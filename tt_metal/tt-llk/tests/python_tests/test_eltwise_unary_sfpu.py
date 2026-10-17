@@ -625,10 +625,29 @@ _EXPM1_CW_NAN_OPS = [
     MathOperation.Expm1Cw,
 ]
 
-# Controls alongside the probe: -inf and -100.0 both land below the clamp and must still be
-# clamped (expm1 -> -1), so a guard widened to catch every non-finite shows up; 1.5 is the
-# positive arm. The rest of each face is -2.0, the ordinary negative arm.
-_EXPM1_CW_NAN_PROBES = [_NEGATIVE_NAN, float("nan"), float("-inf"), -100.0, 1.5]
+# Controls alongside the two NaN probes: -inf and -100.0 both land below the clamp and must
+# still be clamped (expm1 -> -1), so a guard widened to catch every non-finite shows up;
+# -2.0 and -0.5 are the ordinary negative arm; 1.5 is the positive arm. Every control but
+# 1.5 is negative on purpose: a lane with x >= 0 takes the pass-through in ELU/CELU/SELU, so
+# its result would not come from the helper and the allclose below would check nothing
+# there -- the 0.0 that StimuliSpec.custom would otherwise fill with is not equivalent.
+#
+# The list repeats through each face with an ODD period. One SFPLOAD reads one column
+# parity of four Dst rows, and sfpi's dst_reg++ steps the address by 2, so successive
+# iterations alternate even and odd columns; with the `#pragma GCC unroll 2` in
+# ELU/CELU/SELU every even-column pass runs in one copy of the inlined helper and every
+# odd-column pass in the other. An even period would pin each probe to one column parity,
+# hence to one copy, and a guard missing from the other copy would go unnoticed. An odd
+# period lands every probe on both parities, so both copies see all of them.
+_EXPM1_CW_NAN_PROBES = [
+    _NEGATIVE_NAN,
+    float("nan"),
+    float("-inf"),
+    -100.0,
+    -2.0,
+    -0.5,
+    1.5,
+]
 
 
 @pytest.mark.nightly
@@ -645,10 +664,18 @@ def test_expm1_cw_negative_nan_regression(mathop):
         "combination this regression test runs on before editing it."
     )
 
-    # The probes head every face and -2.0 fills it to the end, in place of the 0.0 filler
-    # StimuliSpec.custom would otherwise write, so every lane goes through the helper.
+    # StimuliSpec.custom writes the same values at the head of every face, so one face's
+    # worth of the repeating probe list covers the tile; the period has to stay odd for
+    # both unrolled copies of the helper to see every probe (see _EXPM1_CW_NAN_PROBES).
+    assert len(_EXPM1_CW_NAN_PROBES) % 2 == 1, (
+        "the probe period must stay odd so both unrolled copies of the helper see every "
+        "probe; add or drop a control to keep it odd"
+    )
     face_elements = FACE_DIM * FACE_DIM
-    values = _EXPM1_CW_NAN_PROBES + [-2.0] * (face_elements - len(_EXPM1_CW_NAN_PROBES))
+    values = [
+        _EXPM1_CW_NAN_PROBES[i % len(_EXPM1_CW_NAN_PROBES)]
+        for i in range(face_elements)
+    ]
     res, golden = eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
@@ -661,15 +688,14 @@ def test_expm1_cw_negative_nan_regression(mathop):
     )
     golden = torch.as_tensor(golden, dtype=torch.float32)
 
-    # The NaN probes reached the golden, once per face: if this count drifts the driver's
-    # gate above judged fewer NaN lanes than the probe list promises.
+    # The NaN probes reached the golden (so the gate above had NaN lanes to judge): the
+    # count follows from the values written to each face, so a drift means the driver
+    # judged fewer NaN lanes than the stimulus promises.
     nan_lanes = torch.isnan(golden)
-    expected_nan_lanes = (
-        sum(math.isnan(p) for p in _EXPM1_CW_NAN_PROBES) * FACES_PER_TILE
-    )
+    expected_nan_lanes = sum(math.isnan(v) for v in values) * FACES_PER_TILE
     assert nan_lanes.sum().item() == expected_nan_lanes, (
         f"the golden returned NaN on {nan_lanes.sum().item()} lanes, expected "
-        f"{expected_nan_lanes} (the NaN probes once per face)"
+        f"{expected_nan_lanes} (the NaN lanes of the stimulus, every face)"
     )
     # Tolerance, not equality: the Cody-Waite expm1 is an approximation, so the band only has
     # to separate the right arm from the wrong one (and -1 from a passed-through -inf).
