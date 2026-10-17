@@ -1983,44 +1983,44 @@ I0:  # tracked: #50465 (no large-|x| branch; closed unfixed, fix in #52126); mea
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 678 lane(s) disagreeing with the golden about being finite (golden -> result: x=-552.06: inf -> 3.1658e+38; x=-549.588: inf -> 2.8682e+38); max 476812063 ULP over the 64346 measurable lanes
 
 
-I1:  # tracked: #52174 (input clamped at 88.5); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-07, except where a row says otherwise
-  - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 31104 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 27393 ULP over the 33920 measurable lanes
-  - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 31104 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 27393 ULP over the 33920 measurable lanes
+I1:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-17, except where a row says otherwise
+  - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 27393 ULP, block-quantized
+  - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 27393 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP
-  - {in: Bfp4_b, out: Float16_b, dest: "No", metric: tolerance}  # not measurable: 31104 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 1 ULP over the 33920 measurable lanes
-  - {in: Bfp4_b, out: Float16_b, dest: "Yes", metric: tolerance}  # not measurable: 31104 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37); max 1 ULP over the 33920 measurable lanes
-  - {in: Bfp4_b, out: Float32, dest: "No", metric: tolerance}  # not measurable: 31104 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 65536 ULP over the 33920 measurable lanes
-  - {in: Bfp4_b, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 31104 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37); max 65536 ULP over the 33920 measurable lanes
-  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 31885 ULP over the 33904 measurable lanes
-  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 31885 ULP over the 33904 measurable lanes
+  - {in: Bfp4_b, out: Float16_b, dest: "No", max_ulp: 3}  # max 2 ULP
+  - {in: Bfp4_b, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP
+  - {in: Bfp4_b, out: Float32, dest: "No", max_ulp: 144180}  # max 131072 ULP
+  - {in: Bfp4_b, out: Float32, dest: "Yes", max_ulp: 72090}  # max 65536 ULP
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32337 ULP, block-quantized
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32337 ULP, block-quantized
   - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 9}  # max 8 ULP
-  - {in: Bfp8_b, out: Float16_b, dest: "No", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 452 ULP over the 33904 measurable lanes
-  - {in: Bfp8_b, out: Float16_b, dest: "Yes", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37); max 453 ULP over the 33904 measurable lanes
-  - {in: Bfp8_b, out: Float32, dest: "No", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 29622272 ULP over the 33904 measurable lanes
-  - {in: Bfp8_b, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37); max 29687808 ULP over the 33904 measurable lanes
+  - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 3}  # max 2 ULP
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP
+  - {in: Bfp8_b, out: Float32, dest: "No", max_ulp: 144180}  # max 131072 ULP
+  - {in: Bfp8_b, out: Float32, dest: "Yes", max_ulp: 72090}  # max 65536 ULP
   - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 12629 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -130048; x=-65472: -inf -> -130048); max 18177 ULP over the 48812 measurable lanes
-  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 25258 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -1.16307e+37; x=-65472: -inf -> -1.16307e+37); max 18177 ULP over the 36183 measurable lanes
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 5672 lane(s) disagreeing with the golden about being finite (golden -> result: x=-91.875: -inf -> -3.34965e+38; x=-91.8125: -inf -> -3.13698e+38); max 18177 ULP over the 55769 measurable lanes
   - {in: Float16, out: Float16, dest: "No", max_ulp: 8}  # max 7 ULP
   - {in: Float16, out: Float16, dest: "Yes", max_ulp: 8}  # max 7 ULP
   - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # not measurable: 12629 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -130560; x=-65472: -inf -> -130560); max 14337 ULP over the 48812 measurable lanes
-  - {in: Float16, out: Float16_b, dest: "Yes", metric: tolerance}  # not measurable: 25258 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -1.15477e+37; x=-65472: -inf -> -1.15477e+37); max 1 ULP over the 36183 measurable lanes
+  - {in: Float16, out: Float16_b, dest: "Yes", metric: tolerance}  # not measurable: 5672 lane(s) disagreeing with the golden about being finite (golden -> result: x=-91.875: -inf -> -3.30978e+38; x=-91.8125: -inf -> -3.11039e+38); max 1 ULP over the 55769 measurable lanes
   - {in: Float16, out: Float32, dest: "No", metric: tolerance}  # not measurable: 12629 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -131008; x=-65472: -inf -> -131008); max 939524097 ULP over the 48812 measurable lanes
-  - {in: Float16, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 25258 lane(s) disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -1.15477e+37; x=-65472: -inf -> -1.15477e+37); max 57344 ULP over the 36183 measurable lanes
-  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 31885 ULP over the 33905 measurable lanes
-  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 31885 ULP over the 33905 measurable lanes
+  - {in: Float16, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 5672 lane(s) disagreeing with the golden about being finite (golden -> result: x=-91.875: -inf -> -3.30978e+38; x=-91.8125: -inf -> -3.11039e+38); max 57344 ULP over the 55769 measurable lanes
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32429 ULP, block-quantized
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32429 ULP, block-quantized
   - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 9}  # max 8 ULP
-  - {in: Float16_b, out: Float16_b, dest: "No", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37); max 544 ULP over the 33905 measurable lanes
-  - {in: Float16_b, out: Float16_b, dest: "Yes", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37); max 544 ULP over the 33905 measurable lanes
-  - {in: Float16_b, out: Float32, dest: "No", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37); max 35651584 ULP over the 33905 measurable lanes
-  - {in: Float16_b, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37); max 35651584 ULP over the 33905 measurable lanes
-  - {in: Float32, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.16307e+37; x=-3.38132e+38: -inf -> -1.16307e+37); max 31885 ULP over the 33904 measurable lanes
-  - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.16307e+37; x=-3.38132e+38: -inf -> -1.16307e+37); max 31885 ULP over the 33904 measurable lanes
-  - {in: Float32, out: Float16, dest: "No", max_ulp: 7}  # max 6 ULP
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP
+  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 72090}  # max 65536 ULP
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 72090}  # max 65536 ULP
+  - {in: Float32, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32429 ULP, block-quantized
+  - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32497 ULP, block-quantized
+  - {in: Float32, out: Float16, dest: "No", max_ulp: 8}  # max 7 ULP
   - {in: Float32, out: Float16, dest: "Yes", max_ulp: 8}  # max 7 ULP
-  - {in: Float32, out: Float16_b, dest: "No", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37); max 544 ULP over the 33904 measurable lanes
-  - {in: Float32, out: Float16_b, dest: "Yes", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37); max 612 ULP over the 33904 measurable lanes
-  - {in: Float32, out: Float32, dest: "No", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37); max 35651584 ULP over the 33904 measurable lanes
-  - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 31120 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37); max 40083139 ULP over the 33904 measurable lanes
+  - {in: Float32, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP
+  - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP
+  - {in: Float32, out: Float32, dest: "No", max_ulp: 72090}  # max 65536 ULP
+  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 63786}  # max 57987 ULP
 
 
 # Keyed per format, not through a DEFAULT: Identity was never in BROAD_SWEEP_OPS, so it

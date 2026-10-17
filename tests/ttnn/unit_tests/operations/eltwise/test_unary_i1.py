@@ -55,7 +55,7 @@ def _assert_close(name, got, ref, dtype):
     )
 
 
-# Covers the asymptotic |x| > 10 branch and the ±88.5 input clamp.
+# Covers the asymptotic |x| > 10 branch.
 # Range [-50, 50] keeps reference values within FP32 (i1(50) ≈ 2.93e20).
 @pytest.mark.parametrize(
     "shapes",
@@ -90,18 +90,37 @@ def test_i1_ood(device, shapes, dtype):
     _assert_close("test_i1_ood", output_tensor, torch_output_tensor, dtype)
 
 
-# Boundary inputs straddling the |x| > 10 branch and the ±88.5 clamp.
+def _skip_on_quasar(device):
+    # The Quasar kernel still clamps its input at +/-88.5 and evaluates exp(|x|) directly,
+    # so it returns ~+/-1.15e37 for every |x| > 88.5; the +/-92 clamp and the +/-inf
+    # overflow below are Wormhole/Blackhole behaviour until the Quasar copy is reworked.
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("i1 on Quasar still saturates its input at +/-88.5")
+
+
+# Boundary inputs straddling the |x| > 10 branch and the fp32 overflow point of
+# i1 (|x| ~= 91.9, where i1(x) ~ e^x / sqrt(2*pi*x) first exceeds FLT_MAX).
+# exp() alone overflows earlier, at |x| ~= 88.72, so an implementation that
+# saturates its input at exp's bound returns the constant i1(+/-88.5) ~= 1.15e37
+# for every |x| > 88.5: too small by up to 20x in the finite window
+# 88.5 < |x| < 91.9, and finite where the true result is +/-inf.
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_i1_clamp_boundary(device, dtype):
+    _skip_on_quasar(device)
+    # Every finite value is exactly representable in bfloat16 (step 0.5 in [64, 128)).
+    # +/-inf must come back as +/-inf, not as the finite i1 of a clamped input.
+    inf = float("inf")
     boundaries = torch.tensor(
-        [-100.0, -88.5, -88.0, -10.5, -10.0, -9.5, 9.5, 10.0, 10.5, 88.0, 88.5, 100.0],
+        [-inf, -1000.0, -100.0, -91.5, -90.0, -89.0, -88.5, -88.0, -10.5, -10.0, -9.5]
+        + [9.5, 10.0, 10.5, 88.0, 88.5, 89.0, 90.0, 91.5, 100.0, 1000.0, inf],
         dtype=torch.float32,
     )
-    # i1 is unbounded; out-of-clamp inputs (|x| > 88.5) return i1(±88.5).
-    expected_input = torch.clamp(boundaries, min=-88.5, max=88.5)
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
-    expected_input = expected_input.to(torch_dtype).to(torch.float32)
-    torch_output_tensor = torch.special.i1(expected_input)
+    expected_input = boundaries.to(torch_dtype).to(torch.float32)
+    # The ttnn golden evaluates torch.special.i1 in float64 (torch's float32 i1
+    # overflows at |x| >= 89 although the result fits in float32 up to |x| ~= 91.9)
+    # and keeps +/-inf lanes, where torch.special.i1 returns NaN.
+    torch_output_tensor = ttnn.get_golden_function(ttnn.i1)(expected_input)
 
     # Pad to a tile-aligned shape so we can run on device.
     padded = torch.zeros((1, 1, 32, 32), dtype=torch.float32)
@@ -116,5 +135,14 @@ def test_i1_clamp_boundary(device, dtype):
     )
     output_tensor = ttnn.i1(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)[0, 0, 0, : boundaries.numel()]
+
+    # |x| >= 92 overflows float32 (and bfloat16): the result must be +/-inf
+    # with the sign of x, never a finite saturation value.
+    got_f32 = output_tensor.float()
+    overflow = torch_output_tensor.isinf()
+    assert torch.equal(got_f32.isinf() & (got_f32.sign() == torch_output_tensor.sign()), overflow), (
+        f"test_i1_clamp_boundary: inf lanes mismatch for inputs {boundaries[overflow].tolist()}: "
+        f"got={got_f32[overflow].tolist()} ref={torch_output_tensor[overflow].tolist()}"
+    )
 
     _assert_close("test_i1_clamp_boundary", output_tensor, torch_output_tensor, dtype)

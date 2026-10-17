@@ -1969,6 +1969,7 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
             MathOperation.Exp2,
             MathOperation.ExpWithBase,
             MathOperation.Expm1,
+            MathOperation.I1,
             MathOperation.Selu,
             MathOperation.Sinh,
             MathOperation.Square,
@@ -1990,6 +1991,9 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
     # -- the store or the Dest, not the op ------------------------------------------
     (MathOperation.Sinh, DataFormat.Float16, None, None, DestAccumulation.No): (
         _NO_INFINITY_IN_A_16BIT_DEST
+    ),
+    (MathOperation.I1, DataFormat.Float16, None, None, DestAccumulation.No): (
+        _NO_INFINITY_IN_A_16BIT_DEST + "; i1(-65504) reads -130560 the same way"
     ),
     # -- the approximation's own shortfall at the fp16 overflow edge ----------------
     (
@@ -2050,10 +2054,6 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
         "Taylor series with no large-|x| branch (#50465, closed without a fix on main; "
         "the fix is #52126). The Float16 cells' one lane in the gap below, x = +-13.3, "
         "is named in _KNOWN_NONFINITE_LANES, so those cells stay gated"
-    ),
-    (MathOperation.I1, None, None, None, None): (
-        "saturates at +-1.16e37 where i1 overflows fp32, half the format: the input is "
-        "clamped at 88.5 (#52174, under #52178)"
     ),
     (MathOperation.Lgamma, None, None, None, None): (
         "no defect: the driver runs calculate_lgamma_stirling alone, which answers "
@@ -2171,6 +2171,20 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
         DestAccumulation.Yes,
     ): 1,
     (
+        MathOperation.I1,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.I1,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
         MathOperation.Square,
         DataFormat.Float16,
         DataFormat.Float16_b,
@@ -2220,6 +2234,7 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
         DestAccumulation.Yes,
     ): 1,
     (MathOperation.Sinh, DataFormat.Float16, None, None, DestAccumulation.No): 2,
+    (MathOperation.I1, DataFormat.Float16, None, None, DestAccumulation.No): 2,
     (
         MathOperation.Exp,
         DataFormat.Float16,
@@ -2265,7 +2280,6 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
     ): 2,
     (MathOperation.Expm1Cw, None, None, None, None): 25,
     (MathOperation.I0, None, None, None, None): 18,
-    (MathOperation.I1, None, None, None, None): 20,
     (MathOperation.Lgamma, None, None, None, None): 19,
     (MathOperation.Polygamma, None, None, None, None): 50,
     (MathOperation.Rpow, None, None, None, None): 22,
