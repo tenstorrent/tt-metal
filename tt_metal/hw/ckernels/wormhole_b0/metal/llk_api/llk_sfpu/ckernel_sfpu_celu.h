@@ -37,7 +37,7 @@ sfpi_inline void celu_loop(sfpi::vFloat alpha, sfpi::vFloat alpha_recip) {
         sfpi::vFloat result = alpha * expm1_cw_clamped(arg);
 
         if constexpr (NEG_ALPHA) {
-            v_if(sfpi::exexp(x, sfpi::ExponentMode::Biased) == 255) { result = x; }
+            v_if(!sfpi::is_finite(x)) { result = x; }
             v_endif;
         }
         v_if(x >= 0.0f) { result = x; }

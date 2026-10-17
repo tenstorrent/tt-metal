@@ -203,6 +203,8 @@ def test_scalarB_celu_negative_alpha_negative_input(device, alpha, torch_dtype, 
     edge, not the sign wrap). Power-of-two alphas keep x / alpha and alpha * (...) exact on
     both host and device so the ULP bound measures the kernel, not the host reciprocal.
     """
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar celu kernel is unchanged: no upper clamp / nonfinite pass-through yet")
     h, w = 64, 128
     ratio = torch.cat([torch.linspace(0.0, 80.0, h * w // 2), torch.linspace(90.0, 200.0, h * w // 2)])
     torch_input_tensor_a = (ratio * alpha).reshape(h, w).to(torch_dtype)  # x = alpha * ratio <= 0
@@ -240,6 +242,8 @@ def test_scalarB_celu_nonfinite_input(device, alpha, torch_dtype, ttnn_dtype):
       NaN sign of the x / alpha product is unspecified on Wormhole, so the helper's own
       clamp may rank it below -87 and return alpha * (exp(-87) - 1) instead of NaN.
     """
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar celu kernel is unchanged: no upper clamp / nonfinite pass-through yet")
     h, w = 32, 32
     if torch_dtype == torch.float32:
         nan_bits = torch.tensor([0x7FC00000, -0x00400000], dtype=torch.int32)  # +NaN, -NaN (0xFFC00000)
