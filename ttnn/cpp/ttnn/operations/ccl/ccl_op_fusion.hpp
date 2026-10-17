@@ -13,11 +13,6 @@
 
 namespace ttnn::experimental::ccl {
 
-// Adds a WORKER semaphore on `core_ranges` to `desc` with the lowest id that is free on every core of the range,
-// the id CreateSemaphore would pick, and returns that id.
-uint32_t allocate_worker_semaphore(
-    tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& core_ranges, uint32_t initial_value);
-
 struct CoreSemPair {
     tt::tt_metal::CoreCoord core = {0, 0};
     uint32_t sem_id = 0;

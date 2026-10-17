@@ -163,19 +163,6 @@ constexpr const char* strided_all_gather_aggregator_kernel_path =
     "ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/"
     "minimal_default_mm_signal_aggregator.cpp";
 
-// Single-core WORKER semaphore with the lowest id free on `core`.
-uint32_t add_core_semaphore(tt::tt_metal::ProgramDescriptor& desc, const CoreCoord& core) {
-    const auto semaphore_id = desc.find_available_semaphore_id(core, tt::CoreType::WORKER);
-    TT_FATAL(semaphore_id.has_value(), "strided_all_gather_async: no free semaphore id on worker core {}", core);
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = semaphore_id.value(),
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = CoreRangeSet(CoreRange(core)),
-        .initial_value = 0,
-    });
-    return semaphore_id.value();
-}
-
 template <typename F>
 void for_each_strided_all_gather_core_runtime_args(
     tt::tt_metal::Program& program, tt::tt_metal::KernelHandle kernel_index, F patch) {
@@ -850,8 +837,11 @@ void strided_all_gather_async_minimal_default_helper(
                 }
                 // Layout: [mux_connection_valid][11 client-connection args]
                 writer_rt_args_tail.push_back(static_cast<uint32_t>(mux_connection_valid ? 1 : 0));
-                const uint32_t flow_control_sem_id = add_core_semaphore(desc, core);
-                const uint32_t teardown_sem_id = add_core_semaphore(desc, core);
+                const CoreRangeSet worker_core_set{CoreRange(core)};
+                const uint32_t flow_control_sem_id =
+                    ttnn::experimental::ccl::add_semaphore_descriptor(desc, worker_core_set);
+                const uint32_t teardown_sem_id =
+                    ttnn::experimental::ccl::add_semaphore_descriptor(desc, worker_core_set);
                 mux_v2_config.append_client_connection_rt_args(
                     mux_virtual_core,
                     static_cast<uint8_t>(worker),

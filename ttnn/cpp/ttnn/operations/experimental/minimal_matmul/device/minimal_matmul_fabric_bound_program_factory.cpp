@@ -398,14 +398,14 @@ void minimal_matmul_fabric_bound_factory_helper_common(
     auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
     auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
-    using ttnn::experimental::ccl::allocate_worker_semaphore;
+    using ttnn::experimental::ccl::add_semaphore_descriptor;
     const CoreRangeSet core_grid_set(core_grid);
-    auto in0_sender_semaphore_id = allocate_worker_semaphore(desc, core_grid_set, INVALID);
-    auto in0_receiver_semaphore_id = allocate_worker_semaphore(desc, core_grid_set, INVALID);
-    auto in0_valid_semaphore_id = allocate_worker_semaphore(desc, core_grid_set, VALID);
-    auto in1_sender_semaphore_id = allocate_worker_semaphore(desc, core_grid_set, INVALID);
-    auto in1_receiver_semaphore_id = allocate_worker_semaphore(desc, core_grid_set, INVALID);
-    auto in1_valid_semaphore_id = allocate_worker_semaphore(desc, core_grid_set, VALID);
+    auto in0_sender_semaphore_id = add_semaphore_descriptor(desc, core_grid_set, INVALID);
+    auto in0_receiver_semaphore_id = add_semaphore_descriptor(desc, core_grid_set, INVALID);
+    auto in0_valid_semaphore_id = add_semaphore_descriptor(desc, core_grid_set, VALID);
+    auto in1_sender_semaphore_id = add_semaphore_descriptor(desc, core_grid_set, INVALID);
+    auto in1_receiver_semaphore_id = add_semaphore_descriptor(desc, core_grid_set, INVALID);
+    auto in1_valid_semaphore_id = add_semaphore_descriptor(desc, core_grid_set, VALID);
 
     // CB index of every circular buffer this helper creates, exposed to all five kernels as named compile-time args
     KernelDescriptor::NamedCompileTimeArgs cb_named_args;
@@ -604,7 +604,7 @@ void minimal_matmul_fabric_bound_factory_helper_common(
     uint32_t srs_fuse_signaler_sync_semaphore_id = 0;
     if (fuse_srs) {
         defines["SRS_FUSE_OP_SIGNALER"] = "1";
-        srs_fuse_signaler_sync_semaphore_id = allocate_worker_semaphore(desc, core_grid_set, 0);
+        srs_fuse_signaler_sync_semaphore_id = add_semaphore_descriptor(desc, core_grid_set);
     }
 
     std::vector<CoreCoord> all_worker_cores_noc;
