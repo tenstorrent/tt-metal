@@ -52,3 +52,9 @@ def cache_from_host(mesh, kv: torch.Tensor, chunk: int) -> ttnn.Tensor:
         memory_config=cache_memory_config(mesh, kv.shape[-1]),
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=(rows, cols), dims=(2, 1)),
     )
+
+
+def bfp8_round(t: torch.Tensor) -> torch.Tensor:
+    """Host only (harness boundaries, load time): ``t`` rounded to bfloat8_b exactly as cache_from_host stores it
+    (ttnn's host conversion, TILE layout: the shared exponents run along the last dim, which the reorder keeps)."""
+    return ttnn.to_torch(ttnn.from_torch(t.float(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).float()

@@ -23,6 +23,10 @@ TABLE = {
     # full layers: SDPA attends the chunk's own K / V in bf16 (a per-call bf16 copy of the slot's cache); the served
     # cache stays bfp8. False: SDPA reads the bfp8 cache (rel 0.067 vs 0.043 limit on L1: bfp8 on the chunk's own keys)
     "ATTN_CHUNK_KV_BF16": Setting(True, (True, False), "full-layer SDPA sees the chunk's own K / V in bf16"),
+    # full layers: the model keeps a K residual cache lo = bfp8(k - hi) beside the served bfp8 K (hi, the contract's
+    # cache), and SDPA's bf16 slot copy has prefix K = hi + lo. bfp8 prefix K alone: rel 0.017, worst row 0.068, ratio
+    # [0.975, 1.030] vs the CPU step (S.attn_moe.02 CPU simulation; limits 0.02 / 0.05 / 0.02). ~1 MB per slot-layer
+    "ATTN_FULL_K_LO": Setting(True, (True, False), "full layers keep a bfp8 K residual cache for SDPA's prefix K"),
     # sliding layers (ring SDPA takes only bfp8 K / V there): SDPA reads a per-call 128-wide slot copy, head dim
     # [hi | lo] with hi = bfp8(x), lo = bfp8(x - hi), and q duplicated, so q.k and P.v see x to ~2^-14. bfp8 on the
     # chunk's own K was rel 0.0246 vs the CPU step in S.sliding_moe.02 (limit 0.02); the split simulates at 0.003
@@ -64,6 +68,7 @@ MAX_PRECISION = {
     "ATTN_MM_FP32_ACC": True,
     "QKV_FP32": True,
     "ATTN_CHUNK_KV_BF16": True,
+    "ATTN_FULL_K_LO": True,
     "ATTN_SLIDING_KV_SPLIT": True,
     "ATTN_QKV_WEIGHT_DTYPE": "bfloat16",
     "ROPE_FP32": True,

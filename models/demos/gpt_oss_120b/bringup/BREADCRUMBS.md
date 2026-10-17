@@ -137,3 +137,27 @@
   block out vs CPU attn_residual rel 0.0027 (0.01). Device ops: attn_norm 1, attention 58, attn_residual 1; host
   FLOPs 0.
 - Re-run: `bfw job check --task S.sliding_moe.03`.
+
+## S.attn_moe.02 (layer 1: attn_norm + attention on device)
+
+- First run failed the swap step check: swap_attention vs the CPU step had rel 0.0249 (limit 0.02), worst row 0.111
+  (limit 0.05) and ratio [0.971, 1.050] (limit 1 +- 0.02); the margin was 0.40. The golden prefix state is bf16, and the
+  CPU step attends it at that precision.
+- CPU simulation (scratch sim.py, fp32 SDPA, every 5th query row of chunk 1): bfp8 on the prefix K alone gives rel
+  0.0170, row 0.068 and ratio [0.975, 1.030]. Prefix V in bfp8 adds 0.001, the chunk's K / V in bf16 add 0.0045, q in
+  bf16 0.0025. With the prefix K as bfp8 hi + bfp8 lo: 0.0001.
+- Fix: `ATTN_FULL_K_LO` (True, in MAX_PRECISION). On full layers the module also keeps a K residual cache
+  `cache_k_lo`, with the same layout as the served cache and lo = bfp8(k - bfp8(k)), written beside the served K
+  through `update_padded_kv_cache`. SDPA's per-call bf16 slot copy then holds the prefix K as hi + lo (each typecast to
+  fp32 and summed, then bf16). The served cache is unchanged: plain bfp8, per the contract. `TtAttention.__call__` takes
+  `cache_k_lo=` and asserts it is given exactly when `module.k_lo` is set. `_residual` is shared with the sliding
+  split. It costs one more [n_batch, 2, 7040, 64] bfp8 tensor per full layer per chip, which is ~1 MB per slot-layer.
+- `hooks._AttentionBoundary` loads the K residual of the golden prefix too, as host - `kv_cache.bfp8_round(host)`
+  (ttnn's host bfp8 conversion, the same as cache_from_host).
+- **The assemble task must allocate `cache_k_lo` for each full-attention layer and slot** (same `cache_from_host` /
+  allocator layout) and pass it on every call. It is model state outside the served cache: when the decode side or a
+  migration pulls the served cache, it does not get lo, and prefill only needs it for its own later chunks.
+- Gate: swap_attention vs CPU rel 0.0170 (0.02), row 0.043, ratio [0.992, 1.015], bias +0.0034. Block out vs CPU
+  attention rel 0.0068 (0.01). swap_margin_min 1.158 (the closest check is rel against the CPU step). pcc_swap_out
+  0.99997. Device ops: attention 53, attn_norm 1; host FLOPs 0.
+- Re-run: `bfw job check --task S.attn_moe.02`.

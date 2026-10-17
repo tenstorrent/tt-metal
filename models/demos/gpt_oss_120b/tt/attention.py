@@ -14,7 +14,8 @@ Per chip (row r, column c): x [1, 1, 640, 2880] bf16, the chunk's tokens p with 
         k_rope_layout meta) and q.k is unchanged
     update_padded_kv_cache: post-RoPE K and V (bfp8) into the served cache at kv_actual = chunk start
     full layers (ATTN_CHUNK_KV_BF16): SDPA reads a per-call bf16 copy of the slot (slice + typecast, then the chunk's
-        own K / V written in bf16), not the bfp8 cache; K block SDPA_FULL_K_CHUNK (512)
+        own K / V written in bf16), not the bfp8 cache; K block SDPA_FULL_K_CHUNK (512). ATTN_FULL_K_LO: the model also
+        keeps a K residual cache lo = bfp8(k - hi) beside the served bfp8 K (hi), and the copy's prefix K is hi + lo
     sliding layers (ATTN_SLIDING_KV_SPLIT; the op takes only bfp8 K / V there): SDPA reads a per-call slot copy of
         head dim 128, [hi | lo] with hi = bfp8(x) and lo = bfp8(x - hi) (the prefix: [cache | 0]), q is [q | q], and
         the output halves are summed: q.k and P.v then see the chunk's K / V to ~2^-14 instead of bfp8's 2^-7
@@ -248,6 +249,8 @@ class TtAttention:
         )
         self.qkv_dtype = ttnn.float32 if settings.get("QKV_FP32") else ttnn.bfloat16
         self.chunk_kv_bf16 = settings.get("ATTN_CHUNK_KV_BF16")
+        # full layers: a K residual cache (same layout as the served one) the caller allocates and passes as cache_k_lo
+        self.k_lo = window is None and self.chunk_kv_bf16 and settings.get("ATTN_FULL_K_LO")
         self.kv_split = window is not None and settings.get("ATTN_SLIDING_KV_SPLIT")
         self.mm_config = _compute_config(mesh, settings.get("ATTN_MM_FIDELITY"), settings.get("ATTN_MM_FP32_ACC"))
         self.sdpa_config = _compute_config(mesh, settings.get("SDPA_FIDELITY"), settings.get("SDPA_FP32_ACC"))
@@ -270,6 +273,35 @@ class TtAttention:
             self.ccl.ring_gather_buffer(f"v_{tag}", self.nkv, seq, head_dim, dtype),
         )
 
+    @staticmethod
+    def _residual(t: ttnn.Tensor, hi: ttnn.Tensor) -> ttnn.Tensor:
+        """bfp8(t - hi): what the bfp8 cast ``hi`` of the K or V heads ``t`` (fp32) lost."""
+        hi_f = ttnn.typecast(hi, t.dtype)
+        lo_f = ttnn.subtract(t, hi_f)
+        hi_f.deallocate(True)
+        lo = ttnn.typecast(lo_f, ttnn.bfloat8_b)
+        lo_f.deallocate(True)
+        return lo
+
+    @staticmethod
+    def _slot_bf16(cache: ttnn.Tensor, lo_cache, batch_idx: int) -> ttnn.Tensor:
+        """A bf16 DRAM-interleaved copy of one batch slot of a cache, hi + lo (summed in fp32) when ``lo_cache``."""
+        b = cache.shape
+        parts = []
+        for c in (cache, lo_cache) if lo_cache is not None else (cache,):
+            slot = ttnn.slice(
+                c, [batch_idx, 0, 0, 0], [batch_idx + 1, b[1], b[2], b[3]], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            dtype = ttnn.bfloat16 if lo_cache is None else ttnn.float32
+            parts.append(ttnn.typecast(slot, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            slot.deallocate(True)
+        if lo_cache is None:
+            return parts[0]
+        out = ttnn.add(parts[0], parts[1], dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for p in parts:
+            p.deallocate(True)
+        return out
+
     def _split_slot(self, cache: ttnn.Tensor, t: ttnn.Tensor, batch_idx: int, start: int, hi: ttnn.Tensor):
         """A 128-wide copy of this slot's cache for SDPA: [cache | 0] on every row, then the chunk's rows [hi | lo]
         with lo = bfp8(t - hi) (``t`` the fp32 K or V heads, ``hi`` their bfp8 cast). bfp8 throughout."""
@@ -281,11 +313,7 @@ class TtAttention:
         wide = ttnn.concat([slot, zeros], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         slot.deallocate(True)
         zeros.deallocate(True)
-        hi_f = ttnn.typecast(hi, t.dtype)
-        lo_f = ttnn.subtract(t, hi_f)
-        hi_f.deallocate(True)
-        lo = ttnn.typecast(lo_f, ttnn.bfloat8_b)
-        lo_f.deallocate(True)
+        lo = self._residual(t, hi)
         src = ttnn.concat([hi, lo], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         lo.deallocate(True)
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -294,9 +322,19 @@ class TtAttention:
         src.deallocate(True)
         return wide
 
-    def __call__(self, x: ttnn.Tensor, start: int, cache_k: ttnn.Tensor, cache_v: ttnn.Tensor, batch_idx: int = 0):
+    def __call__(
+        self,
+        x: ttnn.Tensor,
+        start: int,
+        cache_k: ttnn.Tensor,
+        cache_v: ttnn.Tensor,
+        batch_idx: int = 0,
+        cache_k_lo: ttnn.Tensor | None = None,
+    ):
         """x [1, 1, S_local, H] bf16; the chunk's first global position ``start`` (tile-aligned); the layer's caches
-        [n_batch, 2, rows_local, 64] bfp8 and its batch slot. Returns [1, 1, S_local, H] bf16."""
+        [n_batch, 2, rows_local, 64] bfp8 and its batch slot; ``cache_k_lo`` (when self.k_lo) the K residual cache of
+        the same layout. Returns [1, 1, S_local, H] bf16."""
+        assert (cache_k_lo is not None) == bool(self.k_lo), "cache_k_lo is required exactly when ATTN_FULL_K_LO is on"
         s_local = x.shape[-2]
         qkv = ttnn.linear(
             x,
@@ -326,19 +364,12 @@ class TtAttention:
         k.deallocate(True)
         # full layers: SDPA reads a bf16 copy of this slot's cache holding the chunk's own K / V in bf16 (the served
         # cache still gets bfp8). Full causal attention over the prefix: bfp8 on the chunk's own keys alone is rel 0.06
+        # ATTN_FULL_K_LO: the prefix K of that copy is hi + lo (bfp8 hi alone is rel 0.017, worst row 0.068 on L1)
         sdpa_kv, sdpa_batch = None, batch_idx
         if self.window is None and self.chunk_kv_bf16:
             sdpa_kv, sdpa_batch = [], 0
-            for cache, t in ((cache_k, k_rot), (cache_v, v)):
-                b = cache.shape
-                slot = ttnn.slice(
-                    cache,
-                    [batch_idx, 0, 0, 0],
-                    [batch_idx + 1, b[1], b[2], b[3]],
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                shadow = ttnn.typecast(slot, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                slot.deallocate(True)
+            for cache, lo_cache, t in ((cache_k, cache_k_lo, k_rot), (cache_v, None, v)):
+                shadow = self._slot_bf16(cache, lo_cache, batch_idx)
                 src = ttnn.typecast(t, ttnn.bfloat16)
                 ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                     shadow, src, slot_idx=0, layer_idx=0, num_layers=1, kv_actual_global=start, cluster_axis=SP_AXIS
@@ -351,6 +382,18 @@ class TtAttention:
             src = ttnn.typecast(t, ttnn.bfloat8_b)
             if self.kv_split:  # before the served write: the slot copy's prefix must not see the chunk's hi
                 sdpa_kv.append(self._split_slot(cache, t, batch_idx, start, src))
+            if cache is cache_k and self.k_lo:
+                lo = self._residual(t, src)
+                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                    cache_k_lo,
+                    lo,
+                    slot_idx=batch_idx,
+                    layer_idx=0,
+                    num_layers=1,
+                    kv_actual_global=start,
+                    cluster_axis=SP_AXIS,
+                )
+                lo.deallocate(True)
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 cache,
                 src,

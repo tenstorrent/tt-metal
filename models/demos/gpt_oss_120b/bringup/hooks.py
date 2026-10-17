@@ -87,7 +87,9 @@ def _attention(mesh, spec, layer):
 class _AttentionBoundary:
     """Component harness boundary of the stateful attention step: [S, H] host in, the golden KV prefix
     (ctx.extra state_prefix, positions [0, prefix_len)) loaded into a fresh served-layout cache, the device module,
-    [S, H] host out. Every call starts from its own cache, so repeated calls see the same state."""
+    [S, H] host out. Every call starts from its own cache, so repeated calls see the same state. A module with a K
+    residual cache (k_lo, full layers) gets it loaded too: lo = prefix - bfp8(prefix), what the model's own writes of
+    the earlier chunks would hold."""
 
     def __init__(self, mesh, module, chunk: int):
         self.mesh, self.module, self.chunk = mesh, module, chunk
@@ -96,7 +98,7 @@ class _AttentionBoundary:
         import torch
 
         from models.demos.gpt_oss_120b.tt.attention import meta_permute_cols
-        from models.demos.gpt_oss_120b.tt.kv_cache import cache_from_host
+        from models.demos.gpt_oss_120b.tt.kv_cache import bfp8_round, cache_from_host
         from models.demos.gpt_oss_120b.tt.layout import rows_to_device, rows_to_host
 
         assert x.shape[0] == self.chunk, f"one chunk of {self.chunk} rows, got {x.shape[0]}"
@@ -109,8 +111,12 @@ class _AttentionBoundary:
             host = torch.zeros(1, src.shape[1], seq, src.shape[2])
             host[0, :, :n] = src.permute(1, 0, 2)
             caches.append(cache_from_host(self.mesh, host, self.chunk))
+            if name == "key" and self.module.k_lo:
+                k_lo = cache_from_host(self.mesh, host - bfp8_round(host), self.chunk)
         tt_x = rows_to_device(self.mesh, x)
-        tt_y = self.module(tt_x, ctx.start, *caches)
+        extra = {"cache_k_lo": k_lo} if self.module.k_lo else {}
+        tt_y = self.module(tt_x, ctx.start, *caches, **extra)
+        caches += list(extra.values())
         out = rows_to_host(self.mesh, tt_y)
         for t in (tt_x, tt_y, *caches):
             t.deallocate(True)
