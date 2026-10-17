@@ -16,8 +16,7 @@
 - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
   cmd: |
     pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
-    # Disabled due to issue https://github.com/tenstorrent/tt-metal/issues/41040
-    # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
+    pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py -k "Llama-3.2-1B"
   skus:
     bh_quietbox_2:
       timeout: 15

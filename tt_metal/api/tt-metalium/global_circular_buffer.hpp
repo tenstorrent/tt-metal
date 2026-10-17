@@ -98,10 +98,15 @@ GlobalCircularBuffer CreateGlobalCircularBuffer(
 
 /**
  * @brief Creates a Circular Buffer in L1 memory of specified cores using the address space of the
- * global circular bufferand adds it to the program.
+ * global circular buffer and adds it to the program.
+ *
+ * The cores may extend past the global circular buffer's senders and receivers, e.g. to a rectangle, so that one
+ * multicast configures them all. On those extra cores the remote circular buffer is absent: kernels there must not
+ * use it.
  *
  * @param program The program to which the buffer will be added.
- * @param core_spec Specifies the cores where the circular buffer will be configured.
+ * @param core_spec Specifies the cores where the circular buffer will be configured. Must include at least one of
+ * the global circular buffer's sender or receiver cores.
  * @param config Configuration for the circular buffer.
  * @param global_circular_buffer Global circular buffer to use the address space and configuration of.
  * @return CBHandle representing the Circular Buffer ID.

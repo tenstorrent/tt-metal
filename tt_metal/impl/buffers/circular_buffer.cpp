@@ -215,9 +215,19 @@ void CircularBufferImpl::set_global_base_address(DeviceAddr base_address) {
 }
 
 void CircularBufferImpl::set_global_circular_buffer(const experimental::GlobalCircularBuffer& global_circular_buffer) {
+    // Cores outside the GlobalCircularBuffer's senders and receivers may carry it too: their config page reads as
+    // "not part of it", so their kernels see the remote circular buffer as absent.
+    const auto& gcb = global_circular_buffer.impl();
     TT_FATAL(
-        global_circular_buffer.impl().all_cores().contains(this->core_ranges_),
-        "Specified cores are not contained in associated GlobalCircularBuffer");
+        gcb.config_cores().contains(this->core_ranges_),
+        "Circular buffer cores {} are outside the worker grid {} that GlobalCircularBuffer configures",
+        this->core_ranges_,
+        gcb.config_cores());
+    TT_FATAL(
+        gcb.all_cores().intersects(this->core_ranges_),
+        "Circular buffer cores {} include none of the GlobalCircularBuffer's sender or receiver cores {}",
+        this->core_ranges_,
+        gcb.all_cores());
     config_.set_globally_allocated_address(global_circular_buffer.cb_buffer());
     this->shadow_global_circular_buffer_ = &global_circular_buffer;
     this->globally_allocated_address_ = global_circular_buffer.buffer_address();

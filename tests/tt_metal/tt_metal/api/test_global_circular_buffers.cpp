@@ -14,8 +14,10 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -24,6 +26,7 @@
 
 // Access to internal API: ProgramImpl::finalize_offsets
 #include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -126,6 +129,75 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         EXPECT_THROW(program_.impl().finalize_offsets(mesh_device.get()), std::exception);
+    }
+}
+
+// A circular buffer backed by a GlobalCircularBuffer may span cores beyond its senders and receivers, so that one
+// config covers a whole rectangle. Firmware sets the remote circular buffer up on the receivers and leaves it absent on
+// the other cores, including one where a previous program had a remote circular buffer at the same index.
+TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferOnCoresOutsideIt) {
+    const CoreCoord sender_core(0, 0);
+    const CoreRangeSet receiver_cores(CoreRange({1, 1}, {2, 2}));
+    const CoreRangeSet other_receiver_cores(CoreRange({3, 3}, {3, 3}));
+    const CoreRangeSet cb_cores(CoreRange({1, 1}, {3, 3}));  // receiver_cores and five cores outside global_cb
+    constexpr uint32_t remote_cb_index = 31;
+    constexpr uint32_t cb_page_size = 32;
+    auto mesh_device = devices_[0];
+    const auto device_range =
+        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
+
+    auto global_cb = experimental::GlobalCircularBuffer(
+        *mesh_device, {{sender_core, receiver_cores}}, 3200, tt::tt_metal::BufferType::L1);
+    auto other_global_cb = experimental::GlobalCircularBuffer(
+        *mesh_device, {{sender_core, other_receiver_cores}}, 3200, tt::tt_metal::BufferType::L1);
+
+    // One word per core: where the kernel reports its remote circular buffer's fifo_start_addr.
+    const uint32_t num_cores = cb_cores.num_cores();
+    const uint32_t result_page_size = hal::get_l1_alignment();
+    auto result_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = result_page_size * num_cores},
+        distributed::DeviceLocalBufferConfig{
+            .page_size = result_page_size,
+            .buffer_type = tt::tt_metal::BufferType::L1,
+            .sharding_args = BufferShardingArgs(
+                ShardSpecBuffer(cb_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1}),
+                TensorMemoryLayout::HEIGHT_SHARDED)},
+        mesh_device.get());
+    const uint32_t result_addr = result_buffer->address();
+
+    const auto run_and_read = [&](const CoreRangeSet& cores, const experimental::GlobalCircularBuffer& gcb) {
+        Program program = CreateProgram();
+        const KernelHandle kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/remote_cb_fifo_start.cpp",
+            cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {remote_cb_index}});
+        CircularBufferConfig cb_config(cb_page_size);
+        cb_config.remote_index(remote_cb_index).set_page_size(cb_page_size).set_data_format(tt::DataFormat::Float16_b);
+        experimental::CreateCircularBuffer(program, cores, cb_config, gcb);
+        SetRuntimeArgs(program, kernel, cores, {result_addr});
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range, std::move(program));
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
+
+        std::map<CoreCoord, uint32_t> fifo_start_addrs;
+        for (const CoreCoord& core : corerange_to_cores(cores)) {
+            std::vector<uint32_t> word;
+            slow_dispatch::ReadFromL1(*mesh_device, core, result_addr, sizeof(uint32_t), word);
+            fifo_start_addrs[core] = word.at(0);
+        }
+        return fifo_start_addrs;
+    };
+
+    EXPECT_EQ(
+        run_and_read(other_receiver_cores, other_global_cb).at(CoreCoord(3, 3)), other_global_cb.buffer_address());
+
+    for (const auto& [core, fifo_start_addr] : run_and_read(cb_cores, global_cb)) {
+        const uint32_t expected = receiver_cores.contains(core) ? global_cb.buffer_address() : 0;
+        EXPECT_EQ(fifo_start_addr, expected) << "core " << core.str();
     }
 }
 

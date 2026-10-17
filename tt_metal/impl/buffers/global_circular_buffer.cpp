@@ -253,6 +253,11 @@ void GlobalCircularBufferImpl::setup_cb_buffers(BufferType buffer_type, uint32_t
     uint32_t num_cores = all_cores_.num_cores();
 
     auto shard_parameters = ShardSpecBuffer(all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+    const CoreCoord worker_grid = device_->compute_with_storage_grid_size();
+    config_cores_ = CoreRangeSet(CoreRange({0, 0}, {worker_grid.x - 1, worker_grid.y - 1}));
+    const uint32_t num_config_cores = config_cores_.num_cores();
+    auto config_shard_parameters =
+        ShardSpecBuffer(config_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_config_cores, 1});
 
     uint32_t cb_buffer_size = size_ * num_cores;
     cb_buffer_ = distributed::MeshBuffer::create(
@@ -273,13 +278,13 @@ void GlobalCircularBufferImpl::setup_cb_buffers(BufferType buffer_type, uint32_t
     uint32_t num_noc_xy_words = 2 * max_num_receivers_per_sender;
     auto cb_config_page_size = tt::align((num_config_elements + num_noc_xy_words) * sizeof(uint32_t), l1_alignment) +
                                (2 * max_num_receivers_per_sender * l1_alignment);
-    uint32_t cb_config_size = cb_config_page_size * num_cores;
+    uint32_t cb_config_size = cb_config_page_size * num_config_cores;
     cb_config_buffer_ = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = cb_config_size},
         distributed::DeviceLocalBufferConfig{
             .page_size = cb_config_page_size,
             .buffer_type = buffer_type,
-            .sharding_args = BufferShardingArgs(std::move(shard_parameters), TensorMemoryLayout::HEIGHT_SHARDED),
+            .sharding_args = BufferShardingArgs(std::move(config_shard_parameters), TensorMemoryLayout::HEIGHT_SHARDED),
         },
         device_);
 
@@ -409,6 +414,8 @@ const CoreRangeSet& GlobalCircularBufferImpl::sender_cores() const { return send
 const CoreRangeSet& GlobalCircularBufferImpl::receiver_cores() const { return receiver_cores_; }
 
 const CoreRangeSet& GlobalCircularBufferImpl::all_cores() const { return all_cores_; }
+
+const CoreRangeSet& GlobalCircularBufferImpl::config_cores() const { return config_cores_; }
 
 DeviceAddr GlobalCircularBufferImpl::buffer_address() const { return cb_buffer().address(); }
 
