@@ -62,6 +62,7 @@ older `gh` (2.4) lacks.
 | `mkwt.sh <name> <branch>` | worktree off origin/main (or the existing branch on resume) |
 | `dispatch.sh [--match <regex>] "<workflow>" <ref> [-f k=v]` | dispatch a workflow **and get its run id** (gh prints none); `--match` pins the run's identity when the workflow+ref is shared |
 | `ci_budget.sh [--need-nightly N] [--verify] [sanity=5] [nightly=5]` | room for one more PR's CI? counts **my** in-flight Sanity / Nightly(+e2e) dispatches on GitHub (so the cap is global across boxes); exit 0 = dispatch, 1 = queue it, 2 = GitHub unreadable (treat as "not now", retry next loop); `--verify` right after a dispatch: exit 1 = over the cap, cancel what you just dispatched (§6) |
+| `ci_scope.sh --pr <n> \| <worktree>` | `ttllk-only` (every change under tt_metal/tt-llk/ → Sanity + LLK e2e, no Nightly) or `full` + the other paths; `dispatch.sh` refuses a Nightly for a ttllk-only PR (exit 4) |
 | `device_queue.sh` | how many processes hold or wait on this box's device lock, whatever form took it — the §2 queue cap uses it |
 | `ci_triage.sh <run_id>` | every non-green job of a run with its failing tests |
 | `main_job_status.sh "<workflow>" "<job>"` | is the same job failing on main — on the same tests? |
@@ -659,10 +660,18 @@ per PR**; every additional run must be justified in the ledger by exactly one of
 breakage. A bot finding that arrives while CI is already running is handled, but the fix is held
 (batched) until that CI run reports, so one re-run covers both.
 
+**Scope first** (policy 2026-10-17): `$SKILL/scripts/ci_scope.sh --pr <n>` (or `<worktree>`). **`ttllk-only`**
+— every changed file under `tt_metal/tt-llk/` — is gated by **Sanity + LLK e2e only**; the Nightly L2 is
+not dispatched for it (`dispatch.sh` refuses with exit 4), its budget need is `--need-nightly 1`, and the
+PR body says "Nightly L2: not run (tt-llk-only change; Sanity LLK smoke + LLK e2e cover it)". Sanity's
+`run-llk-sanity-tests` smoke (WH+BH) and the LLK e2e suite execute exactly that code; the Nightly's ttnn
+categories and metal `unit_tests_llk` exercise the metal wrapper layer, which such a PR does not touch.
+**`full`** — anything under `tt_metal/hw/`, `ttnn/`, `tests/`, `models/` — keeps Sanity + Nightly (+ e2e).
+
 **Budget gate, right before every dispatch** (first run, re-run after a fix or rebase, probe/fix
 pair, rerun-failed-jobs alike):
 ```bash
-$SKILL/scripts/ci_budget.sh [--need-nightly 2]   # 2 when LLK e2e is needed too; exit 0 = go, 1 = queue
+$SKILL/scripts/ci_budget.sh [--need-nightly 2]   # 2 = Nightly + LLK e2e (full); 1 = e2e only (ttllk-only); exit 0 = go, 1 = queue
 ```
 Exit 1 → the PR's status becomes `ci-queue(<since>)` in the ledger and **nothing else about it
 waits**: reviews stay answered, and the scheduler moves to other items. Exit 0 → dispatch, then
@@ -720,7 +729,8 @@ move the local `origin/main`), re-run the item's test with the fix (must still p
 any of the PR's files (`git diff <old-base>..origin/main --stat -- <files>`), redo the fail-without
 check too — main may have fixed or moved the defect.
 
-**The final SHA must have its own full Sanity + Nightly (+ LLK e2e) pass.** Results from an older SHA
+**The final SHA must have its own full pass of its CI set** — Sanity + Nightly (+ LLK e2e) for `full`,
+Sanity + LLK e2e for `ttllk-only`. Results from an older SHA
 don't count. Any push that changes the tree — review fix, CI fix, rebase — means a full re-dispatch
 on the new head. Only PR-body edits and replies (no new commit) need none.
 

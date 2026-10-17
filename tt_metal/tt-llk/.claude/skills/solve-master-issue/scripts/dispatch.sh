@@ -12,6 +12,7 @@
 #         dispatching again.
 # Exit 3: more than one matching new run appeared (something else dispatched the same thing
 #         meanwhile); the candidates are printed, nothing is chosen for you.
+# Exit 4: Nightly requested for a ttllk-only PR — not dispatched (policy, see below); use Sanity + LLK e2e.
 # Repo: $GH_REPO, default tenstorrent/tt-metal.
 set -euo pipefail
 match=
@@ -19,6 +20,21 @@ match=
 wf=$1; ref=$2; shift 2
 repo=${GH_REPO:-tenstorrent/tt-metal}
 me=$(gh api user -q .login)
+# Policy (2026-10-17): the Nightly L2 is not dispatched for a ttllk-only PR (every changed file under
+# tt_metal/tt-llk/); its CI set is Sanity + LLK e2e, and the PR is green when those pass. Exit 4 tells the
+# caller so; CI_SCOPE_FORCE_NIGHTLY=1 overrides for a documented exception.
+if [ "$wf" = "Nightly tt-metal L2 tests" ] && [ -z "${CI_SCOPE_FORCE_NIGHTLY:-}" ]; then
+    prn=$(gh pr list --repo "$repo" --head "$ref" --state open --json number -q '.[0].number' 2>/dev/null || true)
+    if [ -n "$prn" ] && "$(dirname "$0")/ci_scope.sh" --pr "$prn" > /dev/null 2>&1; then
+        cat >&2 <<MSG
+not dispatched: PR #$prn ($ref) is ttllk-only (all changes under tt_metal/tt-llk/). Policy 2026-10-17: its CI set is
+Sanity (run-llk-sanity-tests=true) + LLK e2e Tests only; do NOT dispatch or re-dispatch the Nightly for it. Budget it
+with ci_budget.sh --need-nightly 1. Record in the ledger and the PR body: "Nightly L2: not run (tt-llk-only change;
+Sanity LLK smoke + LLK e2e cover it)". The PR is green when Sanity + LLK e2e pass on the final SHA.
+MSG
+        exit 4
+    fi
+fi
 wid=$(gh api "repos/$repo/actions/workflows?per_page=100" --paginate -q ".workflows[]|select(.name==\"$wf\")|.id")
 wid=${wid%%$'\n'*}
 [ -z "$wid" ] && { echo "no workflow named '$wf'" >&2; exit 2; }
