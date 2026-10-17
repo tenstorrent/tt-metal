@@ -198,3 +198,20 @@
 - Gate: pcc_layer L00 0.99998 / L01 0.99994, rel 0.0067 / 0.0106, bias 0.0009 / 0.0016, pcc_state_min 0.99991,
   device ops per layer 140, state bits 8 / 8. Regression M.1 PASS (this includes test_kv_layout).
 - Re-run: `bfw job check --task L.s5120`.
+
+## L.starts (KV at tt-d-gen's chunk starts, layers [0, 1], 56320 in 5120)
+
+- First gate: cold_mid_end chunk [5120, 8017) failed with `TT_FATAL zero_padded_kv_cache_device_operation.cpp:219:
+  cache_shape[1] == 1`. zero_padded_kv_cache only takes caches with one head per chip, and ours has 2 KV heads per
+  chip ([slots x layers, 2, rows, 64]). The pulled-back case (record-aligned end) already passed.
+- Fix (`tt/attention.py`): we no longer call zero_padded_kv_cache. When `end % 32 != 0`, TtAttention multiplies post-RoPE
+  K and V (fp32) by a 0/1 row mask before any cache write, so update_padded_kv_cache(valid_global=end) writes the last
+  record with zero pad rows. This covers the served K / V, k_lo and the SDPA slot copies. Pad keys sit at positions
+  >= end, so causal SDPA never reads them for real rows. The mask comes from position tables built once at load in
+  TtRope: hi/lo bf16 tables of the global position, block-cyclic and SP-sharded like cos / sin. The same
+  rotary_embedding_indexed row pick (`_pick`) selects this chunk's rows, then `ttnn.lt(pos, end)`. Start stays on the
+  device path, and there is no host work.
+- `tt/model.py`: the zero_padded_kv_cache loop is removed from `_attention_step`.
+- Gate: cold_mid_end / follow_up_block / follow_up_tile / pulled_back K, V pcc 0.99990-0.99995 on L0 / L1, pad rows
+  zero, prefix rows unchanged, rewrite identical.
+- Re-run: `bfw job check --task L.starts`.

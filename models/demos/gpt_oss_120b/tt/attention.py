@@ -32,7 +32,7 @@ import torch
 import ttnn
 
 from .ccl import SP_AXIS, TP_AXIS
-from .kv_cache import block_cyclic_reorder
+from .kv_cache import RECORD_TOKENS, block_cyclic_reorder
 from .settings import settings
 
 HEAD_DIM = 64
@@ -108,11 +108,15 @@ class TtRope:
             )
 
         self.fp32 = settings.get("ROPE_FP32")
+        bf = lambda t: t.to(torch.bfloat16).float()  # noqa: E731
+        self.ones = rep(torch.ones(1, 1, chunk // sp, HEAD_DIM), ttnn.float32)
+        self.zero_rot = rep(torch.zeros(1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE))
+        # each row's global position p (hi = bf16(p), lo = p - hi, both exact in bf16), picked like cos / sin: the pad
+        # mask of a chunk ending mid-record (positions_at)
+        p = pos[None, None, :, None].expand(1, 1, max_seq, HEAD_DIM)
+        self.pos_tables = [dev(bf(p)), dev(p - bf(p))]
         if self.fp32:
-            bf = lambda t: t.to(torch.bfloat16).float()  # noqa: E731
             self.tables = [dev(h) for t in (cos, sin) for h in (bf(t), t - bf(t))]  # cos hi, lo, sin hi, lo
-            self.ones = rep(torch.ones(1, 1, chunk // sp, HEAD_DIM), ttnn.float32)
-            self.zero_rot = rep(torch.zeros(1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE))
             rot = torch.zeros(HEAD_DIM, HEAD_DIM)
             for b in range(0, HEAD_DIM, ttnn.TILE_SIZE):
                 rot[b : b + ttnn.TILE_SIZE, b : b + ttnn.TILE_SIZE] = rot_transformation_mat()[0, 0]
@@ -128,20 +132,32 @@ class TtRope:
             self.cos, self.sin = dev(cos), dev(sin)
         self.trans = rep(rot_transformation_mat())
 
-    def tables_at(self, start: int):
-        """This chunk's cos / sin rows [1, 1, S_local, 64] fp32 (ROPE_FP32)."""
+    def _pick(self, tables, start: int):
+        """Rows of hi / lo table pairs for the chunk at ``start``, each pair summed in fp32 -> [1, 1, S_local, 64]."""
         rows = [
             ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
                 self.ones, t, t, self.zero_rot, kv_actual_global=start, cluster_axis=SP_AXIS
             )
-            for t in self.tables
+            for t in tables
         ]
         out = []
-        for hi, lo in (rows[:2], rows[2:]):
+        for j in range(0, len(rows), 2):
+            hi, lo = rows[j], rows[j + 1]
             out.append(ttnn.add(hi, lo, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG))
             hi.deallocate(True)
             lo.deallocate(True)
         return out
+
+    def tables_at(self, start: int):
+        """This chunk's cos / sin rows [1, 1, S_local, 64] fp32 (ROPE_FP32)."""
+        return self._pick(self.tables, start)
+
+    def valid_mask(self, start: int, end: int) -> ttnn.Tensor:
+        """[1, 1, S_local, 64] fp32: 1 on the rows of the chunk at ``start`` whose position is below ``end``, else 0."""
+        (pos,) = self._pick(self.pos_tables, start)
+        mask = ttnn.lt(pos, float(end), dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        pos.deallocate(True)
+        return mask
 
     def _rotate(self, t: ttnn.Tensor) -> ttnn.Tensor:
         hi = ttnn.typecast(t, ttnn.bfloat16)
@@ -284,6 +300,13 @@ class TtAttention:
         return lo
 
     @staticmethod
+    def _masked(t: ttnn.Tensor, mask: ttnn.Tensor) -> ttnn.Tensor:
+        """K or V heads [1, n, S_local, 64] times the row mask [1, 1, S_local, 64] (exact: 0 or 1)."""
+        out = ttnn.multiply(t, mask, dtype=t.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        t.deallocate(True)
+        return out
+
+    @staticmethod
     def _slot_bf16(cache: ttnn.Tensor, lo_cache, batch_idx: int) -> ttnn.Tensor:
         """A bf16 DRAM-interleaved copy of one batch slot of a cache, hi + lo (summed in fp32) when ``lo_cache``."""
         b = cache.shape
@@ -335,7 +358,7 @@ class TtAttention:
         """x [1, 1, S_local, H] bf16; the chunk's first global position ``start`` (tile-aligned); the layer's caches
         [n_batch, 2, rows_local, 64] bfp8 and its batch slot; ``cache_k_lo`` (when self.k_lo) the K residual cache of
         the same layout; ``end`` (optional) the end of the chunk's real tokens: only the 32-row records holding them
-        are written to the caches (update_padded_kv_cache valid_global; the caller zeroes the last record's pad rows).
+        are written to the caches (update_padded_kv_cache valid_global), the last record's pad rows as zeros.
         Returns [1, 1, S_local, H] bf16."""
         assert (cache_k_lo is not None) == bool(self.k_lo), "cache_k_lo is required exactly when ATTN_FULL_K_LO is on"
         s_local = x.shape[-2]
@@ -365,6 +388,12 @@ class TtAttention:
             q_rot.deallocate(True)
             q_rot = q_bf
         k.deallocate(True)
+        if end is not None and end % RECORD_TOKENS:
+            # the record holding the last real token is written whole (update_padded_kv_cache valid_global): its pad
+            # rows go in as zeros (zero_padded_kv_cache takes one head per chip only; this cache has two)
+            mask = self.rope.valid_mask(start, end)
+            k_rot, v = [self._masked(t, mask) for t in (k_rot, v)]
+            mask.deallocate(True)
         # full layers: SDPA reads a bf16 copy of this slot's cache holding the chunk's own K / V in bf16 (the served
         # cache still gets bfp8). Full causal attention over the prefix: bfp8 on the chunk's own keys alone is rel 0.06
         # ATTN_FULL_K_LO: the prefix K of that copy is hi + lo (bfp8 hi alone is rel 0.017, worst row 0.068 on L1)

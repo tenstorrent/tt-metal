@@ -23,7 +23,7 @@ from ..reference._bringup_interface import Ctx, run_block
 from ..reference.gpt_oss_ref import GptOssReference
 from .attention import HEAD_DIM, meta_permute_cols
 from .ccl import SP_AXIS
-from .kv_cache import RECORD_TOKENS, bfp8_round, block_cyclic_reorder, cache_memory_config
+from .kv_cache import bfp8_round, block_cyclic_reorder, cache_memory_config
 from .layout import rows_to_device, rows_to_host
 from .residual import TtResidualAdd
 from .settings import settings
@@ -280,7 +280,7 @@ class TtModel:
 
     def _attention_step(self, i: int):
         """The attention step of layer i: the served cache slot of (state.slot, i), the K residual cache on full
-        layers, and pad rows past ctx.extra["end"] zeroed in every cache it wrote."""
+        layers; rows past ctx.extra["end"] go to every cache it writes as zeros (TtAttention end=)."""
         attn = self.attention[i]
 
         def run(ctx, x):
@@ -289,20 +289,7 @@ class TtModel:
             end = ctx.extra.get("end")
             if end is not None and end >= ctx.start + self.chunk:
                 end = None
-            y = attn(x, ctx.start, st.k, st.v, batch_idx=b, end=end, **extra)
-            if end is not None and end % RECORD_TOKENS:  # the last record's pad rows (only real rows were written)
-                for cache in (st.k, st.v, *extra.values()):
-                    ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                        cache,
-                        slot_idx=b,
-                        layer_idx=0,
-                        num_layers=1,
-                        valid_global=end,
-                        chunk_size_global=self.chunk,
-                        cluster_axis=SP_AXIS,
-                        pad_align=RECORD_TOKENS,
-                    )
-            return y
+            return attn(x, ctx.start, st.k, st.v, batch_idx=b, end=end, **extra)
 
         return run
 
