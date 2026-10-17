@@ -142,9 +142,11 @@ class TtSparseAttention(TtWindowAttention):
             ttnn.deallocate(y)
             return out
 
-        tl = ttnn.to_layout(topk, ttnn.TILE_LAYOUT, memory_config=DRAM)
+        tiled = topk.layout != ttnn.TILE_LAYOUT  # K-1: to_layout to the same layout returns its input (not ours)
+        tl = ttnn.to_layout(topk, ttnn.TILE_LAYOUT, memory_config=DRAM) if tiled else topk
         x = ttnn.typecast(ttnn.bitcast(tl, ttnn.int32), ttnn.float32, memory_config=DRAM)  # none -> -1.0
-        ttnn.deallocate(tl)
+        if tiled:
+            ttnn.deallocate(tl)
         s = floor_div(x, hs)
         u = op(ttnn.subtract, x, op(ttnn.multiply, ttnn.clone(s, memory_config=DRAM), float(hs)))  # j mod hs
         b = floor_div(s, n_own)
