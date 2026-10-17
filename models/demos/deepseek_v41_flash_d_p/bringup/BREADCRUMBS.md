@@ -1392,3 +1392,31 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   failures. It checks the served caches only, not layer 3's attention output (hence the probe).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attention.py && BRINGUP_TASK=C.enc_reuse.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`;
   probe `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_reuse_attn < tests/ttnn/unit_tests/operations/ds41_reuse_attn/probes/probe_001.py`.
+
+## C.dec_candidate.indexer implement (attempt 1)
+- New `tt/indexer.py:TtCandidateIndexer` (subclass of TtIndexer, picked by `build_indexer` for `cfg.is_cand_source`).
+  TtIndexer's `__call__` split into `scores` (ring score, unchanged) + `topk_of` (top 512 + TP gather); C.enc_source.indexer
+  re-run: PASS, same numbers (err 0.0174).
+- Layer 20 = TtIndexer at ratio 1 (served 4_index_k_r1 cache, [rows, 128], ring_indexer_score_dsa key_compression_ratio 1 +
+  natural_query_blocks, HiFi4 + fp32 DEST, k_chunk 32: K-13 / K-14; no fork change). The top-k is over every visible key
+  (layer 20 is not restricted to candidates, reference `_indexer`).
+- Candidate pool from the same scores, per chip: slice to kv_len, -inf pad to a multiple of 256 keys, block max over 8 by
+  8 strided `ttnn.slice` (step 8) + `ttnn.maximum` (exact; probe ds41_cand/probe_001: 9 ms at [512, 55296] vs 18 ms
+  reshape + ttnn.max, 17 ms permute + max), TILE; pin = + 1e30 at block (start + r W + c Sq + i) // 8 from a load-time
+  fp32 row-position column + block iota (add start, x 1/8, floor, eq: exact below 2^24; -inf + 0 stays -inf); RM, -inf
+  pad to 2048 blocks when fewer; `topk_large_indices(k 2048)` -> [1, 1, Sq, 2048] uint32 (0xFFFFFFFF = none). Not
+  gathered over TP: dec_reindex scores the same chip rows (and K-17's wide uint32 gather hang is avoided).
+- hooks: indexer step for the candidate source; `_keep_candidates` writes the reference state's candidates rows
+  (ascending, -1 last: the reference's format) and keeps the device pool in `_HybridState.cands` (ctx.extra
+  cand_store) for this chunk's readers; `DEVICE_STEPS["dec_candidate"]` = attn_hc .. kv, compressor, indexer (DS41-28).
+- Gotcha DS41-52 (K-1): a full-range ttnn.slice returns a new wrapper over its input's buffer; freeing it freed the
+  scores. Fixed with `_same` (buffer_address).
+- Gate: PASS, err_indexer_L20 0.0260 <= 0.0525; vs CPU overlap 0.9974 (worst 0.9629), vs golden 0.9740 / 0.9258,
+  chunk0 0.9987 / 0.9863; A,B,A bit-identical.
+- Pool checks (probes ds41_cand/probe_002-004): golden chunks 0 / 1 (<= 512 blocks: all picked) equal to golden; at 53k
+  (s55296 golden chunk 26, 6912 blocks): device pool vs `select_candidate_blocks` on the device's own scores overlap
+  0.99958, the 1171 differing rows all pure ties; vs golden 0.9676 (worst 0.9302; top-k 0.9579 / 0.9023, bf16
+  scores, K-42); own block in every row, no future block, no repeats; forward 22 ms per chunk at 53k on 2x2. Hybrid
+  device_model [20], golden chunks 0, 1: out PCC 0.99973 / 0.99976, state candidates == golden, topk_idx 0.9777.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_indexer.py`;
+  probes `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_cand < tests/ttnn/unit_tests/operations/ds41_cand/probes/probe_00{3,4}.py`.
