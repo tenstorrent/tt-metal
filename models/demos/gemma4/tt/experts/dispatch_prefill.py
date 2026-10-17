@@ -18,7 +18,7 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, compute_constants, get_ep_mesh_mapper
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, compute_constants
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
@@ -55,24 +55,34 @@ class Gemma4DispatchExperts:
         self.inter = config.moe_intermediate_size
         assert self.num_experts % (rows * cols) == 0
         self.experts_per_chip = self.num_experts // (rows * cols)
+        # Dispatch group = the mesh rows (axis 0), one group per column. A single-row mesh (the 4-chip and 8-chip
+        # entries) dispatches along its columns instead: one group, no replicated axis. The stack needs a group of
+        # more than one chip.
+        self.dispatch_axis = 0 if rows > 1 else 1
+        self.rep_axis = 1 - self.dispatch_axis
+        dgs, ndg = mesh_device.shape[self.dispatch_axis], mesh_device.shape[self.rep_axis]
+        self.dgs, self.ndg = dgs, ndg
+        assert dgs > 1, "the dispatch stack needs a dispatch group of more than one chip"
         assert (
-            CHUNK_TOKENS % (rows * ttnn.TILE_SIZE) == 0
-        ), f"chunk {CHUNK_TOKENS} must split into {rows} tile-aligned rows"
-        self.seq_per_chip = CHUNK_TOKENS // rows
+            CHUNK_TOKENS % (dgs * ttnn.TILE_SIZE) == 0
+        ), f"chunk {CHUNK_TOKENS} must split into {dgs} tile-aligned rows"
+        self.seq_per_chip = CHUNK_TOKENS // dgs
         topology = ttnn.Topology.Linear
         experts_per_chip, metadata_len, max_buf, max_tok = compute_constants(
-            self.seq_per_chip, self.num_experts, self.top_k, rows * cols, rows, self.top_k
+            self.seq_per_chip, self.num_experts, self.top_k, rows * cols, dgs, self.top_k
         )
         assert experts_per_chip == self.experts_per_chip
-        assert max_buf >= rows * self.seq_per_chip * self.top_k, "dispatch buffer below the drop-free worst case"
-        table = ExpertMapping.create_dispatch_table(self.num_experts, rows, cols)
+        assert max_buf >= dgs * self.seq_per_chip * self.top_k, "dispatch buffer below the drop-free worst case"
+        table = ExpertMapping.create_dispatch_table(self.num_experts, dgs, ndg)
         self.routing_setup = TtMoERoutingSetup(
             mesh_device, table, num_links=num_links, experts_per_chip=experts_per_chip
         )
-        self.tt_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, table, dispatch_axis=0)
+        self.tt_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(
+            mesh_device, table, dispatch_axis=self.dispatch_axis
+        )
         self.dispatch = TtDispatchModule(
             mesh_device=mesh_device,
-            dispatch_group_size=rows,
+            dispatch_group_size=dgs,
             experts_per_chip=experts_per_chip,
             num_routed_experts=self.num_experts,
             num_experts_per_tok=self.top_k,
@@ -80,28 +90,30 @@ class Gemma4DispatchExperts:
             max_dispatch_buffer_token_size=max_buf,
             seq_len_per_chip=self.seq_per_chip,
             emb_dim=self.hidden,
-            cluster_axis=0,
+            cluster_axis=self.dispatch_axis,
             num_links=num_links,
             topology=topology,
             subdevice_id=None,
         )
         self.combine = TtCombineModule(
             mesh_device=mesh_device,
-            dispatch_group_size=rows,
-            num_dispatch_groups=cols,
+            dispatch_group_size=dgs,
+            num_dispatch_groups=ndg,
             experts_per_chip=experts_per_chip,
             num_experts_per_tok=self.top_k,
             seq_len_per_chip=self.seq_per_chip,
-            cluster_axis=0,
+            cluster_axis=self.dispatch_axis,
             num_links=num_links,
             topology=topology,
             init_zeros=False,
         )
+        # global expert index table [groups, chips-in-group, ...]: dim 1 over the dispatch axis, dim 0 over the other
+        idx_dims = (1, 0) if self.dispatch_axis == 0 else (0, 1)
         global_idx = ttnn.from_torch(
             ExpertMapping.create_global_expert_idx_table(
-                experts_per_chip=experts_per_chip, dispatch_group_size=rows, num_dispatch_groups=cols
+                experts_per_chip=experts_per_chip, dispatch_group_size=dgs, num_dispatch_groups=ndg
             ),
-            mesh_mapper=get_ep_mesh_mapper(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=idx_dims),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             dtype=ttnn.uint32,
@@ -123,7 +135,7 @@ class Gemma4DispatchExperts:
             hybrid_token_threshold=None,
         )
         self.reduce = TtMiniMaxReduce(
-            mesh_device=mesh_device, topk_dim=3, cluster_axis=1, num_links=num_links, topology=topology
+            mesh_device=mesh_device, topk_dim=3, cluster_axis=self.rep_axis, num_links=num_links, topology=topology
         )
         logger.info(
             f"Gemma4DispatchExperts: mesh {rows}x{cols}, {experts_per_chip} experts/chip, chunk {CHUNK_TOKENS} "
@@ -147,10 +159,10 @@ class Gemma4DispatchExperts:
     def _chunk(self, hidden, routing, n_tokens):
         """One dispatch chunk. hidden [1,1,T,H] and routing [1,1,T,E] replicated on every chip, T = CHUNK_TOKENS
         (rows beyond n_tokens are zero padding). Returns [1,1,T,H] replicated (full top-k sum)."""
-        rows = self.rows
-        # each row takes its slice of the chunk (tokens [r*S, (r+1)*S)); the columns keep the same slice
-        x = ttnn.mesh_partition(hidden, dim=2, cluster_axis=0)  # [1,1,S,H] per chip
-        r = ttnn.mesh_partition(routing, dim=2, cluster_axis=0)  # [1,1,S,E]
+        # each chip of the dispatch group takes its slice of the chunk (tokens [r*S, (r+1)*S)); the other axis
+        # keeps the same slice
+        x = ttnn.mesh_partition(hidden, dim=2, cluster_axis=self.dispatch_axis)  # [1,1,S,H] per chip
+        r = ttnn.mesh_partition(routing, dim=2, cluster_axis=self.dispatch_axis)  # [1,1,S,E]
         weights, indices = ttnn.topk(r, k=self.top_k, dim=-1)  # [1,1,S,K] bf16 / uint16, TILE
         ttnn.deallocate(r)
         indices = ttnn.reshape(indices, (self.seq_per_chip, self.top_k))
@@ -187,17 +199,14 @@ class Gemma4DispatchExperts:
         ttnn.deallocate(combined)
         ttnn.deallocate(weights_rm)
         ttnn.deallocate(indices_rm)
-        part = ttnn.reshape(part, (1, 1, self.seq_per_chip, self.hidden // self.cols))
-        if self.cols > 1:
-            full = ttnn.all_gather(part, dim=3, cluster_axis=1, topology=ttnn.Topology.Linear)  # [1,1,S,H]
+        part = ttnn.reshape(part, (1, 1, self.seq_per_chip, self.hidden // self.ndg))
+        if self.ndg > 1:
+            full = ttnn.all_gather(part, dim=3, cluster_axis=self.rep_axis, topology=ttnn.Topology.Linear)  # [1,1,S,H]
             ttnn.deallocate(part)
         else:
             full = part
-        if rows > 1:
-            out = ttnn.all_gather(full, dim=2, cluster_axis=0, topology=ttnn.Topology.Linear)  # [1,1,T,H]
-            ttnn.deallocate(full)
-        else:
-            out = full
+        out = ttnn.all_gather(full, dim=2, cluster_axis=self.dispatch_axis, topology=ttnn.Topology.Linear)  # [1,1,T,H]
+        ttnn.deallocate(full)
         return out
 
     def forward(self, hidden, routing):
