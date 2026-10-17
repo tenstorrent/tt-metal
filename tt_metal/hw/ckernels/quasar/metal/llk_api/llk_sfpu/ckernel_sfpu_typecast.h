@@ -202,9 +202,23 @@ inline void _calculate_typecast_arith_sfp_rows_() {
  * @tparam DST_FMT: Destination data format to convert each element to.
  * @tparam ITERATIONS: Number of SFPU passes (each covers SFP_ROWS rows) needed to span the tile.
  * @note Call @ref init_typecast first to program the ADDR_MOD_6 the generic path stores through.
+ *       Int32 → Float16_b is the dedicated TTI kernel, which walks Dest via ADDR_MOD_7 instead.
+ *       UInt16 → Float32 is the dedicated SFPI kernel, which walks Dest via sfpi::dst_reg++.
  */
 template <DataFormat SRC_FMT, DataFormat DST_FMT, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_typecast() {
+    if constexpr (SRC_FMT == DataFormat::Int32 && DST_FMT == DataFormat::Float16_b) {
+        // Production Int32 L1 is two's-complement through Unpack-to-Dest. The dedicated TTI
+        // kernel converts 2SC → SM before the int→fp32 cast and names the FP16B store.
+        _calculate_typecast_int32_to_fp16b_<ITERATIONS>();
+        return;
+    }
+    if constexpr (SRC_FMT == DataFormat::UInt16 && DST_FMT == DataFormat::Float32) {
+        // UInt16 in a 32-bit Dest word: load the low 16 bits zero-extended and store fp32.
+        // The reverse cast is a different kernel and is not handled here.
+        _calculate_typecast_uint16_to_fp32_<ITERATIONS>();
+        return;
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         _calculate_typecast_arith_sfp_rows_<SRC_FMT, DST_FMT>();
