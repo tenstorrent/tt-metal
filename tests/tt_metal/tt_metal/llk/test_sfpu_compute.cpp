@@ -2691,6 +2691,8 @@ const std::string kFp32PlusInf = "0x7F800000";
 // FP32 +0.0 and a quiet NaN as exp_tile_init's scale.
 const std::string kFp32Zero = "0x00000000";
 const std::string kFp32NaN = "0x7FC00000";
+// FP32 0.5, a non-default positive normal scale.
+const std::string kFp32Half = "0x3F000000";
 
 // Builds a single-core program whose compute kernel runs `chain` on one tile and compiles it
 // (never launches it). Returns the build failure's message, which carries the compiler log, or
@@ -2748,6 +2750,8 @@ TEST_F(LLKMeshDeviceSingleCardFixture, SfpuExpApproxRejectsRuntimeScale) {
 
     // Controls: the supported combinations build, so a rejection below is the guard's doing.
     EXPECT_EQ(compile_sfpu_chain(device, "exp_tile_init<true>(); exp_tile<true, false>(0);"), "");
+    // A non-default positive normal scale (0.5) is accepted by the ClampToNegative init.
+    EXPECT_EQ(compile_sfpu_chain(device, "exp_tile_init<true, " + kFp32Half + ">(); exp_tile<true, false>(0);"), "");
     EXPECT_EQ(
         compile_sfpu_chain(
             device, "exp_tile_init<false>(); exp_tile<false, true>(0, VectorMode::RC, " + kBf16MinusOne + ");"),
@@ -2766,6 +2770,11 @@ TEST_F(LLKMeshDeviceSingleCardFixture, SfpuExpApproxRejectsRuntimeScale) {
         device, "exp_tile_init<true, " + kBf16OneUnshifted + ">(); exp_tile<true, false>(0);", kInitScaleGuard);
     expect_build_rejected(
         device, "exp_tile_init<true, " + kFp32PlusInf + ">(); exp_tile<true, false>(0);", kInitScaleGuard);
+    // Zero would divide the clamp by zero (an infinite floor) and NaN poisons it: both rejected too.
+    for (const std::string& scale : {kFp32Zero, kFp32NaN}) {
+        expect_build_rejected(
+            device, "exp_tile_init<true, " + scale + ">(); exp_tile<true, false>(0);", kInitScaleGuard);
+    }
 
     // The unclamped (InputClamping::None) init only multiplies by the template scale, so a negative
     // scale (exp(-|s| * x)) and a zero scale (exp(0) on every lane, which SDPA requests for uniform

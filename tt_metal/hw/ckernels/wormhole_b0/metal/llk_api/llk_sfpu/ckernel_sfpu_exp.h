@@ -722,8 +722,9 @@ constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(
  * @tparam scale FP32 bit pattern of the input scale (0x3F800000 = 1.0; a bf16 scale shifted left
  *         by 16). Applied by both approximate variants, ignored by the accurate path. With
  *         CLAMP_NEGATIVE it must be a positive normal number (the -88.5 clamp is divided by it);
- *         without CLAMP_NEGATIVE a finite normal number of either sign, or zero (every output
- *         becomes exp(0)).
+ *         without CLAMP_NEGATIVE a finite normal number of either sign, or zero (every finite
+ *         input maps to exp(0); a non-finite input, e.g. a -inf mask fill, gives an unspecified
+ *         finite value).
  * @tparam CLAMP_NEGATIVE Program the ClampToNegative (true) or the unclamped (false) approximate
  *         init. Must match the paired calculate_exponential: the two program incompatible state.
  * @tparam is_fp32_dest_acc_en Dest holds FP32 (true) or bf16 (false) values. Must match the paired
@@ -949,7 +950,9 @@ void exp_init() {
         // A is multiplied by the scale below: a denormal scale (a bf16 scale pasted in unshifted)
         // makes A_scaled vanish by accident, and an infinite or NaN scale makes it non-finite. Zero
         // is allowed: it is the explicit request for exp(0) on every lane (SDPA passes scale = 0
-        // for uniform unmasked attention; a -inf input still becomes NaN).
+        // for uniform unmasked attention). A non-finite input (e.g. a -inf mask fill) then gives
+        // an unspecified finite value: the FP32->INT16 round saturates it to +-32767, so the
+        // stored result stays below 2 in magnitude.
         // Nothing divides by the scale here, so either sign is fine.
         static_assert(
             scale_fp32 == 0.0f ||

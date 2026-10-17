@@ -31,8 +31,9 @@ enum class InputClamping : uint8_t {
  * approximate mode it is always applied, by both the ClampToNegative and the None variants
  * (exp_tile's scale_en is rejected at compile time there): with ClampToNegative it must be a
  * positive normal number, because the -88.5 input clamp is divided by it; with None it must be a
- * finite normal number of either sign, or zero (every finite input maps to exp(0); a -inf input,
- * such as a causal or padding mask fill, becomes NaN, so zero is only meaningful without masking).
+ * finite normal number of either sign, or zero (every finite input maps to exp(0); a non-finite
+ * input, such as a -inf causal or padding mask fill, gives an unspecified finite value, so zero is
+ * only meaningful without masking).
  * In non-approximate mode it is ignored; the exp_tile runtime scale applies when scale_en is true
  * (with a bf16 Dest the scale is emitted as an instruction immediate and must be a compile-time
  * constant; a scale computed at runtime needs fp32_dest_acc_en). This describes
