@@ -294,6 +294,50 @@ def test_topk_sfpu(
     sort_direction: TopKSortDirection,
     sort_mode: str,
 ):
+    _run_topk_sfpu(formats, input_dimensions, K, sort_direction, sort_mode)
+
+
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+        ]
+    ),
+    input_dimensions=[
+        [32, 128],
+    ],
+    K=[32],
+    sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
+    # The harness init has the plain and the fused engine init; rank-stamped and
+    # comparator-stable modes do not go through it.
+    sort_mode=["unstable", "fused"],
+)
+def test_topk_sfpu_harness_init(
+    formats: InputOutputFormat,
+    input_dimensions: list,
+    K: int,
+    sort_direction: TopKSortDirection,
+    sort_mode: str,
+):
+    """Same pipeline and golden as test_topk_sfpu, with the topk init routed through the
+    shared SFPU harness entry (test_utils::call_unary_sfpu_operation_init<topk_local_sort>),
+    the path perf_eltwise_unary_sfpu.py's TopK rows take. The perf sweep never reads its
+    result buffer back, so this is the check that the harness init programs everything the
+    sort network relies on (the DEST increment its replayed stores advance through) and does
+    not inherit it from whatever ran on the core before."""
+    _run_topk_sfpu(
+        formats, input_dimensions, K, sort_direction, sort_mode, harness_init=True
+    )
+
+
+def _run_topk_sfpu(
+    formats: InputOutputFormat,
+    input_dimensions: list,
+    K: int,
+    sort_direction: TopKSortDirection,
+    sort_mode: str,
+    harness_init: bool = False,
+):
     stable_sort = sort_mode == "stable"
     fused_stable = sort_mode == "fused"
     rank_stamped = sort_mode == "rank_stamped"
@@ -350,6 +394,7 @@ def test_topk_sfpu(
                 topk_stable_sort=stable_sort,
                 topk_fused_stable=fused_stable,
                 topk_rank_stamped=rank_stamped,
+                topk_harness_init=harness_init,
             ),
         ],
         runtimes=[
