@@ -17,40 +17,53 @@
 #include <tt-metalium/work_split.hpp>
 #include "hostdevcommon/kernel_structs.h"
 
-#include "modulated_deform_im2col_device_operation.hpp"
+#include "modulated_deform_conv2d_device_operation.hpp"
 
-namespace ttnn::operations::experimental::modulated_deform_im2col {
+namespace ttnn::operations::experimental::modulated_deform_conv2d {
 
 using namespace tt::tt_metal;
 
-// Work unit: a block of 32 consecutive output rows (pixels), all K*K kernel
-// positions of it on one core, so its offsets and mask logits are staged once. Blocks
-// are independent, so there is no cross-core traffic.
-ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
+// The whole conv in one program: each block's sampled columns of one kernel position are multiplied
+// by that position's C x C_out weight slice in the same core, so the columns never leave L1. Kernel
+// positions run outermost so a core loads each weight slice once; an input wider than
+// kConvMaxChunkTiles tiles takes several passes per position, one per chunk of channels. The work
+// unit is a block of 32 consecutive output rows, which shares one set of offset and mask loads;
+// blocks are split evenly over the cores, and each core keeps its blocks' geometry and output
+// accumulators for the whole run.
+ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args, Tensor& output) {
-    if (tensor_args.weight.has_value()) {
-        return create_conv_descriptor(attrs, tensor_args, output);
-    }
     ProgramDescriptor descriptor{};
     const auto s = derive_shapes(attrs, tensor_args);
 
     const auto& input = tensor_args.input;
     const auto& offset_mask = tensor_args.offset_mask;
+    const auto& weight = tensor_args.weight;
+    const bool has_bias = tensor_args.bias.has_value();
 
     constexpr uint32_t TILE_ROWS = tt::constants::TILE_HEIGHT;
+    constexpr uint32_t CORNERS = 4;
+    constexpr uint32_t GEOM_IN_TILES = 5;
     const uint32_t channel_tiles = s.channels / tt::constants::TILE_WIDTH;
+    uint32_t chunk_tiles = std::min(channel_tiles, kConvMaxChunkTiles);
+    while (channel_tiles % chunk_tiles != 0) {
+        --chunk_tiles;
+    }
+    const uint32_t chunks = channel_tiles / chunk_tiles;
+    const uint32_t out_tiles = s.out_channels / tt::constants::TILE_WIDTH;
     const uint32_t num_blocks = tt::div_up(s.rows, TILE_ROWS);
 
     const auto tile_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
     const uint32_t tile_nbytes = tt::tile_size(tile_format);
+    const uint32_t fp32_tile_nbytes = tt::tile_size(tt::DataFormat::Float32);
+    const uint32_t int32_tile_nbytes = tt::tile_size(tt::DataFormat::Int32);
 
-    // Page strides as the buffers lay the pages out; validation guarantees no row padding.
     const uint32_t input_page_nbytes = input.buffer()->aligned_page_size();
     const uint32_t offset_mask_page_nbytes = offset_mask.buffer()->aligned_page_size();
 
     const auto compute_grid = input.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, blocks_per_core_1, blocks_per_core_2] =
         split_work_to_cores(compute_grid, num_blocks);
+    const uint32_t max_blocks = std::max(blocks_per_core_1, blocks_per_core_2);
 
     constexpr uint8_t offset_mask_arena_cb = tt::CBIndex::c_0;
     constexpr uint8_t corner_block_cb = tt::CBIndex::c_2;
@@ -60,19 +73,20 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     constexpr uint8_t geom_index_cb = tt::CBIndex::c_6;
     constexpr uint8_t geom_weight_cb = tt::CBIndex::c_7;
     constexpr uint8_t geom_kernel_cb = tt::CBIndex::c_8;
-    // The second reader's copies of the per-position buffers, for the odd kernel positions.
+    // The second reader's buffers, for the odd blocks.
     constexpr uint8_t odd_corner_block_cb = tt::CBIndex::c_9;
     constexpr uint8_t odd_scalar_tile_cb = tt::CBIndex::c_10;
     constexpr uint8_t odd_geom_index_cb = tt::CBIndex::c_11;
     constexpr uint8_t odd_geom_weight_cb = tt::CBIndex::c_12;
-    // The two halves of a core's input band, each copied in by one reader.
     constexpr uint8_t band_a_cb = tt::CBIndex::c_13;
     constexpr uint8_t band_b_cb = tt::CBIndex::c_14;
+    constexpr uint8_t conv_weight_cb = tt::CBIndex::c_15;
     constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;
     constexpr uint8_t odd_output_tile_cb = tt::CBIndex::c_17;
-    constexpr uint32_t CORNERS = 4;
+    constexpr uint8_t column_cb = tt::CBIndex::c_18;
+    constexpr uint8_t acc_cb = tt::CBIndex::c_19;
+    constexpr uint8_t bias_cb = tt::CBIndex::c_20;
 
-    // Blocks per core, in the order the cores take consecutive blocks.
     const auto cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
     std::vector<uint32_t> core_blocks;
     for (const auto& core : cores) {
@@ -84,9 +98,7 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     // kernel's rows plus the bottom corners' row, widened by a margin on each side for the offsets.
     // The readers copy the band into L1 once and read the corners inside it from there: corner
     // reads spread over every core's L1 saturate the NoC around the first rows of cores, and those
-    // cores then set the op's time. Corners outside the band are read from the input as before.
-    // The margin is the widest whose band fits the L1 the op's other buffers leave at the first call;
-    // a cached program run later with less L1 free fails its circular-buffer check.
+    // cores then set the op's time. Corners outside the band are read from the input.
     const uint32_t image_rows = s.out_h * s.out_w;
     const int64_t kernel_rows = static_cast<int64_t>(attrs.dilation[0]) * (attrs.kernel_size[0] - 1) + 1;
     auto band = [&](uint32_t first_block, uint32_t blocks, uint32_t margin) -> std::pair<uint32_t, uint32_t> {
@@ -118,46 +130,59 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
                 }}},
             });
         };
-    // Reader-only arenas, one stick per row of a block.
     push_cb(offset_mask_arena_cb, TILE_ROWS, offset_mask_page_nbytes);
-    // The four corners of a kernel position, row-major in tile-sized pages, and one scalar tile
-    // per corner, for each reader, two positions deep: a reader lands its next position while
-    // compute still holds its last one.
+    // The four corners of a (pass, block) and one scalar tile per corner, per reader, two deep.
     for (const uint8_t cb : {corner_block_cb, odd_corner_block_cb}) {
-        push_cb(cb, 2 * CORNERS * channel_tiles, tile_nbytes);
+        push_cb(cb, 2 * CORNERS * chunk_tiles, tile_nbytes);
     }
     for (const uint8_t cb : {scalar_tile_cb, odd_scalar_tile_cb}) {
         push_cb(cb, 2 * CORNERS, tile_nbytes);
     }
-    push_cb(tiled_block_cb, CORNERS * channel_tiles, tile_nbytes);
-    // Each reader writes the output of its own kernel positions.
-    for (const uint8_t cb : {output_tile_cb, odd_output_tile_cb}) {
-        push_cb(cb, 2 * channel_tiles, tile_nbytes);
-    }
-    // A block's geometry, [row, kernel position] tiles: the first reader's offsets, mask logits and window
-    // origins in fp32, and compute's corner pages (int32) and weights, one copy per reader and two
-    // blocks deep so compute hands over the next block's while the readers work on this one. The
-    // kernel offsets are one pair of fp32 tiles for the whole run.
-    constexpr uint32_t GEOM_IN_TILES = 5;
-    const uint32_t fp32_tile_nbytes = tt::tile_size(tt::DataFormat::Float32);
-    push_cb(geom_in_cb, GEOM_IN_TILES, fp32_tile_nbytes, tt::DataFormat::Float32);
+    push_cb(tiled_block_cb, CORNERS * chunk_tiles, tile_nbytes);
+    // The geometry inputs, two blocks deep, and each reader's blocks' geometry for the whole run.
+    push_cb(geom_in_cb, 2 * GEOM_IN_TILES, fp32_tile_nbytes, tt::DataFormat::Float32);
     push_cb(geom_kernel_cb, 2, fp32_tile_nbytes, tt::DataFormat::Float32);
-    for (const uint8_t cb : {geom_index_cb, odd_geom_index_cb}) {
-        push_cb(cb, 2, tt::tile_size(tt::DataFormat::Int32), tt::DataFormat::Int32);
-    }
-    for (const uint8_t cb : {geom_weight_cb, odd_geom_weight_cb}) {
-        push_cb(cb, 2 * CORNERS, tile_nbytes);
-    }
-    // L1 below the lowest buffer, less the other circular buffers and a reserve.
+    const uint32_t even_slots = std::max<uint32_t>(1, (max_blocks + 1) / 2);
+    const uint32_t odd_slots = std::max<uint32_t>(1, max_blocks / 2);
+    push_cb(geom_index_cb, even_slots, int32_tile_nbytes, tt::DataFormat::Int32);
+    push_cb(odd_geom_index_cb, odd_slots, int32_tile_nbytes, tt::DataFormat::Int32);
+    push_cb(geom_weight_cb, CORNERS * even_slots, tile_nbytes);
+    push_cb(odd_geom_weight_cb, CORNERS * odd_slots, tile_nbytes);
+    // A block's columns of one pass; two weight slices, the next loading while compute works
+    // through the current one; every block's output, accumulated across passes in bfloat16 (fp32
+    // within a pass, in dest); the bias.
+    push_cb(column_cb, chunk_tiles, tile_nbytes);
+    push_cb(conv_weight_cb, 2 * chunk_tiles * out_tiles, tile_nbytes);
+    push_cb(acc_cb, max_blocks * out_tiles, tile_nbytes);
+    push_cb(bias_cb, out_tiles, tile_nbytes);
+
     const auto* device = input.device();
     const uint64_t l1_top = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
     const uint64_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint64_t l1_free = l1_top > l1_base ? l1_top - l1_base : 0;
     uint64_t other_cbs = 0;
     for (const auto& cb : descriptor.cbs) {
         other_cbs += cb.total_size;
     }
-    const uint64_t band_budget =
-        l1_top > l1_base + other_cbs + kBandL1Reserve ? l1_top - l1_base - other_cbs - kBandL1Reserve : 0;
+    // Each reader's output, two blocks deep where L1 allows; it only drains the epilogue.
+    const uint32_t output_depth = other_cbs + 4 * out_tiles * tile_nbytes <= l1_free ? 2 : 1;
+    for (const uint8_t cb : {output_tile_cb, odd_output_tile_cb}) {
+        push_cb(cb, output_depth * out_tiles, tile_nbytes);
+        other_cbs += output_depth * out_tiles * tile_nbytes;
+    }
+    TT_FATAL(
+        other_cbs <= l1_free,
+        "modulated_deform_conv2d: needs {} KB of L1 per core, {} KB free: {} blocks of 32 rows per core, C {}, C_out "
+        "{} (output accumulators {} KB, weight slices {} KB)",
+        other_cbs / 1024,
+        l1_free / 1024,
+        max_blocks,
+        s.channels,
+        s.out_channels,
+        max_blocks * out_tiles * tile_nbytes / 1024,
+        2 * chunk_tiles * out_tiles * tile_nbytes / 1024);
+    // The band is optional: without room for it the readers fetch the corners from the input in DRAM.
+    const uint64_t band_budget = l1_free > other_cbs + kBandL1Reserve ? l1_free - other_cbs - kBandL1Reserve : 0;
     uint32_t band_margin = 0;
     uint32_t band_pages = 0;
     bool use_band = false;
@@ -180,9 +205,19 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
         push_cb(cb, 1, band_half_pages * input_page_nbytes);
     }
 
-    // Both readers run the same kernel and write the output of their own kernel positions: the
-    // first, on its usual RISC-V and NoC, takes the even ones; the second, on the other RISC-V and
-    // NoC, the odd ones, one fewer, and stages the geometry too.
+    // One core reads the weight slices and multicasts them when the cores form one rectangle; the
+    // multicast fills a rectangle, and a ragged set would leave it writing into idle cores' L1.
+    const bool mcast_weight = all_cores.ranges().size() == 1 && num_cores > 1;
+    const CoreRange core_rect = *all_cores.ranges().begin();
+    const CoreCoord mcast_start = device->worker_core_from_logical_core(core_rect.start_coord);
+    const CoreCoord mcast_end = device->worker_core_from_logical_core(core_rect.end_coord);
+    constexpr uint32_t weight_sender_sem_id = 0;
+    constexpr uint32_t weight_receiver_sem_id = 1;
+    for (const uint32_t id : {weight_sender_sem_id, weight_receiver_sem_id}) {
+        descriptor.semaphores.push_back(SemaphoreDescriptor{
+            .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
+    }
+
     auto reader_ct = [&](bool first) {
         KernelDescriptor::CompileTimeArgs ct{
             offset_mask_arena_cb,
@@ -208,21 +243,32 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
             first ? geom_index_cb : odd_geom_index_cb,
             first ? geom_weight_cb : odd_geom_weight_cb,
             geom_kernel_cb,
-            first ? 0u : 1u,  // stages the geometry
-            first ? 0u : 1u,  // first kernel position
+            first ? 0u : 1u,  // block parity
             first ? output_tile_cb : odd_output_tile_cb,
             tile_nbytes,
             band_a_cb,
             band_b_cb,
+            conv_weight_cb,
+            bias_cb,
+            out_tiles,
+            has_bias ? 1u : 0u,
+            mcast_weight ? 1u : 0u,
+            num_cores - 1,
+            weight_sender_sem_id,
+            weight_receiver_sem_id,
+            chunk_tiles,
         };
         TensorAccessorArgs(*input.buffer()).append_to(ct);
         TensorAccessorArgs(*offset_mask.buffer()).append_to(ct);
         TensorAccessorArgs(*output.buffer()).append_to(ct);
+        TensorAccessorArgs(*weight.buffer()).append_to(ct);
+        // Without a bias the weight stands in, so the accessor's args exist; the kernel never reads it.
+        TensorAccessorArgs(has_bias ? *tensor_args.bias->buffer() : *weight.buffer()).append_to(ct);
         return ct;
     };
 
     KernelDescriptor reader_desc;
-    reader_desc.kernel_source = std::string(kKernelDir) + "dataflow/reader_deform_im2col.cpp";
+    reader_desc.kernel_source = std::string(kKernelDir) + "dataflow/reader_deform_conv.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = reader_ct(true);
@@ -233,17 +279,18 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     odd_reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     odd_reader_desc.core_ranges = all_cores;
     odd_reader_desc.compile_time_args = reader_ct(false);
+    // The second copy runs on the other data-movement RISC-V and NoC, which a writer config selects.
     odd_reader_desc.config = WriterConfigDescriptor{};
 
     KernelDescriptor compute_desc;
-    compute_desc.kernel_source = std::string(kKernelDir) + "compute/compute_deform_im2col.cpp";
+    compute_desc.kernel_source = std::string(kKernelDir) + "compute/compute_deform_conv.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
     compute_desc.compile_time_args = {
         corner_block_cb,
         scalar_tile_cb,
         output_tile_cb,
-        channel_tiles,
+        chunk_tiles,
         s.kernel_positions,
         tiled_block_cb,
         geom_in_cb,
@@ -258,18 +305,30 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
         odd_scalar_tile_cb,
         odd_geom_index_cb,
         odd_geom_weight_cb,
-        odd_output_tile_cb};
+        odd_output_tile_cb,
+        column_cb,
+        conv_weight_cb,
+        acc_cb,
+        bias_cb,
+        out_tiles,
+        has_bias ? 1u : 0u,
+        attrs.relu ? 1u : 0u,
+        chunks};
     // The geometry runs in fp32 and keeps eight tiles in dest at once, which takes full-sync dest;
-    // its fp32 inputs unpack straight to dest, as srcA would round them to TF32.
+    // its fp32 inputs unpack straight to dest, as srcA would round them to TF32. Each pass's matmul
+    // reduction accumulates in fp32 too.
+    // HiFi2 for the corner products and the matmul: it drops the products' low bits, which costs
+    // about as much accuracy as rounding the output to bfloat16, and the cycles it saves are on the
+    // conv's critical path.
     ComputeConfigDescriptor compute_config{};
     compute_config.fp32_dest_acc_en = true;
+    compute_config.math_fidelity = MathFidelity::HiFi2;
     compute_config.dst_full_sync_en = true;
     compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     compute_config.unpack_to_dest_mode[geom_in_cb] = UnpackToDestMode::UnpackToDestFp32;
     compute_config.unpack_to_dest_mode[geom_kernel_cb] = UnpackToDestMode::UnpackToDestFp32;
     compute_desc.config = compute_config;
 
-    // Buffer* entries register as buffer bindings, so cache hits patch the addresses.
     uint32_t block_cursor = 0;
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
@@ -288,6 +347,15 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
         reader_args.push_back(output.buffer());
         reader_args.push_back(band_first_page);
         reader_args.push_back(band_core_pages);
+        reader_args.push_back(weight.buffer());
+        reader_args.push_back(has_bias ? tensor_args.bias->buffer() : weight.buffer());
+        reader_args.push_back(core == core_rect.start_coord ? 1u : 0u);
+        reader_args.push_back(static_cast<uint32_t>(mcast_start.x));
+        reader_args.push_back(static_cast<uint32_t>(mcast_start.y));
+        reader_args.push_back(static_cast<uint32_t>(mcast_start.x));
+        reader_args.push_back(static_cast<uint32_t>(mcast_start.y));
+        reader_args.push_back(static_cast<uint32_t>(mcast_end.x));
+        reader_args.push_back(static_cast<uint32_t>(mcast_end.y));
         reader_desc.emplace_runtime_args(core, reader_args);
         odd_reader_desc.emplace_runtime_args(core, reader_args);
 
@@ -302,4 +370,4 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     return descriptor;
 }
 
-}  // namespace ttnn::operations::experimental::modulated_deform_im2col
+}  // namespace ttnn::operations::experimental::modulated_deform_conv2d

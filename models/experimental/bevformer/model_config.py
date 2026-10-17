@@ -232,15 +232,6 @@ _TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
 # suffice, the rest is margin.
 CODER_BISECTION_STEPS = 22
 
-# DCN input channels that run as one fused op, ttnn.experimental.modulated_deform_conv2d, whose
-# columns never leave L1; layer4's 512 channels take two passes of 256 per kernel position. Others
-# run ttnn.experimental.modulated_deform_im2col and a matmul.
-DCN_FUSED_CHANNELS = (256, 512)
-# in0_block_w of the unfused DCN's matmul 1D program config, by the DCN's input channels: the
-# width measured fastest on Blackhole. The matmul streams its K*K*C_in-wide columns from DRAM and
-# multicasts the weight.
-DCN_MATMUL_IN0_BLOCK_W = {256: 2, 512: 12}
-
 
 # The backbone and FPN, for 6 cameras at 1600x928. Layer indices count the ResNet layers from 0
 # (layer1); level indices the FPN levels from 0 (C3).

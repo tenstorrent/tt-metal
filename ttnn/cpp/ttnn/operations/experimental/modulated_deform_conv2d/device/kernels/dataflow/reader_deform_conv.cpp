@@ -2,29 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader of the modulated deformable conv: the im2col reader's sampling, feeding a matmul that runs
-// in the same op, so the columns never leave L1.
+// Reader of the modulated deformable conv: it gathers the bilinear corners each block's columns are
+// sampled from, for a matmul that runs in the same op, so the columns never leave L1.
 //
 // The kernel positions run outermost and each core's blocks of 32 output rows inside them, so one
 // position's slice of the weight serves all of the core's blocks before the next slice replaces it.
 // An input wider than a chunk of channels takes one pass per chunk at each position, with that
-// chunk's rows of the weight; a pass reads only its chunk of each corner. Two copies of this
-// kernel run per core, one on each data-movement RISC-V and NoC: the first takes the core's even
-// blocks and loads the weight slices and the bias, the second the odd blocks and stages the
-// geometry. Compute returns each block's geometry, every sample's top-left corner page within its
-// image and its four weights, to the copy that owns the block, which keeps it for all kernel
-// positions.
+// chunk's rows of the weight; a pass reads only its chunk of each corner. Two copies of this kernel
+// run per core, one on each data-movement RISC-V and NoC: the first takes the core's even blocks
+// and loads the weight slices and the bias, the second the odd blocks and stages the geometry.
+// Compute returns each block's geometry, every sample's top-left corner page within its image and
+// its four weights, to the copy that owns the block, which keeps it for all kernel positions.
 //
 // The geometry is staged during the first kernel position, two blocks ahead of compute, and compute
-// derives it just before the block's corners, as the im2col does. For each (pass, block) a copy
-// hands compute the four corners as one row-major block, 32 rows of [corner 0 | corner 1 | corner 2
-// | corner 3] chunk-wide input sticks, landed by the NoC reads, and one scalar tile per corner
-// whose column 0 holds the row's weight. After the last position it writes its blocks' C_out-wide
-// output.
+// derives it just before the block's corners. For each (pass, block) a copy hands compute the four
+// corners as one row-major block, 32 rows of [corner 0 | corner 1 | corner 2 | corner 3] chunk-wide
+// input sticks, landed by the NoC reads, and one scalar tile per corner whose column 0 holds the
+// row's weight. After the last position it writes its blocks' C_out-wide output.
 //
 // A corner is read only when its weight is nonzero. Every other row, and every row past the block's
 // end, is zeroed rather than skipped: a stale NaN or Inf times a zero scalar would still be NaN.
-// Offsets and mask logits saturate as in the im2col reader.
+//
+// The geometry runs on compute because the data-movement RISC-Vs have no FPU; the reader only moves
+// bits. Offsets saturate at +-OFFSET_CLAMP pixels, which keeps every coordinate exact in fp32 and
+// puts a non-finite offset outside the input. Mask logits saturate the same way: a NaN one would
+// give its row NaN weights, nonzero even for corners outside the input, whose pages the reader
+// would then read.
 
 #include <cstdint>
 

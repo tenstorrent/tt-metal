@@ -209,8 +209,8 @@ def create_perception_transformer_parameters(transformer, device, dtype=WEIGHT_D
 # Each BatchNorm is folded into the conv before it. The backbone's conv input shapes are recorded
 # from one reference forward; the FPN's follow from its input levels' shapes. The weights stay on
 # the host: conv2d lays them out for its input on the device. A stride-1 1x1 conv whose activations
-# are in DRAM runs as a matmul instead and gets a Linear's weight; the DCNs get the matmul weight
-# their im2col's columns are laid out for.
+# are in DRAM runs as a matmul instead and gets a Linear's weight; the DCNs get their op's weight,
+# laid out for the order it samples its columns in.
 
 
 def _conv_parameters(weight, bias, linear_dtype, staging_dtype):
@@ -232,8 +232,8 @@ def _dcn_parameters(conv, bn):
     """A DCNv2 conv and its offset conv as TTModulatedDeformConv2dPack takes them, ``bn`` folded in.
 
     The weight becomes the device DCN's ``(K*K*C_in, C_out)`` matmul weight, rows in the (kk, c_in)
-    order the im2col emits its columns in. The offset conv stays DCNv2's: it emits the offsets in
-    pixels, (y, x) per kernel position, then the mask logits, which the im2col reads as they are.
+    order the op samples its columns in. The offset conv stays DCNv2's: it emits the offsets in
+    pixels, (y, x) per kernel position, then the mask logits, which the op reads as they are.
     """
     if conv.groups != 1 or conv.deform_groups != 1:
         raise ValueError(f"the device DCN takes groups 1 and deform_groups 1, got {conv.groups}, {conv.deform_groups}")
