@@ -5,7 +5,6 @@
 import torch
 import pytest
 import ttnn
-import math
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc, assert_allclose
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
@@ -365,12 +364,13 @@ def test_softcap_op(device, beta):
 # rpow — PCC ≥ 0.99 + allclose(atol=1e-2, rtol=0.1)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# rpow evaluates exponent ** x as exp2(x * log2(exponent)). Once |x * log2(exponent)|
-# >= ~8.1e31, the device's exp2 argument reduction breaks down and returns a bogus
-# finite value (observed: 1.0) instead of +/-inf like golden -- a real SFPU
-# limitation at extreme magnitudes. Excluded from the accuracy assertions below
-# (wide margin under the observed boundary) but still swept through the device.
-_RPOW_UNRELIABLE_ARG_MAGNITUDE = 1e30
+# rpow evaluates exponent ** x as exp2(x * log2(exponent)) on the bf16 pow kernel, which
+# scales that argument by 2**23 with an exponent-field add. That add used to wrap modulo
+# 256 for x * log2(exponent) >= 2**106 and returned 1.0 instead of +inf (a large negative
+# argument is clamped to -127 before the scale and always came out as 0), so those lanes
+# were masked out of the assertions below. The kernel now clamps the argument from above
+# as well, and every lane of the exhaustive sweep is asserted; the lanes above 2**106 are
+# the regression coverage for that clamp.
 
 
 @pytest.mark.parametrize("exponent", [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.5, 8.0, 9.0, 10.0])
@@ -388,12 +388,9 @@ def test_rpow_op(device, exponent):
     tt_result = ttnn.rpow(tt_in, exponent)
     result = ttnn.to_torch(tt_result)
 
-    arg_magnitude = input_tensor.to(torch.float64).abs() * abs(math.log2(exponent))
-    reliable = arg_magnitude < _RPOW_UNRELIABLE_ARG_MAGNITUDE
-
     golden_finite = torch.isfinite(golden)
     result_finite = torch.isfinite(result)
-    mismatched_finiteness = (golden_finite != result_finite) & reliable
+    mismatched_finiteness = golden_finite != result_finite
     assert not mismatched_finiteness.any(), (
         f"rpow(exponent={exponent}) finite/non-finite classification diverged for "
         f"{int(mismatched_finiteness.sum().item())} of {result.numel()} elements"
@@ -403,17 +400,17 @@ def test_rpow_op(device, exponent):
     # device returning e.g. +inf where golden has -inf (or NaN) would still pass
     # the check above. Verify those match exactly too.
     golden_nan, result_nan = torch.isnan(golden), torch.isnan(result)
-    nan_mismatch = (golden_nan != result_nan) & reliable
+    nan_mismatch = golden_nan != result_nan
     assert (
         not nan_mismatch.any()
     ), f"rpow(exponent={exponent}) NaN classification diverged for {int(nan_mismatch.sum().item())} elements"
     golden_inf, result_inf = torch.isinf(golden), torch.isinf(result)
-    sign_mismatch = golden_inf & result_inf & reliable & (torch.sign(golden) != torch.sign(result))
+    sign_mismatch = golden_inf & result_inf & (torch.sign(golden) != torch.sign(result))
     assert (
         not sign_mismatch.any()
     ), f"rpow(exponent={exponent}) infinity sign diverged for {int(sign_mismatch.sum().item())} elements"
 
-    finite = golden_finite & result_finite & reliable
+    finite = golden_finite & result_finite
     assert_with_pcc(golden[finite], result[finite], pcc=0.99)
     assert_allclose(expected_result=golden[finite], actual_result=result[finite], atol=1e-2, rtol=0.1)
 
