@@ -2277,6 +2277,9 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Bit copy of one operand. A non-finite probe checks the pipeline,
         # not this kernel.
         MathOperation.SfpuCopyDest,
+        # The SFPU returns +0 where torch's zero is -0, and the stock kernel's NaN class is its own: a
+        # cat-B probe asserts torch's class on cells the kernel's PR states instead.
+        MathOperation.SfpuSituGlu,
     }
 )
 
