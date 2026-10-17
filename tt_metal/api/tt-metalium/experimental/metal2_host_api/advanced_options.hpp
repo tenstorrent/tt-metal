@@ -275,6 +275,17 @@ struct DFBAdvancedOptions {
     Group<PrefetcherPipeParamName> prefetcher_pipe_relays;
 };
 
+struct ScratchpadAdvancedOptions {
+    // Allow the same scratchpad to be bound by multiple kernels on a node, such as a
+    // DM kernel and a compute kernel. Both kernels access the same backing L1 memory.
+    // By default, a scratchpad is private to one kernel on each node.
+    //
+    // This shares raw memory; it does not provide DFB producer/consumer synchronization.
+    // Kernel logic must synchronize shared accesses to prevent races and data clobbering.
+    // Each kernel may bind a given ScratchpadSpec only once.
+    bool allow_multi_kernel_binding = false;
+};
+
 struct ProgramAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
     // PrefetcherPipe parameters (experimental)

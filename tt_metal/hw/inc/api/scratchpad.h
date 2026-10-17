@@ -33,6 +33,7 @@ enum class DataFormat : std::uint8_t;
  * 1. Reading uninitialized data.
  * 2. Data races across threads in multi-threaded kernels.
  * 3. Data races across pipeline stages (Unpack/Math/Pack) in compute kernels.
+ * 4. Data races across kernels when ScratchpadSpec::advanced_options.allow_multi_kernel_binding is enabled.
  *
  * Indexed access via operator[] is bounds-checked with ASSERT (see api/debug/assert.h for when it's activated).
  *
@@ -211,8 +212,8 @@ struct noc_traits_t<Scratchpad<T>> {
     }
     template <Noc::AddressType address_type>
     static auto dst_addr_mcast(const Scratchpad<T>&, const Noc&, const dst_args_mcast_type&) {
-        // A scratchpad is private to one kernel instance per node, so multicasting into it would be
-        // writing into other kernels' private memory. Revisit only if a real use case appears.
+        // A scratchpad binding grants access to local L1 only, even when shared across local kernels.
+        // It does not grant access to scratchpads on other nodes for multicast writes.
         static_assert(false, "Scratchpad cannot be used as a NoC multicast destination");
     }
 };
