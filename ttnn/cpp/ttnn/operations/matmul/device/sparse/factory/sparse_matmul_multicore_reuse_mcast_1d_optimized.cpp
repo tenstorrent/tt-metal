@@ -531,7 +531,10 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device->arch(),
+        num_cores,
+        mm_kernel_defines,
+        ttnn::operations::compute_throttle_utils::dfb_slot_operand("in1"));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(),
         num_cores,
