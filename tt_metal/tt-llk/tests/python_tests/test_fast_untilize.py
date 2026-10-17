@@ -17,6 +17,7 @@ import struct
 import pytest
 import torch
 from fast_untilize_common import (
+    FAST_UNTILIZE_BFP2_B_DIMS,
     FAST_UNTILIZE_DEST_SYNC_MODES,
     FAST_UNTILIZE_DIMS,
     FAST_UNTILIZE_FACE_C,
@@ -25,6 +26,7 @@ from fast_untilize_common import (
     FAST_UNTILIZE_TILE_C,
     FAST_UNTILIZE_TILE_FACE_ROWS,
     FAST_UNTILIZE_TILE_R,
+    fast_untilize_bfp2_b_formats,
     fast_untilize_dest_acc_modes,
     fast_untilize_formats,
 )
@@ -210,6 +212,23 @@ def _run_fast_untilize_correctness(
     stimulus_kind=["row_id", "random"],
 )
 def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
+    _run_fast_untilize_correctness(
+        formats, dest_acc, dimensions, dest_sync, stimulus_kind
+    )
+
+
+# Every compressed block-float input carries a per-tile exponent section, so it
+# must take the per-tile BFP unpack path. Routing Bfp2_b through the dense
+# multi-tile MOP reads exponents from tile 0's mantissa area from face 4 on
+# and silently corrupts the row-major output.
+@parametrize(
+    formats=fast_untilize_bfp2_b_formats(),
+    dest_acc=fast_untilize_dest_acc_modes,
+    dimensions=FAST_UNTILIZE_BFP2_B_DIMS,
+    dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
+    stimulus_kind=["row_id", "random"],
+)
+def test_fast_untilize_bfp2_b(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
     _run_fast_untilize_correctness(
         formats, dest_acc, dimensions, dest_sync, stimulus_kind
     )
