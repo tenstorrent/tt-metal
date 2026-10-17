@@ -40,11 +40,13 @@ inline void llk_unpack_AB_matmul_init(
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,
     const std::uint32_t kt_dim = 1) {
-    // Compile-time form of the unified init's runtime LLK_ASSERT (compiled out in production builds): there is
-    // no math program for a one-face SrcA by a one-face SrcB; the 32x32 default would run over them silently.
+    // Compile-time form of the unified init's runtime LLK_ASSERT (compiled out in production builds), widened to
+    // the full support matrix: a pair the math dispatch has no program for would run the 32x32 default over
+    // faces the operands do not have.
     static_assert(
-        !(IN0_DESC.shape.total_num_faces() == 1 && IN1_DESC.shape.total_num_faces() == 1),
-        "llk_unpack_AB_matmul_init: 16x16 by 16x16 matmul is not supported");
+        ckernel::experimental::is_supported_matmul_operand_pair(IN0_DESC.shape, IN1_DESC.shape),
+        "llk_unpack_AB_matmul_init: unsupported in0/in1 tile pair (16x16 by 16x16, mismatched inner dimension, or "
+        "an in1 other than 32x32 / 32x16 / 16x32)");
     SAN_HOOK(unsupported());
     // unpA(SrcA) <- IN1, unpB(SrcB) <- IN0.
     llk_unpack_AB_matmul_init_impl(

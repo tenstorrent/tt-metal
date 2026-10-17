@@ -152,6 +152,38 @@ constexpr bool is_8bit_format(DataFormat f) { return IS_8BIT_FORMAT(static_cast<
 constexpr bool is_partial_height(TensorShape s) { return s.total_row_dim() < TILE_R_DIM; }
 
 /**
+ * (internal) True iff the unpack tilize datapath has a program for an input tile of format `f` and geometry
+ * `s`: the tile must have 2 or 4 faces (there is no single-face tilize program), and an 8-bit (Int8/UInt8/
+ * Fp8_e4m3/Lf8) input must be two faces wide (its face-addressing sequence reads face 1 as the right-hand
+ * neighbour, so a narrow single-face-column 8-bit tile reads the wrong face). Both limits are runtime
+ * LLK_ASSERTs in the LLK that production builds compile out; the tilize ops assert this at compile time.
+ */
+constexpr bool is_supported_tilize_input(DataFormat f, TensorShape s) {
+    const std::uint8_t nf = s.total_num_faces();
+    const bool face_count_ok = (nf == 2 || nf == 4);
+    const bool width_ok = !(is_8bit_format(f) && s.num_faces_c_dim == 1);
+    return face_count_ok && width_ok;
+}
+
+/**
+ * (internal) True iff the Blackhole matmul LLK has unpack + math programs for the operand pair (`in0` -> SrcB,
+ * `in1` -> SrcA): the inner dimension must match (in0 columns == in1 rows); in0 must be K == 32 wide (any legal
+ * 1..32-row height, tiny tiles included) or the 32x16 tile -- a 16-column in0 with fewer than 32 rows (16x16 and
+ * its sub-16-row forms) has no math program and would run the default 32x32 one over faces it does not have;
+ * in1 must be 32x32, 32x16 or 16x32. Matches the support matrix the LLK's own test validator enforces
+ * (tt-llk tests/python_tests/fuser/validator.py, MATMUL_INNER_TILE_DIMS + SUPPORTED_TILE_SIZES). The LLK's only
+ * guard is a runtime LLK_ASSERT on the 16x16-by-16x16 pair that production builds compile out.
+ */
+constexpr bool is_supported_matmul_operand_pair(TensorShape in0, TensorShape in1) {
+    const bool inner_dim_match = in0.total_col_dim() == in1.total_row_dim();
+    const bool in0_ok = (in0.total_col_dim() == TILE_C_DIM) || (in0.total_row_dim() == TILE_R_DIM);
+    const bool in1_full_height =
+        in1.total_row_dim() == TILE_R_DIM && (in1.total_col_dim() == TILE_C_DIM || in1.total_col_dim() == FACE_C_DIM);
+    const bool in1_half_height = in1.total_row_dim() == FACE_R_DIM && in1.total_col_dim() == TILE_C_DIM;
+    return inner_dim_match && in0_ok && (in1_full_height || in1_half_height);
+}
+
+/**
  * (internal) True iff two operands carry the same tile geometry (a two-input op requires matching shapes).
  * Used by the binary-op static_asserts. `a`, `b`: the two tile geometries to compare.
  */

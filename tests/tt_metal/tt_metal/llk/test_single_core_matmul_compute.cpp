@@ -17,6 +17,7 @@
 #include <ostream>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -1442,40 +1443,76 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulBlockIdFreeGolden) {
 }
 
 // Compile-time contract of the id-free matmul operand geometry; these programs are never launched. The LLK has
-// no math program for a single-face in0 by a single-face in1 (16x16 by 16x16): its only guard is a runtime
-// LLK_ASSERT that production builds compile out, after which the 32x32 program runs over one-face operands and
-// produces a wrong product with no diagnostic. The API must reject that pair at compile time (both the
-// single-tile and the block init), while a single-face operand paired with a multi-face one stays accepted.
+// unpack + math programs only for the pairs of the Blackhole matmul support matrix: in0 columns == in1 rows,
+// in0 not 16x16 (any 1..32-row height with 32 columns, or 32x16), in1 one of 32x32 / 32x16 / 16x32. Its only
+// guard is a runtime LLK_ASSERT on the 16x16-by-16x16 pair that production builds compile out; every other
+// unsupported pair (a single-face operand next to a multi-face one, a mismatched inner dimension) silently runs
+// the default 32x32 program over faces the operand does not have. The API must reject all of them at compile
+// time, in both the single-tile and the block init, and keep accepting every supported pair.
 TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulIdFreeCompileLimits) {
-    // in0 faces (r, c), in1 faces (r, c), block init, accepted.
-    const std::array<std::array<std::uint32_t, 6>, 8> cases{{
-        {2, 2, 2, 2, 0, 1},
-        {1, 1, 2, 2, 0, 1},
-        {2, 2, 1, 1, 0, 1},
-        {1, 1, 1, 1, 0, 0},
-        {2, 2, 2, 2, 1, 1},
-        {1, 2, 1, 1, 1, 1},
-        {1, 1, 2, 1, 1, 1},
-        {1, 1, 1, 1, 1, 0},
+    struct Case {
+        std::uint32_t in0_faces_r, in0_faces_c, in1_faces_r, in1_faces_c;
+        std::uint32_t in0_face_r_dim;
+        bool accepted;
+    };
+    // Face dims are 16x16 unless in0_face_r_dim says otherwise; tile dims = faces x face dims.
+    const std::array<Case, 15> cases{{
+        // Supported pairs (in0 x in1).
+        {2, 2, 2, 2, 16, true},  // 32x32 x 32x32
+        {2, 2, 2, 1, 16, true},  // 32x32 x 32x16
+        {2, 1, 1, 2, 16, true},  // 32x16 x 16x32
+        {1, 2, 2, 2, 16, true},  // 16x32 x 32x32
+        {1, 2, 2, 1, 16, true},  // 16x32 x 32x16
+        {1, 2, 2, 2, 8, true},   // 8x32 x 32x32 (tiny-tile in0)
+        // 16x16 in0 (no math program), inner dimension matched or not.
+        {1, 1, 1, 1, 16, false},  // 16x16 x 16x16
+        {1, 1, 1, 2, 16, false},  // 16x16 x 16x32
+        {1, 1, 2, 2, 16, false},  // 16x16 x 32x32
+        {1, 1, 2, 1, 16, false},  // 16x16 x 32x16
+        {1, 1, 1, 2, 8, false},   // 8x16 x 16x32 (sub-16-row single face in0)
+        // Inner dimension mismatch with a multi-face in0.
+        {2, 2, 1, 1, 16, false},  // 32x32 x 16x16
+        {1, 2, 1, 1, 16, false},  // 16x32 x 16x16
+        {2, 1, 2, 2, 16, false},  // 32x16 x 32x32
+        // Inner dimension matched but in1 is 16x16 (not a supported in1 tile).
+        {2, 1, 1, 1, 16, false},  // 32x16 x 16x16
     }};
     const CoreCoord core{0, 0};
     for (const auto& test : cases) {
-        SCOPED_TRACE(
-            ::testing::Message() << "in0_faces=" << test[0] << "x" << test[1] << ", in1_faces=" << test[2] << "x"
-                                 << test[3] << ", block=" << test[4]);
-        Program program = CreateProgram();
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/matmul_idfree_compile_limits.cpp",
-            core,
-            ComputeConfig{
-                .math_fidelity = MathFidelity::LoFi,
-                .fp32_dest_acc_en = false,
-                .compile_args = {test[0], test[1], test[2], test[3], test[4]}});
-        if (test[5]) {
-            EXPECT_NO_THROW(program.impl().compile(&this->device()));
-        } else {
-            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        for (std::uint32_t block = 0; block < 2; ++block) {
+            SCOPED_TRACE(
+                ::testing::Message() << "in0_faces=" << test.in0_faces_r << "x" << test.in0_faces_c
+                                     << ", in0_face_r_dim=" << test.in0_face_r_dim << ", in1_faces=" << test.in1_faces_r
+                                     << "x" << test.in1_faces_c << ", block=" << block);
+            Program program = CreateProgram();
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/compute/matmul_idfree_compile_limits.cpp",
+                core,
+                ComputeConfig{
+                    .math_fidelity = MathFidelity::LoFi,
+                    .fp32_dest_acc_en = false,
+                    .compile_args = {
+                        test.in0_faces_r,
+                        test.in0_faces_c,
+                        test.in1_faces_r,
+                        test.in1_faces_c,
+                        block,
+                        test.in0_face_r_dim}});
+            if (test.accepted) {
+                EXPECT_NO_THROW(program.impl().compile(&this->device()));
+                continue;
+            }
+            // The build failure carries the compiler log; the rejection must come from the API's static_assert,
+            // not from some unrelated build error.
+            const std::string expected_assert =
+                block ? "matmul_block_init: unsupported operand pair" : "matmul_init: unsupported operand pair";
+            try {
+                program.impl().compile(&this->device());
+                ADD_FAILURE() << "unsupported operand pair compiled";
+            } catch (const std::runtime_error& e) {
+                EXPECT_NE(std::string(e.what()).find(expected_assert), std::string::npos) << e.what();
+            }
         }
     }
 }

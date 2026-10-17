@@ -30,6 +30,9 @@ namespace experimental {
  * are required: the tilize pack init needs the input format as well as the output format/geometry. `block`
  * is the tilize block width (ct_dim) the unpacker MOP is configured for. Blackhole only.
  *
+ * Input tiles with 1 face, and narrow (single face column) 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) input tiles, are
+ * compile-time rejected.
+ *
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                     | bool                   |  | False |
  * | Template | InFormat/InShape   | Input buffer L1 format + geometry (deduced)  | DataFormat/TensorShape |  | True |
  * | Template | OutFormat/OutShape | Output buffer L1 format + geometry (deduced)  | DataFormat/TensorShape |  | True |
@@ -47,12 +50,9 @@ ALWI void tilize_init(
     static_assert(is_legal_tile_shape(InShape), "tilize_init: illegal input tile shape.");
     static_assert(is_legal_tile_shape(OutShape), "tilize_init: illegal output tile shape.");
     static_assert(
-        InShape.total_num_faces() == 2 || InShape.total_num_faces() == 4,
-        "tilize_init: input tile must have 2 or 4 faces (the unpack tilize datapath has no single-face program).");
-    static_assert(
-        !(is_8bit_format(InFormat) && InShape.num_faces_c_dim == 1),
-        "tilize_init: 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) narrow tiles (a single face column) are not supported by the "
-        "unpack tilize datapath.");
+        is_supported_tilize_input(InFormat, InShape),
+        "tilize_init: unsupported input tile: 2 or 4 faces required, and an 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) input "
+        "must be two faces wide (the unpack tilize datapath has no program for other input tiles).");
     UNPACK((llk_unpack_tilize_init<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>(block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           LLKOperand<InFormat, InShape>::descriptor,
@@ -79,6 +79,9 @@ ALWI void tilize_init(
  * output_tile_index (both default 0) shift the unpack source / pack destination tile index; at their
  * defaults, tile t lands in slot t and the source base is in.l1_address, byte-identical to the legacy op.
  *
+ * Input tiles with 1 face, and narrow (single face column) 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) input tiles, are
+ * compile-time rejected.
+ *
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                                       | bool       |      | False |
  * | Function | in                | Input operand (unpack base; LLK offsets by input_tile_index + t) | LLKOperand |      | True  |
  * | Function | block             | Number of column tiles in the block                             | uint32_t   | > 0  | True  |
@@ -102,12 +105,9 @@ ALWI void tilize_block(
     static_assert(is_legal_tile_shape(InShape), "tilize_block: illegal input tile shape.");
     static_assert(is_legal_tile_shape(OutShape), "tilize_block: illegal output tile shape.");
     static_assert(
-        InShape.total_num_faces() == 2 || InShape.total_num_faces() == 4,
-        "tilize_block: input tile must have 2 or 4 faces (the unpack tilize datapath has no single-face program).");
-    static_assert(
-        !(is_8bit_format(InFormat) && InShape.num_faces_c_dim == 1),
-        "tilize_block: 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) narrow tiles (a single face column) are not supported by the "
-        "unpack tilize datapath.");
+        is_supported_tilize_input(InFormat, InShape),
+        "tilize_block: unsupported input tile: 2 or 4 faces required, and an 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) input "
+        "must be two faces wide (the unpack tilize datapath has no program for other input tiles).");
     // Unpack the whole block into srcA first (mirrors llk_unpack_tilize_block), then drain via math+pack.
     for (std::uint32_t t = 0; t < block; t++) {
         UNPACK((llk_unpack_tilize<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>(
@@ -142,6 +142,9 @@ ALWI void tilize_block(
  * Id-free tilize uninit. Restores the SrcA/tile config so a subsequent op can reprogram the unpacker, and
  * resets the packer to Default mode. Blackhole only.
  *
+ * Input tiles with 1 face, and narrow (single face column) 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) input tiles, are
+ * compile-time rejected.
+ *
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode | bool | | False |
  */
 // clang-format on
@@ -153,12 +156,9 @@ template <
     TensorShape OutShape>
 ALWI void tilize_uninit(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<OutFormat, OutShape> /*out*/) {
     static_assert(
-        InShape.total_num_faces() == 2 || InShape.total_num_faces() == 4,
-        "tilize_uninit: input tile must have 2 or 4 faces (the unpack tilize datapath has no single-face program).");
-    static_assert(
-        !(is_8bit_format(InFormat) && InShape.num_faces_c_dim == 1),
-        "tilize_uninit: 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) narrow tiles (a single face column) are not supported by the "
-        "unpack tilize datapath.");
+        is_supported_tilize_input(InFormat, InShape),
+        "tilize_uninit: unsupported input tile: 2 or 4 faces required, and an 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) input "
+        "must be two faces wide (the unpack tilize datapath has no program for other input tiles).");
     UNPACK((llk_unpack_tilize_uninit<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>()));
     PACK((llk_pack_init<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en, PackMode::Default>()));
 }

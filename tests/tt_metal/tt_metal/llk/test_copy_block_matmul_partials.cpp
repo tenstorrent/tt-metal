@@ -478,6 +478,9 @@ namespace {
 // Packer DEST capacity for 32x32 tiles under fp32 dest-acc + SyncHalf with a Float32 output: half of DEST at a
 // 32-bit datum (the packer W-stride is 4096 B; a 16-bit output would keep a 2048 B stride and a bound of 8).
 constexpr std::uint32_t kFp32HalfSyncDestTiles = 4;
+// Tile count packed from that window to overrun it: twice the capacity, so the first out-of-window tile index
+// (kFp32HalfSyncDestTiles) is reached.
+constexpr std::uint32_t kOverrunTiles = 2 * kFp32HalfSyncDestTiles;
 
 // One DEST window: `copy_tiles` Float16_b tiles copied into DST and `pack_tiles` packed back out as Float32
 // through the id-free pack_block (id_free) or the legacy CB-id pack_tile loop, under fp32 dest-acc + SyncHalf.
@@ -590,9 +593,9 @@ void run_pack_block_dest_overrun(distributed::MeshDevice& mesh, bool id_free) {
         << " tiles tripped the watcher: " << MetalContext::instance().watcher_server()->exception_message();
     EXPECT_EQ(result, golden) << path << ": in-capacity pack does not reproduce the input";
 
-    run_pack_block_dest_capacity(mesh, src, kFp32HalfSyncDestTiles, 2 * kFp32HalfSyncDestTiles, id_free, completed);
+    run_pack_block_dest_capacity(mesh, src, kFp32HalfSyncDestTiles, kOverrunTiles, id_free, completed);
     const std::string exception = wait_for_watcher_exception();
-    ASSERT_FALSE(exception.empty()) << path << ": packed " << 2 * kFp32HalfSyncDestTiles << " tiles from a "
+    ASSERT_FALSE(exception.empty()) << path << ": packed " << kOverrunTiles << " tiles from a "
                                     << kFp32HalfSyncDestTiles
                                     << "-tile DEST window without tripping the DST-capacity assert";
     EXPECT_NE(exception.find("tripped an assert"), std::string::npos) << exception;

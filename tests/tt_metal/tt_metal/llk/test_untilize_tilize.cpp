@@ -1921,8 +1921,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeBlock4IdFreeGolden) {
 // tilize LLK accepts only 2- or 4-face input tiles and, for the 8-bit formats (Int8/UInt8/Fp8_e4m3/Lf8), only a
 // two-face-wide tile row: its 8-bit sequence addresses face 1 as the right-hand neighbour, so a narrow (single
 // face column) 8-bit tile reads the wrong face. Both limits are runtime LLK_ASSERTs that production builds
-// compile out, so the API must reject those shapes at compile time; wide 8-bit tiles and narrow 16-bit tiles
-// stay accepted.
+// compile out, so the API must reject those shapes at compile time in each of tilize_init, tilize_block and
+// tilize_uninit; wide 8-bit tiles and narrow 16-bit tiles stay accepted.
 TEST_F(LLKBlackholeSingleCardFixture, TensixTilizeIdFreeCompileLimits) {
     struct Case {
         tt::DataFormat format;
@@ -1941,23 +1941,35 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTilizeIdFreeCompileLimits) {
         {tt::DataFormat::UInt8, 2, 1, false},
         {tt::DataFormat::Fp8_e4m3, 2, 1, false},
     }};
+    // Each entry point is compiled on its own (compile arg `mode`) so dropping any one of the three asserts fails.
+    const std::array<std::string, 3> entry_points{"tilize_init", "tilize_block", "tilize_uninit"};
     const CoreCoord core{0, 0};
     for (const auto& test : cases) {
-        SCOPED_TRACE(
-            ::testing::Message() << "format=" << enchantum::to_string(test.format) << ", faces=" << test.faces_r << "x"
-                                 << test.faces_c);
-        Program program = CreateProgram();
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/tilize_2_0_compile_limits.cpp",
-            core,
-            ComputeConfig{
-                .fp32_dest_acc_en = false,
-                .compile_args = {static_cast<std::uint32_t>(test.format), test.faces_r, test.faces_c}});
-        if (test.accepted) {
-            EXPECT_NO_THROW(program.impl().compile(&this->device()));
-        } else {
-            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        for (std::uint32_t mode = 0; mode < entry_points.size(); ++mode) {
+            SCOPED_TRACE(
+                ::testing::Message() << "format=" << enchantum::to_string(test.format) << ", faces=" << test.faces_r
+                                     << "x" << test.faces_c << ", entry=" << entry_points[mode]);
+            Program program = CreateProgram();
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/compute/tilize_2_0_compile_limits.cpp",
+                core,
+                ComputeConfig{
+                    .fp32_dest_acc_en = false,
+                    .compile_args = {static_cast<std::uint32_t>(test.format), test.faces_r, test.faces_c, mode}});
+            if (test.accepted) {
+                EXPECT_NO_THROW(program.impl().compile(&this->device()));
+                continue;
+            }
+            // The build failure carries the compiler log; the rejection must come from the API's static_assert,
+            // not from some unrelated build error.
+            const std::string expected_assert = entry_points[mode] + ": unsupported input tile";
+            try {
+                program.impl().compile(&this->device());
+                ADD_FAILURE() << "unsupported input tile compiled";
+            } catch (const std::runtime_error& e) {
+                EXPECT_NE(std::string(e.what()).find(expected_assert), std::string::npos) << e.what();
+            }
         }
     }
 }
