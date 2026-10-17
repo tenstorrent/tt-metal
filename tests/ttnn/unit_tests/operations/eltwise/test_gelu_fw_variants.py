@@ -277,8 +277,9 @@ def test_gelu_inf_nan_handling(device, variant_name, torch_dtype, tt_dtype):
     NaN is fed with both signs. torch stores float("nan") as the positive
     canonical pattern, but a host 0/0 or inf-inf gives the sign-set 0xFFC00000,
     so that pattern is written through an integer view. The accurate fp32 kernel
-    must return NaN for either sign: its region test is a sign-magnitude ordered
-    compare that sorts -NaN below -inf, where the saturation default is 0."""
+    must return NaN for either sign: its region test x > GELU_SAT is not NaN-aware
+    (Blackhole orders -NaN below -inf; Wormhole subtracts and sign-tests the NaN
+    that comes out), so -NaN fails it and keeps the saturation default 0."""
     variant_enum, _ = _VARIANTS[variant_name]
     inputs = torch.zeros((32, 32), dtype=torch_dtype)
     inputs[0, 0] = float("inf")
