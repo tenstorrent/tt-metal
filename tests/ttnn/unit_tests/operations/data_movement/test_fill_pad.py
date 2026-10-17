@@ -525,3 +525,26 @@ def test_fill_pad_rank_gt3_sharded(device, fill_value, shape, shard_shape, dtype
     padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
     assert_quality(padded_torch_tensor, padded_torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape, grid_end, shard_shape",
+    [
+        ((1, 1, 100, 256), (1, 1), (64, 128)),  # the repro from #53110
+        ((1, 1, 100, 288), (1, 2), (64, 96)),  # non-square grid: 2 block rows along x, 3 block columns along y
+    ],
+)
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_fill_implicit_tile_padding_block_sharded_orientations(device, shape, grid_end, shard_shape, orientation):
+    # BLOCK_SHARDED + COL_MAJOR used to write the padding fill over the logical region (#53110).
+    if orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        grid_end = (grid_end[1], grid_end[0])
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(*grid_end))])
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(grid, list(shard_shape), orientation)
+    )
+    tensor = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    tensor = ttnn.fill_implicit_tile_padding(tensor, 7.0)
+    assert torch.equal(ttnn.to_torch(tensor), x)
