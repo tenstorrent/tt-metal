@@ -100,11 +100,11 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // CB allocation).
 
     // ---- banded-product schedule -------------------------------------------------------------
-    // groups -> rows (phase-stack when group_count > grid_y), bands -> columns (each owns a contiguous chunk).
-    // When the group dimension leaves grid rows idle (short sequences: group_count < grid_y), replicate each
-    // group across num_blocks row-blocks and split its band range across them (a band-chunk per block). Cells
-    // in different blocks write disjoint output columns -- no cross-core reduce -- and each block's k-mcast
-    // stays a contiguous per-column rectangle (a block's group_rows rows share that block's band-chunk).
+    // groups -> rows (phase-stack when group_count > grid_y), bands -> (block, column) cells, dealt round-robin
+    // (indexer_schedule::for_core) so a runtime kv_len below the K capacity spreads over every cell. When the
+    // group dimension leaves grid rows idle (short sequences: group_count < grid_y), replicate each group across
+    // num_blocks row-blocks. Cells write disjoint output columns -- no cross-core reduce -- and each cell's
+    // k-mcast stays a per-column rectangle (a block's group_rows rows share that cell's bands).
     const uint32_t group_count = Sqt / QC;
     const uint32_t band_count = units_in_group(KC, Tt);  // ceil(Tt/KC)
     const auto grid = q.device()->compute_with_storage_grid_size();
@@ -122,10 +122,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t num_groups = group_count / group_rows;
 
     // Widest cell's band count: the streaming q-mcast pad target (the kernels pad each row to max_bands with
-    // q-only phantom bands so the rendezvous stays uniform). Widest block has ceil(band_count/num_blocks)
-    // bands; its widest column ceil(that/cols_used).
-    const uint32_t bands_in_widest_block = (band_count + num_blocks - 1) / num_blocks;
-    const uint32_t max_bands = (bands_in_widest_block + cols_used - 1) / cols_used;
+    // q-only phantom bands so the rendezvous stays uniform). Round-robin over num_blocks * cols_used cells.
+    const uint32_t max_bands = (band_count + num_blocks * cols_used - 1) / (num_blocks * cols_used);
 
     const CoreRange core_rect(CoreCoord{0, 0}, CoreCoord{cols_used - 1, rows_used - 1});
     const CoreRangeSet core_ranges(core_rect);
