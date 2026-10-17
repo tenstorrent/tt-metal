@@ -2573,8 +2573,8 @@ def test_softcap_bfloat16_full_domain(device):
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)
 
-    # NaN does not propagate through min(., 1.0), so the op returns a finite value where
-    # torch returns NaN. Excluded here.
+    # The kernel keeps a NaN a NaN, but a NaN written to a 16-bit Dest reaches L1 as an
+    # infinity, so the op returns inf where torch returns NaN. Excluded here.
     input_tensor = torch.where(torch.isnan(input_tensor), torch.zeros_like(input_tensor), input_tensor)
 
     tt_in = ttnn.from_torch(

@@ -94,6 +94,9 @@
 #include "llk_sfpu/ckernel_sfpu_signbit.h"
 #include "llk_sfpu/ckernel_sfpu_silu.h"
 #include "llk_sfpu/ckernel_sfpu_snake_beta.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_sfpu/ckernel_sfpu_softcap.h" // the kernel and its SfpuType entry exist on Blackhole (and Quasar) only
+#endif
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #include "llk_sfpu/ckernel_sfpu_softshrink.h"
 #include "llk_sfpu/ckernel_sfpu_softsign.h"
@@ -657,6 +660,12 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(sqrt_init<APPROX_MODE>);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (OPERATION == SfpuType::softcap)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(softcap_init);
+    }
+#endif
     else if constexpr (OPERATION == SfpuType::tanh)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(tanh_init<APPROX_MODE, is_fp32_dest_acc_en>);
@@ -1120,6 +1129,21 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
         }
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (OPERATION == SfpuType::softcap)
+    {
+        // beta = 5 and its reciprocal, as fp32 bits (sfpu_dispatch_constants.py holds the golden's copy).
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_softcap,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index,
+            vector_mode,
+            0x40A00000u /* beta = 5.0f */,
+            0x3E4CCCCDu /* 1 / beta = 0.2f */);
+    }
+#endif
     else if constexpr (OPERATION == SfpuType::tanh)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tanh, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);

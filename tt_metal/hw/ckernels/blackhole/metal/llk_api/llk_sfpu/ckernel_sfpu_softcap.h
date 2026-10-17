@@ -19,10 +19,12 @@ namespace ckernel::sfpu {
 // runtime beta exhausts the SFPU LReg file, a hard compile abort rather than a slowdown.
 // Use tanh_tile if fp32-grade tanh is needed.
 //
-// +/-Inf clamps to +/-beta and a NaN stays a NaN, as in torch (the bfloat16 rounding and a
-// 16-bit Dest store then carry it as an infinity of the same sign); -0.0 comes back as +0.0
-// (measured), matching stock calculate_tanh / tanh_tile rather than torch. Leaves rounding to
-// the caller, so fused callers can round once at the end.
+// +/-Inf clamps to +/-beta and a NaN stays a NaN, as in torch, but without its sign: the
+// multiply-adds on either side of the tanh re-emit the canonical positive NaN (SFPMAD.md), so a
+// NaN of either sign comes back as +NaN on an fp32 Dest and, through the bfloat16 rounding and
+// the 16-bit Dest store, as +inf on a 16-bit Dest (measured; test_softcap_polynomial_specials
+// records both). -0.0 comes back as +0.0 (measured), matching stock calculate_tanh / tanh_tile
+// rather than torch. Leaves rounding to the caller, so fused callers can round once at the end.
 sfpi_inline sfpi::vFloat _sfpu_softcap_(sfpi::vFloat x, sfpi::vFloat beta, sfpi::vFloat inv_beta) {
     return _sfpu_tanh_polynomial_(x * inv_beta) * beta;
 }

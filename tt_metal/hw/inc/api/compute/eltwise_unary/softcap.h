@@ -26,8 +26,11 @@ namespace ckernel {
  * and is only available on the compute engine.
  *
  * The output is bounded by beta: near-linear for |x| << beta, saturating smoothly at
- * +/-beta rather than truncating. +/-Inf clamps to +/-beta; NaN does not propagate and
- * -0.0 returns +0.0, both as in tanh_tile.
+ * +/-beta rather than truncating. +/-Inf clamps to +/-beta and -0.0 returns +0.0, both
+ * as in tanh_tile. A NaN input differs per architecture. On Blackhole the polynomial
+ * keeps it a NaN, as torch does, but drops its sign, so the op returns +inf on a 16-bit
+ * Dest (which stores a NaN as an infinity) and +NaN with fp32 Dest accumulation. On
+ * Quasar the polynomial's saturation clamp returns +/-beta for a NaN.
  * The bound is exact in fp32; a bf16 pack rounds to nearest, so a beta that is not
  * bf16-representable can come back up to half a bf16 ULP above beta.
  *

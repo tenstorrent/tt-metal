@@ -289,6 +289,22 @@ class SFPU_CLOBBER_LREGS(TemplateParameter):
 
 
 @dataclass
+class SFPU_UNARY_ITERATIONS(TemplateParameter):
+    """Override the 32 SFPU iterations ``eltwise_unary_sfpu_test.cpp`` runs per tile.
+
+    32 iterations of 32 lanes cover a 32x32 tile. A kernel that walks the tile in pairs
+    (``calculate_tanh``'s polynomial path) only reaches its single-vector tail on an odd
+    count, and 1 makes that tail the whole op: vector 0 alone runs, vectors 1..31 are left
+    as the datacopy wrote them. Honoured by ``eltwise_unary_sfpu_test.cpp`` only.
+    """
+
+    iterations: int = 32
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SFPU_UNARY_ITERATIONS {self.iterations}"
+
+
+@dataclass
 class SFPU_BINOP_MODE(TemplateParameter):
     """Select the float unary-with-scalar binop at compile time.
 
