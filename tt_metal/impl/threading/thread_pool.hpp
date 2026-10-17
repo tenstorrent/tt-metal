@@ -4,11 +4,12 @@
 
 #pragma once
 
-#include <functional>
 #include <memory>
 #include <optional>
 #include <thread>
 #include <vector>
+
+#include <tt_stl/move_only_function.hpp>
 
 #include "impl/context/context_types.hpp"
 
@@ -24,7 +25,7 @@ public:
     // DeviceBoundThreadPool), the worker thread "closest" to the physical device will be used to execute
     // the specified task. This can lead to better host performance. If not specified, the thread-pool
     // will choose a thread based on a round robin distribution strategy.
-    virtual void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) = 0;
+    virtual void enqueue(ttsl::move_only_function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) = 0;
     virtual void wait() = 0;
 };
 
