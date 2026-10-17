@@ -346,8 +346,8 @@ inline constexpr bool is_32bit_input(const std::uint32_t src_format, const std::
 
 // Pack the SrcA/SrcB ALU formats into their fields of the ALU_FORMAT_SPEC_REG0_SrcA_ADDR32 config word. The two fields
 // are DATA_FORMAT_BIT_COUNT (4) bits wide and adjacent, so each value is masked before the shift, as the unpacker does:
-// shifting a raw UInt8 (30) / UInt32 (24) in would land SrcA's bit 4 on SrcB's LSB. Every writer of these fields must
-// go through this helper.
+// shifting a raw UInt8 (30) / UInt32 (24) in would land SrcA's bit 4 on SrcB's LSB. Writers that program both fields go
+// through this helper; writers that program one field mask it with masked_data_format() before the single-field RMW.
 inline constexpr std::uint32_t alu_src_format_cfg(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
     return (masked_data_format(srca_data_format) << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) |
