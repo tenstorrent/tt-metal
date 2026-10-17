@@ -289,6 +289,35 @@ def test_the_tail_limit_after_an_index_step_follows_its_noise_floor(gspec):
     assert not tail(flip(list(range(64))), flip([4, 5, 6, 7])), "far more flips than the floor still fail"
 
 
+def test_the_tail_floor_includes_the_bf16_rounding_of_a_float_step(gspec):
+    """F98: a float step feeding a top-k: a nudge that moves nothing gives a zero floor, but a correct bf16 device
+    output flips near-ties downstream (DeepSeek-V4.1 engram_kv -> indexer: 0.041 vs a 0.0033 limit)."""
+    from types import SimpleNamespace as NS
+
+    from models.demos.common.bringup.testing import component as C
+
+    s = gspec()
+    g = torch.Generator().manual_seed(0)
+    v = torch.randn(64, 32, generator=g)
+    cpu = torch.randn(64, 32, generator=g)  # scores: bf16 rounding reorders a few near-ties
+
+    def pick(ctx, v, y):
+        return v.gather(1, y.topk(4, dim=-1).indices)
+
+    steps = [NS(name="score", inputs=["v"], output="y"), NS(name="pick", inputs=["v", "y"], output="out")]
+    ref = NS(component=lambda layer, name: pick)
+    ctx = NS(state={}, extra={})
+
+    def tail(dev):
+        M.reset("T")
+        seen = {"v": v, "y": dev, "out": pick(None, v, dev)}
+        return C._check_tail(s, ref, 0, steps, steps[0], seen, cpu, {"ctx": ctx, "model": [cpu.clone()]})
+
+    assert tail(cpu.to(torch.bfloat16).float()), "a correct bf16 device step"
+    assert got()["swap_score_out_rel"] > 0.01
+    assert not tail(cpu.flip(-1)), "a wrong step still fails"
+
+
 def test_a_frozen_test_that_wraps_the_step_check_with_the_old_signature_still_works(gspec, monkeypatch):
     """F79: swap tests frozen before F76 patch component._check_step with an eight-argument wrapper."""
     from unittest import mock

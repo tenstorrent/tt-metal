@@ -201,3 +201,7 @@ Every intervention by the supervising session: time, task, trigger, classificati
 ## 2026-10-16 22:25 C.enc_source.ffn_hc: test passes with a zero stub
 - Class: framework (F85 waiver passed any finite output). F97: waived steps still fail beyond rel 0.2. The test agent
   was stopped (doomed: it may not change the framework); resumed.
+
+## 2026-10-17 00:35 S.enc_source_engram.02 gate FAIL (swap_engram_kv_out 0.041 > 0.0033)
+- engram_kv on device 8e-5 vs the CPU (limit 0.0034), err_swap_out 0.055 <= 0.109; the tail floor (nudge) was 1e-6.
+  Class: framework (F98). Attempt 1 aborted as doomed (no tt/ edits); resumed.
