@@ -81,8 +81,9 @@ class MiMoGalaxyGenerator:
     def locate(self, user):
         return user // self.users_per_replica, user % self.users_per_replica
 
-    def prefill(self, prompts):
-        """prompts: dict user -> 1D token tensor (or a list indexed by user). Returns last-token logits, same keys."""
+    def prefill(self, prompts, chunk_size=None):
+        """prompts: dict user -> 1D token tensor (or a list indexed by user). Returns last-token logits, same keys.
+        Each prompt runs in chunks of ``chunk_size`` tokens (default: the model's ``max_prefill_chunk``)."""
         as_list = not isinstance(prompts, dict)
         if as_list:
             prompts = dict(enumerate(prompts))
@@ -93,7 +94,7 @@ class MiMoGalaxyGenerator:
             for r in range(self.dp):
                 user = r * self.users_per_replica + slot
                 if user in prompts:
-                    pending[user] = self.models[r].prefill_enqueue(prompts[user], slot)
+                    pending[user] = self.models[r].prefill_enqueue(prompts[user], slot, chunk_size=chunk_size)
         logits = {}
         for user, handle in pending.items():
             r, _ = self.locate(user)

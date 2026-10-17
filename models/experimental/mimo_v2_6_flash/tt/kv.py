@@ -47,6 +47,12 @@ def page_tables(num_users, max_batch, blocks_per_user, tp, rep, seed=None):
     return tables, num_blocks + (1 if rep > 1 else 0)
 
 
+def slot_owner_masks(tp, rep):
+    """{parity: [tp, 1, 1, 1, 1]}: 1 on the chips that own the slots of that parity (prefill: one user at a time)."""
+    chips = torch.arange(tp)
+    return {p: (chips % rep == p).to(torch.bfloat16).reshape(tp, 1, 1, 1, 1) for p in range(rep)}
+
+
 def owned_positions(positions, tp, rep):
     """positions [B] (-1 = empty) -> per-chip positions [tp, B] with -1 on the slots a chip does not own."""
     slots = torch.arange(positions.numel())
@@ -109,11 +115,27 @@ class SwaBlockTable:
                 self.table[slot, j] = 0
                 self.dirty = True
 
-    def prefill(self, slot, real_len, padded_len):
-        """Before a prefill of ``real_len`` tokens padded to ``padded_len``: the fill writes positions
-        [0, padded_len); only [real_len - window, padded_len) can be read later (decode windows start there)."""
-        self._release_below(slot, self.table.shape[1] * self.block_size)  # the slot's previous user, all of it
-        self._take(slot, max(0, real_len - self.window), padded_len)
+    def prefill(self, slot, start, real_end, padded_end):
+        """Before a prefill chunk of ``slot`` writes positions [start, padded_end), real up to ``real_end``. Only
+        [real_end - window, padded_end) can be read after it (the next chunk's or decode step's window), so only
+        those blocks become real. A chunk at ``start`` 0 begins a new user; a later chunk keeps the window before
+        ``start``, which it reads (``window_blocks``)."""
+        if start == 0:
+            self._release_below(slot, self.table.shape[1] * self.block_size)  # the slot's previous user, all of it
+        else:
+            self._release_below(slot, start)
+            missing = [b for b in self.window_blocks(slot, start) if b == 0]
+            assert not missing, f"slot {slot}: the window before position {start} is not in the cache"
+        self._take(slot, max(0, real_end - self.window), padded_end)
+
+    def window_start(self, start):
+        """First position of the block-aligned keys a chunk at ``start`` reads from the cache."""
+        return max(0, start - self.window) // self.block_size * self.block_size
+
+    def window_blocks(self, slot, start):
+        """Physical blocks of positions [window_start(start), start) of ``slot``, in order."""
+        first, end = self.window_start(start) // self.block_size, start // self.block_size
+        return [int(b) for b in self.table[slot, first:end]]
 
     def advance(self, slot, pos):
         """Before a decode step writes position ``pos`` of ``slot``."""

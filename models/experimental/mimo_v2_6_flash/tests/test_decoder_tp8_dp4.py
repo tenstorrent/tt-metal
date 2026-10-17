@@ -133,7 +133,7 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
             usr = users[(r, u)]
             x_tt = to_tt(usr["x"], rep["plan"])
             if rep["swa_table"] is not None:
-                rep["swa_table"].prefill(u, usr["seq_len"], usr["seq_len"])
+                rep["swa_table"].prefill(u, 0, usr["seq_len"], usr["seq_len"])
                 sync_swa(rep)
             pending[(r, u)] = rep["layer"].forward_prefill(x_tt, u, rep["page_table"], rep["kv"])
     worst = {"prefill": 1.0, "prefill_delta": 1.0, "decode": 1.0, "decode_delta": 1.0}

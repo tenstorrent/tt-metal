@@ -5,7 +5,12 @@
 
 Embedding (replicated) -> 48 decoder layers -> final RMSNorm -> LM head (vocab-parallel: each chip
 holds 152576 / 8 = 19072 columns; the host concatenates the shards). The paged KV cache has one
-K and one V tensor per layer, ``[num_blocks, 1, block_size, 192]`` per chip.
+K and one V tensor per layer, ``[num_blocks, 1, block_size, 192]`` per chip (V 128 wide on the global
+layers).
+
+Prefill runs one user at a time, in chunks of at most ``max_prefill_chunk`` tokens; each chunk attends to
+the earlier ones through the KV cache (attention.py). A prefill can also start at ``start_pos > 0`` when
+the cache already holds the user's first ``start_pos`` tokens.
 
 Decode always runs ``max_batch`` slots (default 32). A slot with position -1 is empty: the cache
 update and SDPA skip it, and its MoE routing weights are masked to zero so it does not widen the
@@ -55,6 +60,7 @@ class TtMiMoModel:
         max_seq_len=4096,
         max_batch=32,
         block_size=64,
+        max_prefill_chunk=4096,
         attn_dtype=ttnn.bfloat8_b,
         mlp_dtype=ttnn.bfloat8_b,
         expert_dtype=ttnn.bfloat4_b,
@@ -62,7 +68,9 @@ class TtMiMoModel:
         kv_dtype=ttnn.bfloat8_b,
         num_links=2,
     ):
-        """``ckpt`` may be None when ``cache_dir`` already holds every tensor (a later DP replica)."""
+        """``ckpt`` may be None when ``cache_dir`` already holds every tensor (a later DP replica).
+        ``max_prefill_chunk``: the default prefill chunk (a multiple of ``block_size``)."""
+        assert max_prefill_chunk % block_size == 0
         self.mesh_device = mesh_device
         self.cfg = cfg
         self.plan = plan = MeshPlan(mesh_device, num_links=num_links)
@@ -70,6 +78,7 @@ class TtMiMoModel:
         self.max_seq_len = max_seq_len
         self.max_batch = max_batch
         self.block_size = block_size
+        self.max_prefill_chunk = max_prefill_chunk
         self.kv_dtype = kv_dtype
         if cache_dir is not None:
             os.makedirs(cache_dir, exist_ok=True)
@@ -277,42 +286,75 @@ class TtMiMoModel:
         return logits
 
     # ------------------------------------------------------------------ prefill
-    def prefill_enqueue(self, tokens, slot, return_hidden=False):
-        """Enqueue prefill of one user (``tokens`` 1D torch) into batch ``slot``; returns a pending handle."""
-        seq_len = tokens.numel()
-        padded = prefill_padded_len(seq_len)
-        assert padded <= self.max_seq_len
-        toks = torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - seq_len))
+    def _prefill_chunk(self, tokens, slot, start_pos, hidden):
+        """One chunk (``tokens`` 1D torch) at ``start_pos`` through every layer; returns the last layer's output
+        [1, 1, padded, hidden] and appends (copy, real rows) of every layer's output to ``hidden`` when given."""
+        n = tokens.numel()
+        padded = prefill_padded_len(n)
+        assert start_pos + padded <= self.max_seq_len, f"chunk ends at {start_pos + padded} > {self.max_seq_len}"
+        window_blocks = None
         if self.swa_table is not None:
-            self.swa_table.prefill(slot, seq_len, padded)
+            self.swa_table.prefill(slot, start_pos, start_pos + n, start_pos + padded)
             self._sync_swa_table()
-        x = self._embed(toks)
-        hidden = []
+            if start_pos > 0:
+                window_blocks = self.swa_table.window_blocks(slot, start_pos)
+        x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)))
         for i, layer in enumerate(self.layers):
-            y = layer.forward_prefill(x, slot, self.page_table_tt, self.kv_caches[i], real_len=seq_len)
+            y = layer.forward_prefill(
+                x,
+                slot,
+                self.page_table_tt,
+                self.kv_caches[i],
+                real_len=n,
+                start_pos=start_pos,
+                window_blocks=window_blocks,
+            )
             x.deallocate(True)
             x = y
-            if return_hidden:
-                hidden.append(ttnn.clone(x))
+            if hidden is not None:
+                hidden[i].append((ttnn.clone(x), n))
+        return x
+
+    def prefill_enqueue(self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None):
+        """Enqueue prefill of one user (``tokens`` 1D torch, positions start_pos ..) into batch ``slot``, in chunks
+        of ``chunk_size`` tokens (default ``max_prefill_chunk``; a multiple of the block size, as is ``start_pos``).
+        ``start_pos > 0`` continues a user whose first start_pos tokens are in the cache. Nothing is read back;
+        returns a pending handle for ``prefill_read``."""
+        n = tokens.numel()
+        chunk = chunk_size or self.max_prefill_chunk
+        assert n > 0 and chunk % self.block_size == 0 and start_pos % self.block_size == 0
+        hidden = [[] for _ in self.layers] if return_hidden else None
+        for s in range(0, n, chunk):
+            x = self._prefill_chunk(tokens[s : s + chunk], slot, start_pos + s, hidden)
+            if s + chunk < n:
+                x.deallocate(True)
+        seq_len = n - s
         tile_start = ((seq_len - 1) // TILE) * TILE
-        if padded == TILE:
+        if prefill_padded_len(seq_len) == TILE:
             last = x  # a slice covering the whole tensor shares its buffer, so it must not be freed separately
         else:
             last = ttnn.slice(x, (0, 0, tile_start, 0), (1, 1, tile_start + TILE, self.cfg.hidden_size))
             x.deallocate(True)
         logits = self._logits(last)
         last.deallocate(True)
-        return {"logits": logits, "row": seq_len - 1 - tile_start, "hidden": hidden, "seq_len": seq_len}
+        return {"logits": logits, "row": seq_len - 1 - tile_start, "hidden": hidden}
 
     def prefill_read(self, pending):
+        """-> (last-token logits [vocab], per-layer hidden states [tokens, hidden] when requested)."""
         logits = self.plan.to_torch_tp_concat(pending["logits"], dim=-1).float()
         pending["logits"].deallocate(True)
         out = logits.reshape(-1, logits.shape[-1])[pending["row"]]
-        hidden = [self.plan.to_torch_replicated(h).float()[0, 0, : pending["seq_len"]] for h in pending["hidden"]]
+        hidden = []
+        for chunks in pending["hidden"] or []:
+            parts = []
+            for h, n in chunks:
+                parts.append(self.plan.to_torch_replicated(h).float()[0, 0, :n])
+                h.deallocate(True)
+            hidden.append(torch.cat(parts))
         return out, hidden
 
-    def prefill(self, tokens, slot, return_hidden=False):
-        return self.prefill_read(self.prefill_enqueue(tokens, slot, return_hidden))
+    def prefill(self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None):
+        return self.prefill_read(self.prefill_enqueue(tokens, slot, return_hidden, start_pos, chunk_size))
 
     # ------------------------------------------------------------------ decode
     def prepare_decode_inputs_host(self, tokens, positions):
