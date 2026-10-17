@@ -1927,10 +1927,15 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeBlock4IdFreeGolden) {
 // by a fixed two-full-face DEST stride, so faces shorter than 16 rows are packed correctly for a two-face tile only;
 // an 8-bit input packs in the default mode, which has no face-height limit. Only the single-face, the 8-bit narrow
 // and the one-row four-face tiles are runtime LLK_ASSERTs in the LLK (compiled out of production builds), so the
-// API must reject the operands at compile time in each of tilize_init, tilize_block and tilize_uninit.
+// API must reject the operands at compile time in each of tilize_init, tilize_block and tilize_uninit. Formats:
+// block-float data is tile-layout only (the shared exponent belongs to a 16-datum face row), so a block-float input
+// has no row-major form for the tilize unpacker to read, and a block-float output shorter than 32 rows is
+// unsupported on the compute datapath (the pack and copy ops reject it at compile time; tilize drives the packer
+// directly and never reached those asserts). Neither is checked by the LLK at all.
 TEST_F(LLKBlackholeSingleCardFixture, TensixTilizeIdFreeCompileLimits) {
     struct Case {
-        tt::DataFormat format;
+        tt::DataFormat format;      // input L1 format
+        tt::DataFormat out_format;  // output L1 format
         std::uint32_t faces_r;
         std::uint32_t faces_c;
         std::uint32_t face_r_dim;
@@ -1938,35 +1943,44 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTilizeIdFreeCompileLimits) {
         std::uint32_t out_faces_c;
         bool accepted;
     };
-    const std::array<Case, 23> cases{{
+    const std::array<Case, 27> cases{{
         // Full-height faces, output geometry == input geometry: two faces wide accepted, narrow / one face rejected.
-        {tt::DataFormat::Float16_b, 2, 2, 16, 2, 2, true},
-        {tt::DataFormat::Float16_b, 1, 2, 16, 1, 2, true},
-        {tt::DataFormat::Float16_b, 2, 1, 16, 2, 1, false},  // narrow 32x16: no narrow tilize program
-        {tt::DataFormat::Float16_b, 1, 1, 16, 1, 1, false},
-        {tt::DataFormat::Float32, 2, 1, 16, 2, 1, false},
-        {tt::DataFormat::Int8, 2, 2, 16, 2, 2, true},
-        {tt::DataFormat::Int8, 1, 2, 16, 1, 2, true},
-        {tt::DataFormat::Int8, 2, 1, 16, 2, 1, false},
-        {tt::DataFormat::Int8, 1, 1, 16, 1, 1, false},
-        {tt::DataFormat::UInt8, 2, 1, 16, 2, 1, false},
-        {tt::DataFormat::Fp8_e4m3, 2, 1, 16, 2, 1, false},
-        {tt::DataFormat::Lf8, 2, 1, 16, 2, 1, false},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 2, 2, 16, 2, 2, true},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 1, 2, 16, 1, 2, true},
+        // narrow 32x16: no narrow tilize program
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 2, 1, 16, 2, 1, false},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 1, 1, 16, 1, 1, false},
+        {tt::DataFormat::Float32, tt::DataFormat::Float32, 2, 1, 16, 2, 1, false},
+        {tt::DataFormat::Int8, tt::DataFormat::Int8, 2, 2, 16, 2, 2, true},
+        {tt::DataFormat::Int8, tt::DataFormat::Int8, 1, 2, 16, 1, 2, true},
+        {tt::DataFormat::Int8, tt::DataFormat::Int8, 2, 1, 16, 2, 1, false},
+        {tt::DataFormat::Int8, tt::DataFormat::Int8, 1, 1, 16, 1, 1, false},
+        {tt::DataFormat::UInt8, tt::DataFormat::UInt8, 2, 1, 16, 2, 1, false},
+        {tt::DataFormat::Fp8_e4m3, tt::DataFormat::Fp8_e4m3, 2, 1, 16, 2, 1, false},
+        {tt::DataFormat::Lf8, tt::DataFormat::Lf8, 2, 1, 16, 2, 1, false},
         // Output geometry differs from the input.
-        {tt::DataFormat::Float16_b, 1, 2, 16, 1, 1, false},  // two-face input into a one-face output
-        {tt::DataFormat::Float16_b, 2, 2, 16, 1, 2, false},  // four-face input into a two-face output
-        {tt::DataFormat::Int8, 2, 2, 16, 1, 2, false},
+        // two-face input into a one-face output, four-face input into a two-face output
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 1, 2, 16, 1, 1, false},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 2, 2, 16, 1, 2, false},
+        {tt::DataFormat::Int8, tt::DataFormat::Int8, 2, 2, 16, 1, 2, false},
         // Faces shorter than 16 rows, non-8-bit input: a two-face tile is the pack tilize program's only short-face
         // form; four short faces (2x32 / 4x32 / 8x32 / 16x32 as 2x2 faces) have none.
-        {tt::DataFormat::Float16_b, 1, 2, 1, 1, 2, true},
-        {tt::DataFormat::Float16_b, 1, 2, 8, 1, 2, true},
-        {tt::DataFormat::Float16_b, 2, 2, 1, 2, 2, false},
-        {tt::DataFormat::Float16_b, 2, 2, 2, 2, 2, false},
-        {tt::DataFormat::Float16_b, 2, 2, 4, 2, 2, false},
-        {tt::DataFormat::Float16_b, 2, 2, 8, 2, 2, false},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 1, 2, 1, 1, 2, true},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 1, 2, 8, 1, 2, true},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 2, 2, 1, 2, 2, false},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 2, 2, 2, 2, 2, false},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 2, 2, 4, 2, 2, false},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 2, 2, 8, 2, 2, false},
         // Faces shorter than 16 rows, 8-bit input: the default pack program has no face-height limit.
-        {tt::DataFormat::Int8, 2, 2, 1, 2, 2, true},
-        {tt::DataFormat::Int8, 2, 2, 8, 2, 2, true},
+        {tt::DataFormat::Int8, tt::DataFormat::Int8, 2, 2, 1, 2, 2, true},
+        {tt::DataFormat::Int8, tt::DataFormat::Int8, 2, 2, 8, 2, 2, true},
+        // Block-float formats. A block-float input has no row-major form to tilize; a block-float output shorter
+        // than 32 rows is unsupported on the compute datapath; a full 32-row block-float output is the ordinary
+        // tilize-to-Bfp8 case and must keep compiling.
+        {tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b, 2, 2, 16, 2, 2, false},     // block-float input
+        {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b, 1, 2, 16, 1, 2, false},  // 16x32 block-float output
+        {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b, 1, 2, 1, 1, 2, false},   // 1x32 block-float output
+        {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b, 2, 2, 16, 2, 2, true},   // 32x32 block-float output
     }};
     // Each entry point is compiled on its own (compile arg `mode`) so dropping any one of the three asserts fails.
     const std::array<std::string, 3> entry_points{"tilize_init", "tilize_block", "tilize_uninit"};
@@ -1974,10 +1988,11 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTilizeIdFreeCompileLimits) {
     for (const auto& test : cases) {
         for (std::uint32_t mode = 0; mode < entry_points.size(); ++mode) {
             SCOPED_TRACE(
-                ::testing::Message() << "format=" << enchantum::to_string(test.format) << ", faces=" << test.faces_r
-                                     << "x" << test.faces_c << ", face_r_dim=" << test.face_r_dim
-                                     << ", out_faces=" << test.out_faces_r << "x" << test.out_faces_c
-                                     << ", entry=" << entry_points[mode]);
+                ::testing::Message() << "format=" << enchantum::to_string(test.format)
+                                     << ", out_format=" << enchantum::to_string(test.out_format)
+                                     << ", faces=" << test.faces_r << "x" << test.faces_c
+                                     << ", face_r_dim=" << test.face_r_dim << ", out_faces=" << test.out_faces_r << "x"
+                                     << test.out_faces_c << ", entry=" << entry_points[mode]);
             Program program = CreateProgram();
             CreateKernel(
                 program,
@@ -1992,7 +2007,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTilizeIdFreeCompileLimits) {
                         mode,
                         test.face_r_dim,
                         test.out_faces_r,
-                        test.out_faces_c}});
+                        test.out_faces_c,
+                        static_cast<std::uint32_t>(test.out_format)}});
             if (test.accepted) {
                 EXPECT_NO_THROW(program.impl().compile(&this->device()));
                 continue;

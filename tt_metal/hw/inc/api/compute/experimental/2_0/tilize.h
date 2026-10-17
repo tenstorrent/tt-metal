@@ -31,8 +31,9 @@ namespace experimental {
  * is the tilize block width (ct_dim) the unpacker MOP is configured for. Blackhole only.
  *
  * Compile-time rejected: an output geometry that differs from the input (tilize keeps the tile shape), input tiles
- * with 1 face or a single face column (narrow), and (for a non-8-bit input) a tile with faces shorter than 16 rows
- * other than a two-face tile.
+ * with 1 face or a single face column (narrow), (for a non-8-bit input) a tile with faces shorter than 16 rows
+ * other than a two-face tile, a block-float input (block-float data has no row-major form), and a block-float
+ * output shorter than 32 rows (unsupported on the BH compute datapath, as in pack / copy).
  *
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                     | bool                   |  | False |
  * | Template | InFormat/InShape   | Input buffer L1 format + geometry (deduced)  | DataFormat/TensorShape |  | True |
@@ -56,6 +57,15 @@ ALWI void tilize_init(
         "must be two faces wide (2 or 4 faces, no narrow tile), and with a non-8-bit input a tile with faces "
         "shorter than 16 rows must have exactly two faces (the tilize unpack / pack programs cover no other "
         "operands).");
+    static_assert(
+        !is_block_float_format(InFormat),
+        "tilize_init: unsupported input format: block-float data is tile-layout only (its shared exponent belongs to "
+        "a 16-datum face row), so there is no row-major form for the tilize unpacker to read; tilize into a "
+        "block-float output instead.");
+    static_assert(
+        !(is_block_float_format(OutFormat) && is_partial_height(OutShape)),
+        "tilize_init: unsupported output: sub-32-row (partial-height) block-float tiles are not supported on the BH "
+        "compute datapath; use a full 32-row tile.");
     UNPACK((llk_unpack_tilize_init<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>(block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           LLKOperand<InFormat, InShape>::descriptor,
@@ -83,8 +93,9 @@ ALWI void tilize_init(
  * defaults, tile t lands in slot t and the source base is in.l1_address, byte-identical to the legacy op.
  *
  * Compile-time rejected: an output geometry that differs from the input (tilize keeps the tile shape), input tiles
- * with 1 face or a single face column (narrow), and (for a non-8-bit input) a tile with faces shorter than 16 rows
- * other than a two-face tile.
+ * with 1 face or a single face column (narrow), (for a non-8-bit input) a tile with faces shorter than 16 rows
+ * other than a two-face tile, a block-float input (block-float data has no row-major form), and a block-float
+ * output shorter than 32 rows (unsupported on the BH compute datapath, as in pack / copy).
  *
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                                       | bool       |      | False |
  * | Function | in                | Input operand (unpack base; LLK offsets by input_tile_index + t) | LLKOperand |      | True  |
@@ -114,6 +125,15 @@ ALWI void tilize_block(
         "must be two faces wide (2 or 4 faces, no narrow tile), and with a non-8-bit input a tile with faces "
         "shorter than 16 rows must have exactly two faces (the tilize unpack / pack programs cover no other "
         "operands).");
+    static_assert(
+        !is_block_float_format(InFormat),
+        "tilize_block: unsupported input format: block-float data is tile-layout only (its shared exponent belongs to "
+        "a 16-datum face row), so there is no row-major form for the tilize unpacker to read; tilize into a "
+        "block-float output instead.");
+    static_assert(
+        !(is_block_float_format(OutFormat) && is_partial_height(OutShape)),
+        "tilize_block: unsupported output: sub-32-row (partial-height) block-float tiles are not supported on the BH "
+        "compute datapath; use a full 32-row tile.");
     // Unpack the whole block into srcA first (mirrors llk_unpack_tilize_block), then drain via math+pack.
     for (std::uint32_t t = 0; t < block; t++) {
         UNPACK((llk_unpack_tilize<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>(
@@ -149,8 +169,9 @@ ALWI void tilize_block(
  * resets the packer to Default mode. Blackhole only.
  *
  * Compile-time rejected: an output geometry that differs from the input (tilize keeps the tile shape), input tiles
- * with 1 face or a single face column (narrow), and (for a non-8-bit input) a tile with faces shorter than 16 rows
- * other than a two-face tile.
+ * with 1 face or a single face column (narrow), (for a non-8-bit input) a tile with faces shorter than 16 rows
+ * other than a two-face tile, a block-float input (block-float data has no row-major form), and a block-float
+ * output shorter than 32 rows (unsupported on the BH compute datapath, as in pack / copy).
  *
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode | bool | | False |
  */
@@ -168,6 +189,15 @@ ALWI void tilize_uninit(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<OutForm
         "must be two faces wide (2 or 4 faces, no narrow tile), and with a non-8-bit input a tile with faces "
         "shorter than 16 rows must have exactly two faces (the tilize unpack / pack programs cover no other "
         "operands).");
+    static_assert(
+        !is_block_float_format(InFormat),
+        "tilize_uninit: unsupported input format: block-float data is tile-layout only (its shared exponent belongs "
+        "to a 16-datum face row), so there is no row-major form for the tilize unpacker to read; tilize into a "
+        "block-float output instead.");
+    static_assert(
+        !(is_block_float_format(OutFormat) && is_partial_height(OutShape)),
+        "tilize_uninit: unsupported output: sub-32-row (partial-height) block-float tiles are not supported on the BH "
+        "compute datapath; use a full 32-row tile.");
     UNPACK((llk_unpack_tilize_uninit<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>()));
     PACK((llk_pack_init<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en, PackMode::Default>()));
 }
