@@ -485,8 +485,9 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std
  *         compile-time error in approximate mode, which never reads the runtime scale.
  * @tparam ITERATIONS 32-lane SFPU iterations, two Dest rows each (8 = one face). Honoured by the
  *         accurate paths. Approximate ClampToNegative is hand-unrolled for 8 and ignores this value
- *         unless DISABLE_SFPLOADMACRO is defined; approximate None accepts only 8 or 32.
- * @tparam CLAMP_NEGATIVE Approximate mode: use the ClampToNegative init (inputs floored at -88.5)
+ *         unless DISABLE_SFPLOADMACRO is defined; approximate None accepts only 8 or 32
+ *         (any value under DISABLE_SFPLOADMACRO).
+ * @tparam CLAMP_NEGATIVE Approximate mode: use the ClampToNegative init (scaled inputs floored at -88.5)
  *         when true, the unclamped init when false. Accurate path: accepted for WH API symmetry;
  *         no effect on BH, whose bf16 kernel clamps unconditionally.
  * @param exp_base_scale_factor Scale as bf16 bits (0x3F80 = 1.0); read only when SCALE_EN is true.
@@ -979,7 +980,8 @@ void exp_init() {
         // A is multiplied by the scale below: a denormal scale (a bf16 scale pasted in unshifted)
         // makes A_scaled vanish by accident, and an infinite or NaN scale makes it non-finite. Zero
         // is allowed: it is the explicit request for exp(0) on every lane (SDPA passes scale = 0
-        // for uniform attention). Nothing divides by the scale here, so either sign is fine.
+        // for uniform unmasked attention; a -inf input still becomes NaN).
+        // Nothing divides by the scale here, so either sign is fine.
         static_assert(
             scale_fp32 == 0.0f ||
                 (scale_fp32 >= std::numeric_limits<float>::min() && scale_fp32 <= std::numeric_limits<float>::max()) ||

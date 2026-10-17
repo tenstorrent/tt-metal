@@ -31,8 +31,11 @@ enum class InputClamping : uint8_t {
  * approximate mode it is always applied, by both the ClampToNegative and the None variants
  * (exp_tile's scale_en is rejected at compile time there): with ClampToNegative it must be a
  * positive normal number, because the -88.5 input clamp is divided by it; with None it must be a
- * finite normal number of either sign, or zero (every output becomes exp(0)). In non-approximate
- * mode it is ignored; the exp_tile runtime scale applies when scale_en is true. This describes
+ * finite normal number of either sign, or zero (every finite input maps to exp(0); a -inf input,
+ * such as a causal or padding mask fill, becomes NaN, so zero is only meaningful without masking).
+ * In non-approximate mode it is ignored; the exp_tile runtime scale applies when scale_en is true
+ * (with a bf16 Dest the scale is emitted as an instruction immediate and must be a compile-time
+ * constant; a scale computed at runtime needs fp32_dest_acc_en). This describes
  * Wormhole and Blackhole; Quasar supports only the default scale with ClampToNegative.
  *
  */
@@ -67,7 +70,7 @@ ALWI void exp_tile_init() {
  * |-------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst        | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | vector_mode | Specifies the vector mode for computation (default: VectorMode::RC)        | VectorMode | Subject to specific hardware/kernel limits            | False    |
- * | scale       | Scale factor to apply in non-approximate mode if scale_en is true (default: 0x3F80, 1.0f in FP16b); never read in approximate mode | uint16_t | Valid FP16b representation                            | False    |
+ * | scale       | Scale factor to apply in non-approximate mode if scale_en is true (default: 0x3F80, 1.0f in FP16b); never read in approximate mode; must be a compile-time constant with a bf16 Dest (a runtime-computed scale needs fp32_dest_acc_en) | uint16_t | Valid FP16b representation                            | False    |
  */
 // clang-format on
 template <

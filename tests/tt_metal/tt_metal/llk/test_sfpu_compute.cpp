@@ -2705,7 +2705,7 @@ std::string compile_sfpu_chain(distributed::MeshDevice& device, const std::strin
             core,
             CircularBufferConfig(tile_bytes, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_bytes));
     }
-    // 32-bit Dest: on Wormhole the bf16 accurate exp lowers exp_tile's runtime scale to an SFPMULI
+    // 32-bit Dest: on Wormhole and Blackhole the bf16 accurate exp lowers exp_tile's runtime scale to an SFPMULI
     // immediate and fails to build when that argument is not constant-folded, so the non-approximate
     // control below takes the sfpi path instead.
     CreateKernel(
