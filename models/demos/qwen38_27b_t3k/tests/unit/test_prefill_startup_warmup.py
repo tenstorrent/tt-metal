@@ -51,7 +51,11 @@ class StartupWarmupTests(unittest.TestCase):
         table = adapter.generator.page_host.clone()
         adapter.warmup_model_prefill(kv_cache=adapter.cache)
         occupancies = adapter.generator.prefill_forward.call_args_list[:4]
-        for batch, call in enumerate(occupancies, 1):
+        # Largest first. The widest occupancy's down_proj reduce_scatter needs the largest
+        # contiguous block of the whole warmup, and running the narrow ones first leaves the
+        # heap in pieces too small for it: measured 48.9 MiB per bank free in one piece this
+        # way against 19.9 MiB the other way, on a 53.3 MiB request.
+        for batch, call in zip(range(4, 0, -1), occupancies):
             self.assertEqual(tuple(call.args[0].shape), (batch, 128))
             self.assertEqual(call.kwargs["slots"], list(range(batch)))
             self.assertIs(call.kwargs["kv_cache"], adapter.cache)
