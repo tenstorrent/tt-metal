@@ -42,7 +42,7 @@ path only ONE lane group is provably defined:
 So, per the "validate only defined lanes" rule, we assert logical row 0 columns 0..15 (the 16
 lanes MVMUL #1 defines) against NUM_HEADS * W * Q. Columns 16..31 of that row -- and every other
 row -- are undefined by this MATH+plain-pack path and are not checked. (The sibling
-test_sdpa_reduce_row.py likewise checks only its single defined lane, column 0.)
+test_sdpa_reduce_row.py likewise checks only its defined lanes, column 0 of rows 0-7.)
 """
 
 import torch
