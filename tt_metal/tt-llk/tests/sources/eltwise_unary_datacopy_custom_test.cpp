@@ -61,7 +61,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
         {
-            _llk_math_eltwise_unary_datacopy_custom_(tile, formats.math);
+            // The copied operand's unpack-destination (SrcA) format, as the compute wrapper passes it; not the math
+            // format, which the harness remaps for fp8 sources.
+            _llk_math_eltwise_unary_datacopy_custom_(tile, formats.unpack_A_dst);
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, false>();
     }

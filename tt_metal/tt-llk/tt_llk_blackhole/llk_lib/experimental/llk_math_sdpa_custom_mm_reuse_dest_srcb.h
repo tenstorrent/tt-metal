@@ -99,7 +99,7 @@ inline void sdpa_custom_mm_reuse_dest_srcb_configure_mop(
  * @param in1_tile_c_dim: Accepted for signature parity with the matmul init and ignored (see in0_tile_r_dim).
  * @param partial_face: Accepted for signature parity with the matmul init and ignored.
  * @param transpose: Accepted for signature parity with the matmul init and ignored.
- * @param kt_dim: Accepted for signature parity with the matmul init and ignored; the execute takes its own kt_dim.
+ * @param kt_dim: Unused; the execute takes its own kt_dim.
  * @note Establishes the operand-driven default Src zero-substitution state, which
  *       @ref _llk_math_sdpa_custom_mm_reuse_dest_srcb_ asserts under LLK asserts. Re-run this init after any math op
  *       that leaves the flag at keep (a copy init does).

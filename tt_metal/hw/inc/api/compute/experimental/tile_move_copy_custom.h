@@ -28,8 +28,9 @@ namespace ckernel {
  *
  * Numerics: like copy_tile, the copy keeps the Src zero-substitution flag disabled so bf16 -0.0 and denormals land
  * in DST unchanged (fp8 sources are flushed instead, whose widened zero carries a residual), and it LEAVES the flag
- * there. The next FPU op must re-run its init / reinit (every Blackhole matmul / reduce / eltwise-binary init and
- * reinit re-applies the operand-driven default), or its MVMUL / GMPOOL keeps denormal Src operands.
+ * there. Before the next FPU op, run an init / reinit that re-applies the operand-driven default; not all
+ * experimental FPU inits do so (see the datacopy lib note in llk_math_eltwise_unary_datacopy_custom.h for the
+ * exceptions). Otherwise its MVMUL / GMPOOL keeps denormal Src operands.
  *
  * Return value: None
  *
