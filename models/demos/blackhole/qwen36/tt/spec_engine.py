@@ -756,6 +756,10 @@ class MTPSpecEngine:
         for t in (r0, r1):
             ttnn.deallocate(t)
         model.prepare_verify_trace(self._prep_pt, T, warm_positions=[0] * B)
+        for dn in self._gdn:
+            # The seed's sync_conv_win from the packed conv format (the gdn_decode_step op is the plain decode, e.g.
+            # QWEN36_VERIFY_SPEC_STEP=1): compile its unpack / copies before capture_decode forbids cache misses.
+            dn.warmup_packed_sync()
         if B > 1:  # compile the join programs (per-user seed, feed merge)
             self._join_take = self._alloc_host_replicated(
                 torch.zeros(1, 1, B * T, B, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT

@@ -1332,6 +1332,28 @@ class TPGatedDeltaNet:
         self._unpack_conv_hist()
         self._conv_fmt = "both" if prev == "both" else "hist"
 
+    def warmup_packed_sync(self):
+        """Warmup only (spec engine, before any trace capture): run the seed's sync_conv_win from the PACKED conv format
+        once, so its packed -> RM unpack (untilize, RM embedding gather) and the hist -> conv_states -> window copies are
+        compiled now. A conv_states writer leaves that format behind whenever the gdn_decode_step op is the plain decode
+        (_refresh_packed_single after a prefill, a packed slot write) -- with QWEN36_VERIFY_SPEC_STEP=1 also under the
+        spec engine, whose first real seed then met an uncompiled program behind the post-capture compile guard.
+        warmup_enter_packed covers only batched models (_decode_B > 1). The state is warmup state here (prepare_decode
+        already seeds it); the round trip is content-neutral and leaves both formats valid ("both")."""
+        if not (
+            self._decode_op
+            and self._conv_win_buf is not None
+            and self.conv_states is not None
+            and self.B == self._decode_B
+            and self._conv_hist_rm is not None
+            and self._needed_conv_fmt(self._decode_B) == "packed"
+        ):
+            return
+        if self._conv_fmt != "packed":
+            self._pack_conv_hist()
+            self._conv_fmt = "packed"
+        self.sync_conv_win()
+
     def _ensure_rm_hist_valid(self):
         """Before any non-decode reader/writer of the RM history / conv_states: when the packed history is the
         authoritative one, convert it back to RM (conv_states stays stale) and tag the format "hist"."""
