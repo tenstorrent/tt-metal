@@ -887,6 +887,27 @@
   "started": "2026-10-17T12:01:54",
   "status": "PASS"
  },
+ "C.dec_reindex.moe_add": {
+  "attempts": 0,
+  "duration_s": 41.0,
+  "history": [
+   {
+    "s": 41.0,
+    "status": "PASS",
+    "t": "2026-10-17T14:23:37"
+   }
+  ],
+  "last_run": "2026-10-17T14:23:37",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.dec_reindex.moe_add.log",
+  "metrics": {
+   "err_moe_add_L24": 0.0023418525233864784,
+   "err_moe_add_L24_limit": 0.8205262422561646
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T14:22:56",
+  "status": "PASS"
+ },
  "C.dec_reindex.q_a": {
   "attempts": 0,
   "duration_s": 34.2,
