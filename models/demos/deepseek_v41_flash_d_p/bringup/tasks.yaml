@@ -4571,6 +4571,14 @@ tasks:
     kind: moe
     layer: 14
     stateful: false
+  frozen:
+    at: '2026-10-17T03:41:17'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_experts.py: daf73c2b81ac83c379acd67bfbe2b190f71921ad2bd97987a7323828463d472c
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.enc_source_engram.17
   title: 'enc_source_engram block with steps 1-17 on device (last: experts)'
   step: implement
