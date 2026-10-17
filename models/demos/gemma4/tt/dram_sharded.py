@@ -336,7 +336,7 @@ class DramShardedLinear:
     def _prefill_pc(self, m):
         return prefill_progcfg(m, self.k, self.n, max_cols=self._prefill_max_cols)
 
-    def __call__(self, x, compute_kernel_config=None, out_memory_config=None):
+    def __call__(self, x, compute_kernel_config=None, out_memory_config=None, prefill=False):
         out_mc = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
         # Prefill with batch>1 reshapes activations to [B, 1, S, K] (see
         # DecoderLayer). Row count for the matmul is the product of all leading
@@ -358,7 +358,9 @@ class DramShardedLinear:
                 return out
             return ttnn.reshape(out, (*orig_leading, int(out.shape[-1])))
 
-        if M <= TILE_SIZE:
+        # ``prefill`` keeps a tile-sized prefill (e.g. a 32-token prompt) off the decode
+        # DRAM-sharded kernel, whose CBs do not fit L1 with fp32 dest accumulation.
+        if M <= TILE_SIZE and not prefill:
             # Decode DRAM-sharded kernel + activation memcfg are tiled for
             # M=TILE_SIZE (32). Packed-verify / small-batch paths pass M=B*P
             # (e.g. 4, 16) — pad to one tile, run, then slice back so callers
