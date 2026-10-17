@@ -25,8 +25,12 @@ from ....utils.test import (
 REQ_EXACT = {"require_exact_physical_num_devices": True}
 # The Flux2 VAE decoder (reused unchanged) uses conv2d, which needs L1_SMALL buffers on every mesh.
 L1_SMALL_SIZE = 65536
-# The transformer traces one denoising step. Flux2's budget; re-measure once the Klein trace is captured.
-TRACE_REGION_SIZE = 31_000_000
+# The transformer traces one denoising step (both CFG forwards + the Euler update, M4). The value is the TOTAL over
+# the 8 DRAM banks (64 MB -> 8,003,584 B per bank). Measured per bank after one captured step (M4 design probes,
+# 2026-10-17): 4x8 ring base CFG T2I 3,203,072 B (25.6 MB total, 82 % of the old 31 MB
+# budget), ring distilled 1,622,016 B, (2,2) submesh base 1,523,712 B, distilled 778,240 B. One ring base trace plus
+# any second trace (the other model, a 1-ref layout, a second length bucket) does not fit in 31 MB.
+TRACE_REGION_SIZE = 64_000_000
 
 # Base fabric/topology params + L1_SMALL for the VAE conv2d. line_params_flux3_klein already carries
 # require_exact (via line_params_req_exact_devices).
