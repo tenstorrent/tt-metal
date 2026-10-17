@@ -301,6 +301,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
  * Requires _init_exponential_tti_bf16_() to have been called to configure
  *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
  *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
+ *
+ * CLAMP_NEGATIVE is ignored. It stays in the signature for source compatibility
+ * (tt-train instantiates this function with it); the lower clamp of xlog2 is
+ * unconditional here (the Blackhole copy masks lanes with a negative xlog2 unconditionally).
  */
 template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE /*maybe_unused*/, int ITERATIONS>
 inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
@@ -371,9 +375,8 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // xlog2 >= 0: for a negative xlog2 it shifts the (sign-less) mantissa by
     // the magnitude's exponent and produces an arbitrary positive value, up
     // to ~1e21, not 0 and not a negative value a packer ReLU could remove.
-    // CLAMP_NEGATIVE therefore does not
-    // disable the lower clamp here; it only governs the approximate path, as
-    // the InputClamping API documents.
+    // CLAMP_NEGATIVE therefore does not disable the lower clamp here; it only
+    // governs the approximate path, as the InputClamping API documents.
     //
     // Lower clamp: xlog2 <- max(xlog2, 0). SFPSWAP cannot reference the
     // LCONST_0 fixed register directly, so we materialize 0.0 in LREG1

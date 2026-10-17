@@ -237,6 +237,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_prgm_(sfpi::vFloat val, C0 c0, C1 c1
  * ADDR_MOD_6 (dest auto-increment by 2 on SFPSTORE) and to load:
  *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
  *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
+ *
+ * CLAMP_NEGATIVE is ignored. It stays in the signature for source compatibility
+ * (tt-train instantiates this function with it); lanes with a negative xlog2
+ * are masked unconditionally here (the Wormhole copy clamps xlog2 unconditionally).
  */
 template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE /*maybe_unused*/, int ITERATIONS>
 inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
