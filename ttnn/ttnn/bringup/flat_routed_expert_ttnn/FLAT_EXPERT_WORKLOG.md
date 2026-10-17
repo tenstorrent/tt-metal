@@ -761,3 +761,16 @@ Shared expert (3 x 320-row parts): ~525-530 us, compute / pipeline bound (~160 T
 320-row parts). Dense ttnn at TP shapes beats it (TP4 gate linear ~245 TFLOP/s at M 1280): zz_scratch_k3_se_tp.py.
 Next candidates: the down weights' bank layout / access order (the mix's 87% vs 93%), fixing NO_MATH for a clean
 traffic-only measurement.
+
+### K3 routed experts: down-weight read layout / schedule (2026-10-17, traced, X1 on; experts / block us, base ~2375 / 3645)
+| knob | experts | block |
+|---|---|---|
+| MIMO_FL_DW_ROT=0 (one bank per down core) | 2565 | 3851 |
+| MIMO_FL_DRING=1.5 (down ring, experts) | 2365 | 3654 |
+| MIMO_FL_DRING=3 | plan TT_FATAL (out region / L1) | - |
+| MIMO_FL_PIN_RATIO=0 (always pin) | 2438 | 3723 |
+| MIMO_FL_PIN_RATIO=1000 | 2376 | 3644 |
+The defaults are right for K3: bank rotation of the down weights is worth ~190 us here (more than at K2.7 / GLM, worklog
+comment in the plan: 55% -> 65% alone); ring depth and pinning ratio change nothing or hurt. With the knobs exhausted
+the remaining ~13% (2375 vs ~2070 at 512 GB/s) needs a DRAM / NoC trace of the mix (tt-npe or the device NoC tracer)
+or a fixed MIMO_FL_NO_MATH for a clean traffic-only time.
