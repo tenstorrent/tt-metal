@@ -9,7 +9,7 @@
 
 void kernel_main() {
     const uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    const float scaler = __builtin_bit_cast(float, get_arg_val<uint32_t>(1));
+    const float scaler = __builtin_bit_cast(float, get_arg_val<uint32_t>(1 /*arg_idx*/));
 
     CircularBuffer cb0(tt::CBIndex::c_0);    // Input A
     CircularBuffer cb1(tt::CBIndex::c_1);    // Input B
