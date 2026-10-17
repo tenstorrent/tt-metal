@@ -77,6 +77,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
 
+    if constexpr (RMSNORM_CLOBBER_UNPA_X_END)
+    {
+        // Leave unpacker A's X span at one row, as _llk_unpack_A_top32_rm_init_ does (its post-phase restore
+        // resets the XY counters, not x_end). The rmsnorm init must re-program it: its MOP issues every real
+        // UNPACR on SrcA, so an inherited span unpacks 16 datums per face instead of 256.
+        TTI_SETADCXX(p_setadc::UNP_A, 16 - 1, 0x0);
+    }
+
     // ---- the op under test ----
     // acc_to_dest=true and DEST_TO_SRCB are forced by the static_assert in
     // _llk_unpack_A_rmsnorm_mop_config_; SCALAR is what routes the base address to upk0

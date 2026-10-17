@@ -157,6 +157,7 @@ def _run(
     num_faces=4,
     clear_dest=False,
     unpack_full_transpose=False,
+    clobber_unpa_x_end=False,
 ):
     """Compile+run one variant.
 
@@ -188,6 +189,7 @@ def _run(
                 rmsnorm_num_faces=num_faces,
                 clear_dest=clear_dest,
                 unpack_full_transpose=unpack_full_transpose,
+                rmsnorm_clobber_unpa_x_end=clobber_unpa_x_end,
             ),
         ],
         runtimes=[],
@@ -499,4 +501,42 @@ def test_rmsnorm_bcast_scalar_dest_reuse_unpack_full_transpose(
         f"unpack_full_transpose mismatch (op={mathop.name}, "
         f"fidelity={math_fidelity.name}, scalar={scalar:.6f}) -- the transpose-fold path "
         "is the axis blaze's version of rmsnorm.h added"
+    )
+
+
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=OPS,
+    num_tiles=[1, 2],
+)
+def test_rmsnorm_bcast_scalar_dest_reuse_reprograms_srca_x_span(
+    formats, dest_acc, mathop, num_tiles
+):
+    """The unpack init must program the X span on the unpacker that reads L1.
+
+    x-start/x-end is per-unpacker state. The rmsnorm MOP issues every real UNPACR on
+    SrcA (unpacker A) and feeds SrcB a ZEROSRC dummy for the MOVD2B, so unpacker A is the
+    one whose span matters. Here the unpack thread leaves unpacker A at a one-row span
+    before the rmsnorm init, as ``_llk_unpack_A_top32_rm_init_`` does and as the stock seed
+    init in this driver otherwise masks: if the init programs only unpacker B, every face
+    arrives as 16 datums plus stale SrcA and the whole-tile result is wrong.
+    """
+    _skip_unsupported(formats, dest_acc)
+
+    device, seen_A, _seed, scalar = _run(
+        formats,
+        dest_acc,
+        mathop,
+        MathFidelity.LoFi,
+        num_tiles,
+        clear_dest=True,
+        clobber_unpa_x_end=True,
+    )
+    golden = _expected(seen_A, scalar, mathop, MathFidelity.LoFi, formats.output_format)
+
+    assert passed_test(golden, device, formats.output_format), (
+        f"rmsnorm result is wrong after unpacker A was left at a one-row X span "
+        f"(op={mathop.name}, num_tiles={num_tiles}, scalar={scalar:.6f}) -- the unpack init "
+        "did not re-program x_end on unpacker A, the unpacker its MOP reads L1 with"
     )

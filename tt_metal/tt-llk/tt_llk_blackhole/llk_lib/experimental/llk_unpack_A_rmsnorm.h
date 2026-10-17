@@ -125,8 +125,12 @@ inline void _llk_unpack_A_rmsnorm_init_(
     // static_cast<uint>(DataFormat::UInt16));
     // cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
-    constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_B;
-    config_unpacker_x_end<UNP_SEL>(face_r_dim);
+    // x-start/x-end is per-unpacker state, so program it on the unpacker the MOP issues real (non-ZEROSRC)
+    // UNPACRs against. The only configuration this init accepts (SCALAR + acc_to_dest + DEST_TO_SRCB, see
+    // the static_assert in _llk_unpack_A_rmsnorm_mop_config_) reads L1 on SrcA alone: SrcB is fed a ZEROSRC
+    // UNPACR_NOP for the MOVD2B on the math thread and never reads L1, so its X counter is unused.
+    // Same rule as llk_unpack_A.h: acc_to_dest DEST_TO_SRCB -> SrcA only.
+    config_unpacker_x_end<p_setadc::UNP_A>(face_r_dim);
 
     _llk_unpack_A_rmsnorm_mop_config_<num_tiles, BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
