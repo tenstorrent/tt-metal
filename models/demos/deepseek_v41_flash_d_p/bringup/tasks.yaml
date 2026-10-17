@@ -5829,6 +5829,14 @@ tasks:
     kind: op
     layer: 20
     stateful: false
+  frozen:
+    at: '2026-10-17T07:53:43'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_hc.py: 262a165709b80ce81c0fcae5e320987e35b3d257dec90354ba6aa60b07e2bc9f
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.dec_candidate.01
   title: 'dec_candidate block with steps 1-1 on device (last: attn_hc)'
   step: implement
