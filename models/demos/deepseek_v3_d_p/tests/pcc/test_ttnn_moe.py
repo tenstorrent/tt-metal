@@ -1265,9 +1265,9 @@ def test_moe_fabric2d_fp8_dispatch(
 
 
 def _fp8_wire_cases():
-    """The model-payload cases whose routed rows the fp8 combine wire can pack: emb a multiple of 2048, which of the
-    models here is GLM 5.3. Its payload holds a packed row plus 64 B, so each row crosses as one packet."""
-    return [case for case in _combine_fabric2d_model_payload_cases() if case.values[0].EMB_SIZE % 2048 == 0]
+    """The model-payload cases, on the fp8 combine wire. GLM 5.3's payload holds a packed 6336 B row plus 64 B, so each
+    row crosses as one packet; DeepSeek-V3's 7168 packs to 7424 B with its 64 B padding, past its payload, so as two."""
+    return _combine_fabric2d_model_payload_cases()
 
 
 # Both wires fp8: Q1 before dispatch_fabric2d, DQ1 into the routed expert's bf8 tiles, and Q2 in combine_fabric2d's

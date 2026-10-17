@@ -9,6 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce {
 
@@ -139,9 +140,8 @@ tt::tt_metal::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
     const bool fp8_in = combine_output.dtype() == DataType::FP8_E4M3;
     auto out_shape = output_shape;
     if (fp8_in) {
-        // drop the H/B fp32 block scales (row = H + 4 * H / B)
-        out_shape[-1] =
-            output_shape[-1] * operation_attributes.fp8_scale_block_w / (operation_attributes.fp8_scale_block_w + 4);
+        // drop the H/B fp32 block scales and any padding after them (row = H + 4 * H / B, maybe up to a 64 B multiple)
+        out_shape[-1] = per_token_cast_to_fp8::packed_row_h(output_shape[-1], operation_attributes.fp8_scale_block_w);
     }
     return tt::tt_metal::TensorSpec(
         out_shape,

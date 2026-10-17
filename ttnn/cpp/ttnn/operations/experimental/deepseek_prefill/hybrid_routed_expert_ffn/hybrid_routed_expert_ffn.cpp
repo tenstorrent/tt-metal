@@ -242,10 +242,12 @@ ttnn::Tensor hybrid_routed_expert_moe_forwarding_buffer(
         .num_links = combine_num_links,
         .fp8_scale_block = fp8_scale_block,
     };
-    const uint32_t token_bytes = fp8_scale_block != 0
-                                     ? emb_dim + emb_dim / fp8_scale_block * static_cast<uint32_t>(sizeof(float))
-                                     : emb_dim * static_cast<uint32_t>(sizeof(uint16_t));
-    return create_device_tensor(combine::forwarding_buffer_spec(params, token_bytes), mesh_device);
+    return create_device_tensor(
+        combine::forwarding_buffer_spec(
+            params,
+            ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::token_size_bytes(
+                emb_dim, fp8_scale_block)),
+        mesh_device);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

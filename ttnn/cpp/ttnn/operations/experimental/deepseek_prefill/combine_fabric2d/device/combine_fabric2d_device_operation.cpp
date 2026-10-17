@@ -148,8 +148,8 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         token_page % 16 == 0,
         "combine_fabric2d: token page {} B must be 16-byte aligned for NoC transfers",
         token_page);
-    // Token + metadata is a DRAM page of the forwarding buffer, which needs DRAM alignment. An fp8 token is emb * 33/32
-    // bytes, so this holds for emb a multiple of 2048.
+    // Token + metadata is a DRAM page of the forwarding buffer, which needs DRAM alignment. token_size_bytes pads an
+    // fp8 token to whole 64 B lines, so this holds for any emb a multiple of the scale block.
     TT_FATAL(
         (token_page + cmbf2d::FORWARDING_METADATA_SIZE) % 64 == 0,
         "combine_fabric2d: token page {} B + {} B of forwarding metadata must be 64-byte aligned for DRAM",

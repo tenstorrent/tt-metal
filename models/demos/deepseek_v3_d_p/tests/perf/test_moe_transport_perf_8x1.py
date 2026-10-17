@@ -17,8 +17,8 @@ Transports:
   fabric2d-fp8-dispatch  fabric2d on the fp8 dispatch wire: Q1, dispatch_fabric2d moving packed e4m3 rows with a
                 scale per 128 values, DQ1 into bf8 tiles for the routed expert
   fabric2d-fp8-both      also the fp8 combine wire: combine_fabric2d's untilizers quantize the routed expert's
-                output the same way inside the overlapped program, and post_combine_reduce dequantizes it. Models
-                whose routed width is a multiple of 2048 only (GLM here), so a packed row is whole 64 B lines.
+                output the same way inside the overlapped program, and post_combine_reduce dequantizes it. A packed
+                row is padded to whole 64 B lines: none at GLM's 6144, 32 B at 7168.
 
 The overlap runs untraced here, which TtMoe only does for this kind of measurement: it is host-bound eager,
 but the profiler times device work. The mesh opens with the payload a model does, at least half a bf16 token plus
@@ -136,8 +136,6 @@ def _cases():
     ):
         device_params = torus_y_device_params(fabric_payload_size=moe_fabric_payload(model.config))
         for transport in _TRANSPORTS:
-            if _TRANSPORTS[transport].get("combine_wire") == "fp8" and model.config.EMB_SIZE % 2048 != 0:
-                continue
             yield pytest.param(
                 variant,
                 model,

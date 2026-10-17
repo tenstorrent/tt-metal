@@ -50,9 +50,9 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         fp8_scale_block=128 (Blackhole, TILE dispatched_buffer) has the untilize quantize each token
         instead: e4m3 values, each 128 scaled by a power of two 2^ceil(log2(max(amax, 1e-4) / 448)) and
         rounded to nearest even, followed by those scales as fp32. The output is then
-        (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim + emb_dim / 32) FP8_E4M3, one byte per
-        element, which post_combine_reduce dequantizes with fp8_scale_block_w=128. A token row must be
-        a multiple of 64 B, so emb_dim a multiple of 2048.
+        (1, 1, seq_len_per_chip, num_experts_per_tok, row) FP8_E4M3, one byte per element, with row
+        emb_dim + emb_dim / 32 padded up to a multiple of 64 B (the padding follows the scales), which
+        post_combine_reduce dequantizes with fp8_scale_block_w=128. emb_dim must be a multiple of 128.
         )doc",
         &combine_fabric2d,
         nb::arg("dispatched_buffer"),

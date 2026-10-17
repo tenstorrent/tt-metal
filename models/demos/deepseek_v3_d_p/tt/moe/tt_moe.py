@@ -355,7 +355,7 @@ class TtMoe(LightweightModule):
             combine_wire: "bf16" (default) or "fp8". With "fp8" combine_fabric2d's untilizers quantize each routed
                 expert output row the same way (Q2, fp8_scale_block must be 128), combine moves the packed rows, and
                 post_combine_reduce dequantizes them in its weighted sum (DQ2). Needs combine_impl "fabric2d",
-                Blackhole, and routed_emb_dim a multiple of 2048, so that a packed row is whole 64 B lines; a row
+                Blackhole, and routed_emb_dim a multiple of 128. A packed row is padded to whole 64 B lines, and
                 travels as one fabric packet when the payload holds it plus 64 B.
 
         "fabric2d", for either op, needs a Ring axis-0 topology on a fabric that wraps axis 0, an even
@@ -422,9 +422,9 @@ class TtMoe(LightweightModule):
                 raise ValueError(f"TtMoe: combine_wire='fp8' quantizes in combine_fabric2d, got {combine_impl=}")
             if fp8_scale_block != 128:
                 raise ValueError(f"TtMoe: combine_wire='fp8' quantizes 1x128 blocks, got {fp8_scale_block=}")
-            if self.routed_emb_dim % 2048 != 0:
+            if self.routed_emb_dim % 128 != 0:
                 raise ValueError(
-                    f"TtMoe: combine_wire='fp8' needs routed_emb_dim % 2048 == 0, got {self.routed_emb_dim}"
+                    f"TtMoe: combine_wire='fp8' needs routed_emb_dim % 128 == 0, got {self.routed_emb_dim}"
                 )
         self.uses_fabric2d = "fabric2d" in (dispatch_impl, combine_impl)
         if self.uses_fabric2d:

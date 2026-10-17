@@ -169,10 +169,7 @@ PerTokenCastToFp8DeviceOperation::spec_return_value_t PerTokenCastToFp8DeviceOpe
 
     auto e4m3_shape = input_shape;
     if (attrs.pack_scales_in_row) {
-        e4m3_shape[-1] = input_shape[-1] + 4 * (input_shape[-1] / attrs.scale_block_w);
-        if (attrs.packed_row_align > 1) {
-            e4m3_shape[-1] = tt::round_up(static_cast<uint32_t>(e4m3_shape[-1]), attrs.packed_row_align);
-        }
+        e4m3_shape[-1] = fp8::packed_row_bytes(input_shape[-1], attrs.scale_block_w, attrs.packed_row_align);
     }
     tt::tt_metal::TensorSpec output_e4m3_spec(
         e4m3_shape,

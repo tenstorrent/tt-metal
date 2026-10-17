@@ -188,7 +188,7 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     const uint32_t H_in = static_cast<uint32_t>(e4m3_shape[-1]);
     const uint32_t H_scale = static_cast<uint32_t>(scale_shape[-1]);
     const uint32_t H = attrs.row_segments > 1     ? attrs.row_segments * ((H_in / attrs.row_segments) / 36 * 32)
-                       : attrs.scales_in_row_tail ? H_in * sbw / (sbw + 4)
+                       : attrs.scales_in_row_tail ? fp8::packed_row_h(H_in, sbw)
                                                   : H_in;
     if (attrs.row_segments > 1) {
         const uint32_t seg_bytes = H_in / attrs.row_segments;
@@ -202,8 +202,9 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     }
     if (attrs.scales_in_row_tail) {
         TT_FATAL(
-            attrs.row_segments > 1 || (H * (sbw + 4) == H_in * sbw && H % fp8::BLOCK_W == 0),
-            "per_token_cast_back: packed row width {} must be H + 4*H/{} with H % {} == 0",
+            attrs.row_segments > 1 || H != 0,
+            "per_token_cast_back: packed row width {} must be H + 4*H/{}, maybe padded to a 64 B multiple, with H % {} "
+            "== 0",
             H_in,
             sbw,
             fp8::BLOCK_W);
@@ -265,7 +266,7 @@ PerTokenCastBackDeviceOperation::spec_return_value_t PerTokenCastBackDeviceOpera
         out_shape[-1] = attrs.row_segments * ((W / attrs.row_segments) / 36 * 32);
     } else if (attrs.scales_in_row_tail) {
         const uint32_t W = static_cast<uint32_t>(out_shape[-1]);
-        out_shape[-1] = W * attrs.scale_block_w / (attrs.scale_block_w + 4);
+        out_shape[-1] = fp8::packed_row_h(W, attrs.scale_block_w);
     }
     return tt::tt_metal::TensorSpec(
         out_shape,

@@ -11,6 +11,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
+#include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
+
 namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce {
 
 namespace {
@@ -42,11 +44,12 @@ tt::tt_metal::ProgramDescriptor create_fp8_block_descriptor(
     constexpr uint32_t TOKENS_PER_CHUNK = 32;
     constexpr uint32_t DRAM_ALIGN = 64;  // Blackhole DRAM reads keep source and destination congruent mod 64 B
     const uint32_t row_bytes = combine_shape[-1];
-    // Rows are [H e4m3 | H / sbw fp32 scales]; one scale covers tiles_per_scale = sbw / 32 tiles of a row.
+    // Rows are [H e4m3 | H / sbw fp32 scales], maybe padded to whole 64 B lines (combine_fabric2d's are); one scale
+    // covers tiles_per_scale = sbw / 32 tiles of a row.
     const uint32_t sbw = operation_attributes.fp8_scale_block_w;
     const uint32_t tiles_per_scale = sbw / TILE_WIDTH;
-    const uint32_t emb_dim = row_bytes * sbw / (sbw + 4);  // H + 4 * H / sbw
-    TT_FATAL(emb_dim * (sbw + 4) == row_bytes * sbw && emb_dim % sbw == 0, "bad 1x{} fp8 row width {}", sbw, row_bytes);
+    const uint32_t emb_dim = per_token_cast_to_fp8::packed_row_h(row_bytes, sbw);
+    TT_FATAL(emb_dim != 0, "bad 1x{} fp8 row width {}", sbw, row_bytes);
     const uint32_t emb_wt = emb_dim / TILE_WIDTH;
     const uint32_t num_experts = combine_shape[expert_dim];
     uint32_t num_tokens = 1;

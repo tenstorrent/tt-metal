@@ -203,8 +203,8 @@ class TtCombine2dModule(LightweightModule):
             memory_config: Output memory configuration. Must be interleaved (L1 or DRAM).
             fp8_scale_block: 0 sends BFLOAT16 tokens. 128 has combine's untilizers quantize each token
                 to FP8_E4M3 with a power-of-two fp32 scale per 128 elements, so the output rows are
-                [emb_dim e4m3 | emb_dim / 128 fp32 scales]. Needs a TILE dispatched buffer and emb_dim a
-                multiple of 2048.
+                [emb_dim e4m3 | emb_dim / 128 fp32 scales], padded to a multiple of 64 B. Needs a TILE
+                dispatched buffer and emb_dim a multiple of 128.
 
         Note there is no dispatch_group_size: combine_fabric2d derives the ring from cluster_axis
         and the mesh shape. There is no topology either: __init__ checks that the fabric wraps

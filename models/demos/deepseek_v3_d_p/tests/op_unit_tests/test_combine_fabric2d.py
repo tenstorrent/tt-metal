@@ -37,7 +37,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_y_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params, torus_y_device_params
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.fabric2d_contract import fabric2d_min_payload_size
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config, get_gate_outputs
@@ -812,23 +812,48 @@ def test_combine_fabric2d_overlapped_skew(mesh_device, device_params, num_links)
     logger.info(f"overlapped skew: {launches} launches byte-exact")
 
 
+def _fp8_row_bytes(emb_dim):
+    """A packed fp8 token as combine_fabric2d sends it: emb e4m3 bytes and a fp32 scale per 128, padded to 64 B."""
+    return -(-(emb_dim + emb_dim // 32) // 64) * 64
+
+
 def _fp8_cases():
-    """emb 2048, the narrowest fp8 token (2112 B), at the full payload; then GLM 5.3's 6144 at its model payload,
-    where a packed 6336 B token crosses as one packet, and at half a bf16 token plus 64 B, where it crosses as two."""
+    """emb 2048, the narrowest fp8 token (2112 B), at the full payload; then GLM 5.3's 6144 and DeepSeek / Kimi's 7168
+    at a payload of the packed token plus 64 B, where it crosses as one packet, and at half a bf16 token plus 64 B,
+    where it crosses as two. 7168 packs to 7392 B, which is not whole 64 B lines, so its token carries 32 B of
+    padding after the scales."""
     full = [param for param in _MESH_CONFIGS if param.id == "fabric2d-torus-y-8x1-2link"]
     cases = [pytest.param(*p.values, 2048, marks=p.marks, id=f"{p.id}-emb2048") for p in full]
-    for payload, label in (
-        (6144 + 6144 // 128 * 4 + 64, "one-packet"),
-        (fabric2d_min_payload_size(6144), "two-packet"),
+    for emb_dim in (6144, 7168):
+        for payload, label in (
+            (_fp8_row_bytes(emb_dim) + 64, "one-packet"),
+            (fabric2d_min_payload_size(emb_dim), "two-packet"),
+        ):
+            cases.append(
+                pytest.param(
+                    (8, 1),
+                    torus_y_device_params(fabric_payload_size=payload),
+                    2,
+                    emb_dim,
+                    marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+                    id=f"fabric2d-torus-y-8x1-2link-payload{payload}-emb{emb_dim}-{label}",
+                )
+            )
+    # The production 8x4 torus at the payload each model opens its mesh with, so the fp8 token crosses as two
+    # packets; and 7168 once more as one.
+    for emb_dim, payload, label in (
+        (6144, fabric2d_min_payload_size(6144), "two-packet"),
+        (7168, fabric2d_min_payload_size(7168), "two-packet"),
+        (7168, _fp8_row_bytes(7168) + 64, "one-packet"),
     ):
         cases.append(
             pytest.param(
-                (8, 1),
-                torus_y_device_params(fabric_payload_size=payload),
+                (8, 4),
+                torus_xy_device_params(fabric_payload_size=payload),
                 2,
-                6144,
-                marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-                id=f"fabric2d-torus-y-8x1-2link-payload{payload}-emb6144-{label}",
+                emb_dim,
+                marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+                id=f"fabric2d-torus-xy-8x4-2link-payload{payload}-emb{emb_dim}-{label}",
             )
         )
     return cases
@@ -863,6 +888,6 @@ def test_combine_fabric2d_fp8(mesh_device, device_params, num_links, emb_dim, ex
     for dtype, label in ((ttnn.bfloat16, "bf16 tiles"), (ttnn.bfloat8_b, "bf8 tiles")):
         output = fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, dtype=dtype, fp8_scale_block=block)
         assert output.dtype == ttnn.fp8_e4m3, output.dtype
-        assert tuple(output.shape)[-3:] == (fx.seq_len_per_chip, fx.topk, emb_dim + emb_dim // 32), output.shape
+        assert tuple(output.shape)[-3:] == (fx.seq_len_per_chip, fx.topk, _fp8_row_bytes(emb_dim)), output.shape
         # The reference quantizes what the device holds: for bf8 tiles, the payload as the upload rounded it.
         fx.check_fp8(output, f"combine fp8 from {label}", block, dtype)
