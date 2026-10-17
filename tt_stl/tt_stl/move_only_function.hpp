@@ -28,9 +28,12 @@ class move_only_function;
 
 namespace detail {
 
-// With the table pointer, sizeof 32, as std::function on libstdc++.
+// With the table pointer, four pointers: the size of std::function on libstdc++.
 inline constexpr std::size_t kMoveOnlyFunctionInlineSize = 3 * sizeof(void*);
-inline constexpr std::size_t kMoveOnlyFunctionInlineAlign = alignof(void*);
+// At least 8, so 8-byte-aligned captures stay inline on 32-bit targets too.
+inline constexpr std::size_t kMoveOnlyFunctionInlineAlign = alignof(void*) > alignof(std::uint64_t)
+                                                                ? alignof(void*)
+                                                                : alignof(std::uint64_t);
 
 template <typename T>
 struct is_in_place_type : std::false_type {};
@@ -99,7 +102,7 @@ class move_only_function;
 
 template <typename R, typename... Args>
 class move_only_function<R(Args...)> {
-    struct VTable {
+    struct alignas(8) VTable {  // room for the three tag bits on 32-bit targets too
         R (*call)(void* storage, Args&&... args);
         void (*relocate)(void* dst, void* src) noexcept;  // move-construct into dst, then destroy src
         void (*destroy)(void* storage) noexcept;
