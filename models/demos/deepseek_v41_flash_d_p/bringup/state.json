@@ -65,6 +65,27 @@
   "started": "2026-10-17T04:56:56",
   "status": "PASS"
  },
+ "C.enc_reuse.attn_norm": {
+  "attempts": 0,
+  "duration_s": 34.4,
+  "history": [
+   {
+    "s": 34.4,
+    "status": "PASS",
+    "t": "2026-10-17T05:14:38"
+   }
+  ],
+  "last_run": "2026-10-17T05:14:38",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.enc_reuse.attn_norm.log",
+  "metrics": {
+   "err_attn_norm_L03": 0.002341634128242731,
+   "err_attn_norm_L03_limit": 0.18080899119377136
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T05:14:04",
+  "status": "PASS"
+ },
  "C.enc_source.attention": {
   "agent": {
    "defs": {
