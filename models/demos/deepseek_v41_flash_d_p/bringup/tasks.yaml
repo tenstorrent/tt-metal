@@ -8080,6 +8080,14 @@ tasks:
     kind: norm
     layer: 21
     stateful: false
+  frozen:
+    at: '2026-10-17T15:04:57'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_norm.py: 371ea3953c318a5f8a4a6b25de174d3c9c16205763d350e60c7317b4e4baa9bd
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.dec_reuse.03
   title: 'dec_reuse block with steps 1-3 on device (last: attn_norm)'
   step: implement
