@@ -82,7 +82,7 @@ inline void _llk_pack_fast_tilize_addrmod_config_(const std::uint32_t unit_dim)
  */
 inline void _llk_pack_fast_tilize_mop_config_()
 {
-    llk_pack_internal::tile_pack_mop_programmed = false; // a format reconfig must not rebuild the tile pack MOP over this one
+    llk_pack_internal::tile_pack_mop.programmed = false; // a format reconfig must not rebuild the tile pack MOP over this one
     ckernel_unpack_template tmp = ckernel_unpack_template(
         false,
         false,

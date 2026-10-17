@@ -41,9 +41,10 @@ inline void llk_pack_init(const std::uint32_t pack_output, std::uint32_t num_til
         LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
     }
 
-    // The MOP bakes pack_dst_format in only for multi-tile output addressing and the partial-face BFP
-    // PACR variant. Otherwise a later reconfig re-derives it, so a format change is not drift.
-    if (num_tiles > 1 || partial_face) {
+    // The MOP bakes pack_dst_format in only for multi-tile output addressing and where its form depends on
+    // the format (the two-face partial-face block-float PACR variant; a one-face tile packs the same way in
+    // every format). Otherwise a later reconfig re-derives it, so a format change is not drift.
+    if (num_tiles > 1 || llk_pack_internal::tile_pack_mop_form_depends_on_format(num_faces, partial_face)) {
         SAN_HOOK(init<OperationPack>(
             StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
             StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),

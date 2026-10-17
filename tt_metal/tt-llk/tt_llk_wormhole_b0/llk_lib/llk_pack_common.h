@@ -18,15 +18,51 @@ using namespace ckernel::packer;
 namespace llk_pack_internal
 {
 /**
- * Which MOP the packer holds. The tile pack MOP (@ref _llk_pack_mop_config_) depends on the output format: a
- * partial-face block-float tile is packed by one packer interface, every other tile by one interface per face.
- * @ref _llk_pack_reconfig_data_format_ rebuilds that MOP when a format change flips the choice, and only that
- * MOP: the untilize, row and fast-tilize MOP configs clear the flag so a reconfig issued while one of them is
- * programmed leaves it in place.
+ * @brief Whether the form of the tile pack MOP depends on the output format.
+ *
+ * A short-face tile of more than one face packs its faces back to back through one packer interface when the
+ * format is block-float (one exponent chunk per tile) and through one interface per face otherwise. A one-face
+ * tile has no second face to join and packs the same way in every format.
+ *
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param partial_face: True if packing a partial (sub-face-row) face.
  */
-static bool tile_pack_mop_programmed = false;
-/** Whether the programmed tile pack MOP is the one-interface partial-face block-float sequence. */
-static bool tile_pack_mop_partial_face_bfp = false;
+inline bool tile_pack_mop_form_depends_on_format(const std::uint32_t num_faces, const bool partial_face)
+{
+    return partial_face && (num_faces > 1);
+}
+
+/**
+ * @brief Whether the tile pack MOP for this output is the one-interface partial-face block-float sequence.
+ *
+ * @param pack_dst_format: Destination (L1) data format.
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param partial_face: True if packing a partial (sub-face-row) face.
+ */
+inline bool is_partial_face_bfp_pack(const std::uint32_t pack_dst_format, const std::uint32_t num_faces, const bool partial_face)
+{
+    return tile_pack_mop_form_depends_on_format(num_faces, partial_face) && IS_BFP_FORMAT(pack_dst_format);
+}
+
+/**
+ * The tile pack MOP the packer holds (the default, data-emitting variant of @ref _llk_pack_mop_config_), as the
+ * pack init built it. @ref _llk_pack_reconfig_data_format_ rebuilds that MOP when a format change flips its form
+ * (@ref is_partial_face_bfp_pack), with the geometry recorded here: the geometry the init also programmed into
+ * the ADDR_MODs and the packer X counter, so a reconfig refreshes the format alone. It rebuilds only that MOP:
+ * the untilize, row and fast-tilize MOP configs and the zero-output variant leave `programmed` false, so a
+ * reconfig issued while one of them is in place leaves it alone.
+ */
+struct TilePackMop
+{
+    bool programmed          = false;
+    bool partial_face_bfp    = false; // the one-interface partial-face block-float sequence
+    std::uint32_t face_r_dim = FACE_R_DIM;
+    std::uint32_t num_faces  = 4;
+    bool partial_face        = false;
+    bool narrow_tile         = false;
+};
+
+static TilePackMop tile_pack_mop;
 } // namespace llk_pack_internal
 
 /**

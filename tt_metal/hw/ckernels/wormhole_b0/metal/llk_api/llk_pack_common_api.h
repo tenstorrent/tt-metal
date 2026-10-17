@@ -181,8 +181,9 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output) {
  * Face geometry (face_r_dim, num_faces), partial-face flag, narrow-tile flag and tile size are
  * derived from the new output's CB metadata. When the tile pack MOP is programmed and the new output
  * moves it across the partial-face block-float line (one packer interface per tile instead of one per
- * face, or back), the LLK rebuilds that MOP for the new format and the pack operation is seated on it
- * again, as llk_pack_init would.
+ * face, or back), the LLK rebuilds that MOP for the new format in the geometry the pack init built it
+ * with, and the pack operation is seated on it again as llk_pack_init seated it: the new format, the
+ * init geometry. A reconfig refreshes the format alone; a caller that changes the tile geometry re-inits.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  new_output          New output circular buffer / operand index to configure for.
@@ -213,14 +214,17 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         partial_face,
         narrow_tile);
     if (tile_pack_mop_rebuilt) {
-        // The rebuilt MOP bakes the new format in (the partial-face block-float PACR variant), exactly as
-        // llk_pack_init records it for a partial-face output.
+        // The rebuilt MOP bakes the new format in (the partial-face block-float PACR variant) and keeps the
+        // geometry the pack init built it with, so it is seated as llk_pack_init seats a format-dependent MOP:
+        // the format recorded, the geometry the init's. A pack to an output of another geometry still reads
+        // as drift against this record, as it did against the init's.
+        [[maybe_unused]] const auto& mop = llk_pack_internal::tile_pack_mop;
         SAN_HOOK(init<OperationPack>(
             StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
-            StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
-            StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
-            StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
-            StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
+            StateVal<Operand<Exu::Pack>::FaceHeight>(mop.face_r_dim),
+            StateVal<Operand<Exu::Pack>::NumFaces>(mop.num_faces),
+            StateVal<Operand<Exu::Pack>::PartialFace>(mop.partial_face),
+            StateVal<Operand<Exu::Pack>::NarrowTile>(mop.narrow_tile),
             StateVal<OperationPack::NumTiles>(llk_pack_internal::configured_num_tiles)));
     }
 }

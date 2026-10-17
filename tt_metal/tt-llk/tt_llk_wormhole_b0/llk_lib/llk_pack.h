@@ -217,21 +217,28 @@ inline void _llk_pack_mop_config_(
         }
     }
 
-    const bool partial_face_bfp               = partial_face && IS_BFP_FORMAT(pack_dst_format);
+    const bool partial_face_bfp               = llk_pack_internal::is_partial_face_bfp_pack(pack_dst_format, num_faces, partial_face);
     const std::uint32_t PACKCNT               = partial_face_bfp ? 1 : num_faces;
     constexpr std::uint32_t MEGAROW           = 1;
     constexpr std::uint32_t ZERO_OUTPUT_FLAG  = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
     constexpr std::uint32_t MOP_INNER_LOOP    = 1;
     llk_pack_internal::configured_num_tiles   = num_tiles;
     llk_pack_internal::configured_zero_output = ZERO_OUTPUT_FLAG;
-    // Only the default, data-emitting variant is rebuilt by a format reconfig (the variant every pack init in use builds).
-    llk_pack_internal::tile_pack_mop_programmed       = (pack_mode == PackMode::Default) && !zero_output;
-    llk_pack_internal::tile_pack_mop_partial_face_bfp = partial_face_bfp;
+    // Record the MOP for a format reconfig: only the default, data-emitting variant is rebuilt there (the variant
+    // every pack init in use builds); the zero-output variant is not.
+    llk_pack_internal::tile_pack_mop.programmed       = (pack_mode == PackMode::Default) && !zero_output;
+    llk_pack_internal::tile_pack_mop.partial_face_bfp = partial_face_bfp;
+    llk_pack_internal::tile_pack_mop.face_r_dim       = face_r_dim;
+    llk_pack_internal::tile_pack_mop.num_faces        = num_faces;
+    llk_pack_internal::tile_pack_mop.partial_face     = partial_face;
+    llk_pack_internal::tile_pack_mop.narrow_tile      = narrow_tile;
 
     if constexpr (pack_mode != PackMode::Untilize)
     {
         if (partial_face_bfp)
         {
+            // Two short faces through one interface: the second PACR packs the second face into the same tile, so
+            // the tile carries one exponent chunk. A one-face tile never comes here (it has no second face to pack).
             LLK_ASSERT(num_tiles == 1, "multi-tile partial-face BFP pack is not supported");
             constexpr std::uint32_t MOP_OUTER_LOOP = 1;
             ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
@@ -293,12 +300,13 @@ inline void _llk_pack_mop_config_(
  *
  * Used to switch the packer to a new data format without a full HW re-configure.
  *
- * The tile pack MOP packs a partial-face block-float tile with one packer interface and every other tile with
- * one interface per face, so it depends on the output format. When the tile pack MOP is programmed and this
- * reconfig crosses that line (a matmul switching from its Float16_b partials to a short-face block-float
- * output, or back), the MOP is rebuilt for the new format; the ADDR_MODs and the packer X counter are
- * geometry-only state that the pack init already programmed. Any other MOP (untilize, rows, fast tilize) is
- * left in place.
+ * The tile pack MOP packs a short-face block-float tile of two faces with one packer interface and every other
+ * tile with one interface per face, so its form depends on the output format. When the tile pack MOP is
+ * programmed and this reconfig crosses that line (a matmul switching from its Float16_b partials to a short-face
+ * block-float output, or back), the MOP is rebuilt for the new format with the geometry the pack init built it
+ * with: the ADDR_MODs and the packer X counter are geometry state that init programmed for that geometry, and a
+ * reconfig refreshes the format alone (a caller that changes the tile geometry re-inits). Any other MOP
+ * (untilize, rows, fast tilize, zero output) is left in place.
  *
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @param pack_src_format: Source (dest register) data format.
@@ -325,12 +333,13 @@ inline bool _llk_pack_reconfig_data_format_(
 
     reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face);
 
-    const bool partial_face_bfp = partial_face && IS_BFP_FORMAT(pack_dst_format);
-    if (!llk_pack_internal::tile_pack_mop_programmed || partial_face_bfp == llk_pack_internal::tile_pack_mop_partial_face_bfp)
+    const llk_pack_internal::TilePackMop mop = llk_pack_internal::tile_pack_mop;
+    if (!mop.programmed || llk_pack_internal::is_partial_face_bfp_pack(pack_dst_format, mop.num_faces, mop.partial_face) == mop.partial_face_bfp)
     {
         return false;
     }
-    _llk_pack_mop_config_<PackMode::Default, false>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, llk_pack_internal::configured_num_tiles);
+    _llk_pack_mop_config_<PackMode::Default, false /*zero_output*/>(
+        pack_dst_format, mop.face_r_dim, mop.num_faces, mop.partial_face, mop.narrow_tile, llk_pack_internal::configured_num_tiles);
     return true;
 }
 

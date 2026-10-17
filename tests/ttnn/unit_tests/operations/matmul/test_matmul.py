@@ -151,7 +151,7 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
         )
 
 
-@pytest.mark.parametrize("tile_h, tile_w", [(16, 32), (16, 16), (8, 32), (4, 32), (32, 16), (32, 32)])
+@pytest.mark.parametrize("tile_h, tile_w", [(16, 32), (16, 16), (8, 32), (4, 32), (8, 16), (4, 16), (32, 16), (32, 32)])
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("k", [32, 64])
 def test_tiny_tiles_bfloat_output(device, tile_h, tile_w, out_dtype, k):
@@ -168,7 +168,8 @@ def test_tiny_tiles_bfloat_output(device, tile_h, tile_w, out_dtype, k):
     for the last block, so the reconfigure path derives the flag as well. The pack MOP was built for
     the Float16_b partials, so that reconfigure must also rebuild it for the block-float output; two
     output blocks per core (out_block_h = per_core_M / 2) make the second block rebuild it again for
-    the partials.
+    the partials. The one-face short tiles (8x16, 4x16) have no second face to join: they pack with one
+    packer interface and one pack per tile in every format, so no rebuild is needed for them.
     """
     torch.manual_seed(0)
     m, n = 64, 64
