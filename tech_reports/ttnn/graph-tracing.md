@@ -501,7 +501,7 @@ tensor[a] → ttnn::multiply ──────────→ ttnn::add
 
 ### Test Structure
 
-Graph tracing tests are in `tests/ttnn/unit_tests/base_functionality/test_graph_report.py` and are organized into:
+Graph tracing tests are in `tests/ttnn/unit_tests/base_functionality/test_graph_report.py`, except the ResNet50 end-to-end test, which runs nightly from `tests/ttnn/nightly/unit_tests/base_functionality/test_graph_report_resnet50.py`. They are organized into:
 
 #### Unit Tests (no hardware required)
 
@@ -538,7 +538,7 @@ Graph tracing tests are in `tests/ttnn/unit_tests/base_functionality/test_graph_
 | `TestStackTraces` | Any device | Stack trace enable/disable and capture verification |
 | `TestFastOperationGraphTracking` | Any device | FastOperation records function names, tensor IDs, and connectivity |
 | `TestLinearModelE2E` | Wormhole B0 | Structural validation: linear model (ones + linear) |
-| `test_resnet50_e2e_graph_capture` | Wormhole B0 | Full ResNet50 E2E graph capture and structural validation |
+| `test_resnet50_e2e_graph_capture` | Wormhole B0 | Full ResNet50 E2E graph capture and structural validation (nightly) |
 
 ### Generating a Database for ttnn-visualizer
 
