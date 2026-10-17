@@ -102,10 +102,10 @@ std::vector<Tensor> fold_with_transpose_(
     std::vector<Tensor> output_tensors;
     if (output_shape.has_value()) {
         // slice
-        n = output_shape.value()[0], w = output_shape.value()[1], h = output_shape.value()[2],
+        n = output_shape.value()[0], h = output_shape.value()[1], w = output_shape.value()[2],
         c = output_shape.value()[3];
         ttnn::Array4D slice_output_tensor_start = {0, 0, 0, 0};
-        ttnn::Array4D slice_output_tensor_end = {n, w, h, c};
+        ttnn::Array4D slice_output_tensor_end = {n, h, w, c};
         ttnn::Array4D step = {1, 1, 1, 1};
         auto slice_output =
             ttnn::slice(transpose_hc_output2, slice_output_tensor_start, slice_output_tensor_end, step, L1_mem_config);
@@ -199,8 +199,8 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 
     log_debug(tt::LogOp, "transpose_hw_output: {}", tt_output_tensor.logical_shape());
 
-    // pad tensor W dim
-    ttnn::Array4D padded_shape2 = {n, padded_c, padded_h32, padded_w32};
+    // pad tensor W dim (tensor is [n, padded_c, w, padded_h32] after transpose(2, 3))
+    ttnn::Array4D padded_shape2 = {n, padded_c, padded_w32, padded_h32};
     auto pad_mem_config2 = create_sharded_memory_config(ttnn::Shape(padded_shape2), grid_size, shard_spec.orientation);
     tt_output_tensor = ttnn::pad(
         tt_output_tensor,

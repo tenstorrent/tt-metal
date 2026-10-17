@@ -495,3 +495,30 @@ def test_fold_tile_partial_tile_width_rejected(device, expect_error):
     ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     with expect_error(RuntimeError, "stride_w|logical W"):
         ttnn.fold(ttnn_in, 32, 32)
+
+
+@pytest.mark.parametrize("nhw", [(1, 64, 128), (1, 128, 64)])
+@pytest.mark.parametrize("stride", [(16, 16), (32, 32)])
+@pytest.mark.parametrize("padding", [(0, 0), (8, 16)])
+def test_fold_rectangular_hw_dimension_order(device, nhw, stride, padding):
+    """Verify fold with rectangular H != W and asymmetric padding maintains correct dimension ordering."""
+    batch_size, height, width = nhw
+    stride_h, stride_w = stride
+    channels = 4
+    input_dtype = ttnn.bfloat16
+    input_layout = ttnn.ROW_MAJOR_LAYOUT
+
+    torch_input = torch.rand((batch_size, height, width, channels), dtype=torch.bfloat16)
+    torch_output = fold_torch(torch_input, stride_h, stride_w, padding=padding)
+
+    tt_input = ttnn.from_torch(
+        torch_input, input_dtype, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_output = ttnn.fold(
+        tt_input,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        padding=list(padding),
+    )
+    tt_output_torch = ttnn.to_torch(tt_output)
+    assert torch.equal(torch_output, tt_output_torch), f"Mismatch in fold rectangular H={height}, W={width}"
