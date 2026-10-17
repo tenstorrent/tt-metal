@@ -30,21 +30,21 @@ namespace tt::tt_metal {
 
 namespace {
 // The session of the context an object belongs to, or nullptr if the inspector is not active on that context.
-inspector::Data* session_of(const distributed::MeshDeviceImpl& mesh_device) {
+inspector::Data* get_inspector_data(const distributed::MeshDeviceImpl& mesh_device) {
     return mesh_device.metal_context().get_inspector_data();
 }
 
-inspector::Data* session_of(const distributed::MeshDevice* mesh_device) {
-    return mesh_device != nullptr ? session_of(mesh_device->impl()) : nullptr;
+inspector::Data* get_inspector_data(const distributed::MeshDevice* mesh_device) {
+    return mesh_device != nullptr ? get_inspector_data(mesh_device->impl()) : nullptr;
 }
 
 // nullptr once the buffer's mesh device is gone, where MeshBuffer::device() would throw.
-inspector::Data* session_of(const distributed::MeshBuffer& buffer) {
-    return buffer.is_allocated() ? session_of(buffer.device()) : nullptr;
+inspector::Data* get_inspector_data(const distributed::MeshBuffer& buffer) {
+    return buffer.is_allocated() ? get_inspector_data(buffer.device()) : nullptr;
 }
 
 // A program must not outlive its context.
-inspector::Data* session_of(const detail::ProgramImpl& program) {
+inspector::Data* get_inspector_data(const detail::ProgramImpl& program) {
     return MetalContext::instance(program.get_context_id()).get_inspector_data();
 }
 }  // namespace
@@ -86,7 +86,7 @@ void Inspector::serialize_rpc(const MetalContext& context) {
 }
 
 void Inspector::program_created(const detail::ProgramImpl* program) noexcept {
-    auto* data = session_of(*program);
+    auto* data = get_inspector_data(*program);
     if (!data) {
         return;
     }
@@ -102,7 +102,7 @@ void Inspector::program_created(const detail::ProgramImpl* program) noexcept {
 }
 
 void Inspector::program_destroyed(const detail::ProgramImpl* program) noexcept {
-    auto* data = session_of(*program);
+    auto* data = get_inspector_data(*program);
     if (!data) {
         return;
     }
@@ -219,7 +219,7 @@ void Inspector::program_compile_finished(
 
 void Inspector::mesh_device_created(
     const distributed::MeshDeviceImpl* mesh_device, std::optional<int> parent_mesh_id) noexcept {
-    auto* data = session_of(*mesh_device);
+    auto* data = get_inspector_data(*mesh_device);
     if (!data) {
         return;
     }
@@ -236,7 +236,7 @@ void Inspector::mesh_device_created(
 }
 
 void Inspector::mesh_device_destroyed(const distributed::MeshDeviceImpl* mesh_device) noexcept {
-    auto* data = session_of(*mesh_device);
+    auto* data = get_inspector_data(*mesh_device);
     if (!data) {
         return;
     }
@@ -254,7 +254,7 @@ void Inspector::mesh_device_destroyed(const distributed::MeshDeviceImpl* mesh_de
 }
 
 void Inspector::mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_device) noexcept {
-    auto* data = session_of(*mesh_device);
+    auto* data = get_inspector_data(*mesh_device);
     if (!data) {
         return;
     }
@@ -270,7 +270,7 @@ void Inspector::mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_
 
 void Inspector::mesh_buffer_allocated(
     const distributed::MeshBuffer* mesh_buffer, const distributed::MeshDevice* mesh_device) noexcept {
-    auto* data = session_of(mesh_device);
+    auto* data = get_inspector_data(mesh_device);
     if (!data) {
         return;
     }
@@ -287,7 +287,7 @@ void Inspector::mesh_buffer_allocated(
 
 void Inspector::mesh_buffer_deallocated(
     const distributed::MeshBuffer* mesh_buffer, const distributed::MeshDevice* mesh_device) noexcept {
-    auto* data = session_of(mesh_device);
+    auto* data = get_inspector_data(mesh_device);
     if (!data) {
         return;
     }
@@ -315,7 +315,7 @@ void Inspector::mesh_buffer_deallocated(
 
 void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexcept {
     auto config_buffer = socket->get_config_buffer();
-    auto* data = session_of(*config_buffer);
+    auto* data = get_inspector_data(*config_buffer);
     if (!data) {
         return;
     }
@@ -396,7 +396,7 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
 }
 
 void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, const CoreRangeSet& cores) noexcept {
-    auto* data = session_of(*buffer);
+    auto* data = get_inspector_data(*buffer);
     if (!data) {
         return;
     }
@@ -415,7 +415,7 @@ void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, 
 }
 
 void Inspector::global_semaphore_reset(const distributed::MeshBuffer* buffer, uint32_t value) noexcept {
-    auto* data = session_of(*buffer);
+    auto* data = get_inspector_data(*buffer);
     if (!data) {
         return;
     }
