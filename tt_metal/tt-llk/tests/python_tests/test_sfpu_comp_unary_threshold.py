@@ -13,20 +13,23 @@ Inputs and thresholds stay away from NaN and from a zero threshold in the decode
 only how the threshold is decoded. The golden is torch's compare and the check is exact: every lane
 is 0.0 or 1.0.
 
-The decode test is Blackhole only: the Wormhole copy of this header decodes the threshold the same
-way now, but Wormhole's ordered compares (gt/lt/ge/le) get an infinite threshold against an infinite
-datum wrong, so 4 of its cells fail there for a reason outside this test (measured on n150).
-``test_sfpu_comp_unary_eq_ne_ieee`` runs on both architectures: eq/ne must follow IEEE equality,
-so -0.0 equals +0.0 and a NaN threshold equals nothing, including a datum with the same NaN bits.
-It also drives the nonzero thresholds of the decode test, with the NaN datums added, so a
-threshold-decode regression on either architecture shows up there too.
+Both tests run on Blackhole and Wormhole (the Wormhole copy of this header decodes the threshold the
+same way). Wormhole's ordered compares (gt/lt/ge/le) get an infinite threshold against an infinite
+datum wrong, a defect of those compares rather than of the decode, so exactly those four decode cells
+are expected failures there (measured on n150; see ``_wormhole_inf_compare_defect``).
+``test_sfpu_comp_unary_eq_ne_ieee`` checks that eq/ne follow IEEE equality: -0.0 equals +0.0 and a NaN
+threshold equals nothing, including a datum with the same NaN bits. It also drives the nonzero
+thresholds of the decode test, with the NaN and denormal datums added, so a threshold-decode
+regression on either architecture shows up there too.
 """
 
 import struct
 
 import numpy as np
+import pytest
 import torch
-from conftest import blackhole_only, skip_for_quasar
+from conftest import skip_for_quasar
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -181,31 +184,78 @@ def _run_threshold_compare(formats, mathop, threshold_bits, dest_sync, input_bit
     )
 
 
-# Blackhole only: Wormhole's ordered compares (gt/lt/ge/le) fail the threshold:inf cells against the
-# infinite datums (4 cells), a defect of those compares rather than of the decode this test checks.
-# The eq/ne nonzero thresholds run on both architectures in test_sfpu_comp_unary_eq_ne_ieee.
-@blackhole_only
+_ORDERED_COMPARES = (
+    MathOperation.UnaryGt,
+    MathOperation.UnaryLt,
+    MathOperation.UnaryGe,
+    MathOperation.UnaryLe,
+)
+
+
+def _wormhole_inf_compare_defect(mathop, threshold) -> bool:
+    """The four decode cells Wormhole gets wrong for a reason outside the threshold decode: its
+    unary_gt/lt/ge/le compare an infinite threshold against the infinite datum wrong (x = inf lane
+    only: gt and lt return 1, ge and le return 0). Blackhole passes the same cells."""
+    return (
+        get_chip_architecture() == ChipArchitecture.WORMHOLE
+        and mathop in _ORDERED_COMPARES
+        and threshold == float("inf")
+    )
+
+
+_WORMHOLE_INF_COMPARE_REASON = (
+    "Wormhole unary_gt/lt/ge/le compare an infinite threshold against the infinite datum wrong "
+    "(x = inf: gt/lt return 1, ge/le return 0), a defect of those compares, not of the threshold "
+    "decode this test checks. Non-strict so a fix surfaces as XPASS."
+)
+
+
+@skip_for_quasar
 @parametrize(
     formats=input_output_formats([DataFormat.Float32], same=True),
     mathop=list(_TORCH_COMPARE),
     threshold=THRESHOLDS,
     dest_sync=[DestSync.Half],
 )
-def test_sfpu_comp_unary_threshold(formats, mathop, threshold, dest_sync):
+def test_sfpu_comp_unary_threshold(request, formats, mathop, threshold, dest_sync):
+    if _wormhole_inf_compare_defect(mathop, threshold):
+        request.node.add_marker(
+            pytest.mark.xfail(reason=_WORMHOLE_INF_COMPARE_REASON, strict=False)
+        )
     _run_threshold_compare(formats, mathop, _bits(threshold), dest_sync, INPUT_BITS)
 
 
-# IEEE equality: -0.0 == +0.0, and NaN != NaN even for identical bits. Every NaN threshold below
-# has a datum with the same bit pattern (torch.eq -> 0, ne -> 1); the nonzero thresholds are the
+# IEEE equality: -0.0 == +0.0, and NaN != NaN even for identical bits. Every NaN threshold is also a
+# datum (torch.eq -> 0, ne -> 1 on the identical-bits lane), and the nonzero thresholds are the
 # decode test's, so a NaN datum also meets each of them.
-IEEE_EQ_NE_INPUT_BITS = INPUT_BITS + (0x7FC00000, 0xFFC00000, 0x7F800001)
-IEEE_EQ_NE_THRESHOLDS = [_Threshold(_bits(t), str(t)) for t in THRESHOLDS] + [
-    _Threshold(0x00000000, "0.0"),
-    _Threshold(0x80000000, "-0.0"),
+_NAN_THRESHOLDS = (
     _Threshold(0x7FC00000, "nan"),
     _Threshold(0xFFC00000, "-nan"),
     _Threshold(0x7F800001, "snan"),  # signalling: not representable as a Python float
-]
+)
+# fp32 denormals, as datums and as thresholds, with the smallest normals as the control. A denormal
+# datum reaches the compare as a denormal (measured on both architectures through this kernel's
+# unpack-to-dest fp32 path): eq(denorm, 0.0) is 0 and eq(denorm, the same denorm) is 1, exactly
+# torch's answer, so the golden applies no flush. A flush anywhere on the path would fail the zero
+# and denormal threshold cells here.
+_DENORMAL_THRESHOLDS = (
+    _Threshold(0x00000001, "denorm_min"),
+    _Threshold(0x807FFFFF, "-denorm_max"),
+)
+_DENORMAL_BITS = (0x00000001, 0x80000001, 0x007FFFFF, 0x807FFFFF)
+_MIN_NORMAL_BITS = (0x00800000, 0x80800000)
+IEEE_EQ_NE_INPUT_BITS = (
+    INPUT_BITS
+    + _DENORMAL_BITS
+    + _MIN_NORMAL_BITS
+    + tuple(t.bits for t in _NAN_THRESHOLDS)
+)
+IEEE_EQ_NE_THRESHOLDS = (
+    [_Threshold(_bits(t), str(t)) for t in THRESHOLDS]
+    + [_Threshold(0x00000000, "0.0"), _Threshold(0x80000000, "-0.0")]
+    + list(_DENORMAL_THRESHOLDS)
+    + list(_NAN_THRESHOLDS)
+)
 
 
 @skip_for_quasar
