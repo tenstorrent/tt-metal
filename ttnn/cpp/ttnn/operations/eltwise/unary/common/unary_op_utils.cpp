@@ -131,26 +131,39 @@ const char* bitwise_shift_data_format_str(UnaryOpType op_type, std::optional<Dat
     TT_THROW("Unsupported input dtype for bitwise/shift op_type {}: expected Int32, UInt32, or UInt16.", op_type);
 }
 
-// Scalar word for the unary_*_tile_int32 compare kernels, which read it as a two's-complement
-// integer. An integer scalar keeps its bits; a float scalar is converted by value and must be a
-// finite integer within the tensor dtype's range, because a fractional, non-finite or out-of-range
-// value cannot be compared exactly (and its conversion is undefined), so it is rejected instead.
+// Scalar word for the unary_*_tile_int32 compare kernels, which read the tile and the scalar as
+// two's-complement int32, also for a UINT32 tensor. An integer scalar keeps its bits. A float scalar
+// is converted by value and must be a finite integer within the tensor dtype's range: a fractional,
+// non-finite or out-of-range value has no exact integer image (and its conversion is undefined), so
+// it is rejected. EQ/NE compare bits and take the whole UINT32 range; GT/LT/GE/LE are signed compares
+// in the kernel, so a UINT32 scalar at or above 2^31 would be read as negative and is rejected. (A
+// UINT32 tile value at or above 2^31 is read the same way by those kernels; this check covers the
+// scalar only.)
 template <typename T>
 uint32_t int_compare_scalar_word(T param0_raw, DataType input_dtype, UnaryOpType op_type) {
     if constexpr (std::is_same_v<T, float>) {
         TT_FATAL(
             binary::utils::scalar_fits_integer_dtype(param0_raw, input_dtype),
-            "Unary: {} with a {} tensor cannot represent the scalar {}: only a finite integer within the range of "
-            "{} can be compared exactly. Typecast the input to a floating-point dtype first.",
+            "Unary: {} with a {} tensor cannot represent the scalar {}: it must be a finite integer within the "
+            "range of {}. Typecast the input to a floating-point dtype first.",
             op_type,
             input_dtype,
             param0_raw,
             input_dtype);
     }
-    if (input_dtype == DataType::UINT32) {
-        return static_cast<uint32_t>(param0_raw);
+    const uint32_t word = input_dtype == DataType::UINT32 ? static_cast<uint32_t>(param0_raw)
+                                                          : std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw));
+    const bool ordered_compare = op_type == UnaryOpType::UNARY_GT || op_type == UnaryOpType::UNARY_LT ||
+                                 op_type == UnaryOpType::UNARY_GE || op_type == UnaryOpType::UNARY_LE;
+    if (input_dtype == DataType::UINT32 && ordered_compare) {
+        TT_FATAL(
+            word < 0x80000000u,
+            "Unary: {} with a UINT32 tensor is a signed 32-bit compare in the kernel, so the scalar must be below "
+            "2147483648 (2^31); {} would be read as negative. Typecast the input to a floating-point dtype first.",
+            op_type,
+            param0_raw);
     }
-    return std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw));
+    return word;
 }
 
 template <typename T>

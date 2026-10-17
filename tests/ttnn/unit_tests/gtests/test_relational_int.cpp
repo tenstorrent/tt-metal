@@ -145,8 +145,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 // A float scalar against an INT32 or UINT32 tensor: the host converts the scalar by value, so an
 // integral float compares as that integer. The inputs include the bit pattern of the float scalar
-// itself (1088421888 == bits of 7.0f), which a bit-cast of the scalar would wrongly report as
-// equal, and a uint32 value >= 2^31, which a conversion through int32_t would corrupt.
+// itself (1088421888 == bits of 7.0f), which a bit-cast of the scalar would wrongly report as equal.
 struct RelationalUnaryFloatScalarParam {
     DataType dtype;        // INT32 or UINT32
     int64_t scalar_input;  // value held by the tensor
@@ -265,11 +264,61 @@ INSTANTIATE_TEST_SUITE_P(
         RelationalUnaryFloatScalarParam{DataType::INT32, 1088421888, 7.0f, 32, 32},  // input is the bits of 7.0f
         RelationalUnaryFloatScalarParam{DataType::INT32, -5, -5.0f, 32, 32},         // equal, negative
         RelationalUnaryFloatScalarParam{DataType::INT32, 3, 2.0f, 32, 32},           // gt, ge, ne
-        RelationalUnaryFloatScalarParam{DataType::UINT32, 5, 7.0f, 32, 32},          // lt, le, ne
-        RelationalUnaryFloatScalarParam{DataType::UINT32, 3000000000, 3000000000.0f, 32, 32}));  // equal, >= 2^31
+        RelationalUnaryFloatScalarParam{DataType::UINT32, 5, 7.0f, 32, 32}));        // lt, le, ne
+
+// A UINT32 scalar at or above 2^31. EQ/NE compare bits, so they accept it and a conversion through
+// int32_t would corrupt it. GT/LT/GE/LE are signed int32 compares in the kernel and would read it as
+// negative (gt_unary(uint32 5, 3000000000.0f) returned 1), so the host rejects it instead.
+struct RelationalUnaryUint32HighScalarParam {
+    int64_t scalar_input;  // value held by the tensor
+    float scalar_param;    // integral-valued, in [2^31, 2^32)
+};
+
+class RelationalUnaryUint32HighScalarFixture
+    : public TTNNFixtureWithSuiteDevice<RelationalUnaryUint32HighScalarFixture>,
+      public testing::WithParamInterface<RelationalUnaryUint32HighScalarParam> {};
+
+TEST_P(RelationalUnaryUint32HighScalarFixture, EqNeUnaryCompareBits) {
+    const auto p = GetParam();
+    const auto s = static_cast<int64_t>(p.scalar_param);
+    const RelationalUnaryFloatScalarParam q{DataType::UINT32, p.scalar_input, p.scalar_param, 32, 32};
+    test_relational_float_scalar_impl(
+        *device_, q, [](const auto& t, float v) { return ttnn::eq_unary(t, v); }, p.scalar_input == s, "eq_unary");
+    test_relational_float_scalar_impl(
+        *device_, q, [](const auto& t, float v) { return ttnn::ne_unary(t, v); }, p.scalar_input != s, "ne_unary");
+    test_relational_float_scalar_impl(
+        *device_, q, [](const auto& t, float v) { return ttnn::ne(v, t); }, s != p.scalar_input, "ne(scalar, tensor)");
+}
+
+TEST_P(RelationalUnaryUint32HighScalarFixture, OrderedCompareIsRejected) {
+    using ::testing::HasSubstr;
+    using ::testing::ThrowsMessage;
+    const auto p = GetParam();
+    auto t = make_int_tensor(*device_, DataType::UINT32, 32, 32, p.scalar_input);
+    const float s = p.scalar_param;
+    const auto s_u32 = static_cast<uint32_t>(p.scalar_param);  // the same word through the uint32_t scalar overload
+    constexpr const char* reason = "below 2147483648";
+
+    EXPECT_THAT([&] { ttnn::gt_unary(t, s); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT([&] { ttnn::lt_unary(t, s); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT([&] { ttnn::ge_unary(t, s); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT([&] { ttnn::le_unary(t, s); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT([&] { ttnn::gt_unary(t, s_u32); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT([&] { ttnn::le_unary(t, s_u32); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    // Scalar-first public overloads.
+    EXPECT_THAT([&] { ttnn::gt(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT([&] { ttnn::lt(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    RelationalUnaryUint32HighScalarTests,
+    RelationalUnaryUint32HighScalarFixture,
+    ::testing::Values(
+        RelationalUnaryUint32HighScalarParam{3000000000, 3000000000.0f},  // equal
+        RelationalUnaryUint32HighScalarParam{5, 3000000000.0f}));         // lt, le, ne: the signed read says gt, ge
 
 // Host side only: the scalar word the generator emits for the int32 compare kernels is the
-// scalar's value, not its float bit pattern, and a uint32 value >= 2^31 keeps its bits.
+// scalar's value, not its float bit pattern, and for EQ/NE a uint32 value >= 2^31 keeps its bits.
 TEST(RelationalUnaryScalarWord, FloatScalarIsConvertedByValue) {
     using ttnn::operations::unary::utils::get_defines;
     const auto func = [](UnaryOpType op, float scalar, DataType dtype) {
@@ -280,8 +329,45 @@ TEST(RelationalUnaryScalarWord, FloatScalarIsConvertedByValue) {
     EXPECT_EQ(func(UnaryOpType::UNARY_EQ, -5.0f, DataType::INT32), "unary_eq_tile_int32(0, 4294967291u);");
     EXPECT_EQ(func(UnaryOpType::UNARY_GT, 2.0f, DataType::INT32), "unary_gt_tile_int32(0, 2);");
     EXPECT_EQ(func(UnaryOpType::UNARY_LT, 2.0f, DataType::INT32), "unary_lt_tile_int32(0, 2);");
-    EXPECT_EQ(func(UnaryOpType::UNARY_GE, 3000000000.0f, DataType::UINT32), "unary_ge_tile_int32(0, 3000000000);");
-    EXPECT_EQ(func(UnaryOpType::UNARY_LE, 3000000000.0f, DataType::UINT32), "unary_le_tile_int32(0, 3000000000);");
+    EXPECT_EQ(func(UnaryOpType::UNARY_EQ, 3000000000.0f, DataType::UINT32), "unary_eq_tile_int32(0, 3000000000u);");
+    EXPECT_EQ(func(UnaryOpType::UNARY_NE, 4294967040.0f, DataType::UINT32), "unary_ne_tile_int32(0, 4294967040u);");
+    EXPECT_EQ(func(UnaryOpType::UNARY_GE, 2147483520.0f, DataType::UINT32), "unary_ge_tile_int32(0, 2147483520);");
+}
+
+// Host side only: GT/LT/GE/LE on UINT32 reject a scalar word at or above 2^31 (float or uint32_t
+// scalar) because the kernel compares as signed int32; EQ/NE and INT32 are unaffected.
+TEST(RelationalUnaryScalarWord, Uint32OrderedCompareRejectsScalarAtOrAbove2To31) {
+    using ::testing::HasSubstr;
+    using ::testing::ThrowsMessage;
+    using ttnn::operations::unary::utils::get_defines;
+    const auto emit = [](UnaryOpType op, auto scalar, DataType dtype) {
+        using T = decltype(scalar);
+        const std::array<T, 1> params = {scalar};
+        get_defines<T>(op, std::span<const T>(params), "0", "0", dtype);
+    };
+    constexpr const char* reason = "below 2147483648";
+    EXPECT_THAT(
+        [&] { emit(UnaryOpType::UNARY_GT, 2147483648.0f, DataType::UINT32); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT(
+        [&] { emit(UnaryOpType::UNARY_LT, 3000000000.0f, DataType::UINT32); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT(
+        [&] { emit(UnaryOpType::UNARY_GE, 3000000000.0f, DataType::UINT32); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT(
+        [&] { emit(UnaryOpType::UNARY_LE, 4294967040.0f, DataType::UINT32); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT(
+        [&] { emit(UnaryOpType::UNARY_GT, std::uint32_t{3000000000u}, DataType::UINT32); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    // Below 2^31 (2147483520 is the largest float32 below it), EQ/NE at any UINT32 value, and INT32 pass.
+    EXPECT_NO_THROW(emit(UnaryOpType::UNARY_GT, 2147483520.0f, DataType::UINT32));
+    EXPECT_NO_THROW(emit(UnaryOpType::UNARY_LE, std::uint32_t{2147483647u}, DataType::UINT32));
+    EXPECT_NO_THROW(emit(UnaryOpType::UNARY_EQ, 3000000000.0f, DataType::UINT32));
+    EXPECT_NO_THROW(emit(UnaryOpType::UNARY_NE, std::uint32_t{4294967295u}, DataType::UINT32));
+    EXPECT_NO_THROW(emit(UnaryOpType::UNARY_GT, -5.0f, DataType::INT32));
+    EXPECT_NO_THROW(emit(UnaryOpType::UNARY_LT, std::int32_t{-2147483647 - 1}, DataType::INT32));
 }
 
 TEST(RelationalUnaryScalarWord, UnrepresentableFloatScalarIsRejected) {
@@ -310,7 +396,7 @@ TEST(RelationalUnaryScalarWord, UnrepresentableFloatScalarIsRejected) {
         ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
     // Integral values inside the range are accepted.
     EXPECT_NO_THROW(emit(UnaryOpType::UNARY_LE, -2147483648.0f, DataType::INT32));
-    EXPECT_NO_THROW(emit(UnaryOpType::UNARY_LE, 4294967040.0f, DataType::UINT32));
+    EXPECT_NO_THROW(emit(UnaryOpType::UNARY_EQ, 4294967040.0f, DataType::UINT32));
 }
 
 // Host side only: an op placed after a TYPECAST is generated for the cast's target dtype. A relational
