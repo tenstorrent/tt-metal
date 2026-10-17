@@ -6550,6 +6550,13 @@ tasks:
     - ffn_collapse
     - ffn_norm
     layer: 20
+  frozen:
+    at: '2026-10-17T10:06:51'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_12_ffn_norm.py: 331030a16c3964f2e4ebf8e1db86b44994c636970436b93beea27cdb9d618529
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_candidate.router
   title: dec_candidate router (router) on device, layer 20
   step: implement
