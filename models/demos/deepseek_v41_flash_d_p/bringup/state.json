@@ -887,6 +887,57 @@
   "started": "2026-10-17T11:54:08",
   "status": "PASS"
  },
+ "C.dec_reindex.router": {
+  "attempts": 0,
+  "duration_s": 21.2,
+  "history": [
+   {
+    "s": 21.2,
+    "status": "PASS",
+    "t": "2026-10-17T13:36:08"
+   }
+  ],
+  "last_run": "2026-10-17T13:36:08",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.dec_reindex.router.log",
+  "metrics": {
+   "auto_router_L24_layer0_flip_frac": 0.0009765625,
+   "auto_router_L24_layer0_flip_limit": 0.02783203125,
+   "auto_router_L24_layer0_flip_rows": 2,
+   "auto_router_L24_layer0_flips_unexplained": 0,
+   "auto_router_L24_layer0_matched": 0.9990234375,
+   "auto_router_L24_layer0_overlap": 0.9998372793197632,
+   "auto_router_L24_layer0_rel": 3.194703094777651e-05,
+   "auto_router_L24_layer0_rowsum": 2.980232238769531e-07,
+   "auto_router_L24_mixed_flip_frac": 0.001953125,
+   "auto_router_L24_mixed_flip_limit": 0.041015625,
+   "auto_router_L24_mixed_flip_rows": 4,
+   "auto_router_L24_mixed_flips_unexplained": 0,
+   "auto_router_L24_mixed_matched": 0.998046875,
+   "auto_router_L24_mixed_overlap": 0.9996744990348816,
+   "auto_router_L24_mixed_rel": 7.392914267256856e-05,
+   "auto_router_L24_mixed_rowsum": 2.980232238769531e-07,
+   "auto_router_L24_vs_cpu_flip_frac": 0.00146484375,
+   "auto_router_L24_vs_cpu_flip_limit": 0.0146484375,
+   "auto_router_L24_vs_cpu_flip_rows": 3,
+   "auto_router_L24_vs_cpu_flips_unexplained": 0,
+   "auto_router_L24_vs_cpu_matched": 0.99853515625,
+   "auto_router_L24_vs_cpu_overlap": 0.999755859375,
+   "auto_router_L24_vs_cpu_rel": 0.00014291494153439999,
+   "auto_router_L24_vs_cpu_rowsum": 4.172325134277344e-07,
+   "auto_router_L24_vs_golden_matched": 0.98974609375,
+   "auto_router_L24_vs_golden_overlap": 0.998291015625,
+   "auto_router_L24_vs_golden_rel": 0.0017556686652824283,
+   "auto_router_L24_vs_golden_rowsum": 0.0022735595703125,
+   "det_router_L24": 1.0,
+   "err_router_L24": 0.03636634722352028,
+   "err_router_L24_limit": 0.2260511815547943,
+   "pcc_router_L24": 0.9993046594252551
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T13:35:46",
+  "status": "PASS"
+ },
  "C.enc_reuse.attention": {
   "agent": {
    "defs": {
