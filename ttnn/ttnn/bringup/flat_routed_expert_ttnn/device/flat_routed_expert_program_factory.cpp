@@ -399,7 +399,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         const char* am = std::getenv("MIMO_FL_DRISC_ALT_MAXCNT");
         // (two tiles up to: GLM-Flash 224, K2.7 E12 (reader down columns) 384: M 256 85.2 two tiles vs 89.1 / 98.1
         // one tile, job 1 on NOC0 / NOC1)
-        drisc_dual_def["SE_DRISC_ALT_MAXCNT"] = am ? std::string(am) : std::string(p.rdown ? "384" : "224");
+        // DRISC-only (no Tensix readers to take hot calls): both tiles on every call - one tile per bank for the whole
+        // call starved its small experts (K3 2 x 4 overlap, Zipf spread / packed fused 3369 / 6148 -> 2589 / 5906 us;
+        // Tensix readers 2727 / 5920)
+        drisc_dual_def["SE_DRISC_ALT_MAXCNT"] =
+            am ? std::string(am) : std::string(!p.dual ? "0xFFFFFFFF" : (p.rdown ? "384" : "224"));
     }
     if (p.drisc && flat_drisc_tiles() == 2) {  // both tiles of a bank every call (se_drisc.hpp SD_PAIRED)
         drisc_dual_def["SE_DRISC_PAIRED_ALWAYS"] = "1";

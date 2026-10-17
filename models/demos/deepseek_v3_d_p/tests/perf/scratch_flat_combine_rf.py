@@ -271,9 +271,14 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
     devplan = dict(plan=pl["plan"], table=pl["table"]) if DEVPLAN else None
     if DEVPLAN:
         assert (
-            l1 is not None and int(os.environ.get("FC_NACC", "15")) == 15
-        ), "FC_DEVPLAN needs FC_L1 (and 15 accumulators)"
+            l1 is not None and int(os.environ.get("FC_NACC", "15")) <= 16
+        ), "FC_DEVPLAN needs FC_L1 (<= 16 accumulators)"
     fused = sparse_combine_rf_prepare(mesh_device, S, H, rows, writers=writers, l1=l1, devplan=devplan, **common)
+    if DEVPLAN:  # (the planner was built for FC_NACC accumulators: the combine must have found that many cells)
+        assert len(fused.cells["accs"]) == n_acc, (
+            f"combine has {len(fused.cells['accs'])} accumulators, the planner {n_acc}: set FC_NACC "
+            f"({len(cells)} free cells)"
+        )
     alone = sparse_combine_rf_prepare(mesh_device, S, H, rows, writers=0, **common)
     coll = fused.collector
     logger.info(

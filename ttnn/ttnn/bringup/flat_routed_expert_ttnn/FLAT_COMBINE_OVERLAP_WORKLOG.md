@@ -1134,3 +1134,16 @@ K3 (L1 hand-off, queued, same harness): 1.048 / 1.031 / 1.024.
   accumulators end within ~20 us of their last local row, but the port senders end 1141 / 1141 / 1162 / 1191 / 1200 /
   1223 / 1269 / 1257 on chips 0-7 (slot waits 12-45 us): a chip-dependent sender tail of up to ~140 us. Open: the
   10880 B fabric payload (fewer router slots than K3's 7232) vs the ports' load per chip.
+
+### K3 overlap with DRISC-only and 64 gate/up cores (2026-10-17, 2 x 4, queued, L1 hand-off, device planner)
+Harness defaults (K3: 56 experts / chip, top-16, 320 tokens / chip, latent 3584, I 3072), fused us (all exact, 2.2e-3):
+| config | uniform | Zipf spread | Zipf packed |
+| base: 48 gate/up, Tensix readers, 28 down, 24 combine cells | 2442 | 2727 | 5920 |
+| DRISC-only, 48 gate/up (39 combine cells), per-call tile switch | 2314 | 3369 | 6148 |
+| DRISC-only, 48 gate/up, both tiles always (ALT_MAXCNT high) | 2314 | 2589 | 5906 |
+| 64 gate/up (MIMO_FL_HG=1 HG_NU=3) + DRISC-only + MIMO_FL_ND=28, 14 accumulators, per-call switch | 2289 | 3566 | 6127 |
+| 64 gate/up + DRISC-only, both tiles always | 2289 | 2590 | 5705 |
+Flat alone: base 2324 / 2586 / 5750; 64 gate/up both tiles 2265 / 2488 / 5601. The skewed routings' DRISC loss was the
+switch-mode policy: a call whose largest expert passes 224 tokens ran every bank on one tile (~28 GB/s), starving the
+call's DRAM-bound small experts. Default now: both tiles on every call when no Tensix readers back the DRISC slots
+(non-dual); dual plans keep 224 / 384. The harness accepts FC_NACC <= 16 (asserting the combine found that many).
