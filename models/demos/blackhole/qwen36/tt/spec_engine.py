@@ -539,6 +539,19 @@ class MTPSpecEngine:
         )
         ttnn.copy_host_to_device_tensor(h, dev)
 
+    def _stage_table(self, host, dev, dtype, layout):
+        """_stage for a page table that mostly repeats from step to step. QWEN36_SPEC_HOSTFIX (default 1): skip the
+        copy when ``dev`` already holds this exact table. Every write to a buffer must go through here, since the
+        cache is the host copy of what that buffer holds (keyed by the buffer, dropped when it is freed)."""
+        if not spec_hostfix_enabled():
+            return self._stage(host, dev, dtype, layout)
+        cache = self.__dict__.setdefault("_stage_cache", {})
+        hit = cache.get(id(dev))
+        if hit is not None and hit[0] is dev and hit[1].shape == host.shape and torch.equal(hit[1], host):
+            return
+        self._stage(host, dev, dtype, layout)
+        cache[id(dev)] = (dev, host.clone())
+
     def _alloc_host_replicated(self, host, dtype, layout):
         return ttnn.from_torch(
             host,
@@ -551,9 +564,9 @@ class MTPSpecEngine:
 
     def _stage_mtp_tables(self, pt):
         """Re-stage the persistent MTP page tables from the fitted host table [B, nb]."""
-        self._stage(pt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self._stage_table(pt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         for u in range(self.B):
-            self._stage(pt[u : u + 1].contiguous(), self._mtp_pt_rows[u], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._stage_table(pt[u : u + 1].contiguous(), self._mtp_pt_rows[u], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
 
     def _check_scratch(self, pt):
         assert int(pt.max()) < self._scratch_block, (
@@ -777,6 +790,7 @@ class MTPSpecEngine:
         self._dr_outs, self._dr_bufs = [], []
         self._dr_tok0 = self._dr_rs_tok = self._dr_rs_pos = self._dr_rs_pt = self._dr_rs_cos = self._dr_rs_sin = None
         self._dr_pos, self._dr_cos, self._dr_sin = [], [], []
+        self.__dict__.pop("_stage_cache", None)  # QWEN36_SPEC_HOSTFIX table cache: its buffers are freed here
         bufs = [
             *self._last_hidden,
             *self._last_sel.values(),
@@ -1263,7 +1277,7 @@ class MTPSpecEngine:
                 dpt[torch.tensor(decline)] = self._scratch_block
                 p = [0 if d else pu for d, pu in zip(decline, p)]
                 pending = [0 if d else t for d, t in zip(decline, pending)]
-            self._stage(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._stage_table(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             drafts = self._propose_recorded(ctok, cpos, m, pending, p, pt, m_kv)
             if any(decline):
                 drafts[torch.tensor(decline)] = 0
@@ -1280,7 +1294,7 @@ class MTPSpecEngine:
         if any(decline):  # declined rows draft at position 0 over an all-scratch table; their ids are discarded
             dpt = pt.clone()
             dpt[torch.tensor(decline)] = self._scratch_block
-            self._stage(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._stage_table(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             p = [0 if d else pu for d, pu in zip(decline, p)]
             pending = [0 if d else t for d, t in zip(decline, pending)]
         drafts = self._draft(pending, self._hp_buf, p)
@@ -1454,7 +1468,7 @@ class MTPSpecEngine:
         rcos, rsin = model._rope_tp_cos_sin_decode_torch(rpos)
         stage(rtok, self._dr_rs_tok, ttnn.uint32, rm)
         stage(rpos, self._dr_rs_pos, ttnn.int32, rm)
-        stage(rpt, self._dr_rs_pt, ttnn.int32, rm)
+        self._stage_table(rpt, self._dr_rs_pt, ttnn.int32, rm)
         stage(rcos, self._dr_rs_cos, bf, tile)
         stage(rsin, self._dr_rs_sin, bf, tile)
         tok0, poss = draft_step_plan(pending, p, K)

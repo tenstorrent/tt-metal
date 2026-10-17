@@ -312,3 +312,73 @@ def test_ids_to_host_matches_per_tensor_reads(B, monkeypatch):
     _fake_ttnn(monkeypatch, log)
     assert MTPSpecEngine._ids_to_host(e, outs) == res["0"][0]
     assert log.count(("blocking_read",)) == K and ("sync",) not in log
+
+
+# ---- R8: drafter page tables skipped when unchanged (fake device) -----------------------------------------
+class _Buf:
+    """Fake persistent device buffer: holds what the last staged copy wrote."""
+
+    def __init__(self):
+        self.content = None
+
+
+def _table_engine(B, n_bufs=3):
+    e = _propose_engine(B, 3, None)
+    e.copies = 0
+
+    def stage(host, dev, dtype, layout):
+        e.copies += 1
+        dev.content = host.clone()
+
+    e._stage = stage
+    return e
+
+
+def test_stage_table_skips_unchanged_and_tracks_device_content(monkeypatch):
+    g = torch.Generator().manual_seed(0)
+    nb = 6
+    bufs = [_Buf() for _ in range(3)]
+    tables = [torch.randint(0, 5, (8, nb), generator=g, dtype=torch.int32) for _ in range(4)]
+    e_new, e_old = _table_engine(8), _table_engine(8)
+    bufs_old = [_Buf() for _ in range(3)]
+    n = 0
+    for _ in range(300):
+        k, t = int(torch.randint(0, 3, (1,), generator=g)), tables[int(torch.randint(0, 4, (1,), generator=g))]
+        host = t.clone() if k else t[:1].clone()
+        monkeypatch.setenv("QWEN36_SPEC_HOSTFIX", "1")
+        MTPSpecEngine._stage_table(e_new, host, bufs[k], None, None)
+        monkeypatch.setenv("QWEN36_SPEC_HOSTFIX", "0")
+        MTPSpecEngine._stage_table(e_old, host, bufs_old[k], None, None)
+        host[0, 0] += 1  # the caller may reuse its tensor: the cache must hold a copy
+        n += 1
+        for a, b in zip(bufs, bufs_old):  # device contents match the old path after every call
+            assert (a.content is None and b.content is None) or torch.equal(a.content, b.content)
+    assert e_old.copies == n and e_new.copies < n
+
+
+def test_stage_table_rewrites_after_buffer_replaced_and_release_cache():
+    e = _table_engine(2)
+    t = torch.arange(12, dtype=torch.int32).reshape(2, 6)
+    a, b = _Buf(), _Buf()
+    MTPSpecEngine._stage_table(e, t, a, None, None)
+    MTPSpecEngine._stage_table(e, t, a, None, None)
+    assert e.copies == 1
+    MTPSpecEngine._stage_table(e, t, b, None, None)  # another buffer holds nothing yet
+    assert e.copies == 2 and torch.equal(b.content, t)
+    e.__dict__.pop("_stage_cache")  # what release does
+    MTPSpecEngine._stage_table(e, t, a, None, None)
+    assert e.copies == 3
+
+
+def test_stage_mtp_tables_second_call_same_table_is_free():
+    B, nb = 4, 5
+    e = _table_engine(B)
+    e._mtp_pt, e._mtp_pt_rows = _Buf(), [_Buf() for _ in range(B)]
+    pt = torch.arange(B * nb, dtype=torch.int32).reshape(B, nb)
+    MTPSpecEngine._stage_mtp_tables(e, pt)
+    assert e.copies == 1 + B
+    MTPSpecEngine._stage_mtp_tables(e, pt.clone())
+    assert e.copies == 1 + B
+    pt[2, 1] = 99
+    MTPSpecEngine._stage_mtp_tables(e, pt)
+    assert e.copies == 1 + B + 2 and torch.equal(e._mtp_pt_rows[2].content, pt[2:3])
