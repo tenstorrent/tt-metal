@@ -7389,6 +7389,13 @@ tasks:
     - attention
     - attn_residual
     layer: 24
+  frozen:
+    at: '2026-10-17T12:58:38'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_08_attn_residual.py: 0731fb730260172d026306b6b1856297c2fd4f31f5f3ab5da39063221cd8f0d7
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.dec_reindex.ffn_hc
   title: dec_reindex ffn_hc (op) on device, layer 24
   step: implement
