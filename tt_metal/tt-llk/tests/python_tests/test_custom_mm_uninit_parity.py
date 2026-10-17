@@ -80,7 +80,7 @@ def _read_headers():
 def test_custom_mm_uninit_bodies_have_not_diverged():
     """Both uninits must consist only of the shared PACK-helper call."""
     sources = _read_headers()
-    expected = "PACK((_llk_pack_custom_mm_uninit_<dense_packing>()));"
+    expected = "PACK((_llk_pack_custom_mm_uninit_<dense_packing, fp32_dest_acc_en>()));"
     for header, function in _UNINIT_PAIR:
         body = _normalize(_extract_body(sources[header], function))
         assert body == expected, (
@@ -99,7 +99,7 @@ def test_driver_and_compute_apis_use_the_shared_pack_helper():
 
     assert '#include "experimental/llk_pack_custom_mm.h"' in driver
     for operation in ("init", "uninit"):
-        call = f"_llk_pack_custom_mm_{operation}_<UNINIT_DENSE_PACKING>();"
+        call = f"_llk_pack_custom_mm_{operation}_<UNINIT_DENSE_PACKING, is_fp32_dest_acc_en>();"
         assert call in driver, (
             f"The restore driver no longer calls {call}; its coverage must exercise "
             "the same PACK helper as the compute APIs."
@@ -122,7 +122,10 @@ def test_driver_and_compute_apis_use_the_shared_pack_helper():
         for index, match in enumerate(overloads):
             body = _normalize(_extract_body(code, match.group(1), match.start()))
             assert (
-                body.count("PACK((_llk_pack_custom_mm_init_<dense_packing>()));") == 1
+                body.count(
+                    "PACK((_llk_pack_custom_mm_init_<dense_packing, fp32_dest_acc_en>()));"
+                )
+                == 1
             ), (
                 f"{header}: {match.group(1)} overload {index + 1} must configure "
                 "the stride exactly once through the shared PACK helper."

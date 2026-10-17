@@ -150,7 +150,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 
-    _llk_pack_custom_mm_init_<UNINIT_DENSE_PACKING>();
+    _llk_pack_custom_mm_init_<UNINIT_DENSE_PACKING, is_fp32_dest_acc_en>();
 
     // What a caller's pack_block_contiguous_init does: replace the MOP, keep the
     // ADDR_MODs/strides from the init above.
@@ -172,7 +172,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // ---- the function under test ----
     if constexpr (!UNINIT_SKIP)
     {
-        _llk_pack_custom_mm_uninit_<UNINIT_DENSE_PACKING>();
+        _llk_pack_custom_mm_uninit_<UNINIT_DENSE_PACKING, is_fp32_dest_acc_en>();
     }
 
     // ---- run 1: plain per-tile pack, deliberately with NO packer re-init ----

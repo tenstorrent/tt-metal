@@ -29,6 +29,7 @@ template <
     bool split_acc = false,
     bool dense_packing = false,
     bool clear_src = true,
+    bool fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat F0,
     TensorShape S0,
     DataFormat F1,
@@ -47,7 +48,7 @@ ALWI void compressed_custom_mm_block_init_short(
         "compressed_custom_mm: in1 tile shape must be [32, 32]");
     UNPACK((_llk_unpack_AB_compressed_custom_mm_init_<transpose, clear_src>(S0.face_r_dim)));
     MATH((_llk_math_compressed_custom_mm_init_<transpose, false, dense_packing>(S0.face_r_dim)));
-    PACK((_llk_pack_custom_mm_init_<dense_packing>()));
+    PACK((_llk_pack_custom_mm_init_<dense_packing, fp32_dest_acc_en>()));
 }
 
 template <
@@ -55,6 +56,7 @@ template <
     bool split_acc = false,
     bool dense_packing = false,
     bool clear_src = true,
+    bool fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat F1,
     TensorShape S1>
 ALWI void compressed_custom_mm_block_init_short(
@@ -71,7 +73,7 @@ ALWI void compressed_custom_mm_block_init_short(
         const auto in0_id = get_operand_id(in0_cb_id);
         _llk_math_compressed_custom_mm_init_<transpose, false, dense_packing>(get_operand_face_r_dim(in0_id));
     }));
-    PACK((_llk_pack_custom_mm_init_<dense_packing>()));
+    PACK((_llk_pack_custom_mm_init_<dense_packing, fp32_dest_acc_en>()));
 }
 
 template <bool finalize = true, DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>

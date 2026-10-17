@@ -133,34 +133,6 @@ def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
     return golden, device
 
 
-# Found by this test: the dense_packing W-stride constants in custom_mm.h /
-# compressed_custom_mm.h are hardcoded for a 16-bit pack source and are wrong for a
-# 32-bit one.
-#
-# The canonical writer, cpack_common.h set_packer_strides, computes
-#     w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * datum_size_in_bytes(fmt)
-# while the shared custom-mm PACK helper retains the literal `* 2`:
-#     init   dense:   (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2   = 1024
-#     uninit restore:  TILE_NUM_FACES      * FACE_C_DIM * FACE_R_DIM * 2   = 2048
-# For a Float32 pack source datum_size_in_bytes is 4, so the correct values are 2048 and
-# 4096. The uninit therefore does not restore what _llk_pack_init_ programmed, and the
-# following pack reads tiles at half the intended stride.
-#
-# Measured on BH p100a, Float32 in/out, dest_acc=Yes, dense_packing=True: run 1 matches
-# on tile 0 only (0.25 overall) regardless of restore_tile_pack_mop, i.e. the W-stride
-# restore does not recover. The 16-bit path is unaffected and fully correct.
-#
-# This is pre-existing -- #52727 kept the demo's structure -- but the promotion ships it
-# in packaged metalium via HW_JIT_API_HEADERS, so it now reaches more callers. Marked
-# xfail rather than skipped so the suite stays green while recording the defect, and
-# flips to XPASS the moment the constants become format-aware (or a static_assert
-# restricts dense_packing to 16-bit pack sources).
-_DENSE_FP32_XFAIL = (
-    "custom_mm dense_packing W-stride is hardcoded *2 (16-bit pack source); "
-    "wrong for a 32-bit pack source, so the uninit cannot restore it"
-)
-
-
 def _skip_unsupported(formats, dest_acc):
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
@@ -179,9 +151,7 @@ def _skip_unsupported(formats, dest_acc):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dense_packing=[False, True],
 )
-def test_custom_mm_uninit_restores_dense_wstride(
-    request, formats, dest_acc, dense_packing
-):
+def test_custom_mm_uninit_restores_dense_wstride(formats, dest_acc, dense_packing):
     """The uninit must put the 64-row tile-to-tile W-stride back.
 
     This is the whole of what ``*_block_uninit`` does as merged. The run-0 block MOP is
@@ -191,10 +161,6 @@ def test_custom_mm_uninit_restores_dense_wstride(
     baseline proving the driver itself is sound.
     """
     _skip_unsupported(formats, dest_acc)
-    if dense_packing and formats.output_format.is_32_bit():
-        request.node.add_marker(
-            pytest.mark.xfail(reason=_DENSE_FP32_XFAIL, strict=False)
-        )
 
     golden, device = _run(formats, dest_acc, dense_packing, skip_uninit=False)
 
