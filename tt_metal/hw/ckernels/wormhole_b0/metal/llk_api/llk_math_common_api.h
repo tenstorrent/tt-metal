@@ -39,8 +39,8 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
  *
  * Programs ALU_ACC_CTRL and the PCK_DEST_RD_CTRL Read_32b_data / Read_int8 bits after Unpack and Pack
  * have drained. The bits come from `enable` and the pack source format Pack reports
- * (llk_pack_wait_fp32_dest_acc): an Int32 / UInt32 output keeps its 32-bit Dest read when dest-acc is
- * disabled. The pack thread reprograms the other mode-dependent packer fields itself.
+ * (llk_pack_wait_fp32_dest_acc): an Int32 / UInt32 / Float32 output keeps its 32-bit Dest read, as the
+ * packer's configure programs it. The pack thread reprograms the other mode-dependent packer fields itself.
  *
  * @param enable True to enable FP32 dest accumulation, false to disable.
  * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_pack_wait_fp32_dest_acc.

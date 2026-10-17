@@ -22,14 +22,16 @@ constexpr std::uint32_t MATH_DONE    = 0x46504110; // 'FPA' | 0x10
 constexpr std::uint32_t PACK_READY_TAG   = 0x46504200; // 'FPB' << 8
 constexpr std::uint32_t PACK_FORMAT_MASK = 0xFF;
 
-// PCK_DEST_RD_CTRL Read_32b_data / Read_int8 for a dest-acc mode and a pack source format. A 32-bit integer
-// source keeps the 32-bit Dest read whatever the mode: Int32 / UInt32 datums only ever exist in a 32-bit
-// Dest and the packer cannot widen 16-bit ones. A Float32 source follows the mode: inside a disabled
-// section the Dest holds 16-bit datums and the packer widens them, as fast-tilize packs a Float32 output
-// from a 16-bit Dest. An 8-bit source takes the 8-bit integer read only in a 16-bit Dest.
+// PCK_DEST_RD_CTRL Read_32b_data / Read_int8 for a dest-acc mode and a pack source format, as configure_pack
+// derives them: a 32-bit source (Int32, UInt32, Float32) keeps the 32-bit Dest read whatever the mode, an
+// 8-bit source takes the 8-bit integer read only in a 16-bit Dest. A 32-bit-source output packs datums
+// written while Dest was 32-bit (e.g. before a disable); datums computed inside a 16-bit section cannot be
+// packed through a 32-bit source with either read width -- the packer would need a 16-bit source, as
+// fast-tilize reconfigures it.
 constexpr bool read_32b_data(bool enable, std::uint32_t pack_src_format)
 {
-    return enable || pack_src_format == to_underlying(DataFormat::Int32) || pack_src_format == to_underlying(DataFormat::UInt32);
+    return enable || pack_src_format == to_underlying(DataFormat::Int32) || pack_src_format == to_underlying(DataFormat::UInt32) ||
+           pack_src_format == to_underlying(DataFormat::Float32);
 }
 
 constexpr bool read_int8(bool enable, std::uint32_t pack_src_format)

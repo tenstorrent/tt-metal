@@ -13,14 +13,21 @@
 // numbers in [0, 127], which Float16_b and Bfp8_b both represent exactly, so the decoded output is
 // compared with the input datum for datum.
 //
+// TensixPackFloat32AfterFp32DestAccDisable: an fp32 build with a Float32 output copies a tile into the
+// 32-bit Dest, disables dest-acc and packs. The datums are still 32-bit, so the packer must keep the 32-bit
+// Dest read for the Float32 source, as configure_pack programs it; clearing it with the mode makes the
+// packer read 16-bit halves and every datum comes out wrong.
+//
 // TensixPackCfgAfterFp32DestAccRestore: the kernel reconfigures the packer to a Bfp8 (5-bit exponent)
 // output while Dest is in 16-bit mode, then restores the 32-bit Dest with restore_fp32_dest_acc<false>().
 // An fp32 -> Bfp8 pack needs the packer's exponent threshold, which zeroes datums below the 5-bit
 // exponent range, so the restore must bring it back for the configured output. The pack thread reads
-// the mode-dependent packer fields back after the restore and the test checks them; the packed data
-// cannot be checked because a Bfp8 output from a 32-bit Dest is not a shipped path.
+// the mode-dependent packer fields back after the restore and the test checks them. The fields are
+// checked rather than packed data because packed data cannot tell the threshold apart on Blackhole: a
+// plain fp32_dest_acc_en Float32 -> Bfp8 datacopy with no toggle at all returns an all-zero tile there.
 
 #include <gtest/gtest.h>
+#include <bit>
 #include <cstdint>
 #include <random>
 #include <vector>
@@ -52,6 +59,8 @@ constexpr std::uint32_t kWholeNumberLimit = 128;
 
 static constexpr const char* kReconfigKernel =
     "tests/tt_metal/tt_metal/test_kernels/compute/pack_reconfig_fp32_dest_acc_toggle.cpp";
+static constexpr const char* kFloat32AfterDisableKernel =
+    "tests/tt_metal/tt_metal/test_kernels/compute/pack_float32_after_fp32_dest_acc_disable.cpp";
 static constexpr const char* kCfgDumpKernel =
     "tests/tt_metal/tt_metal/test_kernels/compute/pack_cfg_dump_fp32_dest_acc_restore.cpp";
 // Exponent floor the packer applies to an 8-bit-exponent datum packed to a 5-bit-exponent format: the
@@ -207,6 +216,50 @@ TEST_F(LLKMeshDeviceFixture, TensixPackCfgAfterFp32DestAccRestore) {
         EXPECT_EQ(words[1], kBfpAExpThreshold) << "exponent threshold value after the 32-bit Dest was restored";
         EXPECT_EQ(words[2], 1u) << "Read_32b_data after the 32-bit Dest was restored";
         EXPECT_EQ(words[3], 0u) << "Round_10b_mant for a Bfp8 pack source";
+    }
+}
+
+TEST_F(LLKMeshDeviceFixture, TensixPackFloat32AfterFp32DestAccDisable) {
+    using namespace unit_tests::llk::pack_reconfig_fp32_dest_acc_toggle;
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "set_fp32_dest_acc is not supported on Quasar";
+    }
+
+    // bf16 values with fractional parts, exact in Float32: the packed words must equal them bit for bit.
+    std::mt19937 rng(0xF32);
+    std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
+    vector<bfloat16> input(kNumTiles * kDatumsPerTile);
+    for (auto& datum : input) {
+        datum = bfloat16(dist(rng));
+    }
+    const vector<std::uint32_t> src_vec = pack_bfloat16_vec_into_uint32_vec(input);
+
+    for (auto& device : this->devices_) {
+        const vector<std::uint32_t> result = run_fp32_dest_acc_kernel(
+            *device,
+            kFloat32AfterDisableKernel,
+            /*fp32_dest_acc_en=*/true,
+            tt::DataFormat::Float16_b,
+            tt::DataFormat::Float32,
+            tt::DataFormat::Float32,
+            src_vec);
+        ASSERT_GE(result.size(), input.size());
+
+        std::uint32_t mismatches = 0;
+        for (std::size_t i = 0; i < input.size(); ++i) {
+            const float expected = static_cast<float>(input[i]);
+            const float got = std::bit_cast<float>(result[i]);
+            if (got != expected) {
+                if (mismatches < 8) {
+                    log_error(tt::LogTest, "datum {}: expected {} got {}", i, expected, got);
+                }
+                ++mismatches;
+            }
+        }
+        EXPECT_EQ(mismatches, 0u)
+            << "Float32 pack after set_fp32_dest_acc<false>() of a tile written in the 32-bit Dest "
+               "differs from the input in "
+            << mismatches << " of " << input.size() << " datums";
     }
 }
 

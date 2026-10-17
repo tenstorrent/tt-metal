@@ -42,6 +42,9 @@ void kernel_main() {
     PACK(({
         // fifo_wr_ptr is a 16-byte L1 address (the unit the packer's L1_Dest_addr takes).
         volatile std::uint32_t* words = reinterpret_cast<volatile std::uint32_t*>(out.get_write_ptr() << 4);
+        // The restore's threshold / rounding writes are Tensix RMWs queued on this thread; cfg_read is a raw
+        // load, so retire them first.
+        tensix_sync();
         const std::uint32_t threshold_word = cfg_read(THCON_SEC0_REG1_Exp_threshold_ADDR32);
         const std::uint32_t dest_rd_word = cfg_read(PCK_DEST_RD_CTRL_Read_32b_data_ADDR32);
         words[0] = (threshold_word & THCON_SEC0_REG1_Exp_threshold_en_MASK) >> THCON_SEC0_REG1_Exp_threshold_en_SHAMT;
