@@ -1,0 +1,177 @@
+{
+ "metrics": {
+  "auto_engram_rows_L14_chunk0_bias": {
+   "t": "2026-10-17T00:03:52",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_chunk0_bias_at": {
+   "t": "2026-10-17T00:03:52",
+   "value": 0
+  },
+  "auto_engram_rows_L14_chunk0_bias_floor": {
+   "t": "2026-10-17T00:03:52",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_chunk0_bias_signed": {
+   "t": "2026-10-17T00:03:52",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_chunk0_col_at": {
+   "t": "2026-10-17T00:03:52",
+   "value": 0
+  },
+  "auto_engram_rows_L14_chunk0_col_floor": {
+   "t": "2026-10-17T00:03:52",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_chunk0_ratio_max": {
+   "t": "2026-10-17T00:03:52",
+   "value": 1.0
+  },
+  "auto_engram_rows_L14_chunk0_ratio_min": {
+   "t": "2026-10-17T00:03:52",
+   "value": 1.0
+  },
+  "auto_engram_rows_L14_chunk0_rel": {
+   "t": "2026-10-17T00:03:52",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_chunk0_rel_limit": {
+   "t": "2026-10-17T00:03:52",
+   "value": 0.03
+  },
+  "auto_engram_rows_L14_chunk0_row": {
+   "t": "2026-10-17T00:03:52",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_chunk0_row_at": {
+   "t": "2026-10-17T00:03:52",
+   "value": 0
+  },
+  "auto_engram_rows_L14_chunk0_row_floor": {
+   "t": "2026-10-17T00:03:52",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_cpu_bias": {
+   "t": "2026-10-17T00:03:50",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_cpu_bias_at": {
+   "t": "2026-10-17T00:03:50",
+   "value": 0
+  },
+  "auto_engram_rows_L14_vs_cpu_bias_floor": {
+   "t": "2026-10-17T00:03:50",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_cpu_bias_signed": {
+   "t": "2026-10-17T00:03:50",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_cpu_col_at": {
+   "t": "2026-10-17T00:03:50",
+   "value": 0
+  },
+  "auto_engram_rows_L14_vs_cpu_col_floor": {
+   "t": "2026-10-17T00:03:50",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_cpu_ratio_max": {
+   "t": "2026-10-17T00:03:50",
+   "value": 1.0
+  },
+  "auto_engram_rows_L14_vs_cpu_ratio_min": {
+   "t": "2026-10-17T00:03:50",
+   "value": 1.0
+  },
+  "auto_engram_rows_L14_vs_cpu_rel": {
+   "t": "2026-10-17T00:03:50",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_cpu_rel_limit": {
+   "t": "2026-10-17T00:03:50",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_cpu_row": {
+   "t": "2026-10-17T00:03:50",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_cpu_row_at": {
+   "t": "2026-10-17T00:03:50",
+   "value": 0
+  },
+  "auto_engram_rows_L14_vs_cpu_row_floor": {
+   "t": "2026-10-17T00:03:50",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_golden_bias": {
+   "t": "2026-10-17T00:03:51",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_golden_bias_at": {
+   "t": "2026-10-17T00:03:51",
+   "value": 0
+  },
+  "auto_engram_rows_L14_vs_golden_bias_floor": {
+   "t": "2026-10-17T00:03:51",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_golden_bias_signed": {
+   "t": "2026-10-17T00:03:51",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_golden_col_at": {
+   "t": "2026-10-17T00:03:51",
+   "value": 0
+  },
+  "auto_engram_rows_L14_vs_golden_col_floor": {
+   "t": "2026-10-17T00:03:51",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_golden_ratio_max": {
+   "t": "2026-10-17T00:03:51",
+   "value": 1.0
+  },
+  "auto_engram_rows_L14_vs_golden_ratio_min": {
+   "t": "2026-10-17T00:03:51",
+   "value": 1.0
+  },
+  "auto_engram_rows_L14_vs_golden_rel": {
+   "t": "2026-10-17T00:03:51",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_golden_rel_limit": {
+   "t": "2026-10-17T00:03:51",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_golden_row": {
+   "t": "2026-10-17T00:03:51",
+   "value": 0.0
+  },
+  "auto_engram_rows_L14_vs_golden_row_at": {
+   "t": "2026-10-17T00:03:51",
+   "value": 0
+  },
+  "auto_engram_rows_L14_vs_golden_row_floor": {
+   "t": "2026-10-17T00:03:51",
+   "value": 0.0
+  },
+  "det_engram_rows_L14": {
+   "t": "2026-10-17T00:03:54",
+   "value": 1.0
+  },
+  "err_engram_rows_L14": {
+   "t": "2026-10-17T00:03:49",
+   "value": 0.0
+  },
+  "err_engram_rows_L14_limit": {
+   "t": "2026-10-17T00:03:49",
+   "value": 0.0
+  },
+  "pcc_engram_rows_L14": {
+   "t": "2026-10-17T00:03:49",
+   "value": 1.0000000000003553
+  }
+ },
+ "task": "C.enc_source_engram.engram_rows"
+}
