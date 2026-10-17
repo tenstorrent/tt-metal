@@ -664,6 +664,33 @@ def test_fmod_inf_divisor(testing_dtype, device):
     _assert_nan_lanes(testing_dtype, output_tensor[~finite_a])
 
 
+# The scalar-divisor forms route to the unary kernels (ckernel_sfpu_remainder.h / ckernel_sfpu_fmod.h),
+# which receive a host reciprocal of 0 for an infinite divisor and used to return NaN where the
+# tensor-tensor path returns the torch value.
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+@pytest.mark.parametrize("scalar", [_INF, -_INF])
+@pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
+def test_modulo_inf_scalar_divisor(ttnn_op, scalar, testing_dtype, device):
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+
+    torch_input_a = torch.tensor([5.0, -5.0, 0.0, 2.5, -2.5, _INF, -_INF, 0.0], dtype=torch_dtype)
+    torch_input_a[7:] = _negative_nan(torch_dtype)
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden = golden_function(torch_input_a, scalar, device=device)
+    nan_lanes = torch.isnan(golden)
+    assert torch.equal(nan_lanes, ~torch.isfinite(torch_input_a))
+
+    tt_in_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn_op(tt_in_a, scalar))
+
+    assert torch.equal(
+        output_tensor[~nan_lanes], golden[~nan_lanes]
+    ), f"device {output_tensor.tolist()} vs torch {golden.tolist()}"
+    _assert_nan_lanes(testing_dtype, output_tensor[nan_lanes])
+
+
 def test_optional_output_tensor_remainder(device):
     torch.manual_seed(0)
 
