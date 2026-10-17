@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <functional>
 #include <limits>
+#include <array>
 #include <optional>
 #include <string_view>
 #include <tuple>
@@ -2942,6 +2943,19 @@ AssignedMeshes decode_sat_placement(const MappingResult<GlobalMeshId, const Cand
 
 constexpr std::size_t kGrowBudgetPerVariant = 128;
 constexpr std::size_t kMaxGrowthCycles = 4;
+// Master-solve ladder, tried in order at the current pool; the pool grows only when every rung failed.
+// Soft seams (RELAXED inter-mesh policy only) let a connection resolve to zero links (#56762).
+struct SolveRung {
+    bool drop_host_cap;
+    bool soft_seams;
+    const char* name;
+};
+constexpr std::array<SolveRung, 4> kSolveLadder{{
+    {/*drop_host_cap=*/false, /*soft_seams=*/false, "hard seams, host cap"},
+    {/*drop_host_cap=*/true, /*soft_seams=*/false, "hard seams, host cap dropped"},
+    {/*drop_host_cap=*/false, /*soft_seams=*/true, "soft seams, host cap"},
+    {/*drop_host_cap=*/true, /*soft_seams=*/true, "soft seams, host cap dropped"},
+}};
 
 // True when this grouping's committed footprint (mesh_node_to_asic_position) satisfies every one of a mesh's
 // pins. A pin group is many-to-many: its fabric_nodes may land on any of its asic_positions, and the topology
@@ -3217,6 +3231,8 @@ void SatPlacementEnumerationSession::finish_init(
 
 bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, bool drop_cap) {
     reset();
+    // build_sat_placement_constraints rebuilds constraints_, so capture the rung's seam softness and re-apply it.
+    const bool soft_seams_wanted = owner_->constraints_.allow_unmatched_target_edges();
     AdjacencyGraph<const Candidate*> seat_graph =
         build_sat_placement_seat_graph(*owner_->pools_, owner_->mesh_level_graph_);
     const bool built =
@@ -3229,6 +3245,7 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
     if (drop_cap) {
         owner_->constraints_.set_max_same_rank_groups_used(0);
     }
+    owner_->constraints_.set_allow_unmatched_target_edges(soft_seams_wanted);
     const auto encode_start = std::chrono::steady_clock::now();
     session = std::make_unique<TopologyMappingEnumerationSession<MeshId, const Candidate*>>(
         owner_->mesh_level_graph_,
@@ -3249,16 +3266,26 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
     }
     relaxed = relaxed_mode;
     drop_host_cap = drop_cap;
+    soft_seams = soft_seams_wanted;
     return true;
 }
 
 MappingResult<MeshId, const Candidate*> SatPlacementEnumerationSession::MasterSolve::next(bool drop_cap) {
     MappingResult<MeshId, const Candidate*> failure;
     failure.success = false;
-    const bool relaxed_mode = owner_->relaxed_inter_mesh_policy_;
-    // Unchanged mode and host cap: this is another model from the session already encoded.
-    if (!matches(relaxed_mode, drop_cap) && !restart(relaxed_mode, drop_cap)) {
-        return failure;
+    const bool relaxed_mode = owner_->relaxed_inter_mesh_policy_ || owner_->constraints_.allow_unmatched_target_edges();
+    // Unchanged mode and host cap: another model from the session already encoded.
+    const bool soft = owner_->constraints_.allow_unmatched_target_edges();
+    // A seam-softness change is an in-session toggle when the live session can absorb it; a mode or host-cap
+    // change (or a session encoded with hard edges) rebuilds as before.
+    const bool toggled = matches(relaxed_mode, drop_cap) && soft != soft_seams && session->started() &&
+                         session->set_allow_unmatched_target_edges(soft);
+    if (toggled) {
+        soft_seams = soft;
+    } else if (!matches(relaxed_mode, drop_cap) || soft != soft_seams) {
+        if (!restart(relaxed_mode, drop_cap)) {
+            return failure;
+        }
     }
     ++owner_->attempts_;
     const auto solve_start = std::chrono::steady_clock::now();
@@ -3453,33 +3480,32 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
     if (solved_) {
         return {};
     }
-
-    // Same mode and host cap: next() is another model from the live session. The growth loop uses ONLY the
-    // normal PGD candidates -- MGD fallbacks are a strict last resort below, never mixed into the pool while
-    // the normal enumeration can still grow or has an untried solve.
-    //
-    // Solve the CURRENT pool with the host-count cap enforced, then -- if that fails -- immediately retry with
-    // the cap dropped at the SAME pool size, before any further growth. Trying drop_cap after every growth round
-    // (rather than only once after all growth is exhausted) lets a solvable smaller pool be solved before growth
-    // overshoots it into an intractably large SAT instance. Previously drop_cap ran only at the very end, so a
-    // large grow budget could blow past the smallest solvable pool (e.g. ~192 seats) straight into a much bigger
-    // one (~320 seats) whose capped solve hangs -- the end-of-loop drop_cap was never reached. Doing it per round
-    // makes the solve converge at the first solvable size regardless of grow budget.
-    auto solve_capped_then_dropped = [&]() -> MappingResult<MeshId, const Candidate*> {
-        MappingResult<MeshId, const Candidate*> r = master_solve_->next(/*drop_cap=*/false);
-        if (!r.success) {
-            r = master_solve_->next(/*drop_cap=*/true);
-            if (r.success) {
-                log_info(
-                    tt::LogFabric,
-                    "SAT joint placement: no placement under the HARD host-count cap at this pool size; placed with "
-                    "the cap dropped (meshes may now span more hosts / use cross-host seats)");
+    // Walk kSolveLadder at the current pool; MasterSolve applies each rung as in-session toggles.
+    bool solved_with_soft_seams = false;
+    auto solve_at_current_pool = [&]() -> MappingResult<MeshId, const Candidate*> {
+        MappingResult<MeshId, const Candidate*> r;
+        r.success = false;
+        for (const SolveRung& rung : kSolveLadder) {
+            if (rung.soft_seams && !relaxed_inter_mesh_policy_) {
+                break;  // STRICT inter-mesh policy: no soft-seam rungs
             }
+            if (constraints_.allow_unmatched_target_edges() != rung.soft_seams) {
+                constraints_.set_allow_unmatched_target_edges(rung.soft_seams);
+            }
+            r = master_solve_->next(rung.drop_host_cap);
+            if (!r.success) {
+                continue;
+            }
+            solved_with_soft_seams = rung.soft_seams;
+            if (&rung != &kSolveLadder.front()) {
+                log_info(tt::LogFabric, "SAT joint placement: placed with '{}' at this pool size", rung.name);
+            }
+            return r;
         }
         return r;
     };
 
-    MappingResult<MeshId, const Candidate*> result = solve_capped_then_dropped();
+    MappingResult<MeshId, const Candidate*> result = solve_at_current_pool();
     while (!result.success && cycle_ < kMaxGrowthCycles) {
         ++cycle_;
         const bool at_cap = cycle_ >= kMaxGrowthCycles;
@@ -3489,7 +3515,7 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         }
         // Growth reallocates candidate pointers, so the live encoding cannot be reused.
         master_solve_->reset();
-        result = solve_capped_then_dropped();
+        result = solve_at_current_pool();
         if (at_cap) {
             break;
         }
@@ -3509,12 +3535,8 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
             }
             // Growth reallocates candidate pointers, so the live encoding cannot be reused.
             master_solve_->reset();
-            result = solve_capped_then_dropped();
+            result = solve_at_current_pool();
         }
-    }
-    // Safety net: growth exhausted (or a grown==0 break above skipped the per-round drop_cap) and still unsolved.
-    if (!result.success) {
-        result = master_solve_->next(/*drop_cap=*/true);
     }
     if (!result.success) {
         solved_ = true;
@@ -3535,17 +3557,25 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         log_warning(
             tt::LogFabric,
             "SAT joint placement: no placement found after {} attempt(s) and {} growth cycle(s) over {} candidate(s); "
-            "candidate lists {} -- the UNSAT verdict is {}",
+            "candidate lists {} -- the UNSAT verdict is {}{}",
             attempts_,
             cycle_,
             candidates,
             complete ? "COMPLETE" : "TRUNCATED",
-            complete ? "trustworthy" : "NOT trustworthy");
+            complete ? "trustworthy" : "NOT trustworthy",
+            relaxed_inter_mesh_policy_ ? " (soft inter-mesh seams were tried too)" : "");
         return {};
     }
 
     AssignedMeshes assigned = decode_sat_placement(result);
     remember_yielded(assigned);
+    if (solved_with_soft_seams) {
+        log_warning(
+            tt::LogFabric,
+            "SAT joint placement: seated {} mesh(es) under RELAXED zero-link tolerance (#56762); unrealized "
+            "inter-mesh connections are logical-only (host interconnect)",
+            assigned.size());
+    }
     if (stats_ != nullptr) {
         bool lists_complete = true;
         for (const auto& [_, pool] : *pools_) {

@@ -22,7 +22,7 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Paired init function for copy_tile / copy_block_matmul_partials. Must be preceded - exactly once,
+ * Paired init function for copy_tile / copy_block. Must be preceded - exactly once,
  * at the very top of the kernel - by compute_kernel_hw_startup(icb, ocb), which performs the one-time
  * hardware configuration. copy_init() then reconfigures the unpacker/math pipeline for the copy op and
  * is the function to call before copy_tile() (including when switching to copy from another op). It
@@ -128,7 +128,7 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
     LLK_SAN_FUNCTION();
 #endif
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        in_cb_id, in_tile_index)));
+        in_cb_id, in_tile_index, dst_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
 }
@@ -168,7 +168,7 @@ ALWI void copy_block(
     LLK_SAN_FUNCTION();
 #endif
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        in_cb_id, start_in_tile_index, ntiles)));
+        in_cb_id, start_in_tile_index, ntiles, start_dst_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy_block<
           DataCopyType::A2D,
           is_fp32_dest_acc_en,
@@ -252,30 +252,5 @@ copy_tile_to_dst_init_short_with_dt(std::uint32_t old_cbid, std::uint32_t new_cb
     copy_init<is_fp32_dest_acc_en>(new_cbid, transpose);
 }
 #endif
-
-// clang-format off
-/**
- * @deprecated Use `copy_block()`, which is functionally equivalent (same block unpack/datacopy paths).
- * This forwarding shim is retained only for backwards compatibility and will be removed after
- * August 15th, 2026 (see .github/deprecations.json).
- *
- * Return value: None
- *
- * | Argument             | Description                                                | Data type | Valid range                                         | required |
- * |----------------------|------------------------------------------------------------|-----------|-----------------------------------------------------|----------|
- * | in_cb_id             | The identifier of the source circular buffer (CB)          | uint32_t  | 0 to 31                                             | True     |
- * | start_in_tile_index  | The index of the first tile to copy from the input CB      | uint32_t  | Must be less than the size of the CB                | True     |
- * | start_dst_tile_index | The index of the first destination tile in the DST register| uint32_t  | Must be less than the size of the DST register (16) | True     |
- * | ntiles               | The number of consecutive tiles to copy                    | uint32_t  | start_dst_tile_index + ntiles <= DST register size  | True     |
- * */
-// clang-format on
-[[deprecated("Use copy_block(); copy_block_matmul_partials will be removed after August 15th, 2026.")]] ALWI void
-copy_block_matmul_partials(
-    std::uint32_t in_cb_id,
-    std::uint32_t start_in_tile_index,
-    std::uint32_t start_dst_tile_index,
-    std::uint32_t ntiles) {
-    copy_block(in_cb_id, start_in_tile_index, start_dst_tile_index, ntiles);
-}
 
 }  // namespace ckernel
