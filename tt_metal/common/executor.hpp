@@ -24,6 +24,7 @@
 #include <taskflow/taskflow.hpp>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <thread>
 
 namespace tt::tt_metal::detail {
@@ -123,8 +124,11 @@ template <class F, class... Args>
 auto async(F&& func, Args&&... args) {
     using return_type = std::invoke_result_t<F, Args...>;
 
+    // A lambda rather than std::bind: libstdc++'s bind computes its result type with the deprecated std::result_of.
     auto task = std::make_shared<std::packaged_task<return_type()>>(
-        std::bind(std::forward<F>(func), std::forward<Args>(args)...));
+        [f = std::forward<F>(func), ... bound_args = std::forward<Args>(args)]() mutable -> return_type {
+            return std::invoke(f, bound_args...);
+        });
     std::shared_future<return_type> res(std::move(task->get_future()));
     GetExecutorMutex().lock();
 
