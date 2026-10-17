@@ -1,0 +1,45 @@
+{
+ "metrics": {
+  "auto_indexer_L20_chunk0_overlap": {
+   "t": "2026-10-17T08:59:10",
+   "value": 0.9986953735351562
+  },
+  "auto_indexer_L20_chunk0_worst_row": {
+   "t": "2026-10-17T08:59:10",
+   "value": 0.986328125
+  },
+  "auto_indexer_L20_vs_cpu_overlap": {
+   "t": "2026-10-17T08:59:10",
+   "value": 0.997401237487793
+  },
+  "auto_indexer_L20_vs_cpu_worst_row": {
+   "t": "2026-10-17T08:59:10",
+   "value": 0.962890625
+  },
+  "auto_indexer_L20_vs_golden_overlap": {
+   "t": "2026-10-17T08:59:10",
+   "value": 0.9739522933959961
+  },
+  "auto_indexer_L20_vs_golden_worst_row": {
+   "t": "2026-10-17T08:59:10",
+   "value": 0.92578125
+  },
+  "det_indexer_L20": {
+   "t": "2026-10-17T08:59:11",
+   "value": 1.0
+  },
+  "err_indexer_L20": {
+   "t": "2026-10-17T08:59:09",
+   "value": 0.026047706604003906
+  },
+  "err_indexer_L20_limit": {
+   "t": "2026-10-17T08:59:09",
+   "value": 0.05254173278808594
+  },
+  "pcc_indexer_L20": {
+   "t": "2026-10-17T08:59:10",
+   "value": 0.9739522933959961
+  }
+ },
+ "task": "C.dec_candidate.indexer"
+}

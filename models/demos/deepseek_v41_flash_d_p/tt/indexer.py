@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """DeepSeek-V4.1 indexer of an index-source layer with its own compressed index keys (reference/ds41_ref.py:_indexer,
-enc_source layers 2 / 8 / 14: ratio 2) on the SP x TP mesh. Adapted from models/demos/hy4_preview_d_p/tt/indexer.py
+enc_source layers 2 / 8 / 14: ratio 2; the candidate source layer 20: ratio 1 plus the candidate pool,
+TtCandidateIndexer below) on the SP x TP mesh. Adapted from models/demos/hy4_preview_d_p/tt/indexer.py
 (ring score over SP, TP query sub-shard, topk_large_indices, TP gather) and deepseek_v3_d_p/tt/mla/indexer.py:
 TtCsaIndexer (compressed keys); no Hadamard (the DS41 reference has none), keys from the compressor's served cache.
 
@@ -197,7 +198,9 @@ class TtIndexer:
         ttnn.deallocate(qr_)
         return out
 
-    def __call__(self, x: ttnn.Tensor, qr: ttnn.Tensor, start: int, cache) -> ttnn.Tensor:
+    def scores(self, x: ttnn.Tensor, qr: ttnn.Tensor, start: int, cache) -> tuple[ttnn.Tensor, int]:
+        """The chip's index scores [1, 1, Sq, T] bf16 ROW_MAJOR (future columns -inf, columns >= kv_len unwritten)
+        and kv_len (the written width, a multiple of 32)."""
         assert start % 32 == 0, start
         t = self._capacity(cache)
         kbuf = self._kbuf[t]  # setup(cache) at load
@@ -228,12 +231,132 @@ class TtIndexer:
         )  # [1, 1, Sq, T] bf16 ROW_MAJOR; future columns -inf, columns >= kv_len unwritten
         for u in (q, w, k_local):
             ttnn.deallocate(u)
+        return logits, kv_len
+
+    def topk_of(self, logits: ttnn.Tensor, kv_len: int) -> ttnn.Tensor:
+        """The 512 best keys per query of the chip's scores -> [1, 1, W, topk] uint32, gathered over TP."""
         local = ttnn.experimental.topk_large_indices(logits, k=self.topk, valid_length=kv_len)
-        ttnn.deallocate(logits)
         if self.tp == 1:
             return local
         out = ttnn.all_gather(local, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)  # [1, 1, W, topk]
         ttnn.deallocate(local)
+        return out
+
+    def __call__(self, x: ttnn.Tensor, qr: ttnn.Tensor, start: int, cache) -> ttnn.Tensor:
+        logits, kv_len = self.scores(x, qr, start, cache)
+        out = self.topk_of(logits, kv_len)
+        ttnn.deallocate(logits)
+        return out
+
+
+def _same(a: ttnn.Tensor, b: ttnn.Tensor) -> bool:
+    """Whether two tensors share a buffer (a no-op slice / to_layout returns a new wrapper over its input's, K-1)."""
+    return a.buffer_address() == b.buffer_address()
+
+
+BIG = 1.0e30  # the pinned block's score boost: above any real score, finite (0 x BIG = 0 off the pin), bf16-exact
+
+
+class TtCandidateIndexer(TtIndexer):
+    """indexer step of the candidate-source layer (dec_candidate, layer 20: ratio 1, its own index keys). As TtIndexer
+    (top 512 over every visible key: layer 20 itself is not restricted to candidates), plus the candidate pool
+    (reference/ds41_ref.py:select_candidate_blocks) from the same scores, per chip:
+
+        block score  max over each block of ``block`` (8) key positions: the scores sliced to kv_len, padded with -inf
+                     to a multiple of 32 blocks, 8 strided slices (step 8) folded by ttnn.maximum (exact; bf16)
+        pin          the block of the query's own (newest) position, (start + r W + c Sq + i) // 8, gets + BIG: fp32
+                     integer ops on a load-time row-position column and block-column iota (exact below 2^24), eq,
+                     x BIG, added (-inf + 0 stays -inf: entirely future blocks stay out)
+        top blocks   topk_large_indices(k = candidate_topk_blocks (2048), the block row padded with -inf to k) ->
+                     [1, 1, Sq, 2048] uint32 block ids, descending score, 0xFFFFFFFF = none (-inf: no visible key)
+
+    ``forward`` returns (top-k [1, 1, W, 512] uint32 gathered over TP, candidates [1, 1, Sq, 2048] uint32 of the chip's
+    own query rows, not gathered: the dec_reindex layers 24-36 score the same rows of the same chunk). The order
+    within a row is free (index sets; ties: bf16 scores, K-42)."""
+
+    def __init__(self, mesh, w, cfg, ratio: int, rope: RopeTable, chunk: int):
+        super().__init__(mesh, w, cfg, ratio, rope, chunk)
+        assert ratio == 1, "the candidate pool is over key positions (the candidate source is ratio 1)"
+        self.block, self.ctopk = cfg.cand_block, cfg.cand_topk_blocks
+        assert 16 <= self.ctopk <= 2048 and self.ctopk % 16 == 0, self.ctopk  # topk_large_indices' k range
+        assert 32 % self.block == 0, self.block  # kv_len (a multiple of 32) holds whole blocks
+        # position offset of each of the chip's query rows within the chunk: r W + c Sq + i (fp32, exact)
+        sp, tp, sq = self.sp, self.tp, self.sq
+        rows = (torch.arange(sp).view(sp, 1, 1) * self.w_rows + torch.arange(tp).view(1, tp, 1) * sq) + torch.arange(
+            sq
+        ).view(1, 1, sq)
+        dims = (0, 1) if SP_AXIS == 0 else (1, 0)
+        self.row_pos = _upload(mesh, rows.float().reshape(sp, tp, sq, 1), ttnn.float32, dims=dims)  # [1, 1, Sq, 1]
+        self._cols = {}  # capacity T -> block-column iota [1, 1, 1, ceil32(T / block)] fp32
+
+    def setup(self, cache) -> None:
+        super().setup(cache)
+        t = self._capacity(cache)
+        if t not in self._cols:
+            nb = -(-(t // self.block) // 32) * 32
+            self._cols[t] = _upload(self.mesh, torch.arange(nb, dtype=torch.float32).reshape(1, 1, 1, nb), ttnn.float32)
+
+    def candidates_of(self, logits: ttnn.Tensor, kv_len: int, start: int, t: int) -> ttnn.Tensor:
+        """The chip's candidate blocks [1, 1, Sq, ctopk] uint32 from its scores (does not consume them)."""
+        b = self.block
+        nb = -(-(kv_len // b) // 32) * 32  # block columns, tile-aligned
+        sq = self.sq
+        lg = ttnn.slice(logits, [0, 0, 0, 0], [1, 1, sq, kv_len], memory_config=DRAM)  # logits itself if kv_len == T
+        if nb * b > kv_len:
+            padded = ttnn.pad(lg, [(0, 0), (0, 0), (0, 0), (0, nb * b - kv_len)], value=float("-inf"))
+            if not _same(lg, logits):  # K-1: a full-range slice returns its input's buffer
+                ttnn.deallocate(lg)
+            lg = padded
+        acc = None
+        for i in range(b):  # block max: column j of slice i = score j b + i
+            part = ttnn.slice(lg, [0, 0, 0, i], [1, 1, sq, nb * b], [1, 1, 1, b], memory_config=DRAM)
+            if acc is None:
+                acc = part
+                continue
+            nxt = ttnn.maximum(acc, part, memory_config=DRAM)
+            ttnn.deallocate(acc)
+            ttnn.deallocate(part)
+            acc = nxt
+        if not _same(lg, logits):
+            ttnn.deallocate(lg)
+        blk = ttnn.to_layout(acc, ttnn.TILE_LAYOUT, memory_config=DRAM)  # [1, 1, Sq, nb] bf16
+        if not _same(blk, acc):  # K-1
+            ttnn.deallocate(acc)
+        # pin: block (start + row offset) // b of every query row
+        pos = ttnn.add(self.row_pos, float(start), memory_config=DRAM)
+        pin = ttnn.floor(ttnn.multiply(pos, 1.0 / b, memory_config=DRAM), memory_config=DRAM)  # b a power of two
+        ttnn.deallocate(pos)
+        cols = ttnn.slice(self._cols[t], [0, 0, 0, 0], [1, 1, 1, nb], memory_config=DRAM)
+        hit = ttnn.eq(cols, pin, dtype=ttnn.float32, memory_config=DRAM)  # [1, 1, Sq, nb] 1 at the pinned block
+        ttnn.deallocate(pin)
+        if not _same(cols, self._cols[t]):  # K-1: never free the load-time iota
+            ttnn.deallocate(cols)
+        boost = ttnn.multiply(hit, BIG, dtype=ttnn.bfloat16, memory_config=DRAM)
+        ttnn.deallocate(hit)
+        pinned = ttnn.add(blk, boost, dtype=ttnn.bfloat16, memory_config=DRAM)
+        for u in (blk, boost):
+            ttnn.deallocate(u)
+        rm = ttnn.to_layout(pinned, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+        if not _same(rm, pinned):
+            ttnn.deallocate(pinned)
+        if nb < self.ctopk:  # fewer blocks than k: the rest are none (-inf -> 0xFFFFFFFF)
+            padded = ttnn.pad(rm, [(0, 0), (0, 0), (0, 0), (0, self.ctopk - nb)], value=float("-inf"))
+            ttnn.deallocate(rm)
+            rm = padded
+        out = ttnn.experimental.topk_large_indices(rm, k=self.ctopk)
+        ttnn.deallocate(rm)
+        return out
+
+    def forward(self, x: ttnn.Tensor, qr: ttnn.Tensor, start: int, cache) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        logits, kv_len = self.scores(x, qr, start, cache)
+        cands = self.candidates_of(logits, kv_len, start, self._capacity(cache))
+        out = self.topk_of(logits, kv_len)
+        ttnn.deallocate(logits)
+        return out, cands
+
+    def __call__(self, x: ttnn.Tensor, qr: ttnn.Tensor, start: int, cache) -> ttnn.Tensor:
+        out, cands = self.forward(x, qr, start, cache)
+        ttnn.deallocate(cands)
         return out
 
 
@@ -246,9 +369,10 @@ def indexer_weights(ck, layer: int) -> dict[str, torch.Tensor]:
 
 
 def build_indexer(mesh, ck, cfg, layer: int, max_seq: int, chunk: int, rope: RopeTable | None = None) -> TtIndexer:
-    """The indexer of an enc_source layer with its own RoPE table (component tests); the assembled model passes the
-    layer's shared table."""
+    """The indexer of a layer with its own index keys (enc_source; the candidate source, layer 20: TtCandidateIndexer)
+    with its own RoPE table (component tests); the assembled model passes the layer's shared table."""
     from .kv import rope_freqs
 
     rope = rope or RopeTable(mesh, rope_freqs(cfg, layer), max_seq)
-    return TtIndexer(mesh, indexer_weights(ck, layer), cfg, cfg.ratio(layer), rope, chunk)
+    cls = TtCandidateIndexer if cfg.is_cand_source(layer) else TtIndexer
+    return cls(mesh, indexer_weights(ck, layer), cfg, cfg.ratio(layer), rope, chunk)

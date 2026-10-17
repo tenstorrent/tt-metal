@@ -107,6 +107,92 @@
   "started": "2026-10-17T08:36:42",
   "status": "PASS"
  },
+ "C.dec_candidate.indexer": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "f7a0752de548f2dc735d5fbb6ce21b8225c9d575",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "017ee34082ef63614ec88eaf407a57c1d26fec70",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "ffbefd3a-f1c1-44f7-8aca-ef497d818759"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/C.dec_candidate.indexer.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "f7a0752de548f2dc735d5fbb6ce21b8225c9d575",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "017ee34082ef63614ec88eaf407a57c1d26fec70",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/C.dec_candidate.indexer.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 784.2,
+    "session_id": "ffbefd3a-f1c1-44f7-8aca-ef497d818759",
+    "t": "2026-10-17T08:58:34"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 36.9,
+  "history": [
+   {
+    "s": 27.4,
+    "status": "FAIL",
+    "t": "2026-10-17T08:45:28"
+   },
+   {
+    "s": 36.9,
+    "status": "PASS",
+    "t": "2026-10-17T08:59:14"
+   }
+  ],
+  "last_run": "2026-10-17T08:59:14",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.dec_candidate.indexer.log",
+  "metrics": {
+   "auto_indexer_L20_chunk0_overlap": 0.9986953735351562,
+   "auto_indexer_L20_chunk0_worst_row": 0.986328125,
+   "auto_indexer_L20_vs_cpu_overlap": 0.997401237487793,
+   "auto_indexer_L20_vs_cpu_worst_row": 0.962890625,
+   "auto_indexer_L20_vs_golden_overlap": 0.9739522933959961,
+   "auto_indexer_L20_vs_golden_worst_row": 0.92578125,
+   "det_indexer_L20": 1.0,
+   "err_indexer_L20": 0.026047706604003906,
+   "err_indexer_L20_limit": 0.05254173278808594,
+   "pcc_indexer_L20": 0.9739522933959961
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-10-17T08:58:37",
+  "status": "PASS",
+  "waiting": null
+ },
  "C.dec_candidate.kv": {
   "attempts": 0,
   "duration_s": 29.1,
