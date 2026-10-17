@@ -148,6 +148,17 @@ DEVICE_STEPS = {
         "indexer",
         "attention",
     },
+    # attn_hc .. kv: the swa modules (C.enc_reuse.attn_hc .. kv and S.enc_reuse.01-05 passed on them, DS41-28); the
+    # attention (tt/sparse_attention.py, C.enc_reuse.attention) reads its source layer's served compressed cache and
+    # device top-k, and writes its own served window cache
+    "enc_reuse": {
+        "attn_hc",
+        "attn_collapse",
+        "attn_norm",
+        "q_a",
+        "kv",
+        "attention",
+    },
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
@@ -376,22 +387,45 @@ def _attention_host_fn(mesh, module):
 
 
 def _sparse_attention_host_fn(mesh, module, cfg, layer):
-    """fn(ctx, q_resid_host [S, 1280], kv_host [S, 512], compressed_host [S / r, head_dim + index_dim], topk_host
-    [S, topk] int32) -> attn_out host [S, H] fp32, for a layer that is its own KV and top-k source (enc_source;
-    harness boundary: q_resid, kv and the top-k row-split over axis 0, replicated over axis 1; the output's rows over
-    axis 0, hidden over axis 1). The window cache as _attention_host_fn. The compressed rows are read on the device
-    from the layer's served compressed cache ctx.extra["compress_cache"].ckv (the hybrid model's, which the device
-    compressor wrote this chunk into); without one (component tests) a cache for the call is made and loaded with
-    the golden prefix (state_prefix compress_kv) and this chunk's rows (``compressed``'s first head_dim columns)."""
+    """fn(ctx, q_resid_host [S, 1280], kv_host [S, 512][, compressed_host [S / r, head_dim + index_dim]][, topk_host
+    [S, topk] int32]) -> attn_out host [S, H] fp32, for a compressed layer (harness boundary: q_resid, kv and the top-k
+    row-split over axis 0, replicated over axis 1; the output's rows over axis 0, hidden over axis 1). ``compressed``
+    is an input only of a layer that is its own KV source, ``topk`` only of its own index source (enc_source); a
+    reader (enc_reuse) reads both from its sources (ds41_ref.Config.kv_source_of / index_source_of). The window cache
+    as _attention_host_fn.
+
+    Compressed rows: read on the device from the KV source's served compressed cache ctx.extra["compress_cache"].ckv
+    (the hybrid model's: the layer's own, or for a reader its source's, which the source's device compressor wrote
+    this chunk into); without one (component tests) a cache for the call is made and loaded with the golden: an own
+    source's prefix (state_prefix compress_kv) + this chunk's rows (``compressed``'s first head_dim columns), a
+    reader's source state as of the end of the chunk (source_state[kv source] compress_kv, F65).
+    Top-k of a reader: the index source's device top-k ctx.extra["topk_device"] (the hybrid model's: the [1, 1, S/SP,
+    K] uint32 output the source's device indexer kept this chunk, read, not consumed); without one the source state's
+    rows [start, start + S) (source_state[index source] topk_idx, F65; the hybrid model's reference state)."""
     import ttnn
     from models.demos.deepseek_v41_flash_d_p.tt.attention import TtWindowCache
     from models.demos.deepseek_v41_flash_d_p.tt.compressor import TtServedRows
     from models.demos.deepseek_v41_flash_d_p.tt.layout import hidden_split_to_host, row_split_to_device
 
     r, hd = cfg.ratio(layer), cfg.head_dim
-    assert cfg.is_kv_source(layer) and cfg.is_index_source(layer), layer
+    kv_src, idx_src = cfg.kv_source_of(layer), cfg.index_source_of(layer)
+    own_kv, own_idx = kv_src == layer, idx_src == layer
+    assert own_kv or not own_idx, f"layer {layer}: its own top-k over another layer's KV is not built yet"
 
-    def fn(ctx, qr, kv, compressed, topk):
+    def _source(ctx, j, name, a, b):
+        """Rows [a, b) of source layer j's state tensor `name` (F65 source_state, else the reference state)."""
+        src = (ctx.extra.get("source_state") or {}).get(j)
+        if src is not None:
+            return src[name][a:b]
+        st = ctx.state
+        assert st is not None, f"layer {layer}: no state of its source layer {j}"
+        return {"compress_kv": st.ckv, "topk_idx": st.topk}[name][j][a:b]
+
+    def fn(ctx, qr, kv, *rest):
+        rest = list(rest)
+        compressed = rest.pop(0) if own_kv else None
+        topk = rest.pop(0) if own_idx else None
+        assert not rest, f"layer {layer}: unexpected attention inputs"
         start, s = int(ctx.start), qr.shape[0]
         end = ctx.extra.get("end")
         end = start + s if end is None else int(end)
@@ -407,26 +441,37 @@ def _sparse_attention_host_fn(mesh, module, cfg, layer):
         own_c = caches is None
         if own_c:
             ckv = TtServedRows(mesh, module.tables, max_seq, hd, r, dedup=True)
-            rows = [prefix["compress_kv"][: start // r].float()] if start else []
-            rows.append(compressed[:, :hd].float())
-            ckv.load_host(torch.cat(rows), 0)
+            if own_kv:
+                rows = [prefix["compress_kv"][: start // r].float()] if start else []
+                rows.append(compressed[:, :hd].float())
+                rows = torch.cat(rows)
+            else:
+                rows = _source(ctx, kv_src, "compress_kv", 0, (start + s) // r).float()
+            ckv.load_host(rows, 0)
         else:
             ckv = caches.ckv
         qd = row_split_to_device(mesh, qr)
         kd = row_split_to_device(mesh, kv, dtype=ttnn.bfloat16)
         sp = mesh.shape[0]
-        td = ttnn.from_torch(
-            topk.to(torch.int32).reshape(sp, 1, s // sp, -1).contiguous(),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(0, None)),
-        )
+        td = None if own_idx else ctx.extra.get("topk_device")
+        own_t = td is None
+        if own_t:
+            if topk is None:
+                topk = _source(ctx, idx_src, "topk_idx", start, start + s)
+            td = ttnn.from_torch(
+                topk.to(torch.int32).reshape(sp, 1, s // sp, -1).contiguous(),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(0, None)),
+            )
         od = module(qd, kd, start, end, cache, ckv, td)
         out = hidden_split_to_host(mesh, od).float()
-        for t in (qd, kd, td, od):
+        for t in (qd, kd, od):
             ttnn.deallocate(t)
+        if own_t:
+            ttnn.deallocate(td)
         if own:
             cache.free()
         if own_c:
@@ -490,7 +535,9 @@ def _indexer_host_fn(mesh, module, cfg, layer, tables):
     (the hybrid model's, which the device compressor wrote this chunk into); without one (component tests) a cache
     for the call is made and loaded with the golden prefix (state_prefix index_k) and this chunk's keys
     (``compressed``'s last index_dim columns). With a reference state carrying the layer (the hybrid model), its
-    topk_idx rows of the chunk are updated as the reference step does (for the ladder state and reader layers)."""
+    topk_idx rows of the chunk are updated as the reference step does (for the ladder state and reader layers). With
+    ctx.extra["topk_store"] (the hybrid model's {layer: (start, device top-k)}) the device output [1, 1, S/SP, K] uint32 stays
+    on the device there for this chunk's reader layers (the previous chunk's is freed)."""
     import ttnn
     from models.demos.deepseek_v41_flash_d_p.tt.compressor import TtServedRows
     from models.demos.deepseek_v41_flash_d_p.tt.layout import hidden_split_to_device, row_split_to_device
@@ -520,8 +567,16 @@ def _indexer_host_fn(mesh, module, cfg, layer, tables):
         k = od.shape[-1]
         idx = full[..., :k].reshape(-1, k).to(torch.int64) & 0xFFFFFFFF  # mesh column 0's copy, as uint32
         out = torch.where(idx >= 0xFFFFFFFF, torch.full_like(idx, -1), idx).to(torch.int32)
-        for t in (xd, qd, od):
+        for t in (xd, qd):
             ttnn.deallocate(t)
+        store = ctx.extra.get("topk_store")
+        if store is None:
+            ttnn.deallocate(od)
+        else:
+            old = store.pop(layer, None)
+            if old is not None:
+                ttnn.deallocate(old[1])
+            store[layer] = (start, od)
         if own:
             cache.free()
         st = ctx.state
@@ -728,8 +783,10 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
     if step == "attention" and cfg.ratio(layer):
         from models.demos.deepseek_v41_flash_d_p.tt.sparse_attention import SparseIndexTables, build_sparse_attention
 
-        if not (cfg.is_kv_source(layer) and cfg.is_index_source(layer)):
-            return None  # only a layer attending over its own compressed rows with its own top-k (enc_source) so far
+        if cfg.uses_candidates(layer) or cfg.is_cand_source(layer):
+            return None  # the decoder layers (candidate pool) are not built yet
+        if cfg.is_index_source(layer) and not cfg.is_kv_source(layer):
+            return None  # its own top-k over another layer's KV (dec_reindex) is not built yet
         tables = _window_tables(mesh, spec, shared)
         if "sparse_index_tables" not in shared:
             shared["sparse_index_tables"] = SparseIndexTables(mesh, tables, cfg.index_topk)
@@ -838,6 +895,7 @@ class _HybridState:
             i: TtCompressCaches(mesh, tables, max_seq, cfg.ratio(i), cfg.head_dim, cfg.index_dim)
             for i in compress_layers
         }
+        self.topk = {}  # {index-source layer: (chunk start, its device indexer's top-k of that chunk)} (readers)
         self.tokens = None
 
     def load_prefix(self, layer, tensors, length):
@@ -881,9 +939,13 @@ class _HybridState:
         return out
 
     def free(self):
+        import ttnn
+
         for c in [*self.window.values(), *self.compress.values()]:
             c.free()
-        self.window, self.compress = {}, {}
+        for _, t in self.topk.values():
+            ttnn.deallocate(t)
+        self.window, self.compress, self.topk = {}, {}, {}
 
 
 class HybridDeviceModel:
@@ -942,6 +1004,16 @@ class HybridDeviceModel:
             ctx.extra["window_cache"] = state.window[i]
         if i in state.compress:
             ctx.extra["compress_cache"] = state.compress[i]
+        if "indexer" in self.overrides[i]:
+            ctx.extra["topk_store"] = state.topk
+        if self.cfg.ratio(i):
+            # a reader layer (enc_reuse) reads its sources' device state of this chunk: the KV source's served
+            # compressed cache and the index source's device top-k (else the reference state's rows)
+            ks, js = self.cfg.kv_source_of(i), self.cfg.index_source_of(i)
+            if ks != i and ks in state.compress:
+                ctx.extra["compress_cache"] = state.compress[ks]
+            if js != i and js in state.topk and state.topk[js][0] == start:
+                ctx.extra["topk_device"] = state.topk[js][1]
         return run_block(
             self.ref.block_graph(i), lambda n: self.ref.component(i, n), ctx, h, overrides=self.overrides[i]
         )
