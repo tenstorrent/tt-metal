@@ -123,28 +123,44 @@ def _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim):
     return flattened_tensor[:elements_to_pack]
 
 
-def _bfp_collect_blocks(flattened_tensor, block_size, float_to_block_fn):
+def _bfp_collect_blocks(flattened_tensor, block_size, magnitude_bits):
     """Iterate over BFP blocks, collecting shared exponents and mantissas.
 
     Args:
         flattened_tensor: Pre-processed tensor (output of _bfp_prepare_blocks).
         block_size: Elements per block (16 for all current BFP formats).
-        float_to_block_fn: Callable(block) -> (shared_exponent, mantissas).
 
     Returns:
         (exponents, all_mantissas) where exponents is padded to at least MIN_BFP_EXPONENTS.
     """
     num_blocks = len(flattened_tensor) // block_size
-    exponents = []
-    all_mantissas = []
-    for i in range(num_blocks):
-        block = flattened_tensor[i * block_size : (i + 1) * block_size]
-        shared_exponent, bfp_mantissas = float_to_block_fn(block)
-        exponents.append(shared_exponent)
-        all_mantissas.extend(bfp_mantissas)
+    if num_blocks == 0:
+        return [0] * MIN_BFP_EXPONENTS, []
+
+    bits = (
+        flattened_tensor[: num_blocks * block_size]
+        .detach()
+        .to(device="cpu", dtype=torch.float32)
+        .numpy()
+        .view(np.uint32)
+        .reshape(num_blocks, block_size)
+    )
+    is_nan = ((bits & 0x7F800000) == 0x7F800000) & ((bits & 0x007FFFFF) != 0)
+    bits = np.where(is_nan, bits | 0x00400000, bits)
+    signs = bits >> 31
+    exps = ((bits >> 23) & 0xFF).astype(np.int32)
+    shared_exps = exps.max(axis=1, keepdims=True)
+    deltas = shared_exps - exps
+    mants = ((bits >> 17) & 0x3F) | 0x40
+    shifts = np.minimum(deltas, 8).astype(np.uint32)
+    guard_shifts = np.maximum(deltas - 1, 0).clip(max=8).astype(np.uint32)
+    guard = ((mants >> guard_shifts) & 1) * (deltas > 0)
+    magnitudes = (((mants >> shifts) + guard) & 0x7F) >> (7 - magnitude_bits)
+    mantissas = np.where(magnitudes != 0, (signs << magnitude_bits) | magnitudes, 0)
+    exponents = shared_exps.flatten().tolist()
     if len(exponents) < MIN_BFP_EXPONENTS:
         exponents.extend([0] * (MIN_BFP_EXPONENTS - len(exponents)))
-    return exponents, all_mantissas
+    return exponents, mantissas.flatten().tolist()
 
 
 def float_to_bfp8_block(block):
@@ -212,7 +228,7 @@ def pack_bfp8_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
     """
     flattened_tensor = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
     exponents, mantissas = _bfp_collect_blocks(
-        flattened_tensor, block_size, float_to_bfp8_block
+        flattened_tensor, block_size, magnitude_bits=7
     )
     return exponents + mantissas
 
@@ -279,14 +295,13 @@ def pack_bfp4_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
     """
     flattened_tensor = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
     exponents, all_mantissas = _bfp_collect_blocks(
-        flattened_tensor, block_size, float_to_bfp4_block
+        flattened_tensor, block_size, magnitude_bits=3
     )
 
-    packed_mantissas = []
-    for i in range(0, len(all_mantissas), 2):
-        low = all_mantissas[i]
-        high = all_mantissas[i + 1] if (i + 1) < len(all_mantissas) else 0
-        packed_mantissas.append((high << 4) | low)
+    mantissas = np.asarray(
+        all_mantissas + [0] * (-len(all_mantissas) % 2), dtype=np.uint8
+    ).reshape(-1, 2)
+    packed_mantissas = (mantissas[:, 0] | (mantissas[:, 1] << 4)).tolist()
 
     return exponents + packed_mantissas
 
@@ -324,16 +339,18 @@ def pack_bfp2_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
     """
     flattened_tensor = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
     exponents, all_mantissas = _bfp_collect_blocks(
-        flattened_tensor, block_size, float_to_bfp2_block
+        flattened_tensor, block_size, magnitude_bits=1
     )
 
-    packed_mantissas = []
-    for i in range(0, len(all_mantissas), 4):
-        e0 = all_mantissas[i] if i < len(all_mantissas) else 0
-        e1 = all_mantissas[i + 1] if (i + 1) < len(all_mantissas) else 0
-        e2 = all_mantissas[i + 2] if (i + 2) < len(all_mantissas) else 0
-        e3 = all_mantissas[i + 3] if (i + 3) < len(all_mantissas) else 0
-        packed_mantissas.append((e3 << 6) | (e2 << 4) | (e1 << 2) | e0)
+    mantissas = np.asarray(
+        all_mantissas + [0] * (-len(all_mantissas) % 4), dtype=np.uint8
+    ).reshape(-1, 4)
+    packed_mantissas = (
+        mantissas[:, 0]
+        | (mantissas[:, 1] << 2)
+        | (mantissas[:, 2] << 4)
+        | (mantissas[:, 3] << 6)
+    ).tolist()
 
     return exponents + packed_mantissas
 

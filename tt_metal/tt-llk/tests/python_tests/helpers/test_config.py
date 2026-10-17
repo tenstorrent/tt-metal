@@ -25,7 +25,10 @@ from ttexalens.tt_exalens_lib import (
     TTException,
     load_elf,
     parse_elf,
+    read_from_device,
     read_word_from_device,
+    write_to_device,
+    write_words_to_device,
 )
 
 from . import device as device_module
@@ -50,7 +53,6 @@ from .device import (
     set_tensix_soft_reset,
     wait_brisc_boot_ready,
 )
-from .device_io import read_from_device, write_to_device, write_words_to_device
 from .device_print import aux_size_for
 from .format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -189,6 +191,7 @@ class TestConfig:
     SHARED_ARTEFACTS_AVAILABLE: ClassVar[bool] = False
     PROFILER_SHARED_ARTEFACTS_AVAILABLE: ClassVar[bool] = False
     KERNEL_COMPONENTS: ClassVar[list[str]] = ["unpack", "math", "pack"]
+    COMPILE_JOBS: ClassVar[int] = os.cpu_count() or 1
 
     # === Runtime static variables, for keeping context of multiple test runs
     CURRENT_LOADED_CONFIG: ClassVar[str] = "uninitialised"
@@ -1836,7 +1839,9 @@ class TestConfig:
                 )
 
             with ThreadPoolExecutor(
-                max_workers=len(TestConfig.KERNEL_COMPONENTS)
+                max_workers=min(
+                    len(TestConfig.KERNEL_COMPONENTS), TestConfig.COMPILE_JOBS
+                )
             ) as executor:
                 futures = [
                     executor.submit(build_kernel_part, name)
