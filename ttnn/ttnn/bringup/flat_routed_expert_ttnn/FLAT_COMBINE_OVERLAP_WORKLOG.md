@@ -933,7 +933,8 @@ untilize + route 12.5 | arena zero 6.2 | dispatch 206.5 | experts + combine 2431
 
 Shared expert, both variants (as the goal asked): **local flat** (default) untilize 24 + flat 530 + sum (fused) vs
 **TP** (K3_SE=tp: x row all-gather over the mesh row, I split 4 ways, reduce-scatter back) untilize 33 + AG 299 + flat
-560 + RS 376 = 1264 us; SE PCC 0.99976 / 0.99975. TP loses on CCL time at 320 tokens a chip; the flat SE is compute /
+560 + RS 376 = 1264 us; SE PCC 0.99976 / 0.99975. **Traced: local 3700 us, TP 4402 us** (K3_SE=tp on the same
+code; its trace had failed on 2-page x rows before the 7-page fix). TP loses on CCL time at 320 tokens a chip; the flat SE is compute /
 pipeline bound either way (~160 TFLOP/s: LoFi only 530 -> 510, bfp8 x no change, 4 parts worse, DRISC on / off same).
 
 Dead ends this round (numbers in the scratch tests):
