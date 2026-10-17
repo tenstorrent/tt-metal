@@ -198,11 +198,9 @@ class DecoderLayer:
         position_embeddings=None,
         position_idx=None,
         kv_cache=None,
-        user_id=0,
         batch_size=1,
-        cached_len=0,
         indexed_rope=False,
-        actual_isl=None,
+        entries=None,
     ):
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
@@ -224,10 +222,9 @@ class DecoderLayer:
                     rope_mats=position_embeddings,
                     position_idx=position_idx,
                     kv_cache=kv_cache,
-                    user_id=user_id,
                     batch_size=batch_size,
-                    cached_len=cached_len,
                     indexed_rope=indexed_rope,
+                    entries=entries,
                 )
             hidden_states_post_norm.deallocate(True)
 
@@ -245,12 +242,12 @@ class DecoderLayer:
             )
 
             with zone("mlp", COARSE):
-                # actual_isl only reaches the MoE MLP — it drives the gate/dispatch padding config.
-                # The dense layers (0-2) have no router or dispatch, so DenseMLP takes no such argument.
+                # The entries' real rows drive the MoE gate/dispatch padding config. The dense layers (0-2)
+                # have no router or dispatch, so DenseMLP takes no such argument.
                 hidden_states = (
                     self.mlp(hidden_states_post_norm)
                     if self.is_dense
-                    else self.mlp(hidden_states_post_norm, actual_isl=actual_isl, actual_start=cached_len)
+                    else self.mlp(hidden_states_post_norm, entries=entries)
                 )
             hidden_states_post_norm.deallocate(True)
 
