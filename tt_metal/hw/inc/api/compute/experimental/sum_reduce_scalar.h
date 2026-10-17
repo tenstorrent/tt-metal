@@ -40,13 +40,11 @@ ALWI void sum_reduce_scalar_init(uint32_t icb) { copy_init(icb); }
  * The result is stored in dest[0] at element position [0]; every other lane is
  * unspecified. Slots 0..num_tiles-1 of DEST are clobbered.
  *
- * num_tiles is bounded twice. The hard ceiling is 8: the shared reduce tail moves
- * dest[i] to SrcA through a switch that only covers i in 0..7 and no-ops above that,
- * so a 9th tile would be silently dropped from the sum. Below that, the acquired DEST
- * must also hold every copied tile until the reduce consumes it, which caps num_tiles
- * at get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>() --
- * 8 for half-sync/16-bit, 4 for half-sync/32-bit, 8 for full-sync/32-bit. Callers
- * pairing fp32 DEST with half-sync therefore get 4, not 8.
+ * num_tiles is bounded by the DEST capacity: the acquired DEST must hold every copied
+ * tile until the reduce consumes it, which caps num_tiles at
+ * get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>() --
+ * 8 for half-sync/16-bit, 4 for half-sync/32-bit, 16 for full-sync/16-bit, 8 for
+ * full-sync/32-bit. Callers pairing fp32 DEST with half-sync therefore get 4, not 8.
  *
  * This is the sum-only counterpart to mul_reduce_scalar_tile(): it reaches the same
  * reduction without an all-ones second operand or an identity ELWMUL. Phase 1 copies
@@ -60,7 +58,7 @@ ALWI void sum_reduce_scalar_init(uint32_t icb) { copy_init(icb); }
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
  * | icb            | Input circular buffer                                         | uint32_t | 0 to 31     | True     |
  * | ocb            | Output circular buffer (used to program packer face_r_dim)    | uint32_t | 0 to 31     | True     |
- * | num_tiles      | Number of tiles to reduce (see the DEST note above)           | uint32_t | 1 to 8      | True     |
+ * | num_tiles      | Number of tiles to reduce (see the DEST note above)           | uint32_t | 1 to the DEST tile capacity | True |
  * | scaler         | Per-GAPOOL multiplier; applied twice (default: 1.0)           | float    | Any float   | False    |
  *
  * Return value: None

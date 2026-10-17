@@ -49,6 +49,12 @@ struct MulReduceScalarConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     uint32_t seed = 12345;
     bool accumulate_in_one_tile = false;
+    // Full-sync DEST (bf16): 16 tile slots instead of the half-sync 8.
+    bool dst_full_sync = false;
+    // Weight tensor B per tile, B[i] = (i + 1) / 16, instead of all ones. With all ones every tile sums to
+    // about the same value, so a tile reduced twice in place of a dropped one barely moves the total; distinct
+    // per-tile weights make such a substitution visible.
+    bool per_tile_weights = false;
     float rel_tol = 0.01f;
 };
 
@@ -121,7 +127,11 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/mul_reduce_scalar.cpp",
         core,
-        tt_metal::ComputeConfig{.math_fidelity = config.math_fidelity, .compile_args = {}, .defines = compute_defines});
+        tt_metal::ComputeConfig{
+            .math_fidelity = config.math_fidelity,
+            .dst_full_sync_en = config.dst_full_sync,
+            .compile_args = {},
+            .defines = compute_defines});
 
     SetRuntimeArgs(
         program,
@@ -137,11 +147,14 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
     auto packed_input0 = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
 
-    bfloat16 one_bf16 = bfloat16(1.0f);
-    uint16_t one_u16 = std::bit_cast<uint16_t>(one_bf16);
     std::vector<uint32_t> packed_input1(byte_size / sizeof(uint32_t));
-    for (uint32_t& val : packed_input1) {
-        val = (static_cast<uint32_t>(one_u16) << 16) | one_u16;
+    const uint32_t words_per_tile = tile_byte_size / sizeof(uint32_t);
+    for (uint32_t tile = 0; tile < config.num_tiles; ++tile) {
+        // (tile + 1) / 16 is exact in bf16 for tile < 16.
+        const float weight = config.per_tile_weights ? static_cast<float>(tile + 1) / 16.0f : 1.0f;
+        const uint16_t w_u16 = std::bit_cast<uint16_t>(bfloat16(weight));
+        const uint32_t packed = (static_cast<uint32_t>(w_u16) << 16) | w_u16;
+        std::fill_n(packed_input1.begin() + tile * words_per_tile, words_per_tile, packed);
     }
 
     auto& cq = mesh_device.mesh_command_queue();
@@ -226,6 +239,34 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(1, 2, 3, 7, 8),
     [](const testing::TestParamInfo<int>& info) {
         return "MulReduceScalar_16x32_" + std::to_string(info.param) + "_Tiles";
+    });
+
+// Full-sync bf16 DEST holds 16 tiles, so num_tiles may legally exceed the half-sync 8. The reduce must move
+// every product tile 8..15 into SrcA; a move that stops at tile 7 reduces tile 7 again in their place.
+// Per-tile weights make that substitution visible (see per_tile_weights); 8 is the control case.
+class MulReduceScalarFullSyncTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
+
+TEST_P(MulReduceScalarFullSyncTest, MulReduceScalarFullSync) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP()
+            << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+    }
+    int num_tiles = GetParam();
+    ASSERT_TRUE(run_mul_reduce_scalar_test(
+        this->device(),
+        {.num_tiles = num_tiles,
+         .tile_height = 32,
+         .dst_full_sync = true,
+         .per_tile_weights = true,
+         .rel_tol = one_tile_rel_tol(num_tiles)}));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MulReduceScalarFullSyncTests,
+    MulReduceScalarFullSyncTest,
+    testing::Values(8, 12, 16),
+    [](const testing::TestParamInfo<int>& info) {
+        return "MulReduceScalarFullSync_" + std::to_string(info.param) + "_Tiles";
     });
 
 // One-tile accumulation, parametrized past the 8-tile DEST capacity.
