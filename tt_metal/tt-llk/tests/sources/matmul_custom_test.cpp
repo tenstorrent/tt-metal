@@ -97,6 +97,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.UNPACK_TRANSPOSE_FACES,
         params.CT_DIM,
         params.RT_DIM);
+    // Expected-assert case (transpose with a 32x16 in1): the init above rejects it under LLK asserts; the unpack thread
+    // loads no sources for it, so without the asserts the MVMULs would stall on src valid -- do not run them.
+    if (params.UNPACK_TRANSPOSE_FACES && params.in1_tile_r_dim == TILE_R_DIM && params.in1_tile_c_dim == FACE_C_DIM)
+    {
+        return;
+    }
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();

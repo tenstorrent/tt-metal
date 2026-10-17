@@ -435,12 +435,14 @@ inline void matmul_configure_mop_throttled_no_mop()
 // _llk_math_matmul_no_mop_ both go through this so the recorded image, its length and the loop that
 // replays it always agree -- a mismatch there replays MVMULs against SrcB faces that were never loaded.
 //
-// Deliberately wider than the regular path's guard: _llk_math_matmul_init_ keeps the throttled MOP at
-// levels 4/5 with high fidelity (matmul_throttle_drives_phases) because its execute cannot tell which
-// MOP is live and would otherwise run every fidelity phase math_fidelity times over. The no-mop
-// execute drives the phase loop itself and re-derives this decision from the same tile dims, so it
-// can fall back at every level and fidelity.
-template <int THROTTLE_LEVEL>
+// Levels 4/5 at high fidelity are also unthrottled, even on a full tile: those images step the
+// fidelity phase only through the execute's ADDR_MOD_4 boundary MVMUL, which does not increment it,
+// so the extra phases collapse and the product comes out short. This is the case the regular
+// _llk_math_matmul_init_ has to keep on the throttled MOP (matmul_throttle_drives_phases), because
+// its execute cannot tell which MOP is live and the unthrottled MOP would run every phase
+// math_fidelity times over. The no-mop execute drives the phase loop itself and re-derives this
+// decision from the same arguments, so it can fall back there as well.
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
 inline constexpr bool matmul_no_mop_use_throttled(
     const std::uint32_t in0_tile_r_dim,
     const std::uint32_t in0_tile_c_dim,
@@ -448,7 +450,8 @@ inline constexpr bool matmul_no_mop_use_throttled(
     const std::uint32_t in1_tile_c_dim,
     const bool partial_face)
 {
-    return (THROTTLE_LEVEL > 0) && matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    return (THROTTLE_LEVEL > 0) && !matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>() &&
+           matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 }
 
 /**
@@ -456,8 +459,20 @@ inline constexpr bool matmul_no_mop_use_throttled(
  *
  * @tparam math_fidelity: Math fidelity, values = <LoFi/HiFi2/HiFi3/HiFi4>.
  * @tparam THROTTLE_LEVEL: Compute-throughput throttle level, 0 disables throttling, valid throttled range is
- *         {1,2,3,4,5}. Throttling is dropped on any tile geometry other than a full 32x32 tile (see
- *         matmul_no_mop_use_throttled): there the unthrottled geometry-aware image is recorded instead.
+ *         {1,2,3,4,5}. Throttling is dropped (the unthrottled geometry-aware image is recorded instead) on
+ *         any tile geometry other than a full 32x32 tile, and at levels 4/5 with high fidelity; see
+ *         matmul_no_mop_use_throttled.
+ * @param in0_tile_r_dim: Row dimension of an in0 tile.
+ * @param in0_tile_c_dim: Column dimension of an in0 tile.
+ * @param in1_tile_r_dim: Row dimension of an in1 tile.
+ * @param in1_tile_c_dim: Column dimension of an in1 tile.
+ * @param partial_face: True when the tile has fewer than the full set of face rows.
+ * @param transpose: Non-zero to transpose in1 faces during the multiply; rejected (LLK_ASSERT) with a 32x16 in1.
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @note On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
+ * @note @ref _llk_math_matmul_no_mop_ runs the configured matmul with matching template args and tile dims;
+ *       @ref _llk_math_matmul_uninit_no_mop_ reverses this init.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_init_no_mop_(
@@ -472,7 +487,8 @@ inline void _llk_math_matmul_init_no_mop_(
 {
     matmul_configure_addrmod_no_mop<math_fidelity, THROTTLE_LEVEL>(
         transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-    const bool throttled = matmul_no_mop_use_throttled<THROTTLE_LEVEL>(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    const bool throttled =
+        matmul_no_mop_use_throttled<math_fidelity, THROTTLE_LEVEL>(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     if constexpr (THROTTLE_LEVEL > 0)
     {
         if (throttled)
@@ -487,6 +503,11 @@ inline void _llk_math_matmul_init_no_mop_(
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+/**
+ * @brief Uninitialize/cleanup after no-mop matmul operations.
+ *
+ * @note Reverses @ref _llk_math_matmul_init_no_mop_; currently a no-op since all state is transient.
+ */
 inline void _llk_math_matmul_uninit_no_mop_()
 {
     // No state to restore - all states are transient or default
@@ -497,7 +518,18 @@ inline void _llk_math_matmul_uninit_no_mop_()
  *
  * @tparam math_fidelity: Math fidelity, must match the init.
  * @tparam THROTTLE_LEVEL: Must match the init. Throttling is dropped on any tile geometry other than a full
- *         32x32 tile (see matmul_no_mop_use_throttled); the tile dims passed here must be the ones the init saw.
+ *         32x32 tile and at levels 4/5 with high fidelity (see matmul_no_mop_use_throttled); the tile dims
+ *         passed here must be the ones the init saw, as they select the replay image and its length.
+ * @param dst_index: Destination tile index the block starts at.
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @param in0_tile_r_dim: Row dimension of an in0 tile.
+ * @param in0_tile_c_dim: Column dimension of an in0 tile.
+ * @param in1_tile_r_dim: Row dimension of an in1 tile.
+ * @param in1_tile_c_dim: Column dimension of an in1 tile.
+ * @param partial_face: True when the tile has fewer than the full set of face rows.
+ * @note Call @ref _llk_math_matmul_init_no_mop_ with the same template args and tile dims first; the unpack
+ *       thread feeds each block through @ref _llk_unpack_AB_matmul_.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_no_mop_(
@@ -516,9 +548,10 @@ inline void _llk_math_matmul_no_mop_(
     constexpr int num_fidelity_phases = get_math_num_fidelity_phases(math_fidelity);
     constexpr bool high_fidelity      = math_fidelity != MathFidelity::LoFi;
 
-    // Same dispatch as the init (matmul_no_mop_use_throttled): a throttled image only exists for a full
-    // 32x32 tile; everything else replays the unthrottled, geometry-aware image the init recorded.
-    const bool throttled = matmul_no_mop_use_throttled<THROTTLE_LEVEL>(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    // Same dispatch as the init (matmul_no_mop_use_throttled): a throttled image only serves a full 32x32
+    // tile below level 4 or at LoFi; everything else replays the unthrottled, geometry-aware image the init recorded.
+    const bool throttled =
+        matmul_no_mop_use_throttled<math_fidelity, THROTTLE_LEVEL>(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 
     // Replay buffer length must match what was recorded at init: the fixed throttled length, or the
     // tile-dimension-dependent length of matmul_configure_mop_custom (shorter for 16x32 / 32x16 tiny tiles).

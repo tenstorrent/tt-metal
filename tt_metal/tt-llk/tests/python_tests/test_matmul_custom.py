@@ -40,7 +40,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
-from helpers.tile_constants import MAX_FACE_R_DIM
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
@@ -81,6 +81,8 @@ MATMUL_FORMATS = input_output_formats(
     ]
 )
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
+# A 16x32 / 8x32 in0 or 32x16 in1 tiny tile holds two faces of the 32x32 tile.
+TINY_TILE_NUM_FACES = 2
 
 
 def _run_matmul_custom(
@@ -115,12 +117,12 @@ def _run_matmul_custom(
     )
     is_tiny_in0 = in0_tile_r_dim < TILE_DIM
     in0_face_r_dim = min(in0_tile_r_dim, MAX_FACE_R_DIM)
-    num_faces_in0 = 2 if is_tiny_in0 else 4
-    num_faces_in1 = 4 if in1_tile_c_dim == TILE_DIM else 2
+    num_faces_in0 = TINY_TILE_NUM_FACES if is_tiny_in0 else MAX_NUM_FACES
+    num_faces_in1 = MAX_NUM_FACES if in1_tile_c_dim == TILE_DIM else TINY_TILE_NUM_FACES
     num_faces = calculate_matmul_output_faces(
         num_faces_in0, num_faces_in1, is_in0_horizontal=True
     )
-    full_tiles = num_faces_in0 == 4 and num_faces_in1 == 4
+    full_tiles = num_faces_in0 == MAX_NUM_FACES and num_faces_in1 == MAX_NUM_FACES
 
     if full_tiles:
         sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
@@ -254,7 +256,7 @@ def _run_matmul_custom(
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    if num_faces < 4:
+    if num_faces < MAX_NUM_FACES:
         # Only the active faces of each result tile are packed; compare those.
         num_elements_per_tile = in0_tile_r_dim * in1_tile_c_dim
         for i in range(matmul_dims.output_tile_cnt):
@@ -332,19 +334,13 @@ def test_matmul_custom_throttle(
     dest_acc,
     boot_mode=BootMode.DEFAULT,
 ):
-    # Known limitation of the current LLK: throttle levels 4 and 5 only advance
-    # the fidelity-phase counter on the final MVMUL of the sequence (they use
-    # ADDR_MOD_4 with fidelity.incr=0 at the phase boundary, unlike levels 1-3
-    # which use the fidelity-incrementing ADDR_MOD_5/6). For a high-fidelity
-    # (multi-phase) matmul this collapses the extra phases and yields ~half the
-    # result, so levels 4/5 are only correct for single-phase (LoFi) fidelity.
-    # Cover levels 4/5 with LoFi and levels 0-3 with both fidelities.
-    if throttle_level >= 4 and math_fidelity != MathFidelity.LoFi:
-        pytest.skip(
-            "throttle levels 4/5 do not increment the fidelity phase per LLK; "
-            "only correct for LoFi (single-phase)"
-        )
-
+    # Throttle levels 4 and 5 only advance the fidelity-phase counter on the
+    # final MVMUL of the sequence (they use ADDR_MOD_4 with fidelity.incr=0 at
+    # the phase boundary, unlike levels 1-3 which use the fidelity-incrementing
+    # ADDR_MOD_5/6), so for a multi-phase (HiFi) matmul the throttled image
+    # would collapse the extra phases. The LLK therefore drops throttling there
+    # (matmul_no_mop_use_throttled) and runs the unthrottled image, so every
+    # level is covered at both fidelities here.
     input_A_dimensions, input_B_dimensions = THROTTLE_DIMS
     _run_matmul_custom(
         math_fidelity,
@@ -359,17 +355,7 @@ def test_matmul_custom_throttle(
 
 @skip_for_wormhole
 @skip_for_quasar
-@parametrize(
-    math_fidelity=[MathFidelity.LoFi],
-    formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
-)
-def test_matmul_custom_transpose_in1_32x16_rejected(
-    math_fidelity,
-    formats,
-    dest_acc,
-    boot_mode=BootMode.DEFAULT,
-):
+def test_matmul_custom_transpose_in1_32x16_rejected(boot_mode=BootMode.DEFAULT):
     """transpose with a 32x16 in1 has no address-mod handling in the matmul LLK; the regular
     _llk_math_matmul_init_ rejects the combination under LLK asserts. The no-mop init shares
     the tiny-tile address mods with it and must reject it the same way, rather than run the
@@ -377,8 +363,9 @@ def test_matmul_custom_transpose_in1_32x16_rejected(
     the result is compared against the A*B^T golden, which it cannot match.
 
     Defined before the tiny-tile tests so that, in file order, the tests that follow it on
-    the same core prove the rejected kernel leaves nothing pending (the test kernel neither
-    loads the sources nor leaves the packer waiting on MATH_PACK in this case)."""
+    the same core prove the rejected kernel leaves nothing pending: in this case the test
+    kernel loads no sources, returns from the math thread right after the (asserting) init,
+    and polls MATH_PACK with a bound on the pack thread instead of waiting on it."""
     if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1":
         pytest.skip("expects an LLK assert; asserts are disabled in this run")
 
@@ -387,9 +374,9 @@ def test_matmul_custom_transpose_in1_32x16_rejected(
         LLKAssertException, match=r"llk_math_matmul_custom_no_mop\.h"
     ):
         _run_matmul_custom(
-            math_fidelity,
-            formats,
-            dest_acc,
+            MathFidelity.LoFi,
+            input_output_formats([DataFormat.Float16_b])[0],
+            DestAccumulation.No,
             input_A_dimensions,
             input_B_dimensions,
             throttle_level=0,
@@ -411,6 +398,7 @@ TINY_IN0_THROTTLE_LEVELS = [level for level in THROTTLE_LEVELS if level > 0]
 TINY_IN0_ROWS = [16, 8]
 
 
+@pytest.mark.nightly
 @skip_for_wormhole
 @skip_for_quasar
 @parametrize(
@@ -441,6 +429,32 @@ def test_matmul_custom_throttle_tiny_in0(
     )
 
 
+# Smoke subset of the nightly sweep above: the SDPA 16x32 geometry at one level that takes
+# the fallback below 4 and one above it, on both fidelity paths.
+@skip_for_wormhole
+@skip_for_quasar
+@parametrize(
+    throttle_level=[level for level in THROTTLE_LEVELS if level in (1, 4)],
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
+)
+def test_matmul_custom_throttle_tiny_in0_smoke(
+    throttle_level,
+    math_fidelity,
+    boot_mode=BootMode.DEFAULT,
+):
+    input_A_dimensions, input_B_dimensions = THROTTLE_DIMS
+    _run_matmul_custom(
+        math_fidelity,
+        input_output_formats([DataFormat.Float16_b])[0],
+        DestAccumulation.No,
+        input_A_dimensions,
+        input_B_dimensions,
+        throttle_level=throttle_level,
+        boot_mode=boot_mode,
+        in0_tile_r_dim=MAX_FACE_R_DIM,
+    )
+
+
 # 32x16 in1 tiny tile (two vertical faces, f0/f2) with a full in0: the other non-full
 # geometry the fallback applies to (the 7-MVMUL image). Throttle 0 covers the image itself,
 # 1 and 3 the fallback dispatch on both fidelity paths.
@@ -449,21 +463,17 @@ def test_matmul_custom_throttle_tiny_in0(
 @parametrize(
     throttle_level=[level for level in THROTTLE_LEVELS if level in (0, 1, 3)],
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
-    formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
 )
 def test_matmul_custom_throttle_tiny_in1(
     throttle_level,
     math_fidelity,
-    formats,
-    dest_acc,
     boot_mode=BootMode.DEFAULT,
 ):
     input_A_dimensions, input_B_dimensions = THROTTLE_DIMS
     _run_matmul_custom(
         math_fidelity,
-        formats,
-        dest_acc,
+        input_output_formats([DataFormat.Float16_b])[0],
+        DestAccumulation.No,
         input_A_dimensions,
         input_B_dimensions,
         throttle_level=throttle_level,
@@ -472,30 +482,36 @@ def test_matmul_custom_throttle_tiny_in1(
     )
 
 
-# Full 32x32 tiles with in1 transposed (faces and within faces): the positive counterpart of
-# the rejection test below the throttle test, checking the transpose address-mod branches of
-# the full-tile no-mop image and the A*B^T golden on hardware.
+# in1 transposed (faces and within faces) against a full 32x32 in0 and against the tiny
+# 16x32 / 8x32 in0 (the SDPA QK^T pairing): the positive counterpart of the rejection test
+# below the throttle test, checking the transpose address-mod branches of the full-tile and
+# tiny-tile no-mop images and the A*B^T golden on hardware.
 @parametrize(
     throttle_level=[level for level in THROTTLE_LEVELS if level in (0, 1)],
+    in0_tile_r_dim=[TILE_DIM] + TINY_IN0_ROWS,
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
-    formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
 )
 def test_matmul_custom_transpose(
     throttle_level,
+    in0_tile_r_dim,
     math_fidelity,
-    formats,
-    dest_acc,
     boot_mode=BootMode.DEFAULT,
 ):
+    if (
+        in0_tile_r_dim < TILE_DIM
+        and get_chip_architecture() != ChipArchitecture.BLACKHOLE
+    ):
+        pytest.skip("the Wormhole no-mop matmul supports full 32x32 tiles only")
+
     input_A_dimensions, input_B_dimensions = THROTTLE_DIMS
     _run_matmul_custom(
         math_fidelity,
-        formats,
-        dest_acc,
+        input_output_formats([DataFormat.Float16_b])[0],
+        DestAccumulation.No,
         input_A_dimensions,
         input_B_dimensions,
         throttle_level=throttle_level,
         boot_mode=boot_mode,
+        in0_tile_r_dim=in0_tile_r_dim,
         transpose=Transpose.Yes,
     )
