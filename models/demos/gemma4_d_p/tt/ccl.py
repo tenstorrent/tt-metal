@@ -128,7 +128,8 @@ class CCLManager:
         ``n_kv_local`` is the per-device head count (this device's TP shard); each
         device holds a zero-filled ``[1, n_kv_local, seq, head_dim]``. The op
         overwrites valid entries and masks invalid ones, so the scratch buffer needs
-        no re-zeroing.
+        no re-zeroing. Create each buffer before trace capture: the first call for a
+        key synchronizes the device.
         """
         # batch: one receive batch per request of a lanes ring SDPA.
         cache_key = (key, n_kv_local, seq, head_dim, str(dtype), str(memory_config), batch)

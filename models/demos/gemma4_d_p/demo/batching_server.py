@@ -21,7 +21,8 @@ Modes, switchable at any time (running requests keep their mode; new ones wait u
 A request keeps one chunk width for its whole life. Latencies and step times are host wall clock around each step
 (staging + trace replay).
 
-Env: DEMO_PORT (default 8765), DEMO_SLOTS (requests in flight, default 4), DEMO_CAPACITY (max prompt tokens, default
+Env: DEMO_HOST (listen address, default 127.0.0.1; 0.0.0.0 serves other hosts, with no authentication), DEMO_PORT
+(default 8765), DEMO_SLOTS (requests in flight, default 4), DEMO_CAPACITY (max prompt tokens, default
 65536), DEMO_WIDE_LANE (default 0).
 """
 
@@ -88,6 +89,7 @@ class Request:
     mode: str = BATCHED
     width: int = CHUNK
     done: int = 0  # tokens prefilled
+    start: int = 0  # tokens already cached; _admit rounds it down to the request's chunk width into done
     started: float = 0.0
     finished: float = 0.0
     error: str = ""
@@ -162,8 +164,7 @@ class Scheduler:
             arrived=time.perf_counter(),
             color=COLORS[rid % len(COLORS)],
         )
-        width = SERIAL_CHUNKS.get(self.mode, CHUNK)
-        request.done = (min(int(start), n_tokens - 1) // width) * width
+        request.start = min(int(start), n_tokens - 1)
         self.incoming.put(request)
         return request
 
@@ -195,6 +196,9 @@ class Scheduler:
             elif self.mode in SERIAL_CHUNKS:
                 for request in admitted:  # one at a time, at the mode's chunk size (see _lanes for the last one)
                     request.width = SERIAL_CHUNKS[self.mode]
+            # Resume at the cached prefix rounded to the width just fixed, so it follows the mode at admission.
+            for request in admitted:
+                request.done = (request.start // request.width) * request.width
             self.active.extend(admitted)
 
     def _plan(self):
@@ -328,7 +332,12 @@ def _handler(scheduler):
             self.wfile.write(body)
 
         def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            except ValueError as error:
+                return self._reply({"error": f"bad request body: {error}"}, 400)
+            if not isinstance(body, dict):
+                return self._reply({"error": "request body must be a JSON object"}, 400)
             if self.path == "/prefill":
                 try:
                     request = scheduler.submit(body.get("tokens", CHUNK), body.get("label"))
@@ -341,8 +350,9 @@ def _handler(scheduler):
                     return self._reply({"mode": scheduler.mode, "modes": MODES, "batched_modes": BATCHED_MODES})
                 if body["mode"] not in MODES:
                     return self._reply({"error": f"mode must be one of {MODES}"}, 400)
-                scheduler.mode = body["mode"]
-                self._reply({"mode": scheduler.mode})
+                with scheduler.lock:  # _admit reads the mode under the lock
+                    scheduler.mode = body["mode"]
+                self._reply({"mode": body["mode"]})
             elif self.path == "/shutdown":
                 scheduler.stop.set()
                 self._reply({"stopping": True})
@@ -383,13 +393,14 @@ def start_scheduler(mesh_device, monkeypatch, num_slots, capacity):
 def test_batching_server(mesh_device, reset_seeds, monkeypatch):
     num_slots = int(os.environ.get("DEMO_SLOTS", "4"))
     capacity = int(os.environ.get("DEMO_CAPACITY", "65536"))
+    host = os.environ.get("DEMO_HOST", "127.0.0.1")
     port = int(os.environ.get("DEMO_PORT", "8765"))
     scheduler, runner = start_scheduler(mesh_device, monkeypatch, num_slots, capacity)
     # The default listen backlog (5) makes a burst of clients wait out a TCP SYN retry (~0.5-1 s).
     ThreadingHTTPServer.request_queue_size = 128
-    server = ThreadingHTTPServer(("0.0.0.0", port), _handler(scheduler))
+    server = ThreadingHTTPServer((host, port), _handler(scheduler))
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    logger.info(f"[demo] serving on port {port}; fire prompts with demo/batching_client.py")
+    logger.info(f"[demo] serving on {host}:{port}; fire prompts with demo/batching_client.py")
     try:
         with Live(get_renderable=scheduler.view, refresh_per_second=4):
             scheduler.run()

@@ -378,7 +378,7 @@ def sliding_ring_prefill_attention(
     the output stays CP-sharded exactly like the input.
     """
     mesh_device = mesh_config.device
-    num_lanes = getattr(prefill_metadata, "num_lanes", 1)
+    num_lanes = prefill_metadata.num_lanes
     if program_config is None:
         sdpa_grid = ccl_manager.compute_grid_size
         q_chunk, k_chunk, k_splits, _ = ring_sdpa_chunk_sizes(

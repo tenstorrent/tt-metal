@@ -89,6 +89,7 @@ class Gemma4BatchedPrefillRuntime(Gemma4PrefillRuntime):
             d2h_service=self.d2h_service,
             metadata_msg=self.metadata,
         )
+        # TODO(#58136): unreachable until set_d2h_ack_service accepts a service with several lanes; untested.
         if self.d2h_service is not None:
             for _ in range((n - 1) * self.config.num_layers):
                 ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(
@@ -104,9 +105,16 @@ class Gemma4BatchedPrefillRuntime(Gemma4PrefillRuntime):
         output.deallocate(True)
 
     def compile(self, kv_cache):
-        # Restored by release_trace.
+        # Restored by release_trace, or here if compiling fails.
         self.saved_fidelity_override = attention_operations.PROJECTION_FIDELITY_OVERRIDE
         attention_operations.PROJECTION_FIDELITY_OVERRIDE = ttnn.MathFidelity.HiFi2
+        try:
+            self._compile(kv_cache)
+        except BaseException:
+            attention_operations.PROJECTION_FIDELITY_OVERRIDE = self.saved_fidelity_override
+            raise
+
+    def _compile(self, kv_cache):
         _, self.model, _, _ = create_tt_model(
             mesh_config=self.mesh_config,
             hf_model_id=self.hf_model_id,
@@ -162,7 +170,8 @@ class Gemma4BatchedPrefillRuntime(Gemma4PrefillRuntime):
                 raise ValueError(f"Slot {lane.slot} expects position {self.slot_ends[lane.slot]}, got {lane.start}")
 
     def prefill_step(self, input_tensor, kv_cache, *, lanes, request_id=0, d2h_service=None, metadata_msg=None):
-        """One step of lanes (step_message.Lane, in message order); request_id numbers lane 0's chunk."""
+        """One step of lanes (step_message.Lane, in message order); request_id numbers lane 0's chunk. Frees
+        input_tensor and metadata_msg after the step; if it raises, they stay the caller's, as in prefill_chunk."""
         lanes = [step_message.Lane(*lane) for lane in lanes]
         self.validate_step(lanes)
         self._check_cache(kv_cache)
