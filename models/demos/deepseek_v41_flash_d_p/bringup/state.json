@@ -595,6 +595,27 @@
   "started": "2026-10-17T11:46:23",
   "status": "PASS"
  },
+ "C.dec_reindex.q_a": {
+  "attempts": 0,
+  "duration_s": 34.2,
+  "history": [
+   {
+    "s": 34.2,
+    "status": "PASS",
+    "t": "2026-10-17T11:54:42"
+   }
+  ],
+  "last_run": "2026-10-17T11:54:42",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.dec_reindex.q_a.log",
+  "metrics": {
+   "err_q_a_L24": 0.014048073440790176,
+   "err_q_a_L24_limit": 0.4866582453250885
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-17T11:54:08",
+  "status": "PASS"
+ },
  "C.enc_reuse.attention": {
   "agent": {
    "defs": {
