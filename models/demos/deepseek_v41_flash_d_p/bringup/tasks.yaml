@@ -4793,6 +4793,14 @@ tasks:
     kind: residual
     layer: 14
     stateful: false
+  frozen:
+    at: '2026-10-17T04:37:03'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_residual.py: 80dced2501c8b2e12dc3cf07656a2dc885080a5774e53e3b0567ae0b439e710c
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.enc_source_engram.20
   title: 'enc_source_engram block with steps 1-20 on device (last: ffn_residual)'
   step: implement
