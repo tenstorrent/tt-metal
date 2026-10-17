@@ -16,7 +16,8 @@ from helpers.compressed_utils import (
 )
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.tile_constants import FACE_C_DIM
+from helpers.test_variant_parameters import CUSTOM_MM_CALLS
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
 
 
 def promote_assignment(assignment, ct):
@@ -131,20 +132,25 @@ def meta_math_header(m, ct):
         return {0: 1, 1: 1, 2: 1, 3: 2}[rows[3] % 4]  # 0/1/2 incB, 3 clrB
 
 
-def encode_meta(assignment, ct, kt, chunk_info):
-    # Build the face-compressed meta buffer, laid out as:
-    #   math_words | iters | address_words | index_words
-    # ct/kt are face columns/rows (N//16, K//16); chunk_info is pack_b's per-chunk
-    # (bfp2, bfp4) exp-section offset + Y_OFF.
-
+def buffer_b_words(kt):
     # buffer_B base in L1_ADDRESS units (= byte/16 - 1): B follows A, which
-    # is kt//2 (= K//32) 32x32 Float16_b tiles of 2048 B each.
+    # is kt//2 (= K//32) 32x32 Float16_b tiles of 2048 B each. kt is the full K in faces.
     buf_a_addr = (
         StimuliConfig.STIMULI_L1_ADDRESS_DEBUG
         if StimuliConfig.WITH_COVERAGE
         else StimuliConfig.STIMULI_L1_ADDRESS_PERF
     )
-    buf_b_words = (buf_a_addr + 2048 * (kt // 2)) // 16 - 1
+    return (buf_a_addr + 2048 * (kt // 2)) // 16 - 1
+
+
+def encode_meta(assignment, ct, kt, chunk_info, b_base_words=None):
+    # Build the face-compressed meta buffer, laid out as:
+    #   math_words | iters | address_words | index_words
+    # ct/kt are face columns/rows (N//16, K//16); chunk_info is pack_b's per-chunk
+    # (bfp2, bfp4) exp-section offset + Y_OFF. b_base_words overrides the buffer_B
+    # base the chunk offsets are relative to, for a meta that covers only part of K.
+
+    buf_b_words = buffer_b_words(kt) if b_base_words is None else b_base_words
 
     # Math region: one 6-bit meta per 4-face block, 5 metas per 32-bit word. A meta is
     # (face_bits << 2) | header — face_bits marks its non-zero faces, header is the
@@ -439,3 +445,115 @@ def test_matmul_face_compressed_deepseek(shape, switch_mult, seed):
         K, N, DEEPSEEK_T420, switch_mult=switch_mult, seed=seed
     )
     run_face_compressed(M, K, N, assignment)
+
+
+# ---------------------------------------------------------------------------
+# Multi-call: K splits over back-to-back calls that accumulate into one DEST, each call with
+# its own meta stream, as a kernel running one call per expert does. The kernel holds math
+# back before each call, so the unpacker reaches the next call while math still holds the
+# previous one's banks (see the kernel source). Every call after the first depends on the
+# end-of-call state the unpack LLK leaves behind:
+#   same        one format throughout, so the boundary is only the counter reset: the
+#               activation unpacks walk the unpacker's own Y counter, which has to be back at
+#               zero when the next call sets its activation base, or the call reads the wrong
+#               rows (every output face wrong, PCC near zero)
+#   alternate   call c is all bfp2 or all bfp4 by parity: every bfp2 <-> bfp4 switch is a
+#               boundary switch, in alternating directions. Inside a call a switch is preceded
+#               by the CLR_SRC stall the index words encode; a call's first face never carries
+#               one, because its previous-format bit replicates the face itself, so only the
+#               end-of-call stall separates the two formats
+#   end-bfp4    every call is bfp2 then bfp4, so every boundary switches bfp4 -> bfp2
+#   end-bfp2    the reverse, every boundary switches bfp2 -> bfp4
+MULTI_CALL_CASES = [
+    # (id, M, K, N, K tiles per call, per-call format runs, cycled over the calls)
+    ("same-bfp4", 1, 2048, 64, 2, [("bfp4",)]),
+    ("same-bfp2-m8", 8, 2048, 64, 2, [("bfp2",)]),
+    ("alternate", 1, 2048, 64, 2, [("bfp2",), ("bfp4",)]),
+    ("alternate-m8", 8, 2048, 64, 2, [("bfp2",), ("bfp4",)]),
+    ("end-bfp4", 1, 2048, 64, 2, [("bfp2", "bfp4")]),
+    ("end-bfp2", 1, 2048, 64, 2, [("bfp4", "bfp2")]),
+    ("end-bfp4-m8", 8, 2048, 64, 2, [("bfp2", "bfp4")]),
+    ("same-bfp4-ct1", 1, 2048, 32, 2, [("bfp4",)]),
+    ("alternate-ct1", 1, 2048, 32, 2, [("bfp2",), ("bfp4",)]),
+    ("end-bfp4-ct1-m8", 8, 2048, 32, 2, [("bfp2", "bfp4")]),
+    ("alternate-ct8-m8", 8, 1024, 256, 2, [("bfp2",), ("bfp4",)]),
+    ("end-bfp2-ct8", 1, 1024, 256, 2, [("bfp4", "bfp2")]),
+]
+
+
+def meta_words_per_call(kt_tiles, ct_tiles):
+    # The kernel's meta stride between calls: one call's meta words with every face present,
+    # which is the most it can take. Same formula as meta_words_per_call in the kernel source.
+    max_iters = kt_tiles * ct_tiles
+    return (
+        (max_iters + 4) // 5 + 1 + 2 * (max_iters // 6 // 8 + 1) + (max_iters + 5) // 6
+    )
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,K,N,kt_per_call,call_formats",
+    [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
+)
+def test_matmul_face_compressed_multi_call(M, K, N, kt_per_call, call_formats):
+    """Back-to-back calls into one DEST, checked against the full-K golden."""
+    kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM
+    ku, cu = K // COMPRESSION_GRANULARITY, N // COMPRESSION_GRANULARITY
+    num_calls = kt // kt_per_call
+    rows_per_call = ku // num_calls  # face rows per call
+    faces_per_call = rows_per_call * cu
+    stride = meta_words_per_call(kt_per_call, ct)
+
+    # Each call lays its formats as contiguous runs over its own faces.
+    assignment = []
+    for c in range(num_calls):
+        formats = call_formats[c % len(call_formats)]
+        assignment += assign_clustered(
+            rows_per_call * COMPRESSION_GRANULARITY, N, formats, COMPRESSION_GRANULARITY
+        )
+
+    def pack_b_per_call(faces):
+        # Each call's faces packed on their own, back to back; the chunk offsets move up by
+        # the call's start so the address words stay relative to buffer_B.
+        out = b""
+        infos = []
+        for c in range(num_calls):
+            packed, info = pack_b(faces[c * faces_per_call : (c + 1) * faces_per_call])
+            base = len(out) // 16
+            infos.append(
+                [(b2 + base, b2_y, b4 + base, b4_y) for b2, b2_y, b4, b4_y in info]
+            )
+            out += packed
+        return out, infos
+
+    def encode_meta_per_call(assignment, ct, kt, infos):
+        # One meta stream per call, each padded to the kernel's stride.
+        out = b""
+        for c in range(num_calls):
+            meta = encode_meta(
+                assignment[c * faces_per_call : (c + 1) * faces_per_call],
+                ct,
+                rows_per_call,
+                infos[c],
+                b_base_words=buffer_b_words(kt),
+            )
+            assert (
+                len(meta) <= 4 * stride
+            ), f"call {c}: meta exceeds the kernel's stride"
+            out += meta.ljust(4 * stride, b"\0")
+        return out
+
+    run_compressed(
+        M,
+        K,
+        N,
+        assignment,
+        "sources/matmul_face_compressed_test.cpp",
+        COMPRESSION_GRANULARITY,
+        SUPPORTED_M,
+        SUPPORTED_FORMATS,
+        promote_assignment,
+        pack_b_per_call,
+        encode_meta_per_call,
+        calls=CUSTOM_MM_CALLS(num_calls=num_calls),
+    )

@@ -423,7 +423,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     std::uint32_t meta = meta_ptr[full_iters];
     for (std::uint32_t j = 0; j < rem_iters; ++j)
     {
-        std::uint32_t idx0        = meta & meta_index_mask;
+        std::uint32_t idx0 = meta & meta_index_mask;
         TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx0]);
         TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx0]);
         meta >>= meta_stride_bits;
@@ -442,10 +442,12 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     reset_config_context();
 
     // Put the counters back the way init left them, ready for the next call: zero the Y counters the
-    // per-face SET_Y writes moved and the shared ZW pair, but not X, so init's CH1 X ends survive.
+    // per-face SET_Y writes moved, the own-set Y the activation unpacks moved, and the shared ZW pair,
+    // but not X, so init's CH1 X ends survive.
     t6_mutex_acquire(mutex::THREAD2_ADC);
     TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_MATH, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
     TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_PACK, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
+    TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y)); // unp1's own set, which B walks
     TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
     t6_mutex_release(mutex::THREAD2_ADC);
 }
