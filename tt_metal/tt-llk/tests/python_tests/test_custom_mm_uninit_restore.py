@@ -136,14 +136,9 @@ def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
 def _skip_unsupported(formats, dest_acc):
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
-    if (
-        formats.input_format == DataFormat.Float16_b
-        and dest_acc == DestAccumulation.Yes
-    ):
-        pytest.skip(
-            "Float16_b with dest_acc=Yes adds nothing here: the pack layout, "
-            "not the DEST width, is what this test varies"
-        )
+    # Float16_b with dest_acc=Yes is kept on purpose: the harness (like tt-metal) keeps a
+    # 2-byte Float16_b pack source over a 4-byte DEST, so it is the one cell in which a
+    # stride derived from the DEST width instead of the pack-source width is wrong.
 
 
 @parametrize(

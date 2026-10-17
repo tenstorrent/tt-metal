@@ -332,9 +332,9 @@ struct MatmulExpertCompressedSRAM {
 
             UNPACK(({ unified_kernels::override_cb_rd_ptr(cb_in0, in0_base); }));
             if constexpr (CTArgs::use_compression) {
-                compressed_custom_mm_block_uninit<true>();
+                compressed_custom_mm_block_uninit<true>(cb_out);
             } else {
-                custom_mm_block_uninit<true>();
+                custom_mm_block_uninit<true>(cb_out);
             }
 
             if constexpr (pop_in1) {

@@ -29,13 +29,12 @@ template <
     bool split_acc = false,
     bool dense_packing = false,
     bool clear_src = true,
-    bool fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat F0,
     TensorShape S0,
     DataFormat F1,
     TensorShape S1>
 ALWI void compressed_custom_mm_block_init_short(
-    experimental::LLKOperand<F0, S0> /*in0*/, experimental::LLKOperand<F1, S1> /*in1*/) {
+    experimental::LLKOperand<F0, S0> /*in0*/, experimental::LLKOperand<F1, S1> /*in1*/, const std::uint32_t out_cb_id) {
     SAN_HOOK(unsupported());
     static_assert(experimental::is_legal_tile_shape(S0), "Illegal activation tile shape");
     static_assert(experimental::is_legal_tile_shape(S1), "Illegal weight tile shape");
@@ -48,7 +47,7 @@ ALWI void compressed_custom_mm_block_init_short(
         "compressed_custom_mm: in1 tile shape must be [32, 32]");
     UNPACK((_llk_unpack_AB_compressed_custom_mm_init_<transpose, clear_src>(S0.face_r_dim)));
     MATH((_llk_math_compressed_custom_mm_init_<transpose, false, dense_packing>(S0.face_r_dim)));
-    PACK((_llk_pack_custom_mm_init_<dense_packing, fp32_dest_acc_en>()));
+    PACK((_llk_pack_custom_mm_init_<dense_packing>(pack_src_format[get_output_id(out_cb_id)])));
 }
 
 template <
@@ -56,11 +55,10 @@ template <
     bool split_acc = false,
     bool dense_packing = false,
     bool clear_src = true,
-    bool fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat F1,
     TensorShape S1>
 ALWI void compressed_custom_mm_block_init_short(
-    const std::uint32_t in0_cb_id, experimental::LLKOperand<F1, S1> /*in1*/) {
+    const std::uint32_t in0_cb_id, experimental::LLKOperand<F1, S1> /*in1*/, const std::uint32_t out_cb_id) {
     SAN_HOOK(unsupported());
     static_assert(
         S1.face_r_dim == 16 && S1.face_c_dim == 16 && S1.num_faces_r_dim == 2 && S1.num_faces_c_dim == 2,
@@ -73,7 +71,7 @@ ALWI void compressed_custom_mm_block_init_short(
         const auto in0_id = get_operand_id(in0_cb_id);
         _llk_math_compressed_custom_mm_init_<transpose, false, dense_packing>(get_operand_face_r_dim(in0_id));
     }));
-    PACK((_llk_pack_custom_mm_init_<dense_packing, fp32_dest_acc_en>()));
+    PACK((_llk_pack_custom_mm_init_<dense_packing>(pack_src_format[get_output_id(out_cb_id)])));
 }
 
 template <bool finalize = true, DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>

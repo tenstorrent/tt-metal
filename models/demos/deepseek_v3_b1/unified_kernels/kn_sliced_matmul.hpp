@@ -135,7 +135,7 @@ struct KNSlicedMatmul {
             cb_push_back(args.out_cb, out_w);
             tile_regs_release();
 
-            custom_mm_block_uninit<dense_packing>();
+            custom_mm_block_uninit<dense_packing>(args.out_cb);
 
             // Pop inputs
             if constexpr (pop_act) {

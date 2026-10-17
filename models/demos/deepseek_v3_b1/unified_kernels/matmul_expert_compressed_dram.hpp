@@ -1133,7 +1133,7 @@ struct MatmulExpertCompressedDRAM {
             // override is in place — leaving it unset would make the next
             // invocation's get_cb_rd_ptr return a stale mid-compute position.
             UNPACK(({ unified_kernels::override_cb_rd_ptr(CTArgs::cb_in0, in0_cb_base); }));
-            compressed_custom_mm_block_uninit<false>();
+            compressed_custom_mm_block_uninit<false>(CTArgs::cb_out);
 
             if constexpr (pop_in0) {
                 if constexpr (CTArgs::accum_experts) {

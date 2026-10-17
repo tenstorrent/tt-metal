@@ -207,7 +207,7 @@ struct Matmul {
             }
             cb_push_back(args.out, out_w);
 
-            custom_mm_block_uninit<dense_packing>();
+            custom_mm_block_uninit<dense_packing>(args.out);
 
             // Pop inputs
             if constexpr (pop_in0) {
