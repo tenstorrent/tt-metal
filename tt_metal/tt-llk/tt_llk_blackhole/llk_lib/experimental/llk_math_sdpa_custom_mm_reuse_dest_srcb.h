@@ -86,6 +86,9 @@ inline void sdpa_custom_mm_reuse_dest_srcb_configure_mop(
         });
 }
 
+// Programs the address mods and the MVMUL replay program, and establishes the operand-driven default Src
+// zero-substitution state, which _llk_math_sdpa_custom_mm_reuse_dest_srcb_ asserts under LLK asserts. Re-run
+// this init after any math op that leaves the flag at keep (a copy init does).
 template <MathFidelity math_fidelity>
 inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
@@ -103,6 +106,10 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_(
         transpose > 0, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 
     // math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // A preceding datacopy leaves the Src zero flag at keep; MVMUL needs the operand-driven value for the
+    // SrcB rows MOVD2B pulls out of DEST.
+    math::_configure_default_zero_flag_state_();
 }
 
 // Simplified implementation: NUM_FIDELITY_PHASES = 0 (no high fidelity mode)
@@ -120,6 +127,10 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
 {
     static_assert(output_granularity >= 1, "output_granularity must be >= 1");
     static_assert(input_granularity >= 1, "input_granularity must be >= 1");
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "sdpa_custom_mm_reuse_dest_srcb: Src zero-substitution flag does not hold the operand-driven value; an op between the "
+        "init and this call left it at keep, so denormal Src operands would not be flushed");
     constexpr std::uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
     std::uint32_t dest_buffer_base   = get_dest_buffer_base();
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
