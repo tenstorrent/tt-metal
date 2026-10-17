@@ -77,10 +77,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
 
+    if constexpr (RMSNORM_CLOBBER_UNPA_X_END)
+    {
+        // Leave unpacker A's X span at one row, as _llk_unpack_A_top32_rm_init_ does (its post-phase restore
+        // resets the XY counters, not x_end). The rmsnorm init must re-program it: its MOP issues every real
+        // UNPACR on SrcA, so an inherited span unpacks 16 datums per face instead of 256.
+        config_unpacker_x_end<p_setadc::UNP_A>(1 /*face_r_dim*/);
+    }
+
     // ---- the op under test ----
     // acc_to_dest=true and DEST_TO_SRCB are forced by the static_assert in
-    // _llk_unpack_A_rmsnorm_mop_config_; SCALAR is what routes the base address to upk0
-    // (SrcA) while SrcB is fed a dummy dvalid for the MOVD2B on the math thread.
+    // _llk_unpack_A_rmsnorm_mop_config_. DEST_TO_SRCB is what routes the base address to
+    // unpacker A (SrcA) -- SCALAR with acc_to_dest alone would route it to unpacker B -- and the
+    // init programs unpacker A's X span to match; SrcB is fed a dummy dvalid for the MOVD2B on
+    // the math thread.
     _llk_unpack_A_rmsnorm_init_<RMSNORM_NUM_TILES, BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
         RMSNORM_UNPACK_FULL_TRANSPOSE /* transpose_of_faces */, RMSNORM_UNPACK_FULL_TRANSPOSE /* within_face_16x16_transpose */, FACE_R_DIM, RMSNORM_NUM_FACES);
 
@@ -114,6 +124,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+
+    if constexpr (RMSNORM_PRESERVE_SRC_ZERO_FLAG)
+    {
+        // Leave the Src zero flag at keep, as copy_init does before its datacopy, so a denormal seed survives
+        // into DEST. The rmsnorm init must restore the operand-driven value, or the FPU keeps the denormal
+        // scalar MOVD2B broadcasts into SrcB instead of flushing it.
+        math::_configure_preserve_zero_flag_state_();
+    }
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
