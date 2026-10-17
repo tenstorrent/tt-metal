@@ -7,7 +7,9 @@
 // b1, the gate|up rows of w_gate_up (bank b holds gate column b and up column b of every expert, 256 contiguous
 // tiles [kt][gate, up]) and the w_down rows (bank b holds output columns b, b + 8, ...: 128 contiguous tiles
 // [kt][16]). Per group: the routing-weight tile, built here from the group's 32 bf16 weights (row-major, one per
-// packed row): row r holds weight r in every column; and the group's 128 x tiles in blocks of x_block tiles.
+// packed row): row r holds weight r in every column; and this core's quarter of the group's x rows: for each packed
+// row its token's columns [quarter * kt / 4 * 32, ...) from the row-major x, row r at r * quarter_bytes (compute
+// tilizes them; the writer shares the tiles with the team).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -15,17 +17,19 @@ void kernel_main() {
     constexpr uint32_t cb_plan = get_compile_time_arg_val(0);
     constexpr uint32_t cb_wgu = get_compile_time_arg_val(1);
     constexpr uint32_t cb_wd = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_x = get_compile_time_arg_val(3);
     constexpr uint32_t cb_rw = get_compile_time_arg_val(4);
     constexpr uint32_t kt = get_compile_time_arg_val(5);        // hidden / 32 = 128
-    constexpr uint32_t x_block = get_compile_time_arg_val(6);   // x tiles per push
     constexpr uint32_t gu_tiles = get_compile_time_arg_val(7);  // gate|up tiles per bank per expert = 2 * kt
     constexpr uint32_t wd_tiles = get_compile_time_arg_val(8);  // down tiles per bank per expert = 8 * 16
     constexpr uint32_t w_tile_bytes = get_compile_time_arg_val(9);
     constexpr uint32_t plan_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t cb_wrow = get_compile_time_arg_val(11);        // 64 B: one group's row weights
     constexpr uint32_t weights_bytes = get_compile_time_arg_val(12);  // the row weights' page: rows_max bf16
-    constexpr uint32_t tile_bytes = 2048;  // bf16 32x32
+    constexpr uint32_t cb_xrm = get_compile_time_arg_val(13);         // 32 rows of this core's quarter of x
+    constexpr uint32_t team_size = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_tok = get_compile_time_arg_val(15);  // 128 B: one group's tokens
+    constexpr uint32_t row_bytes = kt * 64;                    // a bf16 row of x
+    constexpr uint32_t quarter_bytes = row_bytes / team_size;
 
     const uint32_t plan_addr = get_arg_val<uint32_t>(0);
     const uint32_t team = get_arg_val<uint32_t>(1);
@@ -35,6 +39,9 @@ void kernel_main() {
     const uint32_t wd_addr = get_arg_val<uint32_t>(5);
     const uint32_t x_addr = get_arg_val<uint32_t>(6);
     const uint32_t rw_addr = get_arg_val<uint32_t>(7);
+    const uint32_t tok_addr = get_arg_val<uint32_t>(8);
+    const uint32_t quarter = get_arg_val<uint32_t>(9);        // this core's index in its team
+    const uint32_t tokens_bytes = get_arg_val<uint32_t>(10);  // the row tokens' page
 
     const InterleavedAddrGen<true> plan_gen = {.bank_base_address = plan_addr, .page_size = plan_bytes};
     cb_reserve_back(cb_plan, 1);
@@ -45,7 +52,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* plan = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_l1);
     const uint32_t jobs = plan[0];
 
-    const InterleavedAddrGen<true> x_gen = {.bank_base_address = x_addr, .page_size = tile_bytes};
+    const InterleavedAddrGen<true> x_gen = {.bank_base_address = x_addr, .page_size = row_bytes};
+    const InterleavedAddrGen<true> tok_gen = {.bank_base_address = tok_addr, .page_size = tokens_bytes};
+    const uint32_t tok_l1 = get_write_ptr(cb_tok);
+    volatile tt_l1_ptr uint32_t* tok = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tok_l1);
     const InterleavedAddrGen<true> rw_gen = {.bank_base_address = rw_addr, .page_size = weights_bytes};
     const uint32_t wrow_l1 = get_write_ptr(cb_wrow);
     volatile tt_l1_ptr uint16_t* wrow = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(wrow_l1);
@@ -87,16 +97,16 @@ void kernel_main() {
                 }
             }
             cb_push_back(cb_rw, 1);
-            for (uint32_t k0 = 0; k0 < kt; k0 += x_block) {
-                cb_reserve_back(cb_x, x_block);
-                uint32_t dst = get_write_ptr(cb_x);
-                for (uint32_t k = 0; k < x_block; k++) {
-                    noc_async_read(x_gen.get_noc_addr(g * kt + k0 + k, 0), dst, tile_bytes);
-                    dst += tile_bytes;
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb_x, x_block);
+            noc_async_read(tok_gen.get_noc_addr(0, g * 128), tok_l1, 128);
+            noc_async_read_barrier();
+            cb_reserve_back(cb_xrm, kt / team_size);
+            uint32_t dst = get_write_ptr(cb_xrm);
+            for (uint32_t r = 0; r < 32; r++) {
+                noc_async_read(x_gen.get_noc_addr(tok[r], quarter * quarter_bytes), dst, quarter_bytes);
+                dst += quarter_bytes;
             }
+            noc_async_read_barrier();
+            cb_push_back(cb_xrm, kt / team_size);
         }
     }
 }

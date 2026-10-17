@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // TRISCs of the grouped prefill experts. Per job the expert's weight slices sit in cb_wgu / cb_wd for all of its
-// groups. Per 32-row group: gate and up of this core's two intermediate columns (banks b0, b1) accumulated over the
-// 128 x tiles in fp32 dest (dest 0..3 = gate b0, up b0, gate b1, up b1), h = silu(gate) * up * routing weight
-// (dest 0 and 2) -> cb_h_own; once the writer has gathered the team's 8 h tiles into cb_h_all, this core's 32
-// output columns of down (4 per dest pass, K = the 8 h tiles) -> cb_y.
+// groups. Per 32-row group: this core's quarter of the group's x rows (cb_xrm, row-major) tilized into cb_xq for the
+// writer to share with the team; once the team's 128 x tiles are in cb_x, gate and up of this core's two intermediate
+// columns (banks b0, b1) accumulated over the 128 x tiles in fp32 dest (dest 0..3 = gate b0, up b0, gate b1, up b1), h
+// = silu(gate) * up * routing weight (dest 0 and 2) -> cb_h_own; once the writer has gathered the team's 8 h tiles into
+// cb_h_all, this core's 32 output columns of down (4 per dest pass, K = the 8 h tiles) -> cb_y.
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -15,6 +16,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/reconfig_data_format.h"
+#include "api/compute/tilize.h"
 
 void kernel_main() {
     constexpr uint32_t cb_plan = get_compile_time_arg_val(0);
@@ -26,11 +28,13 @@ void kernel_main() {
     constexpr uint32_t cb_h_all = get_compile_time_arg_val(6);
     constexpr uint32_t cb_y = get_compile_time_arg_val(7);
     constexpr uint32_t kt = get_compile_time_arg_val(8);  // 128
-    constexpr uint32_t x_block = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_xrm = get_compile_time_arg_val(9);
     constexpr uint32_t gu_tiles = get_compile_time_arg_val(10);  // per bank: [kt][gate, up]
     constexpr uint32_t wd_tiles = get_compile_time_arg_val(11);  // per bank: [ikt][cols]
     constexpr uint32_t ikt = get_compile_time_arg_val(12);       // intermediate tiles = 8
     constexpr uint32_t cols = get_compile_time_arg_val(13);      // down output columns per bank = 16
+    constexpr uint32_t cb_xq = get_compile_time_arg_val(14);
+    constexpr uint32_t quarter_tiles = get_compile_time_arg_val(15);  // kt / team size
     constexpr uint32_t out_block = 4;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_wgu, cb_h_own);
@@ -42,20 +46,28 @@ void kernel_main() {
         cb_wait_front(cb_wgu, 2 * gu_tiles);
         cb_wait_front(cb_wd, 2 * wd_tiles);
         for (uint32_t i = 0; i < groups; i++) {
-            // gate | up of both banks, accumulated over K
+            // this core's quarter of x: row-major -> tiles (srcA was last the BFP4 down weights)
+            reconfig_data_format_srca(cb_wd, cb_xrm);
+            tilize_init(cb_xrm, quarter_tiles, cb_xq);
+            cb_wait_front(cb_xrm, quarter_tiles);
+            cb_reserve_back(cb_xq, quarter_tiles);
+            tilize_block(cb_xrm, quarter_tiles, cb_xq);
+            cb_push_back(cb_xq, quarter_tiles);
+            cb_pop_front(cb_xrm, quarter_tiles);
+            tilize_uninit(cb_xrm, cb_xq);
+
+            // gate | up of both banks, accumulated over the team's K tiles
+            reconfig_data_format_srca(cb_xrm, cb_wgu);
             matmul_init(cb_x, cb_wgu);
+            cb_wait_front(cb_x, kt);
             tile_regs_acquire();
-            for (uint32_t k0 = 0; k0 < kt; k0 += x_block) {
-                cb_wait_front(cb_x, x_block);
-                for (uint32_t kk = 0; kk < x_block; kk++) {
-                    const uint32_t k = k0 + kk;
-                    matmul_tiles(cb_x, cb_wgu, kk, 2 * k, 0);
-                    matmul_tiles(cb_x, cb_wgu, kk, 2 * k + 1, 1);
-                    matmul_tiles(cb_x, cb_wgu, kk, gu_tiles + 2 * k, 2);
-                    matmul_tiles(cb_x, cb_wgu, kk, gu_tiles + 2 * k + 1, 3);
-                }
-                cb_pop_front(cb_x, x_block);
+            for (uint32_t k = 0; k < kt; k++) {
+                matmul_tiles(cb_x, cb_wgu, k, 2 * k, 0);
+                matmul_tiles(cb_x, cb_wgu, k, 2 * k + 1, 1);
+                matmul_tiles(cb_x, cb_wgu, k, gu_tiles + 2 * k, 2);
+                matmul_tiles(cb_x, cb_wgu, k, gu_tiles + 2 * k + 1, 3);
             }
+            cb_pop_front(cb_x, kt);
             // h = silu(gate) * up * w (w: the rows' routing weights, every column; copied into dest 1 once up is used)
             silu_tile_init();
             silu_tile(0);
