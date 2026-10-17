@@ -65,6 +65,29 @@ def generate_tile_face_row_ids(tile_count, dtype=torch.bfloat16):
     return torch.tensor(values, dtype=dtype)
 
 
+def generate_bfp2_b_tile_face_row_pattern(tile_count, dtype=torch.bfloat16):
+    """Face-row pattern that survives Bfp2_b quantization bit-exactly.
+
+    A Bfp2_b element is 0 or +-2^(shared block exponent), so a uniform row id
+    would collapse to a power of two and hide misplaced faces/rows in tiles >= 2.
+    Instead each 16-element face row carries the tile index in its shared
+    exponent (magnitude 2^tile) and face*16+row+1 (1..64, never zero) as the
+    zero/non-zero mask of its first seven columns, so every face row in the
+    block is distinct and representable.
+    """
+    values = []
+    for tile in range(tile_count):
+        magnitude = float(1 << tile)
+        for face in range(FAST_UNTILIZE_NUM_FACES):
+            for row in range(FAST_UNTILIZE_FACE_R):
+                code = face * FAST_UNTILIZE_FACE_R + row + 1
+                values.extend(
+                    magnitude if (code >> col) & 1 else 0.0
+                    for col in range(FAST_UNTILIZE_FACE_C)
+                )
+    return torch.tensor(values, dtype=dtype)
+
+
 def make_fast_untilize_test_config(
     formats,
     input_dimensions,
@@ -134,6 +157,10 @@ def _run_fast_untilize_correctness(
     )
     if stimulus_kind == "row_id":
         src_A = generate_tile_face_row_ids(
+            tile_count, dtype=format_dict[formats.input_format]
+        )
+    elif stimulus_kind == "bfp2_b_block_id":
+        src_A = generate_bfp2_b_tile_face_row_pattern(
             tile_count, dtype=format_dict[formats.input_format]
         )
     if not allocate_src_b:
@@ -220,13 +247,15 @@ def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
 # Every compressed block-float input carries a per-tile exponent section, so it
 # must take the per-tile BFP unpack path. Routing Bfp2_b through the dense
 # multi-tile MOP reads exponents from tile 0's mantissa area from face 4 on
-# and silently corrupts the row-major output.
+# and silently corrupts the row-major output. The deterministic stimulus is the
+# Bfp2_b-exact block-id pattern (a uniform row id collapses under the 1-bit
+# mantissa and cannot see face/row misplacement in tiles >= 2).
 @parametrize(
     formats=fast_untilize_bfp2_b_formats(),
     dest_acc=fast_untilize_dest_acc_modes,
     dimensions=FAST_UNTILIZE_BFP2_B_DIMS,
     dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
-    stimulus_kind=["row_id", "random"],
+    stimulus_kind=["bfp2_b_block_id", "random"],
 )
 def test_fast_untilize_bfp2_b(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
     _run_fast_untilize_correctness(

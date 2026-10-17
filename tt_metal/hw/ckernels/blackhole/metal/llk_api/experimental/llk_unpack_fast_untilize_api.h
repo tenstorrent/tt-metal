@@ -21,7 +21,7 @@ inline void llk_unpack_fast_untilize_init_with_formats(
 
 // Every compressed block-float input (Bfp8/4/2, A and B exponent variants) carries a
 // per-tile exponent section, so it must take the per-tile unpack path; the dense
-// multi-tile MOP would read exponents out of the previous tile's mantissa area.
+// multi-tile MOP steps every face from tile 0's base and cannot skip those sections.
 inline bool llk_unpack_fast_untilize_is_bfp_input_format(const std::uint32_t format) {
     return ckernel::IS_BFP_FORMAT(format);
 }
