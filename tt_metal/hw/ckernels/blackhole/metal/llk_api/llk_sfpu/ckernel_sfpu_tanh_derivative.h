@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
@@ -14,15 +16,28 @@
 namespace ckernel {
 namespace sfpu {
 
+// One integer step down for |x| > FLT_MAX: +-inf becomes +-FLT_MAX, which the LUT's last segment
+// takes to +-1.0, while a NaN stays a NaN (or, from the smallest payload, becomes an infinity,
+// which the LUT still turns into NaN). Finite inputs are untouched. SFPGT compares sign-magnitude,
+// so the mask is -1 exactly where |x| > vConstFloatPrgm0, which tanh_derivative_init sets to
+// FLT_MAX. Three instructions per row; tt-llk's _calculate_tanh_derivative_ carries the same step.
+sfpi_inline sfpi::vFloat tanh_derivative_lut_nonfinite_step(sfpi::vFloat x) {
+    sfpi::vInt nonfinite =
+        sfpi::vInt(__builtin_rvtt_sfpgt(sfpi::setsgn(x, 0).get(), sfpi::vFloat(sfpi::vConstFloatPrgm0).get(), 8));
+    return sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(x) + nonfinite);
+}
+
 // Legacy tanh derivative: 1 - lut(x)^2, with tanh taken from the SFPLUT rather than computed.
 // For finite |x| >= 3 the result is exactly 0, so every point in the tail is 100% relative
 // error against a sech^2 that is merely small -- and, measured in ulp of that bfloat16
 // reference, a flat ~256 rather than anything unbounded. Absolute error is the only metric
 // that stays meaningful there, and it stays below sech^2(3) = 0.0099; max absolute error is
-// 0.0143 overall (Wormhole, fp32 end to end, every finite bfloat16 input). The infinities are
-// the exception to "exactly 0": the tail pair is (A=0, B=1) and the hardware evaluates
-// A*|x| + B, so 0 * inf + 1 is NaN and 1 - NaN^2 is NaN. Kept for backward
-// compatibility -- calculate_tanh_derivative_sech2 is correctly rounded in bfloat16 instead.
+// 0.0143 overall (Wormhole, fp32 end to end, every finite bfloat16 input). The infinities
+// would be the exception to "exactly 0": the tail pair is (A=0, B=1) and the hardware evaluates
+// A*|x| + B, so 0 * inf + 1 is NaN and 1 - NaN^2 is NaN. tanh_derivative_lut_nonfinite_step
+// moves +-inf to +-FLT_MAX first, so they return 0 like every other |x| >= 3, and NaN still
+// returns NaN (tenstorrent/tt-llk#1701 item 10). Kept for backward compatibility --
+// calculate_tanh_derivative_sech2 is correctly rounded in bfloat16 instead.
 // Nothing in this repository calls it: tanh_derivative_tile dispatches
 // calculate_tanh_derivative_sech2 unconditionally and ignores fast_and_approx, and the
 // LLK harness runs tt-llk's _calculate_tanh_derivative_ rather than this copy. The table
@@ -41,6 +56,7 @@ inline void calculate_tanh_derivative() {
         sfpi::vFloat val = sfpi::dst_reg[0];
 
         if constexpr (!WITH_PRECOMPUTED_TANH) {
+            val = tanh_derivative_lut_nonfinite_step(val);
             val = sfpi::lut(val, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Retain);
         }
 
@@ -74,11 +90,15 @@ inline void tanh_derivative_init() {
     // lut must not step down at a breakpoint, which is what keeps the result monotone in |x|.
     //
     // That tail entry saturates the finite range only. The hardware evaluates A*|x| + B, so
-    // an infinite input computes 0 * inf + 1 = NaN and the kernel returns NaN rather than 0;
-    // do not read (0, 1.0) as handling the infinities.
+    // an infinite input would compute 0 * inf + 1 = NaN; do not read (0, 1.0) as handling the
+    // infinities. The kernels step +-inf down to +-FLT_MAX before the LUT instead, against the
+    // vConstFloatPrgm0 loaded here.
     //
     // UnarySFPUGolden._tanh_derivative_lut mirrors these six pairs by hand, and
     // test_tanh_lut_consistency.py holds all three copies together.
+    //
+    // Prgm0 first: programming it goes through LReg0, which the table then overwrites.
+    sfpi::vConstFloatPrgm0 = std::numeric_limits<float>::max();
     sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.93701171875f, 0.5869140625f);
     sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.183837890625f);
 
