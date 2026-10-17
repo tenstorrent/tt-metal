@@ -1,0 +1,72 @@
+name: "Reconfig escape sweep"
+
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: "Architecture to run the reconfig sweep on"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - blackhole
+  schedule:
+    - cron: "17 4 * * 0" # 04:17 UTC
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.architecture || 'all' }}-${{
+    github.ref_protected && github.run_id || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-images:
+    name: "Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  blackhole:
+    name: "Blackhole"
+    if: >-
+      github.event_name == 'schedule' ||
+      inputs.architecture == 'all' ||
+      inputs.architecture == 'blackhole'
+    needs: build-images
+    uses: ./.github/workflows/reconfig-escape-impl.yaml
+    with:
+      architecture: blackhole
+      docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
+
+  report-status:
+    name: "Report status"
+    runs-on: ubuntu-slim
+    if: always()
+    needs: [blackhole]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+      - name: Resolve overall status
+        id: overall
+        env:
+          BLACKHOLE: ${{ needs.blackhole.result }}
+        run: |
+          status=success
+          for r in "$BLACKHOLE"; do
+            [[ "$r" == "failure" || "$r" == "cancelled" ]] && status=failure
+          done
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+      - name: Report status
+        uses: ./.github/actions/report-failure
+        with:
+          test_name: "Reconfig escape sweep"
+          slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
+          status: ${{ steps.overall.outputs.status }}
