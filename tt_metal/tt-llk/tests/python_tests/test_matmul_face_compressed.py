@@ -418,6 +418,105 @@ def test_matmul_face_compressed_interleaved_matched(shape, formats, interleave_n
 
 
 # ---------------------------------------------------------------------------
+# Zero (bfp0) faces at chosen grid positions. The unpacker emits nothing for a bfp0 face and
+# the math thread takes the skip instruction for it, which only has to carry the counters
+# over the face without multiplying. The full-width case is the one that tells: at ct_dim=16
+# the 32 output faces fill the whole DEST half (32 x 16 rows), so a skip that disturbs any
+# face of the half lands on a live accumulation. Zero faces sit in K-face-rows >= 1 so the
+# faces already hold partials, and the sets are multiples of four so promote_assignment
+# leaves them alone. The skip used to be a ZEROACC with the row select the Wormhole tree
+# treats as a no-op; on Blackhole it marks the last 16-row block of the DEST half, output
+# face 31 (tile 15, second face), as zero whenever the DEST counter is past 256 rows when it
+# issues, i.e. for a zero face at column 17 or later (measured column by column on p100a:
+# columns 0-16 left every face intact, 17-31 wiped face 31's partial). Every case must pass,
+# and a mis-stepped skip would shift every later face, so the cases at lower columns and
+# narrower widths guard the counter steps of each regime (one / odd / even).
+
+ZERO_FACE_CASES = [
+    # (M, K, N, format, zero faces as (k_face_row, face_col)), face grid = (K//16) x (N//16)
+    pytest.param(
+        1, 128, 512, "bfp4", ((1, 0), (1, 1), (1, 2), (1, 3)), id="ct16-k1-c0..3"
+    ),
+    pytest.param(
+        8, 128, 512, "bfp4", ((1, 16), (2, 16), (3, 16), (4, 16)), id="ct16-M8-c16"
+    ),
+    pytest.param(
+        8, 128, 512, "bfp4", ((1, 17), (2, 17), (3, 17), (4, 17)), id="ct16-M8-c17"
+    ),
+    pytest.param(
+        1, 128, 512, "bfp2", ((7, 20), (7, 21), (7, 22), (7, 23)), id="ct16-k7-c20..23"
+    ),
+    pytest.param(
+        8,
+        128,
+        512,
+        "bfp4",
+        ((1, 28), (1, 29), (1, 30), (1, 31)),
+        id="ct16-M8-k1-c28..31",
+    ),
+    pytest.param(
+        8,
+        256,
+        512,
+        "bfp4",
+        ((2, 4), (2, 5), (2, 6), (2, 7), (9, 31), (10, 0), (10, 1), (10, 2)),
+        id="ct16-M8-mixed",
+    ),
+    pytest.param(
+        8, 128, 256, "bfp4", ((1, 0), (1, 1), (1, 2), (1, 3)), id="ct8-M8-k1-c0..3"
+    ),
+    pytest.param(
+        8,
+        128,
+        256,
+        "bfp4",
+        ((1, 12), (1, 13), (1, 14), (1, 15)),
+        id="ct8-M8-k1-c12..15",
+    ),
+    pytest.param(
+        8, 128, 224, "bfp4", ((1, 0), (1, 1), (1, 2), (1, 3)), id="ct7-M8-k1-c0..3"
+    ),
+    pytest.param(
+        8,
+        128,
+        224,
+        "bfp4",
+        ((1, 10), (1, 11), (1, 12), (1, 13)),
+        id="ct7-M8-k1-c10..13",
+    ),
+    pytest.param(
+        8, 128, 32, "bfp4", ((1, 0), (2, 1), (3, 0), (3, 1)), id="ct1-M8-mixed"
+    ),
+    pytest.param(
+        1, 128, 32, "bfp4", ((1, 1), (2, 0), (4, 1), (5, 0)), id="ct1-M1-mixed"
+    ),
+    pytest.param(
+        8, 128, 32, "bfp2", ((0, 1), (1, 0), (5, 1), (6, 0)), id="ct1-M8-bfp2-mixed"
+    ),
+]
+
+
+def assign_zero_faces(K, N, fmt, zero_faces):
+    cu = N // FACE_C_DIM
+    assignment = [FMT_CODE[fmt]] * ((K // FACE_C_DIM) * cu)
+    for k, c in zero_faces:
+        assignment[k * cu + c] = FMT_CODE["bfp0"]
+    return assignment
+
+
+@blackhole_only
+@pytest.mark.parametrize("M, K, N, fmt, zero_faces", ZERO_FACE_CASES)
+def test_matmul_face_compressed_zero_faces(M, K, N, fmt, zero_faces):
+    """Zero (bfp0) faces must leave every other face's accumulation intact."""
+    assignment = assign_zero_faces(K, N, fmt, zero_faces)
+    assert promote_assignment(list(assignment), N // FACE_C_DIM) == assignment, (
+        "zero-face set must already satisfy the face-unpack constraints "
+        "(else promote_assignment would un-zero the faces under test)"
+    )
+    run_face_compressed(M, K, N, assignment)
+
+
+# ---------------------------------------------------------------------------
 # Realistic DeepSeek-R1 assignments swept by face-refinement density (switch_mult),
 # from DEEPSEEK_T420's per-format stats (see helpers/compressed_utils.py):
 #   * 1.0  — tile-granular baseline: 32x32 tiles expanded homogeneously to faces;

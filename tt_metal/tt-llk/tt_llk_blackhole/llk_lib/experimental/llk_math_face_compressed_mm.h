@@ -18,68 +18,78 @@
 using namespace ckernel;
 using namespace ckernel::math;
 
-// Dest rows from a face's accumulation to its split partial: consecutive MVMULs land in different rows so
-// the FPU does not stall on the read-after-write. A CT == 1 tile is two faces wide, so dest ends up holding
-// accumulations at rows 0 and 16 and their partials at 8 and 24, and finalize steps SrcB by this same amount
-// to merge each pair.
-constexpr std::int16_t _llk_math_face_compressed_mm_split_acc_partial_rows_ = 8;
+// Dest rows one skip instruction steps: INCRWC's row increment is four bits wide, so this is half of a
+// 16-row face slot. The multi-tile sequence issues two per skipped face; the ct_dim == 1 sequence walks
+// dest in steps of this size (see the split layout below), so there one is a whole face.
+constexpr std::uint32_t _llk_math_face_compressed_mm_dest_step_rows_ = 8;
+
+// ct_dim == 1 split accumulation: consecutive MVMULs land in different 8-row blocks so the FPU does not
+// stall on the read-after-write. A meta covers two K rows of the two-face tile, and dest walks 0, 8, 16, 24
+// across its four faces, so face 0 accumulates the even K row at row 0 and the odd one at row 16, face 1 at
+// rows 8 and 24. Finalize merges each pair into the face's slot, rows 0 and 16.
+constexpr std::uint32_t _llk_math_face_compressed_mm_split_face0_odd_row_  = 16;
+constexpr std::uint32_t _llk_math_face_compressed_mm_split_face1_even_row_ = 8;
+constexpr std::uint32_t _llk_math_face_compressed_mm_split_face1_odd_row_  = 24;
 
 // The math thread owns the replay buffer from replay_buf_offset up; the SFPU owns everything below it.
 constexpr std::uint32_t _llk_math_face_compressed_mm_replay_base_ = ckernel::math::replay_buf_offset;
 constexpr std::uint32_t _llk_math_face_compressed_mm_replay_slot_ = ckernel::REPLAY_BUF_SIZE - _llk_math_face_compressed_mm_replay_base_;
 
 // The math code sequences: one character is one instruction, recorded into the replay buffer at init (see
-// instr_for_code in _llk_math_face_compressed_mm_mop_config_ for the encodings). The letter names the
-// addrmod that runs with it, so it says what moves after the face is handled:
+// instr_for_code in _llk_math_face_compressed_mm_mop_config_ for the encodings). Upper case multiplies a
+// face in with MVMUL and the letter names the addrmod that runs with it, so it says what moves after the
+// face is handled; lower case skips a face with no data, stepping the same counters with SETRWC or INCRWC:
 //
-//   n / N   noB    dest advances one face, both sources hold
+//   h       skip: dest advances 8 rows, both sources hold -- one face at ct_dim == 1, half a face otherwise
+//   N   noB    dest advances one face, both sources hold
 //   i / I   incB   SrcB advances one activation row block, dest restarts
 //   c / C   clrB   end of a K block: the SrcB and dest counters reset
-//   r / R   revB   like incB, but dest rewinds to the other split-accumulation partial (ct_dim == 1)
+//   r / R   revB   like incB but dest advances to the next split-accumulation row (ct_dim == 1)
 //
-// Lower case skips a face with no data, advancing the counters without multiplying; upper case issues the
-// MVMUL. Each string is an overlap-packing of exactly the fragments its tables ask for, sized to the
-// instructions this thread owns:
+// Skips are plain counter instructions, never ZEROACC: on Blackhole the 16-row ZEROACC is not a no-op for
+// any row select, it marks a face of the current dest half as zero (the row select the Wormhole tree uses
+// as a no-op lands on the half's last face once the dest counter is past 256 rows), which at ct_dim == 16
+// is a live output face. Each string is an overlap-packing of exactly the fragments its tables ask for,
+// sized to the instructions this thread owns:
 //
-//   multi_seq (ct_dim >= 2) needs n i c N I C singly, plus ni Ni nI NI for the two-face midIncB only an
-//   odd width emits. They pack into the first eight characters at 0, 2, 4 and 6, leaving the clrB endings
-//   in the tail.
+//   multi_seq (ct_dim >= 2) needs hh i c N I C singly, plus hhi Ni hhI NI for the two-face midIncB only an
+//   odd width emits. They pack into twelve characters.
 //
-//   one_seq (ct_dim == 1) needs the I and C endings, nr for the MOP operands, and the six three-face
-//   midRevB fragments -- {n,N}{r,R}{n,N} less nrn and nrN, which the MOP issues directly. They pack as
-//   Nrn at 2, nRn at 4, nRN at 6, NrN at 8, NRN at 10, NRn at 12, and nr at 14.
+//   one_seq (ct_dim == 1) needs the I and C endings, hr for the MOP operands, and the six three-face
+//   midRevB fragments -- {h,N}{r,R}{h,N} less hrh and hrN, which the MOP issues directly. They pack as
+//   Nrh at 2, hRh at 4, hRN at 6, NrN at 8, NRN at 10, NRh at 12, and hr at 14.
 static constexpr auto _llk_math_face_compressed_mm_multi_seq_ =
-    ckernel::code_seq::make_sequence<_llk_math_face_compressed_mm_replay_base_, _llk_math_face_compressed_mm_replay_slot_>("niNinINIncNcnCNC");
+    ckernel::code_seq::make_sequence<_llk_math_face_compressed_mm_replay_base_, _llk_math_face_compressed_mm_replay_slot_>("hhiNihhINIcC");
 static constexpr auto _llk_math_face_compressed_mm_one_seq_ =
-    ckernel::code_seq::make_sequence<_llk_math_face_compressed_mm_replay_base_, _llk_math_face_compressed_mm_replay_slot_>("ICNrnRnRNrNRNRnr");
+    ckernel::code_seq::make_sequence<_llk_math_face_compressed_mm_replay_base_, _llk_math_face_compressed_mm_replay_slot_>("ICNrhRhRNrNRNRhr");
 
 static constexpr auto _llk_math_face_compressed_mm_even_l1_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
     [](const std::uint32_t m) -> std::uint32_t
     {
         const std::uint32_t faces123 = (m >> 2) & 0b111;
-        return TT_OP_MOP(p_mop::MASK_LOOP, 2, faces123); // nnn case encoded in the mop
+        return TT_OP_MOP(p_mop::MASK_LOOP, 2, faces123); // hhh case encoded in the mop
     });
 
 static constexpr auto _llk_math_face_compressed_mm_even_l2_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
-    [](const std::uint32_t m, auto /* find */, auto case_encode) -> std::uint32_t
+    [](const std::uint32_t m, auto find) -> std::uint32_t
     {
         const std::uint32_t hdr   = m & 0b11;
         const std::uint32_t face4 = (m >> 5) & 0b1;
         switch (hdr)
         {
             case 0b00:
-                return case_encode("n", face4); // noB
+                return face4 ? find("N") : find("hh"); // noB
             case 0b01:
-                return case_encode("i", face4); // endIncB
+                return face4 ? find("I") : find("i"); // endIncB
             case 0b10:
-                return case_encode("c", face4); // endClrB
+                return face4 ? find("C") : find("c"); // endClrB
             default:
                 return TT_OP_NOP; // invalid hdr
         }
     });
 
 static constexpr auto _llk_math_face_compressed_mm_odd_l1_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
-    [](const std::uint32_t m, auto /* find */, auto case_encode) -> std::uint32_t
+    [](const std::uint32_t m, auto find) -> std::uint32_t
     {
         const std::uint32_t hdr      = m & 0b11;
         const std::uint32_t faces12  = (m >> 2) & 0b011;
@@ -89,7 +99,18 @@ static constexpr auto _llk_math_face_compressed_mm_odd_l1_table_ = ckernel::code
             case 0b00:
                 return TT_OP_MOP(p_mop::MASK_LOOP, 2, faces123); // noB
             case 0b01:
-                return case_encode("ni", faces12); // midIncB only two faces in this case
+                // midIncB only two faces in this case: face1 noB, face2 incB
+                switch (faces12)
+                {
+                    case 0b00:
+                        return find("hhi");
+                    case 0b01:
+                        return find("Ni");
+                    case 0b10:
+                        return find("hhI");
+                    default:
+                        return find("NI");
+                }
             case 0b10:
                 return TT_OP_MOP(p_mop::MASK_LOOP, 2, faces123); // endIncB
             case 0b11:
@@ -100,7 +121,7 @@ static constexpr auto _llk_math_face_compressed_mm_odd_l1_table_ = ckernel::code
     });
 
 static constexpr auto _llk_math_face_compressed_mm_odd_l2_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
-    [](const std::uint32_t m, auto /* find */, auto case_encode) -> std::uint32_t
+    [](const std::uint32_t m, auto find) -> std::uint32_t
     {
         const std::uint32_t hdr     = m & 0b11;
         const std::uint32_t faces34 = (m >> 4) & 0b11;
@@ -108,33 +129,48 @@ static constexpr auto _llk_math_face_compressed_mm_odd_l2_table_ = ckernel::code
         switch (hdr)
         {
             case 0b00:
-                return case_encode("n", face4); // noB
+                return face4 ? find("N") : find("hh"); // noB
             case 0b01:
                 return TT_OP_MOP(p_mop::MASK_LOOP, 1, faces34); // midIncB the mop walks two faces
             case 0b10:
-                return case_encode("i", face4); // endIncB
+                return face4 ? find("I") : find("i"); // endIncB
             case 0b11:
-                return case_encode("c", face4); // endClrB
+                return face4 ? find("C") : find("c"); // endClrB
             default:
                 return 0;
         }
     });
 
 static constexpr auto _llk_math_face_compressed_mm_one_l1_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_one_seq_, 64>(
-    [](const std::uint32_t m, auto /* find */, auto case_encode) -> std::uint32_t
+    [](const std::uint32_t m, auto find) -> std::uint32_t
     {
+        // Bit i of faces123 upper-cases face i of the midRevB pattern h r h.
         const std::uint32_t faces123 = (m >> 2) & 0b111;
         switch (faces123)
         {
             case 0b000:
-                return TT_OP_MOP(p_mop::MASK_LOOP, 0, 0); // "nrn" encoded in the mop
+                return TT_OP_MOP(p_mop::MASK_LOOP, 0, 0); // "hrh" encoded in the mop
+            case 0b001:
+                return find("Nrh");
+            case 0b010:
+                return find("hRh");
+            case 0b011:
+                return find("NRh");
             case 0b100:
-                return TT_OP_MOP(p_mop::MASK_LOOP, 0, 1); // "nrN" encoded in the mop
+                return TT_OP_MOP(p_mop::MASK_LOOP, 0, 1); // "hrN" encoded in the mop
+            case 0b101:
+                return find("NrN");
+            case 0b110:
+                return find("hRN");
             default:
-                return case_encode("nrn", faces123); // always midRevB
+                return find("NRN");
         }
     });
 
+// The endIncB skip steps SrcB by the activation rows per face, 1 or 8, so this table comes in one copy per
+// value; _llk_math_face_compressed_mm_tables_ picks the copy at runtime. The other skips in this regime
+// live in the replay buffer, whose slot the one_seq fills to the last instruction.
+template <std::uint32_t srcb_incr>
 static constexpr auto _llk_math_face_compressed_mm_one_l2_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_one_seq_, 64>(
     [](const std::uint32_t m, auto find) -> std::uint32_t
     {
@@ -143,7 +179,8 @@ static constexpr auto _llk_math_face_compressed_mm_one_l2_table_ = ckernel::code
         switch ((hdr << 1) | face4)
         {
             case 0b000:
-                return TT_OP_ZEROACC_ADDRMOD_ONLY(ADDR_MOD_1); // endIncB zero face4 (i)
+                // endIncB zero face4 (i): SrcB += srcb_incr through its CR, dest and its CR back to 0
+                return TT_OP_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0 /*rwc_d*/, srcb_incr /*rwc_b*/, 0 /*rwc_a*/, p_setrwc::SET_BD);
             case 0b001:
                 return find("I"); // endIncB data face4 (I)
             case 0b010:
@@ -156,23 +193,30 @@ static constexpr auto _llk_math_face_compressed_mm_one_l2_table_ = ckernel::code
     });
 
 /**
- * @brief Program the five address modifiers the code sequence moves the sources and dest with.
+ * @brief Program the address modifiers the code sequence moves the sources and dest with.
  *
- * Every instruction in the sequence names one of these, and it decides what moves afterwards: ADDR_MOD_0
- * holds both sources and advances dest one face, ADDR_MOD_1 and ADDR_MOD_3 step SrcB to the next activation
- * row block, ADDR_MOD_2 clears the SrcB and dest counters, and ADDR_MOD_4 walks SrcB onto the partial that
- * finalize merges.
+ * Every MVMUL in the sequence names one of these, and it decides what moves afterwards: ADDR_MOD_0 holds
+ * both sources and advances dest one face, ADDR_MOD_1 and ADDR_MOD_3 step SrcB to the next activation row
+ * block, ADDR_MOD_2 clears the SrcB and dest counters, ADDR_MOD_4 steps SrcB onto the partial finalize
+ * merges and ADDR_MOD_5 holds everything for finalize's moves. The SrcB steps go through its CR, so the CR
+ * always equals the counter and the skip instructions, which have no addrmod of their own, can step SrcB
+ * relative to it (SETRWC and INCRWC with SrcBCr).
  *
+ * @tparam ct_dim: Output width in tiles. Only whether it is 1 matters: that regime walks dest in 8-row
+ *                 steps (see the split layout at the top of the file), every other width in 16-row faces.
  * @param face_r_dim: Activation rows per face, 1 or 8. This is the SrcB increment, so ADDR_MOD_1 and
  *                    ADDR_MOD_3 are programmed from one of two compile-time arms.
  * @note Called from @ref _llk_math_face_compressed_mm_init_ rather than directly.
  */
+template <std::uint32_t ct_dim>
 inline void _llk_math_face_compressed_mm_addrmod_config_(const std::uint32_t face_r_dim)
 {
+    constexpr std::int16_t face_rows = ct_dim == 1 ? _llk_math_face_compressed_mm_dest_step_rows_ : FACE_R_DIM;
+
     addr_mod_t {
         .srca = {.incr = 0, .clr = 0, .cr = 0},
         .srcb = {.incr = 0, .clr = 0, .cr = 0},
-        .dest = {.incr = 16, .clr = 0, .cr = 0},
+        .dest = {.incr = face_rows, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_0); // noB: hold both sources, advance dest by one face
 
@@ -188,78 +232,90 @@ inline void _llk_math_face_compressed_mm_addrmod_config_(const std::uint32_t fac
     {
         addr_mod_t {
             .srca = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb = {.incr = 1, .clr = 0, .cr = 0},
+            .srcb = {.incr = 1, .clr = 0, .cr = 1},
             .dest = {.incr = 0, .clr = 1, .cr = 0},
         }
             .set(ADDR_MOD_1); // incB: advance SrcB one activation row block, reset dest to the beginning
 
         addr_mod_t {
             .srca = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb = {.incr = 1, .clr = 0, .cr = 0},
-            .dest = {.incr = -_llk_math_face_compressed_mm_split_acc_partial_rows_, .clr = 0, .cr = 0},
+            .srcb = {.incr = 1, .clr = 0, .cr = 1},
+            .dest = {.incr = _llk_math_face_compressed_mm_dest_step_rows_, .clr = 0, .cr = 0},
         }
-            .set(ADDR_MOD_3); // revB: advance SrcB one activation row block, rewind dest to the other partial
+            .set(ADDR_MOD_3); // revB: advance SrcB one activation row block, dest on to the next split row
     }
     else
     {
         addr_mod_t {
             .srca = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb = {.incr = 8, .clr = 0, .cr = 0},
+            .srcb = {.incr = 8, .clr = 0, .cr = 1},
             .dest = {.incr = 0, .clr = 1, .cr = 0},
         }
             .set(ADDR_MOD_1); // incB: advance SrcB one activation row block, reset dest to the beginning
 
         addr_mod_t {
             .srca = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb = {.incr = 8, .clr = 0, .cr = 0},
-            .dest = {.incr = -_llk_math_face_compressed_mm_split_acc_partial_rows_, .clr = 0, .cr = 0},
+            .srcb = {.incr = 8, .clr = 0, .cr = 1},
+            .dest = {.incr = _llk_math_face_compressed_mm_dest_step_rows_, .clr = 0, .cr = 0},
         }
-            .set(ADDR_MOD_3); // revB: advance SrcB one activation row block, rewind dest to the other partial
+            .set(ADDR_MOD_3); // revB: advance SrcB one activation row block, dest on to the next split row
     }
 
     addr_mod_t {
         .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = _llk_math_face_compressed_mm_split_acc_partial_rows_, .clr = 0, .cr = 0},
+        .srcb = {.incr = 8, .clr = 0, .cr = 1},
         .dest = {.incr = 0, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_4); // finalize: advance SrcB onto the partial MOVD2B parked there, hold dest
+
+    addr_mod_t {
+        .srca = {.incr = 0, .clr = 0, .cr = 0},
+        .srcb = {.incr = 0, .clr = 0, .cr = 0},
+        .dest = {.incr = 0, .clr = 0, .cr = 0},
+    }
+        .set(ADDR_MOD_5); // finalize: hold everything, the moves address their rows directly
 }
 
 /**
  * @brief Record the math code sequence into the replay buffer and program the MOP that replays it.
  *
- * One instruction per character: lower case skips a face, advancing the counters with ZEROACC or SETRWC,
+ * One instruction per character: lower case skips a face, stepping the counters with INCRWC or SETRWC,
  * and upper case multiplies it in with MVMUL. ct_dim == 1 records the split-accumulation sequence, every
  * other width the multi-tile one.
  *
  * @tparam ct_dim: Output width in tiles, 1 to 16.
  * @param face_r_dim: Activation rows per face, 1 or 8. Only 1 takes MVMUL's single-row SrcB broadcast,
- *                    which drops the SrcB alignment requirement from 8 rows to 1.
+ *                    which drops the SrcB alignment requirement from 8 rows to 1. It is also the SrcB
+ *                    increment the incB and revB skips step by.
  * @note Called from @ref _llk_math_face_compressed_mm_init_ rather than directly.
- * @ref _llk_math_face_compressed_mm_addrmod_config_ programs the addrmods these instructions name.
+ * @ref _llk_math_face_compressed_mm_addrmod_config_ programs the addrmods the MVMULs name.
  */
 template <std::uint32_t ct_dim>
 inline void _llk_math_face_compressed_mm_mop_config_(const std::uint32_t face_r_dim)
 {
     // MVMUL's instr_mod19 SrcB broadcast, using it for a single row reduces the SrcB alignment requirement from 8 to 1
     const std::uint32_t mvmul_single_row = (face_r_dim == 1) ? 1 : 0;
+    // SrcB rows per activation face: what ADDR_MOD_1 and ADDR_MOD_3 step, and so what the incB / revB skips step.
+    const std::uint32_t srcb_incr = face_r_dim;
 
     // One instruction per code-sequence character. Lower case means no data for this face, so it is
-    // skipped: the counters advance via ZEROACC or SETRWC without multiplying. Upper case multiplies it
-    // in. The ADDR_MOD then picks what advances afterwards -- see _llk_math_face_compressed_mm_addrmod_config_.
-    auto instr_for_code = [mvmul_single_row](char code)
+    // skipped: the counters move exactly as the matching MVMUL's addrmod would move them, by INCRWC or
+    // SETRWC, with the SrcB steps relative to its CR (which the addrmods keep equal to the counter). Upper
+    // case multiplies it in and the ADDR_MOD picks what advances afterwards -- see
+    // _llk_math_face_compressed_mm_addrmod_config_.
+    auto instr_for_code = [mvmul_single_row, srcb_incr](char code)
     {
         switch (code)
         {
-            case 'n':
-                TTI_ZEROACC_ADDRMOD_ONLY(ADDR_MOD_0);
-                break; // skip, noB
+            case 'h':
+                TTI_INCRWC(0 /*rwc_cr*/, _llk_math_face_compressed_mm_dest_step_rows_ /*rwc_d*/, 0 /*rwc_b*/, 0 /*rwc_a*/);
+                break; // skip, half of noB's face step (a whole face at ct_dim == 1)
             case 'N':
                 TT_MVMUL(p_setrwc::CLR_A, mvmul_single_row, ADDR_MOD_0, 0);
                 break; // mul, noB
             case 'i':
-                TTI_ZEROACC_ADDRMOD_ONLY(ADDR_MOD_1);
-                break; // skip, incB
+                TT_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0 /*rwc_d*/, srcb_incr /*rwc_b*/, 0 /*rwc_a*/, p_setrwc::SET_BD);
+                break; // skip, incB: SrcB += srcb_incr through its CR, dest and its CR back to 0
             case 'I':
                 TT_MVMUL(p_setrwc::CLR_A, mvmul_single_row, ADDR_MOD_1, 0);
                 break; // mul, incB
@@ -270,8 +326,8 @@ inline void _llk_math_face_compressed_mm_mop_config_(const std::uint32_t face_r_
                 TT_MVMUL(p_setrwc::CLR_AB, mvmul_single_row, ADDR_MOD_2, 0);
                 break; // mul, clrB
             case 'r':
-                TTI_ZEROACC_ADDRMOD_ONLY(ADDR_MOD_3);
-                break; // skip, revB
+                TT_INCRWC(p_setrwc::CR_B /*rwc_cr*/, _llk_math_face_compressed_mm_dest_step_rows_ /*rwc_d*/, srcb_incr /*rwc_b*/, 0 /*rwc_a*/);
+                break; // skip, revB: SrcB += srcb_incr through its CR, dest on to the next split row
             case 'R':
                 TT_MVMUL(p_setrwc::CLR_A, mvmul_single_row, ADDR_MOD_3, 0);
                 break; // mul, revB
@@ -290,11 +346,11 @@ inline void _llk_math_face_compressed_mm_mop_config_(const std::uint32_t face_r_
         _llk_math_face_compressed_mm_multi_seq_.load(instr_for_code);
     }
 
-    constexpr std::uint32_t op0m = _llk_math_face_compressed_mm_multi_seq_.fragment("n");
+    constexpr std::uint32_t op0m = _llk_math_face_compressed_mm_multi_seq_.fragment("hh");
     constexpr std::uint32_t op0M = _llk_math_face_compressed_mm_multi_seq_.fragment("N");
-    constexpr std::uint32_t op0s = _llk_math_face_compressed_mm_one_seq_.fragment("nr");
-    constexpr std::uint32_t op1s = _llk_math_face_compressed_mm_one_seq_.fragment("n");
-    constexpr std::uint32_t op0S = _llk_math_face_compressed_mm_one_seq_.fragment("nr");
+    constexpr std::uint32_t op0s = _llk_math_face_compressed_mm_one_seq_.fragment("hr");
+    constexpr std::uint32_t op1s = _llk_math_face_compressed_mm_one_seq_.fragment("h");
+    constexpr std::uint32_t op0S = _llk_math_face_compressed_mm_one_seq_.fragment("hr");
     constexpr std::uint32_t op1S = _llk_math_face_compressed_mm_one_seq_.fragment("N");
 
     // Every MOP operand must resolve to a real replay instruction; a 0 means its fragment
@@ -333,7 +389,7 @@ inline void _llk_math_face_compressed_mm_init_(const std::uint32_t face_r_dim)
     static_assert(ct_dim >= 1 && ct_dim <= 16, "face_compressed_mm (math): ct_dim must be in [1, 16]");
     LLK_ASSERT(face_r_dim == 1 || face_r_dim == 8, "face_compressed_mm (math): unsupported face_r_dim (expected 1 or 8)");
 
-    _llk_math_face_compressed_mm_addrmod_config_(face_r_dim);
+    _llk_math_face_compressed_mm_addrmod_config_<ct_dim>(face_r_dim);
     _llk_math_face_compressed_mm_mop_config_<ct_dim>(face_r_dim);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -343,18 +399,23 @@ inline void _llk_math_face_compressed_mm_init_(const std::uint32_t face_r_dim)
  * @brief Select the decode table pair for one output width.
  *
  * @tparam ct_dim: Output width in tiles, 1 to 16.
+ * @param face_r_dim: Activation rows per face, 1 or 8. Only ct_dim == 1 reads it: its level-2 table
+ *                    carries the endIncB skip, whose SrcB step is this value, so it comes in two copies.
  * @return The level-1 and level-2 tables, which expand a 6-bit meta into its two instructions.
  * @note Three regimes, because the header values a width can produce differ: an odd width can advance SrcB
  *       in the middle of a meta, which an even one never does, and ct_dim == 1 splits the accumulation on
  *       top of that.
- * @note Assumes ct_dim is in range. @ref _llk_math_face_compressed_mm_, its only caller, asserts it.
+ * @note Assumes ct_dim and face_r_dim are in range. @ref _llk_math_face_compressed_mm_, its only caller,
+ *       asserts them.
  */
 template <std::uint32_t ct_dim>
-inline constexpr std::array<const std::uint32_t*, 2> _llk_math_face_compressed_mm_tables_()
+inline std::array<const std::uint32_t*, 2> _llk_math_face_compressed_mm_tables_(const std::uint32_t face_r_dim)
 {
     if constexpr (ct_dim == 1)
     {
-        return {{_llk_math_face_compressed_mm_one_l1_table_.data(), _llk_math_face_compressed_mm_one_l2_table_.data()}};
+        const std::uint32_t* l2_table =
+            face_r_dim == 1 ? _llk_math_face_compressed_mm_one_l2_table_<1>.data() : _llk_math_face_compressed_mm_one_l2_table_<8>.data();
+        return {{_llk_math_face_compressed_mm_one_l1_table_.data(), l2_table}};
     }
     else if constexpr (ct_dim % 2 == 0)
     {
@@ -408,9 +469,9 @@ inline void _llk_math_face_compressed_mm_(
     const std::uint32_t rem_iters  = iters % metas_per_word; // metas in the trailing word
     const std::uint32_t* meta_ptr  = reinterpret_cast<const std::uint32_t*>(base_address_meta);
 
-    constexpr auto tables                   = _llk_math_face_compressed_mm_tables_<ct_dim>();
-    constexpr const std::uint32_t* l1_table = tables[0];
-    constexpr const std::uint32_t* l2_table = tables[1];
+    const auto tables                   = _llk_math_face_compressed_mm_tables_<ct_dim>(face_r_dim);
+    const std::uint32_t* const l1_table = tables[0];
+    const std::uint32_t* const l2_table = tables[1];
 
     for (std::uint32_t i = 0; i < full_iters; ++i)
     {
@@ -444,23 +505,34 @@ inline void _llk_math_face_compressed_mm_(
 
     if constexpr (ct_dim == 1 && finalize)
     {
-        // Merge each face's split partial into its accumulation.
-        constexpr std::int16_t partial = _llk_math_face_compressed_mm_split_acc_partial_rows_;
+        // Merge each face's two split partials into its slot: face 0 is rows 0 (even K rows) + 16 (odd), face 1
+        // is rows 8 (even) + 24 (odd), and the results go to rows 0 and 16. The sequence left both counters at
+        // 0, ADDR_MOD_5 holds them, and the unpack side left SrcA and SrcB zeroed and valid.
+        constexpr std::uint32_t face0_odd  = _llk_math_face_compressed_mm_split_face0_odd_row_;
+        constexpr std::uint32_t face1_even = _llk_math_face_compressed_mm_split_face1_even_row_;
+        constexpr std::uint32_t face1_odd  = _llk_math_face_compressed_mm_split_face1_odd_row_;
+        constexpr std::uint32_t face1_slot = FACE_R_DIM;
 
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD); // wait for both operands
-        // Move both partials into SrcB, face 0 at row 0 and face 1 at row 8.
-        // ADDR_MOD_0 advances dest by one face between the two, and ADDR_MOD_2 resets it afterwards.
-        TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, partial);
-        TTI_MOVD2B(p_mov::DEST_NORM, partial, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, partial);
+        // Park face 0's odd partial at SrcB row 0 and face 1's odd partial at SrcB row 8.
+        TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_5, p_movd2b::MOV_4_ROWS, face0_odd);
+        TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_5, p_movd2b::MOV_4_ROWS, face1_odd);
         if (face_r_dim == 8)
         {
-            // Rows 4-7 of each partial, walking the counters the same way as the pair above.
-            TTI_MOVD2B(p_mov::DEST_NORM, 4, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, partial + 4);
-            TTI_MOVD2B(p_mov::DEST_NORM, partial + 4, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, partial + 4);
+            // Rows 4-7 of each partial.
+            TTI_MOVD2B(p_mov::DEST_NORM, 4, ADDR_MOD_5, p_movd2b::MOV_4_ROWS, face0_odd + 4);
+            TTI_MOVD2B(p_mov::DEST_NORM, 12, ADDR_MOD_5, p_movd2b::MOV_4_ROWS, face1_odd + 4);
         }
-        // Add each partial into its accumulation, at dest 0 and 16, with ADDR_MOD_4 stepping SrcB from the
-        // first to the second in between.
+        // Face 0: add its odd partial into row 0, where its even partial already is. SrcA is zero. ADDR_MOD_4
+        // then steps SrcB onto face 1's odd partial.
         TTI_ELWADD(p_elwise::CLR_NONE, p_elwise::DEST_ACCUM_EN, p_elwise::SRCB_NO_BCAST, ADDR_MOD_4, 0);
-        TTI_ELWADD(p_elwise::CLR_AB, p_elwise::DEST_ACCUM_EN, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 16);
+        // Face 1: its even partial sits in face 0's slot (row 8), so bring it into SrcA and let the add write
+        // the sum of the two partials into face 1's slot, row 16, without accumulating onto what is there.
+        TTI_MOVD2A(p_mov::DEST_NORM, 0, ADDR_MOD_5, p_movd2a::MOV_4_ROWS, face1_even);
+        if (face_r_dim == 8)
+        {
+            TTI_MOVD2A(p_mov::DEST_NORM, 4, ADDR_MOD_5, p_movd2a::MOV_4_ROWS, face1_even + 4);
+        }
+        TTI_ELWADD(p_elwise::CLR_AB, p_elwise::DEST_ACCUM_DIS, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, face1_slot);
     }
 }

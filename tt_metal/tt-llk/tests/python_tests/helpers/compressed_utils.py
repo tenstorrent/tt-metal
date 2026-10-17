@@ -29,7 +29,7 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
 from helpers.tilize_untilize import tilize, untilize
 from helpers.unpack import unpack_bfp2_b, unpack_bfp4_b, unpack_bfp8_b
-from helpers.utils import matmul_acc_atol, passed_test
+from helpers.utils import matmul_acc_atol, passed_test, tolerances
 from ttexalens.tt_exalens_lib import write_to_device
 
 # -----------------------------------------------------------------------------
@@ -504,6 +504,19 @@ def run_compressed(
     # accumulates the K-deep sum in a bf16 dest, so noise grows ~linearly per K-tile.
     acc_atol = matmul_acc_atol(golden, kt, DataFormat.Float16_b)
 
+    # Name the 16-column output faces outside the tolerance half of passed_test's gate (same
+    # atol/rtol isclose; PCC is whole-tensor), so a failure says which face of DEST it hit.
+    rtol = tolerances[DataFormat.Float16_b].rtol
+    res_faces = res_tensor.float().reshape(M, N // FACE_C_DIM, FACE_C_DIM)
+    golden_faces = golden.float().reshape(M, N // FACE_C_DIM, FACE_C_DIM)
+    bad_faces = {
+        f"face{c}": round((res_faces[:, c] - golden_faces[:, c]).abs().max().item(), 4)
+        for c in range(N // FACE_C_DIM)
+        if not torch.isclose(
+            res_faces[:, c], golden_faces[:, c], atol=acc_atol, rtol=rtol
+        ).all()
+    }
+
     assert passed_test(
         golden,
         res_tensor,
@@ -511,4 +524,7 @@ def run_compressed(
         custom_atol=acc_atol,
         custom_pcc_threshold=pcc_threshold,
         print_pcc=True,
-    ), f"compressed matmul failed for shape=(M={M}, K={K}, N={N})"
+    ), (
+        f"compressed matmul failed for shape=(M={M}, K={K}, N={N}); output faces outside "
+        f"atol={acc_atol:.4g}/rtol={rtol} (max abs err): {bad_faces}"
+    )

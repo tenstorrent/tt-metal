@@ -330,9 +330,9 @@ struct p_zeroacc
     constexpr static std::uint32_t CLR_ALL      = 0b011;
     constexpr static std::uint32_t CLR_HALF_32B = 0b110;
     constexpr static std::uint32_t CLR_ALL_32B  = 0b111;
-    // Value for the row-select operand -- `where` on Blackhole, `dst` on Wormhole -- that clears nothing,
-    // leaving the instruction a no-op apart from applying its AddrMode to the address counters.
-    constexpr static std::uint32_t WHERE_NOP = 0xff;
+    // There is no row select that makes the 16-row mode a no-op on Blackhole: every `where` value marks a
+    // face of the current dest half as zero (the Wormhole tree's WHERE_NOP lands on the half's last face).
+    // To apply an addrmod without touching dest, step the counters with INCRWC / SETRWC instead.
 };
 
 struct p_zerosrc
