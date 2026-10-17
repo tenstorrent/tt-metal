@@ -53,10 +53,12 @@ def test_experts_decode_kernel(seq_len, mesh_device, reset_seeds, request, monke
     vs the HF reference; the frame is the call size so each mesh row takes seq_len / rows tokens."""
     monkeypatch.setenv("GEMMA4_MOE_DECODE_KERNEL", "1")
     monkeypatch.setenv("GEMMA4_MOE_DECODE_FRAME", str(seq_len))
-    run_experts(1, seq_len, mesh_device, request)
+    # the kernel quantizes the expert weights to bfloat4_b: 0.98 vs the bf16 HF reference (the module's own
+    # golden test reports 0.991); the bf8 sparse path reaches 0.9993
+    run_experts(1, seq_len, mesh_device, request, pcc_threshold=0.97)
 
 
-def run_experts(batch_size, seq_len, mesh_device, request):
+def run_experts(batch_size, seq_len, mesh_device, request, pcc_threshold=None):
     """Test MoE experts against HF reference.
 
     1x1: Uses reduced experts (8) and bfloat16 weights for fast single-card test.
@@ -160,5 +162,7 @@ def run_experts(batch_size, seq_len, mesh_device, request):
         .float()[:seq_len]
     )
 
-    passing, pcc_msg = compare_tensors(tt_out_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
+    passing, pcc_msg = compare_tensors(
+        tt_out_torch, ref_output, pcc_threshold=pcc_threshold or get_pcc_threshold(request)
+    )
     assert passing, f"Experts (tp={tp}) PCC too low: {pcc_msg}"
