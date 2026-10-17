@@ -20,10 +20,9 @@ template <
 inline void configure_explicit_geometry(std::uint32_t ocb, std::uint32_t face_r_dim, std::uint32_t num_faces) {
     const std::uint32_t output_id = get_output_id(ocb);
     const std::uint32_t tile_c_dim = num_faces == 1 ? FACE_C_DIM : TILE_C_DIM;
-    // Packer partial-face flag: faces shorter than FACE_R_DIM rows (one exponent chunk per
-    // tile), the same rule as is_output_face_partial. Not the tile height: 16-row faces are
-    // full faces even when one or two of them make a 16-row tile.
-    const bool partial_face = face_r_dim < FACE_R_DIM;
+    // Packer partial-face flag by face height, not tile height: 16-row faces are full faces even
+    // when one or two of them make a 16-row tile.
+    const bool partial_face = is_face_partial(face_r_dim);
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
     SAN_HOOK(configure(
         StateVal<Operand<Exu::Pack>::DestWidth32>(DST_ACCUM_MODE),

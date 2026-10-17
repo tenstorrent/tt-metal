@@ -163,8 +163,12 @@ def test_tiny_tiles_bfloat_output(device, tile_h, tile_w, out_dtype, k):
     face height, not per tile height, or the 16x32 tile's mantissa rows land one chunk early.
 
     k=32 is a single K block: the packer is configured once for the output. k=64 with a one-tile
-    K block is two K blocks: the packer accumulates the partials in L1 and is reconfigured to the
-    block-float output for the last block, so the reconfigure path derives the flag as well.
+    K block is two K blocks: the packer accumulates the partials in L1 (packer_l1_acc, pinned below
+    so the case does not depend on the matmul default) and is reconfigured to the block-float output
+    for the last block, so the reconfigure path derives the flag as well. The pack MOP was built for
+    the Float16_b partials, so that reconfigure must also rebuild it for the block-float output; two
+    output blocks per core (out_block_h = per_core_M / 2) make the second block rebuild it again for
+    the partials.
     """
     torch.manual_seed(0)
     m, n = 64, 64
@@ -176,18 +180,30 @@ def test_tiny_tiles_bfloat_output(device, tile_h, tile_w, out_dtype, k):
     in1_t = ttnn.from_torch(
         in1, tile=ttnn.Tile((32, tile_w)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
-    out_block_h = m // tile_h
-    out_block_w = n // tile_w
+    per_core_M = m // tile_h
+    per_core_N = n // tile_w
+    out_block_h = per_core_M // 2
+    out_block_w = per_core_N
     out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(1, 1),
         in0_block_w=1,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
-        per_core_M=out_block_h,
-        per_core_N=out_block_w,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
         transpose_mcast=False,
         fused_activation=None,
+    )
+    # The matmul default for bfloat16 inputs, pinned: LoFi, no FP32 accumulation, packer L1 accumulation on.
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
     )
     output_t = ttnn.matmul(
         in0_t,
@@ -195,11 +211,12 @@ def test_tiny_tiles_bfloat_output(device, tile_h, tile_w, out_dtype, k):
         program_config=program_config,
         dtype=out_dtype,
         output_tile=ttnn.Tile((tile_h, tile_w)),
+        compute_kernel_config=compute_kernel_config,
     )
     output = ttnn.to_torch(output_t)
     golden = in0.float() @ in1.float()
     # bfloat4_b keeps a 3-bit mantissa per datum: PCC 0.986 against the host golden for k=32 and
-    # 0.977 for k=64 on every tile shape; the mislaid layout gives 0.02-0.05.
+    # 0.977 for k=64 on every tile shape; the mislaid layout gives 0.02-0.65.
     assert_numeric_metrics(
         golden,
         output,

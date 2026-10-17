@@ -116,7 +116,6 @@ inline void llk_pack_reconfig_data_format() {
         tile_size,
         DESC.shape.total_col_dim(),
         DESC.shape.total_num_faces(),
-        // partial_face: faces shorter than FACE_R_DIM rows (one exponent chunk per tile), the same rule as
-        // the id-free llk_pack_hw_configure. Folds at compile time; full-height faces give false.
-        DESC.shape.face_r_dim < ckernel::FACE_R_DIM);
+        // partial_face by face height (is_face_partial). Folds at compile time; full-height faces give false.
+        is_face_partial(DESC.shape.face_r_dim));
 }
