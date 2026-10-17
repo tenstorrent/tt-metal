@@ -80,8 +80,9 @@ inline void xmov_l1_to_l1_non_compact(const std::uint32_t src_addr_16B, const st
     SIZE_ADDR[0] = xfer_size_16B;
     DIR_ADDR[0]  = 3; // L1 to L1
     risc_compact_mov_instrn_u risc_mov_instrn;
-    // Bits 8 and up of a parametrised command carry the mover number (the firmware encodes it as
-    // command | mover << 8); zero selects mover 0, the one xmov_wait_till_idle polls.
+    // The documented command decode uses bits 0..7 (opcode) and bit 31 (compact / parametrised);
+    // bits 8..30 are not decoded for a parametrised command, so zero them to keep the stored word
+    // defined.
     risc_mov_instrn.val         = 0;
     risc_mov_instrn.f.instrn    = 0x40; // mov instruction
     risc_mov_instrn.f.no_params = 0;    // Use xmov inputs from param registers
@@ -104,8 +105,10 @@ inline void xmov_wait_till_idle()
     {
     }
     // The mover wrote L1 behind the RISC data cache (Blackhole; no-op on Wormhole), so drop the
-    // cache before the caller reads the destination.
+    // cache before the caller reads the destination, and keep the compiler from moving the
+    // caller's destination reads above the wait.
     invalidate_data_cache();
+    fence_compiler();
 }
 
 } // namespace ckernel

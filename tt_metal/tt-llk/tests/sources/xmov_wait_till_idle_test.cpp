@@ -8,7 +8,8 @@
 // Each iteration PACK writes a fresh pattern to the source buffer, issues an L1-to-L1 move with
 // `xmov_l1_to_l1_non_compact`, calls `xmov_wait_till_idle`, and then reads the destination back
 // (last word first, since the mover writes it last) and compares it with the pattern. An iteration
-// in which any destination word still holds the previous pattern is counted as stale.
+// in which any destination word does not yet hold the pattern of this iteration is counted as
+// stale.
 //
 // The source is read back after it is written, so the pattern is in L1 before the move is issued
 // and a stale destination cannot be blamed on the source. The RISC data cache is left as the
