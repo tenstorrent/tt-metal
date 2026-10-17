@@ -236,6 +236,7 @@ def test_eltwise_unary_typecast(
     ],
 )
 def test_eltwise_unary_typecast_uint16_to_fp16b_32bit_dest(formats: InputOutputFormat):
+    (formats,) = formats  # a single parametrize axis arrives as a 1-tuple
     # ttnn.typecast runs this pair in 16-bit Dest (the matrix above pins dest_acc
     # to No), but the compute API allows it with fp32_dest_acc_en too. In 32-bit
     # Dest the UInt16 datum occupies the low half of the 32-bit word, so a 16-bit
