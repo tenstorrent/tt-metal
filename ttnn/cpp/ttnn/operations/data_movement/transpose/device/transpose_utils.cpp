@@ -188,8 +188,8 @@ ShardSpec generate_transpose_shard_spec(
 }
 
 // The sharded row-major WH factory handles an input height that is not a tile multiple through the narrow-row
-// untilize, which packs H % TILE_HEIGHT datums per output row. Three shapes come out silently wrong on both
-// Wormhole and Blackhole (measured, bf16), so they are rejected here before any program is built:
+// untilize, which packs H % TILE_HEIGHT datums per output row. Four shape classes come out wrong on both Wormhole
+// and Blackhole (measured, bf16 and fp32), so they are rejected here before any program is built:
 // - H > TILE_HEIGHT: the kernel packs every tile column at H % TILE_HEIGHT datums, so each full tile column is
 //   clipped and the output row is ht * (H % TILE_HEIGHT) datums instead of H;
 // - a row wider than one face: 16-byte alignment is necessary but not sufficient (the LLK narrow-row
@@ -198,10 +198,15 @@ ShardSpec generate_transpose_shard_spec(
 //   the aligned page pitch, but Wormhole packs the rows at their byte width and Blackhole at a 16-byte-floored
 //   pitch (its per-row L1 advance is in 16-byte units; the LLK init asserts the same). The factory needs native
 //   sharding, which is L1-only, so the L1 alignment is the page pitch;
-// - W % TILE_WIDTH != 0 with W % TILE_WIDTH != H % TILE_HEIGHT: the factory sizes the output page as
-//   (W % TILE_WIDTH) * (H % TILE_HEIGHT) datums and pushes TILE_HEIGHT / (H % TILE_HEIGHT) pages per non-last tile
-//   row, i.e. TILE_HEIGHT * (W % TILE_WIDTH) datums, while the narrow pack writes TILE_HEIGHT * (H % TILE_HEIGHT)
-//   datums there, so the write pointer and the packed data only stay in step when the two remainders agree.
+// - W % TILE_WIDTH != 0: the narrow pack always writes TILE_HEIGHT rows of H % TILE_HEIGHT datums per tile
+//   column, but the factory sizes the sharded output page as (W % TILE_WIDTH) * (H % TILE_HEIGHT) datums and
+//   advances the last column by one page, i.e. W % TILE_WIDTH rows. Within a shard the next H x W slab
+//   overwrites the surplus rows, but the last slab writes them past the end of the output buffer (bf16
+//   [1, 4, 16, 48]: 512 bytes past a 6144-byte shard; measured through a canary buffer allocated right above
+//   the output). When the remainders differ the other columns' page counts disagree with the packed bytes as
+//   well (bf16 16x40: 4851 of 5120 datums wrong; 8x48 overfills the output CB and hangs), and when the tile
+//   does not hold a whole number of H % TILE_HEIGHT-row pages the full columns advance short too (fp32 H 12,
+//   W 44: 2 pages of 576 bytes advanced per 1536 bytes packed).
 void validate_sharded_rm_transpose_narrow_row_height(const Tensor& input_tensor) {
     const uint32_t logical_h = input_tensor.logical_shape()[-2];
     const uint32_t logical_w = input_tensor.logical_shape()[-1];
@@ -237,18 +242,18 @@ void validate_sharded_rm_transpose_narrow_row_height(const Tensor& input_tensor)
         alignment,
         tt::constants::TILE_HEIGHT);
     TT_FATAL(
-        w_remainder == 0 || w_remainder == row_num_datums,
-        "Sharded row-major transpose: W {} leaves {} datums past the last full tile while H {} leaves {}; the sharded "
-        "output pages are {} x {} datums and the narrow-row untilize writes {} x {} datums per tile row, so the two "
-        "only stay in step when the remainders agree. Pad W to a multiple of {} or use an interleaved input.",
+        w_remainder == 0,
+        "Sharded row-major transpose: W {} is not a multiple of {} while H {} is below one tile; the narrow-row "
+        "untilize packs {} rows of {} datums per tile column but the sharded output pages hold {} rows for the last "
+        "column, so every pack of that column writes {} bytes the output pages do not account for (past the end of "
+        "the output for the last slab of a shard). Pad W to a multiple of {} or use an interleaved input.",
         logical_w,
-        w_remainder,
+        tt::constants::TILE_WIDTH,
         logical_h,
-        row_num_datums,
-        w_remainder,
-        row_num_datums,
         tt::constants::TILE_HEIGHT,
         row_num_datums,
+        w_remainder,
+        (tt::constants::TILE_HEIGHT - w_remainder) * row_bytes,
         tt::constants::TILE_WIDTH);
 }
 

@@ -61,13 +61,11 @@ def _height_sharded_rm_input(device, h, w, dtype, c=None):
 @pytest.mark.parametrize(
     "dtype, h, w",
     [
-        # bf16: 16- and 32-byte rows; W a tile multiple, or W % 32 == H % 32 (the one partial-W case the
-        # factory's output paging keeps in step with the narrow pack).
+        # bf16: 16- and 32-byte rows over two and three tile columns (W a tile multiple: see the rejections below).
         (ttnn.bfloat16, 8, 64),
         (ttnn.bfloat16, 16, 64),
-        (ttnn.bfloat16, 8, 40),
-        (ttnn.bfloat16, 16, 48),
-        (ttnn.bfloat16, 16, 80),
+        (ttnn.bfloat16, 8, 96),
+        (ttnn.bfloat16, 16, 96),
         # fp32: 16-, 32-, 48- and 64-byte rows; 12 and 16 datums are only 16-byte multiples at 4 bytes a datum.
         (ttnn.float32, 4, 64),
         (ttnn.float32, 8, 64),
@@ -76,12 +74,16 @@ def _height_sharded_rm_input(device, h, w, dtype, c=None):
     ],
 )
 def test_transpose_hw_sharded_rm_narrow_row_aligned(device, transpose_op, dtype, h, w):
-    """Narrow output rows up to one face wide whose byte width is a multiple of 16 transpose exactly."""
+    """Narrow output rows up to one face wide whose byte width is a multiple of 16 transpose exactly (W a tile
+    multiple)."""
     if transpose_op is ttnn.experimental.quasar.transpose and dtype == ttnn.float32:
-        # The fork's sharded row-major factory binds no unpack mode for its fp32 output buffer, so program-spec
-        # validation rejects every fp32 input before the narrow-row path is reached; not a row-width matter.
+        # The fork's factory maps the compute kernel's output onto the output shard itself for H within one tile
+        # (ht <= 8), binding that fp32 DFB as both producer and consumer of the compute kernel with no unpack_modes
+        # entry; program-spec validation (ValidateUnpackModes: an fp32 DFB consumed with enable_32_bit_dest needs
+        # an explicit entry) rejects it before the narrow-row path is reached. A fork defect, not a row-width one.
         pytest.skip(
-            "ttnn.experimental.quasar.transpose rejects fp32 sharded row-major input in program-spec validation"
+            "ttnn.experimental.quasar.transpose binds its fp32 output shard as a consumed DFB without an unpack "
+            "mode; program-spec validation rejects it before the narrow-row path"
         )
     torch_input, tt_input = _height_sharded_rm_input(device, h, w, dtype)
     tt_output = transpose_op(tt_input, 2, 3)
@@ -105,16 +107,34 @@ def test_transpose_hw_sharded_rm_narrow_row_aligned(device, transpose_op, dtype,
         (ttnn.bfloat16, 48, 64, "every tile column of the output row would be clipped to 16 datums"),
         # fp32: 20 datums are 80 bytes, 16-byte aligned, and still wider than one face.
         (ttnn.float32, 20, 64, "wider than one face"),
-        # W % 32 != H % 32: the output pages ((W % 32) x (H % 32) datums) and the narrow pack fall out of step.
-        (ttnn.bfloat16, 16, 40, "only stay in step when the remainders agree"),
-        (ttnn.bfloat16, 8, 48, "only stay in step when the remainders agree"),
-        (ttnn.bfloat16, 16, 8, "only stay in step when the remainders agree"),
+        # W % 32 != 0: the last tile column is packed as 32 rows of H datums but paged as W % 32 rows, so every pack
+        # of that column writes (32 - W % 32) * H * 2 bytes the pages do not cover; for the last slab of a shard
+        # they land past the output buffer. The three shapes with W % 32 == H % 32 transpose exactly and still
+        # write past the buffer (measured through a canary buffer allocated right above the output).
+        (ttnn.bfloat16, 16, 40, "writes 768 bytes the output pages do not account for"),
+        (ttnn.bfloat16, 8, 48, "writes 256 bytes the output pages do not account for"),
+        (ttnn.bfloat16, 16, 8, "writes 768 bytes the output pages do not account for"),
+        (ttnn.bfloat16, 8, 40, "writes 384 bytes the output pages do not account for"),
+        (ttnn.bfloat16, 16, 48, "writes 512 bytes the output pages do not account for"),
+        (ttnn.bfloat16, 16, 80, "writes 512 bytes the output pages do not account for"),
     ],
 )
-def test_transpose_hw_sharded_rm_narrow_row_rejects_unsupported_heights(
+def test_transpose_hw_sharded_rm_narrow_row_rejects_unsupported_shapes(
     device, expect_error, transpose_op, dtype, h, w, message
 ):
     """Shapes the narrow-row untilize packs wrongly (on Wormhole and Blackhole) are rejected on the host."""
     _, tt_input = _height_sharded_rm_input(device, h, w, dtype)
     with expect_error(RuntimeError, message):
+        transpose_op(tt_input, 2, 3)
+
+
+@skip_on_quasar
+@pytest.mark.parametrize("transpose_op", TRANSPOSE_OPS)
+def test_transpose_hw_sharded_rm_narrow_row_rejects_fp32_partial_width(device, expect_error, transpose_op):
+    """fp32 H 12, W 44: besides the surplus rows of the last column, a 4096-byte tile holds 2.67 pages of 32 x 12
+    fp32 datums, so the factory advances the full columns by two 576-byte pages per 1536 bytes packed and the output
+    comes out wrong. 192 slabs make both the input shard (a tile multiple of elements) and the output shard (a whole
+    number of 576-byte pages) valid, so without the check the shape runs."""
+    _, tt_input = _height_sharded_rm_input(device, 12, 44, ttnn.float32, c=192)
+    with expect_error(RuntimeError, "writes 960 bytes the output pages do not account for"):
         transpose_op(tt_input, 2, 3)

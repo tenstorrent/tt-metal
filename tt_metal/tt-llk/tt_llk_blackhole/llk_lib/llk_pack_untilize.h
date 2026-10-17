@@ -186,10 +186,12 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
  * @note With narrow_row, keep full_ct_dim * row_num_datums at a multiple of 16 bytes in pack_dst_format: the per-row
  * L1 advance is in 16-byte units, so a narrower pitch cannot be expressed and the rows overlap. Checked by LLK_ASSERT.
  * @note With narrow_row and several blocks (block_ct_dim < full_ct_dim), keep row_num_datums == FACE_C_DIM and
- * num_faces == 1: the block column offset the wrapper adds to the L1 address is block_ct_dim face-column widths
- * (FACE_C_DIM datums per face column), which only equals block_ct_dim * row_num_datums for a one-face tile packed
- * at a full face width; any other narrow row lands its second block at the wrong column. Checked by static_assert
- * (row_num_datums) and LLK_ASSERT (num_faces).
+ * num_faces == 1: the block column offset the wrapper (llk_pack_untilize_impl) adds to the L1 address is
+ * block_ct_dim * (num_faces > 2 ? num_faces / 2 : num_faces) * FACE_C_DIM datums, i.e. block_ct_dim face-column
+ * widths for a one-face tile and twice that for two- and four-face tiles, while a narrow block is
+ * block_ct_dim * row_num_datums datums wide; the two agree only for a one-face tile at a full face width, and any
+ * other narrow row lands its second block at the wrong column. Checked by static_assert (row_num_datums) and
+ * LLK_ASSERT (num_faces).
  */
 template <
     std::uint32_t block_ct_dim,
@@ -213,15 +215,17 @@ inline void _llk_pack_untilize_init_(
         // face, so a wider row reads past the face and is packed wrong (measured: 24 and 28 bf16 datums). The
         // 16-byte row-width check below is necessary but not sufficient on its own.
         static_assert(row_num_datums <= FACE_C_DIM, "row_num_datums must be at most FACE_C_DIM for narrow_row packing");
-        // The wrapper's block column offset (llk_pack_untilize_impl) is block_ct_dim face-column widths, which equals
-        // block_ct_dim * row_num_datums only for a one-face tile packed at a full face width (num_faces checked
-        // below); a narrower row must span exactly one block.
+        // The wrapper's block column offset (llk_pack_untilize_impl) is
+        // block_ct_dim * (num_faces > 2 ? num_faces / 2 : num_faces) * FACE_C_DIM datums, which equals the narrow
+        // block width block_ct_dim * row_num_datums only for a one-face tile packed at a full face width (num_faces
+        // checked below); a narrower row must span exactly one block.
         static_assert(
             block_ct_dim == full_ct_dim || row_num_datums == FACE_C_DIM, "narrow_row packing with several blocks requires row_num_datums == FACE_C_DIM");
     }
     LLK_ASSERT(
         !narrow_row || block_ct_dim == full_ct_dim || num_faces == 1,
-        "narrow_row packing with several blocks requires num_faces == 1 (block column offset is in face-column widths)");
+        "narrow_row packing with several blocks requires num_faces == 1 (the block column offset is two face-column widths "
+        "per tile for two- and four-face tiles)");
 
     _llk_pack_untilize_configure_addrmod_();
 
