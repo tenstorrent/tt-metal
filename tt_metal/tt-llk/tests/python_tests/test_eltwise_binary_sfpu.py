@@ -457,14 +457,16 @@ def _logsigmoid_stimuli_spec():
 def _override_src_A(src_A, src_A_override, *, repeat):
     """Replace the generated operand buffer with an explicit one, cast to its dtype.
 
-    With ``repeat`` the override may hold any whole number of tile pairs and is tiled
-    across the buffer; without it the override must be the whole buffer.
+    With ``repeat`` the override is tiled across the buffer, so its length must evenly
+    divide the buffer length -- which admits a single element and rejects, say, three
+    tile pairs on an eight-pair buffer; without it the override must be the whole buffer.
     """
     override = src_A_override.to(src_A.dtype).flatten()
     if repeat:
         if src_A.numel() % override.numel() != 0:
             raise ValueError(
-                "SFPU binary override must contain a whole number of tile pairs"
+                "SFPU binary override length must evenly divide the buffer length "
+                f"({src_A.numel()} elements), got {override.numel()}"
             )
         return override.repeat(src_A.numel() // override.numel())
     if override.numel() != src_A.numel():
