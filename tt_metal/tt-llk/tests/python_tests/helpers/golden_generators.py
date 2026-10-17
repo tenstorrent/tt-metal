@@ -3467,8 +3467,10 @@ class UnarySFPUGolden:
 
     def _i1_bessel(self, x):
         # Modified Bessel I1; the kernel poly approx is valid on |x| <= ~3.75. Same torch
-        # limitation as _i0, with the sign kept: I1 is odd, so I1(+/-inf) = +/-inf. I1 stays
-        # outside SPECIALS_READY_OPS because the kernel saturates a non-finite input.
+        # limitation as _i0, with the sign kept: I1 is odd, so I1(+/-inf) = +/-inf. The
+        # kernel clamps its input at +/-92, past i1's own fp32 overflow point (~91.9), so
+        # every |x| >= 92 overflows to +/-inf as here; I1 stays outside SPECIALS_READY_OPS
+        # until the edge probe has confirmed the non-finite inputs on silicon.
         if math.isnan(x):
             return x
         if math.isinf(x):
