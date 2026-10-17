@@ -465,7 +465,7 @@ detail::ProgramImpl::ProgramImpl(ContextId context_id) :
     program_configs_.resize(programmable_core_count_);
     program_config_sizes_.resize(programmable_core_count_ + 2);
 
-    Inspector::program_created(MetalContext::instance(context_id_), this);
+    Inspector::program_created(this);
 }
 
 detail::ProgramImpl::~ProgramImpl() noexcept {
