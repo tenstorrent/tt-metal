@@ -26,6 +26,7 @@ from helpers.llk_params import (
     BroadcastType,
     DestSync,
     EltwiseBinaryReuseDestType,
+    MathFidelity,
     MathOperation,
     format_dict,
 )
@@ -43,15 +44,12 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+from test_eltwise_binary import _apply_dest_reuse_op
 
 # The probe drives the Wormhole/Blackhole llk_unpack_AB.h / llk_math_eltwise_binary.h MOPs.
 pytestmark = skip_for_quasar
 
 TILE_DIMENSIONS = [16, 32]
-
-
-def _apply(math_op, src_a, src_b):
-    return (src_a + src_b) if math_op == MathOperation.Elwadd else (src_a - src_b)
 
 
 def _broadcast_types(reuse_dest_type):
@@ -113,17 +111,25 @@ def test_partial_face_rows_untouched(math_op, reuse_dest_type, broadcast_type, f
     torch_format = format_dict[formats.output_format]
     a = src_A_tilized.to(torch_format).view(tile_cnt, tile_elements)
     b = src_B_tilized.to(torch_format).view(tile_cnt, tile_elements)
+
+    def apply_op(src_a, src_b):
+        # Same op and operand order as test_eltwise_binary's dest-reuse golden. ELWADD/ELWSUB
+        # have no fidelity phases, so the helper never touches the golden generator (None).
+        return _apply_dest_reuse_op(
+            math_op, MathFidelity.LoFi, formats, torch_format, None, src_a, src_b
+        )
+
     if reuse_dest_type == EltwiseBinaryReuseDestType.NONE:
         # One output tile per input tile.
-        golden = _apply(math_op, a, b)
+        golden = apply_op(a, b)
     else:
         # Seed DEST with tile 0, then fold the remaining tiles through DEST.
-        dest = _apply(math_op, a[0], b[0])
+        dest = apply_op(a[0], b[0])
         for i in range(1, tile_cnt):
             if reuse_dest_type == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
-                dest = _apply(math_op, dest, b[i])
+                dest = apply_op(dest, b[i])
             else:
-                dest = _apply(math_op, a[i], dest)
+                dest = apply_op(a[i], dest)
         golden = dest.view(1, tile_elements)
     output_tiles = golden.shape[0]
     # Face-major layout: tile t, face f, row r starts at ((t * num_faces + f) * face_r_dim + r) * FACE_C_DIM.
