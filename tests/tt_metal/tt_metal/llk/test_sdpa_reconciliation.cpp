@@ -5,8 +5,10 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -495,7 +497,8 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
     ASSERT_LT(std::sqrt(squared_error / squared_golden), 0.02);
 }
 
-Program make_sdpa_chunk_compile_program(const std::vector<std::uint32_t>& args) {
+Program make_sdpa_chunk_compile_program(
+    const std::vector<std::uint32_t>& args, const std::map<std::string, std::string>& defines = {}) {
     Program program = CreateProgram();
     const CoreCoord core{0, 0};
     for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_3, tt::CBIndex::c_16}) {
@@ -509,7 +512,8 @@ Program make_sdpa_chunk_compile_program(const std::vector<std::uint32_t>& args) 
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_chunk_compile_limits.cpp",
         core,
-        ComputeConfig{.math_fidelity = MathFidelity::LoFi, .fp32_dest_acc_en = false, .compile_args = args});
+        ComputeConfig{
+            .math_fidelity = MathFidelity::LoFi, .fp32_dest_acc_en = false, .compile_args = args, .defines = defines});
     return program;
 }
 
@@ -609,6 +613,19 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvCompileLimits) {
                                  << ", transpose_v=" << test[5]);
         auto program = make_sdpa_chunk_compile_program({2, 1, 1, test[0], test[1], test[2], test[3], test[4], test[5]});
         if (test[6]) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        }
+    }
+    // Direct reuse-dest-SrcB calls (SDPA_DIRECT_CALL in the kernel): the current argument
+    // lists compile; the legacy lists that carried a transpose argument must not compile
+    // instead of re-binding transpose as kt_dim.
+    for (const std::uint32_t mode : {1u, 2u, 3u, 4u}) {
+        SCOPED_TRACE(::testing::Message() << "direct_call=" << mode);
+        auto program =
+            make_sdpa_chunk_compile_program({2, 1, 1, 6, 2, 3, 2, 0, 0}, {{"SDPA_DIRECT_CALL", std::to_string(mode)}});
+        if (mode == 1) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {
             EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);

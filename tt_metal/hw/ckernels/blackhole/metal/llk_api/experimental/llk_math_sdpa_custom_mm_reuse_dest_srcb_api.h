@@ -20,7 +20,7 @@
 
 template <MathFidelity math_fidelity>
 inline void llk_math_sdpa_custom_mm_reuse_dest_srcb_init(
-    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t kt_dim = 1) {
+    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t kt_dim) {
     SAN_HOOK(unsupported());
     const std::uint32_t in0_id = get_operand_id(operandA);
     const std::uint32_t in1_id = get_operand_id(operandB);
@@ -36,8 +36,16 @@ inline void llk_math_sdpa_custom_mm_reuse_dest_srcb_init(
 
     // The LLK's transpose argument is unused: operand B is always used as stored.
     _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_<math_fidelity>(
-        in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, /*transpose=*/0, kt_dim);
+        in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, 0 /*transpose*/, kt_dim);
 }
+
+// Legacy (operandA, operandB, transpose) argument lists have the same arity as the current
+// (operandA, operandB, kt_dim) list. A bool transpose selects this deleted overload and an int
+// literal makes the call ambiguous, so neither re-binds as kt_dim. A transpose of operand B
+// is not implemented: see the transpose_v static_assert in compute_sdpa_chunk.
+template <MathFidelity math_fidelity>
+inline void llk_math_sdpa_custom_mm_reuse_dest_srcb_init(
+    const std::uint32_t operandA, const std::uint32_t operandB, bool transpose) = delete;
 
 // Runtime parameter signal_output:
 //   false (default): Full sdpa_custom_mm_reuse_dest_srcb - MVMULs + finalization
@@ -50,10 +58,23 @@ template <MathFidelity math_fidelity, std::uint32_t output_granularity, std::uin
 inline void llk_math_sdpa_custom_mm_reuse_dest_srcb(
     const std::uint32_t src_index,
     const std::uint32_t dst_index,
-    const std::uint32_t kt_dim = 1,
-    const std::uint32_t nt_dim = 1,
-    bool signal_output = false) {
+    const std::uint32_t kt_dim,
+    const std::uint32_t nt_dim,
+    bool signal_output) {
     SAN_HOOK(unsupported());
     _llk_math_sdpa_custom_mm_reuse_dest_srcb_<output_granularity, input_granularity>(
-        src_index, dst_index, /*transpose=*/false, kt_dim, nt_dim, signal_output);
+        src_index, dst_index, false /*transpose*/, kt_dim, nt_dim, signal_output);
 }
+
+// Legacy (src_index, dst_index, transpose, kt_dim, nt_dim) argument lists have the same arity
+// as the current (src_index, dst_index, kt_dim, nt_dim, signal_output) list. A bool transpose
+// selects this deleted overload and any other transpose makes the call ambiguous, so none
+// re-binds as kt_dim. A transpose of operand B is not implemented: see the transpose_v
+// static_assert in compute_sdpa_chunk.
+template <MathFidelity math_fidelity, std::uint32_t output_granularity, std::uint32_t input_granularity = 1>
+inline void llk_math_sdpa_custom_mm_reuse_dest_srcb(
+    const std::uint32_t src_index,
+    const std::uint32_t dst_index,
+    bool transpose,
+    const std::uint32_t kt_dim,
+    const std::uint32_t nt_dim) = delete;

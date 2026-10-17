@@ -35,19 +35,23 @@ namespace ckernel {
  *
  * | Argument       | Description                                                   | Type     | Valid Range                                      | Required |
  * |----------------|---------------------------------------------------------------|----------|--------------------------------------------------|----------|
- * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                          | False    |
- * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                          | False    |
- * | out_cb_id      | The identifier of the output circular buffer (CB)             | uint32_t | 0 to 31                                          | False    |
- * | kt_dim         | The inner dim of the input matrices in tiles                  | uint32_t | even number from 2 to 256                        | False    |
- * | nt_dim         | The number of SrcA tiles per K iteration                      | uint32_t | 1 to 16                                          | False    |
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                          | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                          | True     |
+ * | out_cb_id      | The identifier of the output circular buffer (CB)             | uint32_t | 0 to 31                                          | True     |
+ * | kt_dim         | The inner dim of the input matrices in tiles                  | uint32_t | even number from 2 to 256                        | True     |
+ * | nt_dim         | The number of SrcA tiles per K iteration                      | uint32_t | 1 to 16                                          | True     |
+ *
+ * All arguments are required and kt_dim/nt_dim take std::uint32_t: the former
+ * transpose argument sat between out_cb_id and kt_dim, so a legacy argument list
+ * must not compile instead of re-binding transpose as kt_dim.
  */
 // clang-format on
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
     std::uint32_t out_cb_id,
-    std::uint32_t kt_dim = 1,
-    std::uint32_t nt_dim = 1) {
+    std::uint32_t kt_dim,
+    std::uint32_t nt_dim) {
     // Intentionally swap in0 and in1 as operation specific hw_configures are deprecated
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(in0_cb_id, in1_cb_id, nt_dim)));
@@ -61,15 +65,29 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, ckernel::PackMode::Default>(out_cb_id)));
 }
 
+// Legacy (in0, in1, out, transpose, kt_dim) argument lists have the same arity as the
+// current (in0, in1, out, kt_dim, nt_dim) list. A bool transpose selects this deleted
+// overload and an int literal makes the call ambiguous, so neither re-binds as kt_dim.
+// A transpose of operand B is not implemented: see the transpose_v static_assert in
+// compute_sdpa_chunk.
+ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
+    std::uint32_t in0_cb_id, std::uint32_t in1_cb_id, std::uint32_t out_cb_id, bool transpose, std::uint32_t kt_dim) =
+    delete;
+
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
     std::uint32_t out_cb_id,
-    std::uint32_t kt_dim = 1,
-    std::uint32_t nt_dim = 1) {
+    std::uint32_t kt_dim,
+    std::uint32_t nt_dim) {
     UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(in0_cb_id, in1_cb_id, nt_dim)));
     MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, kt_dim)));
 }
+
+// Deleted for the same reason as the sdpa_custom_mm_reuse_dest_srcb_block_init overload above.
+ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
+    std::uint32_t in0_cb_id, std::uint32_t in1_cb_id, std::uint32_t out_cb_id, bool transpose, std::uint32_t kt_dim) =
+    delete;
 
 // clang-format off
 /**
@@ -103,8 +121,13 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  * | in1_tile_index | The index of the tile in block B from the second input CB               | uint32_t | Must be less than the size of the CB           | True     |
  * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
  * | kt_dim         | The inner dimension (K reduction dimension).                            | uint32_t | Must be equal to block A column dimension      | True     |
- * | in1_k_stride   | Stride between K tiles in in1 CB (default 1 for contiguous K tiles).    | uint32_t | >= 1                                           | False    |
- * | signal_output  | Signal SFPU semaphore for pipelining (default false).                   | bool     | true or false                                  | False    |
+ * | nt_dim         | The number of SrcA tiles per K iteration.                               | uint32_t | 1 to 16                                        | True     |
+ * | in1_k_stride   | Stride between K tiles in in1 CB (1 for contiguous K tiles).            | uint32_t | >= 1                                           | True     |
+ * | signal_output  | Signal SFPU semaphore for pipelining.                                   | bool     | true or false                                  | True     |
+ *
+ * All arguments are required and kt_dim/nt_dim/in1_k_stride take std::uint32_t: the
+ * former transpose argument sat between idst and kt_dim, so a legacy argument list
+ * must not compile instead of re-binding transpose as kt_dim.
  */
 // clang-format on
 template <std::uint32_t output_granularity, std::uint32_t input_granularity = 1>
@@ -117,13 +140,31 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block(
     std::uint32_t idst,
     std::uint32_t kt_dim,
     std::uint32_t nt_dim,
-    std::uint32_t in1_k_stride = 1,
-    bool signal_output = false) {
+    std::uint32_t in1_k_stride,
+    bool signal_output) {
     UNPACK((llk_unpack_A_sdpa_set_srcb_dummy_valid()));
     UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, nt_dim, in1_k_stride)));
     MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb<MATH_FIDELITY, output_granularity, input_granularity>(
         isrc, idst, kt_dim, nt_dim, signal_output)));
 }
+
+// Legacy (..., idst, transpose, kt_dim, nt_dim, in1_k_stride) argument lists have the same
+// arity as the current (..., idst, kt_dim, nt_dim, in1_k_stride, signal_output) list. A
+// bool transpose selects this deleted overload and any other transpose makes the call
+// ambiguous, so none re-binds as kt_dim. A transpose of operand B is not implemented: see
+// the transpose_v static_assert in compute_sdpa_chunk.
+template <std::uint32_t output_granularity, std::uint32_t input_granularity = 1>
+ALWI void sdpa_custom_mm_reuse_dest_srcb_block(
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t isrc,
+    std::uint32_t idst,
+    bool transpose,
+    std::uint32_t kt_dim,
+    std::uint32_t nt_dim,
+    std::uint32_t in1_k_stride) = delete;
 
 }  // namespace ckernel

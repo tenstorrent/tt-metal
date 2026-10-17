@@ -21,7 +21,7 @@
  *************************************************************************/
 
 __attribute__((always_inline)) inline void llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(
-    const std::uint32_t operand0, const std::uint32_t operand1, const std::uint32_t nt_dim = 1) {
+    const std::uint32_t operand0, const std::uint32_t operand1, const std::uint32_t nt_dim) {
     const std::uint32_t operandA_id = get_operand_id(operand1);
 
     const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
@@ -29,6 +29,13 @@ __attribute__((always_inline)) inline void llk_unpack_AB_sdpa_custom_mm_reuse_de
 
     _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_(nt_dim, unpA_face_r_dim, unpA_num_faces);
 }
+
+// Legacy (operand0, operand1, transpose) argument lists have the same arity as the current
+// (operand0, operand1, nt_dim) list. A bool transpose selects this deleted overload and an int
+// literal makes the call ambiguous, so neither re-binds as nt_dim. A transpose of operand B
+// is not implemented: see the transpose_v static_assert in compute_sdpa_chunk.
+inline void llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(
+    const std::uint32_t operand0, const std::uint32_t operand1, bool transpose) = delete;
 
 inline void llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
     const std::uint32_t operand0,
