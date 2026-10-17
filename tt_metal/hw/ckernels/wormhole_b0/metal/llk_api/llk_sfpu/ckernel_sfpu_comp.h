@@ -254,11 +254,12 @@ inline void calculate_nez_uint32() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
-    // Both operands are two's complement: the scalar comes from the host as such, and int32 tiles
-    // sit in Dest as such, so read the word as it is (I32 layout, SFPLOAD mod0 INT32) and compare.
-    // The Wormhole Default vInt layout is SM32 (SFPLOAD mod0 INT32_SM), whose sign-magnitude ->
-    // two's complement conversion has no encoding for -2^31 and turns it into 0; a software
-    // re-conversion of that word cannot bring INT32_MIN back, so eq/ne misclassified it.
+    // eq/ne is equality of the raw 32-bit word (int32 or uint32 bit pattern; ttnn routes both
+    // dtypes here) against the scalar the host passes as the same raw word, so read the Dest word
+    // as it is (I32 layout, SFPLOAD mod0 INT32) and compare. The Wormhole Default vInt layout is
+    // SM32 (SFPLOAD mod0 INT32_SM), whose sign-magnitude -> two's complement conversion has no
+    // encoding for the word 0x80000000 (INT32_MIN, or the uint32 2^31) and turns it into 0; a
+    // software re-conversion of that word cannot bring it back, so eq/ne misclassified it.
     vInt converted_scalar = scalar;
 
 #pragma GCC unroll 8
