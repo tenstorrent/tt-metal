@@ -19,18 +19,19 @@
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>; REDUCE_ROW is MAX only
  *         (SUM/AVG must use llk_unpack_AB_reduce_init / llk_unpack_AB_reduce).
  * @param scaler_operand: Circular buffer holding the scaler tile; its formats configure the SrcB unpacker.
+ * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (no default: both
+ *        arguments are required).
  * @note scaler_operand should also be the SrcB operand passed to hw_startup / reconfig_data_format_srcb (as reduce_init
  *       does via state_configure(icb, icb_scaler, ocb)), and llk_unpack_reduce must use a scaler CB with the same
  *       formats; on Blackhole the FPU takes the SrcB format from the unpacker output format this init programs, so
  *       a mismatch is not silently miscomputed here as it is on Wormhole.
  * @note Only the first FACE_C_DIM datums of face 0 of the scaler tile are used, for every face of the data tile;
  *       per-face or partial scaler tiles need llk_unpack_AB_reduce_init / llk_unpack_AB_reduce.
- * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose.
  * @note Pair with @ref llk_unpack_reduce for the per-tile unpack.
  */
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce_init(
-    const std::uint32_t scaler_operand, const std::uint32_t within_face_16x16_transpose = 0) {
+    const std::uint32_t scaler_operand, const std::uint32_t within_face_16x16_transpose) {
     SAN_HOOK(unsupported());
     const std::uint32_t scaler_operand_id = get_operand_id(scaler_operand);
 
