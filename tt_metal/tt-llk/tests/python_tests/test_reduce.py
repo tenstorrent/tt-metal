@@ -429,23 +429,28 @@ def test_reduce_bfp4_b(
 # REDUCE_SCALAR SUM/AVG with fp32 DEST accumulation must keep fp32 precision.
 #
 # The face pooling leaves 16 per-column partial sums in DEST as fp32 datums. The
-# kernel then moves that row through SrcB (MOVD2B, TRNSPSRCB) and SrcA (MOVB2A)
-# for the final GAPOOL; the Src registers hold 19-bit datums, so every partial
-# is truncated to TF32 mid-reduction and the final total is low by the sum of
-# those truncations. The default harness tolerance (5%) is far too loose to see
-# a 2^-10 relative error, so this case builds inputs whose per-column sums need
-# more mantissa bits than a Src datum carries, computes the exact total, and
-# gates on a couple of fp32 ulps.
+# pre-fix, FPU-only tail then moved that row through SrcB (MOVD2B, TRNSPSRCB)
+# and SrcA (MOVB2A) for the final GAPOOL; the Src registers hold 19-bit datums,
+# so every partial was truncated to TF32 mid-reduction and the total came out
+# low by the sum of those truncations. The default harness tolerance (5%) is far
+# too loose to see a 2^-10 relative error, so this case builds inputs whose
+# per-column sums need more mantissa bits than a Src datum carries, computes the
+# exact total, and gates on a couple of fp32 ulps.
 #
-# Inputs are 1.0 + k * 2^-7 (k in [0, 127]): exact in every Src format and in
-# every fidelity phase (SrcA contributes 4 + 5 mantissa bits over two phases),
-# so the face pooling into fp32 DEST is exact and the only inexact step on
-# shipped code is the Src round trip of the partial sums. The scaler is 1.0
-# (SUM) or an exact power of two (AVG, square tiles), so the final GAPOOL is
-# exact too and the device total must equal the fp64 total bit for bit.
+# Inputs are 1.0 + k * 2^-INPUT_MANTISSA_BITS: exact in every Src format and in
+# every fidelity phase (SrcA contributes 4 + 5 mantissa bits over two phases), so
+# the face pooling into fp32 DEST is exact and the only inexact step of the
+# FPU-only tail is the Src round trip of the partial sums. The scaler row is
+# either uniform (1.0 for SUM, an exact power of two for AVG on square tiles) or,
+# for SUM, a per-column weight pattern that is also exact; the final GAPOOL is
+# then exact too and the device total must equal the fp64 total bit for bit.
+# With four tiles reduced to one the sum is still exact in fp32, which checks
+# the accumulation carried across tiles at fp32 precision.
 # ---------------------------------------------------------------------------
 
 FP32_EXACT_TILES = [[32, 32], [16, 32], [16, 16]]
+INPUT_MANTISSA_BITS = 7
+FACE_C_DIM = 16
 
 
 def _fp32_exact_tiles_for_pool(pool_type):
@@ -453,6 +458,13 @@ def _fp32_exact_tiles_for_pool(pool_type):
     if pool_type == ReducePool.Average:
         return [t for t in FP32_EXACT_TILES if t[0] == t[1]]
     return FP32_EXACT_TILES
+
+
+def _fp32_exact_scaler_rows_for_pool(pool_type):
+    """The per-column pattern only makes sense where the test owns the scaler value (SUM)."""
+    if pool_type == ReducePool.Average:
+        return ["uniform"]
+    return ["uniform", "per_column"]
 
 
 def _truncate_significand(value: float, explicit_mantissa_bits: int) -> float:
@@ -468,43 +480,68 @@ def _truncate_significand(value: float, explicit_mantissa_bits: int) -> float:
 
 
 @parametrize(
-    formats=[InputOutputFormat(DataFormat.Float32, DataFormat.Float32)],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
+    num_tiles=[1, 4],
+    scaler_row=_fp32_exact_scaler_rows_for_pool,
     tile_dimensions=_fp32_exact_tiles_for_pool,
 )
-def test_reduce_scalar_fp32_exact(formats, pool_type, math_fidelity, tile_dimensions):
+def test_reduce_scalar_fp32_exact(
+    pool_type, math_fidelity, num_tiles, scaler_row, tile_dimensions
+):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     tile_shape = construct_tile_shape(tile_dimensions)
-    num_elements = tile_shape.total_tile_size()
+    elements_per_tile = tile_shape.total_tile_size()
+    num_elements = num_tiles * elements_per_tile
+    is_reduce_to_one = num_tiles > 1
 
     # Deterministic, unstructured k so the per-column sums carry non-zero low
     # mantissa bits (a structured pattern can make every column sum TF32-exact).
     generator = torch.Generator().manual_seed(0x5EED)
-    k = torch.randint(0, 128, (num_elements,), generator=generator)
-    src_A = (1.0 + k.to(torch.float64) * 2.0**-7).to(torch.float32)
+    k = torch.randint(0, 2**INPUT_MANTISSA_BITS, (num_elements,), generator=generator)
+    src_A = (1.0 + k.to(torch.float64) * 2.0**-INPUT_MANTISSA_BITS).to(torch.float32)
 
-    if pool_type == ReducePool.Average:
+    # Scaler row w[c] for the 16 columns of a face. The kernel applies it twice:
+    # the face pooling weights face row r by w[r] and the final pool weights the
+    # per-column partial sums by w[c]. The scaler tile holds w[c] in every row of
+    # every face (c = L1 index mod 16), so each face sees the same row.
+    if scaler_row == "per_column":
+        weights = [1.0 + (c % 2) * 0.5 for c in range(FACE_C_DIM)]
+    elif pool_type == ReducePool.Average:
         scaler = 1.0 / math.sqrt(tile_dimensions[0] * tile_dimensions[1])
+        assert math.frexp(scaler)[0] == 0.5, "scaler must be an exact power of two"
+        weights = [scaler] * FACE_C_DIM
     else:
-        scaler = 1.0
-    assert (
-        math.ldexp(math.frexp(scaler)[0], 0) == 0.5
-    ), "scaler must be an exact power of two"
-    src_B = torch.full((num_elements,), scaler, dtype=torch.float32)
+        weights = [1.0] * FACE_C_DIM
+    src_B = torch.tensor(
+        [weights[i % FACE_C_DIM] for i in range(elements_per_tile)], dtype=torch.float32
+    )
 
-    # Exact reference: the kernel applies the scaler in both GAPOOL stages.
+    # Exact reference: sum over every element of w[row] * w[col] * A, in fp64.
     values = src_A.to(torch.float64)
-    golden = float(values.sum().item()) * scaler * scaler
+    index = torch.arange(num_elements)
+    face_row = (index % (tile_shape.face_r_dim * FACE_C_DIM)) // FACE_C_DIM
+    face_col = index % FACE_C_DIM
+    w = torch.tensor(weights, dtype=torch.float64)
+    weighted = values * w[face_row] * w[face_col]
+    golden = float(weighted.sum().item())
 
-    # What the Src round trip does to the per-column partial sums on shipped
-    # code, for the assertion message only: each in-face column (L1 index mod
-    # 16) is pooled across all faces into one fp32 partial, every partial is
-    # then truncated to a Src datum (TF32 keeps 10 explicit mantissa bits; the
-    # multiplier ignores the last of them, so 9 are effective) before the final
-    # GAPOOL adds the 16 partials.
-    partials = [float(values[c::16].sum().item()) * scaler for c in range(16)]
+    # What the Src round trip of the pre-fix tail does, for the assertion message
+    # only: per tile, each in-face column is pooled into one fp32 partial, every
+    # partial is then truncated to a Src datum (TF32 keeps 10 explicit mantissa
+    # bits; the multiplier ignores the last of them, so 9 are effective) before
+    # the final GAPOOL weights and adds the 16 partials.
+    row_weighted = (values * w[face_row]).reshape(num_tiles, -1)
+    partials = [
+        [float(row_weighted[t, c::FACE_C_DIM].sum().item()) for c in range(FACE_C_DIM)]
+        for t in range(num_tiles)
+    ]
     modelled = {
-        bits: sum(_truncate_significand(p, bits) for p in partials) * scaler
+        bits: sum(
+            weights[c] * _truncate_significand(partials[t][c], bits)
+            for t in range(num_tiles)
+            for c in range(FACE_C_DIM)
+        )
         for bits in (10, 9, 7)
     }
 
@@ -522,10 +559,10 @@ def test_reduce_scalar_fp32_exact(formats, pool_type, math_fidelity, tile_dimens
                 tile_shape.face_r_dim,
                 tile_shape.face_c_dim,
             ),
-            INPUT_TILE_CNT(1),
+            INPUT_TILE_CNT(num_tiles),
             OUTPUT_TILE_CNT(1),
             NUM_TILES_IN_BLOCK(1),
-            REDUCE_TO_ONE(False),
+            REDUCE_TO_ONE(is_reduce_to_one),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
         ],
@@ -535,7 +572,7 @@ def test_reduce_scalar_fp32_exact(formats, pool_type, math_fidelity, tile_dimens
             src_B,
             formats.input_format,
             formats.output_format,
-            tile_count_A=1,
+            tile_count_A=num_tiles,
             tile_count_B=1,
             tile_count_res=1,
             num_faces=tile_shape.total_num_faces(),
@@ -547,7 +584,7 @@ def test_reduce_scalar_fp32_exact(formats, pool_type, math_fidelity, tile_dimens
     )
 
     res_from_L1 = configuration.run().result
-    assert len(res_from_L1) == num_elements, "Result tensor has the wrong length"
+    assert len(res_from_L1) == elements_per_tile, "Result tensor has the wrong length"
 
     device = float(res_from_L1[0])
     error = device - golden
@@ -555,7 +592,8 @@ def test_reduce_scalar_fp32_exact(formats, pool_type, math_fidelity, tile_dimens
     assert abs(error) <= tolerance, (
         f"REDUCE_SCALAR {pool_type.name} fp32 result lost precision: device={device!r} "
         f"golden={golden!r} error={error:+.6g} (allowed +-{tolerance:.3g}); "
-        f"Src round-trip model of the shipped tail (partials truncated to 9/10/7 "
+        f"Src round-trip model of the pre-fix FPU-only tail (partials truncated to 9/10/7 "
         f"explicit mantissa bits): {modelled[9]!r} / {modelled[10]!r} / {modelled[7]!r} "
-        f"(tile={tile_dimensions}, fidelity={math_fidelity.name})"
+        f"(tile={tile_dimensions}, num_tiles={num_tiles}, scaler_row={scaler_row}, "
+        f"fidelity={math_fidelity.name})"
     )
