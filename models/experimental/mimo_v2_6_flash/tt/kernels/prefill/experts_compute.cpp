@@ -6,7 +6,7 @@
 // writer to share with the team; once the team's 128 x tiles are in cb_x, gate and up of this core's two intermediate
 // columns (banks b0, b1) accumulated over the 128 x tiles in fp32 dest (dest 0..3 = gate b0, up b0, gate b1, up b1), h
 // = silu(gate) * up * routing weight (dest 0 and 2) -> cb_h_own; once the writer has gathered the team's 8 h tiles into
-// cb_h_all, this core's 32 output columns of down (4 per dest pass, K = the 8 h tiles) -> cb_y.
+// cb_h_all, this core's 32 output columns of down (4 adjacent per dest pass, K = the 8 h tiles), untilized -> cb_y.
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -17,6 +17,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tilize.h"
+#include "api/compute/pack_untilize.h"
 
 void kernel_main() {
     constexpr uint32_t cb_plan = get_compile_time_arg_val(0);
@@ -91,27 +92,27 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(cb_h_own, 2);
 
-            // down: this core's output columns (bank b0: cols b0 + 8m, bank b1: b1 + 8m), K = the team's 8 h tiles
+            // down: this core's 32 output columns, 8 passes of 4 adjacent ones (cb_wd is [pass][ikt][4]), K = the
+            // team's 8 h tiles; each pass untilized into cb_y (32 rows of 4 tiles' columns) for the writer's row writes
             cb_wait_front(cb_h_all, ikt);
             reconfig_data_format_srca(cb_rw, cb_wd);
             matmul_init(cb_h_all, cb_wd);
+            pack_untilize_dest_init<out_block>(cb_y);
             for (uint32_t p = 0; p < 2 * cols / out_block; p++) {
-                const uint32_t w0 = (p / (cols / out_block)) * wd_tiles + (p % (cols / out_block)) * out_block;
                 tile_regs_acquire();
                 for (uint32_t r = 0; r < ikt; r++) {
                     for (uint32_t c = 0; c < out_block; c++) {
-                        matmul_tiles(cb_h_all, cb_wd, r, w0 + r * cols + c, c);
+                        matmul_tiles(cb_h_all, cb_wd, r, (p * ikt + r) * out_block + c, c);
                     }
                 }
                 tile_regs_commit();
                 cb_reserve_back(cb_y, out_block);
                 tile_regs_wait();
-                for (uint32_t c = 0; c < out_block; c++) {
-                    pack_tile(c, cb_y);
-                }
+                pack_untilize_dest<out_block>(cb_y);
                 tile_regs_release();
                 cb_push_back(cb_y, out_block);
             }
+            pack_untilize_uninit(cb_y);
             cb_pop_front(cb_h_all, ikt);
         }
         cb_pop_front(cb_wgu, 2 * gu_tiles);

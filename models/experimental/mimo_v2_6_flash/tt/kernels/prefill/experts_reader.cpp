@@ -5,11 +5,11 @@
 // (a 4 KB page: [jobs, (expert, first group, groups) per job]) into cb_plan for the other two RISCs, then per job
 // this core's slice of the expert's BFP4 weights, kept in L1 for all of the job's groups: from DRAM banks b0 and
 // b1, the gate|up rows of w_gate_up (bank b holds gate column b and up column b of every expert, 256 contiguous
-// tiles [kt][gate, up]) and the w_down rows (bank b holds output columns b, b + 8, ...: 128 contiguous tiles
-// [kt][16]). Per group: the routing-weight tile, built here from the group's 32 bf16 weights (row-major, one per
-// packed row): row r holds weight r in every column; and this core's quarter of the group's x rows: for each packed
-// row its token's columns [quarter * kt / 4 * 32, ...) from the row-major x, row r at r * quarter_bytes (compute
-// tilizes them; the writer shares the tiles with the team).
+// tiles [kt][gate, up]) and its 32 down output columns (8 passes of 4 adjacent columns, one tile read each). Per group:
+// the routing-weight tile, built here from the group's 32 bf16 weights (row-major, one per packed row): row r holds
+// weight r in every column; and this core's quarter of the group's x rows: for each packed row its token's columns
+// [quarter * kt / 4 * 32, ...) from the row-major x, row r at r * quarter_bytes (compute tilizes them; the writer
+// shares the tiles with the team).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -30,6 +30,8 @@ void kernel_main() {
     constexpr uint32_t cb_tok = get_compile_time_arg_val(15);  // 128 B: one group's tokens
     constexpr uint32_t row_bytes = kt * 64;                    // a bf16 row of x
     constexpr uint32_t quarter_bytes = row_bytes / team_size;
+    constexpr uint32_t ikt = 8;     // intermediate tiles of a chip's expert slice
+    constexpr uint32_t passes = 8;  // down passes of 4 output tiles: 32 output columns per core
 
     const uint32_t plan_addr = get_arg_val<uint32_t>(0);
     const uint32_t team = get_arg_val<uint32_t>(1);
@@ -60,7 +62,6 @@ void kernel_main() {
     const uint32_t wrow_l1 = get_write_ptr(cb_wrow);
     volatile tt_l1_ptr uint16_t* wrow = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(wrow_l1);
     constexpr uint32_t gu_bytes = gu_tiles * w_tile_bytes;
-    constexpr uint32_t wd_bytes = wd_tiles * w_tile_bytes;
 
     for (uint32_t j = 0; j < jobs; j++) {
         const uint32_t expert = plan[1 + 3 * j];
@@ -74,8 +75,20 @@ void kernel_main() {
         noc_async_read(get_noc_addr_from_bank_id<true>(bank0, wgu_addr + expert * gu_bytes), gu_l1, gu_bytes);
         noc_async_read(
             get_noc_addr_from_bank_id<true>(bank1, wgu_addr + expert * gu_bytes), gu_l1 + gu_bytes, gu_bytes);
-        noc_async_read(get_noc_addr_from_bank_id<true>(bank0, wd_addr + expert * wd_bytes), wd_l1, wd_bytes);
-        noc_async_read(get_noc_addr_from_bank_id<true>(bank1, wd_addr + expert * wd_bytes), wd_l1 + wd_bytes, wd_bytes);
+        // down: output columns 16 j + 4 quarter + c (c < 4) for pass j: column n sits in bank n % 8 at bank page
+        // expert * 128 + kr * 16 + n / 8; landing as [j][kr][c]
+        uint32_t wd_dst = wd_l1;
+        for (uint32_t pj = 0; pj < passes; pj++) {
+            for (uint32_t kr = 0; kr < ikt; kr++) {
+                for (uint32_t c = 0; c < 4; c++) {
+                    const uint32_t n = 16 * pj + 4 * quarter + c;
+                    const uint32_t page = expert * wd_tiles + kr * 16 + n / 8;
+                    noc_async_read(
+                        get_noc_addr_from_bank_id<true>(n % 8, wd_addr + page * w_tile_bytes), wd_dst, w_tile_bytes);
+                    wd_dst += w_tile_bytes;
+                }
+            }
+        }
         noc_async_read_barrier();
         cb_push_back(cb_wgu, 2 * gu_tiles);
         cb_push_back(cb_wd, 2 * wd_tiles);

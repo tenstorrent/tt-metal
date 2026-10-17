@@ -7,7 +7,8 @@
 // The T x K top-k expert ids (uint32 tiles [T, 32], columns 0..K-1 valid) are counted per expert; expert e gets
 // ceil(count / 32) groups of 32 packed rows, experts in order. Pair (t, k), taken in (t, k) order, goes to the next
 // free row of its expert's groups: row_token[row] = t, row_weight[row] = its routing weight (bf16, round to nearest
-// even), pair_row[k * T + t] = row; rows nothing lands in keep token 0 and weight 0. The team plan splits every
+// even), row_dest[row] = k * T + t (the pair's row of the k-major
+// expert output); rows nothing lands in keep token 0, weight 0 and row_dest 0xFFFFFFFF. The team plan splits every
 // expert's groups into chunks of at most ceil(G / teams) and deals them out longest first (then higher expert, then
 // later chunk) to the least loaded team (ties: lower team), a chunk of n groups adding 2n + 1 to its team's load.
 // Plan page t: [jobs, (expert, first group, groups) per job].
@@ -25,7 +26,7 @@ void kernel_main() {
     constexpr uint32_t cb_state = get_compile_time_arg_val(7);    // count, cursor, first group: 3 x E words
     constexpr uint32_t cb_tokens = get_compile_time_arg_val(8);   // rows_max words
     constexpr uint32_t cb_weights = get_compile_time_arg_val(9);  // rows_max bf16
-    constexpr uint32_t cb_pairs = get_compile_time_arg_val(10);   // K * T words
+    constexpr uint32_t cb_dest = get_compile_time_arg_val(10);    // rows_max words
     constexpr uint32_t cb_plan = get_compile_time_arg_val(11);    // teams * plan_words words
     constexpr uint32_t tile_bytes = 4096;                         // uint32 / fp32 32 x 32
     constexpr uint32_t tile_rows = T / 32;
@@ -34,7 +35,7 @@ void kernel_main() {
     const uint32_t w_addr = get_arg_val<uint32_t>(1);
     const uint32_t tokens_addr = get_arg_val<uint32_t>(2);
     const uint32_t weights_addr = get_arg_val<uint32_t>(3);
-    const uint32_t pairs_addr = get_arg_val<uint32_t>(4);
+    const uint32_t dest_addr = get_arg_val<uint32_t>(4);
     const uint32_t plan_addr = get_arg_val<uint32_t>(5);
 
     const uint32_t ids_l1 = get_write_ptr(cb_tiles);
@@ -47,7 +48,7 @@ void kernel_main() {
     tt_l1_ptr uint32_t* row_token = reinterpret_cast<tt_l1_ptr uint32_t*>(get_write_ptr(cb_tokens));
     tt_l1_ptr uint32_t* row_weight2 = reinterpret_cast<tt_l1_ptr uint32_t*>(get_write_ptr(cb_weights));
     tt_l1_ptr uint16_t* row_weight = reinterpret_cast<tt_l1_ptr uint16_t*>(get_write_ptr(cb_weights));
-    tt_l1_ptr uint32_t* pair_row = reinterpret_cast<tt_l1_ptr uint32_t*>(get_write_ptr(cb_pairs));
+    tt_l1_ptr uint32_t* row_dest = reinterpret_cast<tt_l1_ptr uint32_t*>(get_write_ptr(cb_dest));
     tt_l1_ptr uint32_t* plan = reinterpret_cast<tt_l1_ptr uint32_t*>(get_write_ptr(cb_plan));
 
     for (uint32_t e = 0; e < E; e++) {
@@ -55,6 +56,7 @@ void kernel_main() {
     }
     for (uint32_t r = 0; r < rows_max; r++) {
         row_token[r] = 0;
+        row_dest[r] = 0xFFFFFFFF;
     }
     for (uint32_t r = 0; r < rows_max / 2; r++) {
         row_weight2[r] = 0;
@@ -97,7 +99,7 @@ void kernel_main() {
                 const uint32_t b = wbits[i];
                 row_token[row] = t;
                 row_weight[row] = static_cast<uint16_t>((b + 0x7FFF + ((b >> 16) & 1)) >> 16);
-                pair_row[k * T + t] = row;
+                row_dest[row] = k * T + t;
             }
         }
     }
@@ -142,11 +144,11 @@ void kernel_main() {
 
     const InterleavedAddrGen<true> tokens_gen = {.bank_base_address = tokens_addr, .page_size = rows_max * 4};
     const InterleavedAddrGen<true> weights_gen = {.bank_base_address = weights_addr, .page_size = rows_max * 2};
-    const InterleavedAddrGen<true> pairs_gen = {.bank_base_address = pairs_addr, .page_size = K * T * 4};
+    const InterleavedAddrGen<true> dest_gen = {.bank_base_address = dest_addr, .page_size = rows_max * 4};
     const InterleavedAddrGen<true> plan_gen = {.bank_base_address = plan_addr, .page_size = plan_words * 4};
     noc_async_write(get_write_ptr(cb_tokens), tokens_gen.get_noc_addr(0, 0), rows_max * 4);
     noc_async_write(get_write_ptr(cb_weights), weights_gen.get_noc_addr(0, 0), rows_max * 2);
-    noc_async_write(get_write_ptr(cb_pairs), pairs_gen.get_noc_addr(0, 0), K * T * 4);
+    noc_async_write(get_write_ptr(cb_dest), dest_gen.get_noc_addr(0, 0), rows_max * 4);
     for (uint32_t t = 0; t < teams; t++) {
         noc_async_write(get_write_ptr(cb_plan) + t * plan_words * 4, plan_gen.get_noc_addr(t, 0), plan_words * 4);
     }

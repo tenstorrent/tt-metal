@@ -6,10 +6,11 @@
 // once this core's x semaphore counts the team's 4 quarters cb_x is pushed to compute. A core only sends group n's
 // quarter after its down of group n - 1, which needed every team core's h of group n - 1, which each makes after it
 // is done with its cb_x for group n - 1, so cb_x is never overwritten while in use. Then this core's two h tiles
-// (intermediate columns b0 and b1) go to slots b0 and b1 of cb_h_all on every core of the team (itself included), then
-// one increment of each team core's semaphore; once this core's semaphore counts the team's 4 cores for this group,
-// cb_h_all is complete and pushed to compute. Then this core's 32 output tiles of the group's down rows go to the
-// packed output [G * 32, H].
+// (intermediate columns b0 and b1) go to slots b0 and b1 of cb_h_all on every core of the team (itself included),
+// then one increment of each team core's semaphore; once this core's semaphore counts the team's 4 cores for this
+// group, cb_h_all is complete and pushed to compute. Then this core's down output, 8 passes of 32 untilized rows of
+// 4 adjacent tile columns (16 j + 4 quarter ..): row r of the group goes to row row_dest[r] (k * T + t) of the
+// k-major row-major output [K * T, H]; padding rows (row_dest 0xFFFFFFFF) are skipped.
 //
 // cb_h_all holds two groups (8 tiles each) and every team core walks the same groups, so a sender's group n lands
 // in slot n % 2: a core that is still reading slot n % 2 for group n - 2 cannot be overwritten, because the sender
@@ -34,6 +35,8 @@ void kernel_main() {
     constexpr uint32_t x_sem_id = get_compile_time_arg_val(12);
     constexpr uint32_t quarter_tiles = nt / team_size;
     constexpr uint32_t quarter_bytes = quarter_tiles * 2048;
+    constexpr uint32_t cb_dst = get_compile_time_arg_val(13);  // 128 B: one group's row destinations
+    constexpr uint32_t seg_bytes = 4 * 64;                     // a row of one pass: 4 tiles of columns, bf16
     constexpr uint32_t out_block = 4;
     constexpr uint32_t tile_bytes = 2048;
 
@@ -46,6 +49,8 @@ void kernel_main() {
         peer_y[t] = get_arg_val<uint32_t>(4 + 2 * t);
     }
     const uint32_t quarter = get_arg_val<uint32_t>(3 + 2 * team_size);
+    const uint32_t dest_addr = get_arg_val<uint32_t>(4 + 2 * team_size);
+    const uint32_t dest_bytes = get_arg_val<uint32_t>(5 + 2 * team_size);  // the row destinations' page
 
     cb_wait_front(cb_plan, 1);
     volatile tt_l1_ptr uint32_t* plan = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_plan));
@@ -57,7 +62,10 @@ void kernel_main() {
     const uint32_t x_sem_addr = get_semaphore(x_sem_id);
     volatile tt_l1_ptr uint32_t* x_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(x_sem_addr);
     const uint32_t x_slot = get_write_ptr(cb_x) + quarter * quarter_bytes;
-    const InterleavedAddrGen<true> y_gen = {.bank_base_address = y_addr, .page_size = tile_bytes};
+    const InterleavedAddrGen<true> y_gen = {.bank_base_address = y_addr, .page_size = nt * 64};  // a row of H
+    const InterleavedAddrGen<true> dest_gen = {.bank_base_address = dest_addr, .page_size = dest_bytes};
+    const uint32_t dst_l1 = get_write_ptr(cb_dst);
+    volatile tt_l1_ptr uint32_t* row_dest = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_l1);
 
     uint32_t n = 0;  // groups done by this team
     for (uint32_t j = 0; j < jobs; j++) {
@@ -100,16 +108,18 @@ void kernel_main() {
             noc_semaphore_wait_min(sem, team_size * (n + 1));
             cb_push_back(cb_h_all, ikt);
 
-            // this core's down output tiles of group g: bank b0 columns, then bank b1 columns
+            // this core's down output rows of group g
+            noc_async_read(dest_gen.get_noc_addr(0, g * 128), dst_l1, 128);
+            noc_async_read_barrier();
             for (uint32_t p = 0; p < 2 * cols / out_block; p++) {
-                const uint32_t bank = p < cols / out_block ? bank0 : bank1;
-                const uint32_t m0 = (p % (cols / out_block)) * out_block;
+                const uint32_t col_bytes = (16 * p + 4 * quarter) * 64;
                 cb_wait_front(cb_y, out_block);
-                uint32_t src_y = get_read_ptr(cb_y);
-                for (uint32_t c = 0; c < out_block; c++) {
-                    const uint32_t col = bank + banks * (m0 + c);
-                    noc_async_write(src_y, y_gen.get_noc_addr(g * nt + col, 0), tile_bytes);
-                    src_y += tile_bytes;
+                const uint32_t src_y = get_read_ptr(cb_y);
+                for (uint32_t r = 0; r < 32; r++) {
+                    const uint32_t d = row_dest[r];
+                    if (d != 0xFFFFFFFF) {
+                        noc_async_write(src_y + r * seg_bytes, y_gen.get_noc_addr(d, col_bytes), seg_bytes);
+                    }
                 }
                 noc_async_write_barrier();
                 cb_pop_front(cb_y, out_block);
