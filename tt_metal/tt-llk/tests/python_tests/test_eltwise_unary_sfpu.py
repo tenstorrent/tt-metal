@@ -501,45 +501,37 @@ def test_eltwise_unary_sfpu_edges(
     )
 
 
-# sqrt_custom(+/-inf): strict assertions on two named values, outside the edge sweep because
-# the sweep cannot distinguish the two NaNs it would have to. Float32 -> Float32 at dest_acc=Yes,
-# because a 16-bit output narrows NaN to inf and could not show a regression.
-#
-# Wormhole and Blackhole only, and no Quasar expectation is recorded here: this test cannot run
-# there at all. The driver it builds pulls in llk_sfpu/ckernel_sfpu_mask.h, which has no Quasar
-# copy, and nothing collects it either -- it sits outside python_tests/quasar/, carries no
-# `quasar` marker, and is nightly, each of which the Quasar and ttsim runners exclude.
-#
-# The -inf half pins the NEGATIVE_INFINITY_SAFE instantiation, which calculate_sqrt_custom opts
-# into and nothing in production does. erfinv, asin and acos take the default and still get
-# -inf; that is deliberate and unreachable for them, and priced in ckernel_sfpu_sqrt_custom.h.
-@pytest.mark.nightly
-def test_sqrt_custom_infinity_regression(request):
-    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
-    dest_acc = DestAccumulation.Yes
-    input_dimensions = [32, 32]
+# One 32x32 tile, lane by lane. The regression tests below each pin a handful of named lanes,
+# which the parametrised sweeps' lattice comparison cannot do; this is their shared wiring, so
+# the three differ only in what they send and what they expect of it.
+_SINGLE_TILE_DIMENSIONS = [32, 32]
+_SINGLE_TILE_ELEMENTS = _SINGLE_TILE_DIMENSIONS[0] * _SINGLE_TILE_DIMENSIONS[1]
 
-    # If this ever goes False the pipeline stopped delivering +inf and the assertion below
-    # would pass vacuously -- fail loudly instead of quietly testing nothing.
-    assert specials_safe(formats.input_format, formats.output_format, dest_acc), (
-        "Float32 -> Float32 at dest_acc=Yes no longer carries specials; re-derive the "
-        "combination this regression test runs on before editing it."
-    )
 
-    num_elements = input_dimensions[0] * input_dimensions[1]
-    # A finite control alongside the probe: if the guard is ever widened to pass everything
-    # through, sqrt_custom(4.0) stops being 2.0 and this catches it in the same run.
-    src_A = torch.full((num_elements,), 4.0, dtype=torch.float32)
-    src_A[0] = float("inf")
-    src_A[1] = float("-inf")
-    src_B = torch.zeros(num_elements, dtype=torch.float32)
-    tile_cnt = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+def _run_single_tile_sfpu(
+    mathop: MathOperation,
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    src_A: torch.Tensor,
+    *,
+    unpack_to_dest: bool,
+    approx_mode: ApproximationMode = ApproximationMode.No,
+) -> torch.Tensor:
+    """Run *src_A*, one tile in *formats.input_format*, through the unary SFPU driver.
+
+    Returns the result tile in the output format's torch dtype, lanes in the input's order.
+    FastMode.No and CLAMP_NEGATIVE(True) are what the float sweeps run with; the second
+    operand the driver takes is an all-zero tile of the same dtype.
+    """
+    assert src_A.numel() == _SINGLE_TILE_ELEMENTS, src_A.shape
+    src_B = torch.zeros_like(src_A)
+    tile_cnt = 1
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
         dest_acc,
         formats,
-        input_dimensions,
+        _SINGLE_TILE_DIMENSIONS,
         TILE_DIMENSIONS,
         BlocksCalculationAlgorithm.Standard,
     )
@@ -548,11 +540,11 @@ def test_sqrt_custom_infinity_regression(request):
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
+            generate_input_dim(_SINGLE_TILE_DIMENSIONS, _SINGLE_TILE_DIMENSIONS),
+            APPROX_MODE(approx_mode),
             FAST_MODE(FastMode.No),
             CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=MathOperation.SqrtCustom),
+            MATH_OP(mathop=mathop),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),
@@ -570,10 +562,47 @@ def test_sqrt_custom_infinity_regression(request):
             tile_count_res=tile_cnt,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=True,
+        unpack_to_dest=unpack_to_dest,
     )
 
-    res = torch.tensor(configuration.run().result, dtype=torch.float32)
+    return torch.tensor(
+        configuration.run().result, dtype=format_dict[formats.output_format]
+    )
+
+
+# sqrt_custom(+/-inf): strict assertions on two named values, outside the edge sweep because
+# the sweep cannot distinguish the two NaNs it would have to. Float32 -> Float32 at dest_acc=Yes,
+# because a 16-bit output narrows NaN to inf and could not show a regression.
+#
+# Wormhole and Blackhole only, and no Quasar expectation is recorded here: this test cannot run
+# there at all. The driver it builds pulls in llk_sfpu/ckernel_sfpu_mask.h, which has no Quasar
+# copy, and nothing collects it either -- it sits outside python_tests/quasar/, carries no
+# `quasar` marker, and is nightly, each of which the Quasar and ttsim runners exclude.
+#
+# The -inf half pins the NEGATIVE_INFINITY_SAFE instantiation, which calculate_sqrt_custom opts
+# into and nothing in production does. erfinv, asin and acos take the default and still get
+# -inf; that is deliberate and unreachable for them, and priced in ckernel_sfpu_sqrt_custom.h.
+@pytest.mark.nightly
+def test_sqrt_custom_infinity_regression(request):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+
+    # If this ever goes False the pipeline stopped delivering +inf and the assertion below
+    # would pass vacuously -- fail loudly instead of quietly testing nothing.
+    assert specials_safe(formats.input_format, formats.output_format, dest_acc), (
+        "Float32 -> Float32 at dest_acc=Yes no longer carries specials; re-derive the "
+        "combination this regression test runs on before editing it."
+    )
+
+    # A finite control alongside the probe: if the guard is ever widened to pass everything
+    # through, sqrt_custom(4.0) stops being 2.0 and this catches it in the same run.
+    src_A = torch.full((_SINGLE_TILE_ELEMENTS,), 4.0, dtype=torch.float32)
+    src_A[0] = float("inf")
+    src_A[1] = float("-inf")
+
+    res = _run_single_tile_sfpu(
+        MathOperation.SqrtCustom, formats, dest_acc, src_A, unpack_to_dest=True
+    )
 
     assert res[0] == float("inf"), (
         f"sqrt_custom(+inf) returned {res[0]!r}, expected +inf. The non-finite guard in "
@@ -610,7 +639,6 @@ def test_sqrt_custom_infinity_regression(request):
 def test_tanh_derivative_lut_infinity_regression():
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     dest_acc = DestAccumulation.No
-    input_dimensions = [32, 32]
 
     _skip_bh_unless_fp32(formats, dest_acc)
 
@@ -621,59 +649,22 @@ def test_tanh_derivative_lut_infinity_regression():
         "combination this regression test runs on before editing it."
     )
 
-    num_elements = input_dimensions[0] * input_dimensions[1]
     # 0.0 on every lane around the probes: segment 0's intercept is 0, so the result there is
     # exactly 1.0, and a guard widened to move every lane onto the tail returns 0 instead.
-    src_A = torch.zeros(num_elements, dtype=format_dict[formats.input_format])
+    src_A = torch.zeros(_SINGLE_TILE_ELEMENTS, dtype=format_dict[formats.input_format])
     src_A[0] = float("inf")
     src_A[1] = float("-inf")
     # A finite tail input, exactly 0 from the (0, 1.0) tail pair with no guard involved: a 0 on
     # the probes is then the value the guard moves them onto, not a coincidence.
     src_A[2] = 4.0
-    src_B = torch.zeros(num_elements, dtype=format_dict[formats.input_format])
-    tile_cnt = 1
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+    res = _run_single_tile_sfpu(
+        MathOperation.TanhDerivativeLut,
+        formats,
         dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=MathOperation.TanhDerivativeLut),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
-        ),
-        dest_acc=dest_acc,
+        src_A,
         # A 16-bit input at dest_acc=No goes through the source registers, as in the sweep.
         unpack_to_dest=False,
-    )
-
-    res = torch.tensor(
-        configuration.run().result, dtype=format_dict[formats.output_format]
     ).float()
 
     for lane, probe in ((0, "+inf"), (1, "-inf")):
@@ -688,7 +679,7 @@ def test_tanh_derivative_lut_infinity_regression():
         "table's (0, 1.0) tail pair; the pair the guard relies on has moved."
     )
     # Exactly 1.0, not a tolerance: segment 0 is 0.93701171875 * |x| + 0 and 1 - 0^2 is exact.
-    assert torch.equal(res[3:], torch.ones(num_elements - 3)), (
+    assert torch.equal(res[3:], torch.ones(_SINGLE_TILE_ELEMENTS - 3)), (
         "tanh_derivative_lut(0.0) is no longer exactly 1.0 on the lanes around the probes "
         f"(values seen: {sorted(set(res[3:].tolist()))}); the guard's predicate has been "
         "widened to divert finite lanes."
@@ -725,7 +716,6 @@ def test_sqrt_family_negative_zero_regression(
 ):
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     dest_acc = DestAccumulation.Yes
-    input_dimensions = [32, 32]
 
     # If this ever goes False the pipeline stopped delivering -0.0 and the -0.0 assertion
     # below would really be testing +0.0 -- fail loudly rather than quietly testing nothing.
@@ -734,56 +724,17 @@ def test_sqrt_family_negative_zero_regression(
         "combination this regression test runs on before editing it."
     )
 
-    num_elements = input_dimensions[0] * input_dimensions[1]
     # -0.0 and +0.0 side by side, so a guard that sets a sign rather than carrying the input's
     # fails one of the two.
-    src_A = torch.full((num_elements,), 4.0, dtype=torch.float32)
+    src_A = torch.full((_SINGLE_TILE_ELEMENTS,), 4.0, dtype=torch.float32)
     src_A[0] = -0.0
     src_A[1] = 0.0
     # A negative that must stay NaN: catches the zero-magnitude arm being widened.
     src_A[2] = -1.0
-    src_B = torch.zeros(num_elements, dtype=torch.float32)
-    tile_cnt = 1
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
+    res = _run_single_tile_sfpu(
+        mathop, formats, dest_acc, src_A, unpack_to_dest=True, approx_mode=approx_mode
     )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(approx_mode),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=mathop),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
-    )
-
-    res = torch.tensor(configuration.run().result, dtype=torch.float32)
     bits = res.view(torch.int32)
     op = mathop.name.lower()
 
