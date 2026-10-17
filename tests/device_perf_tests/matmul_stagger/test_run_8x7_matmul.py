@@ -13,7 +13,13 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 
 # One id per program config below; test_matmul_stagger.py profiles each of them with and without the stagger.
+# These four have one inner (K) block per core, so every stagger type delays each core exactly once.
 MATMUL_VARIANTS = ["matmul1d_regular", "matmul1d_transposed", "matmul2d", "matmul_no_mcast"]
+# A 2D matmul with 41 inner blocks per core (K = 41 tiles, in0_block_w = 1) on the same 8x7 grid, for the
+# per-type block-count check: type 2 delays all 41 blocks, type 3 blocks 0, 20 and 40, type 1 block 0 only.
+# No other variant id is a substring of this one, so the profiler's `-k` selects exactly one of them.
+MULTI_BLOCK_MATMUL_VARIANT = "matmul_41_inner_blocks"
+MULTI_BLOCK_INNER_BLOCKS = 41
 
 
 # The host only adds the stagger defines on Wormhole B0 and Blackhole (compute_throttle_utils.cpp).
@@ -25,8 +31,20 @@ MATMUL_VARIANTS = ["matmul1d_regular", "matmul1d_transposed", "matmul2d", "matmu
         ("MatmulMultiCoreReuseMultiCast1DProgramConfig", 56 * 32, 1 * 32, 1 * 32, 1, 1, 1, 1, 1, False),
         ("MatmulMultiCoreReuseMultiCastProgramConfig", 7 * 32, 1 * 32, 8 * 32, 1, 1, 1, 1, 1, False),
         ("MatmulMultiCoreReuseProgramConfig", 56 * 32, 1 * 32, 56 * 32, 1, 56, 1, 1, 1, False),
+        (
+            "MatmulMultiCoreReuseMultiCastProgramConfig",
+            7 * 32,
+            MULTI_BLOCK_INNER_BLOCKS * 32,
+            8 * 32,
+            1,
+            1,
+            1,
+            1,
+            1,
+            False,
+        ),
     ),
-    ids=MATMUL_VARIANTS,
+    ids=MATMUL_VARIANTS + [MULTI_BLOCK_MATMUL_VARIANT],
 )
 def test_run_8x7_matmul(
     device,

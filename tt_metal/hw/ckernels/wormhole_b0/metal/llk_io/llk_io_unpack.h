@@ -19,7 +19,8 @@ using namespace ckernel;
 // Controlled by two defines the host adds to the matmul compute kernel from the
 // TT_MM_STAGGER_TYPE / TT_MM_STAGGER_VALUE environment variables (compute_throttle_utils.cpp):
 //   MM_STAGGER_TYPE  1 = delay before the first in1 block only, 2 = before every in1 block,
-//                    3 = before every stagger_period_in_blocks-th in1 block.
+//                    3 = before the first in1 block and every stagger_period_in_blocks-th after it
+//                    (the block counter is checked before it is incremented).
 //   MM_STAGGER_VALUE = delay in cycles.
 // Without the defines this function is empty.
 inline __attribute__((__always_inline__)) void apply_mm_stagger(int operand) {
@@ -49,7 +50,8 @@ inline __attribute__((__always_inline__)) void apply_mm_stagger(int operand) {
             wait(stagger_delay_in_cycles);
         }
     }
-#elif MM_STAGGER_TYPE == 3  // hybrid stagger - apply stagger every stagger_period_in_blocks-th block
+#elif MM_STAGGER_TYPE == 3  // hybrid stagger - delay the first in1 block and every stagger_period_in_blocks-th
+                            // after it (the counter is checked before the increment)
     constexpr int stagger_operand = 1;
     constexpr int stagger_delay_in_cycles = MM_STAGGER_VALUE;
     constexpr int stagger_period_in_blocks = 20;
