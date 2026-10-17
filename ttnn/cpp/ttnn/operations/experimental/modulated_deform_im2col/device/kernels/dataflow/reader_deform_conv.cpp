@@ -2,27 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader of the modulated deformable conv: the im2col reader's sampling, feeding a matmul that
-// runs in the same op, so the columns never leave L1.
+// Reader of the modulated deformable conv: the im2col reader's sampling, feeding a matmul that runs
+// in the same op, so the columns never leave L1.
 //
 // The kernel positions run outermost and each core's blocks of 32 output rows inside them, so one
-// position's slice of the weight, C x C_out, serves all of the core's blocks before the next
-// slice replaces it. Two copies of this kernel run per core, one on each data-movement RISC-V and
-// NoC: the first takes the core's even blocks and loads the weight slices and the bias, the second
-// the odd blocks and stages the geometry. Compute returns each block's geometry, every sample's
-// top-left corner page within its image and its four weights, to the copy that owns the block,
-// which keeps it for all kernel positions.
+// position's slice of the weight serves all of the core's blocks before the next slice replaces it.
+// An input wider than a chunk of channels takes one pass per chunk at each position, with that
+// chunk's rows of the weight; a pass reads only its chunk of each corner. Two copies of this
+// kernel run per core, one on each data-movement RISC-V and NoC: the first takes the core's even
+// blocks and loads the weight slices and the bias, the second the odd blocks and stages the
+// geometry. Compute returns each block's geometry, every sample's top-left corner page within its
+// image and its four weights, to the copy that owns the block, which keeps it for all kernel
+// positions.
 //
-// The geometry is staged during the first kernel position, two blocks ahead of compute, and
-// compute derives it just before the block's corners, as the im2col does. For each (kernel
-// position, block) a copy hands compute the four corners as one row-major block, 32 rows of
-// [corner 0 | corner 1 | corner 2 | corner 3] C-wide input sticks, landed by the NoC reads, and one
-// scalar tile per corner whose column 0 holds the row's weight. After the last position it writes
-// its blocks' C_out-wide output.
+// The geometry is staged during the first kernel position, two blocks ahead of compute, and compute
+// derives it just before the block's corners, as the im2col does. For each (pass, block) a copy
+// hands compute the four corners as one row-major block, 32 rows of [corner 0 | corner 1 | corner 2
+// | corner 3] chunk-wide input sticks, landed by the NoC reads, and one scalar tile per corner
+// whose column 0 holds the row's weight. After the last position it writes its blocks' C_out-wide
+// output.
 //
-// A corner is read only when its weight is nonzero. Every other row, and every row past the
-// block's end, is zeroed rather than skipped: a stale NaN or Inf times a zero scalar would still
-// be NaN. Offsets and mask logits saturate as in the im2col reader.
+// A corner is read only when its weight is nonzero. Every other row, and every row past the block's
+// end, is zeroed rather than skipped: a stale NaN or Inf times a zero scalar would still be NaN.
+// Offsets and mask logits saturate as in the im2col reader.
 
 #include <cstdint>
 
@@ -79,7 +81,8 @@ constexpr bool MCAST_WEIGHT = get_compile_time_arg_val(32);
 constexpr uint32_t MCAST_NUM_DESTS = get_compile_time_arg_val(33);
 constexpr uint32_t weight_sender_sem_id = get_compile_time_arg_val(34);
 constexpr uint32_t weight_receiver_sem_id = get_compile_time_arg_val(35);
-constexpr auto input_args = TensorAccessorArgs<36>();
+constexpr uint32_t CHUNK_TILES = get_compile_time_arg_val(36);  // input channels per pass / 32
+constexpr auto input_args = TensorAccessorArgs<37>();
 constexpr auto offset_mask_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<offset_mask_args.next_compile_time_args_offset()>();
 constexpr auto weight_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
@@ -87,11 +90,16 @@ constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t CHANNEL_TILES = C / 32;
+constexpr uint32_t CHUNKS = CHANNEL_TILES / CHUNK_TILES;
+constexpr uint32_t PASSES = kernel_positions * CHUNKS;
 constexpr uint32_t CORNERS = 4;
-constexpr uint32_t STICK_NBYTES = C * sizeof(uint16_t);  // the C channels read per corner
+constexpr uint32_t PAGE_NBYTES = C * sizeof(uint16_t);  // an input page's channels, as the band holds them
+constexpr uint32_t STICK_NBYTES = CHUNK_TILES * 32 * sizeof(uint16_t);  // the channels a pass reads per corner
 constexpr uint32_t BLOCK_ROW_NBYTES = CORNERS * STICK_NBYTES;
-// One kernel position's slice of the (K*K*C, C_out) weight: CHANNEL_TILES x OUT_TILES tiles.
-constexpr uint32_t WEIGHT_SLICE_TILES = CHANNEL_TILES * OUT_TILES;
+// One pass's slice of the (K*K*C, C_out) weight, CHUNK_TILES x OUT_TILES tiles. The weight's rows
+// run (kernel position, channel), so pass p's slice is the p-th run of WEIGHT_SLICE_TILES tiles.
+constexpr uint32_t WEIGHT_SLICE_TILES = CHUNK_TILES * OUT_TILES;
+static_assert(CHANNEL_TILES % CHUNK_TILES == 0, "the channels split into whole chunks");
 
 // Tiles of geom_in_cb, per block, and of geom_kernel_cb, once, in compute's order: fp32
 // [row, kernel position].
@@ -208,10 +216,10 @@ void kernel_main() {
         weight_receiver_sem.set(VALID);
     }
 
-    // Loads one kernel position's C x C_out slice of the weight, tiles in row-major order, in two
-    // steps so the wait for it can trail the position's corners: begin reserves the slot and, on a
-    // receiver, reports it free; finish reads or awaits the data and hands it to compute, which
-    // needs it only after the position's last block. Every core reserves the same slot in the same
+    // Loads one pass's slice of the weight, tiles in row-major order, in two steps so the wait for
+    // it can trail the pass's corners: begin reserves the slot and, on a receiver, reports it free;
+    // finish reads or awaits the data and hands it to compute, which needs it only after the pass's
+    // last block. Every core reserves the same slot in the same
     // order, so the slot's address matches on all of them.
     uint32_t weight_slot_l1 = 0;
     auto begin_weight_slice = [&]() {
@@ -222,9 +230,9 @@ void kernel_main() {
             weight_sender_sem.up(noc, sender_noc_x, sender_noc_y, 1);
         }
     };
-    auto finish_weight_slice = [&](uint32_t kk) {
+    auto finish_weight_slice = [&](uint32_t pass) {
         if (!MCAST_WEIGHT || is_weight_sender) {
-            const uint32_t first_tile = kk * WEIGHT_SLICE_TILES;
+            const uint32_t first_tile = pass * WEIGHT_SLICE_TILES;
             for (uint32_t t = 0; t < WEIGHT_SLICE_TILES; ++t) {
                 CoreLocalMem<uint32_t> dst(weight_slot_l1 + t * tile_nbytes);
                 noc.async_read(weight_acc, dst, tile_nbytes, {.page_id = first_tile + t}, {.offset_bytes = 0});
@@ -255,9 +263,9 @@ void kernel_main() {
         }
         conv_weight_cb.push_back(WEIGHT_SLICE_TILES);
     };
-    auto load_weight_slice = [&](uint32_t kk) {
+    auto load_weight_slice = [&](uint32_t pass) {
         begin_weight_slice();
-        finish_weight_slice(kk);
+        finish_weight_slice(pass);
     };
 
     uint32_t offset_mask_l1 = 0;
@@ -358,7 +366,7 @@ void kernel_main() {
         const uint32_t own_l1 = own.get_write_ptr();
         for (uint32_t p = begin; p < end; ++p) {
             CoreLocalMem<uint32_t> dst(own_l1 + (p - begin) * input_page_nbytes);
-            noc.async_read(input_acc, dst, STICK_NBYTES, {.page_id = band_first_page + p}, {.offset_bytes = 0});
+            noc.async_read(input_acc, dst, PAGE_NBYTES, {.page_id = band_first_page + p}, {.offset_bytes = 0});
         }
         noc.async_read_barrier();
         own.push_back(1);
@@ -374,10 +382,12 @@ void kernel_main() {
     uint32_t page[TILE_ROWS];
     uint16_t corner_weight[CORNERS][TILE_ROWS];
 
-    for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
+    for (uint32_t pass = 0; pass < PASSES; ++pass) {
+        const uint32_t kk = pass / CHUNKS;
+        const uint32_t chunk_offset = (pass % CHUNKS) * STICK_NBYTES;
         if constexpr (LOADS_WEIGHT) {
             // The next slice loads while compute works through this one; the CB holds two.
-            if (kk + 1 < kernel_positions) {
+            if (pass + 1 < PASSES) {
                 begin_weight_slice();
             }
         }
@@ -385,7 +395,7 @@ void kernel_main() {
         for (uint32_t j = BLOCK_PARITY; j < num_blocks; j += 2, ++slot) {
             const uint32_t block = start_block + j;
             const uint32_t valid_rows = valid_rows_of(block, num_rows);
-            if (kk == 0) {
+            if (pass == 0) {
                 if constexpr (STAGES_GEOMETRY) {
                     for (uint32_t ahead = j + 1; ahead <= j + 2 && ahead < num_blocks; ++ahead) {
                         if (ahead >= 2) {
@@ -428,7 +438,7 @@ void kernel_main() {
             }
             scalar_tile_cb.push_back(CORNERS);
 
-            corner_block_cb.reserve_back(CORNERS * CHANNEL_TILES);
+            corner_block_cb.reserve_back(CORNERS * CHUNK_TILES);
             const uint32_t block_l1 = corner_block_cb.get_write_ptr();
             for (uint32_t c = 0; c < CORNERS; ++c) {
                 const uint32_t corner_page_offset = (c >> 1) * IN_W + (c & 1);
@@ -443,22 +453,28 @@ void kernel_main() {
                     // Unsigned, so a page before the band also falls outside it.
                     const uint32_t in_band = page_id - band_first_page;
                     if (in_band < band_pages) {
-                        const uint32_t src_l1 = in_band < band_half
-                                                    ? band_a_l1 + in_band * input_page_nbytes
-                                                    : band_b_l1 + (in_band - band_half) * input_page_nbytes;
+                        const uint32_t src_l1 =
+                            chunk_offset + (in_band < band_half
+                                                ? band_a_l1 + in_band * input_page_nbytes
+                                                : band_b_l1 + (in_band - band_half) * input_page_nbytes);
                         noc_async_read(get_noc_addr(src_l1), dst_l1, STICK_NBYTES);
                     } else {
                         CoreLocalMem<uint32_t> dst(dst_l1);
-                        noc.async_read(input_acc, dst, STICK_NBYTES, {.page_id = page_id}, {.offset_bytes = 0});
+                        noc.async_read(
+                            input_acc,
+                            dst,
+                            STICK_NBYTES,
+                            {.page_id = page_id, .offset_bytes = chunk_offset},
+                            {.offset_bytes = 0});
                     }
                 }
             }
             noc.async_read_barrier();
-            corner_block_cb.push_back(CORNERS * CHANNEL_TILES);
+            corner_block_cb.push_back(CORNERS * CHUNK_TILES);
         }
         if constexpr (LOADS_WEIGHT) {
-            if (kk + 1 < kernel_positions) {
-                finish_weight_slice(kk + 1);
+            if (pass + 1 < PASSES) {
+                finish_weight_slice(pass + 1);
             }
         }
     }

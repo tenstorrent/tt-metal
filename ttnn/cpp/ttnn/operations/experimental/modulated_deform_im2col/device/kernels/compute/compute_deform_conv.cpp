@@ -5,14 +5,16 @@
 // Compute of the modulated deformable conv: the im2col's sampling and the conv's matmul in one
 // kernel, so the columns never leave L1.
 //
-// Kernel positions run outermost, the core's blocks of 32 output rows inside them. During the
-// first position each block's geometry is computed on the SFPU two blocks ahead of its corners, so
-// a reader gathers one block while compute works through another, and handed to the reader that
-// owns the block (even blocks to the first, odd to the second), which keeps it for every position. For each (position,
-// block) the reader's four corners are tilized on the unpacker, multiplied by their scalar columns and summed in L1,
-// which gives the block's C columns of that position; a matmul with the position's C x C_out slice of the weight then
-// accumulates into the block's output tiles, in fp32 dest within the position and in bfloat16 L1 across positions.
-// After the last position the bias is added, the ReLU applied, and the bfloat16 output handed to the block's reader.
+// Kernel positions run outermost, the core's blocks of 32 output rows inside them; an input wider
+// than one chunk of channels takes a pass per chunk at each position. During the first pass each
+// block's geometry is computed on the SFPU two blocks ahead of its corners, so a reader gathers one
+// block while compute works through another, and handed to the reader that owns the block (even
+// blocks to the first, odd to the second), which keeps it for every pass. For each (pass, block)
+// the reader's four corners are tilized on the unpacker, multiplied by their scalar columns and
+// summed in L1, which gives the block's columns of that pass's chunk; a matmul with the pass's
+// chunk x C_out slice of the weight then accumulates into the block's output tiles, in fp32 dest
+// within the pass and in bfloat16 L1 across passes. After the last pass the bias is added, the ReLU
+// applied, and the bfloat16 output handed to the block's reader.
 
 #include <cstdint>
 
@@ -39,7 +41,7 @@
 constexpr uint32_t corner_block_cb_index = get_compile_time_arg_val(0);
 constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(1);
 constexpr uint32_t output_cb_index = get_compile_time_arg_val(2);
-constexpr uint32_t channel_tiles = get_compile_time_arg_val(3);
+constexpr uint32_t channel_tiles = get_compile_time_arg_val(3);  // input channels per pass / 32
 constexpr uint32_t kernel_positions = get_compile_time_arg_val(4);
 constexpr uint32_t tiled_cb_index = get_compile_time_arg_val(5);
 constexpr uint32_t geom_in_cb_index = get_compile_time_arg_val(6);
@@ -66,6 +68,7 @@ constexpr uint32_t bias_cb_index = get_compile_time_arg_val(22);
 constexpr uint32_t OUT_TILES = get_compile_time_arg_val(23);  // C_out / 32
 constexpr bool HAS_BIAS = get_compile_time_arg_val(24);
 constexpr bool RELU = get_compile_time_arg_val(25);
+constexpr uint32_t CHUNKS = get_compile_time_arg_val(26);  // passes per kernel position
 constexpr uint32_t CORNERS = 4;
 constexpr uint32_t BLOCK_TILES = CORNERS * channel_tiles;
 constexpr uint32_t WEIGHT_SLICE_TILES = channel_tiles * OUT_TILES;
@@ -225,7 +228,7 @@ void kernel_main() {
         geometry_of(block);
     }
 
-    for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
+    for (uint32_t pass = 0; pass < kernel_positions * CHUNKS; ++pass) {
         conv_weight_cb.wait_front(WEIGHT_SLICE_TILES);
         for (uint32_t block = 0; block < num_blocks; ++block) {
             const bool odd = block & 1;
@@ -234,7 +237,7 @@ void kernel_main() {
             CircularBuffer corner_block_cb(corner_cb_index);
             CircularBuffer scalar_cb(scalar_index);
 
-            // The block's columns of this position: the four corners times their scalars, summed.
+            // The block's columns of this pass: the four corners times their scalars, summed.
             reconfig_data_format_srca(corner_cb_index);
             pack_reconfig_data_format(tiled_cb_index);
             pack_reconfig_l1_acc(0);
@@ -269,8 +272,8 @@ void kernel_main() {
             column_cb.push_back(channel_tiles);
             tiled_cb.pop_front(BLOCK_TILES);
 
-            // The block's output += its columns times the position's weight slice: fp32 in dest
-            // over the slice's C rows, and in L1 across positions; the first position overwrites.
+            // The block's output += its columns times the pass's weight slice: fp32 in dest over the
+            // slice's rows, and in L1 across passes; the first pass overwrites.
             column_cb.wait_front(channel_tiles);
             reconfig_data_format(conv_weight_cb_index, column_cb_index);
             pack_reconfig_data_format(acc_cb_index);
@@ -284,7 +287,7 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_reconfig_l1_acc(kk == 0 ? 0 : 1);
+                pack_reconfig_l1_acc(pass == 0 ? 0 : 1);
                 for (uint32_t i = 0; i < chunk; ++i) {
                     pack_tile<true>(i, acc_cb_index, block * OUT_TILES + n0 + i);
                 }
@@ -292,7 +295,7 @@ void kernel_main() {
             }
             pack_reconfig_l1_acc(0);
             column_cb.pop_front(channel_tiles);
-            if (kk == 0 && block + 2 < num_blocks) {
+            if (pass == 0 && block + 2 < num_blocks) {
                 geometry_of(block + 2);
             }
         }

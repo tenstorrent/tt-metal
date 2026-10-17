@@ -28,6 +28,10 @@ inline constexpr std::string_view kKernelDir =
 // free for what the op's program does not account for.
 constexpr uint32_t kMaxBandMargin = 4;
 constexpr uint32_t kBandL1Reserve = 32 * 1024;
+// The most input channels, in tiles, the fused conv samples and multiplies per pass. Wider inputs
+// take several passes per kernel position, each with its own slice of the weight, so the corner
+// blocks and the two weight slices stay within L1.
+constexpr uint32_t kConvMaxChunkTiles = 8;
 
 // Problem geometry, derived once from the tensor shapes and the conv attributes
 // and shared by validation, the output spec and the program factory.
