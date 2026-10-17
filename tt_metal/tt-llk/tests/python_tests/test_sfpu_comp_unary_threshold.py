@@ -9,11 +9,14 @@
 used to build the vFloat with ``vFloat s = value``, a numeric uint32 -> float conversion: 0x3F000000
 (0.5f) became 1056964608.0f, and no negative, infinite or NaN threshold could be expressed at all.
 
-Inputs and thresholds stay away from NaN and from a zero threshold, whose IEEE handling is a separate
-defect (item 3), so this test checks only how the threshold is decoded. The golden is torch's compare
-and the check is exact: every lane is 0.0 or 1.0.
+Inputs and thresholds stay away from NaN and from a zero threshold in the decode test, so it checks
+only how the threshold is decoded. The golden is torch's compare and the check is exact: every lane
+is 0.0 or 1.0.
 
-Blackhole only: the Wormhole copy of this header is not changed by the fix.
+The decode test is Blackhole only: the Wormhole copy of this header decodes the threshold the same
+way now, but its ordered compares are not covered by that fix. ``test_sfpu_comp_unary_eq_ne_ieee``
+runs on both architectures: eq/ne must follow IEEE equality, so -0.0 equals +0.0 and a NaN
+threshold equals nothing, including a datum with the same NaN bits.
 """
 
 import struct
@@ -40,9 +43,6 @@ from helpers.test_variant_parameters import (
     VECTOR_MODE,
     generate_input_dim,
 )
-
-# https://github.com/tenstorrent/tt-llk/issues/1701 item 16: only the Blackhole _calculate_comp_unary_ is fixed.
-pytestmark = blackhole_only
 
 ELEMENTS_PER_TILE = 1024
 
@@ -97,15 +97,9 @@ def _bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
-@parametrize(
-    formats=input_output_formats([DataFormat.Float32], same=True),
-    mathop=list(_TORCH_COMPARE),
-    threshold=THRESHOLDS,
-    dest_sync=[DestSync.Half],
-)
-def test_sfpu_comp_unary_threshold(formats, mathop, threshold, dest_sync):
-    reps = ELEMENTS_PER_TILE // len(INPUTS) + 1
-    src_A = torch.tensor((list(INPUTS) * reps)[:ELEMENTS_PER_TILE], dtype=torch.float32)
+def _run_threshold_compare(formats, mathop, threshold, dest_sync, inputs):
+    reps = ELEMENTS_PER_TILE // len(inputs) + 1
+    src_A = torch.tensor((list(inputs) * reps)[:ELEMENTS_PER_TILE], dtype=torch.float32)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.float32)
 
     configuration = TestConfig(
@@ -158,3 +152,31 @@ def test_sfpu_comp_unary_threshold(formats, mathop, threshold, dest_sync):
             f"  x = {x:.9g}: got {got}, expected {want}" for x, got, want in wrong
         )
     )
+
+
+# https://github.com/tenstorrent/tt-llk/issues/1701 item 16: only the Blackhole _calculate_comp_unary_ is fixed.
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    mathop=list(_TORCH_COMPARE),
+    threshold=THRESHOLDS,
+    dest_sync=[DestSync.Half],
+)
+def test_sfpu_comp_unary_threshold(formats, mathop, threshold, dest_sync):
+    _run_threshold_compare(formats, mathop, threshold, dest_sync, INPUTS)
+
+
+# IEEE equality: -0.0 == +0.0, and NaN != NaN even for identical bits. The inputs add a NaN
+# datum so a NaN threshold meets a lane with the same bit pattern (torch.eq -> 0, ne -> 1).
+IEEE_EQ_NE_INPUTS = INPUTS + (float("nan"),)
+IEEE_EQ_NE_THRESHOLDS = [0.0, -0.0, float("nan")]
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    mathop=[MathOperation.UnaryEq, MathOperation.UnaryNe],
+    threshold=IEEE_EQ_NE_THRESHOLDS,
+    dest_sync=[DestSync.Half],
+)
+def test_sfpu_comp_unary_eq_ne_ieee(formats, mathop, threshold, dest_sync):
+    _run_threshold_compare(formats, mathop, threshold, dest_sync, IEEE_EQ_NE_INPUTS)
