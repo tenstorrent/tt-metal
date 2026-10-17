@@ -18,6 +18,11 @@
 // Dest read for the Float32 source, as configure_pack programs it; clearing it with the mode makes the
 // packer read 16-bit halves and every datum comes out wrong.
 //
+// TensixPackReconfigAfterFp32DestAccReinit: an fp32 build disables dest-acc and, without a restore,
+// re-initializes with compute_kernel_hw_startup (and, on Blackhole, compute_kernel_hw_cleanup), then copies
+// into the 32-bit Dest, reconfigures the packer to Bfp8_b and packs. The re-init must end the override, or
+// the reconfig programs the stale 16-bit read and the tile comes out scrambled.
+//
 // TensixPackCfgAfterFp32DestAccRestore: the kernel reconfigures the packer to a Bfp8 (5-bit exponent)
 // output while Dest is in 16-bit mode, then restores the 32-bit Dest with restore_fp32_dest_acc<false>().
 // An fp32 -> Bfp8 pack needs the packer's exponent threshold, which zeroes datums below the 5-bit
@@ -29,7 +34,9 @@
 #include <gtest/gtest.h>
 #include <bit>
 #include <cstdint>
+#include <map>
 #include <random>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -61,6 +68,8 @@ static constexpr const char* kReconfigKernel =
     "tests/tt_metal/tt_metal/test_kernels/compute/pack_reconfig_fp32_dest_acc_toggle.cpp";
 static constexpr const char* kFloat32AfterDisableKernel =
     "tests/tt_metal/tt_metal/test_kernels/compute/pack_float32_after_fp32_dest_acc_disable.cpp";
+static constexpr const char* kReinitKernel =
+    "tests/tt_metal/tt_metal/test_kernels/compute/pack_reconfig_after_fp32_dest_acc_reinit.cpp";
 static constexpr const char* kCfgDumpKernel =
     "tests/tt_metal/tt_metal/test_kernels/compute/pack_cfg_dump_fp32_dest_acc_restore.cpp";
 // Exponent floor the packer applies to an 8-bit-exponent datum packed to a 5-bit-exponent format: the
@@ -76,7 +85,8 @@ static vector<std::uint32_t> run_fp32_dest_acc_kernel(
     tt::DataFormat in_fmt,
     tt::DataFormat startup_fmt,
     tt::DataFormat out_fmt,
-    const vector<std::uint32_t>& src_vec) {
+    const vector<std::uint32_t>& src_vec,
+    const std::map<std::string, std::string>& defines = {}) {
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
 
@@ -122,7 +132,7 @@ static vector<std::uint32_t> run_fp32_dest_acc_kernel(
         program,
         compute_kernel,
         core,
-        ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {kNumTiles}});
+        ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {kNumTiles}, .defines = defines});
 
     auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
@@ -260,6 +270,57 @@ TEST_F(LLKMeshDeviceFixture, TensixPackFloat32AfterFp32DestAccDisable) {
             << "Float32 pack after set_fp32_dest_acc<false>() of a tile written in the 32-bit Dest "
                "differs from the input in "
             << mismatches << " of " << input.size() << " datums";
+    }
+}
+
+TEST_F(LLKMeshDeviceFixture, TensixPackReconfigAfterFp32DestAccReinit) {
+    using namespace unit_tests::llk::pack_reconfig_fp32_dest_acc_toggle;
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "set_fp32_dest_acc is not supported on Quasar";
+    }
+
+    std::mt19937 rng(0x5EED);
+    vector<bfloat16> input(kNumTiles * kDatumsPerTile);
+    for (auto& datum : input) {
+        datum = bfloat16(static_cast<float>(rng() % kWholeNumberLimit));
+    }
+    const vector<std::uint32_t> src_vec = pack_bfloat16_vec_into_uint32_vec(input);
+
+    // compute_kernel_hw_cleanup exists on Blackhole only.
+    vector<int> reinit_with_cleanup = {0};
+    if (this->arch_ == ARCH::BLACKHOLE) {
+        reinit_with_cleanup.push_back(1);
+    }
+    for (int cleanup : reinit_with_cleanup) {
+        for (auto& device : this->devices_) {
+            const vector<std::uint32_t> result = run_fp32_dest_acc_kernel(
+                *device,
+                kReinitKernel,
+                /*fp32_dest_acc_en=*/true,
+                tt::DataFormat::Float16_b,
+                tt::DataFormat::Float16_b,
+                tt::DataFormat::Bfp8_b,
+                src_vec,
+                {{"REINIT_WITH_CLEANUP", std::to_string(cleanup)}});
+            const vector<float> output = unpack_bfp8_tiles_into_float_vec(
+                ttsl::make_const_span(result), /*row_major_output=*/false, /*is_exp_a=*/false);
+            ASSERT_EQ(output.size(), input.size());
+
+            std::uint32_t mismatches = 0;
+            for (std::size_t i = 0; i < input.size(); ++i) {
+                const float expected = static_cast<float>(input[i]);
+                if (output[i] != expected) {
+                    if (mismatches < 8) {
+                        log_error(tt::LogTest, "datum {}: expected {} got {}", i, expected, output[i]);
+                    }
+                    ++mismatches;
+                }
+            }
+            EXPECT_EQ(mismatches, 0u) << (cleanup ? "compute_kernel_hw_cleanup" : "compute_kernel_hw_startup")
+                                      << " after set_fp32_dest_acc<false>(): Bfp8_b pack after the reconfig differs "
+                                         "from the input in "
+                                      << mismatches << " of " << input.size() << " datums";
+        }
     }
 }
 

@@ -133,8 +133,9 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
  * Explicit-mode APIs (the id-free experimental pack_reconfig_data_format,
  * 2.0 pack_untilize, fast_tilize_uninit, copy_tile<is_fp32_dest_acc_en>, ...)
  * take the mode from their template argument and must be passed the
- * overridden mode. A compute_kernel_hw_startup inside the override returns
- * the packer to the kernel-wide mode.
+ * overridden mode. A compute_kernel_hw_startup (CB-id or id-free) or a
+ * compute_kernel_hw_cleanup inside the override ends it and returns the
+ * whole pipeline to the kernel-wide mode.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.
@@ -182,7 +183,8 @@ ALWI void enable_fp32_dest_acc(uint32_t ocb) {
  * experimental pack_reconfig_data_format, 2.0 pack_untilize,
  * fast_tilize_uninit, copy_tile<is_fp32_dest_acc_en>, ...) take the mode
  * from their template argument and must be passed the overridden mode. A
- * compute_kernel_hw_startup inside the override returns the packer to the
+ * compute_kernel_hw_startup (CB-id or id-free) or a compute_kernel_hw_cleanup
+ * inside the override ends it and returns the whole pipeline to the
  * kernel-wide mode.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not

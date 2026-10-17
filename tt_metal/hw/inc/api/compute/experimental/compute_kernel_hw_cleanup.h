@@ -27,6 +27,7 @@
 #endif
 #if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
 #include "experimental/llk_pack_hw_cleanup.h"
+#include "llk_pack_common_api.h"
 #endif
 
 // clang-format off
@@ -59,7 +60,8 @@
  * pack_init or pack_reconfig_data_format<true> before packing.
  *
  * Compile-time DST_ACCUM_MODE and DST_SYNC_MODE are preserved (re-asserted via the
- * hw_configure helpers, not changed to a different mode).
+ * hw_configure helpers, not changed to a different mode); a set_fp32_dest_acc
+ * override in effect ends here.
  */
 // clang-format on
 #if defined(ARCH_BLACKHOLE)
@@ -67,5 +69,7 @@ ALWI void compute_kernel_hw_cleanup() {
     UNPACK((_llk_unpack_hw_cleanup_canonical_<DST_ACCUM_MODE>()));
     MATH((_llk_math_hw_cleanup_canonical_<DST_SYNC_MODE, DST_ACCUM_MODE>()));
     PACK((_llk_pack_hw_cleanup_canonical_<DST_SYNC_MODE, DST_ACCUM_MODE>()));
+    // Cleanup re-asserts the kernel-wide DST_ACCUM_MODE, so a set_fp32_dest_acc override ends here.
+    PACK((llk_pack_clear_fp32_dest_acc_override()));
 }
 #endif

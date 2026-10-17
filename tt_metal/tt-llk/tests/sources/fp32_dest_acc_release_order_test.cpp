@@ -29,6 +29,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 namespace
 {
 constexpr std::uint32_t CYCLES = 256;
+// Sent by UNPACK and PACK once their last readback is done, so that MATH does not restore the dest-acc
+// fields under the final snapshot.
+constexpr std::uint32_t SNAPSHOTS_DONE = 0x534E4150; // 'SNAP'
 
 // Pack source formats PACK reports, one per handshake pair, so that every Read_32b_data / Read_int8
 // outcome of the MATH arm's derivation is read back: Int8 / UInt8 take the 8-bit integer read in a 16-bit
@@ -92,6 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     std::uint32_t enabled_seen  = 0;
     std::uint32_t disabled_seen = 0;
     released_side<ThreadId::UnpackThreadId>(enabled_seen, disabled_seen);
+    mailbox_write(ThreadId::MathThreadId, SNAPSHOTS_DONE);
 
     auto* res = reinterpret_cast<std::uint32_t*>(params.buffer_Res[0]);
     res[3]    = enabled_seen;
@@ -110,7 +114,12 @@ void run_kernel(RUNTIME_PARAMETERS)
         _llk_set_fp32_dest_acc_<ThreadId::MathThreadId>(false /*enable*/);
     }
 
-    // Leave the dest-acc fields as the variant was built.
+    // Wait until both released threads have taken their last readback, then leave the dest-acc fields as
+    // the variant was built.
+    const std::uint32_t unpack_done = mailbox_read(ThreadId::UnpackThreadId);
+    const std::uint32_t pack_done   = mailbox_read(ThreadId::PackThreadId);
+    static_cast<void>(unpack_done);
+    static_cast<void>(pack_done);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(is_fp32_dest_acc_en);
@@ -126,6 +135,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     std::uint32_t enabled_seen  = 0;
     std::uint32_t disabled_seen = 0;
     released_side<ThreadId::PackThreadId>(enabled_seen, disabled_seen);
+    mailbox_write(ThreadId::MathThreadId, SNAPSHOTS_DONE);
 
     auto* res = reinterpret_cast<std::uint32_t*>(params.buffer_Res[0]);
     res[0]    = CYCLES;

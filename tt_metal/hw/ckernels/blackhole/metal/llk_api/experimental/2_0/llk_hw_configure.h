@@ -73,6 +73,8 @@ inline void llk_math_hw_configure() {
 template <bool is_fp32_dest_acc_en, ckernel::experimental::LLKMemDescriptor OUT_DESC>
 inline void llk_pack_hw_configure() {
     SAN_HOOK(unsupported());
+    // A full configure programs the kernel-wide mode; a toggle's override ends here.
+    llk_pack_clear_fp32_dest_acc_override();
     constexpr std::uint8_t pack_src = ckernel::infer_pack_reg_fmt(OUT_DESC.format, is_fp32_dest_acc_en);
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
         pack_src,

@@ -29,6 +29,13 @@ inline bool pack_fp32_dest_acc_overridden = false;
 inline bool pack_fp32_dest_acc_live = false;
 
 /**
+ * End a mid-kernel dest-acc override on the pack thread: later llk_pack_reconfig_data_format calls program
+ * the kernel-wide mode again. Every path that reprograms the packer and ALU_ACC_CTRL for the kernel-wide
+ * mode calls it (llk_pack_hw_configure, the id-free llk_pack_hw_configure, compute_kernel_hw_cleanup).
+ */
+inline void llk_pack_clear_fp32_dest_acc_override() { pack_fp32_dest_acc_overridden = false; }
+
+/**
  * Program the packer fields that the dest-acc mode decides for an output, the way configure_pack<mode>
  * programs them: PCK_DEST_RD_CTRL Read_32b_data / Read_int8 (the toggle's derivation), the exponent
  * threshold (fp32 Dest -> BFP-A underflow workaround) and Round_10b_mant (fp32 Dest -> Float16 source).
@@ -86,7 +93,7 @@ inline void llk_pack_wait_fp32_dest_acc(const std::uint32_t ocb, const bool enab
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_hw_configure(std::uint32_t pack_output) {
     // A full configure programs the kernel-wide mode; a toggle's override ends here.
-    pack_fp32_dest_acc_overridden = false;
+    llk_pack_clear_fp32_dest_acc_override();
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
