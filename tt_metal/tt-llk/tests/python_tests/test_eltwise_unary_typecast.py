@@ -568,25 +568,35 @@ def test_eltwise_unary_typecast_fp32_to_fp16b_rounding_specials():
 def test_eltwise_unary_typecast_fp32_to_fp16b_nan_packs_to_inf():
     # The production pair (ttnn.typecast Float32 -> Float16_b, 32-bit Dest): the
     # packer narrows the rounded fp32 word in Dest to bfloat16 with its rounding
-    # conversion, which turns a NaN into an infinity (keeping the sign) and a minus
-    # zero into a positive zero. So a NaN input reaches L1 as +/-inf with the input
-    # sign, whatever payload the SFPU left in Dest. What the user must not see is
-    # the rounding carrying a NaN out of its exponent into a zero (0x7FFFFFFF ->
-    # 0x80000000), which packs as 0.0 instead of +inf.
+    # conversion, which turns a NaN into an infinity keeping the sign. So a NaN input
+    # reaches L1 as +/-inf with the input sign, whatever payload the SFPU left in
+    # Dest. What the user must not see is the rounding carrying a NaN out of its
+    # exponent into a zero (0x7FFFFFFF -> 0x80000000), which packs as a zero instead
+    # of +inf.
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b)
     bits, golden_bits, result = _run_fp32_to_fp16b_specials(formats)
+
+    # The same rounding conversion turns a minus zero into a positive zero: measured
+    # on Wormhole (and in its packer documentation), not measured on Blackhole, where
+    # this test has only been compiled. So the zero lanes are pinned to +0.0 on
+    # Wormhole and accept either zero elsewhere; the NaN lanes are pinned everywhere.
+    zero_sign_dropped = get_chip_architecture() == ChipArchitecture.WORMHOLE
 
     mismatches = []
     for b, g, r in zip(bits, golden_bits, result):
         got = struct.unpack("<I", struct.pack("<f", r))[0]
         if _fp32_is_nan(b):
             expected = (b & _FP32_SIGN_BIT) | _FP32_EXP_MASK
+            ok, shown = got == expected, hex(expected)
         elif g & ~_FP32_SIGN_BIT == 0:
-            expected = 0  # the packer's rounding conversion drops the sign of a zero
+            if zero_sign_dropped:
+                ok, shown = got == 0, hex(0)
+            else:
+                ok, shown = got & ~_FP32_SIGN_BIT == 0, "either zero"
         else:
-            expected = g
-        if got != expected:
-            mismatches.append((hex(b), hex(expected), hex(got)))
+            ok, shown = got == g, hex(g)
+        if not ok:
+            mismatches.append((hex(b), shown, hex(got)))
     assert not mismatches, (
         f"{len(mismatches)} fp32->bf16 L1 mismatches (input bits, expected, got): "
         f"{mismatches[:16]}"
