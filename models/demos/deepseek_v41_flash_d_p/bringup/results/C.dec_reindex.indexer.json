@@ -1,0 +1,53 @@
+{
+ "metrics": {
+  "auto_indexer_L24_chunk0_overlap": {
+   "t": "2026-10-17T12:21:16",
+   "value": 0.9954900741577148
+  },
+  "auto_indexer_L24_chunk0_worst_row": {
+   "t": "2026-10-17T12:21:16",
+   "value": 0.97265625
+  },
+  "auto_indexer_L24_layer0_overlap": {
+   "t": "2026-10-17T12:21:16",
+   "value": 0.9901714324951172
+  },
+  "auto_indexer_L24_layer0_worst_row": {
+   "t": "2026-10-17T12:21:16",
+   "value": 0.908203125
+  },
+  "auto_indexer_L24_vs_cpu_overlap": {
+   "t": "2026-10-17T12:21:15",
+   "value": 0.9886617660522461
+  },
+  "auto_indexer_L24_vs_cpu_worst_row": {
+   "t": "2026-10-17T12:21:15",
+   "value": 0.96875
+  },
+  "auto_indexer_L24_vs_golden_overlap": {
+   "t": "2026-10-17T12:21:15",
+   "value": 0.9693784713745117
+  },
+  "auto_indexer_L24_vs_golden_worst_row": {
+   "t": "2026-10-17T12:21:15",
+   "value": 0.921875
+  },
+  "det_indexer_L24": {
+   "t": "2026-10-17T12:21:16",
+   "value": 1.0
+  },
+  "err_indexer_L24": {
+   "t": "2026-10-17T12:21:15",
+   "value": 0.03062152862548828
+  },
+  "err_indexer_L24_limit": {
+   "t": "2026-10-17T12:21:15",
+   "value": 0.05766487121582031
+  },
+  "pcc_indexer_L24": {
+   "t": "2026-10-17T12:21:15",
+   "value": 0.9693784713745117
+  }
+ },
+ "task": "C.dec_reindex.indexer"
+}
