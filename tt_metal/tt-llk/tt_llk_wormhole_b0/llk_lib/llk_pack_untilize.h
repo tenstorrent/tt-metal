@@ -31,15 +31,18 @@ constexpr std::uint32_t PACK_UNTILIZE_L1_ADDRESS_UNIT_BYTES = 16;
  * @ref _llk_init_packer_dest_offset_registers_), so a 32x32 tile is covered by 4 packers x 8 runs and a
  * 16-row two-face tile by packers 0/1 x 8 runs. A single-face tile (num_faces == 1) enables packer 0 only,
  * so it has to walk all face_r_dim rows itself; tiles with fewer than FACE_R_DIM rows also use one packer
- * and need face_r_dim runs.
+ * and need face_r_dim runs. The diagonal layout places its packers differently and keeps its original
+ * TILE_R_DIM / 4 runs for 16-row faces; its single-face case has no caller and is not analysed here.
  *
+ * @tparam diagonal: True for the diagonal (per-packer split) layout.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @return Dest rows (MOP runs) per block.
  */
+template <bool diagonal = false>
 inline std::uint32_t _llk_pack_untilize_num_rows_(const std::uint32_t face_r_dim, const std::uint32_t num_faces)
 {
-    return (face_r_dim < FACE_R_DIM) ? face_r_dim : ((num_faces == 1) ? FACE_R_DIM : TILE_R_DIM / 4);
+    return (face_r_dim < FACE_R_DIM) ? face_r_dim : ((!diagonal && num_faces == 1) ? FACE_R_DIM : TILE_R_DIM / 4);
 }
 
 /**
@@ -143,12 +146,13 @@ template <
     std::uint32_t row_num_datums = TILE_C_DIM>
 inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
+    static_assert(!(diagonal && narrow_row), "diagonal untilize has no narrow-row layout");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const std::uint32_t PACKCNT              = diagonal ? (num_faces > 2 ? num_faces / 2 : num_faces) : ((face_r_dim < FACE_R_DIM) ? 1 : num_faces);
     constexpr std::uint32_t MEGAROW          = 1;
     constexpr std::uint32_t ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
     constexpr bool single_tile               = _llk_pack_untilize_single_tile_v<block_ct_dim, full_ct_dim, narrow_row>;
-    const std::uint32_t MOP_INNER_LOOP       = single_tile ? _llk_pack_untilize_num_rows_(face_r_dim, num_faces) : (diagonal ? FACE_R_DIM - 1 : 1);
+    const std::uint32_t MOP_INNER_LOOP       = single_tile ? _llk_pack_untilize_num_rows_<diagonal>(face_r_dim, num_faces) : (diagonal ? FACE_R_DIM - 1 : 1);
     constexpr std::uint32_t MOP_OUTER_LOOP   = single_tile ? 1 : block_ct_dim;
 
     if constexpr (diagonal)
@@ -244,6 +248,7 @@ template <
 inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+    static_assert(!(diagonal && narrow_row), "diagonal untilize has no narrow-row layout");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     // The one-tile narrow MOP walks the rows itself, so ADDR_MOD_0 has to step Y after every PACR.
@@ -349,11 +354,12 @@ inline void _llk_pack_untilize_(
     const std::uint32_t tile_dst_rt_offset = 0)
 {
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+    static_assert(!(diagonal && narrow_row), "diagonal untilize has no narrow-row layout");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal, row_num_datums>(address, pack_dst_format);
 
-    [[maybe_unused]] const std::uint32_t num_rows = _llk_pack_untilize_num_rows_(face_r_dim, num_faces);
+    [[maybe_unused]] const std::uint32_t num_rows = _llk_pack_untilize_num_rows_<diagonal>(face_r_dim, num_faces);
 
     if constexpr (_llk_pack_untilize_single_tile_v<block_ct_dim, full_ct_dim, narrow_row>)
     {
