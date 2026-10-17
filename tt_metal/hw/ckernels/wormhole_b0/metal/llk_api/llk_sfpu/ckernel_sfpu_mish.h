@@ -46,7 +46,10 @@ inline void calculate_mish() {
             if constexpr (APPROXIMATION_MODE) {
                 u = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(x);
             } else {
-                u = _sfpu_exp_accurate_<is_fp32_dest_acc_en>(x);
+                // u is an intermediate: keep it in fp32 regardless of the Dst format, otherwise its
+                // bf16 rounding (2^-9 relative) propagates ~1:1 into the result and flips the final
+                // rounding of a few percent of inputs. Only the result is rounded to bf16, below.
+                u = _sfpu_exp_accurate_<true>(x);
             }
 
             // numerator = u * (u + 2)
