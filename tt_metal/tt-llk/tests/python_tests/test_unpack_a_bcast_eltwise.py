@@ -41,6 +41,9 @@ from helpers.utils import passed_test
 MATHOPS = [MathOperation.Elwsub, MathOperation.Elwadd, MathOperation.Elwmul]
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 SRCA_REUSE_COUNTS = [2, 4, 8]
+# One fidelity for the golden and the MATH_FIDELITY template: Elwadd and Elwsub ignore it,
+# and Elwmul at LoFi is the single-phase multiply this test has always checked.
+FIDELITY = MathFidelity.LoFi
 INPUT_DIMENSIONS = [
     [128, 32],
     [32, 128],
@@ -162,7 +165,7 @@ def _run_unp_bcast_sub_sdpa(
         bcast_a,
         src_B[: input_tiles * 1024],
         formats.output_format,
-        MathFidelity.LoFi,
+        FIDELITY,
         formats.input_format,
         dest_acc=dest_acc,
     ).to(dtype=format_dict[formats.output_format])
@@ -179,7 +182,7 @@ def _run_unp_bcast_sub_sdpa(
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
-            MATH_FIDELITY(MathFidelity.LoFi),
+            MATH_FIDELITY(FIDELITY),
             MATH_OP(mathop=mathop),
             DEST_SYNC(),
         ],
