@@ -140,15 +140,24 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
 
     if constexpr ((eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB))
     {
-        ckernel_template tmp(outerloop, innerloop, eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc_to_dest, broadcast_type, addr_mod));
+        const std::uint32_t loop_op = eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc_to_dest, broadcast_type, addr_mod);
+        constexpr std::uint32_t end_op = TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB);
         if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
         {
-            // For partial faces (face_r_dim < 16), we still need to increment counters by MAX_FPU_ROWS
-            // to maintain proper 16-row spacing between faces
-            tmp.set_loop_op1(TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
+            // Partial faces: INCRWC as loop_op1 via the two-op constructor to keep 16-row face spacing.
+            // The two-op constructor also makes INCRWC the last-iteration instruction. With innerloop == 1
+            // the INCRWC slot is always the last inner iteration, so a one-op template with set_loop_op1
+            // would have that slot overridden by a second ELWADD/ELWSUB, which writes rows 8-15 of the face.
+            ckernel_template tmp(outerloop, innerloop, loop_op, TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
+            tmp.set_end_op(end_op);
+            tmp.program();
         }
-        tmp.set_end_op(TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
-        tmp.program();
+        else
+        {
+            ckernel_template tmp(outerloop, innerloop, loop_op);
+            tmp.set_end_op(end_op);
+            tmp.program();
+        }
     }
     else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL)
     {
@@ -382,14 +391,24 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
 
     if constexpr ((eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB))
     {
-        ckernel_template tmp(outerloop, innerloop, eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc_to_dest, broadcast_type, addr_mod));
+        const std::uint32_t loop_op = eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc_to_dest, broadcast_type, addr_mod);
+        constexpr std::uint32_t end_op = TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB);
         if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
         {
-            // For partial faces, still increment by MAX_FPU_ROWS to maintain 16-row face spacing
-            tmp.set_loop_op1(TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
+            // Partial faces: INCRWC as loop_op1 via the two-op constructor to keep 16-row face spacing.
+            // The two-op constructor also makes INCRWC the last-iteration instruction. With innerloop == 1
+            // the INCRWC slot is always the last inner iteration, so a one-op template with set_loop_op1
+            // would have that slot overridden by a second ELWADD/ELWSUB, which writes rows 8-15 of the face.
+            ckernel_template tmp(outerloop, innerloop, loop_op, TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
+            tmp.set_end_op(end_op);
+            tmp.program();
         }
-        tmp.set_end_op(TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
-        tmp.program();
+        else
+        {
+            ckernel_template tmp(outerloop, innerloop, loop_op);
+            tmp.set_end_op(end_op);
+            tmp.program();
+        }
     }
     else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL)
     {
@@ -463,17 +482,12 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_init_(const ckernel::Tensor
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param loop_count: Number of faces to process.
  * @param face_offset: Index of the first face within the tile.
- * @param clear_fp32_dst_acc: Clear the FP32 dest accumulator face when FP32 mode is enabled.
  * @param dst_index: Tile index into the destination register.
  * @param face_r_dim: Face row dimension; used for HiFi partial-face dest spacing.
  */
 template <bool is_fp32_dest_acc_en, EltwiseBinaryReuseDestType binary_reuse_dest, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void eltwise_binary_run_with_dest_reuse(
-    const std::uint32_t loop_count,
-    const std::uint32_t face_offset,
-    const bool clear_fp32_dst_acc,
-    const std::uint32_t dst_index,
-    const std::uint32_t face_r_dim)
+    const std::uint32_t loop_count, const std::uint32_t face_offset, const std::uint32_t dst_index, const std::uint32_t face_r_dim)
 {
     constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
 
@@ -482,9 +496,13 @@ inline void eltwise_binary_run_with_dest_reuse(
     {
         eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
 
-        // Clear DEST face-by-face when reusing dest as source
-        auto base_address = (get_dest_buffer_base() >> 4) + (dst_index << ((is_fp32_dest_acc_en && clear_fp32_dst_acc) ? 3 : 2));
-        if (is_fp32_dest_acc_en && clear_fp32_dst_acc)
+        // Clear DEST face-by-face when reusing dest as source. ZEROACC's 16-row mode clears a
+        // physical 16-row block; a 32-bit 16-row face fully occupies two consecutive blocks (each
+        // 32-bit row keeps both of its 16-bit halves inside one block: rows 0-7 fill the first
+        // block, rows 8-15 the second), so the clear geometry follows the DEST width alone.
+        // ELWMUL always accumulates into DEST, so the clear is never optional.
+        auto base_address = (get_dest_buffer_base() >> 4) + (dst_index << (is_fp32_dest_acc_en ? 3 : 2));
+        if constexpr (is_fp32_dest_acc_en)
         {
             const std::uint32_t face_offset_fp32 = face_offset * 2;
             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (face_offset_fp32 + n * 2));
@@ -518,7 +536,6 @@ inline void eltwise_binary_run_with_dest_reuse(
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB> (NONE is rejected)
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param dst_index: Tile index into the destination register
- * @param clear_fp32_dst_acc: Clears index in destination register when float32 mode is enabled
  * @note Call @ref _llk_math_eltwise_binary_with_dest_reuse_init_ with matching template args before this function.
  */
 template <
@@ -528,7 +545,7 @@ template <
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest>
-inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape tensor_shape, std::uint32_t dst_index, const bool clear_fp32_dst_acc)
+inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape tensor_shape, std::uint32_t dst_index)
 {
     static_assert(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE, "Use _llk_math_eltwise_binary_standard_ for no dest reuse");
     static_assert(
@@ -591,7 +608,7 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
                 // face_offset = face_row * num_faces_c_dim (position in face array)
                 const std::uint32_t face_offset = face_row * num_faces_c_dim;
                 eltwise_binary_run_with_dest_reuse<is_fp32_dest_acc_en, binary_reuse_dest, math_fidelity>(
-                    num_faces_c_dim, face_offset, clear_fp32_dst_acc, dst_index, tensor_shape.face_r_dim);
+                    num_faces_c_dim, face_offset, dst_index, tensor_shape.face_r_dim);
                 TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
             }
         }
@@ -599,7 +616,7 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
         {
             // NONE/ROW/SCALAR: process all faces with ZEROACC
             eltwise_binary_run_with_dest_reuse<is_fp32_dest_acc_en, binary_reuse_dest, math_fidelity>(
-                num_faces, 0 /*face_offset*/, clear_fp32_dst_acc, dst_index, tensor_shape.face_r_dim);
+                num_faces, 0 /*face_offset*/, dst_index, tensor_shape.face_r_dim);
 
             if constexpr (src_b_bcast_type == BroadcastType::SCALAR)
             {
@@ -664,7 +681,8 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape tensor_sha
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param dst_index: Tile index into the destination register
- * @param clear_fp32_dst_acc: Clears index in destination register when float32 mode is enabled
+ * @param clear_fp32_dst_acc: No effect on Wormhole. The dest-reuse ELWMUL face clear always follows
+ *        is_fp32_dest_acc_en; the parameter stays for the shared caller signature (Blackhole still honours it).
  * @note Call @ref _llk_math_eltwise_binary_init_ with matching template args before this function, and
  *       @ref _llk_math_eltwise_binary_uninit_ after it to restore modified state.
  * @note On the unpack thread, @ref _llk_unpack_AB_ must feed the operand tiles into SrcA/SrcB.
@@ -676,7 +694,7 @@ template <
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity                   = MathFidelity::LoFi,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void _llk_math_eltwise_binary_(const ckernel::TensorShape tensor_shape, std::uint32_t dst_index, const bool clear_fp32_dst_acc = false)
+inline void _llk_math_eltwise_binary_(const ckernel::TensorShape tensor_shape, std::uint32_t dst_index, [[maybe_unused]] const bool clear_fp32_dst_acc = false)
 {
     // Zero-flag leak guard. ELWADD/ELWMUL/ELWSUB honor ALU_ACC_CTRL_Zero_Flag_disabled_src; a prior
     // copy_init/datacopy op leaking PRESERVE here changes denormal Src results. eltwise_binary_init
@@ -693,7 +711,7 @@ inline void _llk_math_eltwise_binary_(const ckernel::TensorShape tensor_shape, s
     else
     {
         _llk_math_eltwise_binary_with_dest_reuse_<eltwise_binary_type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, math_fidelity, binary_reuse_dest>(
-            tensor_shape, dst_index, clear_fp32_dst_acc);
+            tensor_shape, dst_index);
     }
 }
 
