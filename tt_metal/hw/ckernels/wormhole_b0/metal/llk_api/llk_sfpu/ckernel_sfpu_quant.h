@@ -37,6 +37,9 @@ namespace ckernel::sfpu {
 // bodies, [16, 32) for the FPU MOP bodies that reduce, matmul and transpose_dest record).
 // Every body recorded here must stay below that split, otherwise an FPU op issued between a
 // quant-family init and its tile calls silently corrupts whichever body was recorded first.
+// Only ops that record at or above the split are safe in between: native reduce, matmul and
+// transpose_dest. reduce_block_max_row (reduce_custom.h) records its MOP bodies from slot 0
+// and overwrites every window here, so the quant-family init must be issued again after it.
 // The windows are sized by the int32 bodies, with DEQUANT pinned to the top of the SFPU
 // half: QUANT [0, 3), REQUANT [3, 7), DEQUANT [11, 16). The int8-output quant body [0, 7)
 // is longer than its window and runs into REQUANT's; that is harmless for the reason above

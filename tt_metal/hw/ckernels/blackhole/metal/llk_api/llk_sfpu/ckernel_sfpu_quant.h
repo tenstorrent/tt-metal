@@ -38,7 +38,10 @@ namespace ckernel::sfpu {
 // bodies, [16, 32) for the FPU MOP bodies that reduce, transpose_dest and the matmul
 // variants record). Every body recorded here must stay below that split, otherwise an FPU
 // op issued between a quant-family init and its tile calls silently corrupts whichever
-// body was recorded first. The windows are sized by the 2's-complement bodies - QUANT
+// body was recorded first. Only ops that record at or above the split are safe in between:
+// native reduce, transpose_dest and the matmul variants. reduce_block_max_row
+// (reduce_custom.h) records its MOP bodies from slot 0 and overwrites every window here, so
+// the quant-family init must be issued again after it. The windows are sized by the 2's-complement bodies - QUANT
 // [0, 4), REQUANT [4, 11), DEQUANT [11, 16) - which is exactly the 16 SFPU slots; every
 // other variant is no longer than its window (checked below). The two int8-output bodies
 // are longer than their windows and run into the next op's: QUANT int8-out [0, 6) into
@@ -84,8 +87,9 @@ constexpr std::uint32_t DEQUANT_REPLAY_SLOT = REQUANT_REPLAY_SLOT + REQUANT_REPL
 constexpr std::uint32_t DEQUANT_REPLAY_LEN_2S_COMP = 5;
 constexpr std::uint32_t DEQUANT_REPLAY_LEN_SIGN_MAGN = 3;
 
-// Every variant that is meant to be replayable without a re-init of the neighbouring op must
-// fit its own window (the int8-output bodies are exempt, see the banner).
+// Every non-spilling variant stays inside its own window. The two spilling bodies (QUANT
+// int8-out, REQUANT int8-out with int32 input) only have to stay below replay_buf_offset,
+// which their inits check.
 static_assert(QUANT_REPLAY_LEN_SIGN_MAGN <= QUANT_REPLAY_LEN_2S_COMP, "quant body does not fit the QUANT window");
 static_assert(
     REQUANT_REPLAY_LEN_SIGN_MAGN <= REQUANT_REPLAY_LEN_2S_COMP &&
