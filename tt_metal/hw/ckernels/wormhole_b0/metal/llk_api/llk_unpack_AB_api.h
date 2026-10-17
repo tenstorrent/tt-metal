@@ -20,10 +20,10 @@ inline void llk_unpack_AB_init(
 
     LLK_ASSERT(
         operand_unpacks_to_src(operandA_id),
-        "operand A is an unpack-to-Dest buffer; FPU operands must unpack to SrcA/SrcB");
+        "operand A (SrcA) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
     LLK_ASSERT(
         operand_unpacks_to_src(operandB_id),
-        "operand B is an unpack-to-Dest buffer; FPU operands must unpack to SrcA/SrcB");
+        "operand B (SrcB) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandA_id],
@@ -76,10 +76,10 @@ inline void llk_unpack_AB(
 
     LLK_ASSERT(
         operand_unpacks_to_src(operandA_id),
-        "operand A is an unpack-to-Dest buffer; FPU operands must unpack to SrcA/SrcB");
+        "operand A (SrcA) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
     LLK_ASSERT(
         operand_unpacks_to_src(operandB_id),
-        "operand B is an unpack-to-Dest buffer; FPU operands must unpack to SrcA/SrcB");
+        "operand B (SrcB) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandA_id],

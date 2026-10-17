@@ -25,15 +25,21 @@
  *************************************************************************/
 
 /**
- * Whether an operand unpacks into the SrcA/SrcB registers rather than straight into Dest.
+ * @brief Whether an operand's unpack destination format can be delivered into SrcA/SrcB.
  *
- * The host emits a Float32 unpack destination format only for a CB marked UnpackToDestMode::UnpackToDestFp32.
- * Such a buffer is unpacked into Dest (copy_tile and the other unpack_A paths) and cannot be an FPU operand:
- * the unpacker's SrcA/SrcB path has no FP32 output format. The SrcA/SrcB (AB, matmul) unpack entry points
+ * Float32, Int32 and UInt32 are the unpacker output formats that only the Dest path supports (the
+ * unpack_to_dest cases of is_unpacker_format_conversion_supported_dest in cunpack_common.h). The host
+ * assigns them to a CB marked UnpackToDestMode::UnpackToDestFp32, to every RawUInt32 CB, and to Int32 and
+ * UInt32 CBs. Such an operand is read with copy_tile and the other unpack_A paths and cannot feed the FPU,
+ * whose operands come from SrcA/SrcB; the SrcA/SrcB unpack entry points (AB, matmul, reduce, tilizeA_B)
  * assert this for both operands.
+ *
+ * @param operand_id: Operand id resolved with get_operand_id.
+ * @return True when the operand's unpack destination format has a SrcA/SrcB encoding.
  */
 inline bool operand_unpacks_to_src(const std::uint32_t operand_id) {
-    return unpack_dst_format[operand_id] != (std::uint32_t)DataFormat::Float32;
+    const DataFormat unpack_dst = static_cast<DataFormat>(unpack_dst_format[operand_id]);
+    return unpack_dst != DataFormat::Float32 && unpack_dst != DataFormat::Int32 && unpack_dst != DataFormat::UInt32;
 }
 
 /**
