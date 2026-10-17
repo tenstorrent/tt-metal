@@ -22,9 +22,15 @@ inline void tiled_prod_init() { math::_reset_counters_<p_setrwc::SET_ABD_F>(); }
 // another tile of the batch or to the packer's half.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_tiled_prod() {
+    // One call must cover exactly one tile: each step advances dst_reg by SFP_DESTREG_STRIDE Dest
+    // rows, so ITERATIONS steps have to span one face. Fewer leave part of the tile untouched,
+    // more walk into the next Dest tile.
+    static_assert(
+        ITERATIONS * static_cast<int>(SFP_DESTREG_STRIDE) == static_cast<int>(FACE_R_DIM),
+        "calculate_tiled_prod: ITERATIONS steps of SFP_DESTREG_STRIDE Dest rows must cover one face");
     vFloat result = 1.0f;
 #pragma GCC unroll 8
-    for (int d = 0; d < 4 * ITERATIONS; d++) {
+    for (int d = 0; d < static_cast<int>(TILE_NUM_FACES) * ITERATIONS; d++) {
         vFloat v = dst_reg[0];
         result *= v;
         dst_reg[0] = result;
