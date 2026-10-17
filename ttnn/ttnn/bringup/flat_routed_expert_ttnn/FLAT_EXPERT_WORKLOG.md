@@ -795,3 +795,9 @@ Full size, per-core kernel end times (device profiler), chip 0:
 So the fused program = the flat cores (slowed ~4% by the combine's traffic) + ~110-120 us of combine running alone
 after the experts (the last experts' rows: fabric hops, home accumulate, final writes). The drain is ~1/3 of the gap to
 the DRAM floor; the rest is the steady-state DRAM efficiency (87%).
+Follow-up (same day): the combine tail varies run to run - a second profiled trace (TT_METAL_PROFILER_SYNC=1) gives
+per-chip experts programs of 2357-2376 us (the unprofiled traced 2372) with tails of 17-51 us (chip 0 44-51), vs
+22-115 in the first. Cross-chip alignment from sync_device_info.csv (per-device frequency ratio + shift vs device 0)
+did not work either way round (offsets of seconds), so "start skew vs a fabric hot spot" is unresolved. Profile-log
+parsing note: traced replays reuse the run host id - key program instances by (device, run id, trace id, trace id
+counter). Conclusion: the tail is <= ~1/3 of the gap and noisy; the steady-state DRAM efficiency (87%) is the bulk.
