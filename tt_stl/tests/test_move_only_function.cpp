@@ -310,6 +310,40 @@ TEST(MoveOnlyFunctionTest, CPU_SwapExchangesTargets) {
     EXPECT_FALSE(static_cast<bool>(b));
 }
 
+TEST(MoveOnlyFunctionTest, CPU_SwapExchangesHeapTargets) {
+    struct Big {
+        std::uint64_t data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    };
+    move_only_function<std::uint64_t()> heap{[big = Big{}]() { return big.data[7]; }};
+    move_only_function<std::uint64_t()> inline_target{[]() { return std::uint64_t{3}; }};
+    heap.swap(inline_target);
+    EXPECT_EQ(heap(), 3u);
+    EXPECT_EQ(inline_target(), 8u);
+    swap(heap, inline_target);
+    EXPECT_EQ(heap(), 8u);
+    EXPECT_EQ(inline_target(), 3u);
+
+    move_only_function<std::uint64_t()> other_heap{[big = Big{}]() { return big.data[0]; }};
+    heap.swap(other_heap);
+    EXPECT_EQ(heap(), 1u);
+    EXPECT_EQ(other_heap(), 8u);
+}
+
+// Fits the buffer but not its alignment, so it goes to the heap: the allocation honours the alignment,
+// and a move keeps the target where it is.
+TEST(MoveOnlyFunctionTest, CPU_OverAlignedTargetGoesToHeap) {
+    struct alignas(16) OverAligned {
+        std::uintptr_t operator()() const { return reinterpret_cast<std::uintptr_t>(this); }
+    };
+    static_assert(sizeof(OverAligned) <= detail::kMoveOnlyFunctionInlineSize);
+    static_assert(alignof(OverAligned) > detail::kMoveOnlyFunctionInlineAlign);
+    move_only_function<std::uintptr_t()> constructed{OverAligned{}};
+    const std::uintptr_t address = constructed();
+    EXPECT_EQ(address % alignof(OverAligned), 0u);
+    move_only_function<std::uintptr_t()> moved{std::move(constructed)};
+    EXPECT_EQ(moved(), address);
+}
+
 TEST(MoveOnlyFunctionTest, CPU_InPlaceConstructsTarget) {
     struct Adder {
         int base;
