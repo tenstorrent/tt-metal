@@ -434,7 +434,7 @@ def test_capitals_one_by_one_equals_single_batch():
         "The capital of United Kingdom is",
         "The capital of Czech Republic is",
     ]
-    prompts = [tokenizer.encode(_to_capitals_chat_prompt(tokenizer, p)) for p in user_prompts]
+    prompts = [tokenizer.encode(_to_capitals_chat_prompt(tokenizer, p), add_special_tokens=False) for p in user_prompts]
 
     def decode(batch):
         return [tokenizer.decode(c, skip_special_tokens=False) for c in batch.completions]

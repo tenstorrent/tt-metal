@@ -131,7 +131,7 @@ class EvalCallback(TrainerCallback):
         saved = (sampler.temperature, sampler.completions_per_prompt)
         sampler.temperature, sampler.completions_per_prompt = 0.0, 1
         try:
-            batch = sampler.generate([tokenizer.encode(p) for p in self.prompts])
+            batch = sampler.generate([tokenizer.encode(p, add_special_tokens=False) for p in self.prompts])
         finally:
             sampler.temperature, sampler.completions_per_prompt = saved
         texts = [tokenizer.decode(c) for c in batch.completions]
