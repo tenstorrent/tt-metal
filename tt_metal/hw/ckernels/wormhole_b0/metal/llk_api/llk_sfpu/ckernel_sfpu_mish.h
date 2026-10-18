@@ -69,9 +69,8 @@ inline void calculate_mish() {
         }
         v_endif;
 
-        // Below -80, mish(x) equals x * exp(x) to fp32 precision, but u = exp(x) flushes to zero near -87.3 and
-        // mish(x) came out exactly 0 (#55711). Evaluate the tail as (x * exp(x/2)) * exp(x/2), which stays normal
-        // down to about -103.
+        // Below -80 mish(x) = x * exp(x) to fp32 precision; exp(x) alone flushes to zero near -87.3 (#55711),
+        // so the tail is (x * exp(x/2)) * exp(x/2).
         v_if(x < -80.0f) {
             sfpi::vFloat half_exp;
             if constexpr (APPROXIMATION_MODE) {
