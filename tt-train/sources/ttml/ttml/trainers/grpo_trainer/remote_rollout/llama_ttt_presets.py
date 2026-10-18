@@ -11,6 +11,7 @@ from typing import Any, Sequence, Tuple
 
 from transformers import AutoTokenizer
 
+from ttml.common.utils import resolve_pad_token_id
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
     MathFidelitySetting,
@@ -75,10 +76,4 @@ def llama_stop_and_pad(model_id: str) -> Tuple[Sequence[int], int]:
         tid = tok.convert_tokens_to_ids(s)
         if tid is not None and tid >= 0 and tid != tok.unk_token_id:
             ids.add(int(tid))
-    pad = tok.pad_token_id if tok.pad_token_id is not None else tok.eos_token_id
-    if pad is None:
-        raise RuntimeError(
-            f"llama_stop_and_pad({model_id!r}): tokenizer exposes neither "
-            "pad_token_id nor eos_token_id; cannot derive a filler id."
-        )
-    return sorted(ids), int(pad)
+    return sorted(ids), resolve_pad_token_id(tok)
