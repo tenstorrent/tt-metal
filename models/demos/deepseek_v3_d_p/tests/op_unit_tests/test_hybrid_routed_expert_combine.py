@@ -291,7 +291,7 @@ def _spread_indices_from_counts(counts, chips, seq, topk):
     return rows.reshape(chips, seq, topk)
 
 
-def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=False):
+def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=False, combine_fp8_scale_block=0):
     """One seq-640 layer of `model_id` on `mesh_device`: its inputs, and the three ways to run it.
 
     `dg0_only` routes every token to dispatch group 0 alone, at that group's top-k share, so the other groups
@@ -501,6 +501,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             num_links=num_links,
             topology=per_axis_topology(device_params["fabric_config"])[0],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            fp8_scale_block=combine_fp8_scale_block,
         )
 
     # The overlap's fwd_arrived, final_arrived, expert_go and launch_credit outlive every launch -- neighbouring
@@ -531,6 +532,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             final_arrived_semaphore=final_arrived,
             expert_go_semaphore=expert_go,
             launch_credit_semaphore=launch_credit,
+            combine_fp8_scale_block=combine_fp8_scale_block,
         )
 
     reference = []
@@ -673,7 +675,11 @@ def _replay_us(mesh_device, trace_id, iters):
     _mesh_params(),
     indirect=["mesh_device", "device_params"],
 )
-def test_hybrid_routed_expert_combine_overlap_perf(mesh_device, device_params, threshold_id, model_id, variant):
+# The wire combine sends: bf16 tokens, or packed fp8 rows the untilizers quantize in 1x128 blocks.
+@pytest.mark.parametrize("combine_wire", ["bf16", "fp8"])
+def test_hybrid_routed_expert_combine_overlap_perf(
+    mesh_device, device_params, threshold_id, model_id, variant, combine_wire
+):
     """The overlapped program against the same two ops back to back: hybrid routed expert, then
     combine_fabric2d. Sequential is the sum of the two programs' times, so it assumes no gap between
     them and is the best a sequential dispatch can do; the overlap must beat it.
@@ -687,7 +693,14 @@ def test_hybrid_routed_expert_combine_overlap_perf(mesh_device, device_params, t
     """
     if variant == "8x1-submesh":
         mesh_device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
-    case = _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=variant == "dg0-only")
+    case = _build_case(
+        mesh_device,
+        device_params,
+        threshold_id,
+        model_id,
+        dg0_only=variant == "dg0-only",
+        combine_fp8_scale_block=128 if combine_wire == "fp8" else 0,
+    )
 
     case.solo_routed_expert()
     re_trace, traced_re_out = _capture(mesh_device, case.solo_routed_expert)
@@ -717,7 +730,7 @@ def test_hybrid_routed_expert_combine_overlap_perf(mesh_device, device_params, t
     traced_sequential_us = traced_re_us + traced_combine_us
     traced_saved_us = traced_sequential_us - traced_overlap_us
     logger.info(
-        f"RE+combine {model_id} {threshold_id} traced: sequential {traced_sequential_us:.1f} us (RE {traced_re_us:.1f} "
+        f"RE+combine {model_id} {threshold_id} {combine_wire} wire traced: sequential {traced_sequential_us:.1f} us (RE {traced_re_us:.1f} "
         f"+ combine {traced_combine_us:.1f}), overlap {traced_overlap_us:.1f} us -> "
         f"{traced_sequential_us / traced_overlap_us:.3f}x, saved {traced_saved_us:.1f} us "
         f"({traced_saved_us / traced_sequential_us:.1%}); combine hidden "
