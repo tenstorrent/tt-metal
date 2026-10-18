@@ -25,12 +25,12 @@ template <
     std::uint32_t dfb_in_id,
     std::uint32_t dfb_max_scaler_id,
     std::uint32_t dfb_max_id,
-    std::uint32_t dfb_out_id>
-ALWI void calc_numeric_stable(
-    DataflowBuffer& dfb_in_obj,
-    DataflowBuffer& dfb_max_scaler_obj,
-    DataflowBuffer& dfb_max_obj,
-    DataflowBuffer& dfb_out_obj) {
+    std::uint32_t dfb_out_id,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2,
+    typename DFB3>
+ALWI void calc_numeric_stable(DFB0& dfb_in_obj, DFB1& dfb_max_scaler_obj, DFB2& dfb_max_obj, DFB3& dfb_out_obj) {
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
     compute_kernel_lib::reduce<

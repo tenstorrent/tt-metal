@@ -17,7 +17,8 @@
 // lower-triangular matrix): seed one face row, then replicate it with local NoC reads.
 // One out-of-line copy serves both fills; it runs once per program, and a copy per value overflows the kernel config
 // buffer.
-__attribute__((noinline)) void fill_ones_and_tril(DataflowBuffer& ones, DataflowBuffer& tril, uint32_t value_bits) {
+template <typename DFB0, typename DFB1>
+__attribute__((noinline)) void fill_ones_and_tril(DFB0& ones, DFB1& tril, uint32_t value_bits) {
     constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
     constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
     constexpr uint32_t faces_per_tile = tt::constants::TILE_HW / tt::constants::FACE_HW;
@@ -62,8 +63,8 @@ __attribute__((noinline)) void fill_ones_and_tril(DataflowBuffer& ones, Dataflow
     ones.push_back(1);
 }
 
-inline void fill_constant_tiles(
-    DataflowBuffer& eye, DataflowBuffer& tril, DataflowBuffer& ones, DataflowBuffer& block_masks) {
+template <typename DFB0, typename DFB1, typename DFB2, typename DFB3>
+inline void fill_constant_tiles(DFB0& eye, DFB1& tril, DFB2& ones, DFB3& block_masks) {
     constexpr uint32_t fp32_one_bits = __builtin_bit_cast(uint32_t, 1.0F);
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
     constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
@@ -128,8 +129,8 @@ inline void fill_constant_tiles(
 // (f1 or f3) to the end of the tile; below a padded top face row, f2 and f3 are all
 // padding. Inputs are BF16 or FP32, so face rows are 32 or 64 bytes and both ranges
 // start at the 16-byte alignment of the zero writes.
-__attribute__((noinline)) void zero_rows_from(
-    const Noc& noc, DataflowBuffer& buffer, uint32_t tiles, uint32_t first_row) {
+template <typename DFB0>
+__attribute__((noinline)) void zero_rows_from(const Noc& noc, DFB0& buffer, uint32_t tiles, uint32_t first_row) {
     constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
     constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
     constexpr uint32_t faces_per_tile_row = tt::constants::TILE_WIDTH / face_width;
@@ -215,7 +216,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         writer_control.push_back(1);
     }
 
-    auto enqueue_contiguous_read = [&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
+    auto enqueue_contiguous_read = [&](const auto& accessor, auto& buffer, uint32_t base, uint32_t tiles) {
         buffer.reserve_back(tiles);
         for (uint32_t tile = 0; tile < tiles; ++tile) {
             noc.async_read(
@@ -239,7 +240,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
     };
 
     auto enqueue_head_chunk_read =
-        [&](const auto& accessor, DataflowBuffer& buffer, uint32_t head_chunk_index, uint32_t width_tiles) {
+        [&](const auto& accessor, auto& buffer, uint32_t head_chunk_index, uint32_t width_tiles) {
             const uint32_t head = head_chunk_index / num_chunks;
             const uint32_t chunk = head_chunk_index % num_chunks;
             const uint32_t row_stride = num_heads * width_tiles;

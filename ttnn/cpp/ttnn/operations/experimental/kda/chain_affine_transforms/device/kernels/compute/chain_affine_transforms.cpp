@@ -15,8 +15,8 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
 // product = A @ state. Each output subblock accumulates the whole key dimension in DST, k = 0 .. Kt - 1 in order.
-template <uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void multiply(DataflowBuffer& a, DataflowBuffer& state, DataflowBuffer& product) {
+template <uint32_t Kt, uint32_t Vt, typename DFBA, typename DFBState, typename DFBProduct>
+FORCE_INLINE void multiply(DFBA& a, DFBState& state, DFBProduct& product) {
     constexpr uint32_t subblock_columns = kda::MatmulSubblock<Kt, Vt>::columns;
     constexpr uint32_t subblock_rows = kda::MatmulSubblock<Kt, Vt>::rows;
     const uint32_t a_id = a.get_id();
@@ -57,8 +57,8 @@ FORCE_INLINE void multiply(DataflowBuffer& a, DataflowBuffer& state, DataflowBuf
 // state = product + b as an SFPU add of two FP32 DST operands; an FPU add would truncate the FP32 product in srcA.
 // product unpacks to DST losslessly and BF16 b widens exactly through srcA. Every packed buffer is FP32, so the
 // packer configuration from startup stays valid.
-template <uint32_t Tiles>
-FORCE_INLINE void add(DataflowBuffer& product, DataflowBuffer& b, DataflowBuffer& state, DataflowBuffer* out) {
+template <uint32_t Tiles, typename DFBProduct, typename DFBB, typename DFBState, typename DFBOut>
+FORCE_INLINE void add(DFBProduct& product, DFBB& b, DFBState& state, DFBOut* out) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     // product and b interleave in DST: tile i uses DST[2i] and DST[2i + 1].
@@ -125,7 +125,7 @@ TT_KERNEL void compute() {
     const uint32_t entry_step = (topology.rank + steps - topology.first_rank) % steps;
 
     for (uint32_t step = 0; step < steps; ++step) {
-        DataflowBuffer& current = step == 0 ? initial : state;
+        auto& current = step == 0 ? initial : state;
         current.wait_front(state_tiles);
         a.wait_front(a_tiles);
         multiply<Kt, Vt>(a, current, product);
