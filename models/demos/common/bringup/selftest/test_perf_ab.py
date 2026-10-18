@@ -342,3 +342,32 @@ def test_accepting_a_setting_switch_ships_it_as_the_default(tmp_path, monkeypatc
     assert '"KERNEL": Setting(\n        "unified",\n        ("loop", "unified")' in out
     assert '"FP32": Setting(False)' in out and '"FIDELITY": Setting("HiFi4", ("HiFi4", "HiFi2"))' in out
     assert model_precision.set_defaults(spec, {"FIDELITY": "HiFi4"}) == []  # already the default: no edit
+
+
+def test_the_accept_reuses_the_on_side_when_the_code_is_unchanged(mk, sandbox):
+    """F105: the accept gate takes the A/B 'on' side's measurement (same commands, same code, every command rc 0)
+    instead of running the gate again (DeepSeek-V4.1 P.2: the accept repeated ~50 min of tests the A/B had just run);
+    a ledger commit in between (state, results, tasks.yaml) is no code change. Changed code: the gate runs."""
+    gate = (
+        f"BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all {LADDER} && TT_METAL_DEVICE_PROFILER=1 "
+        f"scripts/run_safe_pytest.sh --run-all --no-precompile {PROFILE}"
+    )
+    o = mk([pick(gate={"cmd": gate, "metrics": {"device_ms_experts": "< 10", "pcc_layer_L*": ">= 0.97"}})], CHANGE)
+    assert o.run() == HUMAN, mk.lines
+    n = len(mk.calls)
+    sandbox.git("commit", "-q", "--allow-empty", "-m", "a ledger commit in between")
+    assert decide(o, "P.1", "accept") == 0
+    assert o.run() == DONE, mk.lines
+    assert len(mk.calls) == n  # nothing measured again
+    assert o.led.status("P.1") == "PASS" and any("not run again" in ln for ln in mk.lines)
+    got = M.load("P.1", o.led.results_dir)
+    assert got["device_ms_experts"]["value"] == 8.0 and got["pcc_layer_L01"]["value"] == 0.990  # on side, rung last
+    assert sandbox.git("show", "HEAD:src/impl.txt") == "hifi2"
+
+
+def test_the_accept_runs_the_gate_when_the_code_changed_since_the_ab(mk, sandbox):
+    gate = f"BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all {LADDER}"
+    o = mk([pick(gate={"cmd": gate, "metrics": {"pcc_layer_L*": ">= 0.97"}})], CHANGE)
+    assert o.run() == HUMAN, mk.lines
+    (sandbox.repo / "src/impl.txt").write_text("hifi2 tuned\n")  # the code moved after the report
+    assert o.ab_on_reuse(o.led.task("P.1"), o.led.state()["P.1"]["ab"]) is None
