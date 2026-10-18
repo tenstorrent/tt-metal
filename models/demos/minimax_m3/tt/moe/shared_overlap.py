@@ -44,7 +44,7 @@ _MANAGERS = {}
 # here: the down projection's full-K in1 block alone is 24 x 18 tiles.
 CB_BUDGET_TILES = 384
 MAX_IN0_BLOCK_W = 16
-DEST_TILES = 8  # bf16 dest, half-sync: the default compute config of ttnn.linear for a bf16 output
+DEST_TILES = 4  # fp32 dest, half-sync (compute_configs.matmul_compute_config)
 
 
 def _flag(var, default):
@@ -80,9 +80,10 @@ def _divisors_desc(n, cap=None):
 
 def cb_tiles(in0_block_w, out_block_h, out_block_w, k_tiles):
     """Tiles the 2D mcast factory allocates per core for interleaved bf16 in/out: in0 and in1 blocks
-    (double-buffered when K takes more than one block) and one output block (interm0 shares it)."""
+    (double-buffered when K takes more than one block), one output block and the fp32 partials block (its own
+    buffer at fp32 accumulation, two bf16 tiles per tile)."""
     depth = 2 if k_tiles > in0_block_w else 1
-    return depth * (out_block_h + out_block_w) * in0_block_w + out_block_h * out_block_w
+    return depth * (out_block_h + out_block_w) * in0_block_w + 3 * out_block_h * out_block_w
 
 
 def _block_cost(k_tiles, per_core_M, per_core_N, obh, obw, w):

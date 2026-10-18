@@ -20,6 +20,16 @@ from .residual import gather_before_norm, use_sharded_residual
 from .rms_norm import RMSNorm
 
 
+def add_residual(residual, delta):
+    """residual + delta, always bf16: a branch output in another dtype (e.g. bf8 o_proj past 32k tokens) gets a
+    fresh bf16 output instead of being written into."""
+    if delta.dtype == ttnn.bfloat16:
+        return ttnn.add(residual, delta, output_tensor=delta)
+    out = ttnn.add(residual, delta, dtype=ttnn.bfloat16)
+    delta.deallocate(True)
+    return out
+
+
 class DecoderLayer:
     def __init__(
         self,
@@ -211,7 +221,7 @@ class DecoderLayer:
 
             # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
             with zone("residual_attn", FINE):
-                hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+                hidden_states = add_residual(residual, hidden_states)
             residual.deallocate(True)
             residual = hidden_states
             # The ONE pre-MLP all-gather (sharded residual only). Its full-emb output is consumed by the
@@ -235,7 +245,7 @@ class DecoderLayer:
             # Both MLPs close with a reduce-scatter under a sharded residual (emb/tp, matching
             # `residual`) and with an all-reduce under the replicated one (full emb).
             with zone("residual_mlp", FINE):
-                hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+                hidden_states = add_residual(residual, hidden_states)
             residual.deallocate(True)
 
         return hidden_states

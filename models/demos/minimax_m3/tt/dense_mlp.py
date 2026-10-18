@@ -20,6 +20,7 @@ from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
 from .attention.operations import assert_sharded_residual_unpadded
+from .compute_configs import matmul_compute_config
 from .moe.activation import apply_swiglu_fused, swiglu
 from .moe.shared_overlap import shared_expert_program_configs
 from .residual import use_sharded_residual
@@ -98,13 +99,14 @@ class DenseMLP:
         """
         if sub_device is not None:
             return self._partial_on_sub_device(x, sub_device, keep_alive)
+        cfg = matmul_compute_config(self.mesh_device)
         with zone("gate_up_proj", FINE):
-            gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat16)
-            up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat16)
+            gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat16, compute_kernel_config=cfg)
+            up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat16, compute_kernel_config=cfg)
         with zone("swiglu", FINE):
             act = swiglu(gate, up, self.swiglu_cfg)  # clamped swigluoai (M3); consumes gate and up
         with zone("down_proj", FINE):
-            out = ttnn.linear(act, self.down_proj, dtype=ttnn.bfloat16)
+            out = ttnn.linear(act, self.down_proj, dtype=ttnn.bfloat16, compute_kernel_config=cfg)
         act.deallocate(True)
         return out
 
@@ -112,13 +114,17 @@ class DenseMLP:
         assert keep_alive is not None, "a sub-device partial must hand its intermediates to keep_alive"
         sd_id, cores = sub_device
         gate_cfg, up_cfg, down_cfg = shared_expert_program_configs(cores, x, self.gate_proj, self.down_proj)
+        # Explicit: a program_config alone drops the matmul default to LoFi.
+        kw = dict(
+            dtype=ttnn.bfloat16, compute_kernel_config=matmul_compute_config(self.mesh_device), sub_device_id=sd_id
+        )
         with zone("gate_up_proj", FINE):
-            gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat16, program_config=gate_cfg, sub_device_id=sd_id)
-            up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat16, program_config=up_cfg, sub_device_id=sd_id)
+            gate = ttnn.linear(x, self.gate_proj, program_config=gate_cfg, **kw)
+            up = ttnn.linear(x, self.up_proj, program_config=up_cfg, **kw)
         with zone("swiglu", FINE):
             act = apply_swiglu_fused(gate, up, self.swiglu_cfg, sub_core_grids=cores)
         with zone("down_proj", FINE):
-            out = ttnn.linear(act, self.down_proj, dtype=ttnn.bfloat16, program_config=down_cfg, sub_device_id=sd_id)
+            out = ttnn.linear(act, self.down_proj, program_config=down_cfg, **kw)
         keep_alive.extend((gate, up, act))
         return out
 

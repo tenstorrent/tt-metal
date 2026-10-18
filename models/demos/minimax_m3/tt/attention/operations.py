@@ -5,6 +5,7 @@ import math
 
 import ttnn
 
+from ..compute_configs import matmul_compute_config
 from .weights import AttentionWeights
 
 
@@ -22,8 +23,12 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights):
     Returns:
         Fused QKV tensor [batch, seq_len, total_qkv_dim]
     """
-    xqkv_fused = ttnn.linear(hidden_states, weights.wqkv, dtype=ttnn.bfloat16)
-    return xqkv_fused
+    return ttnn.linear(
+        hidden_states,
+        weights.wqkv,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=matmul_compute_config(hidden_states.device()),
+    )
 
 
 def split_qkv_heads_prefill(xqkv_fused, num_heads: int, num_kv_heads: int):
@@ -138,7 +143,7 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
     """
     Apply output projection.
 
-    MiniMax-M3 has no bias on o_proj (bias=False in HF), so this is a plain matmul.
+    MiniMax-M3 has no bias on o_proj (bias=False in HF), so this is a plain matmul on the bf16 attention output.
 
     Args:
         tensor: Attention output tensor
@@ -148,10 +153,12 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
     Returns:
         Output tensor after projection
     """
-    tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
-    out = ttnn.matmul(tensor, weights.o_proj, dtype=activation_dtype)
-    tensor.deallocate(True)
-    return out
+    return ttnn.matmul(
+        tensor,
+        weights.o_proj,
+        dtype=activation_dtype,
+        compute_kernel_config=matmul_compute_config(tensor.device()),
+    )
 
 
 # Per-M_tiles tuned config for the fused attention o_proj matmul + reduce-scatter.
@@ -179,15 +186,11 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
     traffic on the other half — MM signals RS via on-chip semaphore per output
     block so RS starts forwarding as soon as the first block lands in DRAM.
 
-    Dtypes (end-to-end bf8_b through the TP allreduce):
-      - activation cast to bf8_b before MM (DRAM-bandwidth saver)
-      - weight is bf8_b (as loaded, row-parallel sharded on K across TP=8)
-      - MM math: LoFi (same as `ttnn.matmul` default, via compute_kernel_config)
-      - fused-op output inherits input dtype → bf8_b
-      - downstream all-gather + padding-slice operate on bf8_b
+    Dtypes: bf16 activation x bf8_b weight (row-parallel on K across TP), HiFi3 with fp32 accumulation
+    (compute_configs.py), bf16 output through the reduce-scatter.
 
     Returns the reduce-scattered tensor of shape
-    [1, 1, S, padded_hidden_total / TP] in bf8_b.
+    [1, 1, S, padded_hidden_total / TP] in bf16.
 
     Only valid for prefill (TP > 1); the decoder path uses a different pattern.
     """
@@ -212,8 +215,6 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
     Nt_per_core = N_tiles // mm_core_grid.x
     Mt_per_core = max(1, math.ceil(M_tiles / grid_y))
 
-    tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
-
     mm_config = ttnn.MinimalMatmulConfig(
         M_block_size=m_block,
         K_block_size=k_block,
@@ -223,21 +224,13 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
         compute_with_storage_grid_size=mm_core_grid,
     )
 
-    compute_config = ttnn.init_device_compute_kernel_config(
-        ccl_manager.mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
-
     mm_out, rs_out = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
         tensor,
         weights.o_proj,
         3,  # scatter on last (hidden) dim
         ccl_manager.get_rs_ping_pong_semaphore(),
         ttnn.CoreCoord(0, grid_y),  # RS cores start just below the MM rows
-        compute_kernel_config=compute_config,
+        compute_kernel_config=matmul_compute_config(ccl_manager.mesh_device),
         num_links=ccl_manager.num_links,
         memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
         rs_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -248,9 +241,9 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
         barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         chunk_width_in_mm_blocks=chunk_width,
         num_workers_per_link=num_workers,
+        dtype=ttnn.bfloat16,
     )
 
-    tensor.deallocate(True)
     mm_out.deallocate(True)
     return rs_out
 

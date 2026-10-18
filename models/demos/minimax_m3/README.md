@@ -92,6 +92,13 @@ PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=1024 PREFILL_FORWARD_TOKENS_BUDGET=4096 PRE
 
 Module-level PCC tests (vs torch reference / HF) live under [`tests/unit/`](tests/unit/); golden generation is in [`scripts/`](scripts/). The unit tests that model real dims (RoPE θ, MoE routing, MSA parameters) read them from the selected variant's config, so `M3_MODEL_VARIANT=MiniMax-M3.1 pytest ...` runs them for M3.1; tests that need particular layer types set an explicit schedule (`utils/model_variant.with_layer_schedule`).
 
+### Compute precision
+
+The non-expert matmuls (QKV, index_q/k, o_proj, dense MLP, shared expert) run HiFi3 with fp32 accumulation on
+bf16 activations ([`tt/compute_configs.py`](tt/compute_configs.py)).
+The routed experts keep their kernels' own configs (`unified_routed_expert_moe` is fixed at LoFi with bf16
+accumulation).
+
 ### MiniMax-M3.1 and quantized checkpoints (MXFP8 / NVFP4)
 
 The MiniMax-M3.1 checkpoint's `config.json` carries an MXFP8 `quantization_config` (MXFP8 linears, block
