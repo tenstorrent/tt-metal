@@ -479,7 +479,9 @@ class TtCSAIndexer(_TtHCABase):
         # hidden_states is TP-sharded on the model dim: the gate weights stay input-sharded partials + one tiny
         # all-reduce ([1, 1, S_l, H]); only wq_b (which consumes the replicated q latent) is replicated
         w = self.compressor._tp_all_reduce(ttnn.linear(hidden_states, self.w_proj, memory_config=self.memory_config))
-        w = ttnn.permute(ttnn.multiply(w, self.scale), (0, 3, 2, 1))  # [1, H, S_l, 1], scale pre-folded
+        # [1, 1, S_l, H], scale pre-folded: main's indexer_score takes the gate weights in projection order (the pre-merge op
+        # took [1, H, S_l, 1], hence the old permute; the merged op rejects that layout once the fused scorer runs, chunk >= 2)
+        w = ttnn.multiply(w, self.scale)
         E = entry_count + n_new
         E_tiles = -(-E // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         # The op's token causality (key t visible to query s of SP device r iff t <= chunk_start + r*Sq + s) is defeated
@@ -538,7 +540,9 @@ class TtCSAIndexer(_TtHCABase):
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         q = ttnn.concat([nope, rope], dim=-1)
         w = self.compressor._tp_all_reduce(ttnn.linear(hidden_states, self.w_proj, memory_config=self.memory_config))
-        w = ttnn.permute(ttnn.multiply(w, self.scale), (0, 3, 2, 1))
+        w = ttnn.multiply(
+            w, self.scale
+        )  # [1, 1, S_l, H] projection order (main's indexer_score contract; see select_indices_fused)
         cap = int(index_k.shape[2])
         sp = self.sp_factor
         kv_len = (cap // 64) * 64
