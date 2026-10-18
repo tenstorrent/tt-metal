@@ -655,7 +655,7 @@ def _run_train_loop_on_host(monkeypatch):
         self._completions_per_microbatch = 4
         self.rollout_batch_source = _Source()
 
-    monkeypatch.setattr(grpo_trainer_module, "init_distributed_training", lambda config: None)
+    monkeypatch.setattr(grpo_trainer_module, "init_distributed_training", lambda config, device_config: None)
     monkeypatch.setattr(grpo_trainer_module, "is_rollout_rank", lambda config: False)
     monkeypatch.setattr(GRPOTrainer, "_build_policy", fake_build_policy)
     monkeypatch.setattr(
@@ -858,7 +858,7 @@ def _trainer_with_remote_rollout(monkeypatch, client, reward_funcs):
             weight_sync_every=1,
         )
 
-    monkeypatch.setattr(grpo_trainer_module, "init_distributed_training", lambda config: None)
+    monkeypatch.setattr(grpo_trainer_module, "init_distributed_training", lambda config, device_config: None)
     monkeypatch.setattr(grpo_trainer_module, "is_rollout_rank", lambda config: False)
     monkeypatch.setattr(GRPOTrainer, "_build_policy", build_policy)
     monkeypatch.setattr(sync_remote_rollout_batch_source, "weights_ref_hf_dict", lambda model: {})
