@@ -101,9 +101,10 @@ class FakeRunner:
     def __init__(self, eng, num_blocks, nb, seed):
         self.eng, self.K, self.nb = eng, eng.K, nb
         self.bs = BLOCK_SIZE
-        # Seeded shuffle of every real block id; the MTP scratch block (== num_blocks) is never handed out.
+        # Seeded shuffle of every real block id; the MTP scratch block (== num_blocks) is never handed out. Block 0
+        # (vLLM's null block, the traced prefill's trash block) goes out last, only when every other block is in use.
         g = torch.Generator().manual_seed(seed)
-        self.free = torch.randperm(num_blocks, generator=g).tolist()
+        self.free = [0] + (1 + torch.randperm(num_blocks - 1, generator=g)).tolist()  # pop() takes from the end
         self.blocks = []
 
     def _table(self, last_pos):

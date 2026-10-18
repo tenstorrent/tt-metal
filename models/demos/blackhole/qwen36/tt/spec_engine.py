@@ -1320,6 +1320,15 @@ class MTPSpecEngine:
             tokens, pt_row, L, strict=False, chunk_start=chunk_start, carry_gdn=carry, spec_inputs=inputs
         )
         if tr is None:
+            # The trash block (vLLM's null block 0) is one of this request's real blocks: the traced prefill would park
+            # the bucket's padded K/V in it, so the eager path serves this request. vLLM never allocates block 0; a
+            # harness that does must also keep it out of every OTHER request's blocks, which the engine cannot check.
+            if not getattr(self, "_trash_collision_warned", False):
+                self._trash_collision_warned = True
+                logger.warning(
+                    f"[spec_engine] fast prefill declined for slot {slot} (Tp {len(prompt_list)}): trash block "
+                    f"{model.prefill_trash_block} is one of the request's real blocks; eager prefill for this request"
+                )
             return None
         assert tr.last_feed.dtype == self._feed_dtype and tr.last_feed.shape[-1] == self._dim_frac, (
             f"feed row {tr.last_feed.dtype} {tuple(tr.last_feed.shape)} != buffer {self._feed_dtype} "

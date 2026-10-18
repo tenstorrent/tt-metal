@@ -103,8 +103,11 @@ def _batched_kv(model, B, K, prompts):
     (as in _run_tp_spec_generation_batched). allocate_kv_caches adds the MTP scratch block."""
     bpu = max(8, -(-(max(len(p) for p in prompts) + MAX_NEW + K + 1) // BLOCK_SIZE))
     bpu = ((bpu + 31) // 32) * 32
-    page_tables = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])
-    kv_shape = [B * bpu, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
+    # Block 0 is vLLM's null block: never a request's block. The traced prefill (QWEN36_SPEC_FAST_PREFILL=1, as the
+    # non-spec class's short trace) parks the padded K/V of a bucket there, so a user owning block 0 would be corrupted
+    # by every other user's prefill. Users own blocks 1 + u*bpu .. (u+1)*bpu.
+    page_tables = torch.stack([torch.arange(1 + u * bpu, 1 + (u + 1) * bpu, dtype=torch.int32) for u in range(B)])
+    kv_shape = [1 + B * bpu, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
     logger.info(f"[spec-batched] B={B} K={K} rows={B * (K + 1)}/32, paged KV {bpu} blocks/user x {B}")
     return page_tables, kv_shape
 
