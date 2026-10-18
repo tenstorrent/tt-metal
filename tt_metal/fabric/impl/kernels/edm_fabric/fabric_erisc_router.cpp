@@ -1867,6 +1867,13 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     uint32_t vc1_idle_countdown = 0;
     bool vc1_had_progress = false;
 #endif  // FABRIC_2D_VC1_SERVICED
+#if defined(FABRIC_VC0_Z_LANDING_CHANNEL)
+    // The VC0 channel fed by the Z boundary router carries only inter-mesh landings: poll it every pass
+    // for a while after it moves a packet, otherwise every FABRIC_VC1_IDLE_POLL_INTERVAL passes.
+    static_assert(FABRIC_VC0_Z_LANDING_CHANNEL == 4, "the Z landing channel is expected in VC0 slot 4");
+    uint32_t z_landing_countdown = 0;
+    uint32_t z_landing_hot_passes = 0;
+#endif
 
 #if defined(FABRIC_2D_VC2_SERVICED)
     auto outbound_to_receiver_channel_pointer_ch2 =
@@ -2104,6 +2111,30 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry);
                         if constexpr (ACTUAL_VC0_SENDER_CHANNELS > 4) {
+#if defined(FABRIC_VC0_Z_LANDING_CHANNEL)
+                            if (z_landing_hot_passes != 0 || z_landing_countdown == 0) {
+                                const bool z_progress =
+                                    run_sender_channel_step<VC0_RECEIVER_CHANNEL, 4, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                                        local_sender_channels,
+                                        local_sender_channel_worker_interfaces,
+                                        outbound_to_receiver_channel_pointer_ch0,
+                                        remote_receiver_channels,
+                                        channel_connection_established,
+                                        local_sender_channel_free_slots_stream_ids,
+                                        sender_channel_from_receiver_credits,
+                                        inner_loop_perf_telemetry_collector,
+                                        local_fabric_telemetry);
+                                tx_progress |= z_progress;
+                                if (z_progress) {
+                                    z_landing_hot_passes = 128;
+                                } else if (z_landing_hot_passes != 0) {
+                                    z_landing_hot_passes--;
+                                }
+                                z_landing_countdown = FABRIC_VC1_IDLE_POLL_INTERVAL;
+                            } else {
+                                z_landing_countdown--;
+                            }
+#else
                             tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 4, ENABLE_FIRST_LEVEL_ACK_VC0>(
                                 local_sender_channels,
                                 local_sender_channel_worker_interfaces,
@@ -2114,6 +2145,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                                 sender_channel_from_receiver_credits,
                                 inner_loop_perf_telemetry_collector,
                                 local_fabric_telemetry);
+#endif
                         }
                     }
                 }  // end of if constexpr (super_speedy_mode) else block

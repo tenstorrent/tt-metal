@@ -114,7 +114,8 @@ void FabricBuilderContext::compute_max_channel_counts() {
     };
 
     // Always have MESH routers
-    bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2;
+    bool intermesh_vc_config_active =
+        intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2 || intermesh_vc_config_.intermesh_on_vc0;
     possible_shapes.push_back(router_vc_shape(
         topology,
         RoutingDirection::N,
@@ -126,7 +127,8 @@ void FabricBuilderContext::compute_max_channel_counts() {
     // on the same chips (4 VC0 / 4 VC1 when non-express); enumerate both. VC1 is required because
     // the boundary shape is defined by its from-boundary VC1 fanout.
     const bool has_intermesh_z_boundary =
-        intermesh_vc_config_.requires_vc1 && fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
+        (intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.intermesh_on_vc0) &&
+        fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
     if (has_intermesh_z_boundary) {
         const auto boundary_chip = chip_with_z(EdgeCapability::INTERMESH);
         possible_shapes.push_back(router_vc_shape(
@@ -384,8 +386,16 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
             // traffic through it. Inter-mesh packets land on a boundary chip already on VC1 and route Y then
             // X, so traffic whose destination shares the landing chip's column never needs VC1 on an E/W
             // router. The caller vouches for that traffic pattern.
+            const char* on_vc0 = std::getenv("TT_METAL_FABRIC_INTERMESH_VC0");
+            if (on_vc0 != nullptr && std::string_view(on_vc0) == "1" && !needs_mesh_pass_through) {
+                config = IntermeshVCConfig::disabled();
+                config.mode = IntermeshVCMode::FULL_MESH;
+                config.intermesh_on_vc0 = true;
+                log_info(tt::LogFabric, "Intermesh traffic on VC0, no VC1 (TT_METAL_FABRIC_INTERMESH_VC0)");
+            }
             const char* y_only = std::getenv("TT_METAL_FABRIC_VC1_Y_AXIS_ONLY");
-            if (y_only != nullptr && std::string_view(y_only) == "1" && !needs_mesh_pass_through) {
+            if (y_only != nullptr && std::string_view(y_only) == "1" && config.requires_vc1 &&
+                !needs_mesh_pass_through) {
                 config.vc1_y_axis_only = true;
                 log_info(
                     tt::LogFabric,
