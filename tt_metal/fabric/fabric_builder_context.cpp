@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+#include <string_view>
+
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -379,6 +382,18 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
             config = needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through()
                                              : IntermeshVCConfig::full_mesh();
+
+            // Opt-in: a VC1 router polls its VC1 channels on every pass, which slows all intra-mesh (VC0)
+            // traffic through it. Inter-mesh packets land on a boundary chip already on VC1 and route Y then
+            // X, so traffic whose destination shares the landing chip's column never needs VC1 on an E/W
+            // router. The caller vouches for that traffic pattern.
+            const char* y_only = std::getenv("TT_METAL_FABRIC_VC1_Y_AXIS_ONLY");
+            if (y_only != nullptr && std::string_view(y_only) == "1" && !needs_mesh_pass_through) {
+                config.vc1_y_axis_only = true;
+                log_info(
+                    tt::LogFabric,
+                    "Intermesh VC1 restricted to Y-axis and Z routers (TT_METAL_FABRIC_VC1_Y_AXIS_ONLY)");
+            }
         }
     }
 
@@ -395,6 +410,5 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
     return config;
 }
-
 
 }  // namespace tt::tt_fabric

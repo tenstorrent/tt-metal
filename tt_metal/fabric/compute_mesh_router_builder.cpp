@@ -429,6 +429,26 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         actual_sender_channels_per_vc,
         actual_receiver_channels_per_vc);
 
+    // With VC1 only on Y-axis routers, no same-mesh E/W router ever forwards VC1, so the VC1 sender
+    // channels a Y router keeps for its E/W producers never see a packet. Trim them: the router stops
+    // servicing them on every pass, which is most of what an idle VC1 still costs intra-mesh traffic.
+    if (intermesh_config.vc1_y_axis_only && actual_sender_channels_per_vc[1] > 0) {
+        if (!channel_trimming_overrides_for_router.has_value()) {
+            ChannelTrimmingOverrides baseline;
+            baseline.sender_channel_min_packet_size_seen_bytes_by_vc.fill(std::numeric_limits<uint16_t>::max());
+            set_all_channel_bits(baseline.sender_channel_used_bitfield_by_vc, actual_sender_channels_per_vc);
+            set_all_channel_bits(
+                baseline.receiver_channel_data_forwarded_bitfield_by_vc, actual_receiver_channels_per_vc);
+            channel_trimming_overrides_for_router = baseline;
+        }
+        for (const auto& slot : producer_slots.producer_slots(1)) {
+            if (slot.producer == eth_chan_directions::EAST || slot.producer == eth_chan_directions::WEST) {
+                channel_trimming_overrides_for_router->sender_channel_used_bitfield_by_vc &=
+                    static_cast<uint16_t>(~(1u << vc_shape.flat_sender_id(1, slot.channel)));
+            }
+        }
+    }
+
     auto local_vc0_fast_path_info =
         local_router_has_real_capture_entry && channel_trimming_overrides_for_router.has_value()
             ? try_derive_vc0_trim_fast_path_info(
@@ -707,7 +727,8 @@ void ComputeMeshRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatam
     auto* adapter_ptr = erisc_builder_->receiver_channel_to_downstream_adapter.get();
     const auto tensix_noc_x = tensix_builder.get_noc_x();
     const auto tensix_noc_y = tensix_builder.get_noc_y();
-    adapter_ptr->add_local_tensix_connection(adapter_spec, local_tensix_dir, tt::tt_metal::CoreCoord(tensix_noc_x, tensix_noc_y));
+    adapter_ptr->add_local_tensix_connection(
+        adapter_spec, local_tensix_dir, tt::tt_metal::CoreCoord(tensix_noc_x, tensix_noc_y));
 
     // Provide router NOC coordinates to relay kernel for sending packets back to router
     tensix_builder.append_relay_router_noc_xy(erisc_builder_->get_noc_x(), erisc_builder_->get_noc_y());
@@ -911,7 +932,8 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         // VC1 is serviced when:
         // - Intra-mesh router with full mesh VC1, or
         // - Inter-mesh router with pass-through VC1
-        bool vc1_serviced = intermesh_config.vc1_serviced_for(is_inter_mesh_);
+        // (A router without VC1 channels -- an X router under vc1_y_axis_only -- services nothing.)
+        bool vc1_serviced = vc1_active && intermesh_config.vc1_serviced_for(is_inter_mesh_);
 
         if (vc1_serviced) {
             defines["FABRIC_2D_VC1_SERVICED"] = "";

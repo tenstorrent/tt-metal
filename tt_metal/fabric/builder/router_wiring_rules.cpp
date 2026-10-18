@@ -120,6 +120,17 @@ void check_vc0_downstream_capacity(const RouterTurnSet& turn_set, bool express_r
         builder_config::num_downstream_edms_2d_vc0);
 }
 
+// Whether a router facing `direction` loses VC1 under IntermeshVCConfig::vc1_y_axis_only: a same-mesh X
+// router. A Y router, a Z port, and an X port that crosses a mesh boundary keep it.
+bool x_router_without_vc1(
+    const IntermeshVCConfig* vc_config, RoutingDirection direction, const PerDirectionCapabilities& caps) {
+    if (vc_config == nullptr || !vc_config->vc1_y_axis_only || !is_x_axis_direction(direction)) {
+        return false;
+    }
+    const auto& capability = caps.at(direction);
+    return !capability.has_value() || *capability != EdgeCapability::INTERMESH;
+}
+
 }  // namespace
 
 bool wires_into(
@@ -244,6 +255,8 @@ RouterVcShape router_vc_shape(
     const bool requires_vc2 = vc_config && vc_config->requires_vc2;
     // Evaluated once per router: is this the chip's Z-facing intermesh boundary?
     const bool z_boundary_router = is_z_boundary_router(facing, edge_capability);
+    // VC1 channels on this router: every router when the VC exists, minus same-mesh X routers in Y-only mode.
+    const bool vc1_channels = requires_vc1 && !x_router_without_vc1(vc_config, facing, chip_capabilities);
 
     // The boundary family's two construction preconditions, up front: a 1D Z boundary is a
     // configuration error, not a silently five-wide router.
@@ -292,7 +305,7 @@ RouterVcShape router_vc_shape(
         }
 
         // VC1: wired producers, by family, when the VC exists (zero by default).
-        if (requires_vc1) {
+        if (vc1_channels) {
             if (z_boundary_router) {
                 vc1_senders = boundary_vc1_sender_count();
             } else if (chip_z_role == ZPortRole::INTERMESH_BOUNDARY) {
@@ -310,7 +323,7 @@ RouterVcShape router_vc_shape(
         vc2_senders = requires_vc2 ? 1 : 0;
 
         // Receivers: one per active carrier VC. The boundary services no VC2 receiver.
-        vc1_receivers = requires_vc1 ? 1 : 0;
+        vc1_receivers = vc1_channels ? 1 : 0;
         vc2_receivers = (requires_vc2 && !z_boundary_router) ? 1 : 0;
     }
 
@@ -348,10 +361,17 @@ RouterTurnSet turn_set_for_router(
         "A Z-facing intermesh boundary router cannot be constructed without VC1: its entire "
         "shape is the from-boundary VC1 fanout");
 
-    // One emission rule for every ordinary target: VC0 always, VC1 when the VC exists.
-    const auto emit_on_enabled_vcs = [&turn_set, enable_vc1](RoutingDirection dir) {
+    // VC1 receiver on this router, and VC1 senders on a target: both absent on same-mesh X routers in
+    // Y-only mode, so no VC1 turn may start or end there.
+    const bool vc1_here = enable_vc1 && !x_router_without_vc1(vc_config, facing, chip_capabilities);
+    const auto vc1_target = [&](RoutingDirection dir) {
+        return !x_router_without_vc1(vc_config, dir, chip_capabilities);
+    };
+
+    // One emission rule for every ordinary target: VC0 always, VC1 when the VC exists on both ends.
+    const auto emit_on_enabled_vcs = [&turn_set, vc1_here, &vc1_target](RoutingDirection dir) {
         turn_set[0].push_back(ConnectionTarget(0, dir));
-        if (enable_vc1) {
+        if (vc1_here && vc1_target(dir)) {
             turn_set[1].push_back(ConnectionTarget(1, dir));
         }
     };
@@ -363,7 +383,9 @@ RouterTurnSet turn_set_for_router(
     // set is the full set: not a special case, a consequence.
     if (z_boundary_router) {
         for (const auto dir : k_cardinal_directions) {
-            turn_set[1].push_back(ConnectionTarget(1, dir));
+            if (vc1_target(dir)) {
+                turn_set[1].push_back(ConnectionTarget(1, dir));
+            }
         }
         return turn_set;
     }
@@ -439,7 +461,7 @@ RouterTurnSet turn_set_for_router(
             0)) {
         const bool boundary_target = (chip_z_role == ZPortRole::INTERMESH_BOUNDARY);
         turn_set[0].push_back(ConnectionTarget(0, RoutingDirection::Z));
-        if (enable_vc1 && (!boundary_target || enable_mesh_pass_through)) {
+        if (vc1_here && (!boundary_target || enable_mesh_pass_through)) {
             turn_set[1].push_back(ConnectionTarget(1, RoutingDirection::Z));
         }
     }
