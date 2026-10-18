@@ -171,20 +171,40 @@ def rotated_row_of_position(kv_actual_isl: int, sp: int, chunk_local: int, globa
     return None
 
 
+def rotated_chip_position(kv_actual_isl: int, sp: int, chunk_local: int, chip: int, row: int) -> int:
+    """``rotated_chip_positions(kv_actual_isl, sp, chunk_local)[chip][row]`` without building the table."""
+    chunk_size_global = sp * chunk_local
+    split_chunk = kv_actual_isl // chunk_size_global
+    split_chip = (kv_actual_isl // chunk_local) % sp
+    if chip < split_chip:
+        update_idxt = (split_chunk + 1) * chunk_local
+    elif chip == split_chip:
+        update_idxt = split_chunk * chunk_local + kv_actual_isl % chunk_local
+    else:
+        update_idxt = split_chunk * chunk_local
+    lr = update_idxt + row
+    return (lr // chunk_local) * chunk_size_global + chip * chunk_local + (lr % chunk_local)
+
+
 def mtp_lookahead_positions(
     kv_actual_isl: int, sp: int, chunk_local: int, actual_end: int, num_levels: int
 ) -> list[list[int]]:
     """Per chip, the global positions carried by its MTP lookahead slots, which follow its trunk rows:
     the ``num_levels`` positions after its last one, every later slot pad. A split chip whose second run lies at
-    or past ``actual_end`` carries the next chip's first ``num_levels`` positions instead."""
-    positions = rotated_chip_positions(kv_actual_isl, sp, chunk_local)
-    slots = [[row[-1] + 1 + k for k in range(num_levels)] for row in positions]
+    or past ``actual_end`` carries the next chip's first ``num_levels`` positions instead.
+
+    Reads three entries of ``rotated_chip_positions`` per chip, so it computes those rather than the table:
+    the runner calls this on every chunk."""
+
+    def position(chip, row):
+        return rotated_chip_position(kv_actual_isl, sp, chunk_local, chip, row)
+
+    slots = [[position(c, chunk_local - 1) + 1 + k for k in range(num_levels)] for c in range(sp)]
     split_row = chunk_local - kv_actual_isl % chunk_local
     if sp > 1 and split_row < chunk_local:
         split_chip = (kv_actual_isl // chunk_local) % sp
-        split_positions = positions[split_chip]
-        if split_positions[split_row] >= actual_end:
-            slots[split_chip] = [split_positions[split_row - 1] + 1 + k for k in range(num_levels)]
+        if position(split_chip, split_row) >= actual_end:
+            slots[split_chip] = [position(split_chip, split_row - 1) + 1 + k for k in range(num_levels)]
     return slots
 
 
