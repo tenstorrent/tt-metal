@@ -8,6 +8,9 @@ routing with sum-1.5 weights), 2 warm-up calls, then the mean wall time of N_CAL
 has no host sync, so this is the device time of one layer per chunk).
 
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py
+
+test_unified_vs_loop: EXPERTS_KERNEL=unified vs loop on the same inputs (P.2: layer 0, 2x2, chunk 2048: bfp8 317.7 vs
+20.4 ms, bfp4 315.1 vs 20.0 ms per call; unified vs loop rel 6e-5).
 """
 
 from __future__ import annotations
@@ -217,3 +220,50 @@ def test_transpose_b_exact(mesh_device):
             f"rel_vs_fp64={rel:.3g} ms={times}"
         )
         assert torch.equal(at, bt), nm
+
+
+@pytest.mark.timeout(3600)
+@mesh_parametrize
+@pytest.mark.parametrize("impl", ["bfp8", "bfp4"])
+def test_unified_vs_loop(mesh_device, impl, monkeypatch):
+    """EXPERTS_KERNEL=unified (one fused unified_routed_expert_moe) vs loop on the same random inputs: rel / PCC of
+    the outputs (both device paths; the fp8 q(h) turns GEMM-order differences into whole e4m3 steps, DS41-1) and the
+    mean time per call (N_CALLS synchronized calls after 2 warm-ups)."""
+    S = spec()
+    ck, cfg = hooks._checkpoint(S), hooks._config(S)
+    chunk = hooks._chunk(S)
+    g = torch.Generator().manual_seed(0)
+    x = torch.randn(chunk, cfg.dim, generator=g)
+    sc = torch.rand(chunk, cfg.n_experts, generator=g)
+    top = sc.topk(cfg.topk_experts, dim=-1)
+    dense = torch.zeros(chunk, cfg.n_experts)
+    dense.scatter_(1, top.indices, 1.5 * top.values / top.values.sum(-1, keepdim=True))
+    outs = {}
+    for kernel in ("loop", "unified"):
+        monkeypatch.setenv("DS41_EXPERTS_KERNEL", kernel)
+        mod = E.build_experts(mesh_device, ck, cfg, LAYER, chunk, impl=impl)
+        xd = row_split_to_device(mesh_device, x)
+        rd = row_split_to_device(mesh_device, dense)
+        for _ in range(2):
+            ttnn.deallocate(mod(xd, rd))
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.time()
+        for _ in range(N_CALLS):
+            ttnn.deallocate(mod(xd, rd))
+        ttnn.synchronize_device(mesh_device)
+        dt = (time.time() - t0) / N_CALLS
+        od = mod(xd, rd)
+        outs[kernel] = torch.cat([ttnn.to_torch(t).float().reshape(-1) for t in ttnn.get_device_tensors(od)])
+        print(f"EXPERTS_KERNEL_TIME impl={impl} kernel={kernel} layer={LAYER} chunk={chunk} per_call_ms={dt * 1e3:.2f}")
+        for t in (od, xd, rd):
+            ttnn.deallocate(t)
+        mod.free()
+        del mod
+    a, b = outs["loop"].double(), outs["unified"].double()
+    rel = ((b - a).norm() / a.norm()).item()
+    ac, bc = a - a.mean(), b - b.mean()
+    pcc = (ac @ bc / (ac.norm() * bc.norm())).item()
+    print(
+        f"EXPERTS_KERNEL_CMP impl={impl} unified vs loop: rel {rel:.5f} pcc {pcc:.7f} finite {bool(torch.isfinite(b).all())}"
+    )
+    assert bool(torch.isfinite(b).all()) and pcc > 0.999, (rel, pcc)

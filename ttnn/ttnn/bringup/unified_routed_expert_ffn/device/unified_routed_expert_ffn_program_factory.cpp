@@ -14,6 +14,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -68,6 +69,12 @@ constexpr uint32_t CB_X_RM = tt::CBIndex::c_16;
 constexpr uint32_t CB_GATE_BIAS = tt::CBIndex::c_17;
 constexpr uint32_t CB_UP_BIAS = tt::CBIndex::c_18;
 constexpr uint32_t CB_DOWN_BIAS = tt::CBIndex::c_19;
+// Optional per-row routing weights (DeepSeek-V4.1, ROUTED_ROW_WEIGHT): CB_ROW_WEIGHT holds one Float32 tile per
+// tile-row of this core's chunk, the row's weight replicated across faces 0 and 2 (the reader builds it);
+// CB_ROW_WEIGHT_RM is the reader's staging for the TILE_HEIGHT routing-weight sticks of one tile-row. Allocated only
+// with routing_weights.
+constexpr uint32_t CB_ROW_WEIGHT = tt::CBIndex::c_20;
+constexpr uint32_t CB_ROW_WEIGHT_RM = tt::CBIndex::c_21;
 
 // Tile columns per DRAM ND shard of a weight tensor, or 0 when it is not ND-sharded (the
 // interleaved default). The kernels take this as a compile-time arg and coalesce a shard row into
@@ -122,6 +129,11 @@ void visit_reader_common_buffers(const UnifiedRoutedExpertFfnInputs& t, bool fus
         visit_weight_buffers(t.up_biases, fn);
         visit_weight_buffers(t.down_biases, fn);
     }
+    if (t.routing_weights.has_value()) {
+        auto* rw_buffer = t.routing_weights->buffer();
+        TT_FATAL(rw_buffer != nullptr, "routing_weights buffer must be allocated on device");
+        fn(rw_buffer);
+    }
 }
 
 // Writer common args: output, region offsets, up/down weights.
@@ -165,10 +177,15 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // This expert's M (not x's allocated M): x may be a shared buffer wider
     // than one expert's region. K still comes from x's last dim (emb).
     const uint32_t M_tiles_full = op.m_tiles;
-    const uint32_t K_gate_tiles = x_shape[-1] / TILE;          // = N_gate K = emb / TILE
-    const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;  // = hidden / TILE
-    const uint32_t K_down_tiles = down_shape[-2] / TILE;       // = hidden / TILE
-    const uint32_t N_down_tiles_full = down_shape[-1] / TILE;  // = emb / TILE
+    // weights_transposed: the weights are [N, K] (nn.Linear storage) instead of [K, N].
+    const int w_k_dim = op.weights_transposed ? -1 : -2;
+    const int w_n_dim = op.weights_transposed ? -2 : -1;
+    const uint32_t K_gate_tiles = x_shape[-1] / TILE;               // = N_gate K = emb / TILE
+    const uint32_t N_gate_tiles_full = gate_shape[w_n_dim] / TILE;  // = hidden / TILE
+    const uint32_t K_down_tiles = down_shape[w_k_dim] / TILE;       // = hidden / TILE
+    const uint32_t N_down_tiles_full = down_shape[w_n_dim] / TILE;  // = emb / TILE
+    // DeepSeek-V4.1 h options (routing weight and / or fp8 act quant), applied in the fused binary activation.
+    const bool h_opts = op.fuse_routing_weight || op.fp8_act_quant;
 
     // Blackhole compute grid is 13x10 worker cores; we use the bottom-left
     // 11x8 = 88 to leave headroom for dispatch and to give per_core_M /
@@ -249,6 +266,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // (cb_footprint_bytes below) is unchanged on the bias-free path.
     const uint32_t bias_ts =
         op.fuse_bias ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.gate_biases[0].dtype())) : 0;
+    // Routing weights (ROUTED_ROW_WEIGHT): one routing-weight stick per dispatched row (C fp32 values), staged
+    // TILE_HEIGHT at a time at the buffer's aligned page stride. Zero when unused (footprint unchanged).
+    const uint32_t rw_stick_bytes =
+        op.fuse_routing_weight ? static_cast<uint32_t>(t.routing_weights->buffer()->page_size()) : 0;
+    const uint32_t rw_stick_stride =
+        op.fuse_routing_weight ? static_cast<uint32_t>(t.routing_weights->buffer()->aligned_page_size()) : 0;
+    const uint32_t rw_tile_size = op.fuse_routing_weight ? tt::tile_size(tt::DataFormat::Float32) : 0;
+    const uint32_t rw_stage_bytes = TILE * rw_stick_stride;
 
     // in0_block_w_gu (the gate/up K-loop block width) must divide K_gate_tiles.
     // The short_seq picker above already restricts itself to divisors, but the
@@ -275,9 +300,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // shard would still read correctly through the run loop but would split or straddle the slice,
     // losing the point, so it fails host-side instead. gate and up are pinned equal: the reader
     // and the writer read them through a single shared compile-time width.
-    const uint32_t gate_shard_w = nd_shard_n_tiles(t.gate_projs[0]);
-    const uint32_t up_shard_w = nd_shard_n_tiles(t.up_projs[0]);
-    const uint32_t d_shard_w = nd_shard_n_tiles(t.down_projs[0]);
+    // weights_transposed reads tile by tile through the accessor (no coalesced shard rows): widths 0.
+    const uint32_t gate_shard_w = op.weights_transposed ? 0 : nd_shard_n_tiles(t.gate_projs[0]);
+    const uint32_t up_shard_w = op.weights_transposed ? 0 : nd_shard_n_tiles(t.up_projs[0]);
+    const uint32_t d_shard_w = op.weights_transposed ? 0 : nd_shard_n_tiles(t.down_projs[0]);
     TT_FATAL(
         gate_shard_w == up_shard_w,
         "gate_proj and up_proj must share a weight layout: ND shard widths {} and {} tiles",
@@ -445,6 +471,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // Bias CBs (FUSE_BIAS): single-buffered, per_core_N_gu (gate/up) + per_core_N_d
         // (down) tiles. Keep in sync with the CB allocations in the "Bias CBs" section.
         total += static_cast<uint64_t>(2 * per_core_N_gu + per_core_N_d) * bias_ts;
+        // Routing-weight CBs (ROUTED_ROW_WEIGHT): one Float32 tile per tile-row + one tile-row of staged sticks.
+        total += static_cast<uint64_t>(M) * rw_tile_size + rw_stage_bytes;
         return total;
     };
 
@@ -879,6 +907,13 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         make_cb(CB_DOWN_BIAS, bias_df, /*tiles=*/per_core_N_d, bias_tile_size);
     }
 
+    // Routing-weight CBs (ROUTED_ROW_WEIGHT): one Float32 tile per tile-row of the chunk (the reader pushes a full
+    // per_core_M block per chunk, compute pops it after the activation), and the reader's stick staging.
+    if (op.fuse_routing_weight) {
+        make_cb(CB_ROW_WEIGHT, tt::DataFormat::Float32, /*tiles=*/per_core_M, rw_tile_size);
+        make_cb(CB_ROW_WEIGHT_RM, tt::DataFormat::Float32, /*tiles=*/TILE, rw_stick_stride);
+    }
+
     // -------------------------- kernel build ------------------------------
     // Reader compile-time args. Order must exactly match the layout the reader
     // kernel reads via get_compile_time_arg_val(idx) and the TensorAccessor
@@ -971,6 +1006,19 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
         reader_defines.emplace_back("FUSE_BIAS", "1");
     }
+    if (op.fuse_routing_weight) {
+        // After the `start` accessor (biases are refused with routing_weights): the two CB ids, the stick size and
+        // staging stride, then the routing-weights accessor.
+        reader_ct_args.push_back(CB_ROW_WEIGHT);
+        reader_ct_args.push_back(CB_ROW_WEIGHT_RM);
+        reader_ct_args.push_back(rw_stick_bytes);
+        reader_ct_args.push_back(rw_stick_stride);
+        tt::tt_metal::TensorAccessorArgs(t.routing_weights->buffer()).append_to(reader_ct_args);
+        reader_defines.emplace_back("ROUTED_ROW_WEIGHT", "1");
+    }
+    if (op.weights_transposed) {
+        reader_defines.emplace_back("WEIGHTS_NK", "1");
+    }
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
         "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/kernels/dataflow/"
@@ -1053,6 +1101,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     writer_kernel_desc.core_ranges = core_range_set;
     writer_kernel_desc.compile_time_args = std::move(writer_ct_args);
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
+    if (op.weights_transposed) {
+        tt::tt_metal::KernelDescriptor::Defines writer_defines;
+        writer_defines.emplace_back("WEIGHTS_NK", "1");
+        writer_kernel_desc.defines = std::move(writer_defines);
+    }
 
     // Compute kernel compile-time args: positional + named CB ids.
     std::vector<uint32_t> compute_ct_args = {
@@ -1130,6 +1183,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // positional CT arg; compute has no free positional slot, so it is named.
         {"m_tiles_full", M_tiles_full},
     };
+    if (op.fuse_routing_weight) {
+        compute_named_args.emplace_back("cb_row_weight", CB_ROW_WEIGHT);
+    }
     if (fuse_bias) {
         compute_named_args.emplace_back("cb_gate_bias", CB_GATE_BIAS);
         compute_named_args.emplace_back("cb_up_bias", CB_UP_BIAS);
@@ -1166,6 +1222,27 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // the activations that have that branch.
         compute_defines.emplace_back("FUSE_BIAS", "1");
     }
+    if (op.fuse_routing_weight) {
+        compute_defines.emplace_back("ROUTED_ROW_WEIGHT", "1");
+    }
+    if (op.fp8_act_quant) {
+        compute_defines.emplace_back("FP8_ACT_QUANT", "1");
+    }
+    if (op.weights_transposed) {
+        compute_defines.emplace_back("WEIGHTS_NK", "1");
+    }
+    // The h options work on exact fp32 values: the gate/up accumulators (and the routing-weight tiles, and the down
+    // accumulator on its way to the output) are unpacked straight into the fp32 DEST, not through SrcA (TF32).
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
+    if (h_opts) {
+        unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        unpack_to_dest_mode[CB_PARTIALS_GU] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[CB_PARTIALS_UP] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[CB_PARTIALS_D] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        if (op.fuse_routing_weight) {
+            unpack_to_dest_mode[CB_ROW_WEIGHT] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
 
     // Every variant runs LoFi, except GeluTanh (Gemma-4 bring-up) and the opt-in high_precision
     // path, which take the caller's math_fidelity: LoFi truncates the bf16 weight mantissa and biases the expert
@@ -1188,6 +1265,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         .math_fidelity = compute_fidelity,
         .fp32_dest_acc_en = kFp32DestAccEn,
         .dst_full_sync_en = false,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
         .math_approx_mode = false,
     };
 
