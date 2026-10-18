@@ -40,6 +40,7 @@ import torch
 import ttnn
 from models.demos.common.bringup.reference.interface import Ctx, run_block
 
+from . import ccl
 from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights
 from .collapse import TtHcCollapse
 from .common import DRAM, SP_AXIS, TP_AXIS
@@ -519,6 +520,7 @@ class TtDS41Model:
         for i in self.layers:
             missing = [j for j in cfg.sources(i) if j not in self.layers]
             assert not missing, f"layer {i} reads the state of layers {missing}, which are not loaded"
+        ccl.setup(mesh)  # CCL_IMPL=fabric: the fabric collectives' semaphores and plans, once at load (agent rule 5)
         self.tables = WindowTables(mesh, self.chunk)
         self._rope, self._crope, self._sparse = {}, {}, None
         self.state = None

@@ -5,6 +5,6 @@ a line / ring reduce-scatter over the fabric along one mesh axis, with the plann
 fabric_all_gather (fabric_all_gather_ttnn/fabric_all_gather_py.py). From mstaletovic/mimo-v2-dp
 (ttnn/ttnn/operations/examples/fabric_reduce_scatter)."""
 
-from .fabric_reduce_scatter import fabric_reduce_scatter
+from .fabric_reduce_scatter import fabric_reduce_scatter, prepare
 
-__all__ = ["fabric_reduce_scatter"]
+__all__ = ["fabric_reduce_scatter", "prepare"]

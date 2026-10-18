@@ -35,6 +35,7 @@ import torch
 
 import ttnn
 
+from . import ccl
 from .common import DRAM, TP_AXIS, tp_sum
 from .quant import fp8_qdq
 
@@ -100,7 +101,7 @@ class TtDistributedRmsNorm:
             return y
         # ffn_norm: whole token rows on every chip of the mesh row (router, dispatch, shared expert); chip column c's
         # slice lands at columns [c H/TP, (c+1) H/TP) (mesh-column order), so the rows are the reference's.
-        full = ttnn.all_gather(y, dim=3, cluster_axis=TP_AXIS, memory_config=DRAM)
+        full = ccl.all_gather(y, 3, TP_AXIS)
         ttnn.deallocate(y)
         return full
 

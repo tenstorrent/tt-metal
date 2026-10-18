@@ -5,7 +5,7 @@
 - Python: `ttnn.bringup.*` (was `ttnn.experimental.*` on the source branch)
 - Brought in for: glm53_flash_d_p_lb (MoE on the LoudBox, the MiMo-V2 all-gather MoE design: same hidden / expert
   width / top-8 as MiMo-V2.6)
-- Used by: glm53_flash_d_p (tt/experts_ag.py, GLM_EXPERTS_MODE=ag; the whole model on the LoudBox via glm53_flash_d_p_lb)
+- Used by: glm53_flash_d_p (tt/experts_ag.py, GLM_EXPERTS_MODE=ag; the whole model on the LoudBox via glm53_flash_d_p_lb); deepseek_v41_flash_d_p (tt/ccl.py, CCL_IMPL=fabric, P.5: the model's all_gathers, num_links None; no op change)
 
 A drop-in for `ttnn.experimental.high_bw_all_gather` (same signature, validation, program-cache rules and output) with
 its own program: per link a port core placed by NoC1 hops to its Ethernet core, store-and-forward relays gated by arrival

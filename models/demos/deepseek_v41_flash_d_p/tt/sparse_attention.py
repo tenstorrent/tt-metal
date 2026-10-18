@@ -44,6 +44,7 @@ import torch
 
 import ttnn
 
+from . import ccl
 from .attention import WINDOW, TtWindowAttention, TtWindowCache, WindowTables, _upload, attention_weights
 from .common import DRAM, SP_AXIS, TP_AXIS
 from .rope import RopeTable
@@ -92,9 +93,9 @@ class TtSparseAttention(TtWindowAttention):
         g = self.geo
         out = t
         if dedup and g.tp > 1:
-            out = ttnn.all_gather(out, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
+            out = ccl.all_gather(out, 2, TP_AXIS)
         if g.sp > 1:
-            nxt = ttnn.all_gather(out, dim=2, cluster_axis=SP_AXIS, memory_config=DRAM)
+            nxt = ccl.all_gather(out, 2, SP_AXIS)
             if out is not t:
                 ttnn.deallocate(out)
             out = nxt
