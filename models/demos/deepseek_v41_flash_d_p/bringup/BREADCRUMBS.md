@@ -1808,3 +1808,31 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/unit/test_fabric_rs_exact_fp32.py`; regression (options off,
   2x2-runnable) `.../tests/unit/test_fabric_reduce_scatter.py .../tests/test_fabric_reduce_scatter_ttnn.py`: 5 passed,
   same errors as the unchanged file (the other unit files are 2x4-only).
+
+## P.6 perf (attempt 1): TP partial sums in bf16 on the fabric reduce-scatter (CCL_IMPL=fabric_bf16)
+- P.5 had not added the value (OV-18 open), so added: setting CCL_IMPL {stock, fabric (default, unchanged),
+  fabric_bf16}; MAX_PRECISION CCL_IMPL=fabric (exact), so component / swap tests stay exact.
+- fabric_bf16 (tt/ccl.py), as GLM-5.3's scatter_rows (glm53_flash_d_p/tt/common.py, GLM_SCATTER_OP=fabric_bf16):
+  sum_cols (ATTN_O_SUM / EXPERTS_SUM) = bf16 partial -> ttnn.bringup.fabric_reduce_scatter(dim 3, default FPU add,
+  cache_descriptors) -> typecast fp32 (mhc_post asserts fp32 y); tp_sum (HC_TP_SUM gather_add, tile-aligned:
+  mHC mixes, q_a, compressor, indexer gates) = bf16 RS dim 2 -> fabric_all_gather in bf16 -> typecast fp32. Not
+  tile-aligned sums (norm sum of squares [S/SP, 1], engram gates [S/SP, 12]) stay the exact fp32 gather_add (a bf16
+  partial reaching it is cast to fp32 first). No fork change.
+- Tuning (DS41-67): the first version typecast fp32 -> bf16 in ccl and was slower than exact (device total 642.09 vs
+  641.23). Now the producers of the big partials write bf16 directly when `ccl.partial_dtype(mesh)` says so
+  (fabric_bf16 and TP > 1 and the gather_add path): attention wo_b linear (tt/attention.py), moe_add's add
+  (tt/model.py), q_a's linear (tt/q_a.py). Compressor / indexer / mHC partials still typecast in ccl (small).
+- Probe (2x2, random fp32 partials x 3): bf16 sums vs fp64 rel 2.45e-3 for every shape; output vs
+  bf16(bf16 a + bf16 b) within 1 bf16 ulp (max 0.125 at |x| 16-32).
+- Per op (device kernel ms per call, max over chips, 6 calls after 2 warm-ups, 1024 rows per chip; probe, deleted per
+  K-56). stock / fabric / fabric_bf16 with fp32 input (cast in ccl) / fabric_bf16 with bf16 producer input:
+  sum_cols [1024, 5120] 0.664 / 0.147 / 0.196 (cast 0.071 + RS 0.080 + back 0.046) / 0.125 (RS 0.079 + back 0.045);
+  tp_sum q_a [1024, 1792] 0.321 / 0.106 / 0.125 / 0.091; compressor [1024, 1024] 0.165 / 0.065 / 0.070 / 0.054;
+  hc / indexer [1024, 32] 0.014 / 0.013 / 0.015 / 0.015.
+- Ladder last (DS41_CCL_IMPL=fabric_bf16): PASS. pcc_layer L00 0.99976, L01 0.99948, L02 0.99863, L03 0.99674,
+  L14 0.99781, L20 0.99972, L21 0.99813, L24 0.99980; pcc_state_min 0.99776 (P.5 fabric: L03 0.99681, state 0.99767).
+- Plain profile (rung last, chunk 53248-55296, 8 layers), fabric_bf16 vs P.5's fabric (results/P.5_profile.json,
+  another session): device total 639.62 vs 641.23 ms (-1.61, -0.25 %); attention 233.31 vs 234.20, moe_add 1.99 vs
+  2.43, q_a 36.50 vs 36.75, rest within +-0.03; chunk wall 814.8 ms; host_transfers_per_layer 0; pcc_chunk_out 0.99979.
+  On this 2x2 box (TP = 2) the sums are a small share of the chunk; the gain grows with the bytes per sum.
+- Re-run: on `DS41_CCL_IMPL=fabric_bf16`, off `DS41_CCL_IMPL=fabric`, in front of the brief's ladder / profile command.
