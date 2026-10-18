@@ -66,7 +66,8 @@ class RolloutBatch:
 class RolloutSampler(ABC):
     """Generates completions and their log-probs with updatable weights.
 
-    weight_version starts at 0. update_weights(weights, version) sets weight_version to version.
+    weight_version starts at 0, or at -1 for a sampler booted without real weights; generate() then raises
+    until the first update_weights. update_weights(weights, version) requires version > weight_version.
     """
 
     @abstractmethod
