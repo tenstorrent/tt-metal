@@ -41,20 +41,20 @@ Everything else in the launch stays the same.
 | Smaller context with images, 16 users | `runtime_spec_b16_k5_131072_vision.json` | 16 | 131,072 | yes |
 | Long context, 4 users | `runtime_spec_b4_k5_1048576.json` | 4 | 1,048,576 | no |
 | Long context with images, 4 users, 1M | `runtime_spec_b4_k5_1048576_vision.json` | 4 | 1,048,576 | yes |
-| Long context with images, 4 users | `runtime_spec_b4_k5_786432_vision.json` | 4 | 786,432 | yes |
-| Not recommended: images, 4 users (GSM8K about 91 %) | `runtime_spec_b4_k5_524288_vision.json` | 4 | 524,288 | yes |
 | Default, 16 users (prefix caching + chunked prefill) | `runtime_spec_b16_k5_262144_vision.json` | 16 | 262,144 | yes |
 | Default, 4 users (prefix caching + chunked prefill) | `runtime_spec_b4_k5_1048576_vision.json` | 4 | 1,048,576 | yes |
+
+The image's own catalog carries the same two defaults, so a launch without a runtime spec (`--model deepseek-ai/DeepSeek-V4.1-Flash --tt-device blackhole_galaxy`) serves 16 users at 262,144 tokens, and `--impl deepseek-v41-flash-1m` serves 4 users at 1,048,576 tokens (both with prefix caching, chunk budget 4,096, k = 5, image input).
 
 Shared settings:
 - Speculative decoding: 5 draft tokens per round, lossless.
 - Sampling on the device: temperature, top-k, top-p, per-request seed.
-- KV cache: fp8 pool. Prefix caching is on in the 262,144 / 524,288 / 1,048,576-token specs (token budget 4,096); the `_noapc` copies of those specs switch it off. The 131,072-token specs run without it.
+- KV cache: fp8 pool. Prefix caching is on in the 262,144 / 1,048,576-token specs (token budget 4,096); the `_noapc` copies of those specs switch it off. The 131,072-token specs run without it.
 - Chat template: non-thinking.
 - More requests than users wait in the vLLM queue.
 
 Context budget: about 1M tokens per mesh row (users x context per row).
-Long contexts need a smaller trace region (0.8e9 at 262,144, 0.65e9 at 1M and 524,288 tokens).
+Long contexts need a smaller trace region (0.8e9 at 262,144, 0.65e9 at 1M tokens).
 `DSV41_SPEC_MAX_CTX` sets the context cap of speculative decoding.
 It is 131,584 by default and 262,144 in the 16-user long-context spec.
 
