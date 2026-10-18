@@ -5,7 +5,7 @@ import math
 
 import ttnn
 
-from ..compute_configs import matmul_compute_config
+from ..compute_configs import matmul_compute_config, rms_norm_compute_config
 from .weights import AttentionWeights
 
 
@@ -123,7 +123,9 @@ def apply_qk_norm_per_head(tensor, norm_weight, eps: float):
     ttnn.rms_norm. head_dim is NOT TP-sharded, so the norm is local to each device — no cross-TP
     reduction. Applied BEFORE RoPE, on Q and K only (matches transformers minimax_m3_vl).
     """
-    return ttnn.rms_norm(tensor, weight=norm_weight, epsilon=eps)
+    return ttnn.rms_norm(
+        tensor, weight=norm_weight, epsilon=eps, compute_kernel_config=rms_norm_compute_config(tensor.device())
+    )
 
 
 def concat_heads(tensor):

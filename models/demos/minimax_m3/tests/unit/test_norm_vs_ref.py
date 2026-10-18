@@ -83,6 +83,41 @@ def test_rms_norm_vs_ref(mesh_device, device_params, gemma, m, width, reset_seed
     assert passing, f"PCC fail (gemma={gemma}, width={width}): {pcc}"
 
 
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+def test_rms_norm_fp32_statistics(mesh_device, device_params, reset_seeds):
+    """Residual-like rows at full emb (a few large channels, row scales over 4 decades): the per-token scale must
+    match fp32 statistics. The bf16-DEST default sums x^2 in bf16 (1-2% per-token error on real residuals)."""
+    m, width, eps = 1024, 6144, 1e-6
+    x = torch.randn(1, 1, m, width) * torch.logspace(-2, 2, m).reshape(1, 1, m, 1)
+    x[..., torch.randperm(width)[:8]] *= 30.0
+    x = x.bfloat16().float()
+    gain = (torch.randn(width) * 0.1 + 1.0).bfloat16().float()  # the gain as the device holds it
+    ref = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * gain
+
+    norm = RMSNorm(
+        mesh_device=mesh_device,
+        hf_config=SimpleNamespace(rms_norm_eps=eps, use_gemma_norm=False),
+        state_dict={"weight": gain},
+        tensor_cache_path=None,
+    )
+    x_tt = ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    out = ttnn.to_torch(ttnn.get_device_tensors(norm(x_tt))[0]).reshape(1, 1, m, width).float()
+
+    scale = (out * ref).sum(-1) / ref.pow(2).sum(-1)  # per-token fit of out to ref
+    rel = ((out - ref).norm() / ref.norm()).item()
+    worst = (scale - 1).abs().max().item()
+    logger.info(f"rms_norm fp32 statistics: rel {rel:.5f}, worst per-token scale error {worst:.5f}")
+    assert worst < 5e-3, f"per-token scale error {worst:.5f}: statistics not fp32"
+    assert rel < 5e-3, f"rel error {rel:.5f}"
+
+
 # (8, 4) + linear_fabric: the production mesh (SP=8 rows, TP=4 cols) on FABRIC_1D — the plain-MESH
 # single-galaxy descriptor has no wrap links, so FABRIC_1D_RING is not openable here.
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)

@@ -95,7 +95,7 @@ Module-level PCC tests (vs torch reference / HF) live under [`tests/unit/`](test
 ### Compute precision
 
 The non-expert matmuls (QKV, index_q/k, o_proj, dense MLP, shared expert) run HiFi3 with fp32 accumulation on
-bf16 activations ([`tt/compute_configs.py`](tt/compute_configs.py)).
+bf16 activations, and every RMSNorm computes its statistics in fp32 ([`tt/compute_configs.py`](tt/compute_configs.py)).
 The routed experts keep their kernels' own configs (`unified_routed_expert_moe` is fixed at LoFi with bf16
 accumulation).
 

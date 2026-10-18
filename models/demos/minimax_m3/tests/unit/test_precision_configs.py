@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only checks (no device) that the non-expert matmuls run with the compute configs of tt/compute_configs.py:
-every ttnn call is replaced by a recorder. The device-side numerics are covered by the *_vs_ref layer tests.
+"""Host-only checks (no device) that the non-expert matmuls and the RMSNorms run with the compute configs of
+tt/compute_configs.py: every ttnn call is replaced by a recorder. The device-side numerics are covered by
+test_norm_vs_ref.py (test_rms_norm_fp32_statistics) and the *_vs_ref layer tests.
 """
 
 from types import SimpleNamespace
@@ -11,9 +12,9 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.minimax_m3.tt import dense_mlp, layer
+from models.demos.minimax_m3.tt import dense_mlp, layer, rms_norm
 from models.demos.minimax_m3.tt.attention import msa, operations
-from models.demos.minimax_m3.tt.compute_configs import matmul_compute_config
+from models.demos.minimax_m3.tt.compute_configs import matmul_compute_config, rms_norm_compute_config
 from models.demos.minimax_m3.tt.moe.shared_overlap import DEST_TILES, cb_tiles
 
 BH = ttnn.device.Arch.BLACKHOLE
@@ -60,13 +61,14 @@ def _recorder(monkeypatch, *names):
 
 @pytest.mark.parametrize("arch", [BH, WH], ids=["bh", "wh"])
 def test_configs(arch):
-    mm = matmul_compute_config(_Dev(arch))
+    mm, norm = matmul_compute_config(_Dev(arch)), rms_norm_compute_config(_Dev(arch))
     assert (mm.math_fidelity, mm.fp32_dest_acc_en, mm.packer_l1_acc, mm.math_approx_mode) == (
         ttnn.MathFidelity.HiFi3,
         True,
         True,
         False,
     )
+    assert (norm.math_fidelity, norm.fp32_dest_acc_en, norm.math_approx_mode) == (ttnn.MathFidelity.HiFi4, True, False)
     assert matmul_compute_config(_Dev(arch)) is mm
 
 
@@ -118,6 +120,12 @@ def test_o_proj_fused_rs(monkeypatch):
     assert out.name == "rs"
 
 
+def test_qk_norm(monkeypatch):
+    calls = _recorder(monkeypatch, "rms_norm")
+    operations.apply_qk_norm_per_head(_T("q", shape=(1, 16, 1024, 128)), _T("g"), 1e-6)
+    assert calls[0][2]["compute_kernel_config"] is rms_norm_compute_config(_Dev())
+
+
 def test_index_projections(monkeypatch):
     calls = _recorder(monkeypatch, "linear")
     monkeypatch.setattr(msa, "_split_index_heads", lambda t, d: t)
@@ -160,6 +168,36 @@ def test_shared_expert_blocks_fit_fp32_dest():
     """fp32 DEST holds 4 tiles at half-sync; the fp32 partials block is a separate buffer of 2 bf16 tiles per tile."""
     assert DEST_TILES == 4
     assert cb_tiles(4, 2, 3, 8) == 2 * (2 + 3) * 4 + 3 * 2 * 3
+
+
+def _norm(distributed):
+    n = object.__new__(rms_norm.RMSNorm)
+    n.__dict__.update(
+        is_distributed=distributed,
+        tt_weight=_T("gain"),
+        eps=1e-6,
+        compute_config=rms_norm_compute_config(_Dev()),
+        mesh_device=_Dev(),
+    )
+    return n
+
+
+def test_rms_norm_single_pass(monkeypatch):
+    calls = _recorder(monkeypatch, "rms_norm")
+    _norm(False).forward(_T("x"))
+    assert calls[0][2]["compute_kernel_config"] is rms_norm_compute_config(_Dev())
+
+
+def test_rms_norm_distributed(monkeypatch):
+    calls = _recorder(monkeypatch, "rms_norm_pre_all_gather", "rms_norm_post_all_gather", "deallocate")
+    n = _norm(True)
+    n._gather_stats = lambda t, mc=None: t
+    n.forward(_T("x", shape=(1, 1, 1024, 1536)))
+    pre, post = (c for c in calls if c[0] != "deallocate")
+    assert pre[2]["dtype"] == ttnn.float32, "the per-column sum(x^2) is gathered fp32"
+    for c in (pre, post):
+        assert c[2]["compute_kernel_config"] is rms_norm_compute_config(_Dev())
+    assert post[2]["dtype"] == ttnn.bfloat16
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8"])
