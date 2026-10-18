@@ -47,7 +47,7 @@ from ttml.checkpointing import load_checkpoint
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.common.utils import build_mesh
 from ttml.models import RunnerType, WeightTyingType
-from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
+from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors
 from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
 from ttml.models.qwen3.weights import load_weights_from_hf
 
@@ -137,34 +137,7 @@ def _build_llama(tf_config: TransformerConfig, device_config: DeviceConfig, mode
 
     tokenizer = AutoTokenizer.from_pretrained(model_source)
     tf_config.vocab_size = len(tokenizer)
-
-    rope_scaling = LlamaRopeScalingConfig(
-        scaling_factor=getattr(tf_config, "scaling_factor", 0.0) or 0.0,
-        high_freq_factor=getattr(tf_config, "high_freq_factor", 4.0) or 4.0,
-        low_freq_factor=getattr(tf_config, "low_freq_factor", 1.0) or 1.0,
-        original_context_length=getattr(tf_config, "original_context_length", 0) or 0,
-    )
-
-    runner_type = RunnerType.from_string(str(tf_config.runner_type))
-    weight_tying = WeightTyingType.Disabled
-    if tf_config.weight_tying:
-        weight_tying = WeightTyingType.from_string(str(tf_config.weight_tying))
-
-    llama_cfg = LlamaConfig(
-        hidden_size=tf_config.embedding_dim,
-        intermediate_size=tf_config.intermediate_dim,
-        num_hidden_layers=tf_config.num_blocks,
-        num_attention_heads=tf_config.num_heads,
-        num_key_value_heads=tf_config.num_groups,
-        vocab_size=len(tokenizer),
-        max_position_embeddings=tf_config.max_sequence_length,
-        rope_theta=tf_config.theta or 10000.0,
-        attention_dropout=tf_config.dropout_prob,
-        mlp_dropout=tf_config.dropout_prob,
-        runner_type=runner_type,
-        weight_tying=weight_tying,
-        rope_scaling=rope_scaling,
-    )
+    llama_cfg = LlamaConfig.from_transformer_config(tf_config, len(tokenizer))
 
     tt_model = LlamaCompositeKV(llama_cfg)
 
