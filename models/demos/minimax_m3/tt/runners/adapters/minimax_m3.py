@@ -27,8 +27,9 @@ imported lazily inside the methods that need it, so ``import ...adapters.minimax
 for the H2D producer (which reads only path/trace attributes).
 
 Env the operator sets (mirrors the rest of the M3 ecosystem):
-  HF_MODEL / PREFILL_HF_MODEL   real MiniMax-M3 checkpoint dir (VL-wrapped config + bf16 safetensors)
-  TT_CACHE_PATH                 tilized weight-cache root (default: /mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill if present, else the checkpoint dir)
+  HF_MODEL / PREFILL_HF_MODEL   MiniMax-M3-architecture checkpoint dir (VL-wrapped config + bf16 or MXFP8/NVFP4 safetensors)
+  TT_CACHE_PATH                 tilized weight-cache root (default: /mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill
+                                for the default checkpoint when present, else the checkpoint dir)
   PREFILL_TRACE_DIR             golden trace dir (metadata.json + kv_cache/) for KV-PCC validation
 """
 
@@ -76,7 +77,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     # AutoConfig can load M3 only from the full VL checkpoint (it carries the remote config code); the
     # repo config-only dir does not register model_type=minimax_m3. Operators set HF_MODEL/PREFILL_HF_MODEL.
     hf_model_default = "/mnt/weka/model-weights/llm/minimax/MiniMax-M3/"
-    ttnn_cache_default = ""  # unused: see model_config.default_weight_cache_root (TT_CACHE_PATH > weka root > ckpt)
+    ttnn_cache_default = ""  # unused: see model_config.default_weight_cache_root (TT_CACHE_PATH > M3 weka root > ckpt)
     default_gate_mode = "DEVICE_FP32"  # unused by M3 (kept for runner contract parity)
     prefill_trace_default = "/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_10240"
 
@@ -101,10 +102,11 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
         ``max_seq_len`` on the result afterward."""
         from transformers import AutoConfig
 
+        from models.demos.minimax_m3.utils.checkpoint import text_config_of
+
         model_path = _model_path()
         logger.info(f"Loading HF config for model={self.name!r} from {model_path}")
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        return getattr(cfg, "text_config", cfg)
+        return text_config_of(AutoConfig.from_pretrained(model_path, trust_remote_code=True))
 
     # ------------------------------------------------------------------
     # Weight cache
@@ -172,7 +174,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
         else:
             model_path = _model_path()
             logger.warning(
-                f"[minimax_m3] weight cache incomplete at {cache_path}; reading bf16 source from {model_path} "
+                f"[minimax_m3] weight cache incomplete at {cache_path}; reading source weights from {model_path} "
                 f"(slow — populate the cache once to skip this)."
             )
             # Read only the shards for the GLOBAL layer slice this rank builds

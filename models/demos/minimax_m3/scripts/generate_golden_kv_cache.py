@@ -13,8 +13,8 @@ is a vision-language package (model_type=minimax_m3_vl) that ships no modeling c
 AutoModelForCausalLM cannot load it. The reference rebuilds just the text tower from the raw
 language_model.* weights, with math composed from the team's PCC-validated unit-test references.
 
-The reference uses the real attention schedule: dense causal attention for layers 0-2 and MSA
-sparse attention for layers 3-59. Pass --dense-only to force full causal attention on every layer
+The reference uses the real attention schedule from the checkpoint config (sparse_attention_freq):
+dense causal attention where it is 0 (M3: layers 0-2) and MSA sparse attention where it is 1. Pass --dense-only to force full causal attention on every layer
 (identical to the default at <=2048 tokens; above 2048 it will NOT match the real sparse model —
 pipeline testing only, while MSA prefill is not yet device-tested).
 
@@ -148,7 +148,7 @@ def parse_args():
         "--dense-only",
         action="store_true",
         help="Force full causal attention on ALL layers, skipping the MSA sparse path. Default is "
-        "the real schedule (dense layers 0-2 + MSA sparse 3-59). At <=2048 tokens dense-only is "
+        "the real schedule from sparse_attention_freq (M3: dense layers 0-2 + MSA sparse 3-59). At <=2048 tokens dense-only is "
         "identical to the default; above 2048 it does NOT match the real sparse model — use it "
         "to exercise the larger-sequence pipeline while MSA prefill is not yet device-tested.",
     )
@@ -260,7 +260,8 @@ def main():
                 flush=True,
             )
     else:
-        print(f"[forward] real schedule: dense attn (layers 0-2) + MSA sparse attn (layers 3-59)", flush=True)
+        msa = [i for i in range(num_layers) if model.cfg.is_sparse_attn_layer(i)]
+        print(f"[forward] real schedule: MSA sparse attn on {len(msa)}/{num_layers} layers {msa}", flush=True)
     print(f"[forward] WARNING: CPU inference is SLOW - can take 10-60+ minutes!", flush=True)
     print(f"{'='*70}\n", flush=True)
 

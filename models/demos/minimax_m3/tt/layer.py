@@ -104,8 +104,8 @@ class DecoderLayer:
         attn_types = getattr(hf_config, "attn_type_list", None) or getattr(hf_config, "layer_types", None)
         self.attention_type = attn_types[layer_idx] if attn_types is not None else 1
 
-        # M3 MSA: layers with sparse_attention_freq[layer_idx]==1 (layers 3-59) run block-sparse
-        # attention; layers 0-2 (==0) stay dense. sparse_attention_config may be a dict or an object.
+        # M3 MSA: layers with sparse_attention_freq[layer_idx]==1 run block-sparse attention, the rest
+        # dense (M3: 3-59 / 0-2). sparse_attention_config may be a dict or an object.
         sparse_cfg = getattr(hf_config, "sparse_attention_config", None)
         is_sparse = is_sparse_attention_layer(hf_config, layer_idx)
 
@@ -157,11 +157,10 @@ class DecoderLayer:
         )
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
-        # Profiling zone name for this layer. M3 layers 0-2 are dense (dense attention + dense MLP)
-        # and 3-59 are sparse (MSA + MoE) — sparse_attention_freq and moe_layer_freq agree — so one
-        # tag describes the whole layer. Inner zone names are relative; the parser composes the full
-        # path from the nesting (see utils/profiler_utils.py).
-        self.zone_name = f"layer{layer_idx:02d}_{'sparse' if is_sparse else 'dense'}"
+        # Profiling zone name for this layer, tagged by its MLP (dense MLP vs MoE): the attention type
+        # follows sparse_attention_freq, which need not match moe_layer_freq. Inner zone names are
+        # relative; the parser composes the full path from the nesting (see utils/profiler_utils.py).
+        self.zone_name = f"layer{layer_idx:02d}_{'dense' if self.is_dense else 'sparse'}"
 
     def _gather_emb(self, tensor):
         """TP all-gather emb/tp -> full emb. The managed all_gather_async (ping-pong + barrier

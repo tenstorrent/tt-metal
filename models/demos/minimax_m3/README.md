@@ -8,7 +8,7 @@ Config: [`configs/MiniMax-M3/config.json`](configs/MiniMax-M3/config.json).
 
 | | |
 |---|---|
-| Decoder layers | 60 (hybrid schedule; layers **0–2 dense**, **3–59 sparse/MoE**) |
+| Decoder layers | 60 (hybrid schedule; layers **0–2 dense**, **3–59 sparse/MoE**; both schedules come from the checkpoint config — `sparse_attention_freq` for attention, `moe_layer_freq` for the MLP) |
 | Hidden / MoE intermediate | 6144 / 3072 (dense MLP intermediate 12288) |
 | Attention | GQA: 64 q / 4 kv heads, head_dim 128, **partial RoPE** (rotary_dim 64), θ=5e6, QK-norm |
 | Sparse attention (MSA, layers 3–59) | block_size 128, top-16 blocks, 4 index heads, index_dim 128, forced-local block |
@@ -63,6 +63,25 @@ PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=1024 PREFILL_FORWARD_TOKENS_BUDGET=4096 PRE
 
 Module-level PCC tests (vs torch reference / HF) live under [`tests/unit/`](tests/unit/); golden generation is in [`scripts/`](scripts/).
 
+### Quantized checkpoints (MXFP8 / NVFP4)
+
+A checkpoint of the same architecture whose `config.json` carries an MXFP8 `quantization_config` (MXFP8
+linears, compressed-tensors NVFP4 routed experts) loads through the same path: `ModelArgs.load_state_dict`
+and the torch reference (`reference/model.py`) dequantize every weight to bf16 on read
+([`utils/checkpoint.py`](utils/checkpoint.py)), and the tilized cache is then built from those bf16 weights
+exactly as for the bf16 checkpoint. The attention schedule follows the checkpoint's `sparse_attention_freq`
+(every layer can be MSA). Give such a checkpoint its own cache root — `TT_CACHE_PATH` is only defaulted to the
+shared M3 cache for the default M3 checkpoint dir:
+
+```bash
+HF_MODEL=/path/to/quantized-checkpoint TT_CACHE_PATH=/path/to/fresh-cache-root \
+  PREFILL_CHUNKED=1 PREFILL_TRACE_DIR=/path/to/golden/<trace> \
+  python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
+```
+
+The first run reads and dequantizes the source and populates the cache (as slow as the bf16 first run); later
+runs load from the cache. The golden trace must come from the same checkpoint.
+
 ### Environment variables
 
 Every variable the M3 prefill code and its harnesses read. The production runner
@@ -76,11 +95,11 @@ which the runner's `PREFILL_PRODUCER_MULTI_TURN_PROB` mode (off by default) exer
 
 | Variable | Default | Effect |
 |---|---|---|
-| `HF_MODEL` | unset (required) | MiniMax-M3 checkpoint dir (safetensors + `config.json` + tokenizer); also the tilized-cache root unless `TT_CACHE_PATH` is set. `PREFILL_HF_MODEL` overrides it in the production runner. |
-| `TT_CACHE_PATH` | `$HF_MODEL` | Root for the tilized weight cache `tensor_cache_bfp8_MeshShape([sp, tp])`. Point it at a dir you own when the checkpoint dir is read-only. |
+| `HF_MODEL` | unset (required) | MiniMax-M3-architecture checkpoint dir (bf16 or MXFP8/NVFP4 safetensors + `config.json` + tokenizer); also the tilized-cache root unless `TT_CACHE_PATH` is set. `PREFILL_HF_MODEL` overrides it in the production runner. |
+| `TT_CACHE_PATH` | `$HF_MODEL` | Root for the tilized weight cache `tensor_cache_bfp8_MeshShape([sp, tp])`. Point it at a dir you own when the checkpoint dir is read-only. Only the default M3 checkpoint dir falls back to the shared M3 cache root on weka. |
 | `EXPERT_DTYPE` | `bf4` | MoE routed-expert weight dtype: `bf4` or `bf8` (~20% more memory, higher PCC). |
-| `M3_WEIGHTS_FROM_CACHE` | unset | `1` = load every tilized weight from the cache and skip the bf16 source read (also automatic when the cache is complete for the requested layers). |
-| `M3_FORCE_LOAD_WEIGHTS` | unset | `1` = read the bf16 source even if the cache is complete (cache populate / refresh). |
+| `M3_WEIGHTS_FROM_CACHE` | unset | `1` = load every tilized weight from the cache and skip the source read (also automatic when the cache is complete for the requested layers). |
+| `M3_FORCE_LOAD_WEIGHTS` | unset | `1` = read the source weights even if the cache is complete (cache populate / refresh). |
 | `M3_LOAD_NLAYERS` | unset (all) | Read only the safetensors shards holding layers `[M3_LOAD_LAYER_START, +N)` plus embed/norm/lm_head. Set by the harnesses from `PREFILL_NUM_LAYERS` / `PROFILE_NUM_LAYERS` / `NLAYERS`. |
 | `M3_LOAD_LAYER_START` | `0` | First global layer of the `M3_LOAD_NLAYERS` window (a pipeline rank's adapter sets its `first_layer_idx`). |
 | `M3_SHARDED_RESIDUAL` | `1` | Residual-stream layout (`tt/residual.py`): `1` = `emb/tp`-sharded per TP column (attention and the MLPs close with a reduce-scatter only); `0` = full-emb replicated (the layout older baselines were measured on, kept for bisects). |

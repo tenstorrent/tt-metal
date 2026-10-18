@@ -30,9 +30,9 @@ class AttentionConfig:
     # ring_joint_scaled_dot_product_attention (seq sharded across the SP/rows axis) instead of the
     # local scaled_dot_product_attention. Default off so the DP/EP prefill path is unchanged.
     sequence_parallel: bool = False
-    # MSA (sparse) layers (M3 layers 3-59, sparse_attention_freq[idx]==1): when True this layer runs
+    # MSA (sparse) layers (sparse_attention_freq[idx]==1; M3: layers 3-59): when True this layer runs
     # the index branch (index_q/k proj -> norm -> RoPE) + block-sparse attention (indexer -> top-k ->
-    # sparse_sdpa_msa) instead of dense GQA. Dense layers 0-2 stay False. See tt/attention/msa.py.
+    # sparse_sdpa_msa) instead of dense GQA. Dense-attention layers stay False. See tt/attention/msa.py.
     is_sparse: bool = False
     # MSA (sparse) hyperparams, from hf_config.text_config.sparse_attention_config (used when is_sparse).
     msa_block_size: int = 128  # sparse_block_size

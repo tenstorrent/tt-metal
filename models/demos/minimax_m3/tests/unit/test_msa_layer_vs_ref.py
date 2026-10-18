@@ -82,19 +82,17 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     torch.manual_seed(0)
     x = torch.randn(1, S, HIDDEN) * 0.1
 
-    # REAL layer-3 (first MSA layer) attention weights from the checkpoint (bf16 -> fp32 here; loaded
-    # as bf16 on device below). Real attention structure gives well-separated block scores, so the
+    # REAL layer-3 (an MSA layer) attention weights from the checkpoint (bf16, or dequantized to bf16 for a
+    # quantized checkpoint -> fp32 here; loaded as bf16 on device below). Real attention structure gives well-separated block scores, so the
     # indexer top-16 is STABLE across bf16/fp32 (random weights give near-tie scores where the top-16
     # cutoff flips spuriously between precisions).
-    import json as _json
-
-    from safetensors import safe_open
+    from models.demos.minimax_m3.reference.model import SafetensorsWeights
 
     base = os.environ.get("M3_CKPT") or os.environ.get("HF_MODEL")
     if not base:
         pytest.skip("set HF_MODEL (or M3_CKPT) to a MiniMax-M3 checkpoint for the real-weights MSA test")
-    wmap = _json.load(open(f"{base}/model.safetensors.index.json"))["weight_map"]
-    pre = "language_model.model.layers.3.self_attn."
+    ckpt = SafetensorsWeights(base, dtype=torch.float32)
+    pre = "model.layers.3.self_attn."
     names = {
         "q": "q_proj",
         "k": "k_proj",
@@ -107,13 +105,7 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         "iq_norm": "index_q_norm",
         "ik_norm": "index_k_norm",
     }
-    _handles, w = {}, {}
-    for short, nm in names.items():
-        key = pre + nm + ".weight"
-        shard = wmap[key]
-        if shard not in _handles:
-            _handles[shard] = safe_open(f"{base}/{shard}", framework="pt")
-        w[short] = _handles[shard].get_tensor(key).float()
+    w = {short: ckpt.get(pre + nm + ".weight") for short, nm in names.items()}
 
     # HF-convention partial RoPE cos/sin (rotary_dim 64) for the torch ref.
     inv_freq = 1.0 / (THETA ** (torch.arange(0, ROTARY_DIM, 2).float() / ROTARY_DIM))

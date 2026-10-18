@@ -20,8 +20,8 @@ path), so the K/V this produces matches the layout the old HF-based golden produ
 
 ATTENTION (dense + MSA, the real schedule)
 ------------------------------------------
-Layers with ``sparse_attention_freq[i] == 0`` (layers 0-2) use full causal attention. Layers with
-``sparse_attention_freq[i] == 1`` (layers 3-59) use MSA sparse attention: a lightweight index
+Layers with ``sparse_attention_freq[i] == 0`` (M3: layers 0-2) use full causal attention. Layers with
+``sparse_attention_freq[i] == 1`` (M3: layers 3-59) use MSA sparse attention: a lightweight index
 branch (``index_q/k_proj`` -> per-head norm -> partial RoPE) scores key blocks, the top
 ``sparse_topk_blocks`` (16) blocks of ``sparse_block_size`` (128) — plus the force-local current
 block (no sink/init block, matching upstream) — are selected per GQA group, and attention runs causally over only the
@@ -51,6 +51,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import torch
+
+from models.demos.minimax_m3.utils.checkpoint import check_supported_sparse_attention, checkpoint_key_for, load_plain
 
 # MSA equivalence bound: sparse_topk_blocks(16) * sparse_block_size(128). At or below this many
 # context tokens, MSA's top-k block selection covers every block -> identical to dense attention.
@@ -107,6 +109,7 @@ class MiniMaxM3Config:
         if rotary_dim is None:
             rotary_dim = int(round(tc.get("partial_rotary_factor", 0.5) * head_dim))
         sac = tc.get("sparse_attention_config", {}) or {}
+        check_supported_sparse_attention(sac)
         return cls(
             hidden_size=tc["hidden_size"],
             num_hidden_layers=tc["num_hidden_layers"],
@@ -143,7 +146,8 @@ class MiniMaxM3Config:
 # to be fully resident. Each ``get`` returns a fresh fp32 tensor; the caller drops it per layer.
 # --------------------------------------------------------------------------------------------
 class SafetensorsWeights:
-    """Lazy, mmap-backed accessor over a sharded ``language_model.*`` checkpoint."""
+    """Lazy, mmap-backed accessor over a sharded ``language_model.*`` checkpoint. Quantized (MXFP8 / NVFP4)
+    weights are dequantized on read and answer to their plain ``.weight`` name (``utils/checkpoint.py``)."""
 
     def __init__(self, model_path, prefix: str = "language_model.", dtype: torch.dtype = torch.float32):
         from safetensors import safe_open
@@ -162,12 +166,17 @@ class SafetensorsWeights:
             h = self._handles[shard] = self._safe_open(str(self.model_path / shard), framework="pt")
         return h
 
+    def _raw(self, key: str) -> torch.Tensor:
+        return self._handle(self.weight_map[key]).get_tensor(key)
+
+    def _key(self, name: str) -> str:
+        return checkpoint_key_for(self.prefix + name, self.weight_map.__contains__)
+
     def has(self, name: str) -> bool:
-        return (self.prefix + name) in self.weight_map
+        return self._key(name) in self.weight_map
 
     def get(self, name: str) -> torch.Tensor:
-        key = self.prefix + name
-        return self._handle(self.weight_map[key]).get_tensor(key).to(self.dtype)
+        return load_plain(self._key(name), self._raw).to(self.dtype)
 
 
 class DictWeights:
@@ -319,7 +328,7 @@ def msa_block_selection_chunk(iq_g, ik_shared, scale, block_size, topk_blocks, q
 # The model.
 # --------------------------------------------------------------------------------------------
 class MiniMaxM3TextModel:
-    """MiniMax-M3 text reference (dense layers 0-2 + MSA sparse layers 3-59, the real schedule).
+    """MiniMax-M3 text reference (dense / MSA sparse attention per sparse_attention_freq, the real schedule).
 
     Streams weights per layer via a weight source. ``dense_only`` forces full causal attention
     everywhere."""
@@ -482,7 +491,7 @@ class MiniMaxM3TextModel:
     ):
         """Single-shot prefill forward (no cache reuse). ``input_ids`` is ``[B, S]`` (B==1).
 
-        Uses the real attention schedule (dense for layers 0-2, MSA sparse for 3-59) unless
+        Uses the real attention schedule (sparse_attention_freq; M3: dense 0-2, MSA sparse 3-59) unless
         ``dense_only=True``, which forces full causal attention on every layer.
 
         Returns ``(kv_caches, logits)`` where ``kv_caches`` is a list of ``(k, v)`` per layer

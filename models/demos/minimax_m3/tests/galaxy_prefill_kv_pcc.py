@@ -27,7 +27,9 @@ Env:
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs; also auto-sets
                       M3_LOAD_NLAYERS so only those layers' weight shards are read)          [default: all]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8" (cache holds both)      [default bf4]
-  HF_MODEL            real MiniMax-M3 weights dir (read by ModelArgs)
+  HF_MODEL            real weights dir (read by ModelArgs): the bf16 MiniMax-M3 checkpoint or an MXFP8/NVFP4
+                      checkpoint of the same architecture (dequantized to bf16 at load). For any checkpoint other
+                      than the default M3 dir, set TT_CACHE_PATH (else the cache goes under HF_MODEL)
 
 Multi-run mode (load weights + compile ONCE, then run many specs against the resident model):
   PREFILL_RUNS        where run specs come from:
@@ -89,6 +91,9 @@ Run (after weights are present on disk):
   PREFILL_CHUNKED=1 PREFILL_TPS_ITERS=5 \
     PREFILL_TRACE_DIR=$HF_MODEL/golden/longbook_10240 \
     python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
+  # another checkpoint of the same architecture (e.g. MXFP8/NVFP4): its own cache root and golden
+  HF_MODEL=<checkpoint dir> TT_CACHE_PATH=<fresh cache dir> PREFILL_TRACE_DIR=<golden dir> PREFILL_CHUNKED=1 \
+    python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
 """
 
 import json
@@ -133,7 +138,7 @@ def _raise_nproc_limit():
             )
 
 
-# MSA (sparse) layers 3-59 pick the top-TOPK_BLOCKS of BLOCK_SIZE-token blocks. A cold chunk of at least
+# MSA (sparse) layers pick the top-TOPK_BLOCKS of BLOCK_SIZE-token blocks. A cold chunk of at least
 # this many tokens runs the exact-size MSA path; a shorter one reads the KV cache instead. One-shot pads to
 # it so it stays on the exact-size path; chunked only needs whole 128-token blocks per SP rank (a multiple
 # of 1024 at SP=8). Keep in sync with TOPK_BLOCKS * BLOCK_SIZE in models/demos/minimax_m3/tt/attention/msa.py.
@@ -177,6 +182,7 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config,
 
     from models.common.utility_functions import comp_pcc
     from models.demos.minimax_m3.tt.runners.prefill_kv_validation import naturalize_kv_block
+    from models.demos.minimax_m3.utils.general_utils import is_sparse_attention_layer
 
     if threshold is None:
         threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
@@ -191,6 +197,7 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config,
     kv_dir = Path(golden_dir) / "kv_cache"
     logger.info(f"[kv-pcc] per-layer K / V / index_k vs golden ({golden_dir}):")
     mins = {"k": 1.0, "v": 1.0, "index_k": 1.0}
+    msa_without_golden_ik = []  # MSA layers (per the config) whose golden carries no index_k
     assert kv_cache.max_seq_len == runtime.config.max_seq_len, (
         f"KV cache capacity {kv_cache.max_seq_len} != runtime capacity {runtime.config.max_seq_len}: the un-rotation "
         f"below would decode the wrong block-cyclic layout (stale handle after a re-target?)"
@@ -206,6 +213,8 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config,
             g_k = h.get_tensor(f"key_cache_layer_{L}").float()[:, :, :n_tokens, :][..., src]  # HF -> Meta
             g_v = h.get_tensor(f"value_cache_layer_{L}").float()[:, :, :n_tokens, :]
             has_ik = f"index_k_cache_layer_{L}" in keys
+            if not has_ik and is_sparse_attention_layer(hf_config, L):
+                msa_without_golden_ik.append(L)
             g_ik = h.get_tensor(f"index_k_cache_layer_{L}").float()[:, :, :n_tokens, :][..., src] if has_ik else None
 
         pcc_k = float(comp_pcc(g_k, dev_k, 0.0)[1])
@@ -218,6 +227,10 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config,
             line += f" index_k={pcc_ik:.5f}"
         logger.info(line)
 
+    if msa_without_golden_ik:
+        logger.warning(
+            f"[kv-pcc] golden has no index_k for MSA layers {msa_without_golden_ik}: index_k unchecked there"
+        )
     min_pcc = min(mins.values())
     logger.info(
         f"[kv-pcc] min PCC across {num_layers} layers: "
@@ -752,7 +765,7 @@ def main():
                 f"{bang}\n",
                 flush=True,
             )
-            print("[prefill-pcc] loading real bf16 weights + EP placement (slow: bf16 source read) ...", flush=True)
+            print("[prefill-pcc] loading real weights + EP placement (slow: source read) ...", flush=True)
             state_dict = ModelArgs.load_state_dict(model_args.weights_path)
         cfg = TtPrefillRuntimeConfig(
             num_layers=num_layers,

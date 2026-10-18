@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiniMax-M3 MSA (sparse) attention — the real model forward for the sparse layers (3-59).
+"""MiniMax-M3 MSA (sparse) attention — the real model forward for the sparse_attention_freq==1 layers.
 
 Unlike the dense path (ring_joint, which reads the KV cache + gathers across SP *internally*),
 ``sparse_sdpa_msa`` is a pure dense-context kernel: it takes full-length K/V tensors and has no

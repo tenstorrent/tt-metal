@@ -28,7 +28,7 @@ class AttentionWeights:
     # the Q/K projection sharding. None when use_qk_norm is False / no state_dict.
     q_norm: ttnn.Tensor | None = None
     k_norm: ttnn.Tensor | None = None
-    # MSA index branch (sparse layers 3-59 only; None for dense layers 0-2). index_q_proj is
+    # MSA index branch (sparse_attention_freq==1 layers only; None for dense-attention layers). index_q_proj is
     # column-parallel (4 index heads -> 1 per TP col); index_k_proj + both index norms are
     # REPLICATED (index_k is the single shared head, present on every TP col). See tt/attention/msa.py.
     index_q_proj: ttnn.Tensor | None = None
