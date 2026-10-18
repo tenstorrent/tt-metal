@@ -39,6 +39,7 @@ void kernel_main() {
         copy_tile(dfb_pre_in1.get_id(), 0, 0);  // Copy condition to dst reg 0
 
         // Copy tensor to appropriate dst register based on variant
+        reconfig_data_format_srca(dfb_pre_in1.get_id(), dfb_pre_in2.get_id());
         copy_init(dfb_pre_in2.get_id());
         if constexpr (scalar_is_true) {
             // TST: tensor is false value, goes to dst reg 2
@@ -47,6 +48,7 @@ void kernel_main() {
             // TTS: tensor is true value, goes to dst reg 1
             copy_tile(dfb_pre_in2.get_id(), 0, 1);  // Copy true tensor to dst reg 1
         }
+        reconfig_data_format_srca(dfb_pre_in2.get_id(), dfb_pre_in1.get_id());
 
         // Fill scalar value to appropriate dst register
         fill_tile_init();

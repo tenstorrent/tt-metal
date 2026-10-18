@@ -13,7 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -191,7 +191,7 @@ def test_qkv_causal_conv1d_silu_contract(
 
     for name, golden, output in zip(("q", "k", "v"), expected, outputs, strict=True):
         actual = ttnn.to_torch(output)
-        assert_accurate(golden, actual, name=name, pcc_threshold=0.999)
+        assert_accurate(golden, actual, name=name, pcc_threshold=0.999, nrmse_threshold=0.008)
 
     if full_contract:
         trace_id = ttnn.begin_trace_capture(device, cq_id=0)
@@ -240,7 +240,7 @@ def test_qkv_causal_conv1d_silu_work_distribution(
     for name, golden, output in zip(
         ("q", "k", "v"), qkv_reference(inputs, history, taps, widths), outputs, strict=True
     ):
-        assert_accurate(golden, ttnn.to_torch(output), name=name, pcc_threshold=0.999)
+        assert_accurate(golden, ttnn.to_torch(output), name=name, pcc_threshold=0.999, nrmse_threshold=0.008)
 
 
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
@@ -269,7 +269,7 @@ def test_qkv_causal_conv1d_silu_is_device_deterministic(
         name=f"{case.case_id} device-side exact-value determinism marker",
     )
     for name, golden, output in zip(("q", "k", "v"), expected, outputs, strict=True):
-        assert_accurate(golden, output, name=f"{case.case_id} {name}", pcc_threshold=0.999)
+        assert_accurate(golden, output, name=f"{case.case_id} {name}", pcc_threshold=0.999, nrmse_threshold=0.008)
     for output in output_tensors:
         ttnn.deallocate(output)
 
@@ -306,8 +306,12 @@ def test_qkv_causal_conv1d_silu_cache_hit_rebinds_fresh_tensors(
     ):
         actual_a = ttnn.to_torch(actual_a_tt)
         actual_b = ttnn.to_torch(actual_b_tt)
-        assert_accurate(golden_a, actual_a, name=f"{name} cache miss tensors", pcc_threshold=0.999)
-        assert_accurate(golden_b, actual_b, name=f"{name} cache hit fresh tensors", pcc_threshold=0.999)
+        assert_accurate(
+            golden_a, actual_a, name=f"{name} cache miss tensors", pcc_threshold=0.999, nrmse_threshold=0.008
+        )
+        assert_accurate(
+            golden_b, actual_b, name=f"{name} cache hit fresh tensors", pcc_threshold=0.999, nrmse_threshold=0.008
+        )
         assert not torch.equal(actual_a, actual_b)
 
 
