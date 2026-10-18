@@ -32,6 +32,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -89,6 +90,7 @@ const char* kRawWriterKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/ha
 const char* kMultiKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_multi_rw.cpp";
 const char* kPathsKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_buf_rw_paths.cpp";
 const char* kUnresolvedSlotKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_unresolved_slot.cpp";
+const char* kRawFamilyKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_raw_family_coverage.cpp";
 
 MeshTensor alloc(distributed::MeshDevice& md, BufferType bt) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
@@ -98,15 +100,17 @@ MeshTensor alloc(distributed::MeshDevice& md, BufferType bt) {
     return MeshTensor::allocate_on_device(md, spec);
 }
 
-void dope(const MeshTensor& t, uint32_t pattern) {
+void dope(MeshTensor& t, uint32_t pattern) {
     std::vector<uint32_t> v(kWords, pattern);
-    detail::WriteToBuffer(*t.mesh_buffer().get_reference_buffer(), v);
+    auto& cq = t.mutable_device().mesh_command_queue();
+    enqueue_write_tensor(cq, reinterpret_cast<const std::byte*>(v.data()), t);
+    distributed::Finish(cq);  // the write is non-blocking and `v` goes out of scope here
 }
 
 std::vector<uint32_t> readback(distributed::MeshCommandQueue& cq, const MeshTensor& t) {
-    std::vector<uint32_t> v;
+    std::vector<uint32_t> v(kWords);
     distributed::Finish(cq);
-    detail::ReadFromBuffer(*t.mesh_buffer().get_reference_buffer(), v);
+    enqueue_read_tensor(cq, t, reinterpret_cast<std::byte*>(v.data()));
     return v;
 }
 
@@ -598,11 +602,6 @@ TEST_F(UnitMeshCQSingleCardFixture, BufRwMultiTensorTracksCorrectObjects) {
     EXPECT_EQ(name_set(rw.writes), (std::set<std::string_view>{"out"}));
 }
 
-// Coverage of op-to-op R/W inference beyond plain Noc::async_read/async_write on a TensorAccessor
-// (hazard_buf_rw_paths.cpp): each binding is touched through one other transfer path or endpoint kind, and must
-// resolve as that path implies. A path the notes miss shows up as its binding missing from a set -- the unsafe
-// failure (a detector would see no access and relax a real hazard). Compile + one launch; no hazard is timed, so it
-// runs on any architecture and either dispatch mode.
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEndpoint) {
     auto md = devices_.at(0);
     IDevice* dev = md->get_devices()[0];
@@ -670,12 +669,98 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
         }
         return s;
     };
-    EXPECT_FALSE(rw.opaque);
+    // "escape" drops to a raw NoC call on an address pulled out of its accessor, which is conservatively OPAQUE.
+    EXPECT_TRUE(rw.opaque);
     // Typed endpoints and paths are exact; the binding-erasing / address-escaping ones are both read and written.
     EXPECT_EQ(
         names(rw.reads),
         (std::set<std::string_view>{"view", "iter", "shard_iter", "shard", "legacy_r", "wrap", "escape", "local"}));
     EXPECT_EQ(names(rw.writes), (std::set<std::string_view>{"state", "zero", "legacy_w", "wrap", "escape", "local"}));
+}
+
+// Every public raw-address API family, independently: each FAMILY_* build of hazard_raw_family_coverage.cpp
+// makes exactly one such family the kernel's SOLE raw access (see that file's header comment for the full
+// list and why multicast ones target {self, one peer}, never self-only). BufRwCoversEveryTransferPathAndEndpoint
+// above only proves plain noc_async_read/write fire OPAQUE; a family missing its own note_opaque() -- as
+// noc_inline_dw_write briefly was -- would hide behind that test's other assertions. One failing EXPECT per
+// family here instead names exactly which wrapper regressed.
+TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwEveryRawFamilyIndependentlyOpaque) {
+    auto md = devices_.at(0);
+    IDevice* dev = md->get_devices()[0];
+    const exp::NodeCoord node{0, 0};
+
+    // Non-loopback multicast must not target self alone (see e.g. noc_async_write_multicast's own doc:
+    // "the destination range must not be just self"), so these families need a real second core.
+    const bool has_peer_column = md->logical_grid_size().x >= 2;
+    const CoreCoord self_phys = md->worker_core_from_logical_core(CoreCoord{0, 0});
+    const CoreCoord peer_phys = has_peer_column ? md->worker_core_from_logical_core(CoreCoord{1, 0}) : CoreCoord{0, 0};
+
+    struct Family {
+        std::string name;
+        bool needs_multicast_peer = false;
+    };
+    const std::vector<Family> families = {
+        {"FAMILY_READ_ONE_PACKET"},
+        {"FAMILY_READ_ANY_LEN"},
+        {"FAMILY_READ_ONE_PACKET_SET_STATE"},
+        {"FAMILY_READ_SET_STATE"},
+        {"FAMILY_READ_SET_PCIE_STATE"},
+        {"FAMILY_READ_PCIE"},
+        {"FAMILY_WRITE_ONE_PACKET"},
+        {"FAMILY_WRITE_ANY_LEN"},
+        {"FAMILY_WRITE_ONE_PACKET_SET_STATE"},
+        {"FAMILY_WRITE_SET_STATE"},
+        {"FAMILY_WRITE_SET_PCIE_STATE"},
+        {"FAMILY_WRITE_PCIE"},
+        {"FAMILY_WRITE_ONE_PACKET_WITH_TRID"},
+        {"FAMILY_WRITE_ONE_PACKET_WITH_TRID_SET_STATE"},
+        {"FAMILY_INLINE_DW_WRITE"},
+        {"FAMILY_INLINE_DW_WRITE_SET_STATE"},
+        {"FAMILY_WRITE_MULTICAST_ONE_PACKET", /*needs_multicast_peer=*/true},
+        {"FAMILY_WRITE_MULTICAST", /*needs_multicast_peer=*/true},
+        {"FAMILY_WRITE_MULTICAST_LOOPBACK_SRC", /*needs_multicast_peer=*/true},
+        {"FAMILY_INLINE_MCAST_DW_WRITE", /*needs_multicast_peer=*/true},
+    };
+
+    for (const auto& family : families) {
+        if (family.needs_multicast_peer && !has_peer_column) {
+            continue;  // 1-column grid: nothing else exercises these 4, but don't fail the whole test over it
+        }
+
+        exp::KernelSpec k{
+            .unique_id = exp::KernelSpecName{"raw"},
+            .source = kRawFamilyKernel,
+            .num_threads = 1,
+            .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
+        };
+        k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+        k.compiler_options.defines[family.name] = "1";
+        if (family.needs_multicast_peer) {
+            k.compiler_options.defines["MCAST_X_START"] = std::to_string(self_phys.x);
+            k.compiler_options.defines["MCAST_Y_START"] = std::to_string(self_phys.y);
+            k.compiler_options.defines["MCAST_X_END"] = std::to_string(peer_phys.x);
+            k.compiler_options.defines["MCAST_Y_END"] = std::to_string(peer_phys.y);
+        }
+
+        exp::ProgramSpec spec{
+            .name = "raw_family_" + family.name,
+            .kernels = {k},
+            .scratchpads = {exp::ScratchpadSpec{
+                .unique_id = exp::ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
+            .work_units = std::vector<exp::WorkUnitSpec>{exp::WorkUnitSpec{
+                .name = "wu", .kernels = {exp::KernelSpecName{"raw"}}, .target_nodes = node}},
+        };
+        Program program = exp::MakeProgramFromSpec(*md, spec);
+        exp::SetProgramRunArgs(program, exp::ProgramRunArgs{});
+        distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
+
+        const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();
+        auto kernel = program_impl.get_kernel_by_spec_name("raw");
+        ASSERT_NE(kernel, nullptr) << family.name;
+        const ll_api::BufRwInfo rw = kernel->query_buf_rw(*dev);
+        EXPECT_TRUE(rw.opaque) << family.name << " must independently emit OPAQUE";
+    }
 }
 
 // A record whose slot names none of the kernel's bindings (stale or foreign metadata) can't be attributed:
