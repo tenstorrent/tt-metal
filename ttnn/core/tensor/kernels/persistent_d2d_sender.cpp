@@ -160,6 +160,9 @@ constexpr uint32_t kLaneId = is_master ? 0u : 1u;
 constexpr uint32_t kTridBase = 1u + kLaneId * kRingDepth;
 static_assert(2u * kRingDepth <= 15u, "two lanes of trids must fit in the 0..15 transaction-id space");
 using ReadRing = TridRing<kRingDepth, kTridBase>;
+// Ship pages in pairs when a pair fits one packet. Pairs start on even pages, and an even ring depth keeps
+// a pair in two adjacent slots that never wrap.
+constexpr bool kPairPages = (2 * tensor_page_size <= fabric_max_payload_size) && (kRingDepth % 2 == 0);
 
 // Stream this lane's contiguous page range [page_start_, page_end_) DIRECTLY into the
 // receiver DRAM tensor over `conn`, pipelining the DRAM reads (in_acc) with the fabric
@@ -190,7 +193,40 @@ FORCE_INLINE void stream_half(
             {.offset_bytes = i * tensor_page_size},
             NocOptVals{.trid = ReadRing::trid(i)});
     }
-    for (uint32_t k = 0; k < n; ++k) {
+    uint32_t k = 0;
+    if constexpr (kPairPages) {
+        // Two pages per fabric packet. Adjacent ring slots are adjacent in L1, so a page pair is one
+        // contiguous payload; a two-chunk scatter write lands each page at its own (interleaved) DRAM page.
+        // Half the packets, and half the blocking header flushes, for the same bytes.
+        for (; k + 1 < n; k += 2) {
+            const uint32_t slot = ReadRing::slot(k);
+            noc.async_read_barrier<NocOptions::TXN_ID>(NocOptVals{.trid = ReadRing::trid(k)});
+            noc.async_read_barrier<NocOptions::TXN_ID>(NocOptVals{.trid = ReadRing::trid(k + 1)});
+            const uint32_t src = cb_l1_addr + slot * tensor_page_size;
+            data_packet_header_addr->to_noc_unicast_scatter_write(
+                NocUnicastScatterCommandHeader(
+                    {out_acc.get_noc_addr(page_start_ + k), out_acc.get_noc_addr(page_start_ + k + 1)},
+                    {static_cast<uint16_t>(tensor_page_size)}),
+                2 * tensor_page_size);
+            conn.wait_for_empty_write_slot();
+            conn.send_payload_without_header_non_blocking_from_address(src, 2 * tensor_page_size);
+            conn.send_payload_flush_blocking_from_address(
+                (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+            for (uint32_t j = k; j < k + 2; ++j) {
+                const uint32_t next = j + ReadRing::depth;
+                if (next < n) {
+                    noc.async_read<NocOptions::TXN_ID>(
+                        in_acc,
+                        scratch,
+                        tensor_page_size,
+                        {.page_id = page_start_ + next},
+                        {.offset_bytes = ReadRing::slot(j) * tensor_page_size},
+                        NocOptVals{.trid = ReadRing::trid(j)});
+                }
+            }
+        }
+    }
+    for (; k < n; ++k) {
         const uint32_t slot = ReadRing::slot(k);
         const uint32_t trid = ReadRing::trid(k);
         const uint32_t src = cb_l1_addr + slot * tensor_page_size;
