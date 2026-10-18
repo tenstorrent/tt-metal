@@ -1756,3 +1756,55 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - Not run here (orchestrator runs them, change on / off): the 8 frozen tests at defaults, the ladder, the plain profile.
 - Re-run: `DS41_EXPERTS_PRECISION=glm PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
   "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py::test_kernels" -k "bfp8 and fu" -s`.
+
+## P.5 perf (attempt 1): collectives on the bring-up fabric forks (CCL_IMPL=fabric)
+- Change: setting CCL_IMPL {stock (default, F104: the owner flips it), fabric}; new `tt/ccl.py` (all_gather, tp_sum,
+  sum_cols, rs_links, setup); every `ttnn.all_gather` of tt/attention.py, sparse_attention.py, norm.py (ffn_norm,
+  dim 3), indexer.py (u32 RM top-k), compressor.py goes through `ccl.all_gather`; `common.tp_sum` (HC_TP_SUM
+  gather_add: mhc, norms, q_a, compressor, indexer gates, engram_add) -> `ccl.tp_sum`; the hidden-split sums
+  (ATTN_O_SUM, EXPERTS_SUM routed + shared, gather_add) -> `common.sum_cols` -> `ccl.sum_cols`. `TtDS41Model` calls
+  `ccl.setup(mesh)` at load (semaphores, the RS plan + counters incl. its one-time synchronize). Their
+  reduce_scatter / all_reduce values stay stock ttnn. Nothing else changed (HiFi4, fp32, EXPERTS_KERNEL flat).
+- Fabric mapping: all_gather -> `ttnn.bringup.fabric_all_gather(t, dim, out=allocate_tensor_on_device(...),
+  num_links=None, caller-owned L1_SMALL semaphores)` when `_fits` (DRAM interleaved; not a RM innermost-dim gather;
+  TILE dims 2 / 3 tile-aligned): every model gather fits on this box. sum_cols -> ONE `fabric_reduce_scatter(dim=3,
+  exact_fp32_add=True, cache_descriptors=True)` (no full sum, no mesh_partition). tp_sum -> `fabric_reduce_scatter(
+  dim=2, exact)` + `fabric_all_gather(dim 2)`; when R % (32 TP) or W % 32 != 0 (norm sum of squares [S/SP, 1],
+  engram gates [S/SP, 12]: the fork requires a tile-aligned TILE input) the old all_gather(dim 1) + SFPU adds on the
+  fabric gather. Not on a fork: the head <-> seq all_to_all (all_to_all_async_generic, 0.48 ms x 2 per layer; no
+  bring-up fork exists).
+- Fork (fabric_reduce_scatter_ttnn, CHANGELOG "Exact fp32 adds, column blocks, ..."): opt-in `exact_fp32_add`
+  (UnpackToDestFp32 + SFPU add_binary_tile; default FPU path is rel 3.3e-3 on fp32, DS41-65), `dim=3`,
+  `cache_descriptors` (descriptor build 0.655 of 0.85 ms host per call, DS41-66), `prepare()`. Off = the old program
+  (sources, args, CBs, compute config). fabric_all_gather: no change.
+- Links (DS41-66): 4 usable per 2x2 BH neighbour pair. fabric_all_gather at 2 links was slower than stock on the
+  large gathers (fp32 [1024, 2560] dim 3: 0.235 vs 0.139 ms; bf16 [6912, 512]: 0.159 vs 0.098); at None 0.126 /
+  0.090 (faster everywhere). RS at 4 links: sum_cols [1024, 5120] 0.150 ms (0.235 at 2); `ccl.rs_links` = min usable
+  links over the axis's neighbour pairs, capped at DRAM banks / 2.
+- Exactness: a tt-probe (directory deleted, K-56) stock vs fabric bit-identical for
+  every gather shape / dtype the model uses and tp_sum [1024, 32 / 1 / 1792 / 1024 / 12], sum_cols [1024, 5120] (TP 2:
+  one add, a + b either way). Fork tests: tests/unit/test_fabric_rs_exact_fp32.py 7 passed.
+- Accuracy (DS41_CCL_IMPL=fabric, gate order, each once): test_c_dec_reindex_{attention, attn_hc, attn_norm, ffn_hc,
+  ffn_norm, experts, shared_expert, indexer} all PASS.
+- Measurement (2x2, rung last, chunk 53248-55296, 8 layers; BRINGUP_PROFILE_OPS=1 with BRINGUP_PROFILE_LAYERS=0,2:
+  the 8-layer op profile did not finish within the tool's 20 minutes, so the per-op rows are layer 0 (swa) and layer
+  2 (enc_source); sections and totals cover all 8 layers). Stock: collectives on L0 + L2 = 29 all_gather calls 2.31
+  ms + the gather_add slices / adds / mesh_partitions 2.16 ms + all_to_all 1.92 ms = 6.39 of 147.2 ms device (4.3 %;
+  3.0 % without the all_to_all), ~2.9 % of the chunk extrapolated. Fabric: 12 fabric_reduce_scatter 0.86 ms + 25
+  fabric_all_gather 0.86 ms + all_to_all 1.92 = 3.64 ms. Per call (stock -> fabric, ms): o-sum / moe sum [1024, 5120]
+  0.665 (gather 0.257 + slices 0.207 + add 0.142 + partition 0.059) -> 0.161-0.165; q_a tp_sum [1024, 1792] 0.323 ->
+  0.109 (RS 0.059 + AG 0.050); compressor tp_sum [1024, 1024] 0.171 -> 0.069; hc / indexer tp_sum [1024, 32] 0.015 ->
+  0.019; ffn_norm gather fp32 [1024, 2560] dim 3 0.137 -> 0.127; window gathers bf16 [1024 / 128 / 256, 512] 0.040 /
+  0.011 / 0.017 -> 0.022 / 0.009 / 0.013; sparse table gathers [6912 / 13824, 512] 0.094 / 0.183 -> 0.088 / 0.171;
+  top-k u32 [512, 512] 0.043 -> 0.019; compressor gathers [512, 512 / 128] 0.025 / 0.014 -> 0.017 / 0.012.
+  Sections per chunk (ms): attention 238.65 -> 233.99, moe_add 6.49 -> 2.45, q_a 38.49 -> 36.76, compressor 9.42 ->
+  9.11, indexer 56.59 -> 56.46, ffn_norm 2.93 -> 2.82, rest +-0.03. Device total 652.16 -> 641.02 (-11.1, -1.7 %);
+  chunk wall 920.2 -> 922.0 (host-bound: host overhead 281 ms); host_transfers_per_layer 0; pcc_chunk_out 0.99981.
+- Gotchas: run_safe_pytest output redirected to a file buffers Python's prints (use PYTHONUNBUFFERED=1 to see
+  progress); `import ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_reduce_scatter as m` yields the function (the
+  package exports the same name): use sys.modules.
+- Re-run: on `DS41_CCL_IMPL=fabric`, off `DS41_CCL_IMPL=stock`, in front of each frozen test / the ladder / the
+  brief's profile command; fork tests `scripts/run_safe_pytest.sh --run-all --no-precompile
+  ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/unit/test_fabric_rs_exact_fp32.py`; regression (options off,
+  2x2-runnable) `.../tests/unit/test_fabric_reduce_scatter.py .../tests/test_fabric_reduce_scatter_ttnn.py`: 5 passed,
+  same errors as the unchanged file (the other unit files are 2x4-only).

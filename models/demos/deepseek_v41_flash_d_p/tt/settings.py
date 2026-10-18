@@ -205,6 +205,17 @@ TABLE = {
         "time (wall, 20 synced calls) rsqrt + Sinkhorn sfpu_fp32 0.030-0.035 ms, fpu 0.448-0.455 ms; whole step "
         "0.409-0.413 vs 0.764-0.805 ms; per layer per chunk (attn_hc + ffn_hc) 0.82 vs 1.56 ms",
     ),
+    "CCL_IMPL": Setting(
+        "fabric",
+        ("stock", "fabric"),
+        "the cross-chip collectives (tt/ccl.py, P.5): stock = ttnn.all_gather, and the exact TP partial sums (ATTN_O_SUM "
+        "/ EXPERTS_SUM / HC_TP_SUM gather_add) as all_gather + SFPU ttnn.add (+ mesh_partition for the hidden-split "
+        "ones); fabric = the bring-up fabric forks: every all_gather whose contract fits on ttnn.bringup."
+        "fabric_all_gather, the hidden-split sums as ONE ttnn.bringup.fabric_reduce_scatter(dim=3, exact_fp32_add=True) "
+        "each, the replicated ones (HC_TP_SUM: tp_sum) as fabric_reduce_scatter(dim=2, exact) + fabric_all_gather; "
+        "every add one exact fp32 rounding on the SFPU (TP = 2: bit-identical to stock). The head <-> seq all_to_all "
+        "stays stock (no fork). Same numerics either way: not a precision switch",
+    ),
     "HC_TP_SUM": Setting(
         "gather_add",
         ("gather_add", "all_reduce"),

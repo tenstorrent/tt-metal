@@ -94,7 +94,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v41_flash_d_p.reference.weights import fp4_dequant
 
-from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, tp_sum
+from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, sum_cols
 from .quant import fp8_qdq
 from .settings import settings
 
@@ -804,10 +804,7 @@ class TtExperts:
             return ttnn.clone(part, memory_config=DRAM)
         if self.sum_mode == "reduce_scatter":
             return ttnn.reduce_scatter(part, dim=3, cluster_axis=TP_AXIS, memory_config=DRAM)
-        full = tp_sum(self.mesh, part, how="gather_add")
-        out = ttnn.mesh_partition(full, dim=3, cluster_axis=TP_AXIS, memory_config=DRAM)
-        ttnn.deallocate(full)
-        return out
+        return sum_cols(self.mesh, part)
 
     def free(self):
         """Release the device weights (tests that build several layers' or impls' experts in one process)."""

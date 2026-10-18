@@ -10,6 +10,7 @@ import torch
 
 import ttnn
 
+from . import ccl
 from .settings import settings
 
 TP_AXIS = 1  # mesh columns: heads / hidden
@@ -49,22 +50,21 @@ def fpu_weight(w: torch.Tensor) -> torch.Tensor:
 
 def tp_sum(mesh, t: ttnn.Tensor, how: str | None = None) -> ttnn.Tensor:
     """Sum ``t`` ([1, 1, R, W], fp32 TILE) over the TP axis, the result replicated on every chip of the row. Does not
-    consume ``t``. gather_add: all_gather on dim 1 -> [1, TP, R, W], then the TP slices added in mesh-column order
-    on the SFPU, so every chip computes the bit-identical fp32 sum (K-30). all_reduce: one CCL (FPU, ~TF32)."""
+    consume ``t``. gather_add: the exact fp32 sum, bit-identical on every chip (K-30), by tt/ccl.py:tp_sum (CCL_IMPL
+    stock: all_gather on dim 1 + the TP slices added in mesh-column order on the SFPU; fabric: the bring-up fabric
+    reduce-scatter with its exact SFPU add + fabric all_gather). all_reduce: one CCL (FPU, ~TF32)."""
     tp = mesh.shape[TP_AXIS]
     if tp == 1:
         return ttnn.clone(t, memory_config=DRAM)
     how = how or settings.get("HC_TP_SUM")
     if how == "all_reduce":
         return ttnn.all_reduce(t, cluster_axis=TP_AXIS, memory_config=DRAM)
-    r, w = t.shape[-2], t.shape[-1]
-    g = ttnn.all_gather(t, dim=1, cluster_axis=TP_AXIS, memory_config=DRAM)
-    acc = ttnn.slice(g, [0, 0, 0, 0], [1, 1, r, w])
-    for c in range(1, tp):
-        part = ttnn.slice(g, [0, c, 0, 0], [1, c + 1, r, w])
-        nxt = ttnn.add(acc, part, dtype=ttnn.float32, memory_config=DRAM)
-        ttnn.deallocate(acc)
-        ttnn.deallocate(part)
-        acc = nxt
-    ttnn.deallocate(g)
-    return acc
+    return ccl.tp_sum(mesh, t)
+
+
+def sum_cols(mesh, t: ttnn.Tensor) -> ttnn.Tensor:
+    """The exact fp32 sum of ``t`` ([1, 1, R, H] fp32 TILE) over the TP axis, kept as the chip's hidden columns
+    [1, 1, R, H/TP] (the gather_add of ATTN_O_SUM / EXPERTS_SUM; tt/ccl.py:sum_cols). Does not consume ``t``."""
+    if mesh.shape[TP_AXIS] == 1:
+        return ttnn.clone(t, memory_config=DRAM)
+    return ccl.sum_cols(mesh, t)
