@@ -45,7 +45,7 @@ def test_lru_budget_evicts_the_least_recently_used():
     st.put(snap(t, 1024))
     assert st.lookup(t, 700, 4000).s == 512  # touch 512
     st.put(snap(t, 1536))  # 3000 > 2500: 1024 (older than the touched 512) goes
-    assert sorted(k[1] for k in st.snaps) == [512, 1536] and st.evictions == 1
+    assert sorted(k[2] for k in st.snaps) == [512, 1536] and st.evictions == 1
     assert not st.put(snap(t, 2048, nbytes=10**5))  # larger than the whole budget
     st.clear()
     assert st.bytes == 0 and not st.snaps
