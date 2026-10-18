@@ -533,7 +533,8 @@ void py_module_types(nb::module_& mod) {
                 tensor: A sharded tensor to derive CB configuration from
                 address_offset: Byte offset from buffer base address for CB placement (default 0)
                 total_size: Total CB size in bytes (default 0 = use tensor's full bank size)
-                core_ranges: Optional CoreRangeSet override (default None = use tensor's shard grid)
+                core_ranges: Optional CoreRangeSet override (default None = use tensor's shard grid,
+                    or its ND shard grid when the sharding has no 2D shard spec)
 
             Returns:
                 CBDescriptor with all fields (total_size, core_ranges, format_descriptors, buffer)
