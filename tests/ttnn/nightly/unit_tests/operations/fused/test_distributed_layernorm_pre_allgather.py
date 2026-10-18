@@ -1165,6 +1165,12 @@ def test_pre_all_gather_non_welford_fp32_precision(device, variant, shape, use_r
             pcc_threshold=0.99999,
         )
 
+    # Only the stats columns are defined; the rest of each stats tile is zero, as on the FPU path (#57965).
+    others = actual.clone()
+    others[..., [0, 32] if variant == "layer_norm" else [0]] = 0
+    nonzero_cols = sorted(set(torch.nonzero(others)[:, -1].tolist()))
+    assert not nonzero_cols, f"non-zero columns outside the stats: {nonzero_cols}"
+
 
 @pytest.mark.parametrize("shape", PRE_ALL_GATHER_2D_MULTI_ROW_SHAPES)
 @pytest.mark.parametrize("use_residual", [False, True])
