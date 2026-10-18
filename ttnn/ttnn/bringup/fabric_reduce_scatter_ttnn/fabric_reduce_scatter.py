@@ -29,6 +29,7 @@ the receiver's own block (slot G).
 """
 
 import math
+from collections import OrderedDict
 
 import ttnn
 from ttnn.bringup.fabric_all_gather_ttnn.fabric_all_gather_py import (
@@ -305,6 +306,138 @@ void kernel_main() {
 }
 """
 
+# exact_fp32_add=True: the same chunk schedule and arguments as _ADD_COMPUTE, but every operand is unpacked straight
+# into an fp32 DEST (UnpackToDestFp32 on c_0 / c_1 / c_2, fp32_dest_acc_en) and added on the SFPU, so each add is one
+# IEEE fp32 rounding (torch's fp32 a + b) instead of the FPU's add_tiles, which reads fp32 at about TF32 (K-30). A
+# three-input chunk is (c_0 + c_1) + c_2, as _ADD_COMPUTE. Two tiles per DEST batch (4 fp32 DEST tiles, half sync).
+_EXACT_ADD_COMPUTE = r"""
+#include <cstdint>
+#include "api/compute/common.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
+
+void kernel_main() {
+    constexpr uint32_t R = get_compile_time_arg_val(0);
+    constexpr uint32_t PAIR = 2;  // tiles per DEST batch: slots 2 j (sum) and 2 j + 1 (addend)
+    const uint32_t n = get_arg_val<uint32_t>(0);
+    const uint32_t has_b = get_arg_val<uint32_t>(1);
+    const uint32_t has_c = get_arg_val<uint32_t>(2);
+    const uint32_t n_copy = get_arg_val<uint32_t>(3);
+    if (n == 0 && n_copy == 0) {
+        return;
+    }
+    const uint32_t cb_b = has_b ? 1 : 2;
+    const bool three = has_b && has_c;
+    compute_kernel_hw_startup(0, 16);
+    for (uint32_t i = 0; i < n_copy; ++i) {
+        cb_wait_front(0, R);
+        cb_reserve_back(16, R);
+        copy_init(0);
+        for (uint32_t j0 = 0; j0 < R; j0 += PAIR) {
+            const uint32_t m = R - j0 < PAIR ? R - j0 : PAIR;
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < m; ++j) {
+                copy_tile(0, j0 + j, 2 * j);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < m; ++j) {
+                pack_tile(2 * j, 16);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(16, R);
+        cb_pop_front(0, R);
+    }
+    for (uint32_t i = 0; i < n; ++i) {
+        cb_wait_front(0, R);
+        cb_wait_front(cb_b, R);
+        if (three) {
+            cb_wait_front(2, R);
+        }
+        cb_reserve_back(16, R);
+        for (uint32_t j0 = 0; j0 < R; j0 += PAIR) {
+            const uint32_t m = R - j0 < PAIR ? R - j0 : PAIR;
+            tile_regs_acquire();
+            copy_init(0);
+            for (uint32_t j = 0; j < m; ++j) {
+                copy_tile(0, j0 + j, 2 * j);
+            }
+            copy_init(cb_b);
+            for (uint32_t j = 0; j < m; ++j) {
+                copy_tile(cb_b, j0 + j, 2 * j + 1);
+            }
+            add_binary_tile_init();
+            for (uint32_t j = 0; j < m; ++j) {
+                add_binary_tile(2 * j, 2 * j + 1, 2 * j);
+            }
+            if (three) {
+                copy_init(2);
+                for (uint32_t j = 0; j < m; ++j) {
+                    copy_tile(2, j0 + j, 2 * j + 1);
+                }
+                add_binary_tile_init();
+                for (uint32_t j = 0; j < m; ++j) {
+                    add_binary_tile(2 * j, 2 * j + 1, 2 * j);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < m; ++j) {
+                pack_tile(2 * j, 16);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(16, R);
+        cb_pop_front(0, R);
+        cb_pop_front(cb_b, R);
+        if (three) {
+            cb_pop_front(2, R);
+        }
+    }
+}
+"""
+
+
+def _col_reader(src, wt, wb):
+    """dim=3 (column blocks): the reader's input reads remapped. Block j is the input's tile columns [j wb, (j+1) wb);
+    its block-local page q = r wb + c (what the chunk walk, the scratch and the output index) is input page
+    r wt + j wb + c. The pages of one chunk are not consecutive in their bank once the walk crosses a tile row, so
+    each is read on its own. Everything else (scratch slots, output, counters) is block-local and unchanged."""
+    helper = (
+        "const auto in = TensorAccessor(in_args, in_addr, page_bytes);\n"
+        f"    constexpr uint32_t col_wt = {wt}, col_wb = {wb};\n"
+        "    auto read_in = [&](uint32_t blk, uint32_t page, uint32_t n, uint32_t dst) {\n"
+        "        for (uint32_t t = 0; t < n; ++t) {\n"
+        "            const uint32_t q = page + t * num_banks;\n"
+        "            noc_async_read(in.get_noc_addr((q / col_wb) * col_wt + blk * col_wb + q % col_wb), dst + t * page_bytes, page_bytes);\n"
+        "        }\n"
+        "    };"
+    )
+    reps = [
+        ("const auto in = TensorAccessor(in_args, in_addr, page_bytes);", helper, 1),
+        (
+            "noc_async_read(in.get_noc_addr(base + page), wown + batch * chunk_bytes, n * page_bytes);",
+            "read_in(base / blk_pages, page, n, wown + batch * chunk_bytes);",
+            None,
+        ),
+        (
+            "noc_async_read(in.get_noc_addr(own_base + page), w0 + batch * chunk_bytes, n * page_bytes);",
+            "read_in(own_base / blk_pages, page, n, w0 + batch * chunk_bytes);",
+            None,
+        ),
+    ]
+    hits = 0
+    for old, new, want in reps:
+        k = src.count(old)
+        assert want is None or k == want, (old, k)
+        hits += k if want is None else 0
+        src = src.replace(old, new)
+    assert hits >= 1, "no input read to remap"
+    return src
+
+
 _FINAL_WRITER = (
     r"""
 #include <cstdint>
@@ -523,7 +656,8 @@ def _schedule(chips, coord, j, d, ring):
     of 0 .. p-1; a line end starts every chain (lead = all), any other position relays every block (lead = 0).
     Ring: each block's partials arrive at its owner forward over a = G // 2 chips and backward over G - 1 - a, so a
     port sends a (or G - 1 - a) blocks; the first, farthest one starts its chain here (lead = 1), the rest are relays.
-    The last block a port sends is the receiver's own: forward it lands in the receiver's own slot, backward in slot G."""
+    The last block a port sends is the receiver's own: forward it lands in the receiver's own slot, backward in slot G.
+    """
     rg = chips[coord]["rings"][j]
     G, p = chips[coord]["G"], rg["p"]
     peer = rg["next"] if d == "fwd" else rg["prev"]
@@ -556,6 +690,8 @@ def create_mesh_program_descriptor(
     chips_ring=False,
     cb_bytes=128 * 1024,  # 8 chunks of 8 KiB per CB batch: a port reads two streams per chunk, so it needs the depth
     inc_every=8,
+    dim=2,
+    exact_fp32_add=False,
 ):
     sem_a, sem_b, ready_addr = sems
     ring = chips_ring
@@ -563,7 +699,29 @@ def create_mesh_program_descriptor(
     num_banks = _num_banks(mesh_device)
     G = next(iter(chips.values()))["G"]
     shape = list(input_tensor.padded_shape)
-    blk_pages = (shape[-2] // G // 32) * (shape[-1] // 32)
+    if dim == 2:
+        blk_pages = (shape[-2] // G // 32) * (shape[-1] // 32)
+        port_reader, final_reader = _PORT_READER, _FINAL_READER
+    else:  # column blocks: block j = tile columns [j wb, (j+1) wb) of every row
+        wt = shape[-1] // 32
+        wb = wt // G
+        blk_pages = (shape[-2] // 32) * wb
+        port_reader, final_reader = _col_reader(_PORT_READER, wt, wb), _col_reader(_FINAL_READER, wt, wb)
+    if exact_fp32_add:
+        add_source = _EXACT_ADD_COMPUTE
+        unpack = [ttnn.UnpackToDestMode.Default] * 64  # length of ComputeConfigDescriptor.unpack_to_dest_mode
+        for idx in (CB_OWN, CB_IN, CB_IN2):
+            unpack[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32
+
+        def add_config():
+            cfg = ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
+            )
+            cfg.unpack_to_dest_mode = unpack
+            return cfg
+
+    else:
+        add_source, add_config = _ADD_COMPUTE, ttnn.ComputeConfigDescriptor
     run_pages = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
     chunk_bytes = run_pages * page_bytes
     group = max(1, min(8, cb_bytes // (2 * chunk_bytes)))
@@ -616,7 +774,17 @@ def create_mesh_program_descriptor(
             expect_in = _incs(relays * full, inc_every)
             send_ready = _needs_ready(chips, coord, j, d)
             rc = virt(chips[peer]["ports"][(j, _OPP[d], l)]) if send_ready else None
-            args = [scr_addr, blk_pages, lane, lanes, sem_a, sem_a if d == "fwd" else sem_b, expect_in, full, ready_addr]
+            args = [
+                scr_addr,
+                blk_pages,
+                lane,
+                lanes,
+                sem_a,
+                sem_a if d == "fwd" else sem_b,
+                expect_in,
+                full,
+                ready_addr,
+            ]
             args += [1, rc.x, rc.y] if send_ready else [0, 0, 0]
             if rg.get(f"{d}_links") and blocks:
                 pc = virt(chips[peer]["ports"][(j, d, l)])
@@ -651,8 +819,12 @@ def create_mesh_program_descriptor(
             lane, h = divmod(i, 2)
             rg = ch["rings"][lane // num_links]
             # an arrival per direction where a chain ends here: a ring always (G >= 3), a line from each side it has
-            has_f = int(rg["prev"] is not None and bool(_schedule(chips, rg["prev"], lane // num_links, "fwd", ring)[0]))
-            has_b = int(rg["next"] is not None and bool(_schedule(chips, rg["next"], lane // num_links, "bwd", ring)[0]))
+            has_f = int(
+                rg["prev"] is not None and bool(_schedule(chips, rg["prev"], lane // num_links, "fwd", ring)[0])
+            )
+            has_b = int(
+                rg["next"] is not None and bool(_schedule(chips, rg["next"], lane // num_links, "bwd", ring)[0])
+            )
             first, fstride = lane + h * lanes, 2 * lanes
             n = _chunks_per_shard(blk_pages, first, fstride, num_banks, run_pages)
             fr_rt[core.x][core.y] = [
@@ -683,16 +855,16 @@ def create_mesh_program_descriptor(
                 _incs(n, inc_every) if has_b else 0,
             ]
         compute = lambda cores, rt: ttnn.KernelDescriptor(
-            kernel_source=_ADD_COMPUTE,
+            kernel_source=add_source,
             source_type=src,
             core_ranges=cset(cores),
             compile_time_args=[run_pages],
             runtime_args=rt,
-            config=ttnn.ComputeConfigDescriptor(),
+            config=add_config(),
         )
         program.kernels = [
             ttnn.KernelDescriptor(
-                kernel_source=_PORT_READER,
+                kernel_source=port_reader,
                 source_type=src,
                 core_ranges=cset(ports.values()),
                 compile_time_args=ct + in_ct + scr_ct,
@@ -709,7 +881,7 @@ def create_mesh_program_descriptor(
                 config=dm("RISCV_0", NOC1),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=_FINAL_READER,
+                kernel_source=final_reader,
                 source_type=src,
                 core_ranges=cset(finals),
                 compile_time_args=ct + in_ct + scr_ct,
@@ -770,6 +942,9 @@ def fabric_reduce_scatter(
     scheme="ring",
     output=None,
     placement="auto",
+    dim=2,
+    exact_fp32_add=False,
+    cache_descriptors=False,
 ):
     """Reduce-scatter `input_tensor` ([1, 1, G * Sb, W] TILE, DRAM interleaved, a partial per chip; block i = rows
     i Sb ..) over each group: every chip gets its block of the sum over the group, [1, 1, Sb, W] (the layout
@@ -782,8 +957,107 @@ def fabric_reduce_scatter(
     scheme "dual_cycles" (cluster_axis=None, Ring, a torus with both sides >= 3): two edge-disjoint Hamiltonian
         cycles, each reducing half of every block (half the DRAM banks).
     Whatever order a group travels in, chip (r, c) owns block (its row-major rank in the group), as the all-gather's
-    output slots: block r C + c over the whole mesh, block r (c) along axis 0 (1)."""
+    output slots: block r C + c over the whole mesh, block r (c) along axis 0 (1).
+
+    dim: 2 (default) = blocks of rows, as above; 3 = blocks of columns: input [1, 1, S, G * Wb], chip p gets
+        columns [p Wb, (p + 1) Wb) of the sum, [1, 1, S, Wb] (the layout ttnn.reduce_scatter(dim=3) gives; Wb a
+        multiple of 32).
+    exact_fp32_add: False (default) = the adds on the FPU (add_tiles; at fp32 DEST off, so a FLOAT32 partial is read
+        at about TF32 and summed at 16-bit DEST precision, K-30); True = FLOAT32 partials only, each add one exact
+        IEEE fp32 rounding on the SFPU (UnpackToDestFp32 into an fp32 DEST): every sum equals torch's fp32 sum in the
+        op's order (a group of 2: a + b, bit-identical to all_gather + ttnn.add).
+    cache_descriptors: False (default) = the mesh program descriptor is built in Python on every call (~0.65 ms of
+        host time a call on a 2x2 for 160 cores' arguments); True = kept in an LRU keyed by everything it depends on
+        (the group configuration, dim, exact_fp32_add, the input / scratch / output buffer addresses, padded shapes,
+        dtype and page size, the counters' addresses), so a steady-state loop whose allocations repeat reuses it
+        (generic_op ~0.1 ms). The device program is the same either way."""
     mesh_device = input_tensor.device()
+    plan_entry = prepare(
+        mesh_device,
+        cluster_axis=cluster_axis,
+        topology=topology,
+        num_links=num_links,
+        scheme=scheme,
+        placement=placement,
+    )
+    _, chips, ring, sem_handles = plan_entry
+    G = next(iter(chips.values()))["G"]
+    _check_dram_interleaved(input_tensor, "input")
+    shape = list(input_tensor.shape)
+    assert input_tensor.layout == ttnn.TILE_LAYOUT and shape[0] == shape[1] == 1, shape
+    assert dim in (2, 3, -1, -2), f"dim {dim}: blocks of rows (2) or of columns (3)"
+    dim = dim % 4
+    if exact_fp32_add:
+        assert input_tensor.dtype == ttnn.float32, f"exact_fp32_add needs FLOAT32 partials, got {input_tensor.dtype}"
+    if dim == 2:
+        assert shape[2] % (32 * G) == 0, f"rows {shape[2]} must split into {G} tile-aligned blocks"
+        Sb, W = shape[2] // G, shape[3]
+        want = [1, 1, Sb, W]
+    else:
+        assert shape[2] % 32 == 0, f"rows {shape[2]} must be tile-aligned"
+        assert shape[3] % (32 * G) == 0, f"columns {shape[3]} must split into {G} tile-aligned blocks"
+        Sb, W = shape[2], shape[3] // G
+        want = [1, 1, Sb, W]
+    if output is None:
+        output = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(want), input_tensor.dtype, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        )
+    assert list(output.shape) == want and output.dtype == input_tensor.dtype, (list(output.shape), want)
+    skey = (id(mesh_device), G, Sb, W, input_tensor.dtype) + (() if dim == 2 else ("cols",))
+    if skey not in _SCRATCH_CACHE:
+        scr = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, (G + 1) * Sb, W]),
+            input_tensor.dtype,
+            ttnn.TILE_LAYOUT,
+            mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        _SCRATCH_CACHE[skey] = (mesh_device, scr)
+    scratch = _SCRATCH_CACHE[skey][1]
+    sems = tuple(int(ttnn.get_global_semaphore_address(s)) for s in sem_handles)
+    extra = {} if dim == 2 and not exact_fp32_add else {"dim": dim, "exact_fp32_add": exact_fp32_add}
+    build = lambda: create_mesh_program_descriptor(  # noqa: E731
+        mesh_device, input_tensor, scratch, output, sems, chips, num_links=num_links, chips_ring=ring, **extra
+    )
+    if not cache_descriptors:
+        return ttnn.generic_op([input_tensor, scratch, output], build())
+    dkey = (
+        id(mesh_device),
+        cluster_axis,
+        topology,
+        num_links,
+        scheme,
+        placement,
+        dim,
+        bool(exact_fp32_add),
+        sems,
+        input_tensor.dtype,
+        int(input_tensor.buffer_aligned_page_size()),
+        tuple(input_tensor.padded_shape),
+        tuple(output.padded_shape),
+    ) + tuple(int(t.buffer_address()) for t in (input_tensor, scratch, output))
+    hit = _DESC_CACHE.get(dkey)
+    if hit is None or hit[0] is not mesh_device:
+        hit = (mesh_device, build())
+        _DESC_CACHE[dkey] = hit
+        while len(_DESC_CACHE) > _DESC_CACHE_SIZE:
+            _DESC_CACHE.popitem(last=False)
+    else:
+        _DESC_CACHE.move_to_end(dkey)
+    return ttnn.generic_op([input_tensor, scratch, output], hit[1])
+
+
+_DESC_CACHE = OrderedDict()  # cache_descriptors=True: dkey -> (mesh_device, MeshProgramDescriptor), LRU
+_DESC_CACHE_SIZE = 512
+
+
+def prepare(
+    mesh_device, *, cluster_axis=0, topology=ttnn.Topology.Linear, num_links=1, scheme="ring", placement="auto"
+):
+    """The plan and the counters of one group configuration, built once per mesh (cached; fabric_reduce_scatter calls
+    it). The first build creates the global semaphores and synchronizes the mesh (every counter zero before any
+    chip's first call increments a neighbour's): call it at load time so that no forward pass pays for it.
+    Returns (mesh_device, chips, ring, semaphores)."""
     key = (id(mesh_device), cluster_axis, topology, num_links, scheme, placement)
     if key not in _PLAN_CACHE:
         chips, ring = plan(
@@ -795,31 +1069,7 @@ def fabric_reduce_scatter(
             scheme=scheme,
         )
         _PLAN_CACHE[key] = (mesh_device, _with_final_cores(mesh_device, chips, num_links), ring)
-    ring = _PLAN_CACHE[key][2]
-    chips = _PLAN_CACHE[key][1]
-    G = next(iter(chips.values()))["G"]
-    _check_dram_interleaved(input_tensor, "input")
-    shape = list(input_tensor.shape)
-    assert input_tensor.layout == ttnn.TILE_LAYOUT and shape[0] == shape[1] == 1, shape
-    assert shape[2] % (32 * G) == 0, f"rows {shape[2]} must split into {G} tile-aligned blocks"
-    Sb, W = shape[2] // G, shape[3]
-    want = [1, 1, Sb, W]
-    if output is None:
-        output = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(want), input_tensor.dtype, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
-        )
-    assert list(output.shape) == want and output.dtype == input_tensor.dtype, (list(output.shape), want)
-    skey = (id(mesh_device), G, Sb, W, input_tensor.dtype)
-    if skey not in _SCRATCH_CACHE:
-        scr = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, (G + 1) * Sb, W]),
-            input_tensor.dtype,
-            ttnn.TILE_LAYOUT,
-            mesh_device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
-        _SCRATCH_CACHE[skey] = (mesh_device, scr)
-    scratch = _SCRATCH_CACHE[skey][1]
+    chips, ring = _PLAN_CACHE[key][1], _PLAN_CACHE[key][2]
     cores = {(c.x, c.y) for ch in chips.values() for c in list(ch["ports"].values()) + ch["finals"]}
     ckey = (id(mesh_device), tuple(sorted(cores)))
     if ckey not in _SEM_CACHE:
@@ -827,8 +1077,4 @@ def fabric_reduce_scatter(
         sems = tuple(ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3))
         ttnn.synchronize_device(mesh_device)  # every counter zero before any chip's first call increments a neighbour's
         _SEM_CACHE[ckey] = (mesh_device, sems)
-    sems = tuple(int(ttnn.get_global_semaphore_address(s)) for s in _SEM_CACHE[ckey][1])
-    desc = create_mesh_program_descriptor(
-        mesh_device, input_tensor, scratch, output, sems, chips, num_links=num_links, chips_ring=ring
-    )
-    return ttnn.generic_op([input_tensor, scratch, output], desc)
+    return mesh_device, chips, ring, _SEM_CACHE[ckey][1]

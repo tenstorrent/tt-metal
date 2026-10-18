@@ -48,6 +48,7 @@ import torch
 
 import ttnn
 
+from . import ccl
 from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, tp_sum
 from .norm import TtDistributedRmsNorm
 from .quant import fp4_qdq, round_tf32
@@ -351,7 +352,7 @@ class TtCompressor:
         or past ``valid`` zero."""
         g = t
         if self.mesh.shape[SP_AXIS] > 1:
-            g = ttnn.all_gather(t, dim=2, cluster_axis=SP_AXIS, memory_config=DRAM)
+            g = ccl.all_gather(t, 2, SP_AXIS)
         total = g.shape[-2]
         if valid < total:
             # ratio 1: total == the iota's rows, and a full-range slice returns a wrapper over the load-time iota's

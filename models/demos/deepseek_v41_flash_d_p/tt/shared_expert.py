@@ -31,7 +31,7 @@ import torch
 
 import ttnn
 
-from .common import DRAM, TP_AXIS, compute_config, tp_sum
+from .common import DRAM, TP_AXIS, compute_config, sum_cols
 from .quant import GROUP, fp8_qdq
 from .settings import settings
 
@@ -115,10 +115,7 @@ class TtSharedExpert:
             return ttnn.clone(part, memory_config=DRAM)
         if self.sum_mode == "reduce_scatter":
             return ttnn.reduce_scatter(part, dim=3, cluster_axis=TP_AXIS, memory_config=DRAM)
-        full = tp_sum(self.mesh, part, how="gather_add")
-        out = ttnn.mesh_partition(full, dim=3, cluster_axis=TP_AXIS, memory_config=DRAM)
-        ttnn.deallocate(full)
-        return out
+        return sum_cols(self.mesh, part)
 
     def __call__(self, x: ttnn.Tensor, xq: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """shared_out [1, 1, s, H/TP] fp32 (rows over axis 0, hidden columns over axis 1)."""

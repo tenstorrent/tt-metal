@@ -47,6 +47,7 @@ import torch
 
 import ttnn
 
+from . import ccl
 from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, tp_sum
 from .quant import fp4_qdq, fp8_qdq, round_tf32
 from .rope import RopeTable, deinterleave_perm, rope_heads
@@ -236,7 +237,7 @@ class TtIndexer:
         local = ttnn.experimental.topk_large_indices(logits, k=self.topk, valid_length=kv_len)
         if self.tp == 1:
             return local
-        out = ttnn.all_gather(local, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)  # [1, 1, W, topk]
+        out = ccl.all_gather(local, 2, TP_AXIS)  # [1, 1, W, topk]
         ttnn.deallocate(local)
         return out
 
