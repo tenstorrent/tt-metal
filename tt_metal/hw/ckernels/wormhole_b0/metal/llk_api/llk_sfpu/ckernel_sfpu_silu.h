@@ -10,6 +10,9 @@
 
 namespace ckernel::sfpu {
 
+// Whether BF16 DEST runs the generated silu kernel as one call over the whole tile.
+inline constexpr bool silu_bf16_whole_tile = false;
+
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_silu() {
 #pragma GCC unroll 8
@@ -29,7 +32,7 @@ inline void calculate_silu() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 inline void silu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // calculate_silu always uses the non-approx sigmoid path via _sfpu_sigmoid_, so we must

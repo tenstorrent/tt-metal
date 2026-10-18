@@ -630,7 +630,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     {
         // silu_init routes to sigmoid_init<false>, seeding the reciprocal's
         // vConstFloatPrgm0 that calculate_silu depends on.
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(silu_init<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(silu_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::log1p)
     {
