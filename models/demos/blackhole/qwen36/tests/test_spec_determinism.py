@@ -88,8 +88,10 @@ def test_spec_decode_is_deterministic(mesh_device, prompt_len, traced, monkeypat
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
     token_ids = _prompt_of_len(prompt_len, tokenizer)
     prompt_ids = token_ids[0].tolist()
-    kv_shape = [num_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
-    pt = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+    # Block 0 is vLLM's null block (the traced prefill's trash block, QWEN36_SPEC_FAST_PREFILL=1): the request owns
+    # blocks 1..num_blocks, as in serving, so the fast prefill path is exercised instead of declining to eager.
+    kv_shape = [num_blocks + 1, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
+    pt = torch.arange(1, num_blocks + 1, dtype=torch.int32).reshape(1, num_blocks)
 
     # Explicit, model-scoped: spec verify runs the fused GDN op, so decode must use the same math
     # (SpeculativeDecoder asserts it rather than flipping the flag itself).
@@ -177,8 +179,10 @@ def test_spec_sampling_is_deterministic(mesh_device):
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
     token_ids = _prompt_of_len(prompt_len, tokenizer)
     prompt_ids = token_ids[0].tolist()
-    kv_shape = [num_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
-    pt = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+    # Block 0 is vLLM's null block (the traced prefill's trash block, QWEN36_SPEC_FAST_PREFILL=1): the request owns
+    # blocks 1..num_blocks, as in serving, so the fast prefill path is exercised instead of declining to eager.
+    kv_shape = [num_blocks + 1, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
+    pt = torch.arange(1, num_blocks + 1, dtype=torch.int32).reshape(1, num_blocks)
 
     # Explicit, model-scoped: spec verify runs the fused GDN op, so decode must use the same math
     # (SpeculativeDecoder asserts it rather than flipping the flag itself).
