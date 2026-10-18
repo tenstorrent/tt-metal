@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include "sanitizer/api.h"
 
 #ifdef DEBUG_CB_HASH
 #include "llk_math_common_api.h"
@@ -25,6 +26,7 @@
  * @pre Call once before any @ref llk_math_hash_cb_tile.
  */
 inline void llk_math_hash_cb_init() {
+    SAN_HOOK(unsupported());
 #ifdef DEBUG_CB_HASH
     ckernel::sfpu::_llk_math_hash_cb_init_();
 #endif
@@ -37,6 +39,7 @@ inline void llk_math_hash_cb_init() {
  * @pre @ref llk_math_hash_cb_init, and the tile already datacopied into DEST.
  */
 inline void llk_math_hash_cb_tile(uint32_t dst_tile_idx) {
+    SAN_HOOK(unsupported());
 #ifdef DEBUG_CB_HASH
     ckernel::sfpu::_llk_math_hash_cb_tile_(dst_tile_idx);
 #else
@@ -54,6 +57,7 @@ inline void llk_math_hash_cb_tile(uint32_t dst_tile_idx) {
  * @post Caller packs DEST; see api/compute/debug/cb_hash.h.
  */
 inline void llk_math_hash_cb_store_to_dest() {
+    SAN_HOOK(unsupported());
 #ifdef DEBUG_CB_HASH
     ckernel::sfpu::_llk_math_hash_cb_store_to_dest_();
 #endif

@@ -67,7 +67,7 @@ variable "TT_SMI_VERSION" {
   # Bake always passes this to the main targets, so it takes precedence over the
   # ARG TT_SMI_VERSION default in dockerfile/Dockerfile (used only for standalone
   # `docker build` without Bake). Keep the two in sync.
-  default = "5.2.0"
+  default = "6.7.0"
 }
 
 variable "UV_IMAGE" {
@@ -122,6 +122,13 @@ target "clangbuildanalyzer" {
   dockerfile = "dockerfile/Dockerfile.tools"
   target     = "clangbuildanalyzer"
   tags       = ["tool-clangbuildanalyzer:local"]
+}
+
+target "iwyu" {
+  context    = "."
+  dockerfile = "dockerfile/Dockerfile.tools"
+  target     = "iwyu"
+  tags       = ["tool-iwyu:local"]
 }
 
 target "gdb" {
@@ -199,7 +206,7 @@ target "dockerfile-frontend" {
 }
 
 group "tools" {
-  targets = ["ccache", "clangbuildanalyzer", "cmake", "curl", "dockerfile-frontend", "doxygen", "gdb", "mold", "openmpi", "oras", "sfpi", "syft-scanner", "yq", "zstd"]
+  targets = ["ccache", "clangbuildanalyzer", "cmake", "curl", "dockerfile-frontend", "doxygen", "gdb", "iwyu", "mold", "openmpi", "oras", "sfpi", "syft-scanner", "yq", "zstd"]
 }
 
 # =============================================================================
@@ -263,6 +270,7 @@ target "_main-common" {
     mold-layer               = "target:mold"
     doxygen-layer            = "target:doxygen"
     clangbuildanalyzer-layer = "target:clangbuildanalyzer"
+    iwyu-layer               = "target:iwyu"
     gdb-layer                = "target:gdb"
     cmake-layer              = "target:cmake"
     yq-layer                 = "target:yq"

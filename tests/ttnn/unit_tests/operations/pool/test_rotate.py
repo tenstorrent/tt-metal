@@ -130,25 +130,41 @@ def test_custom_center(device, center, interpolation_mode):
 
 
 @pytest.mark.parametrize("fill", [0.0, 1.0, -1.0, 0.5])
-@pytest.mark.parametrize("interpolation_mode", ["nearest", "bilinear"])
-def test_custom_fill_values(device, fill, interpolation_mode):
+@pytest.mark.parametrize(
+    "interpolation_mode,dtype",
+    [
+        ("nearest", ttnn.bfloat16),
+        ("nearest", ttnn.float32),
+        ("bilinear", ttnn.bfloat16),
+    ],
+)
+def test_custom_fill_values(device, fill, interpolation_mode, dtype):
     """Test different fill values for out-of-bounds pixels."""
     torch.manual_seed(0)
 
     input_shape = (1, 16, 16, 64)
     angle = 45.0
-    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    torch_input_nhwc = torch.randn(input_shape, dtype=torch_dtype)
 
     golden_function = ttnn.get_golden_function(ttnn.rotate)
     torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle, fill=fill, interpolation_mode=interpolation_mode)
 
-    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype)
     ttnn_output = ttnn.rotate(ttnn_input, angle=angle, fill=fill, interpolation_mode=interpolation_mode)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
+    # Nearest OOB fill must be tight; whole-image atol=6 hides the FLOAT32 packing bug.
+    # Bilinear interpolates near the edge, so those pixels are not exact fill.
+    if interpolation_mode == "nearest":
+        fill_mask = torch.all(torch_output_nhwc == fill, dim=-1)
+        assert torch.any(fill_mask), "45° rotation should produce out-of-bounds fill pixels"
+        fill_close = torch.allclose(ttnn_output_torch[fill_mask], torch_output_nhwc[fill_mask], atol=1e-5, rtol=0)
+        assert fill_close, f"OOB fill mismatch for fill={fill}, dtype={dtype}"
+
     atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
-    assert comparison_passed, f"Fill value test failed for fill={fill}, mode={interpolation_mode}"
+    assert comparison_passed, f"Fill value test failed for fill={fill}, mode={interpolation_mode}, dtype={dtype}"
 
 
 @pytest.mark.parametrize(
@@ -237,6 +253,15 @@ def test_channel_alignment(device, channels):
     ), f"90-degree rotation should be exact for {channels} channels"
 
 
+@pytest.mark.parametrize("channels", [16, 48])
+def test_bilinear_rejects_non_tile_width_channels(device, channels, expect_error):
+    ttnn_input = ttnn.from_torch(
+        torch.randn(1, 32, 32, channels, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "divisible by TILE_WIDTH"):
+        ttnn.rotate(ttnn_input, angle=45.0, interpolation_mode="bilinear")
+
+
 # ============================================================================
 # Memory Configuration Tests
 # ============================================================================
@@ -300,6 +325,41 @@ def test_height_sharded_memory(device, interpolation_mode):
     atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
     assert comparison_passed, f"{interpolation_mode} height sharded memory test failed"
+
+
+@skip_for_blackhole("Incorrect result on BH: https://github.com/tenstorrent/tt-metal/issues/36263")
+@pytest.mark.parametrize(
+    "interpolation_mode, input_shape, num_cores, shard_height",
+    [
+        ("nearest", (1, 7, 7, 64), 7, 8),
+        ("nearest", (1, 100, 1, 32), 4, 32),
+        ("bilinear", (1, 10, 10, 64), 2, 64),
+    ],
+)
+@pytest.mark.parametrize("angle", [0.0, 45.0])
+def test_uneven_height_sharded_memory(device, interpolation_mode, input_shape, num_cores, shard_height, angle):
+    """The last shard is only partly backed by real sticks; padding sticks must not be read or written."""
+    torch.manual_seed(0)
+
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))}),
+        (shard_height, input_shape[3]),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.rotate)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle, interpolation_mode=interpolation_mode)
+
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_input_sharded = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
+    ttnn_output = ttnn.rotate(ttnn_input_sharded, angle=angle, interpolation_mode=interpolation_mode)
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
+    comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
+    assert comparison_passed, f"{interpolation_mode} uneven height sharded test failed"
 
 
 # ============================================================================

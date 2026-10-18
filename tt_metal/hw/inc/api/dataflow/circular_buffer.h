@@ -14,8 +14,8 @@
 #endif
 #else  // !COMPILE_FOR_TRISC
 #include "api/dataflow/noc.h"
-#include "tools/profiler/noc_debugging_metadata.hpp"
-#include "tools/profiler/noc_debugging_profiler.hpp"
+#include "internal/profiler/noc_debugging_metadata.hpp"
+#include "internal/profiler/noc_debugging_profiler.hpp"
 #endif
 
 #include "api/lock.h"
@@ -254,6 +254,9 @@ private:
         }
     }
 };
+
+template <>
+inline constexpr bool noc_zero_l1_endpoint_v<CircularBuffer> = true;
 
 #ifdef ARCH_QUASAR
 #include "internal/tt-2xx/noc_zero_l1.inl"

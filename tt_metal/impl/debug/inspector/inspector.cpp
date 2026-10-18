@@ -11,9 +11,18 @@
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include "distributed/mesh_socket_utils.hpp"
 #include "program.hpp"
+#include <map>
 #include <memory>
+#include <optional>
+#include <tuple>
 #include <tt-metalium/experimental/inspector.hpp>
 #include "impl/kernels/kernel.hpp"
 
@@ -209,6 +218,7 @@ void Inspector::program_compile_finished(
         std::lock_guard<std::mutex> lock(data->programs_mutex);
         auto& program_data = data->programs_data[program->get_id()];
         program_data.compile_finished_timestamp = std::chrono::high_resolution_clock::now();
+        program_data.semaphores = program->semaphores();
         data->logger.log_program_compile_finished(program_data);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program compile finished: {}", e.what());
@@ -292,6 +302,181 @@ void Inspector::mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_
         data->logger.log_mesh_device_initialized(mesh_device_data);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh device initialized: {}", e.what());
+    }
+}
+
+void Inspector::mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
+    try {
+        if (data->mesh_buffer_logging_enabled) {
+            data->logger.log_mesh_buffer_allocated(mesh_buffer);
+        }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->mesh_buffers_data.insert(mesh_buffer);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh buffer allocated: {}", e.what());
+    }
+}
+
+void Inspector::mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        if (data->mesh_buffer_logging_enabled) {
+            data->logger.log_mesh_buffer_deallocated(mesh_buffer);
+        }
+        std::optional<inspector::MeshSocketData> destroyed_socket;
+        {
+            std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+            data->mesh_buffers_data.erase(mesh_buffer);
+            data->global_semaphores_data.erase(mesh_buffer);
+            if (auto it = data->mesh_sockets_data.find(mesh_buffer); it != data->mesh_sockets_data.end()) {
+                destroyed_socket = std::move(it->second);
+                data->mesh_sockets_data.erase(it);
+            }
+        }
+        if (destroyed_socket.has_value() && data->mesh_socket_logging_enabled) {
+            data->logger.log_mesh_socket_destroyed(mesh_buffer, *destroyed_socket);
+        }
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh buffer deallocated: {}", e.what());
+    }
+}
+
+void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        auto* mesh_device = socket->get_mesh_device();
+        const distributed::SocketSenderSize sender_size(
+            mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
+        auto config_buffer = socket->get_config_buffer();
+        const bool is_sender = socket->get_socket_endpoint_type() == distributed::SocketEndpoint::SENDER;
+
+        inspector::MeshSocketData socket_data;
+        socket_data.is_sender = is_sender;
+        socket_data.fifo_size = socket->get_config().socket_mem_config.fifo_size;
+        socket_data.bytes_acked_offset_bytes = sender_size.md_size_bytes;
+        socket_data.bytes_acked_stride_bytes = sender_size.ack_size_bytes;
+
+        const auto local_ep = socket->get_socket_endpoint_type();
+        const auto peer_ep = is_sender ? distributed::SocketEndpoint::RECEIVER : distributed::SocketEndpoint::SENDER;
+        // One entry per local core; a sender core feeding several downstreams collects several peers.
+        std::map<std::tuple<uint32_t, uint32_t, uint32_t>, inspector::MeshSocketLocalCoreData> by_core;
+        for (const auto& conn : socket->get_config().socket_connection_config) {
+            const auto& local_core = is_sender ? conn.sender_core : conn.receiver_core;
+            if (!mesh_device->is_local(local_core.device_coord)) {
+                continue;  // Another rank owns this core and reports it itself.
+            }
+            auto* local_device = mesh_device->get_device(local_core.device_coord);
+            if (local_device == nullptr) {
+                continue;
+            }
+            const auto& peer_core = is_sender ? conn.receiver_core : conn.sender_core;
+            auto local_node = socket->get_fabric_node_id(local_ep, local_core.device_coord);
+            auto peer_node = socket->get_fabric_node_id(peer_ep, peer_core.device_coord);
+
+            // One mesh id per side, so every connection agrees.
+            socket_data.local_mesh_id = *local_node.mesh_id;
+            socket_data.peer_mesh_id = *peer_node.mesh_id;
+
+            const auto core_key = std::tuple(
+                static_cast<uint32_t>(local_device->id()),
+                static_cast<uint32_t>(local_core.core_coord.x),
+                static_cast<uint32_t>(local_core.core_coord.y));
+            // Every connection on this core agrees on these.
+            auto& core_data = by_core[core_key];
+            core_data.chip_id = local_device->id();
+            core_data.core.core_x = local_core.core_coord.x;
+            core_data.core.core_y = local_core.core_coord.y;
+            core_data.core.fabric_chip_id = local_node.chip_id;
+            auto& peer = core_data.peers.emplace_back();
+            peer.fabric_chip_id = peer_node.chip_id;
+            peer.core_x = peer_core.core_coord.x;
+            peer.core_y = peer_core.core_coord.y;
+        }
+        if (by_core.empty()) {
+            return;  // this rank owns no core of this socket
+        }
+        // address() is 0 for per-core buffers, so resolve the per-core addresses here, on the rank that owns the core.
+        socket_data.config_buffer_address = socket->get_config_buffer_address();
+        if (!is_sender) {
+            const auto& data_buffer = *socket->get_data_buffer();
+            const auto& receiver_core = socket->get_config().socket_connection_config.front().receiver_core;
+            socket_data.data_buffer_address =
+                socket->get_config().socket_mem_config.per_core_allocation
+                    ? experimental::per_core_allocation::get_per_core_address(
+                          data_buffer, receiver_core.device_coord, receiver_core.core_coord)
+                    : data_buffer.address();
+        }
+        socket_data.local_cores.reserve(by_core.size());
+        for (auto& [key, core_data] : by_core) {
+            socket_data.local_cores.push_back(std::move(core_data));
+        }
+        if (data->mesh_socket_logging_enabled) {
+            data->logger.log_mesh_socket_created(config_buffer.get(), socket_data);
+        }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->mesh_sockets_data.insert_or_assign(config_buffer.get(), std::move(socket_data));
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh socket created: {}", e.what());
+    }
+}
+
+void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, const CoreRangeSet& cores) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        inspector::GlobalSemaphoreData semaphore_data;
+        semaphore_data.address = buffer->address();
+        semaphore_data.cores = cores;
+        for (const auto* device : buffer->device()->get_devices()) {
+            semaphore_data.chip_ids.push_back(device->id());
+        }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->global_semaphores_data.insert_or_assign(buffer, std::move(semaphore_data));
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log global semaphore created: {}", e.what());
+    }
+}
+
+void Inspector::global_semaphore_reset(const distributed::MeshBuffer* buffer, uint32_t value) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        if (auto it = data->global_semaphores_data.find(buffer); it != data->global_semaphores_data.end()) {
+            it->second.reset_value = value;
+        }
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log global semaphore reset: {}", e.what());
     }
 }
 
@@ -400,7 +585,7 @@ void Inspector::emit_debug_entry(
             slot.operation_name = operation_name;
             slot.tensor_specs = std::move(tensor_specs);
             slot.trace_id = trace_id;
-            if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {
+            if (data->runtime_entries_logging_enabled) {
                 data->logger.log_runtime_entry(slot);
             }
         } else {
@@ -417,7 +602,7 @@ void Inspector::emit_debug_entry(
             } else {
                 data->runtime_entries_write_pos++;
             }
-            if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {
+            if (data->runtime_entries_logging_enabled) {
                 data->logger.log_runtime_entry(slot);
             }
         }

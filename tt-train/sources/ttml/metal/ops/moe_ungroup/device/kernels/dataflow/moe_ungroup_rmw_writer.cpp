@@ -45,6 +45,13 @@ constexpr auto ungrouped_args = TensorAccessorArgs<11>();
 constexpr auto plan_args = TensorAccessorArgs<ungrouped_args.next_compile_time_args_offset()>();
 constexpr auto offsets_args = TensorAccessorArgs<plan_args.next_compile_time_args_offset()>();
 constexpr auto gs_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
+// The accessor chain must consume the host's CT-arg stream exactly; a host
+// built against a different arg table shifts every accessor base and can
+// silently parse page sizes as config words.
+static_assert(
+    gs_args.next_compile_time_args_offset() == kernel_compile_time_args.size(),
+    "moe_ungroup_rmw_writer: compile-time arg count differs from host emission — "
+    "rebuild the ttml host library to match this kernel source");
 
 constexpr uint32_t off_page_bytes = decltype(offsets_args)::AlignedPageSize;
 constexpr uint32_t ungrouped_aligned_page = decltype(ungrouped_args)::AlignedPageSize;
@@ -121,7 +128,7 @@ void kernel_main() {
     // (the first to touch a row reads zero and effectively writes), and tokens
     // with no local experts stay zero.
     fill_zeros_async(noc, cb_scratch, h * 2U);
-    noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
     auto zero_slice = ttml::metal::moe_ungroup::slice_for_core(total_rows, num_total_cores, my_core_idx);
     for (uint32_t row = zero_slice.start; row < zero_slice.start + zero_slice.count; ++row) {
         uint64_t dst_noc = ungrouped_addrgen.get_noc_addr(row);
@@ -193,7 +200,7 @@ void kernel_main() {
                 {
                     uint32_t w_tile_addr = get_write_ptr(cb_w);
                     fill_zeros_async(noc, cb_w, TILE_BYTES);
-                    noc_async_read_barrier();
+                    noc.write_zeros_l1_barrier();
                     volatile tt_l1_ptr uint16_t* w_tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(w_tile_addr);
                     for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
                         uint32_t face = (r < FACE_HEIGHT) ? 0U : 2U;
@@ -212,12 +219,14 @@ void kernel_main() {
                 cb_reserve_back(cb_existing_rm, tt::constants::TILE_HEIGHT);
                 uint32_t existing_l1 = get_write_ptr(cb_existing_rm);
                 uint32_t pad_bytes = hidden_chunk_bytes - chunk_bytes;
+                bool zeros_pending = false;
                 for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
                     uint32_t flat = plan_buf[r];
                     uint32_t row_buf = existing_l1 + r * hidden_chunk_bytes;
                     if (flat == SENTINEL) {
                         // Skipped row — fill via NOC DMA so tilize sees zeros.
                         fill_zeros_async(noc, cb_existing_rm, hidden_chunk_bytes, r * hidden_chunk_bytes);
+                        zeros_pending = true;
                         continue;
                     }
                     uint64_t dst_noc = ungrouped_addrgen.get_noc_addr(flat, chunk * hidden_chunk_bytes);
@@ -235,8 +244,14 @@ void kernel_main() {
                             continue;
                         }
                         fill_zeros_async(noc, cb_existing_rm, pad_bytes, r * hidden_chunk_bytes + chunk_bytes);
+                        zeros_pending = true;
                     }
-                    noc_async_read_barrier();
+                }
+                if (zeros_pending) {
+                    // SENTINEL and pad fills went through async_write_zeros; one
+                    // barrier covers the whole batch and restores the write path
+                    // (Quasar zero mode) before write_chunk's NoC writes.
+                    noc.write_zeros_l1_barrier();
                 }
                 cb_push_back(cb_existing_rm, tt::constants::TILE_HEIGHT);
             };

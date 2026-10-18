@@ -900,3 +900,26 @@ def test_conv_transpose2d_replicate_pad_bfloat8b_weights(device):
         padding=(1, 1),
         weights_dtype=ttnn.bfloat8_b,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_conv_transpose2d_zero_stride_raises(device, expect_error):
+    x = ttnn.from_torch(torch.randn(1, 1, 64, 32).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    w = ttnn.from_torch(torch.randn(32, 32, 3, 3).bfloat16(), dtype=ttnn.bfloat16)
+    with expect_error(RuntimeError, "stride must be greater than 0"):
+        ttnn.conv_transpose2d(
+            input_tensor=x,
+            weight_tensor=w,
+            device=device,
+            in_channels=32,
+            out_channels=32,
+            batch_size=1,
+            input_height=8,
+            input_width=8,
+            kernel_size=(3, 3),
+            stride=(0, 1),
+            padding=(1, 1),
+            output_padding=(0, 0),
+            dilation=(1, 1),
+            groups=1,
+        )

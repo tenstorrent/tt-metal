@@ -1,0 +1,21 @@
+# Rank 0 = TTML sender (DDP mesh); rank 1 = TTT receiver (parent -> 4 submeshes).
+#
+# Target: BH loudbox (8x p150). Each p150 is one PCIe device / one chip, so
+# "0,1,2,3" and "4,5,6,7" each expose 4 chips = a routable [1, 4] line.
+#
+# !!! HARDWARE-SPECIFIC TEMPLATE !!!
+# Adjust TT_VISIBLE_DEVICES per machine.
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3"
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "4,5,6,7"
+
+mesh_graph_desc_path: "configurations/4-4/mgd.textproto"

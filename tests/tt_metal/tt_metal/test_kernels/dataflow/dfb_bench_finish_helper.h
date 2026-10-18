@@ -5,7 +5,7 @@
 // Benchmark-only producer finish for single-producer implicit-sync DFBs.
 //
 // DataflowBuffer::finish() -> handle_final_credits() unconditionally calls
-// sync_threads(get_num_threads()). Quasar benchmark kernels are often launched
+// sync_threads(), which waits for every DM thread of the kernel. Quasar benchmark kernels are often launched
 // with num_threads_per_cluster > 1 while only one DM produces on a given DFB,
 // which deadlocks in that barrier.
 //
@@ -45,8 +45,9 @@ FORCE_INLINE void dfb_finish_single_implicit_read_producer(DataflowBuffer& dfb) 
     };
 
     while (read_actual_slot0() < expected_slot0) {
-        const uint64_t tack  = CMDBUF_TR_ACK_TRID(OVERLAY_RD_CMD_BUF, tail_txn_id);
-        const uint64_t tiles = CMDBUF_READ_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, tail_txn_id);
+        const uint64_t tack = __builtin_riscv_ttrocc_cmdbuf_tr_ack_trid(OVERLAY_RD_CMD_BUF, tail_txn_id);
+        const uint64_t tiles =
+            __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_tr_ack_tr_id(OVERLAY_RD_CMD_BUF, tail_txn_id);
         if (tack == 0 && tiles > 0) {
             break;
         }
@@ -57,7 +58,8 @@ FORCE_INLINE void dfb_finish_single_implicit_read_producer(DataflowBuffer& dfb) 
     } else {
         const uint16_t global_threshold = iface.threshold;
         while (read_actual_slot0() < expected_slot0) {
-            const uint64_t tiles = CMDBUF_READ_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, tail_txn_id);
+            const uint64_t tiles =
+                __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_tr_ack_tr_id(OVERLAY_RD_CMD_BUF, tail_txn_id);
             if (tiles > 0 && tiles < global_threshold) {
                 break;
             }

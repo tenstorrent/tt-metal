@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <memory>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -55,8 +56,6 @@ public:
 
     std::vector<uint32_t> get_compile_time_args() const;
     std::vector<uint32_t> get_common_runtime_args() const;
-
-    static constexpr size_t MAX_NUM_DIMENSIONS = 8;
 
 private:
     void update_args_config();

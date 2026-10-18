@@ -5,15 +5,28 @@
 from typing import TYPE_CHECKING
 
 from helpers.format_config import DataFormat
+from helpers.llk_params import PerfRunType
 
 if TYPE_CHECKING:
+    from fuser.fpu_node import FpuNode
     from fuser.fuser_config import GlobalConfig
     from fuser.l1_operation import L1Operation
 
 
+def fidelity_source_formats(
+    config: "GlobalConfig", operation: "L1Operation", compute_unit: "FpuNode"
+) -> tuple[str, str]:
+    output_format = operation._get_pack_nodes()[0].output.data_format
+    _, src_a, _, src_b, _, _ = config.sentinel._infer_node_formats(
+        config, compute_unit, output_format, operation
+    )
+    src_a, src_b = compute_unit.unpacker.physical_order(src_a, src_b)
+    return src_a.cpp_enum_value, src_b.cpp_enum_value
+
+
 def hw_configure_math(dest_acc: str, math_fmt: DataFormat) -> str:
     return (
-        f"_llk_math_srcAB_hw_configure_<true, {dest_acc}, false>(\n"
+        f"_llk_math_srcAB_hw_configure_<false, {dest_acc}>(\n"
         f"    {math_fmt.cpp_enum_value}, {math_fmt.cpp_enum_value}\n"
         f");\n"
     )
@@ -24,19 +37,24 @@ def configure_math(
     old_math: DataFormat,
     new_math: DataFormat,
 ) -> str:
+    implied = "false" if new_math.is_integer() else "true"
+    math_fmt = new_math.cpp_enum_value
     return (
-        f"_llk_math_srcAB_hw_configure_<false, {dest_acc}, false>(\n"
-        f"    {new_math.cpp_enum_value}, {new_math.cpp_enum_value}\n"
+        f"_configure_alu_formats_<{implied}, {dest_acc}>(\n"
+        f"    {math_fmt}, {math_fmt},\n"
+        f"    _is_src_fmt_int32_dest_compatible_({math_fmt}) && {dest_acc}, DataFormat::Invalid\n"
         f");\n"
     )
 
 
 def math_pack_sync_init(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if not config.quasar_use_dvalid and operation.stage_id != 1:
-        return ""
     dest_sync = operation.dest_sync.cpp_enum_value
     if config.quasar_use_dvalid:
-        return "set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
+        if config.perf_run_type in (None, PerfRunType.L1_TO_L1):
+            return "set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
+        return "set_up_zero_dest_dvalid_handshake_for_math();\n"
+    if operation.stage_id != 1:
+        return ""
     return f"_llk_math_pack_sync_init_<{dest_sync}>();\n"
 
 

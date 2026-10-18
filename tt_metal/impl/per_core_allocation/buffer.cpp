@@ -3,22 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
+#include "impl/buffers/buffer_impl.hpp"
+#include "impl/buffers/buffer_sharding_args_impl.hpp"
 #include <tt_stl/assert.hpp>
+#include <optional>
 
 namespace tt::tt_metal::experimental::per_core_allocation {
 
-bool is_per_core_allocation(const Buffer& buffer) { return buffer.per_core_allocation_; }
+bool is_per_core_allocation(const Buffer& buffer) { return buffer.impl().per_core_allocation_; }
 
 DeviceAddr get_per_core_address(const Buffer& buffer, CoreCoord core) {
     TT_FATAL(
-        buffer.per_core_allocation_, "get_per_core_address() called on buffer without per-core allocation enabled");
-    auto it = buffer.per_core_addresses_.find(core);
-    TT_FATAL(it != buffer.per_core_addresses_.end(), "No per-core address for core ({}, {})", core.x, core.y);
+        buffer.impl().per_core_allocation_,
+        "get_per_core_address() called on buffer without per-core allocation enabled");
+    auto it = buffer.impl().per_core_addresses_.find(core);
+    TT_FATAL(it != buffer.impl().per_core_addresses_.end(), "No per-core address for core ({}, {})", core.x, core.y);
     return it->second;
 }
 
 const std::unordered_map<CoreCoord, DeviceAddr>& get_per_core_addresses(const Buffer& buffer) {
-    return buffer.per_core_addresses_;
+    return buffer.impl().per_core_addresses_;
 }
 
 DeviceAddr get_shard_base_address(const Buffer& buffer, CoreCoord core) {
@@ -28,18 +33,63 @@ DeviceAddr get_shard_base_address(const Buffer& buffer, CoreCoord core) {
     return buffer.address();
 }
 
+DeviceAddr get_shard_base_address(const Buffer& buffer, const CoreRangeSet& cores) {
+    if (!is_per_core_allocation(buffer)) {
+        return buffer.address();
+    }
+    std::optional<DeviceAddr> address;
+    CoreCoord address_core;
+    for (const CoreRange& core_range : cores.ranges()) {
+        for (const CoreCoord& core : core_range) {
+            const auto it = buffer.impl().per_core_addresses_.find(core);
+            TT_FATAL(
+                it != buffer.impl().per_core_addresses_.end(),
+                "Per-core-allocated buffer has no shard on core {}, so it has no address on cores {}; "
+                "limit the cores to the buffer's shard grid",
+                core.str(),
+                cores.str());
+            const DeviceAddr core_address = it->second;
+            if (!address.has_value()) {
+                address = core_address;
+                address_core = core;
+                continue;
+            }
+            TT_FATAL(
+                core_address == *address,
+                "Per-core-allocated buffer sits at {:#x} on core {} but {:#x} on core {}, so cores {} do not share "
+                "one address; split them into groups that do",
+                *address,
+                address_core.str(),
+                core_address,
+                core.str(),
+                cores.str());
+        }
+    }
+    TT_FATAL(address.has_value(), "get_shard_base_address: no cores given for a per-core-allocated buffer");
+    return *address;
+}
+
 void copy_per_core_addresses(Buffer& dst, const Buffer& src) {
     TT_FATAL(
-        dst.per_core_allocation_ && src.per_core_allocation_,
+        dst.impl().per_core_allocation_ && src.impl().per_core_allocation_,
         "copy_per_core_addresses requires both buffers to use per-core allocation");
-    dst.per_core_addresses_ = src.per_core_addresses_;
+    dst.impl().per_core_addresses_ = src.impl().per_core_addresses_;
 }
 
 BufferShardingArgs& set_per_core_allocation(BufferShardingArgs& args, bool enable) {
-    args.per_core_allocation_ = enable;
+    if (enable) {
+        // The reverse of the check in set_range_lockstep_allocation. Without it the two flags can
+        // both end up set by calling the setters the other way round, and allocate_buffer takes the
+        // per-core branch first, so range lockstep is silently ignored rather than reported.
+        TT_FATAL(
+            !range_lockstep_allocation::is_range_lockstep_allocation(args),
+            "per_core_allocation and range_lockstep_allocation are mutually exclusive: a buffer either takes an "
+            "independent address on each core or one address across them");
+    }
+    args.impl().per_core_allocation_ = enable;
     return args;
 }
 
-bool is_per_core_allocation(const BufferShardingArgs& args) { return args.per_core_allocation_; }
+bool is_per_core_allocation(const BufferShardingArgs& args) { return args.impl().per_core_allocation_; }
 
 }  // namespace tt::tt_metal::experimental::per_core_allocation

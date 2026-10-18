@@ -33,11 +33,12 @@ namespace ckernel {
  * | Function   | icb  | The identifier of the circular buffer (CB) for input data | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated(
     "unpack-based untilize is deprecated; use pack_untilize instead. Scheduled for removal, see tt-metal#22904.")]]
 ALWI void untilize_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb, call_line);
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(icb)));
     UNPACK((llk_unpack_untilize_init(icb)));
 }
 
@@ -66,7 +67,7 @@ ALWI void untilize_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
  * see tt-metal#22904.
  */
 // clang-format on
-template <uint32_t block_ct_dim = 1>
+template <uint32_t block_ct_dim = 1, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated(
     "unpack-based untilize is deprecated; use pack_untilize instead. Scheduled for removal, see tt-metal#22904.")]]
 ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
@@ -78,20 +79,20 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
         // Datacopy
         for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
             MATH(
-                (llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(reg_id, icb)));
+                (llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(reg_id, icb)));
         }
 
-        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+        MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
 
         PACK((llk_packer_wait_for_math_done()));
 
         // Datacopy
         for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
-            PACK((llk_pack<DST_ACCUM_MODE, false, PackMode::Default>(reg_id, ocb)));
+            PACK((llk_pack<is_fp32_dest_acc_en, false, PackMode::Default>(reg_id, ocb)));
         }
 
         // Release dest
-        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+        PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
     }
 }
 

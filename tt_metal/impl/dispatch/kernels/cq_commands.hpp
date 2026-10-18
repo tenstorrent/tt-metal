@@ -57,10 +57,9 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_SEND_GO_SIGNAL = 14,
     CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL = 15,
     CQ_DISPATCH_SET_NUM_WORKER_SEMS = 16,
-    CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
-    CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST = 18,  // unicast packed large write with uint32_t length
-    CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS = 19,
-    CQ_DISPATCH_CMD_RT_PROFILER_FLUSH = 20,  // dispatch_s: wait on the last program and signal its profiler record
+    CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST = 17,  // unicast packed large write with uint32_t length
+    CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS = 18,
+    CQ_DISPATCH_CMD_RT_PROFILER_FLUSH = 19,  // dispatch_s: wait on the last program and signal its profiler record
     CQ_DISPATCH_CMD_MAX_COUNT,               // for checking legal IDs
 };
 
@@ -168,10 +167,9 @@ struct CQPrefetchPagedToRingbufferCmd {
 } __attribute__((packed));
 
 struct CQPrefetchSetRingbufferOffsetCmd {
-    uint32_t offset;
-    uint16_t pad1;
-    uint8_t pad2;
     uint8_t update_wp;  // if set, the ringbuffer write pointer will be updated to the offset
+    uint16_t pad1;
+    uint32_t offset;
 } __attribute__((packed));
 
 // Current implementation limit is based on size of the l1_cache which stores the sub_cmds
@@ -396,11 +394,10 @@ struct CQDispatchSetUnicastOnlyCoresCmd {
 constexpr uint8_t CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET = 0xff;
 
 struct CQDispatchGoSignalMcastCmd {
-    uint32_t go_signal;
     uint8_t multicast_go_offset;  // Index of the multicast go to write to. CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET - no
                                   // multicast gos.
-    uint8_t num_unicast_txns;
-    uint8_t noc_data_start_index;
+    uint16_t pad1;
+    uint32_t go_signal;
     uint32_t wait_count;
     uint32_t wait_stream;  // Index of the stream to wait on
 } __attribute__((packed));
@@ -413,6 +410,8 @@ struct CQDispatchNotifySubordinateGoSignalCmd {
 } __attribute__((packed));
 
 struct CQDispatchRtProfilerFlushCmd {
+    uint8_t pad1;
+    uint16_t pad2;
     uint32_t wait_count;   // worker completion count to wait on
     uint32_t wait_stream;  // stream index to wait on
 } __attribute__((packed));
@@ -421,12 +420,6 @@ struct CQDispatchSetNumWorkerSemsCmd {
     uint8_t pad1;
     uint16_t pad2;
     uint32_t num_worker_sems;
-} __attribute__((packed));
-
-struct CQDispatchSetGoSignalNocDataCmd {
-    uint8_t pad1;
-    uint16_t pad2;
-    uint32_t num_words;
 } __attribute__((packed));
 
 struct CQDispatchSetSubDeviceWorkerCountsCmd {
@@ -452,7 +445,6 @@ struct CQDispatchCmd {
         CQDispatchSetUnicastOnlyCoresCmd set_unicast_only_cores;
         CQDispatchNotifySubordinateGoSignalCmd notify_dispatch_s_go_signal;
         CQDispatchSetNumWorkerSemsCmd set_num_worker_sems;
-        CQDispatchSetGoSignalNocDataCmd set_go_signal_noc_data;
         CQDispatchSetSubDeviceWorkerCountsCmd set_sub_device_worker_counts;
         CQDispatchRtProfilerFlushCmd rt_profiler_flush;
     } __attribute__((packed));
@@ -469,8 +461,12 @@ struct CQDispatchCmdLarge {
 
 //////////////////////////////////////////////////////////////////////////////
 
-static_assert(sizeof(CQPrefetchBaseCmd) == sizeof(uint8_t));  // if this fails, padding above needs to be adjusted
-static_assert(sizeof(CQDispatchBaseCmd) == sizeof(uint8_t));  // if this fails, padding above needs to be adjusted
-static_assert((sizeof(CQPrefetchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
-static_assert((sizeof(CQPrefetchCmdLarge) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
-static_assert((sizeof(CQDispatchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
+// Base cmd size sets where every payload field lands: if this fails, adjust the padding above and
+// every load_aligned() field offset shifts with it.
+static_assert(sizeof(CQPrefetchBaseCmd) == sizeof(uint8_t));
+static_assert(sizeof(CQDispatchBaseCmd) == sizeof(uint8_t));
+// Exact, not a multiple: a union member growing past the largest would silently double every stride.
+static_assert(sizeof(CQPrefetchCmd) == CQ_DISPATCH_CMD_SIZE);
+static_assert(sizeof(CQPrefetchCmdLarge) == 2 * CQ_DISPATCH_CMD_SIZE);
+static_assert(sizeof(CQDispatchCmd) == CQ_DISPATCH_CMD_SIZE);
+static_assert(sizeof(CQDispatchCmdLarge) == 2 * CQ_DISPATCH_CMD_SIZE);

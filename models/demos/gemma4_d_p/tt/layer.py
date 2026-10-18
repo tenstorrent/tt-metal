@@ -1,0 +1,161 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Gemma4-31B dense decoder layer: attention, MLP, residuals and layer scalar."""
+
+import ttnn
+from models.demos.gemma4_d_p.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
+from models.demos.gemma4_d_p.tt.ccl import ccl_allgather
+from models.demos.gemma4_d_p.tt.matmul_config import short_m_gather_memcfg
+from models.demos.gemma4_d_p.tt.mlp import MLP
+from models.demos.gemma4_d_p.tt.rms_norm import RMSNorm
+from models.demos.gemma4_d_p.utils.substate import substate
+
+
+class Gemma4DecoderLayer:
+    def __init__(
+        self,
+        mesh_config,
+        hf_config,
+        state_dict,
+        layer_idx,
+        ccl_manager,
+        dtype,
+        tensor_cache_path,
+        max_seq_len,
+        max_local_batch_size,
+        mlp_dtype=None,
+        attention_dtype=None,
+        ring_kv_cache=None,
+        ring_layer_idx=0,
+        ring_num_layers=1,
+    ):
+        # Per-module dtype overrides default to the model-wide ``dtype`` so
+        # callers that don't care about precision config see no change.
+        mesh_device = mesh_config.device
+        self.mesh_config = mesh_config
+        self.ccl_manager = ccl_manager
+        if mlp_dtype is None:
+            mlp_dtype = dtype
+        if attention_dtype is None:
+            attention_dtype = dtype
+        self.mesh_device = mesh_device
+        self.layer_idx = layer_idx
+        self.hidden_size = hf_config.hidden_size
+        self.layer_type = hf_config.layer_types[layer_idx]
+
+        layer_state = substate(state_dict, f"model.language_model.layers.{layer_idx}") if state_dict else {}
+
+        def _norm(name, with_scale=True):
+            return RMSNorm(
+                mesh_config=mesh_config,
+                hf_config=hf_config,
+                state_dict=substate(layer_state, name) if layer_state else {},
+                tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/{name}" if tensor_cache_path else None,
+                with_scale=with_scale,
+            )
+
+        # 4 norms present on every layer
+        self.input_layernorm = _norm("input_layernorm")
+        self.post_attention_layernorm = _norm("post_attention_layernorm")
+        self.pre_feedforward_layernorm = _norm("pre_feedforward_layernorm")
+        self.post_feedforward_layernorm = _norm("post_feedforward_layernorm")
+
+        # Layer scalar
+        self.layer_scalar = layer_state["layer_scalar"].item()
+
+        # Attention
+        attn_config = Gemma4AttentionConfig(hf_config, layer_idx)
+        self.self_attn = Gemma4Attention(
+            mesh_config=mesh_config,
+            config=attn_config,
+            state_dict=substate(layer_state, "self_attn") if layer_state else {},
+            ccl_manager=ccl_manager,
+            layer_idx=layer_idx,
+            tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/self_attn" if tensor_cache_path else None,
+            weight_dtype=attention_dtype,
+            ring_kv_cache=ring_kv_cache,
+            ring_layer_idx=ring_layer_idx,
+            ring_num_layers=ring_num_layers,
+            max_seq_len=max_seq_len,
+            max_batch_size=max_local_batch_size,
+        )
+
+        # Dense MLP (HF key: "mlp")
+        self.mlp = MLP(
+            mesh_config=mesh_config,
+            hf_config=hf_config,
+            state_dict=substate(layer_state, "mlp") if layer_state else {},
+            ccl_manager=ccl_manager,
+            dtype=mlp_dtype,
+            tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/mlp" if tensor_cache_path else None,
+        )
+
+    def _gather_rows(self, x):
+        """All-gather x's TP row split. Each block consumes the result. At short M it lands in L1 in the layout the
+        projections read (matmul_config.short_m_gather_memcfg)."""
+        return ccl_allgather(
+            x,
+            self.mesh_config,
+            self.ccl_manager,
+            dim=2,
+            memory_config=short_m_gather_memcfg(x, self.mesh_config.tp_degree),
+        )
+
+    def __call__(
+        self,
+        hidden_states,
+        prefill_metadata,
+        chunk_start_idx=0,
+        packed_global_rope=None,
+        packed_sliding_rope=None,
+    ):
+        """Prefill one CP-sharded chunk."""
+        # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
+        # hidden_states holds this TP device's 1/TP of the rows: gather the normed rows before each block, whose
+        # closing reduce-scatter returns 1/TP again.
+        residual = hidden_states
+        normed = self.input_layernorm.forward(hidden_states)
+        normed = self._gather_rows(normed)
+        attn_output = self.self_attn(
+            normed,
+            prefill_metadata=prefill_metadata,
+            chunk_start_idx=chunk_start_idx,
+            packed_global_rope=packed_global_rope,
+            packed_sliding_rope=packed_sliding_rope,
+        )
+
+        act_mc = prefill_short_lived_memcfg()
+        # The residual stream stays in the norms' block-sharded layout from here to the next layer's input norm, so
+        # the norms and adds skip their reshards.
+        shard_mc = self.post_attention_layernorm.shard_memory_config(attn_output)
+        out_mc = shard_mc or act_mc
+        attn_output = self.post_attention_layernorm.forward(attn_output, memory_config=out_mc)
+        if shard_mc is not None and residual.memory_config() != shard_mc:
+            sharded_residual = ttnn.to_memory_config(residual, shard_mc)
+            residual.deallocate(True)
+            residual = sharded_residual
+        hidden_states = ttnn.add(residual, attn_output, memory_config=out_mc)
+        residual.deallocate(True)
+        attn_output.deallocate(True)
+
+        # 2. Dense MLP block
+        residual = hidden_states
+        normed = self.pre_feedforward_layernorm.forward(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        normed = self._gather_rows(normed)
+        mlp_output = self.mlp(normed)
+
+        hidden_states = mlp_output
+
+        normed = self.post_feedforward_layernorm.forward(hidden_states, memory_config=out_mc)
+        hidden_states = ttnn.add(
+            residual,
+            normed,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)],
+            memory_config=shard_mc or ttnn.DRAM_MEMORY_CONFIG,
+        )
+        residual.deallocate(True)
+        normed.deallocate(True)
+
+        return hidden_states

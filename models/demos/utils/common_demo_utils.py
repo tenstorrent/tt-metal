@@ -575,3 +575,45 @@ def load_imagenet_dataset(model_location_generator=None, model_version="ImageNet
     else:
         dataset_path = model_version
     return str(dataset_path)
+
+
+def report_vision_fps(model_name: str, fps: float, batch_size: int):
+    """Emit an ("inference", "fps") benchmark measurement for a vision e2e test.
+
+    validate_perf_targets.py resolves the `fps` target metric to the
+    ("inference", "fps") measurement pair, which is not what
+    models.perf.perf_utils.prep_perf_report writes -- that emits
+    throughput_iter_per_s under an "end_to_end_perf" step and so cannot be
+    gated by models/model_targets.yaml. Call this alongside prep_perf_report
+    so the centralized targets check has a metric to compare against.
+
+    `model_name` must match the `model:` identifier in the tiered registry (and
+    an alias in models/model_targets.yaml) so the resolver finds the entry.
+
+    Mirrors the pattern in
+    models/demos/vision/classification/resnet50/ttnn_resnet/demo/demo.py:
+    add_measurement requires the named step to exist on the profiler and
+    save_partial_run_json requires a "run" step, so both are opened and closed
+    around the already-completed measurement.
+    """
+    from models.demos.utils.device_sku import get_current_device_sku_name
+    from models.perf.benchmarking_utils import IS_CI_ENV, BenchmarkData, BenchmarkProfiler
+
+    if not IS_CI_ENV:
+        return
+
+    benchmark_profiler = BenchmarkProfiler()
+    benchmark_profiler.start("run")
+    benchmark_profiler.start("inference")
+    benchmark_profiler.end("inference")
+    benchmark_profiler.end("run")
+    benchmark_data = BenchmarkData()
+    benchmark_data.add_measurement(benchmark_profiler, 0, "inference", "fps", fps)
+    benchmark_data.save_partial_run_json(
+        benchmark_profiler,
+        run_type="end_to_end_perf",
+        ml_model_name=model_name,
+        ml_model_type="cnn",
+        device_name=get_current_device_sku_name(),
+        batch_size=batch_size,
+    )

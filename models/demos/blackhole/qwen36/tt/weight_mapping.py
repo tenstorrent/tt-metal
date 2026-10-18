@@ -5,12 +5,13 @@
 
 Handles:
 - Stripping 'model.language_model.' prefix
-- Filtering out vision encoder and MTP weights
+- Filtering out vision encoder weights (MTP weights are KEPT — the spec-decode drafter)
 - Renaming combined in_proj_qkv → qkv_proj (DeltaNet layers; the op uses the fused weight)
 - Splitting combined conv1d.weight into separate Q, K, V conv weights (DeltaNet layers)
 - Renaming lm_head.weight → output.weight
 - Renaming embed_tokens → tok_embeddings
 """
+
 import json
 from pathlib import Path
 from typing import Dict
@@ -44,9 +45,12 @@ def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
         # Filter out vision encoder weights (check original key — no prefix stripping yet)
         if "visual" in key or key.startswith("model.visual"):
             continue
-        # Filter out MTP (multi-token prediction) weights (original key)
-        if key.startswith("mtp"):
-            continue
+        # NOTE: mtp.* (multi-token prediction head) weights are NOT filtered — they are the
+        # speculative-decode drafter. They have no model./language_model. prefix and do not
+        # start with "layers." so they fall through to the catch-all pass-through below
+        # unchanged (the DeltaNet special-casing is guarded by "layers."). See load_mtp_tensors:
+        # AutoModelForCausalLM (BF16 path) drops mtp.* before we see them, so load_state_dict
+        # reads them directly from safetensors and merges them into this dict.
 
         # Strip the language-model prefix. Two checkpoint sources produce different
         # prefixes for the same internal weights:
@@ -98,6 +102,20 @@ def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
                 remapped[f"{layer_prefix}.linear_attn.v_conv.weight"] = v_conv
                 continue
 
+            # MoE layers (Qwen3.5-MoE) pass their mlp.* keys through unchanged, to be
+            # consumed by tt/moe (load_expert_weights / router / shared expert):
+            #   mlp.gate.weight                         router      [E, H]
+            #   mlp.experts.gate_up_proj                fused       [E, 2I, H]
+            #   mlp.experts.down_proj                   fused       [E, H, I]
+            #   mlp.shared_expert.{gate,up,down}_proj.weight        (singular)
+            #   mlp.shared_expert_gate.weight           sigmoid gate [1, H]
+            # Normalize the DeepSeek-style plural spelling to the singular one the
+            # shared-expert loader expects (no-op on Qwen3.5-MoE, which is singular).
+            if sub_key.startswith("mlp.shared_experts."):
+                sub_key = sub_key.replace("mlp.shared_experts.", "mlp.shared_expert.", 1)
+                remapped[f"{layer_prefix}.{sub_key}"] = tensor
+                continue
+
             # All other keys pass through unchanged
             remapped[new_key] = tensor
             continue
@@ -125,6 +143,44 @@ def is_fp8_checkpoint(model_path) -> bool:
     except (KeyError, ValueError, OSError):
         return False
     return any(k.endswith(".weight_scale_inv") for k in weight_map)
+
+
+def load_mtp_tensors(model_path) -> Dict[str, torch.Tensor]:
+    """Read the MTP head tensors (mtp.*) directly from the checkpoint safetensors.
+
+    AutoModelForCausalLM (the BF16 load path) drops mtp.* via
+    ``_keys_to_ignore_on_load_unexpected = [r"^mtp.*"]`` BEFORE remap_qwen36_state_dict ever
+    sees them, so the spec-decode drafter weights must be read straight from the safetensors.
+    Returns the 15 mtp.* tensors keyed verbatim (mtp.fc.weight, mtp.pre_fc_norm_embedding.weight,
+    mtp.pre_fc_norm_hidden.weight, mtp.norm.weight, mtp.layers.0.*).
+    """
+    from safetensors import safe_open
+
+    model_path = Path(model_path)
+    index_path = model_path / "model.safetensors.index.json"
+    if index_path.is_file():
+        with open(index_path) as f:
+            weight_map = json.load(f)["weight_map"]
+        file_to_keys: Dict[str, list] = {}
+        for key, filename in weight_map.items():
+            if key.startswith("mtp"):
+                file_to_keys.setdefault(filename, []).append(key)
+        files = file_to_keys
+    else:
+        # Single-file checkpoint: scan the one safetensors for mtp.* keys.
+        files = {"model.safetensors": None}
+
+    tensors: Dict[str, torch.Tensor] = {}
+    for filename, keys in files.items():
+        path = model_path / filename
+        if not path.is_file():
+            continue
+        with safe_open(str(path), framework="pt") as sf:
+            if keys is None:
+                keys = [k for k in sf.keys() if k.startswith("mtp")]
+            for key in keys:
+                tensors[key] = sf.get_tensor(key)
+    return tensors
 
 
 def load_qwen36_state_dict_fp8(model_path) -> Dict[str, torch.Tensor]:
@@ -170,16 +226,32 @@ def load_qwen36_state_dict_fp8(model_path) -> Dict[str, torch.Tensor]:
             continue
         if tensor.dtype == torch.float8_e4m3fn:
             scale_key = key + "_scale_inv"
-            dequantized[key] = (
-                dequant_fp8_block(tensor, raw[scale_key]) if scale_key in raw else tensor.to(torch.bfloat16)
-            )
+            if scale_key not in raw:
+                dequantized[key] = tensor.to(torch.bfloat16)
+            elif tensor.dim() <= 2:
+                dequantized[key] = dequant_fp8_block(tensor, raw[scale_key])
+            elif "experts" in key and tensor.dim() == 3 and tensor.shape[-1] % 128 == 0 and tensor.shape[-2] % 128 == 0:
+                # Fused MoE expert weights are 3D ([E, out, in]); dequant_fp8_block is 2D-only,
+                # so dequant each expert's [out, in] slice with its own scale block and stack
+                # back. Restricted to fused-expert keys with 128-divisible dims so other 3-D
+                # tensors (e.g. GDN conv1d.weight [ch, 1, kernel]) don't hit the block reshape.
+                # (Unexercised by the current bf16 35B-A3B.)
+                scale = raw[scale_key]
+                slices = [dequant_fp8_block(tensor[e], scale[e]) for e in range(tensor.shape[0])]
+                dequantized[key] = torch.stack(slices, dim=0)
+            else:
+                raise NotImplementedError(
+                    f"FP8 block dequant for tensor '{key}' with shape {tuple(tensor.shape)} is not supported"
+                )
         else:
             dequantized[key] = tensor
 
     state_dict: Dict[str, torch.Tensor] = {}
     for key, tensor in dequantized.items():
-        if "visual" in key or key.startswith("mtp"):
+        if "visual" in key:
             continue
+        # mtp.* is KEPT (spec-decode drafter). It has no prefix to strip and is not embed/lm_head,
+        # so it passes through the else branch below verbatim, matching the BF16 key scheme.
         short = key
         for prefix in ("model.language_model.", "model."):
             if short.startswith(prefix):

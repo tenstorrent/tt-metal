@@ -62,6 +62,17 @@ void MSDAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     // the program factory.
     TT_FATAL(vs[0] > 0, "N must be > 0");
     TT_FATAL(vs[1] > 0 && vs[2] > 0, "h_in and w_in must be > 0");
+    // The reader maps grid coords to pixel coords in Q16.16: it saturates the
+    // coordinate at +-3 (align_corners) or +-2, halves (g + 1), then scales by
+    // the feature-map size. The largest half-coordinate is 2 in Q16.16, so the
+    // product leaves int32 once the size passes this bound.
+    constexpr uint32_t max_feature_map_size = 16384;
+    TT_FATAL(
+        static_cast<uint32_t>(vs[1]) <= max_feature_map_size && static_cast<uint32_t>(vs[2]) <= max_feature_map_size,
+        "h_in and w_in must each be <= {}, got {}x{}",
+        max_feature_map_size,
+        static_cast<uint32_t>(vs[1]),
+        static_cast<uint32_t>(vs[2]));
     TT_FATAL(as[1] > 0, "Q must be > 0");
     TT_FATAL(as[2] > 0, "P must be > 0");
 

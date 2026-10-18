@@ -40,23 +40,23 @@ COMM_KEYS = (
     "moe_reduce",
     "pre_dispatch_allgather",
 )
-MEM_KEYS = ("cache_read", "kv_write", "index_k_write")
+MEM_KEYS = ("kv_write", "index_k_write")
 
 
 def parent_rels(rels):
     """Zones in `rels` that actually have a descendant present in THIS capture.
 
     Parents hold their children's time too, so they must be excluded from any sum over zones — but
-    whether a zone IS a parent depends on the detail level the capture ran at, not on a fixed list.
-    At LEVEL=2 `attn/cache_read` has no children (deshard/slice are LEVEL=3), so it is a leaf and its
-    time has to be counted; a static exclusion list silently dropped it from the totals.
+    whether a zone IS a parent depends on the detail level the capture ran at, not on a fixed list: a
+    zone whose sub-splits are LEVEL=3 only is a leaf at LEVEL=2 and its time has to be counted; a static
+    exclusion list silently dropped such zones from the totals.
     """
     keys = set(rels)
     return {k for k in keys if any(o != k and o.startswith(k + "/") for o in keys)} | {"(layer total)"}
 
 
-# Layers 0-2 are dense and 3-59 sparse, so a partial build only exercises the de-shard zone at its
-# own layer count — it converts the whole packed cache each time. Everything else is layer-count free.
+# Layers 0-2 are dense and 3-59 sparse. Per-layer zone costs do not depend on how many layers were built,
+# so a partial build projects linearly to the full model.
 FULL_MODEL_LAYERS = 60
 FULL_MODEL_DENSE = 3
 
@@ -86,7 +86,7 @@ def collect(csv_path):
     return acc, P.summarize(acc), P.aggregate_by_class(acc and P.summarize(acc))
 
 
-def accounting(csv_path, dense_ms, sparse_ms, deshard_ms, n_layers):
+def accounting(csv_path, dense_ms, sparse_ms, n_layers):
     """Kernel vs per-op firmware on the busiest chip, and what it projects to for the full model.
 
     Inter-op gaps are deliberately excluded: under tracy the host cannot dispatch fast enough, so
@@ -108,9 +108,7 @@ def accounting(csv_path, dense_ms, sparse_ms, deshard_ms, n_layers):
     mult = fw / kernel if kernel else 1.0
 
     n_sparse_here = max(n_layers - FULL_MODEL_DENSE, 0)
-    desh_full = deshard_ms * FULL_MODEL_LAYERS / n_layers if n_layers else 0.0
-    sparse_full = sparse_ms - deshard_ms + desh_full
-    kern_full = FULL_MODEL_DENSE * dense_ms + (FULL_MODEL_LAYERS - FULL_MODEL_DENSE) * sparse_full
+    kern_full = FULL_MODEL_DENSE * dense_ms + (FULL_MODEL_LAYERS - FULL_MODEL_DENSE) * sparse_ms
     return {
         "device": dev,
         "ops": int(len(d[d["DEVICE ID"] == dev])),
@@ -120,8 +118,6 @@ def accounting(csv_path, dense_ms, sparse_ms, deshard_ms, n_layers):
         "fw_multiplier": round(mult, 4),
         "layers": n_layers,
         "sparse_here": n_sparse_here,
-        "deshard_ms": round(deshard_ms, 4),
-        "deshard_full_ms": round(desh_full, 4),
         "proj_kernel_ms": round(kern_full, 1),
         "proj_busy_ms": round(kern_full * mult, 1),
     }
@@ -172,7 +168,7 @@ def text_report(byclass, acc, acct, csv_path):
             f"({acct['fw_multiplier']:.3f}x multiplier)",
             f"  device busy, {acct['layers']} layers          {acct['busy_ms']:>9.2f} ms",
             f"  projected to {FULL_MODEL_LAYERS} layers        {acct['proj_busy_ms']:>9.1f} ms   "
-            f"(de-shard scaled {acct['deshard_ms']:.3f} -> {acct['deshard_full_ms']:.3f} ms/layer)",
+            f"({FULL_MODEL_DENSE} dense + {FULL_MODEL_LAYERS - FULL_MODEL_DENSE} sparse, per-layer zones as measured)",
         ]
 
     # op detail for the heaviest zones
@@ -463,9 +459,7 @@ if(A){
    <p style="margin:.7rem 0 0;color:var(--ink-2);font-size:.88rem;max-width:80ch">
      Kernel and firmware are on-device measurements. Inter-op gaps are excluded: under tracy the host
      cannot dispatch fast enough, so <code>OP TO OP LATENCY</code> measures instrumentation, not
-     dispatch. The projection scales the de-shard zone by layer count
-     (${A.deshard_ms.toFixed(3)} → ${A.deshard_full_ms.toFixed(3)} ms/layer) and leaves every other zone
-     as measured.</p>`;
+     dispatch. The projection takes every per-layer zone as measured (3 dense + 57 sparse layers).</p>`;
 }else{document.getElementById("acct-sec").style.display="none";}
 
 document.getElementById("imb").innerHTML=D.imb.map(r=>{
@@ -606,15 +600,10 @@ def main():
         )
     dense = byclass.get("dense", {}).get("(layer total)", {}).get("ms_per_layer", 0)
     sparse = byclass.get("sparse", {}).get("(layer total)", {}).get("ms_per_layer", 0)
-    desh = (
-        byclass.get("sparse", {})
-        .get("attn/cache_read/deshard", {})
-        .get("ms_per_layer", byclass.get("sparse", {}).get("attn/cache_read", {}).get("ms_per_layer", 0.0))
-    )
     n_layers = byclass.get("dense", {}).get("(layer total)", {}).get("layers", 0) + byclass.get("sparse", {}).get(
         "(layer total)", {}
     ).get("layers", 0)
-    acct = accounting(args.csv, dense, sparse, desh, n_layers)
+    acct = accounting(args.csv, dense, sparse, n_layers)
 
     print(text_report(byclass, acc, acct, args.csv))
 

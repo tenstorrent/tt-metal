@@ -44,7 +44,7 @@
 #include <tt-metalium/tt_metal.hpp>
 
 #include "jit_build/build.hpp"
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 
 namespace tt::tt_metal {
@@ -105,7 +105,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CompileProgramWithFailingKernelThrowsCleanly)
         Program good = CreateProgram();
         add_tile_cbs(good, CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
         CreateKernel(good, kGoodComputeKernel, CoreCoord(0, 0), ComputeConfig{.compile_args = {1u, 0u}});
-        EXPECT_NO_THROW(slow_dispatch::CompileProgram(this->device(), good));
+        EXPECT_NO_THROW(good.impl().compile(&this->device()));
     }
 
     // Force every repro kernel to compile from scratch (see clear_kernel_cache) so the valid
@@ -144,7 +144,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CompileProgramWithFailingKernelThrowsCleanly)
 
     // sync_build_steps drains all in-flight steps, then rethrows the compile failure
     // -> a clean exception. Without the drain: abandons in-flight steps -> UAF -> SIGSEGV.
-    EXPECT_THROW(slow_dispatch::CompileProgram(this->device(), program), std::exception);
+    EXPECT_THROW(program.impl().compile(&this->device()), std::exception);
 
     std::error_code ec;
     std::filesystem::remove_all(regression_tmp_dir(), ec);

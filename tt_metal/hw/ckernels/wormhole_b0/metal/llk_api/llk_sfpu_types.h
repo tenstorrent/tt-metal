@@ -103,6 +103,7 @@ enum class SfpuType {
     topk_local_sort,
     topk_merge,
     topk_rebuild,
+    topk_defuse,
     unary_ne,
     unary_eq,
     unary_gt,
@@ -164,6 +165,7 @@ enum class SfpuType {
     addcdiv,
     lerp,
     snake_beta,
+    mac,
     xielu,
     lgamma,
     polygamma,
@@ -173,6 +175,5 @@ enum class SfpuType {
     identity,
     sqrt_custom,
     tanh_derivative_lut,
-    rsqrt_compat,
     expm1_cw,
 };

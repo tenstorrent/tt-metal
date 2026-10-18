@@ -50,6 +50,11 @@ METRIC_NAME_MAP = {
     "decode_t/s/u": ("inference_decode", "tokens/s/user"),
     "top1": ("inference_decode", "top1_token_accuracy"),
     "top5": ("inference_decode", "top5_token_accuracy"),
+    "ifeval": ("inference", "ifeval_accuracy"),
+    "gpqa": ("inference", "gpqa_accuracy"),
+    "gsm8k": ("inference", "gsm8k_accuracy"),
+    "text_image_pcc": ("inference", "text_image_pcc"),
+    "edit_image_pcc": ("inference", "edit_image_pcc"),
     # Vision classifiers. Reported from a plain "inference" step rather than
     # inference_decode, since there is no decode phase to attribute them to.
     "fps": ("inference", "fps"),
@@ -75,6 +80,11 @@ ALLOWED_TARGET_METRIC_NAMES = {
     "prefill_time_to_first_token",
     "top1",
     "top5",
+    "ifeval",
+    "gpqa",
+    "gsm8k",
+    "text_image_pcc",
+    "edit_image_pcc",
     "fps",
 }
 
@@ -86,12 +96,23 @@ PREFILL_TIME_TO_FIRST_TOKEN_KEY = "prefill_time_to_first_token"
 # measurements; otherwise it is a perf (eval) run. This lets us validate only the
 # relevant metric family per run: perf numbers from token-matching runs are teacher-
 # forcing artifacts (not real perf), and eval runs do not measure token accuracy.
-ACCURACY_TARGET_METRIC_NAMES = {"top1", "top5"}
+ACCURACY_TARGET_METRIC_NAMES = {"top1", "top5", "ifeval", "gpqa", "gsm8k", "text_image_pcc", "edit_image_pcc"}
 ACCURACY_MEASUREMENT_NAMES = {"top1_token_accuracy", "top5_token_accuracy"}
-# Vision classifiers report accuracy and throughput from the SAME run, unlike LLMs where
-# a token-matching run and an eval run are separate. So these names do not mark a run as
+# These targets unambiguously describe a scored workload. Unlike top1/top5, they
+# cannot refer to a separate token-matching run alongside a performance sweep.
+SINGLE_PASS_ACCURACY_TARGET_METRIC_NAMES = {"ifeval", "gpqa", "gsm8k", "text_image_pcc", "edit_image_pcc"}
+# Classifiers, scored language tasks and image comparisons report accuracy and throughput from the SAME run, unlike
+# separate LLM token-matching and performance runs. These names do not mark a run as
 # accuracy-only -- see _is_accuracy_run.
-VISION_ACCURACY_MEASUREMENT_NAMES = {"top1_accuracy", "top5_accuracy"}
+SINGLE_PASS_ACCURACY_MEASUREMENT_NAMES = {
+    "top1_accuracy",
+    "top5_accuracy",
+    "ifeval_accuracy",
+    "gpqa_accuracy",
+    "gsm8k_accuracy",
+    "text_image_pcc",
+    "edit_image_pcc",
+}
 
 # Reverse lookup from a benchmark (step_name, measurement_name) pair back to a canonical
 # target metric name. Used to report measured values that have no matching target entry so
@@ -152,13 +173,18 @@ def _is_accuracy_run(measured_lookup: dict[tuple[str, str], float]) -> bool:
     return any(name in ACCURACY_MEASUREMENT_NAMES for _step, name in measured_lookup)
 
 
-def _is_single_pass_run(measured_lookup: dict[tuple[str, str], float]) -> bool:
-    """True for runs that report accuracy and throughput together.
+def _is_single_pass_run(measured_lookup: dict[tuple[str, str], float], entry: dict[str, Any]) -> bool:
+    """Identify combined accuracy/perf workloads even when their score is missing.
 
-    Vision classifiers measure both in one pass, so the accuracy/perf split that keeps
-    LLM teacher-forcing numbers away from perf targets must not apply to them.
+    Task/image targets and classifier fps targets establish the workload without
+    relying on the score's presence. Keep top1/top5 token-matching and decode
+    performance runs separate when neither kind of target applies.
     """
-    return any(name in VISION_ACCURACY_MEASUREMENT_NAMES for _step, name in measured_lookup)
+    return (
+        bool(SINGLE_PASS_ACCURACY_TARGET_METRIC_NAMES.intersection(entry.get("accuracy", {})))
+        or "fps" in entry.get("perf", {})
+        or any(name in SINGLE_PASS_ACCURACY_MEASUREMENT_NAMES for _step, name in measured_lookup)
+    )
 
 
 def _extract_metric_value(metric_name: str, lookup: dict[tuple[str, str], float]) -> float | None:
@@ -591,7 +617,7 @@ def validate(
 
         measured = _measurement_lookup(run)
         is_accuracy_run = _is_accuracy_run(measured)
-        is_single_pass_run = _is_single_pass_run(measured)
+        is_single_pass_run = _is_single_pass_run(measured, entry)
         thresholds: dict[str, Any] = {}
         perf = entry.get("perf", {})
         accuracy = entry.get("accuracy", {})

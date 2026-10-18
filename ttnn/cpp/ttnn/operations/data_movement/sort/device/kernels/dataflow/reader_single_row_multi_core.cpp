@@ -58,8 +58,8 @@ void kernel_main() {
 #endif
 
     // Semaphore setup
-    Semaphore<> coordinator_to_cores_sem(sem::coordinator_to_cores);
-    Semaphore<> cores_to_coordinator_ready_sem(sem::cores_to_coordinator_ready);
+    Semaphore coordinator_to_cores_sem(sem::coordinator_to_cores);
+    Semaphore cores_to_coordinator_ready_sem(sem::cores_to_coordinator_ready);
     coordinator_to_cores_sem.set(VALID);  // Reset the semaphore (Valid - we wait for 0)
 
     for (uint32_t h = 0; h < Ht; h++) {

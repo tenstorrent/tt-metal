@@ -21,30 +21,6 @@ run_t3000_falcon40b_perplexity_tests() {
   fi
 }
 
-run_t3000_llama70b_perplexity_tests() {
-  # TODO: rewrite test to use HF reference: the code need to be rewritten completely to use common classes and functions instead of custom copies working only with Meta reference
-
-  echo "LOG_METAL: Checking number of devices"
-  python3 -c "import ttnn; print('Number of devices:', ttnn.get_num_devices())"
-
-  fail=0
-  # Record the start time
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_llama70b_perplexity_tests"
-
-  # Llama-70B perplexity tests
-  pytest models/demos/t3000/llama2_70b/demo/eval_t3000.py --timeout=7200 ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama70b_perplexity_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_llama3_perplexity_tests_single_card() {
 
   echo "LOG_METAL: Checking number of devices"
@@ -194,9 +170,6 @@ run_t3000_tests() {
 
   # Run Falcon-40B perplexity tests
   run_t3000_falcon40b_perplexity_tests
-
-  # Run Llama-70B perplexity tests
-  run_t3000_llama70b_perplexity_tests
 
   # Run llama3 perplexity tests
   run_t3000_llama3_perplexity_tests_single_card

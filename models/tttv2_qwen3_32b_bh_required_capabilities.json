@@ -1,0 +1,410 @@
+{
+  "$schema": "tttv2_bh_required_capabilities.schema.json",
+  "schema_version": 1,
+  "contract_id": "tttv2_qwen3_32b_bh_required_capabilities_v1",
+  "model": {
+    "package": "qwen3_32b",
+    "hf_model_id": "Qwen/Qwen3-32B",
+    "demo_entry_point": "models/common/tests/demos/qwen3_32b/demo.py"
+  },
+  "authority": {
+    "plan": "tttv2_bh_support_plan.md:880-1018",
+    "integration_contract": "models/common/llm_runtime/tttv2_demo_to_vllm_integration_skill.md",
+    "source_files": [
+      "models/common/tests/demos/qwen3_32b/demo.py",
+      "models/common/models/qwen3_32b/hf_adaptor.py",
+      "models/common/models/qwen3_32b/generator.py"
+    ]
+  },
+  "scope": {
+    "declaration_state": "pre_acceptance",
+    "immutability": "This file permanently declares source-required coverage. Characterization, observations, metrics, floors, and current dispositions live outside this contract and may never remove a requirement.",
+    "acceptance_rule": "Each requirement must be resolved in characterization/completion evidence as PASS or explicitly approved APPROVED_UNSUPPORTED_GEOMETRY. FAIL or BLOCKED there prevents completion without mutating this declaration."
+  },
+  "geometries": [
+    {
+      "id": "p150x4_tp4_dp1",
+      "ci_sku": "bh_quietbox_2",
+      "mesh_name": "P150x4",
+      "mesh_shape": [
+        1,
+        4
+      ],
+      "dies": 4,
+      "tp_per_lane": 4,
+      "dp": 1,
+      "fabric_config": "FABRIC_1D_RING",
+      "role": "required"
+    }
+  ],
+  "demo_requirements": [
+    {
+      "id": "p150x4.performance.token_accuracy",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "performance",
+      "demo_case": "token-accuracy",
+      "source_parameter_id": "token-accuracy",
+      "node_id": "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[performance-token-accuracy-P150x4]",
+      "dp": 1,
+      "trace_mode": "none",
+      "context_bucket": 4096,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "token_accuracy",
+        "quality"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, token_accuracy, quality gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 1,
+      "decode_tokens": 511,
+      "repeat_batches": 1,
+      "report_perf": false
+    },
+    {
+      "id": "p150x4.accuracy.token_accuracy",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "accuracy",
+      "demo_case": "token-accuracy",
+      "source_parameter_id": "token-accuracy",
+      "node_id": "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[accuracy-token-accuracy-P150x4]",
+      "dp": 1,
+      "trace_mode": "none",
+      "context_bucket": 4096,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "token_accuracy",
+        "quality"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, token_accuracy, quality gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 1,
+      "decode_tokens": 511,
+      "repeat_batches": 1,
+      "report_perf": false
+    },
+    {
+      "id": "p150x4.performance.eval_32",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "performance",
+      "demo_case": "eval-32",
+      "source_parameter_id": "eval-32",
+      "node_id": "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[performance-eval-32-P150x4]",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 3,
+      "report_perf": false
+    },
+    {
+      "id": "p150x4.accuracy.eval_32",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "accuracy",
+      "demo_case": "eval-32",
+      "source_parameter_id": "eval-32",
+      "node_id": "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[accuracy-eval-32-P150x4]",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 3,
+      "report_perf": false
+    },
+    {
+      "id": "p150x4.performance.eval_32_perf_report",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "performance",
+      "demo_case": "eval-32-perf-report",
+      "source_parameter_id": "eval-32-perf-report",
+      "node_id": "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[performance-eval-32-perf-report-P150x4]",
+      "dp": 1,
+      "trace_mode": "all",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 3,
+      "report_perf": true
+    },
+    {
+      "id": "p150x4.accuracy.seeded_cross_cardinality",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "accuracy",
+      "demo_case": "seeded-cross-cardinality",
+      "source_parameter_id": "seeded-cross-cardinality",
+      "node_id": "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b_p150x4_seeded_cross_cardinality[P150x4]",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "The exact canonical node executes 32 true active-batch-1 controls with prepared regular-single prefill and candidates 1/2/4/32 with prepared-prefill geometry proving regular-batched Q128 rows at cardinalities 2 and 4 plus Q128 active-30/padded-32 and Q1024 active-2/padded-2 regular-batched groups at cardinality 32. After all required eager-prefill signatures are registered, each reused executor captures exactly one top-k decode trace alongside required non-top-k decode coverage; every generated decode iteration records a successful replay of that top-k trace key with zero coverage misses and zero post-activation compile rejections. It uses unique per-request decode seed streams, compares complete generated token-ID tuples request-by-request, and emits either INVARIANT or BATCHED_PREFILL_REJECTED. BATCHED_PREFILL_REJECTED is a completed negative verdict that retains the sequential P150x4 policy; malformed or incomplete outputs, missing execution, decoded-string comparison, conflicting batch-disable environment controls, skips, or xfails do not satisfy this requirement.",
+      "batch_size": 32,
+      "decode_tokens": 32,
+      "repeat_batches": 1,
+      "report_perf": false
+    },
+    {
+      "id": "p150x4.accuracy.eval_32_perf_report",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "accuracy",
+      "demo_case": "eval-32-perf-report",
+      "source_parameter_id": "eval-32-perf-report",
+      "node_id": "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[accuracy-eval-32-perf-report-P150x4]",
+      "dp": 1,
+      "trace_mode": "all",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 3,
+      "report_perf": true
+    },
+    {
+      "id": "p150x4.performance.batch_32_ci",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "performance",
+      "demo_case": "batch-32-ci",
+      "source_parameter_id": "batch-32-ci",
+      "node_id": "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[performance-batch-32-ci-P150x4]",
+      "dp": 1,
+      "trace_mode": "all",
+      "context_bucket": 2048,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 1024,
+      "repeat_batches": 1,
+      "report_perf": true
+    },
+    {
+      "id": "p150x4.accuracy.batch_32_ci",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "accuracy",
+      "demo_case": "batch-32-ci",
+      "source_parameter_id": "batch-32-ci",
+      "node_id": "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[accuracy-batch-32-ci-P150x4]",
+      "dp": 1,
+      "trace_mode": "all",
+      "context_bucket": 2048,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 1024,
+      "repeat_batches": 1,
+      "report_perf": true
+    }
+  ],
+  "serving_requirements": [
+    {
+      "row_id": "p150x4_dp1_decode_only",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "decode_only",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "trace_prefill_buckets": [],
+      "context_requirements": [
+        {
+          "bucket": null,
+          "bucket_rule": "highest characterization-proven bucket, capped by min(model context ceiling, 32768)",
+          "required_subcases": [
+            "long_prefill",
+            "chunked_prefill",
+            "cached_prefill"
+          ],
+          "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+          "acceptance_condition": "Characterization freezes a supported context bucket, then Tier 1 proves exact token counts plus long-, chunked-, and cached-prefill evidence before acceptance expectations are frozen."
+        }
+      ],
+      "cached_prefill": "required",
+      "chunked_prefill": "required",
+      "tier0_smoke": true,
+      "tier1_performance": "required",
+      "tier2_quality": "required_human_review",
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Canonical row passes every declared tier and context subcase with immutable LaunchSpec/provenance, exact trace/program evidence, clean lifecycle, frozen independent performance gates, and human-reviewed Tier-2 quality.",
+      "model_optimization_profile": "performance"
+    },
+    {
+      "row_id": "p150x4_dp1_all",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "all",
+      "dp": 1,
+      "trace_mode": "all",
+      "trace_prefill_buckets": [
+        128,
+        1024
+      ],
+      "context_requirements": [
+        {
+          "bucket": null,
+          "bucket_rule": "highest characterization-proven bucket, capped by min(model context ceiling, 32768)",
+          "required_subcases": [
+            "long_prefill",
+            "chunked_prefill",
+            "cached_prefill"
+          ],
+          "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+          "acceptance_condition": "Characterization freezes a supported context bucket, then Tier 1 proves exact token counts plus long-, chunked-, and cached-prefill evidence before acceptance expectations are frozen."
+        }
+      ],
+      "cached_prefill": "required",
+      "chunked_prefill": "required",
+      "tier0_smoke": false,
+      "tier1_performance": "required",
+      "tier2_quality": "required_human_review",
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Canonical row passes every declared tier and context subcase with immutable LaunchSpec/provenance, exact trace/program evidence, clean lifecycle, frozen independent performance gates, and human-reviewed Tier-2 quality.",
+      "model_optimization_profile": "performance"
+    }
+  ],
+  "cross_cutting_requirements": [
+    {
+      "id": "tp4_memory_feasibility",
+      "capability": "Full Qwen3-32B weights plus paged KV must fit and execute at batch 32 on four P150 dies.",
+      "applies_to": [
+        "p150x4_tp4_dp1"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Immutable qualification evidence demonstrates this capability for every listed geometry without dropping a profile, workload, or row."
+    },
+    {
+      "id": "cross_cardinality_invariance",
+      "capability": "Fixed request IDs and per-request seeds must be compared across 32 true batch-1 controls and batched-prefill candidate cardinalities 1, 2, 4, and 32, with an immutable INVARIANT or BATCHED_PREFILL_REJECTED disposition.",
+      "applies_to": [
+        "p150x4_tp4_dp1"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Immutable qualification evidence records the completed experiment as either INVARIANT or BATCHED_PREFILL_REJECTED without dropping a profile, workload, or row; either disposition satisfies experiment completion, while only INVARIANT permits changing the checked-in sequential-prefill policy."
+    },
+    {
+      "id": "disable_batched_prefill_policy",
+      "capability": "P150x4 must retain disable_batched_prefill unless and until the required cross-cardinality experiment proves invariance.",
+      "applies_to": [
+        "p150x4_tp4_dp1"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "The checked-in P150x4 policy remains sequential when the experiment disposition is BATCHED_PREFILL_REJECTED and may enable batched prefill only when immutable evidence records INVARIANT; missing or incomplete experiment evidence cannot change the policy."
+    },
+    {
+      "id": "central_trace_region",
+      "capability": "Demo and serving execution must use the central trace-region resolver with a measured P150x4 value and exact trace/program evidence.",
+      "applies_to": [
+        "p150x4_tp4_dp1"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Immutable qualification evidence demonstrates this capability for every listed geometry without dropping a profile, workload, or row."
+    },
+    {
+      "id": "fail_closed_performance",
+      "capability": "Missing or incomplete profile-matched metrics permit the full model workload to execute and report observational measurements but cannot claim acceptance; every complete independently frozen floor remains enforced and every target miss fails.",
+      "applies_to": [
+        "p150x4_tp4_dp1"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "PASS requires fresh measurements meeting every complete independently frozen floor. When a profile-matched floor is absent or incomplete, the node must execute and report TTFT, decode tokens/s/user, aggregate tokens/s, and applicable accuracy or determinism results as observational evidence; it must not claim acceptance or derive a floor from that run."
+    },
+    {
+      "id": "cold_warm_cache",
+      "capability": "Every demo case passes cold-write and warm-read cache runs; serving rows pin cache roots and reject fallback.",
+      "applies_to": [
+        "p150x4_tp4_dp1"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Immutable qualification evidence demonstrates this capability for every listed geometry without dropping a profile, workload, or row."
+    }
+  ],
+  "excluded_or_deferred": [
+    {
+      "id": "p100_p150_p300",
+      "classification": "out_of_scope",
+      "reason": "Qwen3-32B has exactly one v1 BH target: P150x4/bh_quietbox_2.",
+      "acceptance_effect": "No other BH SKU or geometry may be silently added to or required by this v1 contract."
+    },
+    {
+      "id": "p150x8_and_bh_galaxy",
+      "classification": "out_of_scope",
+      "reason": "This initiative migrates models_e2e_tests.yaml only; release_tests loudbox/Galaxy legs are follow-up work.",
+      "acceptance_effect": "No P150x8 or BH Galaxy row is required for v1."
+    },
+    {
+      "id": "noncanonical_1d_and_2d_meshes",
+      "classification": "post_v1_stretch",
+      "reason": "Only logical (1,4) TP4 is canonical; (4,1) and requested physical (2,2) model meshes are deferred.",
+      "acceptance_effect": "Neither orientation can replace required (1,4) P150x4 evidence."
+    }
+  ]
+}

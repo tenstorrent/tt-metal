@@ -61,6 +61,7 @@ ttnn::Tensor accumulation(
     const bool& reverse_order,
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config,
-    AccumulationOp op);
+    AccumulationOp op,
+    bool disable_compensation = false);
 
 }  // namespace ttnn::prim

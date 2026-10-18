@@ -3,57 +3,49 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/compute_kernel_api.h"
-#include "api/compute/eltwise_unary/activations.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // Hardsigmoid
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // Optional
+#include "experimental/kernel_args.h"
+
+namespace ckl = compute_kernel_lib;
+
+constexpr bool kIsFloat32 = get_arg(args::is_float32) == 1;
+constexpr bool kIsInt = get_arg(args::is_int) == 1;
+constexpr bool kIsFloat = !kIsFloat32 && !kIsInt;
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg(args::num_tiles);
 
-    constexpr auto cb_input = tt::CBIndex::c_0;
-    constexpr auto cb_output = tt::CBIndex::c_2;
+    DataflowBuffer dfb_in_obj(dfb::in);
+    DataflowBuffer dfb_out_obj(dfb::out);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
 
-    DataflowBuffer dfb_in(cb_input);
-    DataflowBuffer dfb_out(cb_output);
-
-    init_sfpu(cb_input, cb_output);
-
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        tile_regs_acquire();
-
-        dfb_in.wait_front(1);
-        dfb_out.reserve_back(1);
-
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 0);
-        copy_tile(cb_input, 0, 1);
-
-        hardsigmoid_tile_init();
-        hardsigmoid_tile(0);
-
-#ifdef INP_FLOAT32
-        mul_binary_tile_init();
-        mul_binary_tile(0, 1, 0);
-#endif
-#ifdef INP_FLOAT
-        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input);
-        mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input, 0, 0);
-#endif
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-
-        dfb_in.pop_front(1);
-        dfb_out.push_back(1);
-
-        tile_regs_release();
-    }
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(num_tiles),
+        ckl::CopyTile<
+            ckl::input(
+                dfb::in,
+                ckl::WaitPolicy::PerTile,
+                kIsInt ? ckl::PopPolicy::PerTile : ckl::PopPolicy::None,
+                ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{dfb_in_obj},
+        ckl::Hardsigmoid<ckl::Dst::D0>{},
+        ckl::Optional<
+            kIsFloat32,
+            ckl::CopyTile<
+                ckl::input(dfb::in, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                ckl::Dst::D1>>{dfb_in_obj},
+        ckl::Optional<kIsFloat32, ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>>{},
+        ckl::Optional<
+            kIsFloat,
+            ckl::DestReuseBinary<
+                ckl::BinaryFpuOp::Mul,
+                ckl::input(dfb::in, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                ckl::DestReuseType::DEST_TO_SRCA>>{dfb_in_obj},
+        ckl::PackTile<ckl::output(
+            dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            dfb_out_obj});
 }

@@ -8,6 +8,8 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.clang-tidy-config-changed }}
   tt-metalium-changed:
     value: ${{ steps.find-changed-files.outputs.tt-metalium-changed }}
+  tt-metalium-api-headers-changed:
+    value: ${{ steps.find-changed-files.outputs.tt-metalium-api-headers-changed }}
   tt-nn-changed:
     value: ${{ steps.find-changed-files.outputs.tt-nn-changed }}
   tt-metalium-tests-changed:
@@ -24,6 +26,8 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.submodule-changed }}
   any-code-changed:
     value: ${{ steps.find-changed-files.outputs.any-code-changed }}
+  run-clang-tidy:
+    value: ${{ steps.find-changed-files.outputs.run-clang-tidy }}
   docs-changed:
     value: ${{ steps.find-changed-files.outputs.docs-changed }}
   model-charts-changed:
@@ -50,6 +54,8 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.llk-perf-changed }}
   llk-ci-changed:
     value: ${{ steps.find-changed-files.outputs.llk-ci-changed }}
+  ttsim-ci-changed:
+    value: ${{ steps.find-changed-files.outputs.ttsim-ci-changed }}
 
 runs:
   using: "composite"

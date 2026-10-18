@@ -18,8 +18,10 @@ static constexpr std::uint32_t FUSED_ACT_GELU = 4;
 static constexpr std::uint32_t FUSED_ACT_CLAMP_ONLY = 5;
 static constexpr std::uint32_t FUSED_ACT_SITU_GATE = 6;
 static constexpr std::uint32_t FUSED_ACT_SCALED_TANH = 7;
+static constexpr std::uint32_t FUSED_ACT_SILU_SCALED = 8;
 
-#ifdef TRISC_PACK
+// MATH as well as PACK: MatmulSwiGLU drives these from the math thread.
+#if defined(TRISC_PACK) || defined(TRISC_MATH)
 #include "ckernel_sfpu_sigmoid.h"
 
 namespace ckernel {
@@ -135,4 +137,4 @@ inline void calculate_scaled_tanh(std::uint32_t beta_bits, std::uint32_t beta_re
 
 }  // namespace sfpu
 }  // namespace ckernel
-#endif  // TRISC_PACK
+#endif  // TRISC_PACK || TRISC_MATH

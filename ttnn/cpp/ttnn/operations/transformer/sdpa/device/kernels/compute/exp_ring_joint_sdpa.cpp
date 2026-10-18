@@ -13,65 +13,73 @@
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_fused_op_indexer.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 void kernel_main() {
-    constexpr uint32_t NH = get_compile_time_arg_val(0);
-    constexpr uint32_t DHt = get_compile_time_arg_val(1);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(2);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(3);
-    constexpr uint32_t local_padded_N = get_compile_time_arg_val(4);
-    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(5);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(6);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(7);
-    constexpr uint32_t Lt = get_compile_time_arg_val(8);
-    constexpr uint32_t L = get_compile_time_arg_val(9);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(10);
-    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(11);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(12);
+    constexpr uint32_t DHt = get_compile_time_arg_val(0);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(1);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(2);
+    constexpr uint32_t local_padded_N = get_compile_time_arg_val(3);
+    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(4);
+    constexpr uint32_t logical_n_ct = get_compile_time_arg_val(5);
+    constexpr uint32_t logical_nt_ct = get_compile_time_arg_val(6);
+    constexpr uint32_t Lt = get_compile_time_arg_val(7);
+    constexpr uint32_t L = get_compile_time_arg_val(8);
+    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(9);
+    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(10);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(11);
 
-    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(13);
-    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(14);
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(15);
-    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(16);
-    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(17);
-    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(18);
-    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(19);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(20);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(21);
-    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(22);
-    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(23);
-    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(24);
+    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(12);
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(13);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(14);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(15);
 
-    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(25);
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(26) == 1;
-    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(27);
-    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(28);
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(16);
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(18);
+    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(19);
+    // Streamed Q (host fallback when resident Q does not fit L1): cb_q_in holds one chunk; every
+    // pass reads at offset 0 and pops its chunk at pass end so the reader can load the next one.
+    constexpr bool stream_q = get_compile_time_arg_val(20) == 1;
+    // Multi-pass programs keep per-pass accumulator state in the L1 FIFO; single-pass programs
+    // use the original persist-in-scratch path (no FIFO entry/exit cost per ring iteration).
+    constexpr bool use_state_fifo = get_compile_time_arg_val(21) == 1;
+    // When set, logical_n_ct/logical_nt_ct are worst-case placeholders; live values arrive via the
+    // reader's derived CB.
+    constexpr bool has_logical_n_tensor = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t cb_derived = tt::CBIndex::c_13;
 
     // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
     // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
     // Only needed when any K/joint dimension has padding that doesn't fill a chunk.
     constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
-    constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool global_n_has_padding =
+        has_logical_n_tensor || (logical_n_ct % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0);
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
 
+    // Tile presence must match the factory's CB sizing and the writer's generation order
+    // (partial_tile_present is the one definition of that rule).
+    constexpr bool has_global_n_partial_tile =
+        ring_joint::partial_tile_present(global_n_partial_col, has_logical_n_tensor);
     constexpr uint32_t neginf_tile_idx = 0;
-    constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? 1 : 0;
+    constexpr uint32_t global_n_partial_tile_idx = has_global_n_partial_tile ? 1 : 0;
     constexpr uint32_t joint_l_partial_tile_idx =
-        (joint_l_partial_col > 0) ? (1 + (global_n_partial_col > 0 ? 1 : 0)) : 0;
-    constexpr uint32_t total_mask_tiles = 1 + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
+        (joint_l_partial_col > 0) ? (1 + (has_global_n_partial_tile ? 1 : 0)) : 0;
+    constexpr uint32_t total_mask_tiles = 1 + (has_global_n_partial_tile ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
     uint32_t argidx = 0;
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t q_per_core = global_q_end - global_q_start;
+    // Head-serial passes: this core owns flat Q chunks q_base + p * q_stride for p in [0, q_count),
+    // i.e. one chunk of head (p * grid_rows + my_row) per pass. See the program factory.
+    const uint32_t q_base = get_arg_val<uint32_t>(argidx++);
+    const uint32_t q_stride = get_arg_val<uint32_t>(argidx++);
+    const uint32_t q_count = get_arg_val<uint32_t>(argidx++);
 
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
-    constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
-    constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
@@ -81,7 +89,6 @@ void kernel_main() {
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
     constexpr uint32_t cb_max_in = tt::CBIndex::c_6;  // deferred norm: running max
-    constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;  // eager norm: LSE
     constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
@@ -94,7 +101,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_max_out = tt::CBIndex::c_17;  // deferred norm: running max
-    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;  // eager norm: LSE
 
     // Streaming compute uses c_9 as 1-tile recip scratch for normalize_row_streaming.
     // (c_4 is used by cb_scale_in in ring joint SDPA, unlike regular SDPA.)
@@ -105,7 +111,32 @@ void kernel_main() {
     constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
     constexpr uint32_t cb_signal = tt::CBIndex::c_12;
 
-    constexpr uint32_t num_q_chunks = local_padded_Nt / Sq_chunk_t + Lt / Sq_chunk_t;
+    // div_up: the last local chunk may be partial (padded Q rows). Matches the factory's
+    // num_q_chunks so flat-id decoding stays consistent across host and kernels.
+    constexpr uint32_t num_q_chunks =
+        (local_padded_Nt + Sq_chunk_t - 1) / Sq_chunk_t + (Lt + Sq_chunk_t - 1) / Sq_chunk_t;
+
+    // Live length from the reader's derived CB, read ONCE so this kernel and the reader derive their
+    // chunk-skip decisions from the same single DRAM read. Must precede compute_kernel_hw_startup:
+    // read_tile_value rendezvouses UNPACK -> MATH/PACK through the mailboxes, and reading it after
+    // hw startup / matmul_init returns garbage.
+    uint32_t logical_n = logical_n_ct;
+    uint32_t logical_nt = logical_nt_ct;
+    uint32_t global_n_partial_col_live = global_n_partial_col;
+    if constexpr (has_logical_n_tensor) {
+        CircularBuffer cb_derived_obj(cb_derived);
+        cb_derived_obj.wait_front(1);
+        constexpr uint32_t kDerivedTile = 0;
+        logical_nt = ckernel::read_tile_value(cb_derived, kDerivedTile, ring_joint::kDerivedLogicalNt);
+        global_n_partial_col_live =
+            ckernel::read_tile_value(cb_derived, kDerivedTile, ring_joint::kDerivedGlobalNPartialCol);
+        cb_derived_obj.pop_front(1);
+        // Recover the element count: exact inverse of the reader's (logical_nt, partial_col) derivation.
+        logical_n = (logical_nt == 0)
+                        ? 0u
+                        : ((logical_nt - 1) * ring_joint::kTileHeight +
+                           (global_n_partial_col_live == 0 ? ring_joint::kTileHeight : global_n_partial_col_live));
+    }
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);
@@ -127,13 +158,21 @@ void kernel_main() {
         (local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (local_padded_Nt % Sk_chunk_t)) : 0;
     constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
 
-    RingAccumulatorState acc_state = {
-        {cb_sum_A, cb_max_A, cb_out_im_A},  // prev
-        {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
+    // Fixed scratch halves for the within-pass ping-pong. Unlike the single-head path these are
+    // never rewritten: cross-ring-iteration state lives in the L1 state FIFO
+    // ({cb_sum_in, cb_max_in, cb_prev_out} = {c_11, c_6, c_7}), one entry per pass, so every pass
+    // starts from the same scratch roles. See sdpa_ring_v2's use_l1_state_fifo.
+    RingAccumulatorState scratch_state = {
+        {cb_sum_A, cb_max_A, cb_out_im_A},  // prev-scratch
+        {cb_sum_B, cb_max_B, cb_out_im_B},  // cur-scratch
     };
 
     const uint32_t last_active_ring_iter =
-        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_nt, L);
+
+    // First iteration that does work inits accumulators — not necessarily iter 0 (a fully-pad own
+    // shard skips it).
+    bool seen_active_iter = false;
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
@@ -142,8 +181,7 @@ void kernel_main() {
 
         // First, find out if this ring iter processes any KV chunks.
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile < logical_nt;
         const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
 
         if (!ring_iter_does_work) {
@@ -172,7 +210,7 @@ void kernel_main() {
         lw_mask.neginf_tile_idx = neginf_tile_idx;
         lw_mask.local_n_padded_tiles = local_n_padded_tiles;
         lw_mask.joint_n_padded_tiles = joint_n_padded_tiles;
-        lw_mask.global_n_partial_col = global_n_partial_col;
+        lw_mask.global_n_partial_col = global_n_partial_col_live;
         lw_mask.joint_l_partial_col = joint_l_partial_col;
         lw_mask.global_n_partial_tile_idx = global_n_partial_tile_idx;
         lw_mask.joint_l_partial_tile_idx = joint_l_partial_tile_idx;
@@ -184,8 +222,15 @@ void kernel_main() {
         }
 
         const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
+        const bool is_first_active_iter = !seen_active_iter;
         static_assert(use_streaming_compute, "Streaming compute must be enabled for ring joint SDPA");
-        if constexpr (use_streaming_compute) {
+
+        // Serial passes over this row's heads, same order as the reader and writer. Each pass is a
+        // single-Q-chunk sdpa_ring_v2 call (q_per_core == 1), so every L1-residency property of the
+        // single-head path holds per pass; the only per-pass state is which Q chunk it reads from
+        // cb_q_in (q_base_tiles) and which L1 FIFO entry it merges (handled inside sdpa_ring_v2).
+        for (uint32_t pass = 0; pass < q_count; ++pass) {
+            const uint32_t global_q_chunk = q_base + pass * q_stride;
             sdpa_ring_v2<
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -225,9 +270,10 @@ void kernel_main() {
                 global_n_has_padding,
                 local_n_has_padding,
                 joint_has_padding,
-                false>(  // straddle_mask_enabled
-                global_q_start,
-                global_q_end,
+                false,            // straddle_mask_enabled
+                use_state_fifo>(  // use_l1_state_fifo — single-pass programs keep the scratch path
+                global_q_chunk,
+                global_q_chunk + 1,
                 num_kv_chunks,
                 num_q_chunks,
                 ring_iter,
@@ -240,79 +286,34 @@ void kernel_main() {
                 global_n_mask_chunk_id,
                 local_n_mask_chunk_id,
                 joint_n_mask_chunk_id,
-                acc_state,
+                scratch_state,
                 is_last_ring_iter,
-                q_per_core,
+                /*q_per_core=*/1,
                 lw_mask,
                 /*skip_first_half_q=*/false,
                 /*use_zigzag_balancing=*/false,
                 ChunkedContext{},
-                /*is_first_active_iter=*/(ring_iter == 0));
-        } else {
-            sdpa_ring<
-                cb_qk_im,
-                cb_identity_scale_in,
-                cb_scale_in,
-                Sq_chunk_t,
-                Sk_chunk_t,
-                NH,
-                DHt,
-                DHt,
-                scale_fp32,
-                needs_lightweight_mask>(
-                qk_in0_block_w,
-                qk_subblock_w,
-                qk_subblock_h,
-                qk_in0_num_subblocks,
-                qk_in1_num_subblocks,
-                qk_num_blocks,
-                out_in0_block_w,
-                out_subblock_w,
-                out_subblock_h,
-                out_in0_num_subblocks,
-                out_in1_num_subblocks,
-                out_num_blocks,
-                global_q_start,
-                global_q_end,
-                0,              // q_num_chunks
-                0,              // iter_k_chunk_start
-                num_kv_chunks,  // iter_k_chunk_end
-                q_chunk_tiles,
-                k_chunk_tiles,
-                k_chunk_tiles,  // v_chunk_tiles = k_chunk_tiles (vDHt = DHt)
-                qk_chunk_tiles,
-                out_chunk_tiles,
-                ring_iter,
-                ring_id,
-                num_local_k_chunks,
-                local_padded_Nt,
-                logical_nt,
-                ring_iter_needs_global_n_mask,
-                ring_iter_needs_joint_n_mask,
-                local_n_needs_masking,
-                global_n_mask_chunk_id,
-                local_n_mask_chunk_id,
-                joint_n_mask_chunk_id,
-                cb_q_in,
-                cb_k_in,
-                cb_v_in,
-                cb_mask_in,
-                cb_col_identity,
-                cb_out_im_A,
-                cb_out_im_B,
-                cb_max_A,
-                cb_max_B,
-                cb_sum_A,
-                cb_sum_B,
-                cb_exp_max_diff,
-                cb_lse_in,
-                cb_lse_out,
-                cb_prev_out,
-                cb_out,
-                lw_mask,
-                false,  // is_causal
-                false,  // is_balanced
-                is_last_ring_iter);
+                is_first_active_iter,
+                /*logical_lt=*/0,
+                /*q_base_tiles=*/stream_q ? 0u : pass * q_chunk_tiles);
+
+            if constexpr (stream_q) {
+                // This pass's chunk is spent; free the slot so the reader can load the next pass's
+                // chunk. Uniform on every core (q_count == 1 rows re-read too).
+                sdpa_cb_pop_front_out_of_line(cb_q_in, q_chunk_tiles);
+            }
         }
+
+        if constexpr (!stream_q && use_state_fifo) {
+            // All q_count Q chunks stay resident in cb_q_in for the whole op (each read once, on the
+            // first active ring iteration) and are popped together once the last pass has consumed
+            // them. On the scratch path (!use_state_fifo) sdpa_ring_v2 pops the single resident
+            // chunk itself on the last ring iteration — popping here too would double-pop.
+            if (is_last_ring_iter) {
+                sdpa_cb_pop_front_out_of_line(cb_q_in, q_count * q_chunk_tiles);
+            }
+        }
+
+        seen_active_iter = true;
     }
 }

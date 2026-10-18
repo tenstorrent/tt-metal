@@ -38,20 +38,16 @@ inline void make_lane_salt() {
     // the ISA-defined LREG15, whose lane i contains 2*i. Offset LTILEID first
     // so lane zero also receives a nonzero salt. The immediate offset also
     // eliminates long-stream spatial ridges that remained when the salt was
-    // derived directly from LTILEID. Load the shift counts into LREG0 because
-    // TTSim does not yet support SFPSHFT2's immediate mode.
+    // derived directly from LTILEID. The immediate shift encodings select
+    // LREG4 and LREG5 as their respective sources.
     // All lane PRNGs receive the same seed, while nearby cores receive related
     // seeds. Salting before a bijective finalizer diffuses those relationships
     // through the 31 bits consumed by SFPCAST without biasing a lane's output.
-    // TODO: Switch back to immediate mode, saving two cycles per face, once
-    // https://github.com/tenstorrent/ttsim/issues/11 is resolved.
     TTI_SFPIADD(
         (-151) & 0xFFF, p_sfpu::LTILEID, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_SHORT, 20);
-    TTI_SFPSHFT2(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+    TTI_SFPSHFT2(20, 0, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
     TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_SHORT, 5);
-    TTI_SFPSHFT2(p_sfpu::LREG5, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+    TTI_SFPSHFT2(5, 0, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
     TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG3, 0);
 }
 

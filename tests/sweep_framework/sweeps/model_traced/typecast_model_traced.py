@@ -199,7 +199,11 @@ def run(
     # Use device-0 extraction (no mesh composer) to get per-device output that
     # matches the per-device reference tensor.  Typecast is element-wise so each
     # device's output independently matches the reference.
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(
+        output_tensor,
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     if output_dtype == ttnn.uint32 or input_a_dtype == ttnn.uint32:

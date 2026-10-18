@@ -25,7 +25,7 @@ void kernel_main() {
     const auto values_tensor_accessor = TensorAccessor(tensor::values);
     const auto indices_tensor_accessor = TensorAccessor(tensor::indices);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer values_dfb(dfb::values);
     DataflowBuffer indices_dfb(dfb::indices);
     const uint32_t tile_bytes_val = values_dfb.get_entry_size();
@@ -33,13 +33,13 @@ void kernel_main() {
 
     // Get Kt rows of values and then Kt rows of indices from compute kernel
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {
-        const uint32_t row = id + core_loop * total_number_of_cores;
+        const uint32_t row = id + (core_loop * total_number_of_cores);
 
         // TopK values
         for (uint32_t k = 0; k < Kt; ++k) {
             values_dfb.wait_front(onetile);
             noc.async_write(
-                values_dfb, values_tensor_accessor, tile_bytes_val, {.offset_bytes = 0}, {.page_id = row * Kt + k});
+                values_dfb, values_tensor_accessor, tile_bytes_val, {.offset_bytes = 0}, {.page_id = (row * Kt) + k});
             noc.async_write_barrier();
             values_dfb.pop_front(onetile);
         }  // k loop
@@ -48,7 +48,7 @@ void kernel_main() {
         for (uint32_t k = 0; k < Kt; ++k) {
             indices_dfb.wait_front(onetile);
             noc.async_write(
-                indices_dfb, indices_tensor_accessor, tile_bytes_idx, {.offset_bytes = 0}, {.page_id = row * Kt + k});
+                indices_dfb, indices_tensor_accessor, tile_bytes_idx, {.offset_bytes = 0}, {.page_id = (row * Kt) + k});
             noc.async_write_barrier();
             indices_dfb.pop_front(onetile);
         }  // k loop

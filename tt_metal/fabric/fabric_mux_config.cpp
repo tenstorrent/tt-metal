@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstddef>
 #include <vector>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -87,7 +88,8 @@ FabricMuxConfig::FabricMuxConfig(
     uint8_t num_buffers_header_only_channel,
     size_t buffer_size_bytes_full_size_channel,
     size_t base_l1_address,
-    CoreType core_type) :
+    CoreType core_type,
+    size_t usable_l1_end_address) :
     core_type_(core_type),
     num_full_size_channels_(num_full_size_channels),
     num_header_only_channels_(num_header_only_channels),
@@ -177,15 +179,22 @@ FabricMuxConfig::FabricMuxConfig(
     }
 
     core_type_index_ = hal.get_programmable_core_type_index(hal_core_type);
-    auto l1_end_address = hal.get_dev_addr(hal_core_type, tt_metal::HalL1MemAddrType::BASE) +
-                          hal.get_dev_size(hal_core_type, tt_metal::HalL1MemAddrType::BASE);
+    const auto physical_l1_end_address = hal.get_dev_addr(hal_core_type, tt_metal::HalL1MemAddrType::BASE) +
+                                         hal.get_dev_size(hal_core_type, tt_metal::HalL1MemAddrType::BASE);
+
+    // A caller-supplied ceiling only ever tightens the bound; it can never license the map to run past
+    // the physical end of L1.
+    const auto l1_end_address = usable_l1_end_address == 0
+                                    ? physical_l1_end_address
+                                    : std::min<size_t>(usable_l1_end_address, physical_l1_end_address);
 
     // The memory map ends at the end of the last region (header-only channels)
     TT_FATAL(
         memory_map_end_address_ <= l1_end_address,
-        "Memory map end address: {} is greater than L1 end address: {}",
+        "Memory map end address: {} is greater than L1 end address: {} (physical L1 end: {})",
         memory_map_end_address_,
-        l1_end_address);
+        l1_end_address,
+        physical_l1_end_address);
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
@@ -239,12 +248,10 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
     return ct_args;
 }
 
-std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_relay_mux() const {
-    const auto& fabric_router_config = tt::tt_metal::MetalContext::instance()
-                                           .get_control_plane()
-                                           .get_fabric_context()
-                                           .get_builder_context()
-                                           .get_fabric_router_config();
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_relay_mux(
+    const ControlPlane& control_plane) const {
+    const auto& fabric_router_config =
+        control_plane.get_fabric_context().get_builder_context().get_fabric_router_config();
     auto* channel_allocator = fabric_router_config.channel_allocator.get();
     auto* const static_channel_allocator =
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
@@ -347,21 +354,6 @@ void FabricMuxConfig::set_num_full_size_channel_iters(size_t new_val) {
     TT_FATAL(new_val > 0, "Number of iterations must be greater than 0");
     num_full_size_channel_iters_ = new_val;
 }
-
-void FabricMuxConfig::set_num_iters_between_teardown_checks(size_t new_val) {
-    TT_FATAL(new_val > 0, "Setting num iters b/w teardown checks to 0 will result in no data being sent over fabric");
-    num_iters_between_teardown_checks_ = new_val;
-}
-
-void FabricMuxConfig::set_wait_for_fabric_endpoint_ready(bool wait_for_ready) {
-    wait_for_fabric_endpoint_ready_ = wait_for_ready;
-}
-
-void FabricMuxConfig::set_fabric_endpoint_channel_num_buffers(size_t num_buffers) {
-    fabric_endpoint_channel_num_buffers_ = num_buffers;
-}
-
-void FabricMuxConfig::set_fabric_endpoint_status_address(size_t address) { fabric_endpoint_status_address_ = address; }
 
 size_t FabricMuxConfig::get_memory_map_end_address() const { return memory_map_end_address_; }
 

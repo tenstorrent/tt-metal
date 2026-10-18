@@ -31,6 +31,10 @@ if TYPE_CHECKING:
 # tradeoff — SDPA pads+masks a partial last chunk internally, so nothing needs to be aligned
 # to it. (Also reused as the flash-SDPA q/k chunk size, an independent perf-tiling knob.)
 SEQ_BUCKET_SIZE = 128
+# Largest SP shard whose fp32-accumulate ring SDPA program fits Wormhole's kernel-config buffer;
+# see `Qwen3VlAttention._ring_compute_kernel_config`. This was the largest power of 2 that was
+# empirically observed to be okay with fp32_accumulate = True, but may change in the future.
+_RING_FP32_ACC_MAX_LOCAL_ROWS_WH = 512
 
 
 @dataclass
@@ -43,6 +47,20 @@ class Qwen3VlContext:
     # kernel config instead of the tt_dit-wide default from `linear_compute_config`. See
     # `Qwen3VlTextEncoder`'s `high_fidelity_linears`.
     linear_compute_kernel_config: object | None = None
+    # Sequence-parallel axis: shards the sequence and uses causal ring attention (causal path only).
+    # Composes with FSDP on the same axis (FSDP shards weights, SP shards activation rows).
+    sp_axis: int | None = None
+    # Ring K/V gather rows to allocate, so every sequence length up to it shares one buffer pair.
+    kv_gather_capacity: int | None = None
+    use_persistent_ccl_buffers: bool = True
+
+    def __post_init__(self) -> None:
+        if self.sp_axis is None:
+            return
+        if self.sp_axis == self.tp_axis:
+            raise ValueError(f"sp_axis ({self.sp_axis}) must differ from tp_axis ({self.tp_axis})")
+        if self.ccl_manager is None:
+            raise ValueError("decoder SP needs a ccl_manager for the ring all-gather")
 
 
 def vision_token_runs(input_ids: torch.Tensor, image_token_id: int | Sequence[int]) -> list[tuple[int, int]]:
@@ -55,8 +73,8 @@ def vision_token_runs(input_ids: torch.Tensor, image_token_id: int | Sequence[in
     `image_token_id` may be several ids, which `ref2va` needs: its presentation mixes
     `<|image_pad|>` runs (one per image reference) with `<|video_pad|>` runs (one per merged frame
     pair of a video reference). Runs come back in sequence order regardless of pad id, in one
-    interleaved list, because `_scatter_rows` consumes the tower's rows in run order and the caller
-    assembles that output in presentation order.
+    interleaved list, because `Qwen3VlTextEncoder.merge_vision` consumes the tower's rows in run order
+    and the caller assembles that output in presentation order.
 
     A run boundary is a change of token, so two adjacent runs of different pad ids are two runs. That
     does not arise in a MiniMax-H3 presentation, where a `"<{t} seconds>"` label separates two video
@@ -86,37 +104,24 @@ def vision_token_runs(input_ids: torch.Tensor, image_token_id: int | Sequence[in
     return runs
 
 
-def _scatter_rows(base: ttnn.Tensor, values: ttnn.Tensor, runs: Sequence[tuple[int, int]], *, add: bool) -> ttnn.Tensor:
-    """Write `values` into the row ranges `runs` of `base`, either replacing or adding.
+def vision_gather_indices(runs: Sequence[tuple[int, int]], seq_len: int, *, vision_offset: int) -> torch.Tensor:
+    """Source-table row of each of `seq_len` sequence rows, for a gather that places vision tokens.
 
-    Done by slicing and concatenating rather than a masked scatter: the vision positions are contiguous
-    runs, so this is exact, and row slicing on the sequence axis is already how this module trims its
-    padding. `values` rows are consumed in run order.
+    The rows of `runs` take consecutive table rows from `vision_offset` (at least 1), in run order.
+    Every other row maps to row 0.
     """
-    # The vision tower emits `(rows, hidden)` while the sequence buffer is `(batch, seq, hidden)`;
-    # normalize so the slicing below is rank-agnostic.
-    if len(values.shape) == 2:
-        values = ttnn.reshape(values, (1, values.shape[0], values.shape[1]))
-
-    total = sum(length for _, length in runs)
-    if values.shape[-2] != total:
-        msg = f"runs cover {total} rows but values has {values.shape[-2]}"
-        raise ValueError(msg)
-
-    pieces: list[ttnn.Tensor] = []
+    indices = torch.zeros(seq_len, dtype=torch.int64)
     cursor = taken = 0
     for start, length in runs:
         if start < cursor:
             msg = f"runs must be sorted and disjoint; {start} overlaps {cursor}"
             raise ValueError(msg)
-        if start > cursor:
-            pieces.append(base[:, cursor:start, :])
-        chunk = values[:, taken : taken + length, :]
-        pieces.append(ttnn.add(base[:, start : start + length, :], chunk) if add else chunk)
+        if start + length > seq_len:
+            msg = f"run ({start}, {length}) ends past the sequence length {seq_len}"
+            raise ValueError(msg)
+        indices[start : start + length] = torch.arange(vision_offset + taken, vision_offset + taken + length)
         cursor, taken = start + length, taken + length
-    if cursor < base.shape[-2]:
-        pieces.append(base[:, cursor:, :])
-    return ttnn.concat(pieces, dim=-2) if len(pieces) > 1 else pieces[0]
+    return indices.to(torch.int32)
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L769
@@ -141,6 +146,8 @@ class Qwen3VlTextEncoder(Module):
         ccl_manager: CCLManager | None = None,
         is_fsdp: bool = False,
         high_fidelity_linears: bool = False,
+        kv_gather_capacity: int | None = None,
+        use_persistent_ccl_buffers: bool = True,
     ) -> None:
         super().__init__()
 
@@ -158,6 +165,10 @@ class Qwen3VlTextEncoder(Module):
                 raise ValueError(msg)
             head_dim = hidden_size // num_attention_heads
 
+        sp_axis = None
+        if parallel_config is not None and parallel_config.sequence_parallel is not None:
+            sp_axis = parallel_config.sequence_parallel.mesh_axis
+
         # FSDP: For encoders, we can only use FSDP if there's a separate axis from TP.
         # Since the encoder runs on a submesh (e.g., 1x4), we need to check if the other axis
         # has size > 1. If the mesh is 1xN, FSDP can't be enabled because there's no second axis.
@@ -168,6 +179,7 @@ class Qwen3VlTextEncoder(Module):
             other_axis = 1 - tp_axis  # If TP is on axis 1, check axis 0; if TP is on axis 0, check axis 1
             if device.shape[other_axis] > 1:
                 fsdp_mesh_axis = other_axis
+
         if is_fsdp and fsdp_mesh_axis is None:
             logger.warning(
                 f"Qwen3-VL: FSDP was requested but is disabled — no mesh axis other than the "
@@ -194,6 +206,9 @@ class Qwen3VlTextEncoder(Module):
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
             linear_compute_kernel_config=linear_compute_kernel_config,
+            sp_axis=sp_axis,
+            kv_gather_capacity=kv_gather_capacity,
+            use_persistent_ccl_buffers=use_persistent_ccl_buffers,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -219,6 +234,8 @@ class Qwen3VlTextEncoder(Module):
         self._device = ctx.device
         self._tp_axis = ctx.tp_axis
         self._ccl_manager = ctx.ccl_manager
+        self._sp_axis = ctx.sp_axis
+        self._sp_factor = device.shape[ctx.sp_axis] if ctx.sp_axis is not None else 1
         self._mrope_section = mrope_section
         # See Qwen3VlAttention: head_dim is not derivable from hidden_size / num_heads for every
         # Qwen3-VL checkpoint. The rope tables are built at this width, so it must agree.
@@ -253,6 +270,9 @@ class Qwen3VlTextEncoder(Module):
         if deepstack_embeds and vision_runs is None:
             msg = "deepstack_embeds needs vision_runs to know which rows to add to"
             raise ValueError(msg)
+        if self._sp_axis is not None and attention_mask is not None:
+            msg = "sequence-parallel decoder supports only the causal (no-mask) path"
+            raise ValueError(msg)
         batch_size, seq_len = input_ids.shape
 
         if attention_mask is not None:
@@ -269,6 +289,12 @@ class Qwen3VlTextEncoder(Module):
             assert attention_mask.shape == (batch_size, seq_len)
             attention_mask = ttnn.pad(attention_mask, [(0, padded_seq_len - seq_len)], value=0)
             attention_bias = prepare_attention_bias(attention_mask)
+        elif self._sp_axis is not None:
+            padded_seq_len = -(-seq_len // (self._sp_factor * 32)) * (self._sp_factor * 32)
+            if padded_seq_len != seq_len:
+                input_ids = ttnn.pad(input_ids, [(0, padded_seq_len - seq_len)], value=0)
+                pos_embeds = tuple(ttnn.pad(x, [(0, padded_seq_len - seq_len), (0, 0)], value=0) for x in pos_embeds)
+            attention_bias = None
         else:
             # padding is only required by `ttnn.transformer.scaled_dot_product_attention` when using
             # an attention mask
@@ -281,14 +307,19 @@ class Qwen3VlTextEncoder(Module):
         input_embeds = self.embed_tokens.forward(input_ids)
 
         if self._tp_axis is not None:
-            input_embeds = self._ccl_manager.all_gather_persistent_buffer(
+            input_embeds = self._ccl_manager.all_gather(
                 input_embeds, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True
             )
             # clone to move out of persistent buffer
             input_embeds = ttnn.clone(input_embeds)
 
+        if self._sp_axis is not None:
+            input_embeds = ttnn.mesh_partition(input_embeds, dim=1, cluster_axis=self._sp_axis)
+            pos_embeds = tuple(ttnn.mesh_partition(x, dim=2, cluster_axis=self._sp_axis) for x in pos_embeds)
+
+        deepstack_rows: list[ttnn.Tensor] = []
         if vision_embeds is not None:
-            input_embeds = _scatter_rows(input_embeds, vision_embeds, vision_runs, add=False)
+            input_embeds, deepstack_rows = self.merge_vision(input_embeds, vision_embeds, vision_runs, deepstack_embeds)
 
         hidden_states = input_embeds
         captured: list[ttnn.Tensor] = []
@@ -301,8 +332,8 @@ class Qwen3VlTextEncoder(Module):
             )
             # Vision also enters here, not only at the embeddings: the tower's intermediate features are
             # added to the vision rows of the first few layers.
-            if deepstack_embeds and layer_idx < len(deepstack_embeds):
-                hidden_states = _scatter_rows(hidden_states, deepstack_embeds[layer_idx], vision_runs, add=True)
+            if layer_idx < len(deepstack_rows):
+                hidden_states = ttnn.add(hidden_states, deepstack_rows[layer_idx])
             if self._activation_layers is not None and layer_idx in self._activation_layers:
                 captured.append(hidden_states)
 
@@ -310,10 +341,60 @@ class Qwen3VlTextEncoder(Module):
             # default: final normalized hidden state
             captured = [self.norm.forward(hidden_states)]
 
+        if self._sp_axis is not None:
+            captured = [
+                self._ccl_manager.all_gather(x, dim=1, mesh_axis=self._sp_axis, use_hyperparams=True) for x in captured
+            ]
+
         if padded_seq_len != seq_len:
             captured = [x[:, :seq_len, :] for x in captured]
 
         return captured
+
+    def merge_vision(
+        self,
+        input_embeds: ttnn.Tensor,
+        vision_embeds: ttnn.Tensor,
+        vision_runs: Sequence[tuple[int, int]],
+        deepstack_embeds: Sequence[ttnn.Tensor] | None = None,
+    ) -> tuple[ttnn.Tensor, list[ttnn.Tensor]]:
+        """`input_embeds` with the `vision_runs` rows replaced by the tower's tokens, and each deepstack
+        feature laid out along the sequence (zeros off the vision rows), ready to add to the hidden states.
+
+        `input_embeds` is this device's sequence shard under SP, and so is everything returned. Each
+        output is a row gather from `[zeros | tower rows]` rather than slices around each run, so every
+        program is keyed only on the sequence length and the tower's row count; the run layout lives in
+        the index values. The text rows come back through a 0/1 row select, which keeps the table to the
+        tower's rows: `ttnn.embedding` takes a row-major copy of it. `vision_embeds` may carry the tower's
+        SP pad rows after the real tokens: nothing indexes them.
+        """
+        seq_len, hidden = input_embeds.shape[-2] * self._sp_factor, input_embeds.shape[-1]
+        real_tokens = sum(length for _, length in vision_runs)
+        if real_tokens > vision_embeds.shape[-2]:
+            msg = f"runs cover {real_tokens} rows but the tower emitted {vision_embeds.shape[-2]}"
+            raise ValueError(msg)
+
+        indices = vision_gather_indices(vision_runs, seq_len, vision_offset=ttnn.TILE_SIZE)
+        text_mask = tensor.from_torch(
+            (indices == 0).float().reshape(1, -1, 1), device=self._device, mesh_axes=[None, self._sp_axis, None]
+        )
+        indices = tensor.from_torch(
+            indices.reshape(1, -1),
+            device=self._device,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=[None, self._sp_axis],
+        )
+        zeros = tensor.from_torch(torch.zeros(ttnn.TILE_SIZE, hidden), device=self._device, mesh_axes=[None, None])
+
+        def gather(rows: ttnn.Tensor) -> ttnn.Tensor:
+            table = ttnn.concat([zeros, rows], dim=0)
+            placed = ttnn.embedding(indices, table, layout=ttnn.TILE_LAYOUT)
+            ttnn.deallocate(table)
+            return placed
+
+        merged = ttnn.add(ttnn.multiply(input_embeds, text_mask), gather(vision_embeds))
+        return merged, [gather(feature) for feature in deepstack_embeds or ()]
 
     def create_rope_tensors(
         self, batch_size: int, sequence_length: int, attention_mask: torch.Tensor | None
@@ -459,6 +540,9 @@ class Qwen3VlAttention(Module):
         self._tp_factor = tp_factor
         self._device = ctx.device
         self._ccl_manager = ctx.ccl_manager
+        self._sp_axis = ctx.sp_axis
+        self._sp_factor = ctx.device.shape[ctx.sp_axis] if ctx.sp_axis is not None else 1
+        self._kv_gather_capacity = ctx.kv_gather_capacity
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         def _prepare_qkv(q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
@@ -537,25 +621,29 @@ class Qwen3VlAttention(Module):
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
 
-        x = ttnn.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            attn_mask=attention_bias,
-            is_causal=attention_bias is None,
-            program_config=self._sdpa_program_config(q.shape[2]),
-            compute_kernel_config=self._sdpa_compute_kernel_config,
-        )
+        if self._sp_axis is not None:
+            assert attention_bias is None, "SP decoder attention supports only the causal path (attention_bias=None)"
+            x = self._ring_attention(q, k, v)
+        else:
+            x = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attention_bias,
+                is_causal=attention_bias is None,
+                program_config=self._sdpa_program_config(q.shape[2]),
+                compute_kernel_config=self._sdpa_compute_kernel_config,
+            )
 
         x = ttnn.transformer.concatenate_heads(x)
 
         if self._tp_axis is not None:
-            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self._ccl_manager.all_gather(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         x = self.o_proj.forward(x)
 
         if self._tp_axis is not None:
-            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self._ccl_manager.all_gather(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         return x
 
@@ -568,9 +656,83 @@ class Qwen3VlAttention(Module):
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=chunk_size,
-            k_chunk_size=chunk_size,
+            k_chunk_size=min(seq_len, 512),
             exp_approx_mode=False,
         )
+
+    def _ring_program_config(self, local_seq_len: int) -> tuple[ttnn.SDPAProgramConfig, tuple[int, int]]:
+        """Ring SDPA config sized from the local shard; reserves the last core column for CCL workers."""
+        full_grid = self._device.compute_with_storage_grid_size()
+        worker_grid = (full_grid.x - 1, full_grid.y)
+        chunk = min(-(-local_seq_len // 32) * 32, SEQ_BUCKET_SIZE)
+        cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=worker_grid,
+            q_chunk_size=chunk,
+            k_chunk_size=min(-(-local_seq_len // 32) * 32, 512),
+            exp_approx_mode=False,
+        )
+        return cfg, worker_grid
+
+    def _ring_compute_kernel_config(self, local_seq_len: int):
+        """This helper turns off fp32_dest_acc_en from the kernel config when it wouldn't fit
+        on the kernel config buffer.
+
+        By default we set `fp32_dest_acc_en=True` but that selects the ring joint SDPA's
+        legacy compute path, whose kernels are larger than the streaming path's. Some ring
+        SDPA configs on Wormhole are too big to fit on the kernel config buffer, so
+        we set it to false in that case so it can fit. TODO: Consider maybe not making
+        this a silent change/fallback for an edge case but require it at the beginning for WH.
+
+        Only tested for wormhole, TODO: unify for both wormhole and blackhole.
+        """
+        rows = -(-local_seq_len // 32) * 32
+        if self._device.arch() == ttnn.device.Arch.WORMHOLE_B0 and rows > _RING_FP32_ACC_MAX_LOCAL_ROWS_WH:
+            return ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+            )
+        return self._sdpa_compute_kernel_config
+
+    def _ring_attention(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
+        """Causal ring attention over a sequence sharded on the SP axis (zero-width joint slots)."""
+        sp_axis, ccl = self._sp_axis, self._ccl_manager
+        local_seq_len = q.shape[2]
+        pc, worker_grid = self._ring_program_config(local_seq_len)
+        compute_kernel_config = self._ring_compute_kernel_config(local_seq_len)
+        empty_q = tensor.bf16_tensor(torch.zeros(1, self._num_local_heads, 0, self._head_dim), device=self._device)
+        empty_kv = tensor.bf16_tensor(torch.zeros(1, self._num_local_kv_heads, 0, self._head_dim), device=self._device)
+        attn, _joint, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            empty_q,
+            empty_kv,
+            empty_kv,
+            persistent_output_buffer_k=ccl.get_ag_ping_pong_buffer(
+                k.shape, 2, sp_axis, dtype=k.dtype, capacity=self._kv_gather_capacity
+            ),
+            persistent_output_buffer_v=ccl.get_ag_ping_pong_buffer(
+                v.shape, 2, sp_axis, dtype=v.dtype, capacity=self._kv_gather_capacity
+            ),
+            joint_strategy="rear",
+            logical_n=local_seq_len * self._sp_factor,
+            program_config=pc,
+            compute_kernel_config=compute_kernel_config,
+            dim=2,
+            scale=self._head_dim**-0.5,
+            multi_device_global_semaphore=ccl.get_ag_ping_pong_semaphore(sp_axis),
+            num_links=ccl.num_links,
+            cluster_axis=sp_axis,
+            mesh_device=self._device,
+            topology=ccl.topology,
+            subdevice_id=ccl.ccl_sub_device_id,
+            ccl_core_grid_offset=(worker_grid[0], 0),
+            use_column_major_ccl=True,
+            is_causal=True,
+            is_balanced=False,
+        )
+        return attn
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L529
@@ -626,13 +788,14 @@ class Qwen3VlMlp(Module):
 
         self._ccl_manager = ctx.ccl_manager
         self._tp_axis = ctx.tp_axis
+        self._use_persistent_ccl_buffers = ctx.use_persistent_ccl_buffers
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.act_fn(self.gate_proj.forward(x)) * self.up_proj.forward(x)
-        x = self.down_proj(x)
+        x = self.down_proj(x, use_persistent_buffer=self._use_persistent_ccl_buffers)
 
         if self._tp_axis is not None:
-            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self._ccl_manager.all_gather(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         return x
 

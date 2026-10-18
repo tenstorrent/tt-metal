@@ -23,105 +23,19 @@ Per tech_reports/Handling_Special_Value/special_values.md: "denormals | all | 0x
 Run: pytest tests/ttnn/unit_tests/operations/eltwise/test_tanh_bw_ulp.py -v -s
 """
 
-import struct
 import pytest
 import torch
 import ttnn
 from loguru import logger
-from mpmath import mp, cosh as mp_cosh
 
-
-def float_to_bf16_bits(f: float) -> int:
-    """Convert float to BFloat16 bit representation."""
-    f32_bits = struct.unpack(">I", struct.pack(">f", f))[0]
-    return f32_bits >> 16
-
-
-def bf16_bits_to_float(bits: int) -> float:
-    """Convert BFloat16 bits to float."""
-    f32_bits = bits << 16
-    return struct.unpack(">f", struct.pack(">I", f32_bits))[0]
-
-
-def is_bf16_denormal(bits: int) -> bool:
-    """Check if BF16 bits represent a denormal (subnormal) value."""
-    exp = (bits >> 7) & 0xFF
-    mantissa = bits & 0x7F
-    return (exp == 0) and (mantissa != 0)
-
-
-def bf16_daz_normalize(bits: int) -> int:
-    """Apply DAZ (Denormals-Are-Zero) normalization to BF16 bits."""
-    if is_bf16_denormal(bits):
-        return 0x0000
-    if bits == 0x8000:  # -0 -> +0
-        return 0x0000
-    return bits
-
-
-def bf16_value_order_index_daz(bits: int) -> int:
-    """Calculate the value order index for a BFloat16 value with DAZ."""
-    bits = bf16_daz_normalize(bits)
-
-    exp = (bits >> 7) & 0xFF
-    mantissa = bits & 0x7F
-    if exp == 0xFF and mantissa != 0:
-        return -1  # NaN
-    if bits == 0x7F80:
-        return 65281  # +inf
-    if bits == 0xFF80:
-        return -1  # -inf
-    if bits == 0x0000:
-        return 32640  # Zero
-
-    if bits & 0x8000:
-        magnitude = bits & 0x7FFF
-        return 0x7F7F - magnitude
-    else:
-        return 32640 + bits - 0x007F
-
-
-def ulp_distance_bf16_daz(a: float, b: float) -> int:
-    """Calculate ULP distance with DAZ+FTZ model."""
-    a_bits = bf16_daz_normalize(float_to_bf16_bits(a))
-    b_bits = bf16_daz_normalize(float_to_bf16_bits(b))
-
-    a_exp = (a_bits >> 7) & 0xFF
-    b_exp = (b_bits >> 7) & 0xFF
-    if (a_exp == 0xFF and (a_bits & 0x7F) != 0) or (b_exp == 0xFF and (b_bits & 0x7F) != 0):
-        return -1
-
-    idx_a = bf16_value_order_index_daz(a_bits)
-    idx_b = bf16_value_order_index_daz(b_bits)
-
-    if idx_a < 0 or idx_b < 0:
-        return -1
-
-    return abs(idx_a - idx_b)
-
-
-def bf16_quantize_rne(x: float) -> float:
-    """RNE-quantize a float to BF16 (matches torch's BFloat16 conversion).
-    Required because the bit-level helpers above truncate, but torch — and therefore
-    the device input — uses round-to-nearest-even. For test points that are not
-    exact BF16 values (e.g., 2.9, 3.01), truncation and RNE diverge."""
-    return float(torch.tensor([x], dtype=torch.bfloat16).item())
-
-
-def sech2_exact(x: float) -> float:
-    """
-    Exact tanh derivative using mpmath 256-bit precision.
-
-    tanh'(x) = sech²(x) = 1 / cosh²(x)
-
-    Uses 1/cosh²(x) form (not 1 - tanh²(x)) to avoid the catastrophic cancellation
-    that motivated this PR's existence (the original buggy composite kernel).
-    """
-    mp.prec = 256
-    x_mp = mp.mpf(x)
-    cosh_x = mp_cosh(x_mp)
-    result = 1 / (cosh_x * cosh_x)
-    return float(result)
+from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    bf16_bits_to_float,
+    bf16_daz_normalize,
+    bf16_quantize_rne,
+    float_to_bf16_bits,
+    sech2_exact,
+    ulp_distance_bf16_daz,
+)
 
 
 def tanh_derivative_expected_bf16_daz(x: float) -> float:
@@ -297,6 +211,28 @@ class TestTanhBwDeepTail:
         ), f"ULP {ulp_error} and abs error {abs(actual - expected):.3e} both exceed thresholds"
 
 
+@pytest.mark.skipif(
+    ttnn.get_arch_name() != "blackhole",
+    reason=(
+        "Wormhole's tanh derivative still builds |x| with sfpi::abs, which leaves a sign-set NaN "
+        "sign-set; tracked by https://github.com/tenstorrent/tt-metal/issues/57509"
+    ),
+)
+class TestTanhBwNonFinite:
+    """Non-finite inputs return 0, whatever the sign bit. The sign-set NaNs are the
+    ones that matter: torch rounds every NaN to bf16 as 0xFFFF, and with |x| taken by
+    sfpi::abs those came out as +inf while 0x7FC0 gave 0."""
+
+    @pytest.mark.parametrize("bits", [0x7FC0, 0xFFC0, 0xFFFF, 0x7F81, 0xFF81, 0x7F80, 0xFF80])
+    def test_non_finite_is_zero(self, device, bits):
+        x = torch.tensor([bits], dtype=torch.int32).to(torch.int16).view(torch.bfloat16).reshape(1, 1)
+        tt_x = ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_g = ttnn.from_torch(torch.ones_like(x), device=device, layout=ttnn.TILE_LAYOUT)
+        actual = ttnn.to_torch(ttnn.tanh_bw(tt_g, tt_x)[0]).reshape(-1)[0].item()
+        logger.info(f"x=0x{bits:04X}: actual={actual!r}")
+        assert actual == 0.0, f"x=0x{bits:04X}: expected 0, got {actual!r}"
+
+
 class TestTanhBwWithGradientScaling:
     """Correctness guard (unique): only tests using grad != 1.0 (grad=0.5, 2.0, -1.0, 0.1, 10.0).
     Catches swapped grad/input tensors or missing gradient multiplication in backward pass."""
@@ -382,3 +318,47 @@ def test_tanh_bw_ulp_summary(device):
     assert max_ulp <= 2, (
         f"Max ULP {max_ulp} at x={worst_x} exceeds threshold 2. " f"See table above for per-point details."
     )
+
+
+def test_tanh_bw_cache_miss_same_volume_different_alignment(device):
+    """Equal padded volume, different alignment, must be two cache entries.
+
+    logical 32x32 padded to 64x32 versus padded to 32x64. Both volumes are 2048.
+    """
+    device.enable_program_cache()
+    logical = (1, 1, 32, 32)
+
+    def pair(padded):
+        grad = torch.rand(logical, dtype=torch.bfloat16)
+        x = torch.rand(logical, dtype=torch.bfloat16)
+        tt_grad = ttnn.tilize_with_val_padding(
+            ttnn.from_torch(grad, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16),
+            padded,
+            0.0,
+        )
+        tt_x = ttnn.tilize_with_val_padding(
+            ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16),
+            padded,
+            0.0,
+        )
+        return tt_grad, tt_x
+
+    torch.manual_seed(0)
+    wide = pair([1, 1, 64, 32])
+    tall = pair([1, 1, 32, 64])
+
+    def volume(shape):
+        n = 1
+        for dim in shape:
+            n *= int(dim)
+        return n
+
+    assert volume(wide[1].padded_shape) == volume(tall[1].padded_shape)
+    assert list(wide[1].padded_shape) != list(tall[1].padded_shape)
+
+    device.clear_program_cache()
+    ttnn.tanh_bw(*wide)
+    assert device.num_program_cache_entries() == 1
+    ttnn.tanh_bw(*tall)
+    assert device.num_program_cache_entries() == 2
+    device.disable_and_clear_program_cache()

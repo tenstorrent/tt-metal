@@ -20,15 +20,48 @@ chunksize_list = [1, 2, 4, 5]
 dims = [0, 1, 2, 3, 4]
 
 
-@pytest.mark.parametrize("layout", layouts)
-@pytest.mark.parametrize("dtype", dtypes)
 @pytest.mark.parametrize("shape", shapes)
 @pytest.mark.parametrize("chunksize", chunksize_list)
 @pytest.mark.parametrize("dim", dims)
-def test_split(device, layout, dtype, shape, chunksize, dim):
+def test_split(device, shape, chunksize, dim):
     if dim > len(shape) - 1:
         pytest.skip("dim greater than rank")
 
+    torch_input_tensor = torch.rand(shape)
+    torch_results = torch.split(torch_input_tensor, chunksize, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    outputs = ttnn.split(input_tensor, chunksize, dim=dim)
+    outputs = [ttnn.to_torch(t) for t in outputs]
+
+    assert len(outputs) == len(torch_results)
+    for output, torch_result in zip(outputs, torch_results):
+        assert (
+            output.shape == torch_result.shape
+        ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
+
+        assert_with_pcc(torch_result, output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "layout, dtype",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, torch.bfloat16),
+        (ttnn.TILE_LAYOUT, torch.float32),
+        (ttnn.ROW_MAJOR_LAYOUT, torch.float32),
+    ],
+)
+@pytest.mark.parametrize(
+    "shape, chunksize, dim",
+    [
+        ((2,), 1, 0),
+        ((1, 2, 3), 2, 2),
+        ((10, 9, 8, 7, 6), 4, 4),
+        ((32, 64, 4096), 5, 2),
+    ],
+)
+def test_split_dtype_layout_coverage(device, layout, dtype, shape, chunksize, dim):
     torch_input_tensor = torch.rand(shape)
     torch_results = torch.split(torch_input_tensor, chunksize, dim=dim)
 

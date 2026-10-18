@@ -14,6 +14,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     to_ttnn,
 )
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def get_tensors(
     input_shape,
@@ -210,6 +213,8 @@ def test_moreh_linear_wo_output(shapes, has_bias, npu_dtype, device):
 )
 def test_moreh_linear_enable_cache(shapes, device):
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         passing = moreh_linear(shapes, True, True, get_compute_kernel_options(False), device)
@@ -370,6 +375,8 @@ def test_moreh_linear_backward_enable_cache(shapes, device):
     compute_kernel_config = get_compute_kernel_options(False)
 
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         passing = moreh_linear_backward(
@@ -391,6 +398,8 @@ def test_moreh_linear_backward_enable_cache(shapes, device):
         # GPT2-Small cases
         ([8, 512, 768], [768, 768], [1, 768], [8, 512, 768]),
         ([8, 512, 768], [3072, 768], [1, 3072], [8, 512, 3072]),
+        # scalar bias takes the single-core factory
+        ([8, 512, 768], [3072, 768], [1, 1], [8, 512, 3072]),
     ),
 )
 def test_moreh_bias_backward_fp32(shapes, device):
@@ -489,9 +498,9 @@ def test_moreh_bias_backward_fp32(shapes, device):
     diff_fp32 = torch.abs(torch_bias_fp32.grad - tt_bias_grad_fp32_cpu)
     logger.debug(f"std={torch.std(diff_fp32)}")
     logger.debug(f"mean={diff_fp32.mean()}")
-    logger.debug(f"topk(5) {torch.topk(diff_fp32.reshape(-1), 5)}")
+    logger.debug(f"topk(5) {torch.topk(diff_fp32.reshape(-1), min(5, diff_fp32.numel()))}")
     diff = torch.abs(torch_bias_fp32.grad - tt_bias_grad_cpu)
     logger.debug(f"std={torch.std(diff)}")
     logger.debug(f"mean={diff.mean()}")
-    logger.debug(f"topk(5) {torch.topk(diff.reshape(-1), 5)}")
+    logger.debug(f"topk(5) {torch.topk(diff.reshape(-1), min(5, diff.numel()))}")
     assert diff_fp32.mean() < diff.mean()

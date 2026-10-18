@@ -11,7 +11,7 @@
 #include <optional>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include <random>
 
 namespace tt::tt_fabric {

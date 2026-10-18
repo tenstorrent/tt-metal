@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/eltwise_unary/addcdiv.h"
@@ -23,7 +24,8 @@ void kernel_main() {
     DataflowBuffer dfb_in2(tt::CBIndex::c_2);  // input_c
     DataflowBuffer dfb_out(tt::CBIndex::c_3);
 
-    unary_op_init_common(dfb_in0.get_id(), dfb_out.get_id());
+    compute_kernel_hw_startup(dfb_in0.get_id(), dfb_out.get_id());
+    copy_init(dfb_in0.get_id());
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         dfb_in0.wait_front(num_tiles_per_cycle);
@@ -34,14 +36,17 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-        copy_tile_init(dfb_in0.get_id());
+        copy_init(dfb_in0.get_id());
         copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_tile_init(dfb_in1.get_id());
+        reconfig_data_format_srca(dfb_in0.get_id(), dfb_in1.get_id());
+        copy_init(dfb_in1.get_id());
         copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_tile_init(dfb_in2.get_id());
+        reconfig_data_format_srca(dfb_in1.get_id(), dfb_in2.get_id());
+        copy_init(dfb_in2.get_id());
         copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
+        reconfig_data_format_srca(dfb_in2.get_id(), dfb_in0.get_id());
 
         TERNARY_SFPU_OP_INIT();
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg);

@@ -6,56 +6,36 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     using namespace tt::constants;
-    uint32_t i = 0;
-    auto target_addr = get_arg_val<uint32_t>(i++);
-    auto output_grad_addr = get_arg_val<uint32_t>(i++);
-    auto weight_addr = get_arg_val<uint32_t>(i++);
-    auto ignore_index = static_cast<int32_t>(get_arg_val<uint32_t>(i++));
-    auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
-    auto start_id = get_arg_val<uint32_t>(i++);
-    auto C = get_arg_val<uint32_t>(i++);
-    auto Ct = get_arg_val<uint32_t>(i++);
-    auto Wt = get_arg_val<uint32_t>(i++);
-
-    constexpr uint32_t cb_target = tt::CBIndex::c_0;
-    constexpr uint32_t cb_output_grad = tt::CBIndex::c_1;
-    constexpr uint32_t cb_weight = tt::CBIndex::c_2;
-
-    constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
-
-    constexpr uint32_t cb_weight_scratch = tt::CBIndex::c_7;
+    auto ignore_index = static_cast<int32_t>(get_arg(args::ignore_index));
+    auto num_tiles_per_core = get_arg(args::num_tiles_per_core);
+    auto start_id = get_arg(args::start_id);
+    auto Ct = get_arg(args::Ct);
+    auto Wt = get_arg(args::Wt);
 
     // ublocks size defined in tiles
 
-    const DataFormat weight_data_format = get_dataformat(cb_weight);
-
-    const DataFormat output_grad_data_format = get_dataformat(cb_output_grad);
-
-    constexpr auto target_args = TensorAccessorArgs<0>();
-    constexpr auto output_grad_args = TensorAccessorArgs<target_args.next_compile_time_args_offset()>();
-    constexpr auto weight_args = TensorAccessorArgs<output_grad_args.next_compile_time_args_offset()>();
-
-    const auto addrg_target = TensorAccessor(target_args, target_addr);
+    const auto addrg_target = TensorAccessor(tensor::target);
     constexpr uint32_t onetile = 1;
 
-    DataflowBuffer dfb_target_obj(cb_target);
-    DataflowBuffer dfb_output_grad_obj(cb_output_grad);
-    DataflowBuffer dfb_input_grad_obj(cb_input_grad);
+    DataflowBuffer dfb_target_obj(dfb::target);
+    DataflowBuffer dfb_output_grad_obj(dfb::output_grad);
+    DataflowBuffer dfb_input_grad_obj(dfb::input_grad);
 #if defined(WEIGHT)
-    DataflowBuffer dfb_weight_obj(cb_weight);
-    const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
+    DataflowBuffer dfb_weight_obj(dfb::weight);
+    const auto addrg_weight = TensorAccessor(tensor::weight);
 
-    DataflowBuffer dfb_weight_scratch_obj(cb_weight_scratch);
+    DataflowBuffer dfb_weight_scratch_obj(dfb::weight_scratch);
     read_line(dfb_weight_obj, dfb_weight_scratch_obj, addrg_weight, Ct);
 
     dfb_weight_obj.wait_front(Ct);
     CoreLocalMem<volatile uint16_t> weight_l1_ptr(dfb_weight_obj.get_read_ptr());
 #endif
 
-    const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr);
+    const auto addrg_output_grad = TensorAccessor(tensor::output_grad);
 
     auto zero = fp32_to_bf16_truncate(0.0f);
 

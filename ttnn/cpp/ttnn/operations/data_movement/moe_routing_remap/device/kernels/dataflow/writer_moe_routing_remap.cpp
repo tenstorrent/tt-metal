@@ -34,7 +34,7 @@ void kernel_main() {
     DataflowBuffer local_weights_idxs_dfb(local_weights_idxs_dfb_id);
 
     local_weights_dfb.reserve_back(1);
-    const uint32_t local_weights_l1_addr = local_weights_dfb.get_read_ptr();
+    const uint32_t local_weights_l1_addr = local_weights_dfb.get_write_ptr();
     local_weights_dfb.push_back(1);
 
     fill_with_val<weight_addr_t>(local_weights_l1_addr, num_cluster_experts, 0u);

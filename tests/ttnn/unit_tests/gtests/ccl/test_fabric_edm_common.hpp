@@ -482,26 +482,18 @@ bool RunPipelinedWorkersTest(
         }
     }
 
-    constexpr size_t num_command_streams = 1;
     std::vector<KernelHandle> reader_kernels;
     std::vector<KernelHandle> writer_kernels;
     // Create the kernel handles for each pipeline stage
     for (size_t stage = 0; stage < num_stages; stage++) {
         auto reader_kernel = ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_ct_args(
-            program,
-            {tt::CB::c_in0},
-            {&device_tensors[stage]},
-            pipeline_stage_worker_cores[stage],
-            tt_metal::ReaderDataMovementConfig{},
-            num_command_streams);
+            program, device_tensors[stage], pipeline_stage_worker_cores[stage], tt_metal::ReaderDataMovementConfig{});
         reader_kernels.push_back(reader_kernel);
         auto writer_kernel = ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_ct_args(
             program,
-            {tt::CB::c_in0},
-            {&device_tensors[stage + 1]},
+            device_tensors[stage + 1],
             pipeline_stage_worker_cores[stage],
-            tt_metal::WriterDataMovementConfig{},
-            num_command_streams);
+            tt_metal::WriterDataMovementConfig{});
         writer_kernels.push_back(writer_kernel);
     }
 
@@ -605,29 +597,19 @@ bool RunPipelinedWorkersTest(
             ttnn::ccl::worker_detail::generate_multi_input_command_stream_kernel_rt_args(
                 program,
                 reader_kernels[stage],
-                {&device_tensors[stage]},
-                {page_size_bytes},
-                mesh_device->get_devices()[0],
-                0,  // link = 0, don't care, since we aren't specifying connections
+                device_tensors[stage],
+                page_size_bytes,
                 cb_packet_size_in_pages,
                 {worker_cores.at(worker)},
-                reader_cmd_stream,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt);
+                reader_cmd_stream);
             ttnn::ccl::worker_detail::generate_multi_input_command_stream_kernel_rt_args(
                 program,
                 writer_kernels[stage],
-                {&device_tensors[stage + 1]},
-                {page_size_bytes},
-                mesh_device->get_devices()[0],
-                0,  // link = 0, don't care, since we aren't specifying connections
+                device_tensors[stage + 1],
+                page_size_bytes,
                 cb_packet_size_in_pages,
                 {worker_cores.at(worker)},
-                writer_cmd_stream,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt);
+                writer_cmd_stream);
         }
     }
     std::vector<tt::tt_metal::distributed::MeshWorkload> mesh_workloads(1);

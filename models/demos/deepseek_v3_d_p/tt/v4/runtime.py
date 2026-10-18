@@ -328,7 +328,17 @@ class TtV4PrefillRuntime:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-    def prefill_chunk(
+    def prefill_chunk(self, input_tensor, kv_caches, *, metadata_msg=None, **kwargs):
+        """Main's runner hands each chunk's metadata tensor to the runtime. The last rank never forwards it, so it frees it after
+        the chunk (the reference runtimes do; the pre-merge runner leaked it as record_dev); earlier ranks leave it to the runner,
+        which forwards it downstream."""
+        try:
+            return self._prefill_chunk(input_tensor, kv_caches, **kwargs)
+        finally:
+            if metadata_msg is not None and self.config.is_last_rank:
+                ttnn.deallocate(metadata_msg)
+
+    def _prefill_chunk(
         self,
         input_tensor,
         kv_caches,
@@ -668,9 +678,42 @@ class TtV4PrefillRuntime:
             return int(t.buffer_address())
         raise RuntimeError("no KV group tensor on this rank")
 
+    def kv_migration_stages(self, kv_caches, first_layer_idx: int, num_my_layers: int):
+        """Main's migration contract: ONE stage per rank (its first KV group tensor's address, as kv_migration_base_address
+        gave the old single-stage protocol). main calls this on EVERY rank but build_kv_chunk_table on rank 0 only, while the V4
+        table build is COLLECTIVE -- so it runs HERE, on every rank, into a staging file that rank 0's build_kv_chunk_table
+        moves into place (multi-rank V4 would otherwise deadlock in the build)."""
+        import tempfile
+
+        from models.demos.common.prefill.runners.migration import KvCacheStage
+
+        fd, staged = tempfile.mkstemp(prefix="v4_kv_table_", suffix=".staged")
+        os.close(fd)
+        self._staged_kv_table = self._build_kv_chunk_table_collective(kv_caches, staged)
+        return [KvCacheStage(self.kv_migration_base_address(kv_caches), int(first_layer_idx), int(num_my_layers))]
+
     def build_kv_chunk_table(
-        self, kv_caches, path: str, *, first_layer_idx: int = 0, num_my_layers: Optional[int] = None, stage_layout=None
+        self,
+        kv_caches,
+        path: str,
+        *,
+        first_layer_idx: int = 0,
+        num_my_layers: Optional[int] = None,
+        stage_layouts=None,
+        stage_layout=None,
     ) -> str:
+        """Rank 0 (main's flow): place the table kv_migration_stages built collectively; called without it (the old
+        single-call flow), build here -- collective over the runner's ranks."""
+        import shutil
+
+        staged = getattr(self, "_staged_kv_table", None)
+        if staged and os.path.exists(staged):
+            shutil.move(staged, path)
+            self._staged_kv_table = None
+            return path
+        return self._build_kv_chunk_table_collective(kv_caches, path)
+
+    def _build_kv_chunk_table_collective(self, kv_caches, path: str) -> str:
         """COLLECTIVE over the runner's ranks (every rank must call it): the contract's multi-config table."""
         return build_v4_kv_chunk_table(
             mesh_device=self.mesh_device,

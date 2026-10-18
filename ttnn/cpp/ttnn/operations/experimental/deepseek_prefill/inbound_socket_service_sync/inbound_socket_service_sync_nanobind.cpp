@@ -29,19 +29,24 @@ void bind_inbound_socket_service_sync(nb::module_& mod) {
                 transfer; a D2DStreamServiceReceiver drains a device->device transfer.
 
         Keyword Args:
-            metadata_size_bytes (int): When > 0, must match the service's value. Adds a
-                second output tensor holding the inline metadata. Default: 0.
+            metadata_size_bytes (int): When > 0, must match the service's value. Adds an
+                output tensor holding the inline metadata. Default: 0.
+            overhang_size_bytes (int): When > 0, the trailing bytes of every page are written
+                to their own output tensor instead of to the tokens tensor, splitting the
+                backing spec's last dim. Costs no extra pass over the data -- the op's single
+                copy simply lands in two destinations. Default: 0.
 
         Returns:
-            List[ttnn.Tensor]: ``[tokens]`` when ``metadata_size_bytes == 0``, else
-            ``[tokens, metadata]``.
+            List[ttnn.Tensor]: ``[tokens]``, plus ``overhang`` when
+            ``overhang_size_bytes > 0``, plus ``metadata`` when ``metadata_size_bytes > 0``,
+            in that order.
         )doc";
 
     // Two overloads under one Python name; nanobind dispatches on the `service`
     // arg type (H2DStreamService vs D2DStreamServiceReceiver). The now-overloaded
     // function address must be disambiguated via these typedefs.
-    using H2DReceiverFn = std::vector<ttnn::Tensor> (*)(const tt::tt_metal::H2DStreamService&, uint32_t);
-    using D2DReceiverFn = std::vector<ttnn::Tensor> (*)(const ttnn::D2DStreamServiceReceiver&, uint32_t);
+    using H2DReceiverFn = std::vector<ttnn::Tensor> (*)(const tt::tt_metal::H2DStreamService&, uint32_t, uint32_t);
+    using D2DReceiverFn = std::vector<ttnn::Tensor> (*)(const ttnn::D2DStreamServiceReceiver&, uint32_t, uint32_t);
 
     ttnn::bind_function<"inbound_socket_service_sync", "ttnn.experimental.deepseek_prefill.">(
         mod,
@@ -50,12 +55,14 @@ void bind_inbound_socket_service_sync(nb::module_& mod) {
             static_cast<H2DReceiverFn>(&ttnn::experimental::inbound_socket_service_sync),
             nb::arg("service"),
             nb::kw_only(),
-            nb::arg("metadata_size_bytes") = static_cast<uint32_t>(0)),
+            nb::arg("metadata_size_bytes") = static_cast<uint32_t>(0),
+            nb::arg("overhang_size_bytes") = static_cast<uint32_t>(0)),
         ttnn::overload_t(
             static_cast<D2DReceiverFn>(&ttnn::experimental::inbound_socket_service_sync),
             nb::arg("service"),
             nb::kw_only(),
-            nb::arg("metadata_size_bytes") = static_cast<uint32_t>(0)));
+            nb::arg("metadata_size_bytes") = static_cast<uint32_t>(0),
+            nb::arg("overhang_size_bytes") = static_cast<uint32_t>(0)));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::inbound_socket_service_sync::detail

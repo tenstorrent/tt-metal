@@ -4,49 +4,58 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_common.hpp"
+#include "api/tensor/local_tensor_accessor.h"
+#include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_common_metal2.hpp"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     Noc noc;
 
-    const std::uint32_t input_buffer_src_addr = get_arg_val<uint32_t>(0);
-    const std::uint32_t weight_buffer_src_addr = get_arg_val<uint32_t>(1);
-    const std::uint32_t batch_offset = get_arg_val<uint32_t>(2);
-    const std::uint32_t weights_offset = get_arg_val<uint32_t>(3);
-    const std::uint32_t num_rows = get_arg_val<uint32_t>(4);
+    const std::uint32_t batch_offset = get_arg(args::batch_offset);
+    const std::uint32_t weights_offset = get_arg(args::weights_offset);
+    const std::uint32_t num_rows = get_arg(args::num_rows);
 
-    const std::uint32_t index_idx = get_arg_val<uint32_t>(5);
+    const std::uint32_t index_idx = get_arg(args::index_idx);
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
+    constexpr uint32_t input_page_size = get_arg(args::input_page_size);
+    constexpr uint32_t weight_stick_size = get_arg(args::weight_stick_size);
 
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t weight_stick_size = get_compile_time_arg_val(4);
+    constexpr uint32_t rows_per_block = get_arg(args::rows_per_block);  // Input elems per block
+    constexpr uint32_t input_block_size_bytes = get_arg(args::input_block_size_bytes);
 
-    constexpr uint32_t rows_per_block = get_compile_time_arg_val(5);  // Input elems per block
-    constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t chunk_size = get_arg(args::chunk_size);
+    constexpr uint32_t num_chunks = get_arg(args::num_chunks);
+    constexpr uint32_t last_chunk_size = get_arg(args::last_chunk_size);
 
-    constexpr uint32_t chunk_size = get_compile_time_arg_val(7);
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(8);
-    constexpr uint32_t last_chunk_size = get_compile_time_arg_val(9);
+    const auto input = TensorAccessor(tensor::input);
+    const auto weights = TensorAccessor(tensor::weights);
 
-    constexpr auto input_args = TensorAccessorArgs<10>();
-    constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    const auto input = TensorAccessor(input_args, input_buffer_src_addr);
-    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr);
+    // The local weight cache exists only for the embeddings types that serve some weight rows out of
+    // local SRAM, so it is bound (and named) only on those builds.
+#if defined PADDED
+    prepare_local_cache(noc, scratch::local_cache, weights, weight_stick_size, get_arg(args::pad_token));
+#elif defined BINARY
+    prepare_local_cache(noc, scratch::local_cache, weights, weight_stick_size);
+#endif
 
-    prepare_local_cache(noc, cb_id_in2, weights, weight_stick_size, /*pad_token_arg_idx=*/6);
-
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
-
-    cb_in1.reserve_back(1);
-    uint32_t input_l1_addr = cb_in1.get_write_ptr();
-    volatile tt_l1_ptr input_token_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr input_token_t*>(input_l1_addr);
+#ifdef OUTPUT_SHARDED
+    // The output is sharded: this reader writes the weight sticks it gathers straight into its own
+    // output shard, one chunk_size-strided row after another (the host checks they fit).
+    static_assert(num_chunks == 1, "the host never chunks the rows of a sharded output");
+    LocalTensorAccessor<uint8_t> out_shard(tensor::out_shard);
+    uint32_t out_offset = 0;  // byte offset of the next row in the shard
+#else
+    // dfb_in0 stages the weight sticks this reader gathers; a writer kernel drains it to the output
+    // tensor.
+    DataflowBuffer dfb_in0(dfb::in0);
+#endif
+    // The index scratch is this reader's private page for the block of indices it is working through:
+    // the NoC reads into it via the scratchpad object and the RISC reads the indices back.
+    Scratchpad<volatile input_token_t> index_scratch(scratch::in1);
 
     uint32_t curr_row = batch_offset;  // Number of pages/rows we have read from input so far
     uint32_t offset = weights_offset;  // Which input elem we are on (bytes offset from start of row)
@@ -57,24 +66,35 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
             noc.async_read(
-                input,
-                CoreLocalMem<uint32_t>(input_l1_addr),
-                input_block_size_bytes,
-                {.page_id = curr_row, .offset_bytes = offset},
-                {});
+                input, index_scratch, input_block_size_bytes, {.page_id = curr_row, .offset_bytes = offset}, {});
             noc.async_read_barrier();
             read_indices = false;
         }
-        input_token_t token = input_l1_ptr[index];
+        input_token_t token;
+        {
+            // The NoC rewrites this scratchpad with each new index block, so on Quasar the DM core's L2
+            // may still hold the previous block; scoped_lock invalidates the line before the read.
+            // No-op on WH/BH.
+            auto index_lock = index_scratch.scoped_lock(index, 1);
+            token = index_scratch[index];
+        }
 
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
-            cb_in0.reserve_back(1);
-            uint32_t l1_write_addr = cb_in0.get_write_ptr();
+#ifdef OUTPUT_SHARDED
+            uint32_t l1_write_addr = out_shard.get_bank_base_address() + out_offset;
+#else
+            dfb_in0.reserve_back(1);
+            uint32_t l1_write_addr = dfb_in0.get_write_ptr();
+#endif
             uint32_t current_chunk_size = (chunk < num_chunks - 1) ? chunk_size : last_chunk_size;
             uint32_t chunk_offset = chunk * chunk_size;
             read_token_async(noc, token, weights, l1_write_addr, current_chunk_size, chunk_offset);
             noc.async_read_barrier();
-            cb_in0.push_back(1);
+#ifdef OUTPUT_SHARDED
+            out_offset += chunk_size;
+#else
+            dfb_in0.push_back(1);
+#endif
         }
 
         index++;
@@ -91,7 +111,4 @@ void kernel_main() {
             read_indices = true;
         }
     }
-    // cb_in1 is reserved once as an index scratch buffer (no downstream consumer); commit the
-    // reservation so the CB is left balanced.
-    cb_in1.push_back(1);
 }

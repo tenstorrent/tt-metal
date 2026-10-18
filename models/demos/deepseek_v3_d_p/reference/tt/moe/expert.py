@@ -21,6 +21,18 @@ import torch.nn.functional as F
 # Activation selectors accepted by TorchExpert / apply_glu_activation.
 ACTIVATION_SILU = "silu"
 ACTIVATION_SITU = "situ"
+ACTIVATION_SWIGLUOAI = "swiglu_oai"
+ACTIVATION_CLAMPED_SILU_GLU = "clamped_silu_glu"
+
+# The device kernel bakes SwiGLUConfigGPTOSS rather than taking these as arguments, so a reference
+# that let callers vary them could grade against an activation the kernel cannot run.
+SWIGLUOAI_ALPHA = 1.702
+SWIGLUOAI_LIMIT = 7.0
+
+# DeepSeek-V4's swiglu_limit, shared by V4 Pro and V4 Flash. Must equal the kernel's
+# compile-time ClampedSiluGluConfigDsV4::limit, or the reference grades the device against a
+# different function.
+CLAMPED_SILU_GLU_LIMIT = 10.0
 
 
 def apply_glu_activation(
@@ -32,7 +44,11 @@ def apply_glu_activation(
 ) -> torch.Tensor:
     """Combine a GLU pair into one activated tensor.
 
-    ``silu``: ``silu(gate) * up`` -- the DeepSeek / Kimi-K2.6 SwiGLU.
+    ``silu``: ``silu(gate) * up`` -- the DeepSeek / Kimi-K2.7 SwiGLU.
+
+    ``clamped_silu_glu``: DeepSeek-V4's ``silu(min(gate, L)) * clamp(up, -L, L)``, matching
+    ``DeepseekV4Experts._apply_gate``. The gate half clamps only from above and the up half
+    clamps both ends; that asymmetry is the model's, not a saturation bound.
 
     ``situ``: Kimi-K3's SiTU-GLU, ``beta*tanh(gate/beta)*sigmoid(gate) * linear_beta*tanh(up/linear_beta)``.
     Mathematically identical to upstream ``SituAndMul`` (``modeling_kimi_linear.py:64``), which takes
@@ -40,8 +56,11 @@ def apply_glu_activation(
     separate arguments avoids a concat the device path would not do either. Computed in fp32 to match
     upstream, which casts both halves up before the tanh/sigmoid.
 
-    NOTE: no TT kernel implements SiTU yet (issue #51335). ``situ`` exists so the host reference can
-    model the checkpoint faithfully; device comparisons must run ``silu`` on both sides.
+    NOTE: every K3 FFN site runs SiTU on device -- the routed experts through the fused kernel
+    (``ttnn.RoutedExpertActivation.SituGlu``), the shared expert and the layer-0 dense FFN through
+    the composed path in ``TtSharedExpert`` / ``TtFfn``. All three are Blackhole-only, and K3 names
+    SiTU unconditionally, so there is no Wormhole configuration of K3 to compare against; ``silu``
+    here serves the other models.
     """
     if activation == ACTIVATION_SILU:
         return F.silu(gate_out) * up_out
@@ -52,7 +71,19 @@ def apply_glu_activation(
         if situ_linear_beta is not None:
             up = situ_linear_beta * torch.tanh(up / situ_linear_beta)
         return (situ_a * up).to(gate_out.dtype)
-    raise ValueError(f"unknown activation {activation!r}; expected {ACTIVATION_SILU!r} or {ACTIVATION_SITU!r}")
+    if activation == ACTIVATION_SWIGLUOAI:
+        gate = gate_out.float().clamp(max=SWIGLUOAI_LIMIT)
+        up = up_out.float().clamp(min=-SWIGLUOAI_LIMIT, max=SWIGLUOAI_LIMIT)
+        return ((up + 1.0) * gate * torch.sigmoid(SWIGLUOAI_ALPHA * gate)).to(gate_out.dtype)
+    if activation == ACTIVATION_CLAMPED_SILU_GLU:
+        gate = torch.clamp(gate_out.float(), max=CLAMPED_SILU_GLU_LIMIT)
+        up = torch.clamp(up_out.float(), min=-CLAMPED_SILU_GLU_LIMIT, max=CLAMPED_SILU_GLU_LIMIT)
+        return (F.silu(gate) * up).to(gate_out.dtype)
+    raise ValueError(
+        f"unknown activation {activation!r}; expected one of "
+        f"{ACTIVATION_SILU!r}, {ACTIVATION_SITU!r}, {ACTIVATION_SWIGLUOAI!r}, "
+        f"{ACTIVATION_CLAMPED_SILU_GLU!r}"
+    )
 
 
 class TorchExpert(nn.Module):
@@ -93,7 +124,8 @@ class TorchExpert(nn.Module):
             use_identity: If True and torch_weights is None, initialize with identity
                          matrices (requires emb_dim == hidden_dim). Useful for flow testing.
                          If False and torch_weights is None, uses random normal init.
-            activation: "silu" (default, unchanged behaviour) or "situ" for Kimi-K3's SiTU-GLU.
+            activation: "silu" (default, unchanged behaviour), "situ" for Kimi-K3's SiTU-GLU,
+                        or "clamped_silu_glu" for DeepSeek-V4's clamped SiLU.
             situ_beta / situ_linear_beta: SiTU scalars, ignored unless activation == "situ".
         """
         super().__init__()

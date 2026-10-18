@@ -17,6 +17,9 @@ NOTE: per-layer LayerAck channel + scheduler-driven migration are NOT here
 (owned by the runner / scheduler / worker side).
 """
 
+from dataclasses import dataclass
+from typing import Optional
+
 import ttnn
 from models.demos.common.prefill.runners.migration import (
     allgather_kv_stage_layout,
@@ -25,14 +28,71 @@ from models.demos.common.prefill.runners.migration import (
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-    PREFILL_CHUNK_OUTPUT_TOKENS,
-    create_kv_chunk_address_table_kimi,
-    populate_kv_chunk_address_table_kimi,
+    PREFILL_CHUNK_TOKENS,
+    create_kv_chunk_address_table_block_cyclic,
+    kda_chunk_n_tokens,
+    kda_max_sequence_length,
+    kda_segment_bytes,
+    merged_num_layers,
+    populate_kv_chunk_address_table_block_cyclic,
+    populate_kv_chunk_address_table_dflash,
+    populate_kv_chunk_address_table_kda,
 )
 
 # A KV chunk is one DRAM bank's worth of tokens (NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK=32) x head_dim.
 _TILE_DIM = 32  # bfp8 is tiled 32x32
 _BFP8_TILE_BYTES = 1088  # one 32x32 bfp8 tile: 1024 data + 64 exponent bytes
+
+
+def config_name(config_id: int, num_configs: int) -> str:
+    """Zero-padded positional config name, matching how blaze's ``kv_chunk_migration_helpers`` names
+    the decode table's configs (``width = max(2, len(str(n - 1)))``, at least two digits).
+
+    The KV manager pairs the two tables by config NAME to assign ids, so an unpadded name here makes
+    it reject the pair with "KV config '0': name-to-id mismatch across the loaded tables" and exit
+    fatally -- decode publishes "00"/"01" while this side published "0"/"1". Sorted names keep ids in
+    position order, which the assert below relies on. Same helper as
+    ``minimax_m3.tt.runners.kv_chunk_table.config_name`` and
+    ``gpt_oss_d_p.tt.runners.kv_chunk_table._stable_config_name``."""
+    width = max(2, len(str(max(num_configs - 1, 0))))
+    return f"{config_id:0{width}d}"
+
+
+def dflash_config_name(kind: str, head_idx: int) -> str:
+    """Table config name for one global kv-head of the DFlash drafter's K or V context cache.
+
+    ``kind`` is "k" or "v". K names sort ahead of V names, so config-id order is
+    k_h00..k_hN-1, v_h00..v_hN-1 — the same K-then-V order the M3 builder documents as the
+    src<->dst migration contract."""
+    assert kind in ("k", "v"), f"dflash config kind must be 'k' or 'v', got {kind!r}"
+    return f"dflash_{kind}_h{head_idx:02d}"
+
+
+@dataclass(frozen=True)
+class KdaTableSpec:
+    """The Kimi-K3 KDA state slabs as the table sees them: configs "01" (recurrent) and "02" (convolution).
+
+    ``geometry`` fixes the segment numbering; ``recurrent`` / ``convolution`` are this rank's slabs when it
+    holds any (None on a rank that builds the table for KDA layers it does not own); the two layouts are
+    the all-gathered ``KvCacheStage`` layouts in compacted KDA-slot space; ``layer_rows`` maps that
+    space to model layers. See ``populate_kv_chunk_address_table_kda``.
+    """
+
+    geometry: object
+    recurrent: Optional[ttnn.Tensor]
+    convolution: Optional[ttnn.Tensor]
+    recurrent_layout: list
+    convolution_layout: list
+    layer_rows: list
+
+    def tensor(self, kind: str):
+        return self.recurrent if kind == "kda_recurrent" else self.convolution
+
+    def layout(self, kind: str):
+        return self.recurrent_layout if kind == "kda_recurrent" else self.convolution_layout
+
+
+KDA_TABLE_KINDS = ("kda_recurrent", "kda_convolution")
 
 
 def _dram_chunk_size_bytes(cache) -> int:
@@ -62,7 +122,7 @@ def _dram_chunk_size_bytes(cache) -> int:
 def _num_layers_from_cache(cache, num_users: int) -> int:
     """Layer count a KV cache holds, recovered from its folded batch dim. init_kvpe_cache lays caches
     out user-major with shape[0] = num_users * num_layers, so dividing the batch dim by num_users gives
-    this cache's layer count — all layers for the KVPE cache, full-layers-only for the GLM-5.2 index
+    this cache's layer count — all layers for the KVPE cache, full-layers-only for the GLM-5.3 index
     cache (which allocate_kv_cache sizes to num_full)."""
     return cache.shape[0] // num_users
 
@@ -79,12 +139,25 @@ def build_and_serialize_kv_chunk_table(
     chunk_size_global,
     path,
     index_kv_cache=None,
+    dflash_caches=None,
+    dflash_spec=None,
+    dflash_first_layer=0,
+    tp_axis=1,
     first_layer_idx=0,
     num_my_layers=None,
-    stage_layout=None,
+    stage_layouts=None,
+    layer_rows=None,
+    index_layer_ids=None,
+    kda=None,
 ) -> str:
     """Build the MLA block-cyclic KV chunk address table and serialize it to ``path`` for the
     inference server's SET_TABLE. Returns the path on success.
+
+    ``kda`` (Kimi-K3 only): a :class:`KdaTableSpec` describing the KDA state slabs. It adds configs "01"
+    (recurrent) and "02" (convolution) after the kvpe config, on the contract's synthetic position axis
+    (strides 96 / 64 over ``KDA_VERSIONS`` aliased windows, see ``kda_position``) and published on the
+    model's layer axis via its own ``layer_rows``; ``layer_rows`` (the kvpe map) is honoured on the merged
+    path as well.
 
     Chunked prefill stores KV positions block-cyclic across the SP shards, so the table maps each
     natural position to its true storage chip + offset. The migration worker copies the chunks the
@@ -93,31 +166,64 @@ def build_and_serialize_kv_chunk_table(
     max_seq_len) lists the wrong, block-cyclically-scattered chunks and fails its PCC check.
 
     ``chunk_size_global`` is the block-cyclic period; the kimi builder hardcodes it as
-    PREFILL_CHUNK_OUTPUT_TOKENS, so a non-default period is rejected here rather than mismapped.
+    PREFILL_CHUNK_TOKENS, so a non-default period is rejected here rather than mismapped.
 
     ``index_kv_cache`` (sparse/DSA models only): when given, a single MERGED table describes BOTH
     caches — config 0 = the KVPE cache, config 1 = the index-key cache — sharing one device-group
     side table. None (dense models) → the usual single-config table over the KVPE cache alone.
 
-    ``first_layer_idx`` / ``num_my_layers`` / ``stage_layout`` (pipeline-parallel only): this rank owns
-    layers [first_layer_idx, first_layer_idx + num_my_layers); ``stage_layout`` is the all-gathered
-    per-stage layout so rank 0 builds one table spanning every stage. Single-rank defaults (stage_layout
-    None) build over this host's KVPE cache alone. Only the single-config (KVPE) path is PP-aware."""
-    assert chunk_size_global == PREFILL_CHUNK_OUTPUT_TOKENS, (
-        f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
-        f"PREFILL_CHUNK_OUTPUT_TOKENS={PREFILL_CHUNK_OUTPUT_TOKENS}, but chunk_size_global={chunk_size_global}. "
+    ``dflash_spec`` (DFlash drafter under pipeline parallelism): the same drafter configs as
+    ``dflash_caches`` below, but described without a local tensor — ``{num_kv_heads, head_dim,
+    num_layers, k_stage_layout, v_stage_layout}``. Use it when the rank building the table is not the
+    rank that owns the drafter caches (the KV tail), which is every multi-rank run. Geometry comes from
+    the drafter checkpoint config (loaded on every rank), the two stage layouts from
+    ``allgather_kv_stage_layout``. Mutually exclusive with ``dflash_caches``.
+
+    ``dflash_caches`` (DFlash drafter only): ``(k_cache, v_cache)`` for the drafter's context-KV, which
+    also joins the merged table — ``2 * num_kv_heads`` further configs, named by
+    :func:`dflash_config_name`, because the table key is (layer, position, slot) with no head axis. The
+    drafter's shapes carry everything else: layer count from ``shape[0] // num_users`` (user-major fold),
+    ``num_kv_heads`` from ``shape[1] * tp`` (dim 1 is this chip's TP head slice), head_dim from
+    ``shape[-1]``. Passing these turns even a DENSE model's table into a merged one.
+
+    ``dflash_first_layer``: where the drafter's layers sit on the table's GLOBAL layer axis (the
+    verifier's layer count, since the drafter runs after every verifier layer). Layer ids mean the same
+    thing in every config here — config 1 is widened the same way below — so the drafter's 6 layers are
+    published as ``dflash_first_layer ..  +5`` rather than as their own 0..5.
+
+    ``first_layer_idx`` / ``num_my_layers`` / ``stage_layouts`` (pipeline-parallel only): this rank owns
+    layers [first_layer_idx, first_layer_idx + num_my_layers); ``stage_layouts`` holds ONE all-gathered
+    per-stage layout per block-cyclic cache (config order), so rank 0 builds one table spanning every
+    stage while the collectives ran on all ranks. Leave it None to gather inline (single-rank / tests).
+
+    KV DEDUP is derived, not passed. A sparse/DSA model (``index_kv_cache`` given) always stripes its
+    block-cyclic caches across SP*TP, so its table addresses each (row, col) device individually instead
+    of one group per SP row; a dense model never does. Deriving it here is what keeps the table's
+    addressing and the caches' allocation from disagreeing — a mismatch makes EVERY address wrong, with
+    no error. ``tp_axis`` names the TP mesh axis in either case — it is the dflash head-count geometry
+    and is not itself the dedup switch."""
+    assert chunk_size_global == PREFILL_CHUNK_TOKENS, (
+        f"create_kv_chunk_address_table_block_cyclic assumes a block-cyclic period of "
+        f"PREFILL_CHUNK_TOKENS={PREFILL_CHUNK_TOKENS}, but chunk_size_global={chunk_size_global}. "
         f"A different period would mismap every position; re-introduce a parametrized builder if needed."
     )
 
     primary_cache = kvpe_cache.storage
-    all_caches = (primary_cache,) + ((index_kv_cache,) if index_kv_cache is not None else ())
-    if len(all_caches) > 1:
-        # The cross-stage (pipeline-parallel) merge is not wired through the dual-cache merged table
-        # yet; callers gate this out (build_kv_chunk_table asserts index is None on the PP path).
-        assert stage_layout is None, (
-            "build_and_serialize_kv_chunk_table: pipeline-parallel stage_layout is not supported for the "
-            "merged (KVPE + index) table yet."
-        )
+    # One tagged list of every cache this rank owns, merged into ONE table downstream. The tag routes
+    # each cache to its populate path: "kvpe" / "index" are block-cyclic MLA caches named positionally
+    # (KVPE at config 0, index at 1); "dflash" is the drafter's (k, v) pair that fans out per-head.
+    all_caches = [("kvpe", primary_cache)]
+    if index_kv_cache is not None:
+        all_caches.append(("index", index_kv_cache))
+    if dflash_caches is not None:
+        all_caches.append(("dflash", dflash_caches))
+    if dflash_spec is not None:
+        assert dflash_caches is None, "pass the drafter either as local tensors or as a staged spec, not both"
+        all_caches.append(("dflash_staged", dflash_spec))
+    if kda is not None:
+        assert index_kv_cache is None, "a DSA index cache and KDA state slabs in one table is not a supported layout"
+        all_caches.extend((kind, kda) for kind in KDA_TABLE_KINDS)
+    if index_kv_cache is not None or dflash_caches is not None or dflash_spec is not None or kda is not None:
         return _build_and_serialize_merged_kv_chunk_table(
             mesh_device=mesh_device,
             caches=all_caches,
@@ -125,12 +231,21 @@ def build_and_serialize_kv_chunk_table(
             num_layers=num_layers,
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
+            tp_axis=tp_axis,
             num_users=num_users,
+            chunk_size_global=chunk_size_global,
             path=path,
+            stage_layouts=stage_layouts,
+            index_layer_ids=index_layer_ids,
+            dflash_first_layer=dflash_first_layer,
+            kvpe_layer_rows=layer_rows,
         )
 
+    # Single config: the KVPE cache is the only one described, so its layout is the only one gathered.
+    stage_layout = stage_layouts[0] if stage_layouts else None
+
     def _builder(*, config, chunk_size_bytes, num_users):
-        return create_kv_chunk_address_table_kimi(
+        return create_kv_chunk_address_table_block_cyclic(
             config=config,
             mesh_device=mesh_device,
             mesh_shape=mesh_shape,
@@ -142,6 +257,7 @@ def build_and_serialize_kv_chunk_table(
             first_layer_idx=first_layer_idx,
             num_my_layers=num_my_layers,
             stage_layout=stage_layout,
+            layer_rows=layer_rows,
         )
 
     return serialize_kv_chunk_table(
@@ -156,54 +272,286 @@ def build_and_serialize_kv_chunk_table(
 
 
 def _build_and_serialize_merged_kv_chunk_table(
-    *, mesh_device, caches, seq_len, num_layers, mesh_shape, sp_axis, num_users, path
+    *,
+    mesh_device,
+    caches,
+    seq_len,
+    num_layers,
+    mesh_shape,
+    sp_axis,
+    num_users,
+    path,
+    tp_axis=1,
+    chunk_size_global=None,
+    stage_layouts=None,
+    index_layer_ids=None,
+    dflash_first_layer=0,
+    kvpe_layer_rows=None,
 ) -> str:
-    """Sparse (DSA) path: build ONE KvChunkAddressTable holding BOTH caches instead of two tables —
-    config 0 = the KVPE cache, config 1 = the index-key cache. Each config carries its own
-    chunk_size_bytes (derived from the cache's dtype + head_dim); the device-group / fabric-host side
-    table is shared across both. Mirrors test_glm_kv_cache_table's merged readback."""
+    """Build ONE KvChunkAddressTable over every cache this rank owns and serialize it to ``path``.
+    ``caches`` is a tagged list of ``(kind, payload)``: ``("kvpe", tensor)`` / ``("index", tensor)`` for
+    the block-cyclic MLA caches, named "00" (KVPE), "01" (GLM-5.3 index); ``("dflash", (k_cache, v_cache))``
+    for the DFlash drafter (Kimi-only), which adds one config per (K|V, kv-head) via
+    :func:`dflash_config_name`. Names must stay in sorted order (asserted) so the protobuf round-trip
+    keeps KVPE at config id 0 and the index at 1 — see the naming note at the top of this module.
+
+    ``index_layer_ids``: dense row -> global layer map; publishes config 1 on the LAYER axis so one
+    layer number selects the same layer in every config. None keeps the compacted axis.
+
+    ``kvpe_layer_rows``: the same map for config 0, for a HYBRID attention stack whose kvpe stage is
+    numbered in compacted MLA-slot space (Kimi-K3). Without it a merged table would publish kvpe rows
+    at slot numbers while the single-config path publishes them at layers.
+
+    ``("kda_recurrent", spec)`` / ``("kda_convolution", spec)`` (Kimi-K3): a :class:`KdaTableSpec`; these
+    take the decimal names after the block-cyclic caches and are populated by
+    ``populate_kv_chunk_address_table_kda`` from the layouts the spec carries.
+
+    ``stage_layouts`` is one all-gathered layout per block-cyclic cache, in the same order — each config
+    needs its own, since a layout carries one cache's DRAM base and one layer-index space. Only rank 0
+    reaches this function, so the gather cannot happen here; None gathers inline, correct only
+    single-rank."""
     disagg = ttnn.experimental.disaggregation
 
-    def _table_config(cache):
+    # (name, cache, head_idx); head_idx is None for the block-cyclic MLA caches ("kvpe" / "index"), the
+    # global kv-head otherwise ("dflash" drafter). Block-cyclic entries come first so config names sort
+    # globally (asserted below) with KVPE at id 0.
+    entries = []
+    dflash_kv_heads = 0
+    n_block_cyclic = 0
+    # Known up front so config_name() can pad to a stable width: the block-cyclic caches and the KDA
+    # state slabs are the positionally-named configs, and their count fixes the width for all of them.
+    n_positional = sum(1 for kind, _ in caches if kind in ("kvpe", "index") or kind in KDA_TABLE_KINDS)
+    kvpe_config_name = config_name(0, n_positional)
+    index_config_name = None
+    # Drafter-only, pipeline-parallel path: config name -> its all-gathered stage layout, and the
+    # geometry that replaces the tensor a non-owning rank does not have. Empty on the single-stage path.
+    dflash_stage_of = {}
+    dflash_staged = None
+    # Kimi-K3 KDA state slabs: config name -> (kind, KdaTableSpec). Named after the block-cyclic caches
+    # so kvpe keeps id 0; on the synthetic KDA axis, so they never enter the block-cyclic bookkeeping below.
+    kda_configs = {}
+    for kind, payload in caches:
+        if kind in ("kvpe", "index"):  # block-cyclic MLA caches -> populate_kv_chunk_address_table_block_cyclic
+            if kind == "index":
+                index_config_name = config_name(n_block_cyclic, n_positional)
+            entries.append((config_name(n_block_cyclic, n_positional), payload, None))
+            n_block_cyclic += 1
+        elif kind in KDA_TABLE_KINDS:
+            kda_configs[config_name(n_block_cyclic + len(kda_configs), n_positional)] = (kind, payload)
+        elif kind == "dflash_staged":
+            # Pipeline-parallel drafter: rank 0 builds the table but owns no drafter tensor, so the
+            # entries are described entirely by gathered metadata + the drafter config every rank loads.
+            # Geometry needs no all-gather (DFlashDrafterConfig is checkpoint-wide); only the addresses do.
+            dflash_kv_heads = payload["num_kv_heads"]
+            if payload["head_dim"] % _TILE_DIM != 0:
+                # Guard the division below: integer division would silently undersize every chunk and
+                # point the whole drafter half of the table at the wrong bytes.
+                raise ValueError(f"drafter head_dim {payload['head_dim']} must be a multiple of {_TILE_DIM} (tiled)")
+            dflash_staged = {
+                "num_layers": payload["num_layers"],
+                "chunk_size_bytes": (payload["head_dim"] // _TILE_DIM) * _BFP8_TILE_BYTES,
+            }
+            for k_or_v, layout in (("k", payload["k_stage_layout"]), ("v", payload["v_stage_layout"])):
+                for h in range(dflash_kv_heads):
+                    name = dflash_config_name(k_or_v, h)
+                    entries.append((name, None, h))
+                    dflash_stage_of[name] = layout
+        elif kind == "dflash":
+            k_cache, v_cache = payload
+            # Distinct allocations, else every V config aliases K's addresses (a same-address table
+            # still looks well-formed). dim 1 is this chip's TP head slice, so the GLOBAL head count is
+            # shape[1]*tp.
+            assert (
+                k_cache.buffer_address() != v_cache.buffer_address()
+            ), "drafter K and V must be distinct allocations (same buffer => V configs alias K)"
+            assert v_cache.shape == k_cache.shape, f"drafter V shape {v_cache.shape} != K shape {k_cache.shape}"
+            dflash_kv_heads = k_cache.shape[1] * mesh_shape[tp_axis]
+            entries += [
+                (dflash_config_name(k_or_v, h), cache, h)
+                for k_or_v, cache in (("k", k_cache), ("v", v_cache))
+                for h in range(dflash_kv_heads)
+            ]
+        else:
+            raise ValueError(
+                f"unknown KV table cache kind: {kind!r} (expected 'kvpe', 'index', 'dflash', "
+                f"'kda_recurrent' or 'kda_convolution')"
+            )
+
+    block_cyclic = [(name, cache) for name, cache, head_idx in entries if head_idx is None]
+    kv_dedup = index_config_name is not None
+    if stage_layouts is None:
+        stage_layouts = [
+            allgather_kv_stage_layout(
+                mesh_device,
+                int(cache.buffer_address()),
+                mesh_shape,
+                first_layer_idx=0,
+                num_my_layers=_num_layers_from_cache(cache, num_users),
+            )
+            for _, cache in block_cyclic
+        ]
+    if len(stage_layouts) != len(block_cyclic):
+        raise RuntimeError(
+            f"merged table has {len(block_cyclic)} block-cyclic caches but got {len(stage_layouts)} gathered "
+            "stage layouts; the runtime must describe every config it merges (one KvCacheStage per cache, "
+            "in config order)."
+        )
+    layout_of = {name: layout for (name, _), layout in zip(block_cyclic, stage_layouts)}
+
+    # int(): the binding hands back a strong Rank type, which never compares equal to the plain int
+    # the gathered stages are keyed by.
+    my_rank = int(ttnn.distributed_context_get_rank())
+
+    def _table_config(cache, stage_layout):
         cfg = disagg.KvChunkAddressTableConfig()
-        # KVPE = all layers; the GLM-5.2 index cache = full-layers-only, so config 1 holds only num_full
-        # entries and populate_kv_chunk_address_table_kimi (which iterates config.num_layers) skips the
-        # shared-layer slots. GLM-5.1 / dense: index cache is all-layers, so this equals num_layers.
-        cfg.num_layers = _num_layers_from_cache(cache, num_users)
+        if cache is None:
+            # Staged drafter config: no local tensor to size from. The drafter is not layer-partitioned,
+            # so its depth is the drafter's own rather than a sum over stages, and its chunk size follows
+            # from head_dim (the cache is always bfp8/TILE -- allocate_dflash_kv_cache). The axis is
+            # published from 0 so a global layer id indexes it directly; only the tail rows are filled.
+            cfg.num_layers = dflash_first_layer + dflash_staged["num_layers"]
+            cfg.max_sequence_length = seq_len
+            cfg.num_slots = num_users
+            cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+            cfg.chunk_size_bytes = dflash_staged["chunk_size_bytes"]
+            return cfg
+        if stage_layout is None:
+            # Drafter cache: single-stage, so its depth comes off the cache itself (the 6 draft layers,
+            # user-major shape[0] // num_users), then offset onto the global axis as above.
+            cfg.num_layers = dflash_first_layer + _num_layers_from_cache(cache, num_users)
+        else:
+            # Match a layout to its cache by DRAM base, so a runtime returning its stages out of config
+            # order is caught here instead of silently addressing one cache with the other's layout.
+            base_addr = int(cache.buffer_address())
+            if not any(s["rank"] == my_rank and s["base_addr"] == base_addr for s in stage_layout):
+                raise RuntimeError(
+                    f"gathered stage layout does not describe this cache: rank {my_rank} has no stage at "
+                    f"{hex(base_addr)} in {[(s['rank'], hex(s['base_addr'])) for s in stage_layout]} — "
+                    "stages are out of config order."
+                )
+            # Size the config to the GLOBAL layer total, summed over the gathered stages: the KVPE cache's
+            # every layer, and the index cache's full-indexer layers only (GLM-5.3 cross-layer reuse — the
+            # shared layers own no indexer slot; dense has one per layer, so it equals num_layers).
+            cfg.num_layers = merged_num_layers(stage_layout)
         cfg.max_sequence_length = seq_len
         cfg.num_slots = num_users
         cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
         cfg.chunk_size_bytes = _dram_chunk_size_bytes(cache)
         return cfg
 
-    # BF16 and scaled FP8 both own one primary KVPE tensor; scaled FP8 stores its mixed fields in one
-    # packed row. The optional index cache is therefore always the next stable config.
-    configs = [_table_config(c) for c in caches]
+    block_cyclic_names = [name for name, _, head_idx in entries if head_idx is None]
+    other_names = [name for name, _, head_idx in entries if head_idx is not None]
+    names = block_cyclic_names + list(kda_configs) + other_names
+    assert names == sorted(names), f"config names must already be sorted (protobuf renumbers by name): {names}"
+    configs = {name: _table_config(cache, layout_of.get(name)) for name, cache, _ in entries}
+
+    # A hybrid stack's kvpe stage is numbered in compacted slab space; publish config 0 on the layer axis
+    # (the extent grows, the DRAM rows the gathered layout addresses do not). Same rule as the index
+    # widening below and as the single-config path.
+    if kvpe_layer_rows is not None:
+        dense_rows = configs[kvpe_config_name].num_layers
+        assert (
+            len(kvpe_layer_rows) == dense_rows
+        ), f"kvpe_layer_rows has {len(kvpe_layer_rows)} entries but config 0 spans {dense_rows} compacted slabs"
+        configs[kvpe_config_name].num_layers = max(configs[kvpe_config_name].num_layers, max(kvpe_layer_rows) + 1)
+
+    for name, (kind, spec) in kda_configs.items():
+        cfg = disagg.KvChunkAddressTableConfig()
+        # One layer axis for every config: the KDA rows sit at their model layers, so the extent is the
+        # kvpe config's (already widened to the model's layer count) or the KDA rows', whichever is larger.
+        cfg.num_layers = max(configs[kvpe_config_name].num_layers, max(spec.layer_rows) + 1)
+        cfg.max_sequence_length = kda_max_sequence_length(spec.geometry)
+        cfg.num_slots = num_users
+        cfg.chunk_n_tokens = kda_chunk_n_tokens(spec.geometry, kind)
+        cfg.chunk_size_bytes = kda_segment_bytes(spec.geometry, kind)
+        tensor = spec.tensor(kind)
+        if tensor is not None:
+            page = tensor.buffer_aligned_page_size()
+            assert (
+                cfg.chunk_size_bytes % page == 0
+            ), f"{kind} slab page {page} bytes does not tile a {cfg.chunk_size_bytes}-byte segment"
+        total = sum(stage["count"] for stage in spec.layout(kind))
+        assert total == len(
+            spec.layer_rows
+        ), f"{kind} stages span {total} compacted layers but layer_rows has {len(spec.layer_rows)} entries"
+        configs[name] = cfg
+
+    # Widen the index config to the layer axis before the table is built (extents are fixed at construction).
+    # The compacted extent stays the DRAM row count: only the published axis grows, so the stage layouts
+    # gathered above (dense, one per cache) keep addressing the same rows.
+    if index_config_name is not None and index_layer_ids is not None:
+        index_dense_layers = configs[index_config_name].num_layers
+        # Global layer total: under PP the `num_layers` arg is this rank's slice, config 0 spans every stage.
+        global_layers = configs[kvpe_config_name].num_layers
+        assert len(index_layer_ids) == index_dense_layers, (
+            f"index_layer_ids has {len(index_layer_ids)} entries but the index config spans "
+            f"{index_dense_layers} compacted layers; every dense row needs a global layer id"
+        )
+        assert (
+            max(index_layer_ids) < global_layers
+        ), f"index_layer_ids reaches layer {max(index_layer_ids)} but the table spans {global_layers} layers"
+        configs[index_config_name].num_layers = global_layers
     table = disagg.KvChunkAddressTable(configs)
 
-    for config_id, (cache, cfg) in enumerate(zip(caches, configs)):
-        # The merged table has one config per physical cache, so each config needs a layout with that
-        # cache's DRAM base address. The dual-cache path is single-stage today, but this remains a
-        # collective to match the single-config builder and to produce the mesh/fabric-node metadata.
-        stage_layout = allgather_kv_stage_layout(
-            mesh_device,
-            int(cache.buffer_address()),
-            mesh_shape,
-            first_layer_idx=0,
-            num_my_layers=cfg.num_layers,
-        )
-        populate_kv_chunk_address_table_kimi(
+    for name, cache, head_idx in entries:
+        cfg, config_id = configs[name], table.config_id_of(name)
+        if head_idx is None:  # MLA/kimi block-cyclic model cache
+            # Every block-cyclic cache shares the dedup layout, so all such configs resolve to the same
+            # device groups (add_device_group dedups, so they are registered once and shared).
+            populate_kv_chunk_address_table_block_cyclic(
+                lookup_table=table,
+                config=cfg,
+                mesh_device=mesh_device,
+                mesh_shape=mesh_shape,
+                seq_len=seq_len,
+                sp_axis=sp_axis,
+                tt_kvpe_cache=cache,
+                chunk_size_bytes=cfg.chunk_size_bytes,
+                num_users=num_users,
+                config_id=config_id,
+                stage_layout=layout_of[name],
+                layer_rows=(
+                    index_layer_ids
+                    if name == index_config_name
+                    else (kvpe_layer_rows if name == kvpe_config_name else None)
+                ),
+                tp_axis=tp_axis if kv_dedup else None,
+            )
+        else:  # one global kv-head of the drafter's K or V cache
+            populate_kv_chunk_address_table_dflash(
+                lookup_table=table,
+                config=cfg,
+                mesh_device=mesh_device,
+                mesh_shape=mesh_shape,
+                seq_len=seq_len,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                kv_cache=cache,
+                chunk_size_bytes=cfg.chunk_size_bytes,
+                num_kv_heads=dflash_kv_heads,
+                head_idx=head_idx,
+                num_users=num_users,
+                config_id=config_id,
+                chunk_size_global=chunk_size_global,
+                # None on the single-stage path (addresses come from `cache`); the gathered layout of
+                # the owning rank under pipeline parallelism, where `cache` is None.
+                stage_layout=dflash_stage_of.get(name),
+                first_layer=dflash_first_layer,
+            )
+
+    for name, (kind, spec) in kda_configs.items():
+        populate_kv_chunk_address_table_kda(
             lookup_table=table,
-            config=cfg,
-            mesh_device=mesh_device,
+            config=configs[name],
             mesh_shape=mesh_shape,
-            seq_len=seq_len,
             sp_axis=sp_axis,
-            tt_kvpe_cache=cache,
-            chunk_size_bytes=cfg.chunk_size_bytes,
+            tp_axis=tp_axis,
+            geometry=spec.geometry,
+            kind=kind,
             num_users=num_users,
-            config_id=config_id,
-            stage_layout=stage_layout,
+            config_id=table.config_id_of(name),
+            stage_layout=spec.layout(kind),
+            layer_rows=spec.layer_rows,
         )
 
     return serialize_prebuilt_kv_chunk_table(table=table, path=path)

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -23,6 +24,7 @@ namespace tt::tt_metal {
     namespace distributed {
     class MeshDeviceImpl;
     class MeshWorkloadImpl;
+    class MeshBuffer;
     }
 }
 
@@ -49,6 +51,14 @@ struct ProgramData {
     time_point compile_finished_timestamp;
     std::unordered_map<int, KernelData> kernels;
     std::unordered_map<std::size_t, ProgramBinaryStatus> binary_status_per_device;
+    std::vector<Semaphore> semaphores;
+};
+
+struct GlobalSemaphoreData {
+    uint64_t address{};
+    CoreRangeSet cores;
+    std::vector<uint32_t> chip_ids;
+    std::optional<uint32_t> reset_value;
 };
 
 struct MeshDeviceData {
@@ -56,6 +66,30 @@ struct MeshDeviceData {
     int mesh_id{};
     std::optional<int> parent_mesh_id;
     bool initialized = false;
+};
+
+struct MeshSocketCore {
+    uint32_t fabric_chip_id{};
+    uint32_t core_x{};
+    uint32_t core_y{};
+};
+
+struct MeshSocketLocalCoreData {
+    MeshSocketCore core;
+    uint32_t chip_id{};
+    std::vector<MeshSocketCore> peers;
+};
+
+struct MeshSocketData {
+    bool is_sender{};
+    uint64_t config_buffer_address{};
+    uint64_t data_buffer_address{};
+    uint64_t fifo_size{};
+    uint32_t bytes_acked_offset_bytes{};
+    uint32_t bytes_acked_stride_bytes{};
+    uint32_t local_mesh_id{};
+    uint32_t peer_mesh_id{};
+    std::vector<MeshSocketLocalCoreData> local_cores;
 };
 
 struct MeshWorkloadRuntimeEntry {

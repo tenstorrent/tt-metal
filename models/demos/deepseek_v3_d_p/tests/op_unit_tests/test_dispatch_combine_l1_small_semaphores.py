@@ -20,21 +20,21 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_y_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
-    create_fabric_router_config,
     extract_mesh_config,
     get_dispatch_input_mesh_mapper,
     get_gate_outputs,
-    get_max_payload_size,
     initialize_test_inputs,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.test_utils import print_l1_buffers, print_l1_small_buffers
 
 
-def run_dispatch_op(mesh_device, use_l1_small):
+def run_dispatch_op(mesh_device, use_l1_small, topology):
     """Run dispatch op with small tensors in DRAM, creating 2 global semaphores."""
     torch.manual_seed(42)
 
@@ -146,7 +146,7 @@ def run_dispatch_op(mesh_device, use_l1_small):
         max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         cluster_axis=sp_axis,
         num_links=1,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
         use_l1_small_for_semaphores=use_l1_small,
     )
     ttnn.synchronize_device(mesh_device)
@@ -178,6 +178,7 @@ def run_combine_op(
     seq_len_per_chip,
     sp_axis,
     use_l1_small,
+    topology,
 ):
     """Run combine op using dispatch outputs, creating 1 global semaphore."""
     output = ttnn.experimental.deepseek_prefill.combine(
@@ -191,7 +192,7 @@ def run_combine_op(
         seq_len_per_chip=seq_len_per_chip,
         cluster_axis=sp_axis,
         num_links=1,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
         init_zeros=False,
         use_l1_small_for_semaphores=use_l1_small,
     )
@@ -204,13 +205,9 @@ def run_combine_op(
     [
         pytest.param(
             (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-                "l1_small_size": 512,
-            },
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4x1",
+            torus_y_device_params(l1_small_size=512),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="torus-y-4x1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -220,6 +217,8 @@ def run_combine_op(
 def test_deepseek_prefill_l1_small_semaphores(mesh_device, device_params, ccl_op, use_l1_small, expect_error):
     """Test that dispatch/combine semaphores can be placed in L1_SMALL to prevent L1 fragmentation."""
 
+    sp_axis = extract_mesh_config(mesh_device).sp_axis
+    topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     compute_grid = mesh_device.compute_with_storage_grid_size()
     num_worker_cores = compute_grid.x * compute_grid.y
     logger.info(f"Compute grid: {compute_grid.x}x{compute_grid.y} = {num_worker_cores} cores")
@@ -260,7 +259,7 @@ def test_deepseek_prefill_l1_small_semaphores(mesh_device, device_params, ccl_op
         seq_len_per_chip,
         sp_axis,
         dispatch_intermediates,
-    ) = run_dispatch_op(mesh_device, use_l1_small)
+    ) = run_dispatch_op(mesh_device, use_l1_small, topology)
     tensors_to_free.extend(dispatch_intermediates)
 
     if ccl_op == "combine":
@@ -276,6 +275,7 @@ def test_deepseek_prefill_l1_small_semaphores(mesh_device, device_params, ccl_op
             seq_len_per_chip,
             sp_axis,
             use_l1_small,
+            topology,
         )
         tensors_to_free.append(combine_output)
 

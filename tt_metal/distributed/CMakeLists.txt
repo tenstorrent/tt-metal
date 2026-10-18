@@ -46,6 +46,15 @@ elseif(ENABLE_DISTRIBUTED)
     find_package(MPI QUIET COMPONENTS C)
     if(MPI_FOUND)
         message(STATUS "ULFM MPI not found, using system MPI")
+        # OpenMPI < 5 (and MPICH) pull their deprecated C++ bindings into <mpi.h> for C++
+        # translation units, which then need libmpi_cxx at link time. Only the C API is used
+        # here, so opt out instead of linking the C++ bindings library.
+        target_compile_definitions(
+            MPI::MPI_C
+            INTERFACE
+                OMPI_SKIP_MPICXX=1
+                MPICH_SKIP_MPICXX=1
+        )
         add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
         set(USE_MPI TRUE)
         list(APPEND DISTRIBUTED_SRC multihost/mpi_distributed_context.cpp)
@@ -61,11 +70,23 @@ else()
     list(APPEND DISTRIBUTED_SRC multihost/single_host_context.cpp)
 endif()
 
+# The host-to-host hop is MPI one-sided RMA and there is no version of it without one, so
+# these two follow USE_MPI while the device legs build unconditionally.
+if(USE_MPI)
+    list(
+        APPEND
+        DISTRIBUTED_SRC
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_rdma_window.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_h2h_socket.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/d2h2h2d_socket.cpp
+    )
+endif()
+
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(distributed)
-target_precompile_headers(distributed REUSE_FROM metal_common_pch)
+tt_reuse_precompile_headers(distributed metal_common_pch)
 
 foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
     GENERATE_FBS_HEADER(${FBS_FILE} TARGET distributed)
@@ -95,8 +116,9 @@ endif()
 
 if(TT_METAL_USE_EMULE)
     # The slow-dispatch mesh command queue routes per-device dispatch through the emule
-    # register/run split (emulated_program_runner.hpp) — gated on this define.
+    # register/run split — gated on this define.
     target_compile_definitions(distributed PRIVATE TT_METAL_USE_EMULE=1)
+    target_link_libraries(distributed PRIVATE tt_emule_runtime)
 endif()
 
 target_include_directories(distributed SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)

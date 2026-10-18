@@ -67,7 +67,7 @@ inline void reduce_max_row_configure_addrmod_reinit_runtime()
  * Use the standard reduce MOP configuration with _llk_math_reduce_init_ for general-purpose reduction.
  */
 template <bool is_fp32_dest_acc_en = false>
-inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t block_ct_dim, const ckernel::TensorShape& tensor_shape)
+inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t block_ct_dim, const ckernel::TensorShape tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
@@ -241,6 +241,11 @@ inline void _llk_math_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     _llk_math_reduce_block_max_row_mop_config_runtime_<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape);
+
+    // The reduce runs on the FPU pool (GMPOOL). Restore the operand-driven zero-flag baseline so a
+    // preceding datacopy/copy_init that left PRESERVE (keep denormals) does not leak into it, mirroring
+    // the standard _llk_math_reduce_init_.
+    math::_configure_default_zero_flag_state_();
 }
 
 template <bool is_fp32_dest_acc_en = false>
@@ -264,7 +269,7 @@ inline void _llk_math_reduce_block_max_row_uninit_runtime_()
  * for general-purpose block reduction across multiple tiles.
  */
 template <bool is_fp32_dest_acc_en = false>
-inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
+inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
     // Packer indexes at the 32x32 slot stride regardless of the operand's face count.
@@ -285,14 +290,14 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
             // Tf32 that the pool wrote, so override SrcA to Tf32 (and disable the zero-flag source)
             // for the replayed transpose, exactly as the num_faces=4 path does below.
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+            math::_configure_src_zero_flag_(true);
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
 
             // Replay the 13 instructions (slots 2-14): hi/lo transpose of the single face-row + CLR_B.
             lltt::replay(2, 13);
 
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+            math::_configure_src_zero_flag_(false);
         }
         else
         {
@@ -305,7 +310,7 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
     if constexpr (is_fp32_dest_acc_en)
     {
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+        math::_configure_src_zero_flag_(true);
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
     }
 
@@ -315,7 +320,7 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
     if constexpr (is_fp32_dest_acc_en)
     {
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+        math::_configure_src_zero_flag_(false);
     }
 }
 

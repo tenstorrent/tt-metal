@@ -27,6 +27,7 @@ captured in a sidecar JSON file. The importer consumes that sidecar offline and
 populates the visualizer comparison tables.
 """
 
+import hashlib
 import json
 import math
 import re
@@ -35,7 +36,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Generator, Union
+from typing import Generator, NamedTuple, Optional, Union
 from urllib.parse import urlparse, urlunparse
 
 from loguru import logger
@@ -78,11 +79,41 @@ def run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
     """
     import ttnn
 
-    report_path = getattr(ttnn.CONFIG, "report_path", None)
-    report_name = getattr(ttnn.CONFIG, "report_name", None)
-    if report_path is None or not report_name or str(report_name).strip() == "":
-        yield
+    if getattr(ttnn.CONFIG, "report_name", None) is not None:
+        yield from _run_pytest_graph_report_fixture(request)
         return
+
+    # A report was asked for but not named, so name it after the test. It has to happen here: this fixture is
+    # autouse from the root conftest, so it runs before any deeper conftest (tests/ttnn) could set report_name.
+    with ttnn.manage_config("report_name", derive_report_name(request.node.nodeid)):
+        yield from _run_pytest_graph_report_fixture(request)
+
+
+# ttnn::Config::get_report_path_impl keeps only the first 64 characters of report_name (then sanitizes them and
+# appends "_<mon><dd>_<HHMM>"), so a derived name must fit in that budget with its unique part intact.
+_REPORT_NAME_MAX_LENGTH = 64
+_REPORT_NAME_HASH_LENGTH = 8
+
+
+def derive_report_name(nodeid: str) -> str:
+    """Name a report after the pytest test it is generated for.
+
+    The name is ``<file stem>_<test name>_<hash>``, where the hash is over the full node id so parametrized
+    cases and tests that share a long common prefix get distinct report directories. It is deterministic: every
+    rank of a multi-process run derives the same name, and there is no timestamp to straddle a minute boundary
+    (the C++ side stamps the report path with the minute itself).
+    """
+    file_part, _, test_name = nodeid.partition("::")
+    test_name = test_name.rsplit("::", 1)[-1]
+    stem = Path(file_part).stem
+    prefix = f"{stem}_{test_name}" if test_name else stem
+    prefix = prefix[: _REPORT_NAME_MAX_LENGTH - _REPORT_NAME_HASH_LENGTH - 1]
+    digest = hashlib.sha1(nodeid.encode()).hexdigest()[:_REPORT_NAME_HASH_LENGTH]
+    return f"{prefix}_{digest}"
+
+
+def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
+    import ttnn
 
     if ttnn.graph.is_graph_capture_active():
         yield
@@ -90,7 +121,7 @@ def run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
 
     enable_graph_report = getattr(ttnn.CONFIG, "enable_graph_report", False)
     enable_comparison_mode = getattr(ttnn.CONFIG, "enable_comparison_mode", False)
-    report_path = Path(report_path)
+    report_path = Path(ttnn.CONFIG.report_path)
     enable_detailed_buffer_report = getattr(ttnn.CONFIG, "enable_detailed_buffer_report", False)
 
     # Ensure we are torn down before device fixtures: request whichever device
@@ -232,7 +263,9 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
 # 3.2 - git hash and remote URL in report_metadata (#43830)
 # 3.3 - rank on local/global_tensor_comparison_records (#45448)
-DATABASE_SCHEMA_VERSION = "3.3"
+# 3.4 - storage_type on tensors; buffer_type is NULL for host tensors instead of 0 (DRAM)
+# 3.5 - sub-device topology and operation/program execution placement: sub_device_managers, sub_devices, operation_executions, execution_sub_devices
+DATABASE_SCHEMA_VERSION = "3.5"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
@@ -240,6 +273,11 @@ COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
 _OPERATION_ID_STRIDE_PER_RANK_FILE = 10000
+
+# operation_executions.execution_id is operation_id * this stride + a per-operation index, so ids
+# stay unique wherever operation_id is. Bounds an operation to this many program executions, i.e.
+# this many devices in one rank's local mesh.
+_EXECUTION_ID_STRIDE_PER_OPERATION = 1024
 
 
 def _schema_version_tuple(ver: str) -> tuple[int, ...]:
@@ -341,9 +379,141 @@ def _int_param(params, key):
     return v if isinstance(v, int) else int(v)
 
 
+class _TensorRow(NamedTuple):
+    """One ``tensors`` row, fields in column order."""
+
+    tensor_id: Union[int, str]
+    shape: Optional[str]
+    dtype: Optional[str]
+    layout: Optional[str]
+    memory_config: Optional[str]
+    device_id: Optional[int]
+    address: Optional[int]
+    buffer_type: Optional[int]
+    rank: int
+    storage_type: Optional[str]
+
+
+_TENSORS_INSERT_SQL = (
+    f"INSERT OR IGNORE INTO tensors ({', '.join(_TensorRow._fields)}) "
+    f"VALUES ({', '.join('?' * len(_TensorRow._fields))})"
+)
+
+
+def _tensor_row_from_params(tensor_id, params: dict, rank: int) -> _TensorRow:
+    """Build a ``tensors`` row from a captured tensor node's params.
+
+    ``buffer_type`` stays None when the capture recorded none: ``0`` is DRAM, so defaulting to it
+    mislabels host tensors. Captures predating ``storage_type`` only emitted ``memory_config`` and
+    ``address`` for device tensors, so either marks one; their absence cannot mark a host tensor,
+    because a deallocated device tensor looked the same.
+    """
+    dtype = params.get("dtype")
+    layout = params.get("layout")
+    if dtype and "::" in dtype:
+        dtype = dtype.replace("::", ".")
+    if layout and "::" in layout:
+        layout = layout.replace("::", ".")
+    memory_config = params.get("memory_config")
+    address = _int_param(params, "address")
+    storage_type = params.get("storage_type")
+    if storage_type is None and (memory_config is not None or address is not None):
+        storage_type = "DEVICE"
+    return _TensorRow(
+        tensor_id=tensor_id,
+        shape=params.get("shape", ""),
+        dtype=dtype,
+        layout=layout,
+        memory_config=memory_config,
+        device_id=_int_param(params, "device_id"),
+        address=address,
+        buffer_type=_int_param(params, "buffer_type"),
+        rank=rank,
+        storage_type=storage_type,
+    )
+
+
 def _tid_int(tid):
     """Coerce a tensor ID (possibly a string) to int."""
     return int(tid) if isinstance(tid, str) else tid
+
+
+def _in_flight_operation_frame(function_stack: list, error_operation: str):
+    """Return the reported stack frame that should own a leftover JSON error node.
+
+    Matches ``error_operation`` against the innermost frame of that name, then walks
+    out to the enclosing non-nested operation (the row the Visualizer lists). Returns
+    ``None`` when nothing on the stack matches, so the caller can keep a standalone row.
+    """
+    if not error_operation:
+        return None
+    match_index = None
+    for i in range(len(function_stack) - 1, -1, -1):
+        if function_stack[i].get("name") == error_operation:
+            match_index = i
+            break
+    if match_index is None:
+        return None
+    for i in range(match_index, -1, -1):
+        if not function_stack[i].get("nested"):
+            return function_stack[i]
+    return None
+
+
+def _without_capture_boundaries(nodes: list) -> list:
+    """Drop report-level capture_start/capture_end so the per-op wrapper can add exactly one pair."""
+    return [node for node in nodes if node.get("node_type") not in ("capture_start", "capture_end")]
+
+
+def _tensor_ids_from_function_start_inputs(graph: list, node_counters) -> list:
+    """Resolve a function_start's C++ ``input_tensors`` (graph node counters) to tensor_ids.
+
+    python_io is absent in older reports and C++-initiated captures; the start node still
+    lists those counters, which is what the Visualizer uses to join the op to its tensors.
+    """
+    tensor_ids = []
+    for node_counter in node_counters:
+        if node_counter < len(graph):
+            tensor_node = graph[node_counter]
+            if tensor_node.get("node_type") == "tensor":
+                tid = tensor_node.get("params", {}).get("tensor_id", "")
+                if tid:
+                    tensor_ids.append(int(tid))
+    return tensor_ids
+
+
+def _build_operation_subgraph(nodes: list) -> list:
+    """Wrap an operation's trace nodes in capture_start/capture_end and renumber them."""
+    capture_start = {
+        "arguments": [],
+        "connections": [1],
+        "counter": 0,
+        "input_tensors": [],
+        "node_type": "capture_start",
+        "params": {},
+        "stacking_level": 0,
+    }
+    capture_end = {
+        "arguments": [],
+        "connections": [],
+        "counter": 0,
+        "input_tensors": [],
+        "node_type": "capture_end",
+        "params": {},
+        "stacking_level": 0,
+    }
+    raw_subgraph = [capture_start] + nodes + [capture_end]
+    old_to_new = {node.get("counter", 0): idx for idx, node in enumerate(raw_subgraph)}
+    subgraph = []
+    for idx, node in enumerate(raw_subgraph):
+        node_copy = dict(node)
+        node_copy["counter"] = idx
+        if "connections" in node_copy:
+            node_copy["connections"] = [old_to_new.get(c, c) for c in node_copy["connections"]]
+        if "input_tensors" in node_copy:
+            node_copy["input_tensors"] = [old_to_new.get(c, c) for c in node_copy["input_tensors"]]
+        subgraph.append(node_copy)
+    return subgraph
 
 
 def _is_tensor_deallocate_operation(name: str) -> bool:
@@ -535,6 +705,59 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
     """
     )
 
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sub_device_managers (
+            device_id int,
+            sub_device_manager_id int,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(device_id, sub_device_manager_id, rank)
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sub_devices (
+            device_id int,
+            sub_device_manager_id int,
+            sub_device_id int,
+            worker_core_ranges text,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(device_id, sub_device_manager_id, sub_device_id, rank)
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS operation_executions (
+            execution_id int,
+            operation_id int,
+            device_id int,
+            physical_device_id int,
+            runtime_id int,
+            global_call_count int,
+            command_queue_id int,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(execution_id, rank)
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS execution_sub_devices (
+            execution_id int,
+            device_id int,
+            sub_device_manager_id int,
+            sub_device_id int,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(execution_id, device_id, sub_device_manager_id, sub_device_id, rank)
+        )
+    """
+    )
+
     # Tensors table
     cursor.execute(
         """
@@ -548,6 +771,7 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             address int,
             buffer_type int,
             rank int NOT NULL DEFAULT 0,
+            storage_type text,
             UNIQUE(tensor_id, rank)
         )
     """
@@ -1025,6 +1249,10 @@ def import_graph(
     stack_traces_batch = []
     operations_batch = []
     operation_arguments_batch = []
+    sub_device_managers_batch = []
+    sub_devices_batch = []
+    operation_executions_batch = []
+    execution_sub_devices_batch = []
     input_tensors_batch = []
     output_tensors_batch = []
     tensors_batch = []
@@ -1056,6 +1284,9 @@ def import_graph(
 
     # Track function start nodes to pair with function end
     function_stack = []
+    # (name, reason) of the innermost C++ scope that was left by an exception, held until the
+    # enclosing reported operation closes so the diagnostic lands on the row users actually see.
+    pending_abort = None
     operation_counter = 1
     tensor_ids_seen = set()
     active_buffers = []
@@ -1162,6 +1393,7 @@ def import_graph(
             if not is_nested:
                 real_function_depth += 1
                 op_nesting_depth += 1
+                pending_abort = None
                 current_op_nodes = [node]
                 nested_input_tensor_ids = []
                 nested_output_tensor_ids = []
@@ -1177,9 +1409,15 @@ def import_graph(
 
         elif node_type == "function_end":
             name = params.get("name", "unknown")
+            # Set by GraphProcessor when it receives GraphFunctionAbort through
+            # track_function_end: this scope was left by an exception.
+            is_aborted = params.get("aborted") == "true"
+            abort_reason = params.get("abort_reason", "")
 
             start_node = function_stack.pop() if function_stack else None
             if start_node and start_node.get("nested"):
+                if is_aborted and pending_abort is None:
+                    pending_abort = (name, abort_reason)
                 op_nesting_depth -= 1
 
                 # Gather this op's own input tensor IDs so we can detect in-place ops
@@ -1237,11 +1475,117 @@ def import_graph(
             operation_id = base_operation_id + operation_counter
             operations_batch.append((operation_id, name, duration_s, rank))
 
+            execution_index = 0
+            for execution_node in current_op_nodes:
+                execution_node_type = execution_node.get("node_type")
+
+                # Sub-device topology is snapshotted per manager by the producer, so it covers
+                # sub-devices that never ran an operation. Deriving it from executions would not.
+                if execution_node_type == "sub_device_manager":
+                    manager_params = execution_node.get("params") or {}
+                    device_id = int(manager_params["device_id"])
+                    manager_id = int(manager_params["sub_device_manager_id"])
+                    sub_device_managers_batch.append((device_id, manager_id, rank))
+                    for sub_device in json.loads(manager_params.get("sub_devices") or "[]"):
+                        sub_devices_batch.append(
+                            (
+                                device_id,
+                                manager_id,
+                                int(sub_device["sub_device_id"]),
+                                json.dumps(sub_device.get("worker_core_ranges", [])),
+                                rank,
+                            )
+                        )
+                    continue
+
+                if execution_node_type != "program_execution":
+                    continue
+                execution_params = execution_node.get("params") or {}
+                # Derive the id from operation_id, which is already unique across ranks and merged
+                # files. Deriving it from the graph node counter instead would collide across files,
+                # because node counters routinely exceed _OPERATION_ID_STRIDE_PER_RANK_FILE.
+                if execution_index >= _EXECUTION_ID_STRIDE_PER_OPERATION:
+                    logger.warning(
+                        f"operation_id={operation_id} has more than {_EXECUTION_ID_STRIDE_PER_OPERATION} "
+                        f"program executions; dropping the remainder to keep execution_id unique"
+                    )
+                    break
+                execution_id = operation_id * _EXECUTION_ID_STRIDE_PER_OPERATION + execution_index
+                execution_index += 1
+                device_id = int(execution_params["device_id"])
+                physical_device_id = int(execution_params.get("physical_device_id", device_id))
+                manager_id = int(execution_params["sub_device_manager_id"])
+                # Absent when capture could not place the program on a sub-device. The execution
+                # still gets its operation_executions row -- which chip ran the operation is worth
+                # reporting on its own -- and only the execution_sub_devices link is omitted, so
+                # an unplaced execution reads as unknown rather than as sub-device 0.
+                raw_sub_device_id = execution_params.get("sub_device_id")
+
+                operation_executions_batch.append(
+                    (
+                        execution_id,
+                        operation_id,
+                        device_id,
+                        physical_device_id,
+                        int(execution_params["runtime_id"]),
+                        int(execution_params["global_call_count"]),
+                        int(execution_params["command_queue_id"]),
+                        rank,
+                    )
+                )
+                if raw_sub_device_id is not None:
+                    execution_sub_devices_batch.append(
+                        (execution_id, device_id, manager_id, int(raw_sub_device_id), rank)
+                    )
+
             if start_node:
                 graph_counter_to_op_id[start_node["counter"]] = operation_id
 
             # ----- Python I/O: if available, use directly -----
             py_io = start_node.get("python_io") if start_node else None
+
+            if py_io and py_io.get("error"):
+                error = py_io["error"]
+                errors_batch.append(
+                    (
+                        operation_id,
+                        name,
+                        error.get("type", "exception"),
+                        error.get("message", ""),
+                        "\n".join(py_io.get("python_stack_trace", [])),
+                        "",
+                        rank,
+                    )
+                )
+            elif is_aborted or pending_abort:
+                # No Python-side record, so this is a C++-initiated capture or an op with no Python
+                # wrapper. The abort marker is then the only evidence that the operation failed.
+                failing_name, reason = (name, abort_reason) if is_aborted else pending_abort
+                errors_batch.append(
+                    (
+                        operation_id,
+                        name,
+                        "aborted_operation",
+                        reason or f"Operation '{failing_name}' was aborted by an exception",
+                        "\n".join(py_io.get("python_stack_trace", [])) if py_io else "",
+                        "",
+                        rank,
+                    )
+                )
+            elif start_node and start_node.get("deferred_error"):
+                deferred = start_node["deferred_error"]
+                errors_batch.append(
+                    (
+                        operation_id,
+                        name,
+                        deferred.get("type", "exception"),
+                        deferred.get("message", ""),
+                        "\n".join(py_io.get("python_stack_trace", [])) if py_io else "",
+                        "",
+                        rank,
+                    )
+                )
+            pending_abort = None
 
             if py_io and py_io.get("arguments"):
                 for key, val in py_io["arguments"].items():
@@ -1258,14 +1602,7 @@ def import_graph(
                 for idx, tid in enumerate(py_io["input_tensor_ids"]):
                     input_tensors_batch.append((operation_id, idx, int(tid), rank))
             elif start_node:
-                direct_inputs = []
-                for node_counter in start_node.get("input_tensors", []):
-                    if node_counter < len(graph):
-                        tensor_node = graph[node_counter]
-                        if tensor_node.get("node_type") == "tensor":
-                            tid = tensor_node.get("params", {}).get("tensor_id", "")
-                            if tid:
-                                direct_inputs.append(int(tid))
+                direct_inputs = _tensor_ids_from_function_start_inputs(graph, start_node.get("input_tensors", []))
 
                 if direct_inputs:
                     for idx, tid in enumerate(direct_inputs):
@@ -1338,37 +1675,7 @@ def import_graph(
             if py_io and py_io.get("captured_graph"):
                 subgraph = py_io["captured_graph"]
             else:
-                capture_start = {
-                    "arguments": [],
-                    "connections": [1],
-                    "counter": 0,
-                    "input_tensors": [],
-                    "node_type": "capture_start",
-                    "params": {},
-                    "stacking_level": 0,
-                }
-                capture_end = {
-                    "arguments": [],
-                    "connections": [],
-                    "counter": 0,
-                    "input_tensors": [],
-                    "node_type": "capture_end",
-                    "params": {},
-                    "stacking_level": 0,
-                }
-                raw_subgraph = [capture_start] + current_op_nodes + output_tensor_nodes + [capture_end]
-                old_to_new = {}
-                for idx, nd in enumerate(raw_subgraph):
-                    old_to_new[nd.get("counter", 0)] = idx
-                subgraph = []
-                for idx, nd in enumerate(raw_subgraph):
-                    nd_copy = dict(nd)
-                    nd_copy["counter"] = idx
-                    if "connections" in nd_copy:
-                        nd_copy["connections"] = [old_to_new.get(c, c) for c in nd_copy["connections"]]
-                    if "input_tensors" in nd_copy:
-                        nd_copy["input_tensors"] = [old_to_new.get(c, c) for c in nd_copy["input_tensors"]]
-                    subgraph.append(nd_copy)
+                subgraph = _build_operation_subgraph(current_op_nodes + output_tensor_nodes)
 
             for snode in subgraph:
                 if "counter" in snode:
@@ -1407,31 +1714,7 @@ def import_graph(
             tensor_id = params.get("tensor_id", "")
             if tensor_id and tensor_id not in tensor_ids_seen:
                 tensor_ids_seen.add(tensor_id)
-                shape = params.get("shape", "")
-                dtype = params.get("dtype")
-                layout = params.get("layout")
-                memory_config = params.get("memory_config")
-
-                if dtype and "::" in dtype:
-                    dtype = dtype.replace("::", ".")
-                if layout and "::" in layout:
-                    layout = layout.replace("::", ".")
-                device_id = _int_param(params, "device_id")
-                address = _int_param(params, "address")
-                buffer_type = _int_param(params, "buffer_type") or 0
-                tensors_batch.append(
-                    (
-                        tensor_id,
-                        shape,
-                        dtype,
-                        layout,
-                        memory_config,
-                        device_id,
-                        address,
-                        buffer_type,
-                        rank,
-                    )
-                )
+                tensors_batch.append(_tensor_row_from_params(tensor_id, params, rank))
 
                 device_tensors_str = params.get("device_tensors")
                 if device_tensors_str:
@@ -1483,9 +1766,8 @@ def import_graph(
             dealloc_tensor_id = None
             if dealloc_address is not None:
                 for t in tensors_batch:
-                    tid, _, _, _, _, _, addr, _, _ = t
-                    if addr == dealloc_address:
-                        dealloc_tensor_id = _tid_int(tid)
+                    if t.address == dealloc_address:
+                        dealloc_tensor_id = _tid_int(t.tensor_id)
                         break
 
             if not function_stack:
@@ -1540,25 +1822,98 @@ def import_graph(
             error_type = params.get("error_type", "unknown")
             error_message = params.get("error_message", "")
             error_operation = params.get("error_operation", "")
-            errors_batch.append((base_operation_id, error_operation, error_type, error_message, "", "", rank))
+            owner = _in_flight_operation_frame(function_stack, error_operation)
+            if owner is not None:
+                # Bind to the in-flight operation so the Visualizer can join on operation_id.
+                # Emitted when that start is closed (function_end) or imported as an orphan.
+                if "deferred_error" not in owner:
+                    owner["deferred_error"] = {"type": error_type, "message": error_message}
+            else:
+                errors_batch.append((base_operation_id, error_operation, error_type, error_message, "", "", rank))
 
-    # Detect orphan function_start nodes (started but never ended = operation error).
-    already_errored = {e[1] for e in errors_batch}
+    # Orphan function_start (started, never ended): record the operation that died, with its error.
+    # Deduplicate by (operation_id, rank), never by operation name: a retried ttnn.conv2d is a
+    # different row from the earlier failure of the same name.
+    already_errored = {(e[0], e[6]) for e in errors_batch}
     for orphan in function_stack:
-        if not orphan.get("nested"):
-            op_name = orphan.get("name", "unknown")
-            if op_name not in already_errored:
-                errors_batch.append(
-                    (
-                        base_operation_id,
-                        op_name,
-                        "incomplete_operation",
-                        f"Operation '{op_name}' started but never completed (likely crashed)",
-                        "",
-                        "",
-                        rank,
-                    )
+        if orphan.get("nested"):
+            continue
+
+        op_name = orphan.get("name", "unknown")
+        py_io = orphan.get("python_io") or {}
+        error = py_io.get("error") or {}
+        deferred_error = orphan.get("deferred_error") or {}
+        operation_id = base_operation_id + operation_counter
+        operation_counter += 1
+        graph_counter_to_op_id[orphan["counter"]] = operation_id
+        operations_batch.append((operation_id, op_name, 0, rank))
+
+        if py_io.get("arguments"):
+            for key, val in py_io["arguments"].items():
+                operation_arguments_batch.append((operation_id, str(key), str(val), rank))
+        else:
+            for idx, arg in enumerate(orphan.get("arguments", [])):
+                operation_arguments_batch.append((operation_id, f"arg_{idx}", str(arg), rank))
+
+        if py_io.get("input_tensor_ids"):
+            for idx, tid in enumerate(py_io["input_tensor_ids"]):
+                input_tensors_batch.append((operation_id, idx, int(tid), rank))
+        else:
+            direct_inputs = _tensor_ids_from_function_start_inputs(graph, orphan.get("input_tensors", []))
+            if direct_inputs:
+                for idx, tid in enumerate(direct_inputs):
+                    input_tensors_batch.append((operation_id, idx, tid, rank))
+            elif nested_input_tensor_ids:
+                seen = set()
+                lifted_inputs = []
+                for tid in nested_input_tensor_ids:
+                    if tid in all_nested_output_ids:
+                        continue
+                    if tid in seen:
+                        continue
+                    seen.add(tid)
+                    lifted_inputs.append(tid)
+                for idx, tid in enumerate(lifted_inputs):
+                    input_tensors_batch.append((operation_id, idx, tid, rank))
+
+        subgraph = py_io.get("captured_graph") or _build_operation_subgraph(
+            _without_capture_boundaries(current_op_nodes)
+        )
+        if subgraph:
+            for snode in subgraph:
+                if "counter" in snode:
+                    snode["id"] = snode["counter"]
+            captured_graph_batch.append((operation_id, json.dumps(subgraph), rank))
+
+        stack_trace = "\n".join(py_io.get("python_stack_trace", []))
+        if stack_trace:
+            stack_traces_batch.append((operation_id, stack_trace, rank))
+
+        if (operation_id, rank) not in already_errored:
+            if error:
+                error_type = error.get("type", "incomplete_operation")
+                error_message = error.get(
+                    "message", f"Operation '{op_name}' started but never completed (likely crashed)"
                 )
+            elif deferred_error:
+                error_type = deferred_error.get("type", "incomplete_operation")
+                error_message = deferred_error.get(
+                    "message", f"Operation '{op_name}' started but never completed (likely crashed)"
+                )
+            else:
+                error_type = "incomplete_operation"
+                error_message = f"Operation '{op_name}' started but never completed (likely crashed)"
+            errors_batch.append(
+                (
+                    operation_id,
+                    op_name,
+                    error_type,
+                    error_message,
+                    stack_trace,
+                    "",
+                    rank,
+                )
+            )
 
     # Keep host tensors only when referenced in I/O; keep all device tensors as-is.
     referenced_tids = set()
@@ -1567,23 +1922,20 @@ def import_graph(
     for _, _, tid, _ in output_tensors_batch:
         referenced_tids.add(_tid_int(tid))
 
-    filtered_tensors = []
-    for t in tensors_batch:
-        tid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, _tr = t
-        tid_int = _tid_int(tid)
-        if dev_id is None:
-            if tid_int in referenced_tids:
-                filtered_tensors.append(t)
-        else:
-            filtered_tensors.append(t)
-    tensors_batch = filtered_tensors
+    # A device tensor without a buffer has no device_id either, so storage_type decides; captures
+    # predating it fall back to device_id.
+    tensors_batch = [
+        t
+        for t in tensors_batch
+        if t.storage_type == "DEVICE" or t.device_id is not None or _tid_int(t.tensor_id) in referenced_tids
+    ]
 
     # Ensure py_io tensor IDs that don't have C++ graph entries get created.
     # When enable_logging=True, Python's set_output_tensor_id_decorator assigns
     # new tensor IDs after C++ records the output.  These Python-level IDs appear
     # in py_io output_tensor_ids but have no C++ tensor node.  Create tensor
     # entries for them by copying from the nearest tensor at the same address.
-    existing_tids = {_tid_int(t[0]) for t in tensors_batch}
+    existing_tids = {_tid_int(t.tensor_id) for t in tensors_batch}
     io_tids = set()
     for _, _, tid, _ in input_tensors_batch:
         io_tids.add(_tid_int(tid))
@@ -1593,33 +1945,16 @@ def import_graph(
     if missing_tids:
         addr_to_tensor = {}
         for t in tensors_batch:
-            tid_val, shape, dtype, layout, mem_cfg, dev_id, addr, bt, _tr = t
-            if addr is not None and addr not in addr_to_tensor:
-                addr_to_tensor[addr] = t
+            if t.address is not None and t.address not in addr_to_tensor:
+                addr_to_tensor[t.address] = t
         for mtid in missing_tids:
             addr = tensor_address.get(mtid)
             if addr is not None and addr in addr_to_tensor:
-                _, shape, dtype, layout, mem_cfg, dev_id, _, bt, _tr = addr_to_tensor[addr]
-                tensors_batch.append((mtid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, rank))
+                tensors_batch.append(addr_to_tensor[addr]._replace(tensor_id=mtid, address=addr, rank=rank))
             elif mtid in pyid_to_cpp_tensor:
-                cpp_node = pyid_to_cpp_tensor[mtid]
-                p = cpp_node.get("params", {})
-                btv = _int_param(p, "buffer_type") or 0
-                tensors_batch.append(
-                    (
-                        mtid,
-                        str(p.get("shape", "")),
-                        str(p.get("dtype", "")),
-                        str(p.get("layout", "")),
-                        str(p.get("memory_config", "")),
-                        _int_param(p, "device_id"),
-                        _int_param(p, "address"),
-                        btv,
-                        rank,
-                    )
-                )
+                tensors_batch.append(_tensor_row_from_params(mtid, pyid_to_cpp_tensor[mtid].get("params", {}), rank))
 
-    kept_tensor_ids = {_tid_int(t[0]) for t in tensors_batch}
+    kept_tensor_ids = {_tid_int(t.tensor_id) for t in tensors_batch}
 
     # Deduplicate per operation (same op + same tensor = one entry)
     seen_input = set()
@@ -1688,6 +2023,26 @@ def import_graph(
         cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?, ?, ?)""", stack_traces_rows)
     if operations_batch:
         cursor.executemany("""INSERT OR REPLACE INTO operations VALUES (?, ?, ?, ?)""", operations_batch)
+    if sub_device_managers_batch:
+        cursor.executemany(
+            """INSERT OR IGNORE INTO sub_device_managers VALUES (?, ?, ?)""",
+            sub_device_managers_batch,
+        )
+    if sub_devices_batch:
+        cursor.executemany(
+            """INSERT OR IGNORE INTO sub_devices VALUES (?, ?, ?, ?, ?)""",
+            sub_devices_batch,
+        )
+    if operation_executions_batch:
+        cursor.executemany(
+            """INSERT OR REPLACE INTO operation_executions VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            operation_executions_batch,
+        )
+    if execution_sub_devices_batch:
+        cursor.executemany(
+            """INSERT OR IGNORE INTO execution_sub_devices VALUES (?, ?, ?, ?, ?)""",
+            execution_sub_devices_batch,
+        )
     if operation_arguments_batch:
         cursor.executemany("""INSERT INTO operation_arguments VALUES (?, ?, ?, ?)""", operation_arguments_batch)
     if input_tensors_batch:
@@ -1705,7 +2060,7 @@ def import_graph(
             tensor_producers_batch,
         )
     if tensors_batch:
-        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
+        cursor.executemany(_TENSORS_INSERT_SQL, tensors_batch)
     tensor_lifetime_records = []
     if record_tensor_lifetime:
         tensor_lifetime_records = compute_tensor_lifetime_records(
@@ -1759,6 +2114,9 @@ def import_graph(
 
     return {
         "operations": len(operations_batch),
+        "operation_executions": len(operation_executions_batch),
+        "sub_device_managers": len(set(sub_device_managers_batch)),
+        "sub_devices": len(set(sub_devices_batch)),
         "tensors": len(tensors_batch),
         "device_tensors": len(device_tensors_batch),
         "buffers": len(buffers_batch),
@@ -1794,18 +2152,9 @@ def _comparison_record_to_row(record: dict, rank: int = 0) -> tuple:
     )
 
 
-def _tensor_record_to_row(tensor: dict, rank: int = 0) -> tuple:
-    return (
-        int(tensor["tensor_id"]),
-        tensor.get("shape"),
-        tensor.get("dtype"),
-        tensor.get("layout"),
-        tensor.get("memory_config"),
-        tensor.get("device_id"),
-        tensor.get("address"),
-        tensor.get("buffer_type"),
-        rank,
-    )
+def _tensor_record_to_row(tensor: dict, rank: int = 0) -> _TensorRow:
+    # Same fields as a captured tensor node, so sidecars predating storage_type get the same inference
+    return _tensor_row_from_params(int(tensor["tensor_id"]), tensor, rank)
 
 
 def import_tensor_comparison_records(cursor: sqlite3.Cursor, comparison_data: dict, rank: int = 0) -> dict:
@@ -1823,7 +2172,7 @@ def import_tensor_comparison_records(cursor: sqlite3.Cursor, comparison_data: di
     ]
 
     if tensors_batch:
-        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
+        cursor.executemany(_TENSORS_INSERT_SQL, tensors_batch)
     if local_records_batch:
         cursor.executemany(
             """INSERT INTO local_tensor_comparison_records VALUES (?, ?, ?, ?, ?, ?)""", local_records_batch
