@@ -798,6 +798,18 @@ greedy eval on a held-out split every step.
 python3 reverse_text/reverse_text_training_example.py
 ```
 
+### GSM8K Training
+
+[`gsm8k/gsm8k_training_example.py`](../sources/examples/grpo/gsm8k/gsm8k_training_example.py) —
+trains a think-tagged Qwen3-0.6B SFT checkpoint on GSM8K math problems with
+remote rollouts (`rollout_backend: "ttt_remote_sync"`, 1 TTML chip + 1 TTT
+chip), rewarding the correct answer and the `<think>`/`<answer>` format. See the
+[examples README](../sources/examples/grpo/README.md#gsm8k-qwen3-06b-remote-rollouts).
+
+```bash
+./tt-train/sources/examples/grpo/gsm8k/run_remote_rollout.sh
+```
+
 ### Plotting
 
 [`boolq/boolq_plot_example.py`](../sources/examples/grpo/boolq/boolq_plot_example.py) — plots any column of the `grpo_metrics.csv` written by the built-in `GRPOMonitor`.
