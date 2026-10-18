@@ -273,16 +273,18 @@ class GroupedExperts:
 
 
 class DevicePlan:
-    """The expert-major plan on one core from the device's top-k (tt/kernels/prefill/plan.cpp): no read back. Shapes
-    are static per T, sized for the most groups the routing can need (8T / 32 + E): rows past the used groups are
-    simply not in the team plan."""
+    """The expert-major plan from the device's top-k on CORES cores, split by expert (tt/kernels/prefill/plan.cpp): no
+    read back. Shapes are static per T, sized for the most groups the routing can need (8T / 32 + E): rows past the used
+    groups are simply not in the team plan."""
 
     CB_TILES, CB_STATE, CB_TOKENS, CB_WEIGHTS, CB_DEST, CB_PLAN = range(6)
+    GRID = (8, 2)  # CORES = 16
 
     def __init__(self, moe, grouped):
         self.moe, self.grouped = moe, grouped
-        self.core = ttnn.CoreCoord(0, 0)
-        self.ranges = ttnn.CoreRangeSet([ttnn.CoreRange(self.core, self.core)])
+        gx, gy = self.GRID
+        self.cores = [ttnn.CoreCoord(x, y) for y in range(gy) for x in range(gx)]
+        self.ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
 
     @staticmethod
     def max_rows(num_tokens, k, experts):
@@ -314,14 +316,16 @@ class DevicePlan:
         row_dest = empty([1, R], ttnn.uint32)
         plan = empty([grouped.num_teams, grouped.PLAN_WORDS], ttnn.uint32)
         rt = ttnn.RuntimeArgs()
-        rt[self.core.x][self.core.y] = [
-            indices.buffer_address(),
-            weights.buffer_address(),
-            row_token.buffer_address(),
-            row_weight.buffer_address(),
-            row_dest.buffer_address(),
-            plan.buffer_address(),
-        ]
+        for i, core in enumerate(self.cores):
+            rt[core.x][core.y] = [
+                indices.buffer_address(),
+                weights.buffer_address(),
+                row_token.buffer_address(),
+                row_weight.buffer_address(),
+                row_dest.buffer_address(),
+                plan.buffer_address(),
+                i,
+            ]
         kernel = ttnn.KernelDescriptor(
             kernel_source=f"{KERNEL_DIR}/plan.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -339,6 +343,7 @@ class DevicePlan:
                 self.CB_WEIGHTS,
                 self.CB_DEST,
                 self.CB_PLAN,
+                len(self.cores),
             ],
             runtime_args=rt,
             config=ttnn.DataMovementConfigDescriptor(
@@ -347,7 +352,7 @@ class DevicePlan:
         )
         cbs = [
             self._cb(self.CB_TILES, 2 * 4096),
-            self._cb(self.CB_STATE, 3 * E * 4),
+            self._cb(self.CB_STATE, (3 * E + 4) * 4),
             self._cb(self.CB_TOKENS, R * 4),
             self._cb(self.CB_WEIGHTS, R * 2),
             self._cb(self.CB_DEST, R * 4),
