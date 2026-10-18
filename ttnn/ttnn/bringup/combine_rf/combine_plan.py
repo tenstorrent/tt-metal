@@ -1004,9 +1004,10 @@ def plan_reference(ids, wbits, me, R, C, S, K, EPC, NG, A, L, P, lut, rows_cap, 
     return dict(counts=cnt, regions=reg, token_index=tidx, table=tab, plan=plan)
 
 
-def port_luts(mesh_device, num_links, torus=(False, False)):
+def port_luts(mesh_device, num_links, torus=(False, False), per_direction=False):
     """Per chip coord: lut[direction * 2 + link] = port id (the chip's ports in DIRS / link order, as
-    sparse_combine_rf_prepare numbers them), and the port count."""
+    sparse_combine_rf_prepare numbers them), and the port count. per_direction: one port per direction, driving all
+    its links (sparse_combine_rf_prepare ports_per_direction): every link of a direction maps to that port's id."""
     from .sparse_all_gather_2d import DIRS, mesh_plan
 
     chips, _, _ = mesh_plan(mesh_device, num_links, torus)
@@ -1017,7 +1018,8 @@ def port_luts(mesh_device, num_links, torus=(False, False)):
             if d in ports:
                 for li in range(num_links):
                     lut[di * 2 + li] = j
-                    j += 1
+                    j += 0 if per_direction else 1
+                j += 1 if per_direction else 0
         luts[ch], n[ch] = lut, j
     return luts, n
 

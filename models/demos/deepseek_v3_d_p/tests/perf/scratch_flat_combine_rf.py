@@ -189,6 +189,8 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
     )
     DEVPLAN = os.environ.get("FC_DEVPLAN") == "1"  # (with FC_L1: every per-call table from the device planner)
     DET = DEVPLAN and os.environ.get("FC_DET", "0") == "1"
+    PER_DIR_PORTS = DEVPLAN and os.environ.get("FC_PORTS", "link") == "dir"  # (a combine port per direction)
+    ACC_ON_PORTS = DEVPLAN and os.environ.get("FC_ACC_ON_PORTS", "0") == "1"  # (ports on accumulator cells)
     tidx = None
     if DEVPLAN:
         ids, gates = _routing.last
@@ -210,7 +212,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
             memory_config=dram,
             mesh_mapper=rep,
         )
-        luts, nps = port_luts(mesh_device, L)
+        luts, nps = port_luts(mesh_device, L, per_direction=PER_DIR_PORTS)
         planner = combine_planner_prepare(
             mesh_device,
             S=S,
@@ -297,14 +299,30 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
             l1 is not None and int(os.environ.get("FC_NACC", "15")) <= 16
         ), "FC_DEVPLAN needs FC_L1 (<= 16 accumulators)"
     fused = sparse_combine_rf_prepare(
-        mesh_device, S, H, rows, writers=writers, l1=l1, devplan=devplan, deterministic=DET, **common
+        mesh_device,
+        S,
+        H,
+        rows,
+        writers=writers,
+        l1=l1,
+        devplan=devplan,
+        deterministic=DET,
+        ports_per_direction=PER_DIR_PORTS,
+        acc_on_ports=ACC_ON_PORTS,
+        **common,
     )
     if DEVPLAN:  # (the planner was built for FC_NACC accumulators: the combine must have found that many cells)
         assert len(fused.cells["accs"]) == n_acc, (
             f"combine has {len(fused.cells['accs'])} accumulators, the planner {n_acc}: set FC_NACC "
             f"({len(cells)} free cells)"
         )
-    alone = sparse_combine_rf_prepare(mesh_device, S, H, rows, writers=0, **common)
+    # (combine alone: the same cells in the same roles - the arena's cumulative counters are shared; with
+    # accumulators on the ports (L1 hand-off only) there is no alone variant)
+    alone = (
+        None
+        if ACC_ON_PORTS
+        else sparse_combine_rf_prepare(mesh_device, S, H, rows, writers=0, ports_per_direction=PER_DIR_PORTS, **common)
+    )
     coll = fused.collector
     logger.info(
         f"{routing}: flat drisc {plan.get('drisc')} dual {plan.get('dual')} down {len(plan['down'])} cells "
@@ -436,9 +454,16 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
                 logger.info(
                     f"TPROF {routing} chip {ci}: port rows all landed by {max(us(r[2]) for r in r1):.0f} | port readers end "
                     f"{max(us(r[3]) for r in r1):.0f} | senders end {max(us(r[2]) for r in sdp):.0f} (slot wait "
-                    f"{max(r[3] for r in sdp) / 1350:.0f}) | accs local landed {max(us(r[2]) for r in adp if r[2]):.0f} "
+                    f"{max(r[3] for r in sdp) / 1350:.0f}) | accs local landed "
+                    f"{max([us(r[2]) for r in adp if r[2]], default=0):.0f} "
                     f"end {max(us(r[3]) for r in adp):.0f}"
                 )
+                for r in sdp:  # (per sender: us busy until its end, slot wait, idle, credits, sending; rows, blocked)
+                    logger.info(
+                        f"TPROF {routing} chip {ci} sender {r[0] & 0xFF}: end {us(r[2]):.0f} slot {r[3] / 1350:.0f} "
+                        f"idle {r[4] / 1350:.0f} cred {r[5] / 1350:.0f} send {r[8] / 1350:.0f} us | rows {r[7]} "
+                        f"blocked {r[6]} empty {r[9]}"
+                    )
                 continue
             sdp = [r for r in d[8:16] if r[0] >> 20 == 0x7E1]
             adp = [r for r in d[16:48] if r[0] >> 20 == 0x7E2]
@@ -495,7 +520,13 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
         t_fused = pipelined(run_fused, "fused")
         if os.environ.get("FC_DRISC_DUMP"):  # (DRISC per-section cycles of the last fused call: MIMO_FL_DRISC_PROF=1)
             ttnn._ttnn.operations.bringup.flat_drisc_dump(mesh_device)
-        t_flat, t_comb = pipelined(run_flat, "flat alone"), pipelined(lambda: alone(y, out), "combine alone")
+        t_flat = pipelined(run_flat, "flat alone")
+        if alone is None:
+            logger.info(
+                f"FC_SUMMARY {routing:16s} pipelined: flat {t_flat:.0f} | fused {t_fused:.0f} us (fused / flat {t_fused / t_flat:.3f})"
+            )
+            return
+        t_comb = pipelined(lambda: alone(y, out), "combine alone")
         logger.info(
             f"FC_SUMMARY {routing:16s} pipelined: flat {t_flat:.0f} + combine {t_comb:.0f} = {t_flat + t_comb:.0f} serial vs "
             f"fused {t_fused:.0f} us ({100 * (t_flat + t_comb - t_fused) / t_comb:.0f}% of the combine hidden; fused / flat "
