@@ -1570,3 +1570,37 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - The whole gate exceeds the tool's 10-minute foreground limit: run its five parts one by one (each 3-6 min, mostly
   model load); all five PASS after the last change (runner smoke skips, DS41-8).
 - Re-run: the brief's gate command with `PYTHONPATH=$PWD`.
+
+## P.1 perf (attempt 1): routed experts in bfp4 (owner pick)
+- Change: EXPERTS_IMPL gains "bfp4" (tt/settings.py; choices bfp8 | bfp4 | fp4_decode). `tt/experts.py:_load_block`
+  (was `_load_bfp8`) converts every expert's fused w1 | w3 [2I, H] and w2 [H, I] once at load to bfloat4_b in the
+  stored [N, K] orientation, used with `ttnn.linear(transpose_b=True)` exactly like bfp8 (DS41-35); `_ffn` takes the
+  same path for both block formats. Same HiFi4 + fp32 acc, same fp8 q(h). Default kept at bfp8 (owner text: "Keep
+  bfp8 the default and the max precision"); MAX_PRECISION now names EXPERTS_IMPL=bfp8, so component / swap tests
+  stay at bfp8. Off = EXPERTS_IMPL=bfp8 (the old path, unchanged).
+- Load-time stats (CPU, every expert of the layer): `_bfp4_round` emulates ttnn's host packing
+  (blockfloat_common.cpp convert_u32_to_bfp: shared exponent per 16 along the last dim, 3 magnitude bits, round to
+  nearest even, saturate at 7); `_bfp4_change` -> logged as `EXPERTS_BFP4 layer=...` and kept in `bfp4_stats`.
+  Checked: `tt/perf_experts.py::test_bfp4_round_matches_ttnn` (emulation == ttnn roundtrip on random, ties,
+  saturation and expert matrices), `::test_transpose_b_bfp4` (device: linear(x, W bfp4 [N, K], transpose_b) ==
+  linear(x, q4(W)^T bf16) bit for bit, w1 | w3 and w2; rel vs exact W 0.118 / 0.116).
+- Fraction of expert values bfp4 changes / worst per-matrix ||q(W) - W|| / ||W||, per layer (96 experts each):
+  L0 16.64 % / 0.1193 (e57 w1); L1 16.45 % / 0.1178 (e86 w1); L2 16.37 % / 0.1179 (e36 w1); L3 16.38 % / 0.1198
+  (e20 w3); L14 16.59 % / 0.1214 (e22 w2); L20 16.48 % / 0.1192 (e12 w2); L21 16.50 % / 0.1226 (e43 w2);
+  L24 16.56 % / 0.1242 (e7 w2).
+- Expert weight memory per chip (0.5625 vs 1.0625 B per value, 3 x 5120 x 2304 per expert): bfp4 0.445 GiB per layer
+  at 24 experts per chip: this run (8 layers) 3.56 GiB (bfp8 6.72); galaxy_4x4 40 layers 17.80 GiB (bfp8 33.62);
+  galaxy_8x4 (12 per chip) 8.90 GiB (bfp8 16.81).
+- Accuracy (DS41_EXPERTS_IMPL=bfp4, BRINGUP_RUNG=last ladder): PASS. pcc_layer L00 0.99965, L01 0.99921, L02 0.99803,
+  L03 0.99535, L14 0.99660, L20 0.99938, L21 0.99730, L24 0.99949 (bfp8 at L.last: 0.99981 .. worst L03 0.99673);
+  pcc_state_min 0.99726 (window_kv L03; bfp8 0.99801); overlap_state_min 0.99652; host_transfers_per_layer 0.
+- Plain profile, same code, 2x2, chunk 53248-55296, 8 layers: experts section 2501.4 ms bfp4 vs 2522.5 ms bfp8
+  (312.7 vs 315.3 ms per layer per chunk, -0.8 %; 43,264 programs both); device_ms_total 3004.1 vs 3025.3; chunk wall
+  3212 vs 3241 ms; pcc_chunk_out 0.99949 vs 0.99981. No speed gain (DS41-56): bfp4 is a memory pick only.
+- Load: model_load_s 427 s for bfp4 in the ladder run with the first stats code (bfp8 ~292 s); the stats were then
+  made ~2x cheaper (one fp64 power-of-two scale per group instead of ldexp on every value); load ~34 s per layer
+  in the profile run.
+- Re-run: `PYTHONPATH=$PWD DS41_EXPERTS_IMPL=bfp4 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all
+  --no-precompile models/demos/common/bringup/tests/test_ladder.py`; profile: the brief's second command with
+  DS41_EXPERTS_IMPL=bfp4 / bfp8; checks: `scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py -k bfp4 -s`.
