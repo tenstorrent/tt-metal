@@ -18,10 +18,10 @@
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
-template <typename TensorAccessorType>
+template <typename TensorAccessorType, typename DFB>
 void read_block_from_dram(
     const Noc& noc,
-    DataflowBuffer& dfb,
+    DFB& dfb,
     const TensorAccessorType& s1,
     uint32_t tensor_width_in_tiles,
     uint32_t block_w_idx,

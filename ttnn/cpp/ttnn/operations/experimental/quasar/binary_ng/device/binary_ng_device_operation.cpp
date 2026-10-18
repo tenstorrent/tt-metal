@@ -709,36 +709,16 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (a.padded_shape() != b.padded_shape() || a.padded_shape() != out_spec.padded_shape()) {
         return false;
     }
-    // An L1 shard runs here only when all three operands are L1 shards with one memory config, which the
-    // factory borrows; beside any other placement it stays on the fallback. Without an L1 shard each operand
-    // is interleaved or a DRAM shard: the factory borrows L1-interleaved slices when it can, else uses the NoC.
-    // out_spec is the supplied output tensor's spec when one is given.
-    const auto is_l1_shard = [](const tt::tt_metal::MemoryConfig& mc) {
-        return mc.is_sharded() && mc.buffer_type() == BufferType::L1;
+    // Each operand on its own is interleaved (L1 or DRAM), an L1 shard or a DRAM shard with a 2D spec, in any
+    // mix. The factory borrows each operand that sits in its anchor, an L1 shard config or the L1 banks, and
+    // moves the rest over the NoC through each operand's sharding-aware TensorAccessor. out_spec is the supplied
+    // output tensor's spec when one is given.
+    const auto placement_ok = [](const tt::tt_metal::MemoryConfig& mc) {
+        return CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(mc) || CMAKE_UNIQUE_NAMESPACE::noc_operand_ok(mc);
     };
-    const bool any_l1_shard =
-        is_l1_shard(a.memory_config()) || is_l1_shard(b.memory_config()) || is_l1_shard(out_spec.memory_config());
-    if (any_l1_shard) {
-        // Any shard tile count is admitted: the factory keeps the compute count and moves the tiles that do
-        // not divide by it through small owned rings.
-        if (!CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(a.memory_config()) ||
-            !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(b.memory_config()) ||
-            !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(out_spec.memory_config())) {
-            return false;
-        }
-        // Reports all three volumes only for one memory config (is_native_L1_sharding).
-        const auto shard_volumes = get_shard_volumes(a.tensor_spec(), b.tensor_spec(), out_spec);
-        if (!shard_volumes.has_value() || !shard_volumes->a_shard_volume.has_value() ||
-            !shard_volumes->b_shard_volume.has_value() || !shard_volumes->c_shard_volume.has_value()) {
-            return false;
-        }
-    } else {
-        const bool all_noc_operands = CMAKE_UNIQUE_NAMESPACE::noc_operand_ok(a.memory_config()) &&
-                                      CMAKE_UNIQUE_NAMESPACE::noc_operand_ok(b.memory_config()) &&
-                                      CMAKE_UNIQUE_NAMESPACE::noc_operand_ok(out_spec.memory_config());
-        if (!all_noc_operands) {
-            return false;
-        }
+    if (!placement_ok(a.memory_config()) || !placement_ok(b.memory_config()) ||
+        !placement_ok(out_spec.memory_config())) {
+        return false;
     }
 
     // A zero-volume output has no work to place, and an empty worker grid has nowhere to place it.
@@ -748,10 +728,12 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (out_spec.padded_shape().volume() == 0 || attributes.worker_grid.num_cores() == 0) {
         return false;
     }
-    // Mirrors dataflow_buffer.cpp's two directional STRIDED asserts; reject rather than trip them.
+    // Mirrors dataflow_buffer.cpp's two directional STRIDED asserts; reject rather than trip them. The counts
+    // are the NoC path's, the most DM threads a program runs. The rule's values always pass, so only a set R or
+    // W beside the compute count can fail.
+    const NativeConfig noc = resolve_native_config(tuning, {.inputs = true, .output = true});
     const auto ratio_ok = [](uint32_t p, uint32_t c) { return std::max(p, c) % std::min(p, c) == 0; };
-    return ratio_ok(tuning.reader_threads, tuning.compute_threads) &&
-           ratio_ok(tuning.compute_threads, tuning.writer_threads);
+    return ratio_ok(noc.reader_threads, noc.compute_threads) && ratio_ok(noc.compute_threads, noc.writer_threads);
 }
 
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(

@@ -49,8 +49,8 @@ struct KdaPrepWorkDist {
 KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, uint32_t core_cap);
 
 // One core per (head, value block). A head's state columns evolve independently, so its value tiles are split
-// across as many cores as fit. A head's blocks share one grid row so value block 0 can multicast the
-// value-independent inputs to the rest.
+// across as many cores as fit. A head's blocks share one grid column (or, when no column split fits, one grid row) so
+// value block 0 can multicast the value-independent inputs to the rest.
 struct ValueBlockDistribution {
     std::vector<tt::tt_metal::CoreCoord> cores;
     std::vector<uint32_t> head;
@@ -63,8 +63,9 @@ struct ValueBlockDistribution {
 ValueBlockDistribution distribute_value_blocks(
     tt::tt_metal::CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles);
 
-// The physical row segment a core's value-block multicast addresses, ordered for NoC 0: value block 0 (the
-// sender) gets its siblings' segment, every other block gets the sender. All zero when a head has one block.
+// The physical segment (one column, or one row) a core's value-block multicast addresses, ordered for NoC 0: value
+// block 0 (the sender) gets its siblings' segment, every other block gets the sender. All zero when a head has one
+// block.
 struct ValueBlockPeers {
     uint32_t x0 = 0;
     uint32_t y0 = 0;

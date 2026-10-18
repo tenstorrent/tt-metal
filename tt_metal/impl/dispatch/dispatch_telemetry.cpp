@@ -28,27 +28,27 @@ namespace {
 
 struct SMCRuntimeTelemetryBuffer {
     tt_xy_pair arc_core;
-    uint32_t addr = 0;
+    uint64_t addr = 0;
     uint32_t size = 0;
 };
 
 std::optional<SMCRuntimeTelemetryBuffer> discover_smc_dispatch_telemetry_control(tt::umd::TTDevice& tt_device) {
-    tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr;
+    tt::umd::DeviceFirmware* firmware = nullptr;
     try {
-        // Throws when the device has no firmware info provider (ex: simulators)
+        // Throws when the device has no firmware module (ex: simulators)
         // Dispatch telemetry is best-effort: any failure to reach the SMC/firmware side must degrade to
         // "unavailable" rather than propagate, otherwise it would break device init/close on devices that
         // don't back a firmware info provider.
-        firmware_info_provider = tt_device.get_firmware_info_provider();
+        firmware = tt_device.get_device_firmware();
     } catch (...) {
         log_warning(
-            tt::LogMetal, "Dispatch telemetry SMC buffer unavailable (no firmware info provider, e.g. simulator)");
+            tt::LogMetal, "Dispatch telemetry SMC buffer unavailable (no device firmware, e.g. simulator)");
     }
-    if (firmware_info_provider == nullptr) {
+    if (firmware == nullptr) {
         return std::nullopt;
     }
 
-    auto size = firmware_info_provider->get_runtime_telemetry_buffer_size();
+    auto size = firmware->get_runtime_telemetry_buffer_size();
     if (!size.has_value() || size.value() == 0) {
         log_debug(tt::LogMetal, "Dispatch telemetry SMC buffer is unavailable");
         return std::nullopt;
@@ -62,7 +62,7 @@ std::optional<SMCRuntimeTelemetryBuffer> discover_smc_dispatch_telemetry_control
         return std::nullopt;
     }
 
-    auto addr = firmware_info_provider->get_runtime_telemetry_buffer_address();
+    auto addr = firmware->get_runtime_telemetry_buffer_address();
     // 0 is unpublished, not a valid buffer. Same class of versim trap as L1 addr_offset == 0.
     if (!addr.has_value() || addr.value() == 0) {
         log_warning(tt::LogMetal, "Dispatch telemetry SMC buffer address is unavailable or invalid");
