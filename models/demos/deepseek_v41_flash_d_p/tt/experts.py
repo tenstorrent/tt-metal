@@ -21,7 +21,7 @@ dispatched row's own fp32 weight. Dispatch carries only the row, so the row carr
            extract [cap, H + 3 Egp] -> x rows | piece columns
            r   = pieces @ Sel_j  (bf16 0/1 selector [3 Egp, 32]: one nonzero product per tile-dot, the three pieces in
                                   different K tiles, summed exactly in fp32 DEST, DS41-16) -> max over 32 equal columns
-           g | u = ttnn.linear(x, [W1; W3], transpose_b, HiFi4 + fp32 acc, fp32 out)   (bfp8 [N, K] at load;
+           g | u = ttnn.linear(x, [W1; W3], transpose_b, HiFi4 + fp32 acc, fp32 out)   (bfp8 / bfp4 [N, K] at load;
                                                                 fp4_decode: two linears on per-chunk decoded bf16 W^T)
            h   = silu(min(g, 10)) * clamp(u, +-10) * r            fp32 (SFPU)
            y   = ttnn.linear(fp8_qdq(h), W2, transpose_b) -> bf16  (insert / combine are bf16-only)
@@ -38,6 +38,12 @@ Weights (setting EXPERTS_IMPL, DS41-10 / DS41-35):
                   every value exactly there (one exponent per 16 values along K, inside one e8m0 block; asserted per
                   tensor at load, `_bfp8_exact`); W^T would not (DS41-35). 1.06 B per value: 0.84 GiB per layer per
                   chip at 24 experts per chip (this run's scaled 2x2 and galaxy_4x4). No per-chunk weight work.
+  bfp4            (owner pick, P.1) the bfp8 path with bfloat4_b weights: same [N, K] orientation, transpose_b,
+                  fused w1 | w3, converted once at load. Lossy: bfloat4_b keeps 3 magnitude bits under the group's
+                  exponent (round to nearest even, saturating; `_bfp4_round` = ttnn's host packing), so an e2m1 value
+                  more than 2 binades below its group's largest, or needing its 2nd bit there, moves. The fraction of
+                  values changed and the worst per-matrix relative change are logged per layer at load (`bfp4_stats`).
+                  0.5625 B per value: 0.44 GiB per layer per chip at 24 experts per chip.
   fp4_decode      the previous path: the checkpoint's packed codes kept on the device (0.53 B per value) and decoded
                   to a bf16 W^T for every expert in every chunk (a per-chunk weight rebuild, against agent rule 5;
                   kept for comparison only). Per matrix W [N, K] the device holds W^T = T [K, N] as 8 nibble planes,
@@ -56,6 +62,7 @@ dispatch buffer K x the cap (all K of a token's experts may sit on one chip). ex
 from __future__ import annotations
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, compute_constants, get_ep_mesh_mapper
@@ -75,6 +82,8 @@ FP4_VALUES = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2
 NAMES = ("w1", "w3", "w2")
 BFP8_GROUP = 16  # bfloat8_b: one shared exponent per 16 values of a tile face row (along the last dim)
 BFP8_MANT = 7  # magnitude bits under the shared exponent (the leading one included)
+BFP4_MANT = 3  # bfloat4_b: the same 16-value groups, 3 magnitude bits
+BLOCK_DTYPES = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}  # EXPERTS_IMPL values loaded once as block floats
 
 
 def _ceil(a: int, b: int) -> int:
@@ -123,6 +132,29 @@ def _bfp8_exact(t: torch.Tensor) -> bool:
     return bool((q == q.round()).all()) and bool((q.abs() < 2**BFP8_MANT).all())
 
 
+def _bfp4_round(t: torch.Tensor) -> torch.Tensor:
+    """t (last dim a multiple of 16) as bfloat4_b holds it, fp32 (ttnn's host packing, blockfloat_common.cpp
+    convert_u32_to_bfp, round to nearest even): per 16 values along the last dim, E = the group's largest binary
+    exponent; each value -> round(v / 2^(E - 2)) clamped to +-7, times 2^(E - 2). Checked against ttnn's own packing
+    by tt/perf_experts.py:test_bfp4_round_matches_ttnn."""
+    g = t.float().reshape(-1, BFP8_GROUP)
+    _, e = torch.frexp(g.abs().amax(dim=-1, keepdim=True))  # amax = m 2^e, m in [0.5, 1): unit 2^(e - 3)
+    s = torch.ldexp(torch.ones_like(e, dtype=torch.float64), BFP4_MANT - e)  # powers of two, exact in fp64
+    up, down = s.float(), (1.0 / s).float()
+    assert bool(torch.isfinite(up).all() and torch.isfinite(down).all() and (up > 0).all() and (down > 0).all())
+    lim = 2**BFP4_MANT - 1
+    return (g * up).round_().clamp_(-lim, lim).mul_(down).reshape(t.shape)
+
+
+def _bfp4_change(w: torch.Tensor) -> tuple[int, torch.Tensor]:
+    """w [..., N, K]: (values bfloat4_b changes, per-matrix relative change ||q(w) - w|| / ||w|| over the last two
+    dims, fp32)."""
+    wf = w.float()
+    d = _bfp4_round(w).sub_(wf)
+    rel = torch.linalg.vector_norm(d, dim=(-2, -1)) / torch.linalg.vector_norm(wf, dim=(-2, -1)).clamp_min(1e-30)
+    return int(torch.count_nonzero(d)), rel
+
+
 class TtExperts:
     def __init__(
         self,
@@ -145,7 +177,7 @@ class TtExperts:
         E = int(num_experts)
         assert E % n == 0, f"{E} experts do not split over {n} chips"
         self.impl = impl or settings.get("EXPERTS_IMPL")
-        assert self.impl in ("bfp8", "fp4_decode"), self.impl
+        assert self.impl in ("bfp8", "bfp4", "fp4_decode"), self.impl
         self.decode_mode = settings.get("EXPERTS_DECODE")
         self.sum_mode = settings.get("EXPERTS_SUM")
         self.mesh, self.layer, self.num_links = mesh, layer, num_links
@@ -159,6 +191,7 @@ class TtExperts:
         self.max_chunk = int(max_chunk)
         assert self.max_chunk % (rows * TILE) == 0, f"chunk {max_chunk} is not {rows} x a multiple of {TILE}"
         self.cfg = compute_config(mesh)
+        self.bfp4_stats = None  # EXPERTS_IMPL=bfp4: what bfloat4_b changes in this layer's experts (_load_block)
 
         # dispatch table (groups, E + 1) sharded over columns; local -> global expert ids per chip
         self.dispatch_table = TtDispatchModule.shard_expert_dispatch_table(
@@ -191,8 +224,8 @@ class TtExperts:
             for le in range(self.epc)
         ]
 
-        if self.impl == "bfp8":
-            self._load_bfp8(ck, gtab)
+        if self.impl in BLOCK_DTYPES:
+            self._load_block(ck, gtab)
         else:
             self._load_fp4(ck, gtab)
         self._seq = {}
@@ -254,16 +287,23 @@ class TtExperts:
                     mesh_mapper=get_ep_mesh_mapper(mesh),
                 )
 
-    def _load_bfp8(self, ck, gtab):
-        """bfp8: per local slot le, W13 [2I, H] (w1 rows | w3 rows) and W2 [H, I] bfloat8_b as stored ([N, K], used
-        with transpose_b), one mesh tensor each whose chip (r, c) shard is expert (c rows + r) epc + le. Built once.
+    def _load_block(self, ck, gtab):
+        """bfp8 / bfp4: per local slot le, W13 [2I, H] (w1 rows | w3 rows) and W2 [H, I] bfloat8_b / bfloat4_b as
+        stored ([N, K], used with transpose_b), one mesh tensor each whose chip (r, c) shard is expert
+        (c rows + r) epc + le. Built once.
 
         Orientation matters (DS41-35): bfloat8_b shares one exponent per 16 values along the last dim. Along K (as
         stored) a group lies inside one 32-wide e8m0 block, so it holds e2m1 values (0.5 .. 6, 4 bits) under one
         scale: always exact. Along N (W^T) a group spans 16 output rows with their own scales, and a few w2 groups
-        (layer 0: 2-3 of 737,280 per matrix) mix 2^-3 and 2^-8 scales: not exact."""
+        (layer 0: 2-3 of 737,280 per matrix) mix 2^-3 and 2^-8 scales: not exact.
+
+        bfp4 (lossy, owner pick): the same orientation (a group still shares one e8m0 scale); `bfp4_stats` records
+        the fraction of this layer's expert values bfloat4_b changes and the worst per-matrix relative change."""
         rows, cols, mesh, layer, H, I = self.dgs, self.ngroups, self.mesh, self.layer, self.H, self.I
+        dtype = BLOCK_DTYPES[self.impl]
         self.w13, self.w2 = [], []
+        changed = total = 0
+        worst = (0.0, None)
         for le in range(self.epc):
             w13 = torch.empty(cols, rows, 2 * I, H, dtype=torch.bfloat16)
             w2 = torch.empty(cols, rows, H, I, dtype=torch.bfloat16)
@@ -277,19 +317,39 @@ class TtExperts:
                     w2[c, r] = w["w2"]
                     for t in w.values():
                         assert bool(torch.equal(t.to(torch.bfloat16).float(), t)), "e2m1 x 2^e not bf16-exact"
-            for t, nm in ((w13, "w1 | w3"), (w2, "w2")):
-                assert _bfp8_exact(t), f"layer {layer} slot {le} {nm}: bfloat8_b would round a value (DS41-35)"
+            if self.impl == "bfp8":
+                for t, nm in ((w13, "w1 | w3"), (w2, "w2")):
+                    assert _bfp8_exact(t), f"layer {layer} slot {le} {nm}: bfloat8_b would round a value (DS41-35)"
+            else:
+                for mats in ((w13[:, :, :I], "w1"), (w13[:, :, I:], "w3"), (w2, "w2")):
+                    n_ch, rel = _bfp4_change(mats[0])
+                    changed, total = changed + n_ch, total + mats[0].numel()
+                    v, i = rel.flatten().max(dim=0)
+                    if float(v) > worst[0]:
+                        c, r = divmod(int(i), rows)
+                        worst = (float(v), (int(gtab[c, r, le]), mats[1]))
             for t, out in ((w13, self.w13), (w2, self.w2)):
                 out.append(
                     ttnn.from_torch(
                         t,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=dtype,
                         layout=ttnn.TILE_LAYOUT,
                         device=mesh,
                         memory_config=DRAM,
                         mesh_mapper=get_ep_mesh_mapper(mesh),
                     )
                 )
+        if self.impl == "bfp4":
+            self.bfp4_stats = {
+                "layer": layer,
+                "changed_frac": changed / total,
+                "worst_rel": worst[0],
+                "worst_matrix": worst[1],
+            }
+            logger.info(
+                f"EXPERTS_BFP4 layer={layer} values_changed={changed}/{total} ({100 * changed / total:.2f} %) "
+                f"worst_matrix_rel={worst[0]:.4g} (expert, matrix)={worst[1]}"
+            )
 
     # ------------------------------------------------------------------ sizes (built once per rows-per-chip)
     def _modules(self, s: int):
@@ -409,7 +469,7 @@ class TtExperts:
     def _ffn(self, xt: ttnn.Tensor, r: ttnn.Tensor, le: int) -> ttnn.Tensor:
         """One expert over its extracted rows: xt [cap, H] bf16 (q(x)), r [cap, 1] fp32 -> [cap, H] bf16."""
         cfg, lim, I = self.cfg, self.lim, self.I
-        if self.impl == "bfp8":
+        if self.impl in BLOCK_DTYPES:
             gu = ttnn.linear(
                 xt, self.w13[le], transpose_b=True, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM
             )
@@ -440,7 +500,7 @@ class TtExperts:
         ttnn.deallocate(h)
         hq = fp8_qdq(hr, dtype=ttnn.bfloat16)
         ttnn.deallocate(hr)
-        if self.impl == "bfp8":
+        if self.impl in BLOCK_DTYPES:
             y = ttnn.linear(
                 hq, self.w2[le], transpose_b=True, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM
             )

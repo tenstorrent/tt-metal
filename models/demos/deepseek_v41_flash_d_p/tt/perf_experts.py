@@ -62,8 +62,11 @@ def test_time_experts(mesh_device):
             ttnn.deallocate(t)
         mod.free()
         del mod
-    a, b = outs.values()
+    a, b = outs["bfp8"], outs["fp4_decode"]
     print(f"EXPERTS_SAME bfp8 vs fp4_decode bit-identical (chip 0): {bool(torch.equal(a, b))}")
+    if "bfp4" in outs:
+        d = (outs["bfp4"].double() - a.double()).norm() / a.double().norm()
+        print(f"EXPERTS_BFP4 rel vs bfp8 (chip 0, random inputs): {d.item():.4g}")
 
 
 def _bfp8_roundtrip(t: torch.Tensor) -> torch.Tensor:
@@ -102,6 +105,74 @@ def test_bfp8_check_matches_ttnn():
                 bad_t += int(not E._bfp8_exact(w.t().contiguous()))
                 n += 1
     print(f"BFP8_EXACT layers={layers} matrices={n} all exact as stored [N, K]; not exact as W^T: {bad_t}")
+
+
+def _bfp4_roundtrip(t: torch.Tensor) -> torch.Tensor:
+    """t through ttnn's host bfloat4_b packing and back (no device)."""
+    return ttnn.to_torch(ttnn.from_torch(t, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
+
+
+@pytest.mark.timeout(3600)
+def test_bfp4_round_matches_ttnn():
+    """tt/experts._bfp4_round == ttnn's own bfloat4_b packing (random, ties, saturation, a few expert matrices), then
+    per run layer over every expert: the fraction of values bfloat4_b changes and the worst per-matrix relative change
+    ||q(W) - W|| / ||W|| (the numbers EXPERTS_IMPL=bfp4 logs at load)."""
+    S = spec()
+    ck, cfg = hooks._checkpoint(S), hooks._config(S)
+    g = torch.Generator().manual_seed(0)
+    rnd = torch.randn(64, 256, generator=g) * 2.0 ** torch.randint(-8, 8, (64, 1), generator=g)
+    ties = torch.tensor([6.0, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 7.5, 0.25, 0.75, -0.5, -1.5, -2.5, 3.0, 1.0, 0.0])
+    sat = torch.tensor([15.0, 14.0, 13.0, 1.0] + [0.0] * 12)
+    for t in (rnd, ties.repeat(32, 16), sat.repeat(32, 16)):
+        t = t.to(torch.bfloat16).float()
+        assert torch.equal(E._bfp4_round(t), _bfp4_roundtrip(t)), "bfp4 emulation != ttnn packing"
+    layers = [int(i) for i in S.layers()]
+    for layer in layers:
+        changed = total = 0
+        worst = (0.0, None)
+        for e in range(cfg.n_experts):
+            p = ck.expert(layer, e)
+            for nm in E.NAMES:
+                w = E.fp4_dequant(*p[nm])  # [N, K] as stored: what tt/experts.py uploads
+                if e < 2 and layer == layers[0]:
+                    assert torch.equal(E._bfp4_round(w), _bfp4_roundtrip(w)), (layer, e, nm)
+                n_ch, rel = E._bfp4_change(w)
+                changed, total = changed + n_ch, total + w.numel()
+                if float(rel) > worst[0]:
+                    worst = (float(rel), (e, nm))
+        print(
+            f"BFP4_CHANGE layer={layer} experts={cfg.n_experts} values_changed={100 * changed / total:.2f} % "
+            f"worst_matrix_rel={worst[0]:.4g} at (expert, matrix)={worst[1]}"
+        )
+
+
+@mesh_parametrize
+def test_transpose_b_bfp4(mesh_device):
+    """ttnn.linear(x, W bfp4 [N, K], transpose_b=True) == ttnn.linear(x, q4(W)^T bf16 [K, N]) bit for bit
+    (q4 = _bfp4_round: the device multiplies exactly the values the load-time stats describe), HiFi4 + fp32 acc."""
+    S = spec()
+    ck = hooks._checkpoint(S)
+    p = ck.expert(LAYER, 3)
+    w = {nm: E.fp4_dequant(*p[nm]) for nm in E.NAMES}
+    cfg = E.compute_config(mesh_device)
+    g = torch.Generator().manual_seed(1)
+    rep = ttnn.ReplicateTensorToMesh(mesh_device)
+    for nm, wn in (("w1 | w3", torch.cat([w["w1"], w["w3"]])), ("w2", w["w2"])):
+        n_, k_ = wn.shape
+        xh = torch.randn(2048, k_, generator=g).to(torch.bfloat16)
+        xd = ttnn.from_torch(xh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=rep)
+        wb = ttnn.from_torch(wn, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=rep)
+        wq = E._bfp4_round(wn)
+        wt = ttnn.from_torch(
+            wq.t().contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=rep
+        )
+        kw = dict(dtype=ttnn.float32, compute_kernel_config=cfg)
+        a = ttnn.to_torch(ttnn.get_device_tensors(ttnn.linear(xd, wb, transpose_b=True, **kw))[0])
+        b = ttnn.to_torch(ttnn.get_device_tensors(ttnn.linear(xd, wt, **kw))[0])
+        ref = xh.double() @ wn.double().t()
+        rel = ((a.double() - ref).norm() / ref.norm()).item()
+        print(f"TRANSPOSE_B_BFP4 {nm}: equal={bool(torch.equal(a, b))} rel_vs_exact_W={rel:.4g}")
+        assert torch.equal(a, b), nm
 
 
 @mesh_parametrize
