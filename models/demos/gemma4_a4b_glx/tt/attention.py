@@ -11,7 +11,12 @@ Per chunk at absolute positions [start, start+S):
   q = rope(q_norm(x Wq)), k = rope(k_norm(x Wk)), v = rms(x Wv)   (Gemma RMSNorm x * w, eps 1e-6; V has no weight)
   K/V are written into the bfp8 cache at [start, start+S), then SDPA (causal, window 1024, scale 1.0) runs over the
   square [cache tail (start-hist, start) | chunk]. Q is front-padded with hist dummy rows whose outputs are dropped.
+Serving chunks (tt-d-gen): ``start`` is any multiple of 32 and ``end`` (actual_end) may fall inside the chunk; K/V rows
+at and past ``end`` are zeroed before the cache write (the record holding actual_end ships whole), so the rows past it
+stay zero until a later chunk writes them. The pad rows' own outputs are dropped by the caller.
 """
+
+import math
 
 import torch
 
@@ -112,7 +117,8 @@ class TtSlidingAttention:
         self.norm_cfg = _kernel_config(mesh, "HiFi4", True)
         self.sdpa_cfg = _kernel_config(mesh, settings.get("SDPA_FIDELITY"), settings.get("SDPA_FP32_ACC"))
         self.q_chunk, self.k_chunk = settings.get("SDPA_Q_CHUNK"), settings.get("SDPA_K_CHUNK")
-        self.cos = self.sin = None
+        self.cos = self.sin = self.rows = None
+        self.rope_impl = settings.get("ROPE_IMPL")
         self.rope_len = 0
 
     def _weight(self, w, dim):
@@ -145,8 +151,14 @@ class TtSlidingAttention:
         if self.cos is not None:
             ttnn.deallocate(self.cos)
             ttnn.deallocate(self.sin)
+        sin = emb.sin()
+        if self.rope_impl == "composed":  # rotate_half(x) * sin == swap_halves(x) * [-sin_lo | sin_hi]
+            sin = torch.cat([-sin[:, : sin.shape[-1] // 2], sin[:, sin.shape[-1] // 2 :]], dim=-1)
         self.cos = self._replicated(emb.cos().reshape(1, 1, max_seq, -1), ttnn.float32)
-        self.sin = self._replicated(emb.sin().reshape(1, 1, max_seq, -1), ttnn.float32)
+        self.sin = self._replicated(sin.reshape(1, 1, max_seq, -1), ttnn.float32)
+        if self.rows is not None:
+            ttnn.deallocate(self.rows)
+        self.rows = self._replicated(pos.reshape(1, 1, max_seq, 1), ttnn.float32)  # local row index (exact in fp32)
         self.rope_len = max_seq
 
     def _rope_rows(self, start: int, end: int, d: int):
@@ -157,6 +169,37 @@ class TtSlidingAttention:
             ttnn.slice(self.cos, [0, 0, start, 0], [1, 1, end, d]),
             ttnn.slice(self.sin, [0, 0, start, 0], [1, 1, end, d]),
         )
+
+    def _pad_mask(self, s: int, n: int):
+        """[1, 1, s, 1] fp32: 1 for the chunk's rows below n (actual_end - start), 0 for the pad rows; None when every
+        row is real. A compare against the load-time row index table, no host work."""
+        if n >= s:
+            return None
+        rows = self.rows if s == self.rope_len else ttnn.slice(self.rows, [0, 0, 0, 0], [1, 1, s, 1])
+        mask = ttnn.lt(rows, float(n))
+        if rows is not self.rows:
+            ttnn.deallocate(rows)
+        return mask
+
+    @staticmethod
+    def _masked(t, mask):
+        """where(mask, t, 0), t freed; t itself when mask is None. A select, not a multiply: the FPU multiply feeds
+        fp32 operands as tf32 and would change the real rows' bits, so a pulled-back chunk's rewrite of rows an
+        unmasked chunk wrote would differ."""
+        if mask is None:
+            return t
+        out = ttnn.where(mask, t, 0.0)
+        ttnn.deallocate(t)
+        return out
+
+    def _kv(self, k, v, cos, sin, mask):
+        """fp32 K/V heads -> bfp8 (K = rope(k_norm(k)), V = rms(v)), the pad rows zeroed."""
+        k8 = self._norm_rope(k, self.k_norm, cos, sin, ttnn.bfloat8_b, mask)
+        vn = self._masked(self._head_norm(v, None), mask)
+        ttnn.deallocate(v)
+        v8 = ttnn.typecast(vn, ttnn.bfloat8_b)
+        ttnn.deallocate(vn)
+        return k8, v8
 
     def make_cache(self, max_seq: int, k_prefix=None, v_prefix=None) -> TtKVCache:
         """Device cache for this layer from host prefixes in the reference's state exchange layout, position-major
@@ -184,22 +227,44 @@ class TtSlidingAttention:
         ttnn.deallocate(t)
         return out
 
-    def _norm_rope(self, t, weight, cos, sin, dtype):
-        """fp32 [1, h, S, D] -> rope(rms_norm(t) * w) in `dtype`."""
+    def _rope(self, t, cos, sin):
+        """rotate-half RoPE of fp32 [1, h, S, D]. composed: t*cos + swap_halves(t)*sin (sin table pre-signed), plain
+        eltwise ops whose bits for a row do not depend on the row's place in the chunk (rotary_embedding's do)."""
+        if self.rope_impl == "fused":
+            return ttnn.experimental.rotary_embedding(t, cos, sin, compute_kernel_config=self.norm_cfg)
+        h, s_, d = t.shape[1], t.shape[2], t.shape[3]
+        lo = ttnn.slice(t, [0, 0, 0, 0], [1, h, s_, d // 2])
+        hi = ttnn.slice(t, [0, 0, 0, d // 2], [1, h, s_, d])
+        swapped = ttnn.concat([hi, lo], dim=-1)
+        ttnn.deallocate(lo)
+        ttnn.deallocate(hi)
+        rs = ttnn.multiply(swapped, sin)
+        ttnn.deallocate(swapped)
+        out = ttnn.multiply(t, cos)
+        ttnn.add_(out, rs)
+        ttnn.deallocate(rs)
+        return out
+
+    def _norm_rope(self, t, weight, cos, sin, dtype, mask=None):
+        """fp32 [1, h, S, D] -> rope(rms_norm(t) * w) in `dtype` (rows where mask is 0 zeroed)."""
         tn = self._head_norm(t, weight)
         ttnn.deallocate(t)
-        tr = ttnn.experimental.rotary_embedding(tn, cos, sin, compute_kernel_config=self.norm_cfg)
+        tr = self._rope(tn, cos, sin)
         ttnn.deallocate(tn)
+        tr = self._masked(tr, mask)
         out = ttnn.typecast(tr, dtype)
         ttnn.deallocate(tr)
         return out
 
-    def __call__(self, x, cache: TtKVCache, start: int):
-        """x: [1, 1, S, hidden] bf16 replicated; positions [start, start+S). Returns [1, 1, S, hidden] replicated."""
+    def __call__(self, x, cache: TtKVCache, start: int, actual_end: int | None = None):
+        """x: [1, 1, S, hidden] bf16 replicated; positions [start, start+S), rows at and past actual_end are pad (their
+        cache rows are written as zeros). Returns [1, 1, S, hidden] replicated."""
         s = x.shape[-2]
         end = start + s
         assert start % TILE == 0 and s % TILE == 0, f"start {start} and S {s} must be tile aligned"
         assert end <= cache.max_seq and end <= self.rope_len, f"chunk end {end} past cache/rope ({cache.max_seq})"
+        n = s if actual_end is None else actual_end - start
+        assert 0 < n <= s, f"actual_end {actual_end} not in ({start}, {end}]"
         nh, nkv, d = self.nh, self.nkv, self.d
 
         xqkv = ttnn.linear(x, self.wqkv, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
@@ -214,14 +279,13 @@ class TtSlidingAttention:
         q, k, v = (self._fp32(t) for t in (q, k, v))
         cos, sin = self._rope_rows(start, end, d)
         q = self._norm_rope(q, self.q_norm, cos, sin, ttnn.bfloat16)
-        k8 = self._norm_rope(k, self.k_norm, cos, sin, ttnn.bfloat8_b)
+        mask = self._pad_mask(s, n)
+        k8, v8 = self._kv(k, v, cos, sin, mask)
+        if mask is not None:
+            ttnn.deallocate(mask)
         if end - start < self.rope_len:  # a full-range slice is the table itself: keep it
             ttnn.deallocate(cos)
             ttnn.deallocate(sin)
-        vn = self._head_norm(v, None)
-        ttnn.deallocate(v)
-        v8 = ttnn.typecast(vn, ttnn.bfloat8_b)
-        ttnn.deallocate(vn)
 
         # Write the chunk into the cache (bfp8), then read back the window tail + chunk as K/V for SDPA.
         ttnn.fill_cache(cache.k, k8, batch_idx=0, update_idx=start)
@@ -310,7 +374,8 @@ class TtGlobalAttention(TtSlidingAttention):
         self.norm_cfg = _kernel_config(mesh, "HiFi4", True)
         self.sdpa_cfg = _kernel_config(mesh, settings.get("SDPA_FIDELITY"), settings.get("SDPA_FP32_ACC"))
         self.q_chunk, self.k_chunk = settings.get("GLOBAL_SDPA_Q_CHUNK"), settings.get("GLOBAL_SDPA_K_CHUNK")
-        self.cos = self.sin = None
+        self.cos = self.sin = self.rows = None
+        self.rope_impl = settings.get("ROPE_IMPL")
         self.rope_len = 0
         self.page_table = None
 
@@ -331,12 +396,15 @@ class TtGlobalAttention(TtSlidingAttention):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
             )
 
-    def __call__(self, x, cache: TtKVCache, start: int):
-        """x: [1, 1, S, hidden] bf16 replicated; positions [start, start+S). Returns [1, 1, S, hidden] replicated."""
+    def __call__(self, x, cache: TtKVCache, start: int, actual_end: int | None = None):
+        """x: [1, 1, S, hidden] bf16 replicated; positions [start, start+S), rows at and past actual_end are pad (their
+        cache rows are written as zeros). Returns [1, 1, S, hidden] replicated."""
         s = x.shape[-2]
         end = start + s
         assert start % TILE == 0 and s % TILE == 0, f"start {start} and S {s} must be tile aligned"
         assert end <= cache.max_seq <= self.rope_len, f"chunk end {end} / cache {cache.max_seq} / rope {self.rope_len}"
+        n = s if actual_end is None else actual_end - start
+        assert 0 < n <= s, f"actual_end {actual_end} not in ({start}, {end}]"
         nh, d = self.nh, self.d
 
         xqkv = ttnn.linear(x, self.wqkv, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
@@ -354,40 +422,54 @@ class TtGlobalAttention(TtSlidingAttention):
         q, k, v = (self._fp32(t) for t in (q, k, v))
         cos, sin = self._rope_rows(start, end, d)
         q = self._norm_rope(q, self.q_norm, cos, sin, ttnn.bfloat16)
-        k8 = self._norm_rope(k, self.k_norm, cos, sin, ttnn.bfloat8_b)
+        mask = self._pad_mask(s, n)
+        k8, v8 = self._kv(k, v, cos, sin, mask)
+        if mask is not None:
+            ttnn.deallocate(mask)
         if end - start < self.rope_len:  # a full-range slice is the table itself: keep it
             ttnn.deallocate(cos)
             ttnn.deallocate(sin)
-        vn = self._head_norm(v, None)
-        ttnn.deallocate(v)
-        v8 = ttnn.typecast(vn, ttnn.bfloat8_b)
-        ttnn.deallocate(vn)
 
         ttnn.fill_cache(cache.k, k8, batch_idx=0, update_idx=start)
         ttnn.fill_cache(cache.v, v8, batch_idx=0, update_idx=start)
         ttnn.deallocate(k8)
         ttnn.deallocate(v8)
 
+        # Chunked SDPA wants chunk_start_idx on a q/k chunk boundary; a start that is only tile aligned (a follow-up
+        # turn) runs from the boundary below it, Q front-padded with `pre` dummy rows whose outputs are dropped.
+        q_chunk, k_chunk = min(self.q_chunk, s), min(self.k_chunk, s)
+        pre = start % math.lcm(q_chunk, k_chunk)
+        if pre:
+            q_pad = ttnn.slice(q, [0, 0, 0, 0], [1, nh, pre, d])
+            q_sq = ttnn.concat([q_pad, q], dim=2)
+            ttnn.deallocate(q_pad)
+            ttnn.deallocate(q)
+        else:
+            q_sq = q
         pages = (cache.max_seq // self.KV_BLOCK, 1, self.KV_BLOCK, d)  # zero-cost view of the contiguous cache
         k_paged = ttnn.reshape(cache.k, pages)
         v_paged = ttnn.reshape(cache.v, pages)
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
-            q_chunk_size=min(self.q_chunk, s),
-            k_chunk_size=min(self.k_chunk, s),
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
             exp_approx_mode=False,
         )
         attn = ttnn.transformer.chunked_scaled_dot_product_attention(
-            input_tensor_q=q,
+            input_tensor_q=q_sq,
             input_tensor_k=k_paged,
             input_tensor_v=v_paged,
             page_table_tensor=self.page_table,
-            chunk_start_idx=start,
+            chunk_start_idx=start - pre,
             scale=self.scale,
             program_config=program_config,
             compute_kernel_config=self.sdpa_cfg,
         )
-        ttnn.deallocate(q)
+        ttnn.deallocate(q_sq)
+        if pre:
+            full = attn
+            attn = ttnn.slice(full, [0, 0, pre, 0], [1, nh, pre + s, d])
+            ttnn.deallocate(full)
 
         concat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn)

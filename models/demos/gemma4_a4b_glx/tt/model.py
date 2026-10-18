@@ -156,7 +156,7 @@ class TtGemma4Block:
     def _step_fns(self):
         fns = {name: (lambda ctx, x, m=m: m(x)) for name, m in self.norms.items()}
         fns.update(
-            attention=lambda ctx, x: self.attention(x, ctx.state, ctx.start),
+            attention=lambda ctx, x: self.attention(x, ctx.state, ctx.start, ctx.extra.get("end")),
             attn_residual=lambda ctx, a, b: self.add(a, b),
             mlp=lambda ctx, x: self.mlp(x),
             router=self._router,
@@ -166,8 +166,9 @@ class TtGemma4Block:
         )
         return fns
 
-    def __call__(self, h, start, cache):
-        """h: [1, 1, S, H] bf16 replicated at positions [start, start+S). Returns the block output (h is kept)."""
+    def __call__(self, h, start, cache, end=None):
+        """h: [1, 1, S, H] bf16 replicated at positions [start, start+S); rows at and past `end` (actual_end) are pad.
+        Returns the block output (h is kept)."""
         env = {}
         k = {"step": 0}
 
@@ -180,7 +181,7 @@ class TtGemma4Block:
                 _free(env.pop(dead, None))
             k["step"] += 1
 
-        ctx = Ctx(self.i, start, h.shape[-2], cache)
+        ctx = Ctx(self.i, start, h.shape[-2], cache, extra={"end": end})
         return run_block(self.steps, lambda name: self.fns[name], ctx, h, rec)
 
 
@@ -203,6 +204,9 @@ class TtGemma4Model:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
+        vocab = table.shape[0]
+        assert vocab & (vocab - 1) == 0, f"vocab {vocab} not a power of two (the pad id mask needs one)"
+        self.id_mask = vocab - 1
         del table
         self.norm = TtRMSNorm(mesh, self.loader.get(PREFIX + "norm.weight"), eps=self.cfg.rms_norm_eps)
         self.blocks = [TtGemma4Block(mesh, self.cfg, self.loader, i) for i in layers]
@@ -217,10 +221,16 @@ class TtGemma4Model:
         return caches
 
     def embed(self, ids):
-        """ids: [1, 1, 1, S] uint32 ROW_MAJOR replicated -> [1, 1, S, H] bf16 TILE replicated (sqrt(H) folded in)."""
+        """ids: [1, 1, 1, S] uint32 ROW_MAJOR replicated -> [1, 1, S, H] bf16 TILE replicated (sqrt(H) folded in).
+
+        The server pads a chunk past actual_end with 0xFFFFFFFF; ids & (vocab - 1) keeps every real id and maps the pad
+        id to a valid row (vocab - 1), so the lookup never reads past the table. Pad rows only feed pad rows (causal)
+        and attention writes zeros to their cache rows."""
+        safe = ttnn.bitwise_and(ids, self.id_mask)
         e = ttnn.embedding(
-            ids, self.embed_table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            safe, self.embed_table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
+        ttnn.deallocate(safe)
         return ttnn.reshape(e, (1, 1, ids.shape[-1], e.shape[-1]))
 
     def final_norm(self, h):

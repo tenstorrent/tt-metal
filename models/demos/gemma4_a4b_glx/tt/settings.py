@@ -60,6 +60,13 @@ TABLE = {
         ("separate", "fused"),
         "2026-10-14 L.s16384: RMSNorm weight as a separate fp32 multiply (fused ttnn.rms_norm weight biases norms -0.07 %)",
     ),
+    "ROPE_IMPL": Setting(
+        "composed",
+        ("composed", "fused"),
+        "2026-10-18 L.starts: RoPE as eltwise x*cos + swap_halves(x)*sin_signed (composed; same bits for a token at any "
+        "chunk offset) or ttnn.experimental.rotary_embedding (fused; its core group 1 runs a default compute config, so "
+        "a row's bits depend on where it falls in the chunk and a pulled-back rewrite differs)",
+    ),
 }
 
 MAX_PRECISION = {

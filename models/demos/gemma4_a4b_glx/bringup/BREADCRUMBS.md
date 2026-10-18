@@ -362,3 +362,23 @@ I re-applied the attempt above unchanged; it had passed under an older framework
   returns the tables themselves; forward deallocates cos/sin only when `end - start < rope_len`.
 - Result: 'What is the capital of France? Answer in one word.' -> 'Paris<turn|>', smoke_device_ok 1.
 - Re-run: `bfw job check --task L.smoke`.
+
+## L.starts (KV at tt-d-gen's chunk starts)
+
+- Serving entry points: `embed(tokens, start=)` uploads ids as uint32, so the 0xFFFFFFFF pad survives.
+  `TtGemma4Model.embed` masks ids with `vocab - 1` (262144 is a power of two) before `ttnn.embedding`.
+  `layer(i, h, start, state, end=)` passes `end` through `TtGemma4Block` (`Ctx.extra["end"]`) to attention as `actual_end`.
+  `_DeviceState.free()` frees the caches.
+- Pad rows: attention builds a [1,1,S,1] mask once per call. It compares a load-time fp32 row-index table (`self.rows`)
+  with `actual_end - start`, then zeroes K and V rows at and past actual_end with `ttnn.where` before `fill_cache`.
+  A multiply would change the real rows' bits.
+- Global chunked SDPA at a start that is not a multiple of lcm(q_chunk, k_chunk): front-pad Q with `pre` of its own
+  rows, call with `chunk_start_idx = start - pre`, and slice the output back.
+- RoPE: `ROPE_IMPL` setting, default `composed` = `x*cos + concat([x_hi, x_lo]) * sin_signed` (the load-time sin table
+  has its first half negated). The fused `ttnn.experimental.rotary_embedding` gave one K tile different bits depending
+  on its offset in the chunk (core group 1 runs a default compute config), so the pulled-back chunk rewrote rows
+  [8192, 8224) with different bytes. `fused` remains as the option.
+- Not done here: the ND-sharded served KV cache (`test_kv_layout`, `test_pad_rows`) is gated by other assemble tasks.
+  `TtKVCache` is still DRAM-interleaved.
+- Re-run: `bfw job check --task L.starts`. Gate only:
+  `scripts/run_safe_pytest.sh --run-all generated/bringup/gemma4_a4b_glx/tests/test_chunk_starts.py`.

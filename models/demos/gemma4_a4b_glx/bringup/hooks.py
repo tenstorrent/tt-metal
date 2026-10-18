@@ -263,6 +263,11 @@ class _DeviceState:
 
         return {"key": ttnn.bfloat8_b, "value": ttnn.bfloat8_b}
 
+    def free(self):
+        for cache in self.caches.values():
+            cache.deallocate()
+        self.caches = {}
+
 
 class Gemma4DeviceModel:
     """Ladder adapter over tt.model.TtGemma4Model. The hidden state is a replicated [1, 1, S, H] bf16 device tensor
@@ -285,13 +290,15 @@ class Gemma4DeviceModel:
     def new_state(self, max_seq):
         return _DeviceState(self.model, max_seq)
 
-    def embed(self, tokens):
+    def embed(self, tokens, start=0):
+        """tokens: one chunk in natural order, the server's pad id (0xFFFFFFFF) past actual_end. The hidden state is
+        replicated on every chip, so the chunk's layout does not depend on `start` (positions enter in layer())."""
         import torch
 
         import ttnn
 
         ids = ttnn.from_torch(
-            tokens.reshape(1, 1, 1, -1).to(torch.int32),
+            tokens.reshape(1, 1, 1, -1).to(torch.int64).to(torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh,
@@ -312,8 +319,9 @@ class Gemma4DeviceModel:
 
         return replicated_to_host(h).float()
 
-    def layer(self, i, h, start, state):
-        return self.blocks[i](h, start, state.caches[i])
+    def layer(self, i, h, start, state, end=None):
+        """Rows at and past `end` (actual_end) are pad: their cache rows stay zero."""
+        return self.blocks[i](h, start, state.caches[i], end=end)
 
     def final_norm(self, h):
         return self.model.final_norm(h)
