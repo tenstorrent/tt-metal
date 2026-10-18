@@ -613,8 +613,15 @@ bool D2HSocket::has_data(std::optional<uint32_t> num_bytes_to_check) {
     if (read_ptr_ + num_bytes >= fifo_curr_size_) {
         num_bytes += fifo_size_ - fifo_curr_size_;
     }
-    tt_driver_atomics::mfence();
-    volatile uint32_t bytes_sent_value = bytes_sent_ptr_[0];
+    uint32_t bytes_sent_value;
+    if (using_hugepage_) {
+        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+        _mm_lfence();
+        bytes_sent_value = *hugepage_bytes_sent_host_ptr_;
+    } else {
+        tt_driver_atomics::mfence();
+        bytes_sent_value = bytes_sent_ptr_[0];
+    }
     bytes_sent_ = bytes_sent_value;
     uint32_t bytes_recv = bytes_sent_value - bytes_acked_;
     return bytes_recv >= num_bytes;
