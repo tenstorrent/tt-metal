@@ -149,6 +149,15 @@ class TtSlidingAttention:
         self.sin = self._replicated(emb.sin().reshape(1, 1, max_seq, -1), ttnn.float32)
         self.rope_len = max_seq
 
+    def _rope_rows(self, start: int, end: int, d: int):
+        """cos/sin rows [start, end) of the tables; the full range returns the tables themselves (never free them)."""
+        if end - start == self.rope_len:
+            return self.cos, self.sin
+        return (
+            ttnn.slice(self.cos, [0, 0, start, 0], [1, 1, end, d]),
+            ttnn.slice(self.sin, [0, 0, start, 0], [1, 1, end, d]),
+        )
+
     def make_cache(self, max_seq: int, k_prefix=None, v_prefix=None) -> TtKVCache:
         """Device cache for this layer from host prefixes in the reference's state exchange layout, position-major
         [n, Hkv * D] (row = token, heads concatenated). Each KV head goes on kv_repeat adjacent columns."""
@@ -203,12 +212,12 @@ class TtSlidingAttention:
         # bf16 -> bfp8 ties away from zero (bf16 values sit exactly on bfp8 ties), which grew K norms by ~0.3 % and
         # the attention output by ~0.4 %; fp32 -> bfp8 is unbiased. rotary_embedding's default config adds ~0.2 %.
         q, k, v = (self._fp32(t) for t in (q, k, v))
-        cos = ttnn.slice(self.cos, [0, 0, start, 0], [1, 1, end, d])
-        sin = ttnn.slice(self.sin, [0, 0, start, 0], [1, 1, end, d])
+        cos, sin = self._rope_rows(start, end, d)
         q = self._norm_rope(q, self.q_norm, cos, sin, ttnn.bfloat16)
         k8 = self._norm_rope(k, self.k_norm, cos, sin, ttnn.bfloat8_b)
-        ttnn.deallocate(cos)
-        ttnn.deallocate(sin)
+        if end - start < self.rope_len:  # a full-range slice is the table itself: keep it
+            ttnn.deallocate(cos)
+            ttnn.deallocate(sin)
         vn = self._head_norm(v, None)
         ttnn.deallocate(v)
         v8 = ttnn.typecast(vn, ttnn.bfloat8_b)
@@ -343,12 +352,12 @@ class TtGlobalAttention(TtSlidingAttention):
 
         # fp32 norms + RoPE; K/V reach bfp8 from fp32 (see TtSlidingAttention.__call__).
         q, k, v = (self._fp32(t) for t in (q, k, v))
-        cos = ttnn.slice(self.cos, [0, 0, start, 0], [1, 1, end, d])
-        sin = ttnn.slice(self.sin, [0, 0, start, 0], [1, 1, end, d])
+        cos, sin = self._rope_rows(start, end, d)
         q = self._norm_rope(q, self.q_norm, cos, sin, ttnn.bfloat16)
         k8 = self._norm_rope(k, self.k_norm, cos, sin, ttnn.bfloat8_b)
-        ttnn.deallocate(cos)
-        ttnn.deallocate(sin)
+        if end - start < self.rope_len:  # a full-range slice is the table itself: keep it
+            ttnn.deallocate(cos)
+            ttnn.deallocate(sin)
         vn = self._head_norm(v, None)
         ttnn.deallocate(v)
         v8 = ttnn.typecast(vn, ttnn.bfloat8_b)

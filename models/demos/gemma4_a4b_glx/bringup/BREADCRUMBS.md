@@ -349,3 +349,16 @@ I re-applied the attempt above unchanged; it had passed under an older framework
   (`[:n]`), both in `_attention_fn` and in `_DeviceState.load_prefix`.
 - Result: pcc_attention_L00 0.99997, auto_margin_min 1.52, 32 device ops, 0 host flops.
 - Re-run: `bfw job check --task C.sliding.attention`.
+
+## L.smoke (intake smoke on the device model)
+
+- First check, with no code change: step 0 gave 'Paris'. Step 1 failed with TT_FATAL "Input Tensor is not allocated" in
+  `ttnn.slice(self.cos, ...)`, sliding attention layer 0.
+- Cause: the smoke runs one chunk of length `target.chunk` (8192) at start 0, so `end - start == rope_len`.
+  `ttnn.slice` over the whole tensor returns the input tensor itself, not a copy. Attention then deallocated "the
+  slice", which freed the load-time cos/sin tables, and the next forward hit freed buffers. The ladder never
+  re-runs a chunk that covers the whole table, so it did not see this.
+- Fix: `_rope_rows(start, end, d)` in tt/attention.py (sliding; the global subclass inherits it). For the full range it
+  returns the tables themselves; forward deallocates cos/sin only when `end - start < rope_len`.
+- Result: 'What is the capital of France? Answer in one word.' -> 'Paris<turn|>', smoke_device_ok 1.
+- Re-run: `bfw job check --task L.smoke`.
