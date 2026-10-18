@@ -10,9 +10,13 @@ import os
 import secrets
 import time
 from collections import Counter
+from pathlib import Path
 
 import torch
-from readiness_check.contract import Generator
+try:
+    from readiness_check.contract import Generator
+except ImportError:  # serving images (TTI/CI) do not ship the bring-up runtime
+    from models.autoports.qwen_qwen3_8_flash_next.tt.readiness_contract import Generator
 
 import ttnn
 from models.autoports.qwen_qwen3_8_flash_next.tt.model import QwenFlashNextModel
@@ -791,7 +795,9 @@ def build_generator(model_dir, mesh_device, **kwargs):
         layer_indices=indices,
         max_seq_len=kwargs.pop("max_seq_len", None),
         cache_dir=kwargs.pop(
-            "cache_dir", "/home/vkovacevic/qwen38-flash/tt-metal-cache/qwen_qwen3_8_flash_next/de4b8e4_ple"
+            "cache_dir",
+            os.environ.get("QWEN_FLASH_WEIGHT_CACHE")
+            or str(Path.home() / ".cache/tt-metal-cache/qwen_qwen3_8_flash_next/de4b8e4_ple"),
         ),
     )
     return QwenFlashNextGenerator(

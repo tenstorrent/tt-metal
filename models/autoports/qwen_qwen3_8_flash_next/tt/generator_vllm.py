@@ -17,6 +17,27 @@ from .generator import QwenFlashNextGenerator
 from .model import QwenFlashNextModel
 
 
+
+def _mounted_snapshot():
+    """Serving harnesses (TTI) mount the checkpoint and export MODEL_WEIGHTS_DIR /
+    HF_MODEL as a local snapshot directory. Prefer it when it holds the safetensors
+    index and config.json, so the container needs no hub access."""
+    for name in ("MODEL_WEIGHTS_DIR", "HF_MODEL"):
+        value = os.environ.get(name)
+        if value and (Path(value) / "model.safetensors.index.json").is_file() and (Path(value) / "config.json").is_file():
+            return value
+    return None
+
+
+def _ple_cache_dir():
+    """Where the BFP4 n-gram embedding shards (~54 GB) are cached. QWEN_FLASH_WEIGHT_CACHE
+    wins; TTI serving images set TT_CACHE_PATH (per-model cache volume); otherwise ~/.cache."""
+    explicit = os.environ.get("QWEN_FLASH_WEIGHT_CACHE")
+    if explicit:
+        return explicit
+    root = os.environ.get("TT_CACHE_PATH") or str(Path.home() / ".cache" / "tt-metal-cache")
+    return str(Path(root) / "qwen_qwen3_8_flash_next" / "de4b8e4_ple")
+
 class QwenFlashNextForCausalLM:
     decode_input_update_contract = 1
     model_capabilities = {
@@ -48,7 +69,9 @@ class QwenFlashNextForCausalLM:
         obj.mesh = mesh_device
         obj.batch_size = max_batch_size
         obj.context = max_seq_len
-        obj.checkpoint = os.environ.get("QWEN_FLASH_CHECKPOINT", hf_config._name_or_path)
+        obj.checkpoint = (
+            os.environ.get("QWEN_FLASH_CHECKPOINT") or _mounted_snapshot() or hf_config._name_or_path
+        )
         if not Path(obj.checkpoint).is_dir():
             from huggingface_hub import snapshot_download
 
@@ -111,10 +134,7 @@ class QwenFlashNextForCausalLM:
             batch_size=self.batch_size,
             max_seq_len=self.context,
             layer_indices=self.layer_indices,
-            cache_dir=os.environ.get(
-                "QWEN_FLASH_WEIGHT_CACHE",
-                "/home/vkovacevic/qwen38-flash/tt-metal-cache/qwen_qwen3_8_flash_next/de4b8e4_ple",
-            ),
+            cache_dir=_ple_cache_dir(),
             attention_pool_tokens=blocks * block_size,
         )
         self.generator = QwenFlashNextGenerator(
