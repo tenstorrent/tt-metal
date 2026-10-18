@@ -491,6 +491,18 @@ inline void _llk_unpack_AB_matmul_uninit_()
 }
 
 /**
+ * @brief The hoist_rows argument of @ref _llk_unpack_AB_matmul_ for a kernel's fidelity and sync mode.
+ *
+ * With HiFi4 and one DEST section the math and pack bound every block, so a shorter unpack call only moves their
+ * hand-off; those kernels keep the per-row form.
+ */
+template <MathFidelity math_fidelity, DstSync dst_sync>
+constexpr bool unpack_AB_matmul_hoist_rows()
+{
+    return !(math_fidelity == MathFidelity::HiFi4 && dst_sync == DstSync::SyncFull);
+}
+
+/**
  * @brief Unpack the operand tiles for a matmul (A x B) into SrcA and SrcB.
  *
  * Iterates over the reused dimension, computing per-tile L1 addresses (with optional kernel-
@@ -502,6 +514,7 @@ inline void _llk_unpack_AB_matmul_uninit_()
  * @tparam auto_ttsync: The value passed to @ref _llk_unpack_AB_matmul_init_.
  * @tparam dest_max_tiles: The 32x32 tiles DEST holds in the kernel's sync and accumulation mode (get_dest_max_tiles), which
  *                         bounds the tiles of a row.
+ * @tparam hoist_rows: Compute the row invariants once per call on the poll path; see @ref unpack_AB_matmul_hoist_rows.
  * @param base_address_a: L1 base address of operand A's tile buffer.
  * @param base_address_b: L1 base address of operand B's tile buffer.
  * @param tile_index_a: Starting tile index into operand A.
@@ -517,7 +530,12 @@ inline void _llk_unpack_AB_matmul_uninit_()
  *       @ref _llk_unpack_AB_matmul_uninit_ after it to restore modified state.
  * @ref _llk_math_matmul_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool auto_ttsync = false, std::uint32_t dest_max_tiles = 16>
+template <
+    std::uint32_t kernel_broadcast_a = 0,
+    std::uint32_t kernel_broadcast_b = 0,
+    bool auto_ttsync                 = false,
+    std::uint32_t dest_max_tiles     = 16,
+    bool hoist_rows                  = true>
 inline void _llk_unpack_AB_matmul_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -549,7 +567,7 @@ inline void _llk_unpack_AB_matmul_(
     }
 
     // The poll path computes its row invariants once: on short rows the unpack thread waits on its RISC's instruction count
-    constexpr bool hoisted     = !auto_ttsync && kernel_broadcast_a == 0 && kernel_broadcast_b == 0;
+    constexpr bool hoisted     = hoist_rows && !auto_ttsync && kernel_broadcast_a == 0 && kernel_broadcast_b == 0;
     std::uint32_t address_a    = base_address_a + tile_size_a * tile_index_a;
     std::uint32_t address_b    = base_address_b + tile_size_b * tile_index_b;
     const std::uint32_t step_a = reuse_a ? tile_size_a * kt_dim : 0;

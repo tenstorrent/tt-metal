@@ -61,7 +61,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr bool stream_narrow = false;
 #endif
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, unpack_auto_ttsync, stream_narrow
-#define MATMUL_UNPACK_TEMPLATE_ARGS      0, 0, unpack_auto_ttsync, MAX_TILES_DEST
+#define MATMUL_UNPACK_TEMPLATE_ARGS      0, 0, unpack_auto_ttsync, MAX_TILES_DEST, unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>()
 #else
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_TEMPLATE_ARGS

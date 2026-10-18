@@ -60,7 +60,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr bool stream_narrow = false;
 #endif
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, stream_narrow
-#define MATMUL_UNPACK_TEMPLATE_ARGS      0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()
+#define MATMUL_UNPACK_TEMPLATE_ARGS \
+    0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>()
 #else
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_TEMPLATE_ARGS
