@@ -1313,3 +1313,5 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F106: the settings lint on a fork flags only the environment reads a change adds (vs HEAD): an imported fork's own
   knobs are not the editing agent's. DeepSeek-V4.1 P.3: 173 flags on Marko's MIMO_FL_* reads after an edit to
   flat_routed_expert; attempt 2 began converting them (aborted, OV-15). Model code stays strict.
+- F107: a perf pick's agent attempts continue the numbering across a resume or a new brief (F95's rule, which the
+  perf loop missed): DeepSeek-V4.1 P.3 restarted at attempt 1 after an overseer stop, reusing attempt 1's brief name.
