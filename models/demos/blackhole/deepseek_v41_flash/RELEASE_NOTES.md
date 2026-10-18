@@ -1,18 +1,20 @@
 # DeepSeek-V4.1-Flash on Blackhole Galaxy: release notes
 
-## This release: image `0.24.0-c9cfb00-ffd1a57` (vLLM 0.31.0)
+## This release: image `0.24.0-5cfe4d9-84b529b` (vLLM 0.31.0)
 
 | | |
 |---|---|
-| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-c9cfb00-ffd1a57` |
-| tt-metal | `c9cfb008c651ea5b5a7978f0569cd4358196f8ce` (branch `ssinghal/dsv4p1`; the image was built from this commit, later commits change documentation only) |
-| tt-inference-server | `ffd1a57ceece25c02b668bbcc4682dba52dbd9da` (branch `ssinghal/dsv4p1`) |
+| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-5cfe4d9-84b529b` |
+| tt-metal | `5cfe4d92d309793f070876e3023838c35ff7922e` (branch `ssinghal/dsv4p1`; the image was built from this commit, later commits change documentation only) |
+| tt-inference-server | `84b529b9afdeaa12c230523c1c90ed2c307b18bf` (branch `ssinghal/dsv4p1`; the catalog carries the production defaults, see below) |
 | vllm-tt-plugin | `ff71d290df8e95e5e956d49ba860478db2cb034c` (branch `ssinghal/dsv4p1`) |
 | Stack | vLLM 0.31.0, torch 2.11.0+cpu, transformers 5.12.1 |
-| Previous image | `0.24.0-799a223-ffd1a57` (vLLM 0.31.0; before it `0.24.0-3dce07e-233b250`) |
-| Build | an overlay on the previous image (`0.24.0-799a223-ffd1a57`): the compiled tt-metal (C++), the Python environment and the vLLM install are reused unchanged (no file outside `models/` differs in tt-metal between `3dce07e3792` and this commit); `models/` and the plugin package are replaced from the commits above, the tt-inference-server tree is unchanged. |
+| Previous image | `0.24.0-c9cfb00-ffd1a57` (vLLM 0.31.0; before it `0.24.0-799a223-ffd1a57`) |
+| Build | an overlay on the previous image (`0.24.0-c9cfb00-ffd1a57`): the compiled tt-metal (C++), the Python environment and the vLLM install are reused unchanged (no file outside `models/` differs in tt-metal between `3dce07e3792` and this commit); `models/` and the plugin package are replaced from the commits above, the tt-inference-server tree is unchanged. |
 
 ## What changed since `0.24.0-799a223-ffd1a57`
+
+New since `0.24.0-c9cfb00-ffd1a57`: the small prefill context at 1,048,576 tokens, the `DSV41_SHARED_SAMPLER_SPEC` flag (default off), and the catalog defaults of tt-inference-server (a launch without a runtime spec serves 16 users at 262,144 tokens with prefix caching, chunk budget 4,096 and k = 5; `--impl deepseek-v41-flash-1m` serves 4 users at 1,048,576 tokens). The other items below are in both images.
 
 - **Plain decode is fixed.** A server without speculative decoding used the fused decode-indexer backend and answered wrongly at 16 users (GSM8K 85.67 % at 131,072 tokens, 80.59 % at 262,144). Plain decode now uses the matmul backend up to 262,144 index entries, like the speculative servers (`DSV41_IDX_SWITCH` default 262144 for every launch). See "Known issues" for how this was verified.
 - **Prefix caching (APC) and chunked prefill, on by default in the 262,144 / 1,048,576-token specs.** They start the server with APC on and a token budget of 4,096 per step (`_noapc` copies switch it off). Shared-prefix bursts get their first token about 3x sooner at 16 users / 262,144 tokens, and a 32k-token prompt no longer stops decoding for 33 s (9 s). The 131,072-token specs are unchanged (APC off, budget 67,584; APC is wrong with the unsharded prefill-indexer layout of those sizes).

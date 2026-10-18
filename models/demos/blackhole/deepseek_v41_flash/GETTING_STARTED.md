@@ -9,10 +9,10 @@ What changed in this release is in `RELEASE_NOTES.md`.
 
 | | |
 |---|---|
-| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-c9cfb00-ffd1a57` |
-| Size | 22.1 GB on disk (5.3 GB compressed), built 2026-10-17 |
-| tt-metal | `c9cfb008c651ea5b5a7978f0569cd4358196f8ce` |
-| tt-inference-server | `ffd1a57ceece25c02b668bbcc4682dba52dbd9da` |
+| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-5cfe4d9-84b529b` |
+| Size | 22.4 GB on disk (5.7 GB compressed), built 2026-10-18 |
+| tt-metal | `5cfe4d92d309793f070876e3023838c35ff7922e` |
+| tt-inference-server | `84b529b9afdeaa12c230523c1c90ed2c307b18bf` |
 | vllm-tt-plugin | `ff71d290df8e95e5e956d49ba860478db2cb034c` |
 | vLLM | 0.31.0 (torch 2.11.0+cpu, transformers 5.12.1) |
 | Model | [`deepseek-ai/DeepSeek-V4.1-Flash`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash) (476 GB, 48 shards) |
@@ -20,7 +20,7 @@ What changed in this release is in `RELEASE_NOTES.md`.
 
 All branches are `ssinghal/dsv4p1`.
 `BUILD_INFO` in the image records the three commits.
-The image is an overlay on the previous image (`0.24.0-799a223-ffd1a57`).
+The image is an overlay on the previous image (`0.24.0-c9cfb00-ffd1a57`).
 The compiled tt-metal and the Python environment are reused.
 `models/`, the tt-inference-server tree and the plugin package come from the commits above.
 The `assets/` folder inside the image is older than the one in the repo: take runtime specs from the repo.
@@ -74,7 +74,7 @@ It is 131,584 by default and 262,144 in the 16-user long-context spec.
 `docker run` pulls it on first use.
 
 ```bash
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-c9cfb00-ffd1a57
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-5cfe4d9-84b529b
 docker pull $IMAGE
 ```
 
@@ -85,7 +85,7 @@ export CKPT=/path/to/deepseek-v41-flash        # the checkpoint (read-only for t
 export CACHE=/path/to/dsv41_cache              # weights/ and kernels/, reused across starts
 export STATE=/path/to/dsv41_state              # scratch dirs the server writes to
 export SPEC=$PWD/assets/runtime_spec_b16_k5_262144_vision.json   # run from models/demos/blackhole/deepseek_v41_flash/ in tt-metal
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-c9cfb00-ffd1a57
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-5cfe4d9-84b529b
 
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
 
