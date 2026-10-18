@@ -548,7 +548,8 @@ void kernel_main() {
         const uint32_t tdbg = get_arg_val<uint32_t>(a_dbg + 2), tpage = get_arg_val<uint32_t>(a_dbg + 3);
         volatile tt_l1_ptr uint32_t* d = misc + 192;
         d[0] = 0x7E100000 | tpage; d[1] = p0; d[2] = get_timestamp_32b(); d[3] = p_slot; d[4] = p_idle; d[5] = p_cred;
-        d[6] = n_blocked; d[7] = n_inj; d[8] = p_send; d[9] = n_empty; d[10] = d[11] = d[12] = d[13] = d[14] = d[15] = 0;
+        d[6] = n_blocked; d[7] = n_inj; d[8] = p_send; d[9] = n_empty; d[10] = p_flush; d[11] = n_credpk;
+        d[12] = d[13] = d[14] = d[15] = 0;
         const InterleavedAddrGen<true> dg = {.bank_base_address = tdbg, .page_size = 512};
         noc_async_write(area + MISC + 192 * 4, get_noc_addr(tpage, dg), 64);
         noc_async_write_barrier();

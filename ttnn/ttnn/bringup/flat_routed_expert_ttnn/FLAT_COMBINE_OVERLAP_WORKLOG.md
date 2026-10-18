@@ -1227,3 +1227,23 @@ K3 block (default now): PCC 0.99622, experts_combine 2356 us, traced forward 331
 bit-exact. Freed cells: K3 with 32 down cores (min(96, 96) effective) gains nothing (flat alone packed 5528 vs 5592:
 K3 packed is not down bound); V4.1 72 gate/up now runs with its combine (13 cells) but loses to 48 (1303 / 1670 /
 2822 us).
+
+### Combine alone, profiled (2026-10-18, 2 x 4, separate ports / accumulators, DRAM y, SPC_TPROF=1)
+Why: what bounds the combine by itself. Floor = the busiest link's rows (route() per hop, direction, link) x row bytes
+at 25 GB/s. Harness: SPC_TPROF now also times the combine-alone call; per sender: end, slot wait (fabric slot),
+idle, credits, send, flush, rows, blocked (destination ring full), credit packets.
+| | uniform | spread | packed |
+| K3 alone / floor (us) | 1023 / 739 (72%) | 1061 / 798 (75%) | 2332 / 2074 (89%) |
+| V4.1 alone / floor (us) | 629 / 400 (64%) | 662 / 466 (70%) | 1278 / 1108 (87%) |
+- Packed: link bound. The hot chip's 4 senders push 5.3-7.3k rows each at ~22.4 GB/s per link (K3 7255 rows x 7.2 KB
+  in 2278 us), idle < 10 us, almost never blocked; ~40% of their send time is waiting for a fabric slot. Every
+  other chip's own rows are out in < 400 us; two of its senders then only return credits until the hot chip ends.
+- Uniform / spread: the busiest link carries only 17-19 GB/s. Not the readers (they end just before the senders: the
+  injection CB throttles them; SPC_NOYREAD=1 no faster), not the accumulators (end with the last row), not flushes
+  (2-5 us), not credits (SPC_CREDTHR=2: K3 -4%, V4.1 0).
+- Ring depth 8 (FC_D=8, FC_ARENA_KB=1200): blocked drops from 300-1150 to 0-250 per sender; K3 uniform 1022 -> 965,
+  V4.1 632 -> 588, packed -1-2%. What is left is fabric backpressure: the slowest chip's senders at D 8 spend 50-60%
+  of their time waiting for a fabric slot with nothing blocked or idle (K3 chip 7: slot 445-505 of 850-970 us), on
+  links that carry forwarded traffic too. Pure injection gets ~22.4 GB/s per link, mixed forward + inject 17-19.
+- Fused: depth 8 changes nothing (V4.1 1188 -> 1177, K3 2456 -> 2460 uniform; packed same): the combine is hidden
+  and the fused cost is on the flat side. Depth stays 4 (the K3 block's arena is per call).

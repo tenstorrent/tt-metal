@@ -332,6 +332,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
         f"{routing}: flat writers {writers}, arena {a_rows * 64 >> 10} KB/core, combine ports "
         f"{sorted(set(fused.cells['ports'].values()))} accs {fused.cells['accs']}"
     )
+    logger.info(f"{routing}: ring depth fused {fused.depth}" + ("" if alone is None else f", alone {alone.depth}"))
     if L1:
         desc, l1_args = fused.build_l1(y, out)
     else:
@@ -439,50 +440,57 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
             )
     assert worst < 2e-2 or os.environ.get("SPC_NOYREAD") == "1", f"{routing}: combine result off ({worst:.2e})"
 
-    if os.environ.get("SPC_TPROF") == "1":  # (timeline of one fused call per chip, us from the combine's first start)
-        run_fused()
+    def tprof(fn, run_, name):  # (SPC_TPROF: timeline of one call per chip, us from the combine's first start)
+        fn()
         ttnn.synchronize_device(mesh_device)
-        for ci, t in enumerate(ttnn.get_device_tensors(fused.tdbg)):
+        for ci, t in enumerate(ttnn.get_device_tensors(run_.tdbg)):
             d = (ttnn.to_torch(t).reshape(48, 128).to(torch.int64) & 0xFFFFFFFF).tolist()
             rdp = [r for r in d[:8] if r[0] >> 20 == 0x7E0]
             r1 = [r for r in d[:8] if r[0] >> 20 == 0x7E3]  # (L1 hand-off port readers: start, all landed, end)
-            if r1:
-                sdp = [r for r in d[8:16] if r[0] >> 20 == 0x7E1]
-                adp = [r for r in d[16:48] if r[0] >> 20 == 0x7E2]
-                t0 = min([r[1] for r in r1 + sdp + adp])
-                us = lambda v: (v - t0) / 1350.0  # noqa: E731
-                logger.info(
-                    f"TPROF {routing} chip {ci}: port rows all landed by {max(us(r[2]) for r in r1):.0f} | port readers end "
-                    f"{max(us(r[3]) for r in r1):.0f} | senders end {max(us(r[2]) for r in sdp):.0f} (slot wait "
-                    f"{max(r[3] for r in sdp) / 1350:.0f}) | accs local landed "
-                    f"{max([us(r[2]) for r in adp if r[2]], default=0):.0f} "
-                    f"end {max(us(r[3]) for r in adp):.0f}"
-                )
-                for r in sdp:  # (per sender: us busy until its end, slot wait, idle, credits, sending; rows, blocked)
-                    logger.info(
-                        f"TPROF {routing} chip {ci} sender {r[0] & 0xFF}: end {us(r[2]):.0f} slot {r[3] / 1350:.0f} "
-                        f"idle {r[4] / 1350:.0f} cred {r[5] / 1350:.0f} send {r[8] / 1350:.0f} us | rows {r[7]} "
-                        f"blocked {r[6]} empty {r[9]}"
-                    )
-                continue
             sdp = [r for r in d[8:16] if r[0] >> 20 == 0x7E1]
             adp = [r for r in d[16:48] if r[0] >> 20 == 0x7E2]
-            t0 = min([r[1] for r in rdp + sdp + adp])
+            t0 = min([r[1] for r in rdp + r1 + sdp + adp])
             us = lambda v: (v - t0) / 1350.0  # noqa: E731
-            ready = {}
-            for r in rdp:
-                for e in range(EPC):
-                    if r[4 + e]:
-                        ready[e] = max(ready.get(e, 0), r[4 + e])
-            es = sorted(ready)
-            q = [es[int(f * (len(es) - 1))] for f in (0, 0.25, 0.5, 0.75, 1)] if es else []
+            if r1:
+                logger.info(
+                    f"TPROF {routing} {name} chip {ci}: port rows all landed by {max(us(r[2]) for r in r1):.0f} | port "
+                    f"readers end {max(us(r[3]) for r in r1):.0f} | senders end {max(us(r[2]) for r in sdp):.0f} (slot "
+                    f"wait {max(r[3] for r in sdp) / 1350:.0f}) | accs local landed "
+                    f"{max([us(r[2]) for r in adp if r[2]], default=0):.0f} end {max(us(r[3]) for r in adp):.0f}"
+                )
+            else:
+                ready = {}
+                for r in rdp:
+                    for e in range(EPC):
+                        if r[4 + e]:
+                            ready[e] = max(ready.get(e, 0), r[4 + e])
+                es = sorted(ready)
+                q = [es[int(f * (len(es) - 1))] for f in (0, 0.25, 0.5, 0.75, 1)] if es else []
+                logger.info(
+                    f"TPROF {routing} {name} chip {ci}: experts ready (e: us) "
+                    + " ".join(f"{e}:{us(ready[e]):.0f}" for e in q)
+                    + f" | readers end {', '.join(f'{us(r[2]):.0f}' for r in rdp)} (rows {', '.join(str(r[3]) for r in rdp)})"
+                    f" | senders end {max(us(r[2]) for r in sdp):.0f}"
+                    f" | accs local done {max([us(r[2]) for r in adp if r[2]], default=0):.0f}"
+                    f" end {max(us(r[3]) for r in adp):.0f}"
+                )
+            for r in sdp:  # (per sender: us busy until its end, slot wait, idle, credits, sending; rows, blocked)
+                logger.info(
+                    f"TPROF {routing} {name} chip {ci} sender {r[0] & 0xFF}: end {us(r[2]):.0f} slot {r[3] / 1350:.0f} "
+                    f"idle {r[4] / 1350:.0f} cred {r[5] / 1350:.0f} send {r[8] / 1350:.0f} flush {r[10] / 1350:.0f} us | rows "
+                    f"{r[7]} blocked {r[6]} empty {r[9]} credit packets {r[11]}"
+                )
+            ae = sorted((us(r[3]), r[5], r[4]) for r in adp)  # (accumulators: end, rows, local rows)
             logger.info(
-                f"TPROF {routing} chip {ci}: experts ready (e: us) "
-                + " ".join(f"{e}:{us(ready[e]):.0f}" for e in q)
-                + f" | readers end {max(us(r[2]) for r in rdp):.0f} | senders end {max(us(r[2]) for r in sdp):.0f}"
-                f" (slot wait {max(r[3] for r in sdp) / 1350:.0f}, idle {max(r[4] for r in sdp) / 1350:.0f} us max)"
-                f" | accs local done {max(us(r[2]) for r in adp if r[2]):.0f} end {max(us(r[3]) for r in adp):.0f}"
+                f"TPROF {routing} {name} chip {ci} accs: end min {ae[0][0]:.0f} med {ae[len(ae) // 2][0]:.0f} max "
+                f"{ae[-1][0]:.0f} us | rows min {min(a_[1] for a_ in ae)} max {max(a_[1] for a_ in ae)} (local "
+                f"{sum(a_[2] for a_ in ae)} of {sum(a_[1] for a_ in ae)})"
             )
+
+    if os.environ.get("SPC_TPROF") == "1":
+        tprof(run_fused, fused, "fused")
+        if alone is not None:
+            tprof(lambda: alone(y, out), alone, "alone")
 
     def timed(fn, name):
         ttnn.ReadDeviceProfiler(mesh_device)  # (flush)
