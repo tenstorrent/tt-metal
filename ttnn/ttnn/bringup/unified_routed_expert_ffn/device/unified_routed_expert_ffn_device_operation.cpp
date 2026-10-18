@@ -107,18 +107,73 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const auto& up_shape = t.up_projs[0].padded_shape();
     const auto& down_shape = t.down_projs[0].padded_shape();
 
+    // (K, N) of each weight: [K, N] by default, [N, K] (nn.Linear storage) with weights_transposed.
+    const int k_dim = op.weights_transposed ? -1 : -2;
+    const int n_dim = op.weights_transposed ? -2 : -1;
     TT_FATAL(
-        x_shape[-1] == gate_shape[-2] && x_shape[-1] == up_shape[-2],
-        "x's last dim {} must match gate/up's K dim ({}, {})",
+        x_shape[-1] == gate_shape[k_dim] && x_shape[-1] == up_shape[k_dim],
+        "x's last dim {} must match gate/up's K dim ({}, {}){}",
         x_shape[-1],
-        gate_shape[-2],
-        up_shape[-2]);
+        gate_shape[k_dim],
+        up_shape[k_dim],
+        op.weights_transposed ? " (weights_transposed: weights are [N, K])" : "");
     TT_FATAL(
-        gate_shape[-1] == up_shape[-1] && gate_shape[-1] == down_shape[-2],
-        "gate/up N ({}) must equal down K ({})",
-        gate_shape[-1],
-        down_shape[-2]);
-    TT_FATAL(down_shape[-1] == x_shape[-1], "down N ({}) must equal x K ({})", down_shape[-1], x_shape[-1]);
+        gate_shape[n_dim] == up_shape[n_dim] && gate_shape[n_dim] == down_shape[k_dim],
+        "gate/up N ({}) must equal down K ({}){}",
+        gate_shape[n_dim],
+        down_shape[k_dim],
+        op.weights_transposed ? " (weights_transposed: weights are [N, K])" : "");
+    TT_FATAL(
+        down_shape[n_dim] == x_shape[-1],
+        "down N ({}) must equal x K ({}){}",
+        down_shape[n_dim],
+        x_shape[-1],
+        op.weights_transposed ? " (weights_transposed: weights are [N, K])" : "");
+
+    // DeepSeek-V4.1 h options (routing weight, fp8 act quant): applied by the fused binary activation phase on
+    // the fp32 DEST values, so they need that phase, the bf16 / fp32-partials precise path and an fp32 dest.
+    if (op.fuse_routing_weight || op.fp8_act_quant) {
+        const char* what = op.fuse_routing_weight ? "routing_weights" : "fp8_act_quant";
+        TT_FATAL(
+            op.activation == RoutedExpertActivation::SwiGluOai || op.activation == RoutedExpertActivation::SituGlu ||
+                op.activation == RoutedExpertActivation::ClampedSiluGlu,
+            "unified_routed_expert_moe: {} needs a fused binary activation (SwiGluOai, SituGlu, ClampedSiluGlu)",
+            what);
+        TT_FATAL(op.high_precision, "unified_routed_expert_moe: {} needs high_precision=True", what);
+        TT_FATAL(
+            op.compute_kernel_config.has_value() && ttnn::get_fp32_dest_acc_en(op.compute_kernel_config),
+            "unified_routed_expert_moe: {} needs compute_kernel_config with fp32_dest_acc_en=True",
+            what);
+        TT_FATAL(!op.fuse_bias, "unified_routed_expert_moe: {} is not combined with expert biases", what);
+    }
+    TT_FATAL(
+        op.fuse_routing_weight == t.routing_weights.has_value(),
+        "op.fuse_routing_weight ({}) must match the presence of routing_weights ({})",
+        op.fuse_routing_weight,
+        t.routing_weights.has_value());
+    if (t.routing_weights.has_value()) {
+        const auto& rw = *t.routing_weights;
+        TT_FATAL(rw.storage_type() == ttnn::StorageType::DEVICE, "routing_weights must be on device");
+        TT_FATAL(rw.dtype() == tt::tt_metal::DataType::FLOAT32, "routing_weights must be FLOAT32, got {}", rw.dtype());
+        TT_FATAL(
+            rw.layout() == tt::tt_metal::Layout::ROW_MAJOR, "routing_weights must be ROW_MAJOR, got {}", rw.layout());
+        TT_FATAL(is_dram_interleaved(rw), "routing_weights must be DRAM-interleaved");
+        const auto& rs = rw.logical_shape();
+        TT_FATAL(rs.rank() >= 2, "routing_weights must have rank >= 2, got {}", rs.rank());
+        for (int i = 0; i < static_cast<int>(rs.rank()) - 2; ++i) {
+            TT_FATAL(rs[i] == 1, "routing_weights leading dim {} must be 1, got {}", i, rs[i]);
+        }
+        TT_FATAL(
+            rs[-2] == t.x.logical_shape()[-2],
+            "routing_weights rows ({}) must equal the dispatched buffer's rows ({})",
+            rs[-2],
+            t.x.logical_shape()[-2]);
+        TT_FATAL(
+            static_cast<uint32_t>(rs[-1]) >= op.experts_per_chip && rs[-1] <= 1024,
+            "routing_weights width ({}) must be >= experts_per_chip ({}) (column = local expert) and <= 1024",
+            rs[-1],
+            op.experts_per_chip);
+    }
 
     constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
     TT_FATAL(x_shape[-2] % TILE == 0, "x M ({}) must be tile-aligned", x_shape[-2]);
@@ -398,7 +453,10 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& down_biases,
     uint32_t min_active_tokens,
     uint32_t max_active_tokens,
-    bool high_precision) {
+    bool high_precision,
+    const std::optional<ttnn::Tensor>& routing_weights,
+    bool fp8_act_quant,
+    bool weights_transposed) {
     using OperationType = ttnn::operations::bringup::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -410,7 +468,10 @@ ttnn::Tensor unified_routed_expert_moe(
             .compute_kernel_config = compute_kernel_config,
             .min_active_tokens = min_active_tokens,
             .max_active_tokens = max_active_tokens,
-            .high_precision = high_precision},
+            .high_precision = high_precision,
+            .fuse_routing_weight = routing_weights.has_value(),
+            .fp8_act_quant = fp8_act_quant,
+            .weights_transposed = weights_transposed},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,
@@ -422,7 +483,8 @@ ttnn::Tensor unified_routed_expert_moe(
             .expert_region_offsets = expert_region_offsets,
             .gate_biases = gate_biases,
             .up_biases = up_biases,
-            .down_biases = down_biases});
+            .down_biases = down_biases,
+            .routing_weights = routing_weights});
 }
 
 }  // namespace ttnn::prim::bringup

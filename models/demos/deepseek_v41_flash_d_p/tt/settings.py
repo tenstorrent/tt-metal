@@ -123,8 +123,8 @@ TABLE = {
         "packed fp4 codes kept on the device and decoded to bf16 W^T for every expert in every chunk (a per-chunk "
         "weight rebuild against agent rule 5; half the weight memory; comparison only). Layer 0, 2x2, chunk 2048, "
         "timed loop tt/perf_experts.py: bfp8 319 ms vs fp4_decode 611 ms per layer per chunk, outputs bit-identical; "
-        "load 44 s vs 4 s. The fused unified_routed_expert_moe does not fit (no routing weight and fp8 q(h) between "
-        "the activation and w2). bfp4 (owner pick 2026-10-17, P.1: memory for galaxy_4x4) = the same path with "
+        "load 44 s vs 4 s. The expert loop or the fused op: EXPERTS_KERNEL. bfp4 (owner pick 2026-10-17, P.1: "
+        "memory for galaxy_4x4) = the same path with "
         "every expert's w1 | w3 and w2 converted to bfloat4_b ONCE at load ([N, K], transpose_b, groups of 16 along "
         "K inside one e8m0 block): lossy (3 magnitude bits under the group's exponent, round to nearest even; "
         "changes 16.4-16.6 % of the fp4 values per layer, worst matrix ||dW|| / ||W|| 0.118-0.124), 0.5625 B per "
@@ -132,6 +132,19 @@ TABLE = {
         "stats logged at load. P.1, 2x2, chunk 53248-55296, plain profile: experts 312.7 vs 315.3 ms per layer "
         "(no speed gain, DS41-56); ladder last worst layer L03 0.9954 vs 0.9967. Component and swap tests stay at "
         "bfp8 (max precision)",
+    ),
+    "EXPERTS_KERNEL": Setting(
+        "unified",
+        ("loop", "unified"),
+        "how the routed experts run on the dispatched buffer (tt/experts.py; EXPERTS_IMPL bfp8 or bfp4): loop = per "
+        "local expert extract -> ttnn.linear w1 | w3 -> SFPU SwiGLU x r -> tt/quant.fp8_qdq -> ttnn.linear w2 -> "
+        "insert (24 experts x ~10 ops at the whole-chunk cap; 2522 of 3025 ms device per chunk on 2x2, X.1); "
+        "unified = ONE ttnn.bringup.unified_routed_expert_moe program over every local expert (counts on the "
+        "device, only the routed rows computed): ClampedSiluGlu, HiFi4 + fp32 dest, high_precision, the fork's "
+        "routing_weights (each dispatched row's fp32 weight from its routing pieces, one selector matmul per chunk) "
+        "+ fp8_act_quant (q(r h) per 32, ue8m0, bit-exact with tt/quant.fp8_qdq, fork tests/unit) + "
+        "weights_transposed (the [N, K] block-float weights as stored: bfp8 exact, DS41-35). Owner (2026-10-17, "
+        "P.2): default stays loop until the owner's table",
     ),
     "EXPERTS_DECODE": Setting(
         "gather",

@@ -1604,3 +1604,47 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   --no-precompile models/demos/common/bringup/tests/test_ladder.py`; profile: the brief's second command with
   DS41_EXPERTS_IMPL=bfp4 / bfp8; checks: `scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py -k bfp4 -s`.
+
+## P.2 perf (attempt 1): routed experts on the fused ttnn.bringup.unified_routed_expert_moe
+- Change: setting EXPERTS_KERNEL {loop, unified} (tt/settings.py; default loop, owner text "default stays loop until
+  the owner's table"; not a precision switch, so not in MAX_PRECISION: the component / swap tests take the env value).
+  unified = `tt/experts.py:TtExperts._unified`: x = buf[:, :H] (RM slice), r_rows = pieces @ SelAll (bf16 0/1
+  [3 Egp, 32] per mesh row, column le = the three piece columns of local expert r epc + le; exact, DS41-16 / DS41-23)
+  -> fp32 RM [rows, 32]; then ONE unified_routed_expert_moe(x, ..., ClampedSiluGlu, high_precision, HiFi4 + fp32
+  dest, routing_weights=r_rows, fp8_act_quant=True, weights_transposed=True) -> the same combine / sum / reduce.
+  Weights: the same bfp8 / bfp4 [N, K] tensors as the loop (bfp8 exact, `_bfp8_exact`), w1 and w3 uploaded separately
+  for unified (w13 for loop). Asserts: block-float EXPERTS_IMPL, swiglu_limit 10 (baked in the op), epc <= 32.
+- Fork (ttnn/ttnn/bringup/unified_routed_expert_ffn, CHANGELOG "Opt-in DeepSeek-V4.1 expert numerics"): three
+  options, default off = the old program. routing_weights: the reader builds one Float32 tile per tile-row (weight in
+  every column of faces 0 / 2), compute copies it to DEST slot 2; the routing weight tensor is "the op's routing":
+  row i column le of `routing_weights`. fp8_act_quant: custom SFPU `calculate_routed_h` on the fp32 DEST tile after
+  ClampedSiluGlu (row amax by compare tree + SUBVEC_SHFLROR1 butterfly; ue8m0 scale from the bits; e4m3 RNE on the
+  integer bits, subnormals by +2^14 - 2^14). weights_transposed: tiles read at page n K + k, matmuls transpose in1.
+  Either h option also unpacks the partials straight to the fp32 DEST (DS41-58: through SrcA they are TF32).
+- Gotchas: "too few lregs" with 4 live row registers (DS41-59: two passes, s / 1/s parked in the consumed up slot);
+  random-weight exactness test showed 2.6 % fp8 differences that were the FPU's GEMM rounding, not the quant (DS41-60:
+  selection weights -> 0 differences over 1528 x 1024); my `timeout 590` around fork_tests killed run_safe_pytest
+  mid-run (cards marked dirty, next run reset them): run the model cases one case at a time.
+- Fork tests: tests/unit/test_ds41_h_options.py 8 passed (exact quant + weight, weight-only, [N, K] == [K, N] bit for
+  bit for bf16 and bfp8 e2m1, DS41 shapes vs float rel 0.0030-0.0058, refusals); by hand a kernel scale floor and a
+  reader column off by one both failed. Regression with the options off: fork_source 75 tests, 0 regressions; model
+  cases pass (mimo 1x4, gemma4 1x4, mimo 2x2, glm53 2x2, hy4 2x2; xing40 4x2 skips on 4 chips). Model case for this
+  call: task O.1.
+- Accuracy (DS41_EXPERTS_KERNEL=unified, bfp8 via MAX_PRECISION, each once, gate order): all 16 PASS. Component
+  err_experts L00 0.0242, L01 0.0291, L02 0.0302, L14 0.0327, L03 0.0302, L20 0.0342, L24 0.0343, L21 0.0342; swap
+  pcc_swap_out swa_12 0.999826, swa_engram_15 0.999762, enc_source_14 0.999556, enc_source_engram_17 0.998458,
+  enc_reuse_12 0.999355, dec_candidate_14 0.999748, dec_reindex_13 0.999782, dec_reuse_12 0.999507 (swa_12's
+  swap_ffn_hc noise-floor FAIL line is the owner waiver, reported WAIVED).
+- Layer 0 A/B (tt/perf_experts.py::test_unified_vs_loop, 2x2, chunk 2048, random routing): bfp8 loop 317.7 vs
+  unified 20.4 ms per call, bfp4 315.1 vs 20.0; unified vs loop rel 6e-5. Step times (sync-instrumented): the fused
+  op 5.6 ms of ~20; the rest is the unchanged chain (fp8_qdq of x ~8 ms instrumented, slices 2.2, combine-sum adds
+  2.1, dispatch 1.8, combine 1.4, pieces 1.3, reduce 1.2): next levers, not this step.
+- Plain profile (test_profile.py, 2x2, chunk 53248-55296, 8 layers): experts section per chunk loop 2522.3 ms (bfp8)
+  / 2501.4 (bfp4) [P.1, same loop code] -> unified 176.77 (bfp8) / 173.74 (bfp4); device_ms_total 679.6 (bfp8, was
+  3025.1) / 676.4 (bfp4); chunk wall 987 / 938 ms (was 3281); pcc_chunk_out 0.99981 (bfp8) / 0.99949 (bfp4);
+  host_transfers_per_layer 0.
+- Re-run: `PYTHONPATH=$PWD DS41_EXPERTS_KERNEL=unified scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py` (each gate test likewise); fork tests
+  `scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/unified_routed_expert_ffn/tests/unit/test_ds41_h_options.py`;
+  A/B `scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py -k unified_vs_loop -s`;
+  profile: the brief's last command with DS41_EXPERTS_KERNEL=unified [DS41_EXPERTS_IMPL=bfp4].
