@@ -163,7 +163,8 @@ Rules and limitations of `ttt_remote_sync`:
 - **Llama only, no FSDP**, and `model_source` must be a HuggingFace Hub id
   (both ranks load HF-named weights from it; a local path raises `ValueError`).
 - **Rank 1 boots with dummy weights**, and rank 0 pushes its weights as
-  version 0 before training starts. A batch generated before a push carries
+  version 0 before training starts. Rank 1 starts at weight_version -1 and
+  refuses to generate until that push arrives. A batch generated before a push carries
   the older version and that version's log-probs, so the PPO ratio stays
   correct with `weight_sync_every > 1`.
 - **Log-probs come from tt-transformers.** `TTTRolloutSampler` enables
@@ -211,8 +212,8 @@ config's `max_completion_length`, `temperature` and `num_generations`, plus its
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `generate` | `(prompts: List[List[int]]) -> RolloutBatch` | Generate `num_generations` completions per prompt and their per-token `log pi_old`, under the weights that sampled them. Never returns placeholder log-probs. |
-| `weight_version` | property `-> int` | Version of the weights the sampler holds. Starts at 0. |
-| `update_weights` | `(weights, version: int) -> None` | Install `weights` and set `weight_version` to `version`. `weights` is `None` for `TTMLRolloutSampler` (it shares the trainer's model) and one HF-keyed dict per submesh for `TTTRolloutSampler`. |
+| `weight_version` | property `-> int` | Version of the weights the sampler holds. Starts at 0, or at -1 for a sampler booted without real weights (its `generate()` raises until the first `update_weights`). |
+| `update_weights` | `(weights, version: int) -> None` | Install `weights` and set `weight_version` to `version`, which must be greater than the current `weight_version`. `weights` is `None` for `TTMLRolloutSampler` (it shares the trainer's model) and one HF-keyed dict per submesh for `TTTRolloutSampler`. |
 | `close` | `() -> None` | Release generation resources. Optional; the default does nothing. |
 
 ### TTMLRolloutSampler
@@ -265,7 +266,7 @@ and a captured decode trace. One tt-transformers call serves
 `slots_per_call = max_batch_size * data_parallel` completions; `generate` splits
 a batch into as many calls as it needs and pads the per-token log-probs to
 `[B, max_completion_length]`. It boots with the HF weights of `model_source`
-at version 0. Temperature, `top_k`, `top_p` and `seed` are baked into the trace
+at version 0, or with dummy weights at version -1. Temperature, `top_k`, `top_p` and `seed` are baked into the trace
 at construction.
 
 ---
