@@ -11,6 +11,22 @@
 
 namespace ttml::optimizers {
 
+void require_bf16_parameters(const serialization::NamedParameters& parameters, std::string_view optimizer_name) {
+    for (const auto& [name, tensor_ptr] : parameters) {
+        if (!tensor_ptr->get_requires_grad()) {
+            continue;
+        }
+        const auto dtype = tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE).dtype();
+        TT_FATAL(
+            dtype == ttnn::DataType::BFLOAT16,
+            "{} supports bf16 parameters only, but parameter '{}' is stored as {}. fp32 parameters are supported by "
+            "AdamW, and by other optimizers once the precision config lands (#56513).",
+            optimizer_name,
+            name,
+            dtype);
+    }
+}
+
 OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
 }
 
