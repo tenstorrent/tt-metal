@@ -79,3 +79,40 @@
 - Check results (`bfw job check --task C.sliding.attn_norm`): PASS.
   - pcc 0.9999962, auto_margin_min 2.87, device_ops 3, host_flops_frac 0.
   - Deterministic.
+
+## C.sliding.attention (run 20261018-003406-gemma31-glx-3, attempt 1), 2026-10-18
+
+- `tt/attention.py`: `SlidingAttention(mesh, w, cfg, max_seq, chunk)`, adapted from gemma4_d_p's ring_prefill.
+  Everything it needs is built at load.
+  - Per chunk, the forward runs: all_gather rows over TP; fused QKV linear (column-parallel,
+    `[q 8 | k 4 | v 4] x 256` per TP column); nlp_create_qkv_heads; fp32 per-head RMS norms; fp32 elementwise RoPE
+    with an exact 256x256 pair-rotation matmul; update_padded_kv_cache from fp32 into the served bfp8 cache; ring_joint
+    SDPA (causal, window 1024, scale 1, kv_actual_isl); nlp_concat_heads; o_proj; reduce_scatter over TP.
+  - Q/K weight rows and the q/k norm weights are permuted to adjacent-pair lanes (`sliding_kv_indices`), so the
+    cache's K is in the served order.
+  - Per-chunk positions (SP-sharded uint32) and kv_actual scalars are device tensors built once at load. The forward
+    only indexes them by `start // chunk`.
+  - Cache per chip: `[KV_SLOTS=2, 4, max_seq/8, 256]` bfp8, DRAM ND-sharded `[1,1,32,256]` round-robin. It is zeroed
+    on device with DRAMZeroFill and has replicate topology.
+- `bringup/hooks.py`: `_AttentionStep` loads `ctx.extra["state_prefix"]` into the cache one chunk at a time, through
+  the same `write_kv` the forward uses. K is converted from NeoX to adjacent-pair order, and the upload is fp32.
+  `device_component` handles step `attention` on sliding layers. max_seq and chunk come from `spec.get("target.seq")`
+  and `spec.get("target.chunk")`; `shapes.*` returns None.
+- `tt/settings.py` gains these switches:
+  - ATTN_PROJ_FIDELITY, ATTN_PROJ_FP32_ACC, ATTN_SDPA_FIDELITY, ATTN_SDPA_FP32_ACC (False only), ATTN_SDPA_Q_CHUNK,
+    ATTN_SDPA_K_CHUNK, ATTN_SDPA_K_SPLITS, ATTN_RING_NUM_LINKS, KV_SLOTS.
+  - ATTN_HEAD_NORM (fp32 | rms_norm), ATTN_ROPE (elementwise | llama), ATTN_KV_FP32_WRITE (True).
+- Norm-bias hunt. The first version had attention output median row norm +0.54% against a 0.4% limit. The sources:
+  - Main cause (~+0.3% on the output): the device's bf16 -> bfp8 conversion rounds up on average. typecast raises row
+    norms +0.28%; any op packing bfp8 from bf16 (clone, add, multiply with a bfp8 output) raises them +0.54%. fp32 ->
+    bfp8 typecast is unbiased. Measured on unit-RMS rows with a scratch test. So K and V now stay fp32 until the cache
+    write, and the prefix upload is fp32 too.
+  - rotary_embedding_llama at head_dim 256 must run with bf16 dest (TT_FATAL otherwise). It raised q/k row norms
+    +0.11%; elementwise fp32 RoPE gives -0.02%.
+  - ttnn.rms_norm on q gave -0.08%. The fp32 eltwise norm gives 0.00%.
+  - The ring SDPA itself (bf16 softmax statistics on the streaming path) is unbiased: +0.08% vs a float64 CPU SDPA on
+    the same device q/k/v, insensitive to k_splits, q_chunk and packer_l1_acc. No fork was needed.
+- Check results (`bfw job check --task C.sliding.attention`): PASS.
+  - pcc 0.99998, auto_margin_min 1.026, device_ops 49, host_flops_frac 0. Deterministic (A,B,A x5 bit-identical).
+  - Golden case: rel 0.0069 (limit 0.0084), bias +0.0023 (limit 0.004). The closest check is the column rel:
+    0.0329 against 0.0338 at column 5161.
