@@ -594,10 +594,12 @@ class CUSTOM_MM_DENSE_PACKING(TemplateParameter):
     left at the default 64.
     """
 
-    dense_packing: bool = True
+    pack_dense: bool = True
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool CUSTOM_MM_DENSE_PACKING = {str(self.dense_packing).lower()};"
+        return (
+            f"constexpr bool CUSTOM_MM_DENSE_PACKING = {str(self.pack_dense).lower()};"
+        )
 
 
 @dataclass
