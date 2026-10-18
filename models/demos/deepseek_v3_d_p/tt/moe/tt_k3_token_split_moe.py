@@ -22,8 +22,10 @@ Routed expert weights: bfp4 in the flat expert's bank layout. For bring-up the r
 distinct experts (global expert g uses pool[g % P]; the routing is over all 896): 896 real experts do not fit on a host.
 """
 
+import hashlib
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import torch
 from ttnn.bringup.combine_rf.combine_plan import combine_planner_prepare, port_luts
@@ -146,7 +148,9 @@ class TtK3TokenSplitMoE:
         cap=8192,
         rows_cap=16384,
         planner_cores=32,
+        deterministic=False,
         torus=(False, False),
+        weight_cache=None,
     ):
         self.mesh, self.d, self.S, self.torus = mesh_device, d, S, tuple(torus)
         R, C = tuple(mesh_device.shape)
@@ -306,20 +310,37 @@ class TtK3TokenSplitMoE:
         P = len(w.pool)
         assert EPC % P == 0, "every chip's local expert e uses pool[e % P]: EPC must be a multiple of the pool"
         lay = dict(self.op.plan)
-        W_l = [
-            tuple(t.T.contiguous() for t in (w.pool[e % P][0], w.pool[e % P][1])) + (w.pool[e % P][2].T.contiguous(),)
-            for e in range(EPC)
-        ]
-        regions, dregs, rregs = flat_weight_regions(W_l, lay)
         wdt = W_DTYPES[self.wdtype][0]
         for t in (self.op.w_gu, self.op.w_d, self.op.w_rd):  # (the fake tensors)
             if t is not None:
                 ttnn.deallocate(t)
-        self.op.w_gu = _bank_sharded([regions], lay["banks"], wdt, mesh_device)
-        self.op.w_d = _bank_sharded([dregs], lay["banks"], wdt, mesh_device)
-        if lay["rdown"]:
-            self.op.w_rd = _bank_sharded([rregs], lay["banks"], wdt, mesh_device)
-        del W_l, regions, dregs, rregs
+        names = ("w_gu", "w_d", "w_rd") if lay["rdown"] else ("w_gu", "w_d")
+        # weight_cache (a directory): the packed (bfp) host tensors, keyed on the plan, the dtype and a sample of the
+        # pool's values - a rebuild with the same weights and layout loads them instead of packing again
+        files = dict.fromkeys(names)
+        if weight_cache is not None:
+            sample = [(tuple(t.shape), t.reshape(-1)[::4093].float().numpy().tobytes()) for p_ in w.pool for t in p_]
+            key = hashlib.sha1(repr((sorted((k, repr(v)) for k, v in lay.items()), self.wdtype, EPC, sample)).encode())
+            files = {n: Path(weight_cache) / f"k3_flat.{key.hexdigest()[:16]}.{n}.tensorbin" for n in names}
+        # (a loaded tensor is file-backed (mmap): its upload spins forever on KMD 2.9 unless the pinned-memory cache is
+        # off - TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 before the device opens; otherwise pack again)
+        no_pin = os.environ.get("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES") == "0"
+        if no_pin and all(f is not None and f.is_file() for f in files.values()):
+            mc = lambda t: t.memory_config()  # noqa: E731
+            loaded = {n: ttnn._ttnn.tensor.load_tensor_flatbuffer(str(files[n])) for n in names}
+            for n, t in loaded.items():
+                setattr(self.op, n, t.to(mesh_device, mc(t)))
+        else:
+            W_l = [
+                tuple(t.T.contiguous() for t in (w.pool[e % P][0], w.pool[e % P][1]))
+                + (w.pool[e % P][2].T.contiguous(),)
+                for e in range(EPC)
+            ]
+            src = dict(zip(("w_gu", "w_d", "w_rd"), flat_weight_regions(W_l, lay)))
+            del W_l
+            for n in names:
+                setattr(self.op, n, _bank_sharded([src[n]], lay["banks"], wdt, mesh_device, files[n]))
+            del src
         plan = self.op.plan
         self.writers = len(plan["down"]) + (len(plan["rdn"]) if plan["rdown"] else 0)
         grid = mesh_device.compute_with_storage_grid_size()
@@ -417,6 +438,17 @@ class TtK3TokenSplitMoE:
             tokens_per_page=32 if os.environ.get("K3_TOPK", "custom") == "custom" else 1,
             torus=self.torus,
         )
+        # deterministic combine: the planner rebuilds every chip's flat-expert schedule (the plan's schedule parameters,
+        # pin 1; the pinning ratio as the flat program reads it) and the accumulators take their rows in that order
+        self.deterministic = deterministic
+        if deterministic:
+            self._planner_args["det"] = dict(
+                rps=lay["sched_rps"],
+                max_e=lay["sched_max_e"],
+                gu_nreg=lay["sched_gu_nreg"],
+                pin=1,
+                pin_ratio=os.environ.get("MIMO_FL_PIN_RATIO", "8"),
+            )
         probe = combine_planner_prepare(mesh_device, A=15, **self._planner_args)  # (outputs only: their addresses)
         self.combine = sparse_combine_rf_prepare(
             mesh_device,
@@ -431,7 +463,8 @@ class TtK3TokenSplitMoE:
             arena=self.arena,
             writers=self.writers,
             l1=dict(writers=wcores, words=int(self.words.buffer_address())),
-            devplan=dict(plan=probe.outs["plan"], table=probe.outs["table"]),
+            devplan=dict(plan=probe.outs["plan"], table=probe.outs["table"], dord=probe.outs.get("dord"), top_k=d.K),
+            deterministic=deterministic,
         )
         self.A = len(self.combine.cells["accs"])
         self.planner = combine_planner_prepare(mesh_device, A=self.A, **self._planner_args) if self.A != 15 else probe

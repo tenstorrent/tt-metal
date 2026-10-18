@@ -290,11 +290,12 @@ def _layout(device, x2=False, xcol=0, nh=1, nsg=1, sg_rects=None):
     return grid, phys, readers, gu, rects, relays, down
 
 
-def _bank_sharded(regions_per_dev, banks, dtype, device, cache_file=None):
+def _bank_sharded(regions_per_dev, banks, dtype, device, cache_file=None, replicate=False):
     """Per-core weight regions (equal-size [tiles, 32, 32]) -> one width-sharded DRAM tensor: core i's region is
     contiguous in bank i % banks at byte offset (i // banks) * region bytes. One region list per device (a mesh:
-    row-major device order; lockstep allocation gives every device the same address). ``cache_file``: also dump the
-    host (bfp-packed) tensor there, for _load_cached."""
+    row-major device order; lockstep allocation gives every device the same address); ``replicate``: one list, the
+    same on every device of the mesh (packed once on the host). ``cache_file``: also dump the host (bfp-packed)
+    tensor there, for _load_cached."""
     hosts = []
     for regions in regions_per_dev:
         per = -(-len(regions) // banks)
@@ -310,7 +311,7 @@ def _bank_sharded(regions_per_dev, banks, dtype, device, cache_file=None):
         ttnn.BufferType.DRAM,
         ttnn.ShardSpec(grid, (hosts[0].shape[0], 32), ttnn.ShardOrientation.ROW_MAJOR),
     )
-    one = len(hosts) == 1
+    one = len(hosts) == 1 or replicate  # (a host tensor not distributed: to_device copies it to every device)
     host = ttnn.from_torch(
         hosts[0] if one else torch.stack(hosts),
         dtype=dtype,
@@ -1932,7 +1933,11 @@ class FlatRoutedExpert:
             weights = weights() if callable(weights) else weights
             assert len(weights) == n_dev and all(len(w_) == E for w_ in weights)
             w_all, wd_all, wr_all = [], [], []
-            for W_l in weights:
+            # every device the same experts (e.g. a test's one random expert everywhere): pack once, replicate
+            same = n_dev > 1 and all(
+                len(w_) == len(weights[0]) and all(a is b for a, b in zip(w_, weights[0])) for w_ in weights[1:]
+            )
+            for W_l in weights[:1] if same else weights:
                 regions, dregs, rregs = flat_weight_regions(W_l, lay)
                 w_all.append(regions)
                 wd_all.append(dregs)
@@ -1940,7 +1945,10 @@ class FlatRoutedExpert:
                     wr_all.append(rregs)
             del weights
             src = {"w_gu": w_all, "w_d": wd_all, "w_rd": wr_all}
-            cached = {n: _bank_sharded(src[n], banks, w_dtype, device, files[n]) for n in names}
+            cached = {
+                n: _bank_sharded(src[n], banks, w_dtype, device, None if same else files[n], replicate=same)
+                for n in names
+            }
             del w_all, wd_all, wr_all, src
         self.w_gu, self.w_d = cached["w_gu"], cached["w_d"]
         self.w_rd = cached.get("w_rd")

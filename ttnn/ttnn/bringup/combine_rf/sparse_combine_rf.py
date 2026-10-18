@@ -631,22 +631,112 @@ void kernel_main() {
         return true;
     };
     uint32_t t_local = 0;
+    auto take_local = [&]() -> bool {  // the next local row (L1 hand-off ring), if every writer landed it
+        uint32_t m = 0xFFFFFFFF;
+        for (uint32_t w = 0; w < WL; ++w) {
+            const uint32_t v = landed[w] - lbase;
+            m = v < m ? v : m;
+        }
+        if (li >= m) return false;
+        const uint32_t sl = LB + (li % QL) * SLOT;
+        push_pieces(sl, (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sl + LASTPB)[0] >> 8) & 0xFFFF);
+        ++li;
+        ++done;
+        const uint32_t g = li + QL < n_local ? li + QL : n_local;
+        if (g > lgranted && (g - lgranted >= 4 || g == n_local)) lgrant_to(g);
+        return true;
+    };
+    auto peek_local = [&]() -> uint32_t {  // the next local row's token, if every writer landed it (else ~0)
+        uint32_t m = 0xFFFFFFFF;
+        for (uint32_t w = 0; w < WL; ++w) {
+            const uint32_t v = landed[w] - lbase;
+            m = v < m ? v : m;
+        }
+        if (li >= m) return 0xFFFFFFFF;
+        return (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(LB + (li % QL) * SLOT + LASTPB)[0] >> 8) & 0xFFFF;
+    };
+    auto peek_ring = [&](uint32_t k) -> uint32_t {  // source k's next row's token, if all its pieces landed (else ~0)
+        const uint32_t s = area + RINGS + ((k - (k > hc)) * D + taken[k] % D) * SLOT;
+        for (uint32_t pc = 0; pc < P; ++pc) {
+            volatile tt_l1_ptr uint32_t* tp =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
+            if (tp[3] == 0 || tp[7] == 0) return 0xFFFFFFFF;
+        }
+        return (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + LASTPB)[0] >> 8) & 0xFFFF;
+    };
+    auto take_ring = [&](uint32_t k) -> bool {  // the next row of source k's ring, if all its pieces landed
+        const uint32_t tk = taken[k];
+        const uint32_t s = area + RINGS + ((k - (k > hc)) * D + tk % D) * SLOT;
+        for (uint32_t pc = 0; pc < P; ++pc) {
+            volatile tt_l1_ptr uint32_t* tp =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
+            if (tp[3] == 0 || tp[7] == 0) return false;
+        }
+        volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + LASTPB);
+        push_pieces(s, (tr[0] >> 8) & 0xFFFF);
+        for (uint32_t pc = 0; pc < P; ++pc) {
+            volatile tt_l1_ptr uint32_t* tp =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
+            tp[3] = 0;
+            tp[7] = 0;
+        }
+        taken[k] = tk + 1;
+        --want[k];
+        ++done;
+        noc_semaphore_inc(get_noc_addr(px[k], py[k], area + RET + 4 * (k * AP + me)), 1);
+        noc_semaphore_inc(get_noc_addr(px[k], py[k], area + MISC + 4 * (__MRTOT__ + k)), 1);
+        return true;
+    };
+    // Deterministic order (__DET__, with the L1 hand-off and the device plan): each home token's rows are added in
+    // the planner's per-token source order (combine_plan det); a ring holds its source's rows in production order,
+    // so a ring's head row is taken once it is its token's next. A token's sum no longer depends on arrival timing,
+    // and a ring waits only on its head token's earlier rows (not on a global step). Deadlock-free: a token's order is
+    // by (predicted finish on the source, source), nondecreasing along every source's production, so the row with
+    // the lowest key not yet taken is always takeable once it lands. A table whose per-source totals disagree with
+    // want / n_local is not used (the polling loop below takes everything; misc[102] flags it).
+    if constexpr (__DET__ && L1M) {
+        constexpr uint32_t DK = __DK__, NTOK = __DNTOK__;
+        const uint32_t ol = (tl + 256 + 63) & ~63u;  // (the table CB: unused with the hand-off's device plan)
+        const InterleavedAddrGen<true> og = {.bank_base_address = get_arg_val<uint32_t>(a + 9 + 2 * WL),
+                                             .page_size = __DPG__};
+        noc_async_read(get_noc_addr(me, og), ol, (NTOK * DK + 63) / 64 * 64);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        const uint8_t* ord = reinterpret_cast<const uint8_t*>(ol);
+        uint32_t tot[N];
+        for (uint32_t k = 0; k < N; ++k) tot[k] = 0;
+        for (uint32_t i = 0; i < NTOK * DK; ++i) {
+            if (ord[i] < N) ++tot[ord[i]];
+        }
+        bool ok = true;
+        for (uint32_t k = 0; k < N; ++k) ok = ok && tot[k] == (k == hc ? n_local : want[k]);
+        misc[102] = ok ? 0 : 0xBAD0DE7;
+        uint8_t pos[NTOK];
+        for (uint32_t j = 0; j < NTOK; ++j) pos[j] = 0;
+        auto next_is = [&](uint32_t t, uint32_t k) -> bool {
+            const uint32_t j = t / A;
+            return t != 0xFFFFFFFF && pos[j] < DK && ord[j * DK + pos[j]] == k;
+        };
+        while (ok && done < n_rows) {
+            invalidate_l1_cache();
+            for (uint32_t t = 0; li < n_local && next_is(t = peek_local(), hc);) {
+                take_local();
+                ++pos[t / A];
+            }
+            for (uint32_t k = 0; k < N; ++k) {
+                if (k == hc) continue;
+                for (uint32_t t = 0; want[k] && next_is(t = peek_ring(k), k);) {
+                    take_ring(k);
+                    ++pos[t / A];
+                }
+            }
+        }
+    }
     while (done < n_rows) {
         invalidate_l1_cache();
         if (li == n_local && t_local == 0) t_local = get_timestamp_32b();
         while (L1M && li < n_local) {
-            uint32_t m = 0xFFFFFFFF;
-            for (uint32_t w = 0; w < WL; ++w) {
-                const uint32_t v = landed[w] - lbase;
-                m = v < m ? v : m;
-            }
-            if (li >= m) break;
-            const uint32_t sl = LB + (li % QL) * SLOT;
-            push_pieces(sl, (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sl + LASTPB)[0] >> 8) & 0xFFFF);
-            ++li;
-            ++done;
-            const uint32_t g = li + QL < n_local ? li + QL : n_local;
-            if (g > lgranted && (g - lgranted >= 4 || g == n_local)) lgrant_to(g);
+            if (!take_local()) break;
         }
         while (!L1M && li < n_local) {
             const uint32_t* en = lentry(li);
@@ -656,30 +746,7 @@ void kernel_main() {
             ++done;
         }
         for (uint32_t k = 0; k < N; ++k) {
-            if (!want[k]) continue;
-            const uint32_t tk = taken[k];
-            const uint32_t s = area + RINGS + ((k - (k > hc)) * D + tk % D) * SLOT;
-            bool all = true;
-            for (uint32_t pc = 0; pc < P && all; ++pc) {
-                volatile tt_l1_ptr uint32_t* tp =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
-                all = tp[3] != 0 && tp[7] != 0;
-            }
-            if (all) {
-                volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + LASTPB);
-                push_pieces(s, (tr[0] >> 8) & 0xFFFF);
-                for (uint32_t pc = 0; pc < P; ++pc) {
-                    volatile tt_l1_ptr uint32_t* tp =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
-                    tp[3] = 0;
-                    tp[7] = 0;
-                }
-                taken[k] = tk + 1;
-                --want[k];
-                ++done;
-                noc_semaphore_inc(get_noc_addr(px[k], py[k], area + RET + 4 * (k * AP + me)), 1);
-                noc_semaphore_inc(get_noc_addr(px[k], py[k], area + MISC + 4 * (__MRTOT__ + k)), 1);
-            }
+            if (want[k]) take_ring(k);
         }
     }
     if constexpr (__DEVPLAN__) {  // (the compute's end marker: it does not know the row count)
@@ -732,6 +799,7 @@ def sparse_combine_rf_prepare(
     counts_off=None,
     l1=None,
     devplan=None,
+    deterministic=False,
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
     logical (x, y) cells the combine may use (ports nearest their Ethernet cores, accumulators the rest), else the
@@ -743,7 +811,9 @@ def sparse_combine_rf_prepare(
     in DRAM; flat_routed_expert_with_program l1_args = run.l1_args). Returns run(y, out) (standalone) with
     run.build(y, out) -> the MeshProgramDescriptor and run.collector. devplan (with l1): dict(plan=, table=) from
     combine_plan (the planner's per-call counts and hand-off table, on the device): the kernels read their counts from
-    the plan, rows_by_chip only places the cores."""
+    the plan, rows_by_chip only places the cores. deterministic (with l1 and a devplan holding the planner's "dord"
+    order table, combine_plan det=): every accumulator takes its rows in a fixed (source schedule entry, source chip)
+    order, so the sums are bit-identical from call to call."""
     R, C = tuple(mesh_device.shape)
     N, L, A0 = R * C, num_links, n_acc
     row_bytes = W * 2
@@ -795,7 +865,15 @@ def sparse_combine_rf_prepare(
             n_ret[(home, fh(home, ch), l)] += 1
     al = lambda v: (v + 63) // 64 * 64  # noqa: E731
     MAXT = (S + A - 1) // A
-    tab_cb = 256 * 8 + 128
+    det = bool(deterministic)
+    assert not det or (
+        l1 is not None and devplan is not None and "dord" in devplan
+    ), "deterministic: the L1 hand-off and a device plan with the planner's order table (combine_plan det=)"
+    det_k = int(devplan.get("top_k", 0)) if det else 0
+    assert not det or det_k, "deterministic: devplan top_k (the routing's top-k: the order table's row stride)"
+    det_pg = int(devplan["dord"].shape[-1]) * 4 if det else 0
+    assert not det or MAXT * det_k <= det_pg, (MAXT, det_k, det_pg)
+    tab_cb = max(256 * 8 + 128, 256 + 64 + (MAXT * det_k + 63) // 64 * 64) if det else 256 * 8 + 128
     acc_cbs = sum(
         al(v) for v in [tab_cb, 2 * NT * TILE, 2 * 32, MAXT * NT * 4096, 2 * NT * TILE] + ([2 * TILE] if l1 else [])
     )
@@ -911,6 +989,10 @@ def sparse_combine_rf_prepare(
         "__CBTAB__": str(CB_TAB),
         "__CBW__": str(CB_W),
         "__DEVPLAN__": str(int(devplan is not None)),
+        "__DET__": str(int(det)),
+        "__DK__": str(max(det_k, 1)),
+        "__DNTOK__": str(MAXT if det else 1),
+        "__DPG__": str(max(det_pg, 64)),
         "__NOYREAD__": os.environ.get("SPC_NOYREAD", "0"),  # (probe: rows not read from y: garbage)
         "__PD__": str(PD),
         "__PS__": str(PS),
@@ -1128,6 +1210,8 @@ def sparse_combine_rf_prepare(
                 args += [int(dbg_t.buffer_address()), 8 + i, int(tdbg_t.buffer_address()), 16 + i]
                 if l1 is not None:
                     args += [QL, area + loc_off, len(wv), len(port_ids[ch]) + i, int(l1["words"])] + wxy
+                    if det:  # (the planner's order table: page i)
+                        args += [int(devplan["dord"].buffer_address())]
                 else:
                     args += [0, 0, 0, 0, 0]
                 ar_rt[core.x][core.y] = args

@@ -13,6 +13,7 @@ import math
 import os
 import statistics
 import time
+from pathlib import Path
 
 import pytest
 import torch
@@ -65,6 +66,12 @@ _PARAMS = [
 ]
 
 
+# (the weight cache's file-backed tensors: their upload hangs with the pinned-memory cache on, KMD 2.9)
+os.environ.setdefault("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES", "0")
+# packed expert weights of the random test pool (local disk; the block keys them on plan + values)
+WEIGHT_CACHE = Path(os.environ.get("TT_METAL_HOME", ".")) / "generated/deepseek_v3_d_p/k3_flat_cache"
+
+
 def pcc(a, b):
     return torch.corrcoef(torch.stack([a.flatten().float(), b.flatten().float()]))[0, 1].item()
 
@@ -114,7 +121,15 @@ def test_k3_moe_layer(mesh_device, device_params):
     torch.manual_seed(0)
     t0 = time.time()
     w = random_k3_weights(d, pool_size=POOL)
-    moe = TtK3TokenSplitMoE(mesh_device, w, d, S, torus=k3_torus())
+    moe = TtK3TokenSplitMoE(
+        mesh_device,
+        w,
+        d,
+        S,
+        torus=k3_torus(),
+        weight_cache=WEIGHT_CACHE,
+        deterministic=os.environ.get("K3_DET", "0") == "1",
+    )
     logger.info(
         f"K3 block built in {time.time() - t0:.0f} s: {moe.EPC} experts per chip, combine accumulators {moe.A}, cells {len(moe.cells)}"
     )
@@ -196,17 +211,28 @@ def test_k3_moe_layer(mesh_device, device_params):
     )
     if os.environ.get("K3_DEBUG_REPEAT"):  # (debug: a second call with the intermediates, diffed against the first)
         snap = lambda t: [ttnn.to_torch(u) for u in ttnn.get_device_tensors(t)]  # noqa: E731
-        first = {k: snap(inter[k]) for k in ("gi", "lat")}
+        keys = [k for k in ("gi", "lat", "routed", "yr", "ys") if k in inter]
+        first = {k: snap(inter[k]) for k in keys}
         first.update({f"pl.{k}": snap(v) for k, v in inter["pl"].items()})
-        y2_, inter2 = moe(xt, keep=True)
-        ttnn.synchronize_device(mesh_device)
-        second = {k: snap(inter2[k]) for k in ("gi", "lat")}
-        second.update({f"pl.{k}": snap(v) for k, v in inter2["pl"].items()})
-        for k in first:
-            diffs = [int((a.to(torch.float64) != b.to(torch.float64)).sum()) for a, b in zip(first[k], second[k])]
-            logger.info(f"K3 DEBUG_REPEAT {k}: elements differing per chip {diffs}")
-        y2t = torch.cat([ttnn.to_torch(t).reshape(S, d.H) for t in ttnn.get_device_tensors(y2_)]).float()
-        logger.info(f"K3 DEBUG_REPEAT y: PCC vs first {pcc(y2t, yd):.6f}")
+        first["y"] = snap(y)
+        for rep in range(int(os.environ.get("K3_DEBUG_REPEAT"))):
+            y2_, inter2 = moe(xt, keep=True)
+            ttnn.synchronize_device(mesh_device)
+            second = {k: snap(inter2[k]) for k in keys}
+            second.update({f"pl.{k}": snap(v) for k, v in inter2["pl"].items()})
+            second["y"] = snap(y2_)
+            for k in first:
+                a_, b_ = torch.cat([u.reshape(-1) for u in first[k]]), torch.cat([u.reshape(-1) for u in second[k]])
+                ne = a_.to(torch.float64) != b_.to(torch.float64)
+                n = int(ne.sum())
+                msg = f"K3 DEBUG_REPEAT {rep} {k:16s}: {n} of {a_.numel()} elements differ"
+                if n and a_.dtype == torch.bfloat16:  # (one bf16 ulp at the element's magnitude: sum order, not data)
+                    av, bv = a_[ne].float(), b_[ne].float()
+                    ulp = torch.ldexp(torch.ones_like(av), torch.frexp(av.abs().clamp(min=1e-30))[1] - 8)
+                    steps = ((av - bv).abs() / ulp).round()
+                    msg += f", max |diff| {float((av - bv).abs().max()):.3e}, in bf16 ulps: max {int(steps.max())}, "
+                    msg += f"{float((steps <= 1).float().mean()):.1%} within 1 ulp"
+                logger.info(msg)
     if os.environ.get("K3_DUMP"):  # (the device's outputs per stage, for the offline accuracy analysis)
         cat = lambda t, *shp: torch.cat(
             [ttnn.to_torch(u).reshape(*shp) for u in ttnn.get_device_tensors(t)]
@@ -290,7 +316,15 @@ def test_k3_moe_layer_trace(mesh_device, device_params):
     mesh_device = k3_mesh(mesh_device)
     d = K3Dims(E=E_ALL)
     w = random_k3_weights(d, pool_size=POOL)
-    moe = TtK3TokenSplitMoE(mesh_device, w, d, S, torus=k3_torus())
+    moe = TtK3TokenSplitMoE(
+        mesh_device,
+        w,
+        d,
+        S,
+        torus=k3_torus(),
+        weight_cache=WEIGHT_CACHE,
+        deterministic=os.environ.get("K3_DET", "0") == "1",
+    )
     x = torch.randn(N * S, d.H, generator=torch.Generator().manual_seed(1)).to(torch.bfloat16)
     xt = ttnn.from_torch(
         x,
@@ -380,3 +414,112 @@ def test_k3_moe_layer_trace(mesh_device, device_params):
                 )
     ttnn.release_trace(mesh_device, tid)
     assert pcc(got, ref) > 0.999 or os.environ.get("K3_PROBE_RUN"), "the trace replay differs from the untraced forward"
+
+
+@pytest.mark.parametrize("mesh_device, device_params", _TRACE_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.timeout(7200)
+def test_k3_moe_determinism_trace(mesh_device, device_params):
+    """Bit-exact determinism over K3_DET_REPLAYS (default 100) traced replays of the whole forward: every stage's
+    output (routing, latent, planner tables, experts + combine, latent up, shared expert, block output) against the
+    first replay's. bf16 stages are compared on the device (ne -> fp32 0 / 1 -> sum: one count per chip and replay,
+    read back at the end); the integer planner tables (small) exactly on the host."""
+    mesh_device = k3_mesh(mesh_device)
+    d = K3Dims(E=E_ALL)
+    w = random_k3_weights(d, pool_size=POOL)
+    moe = TtK3TokenSplitMoE(
+        mesh_device,
+        w,
+        d,
+        S,
+        torus=k3_torus(),
+        weight_cache=WEIGHT_CACHE,
+        deterministic=os.environ.get("K3_DET", "1") == "1",
+    )  # (the CI mode: fixed combine sum order)
+    x = torch.randn(N * S, d.H, generator=torch.Generator().manual_seed(1)).to(torch.bfloat16)
+    xt = ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    y0, i0 = moe(xt, keep=True)  # (compiles every program)
+    ttnn.synchronize_device(mesh_device)
+    del y0, i0
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    y_tr, inter = moe(xt, keep=True)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    stages = {k: inter[k] for k in ("gi", "lat", "routed", "yr", "ys") if k in inter}
+    stages.update({f"pl.{k}": v for k, v in inter["pl"].items()})
+    stages["y"] = y_tr
+    on_dev = {k: t for k, t in stages.items() if t.dtype == ttnn.bfloat16}
+    on_host = {k: t for k, t in stages.items() if k not in on_dev}
+    snap = lambda t: [ttnn.to_torch(u) for u in ttnn.get_device_tensors(t)]  # noqa: E731
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)  # replay 1: the reference
+    ref_dev = {k: ttnn.clone(t) for k, t in on_dev.items()}
+    ref_host = {k: snap(t) for k, t in on_host.items()}
+    ttnn.synchronize_device(mesh_device)
+
+    def mismatches(a, b):  # (device: elements of a != b, one fp32 count per chip)
+        if a.layout != ttnn.TILE_LAYOUT:
+            a, b = ttnn.to_layout(a, ttnn.TILE_LAYOUT), ttnn.to_layout(b, ttnn.TILE_LAYOUT)
+        m = ttnn.ne(a, b, dtype=ttnn.float32)
+        s = ttnn.sum(m)
+        ttnn.deallocate(m)
+        return s
+
+    n = int(os.environ.get("K3_DET_REPLAYS", "100"))
+    counts = {k: [] for k in stages}
+    t0 = time.perf_counter()
+    for _ in range(n - 1):
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        for k, t in on_dev.items():
+            counts[k].append(mismatches(t, ref_dev[k]))
+        for k, t in on_host.items():  # (the planner tables: a few hundred KB, exact compare)
+            counts[k].append(sum(int((a != b).sum()) for a, b in zip(snap(t), ref_host[k])))
+    ttnn.synchronize_device(mesh_device)
+    dt = time.perf_counter() - t0
+    bad_any = 0
+    for k in stages:
+        per = [
+            int(sum(float(ttnn.to_torch(u).reshape(-1)[0]) for u in ttnn.get_device_tensors(c))) if k in on_dev else c
+            for c in counts[k]
+        ]
+        nz = [(i + 2, v) for i, v in enumerate(per) if v]
+        bad_any += len(nz)
+        logger.info(
+            f"K3_DET {k:16s}: {len(nz)} of {n - 1} replays differ from replay 1"
+            + (
+                f"; elements differing (replay: count) {nz[:12]}{' ...' if len(nz) > 12 else ''}, max {max(v for _, v in nz)}"
+                if nz
+                else ""
+            )
+        )
+    logger.info(f"K3_DET {n - 1} replays + compares in {dt:.1f} s ({dt / (n - 1) * 1e3:.1f} ms each)")
+    # (K3_DET_LOCATE=m: m more replays with the combine output read back - which elements differ, and their values)
+    if int(os.environ.get("K3_DET_LOCATE", "0")) and "routed" in stages:
+        ref_r = [r.float() for r in snap(stages["routed"]) if False] or None
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        base = None
+        seen = {}
+        for rep in range(int(os.environ.get("K3_DET_LOCATE"))):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+            cur = snap(stages["routed"])
+            if base is None:
+                base = (
+                    [ttnn.to_torch(u) for u in ttnn.get_device_tensors(ref_dev["routed"])]
+                    if "routed" in ref_dev
+                    else None
+                )
+            for chip, (a, b) in enumerate(zip(base, cur)):
+                a2, b2 = a.reshape(-1, a.shape[-1]).float(), b.reshape(-1, b.shape[-1]).float()
+                for r_, c_ in (a2 != b2).nonzero().tolist():
+                    key = (chip, r_, c_)
+                    seen.setdefault(key, set()).add((float(a2[r_, c_]), float(b2[r_, c_])))
+        for (chip, r_, c_), vals in sorted(seen.items()):
+            logger.info(f"K3_DET_LOC chip {chip} row {r_} col {c_}: replay-1 vs later values {sorted(vals)}")
+        logger.info(f"K3_DET_LOC {len(seen)} distinct differing elements over the locate replays")
+    ttnn.release_trace(mesh_device, tid)
+    assert bad_any == 0 or os.environ.get("K3_PROBE_RUN"), "the forward is not deterministic"

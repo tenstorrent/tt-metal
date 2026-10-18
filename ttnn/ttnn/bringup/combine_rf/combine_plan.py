@@ -408,6 +408,7 @@ def _mc_l1_bytes(M, CH, HS, EPC, NG, rows_cap):
 _PLANNER_MC2 = r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+__DETINC__
 constexpr uint32_t ME = get_compile_time_arg_val(0), R = get_compile_time_arg_val(1), C = get_compile_time_arg_val(2);
 constexpr uint32_t S = get_compile_time_arg_val(3), K = get_compile_time_arg_val(4), EPC = get_compile_time_arg_val(5);
 constexpr uint32_t NG = get_compile_time_arg_val(6), A = get_compile_time_arg_val(7), L = get_compile_time_arg_val(8);
@@ -429,6 +430,14 @@ constexpr uint32_t O_PART = O_STG + al64(STG);              // home partial (pla
 constexpr uint32_t O_TIDX = O_PART + al64(544 * 4), O_TAB = O_TIDX + al64(ROWS_CAP * 4);
 constexpr uint32_t O_PLAN = O_TAB + al64(ROWS_CAP * 8), O_CNT = O_PLAN + 4096, O_REG = O_CNT + al64(NG * 4);
 constexpr uint32_t O_DBG = O_REG + al64(NG * 4);  // 64 bytes of timestamps, then 512 slice records
+// deterministic combine (DET): per owned accumulator, per home token, the source chips of its rows in a fixed order -
+// the order the accumulator adds them in, whatever the arrival timing (combine_plan docstring)
+constexpr uint32_t DET = __DET__, VM = __VM__, OWN = (A + M - 1) / M, GPB = al64(NG * 4);
+constexpr uint32_t DMAXT = (S + A - 1) / A, OPG = al64(DMAXT * K), DPG = __DPG__, WR = __WR__;
+constexpr uint32_t O_GP = O_DBG + al64(64 + 12 * 512), O_GIN = O_GP + GPB, O_GS = O_GIN + M * GPB;
+constexpr uint32_t O_RUN = O_GS + al64(NG * 8), O_SCH = O_RUN + al64(NG * 2), O_SEID = O_SCH + al64(N * VM * 8);
+constexpr uint32_t O_NACT = O_SEID + al64(N * VM), O_ORD = O_NACT + al64(N * 4), O_DYN = O_ORD + OWN * OPG;
+constexpr uint32_t O_TF = O_DYN + 4096;
 constexpr uint32_t WX = __WX__, WY = __WY__;  // torus axes (rings: the shorter way, ties Y- / X+ as the fabric)
 FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {
     const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
@@ -458,6 +467,7 @@ void kernel_main() {
     const uint32_t mx0 = get_arg_val<uint32_t>(a++), my0 = get_arg_val<uint32_t>(a++);
     const uint32_t mx1 = get_arg_val<uint32_t>(a++), my1 = get_arg_val<uint32_t>(a++);
     (void)mx0, (void)my0, (void)mx1, (void)my1;
+    const uint32_t dord_addr = DET ? get_arg_val<uint32_t>(a++) : 0;  // (DET: the order table, a page per accumulator)
     uint32_t ts[16];
     ts[0] = get_timestamp_32b();
     cb_reserve_back(0, 1);
@@ -559,6 +569,22 @@ void kernel_main() {
             ++cnt[e0];
             lst[nl++] = (chl - 1) << 8 | e0;
         }
+    }
+    if constexpr (DET) {  // my chunk's rows per global expert (all homes, then homes before mine) to the owners
+        uint16_t* gp = reinterpret_cast<uint16_t*>(B + O_GP);
+        for (uint32_t i = 0; i < 2 * NG; ++i) gp[i] = 0;
+        const uint16_t* id16 = reinterpret_cast<const uint16_t*>(B + O_IDS);
+        for (uint32_t i = 0; i < chl; ++i) {
+            const uint32_t g = id16[i];
+            ++gp[g];
+            if (c0 + i < ME * SK) ++gp[NG + g];
+        }
+        constexpr uint32_t NOWN = A < M ? A : M;
+        for (uint32_t q = 0; q < NOWN; ++q) {
+            noc_async_write(B + O_GP, get_noc_addr(px[q], py[q], B + O_GIN + p * GPB), GPB);
+        }
+        noc_async_write_barrier();
+        for (uint32_t q = 0; q < NOWN; ++q) noc_semaphore_inc(get_noc_addr(px[q], py[q], get_semaphore(3)), 1);
     }
     uint32_t* myc = reinterpret_cast<uint32_t*>(B + O_MYC);
     for (uint32_t e = 0, o_ = 0; e < EPC; ++e) {
@@ -733,6 +759,83 @@ void kernel_main() {
         }
     }
     ts[6] = get_timestamp_32b();
+#if __DET__  // (preprocessor: SeDyn / SE_RPS exist only with det's include)
+    {
+        if (p < A) {
+            noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(3)), M);
+            invalidate_l1_cache();
+            uint32_t* gs = reinterpret_cast<uint32_t*>(B + O_GS);  // [NG] rows per expert, [NG] of homes before mine
+            for (uint32_t i = 0; i < 2 * NG; ++i) gs[i] = 0;
+            for (uint32_t j = 0; j < M; ++j) {
+                const uint16_t* gj = reinterpret_cast<const uint16_t*>(B + O_GIN + j * GPB);
+                for (uint32_t i = 0; i < 2 * NG; ++i) gs[i] += gj[i];
+            }
+            // every source chip's schedule: the flat expert's own (se_dyn_from_counts on that chip's expert counts)
+            uint32_t* sch = reinterpret_cast<uint32_t*>(B + O_SCH);  // per (source, entry): first row, rows
+            uint8_t* seid = reinterpret_cast<uint8_t*>(B + O_SEID);
+            uint32_t* nact = reinterpret_cast<uint32_t*>(B + O_NACT);
+            static_assert(sizeof(SeDyn) <= 4096, "the schedule scratch");
+            SeDyn& dy = *reinterpret_cast<SeDyn*>(B + O_DYN);
+            // and each entry's predicted finish on its chip, in rows: an entry costs max(WR, its rows) (WR: an
+            // expert's weight read in rows of compute), summed in schedule order
+            uint32_t* tf = reinterpret_cast<uint32_t*>(B + O_TF);
+            for (uint32_t s = 0; s < N; ++s) {
+                se_dyn_from_counts(dy, EPC, SE_RPS, [&](uint32_t e) { return gs[s * EPC + e]; });
+                nact[s] = dy.n_act;
+                uint32_t fin = 0;
+                for (uint32_t v = 0; v < dy.n_act; ++v) {
+                    seid[s * VM + v] = dy.eid[v];
+                    sch[2 * (s * VM + v)] = dy.off[v];
+                    sch[2 * (s * VM + v) + 1] = dy.cnt[v];
+                    fin += dy.cnt[v] > WR ? dy.cnt[v] : WR;
+                    tf[s * VM + v] = fin;
+                }
+            }
+            // my home tokens in order: a row's place in its expert's row list (rows are in (home, token) order: the
+            // homes before mine, then my earlier tokens) picks the entry that carries it; a token's rows are ordered
+            // by (predicted finish, source) - per source that is its production order (no deadlock: combine docstring)
+            uint8_t* ord = reinterpret_cast<uint8_t*>(B + O_ORD);
+            for (uint32_t i = 0; i < OWN * OPG; ++i) ord[i] = 0xFF;
+            uint16_t* run = reinterpret_cast<uint16_t*>(B + O_RUN);
+            for (uint32_t i = 0; i < NG; ++i) run[i] = 0;
+            const uint16_t* hid2 = reinterpret_cast<const uint16_t*>(B + O_HOME);
+            for (uint32_t t = 0; t < S; ++t) {
+                const uint32_t aa = t % A;
+                const bool mine = aa % M == p;
+                uint8_t* oa = ord + (aa / M) * OPG + (t / A) * K;
+                uint32_t kt[K], nk = 0;
+                uint8_t ks[K];
+                for (uint32_t kk = 0; kk < K; ++kk) {
+                    const uint32_t g = hid2[t * K + kk];
+                    const uint32_t r = gs[NG + g] + run[g]++;
+                    if (!mine) continue;
+                    const uint32_t s = g / EPC, e = g - s * EPC;
+                    for (uint32_t v = 0; v < nact[s]; ++v) {
+                        const uint32_t o_ = sch[2 * (s * VM + v)];
+                        if (seid[s * VM + v] == e && r >= o_ && r < o_ + sch[2 * (s * VM + v) + 1]) {
+                            const uint32_t key = tf[s * VM + v];
+                            uint32_t i = nk++;
+                            for (; i > 0 && (kt[i - 1] > key || (kt[i - 1] == key && ks[i - 1] > s)); --i) {
+                                kt[i] = kt[i - 1];
+                                ks[i] = ks[i - 1];
+                            }
+                            kt[i] = key;
+                            ks[i] = static_cast<uint8_t>(s);
+                            break;
+                        }
+                    }
+                }
+                for (uint32_t i = 0; i < nk; ++i) oa[i] = ks[i];
+            }
+            static_assert(OPG <= DPG, "the order table page");
+            const InterleavedAddrGen<true> og = {.bank_base_address = dord_addr, .page_size = DPG};
+            for (uint32_t aa = p; aa < A; aa += M) {
+                noc_async_write(B + O_ORD + (aa / M) * OPG, get_noc_addr(aa, og), OPG);
+            }
+            noc_async_write_barrier();
+        }
+    }
+#endif
     // (3) my accumulators' want blocks and n_local onto core 0's plan; n_inj / n_ret as atomic increments (core 0
     // zeroed its plan before its counts went out)
     const uint32_t pl0 = B + O_PLAN;
@@ -787,6 +890,28 @@ void kernel_main() {
 def _mc2_stg(M, EPC, rows_cap, home_rows=0):
     """Slice staging bytes; with row pages also the home ids' landing (64 bytes a token row, before the slices)."""
     return max(((rows_cap // M + 64) * 8 + 16 * min(EPC * M, 512) + 63) // 64 * 64, 64 * home_rows)
+
+
+def det_page_bytes(S, K):
+    """Bytes of an accumulator's page of the deterministic combine's order table (any accumulator count)."""
+    return (S * K + 63) // 64 * 64
+
+
+def _mc2_det_bytes(M, A, N, NG, VM, S, K):
+    """L1 of the deterministic-combine tables (combine_planner_prepare det)."""
+    al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+    own = (A + M - 1) // M
+    return (
+        (M + 1) * al(NG * 4)
+        + al(NG * 8)
+        + al(NG * 2)
+        + al(N * VM * 8)
+        + al(N * VM)
+        + al(N * 4)
+        + own * al((S + A - 1) // A * K)
+        + 4096
+        + al(N * VM * 4)
+    )
 
 
 def _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, home_rows=0):
@@ -914,6 +1039,7 @@ def combine_planner_prepare(
     joint=False,
     tokens_per_page=1,
     torus=(False, False),
+    det=None,
 ):
     """port_luts[coord] = 8 port ids (direction * 2 + link; 0xFF none), n_ports[coord] = P. Returns run(ids, wts) ->
     dict of the per-chip output tensors (counts, regions, token_index, table, plan), allocated once. ids / wts: one
@@ -951,6 +1077,45 @@ def combine_planner_prepare(
         ),
         plan=zeros(1024),
     )
+    # det (deterministic combine): the flat expert's schedule parameters - dict(rps=, max_e=, gu_nreg=, pin=,
+    # pin_ratio=, optional w_rows=) from its plan (sched_rps / sched_max_e / sched_gu_nreg) and call (pin). Adds
+    # outs["dord"]: per accumulator, per owned home token (t = accumulator + j A), the source chips of its K rows in
+    # the order sparse_combine_rf_prepare(deterministic=True) adds them (uint8, 0xFF past the token's rows; a page of
+    # det_page_bytes(S, K) each). The order: by the row's predicted finish on its chip (the flat schedule, an entry
+    # costing max(w_rows, its rows)), then source chip - each source's production order, so the accumulator can
+    # always take some ring's head row; a token waits only on its own earlier rows, never on a global step.
+    VM = 2 * det["max_e"] if det is not None else 1
+    if det is not None:
+        assert cores is not None, "det: the multi-core planner"
+        assert N < 255, "det: source chips fit a byte"
+        outs["dord"] = ttnn.from_torch(
+            torch.zeros(
+                R, C, 16, det_page_bytes(S, K) // 4, dtype=torch.int32
+            ),  # (16 pages: a probe planner's serve any A)
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard,
+        )
+        detinc = "\n".join(
+            [
+                f"#define SE_RPS {det['rps']}",
+                f"#define SE_MAX_E {det['max_e']}",
+                f"#define SE_GU_NREG {det['gu_nreg']}",
+                "#define SE_META_BYTES 65536",
+            ]  # (no meta CB here)
+            + (
+                [
+                    f"#define SE_PIN_MIN {det['pin']}",
+                    "#define SE_PIN_SMALL 2",
+                    f"#define SE_PIN_RATIO {det['pin_ratio']}",
+                ]
+                if det["pin"]
+                else []
+            )
+            + ['#include "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/kernels/se_dyn.hpp"']
+        )
     T = N * S * K
     in_bytes = 2 * ((T * 2 + 63) // 64) * 64 + 64
     out_bytes = 2 * ((NG * 4 + 63) // 64) * 64 + rows_cap * 12 + 4096 + 64
@@ -973,6 +1138,9 @@ def combine_planner_prepare(
         vv = [mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(*x)) for x in cores]
         pxy = [w for v in vv for w in (v.x, v.y)]
         mc_bytes = _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, HR) if V2 else _mc_l1_bytes(M, CH, HS, EPC, NG, rows_cap)
+        if det is not None:
+            assert V2, "det: the V2 multi-core planner"
+            mc_bytes += _mc2_det_bytes(M, A, N, NG, VM, S, K)
         tdbg_t = ttnn.from_torch(
             torch.zeros(R, C, M, 16, dtype=torch.int32),
             device=mesh_device,
@@ -995,7 +1163,10 @@ def combine_planner_prepare(
                         format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint32, mc_bytes)],
                     )
                 ]
-                pd.semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=mcs, initial_value=0) for i in (0, 1, 2)]
+                pd.semaphores = [
+                    ttnn.SemaphoreDescriptor(id=i, core_ranges=mcs, initial_value=0)
+                    for i in ((0, 1, 2, 3) if det is not None else (0, 1, 2))
+                ]
                 rt = ttnn.RuntimeArgs()
                 head = [
                     int(ids.buffer_address()),
@@ -1008,13 +1179,25 @@ def combine_planner_prepare(
                 ] + list(port_luts[(r, cc)])
                 rect = [min(v.x for v in vv), min(v.y for v in vv), max(v.x for v in vv), max(v.y for v in vv)]
                 for pi, x in enumerate(cores):
-                    rt[x[0]][x[1]] = head + [pi] + pxy + [int(tdbg_t.buffer_address())] + rect
+                    rt[x[0]][x[1]] = (
+                        head
+                        + [pi]
+                        + pxy
+                        + [int(tdbg_t.buffer_address())]
+                        + rect
+                        + ([int(outs["dord"].buffer_address())] if det is not None else [])
+                    )
                 pd.kernels = [
                     ttnn.KernelDescriptor(
                         kernel_source=wsub(_PLANNER_MC2 if V2 else _PLANNER_MC)
                         .replace("__RPAGE__", str((4 if joint else 2) * K if row_pages else 0))
                         .replace("__RJOINT__", str(int(joint)))
-                        .replace("__RPT__", str(tokens_per_page)),
+                        .replace("__RPT__", str(tokens_per_page))
+                        .replace("__DET__", str(int(det is not None)))
+                        .replace("__DPG__", str(det_page_bytes(S, K)))
+                        .replace("__WR__", str(int(det.get("w_rows", 160)) if det is not None else 1))
+                        .replace("__VM__", str(VM))
+                        .replace("__DETINC__", detinc if det is not None else ""),
                         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                         core_ranges=mcs,
                         compile_time_args=[me, R, C, S, K, EPC, NG, A, L, n_ports[(r, cc)], rows_cap, M, CH]

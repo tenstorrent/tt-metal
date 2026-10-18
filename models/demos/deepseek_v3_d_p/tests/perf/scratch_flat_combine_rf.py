@@ -14,6 +14,7 @@ zeros). Times: fused, flat alone (the same op, nothing appended), combine alone.
 import itertools
 import os
 import statistics
+import time
 
 import pytest
 import torch
@@ -140,19 +141,17 @@ def _routing(name, seed=0):
 
 
 @pytest.mark.parametrize("mesh_device, device_params", _PARAMS, indirect=["mesh_device", "device_params"])
-@pytest.mark.parametrize("routing", os.environ.get("FC_ROUTINGS", "uniform,zipf_spread_1.2,zipf_packed_1.2").split(","))
 @pytest.mark.timeout(3600)
-def test_flat_combine_rf(mesh_device, device_params, routing):
+def test_flat_combine_rf(mesh_device, device_params):
+    """Every routing of FC_ROUTINGS on one mesh and one flat expert (its weights packed and uploaded once)."""
     assert tuple(mesh_device.shape) == (R, C)
-    torch.manual_seed(0)
-    rows, counts, regions, n_rows, busiest = _routing(routing)
-    floor = busiest * H * 2 / 1e6 / LINK_GBPS * 1e3
     if os.environ.get("FC_WEIGHTS") == "real":  # (finite y for the check: one random expert shared by all)
         g = torch.Generator().manual_seed(1)
         w1 = tuple(torch.randn(*sh, generator=g) * 0.02 for sh in ((H, I), (H, I), (I, H)))
-        weights = [[w1] * EPC for _ in range(N)]
+        weights = [[w1] * EPC for _ in range(N)]  # (the same tuple everywhere: packed once, replicated)
     else:
         weights = "fake"
+    t0 = time.time()
     op = FlatRoutedExpert(
         mesh_device,
         weights,
@@ -165,6 +164,17 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
         act=ACT,
         pin=1,
     )
+    logger.info(f"flat expert built in {time.time() - t0:.1f} s (weights {os.environ.get('FC_WEIGHTS', 'fake')})")
+    for routing in os.environ.get("FC_ROUTINGS", "uniform,zipf_spread_1.2,zipf_packed_1.2").split(","):
+        t0 = time.time()
+        _flat_combine_rf_routing(mesh_device, op, routing)
+        logger.info(f"{routing}: done in {time.time() - t0:.1f} s")
+
+
+def _flat_combine_rf_routing(mesh_device, op, routing):
+    torch.manual_seed(0)
+    rows, counts, regions, n_rows, busiest = _routing(routing)
+    floor = busiest * H * 2 / 1e6 / LINK_GBPS * 1e3
     plan = op.plan
     writers = len(plan["down"]) + (len(plan["rdn"]) if plan["rdown"] else 0)
     grid0 = mesh_device.compute_with_storage_grid_size()
@@ -178,6 +188,7 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
         t, dtype=d, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=dram, mesh_mapper=shard
     )
     DEVPLAN = os.environ.get("FC_DEVPLAN") == "1"  # (with FC_L1: every per-call table from the device planner)
+    DET = DEVPLAN and os.environ.get("FC_DET", "0") == "1"
     tidx = None
     if DEVPLAN:
         ids, gates = _routing.last
@@ -211,6 +222,16 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
             n_ports=nps,
             rows_cap=rows_cap,
             cores=[(i % 8, i // 8) for i in range(int(os.environ.get("FC_PLAN_CORES", "32")))],
+            # (the deterministic combine order: the flat's schedule parameters; FC_DET=0 for the arrival-order sums)
+            det=dict(
+                rps=plan["sched_rps"],
+                max_e=plan["sched_max_e"],
+                gu_nreg=plan["sched_gu_nreg"],
+                pin=1,
+                pin_ratio=os.environ.get("MIMO_FL_PIN_RATIO", "8"),
+            )
+            if DET
+            else None,
         )
         pl = planner(ids_t, w_t)
         ttnn.synchronize_device(mesh_device)
@@ -234,6 +255,8 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
     grid = mesh_device.compute_with_storage_grid_size()
     all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
     a_rows = int(plan["arena_tiles"]) * 32
+    # (FC_ARENA_KB: a larger arena than the flat expert needs - room for the combine's accumulators / ring depth)
+    a_rows = max(a_rows, int(os.environ.get("FC_ARENA_KB", "0")) * 1024 // 64 // 32 * 32)
     arena = ttnn.from_torch(  # (raw words, row-major: readable back core by core)
         torch.zeros(grid.x * grid.y * a_rows, 16, dtype=torch.int32),
         dtype=ttnn.uint32,
@@ -268,12 +291,14 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         l1 = dict(writers=wcores, words=int(words_t.buffer_address()))
-    devplan = dict(plan=pl["plan"], table=pl["table"]) if DEVPLAN else None
+    devplan = dict(plan=pl["plan"], table=pl["table"], dord=pl.get("dord"), top_k=K) if DEVPLAN else None
     if DEVPLAN:
         assert (
             l1 is not None and int(os.environ.get("FC_NACC", "15")) <= 16
         ), "FC_DEVPLAN needs FC_L1 (<= 16 accumulators)"
-    fused = sparse_combine_rf_prepare(mesh_device, S, H, rows, writers=writers, l1=l1, devplan=devplan, **common)
+    fused = sparse_combine_rf_prepare(
+        mesh_device, S, H, rows, writers=writers, l1=l1, devplan=devplan, deterministic=DET, **common
+    )
     if DEVPLAN:  # (the planner was built for FC_NACC accumulators: the combine must have found that many cells)
         assert len(fused.cells["accs"]) == n_acc, (
             f"combine has {len(fused.cells['accs'])} accumulators, the planner {n_acc}: set FC_NACC "
@@ -363,6 +388,16 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
                     o, t_ = hdr & 0xFF, (hdr >> 8) & 0xFFFF
                     rows[ch].append((r_, (o // C, o % C), t_, 0, 0, w0 >> 16))
     outs = [ttnn.to_torch(t).reshape(S, H).float() for t in ttnn.get_device_tensors(out)]
+    n_rep = int(os.environ.get("FC_DET_REPEAT", "10"))  # (bit-exact repeats of the fused call: the combine's sum order)
+    if n_rep:
+        o0 = ttnn.clone(out)
+        bad = []
+        for i_ in range(n_rep):
+            run_fused()
+            ne = ttnn.sum(ttnn.ne(out, o0, dtype=ttnn.float32))
+            bad.append(sum(int(ttnn.to_torch(t).reshape(-1)[0].item()) for t in ttnn.get_device_tensors(ne)))
+        logger.info(f"{routing}: FC_DET {DET}: {sum(b > 0 for b in bad)} of {n_rep} repeats differ (elements {bad})")
+        assert not DET or not any(bad), f"{routing}: deterministic combine not bit-exact across repeats"
     chips = [(r_, c_) for r_ in range(R) for c_ in range(C)]
     ref = torch.zeros(N, S, H)
     for ci, ch in enumerate(chips):

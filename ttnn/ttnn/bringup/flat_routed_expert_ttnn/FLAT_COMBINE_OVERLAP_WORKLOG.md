@@ -1174,3 +1174,31 @@ cycles on chip 7). The block reads x once (MIMO_FL_X1 scoped around experts_comb
 both rectangles, a win for 48 gate/up: 2433 -> 2372 us); with 64 gate/up cores that one multicaster cannot keep up.
 x read twice with 64 gate/up (K3_EXP_X1=0): experts_combine 2380 us, block traced forward 3315 us (base 3407, -2.7%),
 PCC 0.99622 as base. K3_GU64 is now the block's default (K3_GU64=0: the old layout), and it reads x twice.
+
+### Deterministic combine (2026-10-17)
+Why: 99 traced replays of the K3 block were bit-exact on every stage but the routed output (combine): one element
+(chip 3, row 270, col 3153) toggled by one bf16 ulp in 26 of 99 replays - the accumulators summed each token's rows in
+fp32 in arrival order. CI should assert bit-exact repeats (to catch any other nondeterminism), so the combine's sum
+order is now fixed (`sparse_combine_rf_prepare(deterministic=True)` + `combine_planner_prepare(det=...)`, K3 block
+default; harness FC_DET, default 1; test `scratch_k3_moe_layer.py::test_k3_moe_determinism_trace`, K3_DET_REPLAYS).
+The device planner (multi-core, no host step) exchanges per-chunk expert counts, rebuilds every source chip's flat
+schedule (se_dyn_from_counts: the flat's own code incl. pinning) and writes an order table per accumulator.
+- v1, one global order (schedule entry v, source chip k), per-accumulator counts per (k, v): K3 block 0 of 99 replays
+  differ (was 26 of 99). Harness (K3, 48 gate/up Tensix): uniform 2430 vs 2432 us, packed 5898 vs 5924, but **Zipf
+  spread 3876 vs 2728 (+42%)**: lockstep by entry index makes every chip wait for the hot chip's (pinned, long)
+  entries at every step - the call costs sum over v of max over chips, not max over chips of the sum. V4.1 (DRISC-only,
+  32 down) spread 1528 vs 1306 the same way.
+- v2, per-token order: per owned home token, its rows' source chips sorted by (predicted finish of the row's
+  schedule entry on its chip: an entry costs max(w_rows = 160, its rows), source). Nondecreasing along each source's
+  production, so deadlock-free (the lowest-key row not taken is takeable once it lands); a ring now waits only when
+  its head row's token still needs an earlier row from another chip. (results below)
+
+### V4.1 with DRISC-only, both tiles every call (2026-10-17, queued, L1 hand-off, device planner, 32 down)
+The K3 switch-mode fix (both DRISC tiles on every call when no Tensix readers back the slots) carries over: the flat
+alone is now on par with the Tensix layout on the skewed routings and 1% faster uniform.
+| config | uniform fused / flat | spread fused / flat | packed fused / flat |
+| A no DRISC, 27 down (old best) | 1175 / 1088 | 1335 / 1214 | 2833 / 2618 |
+| C DRISC-only, per-call tile switch, 32 down | 1102 / 1084 | 1588 / 1582 | 2991 / 2817 |
+| DRISC-only both tiles, 32 down, arrival-order combine | **1103 / 1082** | **1306 / 1228** | 2869 / 2624 |
+| same, deterministic v1 (global order) | 1103 / 1082 | 1528 / 1229 | 2823 / 2620 |
+Exact (rel err 2.4e-3) on all routings; v1 bit-exact across 10 repeats on all.
