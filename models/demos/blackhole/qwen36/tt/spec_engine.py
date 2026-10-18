@@ -1295,6 +1295,13 @@ class MTPSpecEngine:
             # Device-to-device: scratch (B=1) -> row `slot` of the batched GDN buffers, other rows untouched (the slot-write
             # trace when captured and still valid, else TPGatedDeltaNet.write_slot(consume=False) eagerly).
             model._write_gdn_slot_from_scratch(slot)
+        path = "short trace" if num_full == 0 else f"{num_full} chunk replay(s), tail {tail}"
+        msg = f"[spec_engine] fast prefill: slot {slot} Tp={Tp} ({path})"
+        if getattr(self, "_fast_prefill_logged", False):
+            logger.debug(msg)
+        else:
+            self._fast_prefill_logged = True
+            logger.info(msg)
         return host
 
     def _replay_spec_short(self, slot, prompt_list, tokens, pt_row, L, chunk_start, carry, captured_row):

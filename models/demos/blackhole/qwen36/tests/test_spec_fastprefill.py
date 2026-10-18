@@ -76,6 +76,14 @@ def _engine(model, nb, flag, monkeypatch):
     eng.prepare(_warm_table(nb))
     eng.capture()
     logger.info(f"[fast_prefill={flag}] engine prepared + captured in {time.perf_counter() - t0:.1f}s")
+    mem = {}
+    for name in ("DRAM", "TRACE", "L1"):
+        try:
+            view = ttnn.get_memory_view(model.mesh_device, getattr(ttnn.BufferType, name))
+            mem[name] = (int(view.total_bytes_allocated_per_bank), int(view.total_bytes_free_per_bank))
+        except Exception as e:  # pragma: no cover - depends on the ttnn build
+            mem[name] = f"n/a: {e}"
+    logger.info(f"[fast_prefill={flag}] memory after capture: (allocated, free) bytes per bank {mem}")
     if flag == "1":
         trs = model._short_traces
         assert trs and all(tr.spec and tr.trace_id is not None for tr in trs.values()), "spec short traces missing"
