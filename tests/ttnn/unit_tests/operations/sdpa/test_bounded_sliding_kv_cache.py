@@ -72,7 +72,7 @@ def _sharded_kv_input(device, x_padded):
     return xt.to(device, mem_cfg)
 
 
-def _run_decode_walk(device, sliding_window, use_modulo_kwarg, decode_steps, scale=None):
+def _run_decode_walk(device, sliding_window, use_modulo_kwarg, decode_steps, scale=None, program_config=None):
     """Drive a single user through ``decode_steps`` of paged_update_cache +
     paged_scaled_dot_product_attention_decode against a bounded sliding-window cache.
 
@@ -143,6 +143,7 @@ def _run_decode_walk(device, sliding_window, use_modulo_kwarg, decode_steps, sca
             scale=scale,
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=program_config,
             **modulo_kwargs,
         )
         out_torch_padded = ttnn.to_torch(out_tt)
@@ -171,6 +172,49 @@ def test_bounded_sliding_kv_cache_position_modulo_round_trip(device):
     if failing:
         msg = "\n".join(f"  pos={p}: {m}" for p, m in failing[:10])
         pytest.fail(f"{len(failing)}/{decode_steps} steps failed PCC≥0.99 with cache_position_modulo set:\n{msg}")
+
+
+# ── Dynamic K chunk: the sliding-window mask and the causal mask on one chunk ──
+
+
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize(
+    "sliding_window, same_k_chunk",
+    [(128, True), (128, False), (256, None)],
+    ids=["window_128_one_k_chunk", "window_128_different_k_chunks", "window_256_every_step"],
+)
+def test_bounded_sliding_kv_cache_dynamic_k_chunk(device, sliding_window, same_k_chunk):
+    """``k_chunk_size=0`` lets the kernel size the K chunk from ``cur_pos``: 256 positions from
+    position 128 on (no fp32 dest accumulation). A step whose window start and ``cur_pos`` fall in
+    the same chunk needs both masks on that chunk: the sliding-window mask before the window and
+    the causal mask after ``cur_pos``. With a window as large as the chunk the two share a chunk
+    only where the window starts on a chunk boundary, so the sliding-window mask hides nothing there.
+    PCC ≥ 0.99 at every step of the selected kind; ``same_k_chunk=None`` selects every step."""
+    decode_steps = sliding_window * 2 + 16
+    k_chunk = 256
+    # The op's default values apart from k_chunk_size=0: the dynamic K chunk, which tt_transformers uses by default.
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=32,
+        k_chunk_size=0,
+        max_cores_per_head_batch=1,
+    )
+
+    results = _run_decode_walk(
+        device, sliding_window, use_modulo_kwarg=True, decode_steps=decode_steps, program_config=program_config
+    )
+
+    checked = [
+        (p, ok, m)
+        for (p, ok, m) in results
+        if p >= sliding_window
+        and (same_k_chunk is None or ((p - sliding_window + 1) // k_chunk == p // k_chunk) == same_k_chunk)
+    ]
+    assert checked, "the walk covers no such position"
+    failing = [(p, m) for (p, ok, m) in checked if not ok]
+    if failing:
+        msg = "\n".join(f"  pos={p}: {m}" for p, m in failing[:10])
+        pytest.fail(f"{len(failing)}/{len(checked)} steps failed PCC≥0.99 with k_chunk_size=0:\n{msg}")
 
 
 # ── Negative: without the kwarg, positions past sliding_window clobber block 0 ──
