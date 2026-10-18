@@ -1048,7 +1048,7 @@ class GRPOTrainer:
         self._rollout_mesh: Any = None
         self._rollout_server: Any = None
 
-        init_distributed_training(config)
+        init_distributed_training(config, device_config)
         if is_rollout_rank(config):
             self._init_remote_rollout()
         else:
