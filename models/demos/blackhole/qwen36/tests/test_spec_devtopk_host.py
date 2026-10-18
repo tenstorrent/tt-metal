@@ -183,9 +183,11 @@ def test_merge_rejects_pad_lanes_and_bad_shapes(expect_error):
 # --------------------------------------------------------------------------- #
 # Flags
 # --------------------------------------------------------------------------- #
-def test_flag_default_off_and_m_read(monkeypatch):
+def test_flag_default_on_and_m_read(monkeypatch):
     monkeypatch.delenv("QWEN36_VERIFY_DEVICE_TOPK", raising=False)
     monkeypatch.delenv("QWEN36_VERIFY_TOPK_M", raising=False)
+    assert verify_device_topk_m() == 64
+    monkeypatch.setenv("QWEN36_VERIFY_DEVICE_TOPK", "0")
     assert verify_device_topk_m() == 0
     monkeypatch.setenv("QWEN36_VERIFY_DEVICE_TOPK", "1")
     assert verify_device_topk_m() == 64

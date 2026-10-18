@@ -1011,9 +1011,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             )
         except Exception as e:
             return SpecReject(reason=f"cost estimate failed: {e}", supported_k=())
-        # QWEN36_VERIFY_DEVICE_TOPK=1 adds the "topk" accept mode (exact top-M candidates from the device instead of
+        # QWEN36_VERIFY_DEVICE_TOPK (default on) adds the "topk" accept mode (exact top-M candidates from the device instead of
         # the full logits on sampled steps, note 26) and tells the plugin the candidate count. Passed only when on, so
-        # a plugin without the field still admits the class with the flag off.
+        # a plugin without the field still admits the class with the flag off (QWEN36_VERIFY_DEVICE_TOPK=0).
         topk_m = verify_device_topk_m()
         topk_kw = {"topk_candidates": topk_m} if topk_m else {}
         return SpecPlan(

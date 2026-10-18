@@ -55,11 +55,11 @@ def fabric_router_config():
 
 
 def verify_device_topk_m():
-    """Device-side top-k for the sampled verify (QWEN36_VERIFY_DEVICE_TOPK, default 0 = off): 0 when off, else
+    """Device-side top-k for the sampled verify (QWEN36_VERIFY_DEVICE_TOPK, default 1 = on; 0 turns it off): 0 when off, else
     M = QWEN36_VERIFY_TOPK_M (default 64) candidates per vocab shard. Read by the model (third verify trace),
     the engine (memory costs, spec_mode "topk") and the vLLM class (SpecPlan accept_modes / topk_candidates), so
     one process sees one answer. Note 26 (work/notes/26_device_topk_sampled_verify.md) is the design."""
-    if not bool(int(os.environ.get("QWEN36_VERIFY_DEVICE_TOPK", "0"))):
+    if not bool(int(os.environ.get("QWEN36_VERIFY_DEVICE_TOPK", "1"))):
         return 0
     return int(os.environ.get("QWEN36_VERIFY_TOPK_M", "64"))
 
