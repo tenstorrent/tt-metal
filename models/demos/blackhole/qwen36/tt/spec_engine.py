@@ -1327,7 +1327,8 @@ class MTPSpecEngine:
                 self._trash_collision_warned = True
                 logger.warning(
                     f"[spec_engine] fast prefill declined for slot {slot} (Tp {len(prompt_list)}): trash block "
-                    f"{model.prefill_trash_block} is one of the request's real blocks; eager prefill for this request"
+                    f"{getattr(model, 'prefill_trash_block', None)} is one of the request's real blocks; eager prefill "
+                    "for this request"
                 )
             return None
         assert tr.last_feed.dtype == self._feed_dtype and tr.last_feed.shape[-1] == self._dim_frac, (
