@@ -9230,12 +9230,86 @@ tasks:
       pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'
+- id: P.6
+  title: 'Partial sums in bf16 on the fabric reduce-scatter (Marko''s GLM-5.3 choice) vs the exact fp32 fabric sums: owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.5
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  ab:
+    change:
+      CCL_IMPL: fabric_bf16
+    env:
+      CCL_IMPL: fabric
+  brief:
+    details: 'Owner (2026-10-18): measure the three partial sums (ATTN_O_SUM, EXPERTS_SUM, HC_TP_SUM) reduced in bf16
+      with ttnn.bringup.fabric_reduce_scatter''s existing add, as Marko Staletovic runs GLM-5.3 on the LoudBox
+      (models/demos/glm53_flash_d_p_lb/bringup/BREADCRUMBS.md: GLM_SCATTER_OP=fabric_bf16, warm 56k prefill 9.34 ->
+      8.95 s, top1 0.8767 -> 0.8804; KDA output RS bf16 8.96 -> 8.47 s), against P.5''s exact fp32 fabric sums. If P.5
+      already added CCL_IMPL=fabric_bf16 (its note OV-18), check it and only time it; else add that value in
+      tt/settings.py / tt/ccl.py (typecast the fp32 partials to bf16, reduce-scatter, back to fp32 where the consumer
+      needs fp32). Add CCL_IMPL to MAX_PRECISION as the exact value so component / swap tests stay exact; a precision
+      drop is judged end to end only. Default unchanged; the owner decides from the table. Report the collectives''
+      per-op time for stock / fabric / fabric_bf16 and the device total.'
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_total: '> 0'
+- id: P.7
+  title: 'Attention matmuls at HiFi2 (MLA projections, sparse SDPA, indexer, q_a; Marko''s GLM-5.3 setting) vs HiFi4: owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.3
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  ab:
+    change:
+      ATTN_FIDELITY: HiFi2
+    env:
+      ATTN_FIDELITY: HiFi4
+  brief:
+    details: 'Owner (2026-10-18): run the attention matmuls at HiFi2, as Marko Staletovic does for GLM-5.3 on the LoudBox
+      (models/demos/glm53_flash_d_p_lb/bringup/BREADCRUMBS.md: attn_fidelity HiFi2 for MLA / sparse SDPA / indexer /
+      q_a, about 1-2 % of prefill; HiFi2 matmuls read 0.28 % low, caches within noise; KDA kept HiFi4 because HiFi2 made
+      its output 3.4 % low). Add ONE setting in tt/settings.py, ATTN_FIDELITY {HiFi4 (default), HiFi2}, used by the
+      attention-side matmuls only: the attention input projection (q_a / wkv), wq_b, the sparse_sdpa and window SDPA
+      programs, the indexer projections and scores, the compressor projections, wo_a / wo_b. mHC, norms, experts, shared
+      expert, router keep MATMUL_FIDELITY (HiFi4). fp32 DEST stays on everywhere. Add ATTN_FIDELITY: "HiFi4" to
+      MAX_PRECISION so component / swap tests keep checking at HiFi4 (precision is judged end to end). Default
+      unchanged; the owner decides from the table. Report the attention / indexer / q_a section times HiFi4 vs HiFi2
+      (plain profile) and the device total; note any step whose component error at HiFi2 (one smoke run with
+      DS41_ATTN_FIDELITY=HiFi2, information only) is far above its HiFi4 value.'
+  gate:
+    cmd: for t in swa_attention dec_reindex_attention dec_reindex_indexer dec_reindex_q_a; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}.py || exit 1; done
+      && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_total: '> 0'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
   deps:
   - P.4
   - P.5
+  - P.6
+  - P.7
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
