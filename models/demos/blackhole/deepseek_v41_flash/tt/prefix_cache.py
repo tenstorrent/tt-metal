@@ -109,6 +109,7 @@ def read_shard(t, k):
     return ttnn.to_torch(_dev(t, k))
 
 
+SNAP_PIECE_MIB = 16  # device-side slice size of a snapshot read (see snapshot_user)
 PIECE = 2048  # rows per ``paged_scatter_rows`` call: the row count is a COMPILE-time argument (one program per distinct count, ~0.4 s at first use), so every write is split into pieces of the same size (the last one padded with SKIP ids)
 
 
@@ -287,11 +288,19 @@ def snapshot_user(model, b, s, toks):
         whole = (
             sp.tensor.shape[0] == 1 and lo == 0 and end == N
         )  # (a full slice returns the persistent tensor itself: never free it)
-        part = sp.tensor if whole else ttnn.slice(sp.tensor, [i, 0, lo, 0], [i + 1, 1, end, D])
-        for c in range(1 if sp.replicated else cols):
-            vals.append(read_shard(part, r * cols + c).clone())
-        if not whole:
-            ttnn.deallocate(part)
+        if whole:
+            for c in range(1 if sp.replicated else cols):
+                vals.append(read_shard(sp.tensor, r * cols + c).clone())
+        else:
+            # row pieces of <= SNAP_PIECE_MIB: one device copy of the whole slice is 512 MiB at 524,288 tokens (1M config), more than the largest free DRAM block (OOM in the server at the 2^19 snapshot)
+            step = max(1, (SNAP_PIECE_MIB << 20) // (D * sp.tensor.element_size()))
+            pieces = [[] for _ in range(1 if sp.replicated else cols)]
+            for p0 in range(lo, end, step):
+                part = ttnn.slice(sp.tensor, [i, 0, p0, 0], [i + 1, 1, min(p0 + step, end), D])
+                for c in range(len(pieces)):
+                    pieces[c].append(read_shard(part, r * cols + c).clone())
+                ttnn.deallocate(part)
+            vals = [torch.cat(x, dim=2) if len(x) > 1 else x[0] for x in pieces]
         snap.carried[name] = vals * cols if sp.replicated else vals
     for src in _sources(model):
         snap.pool[src] = snap.carried[f"L{src}.kvt"][0][0, 0]  # [s / ratio, 512], shared with the carried copy
