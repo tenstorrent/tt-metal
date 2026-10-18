@@ -118,7 +118,9 @@ class CCLManager:
         ]
         self._ring_gather_buffers = {}
 
-    def get_ring_gather_buffer(self, key, n_kv_local, seq, head_dim, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    def get_ring_gather_buffer(
+        self, key, n_kv_local, seq, head_dim, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG, batch=1
+    ):
         """Return persistent ring-attention receive storage.
 
         Distinct ``key`` values isolate receive buffers. ``seq`` is the full cache
@@ -126,12 +128,14 @@ class CCLManager:
         ``n_kv_local`` is the per-device head count (this device's TP shard); each
         device holds a zero-filled ``[1, n_kv_local, seq, head_dim]``. The op
         overwrites valid entries and masks invalid ones, so the scratch buffer needs
-        no re-zeroing.
+        no re-zeroing. Create each buffer before trace capture: the first call for a
+        key synchronizes the device.
         """
-        cache_key = (key, n_kv_local, seq, head_dim, str(dtype), str(memory_config))
+        # batch: one receive batch per request of a lanes ring SDPA.
+        cache_key = (key, n_kv_local, seq, head_dim, str(dtype), str(memory_config), batch)
         if cache_key not in self._ring_gather_buffers:
             self._ring_gather_buffers[cache_key] = ttnn.zeros(
-                [1, n_kv_local, seq, head_dim],
+                [batch, n_kv_local, seq, head_dim],
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,

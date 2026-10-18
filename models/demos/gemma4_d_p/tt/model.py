@@ -17,7 +17,7 @@ from models.demos.gemma4_d_p.tt.ccl import ccl_allgather, ccl_partition_rows
 from models.demos.gemma4_d_p.tt.dflash_config import DEFAULT_DFLASH_MODEL
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
-from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
+from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillLanes, PrefillMetadata
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 
@@ -135,6 +135,8 @@ class Gemma4Model:
 
         # When True the caller refreshes the ring metadata itself, outside any trace.
         self.prefill_metadata = PrefillMetadata(mesh_config)
+        self._lane_prefill_metadata = [self.prefill_metadata]
+        self._lane_vectors = {}
         self._prefill_metadata_external = False
         self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
@@ -256,6 +258,24 @@ class Gemma4Model:
         """Attach the segmented trace controller used for per-layer migration acks."""
         self._prefill_trace_controller = controller
 
+    def lane_vector_metadata(self, num_lanes):
+        """The B-element slot / prefix tensors of a num_lanes step, for the lanes ring SDPA.
+
+        Allocates device tensors on first use, so call it before capturing a trace that uses them.
+        """
+        if num_lanes not in self._lane_vectors:
+            self._lane_vectors[num_lanes] = PrefillMetadata(self.mesh_config, num_lanes)
+        return self._lane_vectors[num_lanes]
+
+    def lane_prefill_metadata(self, num_lanes):
+        """Per-request metadata for a batched step of num_lanes requests; lane 0 is prefill_metadata.
+
+        Allocates new device scalars, so call it before capturing a trace that uses them.
+        """
+        while len(self._lane_prefill_metadata) < num_lanes:
+            self._lane_prefill_metadata.append(PrefillMetadata(self.mesh_config))
+        return self._lane_prefill_metadata[:num_lanes]
+
     def set_prefill_rope_positions(self, position_idx):
         """Set the CP-sharded absolute positions that the caller updates before each replay."""
         self._rope_prefill_positions = position_idx
@@ -268,19 +288,28 @@ class Gemma4Model:
         on_layer_complete=None,
         d2h_service=None,
         metadata_msg=None,
+        prefill_metadata=None,
     ):
         """Prefill one user's chunk and return its final decoder hidden states.
 
         ``hidden_states`` holds this TP device's 1/TP of the chunk's rows, as
         ``transform_and_embed_prefill_inputs_device`` returns them. The caller owns
         trace staging. Migration acknowledgements follow each layer's KV writes.
+
+        A batched step passes prefill_metadata as a PrefillLanes of lane_prefill_metadata's entries, one per request,
+        with the requests' rows stacked request-major (each request's CP-local slab in turn). The caller then stages
+        every lane's metadata and the stacked positions itself.
         """
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
             raise ValueError("Ring prefill processes one user per call")
         if d2h_service is not None and metadata_msg is None:
             raise ValueError("metadata_msg is required for D2H layer acknowledgements")
-        if not self._prefill_metadata_external:
-            self.prefill_metadata.update(slot_idx=user_id, kv_actual_global=chunk_start_idx)
+        if prefill_metadata is None:
+            prefill_metadata = self.prefill_metadata
+            if not self._prefill_metadata_external:
+                self.prefill_metadata.update(slot_idx=user_id, kv_actual_global=chunk_start_idx)
+        elif isinstance(prefill_metadata, PrefillLanes) and self._rope_prefill_positions is None:
+            raise ValueError("a batched step needs per-row RoPE positions (set_prefill_rope_positions)")
 
         # Each layer type's RoPE lanes are looked up once per chunk and shared by all its layers.
         packed_rope_by_type = {
@@ -304,7 +333,7 @@ class Gemma4Model:
             packed_rope = packed_rope_by_type[layer_type]
             hidden_states = layer(
                 hidden_states,
-                prefill_metadata=self.prefill_metadata,
+                prefill_metadata=prefill_metadata,
                 chunk_start_idx=chunk_start_idx,
                 packed_global_rope=packed_rope if layer_type == "full_attention" else None,
                 packed_sliding_rope=packed_rope if layer_type == "sliding_attention" else None,
