@@ -1190,7 +1190,7 @@ class Orchestrator:
         if rec and rec.get("decision") == "reject":
             return self.perf_reject(task, rec)
         if rec and rec.get("decision") == "rerun":  # measure the same change again (e.g. after a board reset)
-            rec = self.ab_report(task, rec.get("changed") or [])
+            rec = self.ab_report(task, sorted(set(rec.get("changed") or []) | set(self.changed_under(task))))
             self.led.update(tid, ab=rec, status="TODO", reason=[rec["why"]])
             return self._human(task, rec["why"])
         if rec:
@@ -1198,7 +1198,8 @@ class Orchestrator:
         changed = self.perf_agent(task)
         if changed is None:
             return STOPPED
-        rec = self.ab_report(task, changed)
+        # F108: the change is everything uncommitted under the task's paths, an earlier attempt's work included
+        rec = self.ab_report(task, sorted(set(changed) | set(self.changed_under(task))))
         self.led.update(tid, ab=rec, status="TODO", reason=[rec["why"]])
         return self._human(task, rec["why"])
 
