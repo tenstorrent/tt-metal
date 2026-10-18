@@ -8,6 +8,7 @@ Fast post-commit tests for SDPA decode with a representative subset of parametri
 
 import random
 
+import math
 import torch
 import numpy as np
 import pytest
@@ -538,5 +539,15 @@ def test_sdpa_decode_default_scale_unaligned_head_dim(device):
         to_tt(Q), to_tt(K), to_tt(V), cur_pos=[cur_pos] * b, is_causal=True, program_config=program_config
     )
     actual = ttnn.to_torch(tt_out)[:, :, :nh, :d]
+    tt_out_explicit = ttnn.transformer.scaled_dot_product_attention_decode(
+        to_tt(Q),
+        to_tt(K),
+        to_tt(V),
+        cur_pos=[cur_pos] * b,
+        is_causal=True,
+        scale=1 / math.sqrt(d),
+        program_config=program_config,
+    )
 
+    assert torch.equal(actual, ttnn.to_torch(tt_out_explicit)[:, :, :nh, :d])
     assert_with_pcc(expected, actual, 0.999)
