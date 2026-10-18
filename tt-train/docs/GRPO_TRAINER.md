@@ -162,7 +162,7 @@ In `ttt_remote_sync` both ranks run this script. The constructor picks the role:
 
 Rules and limitations of `ttt_remote_sync`:
 
-- **Llama only, no FSDP**, and `model_source` must be a HuggingFace Hub id
+- **Llama or Qwen3, no FSDP**, and `model_source` must be a HuggingFace Hub id
   (rank 0 loads its weights from it, rank 1 its config and tokenizer; a local path raises `ValueError`).
 - **Rank 1 boots with dummy weights**, and rank 0 pushes its weights as
   version 0 before training starts. Rank 1 starts at weight_version -1 and
@@ -262,7 +262,7 @@ optimizer state end up sharded `1/N` across the FSDP axis.
 
 ### TTTRolloutSampler
 
-Rollout-rank sampler for Llama on tt-transformers
+Rollout-rank sampler for Llama and Qwen3 on tt-transformers
 ([`ttml/trainers/grpo_trainer/remote_rollout/ttt_rollout_sampler.py`](../sources/ttml/ttml/trainers/grpo_trainer/remote_rollout/ttt_rollout_sampler.py)),
 selected with `rollout_backend: "ttt_remote_sync"`. It splits the rollout mesh into `[1, 1]`
 submeshes and runs one data-parallel model per submesh with on-device sampling
