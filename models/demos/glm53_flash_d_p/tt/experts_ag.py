@@ -442,6 +442,9 @@ class TtExpertsAg:
 
 
 def build_experts_ag(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtype=ttnn.bfloat4_b) -> TtExpertsAg:
+    # 32 down cores (128 output tile columns, 4 a core: as fast as the 36 the 12 x 10 grid would give, and the
+    # token-split path's layout - one flat weight cache for both modes)
+    os.environ.setdefault("MIMO_FL_ND", "32")
     return TtExpertsAg(
         mesh,
         layer,
