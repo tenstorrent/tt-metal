@@ -162,3 +162,12 @@
 - Check (`bfw job check --task C.sliding.post_ffn_norm`): PASS. pcc 0.9999959, auto_margin_min 2.84, device_ops 3,
   host_flops_frac 0.
   - Regressions attn_norm, attention, post_attn_norm, attn_residual, ffn_norm and mlp: PASS.
+
+## C.sliding.ffn_residual (run 20261018-003406-gemma31-glx-3, attempt 1), 2026-10-18
+
+- `tt/residual.py`: `ResidualAdd(scale=None)`. With a scale, the one `ttnn.add` carries a fused
+  `MUL_UNARY_SFPU(scale)` activation: out = (h_mid + mlp_post) * layer_scalar, as in gemma4_d_p `tt/layer.py`.
+  Without one, `activations=[]` (the binding rejects `None`; the first try broke the attn_residual regression).
+- `bringup/hooks.py`: `ffn_residual` reads `layers.{layer}.layer_scalar` once at load as a Python float.
+- Check (`bfw job check --task C.sliding.ffn_residual`): PASS. pcc 0.9999943, auto_margin_min 1.369 (vs_cpu rel
+  0.00342 against 0.00469), bias -0.0024, device_ops 1, host_flops_frac 0. All 7 earlier sliding tasks: PASS.

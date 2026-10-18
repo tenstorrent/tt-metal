@@ -124,6 +124,11 @@ def device_component(mesh, spec, layer, step):
         from models.demos.gemma4_31b_glx.tt.residual import ResidualAdd
 
         return _ResidualStep(mesh, ResidualAdd())
+    if step == "ffn_residual":
+        from models.demos.gemma4_31b_glx.tt.residual import ResidualAdd
+
+        scale = weights.load(ckpt, f"layers.{layer}.layer_scalar").float().item()
+        return _ResidualStep(mesh, ResidualAdd(scale))
     if step == "mlp":
         from models.demos.gemma4_31b_glx.tt.mlp import MLP
 
