@@ -29,12 +29,22 @@ static inline void consume_one_dfb(
     uint32_t num_consumers,
     uint32_t consumer_idx) {
     const uint32_t entry_size = dfb.get_entry_size();
-    for (uint32_t tile_id = 0; tile_id < entries_per_consumer; ++tile_id) {
+    const uint32_t share = dfb.get_consumer_share();
+    const uint32_t stride_bytes = entry_size * dfb.get_consumer_stride_tiles();
+    const uint32_t page_step = is_blocked ? 1u : num_consumers;
+    for (uint32_t tile_id = 0; tile_id < entries_per_consumer; tile_id += share) {
         const uint32_t page_id = is_blocked ? tile_id : tile_id * num_consumers + consumer_idx;
-        dfb.wait_front(1);
-        noc.async_write(dfb, tensor_accessor, entry_size, {}, {.page_id = page_id});
+        dfb.wait_front(share);
+        for (uint32_t i = 0; i < share; ++i) {
+            noc.async_write(
+                dfb,
+                tensor_accessor,
+                entry_size,
+                {.offset_bytes = i * stride_bytes},
+                {.page_id = page_id + i * page_step});
+        }
         noc.async_write_barrier();
-        dfb.pop_front(1);
+        dfb.pop_front(share);
     }
     dfb.finish();
     dfb.write_barrier(noc);
@@ -49,6 +59,7 @@ static inline void consume_one_dfb_impl_sync(
     uint32_t entries_per_consumer,
     uint32_t num_consumers,
     uint32_t consumer_idx) {
+    // One call per page; the DFB does the wait/pop itself.
     for (uint32_t tile_id = 0; tile_id < entries_per_consumer; ++tile_id) {
         const uint32_t page_id = is_blocked ? tile_id : tile_id * num_consumers + consumer_idx;
         noc.template async_write<NocOptions::TXN_ID>(dfb, tensor_accessor, {}, {.page_id = page_id});
@@ -87,23 +98,23 @@ void kernel_main() {
 
     if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-        consume_one_dfb_impl_sync<DataflowBuffer, decltype(dst_0), is_blocked_0>(
+        consume_one_dfb_impl_sync<decltype(dfb_0), decltype(dst_0), is_blocked_0>(
             dfb_0, dst_0, noc, epc_0, num_consumers, consumer_idx);
-        consume_one_dfb_impl_sync<DataflowBuffer, decltype(dst_1), is_blocked_1>(
+        consume_one_dfb_impl_sync<decltype(dfb_1), decltype(dst_1), is_blocked_1>(
             dfb_1, dst_1, noc, epc_1, num_consumers, consumer_idx);
-        consume_one_dfb_impl_sync<DataflowBuffer, decltype(dst_2), is_blocked_2>(
+        consume_one_dfb_impl_sync<decltype(dfb_2), decltype(dst_2), is_blocked_2>(
             dfb_2, dst_2, noc, epc_2, num_consumers, consumer_idx);
-        consume_one_dfb_impl_sync<DataflowBuffer, decltype(dst_3), is_blocked_3>(
+        consume_one_dfb_impl_sync<decltype(dfb_3), decltype(dst_3), is_blocked_3>(
             dfb_3, dst_3, noc, epc_3, num_consumers, consumer_idx);
 #endif
     } else {
-        consume_one_dfb<DataflowBuffer, decltype(dst_0), is_blocked_0>(
+        consume_one_dfb<decltype(dfb_0), decltype(dst_0), is_blocked_0>(
             dfb_0, dst_0, noc, epc_0, num_consumers, consumer_idx);
-        consume_one_dfb<DataflowBuffer, decltype(dst_1), is_blocked_1>(
+        consume_one_dfb<decltype(dfb_1), decltype(dst_1), is_blocked_1>(
             dfb_1, dst_1, noc, epc_1, num_consumers, consumer_idx);
-        consume_one_dfb<DataflowBuffer, decltype(dst_2), is_blocked_2>(
+        consume_one_dfb<decltype(dfb_2), decltype(dst_2), is_blocked_2>(
             dfb_2, dst_2, noc, epc_2, num_consumers, consumer_idx);
-        consume_one_dfb<DataflowBuffer, decltype(dst_3), is_blocked_3>(
+        consume_one_dfb<decltype(dfb_3), decltype(dst_3), is_blocked_3>(
             dfb_3, dst_3, noc, epc_3, num_consumers, consumer_idx);
     }
 }
