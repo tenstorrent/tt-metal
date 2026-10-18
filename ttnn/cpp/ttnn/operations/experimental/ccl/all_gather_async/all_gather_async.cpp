@@ -31,7 +31,7 @@ ttnn::Tensor all_gather_async(
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_gather_async operation");
     uint32_t resolved_num_links =
-        num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, std::nullopt));
+        num_links.has_value() ? *num_links : ttnn::operations::ccl::common::get_num_links(*mesh_device, std::nullopt);
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim);
     bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
@@ -94,8 +94,9 @@ ttnn::Tensor all_gather_async(
     const std::optional<CoreRangeSet>& sub_core_grid) {
     auto* mesh_device_ptr = input_tensor.device();
     TT_FATAL(mesh_device_ptr != nullptr, "Mesh device is required for all_gather_async operation");
-    uint32_t resolved_num_links =
-        num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device_ptr, cluster_axis));
+    uint32_t resolved_num_links = num_links.has_value()
+                                      ? *num_links
+                                      : ttnn::operations::ccl::common::get_num_links(*mesh_device_ptr, cluster_axis);
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case =
         !use_all_gather_async_via_broadcast && composite_common::use_composite_all_gather(input_tensor, dim);
@@ -155,8 +156,9 @@ ttnn::Tensor all_gather_async(
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    uint32_t resolved_links =
-        num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
+    uint32_t resolved_links = num_preferred_links.has_value()
+                                  ? *num_preferred_links
+                                  : ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis);
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case =
         !use_all_gather_async_via_broadcast && composite_common::use_composite_all_gather(input_tensor, dim);
@@ -209,7 +211,7 @@ ttnn::Tensor all_gather_async_reversed(
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_gather_async_reversed operation");
     uint32_t resolved_num_links =
-        num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, std::nullopt));
+        num_links.has_value() ? *num_links : ttnn::operations::ccl::common::get_num_links(*mesh_device, std::nullopt);
     // NOTE: reverse_order parameter is ignored, always use true for reversed API
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim);
@@ -271,8 +273,9 @@ ttnn::Tensor all_gather_async_reversed(
     const std::optional<CoreRangeSet>& sub_core_grid) {
     auto* mesh_device_ptr = input_tensor.device();
     TT_FATAL(mesh_device_ptr != nullptr, "Mesh device is required for all_gather_async_reversed operation");
-    uint32_t resolved_num_links =
-        num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device_ptr, cluster_axis));
+    uint32_t resolved_num_links = num_links.has_value()
+                                      ? *num_links
+                                      : ttnn::operations::ccl::common::get_num_links(*mesh_device_ptr, cluster_axis);
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim);
     bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
@@ -331,8 +334,9 @@ ttnn::Tensor all_gather_async_reversed(
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    uint32_t resolved_links =
-        num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
+    uint32_t resolved_links = num_preferred_links.has_value()
+                                  ? *num_preferred_links
+                                  : ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis);
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim);
     bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(

@@ -199,6 +199,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             is_last_rank=params.is_last_rank,
             pipeline_activation_emb_tp_sharded=self.pipeline_activation_emb_tp_sharded,
             use_trace=params.use_trace,
+            overlap_shared_expert=params.overlap_shared_expert_with_dispatch,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

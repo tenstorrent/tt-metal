@@ -13,7 +13,7 @@
 #     Runs one group only (same as a single CI matrix job).
 #     Groups: unit, phys-grouping, control-plane, t3k, wh-galaxy,
 #       bh-6u, bh-single-galaxy, bh-dual-galaxy,
-#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress, bh-heterogeneous, pipeline-placement, bh-misc#
+#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-fsd-reliability, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress, bh-heterogeneous, pipeline-placement, bh-misc#
 #   Parallel (all groups at once):
 #     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --parallel
 #     Runs all groups in parallel via self-invocation. Each group's output is
@@ -78,6 +78,15 @@ fi
 # non-oversubscribed groups. Only set it if the caller hasn't already chosen a value.
 if [[ -z "${OMPI_MCA_mpi_yield_when_idle:-}" ]]; then
   export OMPI_MCA_mpi_yield_when_idle=1
+fi
+
+# The fabric-tests workflow exports TT_METAL_OPERATION_TIMEOUT_SECONDS=20 for the hardware jobs' hang
+# detection, and peers inherit it as the topology mapper's wait for rank 0's chip-info broadcast. On
+# these oversubscribed mock runs a healthy rank 0 of a 16-64 rank group can legitimately take longer
+# than that on a small runner, so peers falsely declare the controller dead. Floor it for CPU-only
+# runs; commands that need even longer still set their own value.
+if (( ${TT_METAL_OPERATION_TIMEOUT_SECONDS:-0} < 300 )); then
+  export TT_METAL_OPERATION_TIMEOUT_SECONDS=300
 fi
 
 if [[ -z "${DONT_USE_VIRTUAL_ENVIRONMENT:-}" && -f "${REPO_ROOT}/python_env/bin/activate" ]]; then
@@ -211,8 +220,36 @@ run_test() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0
   fi
-  "$@"
-  local status=$?
+  local out status had_errexit=0
+  out=$(mktemp)
+  # errexit has to be off across the invocation. `set -e` aborts on a failing command in an
+  # if/else body, so without this the status check below is never reached: the first failing
+  # test kills the script, nothing lands in FAILURES, and --keep-going does nothing. Remember the
+  # caller's errexit state and restore exactly that: when sourced into an interactive shell this
+  # must not turn errexit ON, or the nonzero return from a failing ad-hoc test closes the shell.
+  [[ $- == *e* ]] && had_errexit=1
+  set +e
+  # Optional wall-clock cap. One MPI rank that fatals while another sits in a barrier
+  # deadlocks prterun forever; this turns that into a failed command instead of a hang.
+  # No --foreground: that signals only tt-run itself, and killing the launcher leaves its
+  # ranks orphaned and spinning in MPI finalize. The default puts the command in its own
+  # process group so the whole rank set is torn down.
+  if [[ -n "${TT_FABRIC_TEST_TIMEOUT:-}" ]]; then
+    timeout --kill-after=30s "${TT_FABRIC_TEST_TIMEOUT}" "$@" 2>&1 | tee "$out"
+  else
+    "$@" 2>&1 | tee "$out"
+  fi
+  status=${PIPESTATUS[0]}
+  if [[ $had_errexit -eq 1 ]]; then set -e; fi
+  # A --gtest_filter that matches nothing exits 0, so a suite that was renamed, dropped from
+  # sources.cmake, or compiled into a different build tree reads as a pass. This gtest is too
+  # old for --gtest_fail_if_no_test_selected, hence matching on the summary line.
+  if [[ $status -eq 0 && "$cmd_str" == *--gtest_filter=* ]] &&
+    grep -q "0 tests from 0 test suites ran" "$out"; then
+    echo "error: gtest filter matched no tests" >&2
+    status=1
+  fi
+  rm -f "$out"
   if [[ $status -ne 0 ]]; then
     FAILURES+=("[${CURRENT_GROUP}] exit ${status}: ${cmd_str% }")
     if [[ "$KEEP_GOING" -eq 0 ]]; then
@@ -270,7 +307,7 @@ done
 
 CURRENT_GROUP="$GROUP"
 
-VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc"
+VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc"
 if ! echo "$VALID_GROUPS" | tr ' ' '\n' | grep -qx "$GROUP"; then
   echo "Invalid --group value '$GROUP'. Valid groups: $VALID_GROUPS" >&2; exit 1
 fi
@@ -282,7 +319,7 @@ if [[ "$GROUP" == "all" && "$PARALLEL" -eq 1 ]]; then
   GROUPS=(
     unit phys-grouping control-plane t3k wh-galaxy
     bh-6u bh-single-galaxy bh-dual-galaxy
-    bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc  )
+    bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc  )
   tmpdir=$(mktemp -d)
   trap 'rm -rf "$tmpdir"' EXIT
   pids=()
@@ -322,7 +359,12 @@ run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-des
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/2x2_n300_cluster_desc/2x2_n300_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MockClusterTopologyFixture*"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="RoutingTableValidation*"
 
-run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*LogicalToPhysicalConversionFixture*"
+# LogicalToPhysicalConversionFixture used to be run here. Its file,
+# fabric_router/test_control_plane_logical_to_physical.cpp, is in no sources.cmake and does not
+# compile: the APIs it covers (build_mesh_adjacency_map,
+# convert_{1d,2d}_mesh_adjacency_to_row_major_vector) no longer exist. The filter matched nothing and
+# exited 0, so this line reported a pass for zero tests. Reviving it means rewriting it against the
+# current mapper API.
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MeshGraphDescriptorTests*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologySolverTest.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologySatEncoderTest.*"
@@ -330,6 +372,10 @@ run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Topol
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="AdjacencyGuidedPlacement.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalGroupingDescriptorTests*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalDescriptorBuilder.*"
+run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalNodeIdTest.*"
+run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalSystemDescriptorDiff.*"
+run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdHostFilter.*"
+run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdChipsAbsentFromLive.*"
 
 fi # unit
 
@@ -340,7 +386,10 @@ if run_group "phys-grouping"; then
 
 # Physical Grouping Descriptor tests with real PSDs (using tt-run)
 run_test tt-run --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --rank-binding "${BH_GALAXY_SP4_RANK_BINDINGS}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalGroupingDescriptorSP4Tests*"
-run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/dual_t3k_ci/dual_t3k_ci_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalGroupingDescriptorDualT3kTests*"
+# PhysicalGroupingDescriptorDualT3kTests used to be run here against the dual-T3k mock. The fixture
+# class still exists in test_physical_grouping_descriptor.cpp but has no TEST_F cases on main, so the
+# filter matches zero tests; plain gtest exited 0 and this line silently reported a pass until the
+# zero-tests guard in run_test surfaced it. Re-add the invocation when the suite grows tests again.
 
 # map_multi_mesh_to_physical with SP4 GLX mock (16 ranks; tt-run)
 run_test tt-run --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --rank-binding "${BH_GALAXY_SP4_RANK_BINDINGS}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.MapMultiMeshToPhysical_Sp4Glx*"
@@ -353,6 +402,12 @@ run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-des
 ######################################
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="T3kTopologyMapperCustomMapping/*"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperTest.T3kMeshGraphTest*"
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="LinkHealthTest.*"
+
+# ControlPlane's link-health surface with no factory descriptor -- the configuration every caller is in
+# today. Walks the whole surface, because a forwarder missing its null check segfaults by default.
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.NoFactoryDescriptor*:ControlPlaneFixture.RefreshWithout*"
+
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/n300_cluster_desc/n300_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperTest.N300MeshGraphTest"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/p100_cluster_desc/p100_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperTest.P100MeshGraphTest"
 run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_dual_host/6u_dual_host_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperTest.DualGalaxyBigMeshTest"
@@ -404,7 +459,9 @@ run_test tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/d
 
 # Negative test: two assign_z boundaries contend for one chip's Z lane -> control-plane init must fail
 # (validated on every rank). Hard rank binding (4x 1x2 meshes, TT_VISIBLE_DEVICES 0..3) pins placement.
-run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml tt-run --rank-binding tests/tt_metal/distributed/config/t3k_assign_z_conflict_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.T3KAssignZConflictFatal"
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml tt-run --rank-binding tests/tt_metal/distributed/config/t3k_assign_z_conflict_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.T3KAssignZConflictStrictFatal"
+# Same conflict under a RELAXED policy: init succeeds, both boundaries resolve zero (#56762).
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml tt-run --rank-binding tests/tt_metal/distributed/config/t3k_assign_z_conflict_relaxed_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.T3KAssignZConflictLosingBoundaryResolvesZero"
 
 # Big mesh 2x4 T3K Multi-host
 run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_2x4_big_mesh_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks"
@@ -524,6 +581,14 @@ if run_group "bh-subtorus"; then
 # Per-host layout checks (8 ASICs: 2x4 RING+RING / 4x2 LINE+RING)
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_2x4_ring_ring_1x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_PIPELINE_BUILDER_CHECK}"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x2_line_ring_2x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_PIPELINE_BUILDER_CHECK}"
+# Phase 1 / Phase 2 regression (tenstorrent/tt-metal#59722): two pinned 4x4 meshes split [1,2] on a TWO-host
+# mock. The single solve (Phase 1, whole hosts visible) seats the edge mesh across the host pair on the
+# `_hostedge` seat; the control plane (Phase 2, each rank sees only its TT_VISIBLE_DEVICES, so no 32-chip
+# host embeds and no `_hostedge` seat exists) must map the same rank bindings. Today it orients the plain
+# seat blind and fails with "Graph specified in MGD could not fit ... (a mesh has no grouping variants)":
+# this test is RED until Phase 2 recovers the host geometry from what it discovers. The MGD header
+# documents the placement; the mapping file is the d02u08 + d02u02 pair.
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x4x2_ring_line_1x2_two_profile_pins_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${MGD_SUBTORUS}/SC2_32x4_revC_subtorus_aisleD_d02u08_d02u02_mapping.yaml" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}"
 # Subtorus single-galaxy grouping MGDs (16–32 ASICs)
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x8_ring_ring_2x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x4_ring_ring_1x1_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_PIPELINE_BUILDER_CHECK}"
@@ -594,17 +659,73 @@ fi # bh-subtorus
 if run_group "bh-subtorus-sc16"; then
 
 # 2x4 = 64-stage ring (8 ASICs/stage, 4x2 RING+LINE), 4x4 = 32-stage ring (16 ASICs/stage), 8x4 = 16-stage ring (32 ASICs/stage)
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_2X4_PIPELINE}"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=120 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_2X4_PIPELINE}"
 # Inter-mesh port assignment golden check: this SC16 superpod ring closes, so every boundary resolves and the
 # golden comparison runs (unlike the SC36 Aisle D subtorus slices, which fatal on one-sided boundaries).
 # Guards against the port determination changing or becoming host-dependent.
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.SC16BlitzSuperpodIntermeshPortAssignment"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=120 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.SC16BlitzSuperpodIntermeshPortAssignment"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x4_pipeline_32stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_4X4_PIPELINE}"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_8x4_pipeline_16stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_8X4_PIPELINE}"
 # Full 32x4 quad torus (16 MPI ranks, 8x2 host grid)
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_32x4_8x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins:${GTEST_PIPELINE_BUILDER_CHECK}
 
 fi # bh-subtorus-sc16
+
+# Factory-descriptor reliability.
+# A matching descriptor reports no downed links. The 4-host pod deletes three same-host cables and
+# one cross-host cable. The subtorus connection the mesh graph does not use is unused. The torus
+# connection (four cables down to three) and the mesh connection (two cables down to one) stay downed.
+#
+# Asset choice matters, and most of the superclusters in tt-cluster-descriptors cannot be used for the
+# matching runs: their FSD and their cluster descriptors disagree about what the hosts are called, so the
+# host filter correctly refuses the descriptor before any of this is exercised. SC36_*_aisleD is
+# cluster_id bh-glx-120-* against an FSD naming bh-glx-110-*; the revAB assets drop the rack token entirely
+# (bh-glx-c01u02 vs bh-glx-110-c01u02); SC20_32x4_revC_subtorus_aisleC does agree on host names but its FSD
+# declares 16 intra-host cables that the host's own cluster descriptor does not have. The two SC16 revC
+# systems below are the ones where the FSD and the mock agree exactly.
+######################################
+if run_group "bh-fsd-reliability"; then
+
+# Healthy-pod tests only; the excluded ones need missing links or an incompatible pairing.
+FSD_HEALTHY_FILTER="FactoryDescriptorControlPlaneFixture.*-FactoryDescriptorControlPlaneFixture.ACableTheMeshGraphDoesNotUseIsUnused:FactoryDescriptorControlPlaneFixture.StrictSystemHealthRejectsARelaxedMeshGraph:FactoryDescriptorControlPlaneFixture.MeshGraphCountAboveTheFactoryDropsTheRoutingPlane:FactoryDescriptorControlPlaneFixture.StrictIntermeshAllowsAnUnusedHoleWhenBothDescriptorsCoverTheCount:FactoryDescriptorControlPlaneFixture.AnIncompatibleDescriptorFailsAtIngest:FactoryDescriptorControlPlaneFixture.RelaxedConnectionWithNoFactoryCableIsLogicalOnly"
+
+# Healthy single host against the multi-host FSD; the host filter narrows it to this rank's slice.
+FSD_AISLEC_DIR=tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revC_aisleC
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=$FSD_AISLEC_DIR/SC16_32x4_revC_aisleC_cluster_desc/SC16_32x4_revC_aisleC_cluster_desc_bh-glx-110-c01u02_rank_38.yaml TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=$FSD_AISLEC_DIR/SC16_32x4_revC_aisleC_factory_system_descriptor.textproto TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${FSD_HEALTHY_FILTER}"
+
+# Same on the subtorus FSD, so the wrap-around cables go through the diff too.
+FSD_SUBTORUS_POD_DIR=tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revC_subtorus_aisleD
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=$FSD_SUBTORUS_POD_DIR/SC16_32x4_revC_subtorus_aisleD_cluster_desc/SC16_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-110-d02u02_rank_0.yaml TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=$FSD_SUBTORUS_POD_DIR/SC16_32x4_revC_subtorus_aisleD_factory_system_descriptor.textproto TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${FSD_HEALTHY_FILTER}"
+
+# Healthy four-host pod, one mesh per host: same-host cables are intramesh, cross-host intermesh.
+FSD_QUAD_HOST_MGD="${MGD_CUSTOM}/fsd_quad_host_mesh_graph_descriptor.textproto"
+FSD_QUAD_HOST_DESCRIPTOR="$FSD_SUBTORUS_POD_DIR/SC16_32x4_revC_subtorus_aisleD_factory_system_descriptor.textproto"
+
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD_QUAD_HOST_MGD}" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${FSD_HEALTHY_FILTER}"
+
+# KNOWN FAILURE to fix: a 4x8 mesh over [2,2] host ranks seats whole on one host, and the rank-split
+# hostnames (__rank<N>) no longer join the FSD even though the descriptor is the right one.
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x8_ring_ring_2x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${FSD_HEALTHY_FILTER}"
+
+# Missing-links pod: holes the mesh graph still needs stay downed, holes past its count are unused.
+FSD_MISSING_LINKS_MAPPING="${FSD_SUBTORUS_POD_DIR}/SC16_32x4_revC_subtorus_aisleD_missing_links/SC16_32x4_revC_subtorus_aisleD_missing_links_mapping.yaml"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD_QUAD_HOST_MGD}" --mock-cluster-rank-binding "${FSD_MISSING_LINKS_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.ACableTheMeshGraphDoesNotUseIsUnused:FactoryDescriptorControlPlaneFixture.StrictSystemHealthRejectsARelaxedMeshGraph"
+
+# Mesh graph asks for more channels than the factory has: planes drop to the factory count.
+FSD_QUAD_HOST_INTRA4_MGD="${MGD_CUSTOM}/fsd_quad_host_intra_count4_mesh_graph_descriptor.textproto"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD_QUAD_HOST_INTRA4_MGD}" --mock-cluster-rank-binding "${FSD_MISSING_LINKS_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.MeshGraphCountAboveTheFactoryDropsTheRoutingPlane"
+
+# STRICT intermesh with every count covered by both descriptors: the hole is unused, init succeeds.
+FSD_QUAD_HOST_STRICT_INTERMESH_MGD="${MGD_CUSTOM}/fsd_quad_host_strict_intermesh_mesh_graph_descriptor.textproto"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD_QUAD_HOST_STRICT_INTERMESH_MGD}" --mock-cluster-rank-binding "${FSD_MISSING_LINKS_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.StrictIntermeshAllowsAnUnusedHoleWhenBothDescriptorsCoverTheCount"
+
+# RELAXED connection the factory never cabled (mesh 0 <-> mesh 2 across the pod ring): zero-link, nothing filed (#56762).
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fsd_quad_host_diagonal_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${FSD_MISSING_LINKS_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.RelaxedConnectionWithNoFactoryCableIsLogicalOnly"
+
+# Aisle C host against the aisle D FSD: no common host, refused at ingest.
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=$FSD_AISLEC_DIR/SC16_32x4_revC_aisleC_cluster_desc/SC16_32x4_revC_aisleC_cluster_desc_bh-glx-110-c01u02_rank_38.yaml TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=$FSD_SUBTORUS_POD_DIR/SC16_32x4_revC_subtorus_aisleD_factory_system_descriptor.textproto TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.AnIncompatibleDescriptorFailsAtIngest"
+
+fi # bh-fsd-reliability
 
 ######################################
 # BH Galaxy: SC20 (20-host) subtorus — same ring tests as bh-subtorus-sc16, scaled to 20 hosts.
@@ -652,7 +773,8 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/dual_bh_galaxy_4x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins
 # Dual 4x16 quad-galaxy intermesh (M0 1x8 + M1 2x16 hosts, 4 intermesh links)
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_single_pod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
+# 64-rank superpod: rank 0 needs ~35 s to map before broadcasting, past the CI-wide 20 s operation timeout.
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=120 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
 # Llama 8b pod MGDs on the full 16-host SP4 system.
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/llama_8b_1x2_pod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/llama_8b_2x1_pod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
@@ -668,7 +790,7 @@ run_test tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/t
 # Variations: shuffled mock rank binding, relabeled MGD descriptors, permuted mesh_id in instances/connections.
 ######################################
 AUTOMAPPER_DEFAULT_ARGS=(
-  --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc_mapping.yaml
+  --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revAB_aisleD/SC16_32x4_revAB_aisleD_mapping.yaml
   --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto
   --num-variations 5
   --seed 42
@@ -681,7 +803,7 @@ if [[ -n "${AUTOMAPPER_TEST_ARGS:-}" ]]; then
 else
   AUTOMAPPER_ARGS=("${AUTOMAPPER_DEFAULT_ARGS[@]}")
 fi
-TT_METAL_SLOW_DISPATCH_MODE=1 python_env/bin/python3 tests/scripts/multihost/run_blitz_superpod_automapper_tests.py "${AUTOMAPPER_ARGS[@]}"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 python3 tests/scripts/multihost/run_blitz_superpod_automapper_tests.py "${AUTOMAPPER_ARGS[@]}"
 
 
 fi # bh-sp4-glx
@@ -998,6 +1120,10 @@ run_test tt-run --mock-cluster-rank-binding "${MOCK_GALAXY_QUAD_2X4_FOUR_RANK_CL
 
 # Multi-MGD subcontext (-M / --mesh-graph-descriptor-mapping): bh_6u (non-torus) mock cluster, one MGD per sub-context.
 run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/bh_6u_cluster_desc.yaml --mesh-graph-descriptor-mapping tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_mesh_graph_descriptor_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="MpiSubContext.*"
+
+# RELAXED zero-link tolerance (#56762): two revC subtorus quads from different systems, no links between them;
+# the RELAXED connection must resolve to zero links. LayoutCheck/CornerPins do not apply to this heterogeneous mock.
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/disconnected_sc36_quads_2bigmesh_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding tests/tt_metal/tt_fabric/mock_cluster_mappings/disconnected_sc36_quads_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestDisconnectedQuadsZeroIntermeshResolved"
 
 fi # bh-misc
 

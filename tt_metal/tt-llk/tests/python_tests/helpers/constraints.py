@@ -5,7 +5,7 @@
 from typing import List
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.data_format_inference import is_format_combination_outlier
+from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
@@ -83,14 +83,13 @@ def distinct_dest_accumulation_modes(formats, modes):
     (sweep-params, marker) key: one kernel, measured twice. Keep only the modes
     that stay distinct after that promotion.
     """
-    if get_chip_architecture() == ChipArchitecture.QUASAR:
-        return list(modes)
     if (
         DestAccumulation.No in modes
         and DestAccumulation.Yes in modes
-        and is_format_combination_outlier(
+        and effective_dest_acc(
             formats.input_format, formats.output_format, DestAccumulation.No
         )
+        == DestAccumulation.Yes
     ):
         return [DestAccumulation.Yes]
     return list(modes)
