@@ -1089,7 +1089,12 @@ class TtPrefillRuntime:
                     actual_end,
                 ), "traced MTP needs actual_start/actual_end on host to build the level geometry"
                 self._trace_mtp_geometry.write(actual_start, actual_end, provided_levels)
-                mtp_variant = "provided" if provided_levels == self.config.mtp_levels else "generate"
+                if provided_levels < self.config.mtp_levels:
+                    mtp_variant = "generate"
+                elif self._trace_mtp_geometry.has_split_chip and self._trace_mtp_geometry.split is None:
+                    mtp_variant = "provided_aligned"
+                else:
+                    mtp_variant = "provided"
             else:
                 mtp_variant = None
             # The scalars are consumed on-device from metadata_msg; the host ints are not read for
