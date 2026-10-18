@@ -153,6 +153,21 @@ TABLE = {
         "[N, K] matrices laid out tile-transposed: bfp8 exact, asserted at load); the dispatched row's first H values "
         "read in place (hidden=H, no x copy)",
     ),
+    "EXPERTS_PRECISION": Setting(
+        "full",
+        ("full", "glm"),
+        "the routed experts' own precision (tt/experts.py; MATMUL_FIDELITY stays the rest of the model's): full = the "
+        "expert matmuls at MATMUL_FIDELITY with FP32_DEST_ACC, the flat op's x / h / y as bf16 tiles; glm (P.4, owner "
+        "comparison 2026-10-18) = Marko Staletovic's flat expert as GLM-5.3 runs it (glm53_flash_d_p/tt/experts_ag.py): "
+        "the expert matmuls at LoFi, the flat op's x and h tiles bfp8 (x_bf16 = h_bf16 = False), y bfp8 TILE "
+        "(y_bf16 = False; combine reads bfp8 TILE), fp32 DEST in gate/up and down (down_fp32 = True, GLM_AG_DOWN_FP32's "
+        "default); EXPERTS_KERNEL=unified: LoFi only (the fused op has no bfp8 tile options); loop: its w1 | w3 and "
+        "w2 linears at LoFi. The routing-weight selector matmuls (no expert matmuls) stay at MATMUL_FIDELITY, and the V4.1 math (routing weight on h, fp8 q(h) before w2) runs in both. Combined with "
+        "EXPERTS_IMPL=bfp4 for GLM's weight format. P.4, 2x2, chunk 53248-55296, plain profile, flat: experts 128.9 "
+        "(glm + bfp4) vs 149.2 ms (full + bfp8) per chunk, device total 631.8 vs 651.9; ladder last (glm + bfp4) worst "
+        "layer L03 0.99524, state min 0.99710 (bfp4 at full, P.1: 0.99535 / 0.99726); layer-0 experts vs CPU rel "
+        "0.131, bias +3.4 % (DS41-64)",
+    ),
     "EXPERTS_DECODE": Setting(
         "gather",
         ("gather", "arith"),
@@ -216,6 +231,7 @@ MAX_PRECISION = {
     "ATTN_O_SUM": "gather_add",
     "EXPERTS_SUM": "gather_add",
     "EXPERTS_IMPL": "bfp8",  # exact fp4 values (DS41-10); bfp4 is the owner's lossy memory pick (P.1)
+    "EXPERTS_PRECISION": "full",  # P.4: glm (LoFi, bfp8 x / h / y) is judged end to end only
 }
 
 settings = Settings("DS41_", TABLE, max_precision=MAX_PRECISION)
