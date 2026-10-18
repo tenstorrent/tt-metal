@@ -5,7 +5,10 @@
 
 import json
 import os
+import queue
 import signal
+import struct
+import threading
 import time
 from typing import Optional
 
@@ -115,6 +118,11 @@ SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 # Per-chunk host timeline of the pipeline handoff (lease, recv, syncs, replay enqueue, send), one log line per chunk.
 HANDOFF_PROFILE = os.environ.get("PREFILL_HANDOFF_PROFILE", "0") == "1"
 _handoff_t: dict = {}
+# Host metadata mirror: every D2D record a rank pushes downstream is also sent as its three metadata words over
+# MPI, in the same order, so the next rank's host knows a chunk's metadata before that chunk's input is read
+# back from device. Set once by main() on every rank alike (it gates the sends and the receiving loop together).
+_HOST_META_TAG = 7301
+_host_meta_on = False
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 # Env-overridable so re-bisecting does not need a rebuild. #54834's fix removed the AttnRes floor
 # that used to make this a narrow band; what is left is MLA's chunked-attention ceiling.
@@ -317,10 +325,34 @@ def _d2d_recv(inbound) -> tuple:
     return act, meta, metadata_msg
 
 
+def _meta_mirror_send(rank: int, words) -> None:
+    if _host_meta_on:
+        ttnn.distributed_context_send_bytes(struct.pack("<3i", *words), rank + 1, _HOST_META_TAG)
+
+
+def _meta_mirror_recv(rank: int) -> dict:
+    slot_id, actual_start, actual_end = struct.unpack(
+        "<3i", ttnn.distributed_context_recv_bytes(12, rank - 1, _HOST_META_TAG)
+    )
+    return {"slot_id": slot_id, "actual_start": actual_start, "actual_end": actual_end}
+
+
 def _d2d_send(
-    outbound, activation: ttnn.Tensor, rank: int, meta: Optional[dict], *, deallocate: bool = True, metadata_msg=None
+    outbound,
+    activation: ttnn.Tensor,
+    rank: int,
+    meta: Optional[dict],
+    *,
+    deallocate: bool = True,
+    metadata_msg=None,
+    mirror: bool = True,
 ) -> None:
     t0 = time.perf_counter()
+    if _host_meta_on and mirror:
+        # The mirror must carry one message per record, or the next rank pairs every later chunk with the
+        # wrong metadata.
+        assert meta is not None, "the host metadata mirror needs this record's metadata on host"
+        _meta_mirror_send(rank, (meta["slot_id"], meta["actual_start"], meta["actual_end"]))
 
     if metadata_msg is not None:
         md_tensor = metadata_msg
@@ -379,6 +411,7 @@ def _forward_send_warmup(runtime, d2d_out, rank: int) -> None:
     if inputs is None:
         return
     activation, md_tensor = inputs
+    _meta_mirror_send(rank, words[:3])
     ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2d_out, activation, metadata=md_tensor)
     d2d_out.release_fabric_links()
     d2d_out.wait_for_fabric_links()
@@ -660,6 +693,172 @@ def run_request_loop_pipelined(
         if first is None:
             first = t_start
         c += 1
+    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
+
+
+class _MetaMirrorReceiver:
+    """Receives the upstream host's metadata mirror on a thread, so the loop can wait for it with a timeout.
+
+    recv_bytes blocks without one, and a loop blocked on a mirror that comes late (the shutdown record, a gap
+    between requests, a slower upstream) would also hold back the completion time of the chunk in flight."""
+
+    def __init__(self, rank: int):
+        self._rank = rank
+        self._q = queue.Queue()
+        self._thread = threading.Thread(target=self._run, name=f"meta-mirror-rank{rank}", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while True:
+            meta = _meta_mirror_recv(self._rank)
+            self._q.put(meta)
+            if _is_shutdown_sentinel(meta):
+                return
+
+    def get(self, timeout: Optional[float] = None) -> dict:
+        return self._q.get(timeout=timeout)
+
+
+def run_request_loop_host_ahead(
+    runtime,
+    kv_caches,
+    rank: int,
+    num_ranks: int,
+    *,
+    d2d_rows: int,
+    d2d_width: int,
+    outbound_planes: int = 1,
+    h2d_service=None,
+    d2d_in=None,
+    d2d_out=None,
+    d2h_service=None,
+    before_first_chunk=None,
+) -> None:
+    """Pipelined loop for a rank fed over D2D that enqueues chunk c+1's replay before chunk c finishes.
+
+    run_request_loop_pipelined still reads each chunk's metadata back from device before it enqueues that chunk,
+    and the read sits in the CQ behind the previous replay. Between two chunks the device therefore idles for
+    the event wake-up, the D2H read, and the host enqueue of the staging copies and the first trace segments
+    (~1 ms), even though the next input has normally landed long before. Here the metadata comes from the
+    upstream host instead (the mirror), so the next chunk's input op, staging copies and replay go into the CQ
+    behind chunk c while it is still computing. The traced ops read every per-chunk scalar on device from the
+    received record, so the host copy is used only to spot the shutdown record and to log. The device runs the
+    same op sequence in the same CQ order as the other loops.
+
+    Timing matches the other loops: a chunk starts when its input op has completed on device (observed through
+    an event recorded behind it, never before the previous chunk ends) and ends at its own replay's event.
+    """
+    cfg = runtime.config
+    assert not cfg.is_first_rank and d2d_in is not None, "the host-ahead loop needs an upstream rank"
+    runtime.replay_sync = False
+    logger.info(f"[pp rank {rank}/{num_ranks}] host-ahead request loop start (is_last={cfg.is_last_rank} input=d2d)")
+    t0 = time.perf_counter()
+    mirror = _MetaMirrorReceiver(rank)
+
+    def _next_input():
+        _lease_reclaim(d2d_in, d2d_out)
+        pending = _recv_enqueue(cfg, None, d2d_in)
+        return pending, ttnn.record_event(runtime.mesh_device)
+
+    # Records ahead of the first chunk (the upstream trace warm-up) and the first chunk itself are read back from
+    # device, as in the other loops: the capture wants its socket programs compiled and the device idle, and the
+    # read-back checks once that the mirror is in step with the D2D stream.
+    while True:
+        pending, _ = _next_input()
+        inp, _, meta, metadata_msg = _recv_decode(cfg, pending)
+        mirrored = mirror.get()
+        if meta != mirrored:
+            raise RuntimeError(
+                f"[pp rank {rank}] host metadata mirror out of step with the D2D stream: device record {meta}, "
+                f"mirrored {mirrored}"
+            )
+        if _is_shutdown_sentinel(meta) or _is_warmup_sentinel(meta):
+            ttnn.deallocate(inp)
+            ttnn.deallocate(metadata_msg)
+        if before_first_chunk is not None:
+            before_first_chunk()
+            before_first_chunk = None
+        if not _is_warmup_sentinel(meta):
+            break
+    if _is_shutdown_sentinel(meta):
+        logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after 0 chunks; exiting request loop")
+        if d2d_out is not None:
+            _forward_shutdown(d2d_out, rank, d2d_rows, d2d_width, outbound_planes)
+        _drain_and_log_e2e(runtime, rank, d2d_out, None, 0, t0)
+        return
+
+    def _enqueue_chunk(c: int, inp, meta: dict, metadata_msg):
+        logger.info(
+            f"[pp rank {rank}] CHUNK_START c={c} slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
+        )
+        out = runtime.prefill_chunk(
+            inp,
+            kv_caches,
+            slot_id=meta["slot_id"],
+            actual_start=meta["actual_start"],
+            actual_end=meta["actual_end"],
+            request_id=c,
+            d2h_service=d2h_service,
+            metadata_msg=metadata_msg,
+        )
+        return out, ttnn.record_event(runtime.mesh_device)
+
+    c = 0
+    first = start = time.time()
+    out, done = _enqueue_chunk(c, inp, meta, metadata_msg)
+    grace = 0.05
+    while not _shutdown:
+        t_m0 = time.perf_counter()
+        # Chunk c's send goes in before the next input op: the CQ order is send, link lease, input.
+        if not cfg.is_last_rank:
+            persistent_md = getattr(runtime, "trace_metadata_msg", None)
+            _d2d_send(d2d_out, out, rank, meta, deallocate=False, metadata_msg=persistent_md)
+        if d2d_out is not None:
+            d2d_out.release_fabric_links()
+        (inp, _, metadata_msg), landed = _next_input()
+        end = None
+        lost = False
+        try:
+            # The mirror normally arrives early in chunk c (the upstream sends it when it enqueues the chunk).
+            # Past half a chunk, close chunk c out first so a late mirror cannot delay its completion time.
+            next_meta = mirror.get(timeout=grace)
+        except queue.Empty:
+            ttnn.event_synchronize(done)
+            end = time.time()
+            lost = True
+            next_meta = mirror.get()
+        t_m1 = time.perf_counter()
+        stop = _is_shutdown_sentinel(next_meta)
+        if _is_warmup_sentinel(next_meta):
+            raise RuntimeError(f"[pp rank {rank}] warm-up record after chunk {c}; it can only precede the first chunk")
+        if not stop:
+            next_out, next_done = _enqueue_chunk(c + 1, inp, next_meta, metadata_msg)
+        t_q = time.perf_counter()
+        if end is None:
+            ttnn.event_synchronize(done)
+            end = time.time()
+        if SYNC_PER_CHUNK:
+            compute_ms = (end - start) * 1000.0
+            logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
+            _record_chunk_timing(rank, c, start, compute_ms)
+        grace = max(0.005, 0.5 * (end - start))
+        c += 1
+        if stop:
+            logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
+            ttnn.deallocate(inp)
+            ttnn.deallocate(metadata_msg)
+            if d2d_out is not None:
+                _forward_shutdown(d2d_out, rank, d2d_rows, d2d_width, outbound_planes)
+            break
+        ttnn.event_synchronize(landed)
+        t_in = time.time()
+        if HANDOFF_PROFILE:
+            logger.info(
+                f"[pp rank {rank}] AHEAD c={c - 1} handoff_and_mirror={(t_m1 - t_m0) * 1000.0:.3f} "
+                f"enq_next={(t_q - t_m1) * 1000.0:.3f} lookahead={'lost' if lost else 'kept'} "
+                f"input_after_end={(t_in - end) * 1000.0:.3f}"
+            )
+        start, out, done, meta = max(end, t_in), next_out, next_done, next_meta
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
 
 
@@ -1098,8 +1297,16 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     pipelined = (
         traced and not MTP_LEVELS and not DFLASH_ENABLED and os.environ.get("PREFILL_PIPELINED_HOST", "1") == "1"
     )
-    loop_fn = run_request_loop_pipelined if pipelined else run_request_loop
-    logger.info(f"[pp rank {rank}] request loop: {'pipelined' if pipelined else 'serial'}")
+    # Every rank takes the same decision: the sends of the metadata mirror and the loop that receives it go together.
+    global _host_meta_on
+    _host_meta_on = pipelined and num_ranks > 1 and os.environ.get("PREFILL_HOST_AHEAD", "1") == "1"
+    if _host_meta_on and not runtime.config.is_first_rank:
+        loop_fn, loop_name = run_request_loop_host_ahead, "host-ahead"
+    elif pipelined:
+        loop_fn, loop_name = run_request_loop_pipelined, "pipelined"
+    else:
+        loop_fn, loop_name = run_request_loop, "serial"
+    logger.info(f"[pp rank {rank}] request loop: {loop_name} (host metadata mirror {'on' if _host_meta_on else 'off'})")
 
     try:
         loop_fn(
