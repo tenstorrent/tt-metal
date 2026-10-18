@@ -1117,7 +1117,7 @@ class GRPOTrainer:
         self._rollout_mesh: Any = None
         self._rollout_server: Any = None
 
-        init_distributed_training(config)
+        init_distributed_training(config, device_config)
         if is_rollout_rank(config):
             # Rank 0 is blocked waiting for the handshake, terminating processes on a failure before handshake.
             with exit_on_error():
