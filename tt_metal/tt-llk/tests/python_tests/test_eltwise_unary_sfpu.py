@@ -1376,6 +1376,8 @@ def eltwise_unary_sfpu(
     polygamma_order=None,
     twos_complement=False,
     gate_on_step_budget=False,
+    custom_atol=None,
+    custom_rtol=None,
 ):
     """*gate_on_step_budget* is for a caller whose hand-built stimulus the op's step
     budget was measured on (``MEASURED_ON_SWEEP`` in test_sfpu_accuracy_budget.py): it
@@ -1518,15 +1520,20 @@ def eltwise_unary_sfpu(
         dest_acc=dest_acc,
         arch=TestConfig.CHIP_ARCH,
     )
+    gate_kwargs = (
+        contract.passed_test_kwargs(flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS)
+        if gate_on_step_budget
+        else contract.tolerance_kwargs()
+    )
+    # A caller whose stimulus sits outside the registry's sampled domain (polygamma's
+    # pre-underflow sweep) states its own tolerance for that stimulus.
+    if custom_atol is not None or custom_rtol is not None:
+        gate_kwargs = {"custom_atol": custom_atol, "custom_rtol": custom_rtol}
     assert passed_test(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **(
-            contract.passed_test_kwargs(flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS)
-            if gate_on_step_budget
-            else contract.tolerance_kwargs()
-        ),
+        **gate_kwargs,
     ), "Assert against golden failed"
 
     # For callers that want a stricter gate than the op's tolerance (an exact-bits check on
