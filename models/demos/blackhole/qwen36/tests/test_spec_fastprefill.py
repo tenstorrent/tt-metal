@@ -109,11 +109,12 @@ def _slot_state(model, mesh, slot):
     return out
 
 
-def _prefill_all(eng, model, mesh, prompts, nb):
-    """Prefill prompt u into slot u (table row: its own blocks); returns per slot (argmax, top-2 gap, MTP K/V rows,
-    GDN state, ms)."""
-    res = []
-    for u, prompt in enumerate(prompts):
+def _prefill_all(eng, model, mesh, prompts, nb, order=None):
+    """Prefill prompt u into slot u (table row: its own blocks) in `order` (default 0..B-1); returns per slot (argmax,
+    top-2 gap, MTP K/V rows, GDN state, ms)."""
+    res = [None] * len(prompts)
+    for u in list(range(len(prompts)) if order is None else order):
+        prompt = prompts[u]
         Tp = len(prompt)
         need = (Tp + K + 1 + K + 1 + BLOCK_SIZE - 1) // BLOCK_SIZE
         blocks = list(range(1 + u * nb, 1 + u * nb + need))
@@ -122,11 +123,28 @@ def _prefill_all(eng, model, mesh, prompts, nb):
         logits = eng.prefill(u, prompt, row)
         ms = (time.perf_counter() - t0) * 1e3
         kv = tsc._mtp_kv_rows(eng, blocks, 0, Tp - 1)  # slots 0 .. Tp-2 are written by the prompt prefill
-        res.append(
-            dict(tok=int(logits.argmax()), gap=_top2_gap(logits), kv=kv, state=_slot_state(model, mesh, u), ms=ms)
-        )
-        logger.info(f"prefill slot {u} Tp={Tp}: {ms:.1f} ms, first token {res[-1]['tok']} (gap {res[-1]['gap']:.3f})")
+        res[u] = dict(tok=int(logits.argmax()), gap=_top2_gap(logits), kv=kv, state=_slot_state(model, mesh, u), ms=ms)
+        logger.info(f"prefill slot {u} Tp={Tp}: {ms:.1f} ms, first token {res[u]['tok']} (gap {res[u]['gap']:.3f})")
     return res
+
+
+def _same_prefill(a, b):
+    """Bit-identity of two prefill records of the same prompt under the same flag: (first token, K, V, GDN state)."""
+    same_kv = all(torch.equal(x, y) for x, y in zip(a["kv"], b["kv"]))
+    same_state = all(
+        torch.equal(ra, rb) and all(torch.equal(ca, cb) for ca, cb in zip(ac, bc))
+        for (ra, ac), (rb, bc) in zip(a["state"], b["state"])
+    )
+    return a["tok"] == b["tok"], same_kv, same_state
+
+
+def _row_profile(d):
+    """Where a K/V row difference d [rows, ...] sits: rows whose max |d| > 1.0 and the three largest rows."""
+    rowmax = d.flatten(1).max(dim=1).values
+    big = (rowmax > 1.0).nonzero().flatten().tolist()
+    top = rowmax.topk(min(3, rowmax.numel()))
+    tops = [(int(i), round(float(v), 3)) for v, i in zip(top.values, top.indices)]
+    return f"rows with max|d|>1: {len(big)} {big[:8]}{'...' if len(big) > 8 else ''}, largest rows {tops}"
 
 
 def _decode_all(eng, prompts, nb, num_blocks, seed):
@@ -162,15 +180,32 @@ def test_fast_prefill_parity(mesh_device, monkeypatch):
             pre = _prefill_all(eng, model, mesh_device, prompts, nb)
             for u in range(B):
                 eng.release(u)
+            # Second pass in reverse slot order: the same prompt must give bit-identical results under the same flag
+            # (determinism, and no dependence on the order of requests after capture).
+            pre2 = _prefill_all(eng, model, mesh_device, prompts, nb, order=range(B - 1, -1, -1))
+            for u in range(B):
+                eng.release(u)
             toks, drv = _decode_all(eng, prompts, nb, num_blocks, seed=1)
             assert mesh_device.num_program_cache_entries() == n_prog, f"flag {flag}: a program compiled after capture"
         finally:
             mesh_device.set_program_cache_misses_allowed(True)
-        runs[flag] = dict(pre=pre, toks=toks)
+        runs[flag] = dict(pre=pre, pre2=pre2, toks=toks)
         logger.info(
             f"[fast_prefill={flag}] prefill ms per slot: {[round(p['ms'], 1) for p in pre]}; "
             f"committed/row-step {tsc._accept_rate(drv):.3f}"
         )
+        for u in range(B):
+            same_tok, same_kv, same_state = _same_prefill(pre[u], pre2[u])
+            msg = f"[repeat flag={flag}] slot {u} (Tp {lens[u]}): pass 1 vs pass 2 (reverse order): first token "
+            msg += f"{'same' if same_tok else 'DIFFERENT'}, MTP K/V {'bit-identical' if same_kv else 'DIFFERENT'}, "
+            msg += f"GDN state {'bit-identical' if same_state else 'DIFFERENT'}"
+            if not same_kv:
+                for name, ra, rb in zip("KV", pre[u]["kv"], pre2[u]["kv"]):
+                    if not torch.equal(ra, rb):
+                        d = (ra.float() - rb.float()).abs()
+                        msg += f"; {name} PCC {_pcc(ra, rb):.6f} max|d| {float(d.max()):.4f} ({_row_profile(d)})"
+            logger.info(msg)
+            runs[flag].setdefault("repeat_ok", []).append(same_tok and same_kv and same_state)
 
     # Every slot is compared and logged before the verdict (QWEN36_FAST_PREFILL_STRICT=0: log only, never fail).
     strict = (
@@ -196,6 +231,7 @@ def test_fast_prefill_parity(mesh_device, monkeypatch):
             kv_summary.append(
                 f"{name} {len(bad)}/{ra.shape[0]} rows differ (rows {bad[0]}..{bad[-1]}) PCC {p:.6f} "
                 f"max|d| {float(d.max()):.4f} mean|d| {float(d.mean()):.5f} ref max|x| {float(ra.float().abs().max()):.3f}"
+                f" [{_row_profile(d)}]"
             )
             if KV_ATOL == 0.0:
                 if p < PCC:
@@ -225,6 +261,10 @@ def test_fast_prefill_parity(mesh_device, monkeypatch):
             f"[parity] slot {u} (Tp {lens[u]}): first token {a['tok']}/{b['tok']}; {'; '.join(kv_summary)}; "
             f"GDN rec_state min PCC {rec_min:.6f}, conv taps min PCC {conv_min:.6f}; {dec}"
         )
+    for flag in ("0", "1"):
+        bad = [u for u, ok in enumerate(runs[flag]["repeat_ok"]) if not ok]
+        if bad:
+            problems.append(f"flag {flag}: repeated prefill of slots {bad} not bit-identical (order dependence)")
     for msg in problems:
         logger.warning(f"[parity] {msg}")
     assert (
