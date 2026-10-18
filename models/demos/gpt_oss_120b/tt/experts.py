@@ -94,12 +94,42 @@ class TtExperts:
                 mesh_mapper=mm,
             )
 
-        self.w_gu, self.b_gu, self.w_d, self.b_d = [], [], [], []
+        # PERF_P1: gate and up as two linears and the SwiGLU as one multiply (activation chains on both operands)
+        self.split_swiglu = settings.get("PERF_P1")
+        I = self.I
+        self.w_gu, self.b_gu, self.w_g, self.b_g, self.w_u, self.b_u, self.w_d, self.b_d = (
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
         for e in range(self.epc):
-            self.w_gu.append(upload(per_chip(w_gu, e), ttnn.bfloat8_b))  # [out 2I, in H]
-            self.b_gu.append(upload(per_chip(b_gu, e)[:, :, None, :], ttnn.float32))
+            if self.split_swiglu:
+                self.w_g.append(upload(per_chip(w_gu[:, :I], e), ttnn.bfloat8_b))  # [out I, in H]
+                self.b_g.append(upload(per_chip(b_gu[:, :I], e)[:, :, None, :], ttnn.float32))
+                self.w_u.append(upload(per_chip(w_gu[:, I:], e), ttnn.bfloat8_b))
+                self.b_u.append(upload(per_chip(b_gu[:, I:], e)[:, :, None, :], ttnn.float32))
+            else:
+                self.w_gu.append(upload(per_chip(w_gu, e), ttnn.bfloat8_b))  # [out 2I, in H]
+                self.b_gu.append(upload(per_chip(b_gu, e)[:, :, None, :], ttnn.float32))
             self.w_d.append(upload(per_chip(w_d, e), ttnn.bfloat8_b))  # [out H, in I]
             self.b_d.append(upload(per_chip(b_d, e)[:, :, None, :], ttnn.float32))
+        U = ttnn.UnaryOpType
+        # glu = g * sigmoid(a g) with g = min(gate, limit) is silu(a g) / a; up side: clamp(up, +-limit) + 1
+        self.gate_act = [
+            ttnn.UnaryWithParam(U.MINIMUM, self.limit),
+            ttnn.UnaryWithParam(U.MUL_UNARY_SFPU, SWIGLU_ALPHA),
+            ttnn.UnaryWithParam(U.SILU),
+            ttnn.UnaryWithParam(U.MUL_UNARY_SFPU, 1.0 / SWIGLU_ALPHA),
+        ]
+        self.up_act = [
+            ttnn.UnaryWithParam(U.HARDTANH, -self.limit, self.limit),
+            ttnn.UnaryWithParam(U.ADD_UNARY_SFPU, 1.0),
+        ]
 
         table = dispatch_table(self.E, rows, cols)
         self.table = ttnn.from_torch(
@@ -133,6 +163,8 @@ class TtExperts:
 
     def _expert(self, tokens: ttnn.Tensor, e: int) -> ttnn.Tensor:
         """tokens [max_tok, H] bf16 TILE -> the expert's output [max_tok, H] bf16 TILE."""
+        if self.split_swiglu:
+            return self._expert_split(tokens, e)
         rows = tokens.shape[-2]
         gu = ttnn.linear(
             ttnn.reshape(tokens, (1, 1, rows, self.H)),
@@ -161,6 +193,50 @@ class TtExperts:
         hdn = ttnn.multiply(up1, glu)
         up1.deallocate(True)
         glu.deallocate(True)
+        out = ttnn.linear(
+            hdn,
+            self.w_d[e],
+            bias=self.b_d[e],
+            transpose_b=True,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.mm_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        hdn.deallocate(True)
+        return ttnn.reshape(out, (rows, self.H))
+
+    def _expert_split(self, tokens: ttnn.Tensor, e: int) -> ttnn.Tensor:
+        """PERF_P1: gate and up linears (bias fused, fp32 out), the clamped SwiGLU as one fp32 multiply whose
+        operands carry the up / gate activation chains, then the down linear."""
+        rows = tokens.shape[-2]
+        x = ttnn.reshape(tokens, (1, 1, rows, self.H))
+        gate = ttnn.linear(
+            x,
+            self.w_g[e],
+            bias=self.b_g[e],
+            transpose_b=True,
+            dtype=self.mid_dtype,
+            compute_kernel_config=self.mm_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        up = ttnn.linear(
+            x,
+            self.w_u[e],
+            bias=self.b_u[e],
+            transpose_b=True,
+            dtype=self.mid_dtype,
+            compute_kernel_config=self.mm_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        hdn = ttnn.multiply(
+            up,
+            gate,
+            input_tensor_a_activations=self.up_act,
+            input_tensor_b_activations=self.gate_act,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        up.deallocate(True)
+        gate.deallocate(True)
         out = ttnn.linear(
             hdn,
             self.w_d[e],

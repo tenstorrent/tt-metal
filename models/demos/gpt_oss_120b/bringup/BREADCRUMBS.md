@@ -240,3 +240,20 @@
 - `prefill_runner.py`: a positive `TT_METAL_OPERATION_TIMEOUT_SECONDS` below `PREFILL_MIN_OPERATION_TIMEOUT_S`
   (600 s) is raised at import. Without this, the 5 s from run_safe_pytest would kill the idle runner.
 - Gate: see the job summary. Re-run: `bfw job check --task K.1`.
+
+## P.1 (perf pick: experts)
+
+- Op profile of the X.1 chunk (layer 0, BRINGUP_PROFILE_OPS=1): experts kernels 40 ms per layer, but 59 ttnn calls
+  at ~0.7 ms host dispatch each. The whole chunk is host-dispatch bound (timeline: device 126.6 ms, kernels 40 ms,
+  gaps 85 ms). Per local expert the old path ran 13 calls: extract, fused gate_up linear (4.05 ms), 2 slices,
+  2 clamps, multiply, sigmoid, multiply, add, multiply (eltwise ~3.3 ms in total), down linear (2.17 ms), insert.
+- Change (`PERF_P1`, default True; `tt/experts.py:_expert_split`): gate and up weights uploaded as two [I, H] bfp8
+  tensors, two `ttnn.linear` with the bias fused (fp32 out), then the clamped SwiGLU as ONE `ttnn.multiply(up,
+  gate)` with SFPU chains on the operands: up `[HARDTANH(-7, 7), ADD 1]`, gate `[MINIMUM 7, MUL 1.702, SILU,
+  MUL 1/1.702]` (g * sigmoid(a g) = silu(a g) / a). That is 6 calls per expert instead of 13, with no slices.
+  False keeps the fused gate_up path.
+- Accuracy (`bfw perf accuracy --task P.1`): PASS. Metrics match the old path to about 1e-7 (L00 vs_golden rel
+  0.003951, L01 0.004060, pcc 0.999992).
+- `bfw perf try --task P.1`: chunk_wall_ms 169.9 (X.1 209.1), device_ms_experts 61.93 (78.42), device_ms_total
+  66.8 (83.0), pcc_chunk_out 0.99993, host transfers 0.
+- Re-run: `bfw perf accuracy --task P.1 && bfw perf try --task P.1`.

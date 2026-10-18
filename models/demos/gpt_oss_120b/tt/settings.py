@@ -59,7 +59,12 @@ TABLE = {
     # dispatch buffer rows per chip = this x 8 x S/8; top-k (4) holds the worst case (no token is ever dropped)
     "EXPERTS_CAPACITY_FACTOR": Setting(4, (1, 2, 4), "dispatch buffer capacity factor (4 = no token dropped)"),
     "EXPERTS_REDUCE_FP32": Setting(True, (True, False), "the 4 dispatch groups' outputs summed over TP in fp32"),
-    # serving_answers slots: the runner test interleaves two user slots; production ships 16 (1.1 GB per chip)
+    # P.1: the chunk is host-dispatch bound (~0.7 ms per ttnn call on the 32-chip mesh). True: gate and up are two
+    # linears (bias fused, no slices) and the clamped SwiGLU is one multiply with SFPU activation chains on both
+    # operands: 4 ops per local expert between extract and insert instead of 11. False: fused gate_up linear,
+    # 2 slices and 7 eltwise ops
+    "PERF_P1": Setting(True, (True, False), "experts: split gate / up linears, SwiGLU fused into one multiply"),
+    # serving_answers slots:the runner test interleaves two user slots; production ships 16 (1.1 GB per chip)
     "KV_SLOTS": Setting(2, None, "user slots the device model's KV state allocates (serving_answers slots)"),
 }
 
