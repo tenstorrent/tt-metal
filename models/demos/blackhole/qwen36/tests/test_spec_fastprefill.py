@@ -172,37 +172,64 @@ def test_fast_prefill_parity(mesh_device, monkeypatch):
             f"committed/row-step {tsc._accept_rate(drv):.3f}"
         )
 
-    strict = os.environ.get("QWEN36_FAST_PREFILL_STRICT_TOKENS", "1") == "1"
+    # Every slot is compared and logged before the verdict (QWEN36_FAST_PREFILL_STRICT=0: log only, never fail).
+    strict = (
+        os.environ.get("QWEN36_FAST_PREFILL_STRICT", os.environ.get("QWEN36_FAST_PREFILL_STRICT_TOKENS", "1")) == "1"
+    )
+    problems = []
     for u in range(B):
         a, b = runs["0"]["pre"][u], runs["1"]["pre"][u]
         if a["tok"] != b["tok"]:
             msg = f"slot {u} (Tp {lens[u]}): first token {a['tok']} (flag 0) vs {b['tok']} (flag 1), gap {a['gap']:.4f}"
-            assert a["gap"] < NEAR_TIE_GAP, msg  # a confident flag-0 argmax must be reproduced
+            if a["gap"] >= NEAR_TIE_GAP:  # a confident flag-0 argmax must be reproduced
+                problems.append(msg)
             logger.info(f"near-tie flip: {msg}")
+        kv_summary = []
         for name, ra, rb in (("K", a["kv"][0], b["kv"][0]), ("V", a["kv"][1], b["kv"][1])):
             assert ra.shape == rb.shape
+            if torch.equal(ra, rb):
+                kv_summary.append(f"{name} bit-identical ({ra.shape[0]} rows)")
+                continue
+            d = (ra.float() - rb.float()).abs()
+            bad = (ra != rb).flatten(1).any(dim=1).nonzero().flatten().tolist()
+            p = _pcc(ra, rb)
+            kv_summary.append(
+                f"{name} {len(bad)}/{ra.shape[0]} rows differ (rows {bad[0]}..{bad[-1]}) PCC {p:.6f} "
+                f"max|d| {float(d.max()):.4f} mean|d| {float(d.mean()):.5f} ref max|x| {float(ra.float().abs().max()):.3f}"
+            )
             if KV_ATOL == 0.0:
-                if not torch.equal(ra, rb):
-                    bad = (ra != rb).flatten(1).any(dim=1).nonzero().flatten().tolist()
-                    p = _pcc(ra, rb)
-                    assert p >= PCC, f"slot {u}: MTP {name} rows differ at {bad[:8]}... PCC {p:.6f}"
-                    logger.warning(f"slot {u}: MTP {name} rows not bit-identical at {len(bad)} slots (PCC {p:.6f})")
-            else:
-                assert torch.allclose(ra, rb, atol=KV_ATOL), f"slot {u}: MTP {name} rows differ"
+                if p < PCC:
+                    problems.append(f"slot {u}: MTP {name} rows differ at {bad[:8]}... PCC {p:.6f}")
+            elif not torch.allclose(ra, rb, atol=KV_ATOL):
+                problems.append(f"slot {u}: MTP {name} rows differ (atol {KV_ATOL})")
+        rec_min, conv_min = 1.0, 1.0
         for li, ((rr, rc), (gr, gc)) in enumerate(zip(a["state"], b["state"])):
-            assert _pcc(rr, gr) >= PCC, f"slot {u} GDN layer {li}: rec_state PCC {_pcc(rr, gr):.6f}"
+            pr = _pcc(rr, gr)
+            rec_min = min(rec_min, pr)
+            if pr < PCC:
+                problems.append(f"slot {u} GDN layer {li}: rec_state PCC {pr:.6f}")
             for j in range(1, len(rc)):
                 if float(rc[j].abs().max()) > 0:
-                    assert _pcc(rc[j], gc[j]) >= PCC, f"slot {u} GDN layer {li}: conv tap {j}"
+                    pc = _pcc(rc[j], gc[j])
+                    conv_min = min(conv_min, pc)
+                    if pc < PCC:
+                        problems.append(f"slot {u} GDN layer {li}: conv tap {j} PCC {pc:.6f}")
         got, ref = runs["1"]["toks"][u], runs["0"]["toks"][u]
         if got != ref:
             i = next((j for j in range(min(len(got), len(ref))) if got[j] != ref[j]), min(len(got), len(ref)))
-            logger.warning(
-                f"request {u}: spec decode diverges at new token {i}: flag 1 {got[i:i+4]} vs flag 0 {ref[i:i+4]}"
-            )
-            assert (
-                not strict
-            ), f"request {u}: decode tokens differ at {i} (QWEN36_FAST_PREFILL_STRICT_TOKENS=0 to log only)"
+            dec = f"spec decode diverges at new token {i}: flag 1 {got[i:i+4]} vs flag 0 {ref[i:i+4]}"
+            problems.append(f"request {u}: decode tokens differ at {i}")
+        else:
+            dec = f"{len(got)} spec decode tokens identical"
+        logger.info(
+            f"[parity] slot {u} (Tp {lens[u]}): first token {a['tok']}/{b['tok']}; {'; '.join(kv_summary)}; "
+            f"GDN rec_state min PCC {rec_min:.6f}, conv taps min PCC {conv_min:.6f}; {dec}"
+        )
+    for msg in problems:
+        logger.warning(f"[parity] {msg}")
+    assert (
+        not problems or not strict
+    ), f"{len(problems)} parity problem(s) (QWEN36_FAST_PREFILL_STRICT=0 to log only):\n" + "\n".join(problems)
     eng.shutdown()
 
 
