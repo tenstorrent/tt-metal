@@ -114,7 +114,7 @@ that shares the model with the trainer (as `TTMLRolloutSampler` does) must switc
 it to eval mode only for the duration of `generate()` and restore the previous
 mode afterwards — `ttml.common.utils.run_mode` does exactly that.
 
-After every optimizer step the trainer calls
+After the last optimizer step of each generation batch the trainer calls
 `rollout_batch_source.update_weights(model, step)`; the source decides whether
 that becomes a sampler `update_weights(weights, version=step)`.
 

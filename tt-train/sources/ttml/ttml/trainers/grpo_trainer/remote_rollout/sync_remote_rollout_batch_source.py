@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import gc
 import time
-from typing import Any, Callable, Dict, Iterator, List
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from ..grpo_trainer import RolloutBatch
 from ..grpo_ttml_model import weights_ref_hf_dict
@@ -49,7 +49,7 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
         self._num_generations = num_generations
         self._max_completion_length = max_completion_length
         self._weight_sync_every = int(weight_sync_every)
-        self._pushed_version = 0
+        self._pushed_version: Optional[int] = None
         self._closed = False
         bridge = HostWeightBridge.init_sender(mesh=mesh_device, peer_rank=TTT_RANK)
         self._client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
@@ -86,7 +86,7 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
             )
 
     def update_weights(self, model: Any, step: int) -> None:
-        if step % self._weight_sync_every != 0:
+        if self._pushed_version is not None and step - self._pushed_version < self._weight_sync_every:
             return
         hf_dict = weights_ref_hf_dict(model)
         try:
