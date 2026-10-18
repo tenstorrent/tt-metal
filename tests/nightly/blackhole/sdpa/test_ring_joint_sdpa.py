@@ -7138,6 +7138,9 @@ def run_ring_joint_sdpa_sliding_lanes_case(
             invoke(tt_lanes_q, lane_slots, lane_prefixes[:-1])
         with expect_error(RuntimeError, "must contain 1..8 elements"):
             invoke(tt_lanes_q, [0] * 9, [0] * 9)
+        # The program hash splits Q's rows by the lane count before validation runs, so an empty slot_id is rejected there.
+        with expect_error(RuntimeError, "slot_id must contain at least one element"):
+            invoke(tt_lanes_q, [], [])
         with expect_error(RuntimeError, "Lanes need a halo buffer with one batch per lane"):
             invoke(tt_lanes_q, lane_slots, lane_prefixes, halo_batch=num_lanes + 1)
         # One element per ROW_MAJOR row would put lanes 1.. on pages the reader never reads.
