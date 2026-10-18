@@ -745,8 +745,66 @@ def test_vadv2(
         "map_all_pts_preds": 0.99,  # observed 0.998
         "ego_fut_preds": 0.99,  # observed 0.999
     }
-    for key in keys_to_check:
-        a = torch.load(f"models/experimental/vadv2/reference/dumps/{key}.pt")
-        b = tt_model._last_outs[key]
-        _, msg = assert_with_pcc(a, b, pcc_floors[key])
-        logger.info(f"{key}: {msg}")
+
+    def check_outputs(frame, floors):
+        for key in keys_to_check:
+            a = torch.load(f"models/experimental/vadv2/reference/dumps/{key}.pt")
+            b = tt_model._last_outs[key]
+            _, msg = assert_with_pcc(a, b, floors[key])
+            logger.info(f"{frame} {key}: {msg}")
+
+    check_outputs("frame 1", pcc_floors)
+
+    task_inputs = {
+        key: input_dict[key]
+        for key in (
+            "gt_bboxes_3d",
+            "gt_labels_3d",
+            "fut_valid_flag",
+            "ego_his_trajs",
+            "ego_fut_trajs",
+            "ego_fut_cmd",
+            "ego_lcf_feat",
+            "gt_attr_labels",
+        )
+    }
+
+    def run_both(img_metas, frame_img):
+        with torch.no_grad():
+            torch_model(return_loss=False, img=[frame_img], img_metas=copy.deepcopy(img_metas), **task_inputs)
+        tt_img = [ttnn.from_torch(frame_img, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)]
+        tt_model(return_loss=False, img=tt_img, img_metas=copy.deepcopy(img_metas), **task_inputs)
+
+    # Parameter preprocessing ran the reference once more, so restart both models' scene history at
+    # frame 1. Then the next frame of the same scene: the encoder takes the previous BEV, rotated by
+    # the ego motion.
+    for model in (torch_model, tt_model):
+        model.prev_frame_info = copy.deepcopy(pristine_prev_frame_info)
+    run_both(pristine_img_metas, torch_img)
+    img_metas = copy.deepcopy(pristine_img_metas)
+    meta = img_metas[0][0][0]
+    meta["can_bus"][:3] += [1.0, 0.2, 0.0]
+    meta["can_bus"][-1] += 1.0
+    run_both(img_metas, torch.randn(1, 6, 3, 384, 640))
+    # The previous BEV carries frame 1's error (bev_embed PCC 0.98) into this frame.
+    temporal_pcc_floors = {
+        "bev_embed": 0.91,  # observed 0.940
+        "all_cls_scores": 0.84,  # observed 0.876
+        "all_bbox_preds": 0.99,  # observed 0.999
+        "all_traj_preds": 0.89,  # observed 0.925
+        "all_traj_cls_scores": 0.82,  # observed 0.857
+        "map_all_cls_scores": 0.86,  # observed 0.896
+        "map_all_bbox_preds": 0.98,  # observed 0.993
+        "map_all_pts_preds": 0.99,  # observed 0.997
+        "ego_fut_preds": 0.99,  # observed 1.000
+    }
+    check_outputs("frame 2 (temporal)", temporal_pcc_floors)
+
+    # A new scene seen through other camera intrinsics: the camera projection must not come from the
+    # previous calls.
+    img_metas = copy.deepcopy(pristine_img_metas)
+    meta = img_metas[0][0][0]
+    meta["scene_token"] = "another-scene"
+    meta["lidar2img"] = [np.diag([0.9, 0.9, 1.0, 1.0]) @ m for m in meta["lidar2img"]]
+    run_both(img_metas, torch.randn(1, 6, 3, 384, 640))
+    check_outputs("frame 3 (new scene, new cameras)", pcc_floors)
