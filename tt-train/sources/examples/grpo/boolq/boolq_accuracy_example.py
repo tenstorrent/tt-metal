@@ -43,7 +43,7 @@ def iter_generated_completions(
     for start in range(0, len(prompts), batch_size):
         end = min(start + batch_size, len(prompts))
         prompt_batch = list(prompts[start:end])
-        batch = sampler.generate([tokenizer.encode(p) for p in prompt_batch])
+        batch = sampler.generate([tokenizer.encode(p, add_special_tokens=False) for p in prompt_batch])
         batch_completions = [tokenizer.decode(c, skip_special_tokens=False) for c in batch.completions]
         if num_generations != 1:
             raise ValueError(f"Expected num_generations=1, got {num_generations}")
