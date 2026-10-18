@@ -299,8 +299,22 @@ public:
      */
     void quiesce_devices();
 
+    /**
+     * @brief Create a submesh over a range of this mesh's devices.
+     *
+     * By default the submesh has its own allocator, so its buffers can land at the same addresses as this mesh's
+     * buffers on the shared devices. With share_allocator, the submesh allocates through this mesh's allocator
+     * instead, so the buffers of this mesh and of every sharing submesh never overlap. A sharing submesh does not
+     * support traces or sub-device managers, and it is closed when this mesh closes.
+     *
+     * Overlapping meshes still run one after another. Call quiesce_devices() between a phase on this mesh and a
+     * phase on an overlapping submesh. For a sharing submesh this is enforced: enqueueing on it while an overlapping
+     * mesh of the same family has a command queue in use, or the other way around, throws.
+     */
     std::shared_ptr<MeshDevice> create_submesh(
-        const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);
+        const MeshShape& submesh_shape,
+        const std::optional<MeshCoordinate>& offset = std::nullopt,
+        bool share_allocator = false);
 
     std::vector<std::shared_ptr<MeshDevice>> create_submeshes(const MeshShape& submesh_shape);
 

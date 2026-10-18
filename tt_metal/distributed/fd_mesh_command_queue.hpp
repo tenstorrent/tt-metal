@@ -163,6 +163,8 @@ private:
     // Used to Maintain state: Mark/Check if this data structure is being used for dispatch.
     // This is temporary - will not be needed when we MeshCommandQueue is the only dispatch interface.
     std::atomic<bool> in_use_ = false;
+    // Marks the queue in use, first checking that no overlapping mesh still owns the devices.
+    void mark_in_use();
 
     const uint32_t prefetcher_dram_aligned_block_size_;
     const uint64_t prefetcher_cache_sizeB_;

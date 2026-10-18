@@ -18,6 +18,7 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_hd_sockets.cpp
     test_host_region.cpp
     test_mesh_sub_device.cpp
+    test_mesh_submesh_shared_allocator.cpp
     test_mesh_allocator.cpp
     test_mesh_command_list.cpp
     test_mesh_events.cpp

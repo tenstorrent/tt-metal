@@ -24,10 +24,12 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <unordered_set>
 #include <utility>
 
 #include "impl/allocator/allocator.hpp"
@@ -280,6 +282,9 @@ std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators() const {
 
 std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators(SubDeviceManagerId manager_id) const {
     this->validate_sub_device_manager_tracker();
+    if (shares_parent_allocator_) {
+        return {this->allocator_impl().get()};
+    }
     const auto* default_manager = sub_device_manager_tracker_->get_default_sub_device_manager();
     std::vector<AllocatorImpl*> result = {default_manager->allocator(SubDeviceId{0}).get()};
     const auto* manager = sub_device_manager_tracker_->find_sub_device_manager(manager_id);
@@ -706,8 +711,20 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_unit_mesh(
 std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     const std::shared_ptr<MeshDevice>& parent_mesh,
     const MeshShape& submesh_shape,
-    const std::optional<MeshCoordinate>& offset) {
+    const std::optional<MeshCoordinate>& offset,
+    bool share_allocator) {
     auto lock_api = this->lock_api();
+    if (share_allocator) {
+        TT_FATAL(
+            this->is_initialized() && !this->is_remote_only(),
+            "A submesh can share the allocator only of an initialized mesh with local devices.");
+        TT_FATAL(
+            get_active_sub_device_manager_id() == get_default_sub_device_manager_id(),
+            "Cannot create a shared-allocator submesh while a non-default sub-device manager is active.");
+        TT_FATAL(
+            !metal_env().get_rtoptions().get_allocator_mode_hybrid(),
+            "Shared-allocator submeshes are not supported with the HYBRID allocator mode.");
+    }
     TT_FATAL(
         std::all_of(submesh_shape.cbegin(), submesh_shape.cend(), [](size_t dim) { return dim > 0; }),
         "Invalid submesh shape: ({}). All dimensions must be positive.",
@@ -760,6 +777,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     auto submesh_view = std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids);
     auto submesh_impl =
         std::make_unique<MeshDeviceImpl>(scoped_devices_, std::move(submesh_view), parent_mesh, metal_context());
+    // Set before initialize: the submesh's command queues read the allocator config while they are built.
+    submesh_impl->shares_parent_allocator_ = share_allocator;
     auto submesh = std::shared_ptr<MeshDevice>(new MeshDevice(std::move(submesh_impl)));
 
     TT_FATAL(
@@ -784,7 +803,13 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     }
 
     submeshes_.push_back(submesh);
-    log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->pimpl_->id(), submesh_shape, offset);
+    log_trace(
+        LogMetal,
+        "Instantiating submesh {}: {} with offset: {}, share_allocator: {}",
+        submesh->pimpl_->id(),
+        submesh_shape,
+        offset,
+        share_allocator);
     if (!submesh->pimpl_->get_view().get_devices().empty()) {
         log_trace(
             LogMetal,
@@ -1032,6 +1057,14 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
+    // A submesh sharing this mesh's allocator frees its buffers through it, so it must close before the allocator
+    // goes away. Its buffers that are still alive are then dropped without being freed.
+    for (const auto& weak_submesh : submeshes_) {
+        if (auto submesh = weak_submesh.lock(); submesh && submesh->impl().shares_parent_allocator_) {
+            submesh->close();
+        }
+    }
+
     // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
     // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
     if (is_initialized()) {
@@ -1191,6 +1224,47 @@ std::optional<int> MeshDeviceImpl::get_child_mesh_id_with_in_use_cq(uint32_t cq_
     return std::nullopt;
 }
 
+void MeshDeviceImpl::validate_no_overlapping_cq_owner() const {
+    const MeshDeviceImpl* root = this;
+    while (root->parent_mesh_) {
+        root = &root->parent_mesh_->impl();
+    }
+    const std::unordered_set<const IDevice*> own_devices(local_devices_.begin(), local_devices_.end());
+    std::function<void(const MeshDeviceImpl&)> check = [&](const MeshDeviceImpl& mesh) {
+        // Only switches that involve a shared-allocator submesh are checked, so meshes created without
+        // share_allocator keep their previous behavior.
+        if (&mesh != this && (shares_parent_allocator_ || mesh.shares_parent_allocator_)) {
+            const bool in_use =
+                std::any_of(mesh.mesh_command_queues_.begin(), mesh.mesh_command_queues_.end(), [](const auto& cq) {
+                    return cq->in_use();
+                });
+            std::vector<ChipId> shared_device_ids;
+            if (in_use) {
+                for (const auto* device : mesh.local_devices_) {
+                    if (own_devices.contains(device)) {
+                        shared_device_ids.push_back(device->id());
+                    }
+                }
+            }
+            TT_FATAL(
+                shared_device_ids.empty(),
+                "MeshDevice {} cannot use its command queues: MeshDevice {}, which shares devices {} with it, still "
+                "has a command queue in use. Overlapping meshes run one after another; call quiesce_devices() on "
+                "MeshDevice {} (or on the mesh that ran last) before switching to the other mesh.",
+                id(),
+                mesh.id(),
+                shared_device_ids,
+                root->id());
+        }
+        for (const auto& weak_submesh : mesh.submeshes_) {
+            if (auto submesh = weak_submesh.lock()) {
+                check(submesh->impl());
+            }
+        }
+    };
+    check(*root);
+}
+
 std::string MeshDeviceImpl::to_string() const {
     return fmt::format("MeshDevice({}x{} grid, {} devices)", this->num_rows(), this->num_cols(), this->num_devices());
 }
@@ -1252,6 +1326,7 @@ void MeshDeviceImpl::validate_sub_device_manager_tracker() const {
 SubDeviceManagerId MeshDeviceImpl::acquire_command_list_builder() {
     auto lock = lock_api();
     TT_FATAL(!command_list_builder_active_, "Only one CommandListBuilder may exist for a MeshDevice");
+    TT_FATAL(!shares_parent_allocator_, "Command lists are not supported on shared-allocator submesh {}.", id());
     validate_sub_device_manager_tracker();
     TT_FATAL(
         sub_device_manager_tracker_->num_traces() == 0,
@@ -1274,6 +1349,7 @@ SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
     std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto lock = lock_api();
     TT_FATAL(!command_list_builder_active_, "Cannot create a sub-device manager while a CommandListBuilder is active");
+    TT_FATAL(!shares_parent_allocator_, "Sub-device managers are not supported on shared-allocator submesh {}.", id());
     validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
 }
@@ -1282,6 +1358,7 @@ SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
     ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto lock = lock_api();
     TT_FATAL(!command_list_builder_active_, "Cannot create a sub-device manager while a CommandListBuilder is active");
+    TT_FATAL(!shares_parent_allocator_, "Sub-device managers are not supported on shared-allocator submesh {}.", id());
     validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
 }
@@ -1616,6 +1693,12 @@ MeshTraceId MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id) {
 
 void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     TracyTTMetalBeginMeshTrace(*this, this->get_device_ids(), *trace_id);
+    // Trace buffers and their DRAM accounting are per mesh; sharing them with the parent is not supported yet.
+    TT_FATAL(
+        !shares_parent_allocator_,
+        "Traces are not supported on shared-allocator submesh {}. Create the submesh without share_allocator to "
+        "capture traces on it.",
+        id());
     TT_FATAL(
         !this->mesh_command_queues_[cq_id]->trace_id().has_value(),
         "CQ {} is already being used for tracing tid {}",
@@ -2038,17 +2121,27 @@ void MeshDeviceImpl::quiesce_devices() {
 // Allocator methods
 std::optional<DeviceAddr> MeshDeviceImpl::lowest_occupied_compute_l1_address() const {
     validate_sub_device_manager_tracker();
+    if (shares_parent_allocator_) {
+        return parent_mesh_->impl().lowest_occupied_compute_l1_address();
+    }
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address();
 }
 
 std::optional<DeviceAddr> MeshDeviceImpl::lowest_occupied_compute_l1_address(
     ttsl::Span<const SubDeviceId> sub_device_ids) const {
     validate_sub_device_manager_tracker();
+    if (shares_parent_allocator_) {
+        // The submesh has only the default sub-device, whose allocator is the parent's global one.
+        return parent_mesh_->impl().lowest_occupied_compute_l1_address();
+    }
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 
 const std::unique_ptr<AllocatorImpl>& MeshDeviceImpl::allocator_impl() const {
     validate_sub_device_manager_tracker();
+    if (shares_parent_allocator_) {
+        return parent_mesh_->impl().allocator_impl();
+    }
     return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
 
@@ -2056,6 +2149,14 @@ const std::unique_ptr<Allocator>& MeshDeviceImpl::allocator() const { return thi
 
 const std::unique_ptr<AllocatorImpl>& MeshDeviceImpl::allocator_impl(SubDeviceId sub_device_id) const {
     validate_sub_device_manager_tracker();
+    if (shares_parent_allocator_) {
+        TT_FATAL(
+            sub_device_id == SubDeviceId{0},
+            "Shared-allocator submesh {} has only sub-device 0, not {}.",
+            id(),
+            *sub_device_id);
+        return parent_mesh_->impl().allocator_impl();
+    }
     return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
 }
 
@@ -2291,8 +2392,8 @@ const std::shared_ptr<MeshDevice>& MeshDevice::get_parent_mesh() const { return 
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { return pimpl_->get_submeshes(); }
 void MeshDevice::quiesce_devices() { pimpl_->quiesce_devices(); }
 std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
-    const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset) {
-    return pimpl_->create_submesh(shared_from_this(), submesh_shape, offset);
+    const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset, bool share_allocator) {
+    return pimpl_->create_submesh(shared_from_this(), submesh_shape, offset, share_allocator);
 }
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const MeshShape& submesh_shape) {
     return pimpl_->create_submeshes(shared_from_this(), submesh_shape);

@@ -192,6 +192,8 @@ private:
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
+    // Set on a submesh created with share_allocator: its buffers are placed by the parent's allocator.
+    bool shares_parent_allocator_ = false;
 
     ttsl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
 
@@ -536,10 +538,17 @@ public:
      */
     void quiesce_devices();
 
+    // Throws if a mesh of this family (parent, submesh or sibling) that shares a device with this mesh has a
+    // command queue in use, since this mesh would then dispatch over that mesh's state. Checked only when one of
+    // the two meshes is a shared-allocator submesh. Called when a command queue of this mesh goes from idle to in
+    // use. Assumes overlapping meshes are not driven from two threads.
+    void validate_no_overlapping_cq_owner() const;
+
     std::shared_ptr<MeshDevice> create_submesh(
         const std::shared_ptr<MeshDevice>& parent_mesh,
         const MeshShape& submesh_shape,
-        const std::optional<MeshCoordinate>& offset = std::nullopt);
+        const std::optional<MeshCoordinate>& offset = std::nullopt,
+        bool share_allocator = false);
 
     std::vector<std::shared_ptr<MeshDevice>> create_submeshes(
         const std::shared_ptr<MeshDevice>& parent_mesh, const MeshShape& submesh_shape);
