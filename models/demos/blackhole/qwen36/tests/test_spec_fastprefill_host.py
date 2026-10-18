@@ -181,6 +181,7 @@ def fake_ttnn(monkeypatch):
     rec = {"copy": [], "to_torch": [], "dealloc": []}
     monkeypatch.setattr(ttnn, "copy", lambda src, dst: rec["copy"].append((src, dst)))
     monkeypatch.setattr(ttnn, "deallocate", lambda t, *a, **k: rec["dealloc"].append(t))
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda *a, **k: rec.setdefault("sync", []).append(a))
     monkeypatch.setattr(
         ttnn, "to_torch", lambda t, **k: rec["to_torch"].append((t, k)) or torch.arange(VOCAB + 8, dtype=torch.bfloat16)
     )
