@@ -30,9 +30,11 @@ DEV_PARAMS = [
 ]
 
 
-def _setup(md, T):
+def _setup(md, T, exact_greedy=False):
     rows, cols = tuple(md.shape)
-    sm = SharedSamplerAdapter(md, mesh_4x8(), CCLManager(md, num_links=2, topology=ttnn.Topology.Ring), T)
+    sm = SharedSamplerAdapter(
+        md, mesh_4x8(), CCLManager(md, num_links=2, topology=ttnn.Topology.Ring), T, exact_greedy=exact_greedy
+    )
     prm = sm.alloc_params()
     B = rows * T
 
@@ -195,7 +197,7 @@ def test_law(mesh_device):
 
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize("device_params", DEV_PARAMS, indirect=True)
-@pytest.mark.parametrize("T", [1, 4])
+@pytest.mark.parametrize("T", [1, 4, 6, 24])
 @torch.no_grad()
 def test_step_cost(mesh_device, T):
     """Cost of one sampled decode step's sampler part as the decode path pays it: host ``set_params`` (changing seeds / uniforms every step), the sampler trace replay, and both together
@@ -215,6 +217,11 @@ def test_step_cost(mesh_device, T):
     for fast in (True, False):  # compile passes of every variant before ANY trace exists
         ttnn.copy(ours.run(logits, ours.params, fast), base)
     ttnn.copy(sm.run(logits, sm.params, False, base_tok=base), base)
+    smx = SharedSamplerAdapter(
+        md, mesh_4x8(), sm.ccl, T, exact_greedy=True
+    )  # spec verify variant: exact fp32 argmax of every row computed in the trace too
+    smx.alloc_params()
+    ttnn.copy(smx.run(logits, smx.params, False), base)
     ttnn.synchronize_device(md)
     traces = {}
     for name, fast in (("ours_topk20", True), ("ours_full", False)):
@@ -226,10 +233,14 @@ def test_step_cost(mesh_device, T):
     ttnn.copy(sm.run(logits, sm.params, False, base_tok=base), base)
     ttnn.end_trace_capture(md, tid_s, cq_id=0)
     traces["shared"] = (tid_s, False)
+    tid_x = ttnn.begin_trace_capture(md, cq_id=0)
+    ttnn.copy(smx.run(logits, smx.params, False), base)
+    ttnn.end_trace_capture(md, tid_x, cq_id=0)
+    traces["shared_exactgreedy"] = (tid_x, False)
     g = torch.Generator().manual_seed(3)
     N = 60
     for name, (tid, fast) in traces.items():
-        smp = sm if name == "shared" else ours
+        smp = {"shared": sm, "shared_exactgreedy": smx}.get(name, ours)
         kk = torch.full((B,), 20.0 if name != "ours_full" else 0.0)
 
         def prm_args():
@@ -257,3 +268,52 @@ def test_step_cost(mesh_device, T):
             f"SAMPLER_STEP_COST T={T} {name}: set_params {t_set:.3f} ms, trace replay {t_rep:.3f} ms, set_params + replay + wait {t_both:.3f} ms",
             flush=True,
         )
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", DEV_PARAMS, indirect=True)
+@pytest.mark.parametrize("T", [6, 24])
+@torch.no_grad()
+def test_spec_rows(mesh_device, T):
+    """Spec verify layout (exact_greedy adapter, no token buffer): T = users * 6 block rows per mesh row. Mixed greedy / sampled rows in a block, sampled tokens inside the top-32,
+    greedy rows the exact fp32 argmax, one seed per verify row reproducible whatever the slot."""
+    md = mesh_device
+    sm, prm, B, to_dev, tok_dev, read = _setup(md, T, exact_greedy=True)
+    L = _real_rows(B)
+    logits = to_dev(L)
+    out = tok_dev(torch.zeros(B, dtype=torch.long))
+    ttnn.copy(sm.run(logits, sm.params, False), out)
+    ttnn.synchronize_device(md)
+    tid = ttnn.begin_trace_capture(md, cq_id=0)
+    ttnn.copy(sm.run(logits, sm.params, False), out)
+    ttnn.end_trace_capture(md, tid, cq_id=0)
+    exact = L.argmax(1)
+    top32 = torch.topk(L, 32, dim=1).indices
+    g = torch.Generator().manual_seed(9)
+    bad = 0
+    for it in range(5):
+        temps = torch.tensor(
+            [0.0 if i % 6 in (0, 3) else 1.0 for i in range(B)]
+        )  # rows of a block: some greedy requests, some sampled
+        ks = torch.tensor([1 if i % 6 == 1 else 0 for i in range(B)])
+        sm.set_params(*sampling_rows(temps.tolist(), ks.tolist(), [0.95] * B, g, B))
+        ttnn.execute_trace(md, tid, cq_id=0, blocking=True)
+        got = read(out)
+        for i in range(B):
+            if float(temps[i]) == 0.0 or int(ks[i]) == 1:
+                bad += int(got[i] != exact[i])
+            else:
+                assert int(got[i]) in top32[i].tolist(), f"row {i} outside the top-32"
+    assert bad == 0, f"{bad} greedy rows != exact argmax"
+    # seeds: the same uniform on the same logits row in every slot of every mesh row
+    row = _real_rows(1)[0]
+    lg2 = to_dev(row.expand(B, VOCAB).contiguous())
+    ttnn.synchronize_device(md)
+    tid2 = ttnn.begin_trace_capture(md, cq_id=0)
+    ttnn.copy(sm.run(lg2, sm.params, False), out)
+    ttnn.end_trace_capture(md, tid2, cq_id=0)
+    sm.set_params(torch.ones(B), torch.zeros(B), torch.full((B,), 0.95), torch.full((B,), 0.41), torch.zeros(B))
+    ttnn.execute_trace(md, tid2, cq_id=0, blocking=True)
+    a = read(out)
+    assert (a == a[0]).all(), f"same seed, different tokens across slots: {a.tolist()}"
+    print(f"SHARED_SAMPLER_IT spec rows T={T}: greedy exact, sampled inside top-32, seeds slot-independent", flush=True)

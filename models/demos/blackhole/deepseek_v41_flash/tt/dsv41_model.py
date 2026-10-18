@@ -1679,19 +1679,19 @@ class Model:
         devs = ttnn.get_device_tensors(ttnn.from_device(self.dec.tok_dev))
         return torch.cat([ttnn.to_torch(devs[r * self.cols]).reshape(-1) for r in range(self.rows)]).long()
 
-    def _make_sampler(self, users_per_row, plain=False):
+    def _make_sampler(self, users_per_row, plain=False, spec=False):
         """The in-trace sampler (tt/device_sampler.py, default; DSV41_INTRACE_SAMPLE=0 builds none): temperature / top-k / top-p draw of the next token over the step's logits, in its OWN trace that a decode
         step replays after the step trace only when a row is sampled (``decode_forward(samp=...)``: the per-row parameters, uploaded before the replay); greedy steps never touch it.
         """
         if os.environ.get("DSV41_INTRACE_SAMPLE", "1") != "1":
             return None
-        if (
-            plain and os.environ.get("DSV41_SHARED_SAMPLER", "0") == "1"
-        ):  # (the vLLM interface defaults it to 1 for plain launches, generator_vllm)
+        if (plain and os.environ.get("DSV41_SHARED_SAMPLER", "0") == "1") or (
+            spec and os.environ.get("DSV41_SHARED_SAMPLER_SPEC", "0") == "1"
+        ):  # (the vLLM interface defaults DSV41_SHARED_SAMPLER to 1 for plain launches, generator_vllm; DSV41_SHARED_SAMPLER_SPEC is the speculative verify)
             # plain decode traces: the shared tt_transformers sampler (top-32 candidates, ~4x faster; tt/shared_sampler.py). The speculative verify keeps our own sampler.
             from models.demos.blackhole.deepseek_v41_flash.tt.shared_sampler import SharedSamplerAdapter
 
-            smp = SharedSamplerAdapter(self.md, self.mc, self.ccl, users_per_row)
+            smp = SharedSamplerAdapter(self.md, self.mc, self.ccl, users_per_row, exact_greedy=spec)
             smp.alloc_params()
             return smp
         from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import DSV41DeviceSampler

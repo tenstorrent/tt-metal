@@ -41,7 +41,7 @@ class SharedSamplerAdapter:
     shared = True  # decoder.forward_sampler passes the step trace's greedy token buffer (``base_tok``)
     variants = (False,)  # one trace (no separate top-k variant: the shared sampler is always the top-32 path)
 
-    def __init__(self, mesh_device, mesh_config, ccl, users_per_row):
+    def __init__(self, mesh_device, mesh_config, ccl, users_per_row, exact_greedy=False):
         from models.common.sampling.tt_sampling import TTSampling
 
         self.md, self.mc, self.ccl = mesh_device, mesh_config, ccl
@@ -62,6 +62,12 @@ class SharedSamplerAdapter:
         self.ts = TTSampling(mesh_device, ccl, args)
         self._last_kpt = None
         self._last_greedy = None
+        # spec verify (no step trace wrote the greedy tokens): the exact fp32 argmax of every row comes from our sampler's greedy part (its other constants are tiny and unused)
+        self._greedy_helper = None
+        if exact_greedy:
+            from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import DSV41DeviceSampler
+
+            self._greedy_helper = DSV41DeviceSampler(mesh_device, mesh_config, ccl, users_per_row, J=2, levels=1)
 
     # host side -------------------------------------------------------------------------------------------------------------------------
     def alloc_params(self):
@@ -143,9 +149,12 @@ class SharedSamplerAdapter:
         out = out[0] if isinstance(out, tuple) else out
         tok_s = ttnn.reshape(ttnn.slice(ttnn.reshape(out, [1, 1, 1, SLOTS]), [0, 0, 0, 0], [1, 1, 1, T]), [T, 1])
         tok_s = ttnn.typecast(ttnn.to_layout(ttnn.typecast(tok_s, ttnn.uint32), ttnn.TILE_LAYOUT), ttnn.float32)
-        if base_tok is None:
+        if base_tok is None and self._greedy_helper is None:
             return ttnn.to_layout(ttnn.typecast(tok_s, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
         greedy = ttnn.reshape(ttnn.slice(params, [0, 0, 0, 4], [1, 1, T, 5]), [T, 1])
-        base = ttnn.typecast(ttnn.to_layout(base_tok, ttnn.TILE_LAYOUT), ttnn.float32)
+        if base_tok is not None:
+            base = ttnn.typecast(ttnn.to_layout(base_tok, ttnn.TILE_LAYOUT), ttnn.float32)
+        else:
+            base = ttnn.reshape(self._greedy_helper._greedy(logits, with_min=False)[2], [T, 1])
         tok = ttnn.add(ttnn.multiply(greedy, base), ttnn.multiply(ttnn.subtract(1.0, greedy), tok_s))
         return ttnn.to_layout(ttnn.typecast(tok, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)

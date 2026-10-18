@@ -242,7 +242,9 @@ class SpecRunner:
         self.dec.enable_sampling(model.mc, model.ccl)
         self.dec.draft_on = draft
         # in-trace sampling of every verify row (DSV41_INTRACE_SAMPLE=1): one sampler over the T = U * n block rows of a mesh row; params uploaded per round (``sample_cfg``), allocated before any trace
-        self.dec.samp = self.samp = model._make_sampler(self.T)  # (replayed by trace S of a sampled round only)
+        self.dec.samp = self.samp = model._make_sampler(
+            self.T, spec=True
+        )  # (replayed by trace S of a sampled round only)
         self.sample_cfg = None  # None = greedy rows; else dict(temperature=[B], top_k=[B], top_p=[B], gens=[B generators] | one generator)
         if self.samp is not None and os.environ.get("DSV41_DEMO_SAMPLE"):
             t_, k_, p_ = os.environ["DSV41_DEMO_SAMPLE"].split(":")
