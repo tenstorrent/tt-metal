@@ -31,6 +31,7 @@ import torch
 
 import ttnn
 
+from . import ccl
 from .common import DRAM, TP_AXIS, compute_config, tp_sum
 from .exact_mm import ExactMatmul
 from .norm import TtDistributedRmsNorm
@@ -80,7 +81,9 @@ class TtAttnInProj:
         if self.exact:
             part = self.mm(xq, self.weight)
         else:
-            part = ttnn.linear(xq, self.weight, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+            # CCL_IMPL=fabric_bf16 (P.6): the partial in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
+            pdt = ccl.partial_dtype(self.mesh) if settings.get("HC_TP_SUM") == "gather_add" else ttnn.float32
+            part = ttnn.linear(xq, self.weight, dtype=pdt, compute_kernel_config=self.ckc, memory_config=DRAM)
         out = tp_sum(self.mesh, part)
         ttnn.deallocate(part)
         return out

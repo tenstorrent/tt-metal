@@ -207,14 +207,22 @@ TABLE = {
     ),
     "CCL_IMPL": Setting(
         "fabric",
-        ("stock", "fabric"),
+        ("stock", "fabric", "fabric_bf16"),
         "the cross-chip collectives (tt/ccl.py, P.5): stock = ttnn.all_gather, and the exact TP partial sums (ATTN_O_SUM "
         "/ EXPERTS_SUM / HC_TP_SUM gather_add) as all_gather + SFPU ttnn.add (+ mesh_partition for the hidden-split "
         "ones); fabric = the bring-up fabric forks: every all_gather whose contract fits on ttnn.bringup."
         "fabric_all_gather, the hidden-split sums as ONE ttnn.bringup.fabric_reduce_scatter(dim=3, exact_fp32_add=True) "
         "each, the replicated ones (HC_TP_SUM: tp_sum) as fabric_reduce_scatter(dim=2, exact) + fabric_all_gather; "
         "every add one exact fp32 rounding on the SFPU (TP = 2: bit-identical to stock). The head <-> seq all_to_all "
-        "stays stock (no fork). Same numerics either way: not a precision switch",
+        "stays stock (no fork). stock and fabric: the same numerics. fabric_bf16 (P.6, owner comparison: Marko Staletovic's "
+        "GLM-5.3 choice, GLM_SCATTER_OP=fabric_bf16) = fabric, but the reduce-scattered TP partial sums (sum_cols: "
+        "ATTN_O_SUM / EXPERTS_SUM; tp_sum: HC_TP_SUM's tile-aligned ones) typecast to bf16, reduced by "
+        "fabric_reduce_scatter's default FPU add, tp_sum's row gather in bf16, then typecast back to fp32: lossy, a "
+        "precision switch (max precision: fabric); the norm / engram-gate sums the fork does not take stay exact fp32. "
+        "The producers of the big partials (attention wo_b, moe_add, q_a; tt/ccl.py:partial_dtype) write them in bf16 "
+        "directly: a separate fp32 -> bf16 typecast ([1024, 5120] 0.071 ms) costs more than the bf16 RS saves "
+        "(DS41-67). P.6, 2x2, chunk 53248-55296, plain profile: device total 639.62 vs fabric 641.23 (P.5; the "
+        "typecast-both-ways version 642.09); ladder last worst layer L03 0.99674 vs 0.99681, state min 0.99776",
     ),
     "HC_TP_SUM": Setting(
         "gather_add",
@@ -242,6 +250,7 @@ MAX_PRECISION = {
     "ATTN_O_SUM": "gather_add",
     "EXPERTS_SUM": "gather_add",
     "EXPERTS_IMPL": "bfp8",  # exact fp4 values (DS41-10); bfp4 is the owner's lossy memory pick (P.1)
+    "CCL_IMPL": "fabric",  # exact fp32 sums (P.5); fabric_bf16 (P.6) is judged end to end only
     "EXPERTS_PRECISION": "full",  # P.4: glm (LoFi, bfp8 x / h / y) is judged end to end only
 }
 
