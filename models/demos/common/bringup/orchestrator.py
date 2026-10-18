@@ -1205,7 +1205,13 @@ class Orchestrator:
     def perf_agent(self, task: dict) -> list[str] | None:
         """The perf role until one attempt ends without problems; the files it changed, or None (STOPPED)."""
         tid, pol, previous, changed = task["id"], self.policy(task, "perf"), "", set()
-        for attempt in range(1, pol["attempts"] + 1):
+        done, cut = self.attempts_so_far(tid, "perf")  # F107: a resumed pick continues the numbering (F95)
+        if cut is not None:
+            previous = (
+                f"A previous run was interrupted during perf attempt {cut} of this task (a crash, power loss or an "
+                "overseer stop). Its changes may be in the tree: check them before redoing anything."
+            )
+        for attempt in range(done + 1, done + pol["attempts"] + 1):
             self.led.update(tid, status="RUNNING", attempt=attempt, role="perf", waiting=None)
             accuracy_guard.clear(self.spec, tid)  # the marker is per attempt
             problems = self.run_agent(task, "perf", attempt, self.brief(task, "perf", attempt, previous))

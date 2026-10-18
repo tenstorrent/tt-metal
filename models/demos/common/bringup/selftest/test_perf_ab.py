@@ -192,7 +192,7 @@ def test_a_new_brief_voids_the_report_and_decide_needs_one(mk, sandbox):
     assert o.run() == HUMAN
     sandbox.tasks(pick(brief={"details": "another idea"}))
     assert decide(o, "P.1", "accept") == 1  # the report was about the old brief
-    assert o.run() == HUMAN and mk.agents()[-1] == "P.1.perf.1.md bringup-engineer" and len(mk.agents()) == 2
+    assert o.run() == HUMAN and mk.agents()[-1] == "P.1.perf.2.md bringup-engineer" and len(mk.agents()) == 2  # F107
 
 
 # ---------------------------------------------------------------- the profile guard
@@ -371,3 +371,13 @@ def test_the_accept_runs_the_gate_when_the_code_changed_since_the_ab(mk, sandbox
     assert o.run() == HUMAN, mk.lines
     (sandbox.repo / "src/impl.txt").write_text("hifi2 tuned\n")  # the code moved after the report
     assert o.ab_on_reuse(o.led.task("P.1"), o.led.state()["P.1"]["ab"]) is None
+
+
+def test_a_resumed_pick_continues_the_attempt_numbering(mk):
+    """F107 (F95 for perf picks): after earlier perf attempts (here two, stopped by the overseer), the next agent run
+    is attempt 3, not 1 again (DeepSeek-V4.1 P.3 restarted at attempt 1 after a resume, reusing attempt 1's brief)."""
+    o = mk([pick()], {"P.1.perf.3.md": CHANGE["P.1.perf.1.md"]})
+    runs = [{"role": "perf", "attempt": a, "t": f"2026-10-18T0{a}:00:00"} for a in (1, 2)]
+    o.led.update("P.1", agent_runs=runs)
+    assert o.run() == HUMAN, mk.lines
+    assert mk.agents() == ["P.1.perf.3.md bringup-engineer"]
