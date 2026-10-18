@@ -41,6 +41,14 @@ _TP_POLICY = {
         # the dispatch link is reserved, and the ring already runs at three quarters of it. Halving
         # the payload buys more than the two typecasts around it cost.
         "ccl_dtype_prefill": "bfloat8_b",
+        # The ring pays a fixed cost per sync that the payload never reaches, so syncing a fifth
+        # as often is worth more than it costs in buffering. The curve is flat from sixteen and
+        # turns back by thirty-two; twenty sits at the knee.
+        "ccl_chunks_per_sync": 20,
+        # A larger chunk only pays once there is enough payload to fill it. Measured on the
+        # prefill ring, twenty wins from 512 rows up and loses at 256 and below, so short prompts
+        # and every decode step keep the library default.
+        "ccl_chunks_min_rows": 512,
         # DRAM-sharded matmul rejects num_workers_per_dram_bank > 1 outside Blackhole, so every
         # projection and the LM head fall back to a single reader per bank.
         "attention_readers": 1,
@@ -554,7 +562,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
             multi_device_global_semaphore=self.ccl.get_and_cycle_ag_semaphore_handles(1),
             barrier_semaphore=self.ccl.get_and_cycle_barrier_semaphore_handle(1),
             memory_config=memory,
-            **self._ccl_tuning(),
+            **self._ccl_tuning(x.shape[-2]),
         )
 
     def _collective_memory(self, x):
@@ -600,7 +608,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
         key = "ccl_dtype" if decode else "ccl_dtype_prefill"
         return getattr(ttnn, self.policy.get(key) or self.policy["ccl_dtype"])
 
-    def _ccl_tuning(self, chunks=False):
+    def _ccl_tuning(self, rows, chunks=False):
         """Ring worker and sync shape, as keyword arguments.
 
         None leaves each knob at the library default. The ring spends a fixed cost per sync that
@@ -608,11 +616,17 @@ class Qwen38TPDecoder(Qwen38Decoder):
         and a value good for one collective can be bad for the other. Only the reduce-scatter
         binding takes chunks_per_sync -- the all-gather overload that carries a persistent output
         does not, and passing it there is a TypeError rather than a no-op.
+
+        chunks_per_sync is the one knob whose best value follows the payload, so rows carries the
+        token count of the call being made rather than the shape the layer was built for.
         """
         names = ("num_workers_per_link", "num_buffers_per_channel")
         if chunks:
             names += ("chunks_per_sync",)
-        return {name: self.policy.get("ccl_" + name) for name in names}
+        tuning = {name: self.policy.get("ccl_" + name) for name in names}
+        if tuning.get("chunks_per_sync") is not None and rows < self.policy.get("ccl_chunks_min_rows", 0):
+            tuning["chunks_per_sync"] = None
+        return tuning
 
     def _linear(self, x, name, activation=None, keep_sharded=False):
         if (
@@ -819,7 +833,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
             multi_device_global_semaphore=self.ccl.get_and_cycle_rs_semaphore_handles(1),
             barrier_semaphore=self.ccl.get_and_cycle_barrier_semaphore_handle(1),
             memory_config=collective_memory,
-            **self._ccl_tuning(chunks=True),
+            **self._ccl_tuning(output.shape[-2], chunks=True),
         )
         if not self.sharded_residual:
             output = self._gather(output)
