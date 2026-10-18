@@ -29,12 +29,22 @@ from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fab
 from models.demos.gemma4_d_p.tt.attention import operations as attention_operations
 from models.demos.gemma4_d_p.tt.attention import ring_prefill
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache
-from models.demos.gemma4_d_p.tt.runners.kv_validation import compare_head, load_gpu_cache_heads, summarize_metrics
+from models.demos.gemma4_d_p.tt.runners.kv_validation import (
+    EARLY_LAYERS,
+    ERROR_BLOCK_ROWS,
+    compare_head,
+    load_gpu_cache_heads,
+    summarize_metrics,
+)
 
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 600_000_000))
-MIN_PER_HEAD_PCC = 0.91
-MIN_OVERALL_PCC = 0.97
-MAX_OVERALL_RRMSE = 0.232
+# Batched KV vs the same request prefilled alone. In every layer below EARLY_LAYERS every head of every 2048-token
+# block must match: clean steps reach 0.9965, while RoPE positions off by one in one lane of one step give 0.765.
+# Deeper layers amplify summation-order differences chaotically (clean steps reach 0.906 min head at layer 57), so
+# the whole cache only has to clear a coarse floor.
+MIN_EARLY_HEAD_PCC = 0.99
+MIN_OVERALL_PCC = 0.96
+MAX_OVERALL_RRMSE = 0.275
 GOLDEN_DIR = Path(os.environ.get("PREFILL_TRACE_DIR", "/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135"))
 
 
@@ -118,7 +128,8 @@ def _read_slot(model, slot, n_tokens, chunk, mesh_config, widths=None):
 def _compare(expected, actual, rows=None):
     """KV PCC metric between two {layer: {config: tensor}} snapshots over rows (a slice, default all).
 
-    Returns overall PCC / RRMSE, the worst head, per-layer PCC and the first layer that isn't bit-identical.
+    Returns overall PCC / RRMSE, the worst head, the worst head of any ERROR_BLOCK_ROWS-row block in the layers below
+    EARLY_LAYERS, per-layer PCC and the first layer that isn't bit-identical.
     """
     rows = rows or slice(None)
     comparisons, layer_pcc, worst, first_diff = [], [], None, None
@@ -140,22 +151,42 @@ def _compare(expected, actual, rows=None):
         pcc=overall["pcc"],
         relative_rmse=overall["relative_rmse"],
         worst_head=worst,
+        early_worst_head=_early_worst_head(expected, actual, rows),
         first_differing_layer=first_diff,
         layer_pcc=layer_pcc,
     )
 
 
+def _early_worst_head(expected, actual, rows):
+    """The lowest-PCC head of any ERROR_BLOCK_ROWS-row block of rows in the layers below EARLY_LAYERS."""
+    start, stop, _ = rows.indices(next(iter(expected[0].values())).shape[0])
+    worst = None
+    for block in range(start, stop, ERROR_BLOCK_ROWS):
+        block_rows = slice(block, min(block + ERROR_BLOCK_ROWS, stop))
+        for layer in range(EARLY_LAYERS):
+            for config_id, golden in expected[layer].items():
+                result = compare_head(
+                    config_id, golden[block_rows].float(), actual[layer][config_id][block_rows].float()
+                )
+                for name, comparison in result.items():
+                    if worst is None or comparison.pcc < worst["pcc"]:
+                        worst = dict(rows=block, layer=layer, config=config_id, cache_type=name, pcc=comparison.pcc)
+    return worst
+
+
 def _gates(result):
     return (
-        result["pcc"] >= MIN_OVERALL_PCC
+        result["early_worst_head"]["pcc"] >= MIN_EARLY_HEAD_PCC
+        and result["pcc"] >= MIN_OVERALL_PCC
         and result["relative_rmse"] < MAX_OVERALL_RRMSE
-        and result["worst_head"]["pcc"] >= MIN_PER_HEAD_PCC
     )
 
 
 def _fmt(result):
-    w = result["worst_head"]
+    w, e = result["worst_head"], result["early_worst_head"]
     return (
+        f"min head in layers 0-{EARLY_LAYERS - 1} {e['pcc']:.6f} "
+        f"(layer {e['layer']} {e['cache_type']}, rows {e['rows']}+) / "
         f"overall {result['pcc']:.6f} / RRMSE {result['relative_rmse']:.6f} / min head {w['pcc']:.6f} "
         f"(layer {w['layer']} {w['cache_type']}) / first differing layer {result['first_differing_layer']}"
     )

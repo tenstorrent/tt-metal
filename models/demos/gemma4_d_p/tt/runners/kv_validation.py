@@ -338,6 +338,31 @@ def _read_layer_heads(read_heads, layer):
     return list(read_heads(layer))
 
 
+# KV error through these layers is set by arithmetic precision. From about layer 18 on, the model amplifies rounding
+# chaotically: two runs that differ only in summation order (matmul blocking, reduce-scatter order, SDPA K split) match
+# per layer within 3% through layer 17 but move a lone 2048-token prompt's final-layer PCC by up to 0.04. Checks that
+# two runs compute the same thing compare these layers.
+EARLY_LAYERS = 16
+# Rows per block of the block_relative_rmse in each of the first EARLY_LAYERS layers' metrics: one 2048-token chunk.
+ERROR_BLOCK_ROWS = 2048
+
+
+def block_squared_sums(expected, actual, block_rows=ERROR_BLOCK_ROWS):
+    """One head's squared error and squared reference sums, per block_rows-row block of tokens, as [2, blocks]."""
+    sums = torch.empty(2, -(-expected.shape[0] // block_rows))
+    for block, start in enumerate(range(0, expected.shape[0], block_rows)):
+        reference = expected[start : start + block_rows].float()
+        sums[0, block] = (actual[start : start + block_rows].float() - reference).square_().sum()
+        sums[1, block] = reference.square_().sum()
+    return sums
+
+
+def block_relative_rmse(head_sums):
+    """Relative RMSE over all of a layer's heads, per block, from each head's block_squared_sums."""
+    totals = sum(head_sums)
+    return (totals[0] / totals[1]).sqrt().tolist()
+
+
 def compare_head(config_id, expected, actual):
     if config_id < 4:
         return {
@@ -401,9 +426,13 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
                         minima[name] = min(minima[name], score)
                         layer_minima[name] = min(layer_minima.get(name, 1.0), score)
                     measurements.append(dict(layer=layer, config=CONFIG_NAMES[config_id], pcc=scores))
+                layer_summary = summarize_metrics(layer_comparisons)
+                if layer < EARLY_LAYERS:
+                    layer_summary["block_relative_rmse"] = block_relative_rmse(
+                        comparer.map(lambda head: block_squared_sums(expected_heads[head[0]], head[1]), actual_heads)
+                    )
                 timings["comparison_seconds"] += time.perf_counter() - start
                 all_comparisons.extend(layer_comparisons)
-                layer_summary = summarize_metrics(layer_comparisons)
                 layer_metrics.append(dict(layer=layer, **layer_summary))
                 layer_seconds = {name: timings[name] - previous_timings[name] for name in previous_timings}
                 layer_timings.append(dict(layer=layer, **layer_seconds))
