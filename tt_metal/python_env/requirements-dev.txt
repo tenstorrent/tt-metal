@@ -30,7 +30,7 @@ mypy==1.9.0
 protobuf==5.29.6
 
 # For TT-Transformers Qwen3 support
-transformers == 5.12.1
+transformers == 5.19.0  # Qwen3.8-Flash-Next (qwen4_exp) CI test branch: the bring-up ran on 5.19.0
 huggingface-hub >= 0.30.0
 
 # For Qwen-VL / multimodal demo preprocessing: qwen-vl-utils (process_vision_info for image prompts)
