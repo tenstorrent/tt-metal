@@ -162,13 +162,24 @@ def rotated_chip_real_token_counts(kv_actual_isl: int, actual_isl: int, sp: int,
 def rotated_row_of_position(kv_actual_isl: int, sp: int, chunk_local: int, global_pos: int) -> int | None:
     """The chip-major flat row ``chip * chunk_local + local`` carrying ``global_pos``, or None.
 
-    Inverse of ``rotated_chip_positions``, keyed off it so it cannot drift from the writer kernel.
+    Inverse of ``rotated_chip_positions``: only chip ``(global_pos % (sp * chunk_local)) // chunk_local`` can
+    carry it, at the row :func:`rotated_chip_row` gives.
     """
-    for c, row in enumerate(rotated_chip_positions(kv_actual_isl, sp, chunk_local)):
-        for r, p in enumerate(row):
-            if p == global_pos:
-                return c * chunk_local + r
-    return None
+    chip = (global_pos % (sp * chunk_local)) // chunk_local
+    row = rotated_chip_row(kv_actual_isl, sp, chunk_local, chip, global_pos)
+    return None if row is None else chip * chunk_local + row
+
+
+def rotated_chip_row(kv_actual_isl: int, sp: int, chunk_local: int, chip: int, global_pos: int) -> int | None:
+    """The row of ``rotated_chip_positions(...)[chip]`` that carries ``global_pos``, or None."""
+    chunk_size_global = sp * chunk_local
+    if (global_pos % chunk_size_global) // chunk_local != chip:
+        return None
+    first = rotated_chip_position(kv_actual_isl, sp, chunk_local, chip, 0)
+    first_lr = (first // chunk_size_global) * chunk_local + first % chunk_local
+    lr = (global_pos // chunk_size_global) * chunk_local + global_pos % chunk_local
+    row = lr - first_lr
+    return row if 0 <= row < chunk_local else None
 
 
 def rotated_chip_position(kv_actual_isl: int, sp: int, chunk_local: int, chip: int, row: int) -> int:
