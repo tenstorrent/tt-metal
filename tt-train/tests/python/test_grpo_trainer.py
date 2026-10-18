@@ -45,7 +45,7 @@ from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.modules import RunMode
 from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback, get_grpo_config
-from ttml.trainers.grpo_trainer import grpo_ttml_model, layout_microbatch, place_old_nlog_probs
+from ttml.trainers.grpo_trainer import grpo_ttml_model, layout_microbatch, place_old_nlog_probs, save_checkpoint
 from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
 
@@ -307,6 +307,27 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path, lr_sc
         f"parameter {snapshot_name!r} was unchanged after one optimizer step; "
         "either backward did not run or the gradient was identically zero"
     )
+
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def _assert_same_parameters(a, b):
+    pa, pb = a.parameters(), b.parameters()
+    assert sorted(pa) == sorted(pb)
+    for name in pa:
+        np.testing.assert_array_equal(
+            pa[name].to_numpy(ttnn.DataType.FLOAT32), pb[name].to_numpy(ttnn.DataType.FLOAT32), err_msg=name
+        )
+
+
+@pytest.mark.requires_device
+def test_save_checkpoint_round_trip_llama(patch_llama_weight_loading, tmp_path):
+    model, tokenizer = grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_MODEL_ID)
+    save_checkpoint(model, 1, str(tmp_path), tokenizer=tokenizer, model_source=HF_MODEL_ID)
+
+    ckpt_dir = str(tmp_path / "checkpoints" / "grpo_step_1")
+    loaded, _ = grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, ckpt_dir)
+    _assert_same_parameters(model, loaded)
 
     ttml.autograd.AutoContext.get_instance().reset_graph()
 

@@ -43,6 +43,7 @@ import torch
 import ttnn
 
 import ttml
+from ttml.checkpointing import load_checkpoint
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.common.utils import build_mesh
 from ttml.models import RunnerType, WeightTyingType
@@ -54,33 +55,7 @@ from .llama_composite_kv import LlamaCompositeKV
 
 _SUPPORTED_KINDS = ("llama", "qwen3")
 
-
-def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> None:
-    from safetensors.numpy import load_file
-    import ml_dtypes
-
-    checkpoint = load_file(checkpoint_path)
-    parameters = model.parameters()
-    loaded, missing = 0, []
-
-    for name, param in parameters.items():
-        if name in checkpoint:
-            arr = checkpoint[name].astype(ml_dtypes.bfloat16)
-            if arr.ndim == 1:
-                arr = arr.reshape(1, 1, 1, -1)
-            elif arr.ndim == 2:
-                arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
-            restored = ttml.autograd.Tensor.from_numpy(arr, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, dp_mapper)
-            param.assign(restored)
-            loaded += 1
-        else:
-            missing.append(name)
-
-    print(f"Loaded {loaded}/{len(parameters)} parameters from {checkpoint_path}")
-    if missing:
-        print(f"Warning: {len(missing)} parameters not found in checkpoint:")
-        for n in missing:
-            print(f"  - {n}")
+CHECKPOINT_FILE = "checkpoint.pkl"
 
 
 def _download_hf_repo(model_source: str) -> str:
@@ -126,9 +101,9 @@ def setup_ttml_model(
     if model_kind not in _SUPPORTED_KINDS:
         raise ValueError(f"setup_ttml_model: model_type must be one of {_SUPPORTED_KINDS}, got {model_kind!r}")
 
-    mesh_device = open_device(model_kind, device_config)
+    open_device(model_kind, device_config)
     if model_kind == "llama":
-        return _build_llama(transformer_config, device_config, model_source, mesh_device)
+        return _build_llama(transformer_config, device_config, model_source)
     return _build_qwen3(transformer_config, device_config, model_source)
 
 
@@ -155,9 +130,7 @@ def open_device(model_kind: str, device_config: DeviceConfig) -> Any:
     return ttml.autograd.AutoContext.get_instance().get_device()
 
 
-def _build_llama(
-    tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str, mesh_device: Any
-) -> Tuple[Any, Any]:
+def _build_llama(tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str) -> Tuple[Any, Any]:
     from transformers import AutoTokenizer
 
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
@@ -199,18 +172,14 @@ def _build_llama(
         # NOTE: TP is intentionally disabled here. cross_entropy_loss assumes full-vocab logits.
         autograd_ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=True, enable_tp=False))
 
-    ddp_enabled = (
-        autograd_ctx.is_parallelism_context_initialized() and autograd_ctx.get_parallelism_context().is_ddp_enabled()
-    )
-    dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(mesh_device, 0) if ddp_enabled else None
-
-    local_safetensors = os.path.isdir(model_source) and any(f == "model.safetensors" for f in os.listdir(model_source))
-    if local_safetensors:
-        logging.info("Loading model from local safetensors: %s", model_source)
-        load_checkpoint(tt_model, model_source, dp_mapper=dp_mapper)
+    checkpoint_path = os.path.join(model_source, CHECKPOINT_FILE)
+    if os.path.isfile(checkpoint_path):
+        logging.info("Loading ttml checkpoint: %s", checkpoint_path)
+        load_checkpoint(checkpoint_path, model_params=tt_model.parameters())
     else:
-        logging.info("Downloading model from HuggingFace: %s", model_source)
-        load_from_safetensors(tt_model, _download_hf_repo(model_source), llama_cfg)
+        hf_path = model_source if os.path.isdir(model_source) else _download_hf_repo(model_source)
+        logging.info("Loading HuggingFace weights from: %s", hf_path)
+        load_from_safetensors(tt_model, hf_path, llama_cfg)
 
     return tt_model, tokenizer
 
@@ -238,21 +207,24 @@ def _build_qwen3(tf_config: TransformerConfig, device_config: DeviceConfig, mode
             tt_model = Qwen3(qwen_config)
         _fully_shard(tt_model, device_config.fsdp_replicate_params)
         ttml.materialize_module(tt_model)
-
-        hf_state_dict = load_hf_state_dict(model_source)
-        load_weights_from_hf(tt_model, hf_state_dict, qwen_config, tie_word_embeddings=tie, sharded=True)
-        del hf_state_dict
+        _load_qwen3_weights(tt_model, model_source, qwen_config, tie, sharded=True)
     else:
         tt_model = Qwen3(qwen_config)
-
-        hf_state_dict = load_hf_state_dict(model_source)
-        load_weights_from_hf(tt_model, hf_state_dict, qwen_config, tie_word_embeddings=tie)
-        del hf_state_dict
+        _load_qwen3_weights(tt_model, model_source, qwen_config, tie, sharded=False)
 
         if fsdp_enabled:
             _fully_shard(tt_model, device_config.fsdp_replicate_params)
 
     return tt_model, tokenizer
+
+
+def _load_qwen3_weights(tt_model: Any, model_source: str, qwen_config: Any, tie: bool, sharded: bool) -> None:
+    checkpoint_path = os.path.join(model_source, CHECKPOINT_FILE)
+    if os.path.isfile(checkpoint_path):
+        load_checkpoint(checkpoint_path, model_params=tt_model.parameters())
+        return
+    hf_state_dict = load_hf_state_dict(model_source)
+    load_weights_from_hf(tt_model, hf_state_dict, qwen_config, tie_word_embeddings=tie, sharded=sharded)
 
 
 def _fully_shard(tt_model: Any, replicate: list[str]) -> None:

@@ -676,19 +676,15 @@ Each checkpoint directory contains:
 
 | File | Contents | Source |
 |------|----------|--------|
-| `model.safetensors` | Model weights in safetensors format | `model.parameters()` exported as float32 numpy arrays |
+| `checkpoint.pkl` | Model parameters and optimizer state; header: `global_step`, `learning_rate`, `rng` (Python, NumPy, PyTorch RNG states), `grpo_config` | `ttml.checkpointing.save_checkpoint` |
 | `config.json` | HuggingFace model configuration | `AutoConfig.from_pretrained(model_source)` |
 | `tokenizer_config.json` | Tokenizer configuration | `tokenizer.save_pretrained()` |
 | `tokenizer.json` | Full tokenizer (vocabulary, merges, etc.) | `tokenizer.save_pretrained()` |
 | `generation_config.json` | Generation parameters (temperature, max tokens, special token IDs) | Built from `GRPOConfig` and tokenizer |
-| `trainer_state.json` | Training progress (global step, learning rate) | Current optimizer step and LR |
-| `scheduler.pt` | Learning rate scheduler state (base LR, warmup config, step) | `torch.save()` |
-| `rng_state.pth` | Python, NumPy, and PyTorch RNG states for reproducibility | `torch.save()` |
-| `training_args.bin` | Full `GRPOConfig` dataclass serialized as a dict | `torch.save(dataclasses.asdict(grpo_config))` |
 | `timestamp.txt` | UTC timestamp of when the checkpoint was saved | `datetime.now(timezone.utc)` |
 
-To resume from a checkpoint, point `model_source` at the checkpoint directory
-(it contains `model.safetensors` and the tokenizer files).
+To start from a checkpoint's weights, point `model_source` at the checkpoint
+directory (it contains `checkpoint.pkl` and the tokenizer files).
 
 ---
 
@@ -780,7 +776,7 @@ python3 boolq/boolq_accuracy_example.py
 ```
 
 To evaluate a fine-tuned checkpoint, change `MODEL_ID` to the checkpoint
-directory containing `model.safetensors`.
+directory containing `checkpoint.pkl`.
 
 ### Reverse Text Training
 

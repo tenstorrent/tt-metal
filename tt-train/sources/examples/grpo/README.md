@@ -80,7 +80,7 @@ python3 boolq/boolq_accuracy_example.py
 
 To evaluate a fine-tuned checkpoint, change `MODEL_ID` at the top of
 the script to a `GRPOTrainer` checkpoint directory (the one containing
-`model.safetensors`).
+`checkpoint.pkl`).
 
 A companion plotting helper
 ([`boolq/boolq_plot_example.py`](boolq/boolq_plot_example.py)) turns the
