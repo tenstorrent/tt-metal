@@ -554,6 +554,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
             multi_device_global_semaphore=self.ccl.get_and_cycle_ag_semaphore_handles(1),
             barrier_semaphore=self.ccl.get_and_cycle_barrier_semaphore_handle(1),
             memory_config=memory,
+            **self._ccl_tuning(),
         )
 
     def _collective_memory(self, x):
@@ -598,6 +599,20 @@ class Qwen38TPDecoder(Qwen38Decoder):
         """
         key = "ccl_dtype" if decode else "ccl_dtype_prefill"
         return getattr(ttnn, self.policy.get(key) or self.policy["ccl_dtype"])
+
+    def _ccl_tuning(self, chunks=False):
+        """Ring worker and sync shape, as keyword arguments.
+
+        None leaves each knob at the library default. The ring spends a fixed cost per sync that
+        the payload does not reach, so these are the knobs that move it; they are not monotonic,
+        and a value good for one collective can be bad for the other. Only the reduce-scatter
+        binding takes chunks_per_sync -- the all-gather overload that carries a persistent output
+        does not, and passing it there is a TypeError rather than a no-op.
+        """
+        names = ("num_workers_per_link", "num_buffers_per_channel")
+        if chunks:
+            names += ("chunks_per_sync",)
+        return {name: self.policy.get("ccl_" + name) for name in names}
 
     def _linear(self, x, name, activation=None, keep_sharded=False):
         if (
@@ -804,6 +819,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
             multi_device_global_semaphore=self.ccl.get_and_cycle_rs_semaphore_handles(1),
             barrier_semaphore=self.ccl.get_and_cycle_barrier_semaphore_handle(1),
             memory_config=collective_memory,
+            **self._ccl_tuning(chunks=True),
         )
         if not self.sharded_residual:
             output = self._gather(output)
