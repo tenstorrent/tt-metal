@@ -1247,3 +1247,40 @@ idle, credits, send, flush, rows, blocked (destination ring full), credit packet
   links that carry forwarded traffic too. Pure injection gets ~22.4 GB/s per link, mixed forward + inject 17-19.
 - Fused: depth 8 changes nothing (V4.1 1188 -> 1177, K3 2456 -> 2460 uniform; packed same): the combine is hidden
   and the fused cost is on the flat side. Depth stays 4 (the K3 block's arena is per call).
+
+### When the level-1 combine becomes link bound: stage size x chunk size (2026-10-18, CPU model)
+Why: the combine's link time grows with the chunk while the flat expert is weight-stream bound (nearly flat in the
+chunk); at some chunk the combine can no longer hide. Model: `models/demos/deepseek_v3_d_p/tests/perf/
+scratch_combine_linkbound_model.py` (no device).
+- Flat, per chip: max(active experts x w0 + a x rows, c x rows), slowest chip. K3 w0 37.1 us, a 0.062, c 0.180 us
+  per row; V4.1 (384 experts, top-6, H 5120, I 2304) w0 39.4, a 0.089, c 0.247. Within 1-4% of the 2x4 harness on
+  uniform / spread; c is fitted on the packed run (it includes the hot-expert slowdown).
+- Combine: busiest (chip, direction, link) rows x 2H B at 25 GB/s / the efficiency measured on 2x4 (uniform 72 / 64%,
+  spread 75 / 70%, packed 89 / 87% for K3 / V4.1). Checks: K3 2x4 2.5K floor 746 vs 739 us, combine 1035 vs 1023.
+- Assumed: 2 links per direction everywhere; 2x4 = mesh, 4x4 = wrap on the 4-wide axis, 8x4 = full torus; the 2x4
+  efficiencies on every stage (more forwarding on 4x4 / 8x4 likely lowers them).
+combine / flat (>= 1: link bound), global chunk:
+| routing | stage | 2.5K | 5K | 8K | 10K | 16K |
+| uniform | K3 2x4 / 4x4 | 0.23 / 0.24 | 0.43 / 0.44 | 0.64 | 0.76 | **1.06 / 1.07** |
+| | K3 8x4 | 0.31 | 0.55 | 0.81 | 0.97 | **1.35** |
+| | V4.1 2x4 / 4x4 | 0.31 / 0.32 | 0.56 / 0.57 | 0.81 / 0.84 | 0.96 / 0.98 | **1.30 / 1.35** |
+| | V4.1 8x4 | 0.41 | 0.75 | **1.06** | **1.28** | **1.63** |
+| spread | K3 2x4 / 4x4 / 8x4 | 0.23 / 0.30 / 0.45 | 0.42 / 0.53 / 0.78 | 0.62 / 0.74 / 0.95 | 0.73 / 0.86 / 0.97 | 0.91 / 0.91 / 0.96 |
+| | V4.1 2x4 / 4x4 / 8x4 | 0.31 / 0.50 / 0.71 | 0.53 / 0.82 / 0.82 | 0.74 / 0.90 / 0.84 | 0.79 / 0.89 / 0.83 | 0.79 / 0.89 / 0.82 |
+| packed | K3 2x4 / 4x4 / 8x4 | 0.45 / 0.67 / 0.47 at every chunk | | | | |
+| | V4.1 2x4 / 4x4 / 8x4 | 0.48 / 0.72 / 0.51 at every chunk | | | | |
+- Uniform crossover (today's combine / at the link floor): K3 2x4 and 4x4 ~14.8K / never (the floor stays ~0.9x the
+  flat compute slope), 8x4 ~10.8K / ~17K; V4.1 2x4 and 4x4 ~10.5K / ~20.5K, 8x4 ~7.5K / ~13.8K. Exposure starts
+  before 1.0: on 2x4 the fused cost is already +2-9% at ratios 0.23-0.58.
+- Packed: constant ratio - the hot chip's flat work is compute bound on its own rows and its out links carry those
+  rows. 4x4 is worst (no Y wrap: 12 of the hot chip's 15 peers through one Y direction). Never link bound.
+- Spread: rises, then plateaus at 0.8-0.97 once the chip holding the hottest expert goes compute bound. K3 8x4 sits
+  at 0.95-0.97 from 8K: link exposed. Small chunks on big stages are worse than uniform (V4.1 8x4 2.5K 0.71 vs 0.41).
+- Zipf 1.2 over all experts is extreme (the hottest expert gets ~every token); the measured hot-expert slowdown at
+  4096+ tokens is not in the model, so the skewed ratios are upper bounds. Skew is a load-balancing problem.
+Levers that move the crossovers: fp8 rows (1.78-1.94x fewer bytes; pjosipovic/k3-moe-fp8-wire: e4m3 + pow2 scale
+per 1x32, Galaxy 8x4 combine 1001 -> 560 us, PCC -0.001, -2.3% output norm drift with truncation; for us the
+quantize fits the down cores' epilogue - one DEST tile row = one 1x32 block - and the dequantize the accumulator's
+gate multiply as a column broadcast), level 2 combine (one row per (token, chip): K3 2x4 2.3x fewer rows, but rows
+wait for the token's last local expert), and the balanced-routing link efficiency (fabric forwarding: 64-77% of the
+floor today).
