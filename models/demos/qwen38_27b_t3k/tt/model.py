@@ -428,7 +428,8 @@ class Qwen38Model:
                 raise ValueError("Prefill selectors do not match this prompt")
         else:
             selectors = None
-        x = self.embed(tokens, batch=1, length=length)
+        sharded = getattr(self, "prefill_sharded_residual", False)
+        x = self.embed(tokens, batch=1, length=length, sharded=sharded)
         if positions is None:
             positions = self.upload(
                 torch.arange(start_pos, start_pos + length, dtype=torch.int32).reshape(1, length),
@@ -451,7 +452,8 @@ class Qwen38Model:
                 local = DecoderState(conv=state.conv[slot : slot + 1], recurrent=state.recurrent[slot : slot + 1])
             else:
                 local = state
-            x = layer.prefill_forward(
+            forward = layer.prefill_sharded_forward if sharded else layer.prefill_forward
+            x = forward(
                 x,
                 state=local,
                 start_pos=start_pos,
@@ -474,6 +476,13 @@ class Qwen38Model:
             # A one-hot read rather than a slice: the row index is data the trace reloads, not an
             # offset compiled into it.
             x = x[:, valid - 1 : valid, :] if selectors is None else ttnn.matmul(selectors.last, x)
+        if sharded:
+            # The head owns the full hidden width whatever the residual carried. Gathering after
+            # the row read above means one row crosses the ring instead of the whole prompt.
+            width = self.config.hidden_size
+            rows = x.shape[1]
+            x = self.layers[-1]._gather(ttnn.reshape(x, [1, 1, rows, width // self.TP]))
+            x = ttnn.reshape(x, [1, rows, width])
         return self.logits(x, decode=not all_logits)
 
     def prefill_batch(self, tokens, *, cache, page_table, length, start_pos, slots, positions=None, return_logits=True):
