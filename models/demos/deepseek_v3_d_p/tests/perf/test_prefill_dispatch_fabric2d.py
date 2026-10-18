@@ -13,6 +13,10 @@ Environment:
     TT_DS_CAPTURED_LAYER   an integer: use one recorded MoE layer's real routing instead of the
                            synthetic draw.
     TT_DS_CAPTURED_PATH    where that recording lives; defaults to the golden prefill cache.
+    TT_DS_MODEL            glm53 or kimi27: that model's emb_dim, routed experts and top-k, and an extra 8x4 mesh
+                           opened at the payload the model's TtMoe opens it with (fabric2d-torus-xy-8x4-2link-model).
+                           With fp8 the token is Q1's packed row, emb_dim plus one fp32 scale per 128, as TtMoe's fp8
+                           wire sends it; pair it with row_major, and bf16 with tile, as the model does.
 
 These are read by this worker's own process, so a harness that launches it must pass them through
 its `env=` parameter, not as a prefix on the command.
@@ -26,6 +30,9 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_dispatch_fabric2d import (
     _HALF_TOKEN_PAYLOAD_8X1,
     PRODUCTION_ROUTING,
@@ -33,7 +40,12 @@ from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_dispatch_fabric2d imp
     _expert_dispatch_table,
 )
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config, get_gate_outputs
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    compute_constants,
+    extract_mesh_config,
+    get_gate_outputs,
+    moe_fabric_payload_size,
+)
 
 # Production prefill geometry: one 5120-token chunk over an 8-chip dispatch group.
 CHUNK = 5 * 1024
@@ -43,6 +55,13 @@ DISPATCH_BUFFER_CAPACITY_FACTOR = 8
 EMB_DIM = 7 * 1024
 NUM_ROUTED_EXPERTS = 256
 NUM_EXPERTS_PER_TOK = 8
+_MODELS = {"glm53": GLM53Config, "kimi27": KimiK27Config}
+_MODEL = os.environ.get("TT_DS_MODEL")
+assert _MODEL in (None, *_MODELS), f"TT_DS_MODEL: expected one of {sorted(_MODELS)}, got {_MODEL!r}"
+if _MODEL is not None:
+    EMB_DIM = _MODELS[_MODEL].EMB_SIZE
+    NUM_ROUTED_EXPERTS = _MODELS[_MODEL].NUM_ROUTED_EXPERTS
+    NUM_EXPERTS_PER_TOK = _MODELS[_MODEL].NUM_EXPERTS_PER_TOKEN
 
 # Launches after the warm-up one.
 ITERATIONS = 10
@@ -52,6 +71,19 @@ ITERATIONS = 10
 _MESH_IDS = ("fabric2d-torus-xy-8x4-2link", "fabric2d-torus-y-8x1-2link")
 _MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id in _MESH_IDS] + [_HALF_TOKEN_PAYLOAD_8X1]
 assert len(_MESH_CONFIGS) == len(_MESH_IDS) + 1, "dispatch_fabric2d perf mesh configs missing from ALL_MESH_CONFIGS"
+if _MODEL is not None:
+    _MESH_CONFIGS.append(
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload_size(_MODELS[_MODEL]),
+                reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-torus-xy-8x4-2link-model",
+        )
+    )
 
 
 @pytest.mark.parametrize(
@@ -66,6 +98,11 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
     sp_axis, H, G = cfg.sp_axis, cfg.dispatch_group_size, cfg.num_dispatch_groups
     assert sp_axis == 0, "this op runs on the dispatch axis, which extract_mesh_config puts at 0"
     seq_len_per_chip = SEQ_LEN_PER_CHIP
+    output_dtype = os.environ.get("TT_DS_OUTPUT_DTYPE", "bf16")
+    assert output_dtype in ("bf16", "fp8"), f"TT_DS_OUTPUT_DTYPE: expected bf16 or fp8, got {output_dtype!r}"
+    fp8_output = output_dtype == "fp8"
+    # A model's fp8 wire dispatches Q1's packed rows, [emb e4m3 | emb / 128 fp32 scales], so the token is that wide.
+    emb_dim = EMB_DIM + EMB_DIM // 128 * 4 if _MODEL is not None and fp8_output else EMB_DIM
 
     experts_per_chip, metadata_len, max_dispatch_buffer_token_size, _ = compute_constants(
         seq_len_per_chip,
@@ -75,7 +112,7 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
         H,
         DISPATCH_BUFFER_CAPACITY_FACTOR,
         experts_per_chip_override=NUM_ROUTED_EXPERTS // G // H,
-        emb_dim=EMB_DIM,
+        emb_dim=emb_dim,
     )
 
     torch.manual_seed(42)
@@ -127,12 +164,12 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    x = torch.randn(H, G, seq_len_per_chip, EMB_DIM, dtype=torch.bfloat16)
+    x = torch.randn(H, G, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
     layout = os.environ.get("TT_DS_INPUT_LAYOUT", "row_major")
     assert layout in ("row_major", "tile"), f"TT_DS_INPUT_LAYOUT: expected row_major or tile, got {layout!r}"
-    output_dtype = os.environ.get("TT_DS_OUTPUT_DTYPE", "bf16")
-    assert output_dtype in ("bf16", "fp8"), f"TT_DS_OUTPUT_DTYPE: expected bf16 or fp8, got {output_dtype!r}"
-    fp8_output = output_dtype == "fp8"
+    assert not (
+        _MODEL and fp8_output and layout == "tile"
+    ), "a model's fp8 wire dispatches Q1's packed rows: use TT_DS_INPUT_LAYOUT=row_major"
     if fp8_output and layout == "row_major":
         # Host conversion to FP8_E4M3 takes a float32 source only; widening bf16 is exact.
         tt_x = ttnn.to_device(
@@ -155,12 +192,12 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
     tt_region = shard(region[:, 0:1, :], (None, 0), ttnn.int32)
 
     logger.info(
-        f"perf worker: mesh={tuple(mesh_device.shape)} seq={seq_len_per_chip} emb={EMB_DIM} "
+        f"perf worker: mesh={tuple(mesh_device.shape)} seq={seq_len_per_chip} emb={emb_dim} "
         f"experts={NUM_ROUTED_EXPERTS} topk={NUM_EXPERTS_PER_TOK} epc={experts_per_chip} "
         f"capacity={max_dispatch_buffer_token_size} links={num_links} iters={ITERATIONS}"
     )
     logger.info(f"routing {routing}: picks landing in this dispatch group {100 * realized:.1f}%")
-    logger.info(f"input layout: {layout}, output dtype: {output_dtype}")
+    logger.info(f"input layout: {layout}, output dtype: {output_dtype}, model: {_MODEL or 'default'}")
     if captured_layer is None:
         # The draw must hit its target share, or the measured traffic silently isn't what we think.
         assert abs(realized - in_group_share) < 0.02, (
