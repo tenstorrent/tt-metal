@@ -84,7 +84,7 @@ void kernel_main() {
         add_init(cb_in1, cb_in0, true);
 
         for (uint32_t i = 0; i < ublock_size_tiles; ++i) {
-            add_tiles(cb_in1, cb_in0, i, i, i);
+            add_tiles(cb_in1, cb_in0, i, i, i, true);
         }
 
         tile_regs_commit();

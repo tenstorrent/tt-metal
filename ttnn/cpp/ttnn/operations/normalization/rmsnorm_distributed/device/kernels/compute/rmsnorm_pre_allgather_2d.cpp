@@ -111,14 +111,13 @@ void kernel_main() {
         compute_kernel_hw_startup(cb_x2_merge_idx, cb_zero_idx, cb_out_final_idx);
         reconfig_data_format(cb_x2_merge_idx, cb_zero_idx);
         pack_reconfig_data_format(cb_out_final_idx);
-        add_init(cb_x2_merge_idx, cb_zero_idx, true);
 
         // Acquire registers
         ACQ();
 
         // Add all 8 tiles together
         for (uint32_t i = 0; i < num_cores_y; i++) {
-            add_tiles(cb_x2_merge_idx, cb_zero_idx, i, 0, dst0);
+            add_tiles(cb_x2_merge_idx, cb_zero_idx, i, 0, dst0, true);
         }
 
         // Pack result

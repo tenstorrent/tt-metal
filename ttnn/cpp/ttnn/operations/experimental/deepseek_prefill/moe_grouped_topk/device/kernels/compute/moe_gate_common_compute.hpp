@@ -284,13 +284,12 @@ void sum_top_experts_per_group(
     CircularBuffer cb_group_summed_scores(cb_group_summed_scores_id);
     // sum the top experts_per_group rows for each group
     compute_kernel_hw_startup(cb_top_experts_per_group_id, cb_top_experts_per_group_id, cb_group_summed_scores_id);
-    add_init(cb_top_experts_per_group_id, cb_top_experts_per_group_id, true);
     cb_top_experts_per_group.wait_front(summed_experts_per_group);
 
     cb_group_summed_scores.reserve_back(1);
     tile_regs_acquire();
     for (uint32_t i = 0; i < summed_experts_per_group; i += 2) {
-        add_tiles(cb_top_experts_per_group_id, cb_top_experts_per_group_id, i, i + 1, 0);
+        add_tiles(cb_top_experts_per_group_id, cb_top_experts_per_group_id, i, i + 1, 0, true);
     }
     tile_regs_commit();
     tile_regs_wait();

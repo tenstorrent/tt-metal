@@ -26,13 +26,12 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         tile_regs_acquire();
-        add_init(dfb::input, dfb::zero, acc_to_dest);
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
             dfb_in0_obj.wait_front(onetile);
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(dfb::input, dfb::zero);
 #endif
-            add_tiles(dfb::input, dfb::zero, idx0, idx0, dst0);
+            add_tiles(dfb::input, dfb::zero, idx0, idx0, dst0, acc_to_dest);
             dfb_in0_obj.pop_front(onetile);
         }
         tile_regs_commit();

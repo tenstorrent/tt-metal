@@ -23,7 +23,6 @@ void kernel_main() {
 
     // Initialize binary operations - use the same constants consistently
     compute_kernel_hw_startup(fabric_receiver_cb_id, fabric_receiver_cb_id, accumulator_cb_id);
-    add_init(fabric_receiver_cb_id, fabric_receiver_cb_id, true);
 
     // Wait for input data once before beginning processing
     cb_fabric_receiver.wait_front(total_pages);
@@ -45,7 +44,7 @@ void kernel_main() {
             const uint32_t first_index = first_device_id * num_pages_per_packet + page_group;
             const uint32_t second_index = second_device_id * num_pages_per_packet + page_group;
 
-            add_tiles(fabric_receiver_cb_id, fabric_receiver_cb_id, first_index, second_index, page_group);
+            add_tiles(fabric_receiver_cb_id, fabric_receiver_cb_id, first_index, second_index, page_group, true);
         }
     }
 

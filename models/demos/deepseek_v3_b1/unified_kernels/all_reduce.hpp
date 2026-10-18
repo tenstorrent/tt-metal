@@ -427,7 +427,7 @@ private:
             }
 
             for (uint32_t i = 0; i < batch_size; ++i) {
-                add_tiles(cb_a, cb_b, start_tile + i, start_tile + i, start_tile + i);
+                add_tiles(cb_a, cb_b, start_tile + i, start_tile + i, start_tile + i, !acquire_regs);
             }
             pack_block_contiguous(start_tile, cb_out, batch_size);
 
@@ -464,10 +464,8 @@ private:
                 copy_tile(CTArgs::cb_residual, i, i);
             }
             cb_pop_front(CTArgs::cb_residual, CTArgs::num_tiles);
-            add_init(CTArgs::cb_local, CTArgs::cb_remote, true);
             batched_add<false>(CTArgs::cb_local, CTArgs::cb_remote, CTArgs::cb_out, CTArgs::num_tiles);
         } else {
-            add_init(CTArgs::cb_local, CTArgs::cb_remote);
             batched_add<true>(CTArgs::cb_local, CTArgs::cb_remote, CTArgs::cb_out, CTArgs::num_tiles);
         }
 #endif

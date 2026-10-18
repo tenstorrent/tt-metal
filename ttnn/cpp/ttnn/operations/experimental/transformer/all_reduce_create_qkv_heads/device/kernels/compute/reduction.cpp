@@ -24,7 +24,6 @@ void kernel_main() {
     cb_out.reserve_back(block_num_tiles);
 
     compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
-    add_init(cb_in0, cb_in1, true);
 
     uint32_t num_pack_iters = (block_num_tiles + max_dst_tiles - 1) / max_dst_tiles;
     uint32_t block_num_tiles_cnt = 0;
@@ -42,7 +41,8 @@ void kernel_main() {
                         cb_in1,
                         block * block_num_tiles + p * max_dst_tiles + i,
                         (block + 1) * block_num_tiles + p * max_dst_tiles + i,
-                        i);
+                        i,
+                        true);
                 }
             }
         }
