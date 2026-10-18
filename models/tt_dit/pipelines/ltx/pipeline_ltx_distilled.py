@@ -31,7 +31,14 @@ from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor, Tracer, traced_function
 from ...utils.video import YuvVideoExport, export_video_audio, export_video_audio_yuv
-from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
+from .pipeline_ltx import (
+    SPATIAL_COMPRESSION,
+    TEMPORAL_COMPRESSION,
+    LTXPipeline,
+    LTXTransformerState,
+    latent_grid,
+    ref_still_encode,
+)
 
 # Distilled sigma schedules for the two stages. The defaults are the shipped 8-step (stage 1)
 # and 3-step (stage 2) schedules. LTX_S1_SIGMAS / LTX_S2_SIGMAS override with a comma-separated
@@ -2078,7 +2085,6 @@ class LTXDistilledPipeline(LTXPipeline):
         if reference_video is not None:
             assert self.vae_encoder is not None, "checkpoint has no VAE encoder; cannot run IC-LoRA reference"
             ref_path, ref_strength = reference_video
-            self._build_ref_vae_encoders(ref_pixel_frames, height, width)
             t0 = time.time()
             # Memoized like _i2v_cond_cache, and for the same reason: the VAE encoder is eager, and an
             # encode issued AFTER a denoise trace replay deadlocks the device in the encoder's
@@ -2090,14 +2096,12 @@ class LTXDistilledPipeline(LTXPipeline):
             if cached is not None:
                 ref_latent_s1, ref_latent_full = cached
             else:
-                ref_clip_s1 = self._load_reference_video(ref_path, s1_height, s1_width, ref_pixel_frames)
-                ref_clip_full = self._load_reference_video(ref_path, height, width, ref_pixel_frames)
-                ref_latent_s1 = self.encode_image(ref_clip_s1, encoder=self.vae_ref_encoder_s1)
-                ref_latent_full = self.encode_image(ref_clip_full, encoder=self.vae_ref_encoder_full)
+                ref_latent_s1, ref_latent_full = self.encode_reference(ref_path, ref_pixel_frames, height, width)
                 self._ref_latent_cache[key] = (ref_latent_s1, ref_latent_full)
             timings.append(("Reference encode", time.time() - t0))
             logger.info(
-                f"IC-LoRA reference {ref_path}: {ref_pixel_frames} looped px frames -> "
+                f"IC-LoRA reference {ref_path}: {ref_pixel_frames} looped px frames "
+                f"{'(still encode) ' if ref_still_encode() else ''}-> "
                 f"{tuple(ref_latent_full.shape)} latent (strength={ref_strength}) "
                 f"{'(cached)' if cached is not None else ''}in {time.time() - t0:.1f}s"
             )

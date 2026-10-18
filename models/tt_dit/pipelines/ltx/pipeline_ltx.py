@@ -52,6 +52,14 @@ from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor, set_kernel_prewarm_capturing
 from ...utils.video import Audio
 
+
+def ref_still_encode() -> bool:
+    """Whether an IC-LoRA reference sheet is encoded as one still frame and repeated along time
+    (``LTXPipeline.encode_reference``). On by default; LTX_REF_STILL_ENCODE=0 restores the multi-frame
+    encode of the looped clip. ltx-server reads this to decide whether a new sheet needs a fresh worker."""
+    return os.environ.get("LTX_REF_STILL_ENCODE", "1") not in ("0", "false", "False")
+
+
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
 # I2V conditioning-image H.264 CRF: round-trip through the codec the VAE/DiT were trained on
@@ -812,6 +820,38 @@ class LTXPipeline:
         self.vae_ref_encoder_full = self._new_vae_encoder(num_frames=ref_pixel_frames, height=height, width=width)
         self._register_coresident_exclusions()
 
+    def encode_reference(
+        self, ref_path: str, ref_pixel_frames: int, height: int, width: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """IC-LoRA reference latents ``(s1 at height//2 x width//2, full)`` for a sheet looped to
+        ``ref_pixel_frames``.
+
+        The looped clip is one still repeated, and the video VAE encoder is causal with first-frame
+        time padding and only per-position norms (RMSNorm over channels), so every latent frame of the
+        clip equals the still's single-frame latent: the reference fp32 encoder gives max |frame_t -
+        frame_0| <= 1.7e-5 and single-frame vs looped <= 1.9e-5 at a latent scale of 6.4 (1, 9, 17 and
+        25 frames). So the still is encoded once per stage resolution with the single-frame image
+        encoder (the I2V one, already loaded and warmed) and repeated along time. No multi-frame
+        encoders or extra weights are needed, and the 1920x1088 encode fits after warmup (the 121-frame
+        encode needed ~10 GB per chip more than was free on a galaxy). ``ref_still_encode()`` False
+        keeps the multi-frame encode."""
+        if not ref_still_encode():
+            self._build_ref_vae_encoders(ref_pixel_frames, height, width)
+            s1 = self.encode_image(
+                self._load_reference_video(ref_path, height // 2, width // 2, ref_pixel_frames),
+                encoder=self.vae_ref_encoder_s1,
+            )
+            full = self.encode_image(
+                self._load_reference_video(ref_path, height, width, ref_pixel_frames), encoder=self.vae_ref_encoder_full
+            )
+            return s1, full
+        latent_frames = (ref_pixel_frames - 1) // TEMPORAL_COMPRESSION + 1
+        out = []
+        for h, w in ((height // 2, width // 2), (height, width)):
+            still = self.encode_image(self._load_reference_video(ref_path, h, w, 1))
+            out.append(still.expand(-1, -1, latent_frames, -1, -1).contiguous())
+        return out[0], out[1]
+
     @staticmethod
     def _sheet_digest(path: str) -> str:
         """Content digest of a reference sheet, for keying the encode memoize. A sheet is a few MB,
@@ -1545,8 +1585,8 @@ class LTXPipeline:
     def _warmup_ref_encode(self, ref_pixel_frames: int, height: int, width: int) -> None:
         """Build + JIT-compile the IC-LoRA reference encoders at both stage resolutions with a
         zero looped clip. No-op when no encoder is configured (non-I2V checkpoints)."""
-        if self.vae_encoder is None:
-            return
+        if self.vae_encoder is None or ref_still_encode():
+            return  # a still reference runs on the image encoder, which its own warmup covers
         self._build_ref_vae_encoders(ref_pixel_frames, height, width)
         self.encode_image(torch.zeros(1, 3, ref_pixel_frames, height // 2, width // 2), encoder=self.vae_ref_encoder_s1)
         self.encode_image(torch.zeros(1, 3, ref_pixel_frames, height, width), encoder=self.vae_ref_encoder_full)
