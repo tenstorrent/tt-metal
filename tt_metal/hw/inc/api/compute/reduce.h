@@ -176,6 +176,19 @@ ALWI void reduce_tile(
     reduce_uninit(icb);
 }
 
+// Unfolded form: the caller runs reconfig, reduce_init and reduce_uninit.
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void reduce_tile(
+    std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t itile, std::uint32_t itile_scaler, std::uint32_t idst) {
+#ifndef ARCH_QUASAR
+    MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(icb, icb_scaler, idst)));
+    UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
+#else
+    MATH((llk_math_reduce<reduce_type, reduce_dim>(icb, icb_scaler, idst)));
+    UNPACK((llk_unpack_AB_reduce(icb, icb_scaler, itile, itile_scaler)));
+#endif
+}
+
 // clang-format off
 /**
  * Performs a reduction operation *B = reduce(A)* on `ntiles` consecutive tiles from the input CB, writing each
@@ -216,6 +229,21 @@ ALWI void reduce_block(
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         reduce_tile<reduce_type, reduce_dim, is_fp32_dest_acc_en>(
             icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i, ocb);
+    }
+}
+
+// Unfolded form: the caller runs reconfig, reduce_init and reduce_uninit.
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void reduce_block(
+    std::uint32_t icb,
+    std::uint32_t icb_scaler,
+    std::uint32_t start_itile,
+    std::uint32_t itile_scaler,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        reduce_tile<reduce_type, reduce_dim, is_fp32_dest_acc_en>(
+            icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i);
     }
 }
 
