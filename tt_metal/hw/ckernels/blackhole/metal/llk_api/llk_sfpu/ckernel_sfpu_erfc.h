@@ -65,13 +65,12 @@ inline void calculate_erfc() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         // Clamp |x| to 5.0 before evaluation (avoids extrapolation, saves one branch)
-        // setsgn before abs turns NaN into -NaN, which SFPABS leaves alone and min keeps.
+        // setsgn before abs turns a NaN into -NaN, which min keeps.
         sfpi::vFloat ax = sfpi::min(sfpi::abs(sfpi::setsgn(x, 1)), 5.0f);
         sfpi::vFloat r =
             piecewise_rational_eval<ERFC_NUM_DEGREE, ERFC_DEN_DEGREE, ERFC_NUM_SEGMENTS, ERFC_LUT_SIZE, false, true>(
                 ERFC_LUT, ax);
-        // erfc(-x) = 2 - erfc(x). Written as two steps so the negation happens in place,
-        // one instruction fewer than `r = 2.0f - r`.
+        // erfc(-x) = 2 - erfc(x), in two steps so the negation is done in place.
         v_if(x < 0.0f) {
             r = -r;
             r += 2.0f;

@@ -471,7 +471,6 @@ def test_erf_erfc_i1_nan_input(device, ttnn_op, dtype):
         inputs[r, (torch.arange(len(row)) + r) % 32] = row
     if dtype == ttnn.float32:
         inputs = (inputs.view(torch.int16).to(torch.int32) << 16).view(torch.float32)
-        # float32 NaNs with the payload only in the low bits.
         inputs[:, 30:32] = torch.tensor([0x7F800001, 0xFF800001 - (1 << 32)], dtype=torch.int32).view(torch.float32)
     tt_in = ttnn.from_torch(inputs, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True)
     out = ttnn.to_torch(ttnn_op(tt_in)).float()
