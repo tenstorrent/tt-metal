@@ -448,7 +448,15 @@ def test_erfc_tail(device):
     assert_allclose(expected_result=golden, actual_result=result, atol=0, rtol=3.2e-1)
 
 
-@pytest.mark.parametrize("ttnn_op", [ttnn.erf, ttnn.erfc, ttnn.i1])
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        pytest.param(lambda t: ttnn.erf(t, fast_and_approximate_mode=False), id="erf"),
+        pytest.param(lambda t: ttnn.erf(t, fast_and_approximate_mode=True), id="erf_fast"),
+        pytest.param(ttnn.erfc, id="erfc"),
+        pytest.param(ttnn.i1, id="i1"),
+    ],
+)
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_erf_erfc_i1_nan_input(device, ttnn_op, dtype):
     """#59184, #59185, #59186: the input clamp must not turn a NaN into a finite result. A BF16 Dest reads
@@ -463,6 +471,8 @@ def test_erf_erfc_i1_nan_input(device, ttnn_op, dtype):
         inputs[r, (torch.arange(len(row)) + r) % 32] = row
     if dtype == ttnn.float32:
         inputs = (inputs.view(torch.int16).to(torch.int32) << 16).view(torch.float32)
+        # float32 NaNs with the payload only in the low bits.
+        inputs[:, 30:32] = torch.tensor([0x7F800001, 0xFF800001 - (1 << 32)], dtype=torch.int32).view(torch.float32)
     tt_in = ttnn.from_torch(inputs, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True)
     out = ttnn.to_torch(ttnn_op(tt_in)).float()
 

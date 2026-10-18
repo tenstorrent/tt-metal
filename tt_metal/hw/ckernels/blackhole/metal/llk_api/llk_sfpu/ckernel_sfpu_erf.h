@@ -54,6 +54,7 @@ constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
 
 // ERF_LUT with the numerator negated: the rational then returns -erf(x) (see calculate_erf).
 constexpr std::array<float, ERF_LUT_SIZE> erf_lut_negated_numerator() {
+    static_assert(ERF_NUM_SEGMENTS == 1, "only the first segment's numerator is negated");
     std::array<float, ERF_LUT_SIZE> lut = ERF_LUT;
     for (uint32_t i = ERF_NUM_SEGMENTS + 1; i <= ERF_NUM_SEGMENTS + 1 + ERF_NUM_DEGREE; i++) {
         lut[i] = -lut[i];

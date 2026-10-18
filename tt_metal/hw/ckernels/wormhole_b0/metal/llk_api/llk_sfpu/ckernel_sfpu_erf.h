@@ -78,8 +78,8 @@ inline void calculate_erf() {
         // Saturate to [-1, 1]: rational fit is not bounded and overshoots by
         // up to ~3e-8 (FP32) / ~2e-4 (BF16 LUT) in the tail. Persists in FP32
         // dest register and biases downstream ops (e.g. decomposed GELU in CLIP).
-        // erf is odd: the rational gave erf(|x|), so clamp it and put the sign of x back.
-        // On Wormhole a NaN comes out of the rational as a negative NaN, which min keeps.
+        // erf is odd: clamp erf(|x|), then copy the sign of x, re-read from Dest so x is not kept live.
+        // Wormhole: this rational returns -NaN for a NaN input (measured, test_erf_erfc_i1_nan_input); min keeps it.
         const sfpi::vFloat x_in = sfpi::dst_reg[0];
         result = sfpi::copysgn(sfpi::min(result, 1.0f), x_in);
         sfpi::dst_reg[0] = result;
