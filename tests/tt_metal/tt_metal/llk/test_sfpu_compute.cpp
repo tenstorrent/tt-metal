@@ -1239,8 +1239,7 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         return uniform(-10.0f, 10.0f);
     }
     if (op_name == "softsign") {
-        // [-4, 4] as before, with every fourth value replaced by a magnitude up to the bfloat16 maximum, where
-        // 1 / (1 + |x|) underflows and softsign must still return +-1.
+        // Every fourth value is a magnitude from 1e8 up to the bfloat16 maximum, where softsign must still be +-1.
         auto packed = uniform(-4.0f, 4.0f);
         auto values = unpack_vector<bfloat16, uint32_t>(packed);
         constexpr float big[] = {1.0e8f, 1.0e30f, 1.0e38f, 3.0e38f};

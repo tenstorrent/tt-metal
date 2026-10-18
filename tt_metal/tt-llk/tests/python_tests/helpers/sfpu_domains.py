@@ -1775,6 +1775,8 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     ),
     # softplus goes linear at its threshold.
     MathOperation.Softplus: (SOFTPLUS_THRESHOLD,),
+    # softsign must still saturate to +-1 from 2**126 up, where the reciprocal of 1 + |x| returns 0.
+    MathOperation.Softsign: (-(2.0**126), 2.0**126, -3.0e38, 3.0e38),
     # Round-half-to-even ties, where the kernel's _round_even_ and a naive round differ.
     MathOperation.Round: (-2.5, -1.5, -0.5, 0.5, 1.5, 2.5),
     # Integer knees. floor/ceil differ from trunc only on the negative side, and frac

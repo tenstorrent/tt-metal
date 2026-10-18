@@ -1686,8 +1686,6 @@ def test_unary_softsign_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device
 
 
 def test_unary_softsign_zero_sign_float32(device):
-    # softsign(+-0) = +-0. The comparisons above treat -0 and +0 as equal, so check the sign bit itself.
-    # float32 only: a bfloat16 -0 reaches the SFPU as +0.
     in_data = torch.zeros(1, 1, 32, 32, dtype=torch.float32)
     in_data[..., 1::2] = -0.0
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)

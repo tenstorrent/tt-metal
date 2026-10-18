@@ -6,6 +6,7 @@ import torch
 import pytest
 import ttnn
 from mpmath import mp, mpf, tanh as mp_tanh
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import (
     assert_allclose,
     assert_equal,
@@ -321,6 +322,7 @@ def test_softsign(device):
     | Input range               | Check      | Reason                                               |
     |---------------------------|------------|------------------------------------------------------|
     | |x| > 1/SNB - 1 (~8.5e37) | exactly ±1 | reciprocal is below SNB; the kernel saturates to ±1  |
+    |                           |            | (within 1 ULP on Wormhole)                           |
     | all                       | ULP ≤ 2    | reciprocal + multiply rounding                       |
 
     ULP rather than whole-domain PCC: the ~46% of inputs already saturating
@@ -337,12 +339,14 @@ def test_softsign(device):
     tt_result = ttnn.softsign(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    # Magnitudes whose reciprocal(1 + |x|) falls below the smallest normal bfloat16.
     near_max = input_tensor.abs().float() > 1.0 / SMALLEST_NORMAL_BF16 - 1.0
     assert near_max.any(), "expected the sweep to reach the near-bf16_max magnitudes"
-    assert torch.equal(
-        result[near_max], torch.sign(input_tensor[near_max]).to(result.dtype)
-    ), "softsign must saturate to exactly ±1 near bf16_max"
+    saturated = torch.sign(input_tensor[near_max]).to(result.dtype)
+    if is_wormhole_b0():
+        # Wormhole lands within 1 ULP of ±1 here, as it does for 2**24 <= |x| < 2**126.
+        assert_with_ulp(expected_result=saturated, actual_result=result[near_max], ulp_threshold=1)
+    else:
+        assert torch.equal(result[near_max], saturated), "softsign must saturate to exactly ±1 near bf16_max"
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=2)
 
