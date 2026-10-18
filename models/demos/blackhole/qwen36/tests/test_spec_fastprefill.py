@@ -254,7 +254,29 @@ def test_fast_prefill_parity(mesh_device, monkeypatch):
         if got != ref:
             i = next((j for j in range(min(len(got), len(ref))) if got[j] != ref[j]), min(len(got), len(ref)))
             dec = f"spec decode diverges at new token {i}: flag 1 {got[i:i+4]} vs flag 0 {ref[i:i+4]}"
-            problems.append(f"request {u}: decode tokens differ at {i}")
+            # Near-tie check at the divergence: token i is predicted from prompt + out[:i]; prefill that sequence
+            # eagerly (flag 0 numerics) and through the fast path and read the top-2 gap of each.
+            seq = list(prompts[u]) + [int(t) for t in ref[:i]]
+            need = (len(seq) + 2 * (K + 1) + BLOCK_SIZE - 1) // BLOCK_SIZE
+            blocks = list(range(1 + u * nb, 1 + u * nb + need))
+            row = torch.tensor([blocks + [0] * (nb - need)], dtype=torch.int32)
+            gaps = {}
+            for fast in (False, True):
+                eng.fast_prefill = fast
+                lg = eng.prefill(u, seq, row)
+                eng.release(u)
+                gaps[fast] = (int(lg.argmax()), _top2_gap(lg))
+            eng.fast_prefill = True
+            dec += (
+                f"; at {i}: eager argmax {gaps[False][0]} gap {gaps[False][1]:.3f}, "
+                f"fast argmax {gaps[True][0]} gap {gaps[True][1]:.3f}"
+            )
+            if gaps[False][1] >= NEAR_TIE_GAP:
+                problems.append(
+                    f"request {u}: decode tokens differ at {i} with a CONFIDENT eager gap {gaps[False][1]:.3f}"
+                )
+            else:
+                dec += " (near-tie: accepted)"
         else:
             dec = f"{len(got)} spec decode tokens identical"
         logger.info(
@@ -282,7 +304,7 @@ def test_fast_prefill_timing(mesh_device, monkeypatch):
     nb = 288  # 18432 tokens per row (16k prompt + verify window + lookahead)
     num_blocks = 1 + B * nb + 1
     model, tokenizer = _build(mesh_device, nb, num_blocks)
-    pool = _prompt_pool(tokenizer, 20000)
+    pool = _prompt_pool(tokenizer, 32768)  # a Frankenstein-config length (20000 has no prompt file)
     lens = (1600, 16384)
     reps = int(os.environ.get("QWEN36_FAST_PREFILL_TIMING_REPS", "3"))
     times = {}
