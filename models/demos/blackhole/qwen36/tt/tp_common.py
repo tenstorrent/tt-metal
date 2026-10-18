@@ -80,6 +80,15 @@ def spec_fast_join_enabled():
     return os.environ.get("QWEN36_SPEC_FAST_JOIN", "1") == "1"
 
 
+def spec_fast_prefill_enabled():
+    """QWEN36_SPEC_FAST_PREFILL (default "0"; "1" opts in): the MTP engine's prompt prefill replays captured traces
+    like the non-spec class instead of the eager masked-bucket forward: one short-prompt bucket trace per request
+    (base forward + the MTP drafter's KV warm-up + the feed row of slot Tp-1 in the SAME trace), the 2048-token chunk
+    trace for long prompts (also at B > 1, on the B=1 GDN scratch), and the per-slot GDN slot-write trace. "0" keeps
+    the eager prefill_for_spec path byte for byte."""
+    return os.environ.get("QWEN36_SPEC_FAST_PREFILL", "0") == "1"
+
+
 def kv_cache_bf8_enabled():
     """bf8 paged KV cache (the qwen38_27b_qb2 KV dtype): QWEN36_KV_BF8 (default 1; 0 = bf16 cache) keeps the
     prefill Q in bf16, QWEN_SDPA_BF8=1 additionally casts the prefill Q to bf8. Halves KV memory and the SDPA reads

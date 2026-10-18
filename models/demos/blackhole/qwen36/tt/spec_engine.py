@@ -30,7 +30,16 @@ normal verify replay itself: the row's ring slot 0 / E_prev are first seeded fro
 (TPGatedDeltaNet.seed_spec_rows_select, ~6 exact data-movement ops per GDN layer), then it runs as an ordinary 0-draft
 row (tokens [t_Tp, pad..], mi_prev 0) next to the running rows, in ONE replay (_seed_fresh_rows). Token 0 of a T-row
 verify is one plain decode step of the same kernels, so the state and logits are those of the eager seed; rec_state is
-no longer advanced by a seed, so a fresh row left out of a step keeps its prefill state (no re-prefill)."""
+no longer advanced by a seed, so a fresh row left out of a step keeps its prefill state (no re-prefill).
+
+Fast prefill (QWEN36_SPEC_FAST_PREFILL, default 0): with the flag at 1 ``prefill`` replays captured traces like the
+non-spec class instead of the eager masked-bucket forward (~2500 dispatches, 158 host writes, 48 eager GDN slot
+writes per request): a prompt < 2048 tokens is ONE replay of the bucket's spec short trace (the base forward + the
+MTP KV warm-up over the segment + the slot Tp-1 feed row, model.capture_prefill_traces_short(spec=True)), a longer
+prompt replays the 2048-token chunk trace per full chunk (recorded on the B=1 GDN scratch also at B > 1, the MTP
+warm-up of a full chunk stays eager) and the spec short trace for its tail, and the GDN scratch -> slot copy is the
+per-slot slot-write trace. Same MTP KV semantics as the eager path: slot i = (post-norm base hidden h_i, token_{i+1})
+for every prompt chunk, slot Tp-1 written at the first verify (_warm_mtp_last)."""
 
 import math
 import os
@@ -46,6 +55,7 @@ import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
 from models.demos.blackhole.qwen36.tt.tp_common import (
     spec_fast_join_enabled,
+    spec_fast_prefill_enabled,
     spec_hostfix_enabled,
     verify_device_topk_m,
 )
@@ -370,6 +380,37 @@ def draft_rows_fit(anchor_pos, K, capacity):
     return [int(p) + 1 + K < capacity for p in anchor_pos]
 
 
+def mtp_prefill_inputs(prompt_ids, chunk_start, bucket, page_table_row, block_size, scratch_block, buf_blocks):
+    """Host inputs of the MTP drafter's KV warm-up over the prompt segment [chunk_start, chunk_start + bucket) of a
+    ``bucket``-row prefill (the spec short trace's ``spec_inputs``): the same values _warm_mtp_chunk /
+    Qwen36Model.ttnn_mtp_prefill_forward upload eagerly.
+
+    Returns int32 torch (tokens [1, bucket], full table [1, buf_blocks], chunk table [1, bucket // block_size]):
+    tokens: slot i (segment row i) fuses with prompt token chunk_start + i + 1, so row i holds
+    prompt_ids[chunk_start + 1 + i] for i < n = min(bucket, Tp - 1 - chunk_start) and 0 past it (slot Tp-1 is left to
+    _warm_mtp_last); chunk table: the user's blocks of the window, entries past ceil((chunk_start + n) / block_size)
+    redirected to the MTP scratch block so padding rows never write K/V into real blocks; full table: the user's row
+    (zero = null block past its allocation) padded to buf_blocks with the same window redirect. n may be 0 (a segment
+    that only holds slot Tp-1): every row then pads to the scratch block."""
+    Tp = len(prompt_ids)
+    row = torch.as_tensor(page_table_row).reshape(1, -1).to(torch.int32)
+    bpb = bucket // block_size
+    blk0 = chunk_start // block_size
+    assert chunk_start % block_size == 0 and bucket % block_size == 0
+    width = max(buf_blocks, blk0 + bpb)
+    if row.shape[1] < width:
+        row = torch.cat([row, torch.zeros(1, width - row.shape[1], dtype=torch.int32)], dim=1)
+    full = row.clone()
+    toks = torch.zeros(1, bucket, dtype=torch.int32)
+    n = max(0, min(bucket, Tp - 1 - chunk_start))
+    if n > 0:
+        toks[0, :n] = torch.as_tensor(prompt_ids[chunk_start + 1 : chunk_start + 1 + n], dtype=torch.int32)
+    keep = -(-(chunk_start + n) // block_size) - blk0  # blocks of the window that hold real MTP rows
+    full[0, blk0 + keep : blk0 + bpb] = int(scratch_block)
+    chunk = full[:, blk0 : blk0 + bpb].clone()
+    return toks, full[:, :buf_blocks].contiguous(), chunk.contiguous()
+
+
 def verify_write_table(page_table, start_pos, num_valid_drafts, block_size):
     """[B, nb] table with each row's entries past the block of its last real column (start_pos + n) set to the
     null block 0, so padded verify columns write only that row's current block or the null block."""
@@ -648,6 +689,9 @@ class MTPSpecEngine:
         # Fast join (module docstring): 1 = a fresh row is seeded in place and verified inside the normal replay;
         # 0 = the eager T = 1 seed forward (_seed / _join), as before.
         self.fast_join = spec_fast_join_enabled()
+        # Fast prefill (module docstring): 1 = prompts replay the spec short traces / chunk trace / slot-write traces;
+        # 0 = the eager prefill_for_spec path (B > 1) or the B == 1 chunk-trace path, as before.
+        self.fast_prefill = spec_fast_prefill_enabled()
         self._kc = self._gdn[0].K if self._gdn else 4  # GDN conv kernel size (E_prev carry rows 1 .. kc-1)
         self._fj_sel = None  # persistent one-hot [B, kc-1+T, kc-1+T + kc-1]: fresh_row_select, shared by every layer
 
@@ -812,23 +856,53 @@ class MTPSpecEngine:
             self._fresh.pop(0, None)
             self._active.discard(0)
 
+        pt_prefill = model._fit_spec_page_table(pt[0:1], self.nb_prefill)
         if B == 1:  # allocate + compile the recorded chunk program (re-runs masked-bucket warmup itself)
-            pt_prefill = model._fit_spec_page_table(pt[0:1], self.nb_prefill)
             model.prepare_prefill_trace_chunked(self.mesh, pt_prefill, chunk_size=2048)
+        if self.fast_prefill:
+            # QWEN36_SPEC_FAST_PREFILL=1: allocate + compile the chunk program (B > 1: on the B=1 GDN scratch the
+            # requests run on) and the spec short traces of every bucket. Allocation only here; record_prefill captures.
+            prev = model._bind_gdn_prefill_scratch() if B > 1 else None
+            try:
+                if B > 1:
+                    model.prepare_prefill_trace_chunked(self.mesh, pt_prefill, chunk_size=2048)
+                # vLLM's null block absorbs the base's padded K/V (the MTP padding rows go to the MTP scratch block).
+                model.prefill_trash_block = 0
+                model.prepare_prefill_traces_short(self.mesh, pt_prefill, spec=True)
+            finally:
+                if prev is not None:
+                    model._unbind_gdn_prefill_scratch(prev)
 
         self.prefill_prepared = True
         logger.info(
             f"[spec_engine] prefill prepared B={B} K={self.K} nb={self.nb} block={self.block_size} "
-            f"warm_prompts={warm_lens} in {time.perf_counter() - t0:.1f}s"
+            f"warm_prompts={warm_lens} fast_prefill={int(self.fast_prefill)} in {time.perf_counter() - t0:.1f}s"
         )
 
     def record_prefill(self):
-        """Record the 2048-token chunk prefill trace (B == 1; B > 1 prefill stays eager). Idempotent."""
+        """Record the 2048-token chunk prefill trace (B == 1, or any B under QWEN36_SPEC_FAST_PREFILL=1, where the spec
+        short traces and the GDN slot-write traces are captured too; otherwise B > 1 prefill stays eager). Idempotent.
+        """
         assert self.prefill_prepared, "record_prefill before prepare_prefill"
         if self.prefill_recorded:
             return
-        if self.B == 1:
-            self.model.record_prefill_trace_chunked(self.mesh)
+        model = self.model
+        if self.fast_prefill:
+            prev = model._bind_gdn_prefill_scratch() if self.B > 1 else None
+            try:
+                model.record_prefill_trace_chunked(self.mesh)
+                model.record_prefill_traces_short(self.mesh)
+            finally:
+                if prev is not None:
+                    model._unbind_gdn_prefill_scratch(prev)
+            if self.B > 1:
+                fmts = {dn._conv_fmt for dn in self._gdn}
+                if fmts == {"both"}:
+                    model.capture_gdn_slot_write_traces(conv_fmt="both")  # skipped (logged) when not applicable
+                else:
+                    logger.info(f"[spec_engine] GDN slot-write traces not captured: conv formats {sorted(fmts)}")
+        elif self.B == 1:
+            model.record_prefill_trace_chunked(self.mesh)
         self.prefill_recorded = True
 
     def prepare_decode(self):
@@ -968,6 +1042,9 @@ class MTPSpecEngine:
             ttnn.release_trace(model.device, model._chunked_trace_id)
             model._chunked_trace_id = None
             model._chunked_prepared_key = None
+        if self.fast_prefill:
+            model.release_prefill_trace_short()  # the spec short traces (captured or only prepared) and their inputs
+            model.release_gdn_slot_write_traces()
         if self._dr_trace is not None:
             ttnn.release_trace(self.mesh, self._dr_trace)
             self._dr_trace = None
@@ -1145,10 +1222,13 @@ class MTPSpecEngine:
             if feed is not hidden:
                 ttnn.deallocate(feed)
 
-        if self.B == 1 and self.prefill_recorded and self.recorded_prefill:
+        logits_dev = None
+        if self.fast_prefill and self.prefill_recorded and self.recorded_prefill:
+            logits_dev = self._prefill_fast(slot, prompt_list, prompt, pt_row, Tp, _on_chunk, captured_row)
+        if logits_dev is None and self.B == 1 and self.prefill_recorded and self.recorded_prefill:
             pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)  # MTP chunk fill keeps the nb-wide pt_row
             logits_dev = model.prefill_traced_chunked(prompt, pt_rec, Tp, on_chunk=_on_chunk)
-        else:
+        if logits_dev is None:
             logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot)
         assert captured_row[0], f"prefill never delivered the chunk holding slot {Tp - 1}"
         if isinstance(logits_dev, torch.Tensor):
@@ -1158,6 +1238,97 @@ class MTPSpecEngine:
             ttnn.deallocate(logits_dev)
         self._fresh[slot] = Tp
         self._active.add(slot)
+        return lt.reshape(-1)[: self.vocab].float()
+
+    def _prefill_fast(self, slot, prompt_list, prompt, pt_row, Tp, on_chunk, captured_row):
+        """QWEN36_SPEC_FAST_PREFILL=1 body of _prefill_row: traced prefill of one prompt on the GDN binding the traces
+        were captured against (the B=1 scratch at B > 1, the decode buffers at B == 1), then the scratch -> slot write.
+        Returns host float logits [vocab], or None when no trace serves the prompt (the caller runs the eager path;
+        nothing has been staged or written then)."""
+        model = self.model
+        chunk = model._chunked_chunk_size or 2048
+        num_full, tail = Tp // chunk, Tp % chunk
+        batched = self.B > 1
+        # The traces' GDN binding check (_short_trace_for) needs the binding the requests run on, so bind first.
+        prev = model._bind_gdn_prefill_scratch() if batched else None
+        try:
+            if num_full == 0:
+                host = self._replay_spec_short(slot, prompt_list, prompt, pt_row, Tp, 0, False, captured_row)
+                if host is None:
+                    return None  # no spec short trace for this length / trash-block collision: nothing staged, eager
+            else:
+                model._build_request_rope(prompt, None)  # text: 1D RoPE, rope_delta 0 (the chunk loop slices it)
+                pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)
+                cs = num_full * chunk
+                tail_tr = model._short_trace_for(tail) if tail >= 3 else None
+                if tail > 0 and tail_tr is None:
+                    # No short trace for the tail (< 3 tokens, or an uncaptured bucket): the chunk trace replays every full
+                    # chunk and the tail runs the eager masked bucket, both with on_chunk (the existing long-prompt path).
+                    logits = model._prefill_traced_chunked_tp(
+                        prompt, pt_rec, Tp, num_full, chunk, tail, on_chunk=on_chunk, run_tail=True
+                    )
+                    host = self._read_replicated_logits(logits)
+                else:
+                    model._prefill_traced_chunked_tp(
+                        prompt, pt_rec, Tp, num_full, chunk, tail, on_chunk=on_chunk, run_tail=False
+                    )
+                    if tail == 0:
+                        # Exact multiple: the last chunk's output gives the logits and the slot Tp-1 feed row.
+                        logits = model._masked_bucket_logits_tp(model._chunked_trace_output, chunk, chunk)
+                        on_chunk(model._chunked_trace_output, cs - chunk, chunk)
+                        host = self._read_replicated_logits(logits)
+                    else:
+                        host = self._replay_spec_short(
+                            slot, prompt_list, prompt[:, cs:Tp], pt_row, tail, cs, True, captured_row
+                        )
+                        if host is None:  # trash-block collision: the eager masked-bucket tail, as the chunk path does
+                            logits, hidden = model.prefill_masked_bucket(
+                                prompt[:, cs:Tp], pt_rec, actual_len=tail, chunk_start=cs, return_hidden=True
+                            )
+                            on_chunk(hidden, cs, tail)
+                            ttnn.deallocate(hidden)
+                            host = self._read_replicated_logits(logits)
+        finally:
+            if prev is not None:
+                model._unbind_gdn_prefill_scratch(prev)
+        if batched:
+            # Device-to-device: scratch (B=1) -> row `slot` of the batched GDN buffers, other rows untouched (the slot-write
+            # trace when captured and still valid, else TPGatedDeltaNet.write_slot(consume=False) eagerly).
+            model._write_gdn_slot_from_scratch(slot)
+        return host
+
+    def _replay_spec_short(self, slot, prompt_list, tokens, pt_row, L, chunk_start, carry, captured_row):
+        """One replay of the spec short trace over the prompt segment [chunk_start, chunk_start + L) = the prompt's last
+        segment (slot Tp-1 is its last real row): base forward + MTP KV warm-up + feed row, then the feed row of slot
+        Tp-1 is copied into _last_hidden[slot]. Returns host float logits [vocab] or None (no trace / trash collision).
+        """
+        model = self.model
+        tr = model._short_trace_for(L)
+        if tr is None:
+            return None
+        inputs = mtp_prefill_inputs(
+            prompt_list, chunk_start, tr.bucket, pt_row, self.block_size, self._scratch_block, tr.buf_blocks
+        )
+        tr = model._replay_short_trace(
+            tokens, pt_row, L, strict=False, chunk_start=chunk_start, carry_gdn=carry, spec_inputs=inputs
+        )
+        if tr is None:
+            return None
+        assert tr.last_feed.dtype == self._feed_dtype and tr.last_feed.shape[-1] == self._dim_frac, (
+            f"feed row {tr.last_feed.dtype} {tuple(tr.last_feed.shape)} != buffer {self._feed_dtype} "
+            f"dim/tp={self._dim_frac}"
+        )
+        ttnn.copy(tr.last_feed, self._last_hidden[slot])
+        captured_row[0] = True
+        if model._logits_read_comp is None:
+            model._logits_read_comp = ttnn.ConcatMeshToTensor(self.mesh, dim=-1)
+        lg = ttnn.to_torch(tr.logits, mesh_composer=model._logits_read_comp)
+        return lg.reshape(-1)[: self.vocab].float()
+
+    def _read_replicated_logits(self, logits_dev):
+        """Replicated device logits [1, 1, vocab] (one all-gathered copy per device) -> host float [vocab], freed."""
+        lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
+        ttnn.deallocate(logits_dev)
         return lt.reshape(-1)[: self.vocab].float()
 
     def _reprefill(self, slot):

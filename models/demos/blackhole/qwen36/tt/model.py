@@ -68,6 +68,13 @@ class _ShortPrefillTrace:
         self.idx = None
         self.val = None
         self.logits = None  # [1, 1, 1, vocab/TP]
+        # Spec variant (QWEN36_SPEC_FAST_PREFILL, MTPSpecEngine): the body also feeds the MTP drafter over the
+        # segment (its KV warm-up) and keeps the drafter feed row of the last real position (slot Tp-1).
+        self.spec = False
+        self.mtp_tok = None  # [1, bucket] uint32 RM: MTP input tokens (slot i fused with prompt token i+1)
+        self.mtp_full_pt = None  # [1, buf_blocks] int32 RM: the MTP page table (padding -> the MTP scratch block)
+        self.mtp_chunk_pt = None  # [1, blocks_per_bucket] int32 RM
+        self.last_feed = None  # output [1, 1, 1, dim/TP] bf16: spec_feed_rows(hidden) at row valid_len-1
         # Host caches (request-independent).
         self.csi_host = None
         self.sel_host = None
@@ -348,6 +355,7 @@ class Qwen36Model:
         # Per-slot traces of the whole GDN slot write (capture_gdn_slot_write_traces): slot -> trace id.
         self._gdn_slot_write_traces = {}
         self._gdn_slot_write_fp = None
+        self._gdn_slot_write_fmt = None  # GDN conv format the slot-write traces were captured under ("packed" / "both")
         self._gdn_slot_write_warned = False
         self._gdn_slot_write_replayed = False
         self._chunked_trace_output = None
@@ -373,6 +381,10 @@ class Qwen36Model:
         # Traced B=1 EXACT-bucket short-prompt prefill (QWEN36_PREFILL_BUCKET_TRACE): bucket -> _ShortPrefillTrace.
         # Captured in the untimed warmup phase (capture_prefill_trace_short), replayed by prefill_short_traced.
         self._short_traces = {}
+        # Prepared (inputs allocated, programs compiled) but not yet captured short traces: prepare_prefill_traces_short
+        # -> record_prefill_traces_short (the spec engine splits the two so every allocation precedes every capture).
+        self._short_traces_pending = {}
+        self._spec_sel_cc = None  # exact one-hot row gather (HiFi4, fp32 acc) of the spec short trace's feed row
         self._logits_read_comp = None  # lazily built ConcatMeshToTensor(dim=-1) for the short trace's logits
         # Block that absorbs the padded K/V writes of a short trace (blocks >= ceil(valid_len/block) of its bucket).
         # vLLM: block 0 is the null block (never allocated to a request). Demos/tests with an identity page table
@@ -3026,6 +3038,28 @@ class Qwen36Model:
         hidden = self._forward_prefill_chunk_tp(
             tr.tok, tr.cos, tr.sin, tr.csi, tr.full_pt, tr.chunk_pt, seq_len=tr.bucket, gdn_masks=tr.gdn_masks
         )
+        last_feed = None
+        if tr.spec:
+            # MTP drafter KV warm-up over the segment, in the trace (QWEN36_SPEC_FAST_PREFILL): the same ops the eager
+            # spec prefill runs per chunk (MTPSpecEngine._prefill_row._on_chunk -> spec_feed_rows, _warm_mtp_chunk,
+            # _capture_last_row), on the persistent MTP inputs. The feed row of the last real position is kept as a
+            # trace output (an exact one-hot gather, like _capture_last_row); the padded rows' K/V go to the MTP
+            # scratch block through mtp_chunk_pt. The base's cos/sin/chunk-start tensors are the same positions.
+            feed = self.spec_feed_rows(hidden)
+            last_feed = ttnn.matmul(tr.sel, feed, compute_kernel_config=self._spec_select_cc())  # [1, 1, 1, dim_frac]
+            mtp_out = self.mtp.forward_prefill(
+                feed,
+                tr.mtp_tok,
+                tr.cos,
+                tr.sin,
+                tr.mtp_full_pt,
+                chunk_page_table=tr.mtp_chunk_pt,
+                chunk_start_idx=0,  # host int only sizes the page table; the device csi tensor positions the SDPA
+                chunk_start_idx_tensor=tr.csi,
+            )
+            ttnn.deallocate(mtp_out)
+            if feed is not hidden:
+                ttnn.deallocate(feed)
         # Last-position select + norm + LM head: the same ops as _masked_bucket_logits_tp, minus the logits
         # all-gather (the argmax runs per vocab shard instead).
         x_last = ttnn.matmul(tr.sel, hidden)  # [1, 1, 1, dim_frac]
@@ -3035,13 +3069,25 @@ class Qwen36Model:
         logits = ttnn.linear(x_last, self.lm_head_weight, **_lm_head_kwargs())  # [1, 1, 1, vocab/TP], pre-gather
         ttnn.deallocate(x_last)
         idx, val = self.shard_argmax_max(logits)
-        return idx, val, logits
+        return idx, val, logits, last_feed
+
+    def _spec_select_cc(self):
+        """Compute config of the spec short trace's feed-row gather: a one-hot matmul must be exact (HiFi4 + fp32
+        accumulation, packer_l1_acc off), the same config MTPSpecEngine uses for its anchor / last-row selects."""
+        if self._spec_sel_cc is None:
+            self._spec_sel_cc = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+        return self._spec_sel_cc
 
     def capture_prefill_trace_short(self, device, page_table, bucket=128):
         """Capture ONE bucket's short-prompt prefill trace (see capture_prefill_traces_short)."""
         return self.capture_prefill_traces_short(device, page_table, buckets=(bucket,))
 
-    def capture_prefill_traces_short(self, device, page_table, buckets=None):
+    def capture_prefill_traces_short(self, device, page_table, buckets=None, spec=False):
         """Capture the B=1 short-prompt prefill trace of every bucket in `buckets` (default
         short_prefill_trace_buckets()). Call in the UNTIMED warmup phase, after allocate_kv_caches (and normally
         after capture_prefill_trace_chunked, which allocates the vision-splice buffers and warms the masked-bucket
@@ -3055,11 +3101,39 @@ class Qwen36Model:
         [1,1,1,Tb], GDN masks m_bg [1,Tb,1] fp32 + conv_sel [1,3,Tb] bf16 (+ q/k/v mask if enabled); plus the
         vision-splice buffers shared with the chunk path. EVERY bucket's inputs are allocated before the first
         warm pass and every warm pass runs before the first capture (no compile / allocation behind a parked trace;
-        later buckets' intermediates cannot alias earlier buckets' inputs)."""
+        later buckets' intermediates cannot alias earlier buckets' inputs).
+
+        ``spec`` (MTPSpecEngine, QWEN36_SPEC_FAST_PREFILL): the trace body also warms the MTP drafter's KV over the
+        segment and outputs the drafter feed row of the last real position (see _forward_prefill_short_tp); three more
+        persistent inputs per bucket (MTP tokens, full and chunk MTP page tables, staged per request from
+        _replay_short_trace's ``spec_inputs``).
+
+        prepare_prefill_traces_short + record_prefill_traces_short are the two halves (allocate + compile, then
+        capture): the spec engine runs them in separate warmup phases so that every persistent buffer of every trace is
+        allocated before any trace is captured."""
+        self.prepare_prefill_traces_short(device, page_table, buckets=buckets, spec=spec)
+        self.record_prefill_traces_short(device)
+
+    def prepare_prefill_traces_short(self, device, page_table, buckets=None, spec=False):
+        """First half of capture_prefill_traces_short: allocate every bucket's persistent inputs and run the eager warm
+        passes (every program compiled), leaving the buckets in ``_short_traces_pending`` for record_prefill_traces_short.
+        Idempotent per bucket: a bucket already pending or captured is left alone."""
         assert self.num_devices > 1 and self._lmhead_vocab_sharded, "short prefill trace is the TP vocab-sharded path"
         assert self._paged_kv_caches is not None, "Call allocate_kv_caches first"
         buckets = sorted(set(self.short_prefill_trace_buckets() if buckets is None else buckets))
         assert buckets, "no buckets to capture"
+        if spec:
+            assert self.mtp is not None, "spec short prefill trace needs the MTP head"
+            assert self.mtp.attention.use_paged and self.mtp.attention.paged_k is not None, "MTP paged KV not bound"
+        todo = []
+        for b in buckets:
+            cur = self._short_traces_pending.get(b) or self._short_traces.get(b)
+            if cur is not None and cur.spec == bool(spec):
+                continue  # already prepared / captured for this variant
+            todo.append(b)
+        if not todo:
+            return
+        buckets = todo
         block_size = get_block_size(self._paged_kv_caches)
         masked = self._short_trace_masks_supported()
         use_qkv_mask = masked and self.short_prefill_trace_qkv_mask_enabled()
@@ -3115,10 +3189,16 @@ class Qwen36Model:
             tr.block_size = block_size
             tr.masked = masked
             tr.n_hist = n_hist
+            tr.spec = bool(spec)
             tr.tok = _up(torch.zeros(1, bucket, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
             tr.csi = _up(torch.zeros(1, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             tr.full_pt = _up(pt.contiguous(), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             tr.chunk_pt = _up(pt[:, :bpb].contiguous(), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            if spec:
+                # The MTP cache is indexed by the same block ids (plus its own scratch block for padding rows).
+                tr.mtp_tok = _up(torch.zeros(1, bucket, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+                tr.mtp_full_pt = _up(pt.contiguous(), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+                tr.mtp_chunk_pt = _up(pt[:, :bpb].contiguous(), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             cos_t, sin_t = self._rope_tp_cos_sin_torch(0, bucket)
             tr.cos = _up(cos_t, ttnn.bfloat16, ttnn.TILE_LAYOUT)
             tr.sin = _up(sin_t, ttnn.bfloat16, ttnn.TILE_LAYOUT)
@@ -3154,28 +3234,47 @@ class Qwen36Model:
                 outs = self._forward_prefill_short_tp(tr)
                 ttnn.synchronize_device(device)
                 for o in outs:
-                    ttnn.deallocate(o)
+                    if o is not None:
+                        ttnn.deallocate(o)
+            self._short_traces_pending[bucket] = tr
+        # The warm passes advanced GDN state and wrote KV blocks [0, bucket/block): zero the state for whatever
+        # runs next (a request's replay re-zeroes it in-trace and rewrites those KV blocks).
+        self._reset_gdn_state_for_new_sequence()
 
-        for bucket, tr in trs.items():
+    def record_prefill_traces_short(self, device):
+        """Second half of capture_prefill_traces_short: capture every prepared (pending) bucket, with the GDN state bound
+        as at prepare time. Allocates nothing but the trace outputs (read right after each replay, before any other trace
+        runs). No-op when nothing is pending."""
+        if not self._short_traces_pending:
+            return
+        for bucket, tr in sorted(self._short_traces_pending.items()):
+            refs = self._gdn_binding_refs()
+            assert len(refs) == len(tr.gdn_refs) and all(
+                a is b for a, b in zip(refs, tr.gdn_refs)
+            ), f"bucket {bucket}: GDN state binding differs from the one prepared against"
             tr.trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-            tr.idx, tr.val, tr.logits = self._forward_prefill_short_tp(tr)
+            tr.idx, tr.val, tr.logits, tr.last_feed = self._forward_prefill_short_tp(tr)
             ttnn.end_trace_capture(device, tr.trace_id, cq_id=0)
             ttnn.synchronize_device(device)
             self._short_traces[bucket] = tr
             logger.info(
                 f"Short-prompt prefill trace (TP, bucket {bucket}, any length <= {bucket}"
-                f"{'' if masked else ' [exact only: no KDA conv]'}, on-device argmax + pre-gather logits) captured."
+                f"{'' if tr.masked else ' [exact only: no KDA conv]'}, on-device argmax + pre-gather logits"
+                f"{' + MTP KV warm-up and feed row' if tr.spec else ''}) captured."
             )
-        # The warm/capture passes advanced GDN state and wrote KV blocks [0, bucket/block): zero the state for
+        self._short_traces_pending = {}
+        # The capture passes advanced GDN state and wrote KV blocks [0, bucket/block): zero the state for
         # whatever runs next (a request's replay re-zeroes it in-trace and rewrites those KV blocks).
         self._reset_gdn_state_for_new_sequence()
 
     def release_prefill_trace_short(self, bucket=None):
         """Release the short-prompt prefill trace for `bucket` (all of them when None) and its persistent
         input buffers. Called on re-capture and from free_kv_caches (the traces bake the KV/GDN addresses)."""
-        buckets = list(self._short_traces) if bucket is None else [bucket]
+        buckets = sorted(set(self._short_traces) | set(self._short_traces_pending)) if bucket is None else [bucket]
         for b in buckets:
             tr = self._short_traces.pop(b, None)
+            if tr is None:
+                tr = self._short_traces_pending.pop(b, None)  # prepared, never captured
             if tr is None:
                 continue
             if tr.trace_id is not None:
@@ -3192,10 +3291,13 @@ class Qwen36Model:
                 tr.m_bg,
                 tr.conv_sel,
                 tr.m_qkv,
+                tr.mtp_tok,
+                tr.mtp_full_pt,
+                tr.mtp_chunk_pt,
             ):
                 if buf is not None:
                     ttnn.deallocate(buf)
-            tr.idx = tr.val = tr.logits = None  # trace outputs: freed with their last reference
+            tr.idx = tr.val = tr.logits = tr.last_feed = None  # trace outputs: freed with their last reference
             tr.gdn_refs = ()
             tr.host_cache.clear()
 
@@ -3269,10 +3371,15 @@ class Qwen36Model:
         strict=True,
         chunk_start=0,
         carry_gdn=False,
+        spec_inputs=None,
     ):
         """Stage every per-request input of the bucket trace serving `actual_len` tokens, replay it, drain.
         Returns the _ShortPrefillTrace (outputs readable) or None when no trace serves this request (strict=False
         also returns None when the trash block collides with the request's real blocks).
+
+        spec_inputs (required for a spec trace, see capture_prefill_traces_short(spec=True)): host int32 torch tensors
+        (mtp_tokens [1, bucket], mtp_full_table [1, buf_blocks], mtp_chunk_table [1, bucket/block]) staged into the
+        MTP inputs; MTPSpecEngine builds them with mtp_prefill_inputs.
 
         chunk_start (default 0; a multiple of 128): the segment's ABSOLUTE start position, for a prefix-cached /
         resumed prefill. token_ids then holds just the segment's tokens, page_table the request's FULL row (the
@@ -3399,6 +3506,31 @@ class Qwen36Model:
             _stage(host["conv_sel"], tr.conv_sel)
             if tr.m_qkv is not None:
                 _stage(host["qkv"], tr.m_qkv)
+        if tr.spec:
+            if spec_inputs is None:
+                raise ValueError(f"bucket {tr.bucket} is a spec short trace: _replay_short_trace needs spec_inputs")
+            mtp_tok, mtp_full, mtp_chunk = spec_inputs
+            want = ((1, tr.bucket), (1, tr.buf_blocks), (1, tr.blocks_per_bucket))
+            got = tuple(tuple(t.shape) for t in (mtp_tok, mtp_full, mtp_chunk))
+            if got != want:
+                raise ValueError(f"spec_inputs shapes {got} != {want} (mtp tokens, mtp full table, mtp chunk table)")
+            for t, buf, dt in (
+                (mtp_tok, tr.mtp_tok, ttnn.uint32),
+                (mtp_full, tr.mtp_full_pt, ttnn.int32),
+                (mtp_chunk, tr.mtp_chunk_pt, ttnn.int32),
+            ):
+                _stage(
+                    ttnn.from_torch(
+                        t.to(torch.int32).contiguous(),
+                        dtype=dt,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=None,
+                        mesh_mapper=rep,
+                    ),
+                    buf,
+                )
+        elif spec_inputs is not None:
+            raise ValueError(f"bucket {tr.bucket} is not a spec short trace, but spec_inputs were given")
         # Vision-splice mask (host->device copy only; clears it for text-only requests).
         self._set_vision_merge(toks, vision_tokens, 0)
 
@@ -4238,7 +4370,8 @@ class Qwen36Model:
             if not self._gdn_slot_write_replayed:
                 self._gdn_slot_write_replayed = True
                 logger.info(f"GDN slot-write trace replay in use (first replay: slot {slot})")
-            # Host-side state write_slot would have left behind (packed format: no conv_states / RM history writes).
+            # Host-side state write_slot would have left behind in either captured format (packed: no conv_states / RM
+            # history writes; "both" (spec engine): the taps and the RM history row are written by the trace itself).
             for dn, _rec, _conv, _carry, _zero0, _zerorec in self._gdn_prefill_scratch:
                 dn._conv_win_stale = True
             return
@@ -4249,30 +4382,43 @@ class Qwen36Model:
             assert dn.rec_state is not rec, "write_slot_from_scratch needs the batched decode buffers bound"
             dn.write_slot(slot, rec, conv, consume=False)
 
-    def _gdn_slot_write_fingerprint(self):
-        """Every device address a slot-write trace bakes: per GDN layer the batched rec_state, the packed history and
-        the B=1 scratch rec + conv taps, plus the shared pack tables."""
+    def _gdn_slot_write_fingerprint(self, conv_fmt=None):
+        """Every device address a slot-write trace bakes, per GDN layer: the batched rec_state and the B=1 scratch rec +
+        conv taps, plus, under the "packed" format, the packed history and the shared pack tables, and under any other
+        format (the spec engine's "both": write_slot writes conv_states and the RM history row) the K tap buffers and
+        the RM history."""
+        conv_fmt = self._gdn_slot_write_fmt if conv_fmt is None else conv_fmt
         fp = []
         for dn, rec, conv, _carry, _zero0, _zerorec in self._gdn_prefill_scratch:
-            tab = dn._pack_tables()
-            fp.append(
-                (
-                    dn.rec_state.buffer_address(),
+            if conv_fmt == "packed":
+                tab = dn._pack_tables()
+                extra = (
                     dn._conv_hist_packed.buffer_address(),
-                    rec.buffer_address(),
-                    tuple(c.buffer_address() for c in conv),
                     tuple(
                         t.buffer_address()
                         for t in (tab["slot_to_packed"][0], tab["slot_to_packed"][1], tab["zero_row"])
                     ),
                 )
+            else:
+                extra = (
+                    tuple(c.buffer_address() for c in dn.conv_states),
+                    None if dn._conv_hist_rm is None else dn._conv_hist_rm.buffer_address(),
+                )
+            fp.append(
+                (
+                    dn.rec_state.buffer_address(),
+                    rec.buffer_address(),
+                    tuple(c.buffer_address() for c in conv),
+                    extra,
+                )
             )
         return fp
 
     def _gdn_slot_write_replayable(self):
-        """A captured slot-write trace is valid only while every layer is still in the packed format the capture ran under
+        """A captured slot-write trace is valid only while every layer is still in the conv format the capture ran under
         and none of the baked addresses moved (checked per replay; a mismatch warns once and the caller goes eager)."""
-        if any(dn._conv_fmt != "packed" for dn, *_ in self._gdn_prefill_scratch):
+        fmt = self._gdn_slot_write_fmt
+        if fmt is None or any(dn._conv_fmt != fmt for dn, *_ in self._gdn_prefill_scratch):
             return False
         fp = self._gdn_slot_write_fingerprint()
         if fp == self._gdn_slot_write_fp:
@@ -4290,16 +4436,25 @@ class Qwen36Model:
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"release_trace failed for a slot-write trace: {e}")
         self._gdn_slot_write_traces = {}
+        self._gdn_slot_write_fp = None
+        self._gdn_slot_write_fmt = None
 
-    def capture_gdn_slot_write_traces(self):
-        """Capture one trace per decode slot of the whole GDN slot write (every layer's in-place packed-history + rec_state
-        write from the persistent B=1 scratch): ~15 host-dispatched ops per layer collapse into one execute_trace. Call
-        after the decode traces are captured. No-op (logged once) unless the in-place packed path applies; any capture
-        failure releases the partial traces and leaves the eager path in charge."""
+    def capture_gdn_slot_write_traces(self, conv_fmt="packed"):
+        """Capture one trace per decode slot of the whole GDN slot write (every layer's in-place rec_state + conv-state
+        write from the persistent B=1 scratch): ~15-30 host-dispatched ops per layer collapse into one execute_trace. Call
+        after the decode traces are captured. No-op (logged once) unless the in-place path applies; any capture failure
+        releases the partial traces and leaves the eager path in charge.
+
+        conv_fmt: the GDN conv-state format the layers must be in, which selects write_slot's body: "packed" (plain
+        serving decode: the in-place packed-history write) or "both" (the MTP spec engine, QWEN36_SPEC_FAST_PREFILL:
+        conv_states + the RM history row, all in place). Replays are valid only while every layer stays in that format
+        (_gdn_slot_write_replayable)."""
         import time
 
         if self._gdn_slot_write_traces or os.environ.get("QWEN36_GDN_SLOT_WRITE_TRACE", "1") != "1":
             return
+        if conv_fmt not in ("packed", "both"):
+            raise ValueError(f"capture_gdn_slot_write_traces: conv_fmt must be 'packed' or 'both', got {conv_fmt!r}")
         why = None
         if os.environ.get("QWEN36_GDN_INPLACE_SLOT_WRITE", "1") != "1":
             why = "QWEN36_GDN_INPLACE_SLOT_WRITE=0"
@@ -4307,11 +4462,16 @@ class Qwen36Model:
             why = "not batched"
         elif self._gdn_prefill_scratch is None:
             why = "no B=1 prefill scratch"
-        elif any(
+        elif conv_fmt == "packed" and any(
             not (dn._conv_fmt == "packed" and dn._hist_hook_active() and dn._decode_B > 1)
             for dn, *_ in self._gdn_prefill_scratch
         ):
             why = "GDN layers are not all in the packed conv format"
+        elif conv_fmt == "both" and any(
+            not (dn._conv_fmt == "both" and dn._decode_B > 1 and dn._rec_row_layout_ok())
+            for dn, *_ in self._gdn_prefill_scratch
+        ):
+            why = "GDN layers are not all in the 'both' conv format with a rank-4 TILE rec_state"
         if why is not None:
             logger.info(f"GDN slot-write trace capture skipped: {why}")
             return
@@ -4329,13 +4489,15 @@ class Qwen36Model:
                     ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
                 self._gdn_slot_write_traces[slot] = tid
             ttnn.synchronize_device(self.mesh_device)
-            self._gdn_slot_write_fp = self._gdn_slot_write_fingerprint()
+            self._gdn_slot_write_fmt = conv_fmt
+            self._gdn_slot_write_fp = self._gdn_slot_write_fingerprint(conv_fmt)
         except Exception as e:  # noqa: BLE001
             logger.error(f"GDN slot-write trace capture failed ({e!r}); falling back to eager slot writes")
             self.release_gdn_slot_write_traces()
             return
         logger.info(
-            f"Captured {len(self._gdn_slot_write_traces)} GDN slot-write traces in {time.perf_counter() - t0:.2f}s"
+            f"Captured {len(self._gdn_slot_write_traces)} GDN slot-write traces ({conv_fmt} conv format) in "
+            f"{time.perf_counter() - t0:.2f}s"
         )
 
     def _prefill_paged_slots_host(self, token_ids_list, page_table, empty_slots, valid_lens=None):
