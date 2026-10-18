@@ -246,7 +246,9 @@ class TtBEVFormerEncoder:
         output = bev_query
         intermediate = []
 
-        cache_key = (bev_h, bev_w, bev_query.shape[1])
+        # The camera projection depends on lidar2img, so it is part of the key.
+        lidar2img = np.asarray([m["lidar2img"] for m in kwargs["img_metas"]])
+        cache_key = (bev_h, bev_w, bev_query.shape[1], lidar2img.tobytes())
         cached = self._ref_cache.get(cache_key)
         if cached is not None:
             ref_3d, ref_2d, reference_points_cam, bev_mask = cached
