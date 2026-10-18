@@ -1342,3 +1342,11 @@ Layer device / traced (fake weights, chunk 5120):
 | L4 kda_moe | 9.63 / 9.66 / 10.71 | 8.91 / 8.76 / 15.47 | 3.450 -> 2.724 |
 ts experts step: flat + combine 1.65-1.67, routing gather / planner / dispatch prep / zero / dispatch / tilize 0.56-0.60,
 the shared expert's x gather 0.42-0.49 ms. ~-0.9 ms per MoE layer traced (~38 ms per chunk over 42 layers).
+Real weights without the checkpoint (zz_scratch_experts_ts_golden.py): the experts from the flat cache, x / routing /
+expected output from the layer-4 component golden (s4096, chunk 2048). Only the non-expert weights need the HF
+shards; the cached layouts here are 64 gate/up + 26 down (layb8c0ab064afd, all 42 layers) and older 11 x 10-era
+sets (the hand-off allows <= 32 down writers, so 64 / 36 cannot run ts). MIMO_FL_ND=26 for both paths:
+ts PCC 0.98831, rel L2 0.1581, scale 1.0224; ag 0.98831 / 0.1585 / 1.0236; ts vs ag 0.99999 / 0.0040. At chunk 5120
+the 26-down plan's larger arena clashes with the sparse dispatch's CBs again (64 / 32 runs). Caution: on a layout-
+key miss FlatRoutedExpert hard-links the newest whole-plan-keyed set (_adopt_legacy), which can be another plan's
+layout (it linked an 11 x 10-era set under the 12 x 10 64 / 36 key here; removed): FLAT_CACHE_NO_ADOPT=1.
