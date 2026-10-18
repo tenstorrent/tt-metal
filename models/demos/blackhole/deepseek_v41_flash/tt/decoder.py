@@ -251,7 +251,12 @@ class DSV41Decoder:
         (the output of ``forward``, kept alive by the caller) INSTEAD of the greedy token the step trace wrote: the sampled token replaces it in the device loop's token buffer. Steps without a
         sampled row never replay it, so greedy decoding pays nothing for the sampler (the sampler costs ~3-9 ms per step: its own trace, not part of the step trace).
         """
-        ttnn.copy(self.samp.run(logits, self.samp.params, fast), self.tok_dev)
+        if getattr(
+            self.samp, "shared", False
+        ):  # shared sampler: the greedy rows keep the exact token the step trace wrote
+            ttnn.copy(self.samp.run(logits, self.samp.params, fast, base_tok=self.tok_dev), self.tok_dev)
+        else:
+            ttnn.copy(self.samp.run(logits, self.samp.params, fast), self.tok_dev)
 
     def snapshot_states(self):
         """Step-carried device state (compressor 'previous token' buffers): lets a warm-up / compile pass run without

@@ -328,7 +328,7 @@ class SamplerTraces:
     def capture(self, body):
         """``body(fast)`` runs the sampler variant and whatever follows it (eager ops; captured into one trace per variant)."""
         md = self.smp.md
-        for fast in (False, True):
+        for fast in getattr(self.smp, "variants", (False, True)):
             self.tids[fast] = ttnn.begin_trace_capture(md, cq_id=0)
             body(fast)
             ttnn.end_trace_capture(md, self.tids[fast], cq_id=0)

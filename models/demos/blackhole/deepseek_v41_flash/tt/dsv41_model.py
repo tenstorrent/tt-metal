@@ -247,7 +247,7 @@ class Model:
             self.head = keep["head"]
         self.dec = DSV41Decoder(mesh_device, self.built, embedding, self.head, dev_engram, step_states=self.step_groups)
         self.dec.mesh_config, self.dec.ccl = self.mc, self.ccl
-        self.dec.samp = self.samp = self._make_sampler(self.U)
+        self.dec.samp = self.samp = self._make_sampler(self.U, plain=True)
         self.prefill_model = GenPrefillModel(
             mesh_device, pls, embedding, self.head, dev_engram, self.host_rows, self.Up
         )
@@ -1679,12 +1679,19 @@ class Model:
         devs = ttnn.get_device_tensors(ttnn.from_device(self.dec.tok_dev))
         return torch.cat([ttnn.to_torch(devs[r * self.cols]).reshape(-1) for r in range(self.rows)]).long()
 
-    def _make_sampler(self, users_per_row):
+    def _make_sampler(self, users_per_row, plain=False):
         """The in-trace sampler (tt/device_sampler.py, default; DSV41_INTRACE_SAMPLE=0 builds none): temperature / top-k / top-p draw of the next token over the step's logits, in its OWN trace that a decode
         step replays after the step trace only when a row is sampled (``decode_forward(samp=...)``: the per-row parameters, uploaded before the replay); greedy steps never touch it.
         """
         if os.environ.get("DSV41_INTRACE_SAMPLE", "1") != "1":
             return None
+        if plain and os.environ.get("DSV41_SHARED_SAMPLER", "0") == "1":
+            # plain decode traces: the shared tt_transformers sampler (top-32 candidates, ~4x faster; tt/shared_sampler.py). The speculative verify keeps our own sampler.
+            from models.demos.blackhole.deepseek_v41_flash.tt.shared_sampler import SharedSamplerAdapter
+
+            smp = SharedSamplerAdapter(self.md, self.mc, self.ccl, users_per_row)
+            smp.alloc_params()
+            return smp
         from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import DSV41DeviceSampler
 
         smp = DSV41DeviceSampler(
