@@ -115,7 +115,7 @@ TABLE = {
     # ---- routed experts (tt/experts.py)
     "EXPERTS_IMPL": Setting(
         "bfp8",
-        ("bfp8", "fp4_decode"),
+        ("bfp8", "bfp4", "fp4_decode"),
         "routed experts (tt/experts.py), per local expert extract -> ttnn.linear SwiGLU with the routing weight and "
         "fp8 q(h) before w2 -> insert, on: bfp8 = every expert's w1 | w3 and w2 converted to bfloat8_b ONCE at load, "
         "kept as stored [N, K] and used with transpose_b (exact: every e2m1 x e8m0 value, asserted at load; W^T would "
@@ -124,7 +124,14 @@ TABLE = {
         "weight rebuild against agent rule 5; half the weight memory; comparison only). Layer 0, 2x2, chunk 2048, "
         "timed loop tt/perf_experts.py: bfp8 319 ms vs fp4_decode 611 ms per layer per chunk, outputs bit-identical; "
         "load 44 s vs 4 s. The fused unified_routed_expert_moe does not fit (no routing weight and fp8 q(h) between "
-        "the activation and w2)",
+        "the activation and w2). bfp4 (owner pick 2026-10-17, P.1: memory for galaxy_4x4) = the same path with "
+        "every expert's w1 | w3 and w2 converted to bfloat4_b ONCE at load ([N, K], transpose_b, groups of 16 along "
+        "K inside one e8m0 block): lossy (3 magnitude bits under the group's exponent, round to nearest even; "
+        "changes 16.4-16.6 % of the fp4 values per layer, worst matrix ||dW|| / ||W|| 0.118-0.124), 0.5625 B per "
+        "value: 0.44 GiB per layer per chip (17.8 GiB at 40 layers on 4x4, 8.9 on 8x4; bfp8 33.6 / 16.8); "
+        "stats logged at load. P.1, 2x2, chunk 53248-55296, plain profile: experts 312.7 vs 315.3 ms per layer "
+        "(no speed gain, DS41-56); ladder last worst layer L03 0.9954 vs 0.9967. Component and swap tests stay at "
+        "bfp8 (max precision)",
     ),
     "EXPERTS_DECODE": Setting(
         "gather",
@@ -188,6 +195,7 @@ MAX_PRECISION = {
     "WINDOW_PIECES": 3,
     "ATTN_O_SUM": "gather_add",
     "EXPERTS_SUM": "gather_add",
+    "EXPERTS_IMPL": "bfp8",  # exact fp4 values (DS41-10); bfp4 is the owner's lossy memory pick (P.1)
 }
 
 settings = Settings("DS41_", TABLE, max_precision=MAX_PRECISION)
