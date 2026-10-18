@@ -209,7 +209,8 @@ class PrefixCache:
     """64-token blocks per session. capacity None = infinite, else LRU in tokens.
 
     A session's hash ids are prefix-chained (a block id fixes its position and predecessor), and insert refreshes a
-    request's blocks tail first, so the cached blocks of a session always form a prefix closed set: lookup is a binary
+    request's blocks tail first (so does a lookup hit, as a server pins the blocks it reuses), so the cached blocks of a
+    session always form a prefix closed set: lookup is a binary
     search for the longest cached prefix, and an infinite cache only adds the blocks past it."""
 
     def __init__(self, capacity_tokens=None):
@@ -234,7 +235,12 @@ class PrefixCache:
         return lo
 
     def lookup(self, sess, hashes):
-        return self._cached_blocks(sess, hashes) * BLOCK
+        count = self._cached_blocks(sess, hashes)
+        if self.cap is not None:
+            base = sess << 32
+            for h in reversed(hashes[:count]):
+                self.lru.move_to_end(base | h)
+        return count * BLOCK
 
     def insert(self, sess, hashes):
         if self.cap is None:
@@ -283,6 +289,7 @@ def run(
     children = [[] for _ in range(N)]
     stats = []  # Stat per finished request
     arrivals = []  # heap (send time, node)
+    freed = []  # heap of times a session's last response ends, freeing its concurrency slot
     left_in_session, sess_done_t = {}, {}
     next_sess = 0
     nxt = 0
@@ -359,14 +366,20 @@ def run(
                 heapq.heappush(arrivals, (ready[c] + think, c))
         left_in_session[s] -= 1
         if left_in_session[s] == 0:
-            start_session(sess_done_t[s])
+            heapq.heappush(freed, sess_done_t[s])  # the next session starts when this one's response ends
 
-    while arrivals or req:
+    def release(until):
+        # Start sessions in the order their predecessors' responses end, not the order their prefills end.
+        while freed and freed[0] <= until:
+            start_session(heapq.heappop(freed))
+
+    while arrivals or req or freed:
+        release(t)
         while arrivals and arrivals[0][0] <= t:
             send, g = heapq.heappop(arrivals)
             admit(g, send)
         if not req:
-            t = arrivals[0][0]
+            t = min(arrivals[0][0] if arrivals else math.inf, freed[0] if freed else math.inf)
             continue
         # pick this step's pieces: [(node, units)]
         if policy == "fcfs":
@@ -388,6 +401,7 @@ def run(
         step_log.append((t, dt, sum(k for _, k in run_list) * C))
         # Requests sent during the step look up the cache as it was when they were sent, before this step's
         # completions are inserted; they still wait for the next step.
+        release(t)
         while arrivals and arrivals[0][0] < t:
             send, g = heapq.heappop(arrivals)
             admit(g, send)

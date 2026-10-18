@@ -12,12 +12,12 @@ build: runs the closed-loop AgentX simulation (agentx_sim.run, 8k unbatched, inf
 sent inside [start, start + window): arrival (relative), input length and cached prefix. The replay then plays these
 arrivals open loop, the same list for every mode.
 
-predict: the batching demo scheduler's policy (demo/batching_server.py, added with the continuous-batching PR), priced with cost_model:
+predict: the batching demo scheduler's policy (demo/batching_scheduler.py, added with the continuous-batching PR), priced with cost_model:
 - every request is padded to a multiple of 2048 (Scheduler.submit), and resumes at its cached prefix rounded down to
   its chunk width (the replay driver does the same);
 - serial 8k / 4k / 2k: FCFS, one request at a time, one chunk per step, the last chunk padded;
-- batched: FCFS admission into num_slots KV slots; each active request gets one 2k lane per step, the spare lanes go
-  to active requests in order (up to their remaining chunks - 1), and the active list rotates by one every step.
+- batched: FCFS admission into budget / 2048 = 4 KV slots, one per lane as in the demo, which the cost model is
+  calibrated for; each active request gets one 2k lane per step, the spare lanes go to active requests in order (up to their remaining chunks - 1), and the active list rotates by one every step.
   This is the demo's policy, not agentx_sim's fcfs / pack, so it is priced here rather than through agentx_sim.run.
 Step time = Model.step_s (calibrated on silicon per mode), plus the scheduler's gap between steps, which advances the
 clock but, as in the replay's busy_s, is not busy time.
@@ -87,10 +87,11 @@ def start_of(r, width):
     return (min(r["cached"], r["in"] - 1) // width) * width
 
 
-def predict(model, reqs, mode, num_slots=4):
+def predict(model, reqs, mode):
     """Per-request (arrival, start of service, finish) in seconds, plus busy time and step count."""
     width, budget = MODES[mode]
     batched = mode == "batched"
+    num_slots = budget // width  # the demo's KV slots are its lanes, so the step budget fixes both
     limit = num_slots if batched else 1
     pending = collections.deque(sorted(range(len(reqs)), key=lambda i: reqs[i]["t"]))
     t, busy, steps = 0.0, 0.0, 0
@@ -158,7 +159,6 @@ def main():
     ap.add_argument("--max-think-s", type=float, default=60.0)
     ap.add_argument("--decode-tps", type=float, default=100.0)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--slots", type=int, default=4)
     a = ap.parse_args()
     if a.cmd == "build":
         return build(a)
@@ -169,7 +169,7 @@ def main():
     if a.measured:
         with open(a.measured) as f:
             meas = json.load(f)["modes"]
-    print(f"{len(reqs)} requests; slots {a.slots}")
+    print(f"{len(reqs)} requests; batched slots {MODES['batched'][1] // CHUNK}")
     print(
         f"{'mode':>10} | {'pred p50':>8} {'p90':>6} {'p99':>6} {'small50':>7} {'makespan':>8} {'busy':>6} {'steps':>5}"
         + (
@@ -179,7 +179,7 @@ def main():
         )
     )
     for mode in MODES:
-        st, fi, busy, steps = predict(model, reqs, mode, a.slots)
+        st, fi, busy, steps = predict(model, reqs, mode)
         p = summary(reqs, st, fi)
         line = (
             f"{mode:>10} | {p['p50']:8.3f} {p['p90']:6.2f} {p['p99']:6.2f} {p['small_p50']:7.3f} {p['makespan']:8.2f} "
