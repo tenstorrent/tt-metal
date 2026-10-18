@@ -90,6 +90,7 @@ def _engine(B, K=3, slotmap=True, gdn=None, **kw):
     e.model = types.SimpleNamespace(_fit_spec_page_table=lambda pt, nb: torch.as_tensor(pt, dtype=torch.int32))
     e._last_hidden, e._mtp_pt_rows, e._vfeed = [None] * B, [None] * B, None
     e._stage_mtp_tables = e._warm_mtp_last = lambda *a, **k: None
+    e.fast_join, e._kc, e._fj_sel = False, 4, None  # QWEN36_SPEC_FAST_JOIN=0: the eager seed path
     e.__dict__.update(kw)
     return e
 

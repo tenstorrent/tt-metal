@@ -178,6 +178,7 @@ def _engine(B, K, slotmap, model):
     e.model = model
     e._last_hidden, e._mtp_pt_rows, e._vfeed = [None] * B, [None] * B, None
     e._stage_mtp_tables = e._warm_mtp_last = lambda *a, **k: None
+    e.fast_join, e._kc, e._fj_sel = False, 4, None  # QWEN36_SPEC_FAST_JOIN=0: the eager seed path
     return e
 
 

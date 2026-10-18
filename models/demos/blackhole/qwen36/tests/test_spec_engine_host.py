@@ -549,6 +549,7 @@ def _bare_engine(B, K=2, **kw):
     e._no_draft, e._speculated, e._withheld_streak = set(range(B)), set(range(B)), {u: 3 for u in range(B)}
     e._row_active, e._last_pt, e._last_cap_blocks, e.skipped_propose_calls = None, None, 4, 0
     e.host_slotmap, e._phys, e._phys_perm = True, list(range(B)), None
+    e.fast_join, e._kc, e._fj_sel = False, 4, None  # QWEN36_SPEC_FAST_JOIN=0: the eager seed path
     e.__dict__.update(kw)
     return e
 

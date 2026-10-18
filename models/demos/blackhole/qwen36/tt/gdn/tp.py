@@ -347,6 +347,32 @@ def spec_conv_sel(mi, n_users, T, kc):
     return sel
 
 
+def fresh_row_select(fresh, n_users, T, kc):
+    """One-hot row selector that seeds the conv window E_prev of FRESH users (QWEN36_SPEC_FAST_JOIN=1,
+    ``TPGatedDeltaNet.seed_spec_rows_select``) while every other user's window is kept:
+
+        cat = cat([E_prev [n_users, kc-1+T, C], taps [n_users, kc-1, C]], dim=1)      (taps = the kc-1 most
+        E_new = sel @ cat                                                               recent raw inputs, oldest first)
+
+    For a running user u, E_new[u] = E_prev[u] (the identity on the first kc-1+T columns). For a fresh user u,
+    E_new[u, 1 + r] = taps[u, r] for r < kc-1 and every other row is 0: a mi = 0 verify (spec_conv_sel / the
+    gdn_spec_step ctrl page) reads rows 1 .. kc-1 as the surviving conv carry, exactly the rows seed_spec_state /
+    seed_spec_rows fill from conv taps 1 .. kc-1; row 0 and rows kc .. are never read at mi = 0.
+
+    Returns torch.bfloat16 [n_users, kc-1+T, (kc-1+T) + (kc-1)] (one-hot, so the matmul is exact).
+    """
+    L = kc - 1 + T
+    f = {int(u) for u in fresh}
+    assert all(0 <= u < n_users for u in f), f"fresh rows {sorted(f)} outside range({n_users})"
+    sel = torch.zeros(n_users, L, L + kc - 1, dtype=torch.bfloat16)
+    for u in range(n_users):
+        if u in f:
+            sel[u, 1 + torch.arange(kc - 1), L + torch.arange(kc - 1)] = 1.0
+        else:
+            sel[u, torch.arange(L), torch.arange(L)] = 1.0
+    return sel
+
+
 def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     """Shard one GDN layer's linear_attn.* weights across the mesh."""
     tp = args.num_devices
@@ -3350,6 +3376,21 @@ class TPGatedDeltaNet:
         rows 1 .. K-1). The window's remaining T-1 rows are zero padding no mi = 0 selector reaches.
         """
         assert self._spec_ring is not None, "seed_spec_state before prepare_spec_verify"
+        self._write_ring_slot0_all()
+        self.sync_conv_win()  # taps are the truth outside the spec loop; mirror them into the window
+        full = (
+            self._conv_win_buf
+            if self._spec_win_pad is None
+            else ttnn.concat([self._conv_win_buf, self._spec_win_pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        )
+        ttnn.copy(full, self.verify_win_cur())  # full-shape copy: the window buffer keeps its address
+        if full is not self._conv_win_buf:
+            ttnn.deallocate(full)
+        self._conv_taps_stale, self._conv_win_stale = False, False
+
+    def _write_ring_slot0_all(self):
+        """rec_state (every user) -> ring token slot 0 (blocks [0, B*Nv)), in place: the ring half of seed_spec_state.
+        Two device ops (sharded copy of the state + slice_write into the rank-4 ring view)."""
         B, Nv, Dk, Dv = self.B, self.Nv, self.Dk, self.Dv
         T = self._spec_shape[1]
         # 4D views: slice_write needs input/output/bounds at equal rank and a rank-4 sharded input,
@@ -3366,16 +3407,101 @@ class TPGatedDeltaNet:
         ), "the rank-4 ring view copied instead of aliasing; slice_write would write to a temporary"
         ttnn.experimental.slice_write(sharded, ring4, [0, 0, 0, 0], [1, B * Nv, Dk, Dv], [1, 1, 1, 1])
         ttnn.deallocate(sharded)
-        self.sync_conv_win()  # taps are the truth outside the spec loop; mirror them into the window
-        full = (
-            self._conv_win_buf
-            if self._spec_win_pad is None
-            else ttnn.concat([self._conv_win_buf, self._spec_win_pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        )
-        ttnn.copy(full, self.verify_win_cur())  # full-shape copy: the window buffer keeps its address
-        if full is not self._conv_win_buf:
-            ttnn.deallocate(full)
-        self._conv_taps_stale, self._conv_win_stale = False, False
+
+    # ---- QWEN36_SPEC_FAST_JOIN=1: per-row ring / E_prev seeding without the eager T = 1 seed forward ----
+    def _spec_ring_rows4(self):
+        """The ring as [T*B, Nv, Dk, Dv]: row (t*B + u) is user u's token-slot-t state block group, so a per-user
+        write into token slot 0 is the one-row slice_write of _remap_rec_rows at offset u. A pure view of _spec_ring
+        (same buffer), cached per ring allocation."""
+        cached = getattr(self, "_spec_ring_rows4_cache", None)
+        if cached is not None and cached[0] is self._spec_ring:
+            return cached[1]
+        B, Nv, Dk, Dv = self.B, self.Nv, self.Dk, self.Dv
+        T = self._spec_shape[1]
+        r4 = ttnn.reshape(self._spec_ring, (T * B, Nv, Dk, Dv))
+        assert (
+            r4.buffer_address() == self._spec_ring.buffer_address()
+        ), "the rank-4 ring view copied instead of aliasing; slice_write would write to a temporary"
+        self._spec_ring_rows4_cache = (self._spec_ring, r4)
+        return r4
+
+    def _fresh_taps_tile(self, route=None):
+        """[B, K-1, C] bf16 TILE: every user's K-1 most recent raw conv inputs, oldest first (conv taps 1 .. K-1,
+        what a mi = 0 verify reads as E_prev rows 1 .. K-1). The source is whichever conv-state format is valid:
+          "hist"  the fused decode's RM history _conv_hist_rm (row u = user u; written per slot by write_slot, unpacked
+                  first when the gdn_decode_step op left it "packed"): ONE tilize, no conv_states traffic;
+          "win"   conv_states -> _conv_win_buf (sync_conv_win) and a slice of its rows 1 .. K-1 (the original decode
+                  path's "states" format, or a model without the fused history).
+        ``route`` forces one (warmup compiles both); None picks by the current format. Returns None when the forced
+        "hist" route has no history buffer."""
+        B, K, C = self.B, self.K, self.qkv_dim_tp
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        hist_ok = self._conv_hist_rm is not None and self.B == self._decode_B and self._hist_hook_active()
+        if route is None:
+            if hist_ok and self._conv_fmt == "packed":
+                self._ensure_rm_hist_valid()  # packed -> hist (the op's format after a plain decode / packed slot write)
+            route = "hist" if hist_ok and self._conv_fmt in ("both", "hist") else "win"
+        if route == "hist":
+            if self._conv_hist_rm is None:
+                return None
+            return ttnn.to_layout(self._conv_hist_rm, ttnn.TILE_LAYOUT, memory_config=mc)
+        assert not self._conv_taps_stale, "fast seed: the conv taps are stale (a seed left them behind the window)"
+        self.sync_conv_win()  # taps -> window (a traced prefill writes the taps without flagging the window stale)
+        return ttnn.slice(self._conv_win_buf, (0, 1, 0), (B, K, C))
+
+    def seed_spec_rows_select(self, rows, sel):
+        """QWEN36_SPEC_FAST_JOIN=1: seed ring token slot 0 and the conv window E_prev of the users in ``rows`` from
+        their durable prefill state (rec_state, conv taps), keeping every other user's ring blocks and window row,
+        with a handful of exact data-movement ops per layer instead of seed_spec_rows' whole-slot rebuild:
+          ring   per user: an L1-sharded slice of rec_state[u] + a one-row slice_write into token slot 0 (the
+                 _remap_rec_rows pattern), or the whole-slot write of seed_spec_state when ``rows`` is every user;
+          E_prev E_new = sel @ [E_prev ; taps(1..K-1)] (one-hot bf16, HiFi4 + fp32 accumulate: exact), copied back in
+                 place; ``sel`` is the device tensor of fresh_row_select(rows, B, T, K), shared by every GDN layer.
+        The ring / E_prev the next verify reads are then those of seed_spec_rows(rows); rec_state, the taps and the
+        staleness flags are untouched (nothing advanced them: the verify itself consumes the first token).
+        Eager; every program it can run is compiled by warmup_fast_seed before capture."""
+        assert self._spec_ring is not None, "seed_spec_rows_select before prepare_spec_verify"
+        B, Nv, Dk, Dv = self.B, self.Nv, self.Dk, self.Dv
+        rows = sorted({int(u) for u in rows})
+        assert rows and all(0 <= u < B for u in rows), f"rows {rows} outside range({B})"
+        if len(rows) == B:
+            self._write_ring_slot0_all()
+        else:
+            assert self._rec_row_layout_ok(), "fast seed needs a rank-4 TILE interleaved rec_state"
+            r4 = self._spec_ring_rows4()
+            cfg = self._rec_row_shard_memcfg()
+            for u in rows:
+                if self.rec_state.dtype == ttnn.float32:
+                    row = ttnn.slice(self.rec_state, (u, 0, 0, 0), (u + 1, Nv, Dk, Dv), memory_config=cfg)
+                else:
+                    s = ttnn.slice(self.rec_state, (u, 0, 0, 0), (u + 1, Nv, Dk, Dv))
+                    c = ttnn.typecast(s, ttnn.float32)
+                    ttnn.deallocate(s)
+                    row = ttnn.to_memory_config(c, cfg)
+                    ttnn.deallocate(c)
+                ttnn.experimental.slice_write(row, r4, [u, 0, 0, 0], [u + 1, Nv, Dk, Dv], [1, 1, 1, 1])
+                ttnn.deallocate(row)
+        taps = self._fresh_taps_tile()  # [B, K-1, C]
+        win = self.verify_win_cur()
+        cat = ttnn.concat([win, taps], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B, K-1+T + K-1, C]
+        ttnn.deallocate(taps)
+        new = ttnn.matmul(sel, cat, compute_kernel_config=self._cfg_onehot, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(cat)
+        ttnn.copy(new, win)  # in place: the window buffer keeps its address
+        ttnn.deallocate(new)
+
+    def warmup_fast_seed(self, sel):
+        """Warmup only (spec engine, after prepare_spec_verify, before any capture): run seed_spec_rows_select for every
+        single user and for all users at once, and build the taps tile through BOTH routes, so every program the fast
+        seed can run after capture is compiled now. The state is warmup state here; the ring and window contents are
+        overwritten by the real seed."""
+        for u in range(self.B):
+            self.seed_spec_rows_select([u], sel)
+        self.seed_spec_rows_select(range(self.B), sel)
+        for route in ("hist", "win"):
+            t = self._fresh_taps_tile(route=route)
+            if t is not None:
+                ttnn.deallocate(t)
 
     def seed_spec_rows(self, rows):
         """seed_spec_state for the users in ``rows`` only; every other user's ring blocks and E_prev row are kept.
@@ -3384,6 +3510,13 @@ class TPGatedDeltaNet:
         Nv, Dk, Dv, K, C = self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
         T = self._spec_shape[1]
         rows = {int(u) for u in rows}
+        if self.B == 1:
+            # B == 1: a ttnn.slice over the whole rec_state / window is a no-op that returns the buffer itself, so the
+            # per-row path below would hand the durable state to _write_spec_rows, which frees its parts. The one
+            # user is every user: the whole-slot seed is the same write.
+            assert rows == {0}, f"rows {sorted(rows)} outside range(1)"
+            self.seed_spec_state()
+            return
         self.sync_conv_win()
         ring_parts = {}
         for u in sorted(rows):
@@ -3418,18 +3551,21 @@ class TPGatedDeltaNet:
             ring_parts[u] if u in ring_parts else ttnn.slice(ring4, (0, u * Nv, 0, 0), (1, (u + 1) * Nv, Dk, Dv))
             for u in range(B)
         ]
-        blk0 = ttnn.concat(parts, dim=1)
-        for s in parts:
-            ttnn.deallocate(s)
+        # B == 1: ttnn.concat of ONE tensor returns that tensor (no copy), so the part must not be freed here.
+        blk0 = parts[0] if B == 1 else ttnn.concat(parts, dim=1)
+        if B > 1:
+            for s in parts:
+                ttnn.deallocate(s)
         sharded = ttnn.to_memory_config(blk0, self._row_shard_memcfg(B * Nv * Dk, Dv))
         ttnn.deallocate(blk0)
         ttnn.experimental.slice_write(sharded, ring4, [0, 0, 0, 0], [1, B * Nv, Dk, Dv], [1, 1, 1, 1])
         ttnn.deallocate(sharded)
         win = self.verify_win_cur()
         eparts = [e_parts[u] if u in e_parts else ttnn.slice(win, (u, 0, 0), (u + 1, K - 1 + T, C)) for u in range(B)]
-        new = ttnn.concat(eparts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        for e in eparts:
-            ttnn.deallocate(e)
+        new = eparts[0] if B == 1 else ttnn.concat(eparts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if B > 1:
+            for e in eparts:
+                ttnn.deallocate(e)
         ttnn.copy(new, win)
         ttnn.deallocate(new)
 
