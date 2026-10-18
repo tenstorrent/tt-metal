@@ -130,6 +130,33 @@ class LlamaConfig:
                     f"intermediate_size={intermediate_size}, tp_size={tp_size}"
                 )
 
+    @classmethod
+    def from_transformer_config(cls, cfg, vocab_size: int, use_tp: bool = False) -> "LlamaConfig":
+        """Build from a yaml ``transformer_config`` block (``ttml.common.config.TransformerConfig``)."""
+        return cls(
+            hidden_size=cfg.embedding_dim,
+            intermediate_size=cfg.intermediate_dim,
+            num_hidden_layers=cfg.num_blocks,
+            num_attention_heads=cfg.num_heads,
+            num_key_value_heads=cfg.num_groups,
+            vocab_size=vocab_size,
+            max_position_embeddings=cfg.max_sequence_length,
+            rope_theta=cfg.theta or 10000.0,
+            attention_dropout=cfg.dropout_prob,
+            mlp_dropout=cfg.dropout_prob,
+            runner_type=RunnerType.from_string(str(cfg.runner_type)),
+            weight_tying=(
+                WeightTyingType.from_string(str(cfg.weight_tying)) if cfg.weight_tying else WeightTyingType.Disabled
+            ),
+            rope_scaling=LlamaRopeScalingConfig(
+                scaling_factor=getattr(cfg, "scaling_factor", 0.0) or 0.0,
+                high_freq_factor=getattr(cfg, "high_freq_factor", 4.0) or 4.0,
+                low_freq_factor=getattr(cfg, "low_freq_factor", 1.0) or 1.0,
+                original_context_length=getattr(cfg, "original_context_length", 0) or 0,
+            ),
+            use_tp=use_tp,
+        )
+
 
 class Llama(AbstractModuleBase):
     """Llama decoder-only transformer (Python implementation)."""
