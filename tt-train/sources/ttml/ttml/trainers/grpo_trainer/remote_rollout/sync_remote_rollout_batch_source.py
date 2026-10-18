@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import gc
+import time
 from typing import Any, Callable, Dict, Iterator, List
 
 from ..grpo_trainer import RolloutBatch
@@ -58,7 +59,9 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
         for start in range(0, len(self._prompts), n):
             prompts = [list(p) for p in self._prompts[start : start + n]]
             extra = {k: list(col[start : start + n]) for k, col in self._extra_columns.items()}
+            generate_start = time.perf_counter()
             completions, token_logprobs, version = self._client.remote_generate(prompts)
+            generation_time_s = time.perf_counter() - generate_start
             if version != self._pushed_version:
                 raise RuntimeError(
                     f"rollout rank generated with weight_version {version}, expected {self._pushed_version}"
@@ -73,7 +76,13 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
                 rollout, num_prompts=len(prompts), num_generations=g, max_completion_length=self._max_completion_length
             )
             yield score_rollout(
-                rollout, prompts, extra, tokenizer=self._tokenizer, reward_funcs=self._reward_funcs, num_generations=g
+                rollout,
+                prompts,
+                extra,
+                tokenizer=self._tokenizer,
+                reward_funcs=self._reward_funcs,
+                num_generations=g,
+                generation_time_s=generation_time_s,
             )
 
     def update_weights(self, model: Any, step: int) -> None:
