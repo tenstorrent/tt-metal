@@ -485,9 +485,11 @@ def _slot_lengths_from_env(num_users: int):
     if not spec:
         return None
     entries = spec.split(",")
-    if len(entries) > num_users or not all(e.strip().isdigit() and int(e) > 0 for e in entries):
+    # A length past MAX_SEQ_LEN would reach the runner, whose lane validation stops the device-owning process.
+    if len(entries) > num_users or not all(e.strip().isdigit() and 0 < int(e) <= MAX_SEQ_LEN for e in entries):
         raise ValueError(
-            f"PREFILL_PRODUCER_SLOT_LENGTHS={spec!r}: want at most {num_users} positive token counts, comma-separated"
+            f"PREFILL_PRODUCER_SLOT_LENGTHS={spec!r}: want at most {num_users} token counts in [1, {MAX_SEQ_LEN}]"
+            " (PREFILL_MAX_SEQ_LEN), comma-separated"
         )
     return {slot: int(n) for slot, n in enumerate(entries)}
 
