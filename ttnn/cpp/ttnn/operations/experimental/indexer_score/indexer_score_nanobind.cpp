@@ -102,8 +102,15 @@ void bind_indexer_score(nb::module_& mod) {
                 across ALL sp*tp devices (linear chip = sp_coord*tp + tp_coord), so only the invP key
                 remap moves to (sp*tp, block_cyclic_chunk_local/tp) -- the causal geometry is unchanged.
                 Needs block_cyclic_chunk_local divisible by tp with a tile-aligned quotient.
+            valid_end_tensor: optional one-element UINT32 row-major interleaved DRAM tensor.
+                Trace-safe cap in K-row units, in [0,T]. The reader loads it on each
+                replay, retaining full K/output allocation and scalar causal geometry.
+                Only columns [0,ceil32(end)) are written; other output storage is
+                unspecified. The caller must mask columns >= end before consuming
+                scores, including the final partially valid tile. Zero skips all K
+                work. Requires contiguous K, key_compression_ratio=1 and no kv_len.
 
-        Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
+        Returns: score [B, 1, Sq, T] bf16 row-major; future columns within the written prefix are -inf.
         )doc",
         &ttnn::experimental::indexer_score_dsa,
         nb::arg("q"),
@@ -119,7 +126,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
         nb::arg("block_cyclic_chunk_local") = std::nullopt,
-        nb::arg("block_cyclic_cache_tp_sharded") = false);
+        nb::arg("block_cyclic_cache_tp_sharded") = false,
+        nb::arg("valid_end_tensor") = nb::none());
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,

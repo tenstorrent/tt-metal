@@ -240,6 +240,23 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
     make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
 
+    // One reader publication for each consumer. Reusing a single mailbox would
+    // let compute pop it before the writer has consumed the runtime prefix.
+    const bool has_prefix_cap = tensors.has_valid_end_metadata();
+    uint32_t cb_meta_derived = 0, cb_meta_writer = 0;
+    if (has_prefix_cap) {
+        const auto make_meta_cb = [&](uint32_t& slot) {
+            slot = next_cb_index++;
+            tt::tt_metal::CreateCircularBuffer(
+                program,
+                core_ranges,
+                tt::tt_metal::CircularBufferConfig(64, {{slot, tt::DataFormat::UInt32}}).set_page_size(slot, 64));
+        };
+        make_meta_cb(cb_meta_derived);
+        make_meta_cb(cb_meta_writer);
+    }
+    const uint32_t prefix_causal_rt_base = indexer_common::reader::Count + cols_used + rows_used;
+
     // Common dimensions (including compressed-key ratio), then CB indices. chunk_t stays a runtime arg.
     std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles, args.key_compression_ratio};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
@@ -294,24 +311,21 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.insert(reader_ct.end(), {0u, 0u, 0u, 0u});
     reader_ct.push_back(0u);  // partial all-gather readiness off (non-fused path)
     reader_ct.push_back(1u);  // unused physical SP size
-    // Chunk-start metadata is fused-ring only (validate rejects it here), but the SAME reader binary
-    // serves both factories, so the block must exist on this path too -- an absent compile arg is a hard
-    // build error in the kernel, not a default. Fixed width: flag, rt base, two CBs, Sq, rotation-exact
-    // flag, then a placeholder accessor. Pushed AFTER partial readiness AND after #55617's physical SP
-    // size, matching the reader's meta_ct_base.
-    reader_ct.push_back(0u);
-    // 6 zeros: rt base, two CBs, Sq, rotation-exact flag, key-stripe split. The split is only read on the
-    // metadata path (rejected here), so 0 is inert -- but the WIDTH must match the reader.
-    reader_ct.insert(reader_ct.end(), 6, 0u);
+    // Shared metadata tail: classic mode reads only the valid-end accessor and
+    // copies static causal geometry from the runtime tail into the mailboxes.
+    reader_ct.push_back(has_prefix_cap ? 1u : 0u);
+    reader_ct.push_back(has_prefix_cap ? prefix_causal_rt_base : 0u);
+    reader_ct.push_back(has_prefix_cap ? cb_meta_derived : 0u);
+    reader_ct.push_back(has_prefix_cap ? cb_meta_writer : 0u);
+    reader_ct.insert(reader_ct.end(), {0u, 0u, 0u});
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
     // Cache-slot metadata, same discipline minus the presence flag: rt base, pages-per-slot, mailbox CB,
     // cache extent, then a placeholder accessor.
     reader_ct.insert(reader_ct.end(), 4, 0u);
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
-    // Real-token end: rt base + placeholder accessor, no presence flag (metadata mode is one flag).
-    // This path rejects metadata mode, so 0 is inert -- but the WIDTH must match the reader.
-    reader_ct.push_back(0u);
-    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
+    reader_ct.push_back(has_prefix_cap ? indexer_common::reader::ValidEnd : 0u);
+    tt::tt_metal::TensorAccessorArgs(has_prefix_cap ? *tensors.valid_end_tensor->buffer() : *q.buffer())
+        .append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(0u);                             // fused_ring off
@@ -324,8 +338,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     writer_ct.push_back(1u);  // unused logical key stripe count
     writer_ct.push_back(1u);  // unused physical SP size
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
-    writer_ct.push_back(0u);
-    writer_ct.push_back(0u);
+    writer_ct.push_back(has_prefix_cap ? 1u : 0u);
+    writer_ct.push_back(has_prefix_cap ? cb_meta_writer : 0u);
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);
@@ -341,8 +355,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     compute_ct.push_back(1u);                        // unused block-cyclic run width
     compute_ct.push_back(1u);                        // unused logical key stripe count
     compute_ct.push_back(1u);                        // unused physical SP size
-    compute_ct.push_back(0u);                        // trace-safe metadata off
-    compute_ct.push_back(0u);                        // metadata CB unused
+    compute_ct.push_back(has_prefix_cap ? 1u : 0u);
+    compute_ct.push_back(has_prefix_cap ? cb_meta_derived : 0u);
 
     const std::unordered_map<std::string, uint32_t> schedule_args{
         {"schedule_blocks", num_blocks},
@@ -384,6 +398,11 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         q.buffer()->address(), k.buffer()->address(), w.buffer()->address(), 0u, k_batch_page_offset, kv_len_tiles};
     std::copy(reader_prefix.begin(), reader_prefix.end(), reader_values.begin());
     append_multicast_axes(reader_values, phys);
+    if (has_prefix_cap) {
+        reader_values[indexer_common::reader::ValidEnd] = tensors.valid_end_tensor->buffer()->address();
+        reader_values.insert(
+            reader_values.end(), {geom.chunk_start_tiles, geom.straddle_q_tile, geom.straddle_jump_tiles});
+    }
     tt::tt_metal::SetCommonRuntimeArgs(program, reader_id, reader_values);
     tt::tt_metal::SetCommonRuntimeArgs(
         program, compute_id, {kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
@@ -441,13 +460,16 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
     const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, tensors.k);
     // Refresh the uniform reader block once per dispatch, then copy it to each program.
     // Fused-only slots stay zero on the single-chip/unfused path.
-    const std::array<uint32_t, indexer_common::reader::Count> reader_values = {
+    std::array<uint32_t, indexer_common::reader::Count> reader_values = {
         tensors.q.buffer()->address(),
         tensors.k.buffer()->address(),
         tensors.weights.buffer()->address(),
         0u,
         k_batch_page_offset,
         kv_len_tiles};
+    if (tensors.has_valid_end_metadata()) {
+        reader_values[indexer_common::reader::ValidEnd] = tensors.valid_end_tensor->buffer()->address();
+    }
     const uint32_t out_address = out.buffer()->address();
     for (auto& [range, shared] : cached.shared_variables) {
         auto& program = cached.workload.get_programs().at(range);
@@ -458,6 +480,12 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
         const std::array<uint32_t, indexer_common::compute::Count> causal_values = {
             kv_len_tiles, geom.chunk_start_tiles, geom.straddle_q_tile, geom.straddle_jump_tiles};
         std::copy(reader_values.begin(), reader_values.end(), reader_args.data());
+        if (tensors.has_valid_end_metadata()) {
+            // The optional static-geometry tail follows the unchanged multicast axes.
+            const std::array<uint32_t, 3> geometry = {
+                geom.chunk_start_tiles, geom.straddle_q_tile, geom.straddle_jump_tiles};
+            std::copy(geometry.begin(), geometry.end(), reader_args.data() + reader_args.size() - geometry.size());
+        }
         std::copy(causal_values.begin(), causal_values.end(), compute_args.data());
         writer_args[indexer_common::writer::Output] = out_address;
         std::copy(causal_values.begin(), causal_values.end(), writer_args.data() + indexer_common::writer::KvLength);

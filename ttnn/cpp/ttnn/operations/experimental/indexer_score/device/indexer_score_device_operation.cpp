@@ -320,6 +320,16 @@ void validate_valid_end_metadata(const operation_attributes_t& attrs, const tens
     if (!t.has_valid_end_metadata()) {
         return;
     }
+    if (!attrs.has_fused_ring()) {
+        TT_FATAL(
+            !attrs.has_block_cyclic() && attrs.key_compression_ratio == 1 && attrs.block_size == 0,
+            "indexer_score: classic valid_end_tensor requires contiguous unpooled K and compression ratio 1");
+        TT_FATAL(
+            !t.has_chunk_start_metadata() && !attrs.kv_len.has_value(),
+            "indexer_score: classic valid_end_tensor uses scalar causal geometry and replaces scalar kv_len");
+        validate_scalar_metadata_tensor(*t.valid_end_tensor, t.q, "valid_end_tensor");
+        return;
+    }
     TT_FATAL(
         attrs.has_fused_ring(),
         "indexer_score: valid_end_tensor is supported only on the fused ring path "
@@ -1175,7 +1185,8 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<std::vector<uint32_t>>& seq_shard_axes,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
-    bool block_cyclic_cache_tp_sharded) {
+    bool block_cyclic_cache_tp_sharded,
+    const std::optional<ttnn::Tensor>& valid_end_tensor) {
     // DSA/GLM: relu, learned per-head gates, one head-summed plane, no pooling. Reads its real weights tensor.
     return launch_indexer_score(
         q,
@@ -1196,7 +1207,11 @@ ttnn::Tensor indexer_score_dsa(
         /*allow_subshard=*/true,
         block_cyclic_sp_axis,
         block_cyclic_chunk_local,
-        block_cyclic_cache_tp_sharded);
+        block_cyclic_cache_tp_sharded,
+        /*k_local=*/std::nullopt,
+        /*fused_ring=*/std::nullopt,
+        /*chunk_start_idx_tensor=*/std::nullopt,
+        valid_end_tensor);
 }
 
 ttnn::Tensor indexer_score_msa(

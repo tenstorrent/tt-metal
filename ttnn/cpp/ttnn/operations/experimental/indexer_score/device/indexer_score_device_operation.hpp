@@ -109,7 +109,11 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
-    bool block_cyclic_cache_tp_sharded = false);
+    bool block_cyclic_cache_tp_sharded = false,
+    // Classic trace-safe prefix cap in K-row units. Only ceil32(end) columns are
+    // written; full output shape and scalar causal geometry remain unchanged.
+    // Caller masks columns >= end. Contiguous K, compression ratio 1 only.
+    const std::optional<ttnn::Tensor>& valid_end_tensor = std::nullopt);
 
 // MiniMax-M3 MSA (ttnn.experimental.indexer_score_msa):
 //   score[b, g, s, t] = sum_{h in group g} (q[b,h,s,:] . k[b,t,:]) * scale

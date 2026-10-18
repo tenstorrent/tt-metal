@@ -92,10 +92,9 @@ FORCE_INLINE constexpr uint32_t tensor_rank_from_transport_rank(uint32_t transpo
 // different hunks -- and reads an unrelated word as the metadata flag, so re-check it whenever main
 // grows the block-cyclic block.
 constexpr uint32_t meta_ct_base = bc_ct_base + 11;
-// THE metadata-mode selector for this kernel. One flag, not one per metadata argument: the host
-// validates the metadata tensors as a group (validate_metadata_mode), so inside this mode every
-// metadata read is legal. valid_end stays optional WITHIN the mode via its address (0 = uncapped),
-// which costs one runtime compare instead of a second program variant.
+// THE metadata-mode selector. Fused mode derives causal geometry from the chunk
+// tensor and optionally caps it. Classic mode has only a valid-end tensor and
+// retains scalar causal geometry; the factory supplies the matching RT tail.
 constexpr bool metadata_mode = get_compile_time_arg_val(meta_ct_base) != 0;
 constexpr uint32_t meta_rt_base = get_compile_time_arg_val(meta_ct_base + 1);
 constexpr uint32_t cb_meta_derived = get_compile_time_arg_val(meta_ct_base + 2);
@@ -819,6 +818,44 @@ void kernel_main() {
             }
         }
     };
+
+    if constexpr (!fused_ring_enabled && metadata_mode) {
+        // Trace-safe classic prefix cap. No ring geometry or fabric gate is
+        // involved. Publish BEFORE any zero-work path so all three kernels
+        // agree on which cells exchange K/output CBs. The existing Q/W multicast
+        // rendezvous remains intact even when this core has no valid K cells.
+        CircularBuffer cb_derived(cb_meta_derived);
+        cb_derived.reserve_back(1);
+        const uint32_t derived_l1 = cb_derived.get_write_ptr();
+        const uint32_t valid_end = trace_metadata::read_metadata_scalar_u32(
+            noc, vend_args, get_common_arg_val<uint32_t>(vend_rt_base), derived_l1);
+        ASSERT(valid_end <= k_len_tiles * 32u);
+        const uint32_t cap_tiles = valid_end / 32u + (valid_end % 32u != 0u);
+        kv_len_tiles = cap_tiles < kv_len_tiles ? cap_tiles : kv_len_tiles;
+        const IndexerScoreMetadataBounds bounds{
+            .kv_len_tiles = kv_len_tiles,
+            .chunk_start_tiles = get_common_arg_val<uint32_t>(meta_rt_base),
+            .straddle_q_tile = get_common_arg_val<uint32_t>(meta_rt_base + 1),
+            .straddle_jump_tiles = get_common_arg_val<uint32_t>(meta_rt_base + 2),
+        };
+        CoreLocalMem<IndexerScoreMetadataBounds> mailbox(derived_l1);
+        mailbox->kv_len_tiles = bounds.kv_len_tiles;
+        mailbox->chunk_start_tiles = bounds.chunk_start_tiles;
+        mailbox->straddle_q_tile = bounds.straddle_q_tile;
+        mailbox->straddle_jump_tiles = bounds.straddle_jump_tiles;
+        clobber_all_memory();
+        cb_derived.push_back(1);
+
+        CircularBuffer cb_wmeta(cb_meta_writer);
+        cb_wmeta.reserve_back(1);
+        CoreLocalMem<IndexerScoreMetadataBounds> wmailbox(cb_wmeta.get_write_ptr());
+        wmailbox->kv_len_tiles = bounds.kv_len_tiles;
+        wmailbox->chunk_start_tiles = bounds.chunk_start_tiles;
+        wmailbox->straddle_q_tile = bounds.straddle_q_tile;
+        wmailbox->straddle_jump_tiles = bounds.straddle_jump_tiles;
+        clobber_all_memory();
+        cb_wmeta.push_back(1);
+    }
 
     if constexpr (fused_ring_enabled && metadata_mode) {
         // Derive causal values before the blocking ring receiver so compute can consume them independently.
