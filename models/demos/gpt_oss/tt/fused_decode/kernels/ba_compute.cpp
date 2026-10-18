@@ -108,6 +108,30 @@ inline void pk_exp_accurate(uint32_t i) {
     exp_packthread_tile<false, false, InputClamping::ClampToNegative, 8, true>(i, VectorMode::C);
 }
 
+// sub / add of the state tiles on the math thread over faces 0 and 2 only (their values sit in column 0)
+inline void mt_sub_c(uint32_t a, uint32_t b, uint32_t o) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (false, ckernel::BinaryOp::SUB, 8, DST_ACCUM_MODE, ckernel::DstRoundingMode::Default),
+        a,
+        b,
+        o,
+        VectorMode::C)));
+}
+inline void mt_add_c(uint32_t a, uint32_t b, uint32_t o) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (false, ckernel::BinaryOp::ADD, 8, DST_ACCUM_MODE, ckernel::DstRoundingMode::Default),
+        a,
+        b,
+        o,
+        VectorMode::C)));
+}
+
 // Q tile t's state merged with a partial [m, l, O_0, O_1] at tiles i .. i + 3 of cb (the children's partials)
 void merge(uint32_t t, uint32_t cb, uint32_t i) {
     const uint32_t cm = cb_m + t, cl = cb_l + t, co = cb_o + t;
@@ -122,8 +146,8 @@ void merge(uint32_t t, uint32_t cb, uint32_t i) {
     binary_max_tile_init();
     binary_max_tile(0, 1, 2, VectorMode::C);
     sub_binary_tile_init();
-    sub_binary_tile(0, 2, 0);
-    sub_binary_tile(1, 2, 1);
+    mt_sub_c(0, 2, 0);
+    mt_sub_c(1, 2, 1);
     exp_accurate_init();
     exp_accurate(0);
     exp_accurate(1);
@@ -146,7 +170,7 @@ void merge(uint32_t t, uint32_t cb, uint32_t i) {
     mul_tiles(cl, cb_ab, 0, 0, 0);
     mul_tiles(cb, cb_ab, i + 1, 1, 1);
     add_binary_tile_init();
-    add_binary_tile(0, 1, 0);
+    mt_add_c(0, 1, 0);
     tile_regs_commit();
     cb_pop_front(cl, 1);
     cb_reserve_back(cl, 1);
