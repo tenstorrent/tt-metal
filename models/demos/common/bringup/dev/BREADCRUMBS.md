@@ -1306,3 +1306,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F104: accepting a perf pick whose ab.change is a model setting ships it: its default in tt/settings.py becomes the
   accepted value (rewritten in place via the AST) before the accept gate, so the gate, the commit and every later task
   run the change. DeepSeek-V4.1 P.2's opt-in EXPERTS_KERNEL stayed `loop`: the accept gate measured the old path.
+- F105: the accept gate reuses the A/B report's 'on' side (same commands, same code, every command rc 0, the gate's
+  rung among the A/B rungs) instead of running again; the code key now hashes the committed files minus the run's own
+  records (state, results, breadcrumbs, supervision, tasks.yaml), so a ledger commit in between is no code change.
+  DeepSeek-V4.1 P.2: the accept re-ran ~50 min of tests the A/B had just measured.
