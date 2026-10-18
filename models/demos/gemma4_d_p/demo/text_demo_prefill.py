@@ -363,6 +363,23 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
     _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, context_len, chunk_size, token_source)
 
 
+@torch.no_grad()
+@pytest.mark.timeout(7200)
+@parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
+@pytest.mark.parametrize("chunk_size", [8192], ids=lambda c: f"chunk{c}")
+@pytest.mark.parametrize("context_len", [262144], ids=lambda c: f"ctx_{c // 1024}k")
+def test_prefill_packed_traced(mesh_device, context_len, chunk_size, token_source, reset_seeds, monkeypatch, tmp_path):
+    """Check full-model request isolation and 256k continuation against legacy prefill."""
+    from models.demos.gemma4_d_p.demo.packed_prefill import run_packed_prefill
+
+    monkeypatch.setenv("GEMMA4_PREFILL_MAX_TRACES", "2")
+    hf_model_id = _hf_model_id()
+    args = Gemma4ModelArgs.from_hf_config(Gemma4ModelArgs.load_hf_config(hf_model_id))
+    tokens = _get_prefill_tokens(hf_model_id, context_len + 5 * chunk_size, args.vocab_size, token_source)[0]
+    run_packed_prefill(mesh_device, hf_model_id, tokens, context_len, chunk_size, tmp_path)
+
+
 @contextlib.contextmanager
 def _shared_device_weights():
     """Write each cached weight to the device once per process, however many models are built.

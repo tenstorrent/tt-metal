@@ -48,6 +48,16 @@ pytest models/demos/gemma4_d_p/tests/test_packed_prefill.py -sv
 
 It compares mixed requests and continuation chunks against Hugging Face, checks trace reuse with changed slots/prefixes, partial final requests, trace eviction, and completion counts. It does not load the 31B checkpoint.
 
+Run the full-checkpoint packed sanity test beside the canonical long-context demo, using the same environment above:
+
+```bash
+pytest 'models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_packed_traced[blackhole-ctx_256k-chunk8192-text-8x4]' -sv
+```
+
+This loads all 60 layers and allocates six 256k slots. It checks 17 mixed request segments (including 1600- and 257-token final requests), continuation, slot reuse, trace reuse/eviction, and completion counts. It then replays those schedules separately for each slot, replacing every other request's tokens with zeros, and requires every valid output row of the selected request to remain bit-for-bit identical. Keeping packed row positions fixed makes this a strict request-isolation check despite reduced-precision differences across layouts. Trace/eager PCC must be at least 0.999.
+
+The test also extends one prompt to 256k in 6144-token pieces, batching 512- and 1536-token requests alongside it. Its final output is compared with legacy 8192-token chunked prefill using the same checkpoint and token history, requiring PCC ≥ 0.98 and relative RMSE < 0.21. Results are written to `packed_prefill.json` in the pytest temporary directory. The test allows two hours for cold weight loading and kernel compilation. The short synthetic test provides the separate Hugging Face comparison.
+
 Run the end-to-end hardware check, which starts both the runner and producer:
 
 ```bash
