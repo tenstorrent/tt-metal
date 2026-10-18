@@ -278,7 +278,7 @@ class V41Prefill:
 
     # ---- the prefill --------------------------------------------------------------------------------------------
     def set_image_rows(self, rows) -> None:
-        """ViT V2: the CURRENT prompt's image-span rows ``[n_span, dim]`` (tt-blaze ``prof/vit_prompt.py``'s span rows:
+        """ViT V2: the CURRENT prompt's image-span rows ``[n_span, dim]`` (pod-NFS ``prof/vit_prompt.py``'s span rows:
         START, the aligner rows with a NEWLINE after each grid row, END); virtual id ``vocab + k`` embeds as row ``k`` and
         routes with ``bias_vl``. None = a text-only prompt."""
         self._image_rows = None if rows is None else torch.as_tensor(rows).to(torch.bfloat16).reshape(-1, self.cfg.dim)

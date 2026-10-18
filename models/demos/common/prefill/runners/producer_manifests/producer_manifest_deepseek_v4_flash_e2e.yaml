@@ -1,6 +1,7 @@
 # DeepSeek-V4-Flash -- END-TO-END disaggregated prefill -> decode (DS4F-0263, 2026-09-25): the 43-layer prefill runner on
-# host 31 (endpoint 1) prefills ONE prompt (PREFILL_PRODUCER_SLOT_TRACES=<trace dir>, overrides the trace_dir below) and
-# migrates slot 0 into slot 0 of the blaze decode ring on hosts 29/48/30 (endpoint 2, --migration-decode-only), which
+# the prefill galaxy (host 41 on the DC16-2 pod; endpoint 1) prefills ONE prompt (PREFILL_PRODUCER_SLOT_TRACES=<trace
+# dir>, overrides the trace_dir below) and migrates slot 0 into slot 0 of the blaze decode ring on hosts 29/48/30
+# (endpoint 2, --migration-decode-only), which
 # decodes from prompt_len with the first token the runner computed (PREFILL_FIRST_TOKEN_DIR) and then runs the same
 # prompt as plain prefill-by-decode for the TTFT/token reference. Driver process: PREFILL_NUM_USERS=1;
 # --verify-migration off (the destination is another galaxy; check_pcc false: no golden at these lengths).

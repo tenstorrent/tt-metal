@@ -1,9 +1,10 @@
-# DeepSeek-V4.1-Flash -- END-TO-END disaggregated prefill -> decode (tt-blaze DS41F-0037 M2, 2026-10-10): the prefill runner on
-# host 30 (endpoint 1; the encoder 0..19 + layer 20 KV-only computed; 40 table layers migrated) prefills ids[:S'] of ONE prompt and migrates slot 0 into
-# slot 0 of the blaze 48-stage ring on hosts 31/29/48 (endpoint 2, --migration-decode-only). The ring then REPLAYS ids[S':S]
-# itself (R >= 2541, DSV41_REPLAY_PROMPT_IDS = the full prompt) -- that also yields the first token, so no first-token dir here.
-# Done / handoff are written on host 30 (local disk) and relayed to the ring master (host 31) by e2e_v41.sh RELAY=1: an NFS
-# sentinel reached the ring ~17 s late (attribute caching, DS41F-0037 13:20).
+# DeepSeek-V4.1-Flash -- END-TO-END disaggregated prefill -> decode (tt-blaze DS41F-0037 M2, 2026-10-10): the prefill
+# runner on the prefill galaxy (host 41 on the DC16-2 pod; endpoint 1; the encoder 0..19 + layer 20 KV-only computed;
+# 40 table layers migrated) prefills ids[:S'] of ONE prompt and migrates slot 0 into slot 0 of the blaze 48-stage
+# ring on hosts 31/29/48 (endpoint 2, --migration-decode-only). The ring then REPLAYS ids[S':S] itself (R >= 2541,
+# DSV41_REPLAY_PROMPT_IDS = the full prompt) -- that also yields the first token, so no first-token dir here.
+# Done / handoff are written on the prefill host (local disk) and relayed to the ring master (host 31) by e2e_v41.sh
+# RELAY=1: an NFS sentinel reached the ring ~17 s late (attribute caching, DS41F-0037 13:20).
 model:
   variant: deepseek_v4_1_flash
   num_layers: 40          # the contract's layers (21 computed + 19 decoder layers aliasing layer 20's rows)

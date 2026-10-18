@@ -1,6 +1,9 @@
-# DeepSeek-V4-Flash -- Gate 3-lite (transport, CROSS-ENDPOINT): the source prefill runner (endpoint 1, this host) migrates
-# slot 0 of its 4 real layers x 10,240 tokens into slot 0 of a DESTINATION runner on another host (endpoint 2) through the
-# tt-llm-engine over TCP; the destination host verifies its slot against the same golden with the V4 reader.
+# DeepSeek-V4-Flash -- TRANSPORT RIG (DS4F-0270, CROSS-ENDPOINT, migrate throughput): the source prefill runner
+# (endpoint 1, this host; the first 4 real layers, SWA SWA CSA HCA) prefills ONE 133,120-token synthetic prompt (the
+# synthetic_10k ids repeated over 26 chunks x 5120) and migrates slot 0 into slot 0 of a DESTINATION prefill runner on
+# another host (endpoint 2) through the tt-llm-engine over TCP. It times the migrate against the requested row range
+# (PREFILL_MIGRATION_POS_END); nothing is verified (check_pcc false: no golden for this prompt). Driven by tt-blaze
+# tests/blaze/models/deepseek_v4_flash/launchers/dc16_2_quad29/prefill_recipes/xfer/xfer_rig.sh.
 # Driver process: PREFILL_NUM_USERS=1; --verify-migration off (the destination is not on this host).
 model:
   variant: deepseek_v4_flash

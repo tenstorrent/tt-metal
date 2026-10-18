@@ -1,14 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """DeepSeek-V4.1-Flash prefill runtime for the generic prefill runner (``models/demos/common/prefill``): one rank (one
-galaxy, sp x tp), the encoder 0..19 + layer 20 KV-only (``tt/v41/prefill.py``), the decode contract's export caches and
-KV chunk table (``tt/v41/kv_export.py``). tt-blaze DS41F-0037 M2.
+galaxy, sp x tp), by default the encoder 0..19 + layer 20 KV-only (``tt/v41/prefill.py``; V41_PREFILL_DECODER=1: all 40
+layers, DS41F-0073), the decode contract's export caches and KV chunk table (``tt/v41/kv_export.py``). tt-blaze
+DS41F-0037 M2.
 
 Per chunk: token ids to the host (the embedding and the Engram hash / gather are host work), ``V41Prefill`` runs the
-chunk eagerly, its new rows go into the export caches on device, then one ack per layer (21) -- the export is complete at
-every chunk boundary. The first token is NOT produced here: the ring replays the prompt's tail (R >= 2541) itself, which
-yields it (``disagg_prefill_plan.md``). A request's first chunk (actual_start 0) resets that slot's states and zeroes its export rows.
-``num_users`` slots: one attention-state set per slot (``V41Prefill.use_slot``), the weights shared.
+chunk (eagerly, or on per-block trace islands with V41_PREFILL_ISLANDS=1, captured in ``on_services_ready``), its new
+rows go into the export caches on device, then one ack per CONTRACT layer (``cfg.n_layers`` = 40, which both sides'
+PREFILL_NUM_LAYERS must match; not the 21 layers computed by default) -- the export is complete at every chunk
+boundary. The first token is NOT produced here: the ring replays the prompt's tail itself (R >= 2541; under 128 tokens
+with V41_PREFILL_DECODER=1), which yields it (``disagg_prefill_plan.md``). A request's first chunk (actual_start 0)
+resets that slot's states and zeroes its export rows. ``num_users`` slots: one attention-state set per slot
+(``V41Prefill.use_slot``), the weights shared.
 """
 
 from __future__ import annotations
@@ -261,7 +265,7 @@ class V41PrefillRuntime:
 
     def _vit_span_rows(self, image_path: str):
         """The image's span rows in span order (START, the aligner rows with a NEWLINE after each grid row, END) --
-        tt-blaze prof/vit_prompt.py's layout, from the device ViT."""
+        the layout of prof/vit_prompt.py (pod NFS only, see scripts/v41_vit_rows.py), from the device ViT."""
         t0 = time.time()
         patches, n_h, n_w, n_llm_h, n_llm_w = self._ip.load_image({"url": image_path}, self._vit_args)
         rows = self.vit.aligner(self.vit.vit(patches, n_h, n_w), n_h, n_w)  # [n_llm_h * n_llm_w, dim] bf16

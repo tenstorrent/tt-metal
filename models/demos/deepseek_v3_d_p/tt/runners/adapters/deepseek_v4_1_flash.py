@@ -3,8 +3,9 @@
 """DeepSeek-V4.1-Flash prefill adapter (the encoder half of the disaggregated split, tt-blaze DS41F-0037 M2).
 
 One rank (one galaxy, sp 8 x tp 4) runs the ENCODER (layers 0..19, Engram before 1 and 14) and layer 20 KV-only
-(``tt/v41/prefill.py``) and exports the decode ring's contract (``tt/v41/kv_export.py``). The ring (tt-blaze
-``deepseek_v4_1_flash``) replays the prompt's tail itself, so this side produces no first token and no LM head.
+(``tt/v41/prefill.py``; V41_PREFILL_DECODER=1 runs all 40 layers, DS41F-0073) and exports the decode ring's contract
+(``tt/v41/kv_export.py``). The ring (tt-blaze ``blaze.models.deepseek_v4_1_flash_4_GLX``) replays the prompt's tail
+itself, so this side produces no first token and no LM head.
 """
 
 from __future__ import annotations

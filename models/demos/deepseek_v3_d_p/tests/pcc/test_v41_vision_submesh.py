@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The prefill runner's in-process ViT (``V41PrefillRuntime._init_vit``, ``V41_PREFILL_VIT=1``): the ttnn ViT + aligner on a
-(1, 1) SUBMESH of the runner's FABRIC_2D 8 x 4 mesh must give the same span rows as the stand-alone one-chip front end
-(``scripts/v41_vit_rows.py`` + tt-blaze ``prof/vit_prompt.py``). ``V41_VIT_SUB_REF``: that front end's ``<prefix>.rows.pt``."""
+"""The prefill runner's in-process ViT (``V41PrefillRuntime._init_vit``, ``V41_PREFILL_VIT=1``): the ttnn ViT + aligner on
+the runner's FABRIC_2D 8 x 4 mesh must give the same span rows as the stand-alone one-chip front end
+(``scripts/v41_vit_rows.py`` + the pod-NFS ``prof/vit_prompt.py``). ``V41_VIT_SUB_REF``: that front end's
+``<prefix>.rows.pt``. By default the ViT is REPLICATED on the whole mesh, the runner's mode; the test keeps its name
+from the (1, 1) SUBMESH it first used, still selectable with ``V41_VIT_ON_SUBMESH=1`` (bit-exact alone, but a submesh
+ViT hung the runner's next prefill chunk, DS41F-0049). Either way the mesh must still run a mesh op afterwards."""
 
 from __future__ import annotations
 

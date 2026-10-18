@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """M9 g2-lite -- does the prefill's exported KV equal what the DECODE ring expects in its caches?
 
-The tt-blaze decode probe (tests/blaze/fused_ops/dsv4_hca_layer/test_csa_stage_pcc.py) seeds a real layer's caches from a
-host rollout of the decode-branch formulas: window K rows = kv_norm(wkv(x_p)) roped at p, compressed entries from the
-token-by-token compressor state machine (roped at the window's first position), indexer keys likewise and then
+The tt-blaze decode probe (tests/blaze/fused_ops/dsv4_hca_layer_stage/test_csa_stage_pcc.py) seeds a real layer's caches
+from a host rollout of the decode-branch formulas: window K rows = kv_norm(wkv(x_p)) roped at p, compressed entries from
+the token-by-token compressor state machine (roped at the window's first position), indexer keys likewise and then
 HADAMARD-ROTATED (k @ H128 / sqrt(128)) before they enter the decode indexer's key cache. With DSV4_KV_SEED_DUMP set,
 the probe writes those seed tensors and its history hidden states to a file.
 
