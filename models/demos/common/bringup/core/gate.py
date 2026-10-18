@@ -15,6 +15,7 @@ A gate passes only if, in this order:
 from __future__ import annotations
 
 import fnmatch
+import json
 import operator
 import os
 import re
@@ -363,8 +364,11 @@ def run_gate(
     force: bool = False,
     extra_env: dict | None = None,
     record: bool = True,
+    reuse: dict | None = None,
 ) -> GateResult:
-    """Run the gate. record=False runs it without touching state.json (used by freeze's stub check)."""
+    """Run the gate. record=False runs it without touching state.json (used by freeze's stub check).
+    reuse (F105): {"metrics": {...}, "source": text} measured by the same commands on the same code (a perf pick's A/B
+    'on' side): recorded, checked and committed like a run of the command, without running it again."""
     task = ledger.task(tid)
     state = ledger.state()
     blocked = [d for d in task.get("deps", []) if not satisfied(state.get(d, {}).get("status"))]
@@ -395,10 +399,19 @@ def run_gate(
     env.update(extra_env or {})
     cmd = gate_command(task)
     t0 = time.time()
-    with open(log, "w") as f:
-        f.write(f"$ {cmd}\n")
-        f.flush()
-        rc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
+    if reuse is not None:
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        out = M._path(tid, ledger.results_dir)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        data = {"task": tid, "metrics": {k: {"value": v, "t": stamp} for k, v in (reuse.get("metrics") or {}).items()}}
+        out.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+        log.write_text(f"$ {cmd}\nnot run again (F105): {reuse.get('source', '')}\n")
+        rc = 0
+    else:
+        with open(log, "w") as f:
+            f.write(f"$ {cmd}\n")
+            f.flush()
+            rc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
     dur = time.time() - t0
 
     got = M.load(tid, ledger.results_dir)
