@@ -1787,19 +1787,37 @@ def _unit_work_name(unit) -> str:
 
 
 def stage_read_bytes(
-    stage, *, model: str = "", task: str = "", measured=None, estimate=None, with_source: bool = False
+    stage,
+    *,
+    model: str = "",
+    task: str = "",
+    measured=None,
+    estimate=None,
+    per_item=None,
+    with_source: bool = False,
 ):
     """THE bytes one unit of `stage` reads. Every consumer asks here; nobody derives it again.
 
-    Three sources, in this order, and the order is the point:
+    TWO ADDENDS. The STREAMED set -- the weights and tables one unit of work reads once, flat in the
+    token count -- comes from three sources in order. On top of it goes `per_item`: what the unit
+    reads of the state it keeps (the KV history filled so far, the activations it carries), linear
+    in the token count and priced from the model's geometry by perf_target.active_bytes. The two
+    were one figure when the measurement counted every buffer a step was HANDED: a decode step is
+    handed its whole KV allocation and its whole embedding table, so Devstral's measured 9.03 GB
+    priced a 17.98 ms step at 98% of peak and the stop gate cleared a stack with half its ceiling
+    still above it. The hook now reports what the step streams, and the state it writes is priced
+    here, by the term that already existed for the estimate.
+
+    Three sources for the streamed set, in this order, and the order is the point:
 
       1. THE PINNED BASELINE (ledger KIND_STAGE_BYTES). The ladder shrinks the read set by design --
          bf16 -> bf8_b halves a weight -- so a ceiling recomputed each round retreats ahead of the
          measurement and is never reached. "The floor is a property of the IMPLEMENTATION, not a
          goal."
       2. THIS BUILD'S MEASUREMENT (trace_replay's dispatch hook: the distinct device tensors this
-         stage's ops touched, observed while the stage ran alone). The first actual measurement of a
-         stage's read set -- everything before it inferred the number from the checkpoint.
+         stage's ops read without writing, a gathered table at the rows that came out of it,
+         observed while the stage ran alone). The first actual measurement of a stage's read set --
+         everything before it inferred the number from the checkpoint.
       3. THE ESTIMATE, last: the checkpoint apportioned by a tower NAME LIST, which is a guess about
          how a model spells its encoder.
 
@@ -1811,15 +1829,28 @@ def stage_read_bytes(
     derivation lived inside one function's loop and the other renderer reached for the model-level
     figure instead. A quantity with one answer needs one place to ask.
 
-    `estimate` is a callable so the fallback is only paid for when the two measurements are absent --
-    it prices activations and KV from the model's geometry and is not free.
+    `estimate` is a callable so the fallback is only paid for when the two measurements are absent.
+    `per_item` is a callable for the same reason, and is added to whichever source answered; a
+    streamed set of 0 stays 0 -- a KV term on top of no weights would be a confident floor resting on
+    nothing streamed, the very figure a refused share returns 0 to avoid.
     """
 
     # WHICH OF THE THREE ANSWERED, reported by the one function that knows. A caller that needs to
     # label the number must not re-run the chain to find out -- that is a second opinion on the same
     # question, and two opinions on this quantity is the defect this function was extracted to end.
     def _ret(val, src):
-        return (int(val), src) if with_source else int(val)
+        """THE ONE RETURN PATH: the streamed set `val`, plus the per-item term, labelled by the
+        source of the streamed set. 0 stays 0 -- see the docstring."""
+        _v = int(val or 0)
+        if _v > 0:
+            try:
+                _pi = per_item() if callable(per_item) else (per_item or 0)
+            except Exception:  # noqa: BLE001 -- the per-item model is optional; the streamed set is not
+                _pi = 0
+            _v += max(0, int(_pi or 0))
+        else:
+            _v = 0
+        return (_v, src) if with_source else _v
 
     try:
         _p = _pinned_stage_bytes(stage, model, task)
@@ -1837,7 +1868,7 @@ def stage_read_bytes(
         _e = estimate() if callable(estimate) else estimate
         return _ret(_e or 0, "estimate")
     except Exception:  # noqa: BLE001
-        return 0
+        return _ret(0, "estimate")
 
 
 def _measured_bw_gbps(rf: dict, ms):
@@ -1985,7 +2016,13 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         return dict(_b) if isinstance(_b, dict) and _b else None
 
     def _bytes_for(stage, toks):
-        """This stage's read set: the weights its subtree streams, plus what it alone carries.
+        """This stage's ESTIMATED read set: the weights its subtree streams, plus what it alone carries.
+
+        The sum of the two helpers below, kept as one name because it is the estimate the
+        pinned -> measured -> estimate chain falls back to. The roof asks the two separately: a
+        MEASURED streamed set replaces only the first addend, and the per-item term is added
+        to it exactly as it is added here -- before that, a measurement replaced the whole sum
+        and the measured path carried no KV or activation term at all.
 
         ONE RULE FOR EVERY STAGE. prefill and decode had a branch each and everything else fell
         through to zero, so a declared third stage got a row with no ceiling and a model declaring
@@ -2000,6 +2037,15 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         The extra is a DIFFERENCE against the same regime with nothing in flight, so the weights
         cancel and this can never become a second opinion on them -- which is what kept decode
         excluded before, two ceilings 2.18x apart with the gate and the report disagreeing.
+        """
+        return _streamed_for(stage) + _per_item_for(stage, toks)
+
+    def _streamed_for(stage):
+        """The weights this stage's subtree streams once per unit, from the checkpoint share.
+
+        THE LOOKUP TABLE IS SUBTRACTED HERE AND ONLY HERE. The measured path needs no such
+        correction: the hook charges a gathered table at the rows that came out of it, because it
+        can see which op read it. The checkpoint cannot, so the pipeline's declaration stands in.
         """
         _share = _stage_share(stage)
         # A REFUSED SHARE IS NOT A SMALL ONE. 0.0 means "this stage's subtree is unknown on a model
@@ -2026,8 +2072,20 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # and 25 MB across a 4096-token prefill -- under half a percent of either read set, against
         # the 25% error it replaces.
         base = max(0.0, base - float(((mf or {}).get("gathered_weight_bytes") or {}).get(_root_of(stage), 0.0)))
-        if not mf:
-            return base
+        return base
+
+    def _per_item_for(stage, toks):
+        """What one unit of this stage reads of the state it keeps: KV history and activations.
+
+        A DIFFERENCE against the same regime with nothing in flight, so the weights cancel and this
+        can never become a second opinion on them -- which is what kept decode excluded before, two
+        ceilings 2.18x apart with the gate and the report disagreeing. Added to the streamed set
+        whichever source supplied it; 0 when the share was refused, when the model's facts carry no
+        geometry, or when the byte model cannot price the regime -- a missing addend, not a missing
+        ceiling, since the streamed set already gives the stage a floor.
+        """
+        if not mf or _streamed_for(stage) <= 0:
+            return 0
         # NO NAME TEST. perf_target owns which regimes it can price and raises for the rest, so ASK
         # it rather than keeping a second list here that has to be updated in step. A stage it cannot
         # price simply has no extra term -- a missing addend, not a missing ceiling, since the
@@ -2039,7 +2097,7 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # expects. For a prompt-consuming stage that reproduces seq_len x batch as before.
         _seq = int(_prompt_tokens() or 0)
         if not _seq:
-            return base
+            return 0
         try:
             from agent.perf_target import active_bytes as _ab
 
@@ -2074,8 +2132,8 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
                 _ab(mf, regime=stage, seq_len=_seq_for_stage, batch=_b, items=_items, block=_blk) or 0.0
             ) - float(_ab(mf, regime=stage, seq_len=0, batch=1, items=0, block=_blk) or 0.0)
         except Exception:  # noqa: BLE001 -- regime unknown to the byte model, or no byte model at all
-            return base
-        return base + max(0.0, _extra) / (tp * _split_of(stage) * _seq_split_of(stage))
+            return 0
+        return max(0.0, _extra) / (tp * _split_of(stage) * _seq_split_of(stage))
 
     params = 0
     try:
@@ -2258,10 +2316,10 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # neither a measurement nor a subtree share is available the roof is WITHHELD -- and the stage
         # still gets its row, because the measurement is real and the gap is worth seeing.
         # PINNED BASELINE, THEN THIS BUILD'S READING, THEN THE ESTIMATE. _measured_stage_bytes is
-        # trace_replay's observation of the distinct device tensors this stage's ops touched, taken
+        # trace_replay's observation of the distinct device tensors this stage's ops streamed, taken
         # while the stage ran in isolation. The pin keeps the target still while the ladder shrinks
-        # the read set underneath it; _bytes_for is the last resort, apportioning the checkpoint with
-        # a tower NAME LIST.
+        # the read set underneath it; _streamed_for is the last resort, apportioning the checkpoint
+        # with a tower NAME LIST. Whichever answers, _per_item_for is added on top.
         #
         # There used to be a fourth entry here, _stage_measured_bytes(profile, name), which looked
         # like the measurement and was not one: it summed a `bytes` key buckets do not carry, keyed on
@@ -2276,10 +2334,15 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
             model=model,
             task=task,
             measured=_meas_bytes,
-            estimate=lambda: _bytes_for(name, toks),
+            estimate=lambda: _streamed_for(name),
+            per_item=lambda: _per_item_for(name, toks),
             with_source=True,
         )
+        # THIS BUILD'S READING, in the roof's currency: its streamed set plus the same per-item term,
+        # so the two figures differ only where the weights do.
         _b_now = int((_meas_bytes or {}).get(name) or 0)
+        if _b_now > 0:
+            _b_now += max(0, int(_per_item_for(name, toks) or 0))
         # WHERE THE NUMBER CAME FROM, carried beside it. The three sources render identically today --
         # a pinned measurement, this build's measurement and a checkpoint estimate are all just a
         # figure in the GB/s column -- so a read set that was never measured looks exactly like one

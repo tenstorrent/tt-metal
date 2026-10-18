@@ -3182,7 +3182,7 @@ def _persist_stage_ms(
                     # PER-REQUEST counts, from the legacy marker. "isl" above holds TOTALS a stage
                     # stated for one call; these must be multiplied by the batch and those must not.
                     "isl_per_request": stage_isl_per_request or {},
-                    # THE READ SET, MEASURED. Distinct device tensors each stage's ops touched, from
+                    # THE READ SET, MEASURED. Distinct device tensors each stage's ops streamed, from
                     # trace_replay's dispatch hook. The roofline's memory floor divides by this;
                     # every other source for it is an inference from the checkpoint plus a naming
                     # convention, and the one that matters most -- what a TOKEN reads -- had no
@@ -3246,8 +3246,10 @@ def read_stage_spread(state_dir_path=None, model="", task="") -> dict:
 def read_stage_bytes(state_dir_path=None, model="", task="") -> dict:
     """The measured per-stage read set in BYTES, or {}. Read by the report renderer.
 
-    The distinct device tensors each stage's ops touched, observed by trace_replay's dispatch hook
-    while the stage ran in isolation. This is the roofline's memory-floor divisor, MEASURED -- the
+    The distinct device tensors each stage's ops STREAMED -- handed and never written, a gathered
+    table at the rows that came out of it -- observed by trace_replay's dispatch hook while the stage
+    ran in isolation. What the step writes (its KV rows, its activations) is priced by summary's
+    per-item term on top. This is the roofline's memory-floor divisor, MEASURED -- the
     alternative sources are the checkpoint's total (which counts towers a token never reads), a name
     list (`audio_tower|vision_tower|...`, which a model can spell differently), and a stage_roots
     section map (which drops lm_head on any untied model).
@@ -3604,10 +3606,11 @@ def _run_full_pipeline_ms():
             # Decode ms and prefill ms are not the same currency (decode recurs per token, prefill
             # once per request), so a phase split guessed from free text can put time in the wrong
             # pool and be acted on. Measured, it cannot.
-            # THE BYTES A STAGE ACTUALLY READ. Parsed here beside its time because they are one
+            # THE BYTES A STAGE ACTUALLY STREAMED. Parsed here beside its time because they are one
             # measurement of one stage: trace_replay observes the distinct device tensors the stage's
-            # ops touched, which is the quantity the roofline has always had to infer from the
-            # checkpoint and a tower name list.
+            # ops read without writing, which is the quantity the roofline has always had to infer
+            # from the checkpoint and a tower name list. The integer up to the first space; the
+            # breakdown trace_replay prints behind it (in_step=, gathered_saved=) is for a reader.
             if "TRACE_STAGE_BYTES[" in line:
                 try:
                     _bn = line.split("TRACE_STAGE_BYTES[", 1)[1].split("]", 1)[0].strip()
@@ -3978,7 +3981,7 @@ def _run_full_pipeline_ms():
                     _med / 1e6,
                     depth=str(_st).strip().lower(),
                     mode="bytes_mb",
-                    source="trace_replay observed read set (%d agreeing samples)" % len(_svals),
+                    source="trace_replay observed streamed read set (%d agreeing samples)" % len(_svals),
                     model=_MODEL_ROOT.name if _MODEL_ROOT else "",
                 )
         except Exception:  # noqa: BLE001 -- a pin that cannot be written must not cost a measurement

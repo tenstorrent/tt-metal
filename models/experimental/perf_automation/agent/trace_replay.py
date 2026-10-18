@@ -40,6 +40,13 @@ _WARMUP_ITERS = max(1, int(os.environ.get("TT_TRACE_WARMUP_ITERS", "3")))
 # How far into a container the read-set walk looks for tensors. Op arguments nest a level or two
 # (a list of tensors, a dict of them); anything deeper is structure, not a read set.
 _NOTE_MAX_DEPTH = 3
+# THE OPS WHOSE CONTRACT IS "READ WHAT AN INDEX TENSOR SELECTS". The table they are handed is not
+# streamed; the rows that come out of it are. Named by the ttnn API's own fully qualified op name
+# (FastOperation.python_fully_qualified_name) -- a property of the library, not of any model.
+# ttnn.embedding: "input_tensor is a list of indices, and the embedding matrix, and the output is the
+# corresponding word embeddings"; ttnn.gather: "extracts values from the input tensor based on indices
+# provided in the index tensor". An op not listed here reads what it is handed, in full.
+_GATHER_OPS = frozenset({"ttnn.embedding", "ttnn.gather"})
 # The replay count an operator may ask for (emit-e2e / optimize --trace-replays set it); this is its
 # one spelling, which the CLI and the gate server forward by name.
 REPLAY_ITERS_ENV = "TT_TRACE_REPLAY_ITERS"
@@ -318,8 +325,8 @@ def _replay(device, tid, iters, budget_s=0.0):
 _TRACED_OP_DISPATCH_MAX = int(os.environ.get("TT_TRACE_DISPATCH_MAX", "32"))
 
 
-def _count_op_dispatches(fn):
-    """Run `fn` once; return (dispatches, working_set_bytes) or (None, 0) if the hook did not install.
+def _count_op_dispatches(fn, detail=None):
+    """Run `fn` once; return (dispatches, streamed_bytes) or (None, 0) if the hook did not install.
 
     WHAT A STAGE ACTUALLY READS, MEASURED. The roofline needs the bytes one unit of work streams, and
     until now nothing measured it. Every route was a guess about the checkpoint: the tower name list
@@ -332,7 +339,7 @@ def _count_op_dispatches(fn):
 
     But the hook that counts dispatches sees EVERY op the stage runs, with its arguments -- and
     trace_replay already runs each stage in isolation. So the read set is right here: the distinct
-    DEVICE tensors this stage's ops touched. That is an observation of this stage on this build, not
+    DEVICE tensors this stage's ops streamed. That is an observation of this stage on this build, not
     an inference from names, and it needs no new pass -- it rides the warmup call that was happening
     anyway.
 
@@ -348,6 +355,31 @@ def _count_op_dispatches(fn):
     Best-effort throughout. A tensor that raises when inspected is skipped rather than ending the
     step, because this is instrumentation riding a measurement: it may return less than the truth,
     never an exception.
+
+    STREAMED, NOT TOUCHED. The first version summed every distinct device tensor an op was HANDED,
+    and handed is not read. A decode step is handed its whole KV cache allocation and reads the rows
+    filled so far; it is handed a replicated embedding table and reads one row per user; it is handed
+    the buffers it is about to overwrite. Devstral 2026-10-15: 9.03 GB per chip reported for a step
+    that streams about 4.6 GB of weights, so the memory floor came out at 17.6 ms and a 17.98 ms
+    decode read as 98% of peak bandwidth -- inside the band, and the stop gate cleared it with half
+    its ceiling still above it. Three rules, none of which names a model or a tensor:
+
+      * A buffer an op PRODUCED OR UPDATED during the step -- returned as a new tensor, or returned
+        as one of its own inputs when it had others to write from (update_cache, generic_op's
+        preallocated output, output_tensor=) -- is state the step writes: an activation, an
+        accumulator, a cache. It is not part of the weight stream. What one unit of work reads of
+        such state (the KV history, the activations it carries) is priced from the model's geometry
+        by perf_target.active_bytes, and summary adds that beside this figure -- the same split the
+        census draws between weights and scratch, for the same reason: KV is linear in the token
+        count and the weights are flat in it.
+      * A buffer returned by an op that was handed ONLY that buffer is a view (reshape, a no-op
+        relayout): nothing was written, and a weight seen through one stays streamed.
+      * A table handed to a GATHER op (_GATHER_OPS: the ops whose contract is to read the elements
+        an index tensor selects) is charged what came out of it, not what it holds. A table some
+        other op streams in full stays in full.
+
+    `detail`, when a dict is passed, receives the breakdown beside the figure: in_step_bytes (what
+    the step wrote, so did not stream), gathered_saved_bytes (table bytes no op read) and buffers.
     """
     # WHICHEVER CLASS THE BUILD REGISTERED. This patched `Operation` because that is the class
     # decorators.py defines first and it has the __call__ a dispatch hook wants. But ttnn chooses at
@@ -383,7 +415,11 @@ def _count_op_dispatches(fn):
     except Exception:  # noqa: BLE001
         _entry = None
     n = [0]
-    seen: dict = {}
+    # Keyed by the buffer identity _key gives, over the whole step:
+    inputs: dict = {}  # every device tensor some op was handed -> its bytes
+    written: set = set()  # buffers some op produced, or updated in place
+    streamed: set = set()  # buffers read by an op that reads what it is handed
+    gathered: dict = {}  # table -> bytes the gather ops that read it produced from it
 
     def _key(x, ent):
         """A tensor's identity. `id()` is not one: CPython reuses the address of a collected object,
@@ -404,37 +440,70 @@ def _count_op_dispatches(fn):
         return ("id", id(x), int(ent[0]), str(ent[1]))
 
     def _note(x, depth=0):
-        """A tensor is not always an argument: it is very often INSIDE one. This looked at bare
-        positional args and kwargs values only, so every tensor passed in a list, tuple or dict --
-        ttnn.concat takes a list -- contributed nothing at all. Verified: _tensor_entry returns None
-        for a list, a tuple and a dict, so a container was not partially counted, it was invisible.
+        """Every device tensor in `x` -- bare, or inside a list, tuple or dict -- as a list of
+        (key, bytes, dtype name), to a bounded depth.
 
-        Bounded depth, because this rides a measurement: op arguments nest a level or two, and a walk
-        that chases arbitrary structure is how the census once wandered into a 131k-token vocabulary."""
+        A tensor is not always an argument: it is very often INSIDE one. The first hook looked at
+        bare positional args and kwargs values only, so every tensor passed in a list, tuple or
+        dict -- ttnn.concat takes a list, generic_op its whole io list -- contributed nothing at
+        all. Bounded depth, because this rides a measurement: op arguments nest a level or two, and
+        a walk that chases arbitrary structure is how the census once wandered into a 131k-token
+        vocabulary."""
+        found: list = []
         if _entry is None or depth > _NOTE_MAX_DEPTH:
-            return
+            return found
         try:
             ent = _entry(x)  # (numel, dtype_name) for a DEVICE tensor, None otherwise
             if ent:
-                seen.setdefault(_key(x, ent), ent[0] * _bpe(ent[1]))
-                return
+                found.append((_key(x, ent), ent[0] * _bpe(ent[1]), str(ent[1])))
+                return found
             if isinstance(x, (list, tuple, set, frozenset)):
                 for _i in x:
-                    _note(_i, depth + 1)
+                    found.extend(_note(_i, depth + 1))
             elif isinstance(x, dict):
                 for _i in x.values():
-                    _note(_i, depth + 1)
+                    found.extend(_note(_i, depth + 1))
         except Exception:  # noqa: BLE001
-            return
+            return found
+        return found
+
+    def _is_index(dtype_name) -> bool:
+        """An integer tensor handed to a gather op is the index, not the table."""
+        return str(dtype_name or "").startswith(("uint", "int"))
 
     def _make_counting(orig):
         def counting(self, *a, **kw):
             n[0] += 1
+            ins: list = []
             for _x in a:
-                _note(_x)
+                ins.extend(_note(_x))
             for _x in kw.values():
-                _note(_x)
-            return orig(self, *a, **kw)
+                ins.extend(_note(_x))
+            for _k, _b, _dt in ins:
+                inputs.setdefault(_k, _b)
+            out = orig(self, *a, **kw)
+            # WHAT THE OP WROTE, read off what it returned. Instrumentation only: a return value
+            # that cannot be walked leaves the inputs counted as read, never the call failed.
+            outs = _note(out)
+            in_keys = {_k for _k, _b, _dt in ins}
+            out_keys = {_k for _k, _b, _dt in outs}
+            for _k in out_keys:
+                if _k in in_keys and len(in_keys) == 1:
+                    continue  # one tensor in, the same buffer out: a view, nothing written
+                written.add(_k)
+            # WHAT THE OP READ OF WHAT IT WAS HANDED.
+            if str(getattr(self, "python_fully_qualified_name", "") or "") in _GATHER_OPS and outs:
+                _rows = sum(_b for _k, _b, _dt in outs)
+                for _k, _b, _dt in ins:
+                    if _k in out_keys:
+                        continue
+                    if _is_index(_dt):
+                        streamed.add(_k)  # the index itself is read whole
+                    else:
+                        gathered[_k] = gathered.get(_k, 0) + _rows
+            else:
+                streamed.update(_k for _k in in_keys if _k not in out_keys)
+            return out
 
         return counting
 
@@ -445,10 +514,24 @@ def _count_op_dispatches(fn):
     finally:
         for _cls, _orig in targets:
             _cls.__call__ = _orig
-    return n[0], int(sum(seen.values()))
+    # THE STREAMED SET: handed, never written, and of a table only what came out of it.
+    total, in_step, saved = 0.0, 0.0, 0.0
+    for _k, _b in inputs.items():
+        if _k in written:
+            in_step += _b
+            continue
+        if _k in streamed or _k not in gathered:
+            total += _b
+            continue
+        _g = min(_b, gathered[_k])
+        total += _g
+        saved += _b - _g
+    if isinstance(detail, dict):
+        detail.update({"in_step_bytes": int(in_step), "gathered_saved_bytes": int(saved), "buffers": len(inputs)})
+    return n[0], int(total)
 
 
-def _report_read_set(stage_name, dispatches, ws_bytes):
+def _report_read_set(stage_name, dispatches, ws_bytes, detail=None):
     """Say which of the three things happened. A read set of 0 and a hook that never ran were the
     SAME observable: both returned (0 bytes), both failed `if bytes > 0`, both printed nothing, and
     both arrived as `bytes: {}`. That silence is why a hook pointed at the wrong class survived every
@@ -458,7 +541,16 @@ def _report_read_set(stage_name, dispatches, ws_bytes):
     could not install and 0 when it installed and intercepted nothing. Print all three cases, and
     carry the op count beside the bytes so the magnitude can be sanity-checked at a glance."""
     if ws_bytes > 0:
-        print("TRACE_STAGE_BYTES[%s]=%d ops=%s" % (stage_name, ws_bytes, dispatches), flush=True)
+        # THE BREAKDOWN RIDES BEHIND THE FIGURE. perf_mcp reads the integer up to the first space, so
+        # trailing fields cost the parser nothing and tell a reader what the step wrote instead of
+        # streamed, and how much table it was handed but did not read.
+        _more = ""
+        if isinstance(detail, dict) and detail:
+            _more = " in_step=%d gathered_saved=%d" % (
+                int(detail.get("in_step_bytes") or 0),
+                int(detail.get("gathered_saved_bytes") or 0),
+            )
+        print("TRACE_STAGE_BYTES[%s]=%d ops=%s%s" % (stage_name, ws_bytes, dispatches, _more), flush=True)
         return
     if dispatches is None:
         _why = "hook did not install (ttnn.decorators unavailable or no op class)"
@@ -487,8 +579,9 @@ def _measure_native(device, stage, budget_s=0.0):
     So the last warmup is counted rather than merely run. `stage.trace_path()` still wins when a
     pipeline reports its own path; the count is what decides when nothing does."""
     _check_advance(_warm(stage.step, _WARMUP_ITERS - 1))
-    dispatched, _ws_bytes = _count_op_dispatches(stage.step)
-    _report_read_set(stage.name, dispatched, _ws_bytes)
+    _det: dict = {}
+    dispatched, _ws_bytes = _count_op_dispatches(stage.step, _det)
+    _report_read_set(stage.name, dispatched, _ws_bytes, _det)
     ttnn.synchronize_device(device)
     t0 = time.perf_counter()
     # Same rule as _replay_1cq: one step is a valid sample and tells us what the rest would cost.
@@ -534,19 +627,20 @@ def _measure_stage(device, stage, budget_s=0.0):
     checkpoint estimate.
 
     One warmup call is spent on it, and it is the call _capture_step_trace was going to make anyway
-    to reach steady state: the hook counts the distinct DEVICE tensors this stage's ops touch, which
-    is the quantity params x width is trying to approximate.
+    to reach steady state: the hook counts the distinct DEVICE tensors this stage's ops stream --
+    handed and never written, a gathered table at what came out of it -- which is the quantity
+    params x width is trying to approximate.
     """
     if getattr(stage, "self_traced", False):
         return _measure_native(device, stage, budget_s)
-    _ws_bytes, _n = 0, None
+    _ws_bytes, _n, _det = 0, None, {}
     try:
-        _n, _ws_bytes = _count_op_dispatches(stage.step)
+        _n, _ws_bytes = _count_op_dispatches(stage.step, _det)
     except Exception as _he:  # noqa: BLE001 -- instrumentation must never cost the measurement
         print("TRACE_STAGE_BYTES_NONE[%s] reason=hook raised %s" % (stage.name, type(_he).__name__), flush=True)
         _ws_bytes, _n = 0, None
     else:
-        _report_read_set(stage.name, _n, _ws_bytes)
+        _report_read_set(stage.name, _n, _ws_bytes, _det)
     tid = _capture_step_trace(device, stage.step)
     try:
         per_s = _replay(device, tid, _REPLAY_ITERS, budget_s)
