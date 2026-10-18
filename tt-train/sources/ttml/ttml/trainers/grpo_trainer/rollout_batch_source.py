@@ -76,7 +76,7 @@ def pad_logprobs(completions: List[List[int]], token_logprobs: List[List[float]]
 
 def tokenize_prompts(dataset: Any, tokenizer: Any, num_prompts: int) -> Tuple[List[List[int]], Dict[str, list]]:
     dataset = dataset.select(range(num_prompts))
-    prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
+    prompts = [tokenizer.encode(row["prompt"], add_special_tokens=False) for row in dataset]
     extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
     return prompts, extra_columns
 
