@@ -1056,10 +1056,7 @@ def test_eltwise_unary_sfpu_polygamma_order(
         spec_A=_polygamma_stimuli_spec(polygamma_order),
         polygamma_order=polygamma_order,
     )
-    # atol is 0 so a flushed lane fails outright at a relative error of 1. The rtol is loose
-    # because the sweep reaches the last binades before underflow, where the Euler-Maclaurin
-    # corrections themselves flush: measured worst case there is 2.0% for float32 at order 11
-    # and 1.4% for bfloat16, against 32.6 float32 ULP and 0.74 bfloat16 ULP above 2^-100.
+    # rtol covers the last binades before underflow, where Euler-Maclaurin terms flush
     assert passed_test(
         golden_tensor,
         res_tensor,
