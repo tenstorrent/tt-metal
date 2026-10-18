@@ -115,6 +115,9 @@ class DeepseekV41ForCausalLM:
             model.new_state(generic=self.generic) for _ in range(prefill_slots)
         ]
         self.generic_traces: dict[int, V41GenericPrefillTrace] = {}  # id(state) -> its bucket captures
+        # requests prefilled (wholly or up to a chunk boundary) but not yet joined into a decode slot:
+        # request key -> (its prefill state, the prefix so far); oldest first
+        self.pending: OrderedDict[int, tuple[V41PrefillState, torch.Tensor]] = OrderedDict()
         self.next_prefill_state = 0
         self.warmed_up = False
         # traced prefill per (slot, prompt length): the fixed input buffers are shared by every trace
@@ -226,18 +229,44 @@ class DeepseekV41ForCausalLM:
         self.next_prefill_state = (self.next_prefill_state + 1) % len(self.prefill_states)
         return state
 
+    def _state_for(self, key: int, start: int) -> V41PrefillState:
+        """The prefill state of request ``key``: at ``start`` 0 a free one, else the one holding the request's
+        earlier chunks. States are owned from a request's first chunk to its join into a decode slot; the join
+        happens at the request's first decode step, or here, when another request needs its state first (the
+        scheduler prefills the waiting requests before it decodes, so a request's prefix is complete by then: it
+        admits one new prefill a step and advances a partial one alone)."""
+        if start == 0:
+            if key in self.pending:  # the same request restarted (preempted and resumed from position 0)
+                return self.pending.pop(key)[0]
+            owned = {id(st) for st, _ in self.pending.values()}
+            free = [st for st in self.prefill_states if id(st) not in owned]
+            if free:
+                return free[0]
+            old_key, (state, _) = next(iter(self.pending.items()))
+            self._join_pending(old_key)
+            return state
+        assert key in self.pending, f"request {key}: a chunk at {start} without its earlier chunks"
+        state, _ = self.pending[key]
+        assert state.start == start, f"request {key}: chunk at {start}, its state is at {state.start}"
+        return state
+
     def prefill_forward(self, **kwargs) -> torch.Tensor:
-        """``tokens`` [B, S] (padded), ``prompt_lens`` [B], ``page_table`` [B, blocks], ``start_pos`` zeros ->
-        fp32 logits ``[B, 1, vocab]`` of each prompt's last token (host sampling reads row -1)."""
+        """``tokens`` [B, S] (padded), ``prompt_lens`` [B], ``page_table`` [B, blocks], ``start_pos`` [B] ->
+        fp32 logits ``[B, 1, vocab]`` of each row's last token (host sampling reads row -1). A row is a prompt
+        (``start_pos`` 0, ``prompt_lens`` its length) or one chunk of it (chunked prefill: ``start_pos`` a
+        multiple of the chunk, ``prompt_lens`` the end of the chunk, ``tokens`` the whole prefix); either way the
+        row's state keeps the prefix and the request joins its decode slot at its first ``decode_forward``.
+        Rows resuming a prefill run before rows starting one (one state can finish before the next takes it)."""
         tokens, lengths, page_table = kwargs["tokens"], kwargs["prompt_lens"], kwargs["page_table"]
         start_pos = kwargs.get("start_pos")
-        assert start_pos is None or all(int(x) == 0 for x in start_pos), f"chunked or cached prefill: {start_pos}"
         assert "sampling_params" not in kwargs or kwargs["sampling_params"] is None, "host sampling only"
         out = torch.zeros(tokens.shape[0], 1, self.config.VOCAB_SIZE, dtype=torch.float32)
-        for i in range(tokens.shape[0]):
+        rows = [i for i in range(tokens.shape[0]) if int(lengths[i]) > 0]
+        rows.sort(key=lambda i: 0 if start_pos is not None and int(start_pos[i]) > 0 else 1)
+        for i in rows:
             n = int(lengths[i])
-            if n == 0:
-                continue
+            start = 0 if start_pos is None else int(start_pos[i])
+            assert start % self.model.chunk == 0, f"row {i}: chunk at {start}, not a multiple of {self.model.chunk}"
             assert (
                 n >= self.config.SLIDING_WINDOW
             ), f"prompt of {n} tokens: decode needs a full window ({self.config.SLIDING_WINDOW})"
@@ -245,33 +274,46 @@ class DeepseekV41ForCausalLM:
                 n + ROWS <= self.model.max_seq_len
             ), f"prompt of {n} tokens beyond max_seq_len {self.model.max_seq_len}"
             prompt = tokens[i, :n].to(torch.int64)
-            slot = self._slot_for_prefill(self._request_key(page_table, i))
-            state = self._prefill_state()
+            key = self._request_key(page_table, i)
+            state = self._state_for(key, start)
             t0 = time.time()
-            trace = self.prefill_traces.get((id(state), n))
-            if trace is None and self.trace_on_miss:
+            trace = self.prefill_traces.get((id(state), n)) if start == 0 else None
+            if trace is None and start == 0 and self.trace_on_miss:
                 trace = self._capture_prefill(state, n)
                 logger.info(f"DeepSeek-V4.1-Flash: prefill of {n} tokens captured in {time.time() - t0:.1f} s")
                 t0 = time.time()
-            generic = self.generic_traces.get(id(state)) if trace is None and n > self.model.chunk else None
+            generic = self.generic_traces.get(id(state)) if trace is None and n - start > 0 else None
+            if generic is not None and n - start <= self.model.chunk and n % self.model.chunk:
+                generic = None  # one partial chunk: eager either way
             if trace is not None:
                 logits, _ = trace.run(prompt)
                 mode = "replay"
             elif generic is not None:
-                logits, _ = generic.run(prompt)
-                trace, mode = generic, f"generic {generic.last['replayed']}+{generic.last['eager']}"
+                logits, _ = generic.run(prompt, start=start)
+                mode = f"generic {generic.last['replayed']}+{generic.last['eager']}"
             else:
-                logits = self.model.prefill_into(prompt, state)
+                logits = self.model.prefill_into(prompt, state, start=start)
                 mode = "eager"
-            t1 = time.time()
-            self.decoder.join(slot, prompt, state)
-            phases = "" if trace is None else " " + " ".join(f"{k} {v:.3f}" for k, v in trace.last.items())
+            self.pending[key] = (state, prompt)
+            self.pending.move_to_end(key)
+            phases = trace if trace is not None else generic
             logger.info(
-                f"DeepSeek-V4.1-Flash: prefill of {n} tokens in {time.time() - t0:.2f} s ({mode};{phases} "
-                f"join {time.time() - t1:.3f} {self.decoder.last_join.get('mode')})"
+                f"DeepSeek-V4.1-Flash: prefill of {n - start} tokens at {start} (prefix {n}) in {time.time() - t0:.2f} s "
+                f"({mode}{'' if phases is None else ' ' + ' '.join(f'{k} {v:.3f}' for k, v in phases.last.items() if isinstance(v, float))})"
             )
             out[i, 0] = logits[-1]
         return out
+
+    def _join_pending(self, key: int) -> None:
+        """Move request ``key``'s prefilled state into its decode slot (its first decode step)."""
+        state, prompt = self.pending.pop(key)
+        slot = self._slot_for_prefill(key)
+        t0 = time.time()
+        self.decoder.join(slot, prompt, state)
+        logger.info(
+            f"DeepSeek-V4.1-Flash: request of {prompt.numel()} tokens joined slot {slot} in {time.time() - t0:.3f} s "
+            f"({self.decoder.last_join.get('mode')})"
+        )
 
     def _capture_prefill(self, state: V41PrefillState, n: int) -> V41PrefillTrace:
         """Capture the prefill of ``n``-token prompts into ``state`` (the slot's own cache tensors, so the slot's
@@ -311,7 +353,10 @@ class DeepseekV41ForCausalLM:
         for i in range(tokens.shape[0]):
             if int(page_table[i, 0]) == 0:
                 continue
-            slot = self._slot_for_decode(self._request_key(page_table, i))
+            key = self._request_key(page_table, i)
+            if key in self.pending:
+                self._join_pending(key)
+            slot = self._slot_for_decode(key)
             p = int(positions[i])
             assert p == self.decoder.position(
                 slot

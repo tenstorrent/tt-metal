@@ -29,6 +29,8 @@ spans must lie in the first chunk (the reference asserts it). Image tokens route
 """
 
 import os
+import queue
+import threading
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -64,6 +66,15 @@ _DELIMITER_ROW = {IMAGE_START: 0, IMAGE_END: 1, IMAGE_NEW_LINE: 2}
 
 
 PREFILL_GENERIC = "TT_V41_PREFILL_GENERIC"  # "1": prefill states are position-generic (V41GenericPrefillTrace)
+# chunks of host inputs prepared ahead of the device by a thread (0: in the loop, as before). The replay issue of a
+# captured chunk blocks when the command queue is full, so without the thread the Engram hashing and table gathers
+# of the next chunk (~90 ms a chunk at 40 layers) serialize behind it (17.7 s of a 61.7 s 1M
+# prefill); a thread prepares them while the main thread waits in the issue.
+PREFILL_PREFETCH = "TT_V41_PREFILL_PREFETCH"
+
+
+def prefill_prefetch() -> int:
+    return int(os.environ.get(PREFILL_PREFETCH, "2"))
 
 
 def prefill_generic() -> bool:
@@ -272,12 +283,18 @@ class TtV41Transformer(LightweightModule):
             state.dspark_rings = self.dspark.new_rings()
         return state
 
-    def _host_chunks(self, request: _Request):
-        """Each chunk's host inputs in order: token ids and (Engram layers) the n-gram hash and the packed rows /
-        row ids of its lookups. Tokens-only, so the loop prepares chunk i + 1 while the device runs chunk i."""
+    def _host_chunks(self, request: _Request, first: int = 0):
+        """Each chunk's host inputs in order from the chunk at ``first`` (a multiple of the chunk): token ids and
+        (Engram layers) the n-gram hash and the packed rows / row ids of its lookups. Tokens-only, so the loop
+        prepares chunk i + 1 while the device runs chunk i. Resuming at ``first`` seeds the Engram history from the
+        tokens before it (what hashing them would have left)."""
         tokens, total = request.tokens, int(request.tokens.numel())
-        history = self.engram_hash.new_history() if self.engram else None
-        for start in range(0, total, self.chunk):
+        assert first % self.chunk == 0 and 0 <= first < total, (first, total)
+        history = None
+        if self.engram:
+            n = self.engram_hash.layout.max_ngram_size - 1
+            history = self.engram_hash.token_map[tokens[max(0, first - n) : first].to(torch.int64)]
+        for start in range(first, total, self.chunk):
             length = min(self.chunk, total - start)
             chunk_tokens = torch.zeros(self.chunk, dtype=torch.int64)
             chunk_tokens[:length] = tokens[start : start + length]
@@ -348,24 +365,34 @@ class TtV41Transformer(LightweightModule):
         return scored
 
     def _run(
-        self, request: _Request, state, buffers: dict, step: Callable, on_block=None, timings: dict | None = None
+        self,
+        request: _Request,
+        state,
+        buffers: dict,
+        step: Callable,
+        on_block=None,
+        timings: dict | None = None,
+        start: int = 0,
     ) -> list:
-        """The chunk loop of one request. ``step(c, forward)`` runs chunk ``c``'s device forward: ``forward()``
-        (untraced or captured) or a replay of its capture. Returns every chunk's scored device logits. ``timings``
-        accumulates the host seconds of each phase (``prepare``: the chunks' host inputs, ``stage``: their copies
-        to the device, ``step``: the device call, untraced or a replay issued without waiting)."""
+        """The chunk loop of one request from position ``start`` (0, or a multiple of the chunk the state is at:
+        a prefill resumed after its earlier chunks). ``step(c, forward)`` runs chunk ``c``'s device forward:
+        ``forward()`` (untraced or captured) or a replay of its capture. Returns every chunk's scored device
+        logits. ``timings`` accumulates the host seconds of each phase (``prepare``: the chunks' host inputs,
+        ``stage``: their copies to the device, ``step``: the device call, untraced or a replay issued without
+        waiting)."""
         total = int(request.tokens.numel())
+        assert state.start == start, f"the state is at {state.start}, the chunk loop starts at {start}"
         if self.dspark is not None and "dspark_rope" not in buffers:
             buffers["dspark_rope"] = [
                 self.dspark.seed_rope(s, min(self.chunk, total - s)) for s in range(0, total, self.chunk)
             ]
         t = timings if timings is not None else {}
-        chunks, scored = self._host_chunks(request), []
+        chunks, scored = self._prefetched(self._host_chunks(request, start), prefill_prefetch()), []
         t0 = time.perf_counter()
         host = next(chunks)
         t["prepare"] = t.get("prepare", 0.0) + time.perf_counter() - t0
         chunk_log = os.environ.get("TT_V41_PREFILL_CHUNK_LOG", "0") == "1"
-        for c in range(-(-total // self.chunk)):
+        for c in range(start // self.chunk, -(-total // self.chunk)):
             t0 = time.perf_counter()
             token_ids, engram_inputs = self._stage(host, buffers)
             if state.generic:
@@ -390,6 +417,36 @@ class TtV41Transformer(LightweightModule):
             t["prepare"] += time.perf_counter() - t0
             state.advance(length)
         return scored
+
+    @staticmethod
+    def _prefetched(chunks, ahead: int):
+        """``chunks`` (the host-input generator) run ``ahead`` items ahead on a thread; 0 returns it as is. The
+        items are host-only (torch and host ttnn tensors), so the thread needs no device."""
+        if ahead <= 0:
+            return chunks
+        q: queue.Queue = queue.Queue(maxsize=ahead)
+        done = object()
+
+        def worker():
+            try:
+                for item in chunks:
+                    q.put(item)
+                q.put(done)
+            except BaseException as e:  # surfaced in the consumer
+                q.put(e)
+
+        threading.Thread(target=worker, daemon=True, name="v41-prefill-prefetch").start()
+
+        def consume():
+            while True:
+                item = q.get()
+                if item is done:
+                    return
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+
+        return consume()
 
     def _logits(self, scored: list) -> torch.Tensor:
         """fp32 [scored rows, vocab] from the device logits of ``_run`` (in prompt order)."""
@@ -422,13 +479,18 @@ class TtV41Transformer(LightweightModule):
         scored = self._run(request, state, {}, lambda c, forward: forward(), on_block)
         return self._logits(scored), state
 
-    def prefill_into(self, tokens: torch.Tensor, state: V41PrefillState, logit_positions: int = 1) -> torch.Tensor:
+    def prefill_into(
+        self, tokens: torch.Tensor, state: V41PrefillState, logit_positions: int = 1, start: int = 0
+    ) -> torch.Tensor:
         """``prefill`` of a text prompt into an existing ``state`` (one of ``new_state()``, or one a previous request
         used: it is reset to what a fresh request starts from, as ``V41PrefillTrace.run`` does), so a request pool can
-        keep its states, and the decode captures made on them, across requests. Returns the logits."""
+        keep its states, and the decode captures made on them, across requests. ``start`` > 0 resumes the prompt's
+        prefill at that chunk boundary instead (``tokens`` the whole prefix; the state at ``start`` from the earlier
+        chunks, not reset). Returns the logits of the prefix's last ``logit_positions`` positions."""
         request = self._request(tokens, logit_positions)
-        self.reset_state(state)
-        scored = self._run(request, state, {}, lambda c, forward: forward())
+        if start == 0:
+            self.reset_state(state)
+        scored = self._run(request, state, {}, lambda c, forward: forward(), start=start)
         return self._logits(scored)
 
     def new_state(self, generic: bool = False) -> V41PrefillState:
@@ -558,9 +620,11 @@ class V41GenericPrefillTrace:
     through host-filled device inputs (``V41ChunkTables.prepare_chunk``: RoPE rows, the pin page, the indexer
     masks' visible counts, the cache writes' row indices), and on its visible token count only through the
     indexer's score width, which is rounded up to a bucket (``V41ChunkTables.buckets``: 8K, 16K, ..., max_seq).
-    So one capture per bucket serves every full, non-final chunk whose visible count falls in it; chunk 0 has
-    its own capture (its window table and leading-row compaction differ), and a prompt's final chunk runs
-    untraced (its valid length, compressor carry and scored rows depend on the prompt). Captures are made on
+    So one capture per bucket serves every full chunk whose visible count falls in it; chunk 0 has its own
+    capture (its window table and leading-row compaction differ). Every capture scores its chunk's last row (one
+    head projection), so a prompt whose length is a multiple of the chunk replays its final chunk too and reads
+    the logits from the capture's output; a partial final chunk runs untraced (its valid length, compressor carry
+    and scored rows depend on the prompt), as does the final chunk when more than one position is scored. Captures are made on
     synthetic tokens at the last chunk start of each bucket without running the chunks before it: the state's
     contents do not matter to a capture, only its addresses. The replay writes the state exactly as the
     untraced prefill does (the inputs are the same values at the same addresses).
@@ -576,6 +640,7 @@ class V41GenericPrefillTrace:
         self.model, self.state, self.chunk = model, state, model.chunk
         self.buffers = {} if buffers is None else buffers
         self.controllers: dict[int, SubDeviceTraceController] = {}
+        self.scored: dict[int, list] = {}  # per capture: the last row's device logits (fixed addresses)
         self.tokens = torch.randint(1, model.config.VOCAB_SIZE, (self.chunk,), dtype=torch.int64)
         self.captured_at: dict[int, int] = {}
         for key in [0] + list(state.tables.buckets):
@@ -586,7 +651,7 @@ class V41GenericPrefillTrace:
             t0 = time.perf_counter()
             for _ in range(warmup):
                 self._one_chunk(start, lambda forward: forward())
-            self._one_chunk(start, self._capture(key))
+            self.scored[key] = self._one_chunk(start, self._capture(key))
             self.captured_at[key] = start
             logger.info(
                 f"generic prefill: bucket {key} captured at chunk start {start} in {time.perf_counter() - t0:.1f} s "
@@ -599,12 +664,13 @@ class V41GenericPrefillTrace:
         model, state = self.model, self.state
         model.reset_state(state)
         state.start = start
-        request = _Request(self.tokens, 1 << 40, None, None)  # nothing scored: a non-final chunk
+        request = _Request(self.tokens, self.chunk - 1, None, None)  # the chunk's last row scored
         host = next(model._host_chunks(request))
         host = _HostChunk(start, host.length, host.token_ids, host.engram, host.types)
         token_ids, engram_inputs = model._stage(host, self.buffers)
         state.tables.prepare_chunk(start, self.chunk)
-        out = step(lambda: model._chunk_forward(state, host, token_ids, engram_inputs, None, None, 1 << 40, None))
+        first_scored = start + self.chunk - 1
+        out = step(lambda: model._chunk_forward(state, host, token_ids, engram_inputs, None, None, first_scored, None))
         ttnn.synchronize_device(model.mesh_device)
         return out
 
@@ -631,34 +697,37 @@ class V41GenericPrefillTrace:
     def num_segments(self) -> int:
         return sum(c.num_segments for c in self.controllers.values())
 
-    def key_of(self, c: int, total: int) -> int | None:
-        """The capture a prompt of ``total`` tokens replays for chunk ``c``: 0, a bucket, or None (untraced)."""
+    def key_of(self, c: int, total: int, logit_positions: int = 1) -> int | None:
+        """The capture a prompt of ``total`` tokens replays for chunk ``c``: 0, a bucket, or None (untraced: a
+        partial final chunk, or the final chunk when more than its last row is scored)."""
         start = c * self.chunk
-        if start + self.chunk >= total:  # the final chunk (a partial one, or the last full one with scored rows)
+        if start + self.chunk > total or (start + self.chunk == total and logit_positions != 1):
             return None
         key = 0 if c == 0 else self.state.tables.bucket(start, self.chunk)
         return key if key in self.controllers else None
 
-    def run(self, tokens: torch.Tensor, logit_positions: int = 1):
-        """tokens [S] -> (fp32 logits [logit_positions, vocab], state) as ``prefill``; ``self.last`` the phases."""
+    def run(self, tokens: torch.Tensor, logit_positions: int = 1, start: int = 0):
+        """tokens [S] -> (fp32 logits [logit_positions, vocab], state) as ``prefill``; ``self.last`` the phases.
+        ``start`` > 0 resumes the prompt at that chunk boundary (as ``prefill_into``)."""
         model, state = self.model, self.state
         total = int(tokens.numel())
         assert logit_positions <= total - (total - 1) // self.chunk * self.chunk, "scored rows lie in the final chunk"
         request = model._request(tokens, logit_positions)
         t0 = time.perf_counter()
-        model.reset_state(state)
+        if start == 0:
+            model.reset_state(state)
         self.last = {"reset": time.perf_counter() - t0, "replayed": 0, "eager": 0}
 
         def step(c: int, forward: Callable):
-            key = self.key_of(c, total)
+            key = self.key_of(c, total, logit_positions)
             if key is None:
                 self.last["eager"] += 1
                 return forward()
             self.last["replayed"] += 1
             self.controllers[key].replay(blocking=False)
-            return []
+            return self.scored[key] if (c + 1) * self.chunk == total else []
 
-        scored = model._run(request, state, self.buffers, step, timings=self.last)
+        scored = model._run(request, state, self.buffers, step, timings=self.last, start=start)
         t0 = time.perf_counter()
         ttnn.synchronize_device(model.mesh_device)
         self.last["wait"] = time.perf_counter() - t0

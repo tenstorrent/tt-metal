@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT
 from models.demos.deepseek_v3_d_p.tt.v41.engram_checkpoint import build_engram_modules
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer, V41GenericPrefillTrace
 from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_dense, resolve_checkpoint
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
 TRACE_REGION = 2 * 1024 * 1024 * 1024  # the served configuration's
 DEFAULT_LAYERS = "0,2,3,20,21,24"
@@ -69,10 +70,15 @@ def _snapshot(mesh_device, logits, state, total: int) -> dict:
     rows), its index-K rows, every layer's window carry, the compressor carries."""
 
     def down(t, rows=None):
-        # the state tensors are replicated: the first and the last chip's copies, the rows the prompt wrote
-        chips = ttnn.get_device_tensors(t)
-        picked = [ttnn.to_torch(chips[0]), ttnn.to_torch(chips[-1])]
-        return torch.stack([x if rows is None else x[:, :, :rows] for x in picked])
+        # the state tensors are replicated: the first and the last chip's copies, the rows the prompt wrote (FP8
+        # rows leave the device only through a mesh composer, as V41PrefillState.to_host)
+        if t.dtype == MlaKvCacheFormat.SCALED_FP8.storage_dtype:
+            every = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+            picked = [every[0], every[-1]]
+        else:
+            chips = ttnn.get_device_tensors(t)
+            picked = [ttnn.to_torch(chips[0])[0], ttnn.to_torch(chips[-1])[0]]
+        return torch.stack([x if rows is None else x[:, :rows] for x in picked])
 
     g, out = state.geometry, {"logits": logits}
     # the window scratch rows past the final chunk's valid length are dead (never read; their values are whatever
@@ -80,11 +86,11 @@ def _snapshot(mesh_device, logits, state, total: int) -> dict:
     dead = slice(WINDOW_SLOT + (total - (total - 1) // g.chunk * g.chunk), g.window_rows)
     for source, t in state.kv.items():
         rows = down(t, g.kv_row_of_compressed(total // state.config.compress_ratio(source)))
-        rows[:, :, :, dead] = 0
+        rows[..., dead, :] = 0
         out[f"kv[{source}]"] = rows
     if state.swa_scratch is not None:
         rows = down(state.swa_scratch)
-        rows[:, :, :, dead] = 0
+        rows[..., dead, :] = 0
         out["swa_scratch"] = rows
     for source, t in state.index_k.items():
         out[f"index_k[{source}]"] = down(t, total // state.config.compress_ratio(source))
@@ -235,6 +241,25 @@ def test_v41_prefill_generic(mesh_device, device_params, monkeypatch):
         phases.append({k: (round(v, 3) if isinstance(v, float) else v) for k, v in trace.last.items()})
         mismatches += _differences(f"traced prompt {i}", reference[i], _snapshot(mesh_device, logits, gstate, total))
         logger.info(f"generic prefill: traced run of prompt {i} {s:.3f} s {trace.last}")
+    # device-only time of each bucket's capture: replays issued back to back, synchronized once (no host work)
+    device_only = {}
+    for key, controller in sorted(trace.controllers.items()):
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.time()
+        for _ in range(5):
+            controller.replay(blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        device_only[str(key)] = round((time.time() - t0) / 5, 4)
+    # and the host's issue time of one replay (the segments' execute_trace calls and manager switches), alone
+    ttnn.synchronize_device(mesh_device)
+    key = max(trace.controllers)
+    t0 = time.time()
+    trace.controllers[key].replay(blocking=False)
+    issue_s = time.time() - t0
+    ttnn.synchronize_device(mesh_device)
+    report["device_only_s_per_chunk"] = device_only
+    report["issue_s_per_chunk"] = round(issue_s, 4)
+    logger.info(f"generic prefill: device-only per chunk {device_only}; host issue {issue_s:.4f} s")
     trace.release()
     chunks = report["chunks"]
     report |= {
