@@ -9105,13 +9105,14 @@ tasks:
     change:
       EXPERTS_KERNEL: flat
     env:
-      EXPERTS_KERNEL: loop
+      EXPERTS_KERNEL: unified
   brief:
     details: 'Owner (2026-10-17): try Marko Staletovic''s flat routed expert, tuned for DeepSeek-V4.1-Flash shapes
       (ttnn/ttnn/bringup/flat_routed_expert_ttnn, imported by the overseer from mstaletovic/galaxy-unified-k3-v41-combine
       @ f080c8df021; read its FLAT_EXPERT_WORKLOG.md and FLAT_COMBINE_OVERLAP_WORKLOG.md first: design, V4.1 defaults
       (uneven gate/up split for I 2304, 16-column units, 48 x 3), the MIMO_FL_* knobs, known hangs). Compare with P.2
-      (EXPERTS_KERNEL=unified). Use the expert compute only (FlatRoutedExpert, act clamped_silu = DeepSeek V4''s limit-10
+      (EXPERTS_KERNEL=unified: experts 176.8 ms per chunk at bfp8, device total 679.5 ms, P.2''s on/off table; the number
+      to beat). Use the expert compute only (FlatRoutedExpert, act clamped_silu = DeepSeek V4''s limit-10
       SwiGLU), keep the model''s dispatch / combine; combine_rf / the combine overlap is a later step. What this model
       needs that the op lacks, each an opt-in argument whose default keeps today''s program (GLM-5.3 Flash uses this op:
       tt/experts_ag.py; its cases must pass unchanged): (1) h scaled by the token''s routing weight before (2) fp8 e4m3
