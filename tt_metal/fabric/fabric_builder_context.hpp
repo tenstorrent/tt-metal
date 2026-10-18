@@ -21,15 +21,14 @@ namespace tt::tt_fabric {
 
 class FabricContext;
 
-
 /**
  * IntermeshVCMode - Defines intermesh VC requirements
  */
- enum class IntermeshVCMode : uint8_t {
-    DISABLED,                      // No intermesh VC (single mesh or no intermesh connectivity)
-    EDGE_ONLY,                     // Intermesh VC on edge nodes only (traffic sinks at mesh boundary)
-    FULL_MESH,                     // Intermesh VC throughout mesh (traffic can traverse nodes within mesh)
-    FULL_MESH_WITH_PASS_THROUGH    // Intermesh VC with inter-mesh pass-through (e.g., A→B→C routing)
+enum class IntermeshVCMode : uint8_t {
+    DISABLED,                    // No intermesh VC (single mesh or no intermesh connectivity)
+    EDGE_ONLY,                   // Intermesh VC on edge nodes only (traffic sinks at mesh boundary)
+    FULL_MESH,                   // Intermesh VC throughout mesh (traffic can traverse nodes within mesh)
+    FULL_MESH_WITH_PASS_THROUGH  // Intermesh VC with inter-mesh pass-through (e.g., A→B→C routing)
 };
 
 /**
@@ -48,16 +47,18 @@ class FabricContext;
  */
 struct IntermeshVCConfig {
     IntermeshVCMode mode = IntermeshVCMode::DISABLED;
-    bool requires_vc1 = false;                      // True if VC1 needed for intermesh
-    bool requires_vc1_full_mesh = false;            // True if VC1 needed throughout mesh (not just edges)
-    bool requires_vc1_mesh_pass_through = false;    // True if VC1 must support inter-mesh pass-through
-    bool requires_vc2 = false;                      // True if VC2 needed (Blackhole + 2D + no UDM/mux)
+    bool requires_vc1 = false;                    // True if VC1 needed for intermesh
+    bool requires_vc1_full_mesh = false;          // True if VC1 needed throughout mesh (not just edges)
+    bool requires_vc1_mesh_pass_through = false;  // True if VC1 must support inter-mesh pass-through
+    bool requires_vc2 = false;                    // True if VC2 needed (Blackhole + 2D + no UDM/mux)
+    // VC1 only on Y-axis (N/S) and Z routers; E/W routers get no VC1 channels and run the single-mesh
+    // router. Valid only when no inter-mesh packet takes an X hop after landing, i.e. every inter-mesh
+    // destination is in the landing chip's column (coordinate-matched D2D streams between equal meshes).
+    bool vc1_y_axis_only = false;
 
     IntermeshVCConfig() = default;
 
-    static IntermeshVCConfig disabled() {
-        return IntermeshVCConfig();
-    }
+    static IntermeshVCConfig disabled() { return IntermeshVCConfig(); }
 
     static IntermeshVCConfig edge_only() {
         IntermeshVCConfig config;
@@ -176,7 +177,6 @@ public:
     bool requires_vc2() const { return intermesh_vc_config_.requires_vc2; }
 
 private:
-
     IntermeshVCConfig compute_intermesh_vc_config() const;
     StreamAssignment compute_stream_assignment(MeshId mesh_id) const;
 
