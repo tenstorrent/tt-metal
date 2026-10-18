@@ -1,0 +1,62 @@
+{
+ "used": [
+  {
+   "id": "DS41-35",
+   "how": "bfp4 weights kept in the stored [N, K] orientation with ttnn.linear(transpose_b=True), so each 16-value group stays inside one e8m0 block (tt/experts.py:_load_block); device check test_transpose_b_bfp4",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-10",
+   "how": "expected bfp4 change rate 16-17 % and the bfp8 GiB figures; measured 16.37-16.64 % per layer and the bfp4 GiB per chip for this run, 4x4 and 8x4",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-58",
+   "how": "read the hand-run ladder / profile metrics from generated/bringup_adhoc/P.1.json and P.1_profile.json",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD on every run",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "--no-precompile on the model-sized perf_experts runs (the gate commands already carry it)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how ttnn rounds to bfloat4_b on the host (shared exponent per 16 along the last dim, 3 magnitude bits, round to nearest even, saturate at 7: blockfloat_common.cpp convert_u32_to_bfp); now tt/experts.py:_bfp4_round",
+  "whether a lighter weight format speeds up the routed-expert section: it does not here (DS41-56)"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-56"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.1",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-17T22:09:41",
+  "head": "2b19ff12f69",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.1.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
