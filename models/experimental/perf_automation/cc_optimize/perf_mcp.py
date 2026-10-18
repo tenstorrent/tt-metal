@@ -8646,6 +8646,7 @@ def finish_round() -> dict:
     # still ends -- the agent exits on its own and no tool can prevent that -- but it ends recorded
     # as REFUSED, and the run stops on its round budget. The budget becoming the visible stopping
     # point is the honest outcome: it says the work was not finished instead of claiming it was.
+    _rep: dict = {}
     try:
         # THE GATE'S OWN ANSWER, not a second one. termination_check already builds the blocking list
         # and already names what has no attempt yet; asking it here means finish_round and the target
@@ -8678,11 +8679,29 @@ def finish_round() -> dict:
         )
     if _left:
         _owed.append("%d material op(s) have no attempt on the rung they are next owed" % len(_left))
-    _verdict["why"] = (
-        "NOT FINISHED. %s. Go back to the top of the LOOP: call termination_check, take the next "
-        "target -- prefer ops in the stacks named here -- and work its rung. Banking wins and writing "
-        "a summary is not an ending while either half is outstanding." % ", and ".join(_owed)
-    )
+    # A REFUSAL IS NOT ALWAYS AN ORDER TO GO BACK. "Go back to the top of the LOOP and take the next
+    # target" presumes there is one. When the gate itself answered with no target -- every material
+    # op's rungs tried, and nothing it could hand over -- the loop it sends the agent back to says the
+    # same thing, and the gate's own directive for that state is "call finish_round". The two tools
+    # then contradicted each other (Devstral run 4, 2026-10-18: the gate said call finish_round, this
+    # said call termination_check, and the agent went looking through the tool's source for a way
+    # out). The verdict is still REFUSED -- a band that cannot be reached is not waived, and the run
+    # ends on its round budget as designed -- but what the agent is told to do is to exit.
+    # ONE REFUSAL EXIT, two wordings: the verdict below is recorded and returned once either way.
+    if _short and not _left and _rep and _rep.get("next_target") is None:
+        _verdict["nothing_reachable"] = True
+        _verdict["why"] = (
+            "NOT FINISHED, AND NOTHING LEFT TO WORK. %s, yet the gate has no target: every material op "
+            "has its rungs tried. The round ends REFUSED on the record -- exit now rather than looping "
+            "back to termination_check, which will say the same. The run goes on by its round budget; a "
+            "later capture may open a new op." % ", and ".join(_owed)
+        )
+    else:
+        _verdict["why"] = (
+            "NOT FINISHED. %s. Go back to the top of the LOOP: call termination_check, take the next "
+            "target -- prefer ops in the stacks named here -- and work its rung. Banking wins and writing "
+            "a summary is not an ending while either half is outstanding." % ", and ".join(_owed)
+        )
     _record_round_finish(_verdict)
     return _verdict
 
@@ -9022,8 +9041,9 @@ def termination_check() -> dict:
         # sends it after a target that is null. Say what is true and what to do.
         _directive = (
             "NOT DONE — %s still above the achievable band, yet no material op has a rung left to try: "
-            "nothing to work this round. Call finish_round so the round ends on the record; a later "
-            "capture may open a new op." % ", ".join(str(r.get("stage") or "?") for r in _short)
+            "nothing to work this round. Call finish_round (it records the round as REFUSED, there being "
+            "nothing reachable) and exit; the run goes on by its round budget, and a later capture may "
+            "open a new op." % ", ".join(str(r.get("stage") or "?") for r in _short)
         )
     else:
         _directive = (
