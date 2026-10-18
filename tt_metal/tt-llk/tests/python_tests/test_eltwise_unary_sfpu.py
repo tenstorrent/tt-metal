@@ -4,6 +4,7 @@
 
 import math
 import struct
+from dataclasses import dataclass
 from itertools import product
 
 import pytest
@@ -62,6 +63,8 @@ from helpers.test_variant_parameters import (
     SFPU_SHIFT_AMOUNT,
     TILE_COUNT,
     DestSync,
+    RuntimeParameter,
+    TemplateParameter,
     generate_input_dim,
 )
 from helpers.utils import passed_test
@@ -1630,3 +1633,269 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     assert torch.all(
         is_valid
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
+
+
+# Every finite BF16 value through the BF16 kernel (FP32 DEST off), in the approximation
+# mode whose instance the BF16 kernel replaces. Subnormal inputs and NaN lanes are
+# outside a step count (see helpers/ulp_sweep.py); finite/non-finite disagreements on
+# normal inputs are failures in their own right. The step metric ranks -0 with +0, so
+# the specials are judged apart, by output class and sign. max_ulp is 0 for an exact fit.
+_BF16_EXHAUSTIVE_OPS = [
+    (MathOperation.Cbrt, ApproximationMode.No, 1),
+]
+# Boards where the op keeps its stock kernel, which this sweep does not test.
+_BF16_STOCK_BOARDS = {
+    MathOperation.Cbrt: (ChipArchitecture.WORMHOLE,),
+}
+# The stored word, per board, at each special input class where the kernel returns its stock
+# kernel's result instead of torch's; the sweep expects that word's class there.
+_BF16_STOCK_SPECIALS = {
+    MathOperation.Cbrt: {
+        ChipArchitecture.BLACKHOLE: {
+            "neg_subnormal": 0x0000,
+            "neg_zero": 0x0000,
+            "pos_subnormal": 0x0000,
+        }
+    },
+}
+
+
+# Consecutive rows of _BF16_EXHAUSTIVE_OPS that share one ELF of sources/eltwise_unary_sfpu_bf16_sweep_test.cpp.
+# Building it is most of a row's time; the first row to need it builds it and the others reuse it.
+_BF16_SWEEP_GROUP = 4
+
+
+@dataclass
+class _SWEEP_OPERATIONS(TemplateParameter):
+    """The (operation, approximation mode) pairs one sweep ELF compiles into its math thread."""
+
+    rows: tuple = ()
+
+    def convert_to_cpp(self) -> str:
+        operations = ", ".join(
+            f"SfpuType::{mathop.cpp_enum_value}" for mathop, _ in self.rows
+        )
+        modes = ", ".join(mode.cpp_enum_value for _, mode in self.rows)
+        return (
+            f"constexpr SfpuType SWEEP_OPERATIONS[] = {{{operations}}};\n"
+            f"constexpr bool SWEEP_APPROXIMATION[] = {{{modes}}};"
+        )
+
+
+@dataclass
+class _SWEEP_INDEX(RuntimeParameter):
+    """Which of its ELF's operations a run executes."""
+
+    index: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SWEEP_INDEX = {self.index};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t SWEEP_INDEX;", "I"
+
+
+# Ops whose BF16 setup runs from an init their stock instances share.
+_BF16_SETUP_OPS = [
+    MathOperation.Cbrt,
+]
+# The (approximation, fast mode) instances each op's BF16 kernel replaces with FP32 DEST off, read
+# from its kernel's gate. Export compiles every other instance's init and tile from this tree and
+# from stock and refuses the PR unless they are identical, so only these instances run here.
+_BF16_REPLACED_INSTANCES = {
+    MathOperation.Cbrt: (
+        (ApproximationMode.No, FastMode.No),
+        (ApproximationMode.No, FastMode.Yes),
+        (ApproximationMode.Yes, FastMode.No),
+        (ApproximationMode.Yes, FastMode.Yes),
+    ),
+}
+_BF16_SETUP_PARAMS = [
+    params
+    for params in _sweep_params(
+        [
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+            InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        ],
+        _BF16_SETUP_OPS,
+        [ApproximationMode.No, ApproximationMode.Yes],
+        STANDARD_DIMENSIONS,
+    )
+    if params[4] == DestAccumulation.No
+    and (params[1], params[3]) in _BF16_REPLACED_INSTANCES[params[2]]
+]
+
+
+@pytest.mark.parametrize(
+    ",".join(_UNARY_SWEEP_ARGNAMES),
+    _BF16_SETUP_PARAMS,
+    ids=[build_param_id(_UNARY_SWEEP_ARGNAMES, p) for p in _BF16_SETUP_PARAMS],
+)
+def test_eltwise_unary_sfpu_bf16_replaced_instances(
+    formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions
+):
+    """Every instance the BF16 kernel replaces, on BF16 and FP32 data, against the sweep's golden."""
+    test_eltwise_unary_sfpu(
+        formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions
+    )
+
+
+def _special_class(value):
+    sign = "neg" if struct.unpack("<I", struct.pack("<f", value))[0] >> 31 else "pos"
+    kind = (
+        "nan" if value != value else ("inf" if abs(value) == float("inf") else "zero")
+    )
+    return f"{sign}_{kind}"
+
+
+@pytest.mark.parametrize("mathop,approx_mode,max_ulp", _BF16_EXHAUSTIVE_OPS)
+def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
+    if TestConfig.CHIP_ARCH in _BF16_STOCK_BOARDS.get(mathop, ()):
+        pytest.skip(f"{mathop.name} keeps the stock kernel on {TestConfig.CHIP_ARCH}")
+    from helpers.sfpu_accuracy_budget import Metric, accuracy_contract
+    from helpers.ulp import nonfinite_mismatches, ulp_distance
+    from helpers.ulp_sweep import _normal_input, measurable_mask, sweep_spec
+
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    dest_acc = DestAccumulation.No
+    dimensions = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * 64]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=dimensions,
+        spec_A=sweep_spec(formats.input_format),
+    )
+    # The sweep pads with +0. The specials go in that padding, under the edge sweep's
+    # gates for what the golden defines and the pipeline delivers.
+    specials = [0.0]
+    if negative_zero_delivered(formats.input_format, dest_acc):
+        specials.append(-0.0)
+    else:
+        # The kernel reads an undelivered -0 as +0, so the golden must too: rsqrt(-0)
+        # is -inf, which the +0 the pipeline delivers can never return.
+        src_A[(src_A == 0) & torch.signbit(src_A.float())] = 0.0
+    nonfinite = mathop in SPECIALS_READY_OPS and specials_safe(
+        formats.input_format, formats.output_format, dest_acc
+    )
+    nan_sign = _gate_unspecified_nan_sign(mathop, formats, dest_acc, nonfinite)
+    if nonfinite:
+        specials += [float("inf"), float("-inf"), float("nan"), _NEGATIVE_NAN]
+    stock = _BF16_STOCK_SPECIALS.get(mathop, {}).get(TestConfig.CHIP_ARCH, {})
+    # Through the bit pattern: a float-to-bfloat16 cast drops a NaN's sign.
+    bits = torch.tensor(specials, dtype=torch.float32).view(torch.int32) >> 16
+    tail = slice(len(src_A) - len(specials), None)
+    src_A[tail] = bits.to(torch.int16).view(torch.bfloat16).to(src_A.dtype)
+    golden = get_golden_generator(UnarySFPUGolden)(
+        mathop, src_A, formats.output_format, dest_acc, formats.input_format, dimensions
+    )
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+    row = _BF16_EXHAUSTIVE_OPS.index((mathop, approx_mode, max_ulp))
+    first = row - row % _BF16_SWEEP_GROUP
+    group = tuple(
+        (op, mode)
+        for op, mode, _ in _BF16_EXHAUSTIVE_OPS[first : first + _BF16_SWEEP_GROUP]
+    )
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_bf16_sweep_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(dimensions, dimensions),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            _SWEEP_OPERATIONS(group),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            _SWEEP_INDEX(row - first),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=False,
+    )
+    result = torch.tensor(
+        configuration.run().result, dtype=format_dict[formats.output_format]
+    )
+    # Every lane whose input the unpack does not flush must agree with the golden about
+    # being NaN or infinite. Stricter than ulp_sweep.nonfinite_failures, which also excuses
+    # a NaN golden, a store saturating past the output's range and inputs outside the op's
+    # claim: a kernel replacing stock's on every BF16 input is held to the golden there too.
+    # NaN inputs are left to the output-class check below, which is stricter.
+    failures = nonfinite_mismatches(golden, result) & _normal_input(
+        src_A, formats.input_format, formats.output_format, dest_acc
+    )
+    assert (
+        not failures.any()
+    ), f"{mathop.name}: {int(failures.sum())} lanes disagree on finiteness"
+
+    def output_class(values):
+        values = values.float()
+        return torch.stack(
+            [
+                values.isnan(),
+                values.isinf(),
+                values == 0,
+                values.signbit() & ~values.isnan(),
+            ]
+        )
+
+    expected = golden[tail].clone()
+    for lane, value in enumerate(specials):
+        if stock.get(_special_class(value)) is not None:
+            word = torch.tensor([stock[_special_class(value)]], dtype=torch.int32).to(
+                torch.int16
+            )
+            expected[lane] = word.view(torch.bfloat16).to(expected.dtype)[0]
+    wrong = output_class(expected) != output_class(result[tail])
+    if nonfinite and not nan_sign:
+        # The pack stores a NaN the kernel makes as an infinity, whose sign Wormhole leaves unspecified.
+        wrong[3] &= ~result[tail].float().isinf()
+    wrong = wrong.any(0)
+    assert not wrong.any(), (
+        f"{mathop.name}: {int(wrong.sum())} of {len(specials)} special inputs "
+        f"{specials} change output class or sign"
+    )
+    mask = measurable_mask(
+        src_A, golden, result, formats.input_format, formats.output_format, dest_acc
+    )
+    over = int(((ulp_distance(golden.to(result.dtype), result) > max_ulp) & mask).sum())
+    assert passed_test(
+        golden, result, formats.output_format, max_ulp=max_ulp, mask=mask
+    ), f"{mathop.name}: {over} lanes over the {max_ulp}-ULP budget"
+    # The step budget helpers/sfpu_accuracy_budget.yaml declares for this cell, where it
+    # declares one for this board, judged as test_unary_sfpu_ulp.py judges it.
+    contract = accuracy_contract(
+        mathop,
+        output_format=formats.output_format,
+        input_format=formats.input_format,
+        approx_mode=approx_mode,
+        dest_acc=dest_acc,
+        arch=TestConfig.CHIP_ARCH,
+    )
+    if contract.metric == Metric.ULP:
+        assert passed_test(
+            golden,
+            result,
+            formats.output_format,
+            mask=mask,
+            flush_subnormals=True,
+            **contract.passed_test_kwargs(),
+        ), f"{mathop.name}: over the {contract.max_ulp}-step budget of helpers/sfpu_accuracy_budget.yaml"
