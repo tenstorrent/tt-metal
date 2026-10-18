@@ -71,6 +71,7 @@ parameters = {
             [1, 64, 100, 100, 7, 7, 3, 3, 3, 3, 1, 1, False, 2, HS, SliceHeight, False],
             [1, 64, 112, 112, 3, 3, 2, 2, 1, 1, 1, 1, True, 2, HS, SliceHeight, False],
             [1, 128, 1600, 150, 5, 5, 1, 1, 2, 2, 1, 1, False, 0, None, None, False],
+            [1, 256, 8192, 81, 2, 2, 2, 2, 0, 0, 1, 1, True, 0, None, None, False],  # automatic slicing with ceil mode
         ],
     },
     "height_shard_tests": {
