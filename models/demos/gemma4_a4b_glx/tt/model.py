@@ -9,7 +9,7 @@ and swap gates validated (tt/rms_norm, attention, mlp, router, experts, residual
 reader (a schedule built once at load); the block input is never freed here (the caller owns it).
 
 Load-time constants: the embedding table with sqrt(H) folded in (bf16, ROW_MAJOR, replicated), RoPE tables and the
-global layers' identity page table (built per cache size in ``new_caches``, outside the forward).
+global layers' identity page table (built per cache size in ``ensure_tables``, outside the forward).
 """
 
 import os
@@ -212,13 +212,15 @@ class TtGemma4Model:
         self.blocks = [TtGemma4Block(mesh, self.cfg, self.loader, i) for i in layers]
         self.load_seconds = time.time() - t0
 
-    def new_caches(self, max_seq: int) -> dict:
-        """Empty per-layer device KV caches for max_seq tokens; the RoPE / page tables for max_seq are built here."""
-        caches = {}
+    def ensure_tables(self, max_seq: int):
+        """The RoPE / page tables for caches of max_seq rows (load time)."""
         for b in self.blocks:
             b.attention.ensure_rope(max_seq)
-            caches[b.i] = b.attention.make_cache(max_seq)
-        return caches
+
+    def new_caches(self, max_seq: int, slots: int = 1) -> dict:
+        """Empty (zero) per-layer served-layout KV caches of `slots` slots x max_seq tokens; the tables are built here."""
+        self.ensure_tables(max_seq)
+        return {b.i: b.attention.new_cache(max_seq, slots) for b in self.blocks}
 
     def embed(self, ids):
         """ids: [1, 1, 1, S] uint32 ROW_MAJOR replicated -> [1, 1, S, H] bf16 TILE replicated (sqrt(H) folded in).
@@ -237,14 +239,14 @@ class TtGemma4Model:
         return self.norm(h)
 
 
-def cache_to_torch(cache, kv_repeat: int, length: int) -> dict:
-    """Device TtKVCache -> host {key, value} position-major [length, Hkv * D] (mesh row 0; each KV head once), the
-    reference's state_tensors layout."""
+def cache_to_torch(cache, kv_repeat: int, length: int, slot: int = 0) -> dict:
+    """Slot `slot` of a device TtKVCache -> host {key, value} position-major [length, Hkv * D] (mesh row 0; each KV
+    head once), the reference's state_tensors layout."""
     cols = cache.mesh.shape[TP_AXIS]
 
     def read(t):
         parts = [ttnn.to_torch(d) for d in ttnn.get_device_tensors(t)[:cols]]  # row 0, columns 0..cols-1
-        full = torch.cat(parts, dim=1)[0, :, :length].float()
+        full = torch.cat(parts, dim=1)[slot, :, :length].float()
         full = full[::kv_repeat]  # [Hkv, length, D]
         return full.transpose(0, 1).reshape(length, -1)
 

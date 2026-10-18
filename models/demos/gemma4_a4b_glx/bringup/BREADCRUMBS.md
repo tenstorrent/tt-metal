@@ -382,3 +382,24 @@ I re-applied the attempt above unchanged; it had passed under an older framework
   `TtKVCache` is still DRAM-interleaved.
 - Re-run: `bfw job check --task L.starts`. Gate only:
   `scripts/run_safe_pytest.sh --run-all generated/bringup/gemma4_a4b_glx/tests/test_chunk_starts.py`.
+
+## K.1 serving adapter (run 20261017-192425-gemma4-glx-followup-5)
+- `tt/attention.py`: `TtKVCache` is now the served cache. Each layer's K and V are [slots, Hkv/TP, max_seq, D] bfp8
+  per chip, DRAM ND-sharded with shard [1, 1, 32, D] ROUND_ROBIN_1D over every bank (`nd_kv_memory_config`). They are
+  zero-filled at allocation with `DRAMZeroFill`. `slot_rows` copies a slot's rows to interleaved DRAM for SDPA.
+  Global layers hold one 512-wide head on 2 adjacent columns.
+- `tt/kv_chunk_table.py`: the KV address table has 16 configs (column c x {K, V} x sub 0/1), and every record is
+  256 wide (8704 B, 8 bfp8 tiles). A sliding layer's sub is the chip's local head. A global layer's sub is the
+  [0,256) or [256,512) half of the 32x512 record, at +8704. This file also has the UMD read-back and the PCC helpers.
+- `tt/runtime.py`: `Gemma4A4bGlxKvCaches` (the engine-owned cache) and `Gemma4A4bGlxPrefillRuntime`. The H2D chunk
+  arrives in ring-SDPA order and is put back in natural order on the device. There is one ack per layer, after that
+  layer's K/V writes (a D2H record op, or a device sync before a host sink).
+- `tt/adapter.py`: `Gemma4A4bGlxPrefillAdapter`, registered as `gemma4_a4b_glx` in the prefill `ADAPTER_PATHS`.
+- Generic framework hooks (`models/demos/common/prefill`):
+  - `PrefillModelAdapter.hf_model_path` returns PREFILL_HF_MODEL, else `hf_model_default`. It lives in the base
+    class because the settings lint forbids env reads in `tt/`.
+  - `prefill_producer._read_slot_kv_and_check_pcc` calls an adapter's `read_slot_kv_and_check_pcc` when the adapter
+    defines one.
+- `bringup/hooks.py`: `cache_tensors`, `contract_read_slot_kv`, `contract_independent_pcc` (the producer's own
+  UMD reader and bfp8 decoder).
+- Re-run: `bfw job check --task K.1`.

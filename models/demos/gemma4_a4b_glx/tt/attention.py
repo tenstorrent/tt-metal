@@ -45,29 +45,80 @@ def _col_mapper(mesh, dim):
     return ttnn.ShardTensor2dMesh(mesh, tuple(mesh.shape), dims=(None, dim))
 
 
-class TtKVCache:
-    """Per-layer K/V cache [1, Hkv, max_seq, D] bfp8, heads split over the mesh columns, replicated over the rows.
-    K is stored post k_norm + RoPE, V post the unscaled RMS (the reference state's layout)."""
+def nd_kv_memory_config(mesh, width: int):
+    """The served KV layout: DRAM ND-sharded, shard [1, 1, 32, width] ROUND_ROBIN_1D over every DRAM bank, so one
+    32-token record of one head is contiguous in one bank (one KV table entry is an address and a size)."""
+    banks = mesh.dram_grid_size().x
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, 0)) for b in range(banks)])
+    spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, TILE, width],
+        grid=grid,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=spec)
 
-    def __init__(self, mesh, num_kv_heads: int, head_dim: int, max_seq: int, k_prefix=None, v_prefix=None):
-        self.mesh, self.max_seq = mesh, max_seq
+
+def zero_fill(t):
+    from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
+
+    DRAMZeroFill.op(t)
+
+
+def slot_rows(t, slot: int, lo: int, hi: int):
+    """Rows [lo, hi) of KV slot `slot` of a [slots, h, cap, D] cache as a new DRAM-interleaved tensor (the caller
+    frees it). A slice covering the whole tensor returns the tensor itself, so that case is a layout copy."""
+    slots, h, cap, d = (int(x) for x in t.shape)
+    if slots == 1 and lo == 0 and hi == cap:
+        return ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.slice(t, [slot, 0, lo, 0], [slot + 1, h, hi, d], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+class TtKVCache:
+    """Per-layer K/V cache [slots, Hkv/TP, max_seq, D] bfp8 per chip (column c holds its own KV heads, every mesh row
+    the same), in the served layout (nd_kv_memory_config), zero when allocated. K is stored post k_norm + RoPE, V post
+    the unscaled RMS (the reference state's layout). ``slot`` is the slot attention reads and writes."""
+
+    def __init__(self, mesh, num_kv_heads: int, head_dim: int, max_seq: int, slots: int = 1):
+        self.mesh, self.max_seq, self.slots, self.d = mesh, max_seq, slots, head_dim
         tp = mesh.shape[TP_AXIS]
         assert num_kv_heads % tp == 0, f"{num_kv_heads} kv heads over TP={tp}"
-        self.k = self._upload(num_kv_heads, head_dim, k_prefix)
-        self.v = self._upload(num_kv_heads, head_dim, v_prefix)
+        assert max_seq % TILE == 0, f"cache length {max_seq} not a multiple of {TILE}"
+        self.nkv = num_kv_heads // tp
+        self.slot = 0
+        mc = nd_kv_memory_config(mesh, head_dim)
+        shape = ttnn.Shape([slots, self.nkv, max_seq, head_dim])
+        self.k = ttnn.allocate_tensor_on_device(shape, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh, mc)
+        self.v = ttnn.allocate_tensor_on_device(shape, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh, mc)
+        self.zero()
 
-    def _upload(self, hkv, d, prefix):
-        full = torch.zeros(1, hkv, self.max_seq, d, dtype=torch.float32)
-        if prefix is not None and prefix.shape[1] > 0:
-            full[0, :, : prefix.shape[1]] = prefix.float()
-        return ttnn.from_torch(
-            full,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=_col_mapper(self.mesh, 1),
-        )
+    def zero(self):
+        zero_fill(self.k)
+        zero_fill(self.v)
+
+    def tensors(self) -> dict:
+        return {"key": self.k, "value": self.v}
+
+    def load(self, slot: int, k_prefix=None, v_prefix=None):
+        """Write host prefixes, head-major [Hkv, n, D] (n may be 0), at rows [0, n) of `slot`; n is padded to whole
+        records with zeros. Load time only (host upload)."""
+        for t, prefix in ((self.k, k_prefix), (self.v, v_prefix)):
+            if prefix is None or prefix.shape[1] == 0:
+                continue
+            n = prefix.shape[1]
+            n_pad = -(-n // TILE) * TILE
+            full = torch.zeros(1, prefix.shape[0], n_pad, self.d, dtype=torch.float32)
+            full[0, :, :n] = prefix.float()
+            up = ttnn.from_torch(
+                full,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=_col_mapper(self.mesh, 1),
+            )
+            ttnn.fill_cache(t, up, batch_idx=slot, update_idx=0)
+            ttnn.deallocate(up)
 
     def deallocate(self):
         ttnn.deallocate(self.k)
@@ -201,9 +252,13 @@ class TtSlidingAttention:
         ttnn.deallocate(vn)
         return k8, v8
 
-    def make_cache(self, max_seq: int, k_prefix=None, v_prefix=None) -> TtKVCache:
-        """Device cache for this layer from host prefixes in the reference's state exchange layout, position-major
-        [n, Hkv * D] (row = token, heads concatenated). Each KV head goes on kv_repeat adjacent columns."""
+    def new_cache(self, max_seq: int, slots: int = 1) -> TtKVCache:
+        """An empty (zero) served-layout cache for this layer: `slots` KV slots of max_seq rows."""
+        return TtKVCache(self.mesh, self.nkv * self.mesh.shape[TP_AXIS], self.d, max_seq, slots)
+
+    def load_prefix(self, cache: TtKVCache, slot: int, k_prefix=None, v_prefix=None):
+        """Write host prefixes in the reference's state exchange layout, position-major [n, Hkv * D] (row = token,
+        heads concatenated), into rows [0, n) of `slot`. Each KV head goes on kv_repeat adjacent columns."""
         r = self.kv_repeat
 
         def head_major(p):
@@ -212,8 +267,13 @@ class TtSlidingAttention:
             p = p.reshape(p.shape[0], p.shape[1] // self.d, self.d).transpose(0, 1)  # [Hkv, n, D]; n may be 0
             return p.repeat_interleave(r, dim=0) if r > 1 else p
 
-        k_prefix, v_prefix = head_major(k_prefix), head_major(v_prefix)
-        return TtKVCache(self.mesh, self.nkv * self.mesh.shape[TP_AXIS], self.d, max_seq, k_prefix, v_prefix)
+        cache.load(slot, head_major(k_prefix), head_major(v_prefix))
+
+    def make_cache(self, max_seq: int, k_prefix=None, v_prefix=None) -> TtKVCache:
+        """One-slot device cache for this layer holding the host prefixes (see load_prefix)."""
+        cache = self.new_cache(max_seq)
+        self.load_prefix(cache, 0, k_prefix, v_prefix)
+        return cache
 
     def _head_norm(self, t, weight):
         shape = t.shape
@@ -287,14 +347,14 @@ class TtSlidingAttention:
             ttnn.deallocate(cos)
             ttnn.deallocate(sin)
 
-        # Write the chunk into the cache (bfp8), then read back the window tail + chunk as K/V for SDPA.
-        ttnn.fill_cache(cache.k, k8, batch_idx=0, update_idx=start)
-        ttnn.fill_cache(cache.v, v8, batch_idx=0, update_idx=start)
+        # Write the chunk into the cache slot (bfp8), then read back the window tail + chunk as K/V for SDPA.
+        ttnn.fill_cache(cache.k, k8, batch_idx=cache.slot, update_idx=start)
+        ttnn.fill_cache(cache.v, v8, batch_idx=cache.slot, update_idx=start)
         ttnn.deallocate(k8)
         ttnn.deallocate(v8)
         hist = min(start, ((self.window + TILE - 1) // TILE) * TILE)
-        k_win = ttnn.slice(cache.k, [0, 0, start - hist, 0], [1, nkv, end, d])
-        v_win = ttnn.slice(cache.v, [0, 0, start - hist, 0], [1, nkv, end, d])
+        k_win = slot_rows(cache.k, cache.slot, start - hist, end)
+        v_win = slot_rows(cache.v, cache.slot, start - hist, end)
         if hist:
             q_pad = ttnn.slice(q, [0, 0, 0, 0], [1, nh, hist, d])  # dummy queries, outputs dropped
             q_sq = ttnn.concat([q_pad, q], dim=2)
@@ -342,9 +402,9 @@ class TtGlobalAttention(TtSlidingAttention):
     Column c holds Q heads 4c..4c+3 and KV head c // 2 (each KV head lives on 2 adjacent columns), so attention stays
     local to each chip (GQA 4:1). The per-chip fused weight is [Wq_c | Wk_{c//2}] and `nlp_create_qkv_heads(kv_tied)`
     reads raw K twice: K = rope(k_norm(k_raw)), V = rms(k_raw) without a weight. RoPE is the rotate-half op with the
-    proportional inv_freq (zeros past 25 %: cos 1, sin 0 there). SDPA is chunked causal SDPA over the whole cache seen as
-    pages of KV_BLOCK rows with an identity page table (one head per chip, so the paged view is a zero-cost reshape of
-    the contiguous [1, 1, max_seq, D] cache).
+    proportional inv_freq (zeros past 25 %: cos 1, sin 0 there). SDPA is chunked causal SDPA over the cache slot (copied to an
+    interleaved [1, 1, max_seq, D] tensor) seen as pages of KV_BLOCK rows with an identity page table (one head per chip,
+    so the paged view is a zero-cost reshape of the copy).
     """
 
     kv_repeat = 2
@@ -430,8 +490,8 @@ class TtGlobalAttention(TtSlidingAttention):
             ttnn.deallocate(cos)
             ttnn.deallocate(sin)
 
-        ttnn.fill_cache(cache.k, k8, batch_idx=0, update_idx=start)
-        ttnn.fill_cache(cache.v, v8, batch_idx=0, update_idx=start)
+        ttnn.fill_cache(cache.k, k8, batch_idx=cache.slot, update_idx=start)
+        ttnn.fill_cache(cache.v, v8, batch_idx=cache.slot, update_idx=start)
         ttnn.deallocate(k8)
         ttnn.deallocate(v8)
 
@@ -446,9 +506,12 @@ class TtGlobalAttention(TtSlidingAttention):
             ttnn.deallocate(q)
         else:
             q_sq = q
-        pages = (cache.max_seq // self.KV_BLOCK, 1, self.KV_BLOCK, d)  # zero-cost view of the contiguous cache
-        k_paged = ttnn.reshape(cache.k, pages)
-        v_paged = ttnn.reshape(cache.v, pages)
+        # The slot as an interleaved [1, 1, max_seq, D] copy, seen as pages (a zero-cost reshape of the copy).
+        pages = (cache.max_seq // self.KV_BLOCK, 1, self.KV_BLOCK, d)
+        k_slot = slot_rows(cache.k, cache.slot, 0, cache.max_seq)
+        v_slot = slot_rows(cache.v, cache.slot, 0, cache.max_seq)
+        k_paged = ttnn.reshape(k_slot, pages)
+        v_paged = ttnn.reshape(v_slot, pages)
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
             q_chunk_size=q_chunk,
@@ -466,6 +529,8 @@ class TtGlobalAttention(TtSlidingAttention):
             compute_kernel_config=self.sdpa_cfg,
         )
         ttnn.deallocate(q_sq)
+        ttnn.deallocate(k_slot)
+        ttnn.deallocate(v_slot)
         if pre:
             full = attn
             attn = ttnn.slice(full, [0, 0, pre, 0], [1, nh, pre + s, d])

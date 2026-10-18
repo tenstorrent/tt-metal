@@ -31,6 +31,7 @@ properties that import lazily.
 from __future__ import annotations
 
 import importlib
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -177,6 +178,11 @@ class PrefillModelAdapter(ABC):
     # PCC) lives on the runtime that build_runtime returns — see the runtime
     # contract in docs/ADDING_A_PREFILL_MODEL.md. The engine owns all comms.
     # =====================================================================
+    @property
+    def hf_model_path(self) -> str:
+        """The checkpoint dir: PREFILL_HF_MODEL, else ``hf_model_default`` (what the runner prints)."""
+        return os.environ.get("PREFILL_HF_MODEL") or self.hf_model_default
+
     @abstractmethod
     def load_hf_config(self) -> "PretrainedConfig":
         """Load (and normalize) the HF config from PREFILL_HF_MODEL (falling back
@@ -325,6 +331,8 @@ ADAPTER_PATHS = {
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
     "gemma4_d_p": "models.demos.gemma4_d_p.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
+    # Gemma-4 26B-A4B (MoE) on an 8x4 Galaxy, replicated sequence, TP4 heads (agentic bring-up).
+    "gemma4_a4b_glx": "models.demos.gemma4_a4b_glx.tt.adapter:Gemma4A4bGlxPrefillAdapter",
     # GLM-5.2: runnable through the runner only (no tests / CI); same architecture as GLM-5.3.
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
     "glm_5_3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3:GLM53Adapter",

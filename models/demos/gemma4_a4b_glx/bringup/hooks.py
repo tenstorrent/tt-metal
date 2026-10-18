@@ -258,6 +258,10 @@ class _DeviceState:
 
         return cache_to_torch(self.caches[layer], self.attention[layer].kv_repeat, length)
 
+    def cache_tensors(self, layer):
+        """The device tensors holding the layer's KV (the served layout the KV table points into)."""
+        return self.caches[layer].tensors()
+
     def formats(self):
         import ttnn
 
@@ -343,6 +347,48 @@ class Gemma4DeviceModel:
         import ttnn
 
         ttnn.synchronize_device(self.mesh)
+
+
+def _sliding_layers(s, layers):
+    import os
+
+    from models.demos.gemma4_a4b_glx.reference.gemma4_ref import Gemma4TextConfig
+
+    cfg = Gemma4TextConfig.from_json(os.path.join(str(s.hf_dir), "config.json"))
+    return {i: cfg.is_sliding(i) for i in layers}
+
+
+def contract_read_slot_kv(s, table, dmap, slot, length):
+    """{layer: {"key", "value"}} position-major [length, Hkv * D] of `slot`, read through the exported KV table."""
+    from models.demos.gemma4_a4b_glx.tt.kv_chunk_table import read_slot_kv
+
+    return read_slot_kv(table, dmap, slot, length, _sliding_layers(s, s.layers()))
+
+
+def contract_independent_pcc(s, table, dmap, slot, length, g):
+    """Min K / V PCC over the layers vs the golden state, read with the producer's own UMD reader and bfp8 decoder
+    (not the adapter's read-back) and a float64 Pearson."""
+    import torch
+
+    from models.demos.common.prefill.runners import prefill_producer as producer
+    from models.demos.gemma4_a4b_glx.tt.kv_chunk_table import config_id, pcc
+
+    tp = s.mesh[1]
+    out = {"k": 1.0, "v": 1.0}
+    for layer, sliding in _sliding_layers(s, s.layers()).items():
+        st = g.state(layer)
+        for k, (short, name) in enumerate((("k", "key"), ("v", "value"))):
+
+            def rd(cid):
+                return producer._read_kv_slice(table, dmap, cid, layer, slot, length, 256, producer._decode_bfp8_chunk)
+
+            if sliding:
+                dev = torch.cat([rd(config_id(c, k, h)) for c in range(tp) for h in (0, 1)], dim=-1)
+            else:
+                dev = torch.cat([rd(config_id(2 * h, k, sub)) for h in range(tp // 2) for sub in (0, 1)], dim=-1)
+            gold = st[name].reshape(-1, st[name].shape[-1])[:length]
+            out[short] = min(out[short], pcc(dev.float(), gold.float()))
+    return out
 
 
 def device_model(mesh, spec, layers, lm_head=True):
