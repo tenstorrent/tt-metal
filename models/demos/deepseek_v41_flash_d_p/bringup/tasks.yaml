@@ -9182,11 +9182,59 @@ tasks:
       pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_experts: '> 0'
+- id: P.5
+  title: 'Collectives on the bring-up fabric forks (fabric_all_gather, fabric_reduce_scatter with an exact fp32 add) vs stock ttnn CCLs'
+  step: perf
+  role: perf
+  deps:
+  - P.4
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup/fabric_all_gather_ttnn
+  - ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn
+  - ttnn/ttnn/bringup/INDEX.md
+  ab:
+    change:
+      CCL_IMPL: fabric
+    env:
+      CCL_IMPL: stock
+  brief:
+    details: 'Owner (2026-10-18): try the bring-up fabric collectives for this model''s cross-chip traffic. Today: stock
+      ttnn.all_gather in attention, sparse_attention, norm, indexer, compressor and common; the three partial sums
+      (ATTN_O_SUM, EXPERTS_SUM, HC_TP_SUM, all gather_add = all_gather of fp32 partials + an exact fp32 SFPU add, K-30)
+      and one all_to_all. Forks: ttnn.bringup.fabric_all_gather (fabric_all_gather_ttnn; a drop-in for
+      ttnn.experimental.high_bw_all_gather with a link-rate program; GLM-5.3 uses it in tt/experts_ag.py) and
+      ttnn.bringup.fabric_reduce_scatter (fabric_reduce_scatter_ttnn: a mesh axis or the whole mesh, line / ring /
+      dual_cycles). First measure where the time is: one per-op profile (BRINGUP_PROFILE_OPS=1, the 8 layers) with the
+      stock CCLs, and report the collectives'' total and per-call times; if they are under ~2 % of device time on this
+      2x2, say so, wire the forks anyway (the payoff is the 4x4 / 8x4 Galaxy) and keep the change small. Then: (1) the
+      all_gathers on fabric_all_gather where its contract fits (dims, dtypes incl. fp32, sharding); list any it cannot
+      take and why. (2) The three partial sums as one fabric_reduce_scatter each, which needs the exact fp32 sum the
+      model has today: fabric_reduce_scatter adds with the FPU (add_tiles), which reads fp32 at ~TF32 (K-30); add an
+      opt-in option (default off = today''s program, skill bringup-fork-op section 3) that adds fp32 partials exactly
+      (SFPU add on fp32 DEST, or unpack to fp32 DEST), with fork unit tests (fp32 inputs vs a float64 sum, bit-exact vs
+      the gather_add result) and the fork''s full regression (GLM-5.3''s use unchanged). One model setting in
+      tt/settings.py, CCL_IMPL {stock (default), fabric}; nothing else changes (HiFi4, fp32, EXPERTS_KERNEL flat).
+      Frozen tests are never edited and must pass with fabric. Report in the commit: the collectives'' time stock vs
+      fabric (per-op), device total per chunk, and which calls moved.'
+  gate:
+    cmd: for t in attention attn_hc attn_norm ffn_hc ffn_norm experts shared_expert indexer; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_${t}.py || exit 1; done
+      && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_total: '> 0'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
   deps:
-  - P.4
+  - P.5
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
