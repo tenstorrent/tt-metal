@@ -1,0 +1,73 @@
+{
+  "config_id": "combined_head4_gdn4_lofi",
+  "weight_groups": {
+    "gdn_input": "bfloat4_b",
+    "gdn_output": "bfloat4_b",
+    "qsa_prefill": "bfloat8_b",
+    "qsa_decode": "bfloat4_b",
+    "qsa_output": "bfloat8_b",
+    "shared_expert": "bfloat16",
+    "hc": "bfloat8_b",
+    "ple_projection": "bfloat8_b",
+    "lm_head": "bfloat4_b",
+    "routed_expert_gate_up": "bfloat4_b",
+    "routed_expert_down": "bfloat4_b",
+    "ple_tables": "bfloat4_b",
+    "embedding": "bfloat16",
+    "router": "bfloat16",
+    "norms": "mixed_bfloat16_float32",
+    "terminal_mixer": "bfloat16"
+  },
+  "compute_fidelities": {
+    "gdn_input": "LoFi",
+    "gdn_output": "LoFi",
+    "qsa_prefill": "HiFi2",
+    "qsa_decode": "LoFi",
+    "qsa_output": "LoFi",
+    "shared_expert": "HiFi2",
+    "hc": "LoFi",
+    "ple_projection": "HiFi2",
+    "lm_head": "LoFi",
+    "routed_expert_gate_up": "LoFi",
+    "routed_expert_down": "LoFi",
+    "router": "HiFi2",
+    "norms": "HiFi4",
+    "terminal_mixer": "HiFi4",
+    "qsa_attention": "HiFi4",
+    "gdn_recurrence": "HiFi4"
+  },
+  "layer_exceptions": {
+    "0": {
+      "weight_groups": {
+        "gdn_input": "bfloat8_b",
+        "gdn_output": "bfloat8_b"
+      }
+    }
+  },
+  "activation_dtype": "bfloat16",
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": "mixed",
+  "kv_cache_dtype": "fp8_e4m3",
+  "state_dtypes": {
+    "raw_index": "bfloat16",
+    "recurrent": "float32",
+    "convolution": "bfloat16"
+  },
+  "logits_dtype": "bfloat16",
+  "sampling": {
+    "logits": "bfloat16",
+    "scores": "bfloat16",
+    "token_ids": "uint32",
+    "max_top_k": 32
+  },
+  "max_context": 262144,
+  "routing": {
+    "active_experts_per_token": 10,
+    "experts_total": 512,
+    "dispatch": "active_only"
+  },
+  "qsa_execution": {
+    "singleton_packed_fidelity_group": "qsa_decode",
+    "batched_decode_weight_group": "qsa_prefill"
+  }
+}

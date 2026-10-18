@@ -1,0 +1,676 @@
+{
+  "model": "Qwen/Qwen3.8-Flash-Next",
+  "revision": "de4b8e4d43b917e7706784d8bb445c9af86a3540",
+  "hf_advertised_context": 262144,
+  "supported_context": 262144,
+  "largest_tested_prefill_context": 262144,
+  "largest_tested_decode_context": 262144,
+  "capability_reduction": null,
+  "status": "functional_decoder_validated_clean_pass",
+  "required_layer_kinds": [
+    "linear_attention",
+    "linear_attention_with_ple",
+    "indexed_attention"
+  ],
+  "notes": "All three layer kinds preserve the advertised262144 context with FP64 acceptance evidence. Full-context B1 validation uses bounded stateful harnesses. GDN/QSA long tests cover attention components; separate complete decoder suites cover B1/B2/B32. PLE long prefix preserves every coupled PLE/residual-addition/attention-hyperconnection/GDN state update and checks the stateless suffix every4096 tokens plus final public prefill/decode. B32 measured context is130, not a full-context batch claim. Large prompts may use absolute-position chunks. No model config or context limit is reduced.",
+  "partial_evidence": {
+    "linear_attention": {
+      "complete_decoder_batches": [
+        1,
+        2,
+        32
+      ],
+      "component_batches": [
+        1
+      ],
+      "complete_prefill_lengths": [
+        1,
+        3,
+        31,
+        32,
+        33,
+        127,
+        128,
+        129,
+        259
+      ],
+      "complete_decode_largest_position": 261,
+      "artifact": "functional_decoder/decoder_boundaries_fp64_01.log",
+      "full_context_gate": "passed real B1 attention-component harness: all recurrent chunks, periodic state, final prefill and changed/repeated traced decode; complete decoder suffix covered separately",
+      "component_prefill_contexts": [
+        262143,
+        262144
+      ],
+      "component_traced_decode_context": 262144,
+      "context_artifact": "functional_decoder/gdn_long_layer0_B1.json",
+      "batch32_evidence": {
+        "artifact": "functional_decoder/decoder_batch32_fp64_01.log",
+        "weights": "real",
+        "chunk_size": 8,
+        "prefill_lengths": [
+          1,
+          33,
+          129
+        ],
+        "continuation_length": 2,
+        "largest_traced_decode_position": 129,
+        "tested_context": 130,
+        "pcc_method": "two_pass_centered_fp64",
+        "minimum_pcc": 0.9997404236044006,
+        "threshold": 0.995,
+        "changed_inputs_and_slots": true,
+        "interleaved_prefill_with_live_decode_trace": true,
+        "bitwise_repeat": true,
+        "scope": "B32 short-context complete decoder; full-context evidence remains independently recorded above"
+      },
+      "summary": "functional_decoder/decoder_boundary_summary.json",
+      "complete_boundary_min_pcc": 0.998554647552672,
+      "context_log": "functional_decoder/gdn_long_fp64_01.log",
+      "context_minimum_pcc": 0.9999639518135346,
+      "context_metric": "two_pass_centered_fp64"
+    },
+    "linear_attention_with_ple": {
+      "complete_decoder_batches": [
+        1,
+        2,
+        32
+      ],
+      "complete_prefill_lengths": [
+        1,
+        3,
+        31,
+        32,
+        33,
+        127,
+        128,
+        129,
+        259
+      ],
+      "complete_decode_largest_position": 261,
+      "artifact": "functional_decoder/decoder_boundaries_fp64_01.log",
+      "context_artifact": "functional_decoder/decoder1_long_context.json",
+      "complete_prefill_contexts": [
+        262143,
+        262144
+      ],
+      "complete_traced_decode_context": 262144,
+      "full_context_gate": "passed real B1 coupled stateful prefix and70 complete-output checks; full128/127 tails plus final-position changed/repeated traced decode, threshold0.995",
+      "batch32_evidence": {
+        "artifact": "functional_decoder/decoder_batch32_fp64_01.log",
+        "weights": "real",
+        "chunk_size": 8,
+        "prefill_lengths": [
+          1,
+          33,
+          129
+        ],
+        "continuation_length": 2,
+        "largest_traced_decode_position": 129,
+        "tested_context": 130,
+        "pcc_method": "two_pass_centered_fp64",
+        "minimum_pcc": 0.9982763670771753,
+        "threshold": 0.995,
+        "changed_inputs_and_slots": true,
+        "interleaved_prefill_with_live_decode_trace": true,
+        "bitwise_repeat": true,
+        "scope": "B32 short-context complete decoder; full-context evidence remains independently recorded above"
+      },
+      "summary": "functional_decoder/decoder_boundary_summary.json",
+      "complete_boundary_min_pcc": 0.9975707124744084,
+      "context_log": "functional_decoder/decoder1_long_fp64_01.log",
+      "context_metric": "two_pass_centered_fp64",
+      "context_minimum_complete_pcc": 0.9982292908806176,
+      "complete_context_checks": 70,
+      "context_elapsed_seconds": 555.7225983750541,
+      "validated_coupled_prefix": 262143,
+      "context_harness_scope": {
+        "persistent_state": "PLE token/convolution history and GDN convolution/recurrent state preserved for every prefix token",
+        "prefix_path": "PLE -> residual addition -> attention hyperconnection read -> GDN",
+        "stateless_suffix": "attention residual write and MoE suffix checked every4096 tokens and at final full decoder calls",
+        "inputs": "integration control: common N(0,.05) vector repeated into4 streams plus independent N(0,.005) noise",
+        "component_ple_pcc": "diagnostic only; complete-output threshold unchanged"
+      }
+    },
+    "indexed_attention": {
+      "complete_decoder_batches": [
+        1,
+        2,
+        32
+      ],
+      "component_slot_swap_batches": [
+        2
+      ],
+      "complete_prefill_lengths": [
+        1,
+        3,
+        31,
+        32,
+        33,
+        127,
+        128,
+        129,
+        259,
+        2053
+      ],
+      "complete_decode_largest_position": 2055,
+      "artifact": "functional_decoder/decoder_boundaries_fp64_01.log",
+      "full_context_gate": "passed real B1 attention-component harness, full page/index state, page permutations and deterministic final trace; complete decoder suffix covered separately",
+      "component_prefill_contexts": [
+        262143,
+        262144
+      ],
+      "component_traced_decode_context": 262144,
+      "context_artifacts": [
+        "functional_decoder/qsa_context_262143_B1.json",
+        "functional_decoder/qsa_context_262144_B1.json"
+      ],
+      "batch32_evidence": {
+        "artifact": "functional_decoder/decoder_batch32_fp64_01.log",
+        "weights": "real",
+        "chunk_size": 8,
+        "prefill_lengths": [
+          1,
+          33,
+          129
+        ],
+        "continuation_length": 2,
+        "largest_traced_decode_position": 129,
+        "tested_context": 130,
+        "pcc_method": "two_pass_centered_fp64",
+        "minimum_pcc": 0.9998771017992765,
+        "threshold": 0.995,
+        "changed_inputs_and_slots": true,
+        "interleaved_prefill_with_live_decode_trace": true,
+        "bitwise_repeat": true,
+        "scope": "B32 short-context complete decoder; full-context evidence remains independently recorded above"
+      },
+      "summary": "functional_decoder/decoder_boundary_summary.json",
+      "complete_boundary_min_pcc": 0.9994733865733758,
+      "context_log": "functional_decoder/qsa_long_01.log",
+      "context_metric": "centered FP64 Pearson correlation (independent QSA helper already FP64)"
+    }
+  },
+  "acceptance_metric": "FP64 Pearson correlation; complete decoder threshold 0.995",
+  "real_accuracy_status": "passed B1/B2 boundary suite, B32 scoped suite, and all B1 full-context harnesses",
+  "full_context_batch": 1,
+  "stage_review": "functional_decoder/stage_review_01.md",
+  "fused_decoder_validation": {
+    "status": "fused_decoder_validated_clean_pass",
+    "supported_context": 262144,
+    "full_context_batch": 1,
+    "batch32_tested_context": 130,
+    "capability_reduction": null,
+    "runtime_source_sha256": "4a2f2586711b985f1f558ed3b2c535ddd8019131ee3afc192aea608915d39afe",
+    "memory_contract": "KV-cache dtype/layout and logical capacity unchanged. Native weighted expert reduction removes an80MiB intermediate, adds33KiB immutable device metadata; indexed B1S1 update adds512bytes persistent indices. No reduced context claim. Router/shared packing concatenates the existing512+1312 columns with no added padding or persistent setup duplication. Final native folds remove intermediate tensors and duplicate per-invocation RoPE tables; persistent KV format/capacity remains unchanged.",
+    "boundary_summary": "fused_decoder/native_boundary_summary.json",
+    "gdn_context": "fused_decoder/gdn_long_final_layer0_B1.json",
+    "pending": [],
+    "functional_evidence": "Existing top-level partial_evidence and stage_review remain the completed functional baseline.",
+    "batch32_summary": "fused_decoder/native_batch32_summary.json",
+    "qsa_context": "fused_decoder/qsa_context_262144_B1_slots.json",
+    "watcher": "fused_decoder/watcher_native_summary.json",
+    "performance": "fused_decoder/native_performance_summary.json",
+    "coupled_ple_context": "fused_decoder/decoder1_long_context.json",
+    "coupled_ple_minimum_complete_pcc": 0.9982264027222862,
+    "coupled_ple_complete_checks": 70,
+    "router_shared_provenance": "fused_decoder/router_shared_integration/audit.json",
+    "native_fold_provenance": "fused_decoder/native_integration/audit.json",
+    "gdn_context_command": "fused_decoder/gdn_long_final_native_command.json",
+    "gdn_context_minimum_pcc": 0.9999653214703076,
+    "qsa_contexts": [
+      "fused_decoder/qsa_context_262143_B1_slots.json",
+      "fused_decoder/qsa_context_262144_B1_slots.json"
+    ],
+    "qsa_context_command": "fused_decoder/qsa_slot_context_native_command.json",
+    "coupled_ple_context_command": "fused_decoder/decoder1_long_final_native_command.json",
+    "final_evidence": "fused_decoder/final_native_evidence.json",
+    "stage_review": "fused_decoder/stage_review_01.md",
+    "stage_review_sha256": "e722265c0d9b6f50b8759aba4d672b60a76faeed0be9d28bdad0b8df7554803e"
+  },
+  "optimized_decoder_validation": {
+    "status": "optimized_decoder_validated_clean_pass",
+    "supported_context": 262144,
+    "full_context_batch": 1,
+    "batch32_tested_context": 130,
+    "capability_reduction": null,
+    "runtime_source_sha256": "60f64f9796ee44084a760a8c817ee9de5577d3ea2b566359844b56aced76c17a",
+    "memory_contract": {
+      "qsa_cache": "BF16 [1,1,2*pool_tokens,512] row-major [V256,K256] replaces two BF16 tiled K/V caches; old caches are deleted before packed allocation. The combined bytes and physical-page capacity are unchanged.",
+      "qsa_kv_bytes_per_physical_token": 2048,
+      "qsa_full_context_kv_bytes_per_batch_lane": 536870912,
+      "qsa_index_state": "Raw key cache, pooled keys and request-slot pooled banks retain original BF16 capacity and paging semantics. Native indexer prefix/weights and logical-position offsets are immutable setup buffers; B1 uses internal chunks512, B>1 uses128, with arbitrary logical tails.",
+      "routed_experts": "Two BFP4 representations (native per-expert and packed sparse-prefill) replace native BFP8-only weights; each full set is1415577600 bytes at576 bytes/tile. Both optimized sets total2831155200 bytes, versus2673868800 bytes for the original BFP8 set. The unused83886080-byte output template and32768-byte reduction-index table are removed.",
+      "attention_weights": "BFP8 interleaved prefill and DRAM-sharded decode copies; padding is internal and does not change logical dimensions.",
+      "ple": "Immutable BFP4 lookup tables unchanged. Parallel token/head lookup writes disjoint segments of the existing prepared output, with no new persistent buffer. Native FP32 tap-plane reduction avoids the generic sum transpose peak; B2 chunk512 passed. One-token projection input/output remain in L1.",
+      "gdn": "FP32 recurrence and BF16 convolution/request-state banks retain capacity; in-place updates and parallel routing remove intermediates.",
+      "public_lengths": "Arbitrary valid logical sequence lengths remain supported. prepare() provisions chunk/tail workspaces before capture; no divisibility restriction.",
+      "hyperconnection": "BFP8 interleaved prefill and DRAM-sharded decode projection copies; decode read/up use5/2cores and one reader. Small outputs remain in L1; B32 normalization retains the legal interleaved path."
+    },
+    "pending": [],
+    "functional_evidence": "Top-level and fused_decoder_validation remain the completed previous-stage baseline.",
+    "batch32_evidence": "optimized_decoder/final_batch32_final2.log",
+    "gdn_context": "optimized_decoder/gdn_long_final_layer0_B1.json",
+    "gdn_context_minimum_pcc": 0.9998257785380804,
+    "qsa_contexts": [
+      "optimized_decoder/qsa_context_262143_B1_slots.json",
+      "optimized_decoder/qsa_context_262144_B1_slots.json"
+    ],
+    "qsa_context_prefill_pcc": 0.9979966663584611,
+    "qsa_context_decode_pcc": 0.9985630457235678,
+    "coupled_ple_context": "optimized_decoder/decoder1_long_context.json",
+    "coupled_ple_minimum_complete_pcc": 0.9978284519453818,
+    "coupled_ple_complete_checks": 70,
+    "watcher": "optimized_decoder/watcher_final_summary.json",
+    "performance": "optimized_decoder/final_selection.json",
+    "profiler_accounting": "optimized_decoder/final_performance_accounting.json",
+    "final_evidence": "optimized_decoder/final_evidence.json",
+    "boundary_comparison": "optimized_decoder/final_evidence.json#boundary_comparison",
+    "correctness_summary": "optimized_decoder/final_evidence.json#correctness",
+    "stage_review": "optimized_decoder/stage_review_01.md",
+    "stage_review_sha256": "9315539ef4b57530d7bcc95f3c5d391ffd86474449168446a5cd94ce15ca7237"
+  },
+  "multichip_decoder_validation": {
+    "status": "multichip_decoder_validated_clean_pass",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "physical_device_ids": [
+      3,
+      2,
+      1,
+      0
+    ],
+    "supported_context": 262144,
+    "full_context_batch": 1,
+    "capability_reduction": null,
+    "weight_bytes_per_device": 26349461504,
+    "kv_cache_bytes_per_device": 3221225472,
+    "all_cache_state_bytes_per_device": 6644066560,
+    "reserved_trace_activation_bytes_per_device": 1073741824,
+    "memory_plan": "multichip_decoder/memory_capacity_plan.json",
+    "qualification": "Final f292934e QSA B1 BF8-prefill/converted-BF4-decode policy passes 429 actual-HF comparisons and 832 tracked watcher replays, all 262144 context tokens in 517 checks, the adjacent 0\u21921\u21922\u21923 stack, and direct prefill/appended-decode cache, tail and pooled-state ownership checks against an independent phase-matched single attention control. Complete-decoder and stack comparisons retain unchanged OptimizedDecoder at PCC \u2265 0.995. GDN/B>1 code-path reuse is AST-proved. All 9 paired timing outputs and 12 profiler policy captures pass.",
+    "pending": [],
+    "planned_total_bytes_per_device": 34067269888,
+    "allocatable_dram_bytes_per_device": 34178731008,
+    "runtime_source_sha256": "f292934e2268db39868676611f608dcba52ad2bc3dc309ebd3e7649b89c8d143",
+    "batch32_tested_context": 130,
+    "capacity_probe": "multichip_decoder/capacity_probe.json",
+    "final_evidence": "multichip_decoder/final_evidence.json",
+    "retained_evidence_equivalence": "multichip_decoder/source_reuse.json",
+    "profiler_accounting": "multichip_decoder/selected_v6_performance_accounting.json",
+    "precision_investigation": "multichip_decoder/qsa_component_precision_autofix.md",
+    "stage_review": "multichip_decoder/stage_review_final.md",
+    "stage_review_sha256": "1e5da8daa859fba1f8ad22d8179a39127ae1365dee604358df071d1ce6101af5"
+  },
+  "optimized_multichip_decoder_validation": {
+    "status": "validated_clean_pass",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "supported_context": 262144,
+    "full_context_batch": 1,
+    "capability_reduction": null,
+    "memory_contract": {
+      "qsa_kv": "FP8_E4M3 row-major [1,1,pool_tokens,512], same page mapping and logical capacity; each local token holds V256+K256. 512 bytes per rank/token vs1024 BF16. Raw/pooled index keys remain BF16.",
+      "qsa_kv_bytes_per_device": 1610612736,
+      "hc": "BF16 singleton HC statistics in one-core width-sharded L1; persistent gathered stats8192bytes/layer/rank,393216bytes for48layers. PLE FP32-input norms retain FP32 statistics. Singleton residual/output interleavedL1; hidden-sharded boundary unchanged.",
+      "dispatch": "Selected-route metadata replaces transient dense routing operations with512-byte transient count buffer. Persistent expert capacity unchanged. Unused512KiB/layer/rank routing-index dictionaries removed; the1MiB/layer metadata reserve stays conservative.",
+      "reserve": "Existing1GiB activation/trace reserve retained; all48layers plus embedding/head capacity planning is allocation evidence, not full-model execution.",
+      "public_lengths": "Scoped 2D K20 geometry covers B1 L1 prefill matrices with M>=128 and all internal groups of outer prefill chunks>=256. SDPA K128 owns padded physical widths; arbitrary logical prompt lengths remain valid.",
+      "prefill": "B1 chunks<=512 use transient interleavedL1 dense matmul/HC inputs and outputs. Completed chunks in multi-chunk requests are staged local DRAM and concatenated inDRAM, preserving hidden ownership and full262144context. Larger batches/custom chunks retain DRAM layout. L1 retained-output OOM and successful staging evidence in prefill_advice.md; existing1GiB DRAM activation/trace reserve remains unchanged."
+    },
+    "pending": [],
+    "runtime_source_sha256": "f248a5a4bc9f9b4b155bde14587c0b83226d01a6f10c8f3442454dc6bdff1b9f",
+    "physical_device_ids": [
+      3,
+      2,
+      1,
+      0
+    ],
+    "batch32_tested_context": 130,
+    "weight_bytes_per_device": 26349461504,
+    "kv_cache_bytes_per_device": 1610612736,
+    "all_cache_state_bytes_per_device": 5033847040,
+    "reserved_trace_activation_bytes_per_device": 1073741824,
+    "planned_total_bytes_per_device": 32457050368,
+    "allocated_probe_bytes_per_device": 32457080832,
+    "allocatable_dram_bytes_per_device": 34178731008,
+    "free_probe_bytes_per_device": 1721650176,
+    "memory_plan": "optimized_multichip_decoder/memory_capacity_plan.json",
+    "capacity_probe": "optimized_multichip_decoder/capacity_probe.json",
+    "final_evidence": "optimized_multichip_decoder/final_evidence.json",
+    "profiler_accounting": "optimized_multichip_decoder/s5_final4_performance_accounting.json",
+    "qualification": "Final4 source passes all12 stress/batch/boundary suites, three262144-token context checks, two adjacent-layer stacks, six prefill trace watcher/tracking checks and the final artifact audit. Final profiles and timings use the same default. Independent stage-review returned clean-pass with no required work.",
+    "stage_review": "optimized_multichip_decoder/stage_review_final.md",
+    "stage_review_sha256": "5a3b1c1edc5cd536b22f7eab7869482331ee1d788d317aaf0173fd36d73ffe12"
+  },
+  "full_model_validation": {
+    "status": "validated_clean_pass",
+    "supported_context": 262144,
+    "hf_advertised_context": 262144,
+    "full_context_batch": 1,
+    "capability_reduction": null,
+    "weight_bytes_per_device": 26352779264,
+    "cache_bytes_per_device": 5084187008,
+    "reserved_trace_activation_bytes_per_device": 1073741824,
+    "planned_total_bytes_per_device": 32510708096,
+    "allocatable_dram_bytes_per_device": 34178731008,
+    "memory_plan": "full_model/memory_capacity_plan.json",
+    "pending": [],
+    "full_stack_allocation": {
+      "artifact": "full_model/readiness01.json",
+      "trace_region_bytes": 160000000,
+      "prepared_memory": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 4252336512,
+        "total_bytes_allocated_per_bank": 3949876224,
+        "total_bytes_free_per_bank": 302460288,
+        "largest_contiguous_bytes_free_per_bank": 259065856
+      },
+      "allocated_bytes_excluding_trace": 31599009792,
+      "free_bytes_excluding_trace": 2419682304
+    },
+    "accuracy": {
+      "prefill": [
+        {
+          "top1": 0.98,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 98,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "teacher_forcing": [
+        {
+          "top1": 0.99,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 99,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100,
+          "elapsed_s": 8.124493098002858,
+          "e2e_t/s/u": 12.308460207145938,
+          "ttft_ms": 3167.798322974704,
+          "decode_tokens": 99.0,
+          "decode_elapsed_s": 4.956124941003509,
+          "decode_t/s/u": 19.97528334706482
+        }
+      ]
+    },
+    "long_context": {
+      "artifact": "full_model/final01.json",
+      "prompt_len": 262141,
+      "tokens": [
+        341,
+        342,
+        343,
+        344
+      ],
+      "final_position": [
+        262144
+      ],
+      "seconds": 1020.6045704080025,
+      "perf": {
+        "prompt_len": 262141,
+        "gen_len": 4,
+        "ttft_s": 1020.4276892449707,
+        "decode_s": 0.17074284597765654,
+        "decode_tps": 17.57028227345221,
+        "sampling_mode": "device",
+        "sampling": "greedy"
+      },
+      "scope": "Full-stack execution/capacity with synthetic valid token IDs; no long-context language-quality claim"
+    },
+    "qualitative_review": "full_model/qualitative_review.json",
+    "batch32_tested_context": 2048,
+    "batch32_evidence": "full_model/batch32_full02.json",
+    "batch32_capacity_plan": "full_model/batch32_memory_capacity_plan.json",
+    "runner_gate": {
+      "artifact": "full_model/stage06_gate.log",
+      "exit_code": 0
+    },
+    "stage_review": "full_model/stage_review_final.md",
+    "stage_review_sha256": "8fa63ea27aac4a931a7515a34e4c7d3c0df26d4a721481e542283bbd0081aac5",
+    "implementation_commit": "9ef8e68947f35a703db91c1930f320795d5adeba"
+  },
+  "optimized_full_model_validation": {
+    "status": "validated_clean_pass",
+    "supported_context": 262144,
+    "hf_advertised_context": 262144,
+    "capability_reduction": null,
+    "full_context_batch": 1,
+    "mesh": [
+      1,
+      4
+    ],
+    "memory_plan": "optimized_full_model/memory_capacity_plan.json",
+    "trace_region_bytes": 768000000,
+    "trace_payload_bytes": 510148608,
+    "allocated_bytes_including_reserved_trace": 32367256576,
+    "free_ordinary_dram_bytes": 1811474432,
+    "cache_and_decoder_policy": "unchanged; optimized_full_model/preserved_decoder_policy.json",
+    "accuracy": {
+      "prefill": [
+        {
+          "top1": 0.98,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 98,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "teacher_forcing": [
+        {
+          "top1": 0.99,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 99,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100,
+          "elapsed_s": 5.901227609021589,
+          "e2e_t/s/u": 16.945626677256698,
+          "ttft_ms": 1020.1983010629192,
+          "decode_tokens": 99.0,
+          "decode_elapsed_s": 4.881014960934408,
+          "decode_t/s/u": 20.282666779830503
+        }
+      ]
+    },
+    "long_context": {
+      "artifact": "optimized_full_model/selected_full.json",
+      "prompt_len": 262141,
+      "tokens": [
+        341,
+        342,
+        343,
+        344
+      ],
+      "final_position": [
+        262144
+      ],
+      "seconds": 1019.286048729904,
+      "perf": {
+        "prompt_len": 262141,
+        "gen_len": 4,
+        "ttft_s": 1019.1108734461013,
+        "decode_s": 0.16846229787915945,
+        "decode_tps": 17.80813889973141,
+        "sampling_mode": "device",
+        "sampling": "greedy"
+      },
+      "scope": "All48 execution/capacity; synthetic token IDs, no language-quality claim"
+    },
+    "batch32_tested_context": 2048,
+    "batch32_evidence": "optimized_full_model/batch32_full_selected.json",
+    "runtime_source_sha256": {
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/hyperconnection.py": "076d5326e1f6480cfcb539d689a9fbbf0506a3f0d344c4097c2c14f8b0223b11",
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/moe.py": "18a18a93f16d6749f748aead4f22b6b111b56e5239027cea075fe489f61714cc",
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/fused_decoder.py": "4a2f2586711b985f1f558ed3b2c535ddd8019131ee3afc192aea608915d39afe",
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/multichip_decoder.py": "790878144e7d04052f22ddf78e4e18ecf40ae92eb9435eaa03c44078eda26d30",
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/optimized_decoder.py": "60f64f9796ee44084a760a8c817ee9de5577d3ea2b566359844b56aced76c17a",
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/generator.py": "be4f274a5e86685a60716c4f30bc59f89de4ba173931345bd7fcf2d8d05574e8",
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/gdn.py": "58fd81250bd0943fc726b4f4e1625f90e431e7839df0171ea5d0679b960c9ad9",
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/ple.py": "9244148a5e50e8985e60946e69223023933f5c2cdb0c48ac30ae7cd782146036",
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/checkpoint.py": "08ad7128d0249cf92a55554fc9790c7e108b1d9cfd7c807013cf982840f5c687",
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/functional_decoder.py": "9853c8f4af0517b2eb89ef85b29291e792c8eaea7bbb45be931ea6d92c45ef60",
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/state_ops.py": "72ea49a07e2d5201afba05a178e9e02bead18264d543df0990d46388044f7b29",
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/ple_lookup.py": "6833c2b6e006022095ee9d8cbcda8090c8c5533e1d10c33700d9568e76a706d6",
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/model.py": "77df16b7fa6e12ebf5fab71338a3c1879d3d3b2461f3a291f2063d0dc95d5bbd",
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/ple_hash.py": "1d4cf242d62287f037563dac04cf886a394dccf9cefa72d387145ccd2ef8e753",
+      "/home/vkovacevic/qwen38-flash/tt-metal/models/autoports/qwen_qwen3_8_flash_next/tt/qsa.py": "f4395514a0d0544677e9cc8e00f499acfade344fc132b86421e45e0527063910",
+      "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp": "0ac1c73e147282c24f5ba344b1aed3464a53cd1775f4171ca202e04e4f4d5ef6"
+    },
+    "qualitative_review": "optimized_full_model/qualitative_review.json",
+    "runner_gate": {
+      "artifact": "optimized_full_model/stage07_gate.log",
+      "exit_code": 0
+    },
+    "context_gate": {
+      "artifact": "optimized_full_model/context_gate.log",
+      "exit_code": 0
+    },
+    "batch_differential": [
+      "optimized_full_model/batch3_review.json",
+      "optimized_full_model/batch32_review.json"
+    ],
+    "pending": [],
+    "stage_review": "optimized_full_model/stage_review_final.md",
+    "stage_review_sha256": "a630c293e88d49ba7aa7e67aa8ef4b338970f60c7dc8b83cfd09268a4dbba4f3",
+    "implementation_commit": "44850219a16ef35a19f8705f13043664915669f3"
+  },
+  "datatype_sweep_capacity_candidates": {
+    "baseline_policy": {
+      "kv_cache_dtype": "fp8_e4m3",
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "memory_plan": "datatype_sweep/capacity_baseline_policy.json",
+      "runtime_artifact": "models/autoports/qwen_qwen3_8_flash_next/doc/datatype_sweep/baseline_policy.json",
+      "runtime_status": "pass",
+      "planned_remaining_bytes_per_device": 1668022912,
+      "actual_free_ordinary_dram_bytes": 1811474432
+    },
+    "kv_bf16": {
+      "kv_cache_dtype": "bfloat16",
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "memory_plan": "datatype_sweep/capacity_kv_bf16.json",
+      "runtime_artifact": "models/autoports/qwen_qwen3_8_flash_next/doc/datatype_sweep/kv_bf16.json",
+      "runtime_status": "pass",
+      "planned_remaining_bytes_per_device": 54264448,
+      "actual_free_ordinary_dram_bytes": 197879808
+    },
+    "combined_head4_gdn4_lofi": {
+      "kv_cache_dtype": "fp8_e4m3",
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "memory_plan": "datatype_sweep/capacity_combined_head4_gdn4_lofi.json",
+      "runtime_artifact": "models/autoports/qwen_qwen3_8_flash_next/doc/datatype_sweep/selected_default.json",
+      "runtime_status": "pass",
+      "planned_remaining_bytes_per_device": 2220470912,
+      "actual_free_ordinary_dram_bytes": 2363201536
+    }
+  },
+  "datatype_sweep_validation": {
+    "status": "validated_clean_pass",
+    "supported_context": 262144,
+    "hf_advertised_context": 262144,
+    "capability_reduction": null,
+    "kv_cache_dtype": "fp8_e4m3",
+    "config_id": "combined_head4_gdn4_lofi",
+    "memory_plan": "datatype_sweep/capacity_combined_head4_gdn4_lofi.json",
+    "runtime_artifact": "models/autoports/qwen_qwen3_8_flash_next/doc/datatype_sweep/selected_default.json",
+    "actual_free_ordinary_dram_bytes": 2363201536,
+    "selected_config": "datatype_sweep/selected_precision_config.json",
+    "policy_propagation": "datatype_sweep/selected_policy_propagation.json",
+    "normal_default_evidence": "datatype_sweep/selected_default.json",
+    "trace_region_bytes": 768000000,
+    "accuracy": {
+      "prefill": [
+        {
+          "top1": 0.93,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 93,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "teacher_forcing": [
+        {
+          "top1": 0.95,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 95,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100,
+          "elapsed_s": 5.8288876980077475,
+          "e2e_t/s/u": 17.15593183141596,
+          "ttft_ms": 1022.1875000279397,
+          "decode_tokens": 99.0,
+          "decode_elapsed_s": 4.806686642114073,
+          "decode_t/s/u": 20.596308303646335
+        }
+      ]
+    },
+    "performance_summary": "datatype_sweep/performance_summary.json",
+    "post_selection_token_out": "datatype_sweep/post_selection_token_out.json",
+    "qualitative_review": "datatype_sweep/qualitative_review.json",
+    "nonaligned_lengths": [
+      31,
+      32,
+      33,
+      127,
+      128,
+      129,
+      203,
+      511,
+      512,
+      513,
+      2053
+    ],
+    "nonaligned_evidence": "datatype_sweep/selected_default.json",
+    "full_context_batch": 1,
+    "public_request_slots": 1,
+    "private_helper_slots": 1,
+    "full_length_execution": {
+      "artifact": "optimized_full_model/selected_full.json",
+      "prompt_len": 262141,
+      "gen_len": 4,
+      "scope": "Inherited execution/capacity evidence: selected FP8 KV layout/chunking/context unchanged; new current-code selected capacity and nonaligned checks. Not a long-context language-quality claim."
+    },
+    "pending": [],
+    "tracked_evidence": "datatype_sweep/selected_tracked.json",
+    "tracking_equivalence": "datatype_sweep/selected_tracking_equivalence.json",
+    "trace_allocation_tracking": 1,
+    "trace_alloc_skip_program_cache": 0,
+    "batch_differential": [
+      "datatype_sweep/selected_batch3.json",
+      "datatype_sweep/selected_batch32.json"
+    ],
+    "batch_differential_scope": "Layers0/1/3 at context2048; prior optimized-full-model full-stack B32 evidence retained",
+    "technical_checks": "datatype_sweep/technical_checks.json",
+    "context_gate": {
+      "artifact": "datatype_sweep/context_gate.log",
+      "exit_code": 0
+    },
+    "stage_review": "datatype_sweep/stage_review_final.md",
+    "stage_review_sha256": "d55b9743c230693ae69a522c5227e5a1c3b41b85e8742ba754c1740924ba3e27",
+    "implementation_commit": "9a636c3be2a2aa475508fa54597393976c9bfece"
+  }
+}

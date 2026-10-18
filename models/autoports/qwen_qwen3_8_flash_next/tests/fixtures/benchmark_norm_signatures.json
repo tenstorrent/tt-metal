@@ -1,0 +1,166 @@
+{
+  "source": "models/autoports/qwen_qwen3_8_flash_next/doc/benchmark/repair_deadline/norm_decoder_initial/summary.json",
+  "source_sha256": "db7c9c321e57960a7ed2f0f88db2fd5885209b4dfcb23c18d274885ed97c20cb",
+  "scope": "Actual reduced-decoder signatures only; no full48 or terminal claim",
+  "observed_signatures": [
+    {
+      "sequence": 128,
+      "input_shape": [
+        1,
+        128,
+        4,
+        640
+      ],
+      "input_padded_shape": [
+        1,
+        128,
+        32,
+        640
+      ],
+      "compact_shape": [
+        1,
+        1,
+        512,
+        640
+      ],
+      "compact_padded_shape": [
+        1,
+        1,
+        512,
+        640
+      ],
+      "restored_shape": [
+        1,
+        128,
+        4,
+        640
+      ],
+      "input_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "compact_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "restored_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "input_dtype": "DataType.BFLOAT16",
+      "statistics_dtype": "DataType.FLOAT32",
+      "weight_shape": [
+        1,
+        1,
+        4,
+        640
+      ],
+      "weight_dtype": "DataType.BFLOAT16",
+      "compute_kernel_config": {
+        "math_fidelity": "MathFidelity.HiFi4",
+        "math_approx_mode": "False",
+        "fp32_dest_acc_en": "True",
+        "packer_l1_acc": "True",
+        "dst_full_sync_en": "False"
+      },
+      "restore_before_stream_weight": true
+    },
+    {
+      "sequence": 256,
+      "input_shape": [
+        1,
+        256,
+        4,
+        640
+      ],
+      "input_padded_shape": [
+        1,
+        256,
+        32,
+        640
+      ],
+      "compact_shape": [
+        1,
+        1,
+        1024,
+        640
+      ],
+      "compact_padded_shape": [
+        1,
+        1,
+        1024,
+        640
+      ],
+      "restored_shape": [
+        1,
+        256,
+        4,
+        640
+      ],
+      "input_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "compact_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "restored_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "input_dtype": "DataType.BFLOAT16",
+      "statistics_dtype": "DataType.FLOAT32",
+      "weight_shape": [
+        1,
+        1,
+        4,
+        640
+      ],
+      "weight_dtype": "DataType.BFLOAT16",
+      "compute_kernel_config": {
+        "math_fidelity": "MathFidelity.HiFi4",
+        "math_approx_mode": "False",
+        "fp32_dest_acc_en": "True",
+        "packer_l1_acc": "True",
+        "dst_full_sync_en": "False"
+      },
+      "restore_before_stream_weight": true
+    },
+    {
+      "sequence": 512,
+      "input_shape": [
+        1,
+        512,
+        4,
+        640
+      ],
+      "input_padded_shape": [
+        1,
+        512,
+        32,
+        640
+      ],
+      "compact_shape": [
+        1,
+        1,
+        2048,
+        640
+      ],
+      "compact_padded_shape": [
+        1,
+        1,
+        2048,
+        640
+      ],
+      "restored_shape": [
+        1,
+        512,
+        4,
+        640
+      ],
+      "input_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "compact_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "restored_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "input_dtype": "DataType.BFLOAT16",
+      "statistics_dtype": "DataType.FLOAT32",
+      "weight_shape": [
+        1,
+        1,
+        4,
+        640
+      ],
+      "weight_dtype": "DataType.BFLOAT16",
+      "compute_kernel_config": {
+        "math_fidelity": "MathFidelity.HiFi4",
+        "math_approx_mode": "False",
+        "fp32_dest_acc_en": "True",
+        "packer_l1_acc": "True",
+        "dst_full_sync_en": "False"
+      },
+      "restore_before_stream_weight": true
+    }
+  ]
+}

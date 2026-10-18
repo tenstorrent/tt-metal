@@ -1,0 +1,175 @@
+{
+  "source": "models/autoports/qwen_qwen3_8_flash_next/doc/benchmark/repair_deadline/qsa_batch_selection_production_v6/summary.json",
+  "source_sha256": "c1e2c99551c3a1a677fef8bdb372f64072e1234a57719d5b635547029eaaa0e8",
+  "scope": "Actual isolated single-layer runtime geometries, not full48 attestation.",
+  "observed": {
+    "32": {
+      "batch": 32,
+      "sequence": 1,
+      "score_shape": [
+        32,
+        1,
+        1,
+        65536
+      ],
+      "score_padded_shape": [
+        32,
+        1,
+        1,
+        65536
+      ],
+      "score_dtype": "DataType.BFLOAT16",
+      "score_layout": "Layout.ROW_MAJOR",
+      "score_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "bound_shape": [
+        32,
+        1
+      ],
+      "bound_padded_shape": [
+        32,
+        1
+      ],
+      "bound_dtype": "DataType.UINT32",
+      "bound_layout": "Layout.ROW_MAJOR",
+      "bound_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "output_shape": [
+        32,
+        1,
+        1,
+        512
+      ],
+      "output_dtype": "DataType.UINT32",
+      "output_layout": "Layout.ROW_MAJOR",
+      "output_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "k": 512,
+      "metadata_mode": "per_row_one_row_per_core",
+      "workers": 110
+    },
+    "4": {
+      "batch": 4,
+      "sequence": 1,
+      "score_shape": [
+        4,
+        1,
+        1,
+        65536
+      ],
+      "score_padded_shape": [
+        4,
+        1,
+        1,
+        65536
+      ],
+      "score_dtype": "DataType.BFLOAT16",
+      "score_layout": "Layout.ROW_MAJOR",
+      "score_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "bound_shape": [
+        4,
+        1
+      ],
+      "bound_padded_shape": [
+        4,
+        1
+      ],
+      "bound_dtype": "DataType.UINT32",
+      "bound_layout": "Layout.ROW_MAJOR",
+      "bound_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "output_shape": [
+        4,
+        1,
+        1,
+        512
+      ],
+      "output_dtype": "DataType.UINT32",
+      "output_layout": "Layout.ROW_MAJOR",
+      "output_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "k": 512,
+      "metadata_mode": "per_row_one_row_per_core",
+      "workers": 110
+    },
+    "8": {
+      "batch": 8,
+      "sequence": 1,
+      "score_shape": [
+        8,
+        1,
+        1,
+        65536
+      ],
+      "score_padded_shape": [
+        8,
+        1,
+        1,
+        65536
+      ],
+      "score_dtype": "DataType.BFLOAT16",
+      "score_layout": "Layout.ROW_MAJOR",
+      "score_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "bound_shape": [
+        8,
+        1
+      ],
+      "bound_padded_shape": [
+        8,
+        1
+      ],
+      "bound_dtype": "DataType.UINT32",
+      "bound_layout": "Layout.ROW_MAJOR",
+      "bound_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "output_shape": [
+        8,
+        1,
+        1,
+        512
+      ],
+      "output_dtype": "DataType.UINT32",
+      "output_layout": "Layout.ROW_MAJOR",
+      "output_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "k": 512,
+      "metadata_mode": "per_row_one_row_per_core",
+      "workers": 110
+    },
+    "16": {
+      "batch": 16,
+      "sequence": 1,
+      "score_shape": [
+        16,
+        1,
+        1,
+        65536
+      ],
+      "score_padded_shape": [
+        16,
+        1,
+        1,
+        65536
+      ],
+      "score_dtype": "DataType.BFLOAT16",
+      "score_layout": "Layout.ROW_MAJOR",
+      "score_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "bound_shape": [
+        16,
+        1
+      ],
+      "bound_padded_shape": [
+        16,
+        1
+      ],
+      "bound_dtype": "DataType.UINT32",
+      "bound_layout": "Layout.ROW_MAJOR",
+      "bound_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "output_shape": [
+        16,
+        1,
+        1,
+        512
+      ],
+      "output_dtype": "DataType.UINT32",
+      "output_layout": "Layout.ROW_MAJOR",
+      "output_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "k": 512,
+      "metadata_mode": "per_row_one_row_per_core",
+      "workers": 110
+    }
+  }
+}
