@@ -1682,8 +1682,8 @@ class GRPOTrainer:
                     self._optimize(scored.rollout, advantages_np)
                     self._apply_gradients()
                     self.global_step += 1
-                    self.rollout_batch_source.update_weights(self.model, self.global_step)
                     self._publish_step_metrics()
+                self.rollout_batch_source.update_weights(self.model, self.global_step)
         finally:
             self.rollout_batch_source.close()
 
