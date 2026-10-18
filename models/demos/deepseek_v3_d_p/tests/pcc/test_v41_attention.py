@@ -47,7 +47,7 @@ _MESH_CONFIGS = [
 
 @lru_cache(maxsize=1)
 def _reference_model(n_layers: int):
-    from blaze.models.deepseek_v4_1_flash.golden.reference import build_model
+    from blaze.models.deepseek_v4_1_flash_4_GLX.golden.reference import build_model
 
     model, *_ = build_model(n_layers=n_layers, max_seq_len=SEQ + 64, threads=16, expert_cache_gb=4.0)
     return model

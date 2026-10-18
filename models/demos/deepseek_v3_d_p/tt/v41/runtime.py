@@ -77,7 +77,7 @@ class V41PrefillRuntime:
             kv_only=not DECODER,
             num_users=num_users,
         )
-        from blaze.models.deepseek_v4_1_flash.engram_host import EngramHost  # tt-blaze's ttnn-free host half
+        from blaze.models.deepseek_v4_1_flash_4_GLX.engram_host import EngramHost  # tt-blaze's ttnn-free host half
 
         kw = {} if model_dir is None else {"model_dir": model_dir}
         self.engram = EngramHost(
