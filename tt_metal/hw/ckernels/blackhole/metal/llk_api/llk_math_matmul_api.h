@@ -17,6 +17,7 @@
 // (resolving these from a CB id, or from an LLKMemDescriptor) lives in the callers. The matmul math EXECUTE
 // (llk_math_matmul below) already takes no operand, so it is reused directly by the id-free API. row_mop selects one
 // MOP per reuse row for full 32x32 tiles (see _llk_math_matmul_init_); init and execute must pass the same value.
+// Without it the kernels keep one MOP per tile: their row_mop gates were measured against that form.
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false>
 inline void llk_math_matmul_init_impl(
     const std::uint32_t in0_tile_r_dim,
@@ -27,7 +28,7 @@ inline void llk_math_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim) {
-    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL, row_mop>(
+    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL, row_mop, !row_mop>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 
@@ -97,5 +98,5 @@ inline void llk_math_matmul(
         StateVal<OperationFpuMatmul::RtDim>(rt_dim),
         StateDiscard<uint>(dst_index)));
 
-    _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL, row_mop>(dst_index, ct_dim, rt_dim);
+    _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL, row_mop, !row_mop>(dst_index, ct_dim, rt_dim);
 }
