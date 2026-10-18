@@ -110,6 +110,17 @@ bindings in [`gsm8k/configurations/split_1_1/`](gsm8k/configurations/split_1_1/)
 dummy weights, so the checkpoint must be registered in tt-transformers'
 `LOCAL_HF_PARAMS` (`qwen3-0.6b-base-think-sft` is).
 
+[`gsm8k/eval_gsm8k.py`](gsm8k/eval_gsm8k.py) prints pass@k tables (correct
+answer, tags present, tags exactly once, format regex) on the GSM8K test split
+for one or more HuggingFace-format checkpoints, generating on tt-transformers
+with `TTTRolloutSampler`:
+
+```bash
+cd tt-train/sources/examples/grpo/gsm8k
+python3 eval_gsm8k.py --models Qwen/Qwen3-0.6B-Base=base ichovpanTT/qwen3-0.6b-base-think-sft=sft \
+    --n-samples 16 --temperature 1.0 --limit 200
+```
+
 ---
 
 ## Device Config
