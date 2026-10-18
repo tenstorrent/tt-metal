@@ -11,8 +11,27 @@ cache are bfloat8_b from the start (the prefill spec's dataformats), not switche
 
 from ._settings_base import Setting, Settings  # noqa: F401  (Setting: the entries agents add to TABLE)
 
-TABLE = {}
+TABLE = {
+    "NORM_FIDELITY": Setting(
+        "HiFi4",
+        ("HiFi4", "HiFi3", "HiFi2", "LoFi"),
+        "ENGINEER rule 7 default; gemma4_d_p runs its norms at HiFi2 (a perf choice for later).",
+    ),
+    "NORM_FP32_ACC": Setting(True, None, "fp32 accumulation as in the reference's fp32 norm."),
+    "NORM_SHARDED": Setting(
+        True,
+        None,
+        "Block-sharded rms_norm (gemma4_d_p rms_norm.py geometry); False: interleaved, one core per tile row.",
+    ),
+    "COMPONENT_FAST_RUNTIME": Setting(
+        False,
+        None,
+        "ttnn fast runtime for device_component modules (bring-up harness only). On this tt-metal the fast path "
+        "skips ttnn's pre-operation hooks, so the framework's device-execution proof counts 0 ops; off = the same "
+        "ops through ttnn's slow Python dispatch, which runs the hooks.",
+    ),
+}
 
-MAX_PRECISION = {}
+MAX_PRECISION = {"NORM_FIDELITY": "HiFi4", "NORM_FP32_ACC": True}
 
 settings = Settings("GEMMA4_31B_GLX_", TABLE, max_precision=MAX_PRECISION)

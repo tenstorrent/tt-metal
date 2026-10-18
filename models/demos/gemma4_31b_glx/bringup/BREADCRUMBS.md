@@ -55,3 +55,27 @@
   - Making state seq-first would drop every layer from the trace import's state_layers, unless a trace_state hook
     (T.1) is written. The fix belongs in chunk_starts (slice positions on dim -2 for a 3-D KV tensor), which is
     the framework's to make.
+
+## C.sliding.attn_norm (run 20261018-003406-gemma31-glx-3, attempt 1), 2026-10-18
+
+- `tt/rms_norm.py`: `RMSNorm(mesh, weight, eps)`, adapted from gemma4_d_p `tt/rms_norm.py`.
+  - The bf16 weight is uploaded once and replicated, as a TILE gamma `[1, 1, 1, 5376]`.
+  - It runs block-sharded with gemma4_d_p's geometry. For 160 rows that is a 12 x 5 grid with 1 x 14-tile blocks.
+  - Precision is HiFi4 with fp32 accumulation. Ops per call: to_memory_config, rms_norm, sharded_to_interleaved.
+- `tt/weights.py` reads single tensors and the text config straight from the HF safetensors. Model code never
+  imports the reference or bringup_fw.
+- `tt/settings.py` gains these switches:
+  - NORM_FIDELITY and NORM_FP32_ACC, both in MAX_PRECISION.
+  - NORM_SHARDED.
+  - COMPONENT_FAST_RUNTIME (default False, see the knowledge note).
+- `bringup/hooks.py`:
+  - `residual_to_device` / `residual_to_host` are the harness boundary. A chunk `[S, H]` maps to `[1, 1, S/32, H]`
+    per chip, and chip (r, t) holds rows `r*S/8 + t*S/32 + [0, S/32)`. These are the plan's SP and TP row splits;
+    the server's block-cyclic reshuffle is K.1's.
+  - `_ResidualStep` wraps a module on that layout.
+  - `device_component` handles only `attn_norm`. The other norms take the same RMSNorm with their own weight name
+    (NORM_WEIGHTS) in their own tasks.
+- On this tt-metal, `ttnn.ConcatMesh2dComposer` is gone. Use `ttnn.create_mesh_composer(mesh, ttnn.MeshComposerConfig(dims=[0, 1], mesh_shape_override=ttnn.MeshShape(8, 4)))`.
+- Check results (`bfw job check --task C.sliding.attn_norm`): PASS.
+  - pcc 0.9999962, auto_margin_min 2.87, device_ops 3, host_flops_frac 0.
+  - Deterministic.
