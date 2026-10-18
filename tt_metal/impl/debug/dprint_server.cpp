@@ -1433,7 +1433,7 @@ bool DPrintServer::Impl::poll_device_print_data_l1(
                 flush_output_streams();
                 return new_data_this_iter;  // Stop the print loop
             }  // Re-throw for instant exit
-            throw e;
+            throw;
         }
 
         // If this read detected a print hang, stop processing prints.

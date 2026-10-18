@@ -306,9 +306,9 @@ void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmB
     }
 
     if (verbose_enabled_) {
-        static const char* type_names[] = {"DRAM", "L1", "L1_SMALL", "TRACE", "CB"};
+        static const char* type_names[] = {"DRAM", "L1", "SYSTEM_MEMORY", "L1_SMALL", "TRACE", "CB"};
         auto type_idx = static_cast<size_t>(type);
-        const char* type_name = (type_idx < 5) ? type_names[type_idx] : "UNKNOWN";
+        const char* type_name = (type_idx < std::size(type_names)) ? type_names[type_idx] : "UNKNOWN";
         log_info(
             tt::LogMetal,
             "SHM record_allocation: pid={}, type={}, size={} B ({} KB), chip_id={}, device_id={}, asic_id=0x{:x}",
@@ -385,9 +385,9 @@ void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, Sh
     }
 
     if (verbose_enabled_) {
-        static const char* type_names[] = {"DRAM", "L1", "L1_SMALL", "TRACE", "CB"};
+        static const char* type_names[] = {"DRAM", "L1", "SYSTEM_MEMORY", "L1_SMALL", "TRACE", "CB"};
         auto type_idx = static_cast<size_t>(type);
-        const char* type_name = (type_idx < 5) ? type_names[type_idx] : "UNKNOWN";
+        const char* type_name = (type_idx < std::size(type_names)) ? type_names[type_idx] : "UNKNOWN";
         log_info(
             tt::LogMetal,
             "SHM record_deallocation: pid={}, type={}, size={} B ({} KB), chip_id={}, device_id={}, asic_id=0x{:x}",
