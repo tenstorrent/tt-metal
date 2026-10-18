@@ -16,10 +16,11 @@ import numpy as np
 import pytest
 
 import ttml
+import ttnn
 
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.modules import RunMode
-from ttml.trainers.grpo_trainer import RolloutBatch, grpo_ttml_model
+from ttml.trainers.grpo_trainer import RolloutBatch, grpo_ttml_model, save_checkpoint
 from ttml.trainers.grpo_trainer.grpo_ttml_model import setup_ttml_model
 from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
@@ -218,5 +219,27 @@ def test_qwen3_rollout_sampler_capital_of_france():
     assert "paris" in completion_str.lower(), f"expected 'Paris' in Qwen3 completion, got: {completion_str!r}"
 
     _assert_rollout_batch_ok(batch, expected_shape=(1, MAX_COMPLETION_LENGTH))
+
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def _assert_same_parameters(a, b):
+    pa, pb = a.parameters(), b.parameters()
+    assert sorted(pa) == sorted(pb)
+    for name in pa:
+        np.testing.assert_array_equal(
+            pa[name].to_numpy(ttnn.DataType.FLOAT32), pb[name].to_numpy(ttnn.DataType.FLOAT32), err_msg=name
+        )
+
+
+@pytest.mark.requires_device
+@pytest.mark.slow
+def test_save_checkpoint_round_trip_qwen3(tmp_path):
+    model, tokenizer = setup_ttml_model(QWEN3_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_QWEN3_MODEL_ID)
+    save_checkpoint(model, 1, str(tmp_path), tokenizer=tokenizer, model_source=HF_QWEN3_MODEL_ID)
+
+    ckpt_dir = str(tmp_path / "checkpoints" / "grpo_step_1")
+    loaded, _ = setup_ttml_model(QWEN3_TRANSFORMER_CONFIG, DEVICE_CONFIG, ckpt_dir)
+    _assert_same_parameters(model, loaded)
 
     ttml.autograd.AutoContext.get_instance().reset_graph()
