@@ -1942,7 +1942,7 @@ class Qwen36Model:
         return g_vals, g_idx
 
     def _vfy_setup_device_topk(self):
-        """Resolve QWEN36_VERIFY_DEVICE_TOPK (default OFF) and QWEN36_VERIFY_TOPK_M (default 64) for this verify
+        """Resolve QWEN36_VERIFY_DEVICE_TOPK (default ON) and QWEN36_VERIFY_TOPK_M (default 64) for this verify
         bucket: ``_vfy_topk`` (bool), ``_vfy_topk_m`` (M candidates per shard) and ``_vfy_topk_w`` (the
         power-of-two width the shard logits are padded to). Needs the sharded-argmax verify (the shard logits
         exist only there); M <= 64 is the multi-core ttnn.topk ceiling and keeps 16-bit indices."""
