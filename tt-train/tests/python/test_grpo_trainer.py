@@ -293,7 +293,14 @@ def test_grpo_trainer_one_step_smoke(
     assert metrics["lr"] == pytest.approx(
         optimizer_dict["lr"] * expected_first_lr_scale
     ), "first-step LR does not match the scheduler contract"
-    for key in ("reward_mean", "reward_std", "mean_completion_len", "generation_time_s"):
+    for key in (
+        "reward_mean",
+        "reward_std",
+        "mean_completion_len",
+        "generation_time_s",
+        "reward_time_s",
+        "rollout_wait_s",
+    ):
         assert key in metrics, f"missing metric {key}"
         assert np.isfinite(metrics[key]), f"metric {key} is not finite: {metrics[key]}"
 

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
@@ -18,6 +19,8 @@ class ScoredRolloutBatch:
     rollout: RolloutBatch
     rewards: np.ndarray
     reward_components: Dict[str, np.ndarray]
+    generation_time_s: float
+    reward_time_s: float
 
 
 class RolloutBatchSource(ABC):
@@ -86,7 +89,9 @@ def score_rollout(
     tokenizer: Any,
     reward_funcs: List[Callable[..., List[float]]],
     num_generations: int,
+    generation_time_s: float,
 ) -> ScoredRolloutBatch:
+    start = time.perf_counter()
     g = num_generations
     if [list(p) for p in rollout.prompts] != [list(p) for p in prompts for _ in range(g)]:
         raise RuntimeError(
@@ -103,6 +108,8 @@ def score_rollout(
         rollout=rollout,
         rewards=np.sum(per_func, axis=0).astype(np.float32),
         reward_components=dict(zip(_derive_reward_names(reward_funcs), per_func)),
+        generation_time_s=generation_time_s,
+        reward_time_s=time.perf_counter() - start,
     )
 
 
@@ -133,7 +140,9 @@ class InProcessRolloutBatchSource(RolloutBatchSource):
         for start in range(0, len(self._prompts), n):
             prompts = [list(p) for p in self._prompts[start : start + n]]
             extra = {k: list(col[start : start + n]) for k, col in self._extra_columns.items()}
+            start = time.perf_counter()
             rollout = self.sampler.generate(prompts)
+            generation_time_s = time.perf_counter() - start
             validate_rollout_batch(
                 rollout,
                 num_prompts=len(prompts),
@@ -147,6 +156,7 @@ class InProcessRolloutBatchSource(RolloutBatchSource):
                 tokenizer=self._tokenizer,
                 reward_funcs=self._reward_funcs,
                 num_generations=self._num_generations,
+                generation_time_s=generation_time_s,
             )
 
     def update_weights(self, model: Any, step: int) -> None:

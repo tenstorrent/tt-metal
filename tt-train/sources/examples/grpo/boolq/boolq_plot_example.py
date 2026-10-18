@@ -8,7 +8,7 @@ built-in ``GRPOMonitor``. See ``tt-train/docs/GRPO_TRAINER.md`` for the
 full column list; the base columns are ``step``, ``reward_mean``,
 ``reward_std``, ``mean_completion_len`` / ``min_completion_len`` /
 ``max_completion_len``, ``lr``, ``step_time_s``, ``generation_time_s``,
-plus one ``<CallbackClassName>_time_s`` column per registered callback.
+``reward_time_s``, ``rollout_wait_s``, plus one ``<CallbackClassName>_time_s`` column per registered callback.
 
 Usage:
     boolq_plot_example.py <csv_file> <metric> [<metric2> ...] [--x <x_col>] [--window <n>] [--out <output_png>]
