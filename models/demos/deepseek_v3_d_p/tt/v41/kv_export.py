@@ -4,7 +4,7 @@
 contract layout and the ``KvChunkAddressTable`` that maps every (config, global layer, 32-row chunk, slot) the ring asks
 for onto them.
 
-The contract is the ring's (tt-blaze ``blaze/models/deepseek_v4_1_flash/kv_migration.py``), in config order::
+The contract is the ring's (tt-blaze ``blaze/models/deepseek_v4_1_flash_4_GLX/kv_migration.py``), in config order::
 
     0  swa_window   layers 0, 1     bfp8 TILE  256-row window ring (position p at row p % 256)
     1  csa_unified  layers 2..39    bf16 RM    rows [0, 256) the window ring, row 256 + w = compressed entry w

@@ -4,7 +4,7 @@
 ``inference/model.py`` builds ``ModelArgs`` from), plus the per-layer CSA2 roles.
 
 The role rules are the reference's (``model.py`` ``Attention`` / ``Indexer`` constructors; mirrored by tt-blaze
-``blaze/models/deepseek_v4_1_flash/layer_schedule.py``):
+``blaze/models/deepseek_v4_1_flash_4_GLX/layer_schedule.py``):
 
 * ``compress_ratios[l]``: 0 = sliding window only; r > 0 = also one compressed KV entry per r tokens.
 * KV sources compute a compressed KV (and the index keys); every later compressing layer reads the latest source's cache.

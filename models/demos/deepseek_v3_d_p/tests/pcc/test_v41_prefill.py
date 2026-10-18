@@ -63,7 +63,7 @@ def _prompt_ids() -> list[int]:
 
 @pytest.mark.parametrize("mesh_device, device_params", _MESH_CONFIGS, indirect=["mesh_device", "device_params"])
 def test_v41_prefill_vs_model_py(mesh_device, device_params):
-    from blaze.models.deepseek_v4_1_flash.engram_host import EngramHost
+    from blaze.models.deepseek_v4_1_flash_4_GLX.engram_host import EngramHost
 
     cfg = V41Config.load()
     ids = _prompt_ids()
