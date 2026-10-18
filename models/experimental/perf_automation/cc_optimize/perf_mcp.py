@@ -8952,8 +8952,13 @@ def termination_check() -> dict:
     # actually happened last time (a crash message, a wedge, a PCC miss) from the log and appends it,
     # so a fresh round starting on a target someone already tried is not starting blind on WHY it
     # failed -- it still has to prove a fix by measuring, same as ever, but it knows what broke.
-    _target_reason = blocking[0]["reason"]
-    _prior_note = _last_recorded_note(blocking[0]["op"])
+    # NOTHING BLOCKING IS A VERDICT, NOT A CRASH. `next_target` below already yields None for an empty
+    # list, but these two reads ran first and raised IndexError the moment the last material op cleared
+    # its checklist -- the very moment can_stop had just been set. The harness treats a raised gate as
+    # "not done" and launches another round, so a finished run relaunched empty rounds until its round
+    # budget was spent (Devstral run 3, 2026-10-15: rounds 4-10 of 10 did nothing).
+    _target_reason = blocking[0]["reason"] if blocking else ""
+    _prior_note = _last_recorded_note(blocking[0]["op"]) if blocking else ""
     if _prior_note and _prior_note not in _target_reason:
         _target_reason = _target_reason.rstrip() + " | Last recorded attempt on this target: " + _prior_note
     next_target = (
@@ -9003,6 +9008,38 @@ def termination_check() -> dict:
         else ""
     )
     _persist_target(next_target)
+    if can_stop:
+        _directive = (
+            "DONE — every material-gap op has its full checklist ticked (grid + dtype knobs + tt-lang "
+            "+ C++). No reachable rung remains."
+        )
+    elif next_target is None:
+        # A STACK STILL OWES ITS BAND BUT NO OP IS LEFT TO HAND OVER. Before, this case could not be
+        # reached (see the IndexError note above); once it is, telling the agent to "work next_target"
+        # sends it after a target that is null. Say what is true and what to do.
+        _directive = (
+            "NOT DONE — %s still above the achievable band, yet no material op has a rung left to try: "
+            "nothing to work this round. Call finish_round so the round ends on the record; a later "
+            "capture may open a new op." % ", ".join(str(r.get("stage") or "?") for r in _short)
+        )
+    else:
+        _directive = (
+            "NOT DONE — work next_target (the largest-gap blocking op) at its rung, IN THE STAGE "
+            "next_target.stage names: the ranking already accounts for where the time is, and the "
+            "metric in your instructions describes only the recurring stage, so following the metric "
+            "instead of the target spends effort where little is left. " + _stage_time_note + "REUSE-FIRST: "
+            "BEFORE editing, call recall_knobs(next_target.op_class, next_target.grid, "
+            "next_target.bound_by) and APPLY/ADAPT any matching "
+            "catalogued knob (heed its negative knowledge); improvise from scratch ONLY if nothing "
+            "matches — a recalled knob still requires check_pcc + measure + record_kernel_attempt (it "
+            "never skips a rung). Ladder ORDER: "
+            "knob:grid -> knob:fidelity -> knob:dtype -> knob:shard -> tt-lang -> cpp. record_kernel_attempt for EACH rung (knobs too: "
+            "kind='grid'/'fidelity'/'dtype'/'shard'; kernels: 'tt-lang'/'cpp'). A later rung does NOT clear an op while an "
+            "earlier rung is untried. WRITE-BACK: after you COMMIT a win you IMPROVISED (recall_knobs "
+            "had no match), call distill_knob to persist it for reuse; if the win re-used a provisional "
+            "lever from another model, pass its id to distill_knob to graduate it. Re-run "
+            "termination_check after each rung."
+        )
     return {
         "can_stop": can_stop,
         # WHICH STACKS STILL OWE THE BAND, and by how much. A veto the caller cannot see reads as
@@ -9020,26 +9057,7 @@ def termination_check() -> dict:
         "next_target": next_target,
         "blocking_ops": blocking,
         "cleared_ops": cleared,
-        "directive": (
-            "DONE — every material-gap op has its full checklist ticked (grid + dtype knobs + tt-lang "
-            "+ C++). No reachable rung remains."
-            if can_stop
-            else "NOT DONE — work next_target (the largest-gap blocking op) at its rung, IN THE STAGE "
-            "next_target.stage names: the ranking already accounts for where the time is, and the "
-            "metric in your instructions describes only the recurring stage, so following the metric "
-            "instead of the target spends effort where little is left. " + _stage_time_note + "REUSE-FIRST: "
-            "BEFORE editing, call recall_knobs(next_target.op_class, next_target.grid, "
-            "next_target.bound_by) and APPLY/ADAPT any matching "
-            "catalogued knob (heed its negative knowledge); improvise from scratch ONLY if nothing "
-            "matches — a recalled knob still requires check_pcc + measure + record_kernel_attempt (it "
-            "never skips a rung). Ladder ORDER: "
-            "knob:grid -> knob:fidelity -> knob:dtype -> knob:shard -> tt-lang -> cpp. record_kernel_attempt for EACH rung (knobs too: "
-            "kind='grid'/'fidelity'/'dtype'/'shard'; kernels: 'tt-lang'/'cpp'). A later rung does NOT clear an op while an "
-            "earlier rung is untried. WRITE-BACK: after you COMMIT a win you IMPROVISED (recall_knobs "
-            "had no match), call distill_knob to persist it for reuse; if the win re-used a provisional "
-            "lever from another model, pass its id to distill_knob to graduate it. Re-run "
-            "termination_check after each rung."
-        ),
+        "directive": _directive,
     }
 
 
