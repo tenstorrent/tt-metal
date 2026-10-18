@@ -1648,3 +1648,65 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   `scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/unified_routed_expert_ffn/tests/unit/test_ds41_h_options.py`;
   A/B `scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py -k unified_vs_loop -s`;
   profile: the brief's last command with DS41_EXPERTS_KERNEL=unified [DS41_EXPERTS_IMPL=bfp4].
+
+## P.3 perf (attempt 1): routed experts on Marko Staletovic's flat_routed_expert (EXPERTS_KERNEL=flat)
+- Change: setting EXPERTS_KERNEL {loop, unified, flat}; on = flat, off = unified (the default is unified again,
+  OV-16 / F104: accepting the pick flips it). `tt/experts.py`: `_load_flat` builds `FlatRoutedExpert(weights_nk=True, routed=True, x_bf16, h_bf16,
+  act clamped_silu, wdtype bf8 / bf4)` once per layer from the same bf16-exact e2m1 x 2^e [N, K] matrices
+  `_load_block` checks with `_bfp8_exact` (DS41-35; per device r cols + c its gtab[c, r] experts); `_flat` = the
+  routing rows (pieces @ SelAll, Float32 TILE [rows, 32], `_routing_rows`, DS41-23 / DS41-16) + ONE
+  `flat_routed_expert(buf, counts, region_offsets, routing_weights, fp8_act_quant=True, y_bf16, down_fp32 =
+  FP32_DEST_ACC, math_fidelity = MATMUL_FIDELITY (HiFi4), hidden=H)` on the dispatched buffer in place (no x copy);
+  dispatch / combine / K-slot sum / TP sum unchanged. Capacity = the dispatch cap (2048; the op needs >= 256).
+- Fork (ttnn/ttnn/bringup/flat_routed_expert_ttnn, CHANGELOG "DeepSeek-V4.1 expert numerics"): routing_weights,
+  fp8_act_quant, weights_nk, hidden; all off = the old program. Plan on this grid (11 x 10 p150) for bfp8 + bf16 x:
+  16-column units, 3 a core, 48 gate/up + 32 down cores, mt 1 (the probe before any change: no other split fits the
+  1400 KB gate/up budget with bfp8 weights). Every third h tile is split over two cores, so the quant block needed
+  the half exchange (DS41-61); the routing-weight tile is read by the gate/up receiver (BRISC, NOC1: the NOC0 write
+  wedge in the program factory's comment) and copied UnpackToDestFp32 into DEST tile 3 before the K loop.
+- Gotchas: the official Expert.forward rounds h to bf16 before w2's act_quant (`self.w2(x.to(dtype))`); ds41_ref and
+  the device quantize the fp32 r h (the device follows ds41_ref, as unified did). The fork's baseline unit run (before
+  any change) already had 13 failures (TP2 / TP4 subgrid plans hit TT_FATAL `p.nsg == 1`; the MiMo perf band): not
+  ours, unchanged after. The plain profile takes ~8-9.5 min (flat load ~45-54 s a layer, unified ~20 s): with a
+  10-minute tool limit run it alone.
+- Fork tests: tests/unit/test_ds41_h_options.py 7 passed (identity down: rw + q 1528 rows bit-exact but one near tie,
+  q only, rw only, pinned schedule 2848 rows; [N, K] == [K, N] bit for bit; DS41 shapes vs float64 rel 0.0032-0.0053,
+  PCC >= 0.99998; refusals); negative controls incl. per-half scales of the split tiles all fail the checker.
+  Regression (options off): unit suite 19 passed / 13 failed = the baseline's ids.
+- Accuracy (EXPERTS_KERNEL=flat, bfp8 via MAX_PRECISION, each frozen test once, gate order): all 16 PASS. experts vs
+  the CPU step (component auto_*_vs_cpu) L00 0.00225, L01 0.00246, L02 0.00256, L14 0.00266, L03 0.00243, L20 0.00265,
+  L24 0.00276, L21 0.00274; swap "swap_experts vs the CPU step" swa_12 0.00219, swa_engram_15 0.00255, enc_source_14
+  0.00246, enc_source_engram_17 0.00263, enc_reuse_12 0.00248, dec_candidate_14 0.00276, dec_reindex_13 0.00277,
+  dec_reuse_12 0.00277 (limits 0.070-0.100); determinism bit-identical; swa_12's swap_ffn_hc line is the owner waiver.
+- Speed, layer 0, chunk 2048, same random inputs (tt/perf_experts.py::test_kernels; whole experts call / kernel part
+  synced, ms): bfp8 flat 17.35 / 3.76, unified 20.35 / 6.37, loop 315.71 / 300.88; bfp4 flat 17.29 / 3.66, unified
+  19.96 / 5.99, loop 314.70 / 299.75; flat vs unified rel < 1e-5, vs loop 6e-5. Flat is HiFi4 compute-bound (bfp4
+  only 3 % faster; the gate/up FPU at HiFi4 ~22.7 us per 32-row sub-block on 48 cores); 13.6 of 17.4 ms is the chain
+  around the op (DS41-62).
+- Plain profile (test_profile.py, 2x2, chunk 53248-55296, 8 layers), experts section ms per chunk: flat 149.3 (bfp8)
+  / 148.0 (bfp4); unified 176.8 / 173.7 (P.2); loop 2522.3 / 2501.4 (P.1 / X.1). Device total 652 (bfp8) / 651
+  (bfp4) ms (P.2 unified 679.6 / 676.4). Owner (not done, owner rule HiFi4): with e2m1 weights srcA holds every weight
+  bit in LoFi's 5, so HiFi2 may already give exact products (x's 8th bf16 bit is the open question): a test, not
+  a pick for an agent.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py` (each gate test likewise; DS41_EXPERTS_KERNEL
+  =unified for the old path); fork tests `scripts/run_safe_pytest.sh --run-all --no-precompile
+  ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_ds41_h_options.py`; A/B `scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py::test_kernels -k "bfp8 and ful"`;
+  profile: the brief's last command [DS41_EXPERTS_IMPL=bfp4].
+
+## P.3 perf (finish, after the overseer stopped attempts 2-3 on the fork's own MIMO_FL_* knobs: OV-15 / OV-16)
+- Nothing in the op or the model path changed after attempt 1; its accuracy (16 frozen expert tests PASS at bfp8) and
+  profile (experts flat 149.3 / unified 176.8 / loop 2522.3 ms per chunk at bfp8; 148.0 / 173.7 / 2501.4 at bfp4;
+  device total flat 652 vs unified 679.6 ms) stand and were not re-run. Marko's MIMO_FL_* / FLAT_CMB_LOG environment
+  knobs left as imported (OV-16).
+- EXPERTS_KERNEL default back to unified (OV-16; F104 flips it when the owner accepts); `DS41_EXPERTS_KERNEL=flat`
+  selects the flat op. The orchestrator sets the switch for both sides.
+- Fork regression, options off (final tree, build 06:28): unit suite (5 imported files) 19 passed / 13 failed vs 18 /
+  14 at the import 9003c0fd2ca; failures all pre-existing: 12 TP2 / TP4 `p.nsg == 1` (same assert at the import) +
+  the MiMo indexed_perf band (1710341 ns, faster than its 1720090 lower bound). GLM-5.3's case
+  (tests/test_flat_bench.py, glm53flash preset, default options) passes. GLM's model path (tt/experts_ag.py) only runs
+  at <= 64 experts per chip (2x4 / 4x4), never on this 2x2 (72 a chip), so the bench is its case here.
+- Re-run: `scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/
+  <file>` per file (test_ds41_h_options.py is the new option tests); `scripts/run_safe_pytest.sh --run-all
+  --no-precompile ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/test_flat_bench.py -s`.

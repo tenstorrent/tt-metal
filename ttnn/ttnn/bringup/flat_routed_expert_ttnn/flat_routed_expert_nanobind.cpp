@@ -40,7 +40,8 @@ nb::dict plan_dict(
     bool weights_bf8,
     uint32_t pin,
     bool x_bf16,
-    bool h_bf16) {
+    bool h_bf16,
+    bool routed) {
     const auto p = fre::flat_routed_expert_plan(
         device,
         fre::FlatRoutedExpertConfig{
@@ -53,7 +54,8 @@ nb::dict plan_dict(
             .activation = 0,
             .pin = pin,
             .x_bf16 = x_bf16,
-            .h_bf16 = h_bf16});
+            .h_bf16 = h_bf16,
+            .routed_weight = routed});
     nb::dict d;
     d["nsg"] = p->nsg;
     d["n_rd"] = p->readers.size();
@@ -86,6 +88,7 @@ nb::dict plan_dict(
     d["hu"] = p->hu;
     d["gu_rp"] = p->gu_rp;
     d["gu_l1acc"] = p->gu_l1acc;
+    d["routed"] = p->routed;
     d["arena_tiles"] = p->arena_tiles;
     d["coords"] = cores(p->coords);
     d["readers"] = cores(p->readers);
@@ -167,6 +170,20 @@ void bind_flat_routed_expert(nb::module_& mod) {
             h_bf16 (bool): h (gate/up -> down) as bf16 tiles (else bfp8); as x_bf16.
             y_bf16 (bool): y as bf16 tiles (else bfp8; tiled y only): no bfp8 rounding of the output.
             math_fidelity (int): the expert matmuls' fidelity (0 LoFi: exact for bfp4 weights; 2 HiFi2 for bfp8).
+            routing_weights (ttnn.Tensor, optional): [rows of x, 32] FLOAT32 TILE, DRAM interleaved; row i column le =
+                dispatched row i's routing weight for local expert le. h = act(gate, up) of each row is multiplied by
+                its weight (fp32, SFPU) before the down projection (DeepSeek-V4: w2(r * act(w1 x, w3 x))). The plan
+                then runs 32-row sub-blocks (one gate/up pass in the fp32 DEST).
+            fp8_act_quant (bool): h (after the routing weight) quantized / dequantized to fp8 e4m3 per 32 values with a
+                ue8m0 scale, round to nearest even, before the down projection (DeepSeek's act_quant(h, 32, 'ue8m0')
+                + its dequantizing GEMM); needs fp32 gate/up DEST (the plan's) and h_bf16 to keep the values exact.
+                On plans of odd 16-column units the cores whose last h tile is a left half receive the right half
+                from the next column group and quantize the whole tile.
+            weights_nk (bool): the weights were laid out from nn.Linear's [N, K] matrices (flat_weight_regions(...,
+                nk=True): each tile the transpose of the x @ W tile, so a bfp8 tile shares its exponents along K) and
+                every weight matmul transposes its in1 tile back.
+            hidden (int): H when x's rows are wider (0: x's width x x_pages_per_row): the relays read each row's first
+                H values (x_pages_per_row 1, no token_index), e.g. a dispatch buffer with extra columns per row.
 
         Returns:
             ttnn.Tensor: y [rows, H] bfp8 TILE, or bf16 ROW_MAJOR with y_row_major (rows: token_index's length in
@@ -194,7 +211,11 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("x_bf16") = false,
         nb::arg("h_bf16") = false,
         nb::arg("y_bf16") = false,
-        nb::arg("math_fidelity") = 0);
+        nb::arg("math_fidelity") = 0,
+        nb::arg("routing_weights") = nb::none(),
+        nb::arg("fp8_act_quant") = false,
+        nb::arg("weights_nk") = false,
+        nb::arg("hidden") = 0);
 
     ttnn::bind_function<"flat_combine_overlap", "ttnn.bringup.">(
         mod,
@@ -284,7 +305,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("pin") = 1,
         nb::arg("x_bf16") = false,
         nb::arg("h_bf16") = false,
-        "The flat_routed_expert layout plan (weight bank layout, coordinator cores for the done words).");
+        nb::arg("routed") = false,
+        "The flat_routed_expert layout plan (weight bank layout, coordinator cores for the done words). routed: the "
+        "plan for the h options (routing_weights / fp8_act_quant: 32-row sub-blocks).");
     mod.def(
         "flat_drisc_stop",
         [](tt::tt_metal::distributed::MeshDevice* device) {

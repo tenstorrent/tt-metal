@@ -23,6 +23,8 @@ inline constexpr uint32_t kKBlk = 8;        // K tiles per gate/up weight / x bl
 inline constexpr uint32_t kBf8Tile = 1088;  // bfp8 tile bytes
 inline constexpr uint32_t kRmChunks = 4;    // x relay: row-major chunks (32 rows x SBT tiles) buffered
 inline constexpr uint32_t kSbSlots = 3;     // x relay: tilized super-blocks buffered
+inline constexpr uint32_t kRhXd = 2;        // h options: the partner-half ring depth (Float32 tiles)
+inline constexpr uint32_t kRhTiles = 7 + kRhXd;  // h options: Float32 tiles in the gate/up h-option region
 
 // What the flat routed expert is built for. Every field is part of the program-cache key.
 struct FlatRoutedExpertConfig {
@@ -55,6 +57,18 @@ struct FlatRoutedExpertConfig {
     // combine overlap (flat_combine_overlap): the y writers (down cores, reader tails) report each local expert to
     // combine's collector once its rows have landed; the 4 report args sit at this runtime-arg index (0: off)
     uint32_t cmb_rt = 0;
+    // DeepSeek-V4.1 options (all off: the program above, unchanged). weights_nk: the weight tiles hold the
+    // nn.Linear [N, K] blocks (each tile the transpose of the x @ W tile) and every weight matmul transposes its in1
+    // tile back (a bfp8 tile then shares its exponents along K: exact for e2m1 x ue8m0 weights); no plan change.
+    // routed_weight: h of each dispatched row is multiplied by that row's fp32 routing weight for its expert (the
+    // routing_weights tensor, column = local expert) before the down projection; fp8_act_quant: h quantized /
+    // dequantized to fp8 e4m3 per 32 values with a ue8m0 scale (DeepSeek's act_quant(h, 32, 'ue8m0')) before the down
+    // projection. Either h option runs the gate/up compute in one 32-row pass per sub-block (mt 1); fp8_act_quant on
+    // a plan of odd 16-column units hands each split h tile's half to the core holding the other half (whole tiles
+    // are quantized in place).
+    bool weights_nk = false;
+    bool routed_weight = false;
+    bool fp8_act_quant = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "hidden",
@@ -72,7 +86,10 @@ struct FlatRoutedExpertConfig {
         "h_bf16",
         "y_bf16",
         "math_fidelity",
-        "cmb_rt");
+        "cmb_rt",
+        "weights_nk",
+        "routed_weight",
+        "fp8_act_quant");
     auto attribute_values() const {
         return std::forward_as_tuple(
             hidden,
@@ -90,7 +107,10 @@ struct FlatRoutedExpertConfig {
             h_bf16,
             y_bf16,
             math_fidelity,
-            cmb_rt);
+            cmb_rt,
+            weights_nk,
+            routed_weight,
+            fp8_act_quant);
     }
 };
 
@@ -163,6 +183,11 @@ struct FlatRoutedExpertPlan {
     // sub-block (x delivery, gate/up) keeps MT row tiles while the down cores' h buffers stay small; the gate/up
     // h_local holds HL_SLOTS sub-blocks
     uint32_t hu = 0, hl_slots = 3;
+    // the h options (config routed_weight / fp8_act_quant): one 32-row pass per sub-block, the routing-weight tile in
+    // DEST tile gwt; the gate/up arena's h-option region at rh_off: routing-weight tiles (2), their staging tile (1),
+    // the own half (2), the partner's half (RH_XD), the half sent (2), Float32 tiles of 4 KB
+    bool routed = false;
+    uint32_t rh_off = 0;
     float dring = 2.0f;
     std::vector<uint32_t> pcds, col0s;
     // arena (per core, 2 KB aligned offsets)

@@ -29,6 +29,7 @@ enum class AddrSrc : uint8_t {
     Arena,
     Words,
     TokenIndex,
+    RoutingWeights,
     Count
 };
 
