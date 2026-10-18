@@ -9,6 +9,11 @@ caught; verify_traced must replay the topk trace in place of the logits trace an
 decode_forward(spec_mode="topk") must deliver candidates, ids and the lazy logits in runner-slot order; and the
 memory cost must count the three new buffers only under the flag. With the flag off nothing changes.
 
+Fresh rows: under QWEN36_SPEC_FAST_JOIN=1 (default) a fresh row's first verify rides the normal replay as a 0-draft
+row, so in topk mode its candidates come from the topk trace with every other row's (one replay, read_topk), its
+argmax filler columns are masked like any row's and no host logits are cached; with the flag at 0 the eager seed /
+join step's host logits feed _topk_from_logits and the lazy fetch returns that copy without a device call.
+
 Run: pytest models/demos/blackhole/qwen36/tests/test_spec_devtopk_host.py -q
 """
 
@@ -17,10 +22,15 @@ import types
 import pytest
 import torch
 
+from models.demos.blackhole.qwen36.tests.test_spec_fastjoin_host import _admit
+from models.demos.blackhole.qwen36.tests.test_spec_fastjoin_host import _engine as _fj_engine
+from models.demos.blackhole.qwen36.tests.test_spec_fastjoin_host import _GdnStub as _FjGdnStub
 from models.demos.blackhole.qwen36.tests.test_spec_slotmap_host import _engine as _slot_engine
 from models.demos.blackhole.qwen36.tests.test_spec_specstep_host import _fake_ttnn, _vfy_model
+from models.demos.blackhole.qwen36.tt.gdn.tp import fresh_row_select
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.blackhole.qwen36.tt.spec_engine import (
+    PLACEHOLDER_TOKEN_ID,
     SPEC_MODES,
     MTPSpecEngine,
     TopKCandidates,
@@ -490,3 +500,190 @@ def test_spec_plan_offers_topk_only_under_the_flag(monkeypatch):
     monkeypatch.setenv("QWEN36_VERIFY_DEVICE_TOPK", "1")
     cls.spec_plan(cfg, 1, 3)
     assert seen["accept_modes"] == ("argmax_ids", "logits", "topk") and seen["topk_candidates"] == 64
+
+
+# --------------------------------------------------------------------------- #
+# Fresh rows in topk mode: QWEN36_SPEC_FAST_JOIN=1 (the normal replay) and =0 (the eager seed / join)
+# --------------------------------------------------------------------------- #
+class _FakeTopkJoinModel(_FakeTopkModel):
+    """_FakeTopkModel that also records mi_prev and inactive, the per-row inputs a fresh row changes."""
+
+    def verify_traced(self, tokens, positions, mi_prev, read_logits=False, page_tables=None, inactive=None, **kw):
+        out = super().verify_traced(tokens, positions, mi_prev, read_logits, page_tables, inactive, **kw)
+        self.calls[-1]["mi_prev"] = [int(m) for m in mi_prev]
+        self.calls[-1]["inactive"] = None if inactive is None else [bool(x) for x in inactive]
+        self.calls[-1]["positions"] = [int(p) for p in positions]
+        return out
+
+
+def _fj_topk_engine(B, K, model, gdn, **kw):
+    """The fast-join host engine (test_spec_fastjoin_host._engine) with the topk-mode fields; the eager-seed topk
+    helper fails the test unless the test replaces it."""
+    e = _fj_engine(B, K, model, gdn, vocab=model.vocab_size, _topk_logits=None, **kw)
+    e._topk_from_logits = lambda out: pytest.fail("_topk_from_logits ran: a fresh row left the normal replay")
+    return e
+
+
+@pytest.mark.parametrize("remap", [None, [2, 0, 3, 1]])
+def test_fast_join_topk_fresh_rows_ride_the_same_replay(remap):
+    """Two fresh rows join two running rows in ONE replay with read_topk: the fresh rows run at mi = 0 after the
+    GDN seed, their candidates (column 0 real) are the exact top-m of the replay's logits like every other row's,
+    their argmax filler columns are masked (num_valid_drafts 0), no host logits are cached and the lazy fetch is one
+    device round trip; everything in runner-slot order through the slot map."""
+    B, K = 4, 3
+    T = K + 1
+    model, gdn = _FakeTopkJoinModel(B, T), _FjGdnStub(T)
+    e = _fj_topk_engine(B, K, model, gdn)
+    if remap is not None:
+        e.remap_slots(remap)
+    phys = list(e._phys)  # runner slot s sits at engine row phys[s]
+    tok, pos, nv, acc = _block(B, T, nv=[2, 0, 1, 0], acc=[2, 1, 3, 1])  # slot s starts at 50 + 10 s
+    e._active = {phys[0], phys[2]}
+    _admit(e, phys[1], 60)
+    _admit(e, phys[3], 80)
+    pt = torch.arange(B * NB, dtype=torch.int32).reshape(B, NB) + 1
+    res = e.decode_forward(tok, pos, num_valid_drafts=nv, accepted_counts=acc, page_table=pt, spec_mode="topk")
+    assert isinstance(res, VerifyResult) and res.spec_mode == "topk" and res.logits is None
+    # one replay for the whole step, the topk read asked, the fresh ENGINE rows at mi = 0, every row active
+    assert len(model.calls) == 1
+    call = model.calls[0]
+    assert call["kw"] == {"read_topk": True} and call["read_logits"] is False
+    assert call["inactive"] == [False] * B
+    clean, start0, active = sanitize_verify_block(tok, pos, nv, K)
+    for s in range(B):
+        assert call["tokens"][phys[s]] == clean[s].tolist() and call["positions"][phys[s]] == int(start0[s])
+    assert call["mi_prev"][phys[1]] == 0 and call["mi_prev"][phys[3]] == 0
+    assert call["mi_prev"][phys[0]] == 1 and call["mi_prev"][phys[2]] == 2
+    # the GDN seed named the fresh engine rows once (shared selector), the MTP slot Tp-1 warmed, bookkeeping cleared
+    fresh_rows = sorted([phys[1], phys[3]])
+    assert gdn.selects == [(fresh_rows, "SEL")]
+    assert torch.equal(e.log["stage"][0][0], fresh_row_select(fresh_rows, B, T, 4)) and len(e.log["stage"]) == 1
+    assert sorted(w[2] for w in e.log["warm"]) == [59, 79] and len(e.log["warm"]) == 2
+    assert e._fresh == {} and e._fresh_dirty == set() and e.log["reprefill"] == []
+    # candidates: exact top-m of each runner row's own replay logits, fresh rows included, runner order
+    want = model.logits_of(clean.tolist()).float()
+    rv, ri = _reference_topk(want, model._vfy_topk_m)
+    assert torch.equal(res.topk_ids.reshape(B * T, -1), ri)
+    assert torch.equal(res.topk_values.reshape(B * T, -1), rv)
+    assert res.topk_values.dtype == torch.float32 and res.topk_ids.dtype == torch.int32
+    # argmax: column 0 of a fresh row is its first generated token, its filler columns are masked like any row's
+    assert torch.equal(res.argmax_ids, mask_unused_columns(want.argmax(-1).to(torch.int32).reshape(B, T), nv))
+    assert res.argmax_ids[[1, 3], 1:].tolist() == [[PLACEHOLDER_TOKEN_ID] * K] * 2
+    assert res.argmax_ids[1, 0] == int(want.reshape(B, T, -1)[1, 0].argmax())
+    # no host logits were cached: the lazy fetch replays the logits trace (one device round trip), runner order
+    assert e._topk_logits is None
+    n_calls = len(model.calls)
+    full = res.fetch_logits()
+    assert model.calls[-1] == "fetch" and len(model.calls) == n_calls + 1
+    assert full.dtype == torch.float32 and torch.equal(full.reshape(B * T, -1), want)
+
+
+def test_fast_join_topk_seed_step_with_a_padding_row_merges_every_row():
+    """Every active row fresh (a seed step) next to a padding row: one replay with read_topk, the whole-slot GDN
+    write, the padding row runs over the null block and its candidate rows merge like any row's (real logits, no
+    pad lanes: the readback is sliced to the B*T rows before the merge); the fresh rows keep column 0 only."""
+    B, K = 3, 2
+    T = K + 1
+    model, gdn = _FakeTopkJoinModel(B, T), _FjGdnStub(T)
+    e = _fj_topk_engine(B, K, model, gdn)
+    _admit(e, 0, 50)
+    _admit(e, 1, 60)
+    tok = torch.full((B, T), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+    pos = torch.full((B, T), -1, dtype=torch.int32)
+    tok[0, 0], pos[0, 0] = 100, 50
+    tok[1, 0], pos[1, 0] = 101, 60  # row 2 stays padding (start_pos -1)
+    nv, acc = torch.zeros(B, dtype=torch.int32), torch.ones(B, dtype=torch.int32)
+    pt = torch.arange(B * NB, dtype=torch.int32).reshape(B, NB) + 1
+    res = e.decode_forward(tok, pos, num_valid_drafts=nv, accepted_counts=acc, page_table=pt, spec_mode="topk")
+    assert len(model.calls) == 1
+    call = model.calls[0]
+    assert call["kw"] == {"read_topk": True} and call["mi_prev"] == [0, 0, 0]
+    assert call["inactive"] == [False, False, True]
+    assert gdn.selects == [([0, 1, 2], "SEL")], "every active row is fresh: the whole-slot write"
+    assert torch.equal(e.log["stage"][0][0], fresh_row_select([0, 1], B, T, 4)), "the selector names only the fresh"
+    assert sorted(w[2] for w in e.log["warm"]) == [49, 59]
+    clean, start0, active = sanitize_verify_block(tok, pos, nv, K)
+    assert active.tolist() == [True, True, False] and call["tokens"] == clean.tolist()
+    want = model.logits_of(clean.tolist()).float()
+    rv, ri = _reference_topk(want, model._vfy_topk_m)
+    assert torch.equal(res.topk_ids.reshape(B * T, -1), ri) and torch.equal(res.topk_values.reshape(B * T, -1), rv)
+    assert res.argmax_ids[:, 0].tolist() == want.argmax(-1).reshape(B, T)[:, 0].tolist()
+    assert bool((res.argmax_ids[:, 1:] == PLACEHOLDER_TOKEN_ID).all())
+    assert e._fresh == {} and e._active == {0, 1} and e._topk_logits is None
+    full = res.fetch_logits()
+    assert model.calls[-1] == "fetch" and torch.equal(full.reshape(B * T, -1), want)
+
+
+def test_fast_join_topk_left_out_fresh_row_waits_without_a_reprefill():
+    """A fresh row left out of a topk step (padding) keeps its prefill state and joins the next replay as a fresh
+    row at mi = 0, with read_topk on both steps and the candidates of both steps from the replay."""
+    B, K = 2, 2
+    T = K + 1
+    model, gdn = _FakeTopkJoinModel(B, T), _FjGdnStub(T)
+    e = _fj_topk_engine(B, K, model, gdn)
+    _admit(e, 0, 50)
+    _admit(e, 1, 70)
+    pt = torch.arange(B * NB, dtype=torch.int32).reshape(B, NB) + 1
+    tok = torch.full((B, T), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+    pos = torch.full((B, T), -1, dtype=torch.int32)
+    tok[0, 0], pos[0, 0] = 100, 50
+    nv, acc = torch.zeros(B, dtype=torch.int32), torch.ones(B, dtype=torch.int32)
+    res = e.decode_forward(tok, pos, num_valid_drafts=nv, accepted_counts=acc, page_table=pt, spec_mode="topk")
+    assert model.calls[0]["kw"] == {"read_topk": True} and model.calls[0]["inactive"] == [False, True]
+    assert e._fresh == {1: 70} and e._fresh_dirty == set() and e.log["reprefill"] == []
+    assert res.topk_ids.shape == (B, T, model._vfy_topk_m)
+    # next step: row 0 running (1 accepted), row 1 comes in fresh
+    tok2, pos2, nv2, acc2 = _block(B, T, nv=[1, 0], acc=[1, 1], base=51)  # slot 0 at 51, slot 1 at 61
+    tok2[1, 0], pos2[1, 0] = 300, 70  # slot 1 verifies its first token at its prompt length
+    res2 = e.decode_forward(tok2, pos2, num_valid_drafts=nv2, accepted_counts=acc2, page_table=pt, spec_mode="topk")
+    call = model.calls[-1]
+    assert call["kw"] == {"read_topk": True} and call["mi_prev"] == [0, 0] and call["inactive"] == [False, False]
+    assert gdn.selects == [([0, 1], "SEL"), ([1], "SEL")] and e._fresh == {} and e.log["reprefill"] == []
+    clean, _, _ = sanitize_verify_block(tok2, pos2, nv2, K)
+    want = model.logits_of(clean.tolist()).float()
+    rv, ri = _reference_topk(want, model._vfy_topk_m)
+    assert torch.equal(res2.topk_ids.reshape(B * T, -1), ri) and torch.equal(res2.topk_values.reshape(B * T, -1), rv)
+    assert torch.equal(res2.argmax_ids, mask_unused_columns(want.argmax(-1).to(torch.int32).reshape(B, T), nv2))
+
+
+@pytest.mark.parametrize("join", [False, True])
+def test_flag_off_topk_fresh_rows_take_the_eager_seed_and_cache_the_host_logits(join):
+    """QWEN36_SPEC_FAST_JOIN=0: the fresh rows go through _seed (every active row fresh) or _join, asked for the
+    logits (read_logits or read_topk), and _topk_from_logits turns those host logits into the same exact candidates;
+    no replay, no fast GDN seed, and the lazy fetch returns the cached copy without a device call."""
+    B, K = 2, 3
+    T = K + 1
+    model, gdn = _FakeTopkJoinModel(B, T), _FjGdnStub(T)
+    e = _fj_engine(B, K, model, gdn, fast_join=False, vocab=model.vocab_size, _topk_logits=None)
+    seen = []
+
+    def fake_seed(tokens, start_pos, pt, read):
+        seen.append(("seed", bool(read)))
+        return torch.zeros(B, T, dtype=torch.int32), model.logits_of(tokens.tolist()).float().reshape(B, T, -1)
+
+    def fake_join(tokens, start_pos, mi_prev, pt, active, fresh, read):
+        seen.append(("join", bool(read), sorted(fresh)))
+        return torch.zeros(B, T, dtype=torch.int32), model.logits_of(tokens.tolist()).float().reshape(B, T, -1)
+
+    e._seed, e._join = fake_seed, fake_join
+    tok, pos, nv, acc = _block(B, T, nv=[0, 0], acc=[1, 1])  # slot 0 at 50, slot 1 at 60
+    if join:
+        e._active = {0}
+        nv[0], acc[0] = 2, 2
+        pos[0, :3] = torch.tensor([50, 51, 52], dtype=torch.int32)
+    else:
+        _admit(e, 0, 50)
+    _admit(e, 1, 60)
+    pt = torch.arange(B * NB, dtype=torch.int32).reshape(B, NB) + 1
+    res = e.decode_forward(tok, pos, num_valid_drafts=nv, accepted_counts=acc, page_table=pt, spec_mode="topk")
+    assert seen == ([("join", True, [1])] if join else [("seed", True)])
+    assert model.calls == [] and gdn.selects == [] and e.log["stage"] == [], "no replay, no fast seed"
+    clean, _, _ = sanitize_verify_block(tok, pos, nv, K)
+    want = model.logits_of(clean.tolist()).float()
+    rv, ri = _reference_topk(want, model._vfy_topk_m)
+    assert torch.equal(res.topk_ids.reshape(B * T, -1), ri) and torch.equal(res.topk_values.reshape(B * T, -1), rv)
+    assert torch.equal(res.argmax_ids, mask_unused_columns(torch.zeros(B, T, dtype=torch.int32), nv))
+    assert e._topk_logits is not None and e._fresh == {}
+    full = res.fetch_logits()
+    assert model.calls == [], "the eager step's host logits serve the fallback: no device round trip"
+    assert full.dtype == torch.float32 and torch.equal(full.reshape(B * T, -1), want)
