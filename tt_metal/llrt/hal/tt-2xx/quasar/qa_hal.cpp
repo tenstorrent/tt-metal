@@ -7,8 +7,11 @@
 #include <cstdlib>
 #include <enchantum/enchantum.hpp>
 #include <numeric>
+#include <optional>
 #include <string>
+#include <string_view>
 
+#include "quasar/qa_att_windows.hpp"
 #include "quasar/qa_hal.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
@@ -19,7 +22,6 @@
 #include "rtoptions.hpp"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
-#include "overlay/meta/registers/overlay_reg.h"
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 
@@ -294,10 +296,14 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
-        // Upper bound: 10 common includes, at most 2 from the core type switch, plus the firmware dir.
-        includes.reserve(13);
+        // Upper bound: 11 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(14);
 
         // Common includes for all core types
+        // A Quasar IP variant goes first so its headers shadow the base ones under tt_llk_quasar.
+        if (const auto& variant = params.rtoptions.get_quasar_arch_variant(); !variant.empty()) {
+            includes.push_back("tt_metal/tt-llk/tt_llk_quasar/arch/" + variant);
+        }
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
         includes.push_back("tt_metal/hw/inc/internal");
@@ -305,6 +311,22 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
+        // Snapshot the env once: includes() runs separately for firmware and
+        // kernel builds, and a mid-process env change must not compile them
+        // against different maps.
+        static const char* const quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
+        // TODO: Use UMD supplied variant instead of env var
+        // defaults to Quasar if no variant is set
+        if (quasar_variant != nullptr && (std::string(quasar_variant) == "horizon" || std::string(quasar_variant) == "2.0.1")) {
+            log_info(LogMetal, "Using variant: Horizon");
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
+        } else if (quasar_variant != nullptr && (std::string(quasar_variant) == "trinity" || std::string(quasar_variant) == "2.0.2")){
+            log_info(LogMetal, "Using variant: Trinity");
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.2/meta");
+        } else {
+            log_info(LogMetal, "Using variant: Quasar");
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
+        }
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/llk_lib");
@@ -341,31 +363,27 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
-        // Snapshot the env once: defines() runs separately for firmware and
-        // kernel builds, and a mid-process env change must not compile them
-        // against different maps.
-        static const char* const att_map = std::getenv("TT_METAL_NOC_ATT");
-        if (att_map != nullptr) {
+        // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
+        // emulation by the same .so test.
+        if (params.rtoptions.get_simulator_path().extension() == ".so") {
+            defines.push_back("TT_METAL_TTSIM");
+        }
+        // The map comes from RunTimeOptions (TT_METAL_NOC_ATT, or the qsr.s1 default MetalEnvImpl
+        // installs) and is fixed for the process, so the firmware and kernel builds see the same map.
+        if (const std::optional<std::string_view> att_map = params.rtoptions.get_noc_att_map();
+            att_map.has_value()) {
             // ATT enabled => the ATT backend and the V3 API everywhere, one map
             // per build. The defines reach the JIT build key through the
             // define hash, so toggling can never reuse stale binaries.
-            const std::string_view map(att_map);
-            if (map == "grendel_qsr1") {
-                defines.push_back("NOC_ATT_CONFIG_GRENDEL_QSR1");
-            } else if (map == "quasar_aether_2x3") {
-                defines.push_back("NOC_ATT_CONFIG_QUASAR_AETHER_2X3");
-            } else {
-                TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected grendel_qsr1 or quasar_aether_2x3)", map);
+            const quasar_att::MapInfo* map_info = quasar_att::find_map(*att_map);
+            if (map_info == nullptr) {
+                TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected {})", *att_map, quasar_att::KNOWN_MAP_NAMES);
             }
+            defines.push_back(std::string(map_info->config_define));
             // Fast dispatch runs on the V3 CQ flag family (cq_dispatch/cq_prefetch
-            // reject non-DRAM-backed CQs at compile time). The watcher NoC sanitizer
-            // decodes XY operands and cannot run under ATT currently; the rest of the
-            // watcher never decodes an address, so allow it when the sanitizer
-            // is explicitly disabled.
-            TT_FATAL(
-                !params.rtoptions.get_watcher_enabled() || params.rtoptions.watcher_noc_sanitize_disabled(),
-                "TT_METAL_NOC_ATT supports the watcher only with the NoC sanitizer disabled "
-                "(TT_METAL_WATCHER_DISABLE_SANITIZE_NOC=1)");
+            // reject non-DRAM-backed CQs at compile time). The watcher, including its
+            // NoC sanitizer, runs under ATT: the sanitizer classifies operands through
+            // the map (debug/sanitize.h) instead of decoding XY fields.
             defines.push_back("NOC_ATT_ENABLED");
             defines.push_back("NOC_API_V3");
             static const bool att_program_for_test = std::getenv("TT_METAL_ATT_PROGRAM_FOR_TEST") != nullptr;
@@ -591,6 +609,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = 0;         // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;  // TODO: add correct value
     this->has_stream_registers_ = false;
+    this->supports_fds_ = true;
     this->noc_topology_ = NoCTopologyType::MESH;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;

@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include <cstdint>
+#include <mutex>
 #include <ranges>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -19,6 +20,8 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tracy/Tracy.hpp>
 #include "ttnn/graph/graph_serialization.hpp"
 
@@ -382,6 +385,60 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
             shard_spec.shape[0] = shard_volume / shard_spec.shape[1];
             output_memory_config =
                 MemoryConfig{input_memory_config.memory_layout(), input_memory_config.buffer_type(), shard_spec};
+        } else if (
+            input_memory_config.created_with_nd_shard_spec() && input_memory_config.shard_spec().has_value() &&
+            input_memory_config.nd_shard_spec().has_value() && new_padded_shape != input_tensor.padded_shape()) {
+            // Gated on created_with_nd_shard_spec: TensorSpec auto-populates a shadow nd spec on
+            // every 2D-sharded config, so without it this rewrite would fire for ordinary sharded
+            // views (ttnn::view is called in loops by repeat, expand, split) and replace a working
+            // config wholesale. Only a user-authored ND spec carries the stale rank/extents.
+            //
+            // A config built from an ND shard spec that normalizes to 2D keeps the nd_shard_spec
+            // attached. Once the padded shape changes it no longer describes the tensor (its rank may
+            // exceed the new rank, or its extents were sized for the old shape), so drop it and keep
+            // only the equivalent 2D shard_spec that the downstream view/recompute path relies on.
+            // TensorSpec then re-derives an equivalent rank-<=2 nd spec for the new shape, so what is
+            // actually lost is the ND provenance and the original shard rank, not the distribution.
+            // Re-deriving a higher-rank ND spec here instead would be wrong: a view aliases the input
+            // buffer's existing device_local_config, and an nd_shard_spec unconditionally overrides
+            // the 2D distribution when sharding args are built, so the spec would describe a
+            // shard->bank mapping the allocation does not have.
+            {
+                // Once per process -- views run in per-step model loops, and reshape_tiled takes
+                // this path on its internal rank-normalizing view.
+                static std::once_flag nd_shard_spec_dropped_warned;
+                std::call_once(nd_shard_spec_dropped_warned, [&] {
+                    log_warning(
+                        tt::LogOp,
+                        "Tensor::view: this view changes the padded shape ({} -> {}), so the "
+                        "nd_shard_spec (shard_shape {}) no longer describes the tensor and is "
+                        "dropped; the view keeps the equivalent 2D shard_spec and is {}-sharded, not "
+                        "ND-sharded. If this view is an op's final output, pass an explicit ND "
+                        "memory_config to keep ND sharding. This message is emitted once per process.",
+                        input_tensor.padded_shape(),
+                        new_padded_shape,
+                        input_memory_config.nd_shard_spec()->shard_shape,
+                        input_memory_config.memory_layout());
+                });
+            }
+            // Carried over by hand: the 3-arg ctor drops the allocation flags, and unlike
+            // nd_shard_spec they are not regenerated downstream. They are mutually exclusive, so at
+            // most one of these runs, and both require the L1 sharded config this still is.
+            const bool per_core =
+                tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(input_memory_config);
+            const bool range_lockstep =
+                tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(
+                    input_memory_config);
+            output_memory_config = MemoryConfig{
+                input_memory_config.memory_layout(),
+                input_memory_config.buffer_type(),
+                input_memory_config.shard_spec()};
+            if (per_core) {
+                tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(output_memory_config, true);
+            } else if (range_lockstep) {
+                tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(
+                    output_memory_config, true);
+            }
         }
     }
 

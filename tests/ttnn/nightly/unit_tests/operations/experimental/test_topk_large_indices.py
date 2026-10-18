@@ -8,7 +8,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_equal
 
@@ -1128,6 +1128,7 @@ def test_topk_large_indices_valid_end_varies_across_trace_replays(device):
     runtime arg, or a compile-time flag), every replay would reuse the end that was live during capture
     and a multi-chunk traced prefill would score the wrong window with nothing failing.
     """
+    device.enable_program_cache()
     num_rows, n, k = 2, 2048, 64
     torch_input = _make_bf16_exact_input(num_rows, n)
     tt_input = _to_device(torch_input, device)

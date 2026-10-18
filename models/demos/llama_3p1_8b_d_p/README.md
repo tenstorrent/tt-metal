@@ -30,7 +30,8 @@ accepts a chunk-aligned capacity. Full-model book tests currently cover 2K and
 Attention gathers the selected cache prefix, restores natural token order,
 and applies standard SDPA with an absolute-position causal mask, accurate
 exponential mode, and FP32 destination accumulation. It requires the standard
-SDPA accurate-exponential prerequisite included in this branch's base.
+SDPA accurate-exponential correction tracked in [PR #57180](https://github.com/tenstorrent/tt-metal/pull/57180).
+Check that correction is present before interpreting failures of the strict attention accuracy gate.
 
 ## Run the tests
 
@@ -55,7 +56,8 @@ python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/model/test_prefill_book_to
 The CI registration in `tests/pipeline_reorg/blaze_models_prefill_tests.yaml`
 runs CPU reference checks first in the components/decoder allocation, plus a
 separate book 2K/4K job. Select `llama31` in the Blaze Models Prefill tests workflow
-to run both jobs. CPU checks use `--noconftest` so collection does not load device
+to run the component, book and runner jobs. Select `llama31_prefill_runner` for
+the runner acceptance stage alone. CPU checks use `--noconftest` so collection does not load device
 fixtures. Shared CPU helpers are in `tests/utils.py`; TTNN helpers are in
 `tests/device_utils.py` and `tests/model/device_utils.py`.
 
@@ -111,3 +113,8 @@ passing run on the final integrated revision.
 
 Test registrations and thresholds describe coverage; passing results must come
 from a run of the branch being reviewed.
+
+## Common prefill runner
+
+See the [runner acceptance guide](docs/prefill-runner.md) for producer/runner
+tests, the source KV address-table contract, and the SC1 CI command.

@@ -8,8 +8,10 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::prim {
 
@@ -34,7 +36,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -83,8 +85,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     uint32_t g1_numcores = core_group_1.num_cores();
 
     // Create Buffers
-    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
         embeddings_index_type = EmbeddingsIndexType::BFP16;
@@ -107,31 +107,71 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     uint32_t required_memory_bytes = 2 * num_tiles_per_block * weights_single_tile_size;
     bool use_chunked_processing = required_memory_bytes > max_l1_budget_bytes;
 
+    // PADDED and BINARY serve some weight rows out of a locally cached copy instead of fetching them
+    // per token; the other embeddings types have no such rows, so the cache is absent for them.
+    const bool use_local_cache = embeddings_type == EmbeddingsType::PADDED || embeddings_type == EmbeddingsType::BINARY;
+    // PADDED caches the single pad row; BINARY caches rows 0 and 1.
+    const uint32_t cache_entries = embeddings_type == EmbeddingsType::PADDED ? 1u : 2u;
+
     // For very large embeddings, use chunked processing
     uint32_t tiles_per_chunk;
     uint32_t num_chunks;
     uint32_t last_chunk_tiles;
     uint32_t buffering;
+    // One pass has to push exactly this many tiles.
+    uint32_t dfb_num_entries;
 
     if (use_chunked_processing) {
-        // Keep tiles_per_chunk near the cap and let the last chunk be partial.
-        // Reader/compute kernels handle the partial trailing chunk explicitly
-        // via last_chunk_tiles.
-        tiles_per_chunk = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
-        num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
-        last_chunk_tiles = num_tiles_per_block - (num_chunks - 1) * tiles_per_chunk;
-        buffering = tiles_per_chunk > max_double_buffer_tiles ? 1 : 2;
+        const uint32_t chunk_cap = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
+        const uint32_t row_bytes = num_tiles_per_block * weights_single_tile_size;
+        const uint32_t output_row_bytes = num_tiles_per_block * output_single_tile_size;
+        // A full row costs one staging buffer plus the output: an output buffer of one row when the
+        // output is interleaved, or the whole output shard when it is sharded. The shard is borrowed
+        // rather than allocated as a buffer, but it still occupies L1 that the staging buffer must not
+        // overlap. The shard size comes from the tensor spec, so the decision is stable across
+        // program-cache hits. Everything has to fit in the L1 left after the buffers that are always present.
+        const uint32_t l1_alignment = device->allocator()->get_alignment(BufferType::L1);
+        // The index scratch and weight cache are scratchpads stacked after the DFBs, each start aligned
+        // to the DRAM alignment (ProgramImpl::allocate_scratchpads).
+        const uint32_t sp_alignment = device->allocator()->get_alignment(BufferType::DRAM);
+        const uint64_t other_l1_bytes =
+            sp_alignment +  // gap from the end of the DFBs to the first scratchpad
+            round_up(TILE_HEIGHT * input_element_size_bytes, sp_alignment) +
+            (use_local_cache ? round_up(cache_entries * round_up_to_mul32(weight_page_size), sp_alignment) : 0);
+        const uint64_t l1_capacity =
+            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        const uint64_t output_bytes =
+            output_sharded ? output.buffer()->aligned_size_per_bank() : round_up(output_row_bytes, l1_alignment);
+        const uint64_t full_row_dfb_bytes = round_up(row_bytes, l1_alignment) + output_bytes;
+        if (full_row_dfb_bytes + other_l1_bytes <= l1_capacity) {
+            // One buffer holds the row, so the short last chunk lands on the end.
+            tiles_per_chunk = std::min(chunk_cap, num_tiles_per_block);
+            num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
+            last_chunk_tiles = num_tiles_per_block - (num_chunks - 1) * tiles_per_chunk;
+            buffering = 1;
+            dfb_num_entries = num_tiles_per_block;
+        } else {
+            // Chunk size divides the row, so every push matches the buffer.
+            tiles_per_chunk = chunk_cap;
+            for (uint32_t divisor = chunk_cap; divisor > 0; --divisor) {
+                if (num_tiles_per_block % divisor == 0) {
+                    tiles_per_chunk = divisor;
+                    break;
+                }
+            }
+            num_chunks = num_tiles_per_block / tiles_per_chunk;
+            last_chunk_tiles = tiles_per_chunk;
+            buffering = 2 * tiles_per_chunk * weights_single_tile_size <= max_l1_budget_bytes ? 2 : 1;
+            dfb_num_entries = buffering * tiles_per_chunk;
+        }
     } else {
         // Use original non-chunked approach for smaller embeddings
         tiles_per_chunk = num_tiles_per_block;
         num_chunks = 1;
         last_chunk_tiles = num_tiles_per_block;
         buffering = num_tiles_per_block > max_double_buffer_tiles ? 1 : 2;
+        dfb_num_entries = buffering * tiles_per_chunk;
     }
-
-    // PADDED and BINARY serve some weight rows out of a locally cached copy instead of fetching them
-    // per token; the other embeddings types have no such rows, so the cache is absent for them.
-    const bool use_local_cache = embeddings_type == EmbeddingsType::PADDED || embeddings_type == EmbeddingsType::BINARY;
 
     // -----------------------------------------------------------------------
     // Resource names
@@ -142,9 +182,12 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     const KernelSpecName COMPUTE_G2{"compute_group_2"};
 
     const DFBSpecName WEIGHTS_STAGING{"weights_staging"};
-    const DFBSpecName INDEX_SCRATCH{"index_scratch"};
+    // The reader's private page for the block of indices it is working through.
+    const ScratchpadSpecName INDEX_SCRATCH_SP{"index_scratch_sp"};
     const DFBSpecName OUTPUT{"output"};
-    const DFBSpecName WEIGHT_CACHE{"weight_cache"};
+    // The reader's private copy of the weight rows it serves locally: it fills it and reads tokens
+    // back out of it, both over the NoC.
+    const ScratchpadSpecName WEIGHT_CACHE_SP{"weight_cache_sp"};
 
     const TensorParamName INPUT_PARAM{"input"};
     const TensorParamName WEIGHTS_PARAM{"weights"};
@@ -161,22 +204,19 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = WEIGHTS_STAGING,
         .entry_size = weights_single_tile_size,
-        .num_entries = buffering * tiles_per_chunk,
+        .num_entries = dfb_num_entries,
         .data_format_metadata = weights_data_format,
     });
 
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = INDEX_SCRATCH,
-        .entry_size = TILE_HEIGHT * input_element_size_bytes,
-        .num_entries = 1,
-        .data_format_metadata = input_data_format,
-    });
+    Group<ScratchpadSpec> scratchpads;
+    scratchpads.push_back(
+        ScratchpadSpec{.unique_id = INDEX_SCRATCH_SP, .size_per_node = TILE_HEIGHT * input_element_size_bytes});
 
     uint32_t output_dfb_total_size;
     if (output_sharded) {
         output_dfb_total_size = output.buffer()->aligned_size_per_bank();
     } else {
-        output_dfb_total_size = buffering * tiles_per_chunk * output_single_tile_size;
+        output_dfb_total_size = dfb_num_entries * output_single_tile_size;
     }
     // The output buffer's total size has to divide evenly by its tile-sized entry. When the output is
     // sharded the total is the shard's own aligned size per bank, which the op's validation makes a
@@ -202,13 +242,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
 
     if (use_local_cache) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        // PADDED caches the single pad row; BINARY caches rows 0 and 1.
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = WEIGHT_CACHE,
-            .entry_size = cache_page_size,
-            .num_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u,
-            .data_format_metadata = weights_data_format,
-        });
+        scratchpads.push_back(
+            ScratchpadSpec{.unique_id = WEIGHT_CACHE_SP, .size_per_node = cache_entries * cache_page_size});
     }
     uint32_t weight_block_size;
     if (output_sharded) {
@@ -243,35 +278,20 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         .accessor_name = "in0",
         .endpoint_type = DFBEndpointType::PRODUCER,
     });
-    // The index scratch page never leaves the reader: it reserves the page once, decodes indices out
-    // of it, and commits it at the end only to leave the buffer balanced. Both roles are the reader's.
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::CONSUMER,
-    });
+    // The index scratch page never leaves the reader: it decodes indices out of it, so it is the
+    // reader's private scratchpad.
+    Group<KernelSpec::ScratchpadBinding> reader_scratchpad_bindings;
+    reader_scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH_SP, .accessor_name = "in1"});
     if (use_local_cache) {
-        // Likewise the weight cache: the reader fills it and reads tokens back out of it, with no
-        // hand-off to another kernel.
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = WEIGHT_CACHE,
-            .accessor_name = "local_cache",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = WEIGHT_CACHE,
-            .accessor_name = "local_cache",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
+        // The weight cache: the reader fills it and reads tokens back out of it, with no hand-off to
+        // another kernel, so it is the reader's private scratchpad too.
+        reader_scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = WEIGHT_CACHE_SP, .accessor_name = "local_cache"});
     }
 
-    // These defines and the weight cache's DFB binding share one condition, the embeddings type. That
-    // is what lets the reader name the cache handle at all: a dfb:: handle exists only on the builds
+    // These defines and the weight cache's scratchpad binding share one condition, the embeddings type. That
+    // is what lets the reader name the cache handle at all: a scratch:: handle exists only on the builds
     // where the host binds it, so the reader's reference to it is compiled out under the same defines
     // on the builds where it is not.
     KernelSpec::CompilerOptions::Defines embedding_defines{
@@ -289,6 +309,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         .source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
         .compiler_options = {.defines = embedding_defines},
         .dfb_bindings = std::move(reader_dfb_bindings),
+        .scratchpad_bindings = std::move(reader_scratchpad_bindings),
         .tensor_bindings =
             {
                 TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
@@ -304,8 +325,11 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
                 {"last_chunk_tiles", last_chunk_tiles},
             },
         .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
+
+    // The reader's index scratchpad, plus its weight cache under PADDED / BINARY.
+    spec.scratchpads = std::move(scratchpads);
 
     // -----------------------------------------------------------------------
     // Compute
@@ -319,9 +343,10 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         use_chunked_processing ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/compute/tilize_chunked.cpp"
                                : "ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp";
 
-    // Legacy compute config left every field at its default; ComputeGen1Config's defaults reproduce
-    // them exactly (HiFi4, precise SFPU, 16-bit dest, double-buffered dest, no unpack-mode entries).
-    ComputeHardwareConfig compute_hw = ComputeGen1Config{};
+    // Legacy compute config left every field at its default. ComputeHardwareConfig's common defaults
+    // reproduce them (HiFi4, precise SFPU, 16-bit dest, double-buffered dest, no unpack-mode entries)
+    // on every generation. A TT-1.x.x-only extra is unused on TT-2.x.x.
+    ComputeHardwareConfig compute_hw{};
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t per_core_block_cnt) {
         Group<DFBBinding> compute_dfb_bindings;
@@ -399,7 +424,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
                     TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "dst"},
                 },
             .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         });
     }
 

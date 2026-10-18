@@ -1153,6 +1153,7 @@ void py_module(nb::module_& mod) {
         mod,
         &ttnn::sqrt_bw,
         R"doc(Performs backward operations for square-root on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(TILE)doc",
         R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 

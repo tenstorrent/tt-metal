@@ -36,6 +36,8 @@ from huggingface_hub import snapshot_download
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
+from ttml.common.sampling import positions_to_tensor
+
 from .completer_common import deallocate_tensors, async_read_to_host
 from ttml.common.utils import build_mesh
 from ttml.models.qwen3.weights import load_weights_from_hf
@@ -78,6 +80,19 @@ class Qwen3GRPOCompleter(GRPOCompleter):
             ``RunnerType.Default`` (retain activations): faster backward, much
             higher peak memory.
     """
+
+    @staticmethod
+    def _fully_shard(tt_model: Any, replicate: list[str]) -> None:
+        """Wrap each block, then the root, with FSDP; params matching ``replicate`` are not sharded."""
+        for block in tt_model.blocks:
+            ttml.fsdp.fully_shard(block, reshard_after_forward=True, replicate=replicate)
+        ttml.fsdp.fully_shard(tt_model, reshard_after_forward=True, replicate=replicate)
+        replicated = ttml.fsdp.replicated_parameters(tt_model)
+        if replicated:
+            logging.info("FSDP: %d parameter(s) kept replicated", len(replicated))
+        unmatched = ttml.fsdp.unmatched_replicate_patterns(tt_model, replicate)
+        if unmatched:
+            logging.warning("fsdp_replicate_params: no parameter matches %s", unmatched)
 
     def setup_device(self, device_config: DeviceConfig) -> Any:
         """Open a named device mesh (with an ``"fsdp"`` axis when enabled)."""
@@ -165,9 +180,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
             )
             with ttml.lazy_init():
                 tt_model = Qwen3(qwen_config)
-            for block in tt_model.blocks:
-                ttml.fsdp.fully_shard(block, reshard_after_forward=True)
-            ttml.fsdp.fully_shard(tt_model, reshard_after_forward=True)
+            self._fully_shard(tt_model, device_config.fsdp_replicate_params)
             ttml.materialize_module(tt_model)
 
             # Weights are uploaded already-sharded to match each materialized
@@ -188,9 +201,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                     "Applying FSDP fully_shard across the 'fsdp' axis " "(size=%d, reshard_after_forward=True)",
                     self._mesh.axis_size("fsdp"),
                 )
-                for block in tt_model.blocks:
-                    ttml.fsdp.fully_shard(block, reshard_after_forward=True)
-                ttml.fsdp.fully_shard(tt_model, reshard_after_forward=True)
+                self._fully_shard(tt_model, device_config.fsdp_replicate_params)
 
         ctx._tokenizer = tokenizer
         if ctx._pad_token is None:
@@ -356,19 +367,35 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                 logits = self._model(input_tensor, prefill_mask, past_key_values=kv)
 
                 seed = int(np.random.randint(low=1, high=int(1e7)))
+
+                # The model emits logits for all Np prompt positions, but exactly ONE per row is ever
+                # read: row b's prediction comes from pred_pos[b] = len_b - 1, and the prompts have
+                # different lengths so every row wants a different position. Sampling the whole
+                # [B, 1, Np, V] therefore did Np times the necessary work.
+                #
+                # Hand the positions to the op instead. It reads only the tiles those rows live in,
+                # so prefill sampling costs one decode step's worth of work whatever the context
+                # length, and returns [B, 1, 1, 1].
+                #
                 # Seed uniquely only over the batch-sharded axes (dp/fsdp) so each device's rollout
                 # draws independent noise; a replicated (tp) axis, if any, is excluded via _seed_axes.
-                sampled = ttml.ops.sample.sample_op(logits, ctx.temperature, seed, None, self._seed_axes)
-                # Per-row prediction position: read the whole sampled column once
-                # on host and pick row b's token at pred_pos[b].
+                positions_tensor = positions_to_tensor(pred_pos, B, Np, self._dp_mapper)
+                sampled = ttml.ops.sample.sample_op(
+                    logits,
+                    ctx.temperature,
+                    seed,
+                    None,
+                    self._seed_axes,
+                    positions_tensor,
+                )
                 sampled_host = ttnn.to_torch(sampled.get_value(), mesh_composer=composer)
-                sampled_host = sampled_host.reshape(B, 1, Np, 1).to(int).numpy()
+                sampled_host = sampled_host.reshape(B).to(int).numpy()
                 for b in range(B):
-                    tok = int(sampled_host[b, 0, pred_pos[b], 0])
+                    tok = int(sampled_host[b])
                     first_tokens[b] = tok
                     if tok in stop_ids:
                         done[b] = True
-                deallocate_tensors([input_tensor, prefill_mask, logits, sampled])
+                deallocate_tensors([input_tensor, prefill_mask, logits, sampled, positions_tensor])
                 ttml.autograd.AutoContext.get_instance().reset_graph()
 
                 # --- Decode: feed one token per step. The first decode input is
@@ -386,13 +413,11 @@ class Qwen3GRPOCompleter(GRPOCompleter):
 
                     seed = int(np.random.randint(low=1, high=int(1e7)))
                     sampled = ttml.ops.sample.sample_op(logits, ctx.temperature, seed, None, self._seed_axes)
-                    # Clone so the column is independent of the deallocated sampled.
-                    last_token_column = ttnn.clone(ttnn.slice(sampled.get_value(), [0, 0, 0, 0], [B_local, 1, 1, 1]))
+
+                    last_token_column = sampled.get_value()
                     generated_columns.append(last_token_column)
                     chunk_columns.append(last_token_column)
-                    # Do NOT deallocate ``last_input``: after step 0 it wraps the
-                    # previous step's still-referenced column.
-                    deallocate_tensors([decode_mask, logits, sampled])
+                    deallocate_tensors([decode_mask, logits])
                     last_input = ttml.autograd.Tensor(last_token_column, False)
 
                     # Chunked async stop detection.

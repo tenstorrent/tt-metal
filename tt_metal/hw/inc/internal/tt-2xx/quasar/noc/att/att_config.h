@@ -13,7 +13,7 @@
  * the NOC V3 API requires for implicit local operands.
  */
 
-#if defined(NOC_ATT_CONFIG_GRENDEL_QSR1) && defined(NOC_ATT_CONFIG_QUASAR_AETHER_2X3)
+#if defined(NOC_ATT_CONFIG_GRENDEL_QSR1) + defined(NOC_ATT_CONFIG_QUASAR_AETHER_2X3) + defined(NOC_ATT_CONFIG_HORIZON_2X3) > 1
 #error "Exactly one ATT configuration may be selected"
 #elif defined(NOC_ATT_CONFIG_GRENDEL_QSR1)
 #include "internal/tt-2xx/quasar/noc/att/configs/grendel_qsr1_att_config.h"
@@ -22,6 +22,10 @@ namespace noc_att_active_config = grendel_qsr1_att_config;
 #elif defined(NOC_ATT_CONFIG_QUASAR_AETHER_2X3)
 #include "internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_att_config.h"
 namespace noc_att_active_config = quasar_aether_2x3_att_config;
+#define NOC_ATT_LOCAL_WINDOW_BASE 0x1800000000ULL
+#elif defined(NOC_ATT_CONFIG_HORIZON_2X3)
+#include "internal/tt-2xx/quasar/noc/att/configs/horizon_2x3_att_config.h"
+namespace noc_att_active_config = horizon_2x3_att_config;
 #define NOC_ATT_LOCAL_WINDOW_BASE 0x1800000000ULL
 #else
 #error "The ATT address backend requires an explicit configuration (NOC_ATT_CONFIG_*, from TT_METAL_NOC_ATT)"

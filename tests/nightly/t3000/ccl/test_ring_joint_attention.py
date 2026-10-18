@@ -455,7 +455,6 @@ def test_ring_joint_sdpa_mochi_model_config(mesh_device, reset_seeds, fp32_dest_
 
 # WH T3K grid constants (logical, before harvesting)
 WH_T3K_GRID_COLS = 8
-WH_T3K_GRID_ROWS = 8
 WH_T3K_CCL_COLUMN = 1  # Last column reserved for CCL
 
 PERF_Q_CHUNK_SIZES = [128, 256]

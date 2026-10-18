@@ -13,6 +13,10 @@ description: |
   each pattern, and opens draft PRs (it cannot build tt-metal locally, and its PRs need a
   maintainer's approval before CI runs anyway). Never merges its own PRs.
 
+  Now supporting auto lock generation: editing this file regenerates silencer.lock.yml
+  automatically via the compile-agentic-workflows pre-commit hook, so contributors no
+  longer need to run `gh aw compile` by hand.
+
 on:
   # Scan twice a day (warnings live in *successful* runs too, so we do not wait
   # for failures the way ci-doctor does), plus on demand. Two explicit cron
@@ -129,14 +133,10 @@ safe-outputs:
       - sanity-tests
       - blackhole-e2e-tests
       - galaxy-profiler-tests
-      - galaxy-multi-user-isolation-tests
-      - galaxy-unit-tests
-      - models-t1-device-perf-tests
-      - galaxy-integration-tests
-      - galaxy-stress-tests
-      - galaxy-e2e-tests
+      - galaxy-tests
       - galaxy-sanity
-      - galaxy-health
+      - models-t1-device-perf-tests
+      - galaxy-stress-tests
       - t3000-tests
       - t3000-dispatch-tests
       - t3000-profiler-tests

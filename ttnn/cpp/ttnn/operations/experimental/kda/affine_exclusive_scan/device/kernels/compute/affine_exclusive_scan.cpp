@@ -34,8 +34,15 @@ struct MatmulSubblock {
 
 // Apply a packed affine pair to a state: out = affine_a * state + affine_b. Unlike matmul_affine, this emits only
 // the transformed state; affine_b is loaded directly into DST so the matmul accumulates without an L1 partial.
-template <uint32_t Mt, uint32_t Kt, uint32_t Vt, uint32_t AffineRowStride = Kt + Vt>
-FORCE_INLINE void matmul_add_affine_b(DataflowBuffer& affine, DataflowBuffer& state, DataflowBuffer& out) {
+template <
+    uint32_t Mt,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t AffineRowStride = Kt + Vt,
+    typename AffineDFB,
+    typename StateDFB,
+    typename OutDFB>
+FORCE_INLINE void matmul_add_affine_b(AffineDFB& affine, StateDFB& state, OutDFB& out) {
     constexpr uint32_t subblock_cols = MatmulSubblock<Mt, Vt>::columns;
     constexpr uint32_t subblock_rows = MatmulSubblock<Mt, Vt>::rows;
 
@@ -90,9 +97,17 @@ FORCE_INLINE void matmul_add_affine_b(DataflowBuffer& affine, DataflowBuffer& st
 
 // Compose packed affine pairs: out_a = a * affine_a and out_b = a * affine_b + local_b. The local B term is
 // preloaded into DST before matmul accumulation, then the packed A and B columns are emitted to separate buffers.
-template <uint32_t Mt, uint32_t Kt, uint32_t At, uint32_t Vt>
-FORCE_INLINE void matmul_affine(
-    DataflowBuffer& a, DataflowBuffer& affine, DataflowBuffer& local_b, DataflowBuffer& out_a, DataflowBuffer& out_b) {
+template <
+    uint32_t Mt,
+    uint32_t Kt,
+    uint32_t At,
+    uint32_t Vt,
+    typename ADFB,
+    typename AffineDFB,
+    typename LocalBDFB,
+    typename OutADFB,
+    typename OutBDFB>
+FORCE_INLINE void matmul_affine(ADFB& a, AffineDFB& affine, LocalBDFB& local_b, OutADFB& out_a, OutBDFB& out_b) {
     constexpr uint32_t Nt = At + Vt;
     constexpr uint32_t subblock_cols = MatmulSubblock<Mt, At, Vt>::columns;
     constexpr uint32_t subblock_rows = MatmulSubblock<Mt, At, Vt>::rows;
@@ -146,7 +161,8 @@ FORCE_INLINE void matmul_affine(
     out_b.push_back(Mt * Vt);
 }
 
-FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) {
+template <typename InDFB, typename OutDFB>
+FORCE_INLINE void copy(InDFB& in, OutDFB& out, uint32_t tiles) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     const uint32_t in_id = in.get_id();
@@ -194,6 +210,10 @@ TT_KERNEL void compute(uint32_t group) {
         DataflowBuffer chronology(dfb::chronology_compute);
         topology = kda_chronology::receive(chronology);
     }
+    const uint32_t active = topology.active_groups(G);
+    if (group >= active) {
+        return;
+    }
     const uint32_t reset_group = topology.reset_group(G);
     initial_a.wait_front(affine_a_tiles);
     const bool reset_worker = group == reset_group;
@@ -226,7 +246,7 @@ TT_KERNEL void compute(uint32_t group) {
         initial_b.pop_front(affine_b_tiles);
     }
 
-    for (uint32_t distance = 1; distance < G; distance *= 2) {
+    for (uint32_t distance = 1; distance < active; distance *= 2) {
         if (group < distance) {
             continue;
         }

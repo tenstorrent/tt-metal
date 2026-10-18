@@ -57,6 +57,11 @@ def unwrap_multimodal_config(cfg):
 class MLAPrefillAdapter(PrefillModelAdapter):
     """DeepSeek-V3-family prefill adapter (MLA + MoE over TtPrefillRuntime)."""
 
+    def fabric_payload_size(self) -> int:
+        from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import moe_fabric_payload_size
+
+        return moe_fabric_payload_size(self.model_config)
+
     # ------------------------------------------------------------------
     # HF config
     # ------------------------------------------------------------------
@@ -141,6 +146,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             kv_only_last_layer=params.kv_only_last_layer,
             dflash_enabled=params.dflash_enabled,
             dflash_checkpoint_path=params.dflash_checkpoint_path,
+            mtp_levels=params.mtp_levels,
             routing_use_l1_small_for_semaphores=self.routing_use_l1_small_for_semaphores,
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             use_trace=params.use_trace,

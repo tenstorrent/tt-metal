@@ -43,8 +43,10 @@ ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_art
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    const uint32_t single_tile_size = tile_size(cb_data_format);
+    const auto in_cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    const auto out_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    const uint32_t in_single_tile_size = tile_size(in_cb_data_format);
+    const uint32_t out_single_tile_size = tile_size(out_cb_data_format);
 
     const auto& input_shape = input.padded_shape();
     const uint32_t tile_height = input.tensor_spec().tile().get_height();
@@ -96,15 +98,15 @@ ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_art
     constexpr uint32_t out0_t = 2;  // output
     m2::DataflowBufferSpec input_dfb{
         .unique_id = INPUT_DFB,
-        .entry_size = single_tile_size,
+        .entry_size = in_single_tile_size,
         .num_entries = in0_t,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = in_cb_data_format,
     };
     m2::DataflowBufferSpec output_dfb{
         .unique_id = OUTPUT_DFB,
-        .entry_size = single_tile_size,
+        .entry_size = out_single_tile_size,
         .num_entries = out0_t,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = out_cb_data_format,
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -118,7 +120,7 @@ ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_art
     const bool needs_wh_fp32_workaround = fp32_dest_acc_en && arch == tt::ARCH::WORMHOLE_B0;
     const auto math_fidelity = needs_wh_fp32_workaround ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
 
-    m2::ComputeGen1Config compute_hw{
+    m2::ComputeHardwareConfig compute_hw{
         .fpu_math_fidelity = math_fidelity,
         // legacy math_approx_mode unset (default false) -> sfpu_precision_mode default (Precise)
         .enable_32_bit_dest = fp32_dest_acc_en,
@@ -126,7 +128,7 @@ ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_art
     };
     // Compute consumes INPUT_DFB; with enable_32_bit_dest an explicit unpack mode is required for a
     // Float32-formatted consumed DFB. Legacy set no unpack_to_dest_mode (default -> UnpackToSrc).
-    if (cb_data_format == DataFormat::Float32) {
+    if (in_cb_data_format == DataFormat::Float32) {
         compute_hw.unpack_modes.insert({INPUT_DFB, UnpackMode::UnpackToSrc});
     }
 
@@ -144,7 +146,7 @@ ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_art
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_input_tiles", "num_output_tiles", "input_tile_offset", "start_id", "HtWt", "CHtWt"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     m2::KernelSpec writer{
@@ -155,7 +157,7 @@ ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_art
             .dfb_spec_name = OUTPUT_DFB, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // One compute KernelSpec per legacy compute KernelDescriptor (per core group), preserving the

@@ -86,6 +86,47 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
 DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE = ttnn.bfloat4_b
 
 
+def routed_expert_weight_memory_config(mesh_device, n_dim: int, dram_nd_sharded: bool) -> ttnn.MemoryConfig:
+    """DRAM placement of one routed-expert weight tensor whose N (the free dim) is ``n_dim``.
+
+    ``dram_nd_sharded=False`` is the DRAM-interleaved placement both routed-expert ops accept.
+
+    ``True`` is the DRAM ND-sharded placement that lets the FFN fetch a whole per-core N weight
+    slice in ONE NoC request instead of one per tile: the slice is exactly one shard, hence
+    contiguous in a single bank. The WIDTH is not a free choice. unified_routed_expert_moe rejects
+    any shard whose width is not exactly its own per_core_N, because a wider or narrower shard
+    splits or straddles the slice and loses the point; per_core_N = ceil(n_tiles / GRID_X) mirrors
+    that split, so this is the one spec the op accepts, and GRID_X is read from the op rather than
+    restated. moe_fused_swiglu reads whatever width it is handed (it only warns when the width
+    splits its chunk walk), so one placement serves both halves of a hybrid forward.
+
+    The HEIGHT stays at one tile-row. Shards distribute ROUND_ROBIN_1D, so consecutive K-rows land
+    in different banks and a core's requests within a K-block rotate across the DRAM banks. That
+    rotation is what buys the bandwidth (a bank-pinned core saturates near 30 GB/s against ~370 GB/s
+    rotating), so a taller shard, which trades rotation for fewer requests, loses.
+
+    n_tiles need not be a multiple of per_core_N: the last shard is partially valid, its phantom
+    columns are dropped by the ops' N-bounds guards, and the buffer pads N up to per_core_N * GRID_X
+    tiles -- a few percent of the weight footprint at the production shapes.
+    """
+    if not dram_nd_sharded:
+        return ttnn.DRAM_MEMORY_CONFIG
+    grid_x = ttnn.UNIFIED_ROUTED_EXPERT_CORE_GRID.x
+    n_tiles = n_dim // ttnn.TILE_SIZE
+    per_core_n = (n_tiles + grid_x - 1) // grid_x
+    dram_grid = mesh_device.dram_grid_size()
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=ttnn.Shape([ttnn.TILE_SIZE, per_core_n * ttnn.TILE_SIZE]),
+            grid=ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid.x - 1, dram_grid.y - 1))]
+            ),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+
 class TtRoutedExpert(LightweightModule):
     @staticmethod
     def check_cache_complete(
@@ -130,6 +171,8 @@ class TtRoutedExpert(LightweightModule):
         *,
         emb_dim: int | None = None,
         hidden_dim: int | None = None,
+        weights_dram_nd_sharded: bool = False,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ):
         """
         Shared logic for converting expert weights to ttnn with caching.
@@ -145,6 +188,10 @@ class TtRoutedExpert(LightweightModule):
             device: None for cache-only, mesh_device for cache+load
             emb_dim: Required when torch_weights is None
             hidden_dim: Required when torch_weights is None
+            weights_dram_nd_sharded: Place the device weights DRAM ND-sharded rather than
+                DRAM-interleaved (see routed_expert_weight_memory_config). A device-side choice
+                only: the cache holds the plain host tensor either way, so one cache serves both
+                placements and check_cache_complete needs no placement in its key.
 
         Returns:
             (gate_projs, up_projs, down_projs) if device is not None, else None
@@ -155,6 +202,19 @@ class TtRoutedExpert(LightweightModule):
             if cache_path is None or cache_name_prefix is None:
                 return None
             return str(cache_path / f"{cache_name_prefix}.{name}")
+
+        def _to_device(host_tt):
+            # Per device (1, 1, K, N) -> (K, N) while still on host, where a squeeze is a pure spec
+            # change; the placement is then applied to the final 2D shape rather than carried
+            # through a device-side view.
+            host_tt = ttnn.squeeze(ttnn.squeeze(host_tt, dim=0), dim=0)
+            return ttnn.to_device(
+                host_tt,
+                device,
+                memory_config=routed_expert_weight_memory_config(
+                    device, host_tt.shape[-1], dram_nd_sharded=weights_dram_nd_sharded
+                ),
+            )
 
         mesh_rows, mesh_cols = mesh_device.shape
         gate_tensors, up_tensors, down_tensors = [], [], []
@@ -183,46 +243,44 @@ class TtRoutedExpert(LightweightModule):
                 stacked_up = torch.empty(mesh_rows, mesh_cols, emb_dim, hidden_dim)
                 stacked_down = torch.empty(mesh_rows, mesh_cols, hidden_dim, emb_dim)
 
-            mem = ttnn.DRAM_MEMORY_CONFIG if device else None
             mapper = ExpertMapping.get_weights_mesh_mapper(mesh_device)
 
+            # Host-side in every mode, with the device placement applied afterwards by _to_device.
+            # as_tensor cannot apply it itself: on a cache hit it places the tensor with the memory
+            # config STORED in the tensorbin and ignores the one requested, so an ND-sharded
+            # placement could never reach a cached weight that way. Keeping the cache host-only also
+            # keeps it placement-agnostic, so flipping the layout invalidates nobody's cache.
             gate_tt = ttnn.as_tensor(
                 stacked_gate,
                 mesh_mapper=mapper,
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
                 dtype=weights_dtype,
-                memory_config=mem,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_gate"),
+                cache_dump_mode=cache_dump_mode,
             )
             up_tt = ttnn.as_tensor(
                 stacked_up,
                 mesh_mapper=mapper,
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
                 dtype=weights_dtype,
-                memory_config=mem,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_up"),
+                cache_dump_mode=cache_dump_mode,
             )
             down_tt = ttnn.as_tensor(
                 stacked_down,
                 mesh_mapper=mapper,
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
                 dtype=weights_dtype,
-                memory_config=mem,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_down"),
+                cache_dump_mode=cache_dump_mode,
             )
 
             if device is None:
                 del gate_tt, up_tt, down_tt
             else:
-                gate_tt = ttnn.squeeze(ttnn.squeeze(gate_tt, dim=0), dim=0)
-                up_tt = ttnn.squeeze(ttnn.squeeze(up_tt, dim=0), dim=0)
-                down_tt = ttnn.squeeze(ttnn.squeeze(down_tt, dim=0), dim=0)
-                gate_tensors.append(gate_tt)
-                up_tensors.append(up_tt)
-                down_tensors.append(down_tt)
+                gate_tensors.append(_to_device(gate_tt))
+                up_tensors.append(_to_device(up_tt))
+                down_tensors.append(_to_device(down_tt))
 
         return (gate_tensors, up_tensors, down_tensors) if device else None
 
@@ -285,10 +343,18 @@ class TtRoutedExpert(LightweightModule):
         weights_dtype: ttnn.DataType,
         cache_path: Path,
         cache_name_prefix: str,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ):
         """Build TTNN cache for routed experts without device copy."""
         TtRoutedExpert._convert_and_cache_expert_weights(
-            torch_weights, experts_per_chip, mesh_device, weights_dtype, cache_path, cache_name_prefix, device=None
+            torch_weights,
+            experts_per_chip,
+            mesh_device,
+            weights_dtype,
+            cache_path,
+            cache_name_prefix,
+            device=None,
+            cache_dump_mode=cache_dump_mode,
         )
 
     """
@@ -306,6 +372,9 @@ class TtRoutedExpert(LightweightModule):
     Weight Layout:
         - Each expert has gate_proj, up_proj, down_proj
         - Weights are NOT sharded across devices (each device has full local expert weights)
+        - On device each weight is DRAM-interleaved or, by default on Blackhole, DRAM ND-sharded
+          one tile-row tall and per_core_N wide (weights_dram_nd_sharded); see
+          routed_expert_weight_memory_config. Biases stay interleaved.
         - gate_proj, up_proj: (emb_dim, hidden_dim)
         - down_proj: (hidden_dim, emb_dim)
     """
@@ -328,6 +397,8 @@ class TtRoutedExpert(LightweightModule):
         *,
         activation: "ttnn.RoutedExpertActivation",
         hybrid_token_threshold: Optional[int] = None,
+        weights_dram_nd_sharded: Optional[bool] = None,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -359,6 +430,13 @@ class TtRoutedExpert(LightweightModule):
                           MiniMax-M3 / gpt-oss clamped swigluoai activation, or
                           RoutedExpertActivation.SituGlu for Kimi K3's SiTU-GLU. Keyword-only
                           and without a default so the caller must choose explicitly.
+            weights_dram_nd_sharded: DRAM placement of the expert weights. None (default) picks
+                          the arch default: ND-sharded on Blackhole, interleaved elsewhere. True
+                          forces ND-sharded (Blackhole only), False forces interleaved. See
+                          routed_expert_weight_memory_config for the placement itself.
+            cache_dump_mode: How a weight-cache miss is written (see ttnn.as_tensor). Pass
+                          ttnn.DumpTensorMode.LOCAL when each rank builds different layers
+                          (pipeline parallel).
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -373,6 +451,7 @@ class TtRoutedExpert(LightweightModule):
         self.compute_kernel_config = compute_kernel_config
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
+        self.cache_dump_mode = cache_dump_mode
         self.global_expert_idx_table = global_expert_idx_table
         # Activation variant for the fused unified_routed_expert_moe kernel.
         # Required RoutedExpertActivation, chosen explicitly by the caller (no
@@ -407,6 +486,20 @@ class TtRoutedExpert(LightweightModule):
                     "expert on the composite."
                 )
         self.hybrid_token_threshold = hybrid_token_threshold
+
+        # DRAM placement of the expert weights. The Blackhole default is ND-sharded: both fused
+        # routed-expert ops then read a per-core weight slice as ONE NoC transaction per K-row
+        # instead of one per tile (see routed_expert_weight_memory_config). Elsewhere the
+        # fallback routed_expert_ffn reads DRAM-interleaved weights only, so the default is
+        # interleaved and an explicit True is rejected rather than failing on device.
+        if weights_dram_nd_sharded is None:
+            weights_dram_nd_sharded = self._is_blackhole
+        elif weights_dram_nd_sharded and not self._is_blackhole:
+            raise NotImplementedError(
+                "weights_dram_nd_sharded requires the Blackhole fused path; the fallback "
+                "routed_expert_ffn reads DRAM-interleaved weights only"
+            )
+        self.weights_dram_nd_sharded = weights_dram_nd_sharded
 
         # Every non-SiLU activation lives in the fused Blackhole kernel only; the Wormhole
         # fallback in forward() calls routed_expert_ffn, which has no activation parameter and
@@ -454,6 +547,8 @@ class TtRoutedExpert(LightweightModule):
                 self.weight_cache_path,
                 self.cache_name_prefix,
                 device=self.mesh_device,
+                weights_dram_nd_sharded=self.weights_dram_nd_sharded,
+                cache_dump_mode=self.cache_dump_mode,
             )
         elif weight_cache_path is not None:
             logger.debug(f"Loading weights from cache ({experts_per_chip} local experts)")
@@ -465,6 +560,8 @@ class TtRoutedExpert(LightweightModule):
                 self.weight_cache_path,
                 self.cache_name_prefix,
                 device=self.mesh_device,
+                weights_dram_nd_sharded=self.weights_dram_nd_sharded,
+                cache_dump_mode=self.cache_dump_mode,
                 emb_dim=emb_dim,
                 hidden_dim=hidden_dim,
             )
@@ -487,6 +584,8 @@ class TtRoutedExpert(LightweightModule):
                 None,
                 None,
                 device=self.mesh_device,
+                weights_dram_nd_sharded=self.weights_dram_nd_sharded,
+                cache_dump_mode=self.cache_dump_mode,
             )
 
         assert result is not None, "Expected weight tensors to be returned when device is provided"
@@ -736,3 +835,70 @@ class TtRoutedExpert(LightweightModule):
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
         return expert_outputs
+
+    def forward_with_combine(
+        self,
+        dispatched_buffer: ttnn.Tensor,
+        expert_token_counts: ttnn.Tensor,
+        expert_region_offsets: ttnn.Tensor,
+        dispatched_metadata: ttnn.Tensor,
+        expert_offsets: ttnn.Tensor,
+        replicated_global_expert_idx_table: ttnn.Tensor,
+        *,
+        combine_axis: int,
+        combine_num_links: int,
+        num_experts_per_tok: int,
+        seq_len_per_chip: int,
+        combine_semaphores,
+        forwarding_buffer: Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
+        """The routed expert overlapped with combine_fabric2d in one program; returns combine's output.
+
+        `combine_semaphores` is the (fwd_arrived, final_arrived, expert_go) triple the caller keeps for the
+        mesh's lifetime; see TT_CCL.get_combine_overlap_semaphores. The op frees the rest of its L1 on return.
+
+        Blackhole only, on the ROW_MAJOR bf16 dispatch buffer: the routed expert writes bf8 tiles, as it does
+        for the separate combine, and combine's untilizers dequantise them to bf16 rows. The threshold splits the experts as in forward(), except that the
+        fused-only sentinel is not available: the one-program op always runs the unified half.
+        """
+        if not self._is_blackhole:
+            raise NotImplementedError("the routed expert / combine overlap is Blackhole-only")
+        if dispatched_buffer.layout != ttnn.ROW_MAJOR_LAYOUT or dispatched_buffer.dtype != ttnn.bfloat16:
+            raise ValueError(
+                f"the routed expert / combine overlap needs a ROW_MAJOR bfloat16 dispatch buffer, got "
+                f"{dispatched_buffer.layout} {dispatched_buffer.dtype}"
+            )
+        threshold = 0 if self.hybrid_token_threshold is None else self.hybrid_token_threshold
+        if threshold >= self.max_tokens:
+            raise ValueError(
+                f"hybrid_token_threshold {threshold} leaves no expert to the unified half (max_tokens "
+                f"{self.max_tokens}); the one-program overlap needs it below max_tokens"
+            )
+        ttnn.tracy_message("`TT_SIGNPOST: HybridRoutedExpertMoeCombine`")
+        return ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe(
+            dispatched_buffer,
+            expert_region_offsets,
+            expert_token_counts,
+            self.global_expert_idx_table,
+            self.gate_projs,
+            self.up_projs,
+            self.down_projs,
+            max_dispatched_tokens_per_expert=self.max_tokens,
+            hybrid_token_threshold=threshold,
+            compute_kernel_config=self.compute_kernel_config,
+            activation=self.activation,
+            gate_biases=self.gate_biases,
+            up_biases=self.up_biases,
+            down_biases=self.down_biases,
+            dispatched_metadata=dispatched_metadata,
+            expert_offsets=expert_offsets,
+            replicated_global_expert_idx_table=replicated_global_expert_idx_table,
+            combine_axis=combine_axis,
+            combine_num_links=combine_num_links,
+            num_experts_per_tok=num_experts_per_tok,
+            seq_len_per_chip=seq_len_per_chip,
+            fwd_arrived_semaphore=combine_semaphores[0],
+            final_arrived_semaphore=combine_semaphores[1],
+            expert_go_semaphore=combine_semaphores[2],
+            forwarding_buffer=forwarding_buffer,
+        )

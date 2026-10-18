@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The vector kernels of the host-side decode and the per-lane state they run against; the frame walk that drives
-// them is StreamDecoder::decode_frame (streaming_profiler_decode.hpp). A frame is a 16-word prefix (word 1 = payload
+// them is StreamDecoder::decode_frame (decode.hpp). A frame is a 16-word prefix (word 1 = payload
 // length), the SPSC_SPAN_WIRE_CTRL_WORDS control block, then each RISC's live ring window packed flat with congruence
 // pads and wraps resolved device-side. Packet formats: spsc_packet.h. The producer publishes its tail only on
 // packet boundaries, so a window never ends mid-packet.
@@ -281,6 +281,7 @@ constexpr bool spsc_is_zone_or_sticky(Kind k) { return k == Kind::Zone || k == K
 // false when there is none. The chain unrolls in table order. always_inline, like the handlers it takes: a handler
 // left out of line captures the walk's locals by address and pushes them all out of registers.
 template <bool (*Pred)(Kind), size_t I = 0, typename H>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward) -- Reuse the callback as an lvalue through recursive calls.
 __attribute__((always_inline)) inline bool spsc_for_format(uint32_t t, H&& handle) {
     if constexpr (I == kFormats.size()) {
         return false;
@@ -296,6 +297,7 @@ __attribute__((always_inline)) inline bool spsc_for_format(uint32_t t, H&& handl
 }
 // Runs handle.template operator()<F>() for every row whose kind Pred accepts, in table order.
 template <bool (*Pred)(Kind), size_t I = 0, typename H>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward) -- Reuse the callback as an lvalue through recursive calls.
 __attribute__((always_inline)) inline void spsc_for_each_format(H&& handle) {
     if constexpr (I < kFormats.size()) {
         if constexpr (Pred(kFormats[I].kind)) {

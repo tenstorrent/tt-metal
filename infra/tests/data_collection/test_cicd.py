@@ -693,6 +693,172 @@ def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_
     assert all(job.card_type == "wh_n300" for job in partial_n300_jobs)
 
 
+def test_search_for_jit_telemetry_parses_both_formats_and_ignores_noise(tmp_path):
+    log_file = tmp_path / "123.log"
+    log_file.write_text(
+        "\n".join(
+            [
+                # Non-metric line that must be ignored (no fully-formed record).
+                "2026-09-17 07:26:27.230 | info | BuildKernels | JIT telemetry: 39 registered TelemetryTokens",
+                # Current format: unit in parentheses, plain numeric values.
+                "2026-09-17 07:26:27.230 | info | BuildKernels | JIT telemetry [JitBuildState::compile] (ms): "
+                "count=5660, total=6211227.967, min=438.541, max=2617.981, mean=1097.390 (build_cache_telemetry.cpp:356)",
+                # Current format, byte unit with integer values.
+                "2026-09-17 07:26:27.230 | info | BuildKernels | JIT telemetry [kernel_elf_size.brisc] (B): "
+                "count=1577, total=1121896316, min=398236, max=1786228, mean=711412 (build_cache_telemetry.cpp:356)",
+                # Older format: no "(unit)", unit suffixed on each value.
+                "2026-09-03 18:49:41.712 | info | BuildKernels | JIT telemetry [jit_build]: "
+                "count=79, total=368533.488ms, min=1004.938ms, max=6393.632ms, mean=4664.981ms",
+            ]
+        )
+    )
+
+    metrics = {m["metric_name"]: m for m in workflows.search_for_jit_telemetry_in_log_file_(log_file)}
+
+    assert set(metrics) == {"JitBuildState::compile", "kernel_elf_size.brisc", "jit_build"}
+
+    compile_metric = metrics["JitBuildState::compile"]
+    assert compile_metric["unit"] == "ms"
+    assert compile_metric["sample_count"] == 5660
+    assert compile_metric["total_value"] == pytest.approx(6211227.967)
+    # A metric seen once keeps its reported mean.
+    assert compile_metric["mean_value"] == pytest.approx(1097.390)
+
+    elf_metric = metrics["kernel_elf_size.brisc"]
+    assert elf_metric["unit"] == "B"
+    assert elf_metric["total_value"] == pytest.approx(1121896316)
+
+    # Older inline-unit format still resolves the unit and the values.
+    build_metric = metrics["jit_build"]
+    assert build_metric["unit"] == "ms"
+    assert build_metric["sample_count"] == 79
+    assert build_metric["max_value"] == pytest.approx(6393.632)
+
+
+def test_search_for_jit_telemetry_aggregates_across_process_blocks(tmp_path):
+    # A job that runs multiple processes emits one telemetry block per process, each
+    # cumulative for its own process. The same metric across blocks must be summed
+    # (not overwritten), with min/max reduced and mean recomputed as total/count.
+    log_file = tmp_path / "789.log"
+    log_file.write_text(
+        "\n".join(
+            [
+                "JIT telemetry [JitBuildState::compile] (ms): " "count=100, total=200.0, min=1.0, max=5.0, mean=2.0",
+                "JIT telemetry [JitBuildState::compile] (ms): " "count=300, total=900.0, min=0.5, max=9.0, mean=3.0",
+            ]
+        )
+    )
+
+    (metric,) = workflows.search_for_jit_telemetry_in_log_file_(log_file)
+    assert metric["metric_name"] == "JitBuildState::compile"
+    assert metric["sample_count"] == 400  # 100 + 300
+    assert metric["total_value"] == pytest.approx(1100.0)  # 200 + 900
+    assert metric["min_value"] == pytest.approx(0.5)  # min(1.0, 0.5)
+    assert metric["max_value"] == pytest.approx(9.0)  # max(5.0, 9.0)
+    assert metric["mean_value"] == pytest.approx(1100.0 / 400)  # total / count
+
+
+def test_search_for_jit_cache_stats_parsed_as_counter_metrics(tmp_path):
+    # The cache-stats line is captured as raw-count jit_cache.* metrics (hits,
+    # lookups, and the bracketed counters). The hit rate is not stored (derivable).
+    log_file = tmp_path / "cache.log"
+    log_file.write_text(
+        "2026-09-17 07:26:27.230 | info | BuildKernels | JIT cache stats: 0/5660 hits (0.0%) "
+        "[0 cached, 1032 build-once dedup, 0 merged artifacts, 0 merged genfiles]\n"
+    )
+
+    metrics = {m["metric_name"]: m for m in workflows.search_for_jit_telemetry_in_log_file_(log_file)}
+
+    assert set(metrics) == {
+        "jit_cache.hits",
+        "jit_cache.lookups",
+        "jit_cache.cached",
+        "jit_cache.build_once_dedup",
+        "jit_cache.merged_artifacts",
+        "jit_cache.merged_genfiles",
+    }
+    assert metrics["jit_cache.hits"]["total_value"] == pytest.approx(0.0)
+    assert metrics["jit_cache.lookups"]["total_value"] == pytest.approx(5660.0)
+    assert metrics["jit_cache.build_once_dedup"]["total_value"] == pytest.approx(1032.0)
+    # Stored as one-sample counters so the shape matches the telemetry metrics.
+    assert metrics["jit_cache.lookups"]["unit"] == "count"
+    assert metrics["jit_cache.lookups"]["sample_count"] == 1
+    # No hit-rate metric is emitted.
+    assert not any(name.endswith("hit_rate_pct") for name in metrics)
+
+
+def test_search_for_jit_cache_stats_tolerates_missing_bracket_counters(tmp_path):
+    # Only the leading hits/lookups pair is required; a truncated bracket must still
+    # yield hits and lookups rather than failing the scan.
+    log_file = tmp_path / "cache_partial.log"
+    log_file.write_text("2026-09-17 07:26:27.230 | info | BuildKernels | JIT cache stats: 96/346 hits (27.7%)\n")
+
+    metrics = {m["metric_name"]: m for m in workflows.search_for_jit_telemetry_in_log_file_(log_file)}
+
+    assert metrics["jit_cache.hits"]["total_value"] == pytest.approx(96.0)
+    assert metrics["jit_cache.lookups"]["total_value"] == pytest.approx(346.0)
+
+
+def test_search_for_jit_cache_stats_sum_across_process_blocks(tmp_path):
+    # Counters from independent process blocks are summed (job-level totals).
+    log_file = tmp_path / "cache_multi.log"
+    prefix = "2026-09-17 07:26:27.230 | info | BuildKernels | "
+    log_file.write_text(
+        prefix
+        + "JIT cache stats: 10/100 hits (10.0%) [1 cached, 2 build-once dedup, 0 merged artifacts, 0 merged genfiles]\n"
+        + prefix
+        + "JIT cache stats: 30/300 hits (10.0%) [3 cached, 4 build-once dedup, 0 merged artifacts, 0 merged genfiles]\n"
+    )
+
+    metrics = {m["metric_name"]: m for m in workflows.search_for_jit_telemetry_in_log_file_(log_file)}
+    assert metrics["jit_cache.hits"]["total_value"] == pytest.approx(40.0)  # 10 + 30
+    assert metrics["jit_cache.lookups"]["total_value"] == pytest.approx(400.0)  # 100 + 300
+
+
+def test_search_for_jit_cache_stats_ignores_echoed_summary_copies(tmp_path):
+    # A workflow step may re-print the cache-stats lines with the logger prefix stripped, e.g.
+    #   grep -a 'JIT cache stats' "$LOG" | sed 's/.*| //' | sed 's/^/  /'
+    # Those echoed copies must not be counted again: each process block counts exactly once.
+    # Lines below use the raw CI format, where every logger field carries ANSI color codes.
+    def real(ts, body):
+        return (
+            f"2026-10-08T{ts}Z \x1b[90m2026-10-08 {ts[:12]}\x1b[0m | info     | "
+            f"\x1b[35m   BuildKernels\x1b[0m | \x1b[37mJIT cache stats: {body}\x1b[0m "
+            "\x1b[90m(build_cache_telemetry.cpp:268)\x1b[0m\n"
+        )
+
+    def echoed(ts, body):
+        return f"2026-10-08T{ts}Z   \x1b[37mJIT cache stats: {body}\x1b[0m \x1b[90m(build_cache_telemetry.cpp:268)\x1b[0m\n"
+
+    body_1 = "106/18250 hits (0.6%) [106 cached, 32783 build-once dedup, 0 merged artifacts, 0 merged genfiles]"
+    body_2 = "106/294 hits (36.1%) [106 cached, 395 build-once dedup, 0 merged artifacts, 0 merged genfiles]"
+    log_file = tmp_path / "cache_echoed.log"
+    log_file.write_text(
+        real("08:31:23.2189789", body_1)
+        + real("08:31:43.2012370", body_2)
+        + "2026-10-08T08:39:04.0881710Z ##[group]Run set -uo pipefail\n"
+        + "2026-10-08T08:39:04.0888341Z grep -a 'JIT cache stats' \"$LOG\" | sed 's/.*| //' | sed 's/^/  /'\n"
+        + "2026-10-08T08:39:04.1525152Z --- JIT cache stats (tt-metal, once per process) ---\n"
+        + echoed("08:39:04.1554629", body_1)
+        + echoed("08:39:04.1556427", body_2)
+    )
+
+    metrics = {m["metric_name"]: m for m in workflows.search_for_jit_telemetry_in_log_file_(log_file)}
+
+    # Two real process blocks -> two samples, not four.
+    assert metrics["jit_cache.lookups"]["sample_count"] == 2
+    assert metrics["jit_cache.lookups"]["total_value"] == pytest.approx(18250.0 + 294.0)
+    assert metrics["jit_cache.hits"]["total_value"] == pytest.approx(212.0)
+    assert metrics["jit_cache.build_once_dedup"]["total_value"] == pytest.approx(32783.0 + 395.0)
+
+
+def test_search_for_jit_telemetry_returns_empty_when_absent(tmp_path):
+    log_file = tmp_path / "456.log"
+    log_file.write_text("nothing of interest here\nanother ordinary log line\n")
+
+    assert workflows.search_for_jit_telemetry_in_log_file_(log_file) == []
+
+
 def _make_run_json(run_id=35744836559, conclusion="cancelled"):
     """The workflow.json that produce-data analyses, for a run with the given id and conclusion."""
     return {

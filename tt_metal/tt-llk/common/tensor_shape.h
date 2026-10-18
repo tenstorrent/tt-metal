@@ -74,6 +74,19 @@ struct __attribute__((packed)) TensorShape
 
 static_assert(sizeof(TensorShape) == 4, "TensorShape must be 4 bytes");
 
+/**
+ * @brief Get the register-file stride between tiny faces, in hardware tile indices.
+ *
+ * Faces shorter than MAX_FPU_ROWS occupy sparse MAX_FPU_ROWS-row slots.
+ * @param tensor_shape: Shape with a valid face row dimension (1, 2, 4, 8, or 16).
+ * @return Hardware tile index increment for one face; 1 for dense faces.
+ * @note Use only when one hardware tile represents one face, rather than a full four-face tile.
+ */
+constexpr std::uint32_t tiny_face_stride(const TensorShape& tensor_shape)
+{
+    return tensor_shape.face_r_dim < MAX_FPU_ROWS ? MAX_FPU_ROWS / tensor_shape.face_r_dim : 1;
+}
+
 constexpr TensorShape DEFAULT_TENSOR_SHAPE = {MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
 
 /// Build a TensorShape from explicit face dimensions and face-grid counts.
@@ -125,17 +138,33 @@ constexpr bool is_valid_face_r_dim(const std::uint8_t face_r_dim)
  */
 constexpr bool validate_matmul_tensor_shapes_(const TensorShape src_b_shape, const TensorShape src_a_shape)
 {
-    const bool supported_src_a_width =
-        src_a_shape.face_c_dim == MAX_FACE_C_DIM && (src_a_shape.num_faces_c_dim == 1 || src_a_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM);
-    const bool wide_src_b = src_b_shape.face_c_dim == MAX_FACE_C_DIM && src_b_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM &&
-                            ((src_b_shape.num_faces_r_dim == 1 && is_valid_face_r_dim(src_b_shape.face_r_dim)) ||
-                             (src_b_shape.face_r_dim == MAX_FACE_R_DIM && src_b_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM));
-    const bool full_k_src_a      = src_a_shape.face_r_dim == MAX_FACE_R_DIM && src_a_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM;
-    const bool half_k_src_a      = src_a_shape.face_r_dim == MAX_FACE_R_DIM && src_a_shape.num_faces_r_dim == 1;
-    const bool single_face_src_b = src_b_shape.face_r_dim == MAX_FACE_R_DIM && src_b_shape.face_c_dim == MAX_FACE_C_DIM && src_b_shape.num_faces_r_dim == 1 &&
-                                   src_b_shape.num_faces_c_dim == 1;
-    const bool single_face_src_a = half_k_src_a && src_a_shape.num_faces_c_dim == 1;
-    return supported_src_a_width && ((wide_src_b && full_k_src_a) || (single_face_src_b && single_face_src_a));
+    if (src_b_shape.face_c_dim != MAX_FACE_C_DIM || src_a_shape.face_c_dim != MAX_FACE_C_DIM || src_a_shape.face_r_dim != MAX_FACE_R_DIM ||
+        !is_valid_face_r_dim(src_b_shape.face_r_dim))
+    {
+        return false;
+    }
+    if (src_b_shape.face_r_dim != MAX_FACE_R_DIM && (src_b_shape.num_faces_r_dim != 1 || src_b_shape.num_faces_c_dim != 2))
+    {
+        return false;
+    }
+
+    constexpr std::uint8_t supported_pairs[][4] = {
+        {1, 2, 2, 1}, // (1x32, 2x32, 4x32, 8x32, 16x32) * 32x16
+        {1, 2, 2, 2}, // (1x32, 2x32, 4x32, 8x32, 16x32) * 32x32
+        {2, 2, 2, 1}, // 32x32 * 32x16
+        {2, 2, 2, 2}, // 32x32 * 32x32
+        {1, 1, 1, 1}, // 16x16 * 16x16
+        {2, 1, 1, 2}, // 32x16 * 16x32
+    };
+    for (const auto& pair : supported_pairs)
+    {
+        if (src_b_shape.num_faces_r_dim == pair[0] && src_b_shape.num_faces_c_dim == pair[1] && src_a_shape.num_faces_r_dim == pair[2] &&
+            src_a_shape.num_faces_c_dim == pair[3])
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**

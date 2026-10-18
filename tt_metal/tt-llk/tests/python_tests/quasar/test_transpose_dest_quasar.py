@@ -16,7 +16,6 @@ from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     PerfRunType,
     Transpose,
     UnpackerEngine,
@@ -27,6 +26,8 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
+    runtime,
     select_perf_input_dimensions,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -36,7 +37,6 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_TRANSPOSE_FACES,
     NUM_BLOCKS,
@@ -168,7 +168,7 @@ def generate_qsr_transpose_dest_combinations(
                                         dest_acc,
                                         dest_sync,
                                         math_transpose_faces,
-                                        dimensions,
+                                        runtime(dimensions),
                                     )
                                 )
                             continue
@@ -179,19 +179,11 @@ def generate_qsr_transpose_dest_combinations(
                                     dest_acc,
                                     dest_sync,
                                     math_transpose_faces,
-                                    dimensions,
+                                    runtime(dimensions),
                                 )
                             )
 
     return combinations
-
-
-def transpose_dest_implied_math_formats(*, is_perf=False):
-    return (
-        [ImpliedMathFormat.Yes]
-        if is_perf
-        else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-    )
 
 
 TRANSPOSE_DEST_FORMATS = input_output_formats(
@@ -202,11 +194,12 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
-)
+    # The MX pair here is on the output side: the transpose happens inside Dest at
+    # math precision, so the packer re-derives the block exponents from the
+    # post-transpose layout. That interaction is specific to this test -- the pack
+    # test never transposes -- so it is the pair worth keeping.
+) + quasar_mx_smoke(DataFormat.Float16_b, DataFormat.MxInt8)
 PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
     TRANSPOSE_DEST_FORMATS,
     is_perf=True,
@@ -218,13 +211,11 @@ PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
     formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
         TRANSPOSE_DEST_FORMATS
     ),
-    implied_math_format=lambda: transpose_dest_implied_math_formats(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_transpose_dest_quasar(
     formats_dest_acc_sync_transpose_dims,
-    implied_math_format,
     run_types,
     loop_factor,
     *,
@@ -334,7 +325,6 @@ def test_transpose_dest_quasar(
         "test_name": "sources/quasar/transpose_dest_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(data_copy_type),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA

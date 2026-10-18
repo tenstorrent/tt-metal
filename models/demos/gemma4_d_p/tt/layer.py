@@ -5,6 +5,9 @@
 
 import ttnn
 from models.demos.gemma4_d_p.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
+from models.demos.gemma4_d_p.tt.ccl import ccl_allgather
+from models.demos.gemma4_d_p.tt.matmul_config import short_m_gather_memcfg
 from models.demos.gemma4_d_p.tt.mlp import MLP
 from models.demos.gemma4_d_p.tt.rms_norm import RMSNorm
 from models.demos.gemma4_d_p.utils.substate import substate
@@ -31,6 +34,8 @@ class Gemma4DecoderLayer:
         # Per-module dtype overrides default to the model-wide ``dtype`` so
         # callers that don't care about precision config see no change.
         mesh_device = mesh_config.device
+        self.mesh_config = mesh_config
+        self.ccl_manager = ccl_manager
         if mlp_dtype is None:
             mlp_dtype = dtype
         if attention_dtype is None:
@@ -87,10 +92,20 @@ class Gemma4DecoderLayer:
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/mlp" if tensor_cache_path else None,
         )
 
+    def _gather_rows(self, x):
+        """All-gather x's TP row split. Each block consumes the result. At short M it lands in L1 in the layout the
+        projections read (matmul_config.short_m_gather_memcfg)."""
+        return ccl_allgather(
+            x,
+            self.mesh_config,
+            self.ccl_manager,
+            dim=2,
+            memory_config=short_m_gather_memcfg(x, self.mesh_config.tp_degree),
+        )
+
     def __call__(
         self,
         hidden_states,
-        rope_mats,
         prefill_metadata,
         chunk_start_idx=0,
         packed_global_rope=None,
@@ -98,36 +113,49 @@ class Gemma4DecoderLayer:
     ):
         """Prefill one CP-sharded chunk."""
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
+        # hidden_states holds this TP device's 1/TP of the rows: gather the normed rows before each block, whose
+        # closing reduce-scatter returns 1/TP again.
         residual = hidden_states
         normed = self.input_layernorm.forward(hidden_states)
+        normed = self._gather_rows(normed)
         attn_output = self.self_attn(
             normed,
-            rope_mats=rope_mats,
             prefill_metadata=prefill_metadata,
             chunk_start_idx=chunk_start_idx,
             packed_global_rope=packed_global_rope,
             packed_sliding_rope=packed_sliding_rope,
         )
 
-        attn_output = self.post_attention_layernorm.forward(attn_output)
-        hidden_states = ttnn.add(residual, attn_output)
+        act_mc = prefill_short_lived_memcfg()
+        # The residual stream stays in the norms' block-sharded layout from here to the next layer's input norm, so
+        # the norms and adds skip their reshards.
+        shard_mc = self.post_attention_layernorm.shard_memory_config(attn_output)
+        out_mc = shard_mc or act_mc
+        attn_output = self.post_attention_layernorm.forward(attn_output, memory_config=out_mc)
+        if shard_mc is not None and residual.memory_config() != shard_mc:
+            sharded_residual = ttnn.to_memory_config(residual, shard_mc)
+            residual.deallocate(True)
+            residual = sharded_residual
+        hidden_states = ttnn.add(residual, attn_output, memory_config=out_mc)
         residual.deallocate(True)
         attn_output.deallocate(True)
 
         # 2. Dense MLP block
         residual = hidden_states
-        normed = self.pre_feedforward_layernorm.forward(hidden_states)
+        normed = self.pre_feedforward_layernorm.forward(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        normed = self._gather_rows(normed)
         mlp_output = self.mlp(normed)
-        normed.deallocate(True)
 
         hidden_states = mlp_output
 
-        # post_feedforward_layernorm -> residual add
-        normed = self.post_feedforward_layernorm.forward(hidden_states)
-        hidden_states = ttnn.add(residual, normed)
+        normed = self.post_feedforward_layernorm.forward(hidden_states, memory_config=out_mc)
+        hidden_states = ttnn.add(
+            residual,
+            normed,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)],
+            memory_config=shard_mc or ttnn.DRAM_MEMORY_CONFIG,
+        )
         residual.deallocate(True)
         normed.deallocate(True)
-
-        hidden_states = ttnn.mul(hidden_states, self.layer_scalar)
 
         return hidden_states

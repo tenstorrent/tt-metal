@@ -20,14 +20,14 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
+#include <gmock/gmock.h>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-// Access to internal API: ProgramImpl::get_sem_base_addr, ProgramImpl::get_cb_size
-#include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -35,12 +35,14 @@ enum class DataFormat : uint8_t;
 
 using std::vector;
 using namespace tt::tt_metal;
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
 
 namespace basic_tests::circular_buffer {
 
 bool test_cb_config_written_to_core(
     distributed::MeshWorkload& workload,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& /*cr_set*/,
     const std::map<uint8_t, std::vector<uint32_t>>& cb_config_per_buffer_index) {
     bool pass = true;
@@ -48,7 +50,6 @@ bool test_cb_config_written_to_core(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     vector<uint32_t> cb_config_vector;
@@ -59,11 +60,11 @@ bool test_cb_config_written_to_core(
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
                     uint32_t cb_config_buffer_size =
-                        program.impl().get_cb_size(device, core_coord, tt::CoreType::WORKER);
+                        workload.get_cb_size(mesh_device, core_coord, tt::CoreType::WORKER);
 
-                    auto sem_base_addr = program.impl().get_sem_base_addr(device, core_coord, tt::CoreType::WORKER);
-                    tt::tt_metal::detail::ReadFromDeviceL1(
-                        device, core_coord, sem_base_addr, cb_config_buffer_size, cb_config_vector);
+                    auto sem_base_addr = workload.get_sem_base_addr(mesh_device, core_coord, tt::CoreType::WORKER);
+                    slow_dispatch::ReadFromL1(
+                        *mesh_device, core_coord, sem_base_addr, cb_config_buffer_size, cb_config_vector);
 
                     for (const auto& [buffer_index, golden_cb_config] : cb_config_per_buffer_index) {
                         auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
@@ -129,7 +130,18 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
 TEST_F(MeshDeviceFixture, TestCreateCircularBufferAtInvalidIndex) {
     CBConfig cb_config;
 
-    EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{max_cbs_, cb_config.data_format}}));
+    EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{NUM_CIRCULAR_BUFFERS, cb_config.data_format}}));
+
+    // An index the config can store but the architecture does not support is rejected when added to a program.
+    if (max_dfbs_ < NUM_CIRCULAR_BUFFERS) {
+        CircularBufferConfig config(cb_config.page_size, {{max_dfbs_, cb_config.data_format}});
+        config.set_page_size(max_dfbs_, cb_config.page_size);
+        Program program;
+        EXPECT_THAT(
+            [&] { CreateCircularBuffer(program, CoreCoord(0, 0), config); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("exceeds max number of circular buffers per core")));
+        EXPECT_TRUE(program.circular_buffers().empty());
+    }
 }
 
 TEST_F(MeshDeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {

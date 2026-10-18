@@ -505,8 +505,14 @@ void kernel_main() {
 
         DataflowBuffer(static_cast<uint16_t>(dfb_sum_final)).pop_front(1);
 
-        recip_tile_init();
-        recip_tile(dst0);
+        // Preserve the FP32 row sum's precision in its reciprocal, independently of exp approximation.
+        if constexpr (DST_ACCUM_MODE) {
+            recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
+            recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(dst0);
+        } else {
+            recip_tile_init();
+            recip_tile(dst0);
+        }
 
         tile_regs_commit();
         tile_regs_wait();
@@ -566,5 +572,17 @@ void kernel_main() {
         DataflowBuffer(static_cast<uint16_t>(dfb_max_final)).pop_front(1);
 #endif
     }
-    dfb_mask_padded_obj.pop_front(1);
+    // The writer generates and pushes the padding mask only when there is padding to mask, and
+    // the masking passes above wait it under the same condition, so the pop carries it too.
+    if (mask_padded_data) {
+        dfb_mask_padded_obj.pop_front(1);
+    }
+
+    // The reduce scalers are pushed once by the reader and read by every pass over the row, so they
+    // are waited once up front rather than per pass. Pop them here to balance the buffers.
+    dfb_max_scaler_obj.pop_front(1);
+    dfb_sum_scaler_obj.pop_front(1);
+#ifdef FUSED_SCALE_MASK
+    dfb_fused_scale_obj.pop_front(1);
+#endif
 }  // MAIN

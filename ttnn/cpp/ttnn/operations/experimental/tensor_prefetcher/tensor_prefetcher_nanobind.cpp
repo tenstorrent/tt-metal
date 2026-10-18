@@ -7,13 +7,46 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/vector.h>
+
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "tensor_prefetcher.hpp"
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include "ttnn/global_circular_buffer.hpp"
 
 namespace ttnn::operations::experimental {
+
+namespace {
+
+// Bound in place of create_prefetcher_pipes_for_tensor_prefetcher so that each returned pipe -- not
+// the list holding them -- keeps the device alive. A caller may keep one pipe and drop the list, and
+// a pipe's destructor reaches into the device to free its L1; nb::keep_alive<0, 1> would tie only
+// the list's own lifetime to the device (and a list cannot be a keep-alive nurse at all).
+nb::list create_prefetcher_pipes_for_tensor_prefetcher_py(
+    const nb::object& space_object,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    bool support_multi_receiver_shards) {
+    // ttnn::bind_function calls this with the GIL released, and everything below touches Python
+    // objects.
+    nb::gil_scoped_acquire gil;
+    const auto pipes = create_prefetcher_pipes_for_tensor_prefetcher(
+        nb::cast<tt::tt_metal::experimental::PrefetcherPipeSpace&>(space_object),
+        bank_to_receivers,
+        support_multi_receiver_shards);
+
+    nb::list pipe_list;
+    for (const auto& pipe : pipes) {
+        nb::object pipe_object = nb::cast(pipe);
+        nb::detail::keep_alive(pipe_object.ptr(), space_object.ptr());
+        pipe_list.append(pipe_object);
+    }
+    return pipe_list;
+}
+
+}  // namespace
 
 void bind_tensor_prefetcher(nb::module_& mod) {
     ttnn::bind_function<"is_tensor_prefetcher_supported", "ttnn.experimental.">(
@@ -46,14 +79,38 @@ void bind_tensor_prefetcher(nb::module_& mod) {
             request), so a single prefetcher can serve GCBs with different num_receivers
             values.
 
+            On Blackhole, the GDDR Memory Controller Multi-Port Front End (MPFE) uses
+            weighted round-robin arbitration. Weights are in [0, 7], and higher relative
+            values receive more service. The hardware slots P1/P2/P3 correspond to DRAM
+            tiles D0/D1/D2; the arguments below name traffic roles, which Metal maps to
+            each bank's D tiles using its worker_endpoint assignment.
+
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device to launch on.
+                free_sender_mpfe_weight (Optional[int]): active free-sender MPFE weight.
+                    None uses the Metal default.
+                noc1_sender_mpfe_weight (Optional[int]): active NOC1-sender MPFE weight.
+                    None uses the Metal default.
+                ordinary_mpfe_weight (Optional[int]): ordinary-operation MPFE weight.
+                    None uses the Metal default.
+                dynamic_mpfe_weighting (Optional[bool]): when True, idle both prefetch senders
+                    at the ordinary weight and lower each private sender slot only while it
+                    handles a request. None uses the Metal default.
+
+            The benchmark tuning script enables TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ENABLE
+            and supplies per-field environment overrides. Those benchmark-only values take
+            precedence over these keyword arguments while the enable variable is set.
 
             Two sender kernels are provisioned per DRAM bank. Each queued GCB selects one
             or both senders per bank; unused senders remain parked on their sockets.
         )doc",
         &start_tensor_prefetcher,
-        nb::arg("mesh_device"));
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("free_sender_mpfe_weight") = std::nullopt,
+        nb::arg("noc1_sender_mpfe_weight") = std::nullopt,
+        nb::arg("ordinary_mpfe_weight") = std::nullopt,
+        nb::arg("dynamic_mpfe_weighting") = std::nullopt);
 
     ttnn::bind_function<"queue_tensor_prefetcher_request", "ttnn.experimental.">(
         mod,
@@ -83,6 +140,14 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     matching order, else it deadlocks.
                 global_cb (GlobalCircularBuffer): a DRAM-sender GCB (created via
                     ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher).
+                    Supply exactly one of global_cb / prefetcher_pipes.
+                prefetcher_pipes (List[PrefetcherPipe]): DRAM-sender PrefetcherPipes (created via
+                    ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher) to deliver into
+                    instead of a GCB. Pass every pipe from one such call, in any order; a subset
+                    or a mix of two calls' pipes is rejected. Receiver-contiguous tensors only; rotation works as it does
+                    for a GCB. A tensor's per-receiver block size need not equal the pipes'
+                    entry_size nor divide the ring, so size the ring for the consumer: one block is
+                    enough for the transport, two for a consumer that keeps a block of lookahead.
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
                     processes this request. Defaults to the full mesh.
                 capture_into_trace (bool): whether this request may be captured into a trace.
@@ -99,9 +164,10 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         &queue_tensor_prefetcher_request,
         nb::arg("mesh_device"),
         nb::arg("tensors"),
-        nb::arg("global_cb"),
+        nb::arg("global_cb") = nb::none(),
         nb::kw_only(),
-        nb::arg("device_subset") = std::nullopt,
+        nb::arg("prefetcher_pipes") = std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>{},
+        nb::arg("device_subset") = nb::none(),
         nb::arg("capture_into_trace") = false);
 
     ttnn::bind_function<"wait_for_cq_on_tensor_prefetcher", "ttnn.experimental.">(
@@ -128,9 +194,9 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         )doc",
         &wait_for_cq_on_tensor_prefetcher,
         nb::arg("mesh_device"),
-        nb::arg("cq_id") = std::nullopt,
+        nb::arg("cq_id") = nb::none(),
         nb::kw_only(),
-        nb::arg("device_subset") = std::nullopt);
+        nb::arg("device_subset") = nb::none());
 
     ttnn::bind_function<"stop_tensor_prefetcher", "ttnn.experimental.">(
         mod,
@@ -172,6 +238,38 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
         nb::arg("support_multi_receiver_shards") = true);
 
+    ttnn::bind_function<"create_prefetcher_pipes_for_tensor_prefetcher", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Create the PrefetcherPipes whose senders are programmable DRAM cores (Blackhole DRISCs),
+            as an alternative Tensor prefetcher delivery target to a DRAM-sender
+            GlobalCircularBuffer. Sender placement, the dual-sender receiver split, and slab
+            numbering match create_global_circular_buffer_for_tensor_prefetcher, so a tensor laid
+            out for one transport is laid out for the other.
+
+            Returns one PrefetcherPipe per DRAM sender core, bank-major: a bank's pipes are
+            adjacent, and the leading one owns that bank's leading receivers. Each pipe carries the
+            bank-local slab base its sender owns, so queueing accepts them in any order. It
+            requires all of them, and rejects a subset or a mix of two calls' pipes.
+
+            Consumers bind the pipes through ProgramRunArgs and read them through the device-side
+            PrefetcherPipe (wait_front / scoped_read_lock / pop_front). Keep the pipes alive for as
+            long as any program uses them: dropping the last reference to one frees its ring and
+            config.
+
+            Args:
+                space: Existing PrefetcherPipeSpace that owns the ring geometry and reserves
+                    enough DRAM sender capacity. Keep it alive while using the returned pipes.
+                bank_to_receivers: List of (bank_id, receivers) pairs.
+                support_multi_receiver_shards: If True, a bank's shard may feed multiple receivers,
+                    which forces a single sender per bank. Defaults to False (receiver-contiguous),
+                    letting a bank with two or more receivers split them across two DRISC senders.
+        )doc",
+        &create_prefetcher_pipes_for_tensor_prefetcher_py,
+        nb::arg("space"),
+        nb::arg("bank_to_receivers"),
+        nb::arg("support_multi_receiver_shards") = false);
+
     ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d", "ttnn.experimental.">(
         mod,
         R"doc(
@@ -204,28 +302,45 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("bank_to_receivers"),
         nb::arg("size"),
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        nb::arg("support_multi_receiver_shards") = std::nullopt);
+        nb::arg("support_multi_receiver_shards") = nb::none());
 
     ttnn::bind_function<"tensor_prefetcher_block_count_for_matmul_1d", "ttnn.experimental.">(
         mod,
         R"doc(
             Compute and validate the block_count to pair with a DRAM weight in
-            queue_tensor_prefetcher_request for a gather_in0 or mcast_in0 1D matmul fed via
-            global_cb. Gather returns the receiver/ring count. Mcast returns
-            weight_K_tiles / in0_block_w and uses natural FIFO order.
+            queue_tensor_prefetcher_request for a gather_in0 or mcast_in0 1D matmul. Gather returns
+            the receiver/ring count. Mcast returns weight_K_tiles / in0_block_w and uses natural
+            FIFO order.
 
             Args:
                 program_config: The 1D matmul program config that will consume the weight.
-                weight: The DRAM weight tensor, in either layout.
+                weight: The DRAM weight tensor. Either layout with global_cb; receiver-contiguous
+                    only with prefetcher_pipes.
                 global_cb: The DRAM-sender GCB the prefetcher and matmul share.
+                prefetcher_pipes: The DRAM-sender PrefetcherPipes the prefetcher and matmul share,
+                    as an alternative third argument to global_cb.
 
             Returns:
                 int: the validated block_count.
         )doc",
-        &ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d,
-        nb::arg("program_config"),
-        nb::arg("weight"),
-        nb::arg("global_cb"));
+        ttnn::overload_t(
+            static_cast<uint32_t (*)(
+                const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig&,
+                const ttnn::Tensor&,
+                const tt::tt_metal::experimental::GlobalCircularBuffer&)>(
+                &ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d),
+            nb::arg("program_config"),
+            nb::arg("weight"),
+            nb::arg("global_cb")),
+        ttnn::overload_t(
+            static_cast<uint32_t (*)(
+                const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig&,
+                const ttnn::Tensor&,
+                const ttnn::PrefetcherPipeList&)>(
+                &ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d),
+            nb::arg("program_config"),
+            nb::arg("weight"),
+            nb::arg("prefetcher_pipes")));
 }
 
 }  // namespace ttnn::operations::experimental

@@ -27,7 +27,7 @@ from helpers.golden_generators import (
     rope_rotated_rows,
     truncate_to_bfloat16,
 )
-from helpers.llk_params import format_dict
+from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
@@ -124,12 +124,23 @@ def _run(
     fused_cos_sin=False,
     tile_h=1,
     cos_sin_per_row=False,
+    dest_acc=DestAccumulation.No,
 ):
-    assert tiles <= MAX_DEST_TILES, f"{tiles} tiles is past the Dest half"
+    max_tiles = 4 if dest_acc == DestAccumulation.Yes else MAX_DEST_TILES
+    assert tiles <= max_tiles, f"{tiles} tiles is past the Dest half"
+    formats = InputOutputFormat(
+        DataFormat.Float16_b,
+        (
+            DataFormat.Float32
+            if dest_acc == DestAccumulation.Yes
+            else DataFormat.Float16_b
+        ),
+    )
 
     configuration = TestConfig(
         "sources/rope_test.cpp",
-        FORMATS,
+        formats,
+        dest_acc=dest_acc,
         templates=[
             ROPE(
                 fused_cos_sin=fused_cos_sin,
@@ -143,10 +154,10 @@ def _run(
         runtimes=[TILE_COUNT(tiles)],
         variant_stimuli=StimuliConfig(
             dest.flatten(),
-            FORMATS.input_format,
+            formats.input_format,
             torch.zeros(ELEMENTS_PER_TILE, dtype=torch.bfloat16),
-            FORMATS.input_format,
-            FORMATS.output_format,
+            formats.input_format,
+            formats.output_format,
             tile_count_A=tiles,
             tile_count_B=1,
             tile_count_res=tiles,
@@ -154,7 +165,7 @@ def _run(
     )
 
     result = torch.tensor(
-        configuration.run().result, dtype=format_dict[FORMATS.output_format]
+        configuration.run().result, dtype=format_dict[formats.output_format]
     )
     return result.reshape(-1, ROW_DATUMS)
 
@@ -272,30 +283,30 @@ def test_rope_quarter_turn():
     ), "a quarter turn must send x_odd to x_even"
 
 
-@parametrize(
-    tile_h=[1, 2, 4, 8, 16, 32],
-    # Dense matmul slots hold the top two faces; 32 live rows need a full tile slot.
-    x_stride=lambda tile_h: (
-        [TILE_SLOT_STRIDE, DENSE_STRIDE] if tile_h <= 16 else [TILE_SLOT_STRIDE]
-    ),
-    per_row=[False, True],
-    scale=[None, 0.0, -2.0],
-)
-def test_rope_fused_cos_sin(tile_h, x_stride, per_row, scale):
-    """Fused phases for copy-tile and dense matmul layouts, including untouched rows."""
-    ht, wt, cs_base = 2, 2, 256
+def _check_fused_cos_sin(
+    tile_h,
+    x_stride,
+    per_row,
+    scale,
+    ht=2,
+    wt=2,
+    x_base=0,
+    cs_base=256,
+    dest_acc=DestAccumulation.No,
+):
     geometry = dict(
         ht=ht,
         wt=wt,
-        x_base=0,
+        x_base=x_base,
         x_stride=x_stride,
         cos_base=cs_base,
         sin_base=cs_base,
         cs_stride=64,
     )
+    tiles = _dest_tiles(geometry)
     generator = torch.Generator().manual_seed(707)
     dest = (
-        torch.empty((6 * TILE_ROWS, ROW_DATUMS))
+        torch.empty((tiles * TILE_ROWS, ROW_DATUMS))
         .uniform_(-1.0, 1.0, generator=generator)
         .to(torch.bfloat16)
     )
@@ -307,7 +318,8 @@ def test_rope_fused_cos_sin(tile_h, x_stride, per_row, scale):
                 angle = 0.07 * row + 0.19 * pair + 0.3 * w
                 dest[cs_base + 64 * w + row, 2 * pair] = math.cos(angle)
                 dest[cs_base + 64 * w + row, 2 * pair + 1] = math.sin(angle)
-    golden = dest.clone()
+    output_dtype = torch.float32 if dest_acc == DestAccumulation.Yes else torch.bfloat16
+    golden = dest.to(output_dtype).clone()
     effective_scale = 1.0 if scale is None else scale
     for h in range(ht):
         for w in range(wt):
@@ -316,25 +328,73 @@ def test_rope_fused_cos_sin(tile_h, x_stride, per_row, scale):
                     row = (logical_row // 16) * 32 + face * 16 + logical_row % 16
                     phase_row = row if per_row else face * 16 + logical_row % 4
                     phase = dest[cs_base + 64 * w + phase_row].float()
-                    x_row = x_stride * (h * wt + w) + row
+                    x_row = x_base + x_stride * (h * wt + w) + row
                     values = dest[x_row].float()
                     cos = phase[0::2] * effective_scale
                     sin = phase[1::2] * effective_scale
-                    golden[x_row, 0::2] = truncate_to_bfloat16(
-                        cos * values[0::2] - sin * values[1::2]
-                    )
-                    golden[x_row, 1::2] = truncate_to_bfloat16(
-                        sin * values[0::2] + cos * values[1::2]
-                    )
+                    even = cos * values[0::2] - sin * values[1::2]
+                    odd = sin * values[0::2] + cos * values[1::2]
+                    if dest_acc == DestAccumulation.No:
+                        even, odd = truncate_to_bfloat16(even), truncate_to_bfloat16(
+                            odd
+                        )
+                    golden[x_row, 0::2], golden[x_row, 1::2] = even, odd
     device = _run(
         geometry,
-        6,
+        tiles,
         dest,
         scale_fp32=None if scale is None else _bf16_bits(scale),
         fused_cos_sin=True,
         tile_h=tile_h,
         cos_sin_per_row=per_row,
+        dest_acc=dest_acc,
     )
-    # Match RopeGolden's SFPSTORE truncation, not PyTorch's default BF16 rounding.
-    # Keep the comparison bitwise, including every untouched destination row.
+    # BF16 SFPSTORE truncates; FP32 SFPSTORE preserves the LREG result. Compare
+    # every row, including phase tiles and untouched padding in partial-height tiles.
     assert torch.equal(device, golden)
+
+
+@parametrize(
+    tile_h=[1, 2, 4, 8, 16, 32],
+    # Dense matmul slots hold the top two faces; 32 live rows need a full tile slot.
+    x_stride=lambda tile_h: (
+        [TILE_SLOT_STRIDE, DENSE_STRIDE] if tile_h <= 16 else [TILE_SLOT_STRIDE]
+    ),
+    per_row=[False, True],
+    scale=[None, 0.0, -2.0],
+)
+def test_rope_fused_cos_sin(tile_h, x_stride, per_row, scale):
+    """Fused phases for copy-tile and dense matmul layouts, including untouched rows."""
+    _check_fused_cos_sin(tile_h, x_stride, per_row, scale)
+
+
+@parametrize(
+    # (heads, width tiles, x stride, height, per-row phase, scale, phases first)
+    case=[
+        (2, 1, TILE_SLOT_STRIDE, 1, False, None, False),
+        (1, 2, TILE_SLOT_STRIDE, 2, True, -2.0, False),
+        (2, 1, DENSE_STRIDE, 4, False, -2.0, False),
+        (1, 2, DENSE_STRIDE, 8, True, None, False),
+        (1, 2, TILE_SLOT_STRIDE, 16, False, 0.0, False),
+        (1, 2, TILE_SLOT_STRIDE, 32, True, None, False),
+        (1, 1, TILE_SLOT_STRIDE, 32, False, -2.0, True),
+        (1, 2, TILE_SLOT_STRIDE, 32, True, 0.0, False),
+    ],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_rope_fused_dest_precision(case, dest_acc):
+    """BF16 inputs unpacked into either DEST representation, within its half capacity."""
+    ht, wt, x_stride, tile_h, per_row, scale, phases_first = case
+    x_base = wt * TILE_ROWS if phases_first else 0
+    cs_base = 0 if phases_first else _round_up(ht * wt * x_stride, TILE_ROWS)
+    _check_fused_cos_sin(
+        tile_h,
+        x_stride,
+        per_row,
+        scale,
+        ht=ht,
+        wt=wt,
+        x_base=x_base,
+        cs_base=cs_base,
+        dest_acc=dest_acc,
+    )

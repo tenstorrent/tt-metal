@@ -39,7 +39,7 @@ namespace detail {
 struct LLKSharedDevices {
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices;
     tt::ARCH arch{tt::ARCH::Invalid};
-    uint32_t max_cbs{};
+    uint32_t max_dfbs{};
     bool initialized{false};
 
     void reset() {
@@ -80,7 +80,7 @@ inline void populate_shared_state(LLKSharedDevices& s, const std::vector<ChipId>
     for (auto& [_, device] : id_to_device) {
         s.devices.push_back(std::move(device));
     }
-    s.max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+    s.max_dfbs = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers();
     s.initialized = true;
 }
 
@@ -91,7 +91,7 @@ void apply_shared_state(Fixture& f, const LLKSharedDevices& s) {
     f.slow_dispatch_ = slow_dispatch;
     f.arch_ = s.arch;
     f.devices_ = s.devices;
-    f.max_cbs_ = s.max_cbs;
+    f.max_dfbs_ = s.max_dfbs;
 }
 
 }  // namespace detail

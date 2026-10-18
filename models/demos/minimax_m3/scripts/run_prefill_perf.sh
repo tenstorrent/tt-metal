@@ -18,7 +18,7 @@
 # Env (all optional):
 #   TT_METAL_HOME      repo root. Defaults to this script's location, so a normal checkout needs
 #                      nothing set. Override only if you are running the script from outside its repo.
-#   HF_MODEL           real MiniMax-M3 weights dir     [/mnt/models/MiniMaxAI/MiniMax-M3-ref]
+#   HF_MODEL           real MiniMax-M3 weights dir     [/mnt/weka/model-weights/llm/minimax/MiniMax-M3]
 #   GOLDEN_DIR         golden traces to tile tokens from
 #   SRC_TRACE          a specific metadata.json to tile from (overrides GOLDEN_DIR)
 #   EXPERT_DTYPE       bf4 | bf8                       [bf4]
@@ -44,7 +44,7 @@ case "$M3_FABRIC" in
   1d_ring|2d_torus_*) _DESC_DEFAULT="$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto" ;;
 esac
 export TT_MESH_GRAPH_DESC_PATH="${TT_MESH_GRAPH_DESC_PATH:-$_DESC_DEFAULT}"
-export HF_MODEL="${HF_MODEL:-/mnt/models/MiniMaxAI/MiniMax-M3-ref}"
+export HF_MODEL="${HF_MODEL:-/mnt/weka/model-weights/llm/minimax/MiniMax-M3}"
 export EXPERT_DTYPE="${EXPERT_DTYPE:-bf4}"
 export PREFILL_TPS_ITERS="${PREFILL_TPS_ITERS:-5}"
 export PREFILL_SKIP_PCC=1     # perf only — skip the per-layer golden KV PCC

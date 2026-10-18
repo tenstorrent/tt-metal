@@ -17,8 +17,8 @@
 
 namespace ttnn::operations::data_movement::untilize_codegen {
 
-uint32_t usable_l1_bytes(const tt::tt_metal::IDevice* device) {
-    return device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+uint32_t usable_l1_bytes(const tt::tt_metal::distributed::MeshDevice& device) {
+    return device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 }
 
 // Correctness scope of the codegen path: TILE input, interleaved (non-sharded) input AND
@@ -72,7 +72,7 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
         auto split = tt::tt_metal::split_work_to_cores(grid, wt, /*row_wise=*/true);
         uint32_t max_tiles_per_core =
             std::max(std::get<4>(split), std::get<3>(split).empty() ? 0u : std::get<5>(split));
-        return 2ull * max_tiles_per_core * kTileSize <= usable_l1_bytes(device);
+        return 2ull * max_tiles_per_core * kTileSize <= usable_l1_bytes(*device);
     };
 
     const auto& logical = input.logical_shape();

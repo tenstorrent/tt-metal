@@ -16,6 +16,7 @@ namespace ttml::optimizers {
 
 SGDComposite::SGDComposite(ttml::serialization::NamedParameters parameters, const SGDCompositeConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
+    require_bf16_parameters(m_parameters, "SGDComposite");
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             m_theta.emplace(
@@ -108,6 +109,7 @@ serialization::StateDict SGDComposite::get_state_dict() const {
     dict["theta"] = m_theta;
     dict["steps"] = m_steps;
     dict["lr"] = m_config.lr;
+    save_initial_lr(dict);
     return dict;
 }
 
@@ -115,6 +117,7 @@ void SGDComposite::set_state_dict(const serialization::StateDict& dict) {
     m_theta = std::get<serialization::NamedParameters>(dict.at("theta"));
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
     set_lr(serialization::get_value_type<float>(dict, "lr"));
+    restore_initial_lr(dict);
     // Restored buffers are treated as past their first update. Buffers are preallocated
     // for every trainable parameter, so a buffer that never received a gradient before the
     // checkpoint (frozen parameter, or a checkpoint saved before any step) is also marked,

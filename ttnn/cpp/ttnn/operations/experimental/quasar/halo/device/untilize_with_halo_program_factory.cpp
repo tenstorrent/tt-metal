@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/common/constants.hpp"
@@ -196,7 +197,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     auto tensor_metadata =
         sliding_window::generate_tensor_metadata(pad_metadata, operation_attributes.config, input_shard_height);
 
-    const uint32_t num_cores_x = input_tensor.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
+    const auto& shard_spec = input_tensor.shard_spec().value();
+    const auto& shard_grid = shard_spec.grid;
 
     auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(
         tensor_metadata,
@@ -204,10 +206,11 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         is_block_sharded,
         transpose_mcast,
         remote_read,
-        device,
-        num_cores_x,
+        *device,
         is_in_tiled,
-        UNTILIZE_BLOCK_SIZE);
+        UNTILIZE_BLOCK_SIZE,
+        shard_grid,
+        shard_spec.orientation);
 
     // op_owned_tensors[0..3] = pad_config0, pad_config1, gather_config0, gather_config1.
     std::vector<MeshTensor> op_owned_tensors;
@@ -376,8 +379,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             .compile_time_args =
                 {{"tiles_per_row", ntiles_per_block}, {"block_size", clamped_block_size_height / TILE_HEIGHT}},
             .runtime_arg_schema = {.runtime_arg_names = {"total_blocks"}},
-            .hw_config = ttnn::to_compute_hardware_config(
-                input_tensor.device()->arch(), operation_attributes.compute_kernel_config),
+            .hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config),
         };
         kernels.push_back(std::move(compute));
     }
@@ -403,9 +405,16 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             // scatter-writes, pad replication, partial-page DRAM config reads); that sub-tile pattern stalls the
             // DFB implicit-sync credit accounting. Opt out so explicit push_back/pop_front stay authoritative
             // (mirrors tilize default / transpose HC-sharded).
-            reader_hw = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+            reader_hw = DataMovementHardwareConfig{
+                .config_2xx =
+                    DataMovementHardwareConfig::DataMovement2XXConfig{
+                        .disable_dfb_implicit_sync_for_all = true,
+                    },
+            };
         } else {
-            reader_hw = DataMovementGen1Config{.processor = processor, .noc = noc};
+            reader_hw = DataMovementHardwareConfig{
+                .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc},
+            };
         }
         KernelSpec reader{
             .unique_id = name,

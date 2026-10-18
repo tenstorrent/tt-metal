@@ -36,11 +36,10 @@ namespace ttnn::experimental::prim {
 
 using tt::tt_metal::experimental::AddRuntimeArgsForNode;
 using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DataMovementGen1Config;
+using tt::tt_metal::experimental::DataMovementHardwareConfig;
 using tt::tt_metal::experimental::DFBBinding;
 using tt::tt_metal::experimental::DFBEndpointType;
 using tt::tt_metal::experimental::DFBSpecName;
-using tt::tt_metal::experimental::double_buffer_dest;
 using tt::tt_metal::experimental::Group;
 using tt::tt_metal::experimental::KernelAdvancedOptions;
 using tt::tt_metal::experimental::KernelSpec;
@@ -53,7 +52,6 @@ using tt::tt_metal::experimental::SemaphoreSpecName;
 using tt::tt_metal::experimental::TensorBinding;
 using tt::tt_metal::experimental::TensorParameter;
 using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::unpack_modes;
 using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace {
@@ -193,6 +191,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     const uint32_t N_chunks = static_cast<uint32_t>(operation_attributes.chunks);
 
     auto* device = input_tensor.device();
+    // Quasar (Gen2) uplift: every Gen2-specific choice below is keyed on this one flag so WH/BH keep
+    // the original path byte-for-byte.
+    const bool is_quasar = device->arch() == tt::ARCH::QUASAR;
 
     // Fused concat (concat-free): in0's K is sourced from input_tensor (prefix K-tiles) then
     // optional_input_tensor (suffix), via the in0 second-source (in3) read path, instead of a
@@ -381,12 +382,26 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     auto core_0_endy = CoreCoord{0, grid_size.y - 1};
     auto core_endx_endy = CoreCoord{grid_size.x - 1, grid_size.y - 1};
 
+    // Which of the four kernel flavours exist on this grid. A receiver kernel only exists when its
+    // parallel axis spans more than one core (in0 receivers sit at in1_idx > 0, in1 receivers at
+    // in0_idx > 0). On WH/BH the grid is always >= 2x2 (validate_on_program_cache_miss), so all four
+    // exist and the spec is unchanged; on a 1-wide / 1-tall grid (single-core Quasar emulator) the
+    // absent receiver kernels and their empty work-unit regions must not be declared -- the spec
+    // validator rejects a kernel that no WorkUnitSpec references, and CoreRange rejects start > end.
+    const bool has_in0_receivers = in1_parallel_axis_cores > 1;
+    const bool has_in1_receivers = in0_parallel_axis_cores > 1;
+
     ProgramSpec spec;
     spec.name = "minimal_matmul";
 
     /**
      * Semaphores. Names replace the sequential ids the legacy factory handed out; the kernels bind
      * them by name. The non-zero initial values are carried over from the legacy factory.
+     *
+     * Quasar: the Gen2 runtime only supports zero-initialized semaphores (ValidateProgramSpec rejects
+     * any other initial_value). The `*_valid` semaphores do not depend on their initial value: both DM
+     * kernels execute `in*_valid_semaphore.set(VALID)` before the first relay_unicast that reads it, so
+     * a zero initial value is behaviorally identical. WH/BH keep the legacy VALID init untouched.
      */
     const SemaphoreSpecName SEM_IN0_SENDER{"in0_sender"};
     const SemaphoreSpecName SEM_IN0_RECEIVER{"in0_receiver"};
@@ -407,7 +422,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             .unique_id = name,
             .target_nodes = CoreRangeSet(core_grid),
         };
-        sem.advanced_options.initial_value = initial_value;
+        sem.advanced_options.initial_value = is_quasar ? 0u : initial_value;
         spec.semaphores.push_back(std::move(sem));
     }
 
@@ -489,6 +504,14 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     if (fuse_swiglu) {
         defines["FUSE_SWIGLU"] = "1";
     }
+    // Without a bias the compute kernel applies SwiGLU on the pack thread in each output block's last K block
+    // (matmul_blocks_swiglu); with one it runs the swiglu_block epilogue. The in-loop path pairs gate / up tiles within
+    // one DST subblock, so an odd subblock_w (a pair straddling two subblocks) takes the epilogue too.
+    const bool swiglu_in_k_loop = fuse_swiglu && !use_bias && subblock_w % 2 == 0;
+    // A block-float output's 7-bit mantissas hide a cheaper sigmoid's error (swiglu_sfpu.hpp); bf16 / fp32 outputs
+    // keep silu_tile's.
+    const bool swiglu_block_float_output =
+        output_data_format == tt::DataFormat::Bfp8_b || output_data_format == tt::DataFormat::Bfp4_b;
 
     if (use_fused_ternary) {
         defines["FUSE_TERNARY"] = "1";
@@ -658,7 +681,14 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             .tensor_bindings = dm_tensor_bindings(own_input_tensor, bind_in3),
             .compile_time_args = std::move(cta),
             .runtime_arg_schema = dm_runtime_arg_names(rt_prefix),
-            .hw_config = DataMovementGen1Config{.processor = processor, .noc = noc},
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = processor,
+                            .noc = noc,
+                        },
+                },
             .advanced_options = dm_advanced_options,
         };
         return kernel;
@@ -685,22 +715,24 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         SEM_IN0_SENDER,
         SEM_IN0_RECEIVER,
         SEM_IN0_VALID));
-    spec.kernels.push_back(make_dm_kernel(
-        K_IN0_RECEIVER,
-        kIn0Source,
-        in0_tile_size,
-        /*is_injector_core=*/false,
-        in0_is_output_writer,
-        DFB_IN0,
-        TP_IN0,
-        /*bind_in3=*/false,
-        "in0",
-        defines,
-        in0_risc,
-        in0_noc,
-        SEM_IN0_SENDER,
-        SEM_IN0_RECEIVER,
-        SEM_IN0_VALID));
+    if (has_in0_receivers) {
+        spec.kernels.push_back(make_dm_kernel(
+            K_IN0_RECEIVER,
+            kIn0Source,
+            in0_tile_size,
+            /*is_injector_core=*/false,
+            in0_is_output_writer,
+            DFB_IN0,
+            TP_IN0,
+            /*bind_in3=*/false,
+            "in0",
+            defines,
+            in0_risc,
+            in0_noc,
+            SEM_IN0_SENDER,
+            SEM_IN0_RECEIVER,
+            SEM_IN0_VALID));
+    }
     spec.kernels.push_back(make_dm_kernel(
         K_IN1_SENDER,
         kIn1Source,
@@ -717,22 +749,24 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         SEM_IN1_SENDER,
         SEM_IN1_RECEIVER,
         SEM_IN1_VALID));
-    spec.kernels.push_back(make_dm_kernel(
-        K_IN1_RECEIVER,
-        kIn1Source,
-        in1_tile_size,
-        /*is_injector_core=*/false,
-        in1_is_output_writer,
-        DFB_IN1,
-        TP_IN1,
-        /*bind_in3=*/false,
-        "in1",
-        defines,
-        in1_risc,
-        in1_noc,
-        SEM_IN1_SENDER,
-        SEM_IN1_RECEIVER,
-        SEM_IN1_VALID));
+    if (has_in1_receivers) {
+        spec.kernels.push_back(make_dm_kernel(
+            K_IN1_RECEIVER,
+            kIn1Source,
+            in1_tile_size,
+            /*is_injector_core=*/false,
+            in1_is_output_writer,
+            DFB_IN1,
+            TP_IN1,
+            /*bind_in3=*/false,
+            "in1",
+            defines,
+            in1_risc,
+            in1_noc,
+            SEM_IN1_SENDER,
+            SEM_IN1_RECEIVER,
+            SEM_IN1_VALID));
+    }
 
     /**
      * Compute kernel.
@@ -751,8 +785,8 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
-    auto compute_hw = to_compute_hardware_config(device->arch(), compute_kernel_config);
-    double_buffer_dest(compute_hw) = true;
+    auto compute_hw = to_compute_hardware_config(compute_kernel_config);
+    compute_hw.double_buffer_dest = true;
     if (fp32_dest_acc_en) {
         // Metal 2.0 requires an explicit unpack mode for Float32 DFBs when enable_32_bit_dest is set.
         const std::vector<std::pair<DFBSpecName, tt::DataFormat>> compute_consumed{
@@ -763,7 +797,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             {DFB_TERNARY_A, ternary_a_data_format},
             {DFB_TERNARY_B, ternary_c_data_format},
         };
-        auto& compute_unpack_modes = unpack_modes(compute_hw);
+        auto& compute_unpack_modes = compute_hw.unpack_modes;
         for (const auto& [dfb, format] : compute_consumed) {
             // Only DFBs this kernel actually binds may appear in unpack_modes.
             const bool bound = (dfb == DFB_IN0 || dfb == DFB_IN1 || dfb == DFB_INTERMEDIATE) ||
@@ -815,6 +849,8 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
                 {"N_blocks_per_core", N_blocks_per_core},
                 {"subblock_h", subblock_h},
                 {"subblock_w", subblock_w},
+                {"swiglu_in_k_loop", swiglu_in_k_loop ? 1u : 0u},
+                {"swiglu_block_float_output", swiglu_block_float_output ? 1u : 0u},
             },
         .runtime_arg_schema = compute_schema,
         .hw_config = compute_hw,
@@ -843,14 +879,20 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             transpose_core_grid ? static_cast<uint32_t>(c.x) : static_cast<uint32_t>(c.y),
             transpose_core_grid ? static_cast<uint32_t>(c.y) : static_cast<uint32_t>(c.x)};
     };
-    for (const auto& [name, nodes] : std::initializer_list<std::pair<const char*, CoreRange>>{
-             {"corner", CoreRange(core_0_0, core_0_0)},
-             {"top_row", CoreRange(core_1_0, core_endx_0)},
-             {"left_col", CoreRange(core_0_1, core_0_endy)},
-             {"interior", CoreRange(CoreCoord{1, 1}, core_endx_endy)},
-         }) {
+    auto add_region = [&](const char* name, const CoreRange& nodes) {
         auto [in0_idx, in1_idx] = idx_for(nodes.start_coord);
         add_work_unit(name, nodes, in0_idx, in1_idx);
+    };
+    // Only the regions that exist on this grid (all four on WH/BH, see has_in*_receivers above).
+    add_region("corner", CoreRange(core_0_0, core_0_0));
+    if (grid_size.x > 1) {
+        add_region("top_row", CoreRange(core_1_0, core_endx_0));
+    }
+    if (grid_size.y > 1) {
+        add_region("left_col", CoreRange(core_0_1, core_0_endy));
+    }
+    if (grid_size.x > 1 && grid_size.y > 1) {
+        add_region("interior", CoreRange(CoreCoord{1, 1}, core_endx_endy));
     }
 
     /**
@@ -862,12 +904,19 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     uint32_t k_blocks_per_core =
         tt::div_up(K_blocks, (transpose_core_grid ? in1_parallel_axis_cores : in0_parallel_axis_cores));
 
+    // Never K block 0 when there is a later one: a writer waits for the previous output block before it reads (and,
+    // on an injector, forwards) the in1 of the K block it defers to, so deferring to K block 0 stalls the next block's
+    // first K block behind the previous block's last subblock and its write.
+    auto defer_write_k_block_for = [&](const CoreCoord& c) -> uint32_t {
+        const uint32_t dwk = std::min(static_cast<uint32_t>(c.y) * k_blocks_per_core, K_blocks - 1);
+        return K_blocks > 1 ? std::max(dwk, 1u) : dwk;
+    };
+
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
     uint32_t max_defer_write_k_block = 0;
     for (const auto& c : cores) {
-        uint32_t dwk = std::min(static_cast<uint32_t>(c.y) * k_blocks_per_core, K_blocks - 1);
-        max_defer_write_k_block = std::max(max_defer_write_k_block, dwk);
+        max_defer_write_k_block = std::max(max_defer_write_k_block, defer_write_k_block_for(c));
     }
 
     uint32_t ternary_b_broadcast = 0u;
@@ -933,9 +982,8 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         uint32_t N_start_tile = N_tiles_per_core * in1_idx;
         uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
 
-        // Defer write to K block with same coordinate as core
-        // The writer receiver cores always have core.x > 0
-        uint32_t defer_write_k_block = std::min(static_cast<uint32_t>(core.y) * k_blocks_per_core, K_blocks - 1);
+        // Defer write to K block with same coordinate as core (but not K block 0, see defer_write_k_block_for)
+        uint32_t defer_write_k_block = defer_write_k_block_for(core);
 
         bool is_in0_sink = core == in0_core_order.back();
         bool is_in1_sink = core == in1_core_order.back();
@@ -996,9 +1044,13 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     }
 
     run_args.kernel_run_args.push_back(std::move(in0_sender_args));
-    run_args.kernel_run_args.push_back(std::move(in0_receiver_args));
+    if (has_in0_receivers) {
+        run_args.kernel_run_args.push_back(std::move(in0_receiver_args));
+    }
     run_args.kernel_run_args.push_back(std::move(in1_sender_args));
-    run_args.kernel_run_args.push_back(std::move(in1_receiver_args));
+    if (has_in1_receivers) {
+        run_args.kernel_run_args.push_back(std::move(in1_receiver_args));
+    }
     run_args.kernel_run_args.push_back(std::move(compute_args));
 
     // Tensor arguments. The framework re-applies these on every program-cache hit, which is what

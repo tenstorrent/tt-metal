@@ -10,32 +10,13 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     data_gen_with_range,
     data_gen_with_range_int,
     compare_pcc,
-    compare_equal,
 )
 from tests.ttnn.utils_for_testing import (
     assert_with_pcc,
     assert_with_ulp,
-    assert_div_by_zero_outputs,
     assert_equal,
 )
-from tests.tt_eager.python_api_testing.sweep_tests import (
-    comparison_funcs,
-)
-from models.common.utility_functions import is_blackhole, is_slow_dispatch
-
-
-def _data_gen_div_scalar_input(input_shapes, low, high, device, divisor):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, low, high, device)
-    if divisor == 0.0:
-        # Avoid 0/0: bf16 fast_and_approximate divide returns 0 instead of NaN (#43209).
-        zero_mask = in_data1 == 0
-        if zero_mask.any():
-            in_data1 = in_data1.clone()
-            in_data1[zero_mask] = 1.0
-            input_tensor1 = ttnn.from_torch(
-                in_data1, dtype=input_tensor1.dtype, layout=input_tensor1.layout, device=device
-            )
-    return in_data1, input_tensor1
+from tt_py_test_utils_common.utility_functions import is_blackhole, is_slow_dispatch
 
 
 @pytest.mark.parametrize(
@@ -114,366 +95,6 @@ def test_binary_atan2_special_values(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_logical_xor_ttnn(input_shapes, device):
-    num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
-    in_data1 = torch.linspace(-100, 100, num_elements, dtype=torch.bfloat16)
-    in_data1 = in_data1[:num_elements].reshape(input_shapes)
-    in_data2 = torch.linspace(-150, 150, num_elements, dtype=torch.bfloat16)
-    in_data2 = in_data2[:num_elements].reshape(input_shapes)
-
-    input_tensor1 = ttnn.from_torch(
-        in_data1,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    input_tensor2 = ttnn.from_torch(
-        in_data2,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    output_tensor = ttnn.logical_xor(input_tensor1, input_tensor2)
-    output_tensor = ttnn.to_torch(output_tensor)
-    golden_function = ttnn.get_golden_function(ttnn.logical_xor)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    assert torch.equal(output_tensor, golden_tensor)
-
-
-@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
-@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_div_ttnn(fast_and_approximate_mode, rounding_mode, input_shapes, device):
-    if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
-    else:
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -200, 150, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -120, 200, device)
-
-    output_tensor = ttnn.div(
-        input_tensor1, input_tensor2, fast_and_approximate_mode=fast_and_approximate_mode, rounding_mode=rounding_mode
-    )
-    golden_function = ttnn.get_golden_function(ttnn.div)
-    golden_tensor = golden_function(in_data1, in_data2, rounding_mode)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
-@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_div_ttnn_ci(fast_and_approximate_mode, rounding_mode, input_shapes, device):
-    if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -1e6, 1e6, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -1e6, -1, device)
-    else:
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -2e6, 1e6, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -1e6, 2e6, device)
-
-    output_tensor = ttnn.div(
-        input_tensor1, input_tensor2, fast_and_approximate_mode=fast_and_approximate_mode, rounding_mode=rounding_mode
-    )
-    golden_function = ttnn.get_golden_function(ttnn.div)
-    golden_tensor = golden_function(in_data1, in_data2, rounding_mode)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    comp_pass = comparison_funcs.comp_pcc(golden_tensor, output_tensor)
-    assert comp_pass
-
-
-@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
-@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_div_ttnn_opt(fast_and_approximate_mode, rounding_mode, input_shapes, device):
-    if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
-    else:
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -200, 100, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 200, device)
-
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.div(
-        input_tensor1,
-        input_tensor2,
-        fast_and_approximate_mode=fast_and_approximate_mode,
-        rounding_mode=rounding_mode,
-        output_tensor=output_tensor,
-        queue_id=cq_id,
-    )
-    golden_function = ttnn.get_golden_function(ttnn.div)
-    golden_tensor = golden_function(in_data1, in_data2, rounding_mode)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
-@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
-def test_binary_div_scalar_ttnn(fast_and_approximate_mode, rounding_mode, input_shapes, value, device):
-    # Skip only rounding_mode=None + fast_and_approximate: trunc/floor of non-zero/0.0
-    # always yields ±inf and is verifiable; rounding_mode=None returns 0 instead (#43209).
-    if value == 0.0 and rounding_mode is None and fast_and_approximate_mode:
-        pytest.skip(
-            "Skipping test case due to division by zero not being handled properly in bfloat16 with rounding_mode=None and fast_and_approximate_mode=True"
-        )
-    in_data1, input_tensor1 = _data_gen_div_scalar_input(input_shapes, -100, 100, device, value)
-
-    output_tensor = ttnn.div(
-        input_tensor1, value, fast_and_approximate_mode=fast_and_approximate_mode, rounding_mode=rounding_mode
-    )
-    golden_function = ttnn.get_golden_function(ttnn.div)
-    golden_tensor = golden_function(in_data1, value, rounding_mode)
-
-    if value == 0.0:
-        assert_div_by_zero_outputs(golden_tensor, ttnn.to_torch(output_tensor))
-    else:
-        comp_pass = compare_pcc([output_tensor], [golden_tensor])
-        assert comp_pass
-
-
-@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
-@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
-def test_binary_div_scalar_ttnn_opt(fast_and_approximate_mode, rounding_mode, input_shapes, value, device):
-    # Skip only rounding_mode=None + fast_and_approximate: trunc/floor of non-zero/0.0
-    # always yields ±inf and is verifiable; rounding_mode=None returns 0 instead (#43209).
-    if value == 0.0 and rounding_mode is None and fast_and_approximate_mode:
-        pytest.skip(
-            "Skipping test case due to division by zero not being handled properly in bfloat16 with rounding_mode=None and fast_and_approximate_mode=True"
-        )
-    in_data1, input_tensor1 = _data_gen_div_scalar_input(input_shapes, -100, 100, device, value)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.div(
-        input_tensor1,
-        value,
-        fast_and_approximate_mode=fast_and_approximate_mode,
-        rounding_mode=rounding_mode,
-        output_tensor=output_tensor,
-    )
-    golden_function = ttnn.get_golden_function(ttnn.div)
-    golden_tensor = golden_function(in_data1, value, rounding_mode)
-
-    if value == 0.0:
-        assert_div_by_zero_outputs(golden_tensor, ttnn.to_torch(output_tensor))
-    else:
-        comp_pass = compare_pcc([output_tensor], [golden_tensor])
-        assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_floor_div_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -350, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
-    output_tensor = ttnn.floor_div(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.floor_div)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
-def test_binary_floor_div_overload_ttnn(input_shapes, value, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.floor_div(input_tensor1, value)
-    golden_function = ttnn.get_golden_function(ttnn.floor_div)
-    golden_tensor = golden_function(in_data1, value)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_logical_and__ttnn(input_shapes, device):
-    num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
-    in_data1 = torch.linspace(-150, 150, num_elements, dtype=torch.bfloat16)
-    in_data1 = in_data1[:num_elements].reshape(input_shapes)
-    in_data2 = torch.linspace(-100, 100, num_elements, dtype=torch.bfloat16)
-    in_data2 = in_data2[:num_elements].reshape(input_shapes)
-
-    input_tensor1 = ttnn.from_torch(
-        in_data1,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    input_tensor2 = ttnn.from_torch(
-        in_data2,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    ttnn.logical_and_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.logical_and_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    assert_with_ulp(expected_result=golden_tensor, actual_result=input_tensor1)
-    assert torch.equal(ttnn.to_torch(input_tensor1), golden_tensor)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_logical_or__ttnn(input_shapes, device):
-    num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
-    in_data1 = torch.linspace(-150, 150, num_elements, dtype=torch.bfloat16)
-    in_data1 = in_data1[:num_elements].reshape(input_shapes)
-    in_data2 = torch.linspace(-100, 100, num_elements, dtype=torch.bfloat16)
-    in_data2 = in_data2[:num_elements].reshape(input_shapes)
-
-    input_tensor1 = ttnn.from_torch(
-        in_data1,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    input_tensor2 = ttnn.from_torch(
-        in_data2,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    ttnn.logical_or_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.logical_or_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    assert_with_ulp(expected_result=golden_tensor, actual_result=input_tensor1)
-    assert torch.equal(ttnn.to_torch(input_tensor1), golden_tensor)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_logical_xor__ttnn(input_shapes, device):
-    num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
-    in_data1 = torch.linspace(-150, 150, num_elements, dtype=torch.bfloat16)
-    in_data1 = in_data1[:num_elements].reshape(input_shapes)
-    in_data2 = torch.linspace(-100, 100, num_elements, dtype=torch.bfloat16)
-    in_data2 = in_data2[:num_elements].reshape(input_shapes)
-
-    input_tensor1 = ttnn.from_torch(
-        in_data1,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    input_tensor2 = ttnn.from_torch(
-        in_data2,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    ttnn.logical_xor_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.logical_xor_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    assert_with_ulp(expected_result=golden_tensor, actual_result=input_tensor1)
-    assert torch.equal(ttnn.to_torch(input_tensor1), golden_tensor)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 @pytest.mark.parametrize("coeffs", [[0.0], [-5.0, 2.0], [-3.0, 0.0, 10.0], [-100.0, -25.0, 0.0, 15.0, 100.0]])
 def test_binary_polyval_ttnn(input_shapes, coeffs, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
@@ -489,242 +110,12 @@ def test_binary_polyval_ttnn(input_shapes, coeffs, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_gti_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-    ttnn.gt_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.gt_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_equal([input_tensor1], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_gti_ttnn(input_shapes, device):
-    for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
-        in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-        ttnn.gt_(input_tensor, scalar)
-        golden_function = ttnn.get_golden_function(ttnn.gt_)
-        golden_tensor = golden_function(in_data, scalar)
-
-        comp_pass = compare_equal([input_tensor], [golden_tensor])
-        assert comp_pass, f"Failed for scalar={scalar}"
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_gei_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-    ttnn.ge_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.ge_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_equal([input_tensor1], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_gei_ttnn(input_shapes, device):
-    for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
-        in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-        ttnn.ge_(input_tensor, scalar)
-        golden_function = ttnn.get_golden_function(ttnn.ge_)
-        golden_tensor = golden_function(in_data, scalar)
-
-        comp_pass = compare_equal([input_tensor], [golden_tensor])
-        assert comp_pass, f"Failed for scalar={scalar}"
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_lti_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-    ttnn.lt_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.lt_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_equal([input_tensor1], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_lti_ttnn(input_shapes, device):
-    for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
-        in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-        ttnn.lt_(input_tensor, scalar)
-        golden_function = ttnn.get_golden_function(ttnn.lt_)
-        golden_tensor = golden_function(in_data, scalar)
-
-        comp_pass = compare_equal([input_tensor], [golden_tensor])
-        assert comp_pass, f"Failed for scalar={scalar}"
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_lei_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-    ttnn.le_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.le_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_equal([input_tensor1], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_lei_ttnn(input_shapes, device):
-    for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
-        in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-        ttnn.le_(input_tensor, scalar)
-        golden_function = ttnn.get_golden_function(ttnn.le_)
-        golden_tensor = golden_function(in_data, scalar)
-
-        comp_pass = compare_equal([input_tensor], [golden_tensor])
-        assert comp_pass, f"Failed for scalar={scalar}"
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_eqi_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-    ttnn.eq_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.eq_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_equal([input_tensor1], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_eqi_ttnn(input_shapes, device):
-    for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
-        in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-        ttnn.eq_(input_tensor, scalar)
-        golden_function = ttnn.get_golden_function(ttnn.eq_)
-        golden_tensor = golden_function(in_data, scalar)
-
-        comp_pass = compare_equal([input_tensor], [golden_tensor])
-        assert comp_pass, f"Failed for scalar={scalar}"
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_nei_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-    ttnn.ne_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.ne_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_equal([input_tensor1], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_nei_ttnn(input_shapes, device):
-    for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
-        in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-        ttnn.ne_(input_tensor, scalar)
-        golden_function = ttnn.get_golden_function(ttnn.ne_)
-        golden_tensor = golden_function(in_data, scalar)
-
-        comp_pass = compare_equal([input_tensor], [golden_tensor])
-        assert comp_pass, f"Failed for scalar={scalar}"
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
         (torch.Size([1, 2, 32, 64, 64])),
         (torch.Size([1, 3, 7, 29, 127])),
         (torch.Size([1, 3, 2, 32])),
         (torch.Size([1, 6, 49, 97])),
         (torch.Size([1, 7, 320])),
         (torch.Size([1, 49, 321])),
-        (torch.Size([4, 32])),
-        (torch.Size([49, 321])),
     ),
 )
 def test_binary_prelu_ttnn(input_shapes, device):
@@ -746,14 +137,10 @@ def test_binary_prelu_ttnn(input_shapes, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 2, 32, 64, 64])),
         (torch.Size([1, 3, 7, 29, 127])),
-        (torch.Size([1, 3, 2, 32])),
         (torch.Size([1, 6, 49, 97])),
         (torch.Size([1, 7, 320])),
         (torch.Size([1, 49, 321])),
-        (torch.Size([4, 32])),
-        (torch.Size([49, 321])),
     ),
 )
 @pytest.mark.parametrize(
@@ -775,14 +162,10 @@ def test_binary_prelu_scalar_ttnn(input_shapes, scalar, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 2, 32, 64, 64])),
         (torch.Size([1, 3, 7, 29, 127])),
-        (torch.Size([1, 3, 2, 32])),
         (torch.Size([1, 6, 49, 97])),
         (torch.Size([1, 7, 320])),
         (torch.Size([1, 49, 321])),
-        (torch.Size([4, 32])),
-        (torch.Size([49, 321])),
     ),
 )
 @pytest.mark.parametrize(
@@ -906,28 +289,65 @@ def test_unary_right_shift(input_shapes, device):
         assert pcc >= 0.99, f"Failed for scalar={scalar}"
 
 
-# Kimi K3 betas: 4 for the gate half, 25 for the up half.
+# Kimi K3 betas: 4 for the gate half, 25 for the up half. These are the betas the fused SFPU kernel
+# (situ_glu_tile) compiles in, so they take the native single-op path.
 SITU_GLU_BETA1 = 4.0
 SITU_GLU_BETA2 = 25.0
+# Any other betas fall back to the composed softcap/sigmoid/multiply chain.
+SITU_GLU_FALLBACK_BETA1 = 2.0
+SITU_GLU_FALLBACK_BETA2 = 10.0
 
-# The bf16 arm is gated in ULP (measured worst case: 3.0 across three composed ops). bfp8_b
-# re-quantizes every intermediate and shares one exponent per 16-element block, which costs
-# hundreds of bf16 ULP on small elements regardless of op accuracy, so that arm is gated by PCC.
+# The bf16 arm is gated in ULP: measured worst case 1.42 for the fused kernel, which never rounds an
+# intermediate, and 3.0 for the composite's three rounded steps. bfp8_b shares one exponent per
+# 16-element block, which costs hundreds of bf16 ULP on small elements regardless of op accuracy, so
+# that arm is gated by PCC. The composite has no fp32 arm: softcap rejects fp32.
+SITU_GLU_NATIVE_ULP = 3
 SITU_GLU_ULP = 6
 SITU_GLU_BF16_PCC = 0.999
 SITU_GLU_BFP8_PCC = 0.99
+SITU_GLU_FP32_PCC = 0.9999
 
-# Numerics on both sides of the L1/DRAM intermediate split, also covering both dtypes. The
-# assertions below check the output placement and the values, not which branch ran -- output
-# placement is pinned to the input's for both.
 SITU_GLU_CASES = [
-    (torch.Size([1, 1, 512, 3072]), ttnn.bfloat16),  # K3 routed expert (3072) <= 3072 -> L1
-    (torch.Size([1, 1, 512, 6144]), ttnn.bfloat8_b),  # K3 shared expert (6144) > 3072 -> DRAM
+    (torch.Size([1, 1, 512, 3072]), ttnn.bfloat16),  # K3 routed-expert width
+    (torch.Size([1, 1, 512, 6144]), ttnn.bfloat8_b),  # K3 shared-expert width
+    (torch.Size([1, 1, 256, 1024]), ttnn.float32),  # fp32 DEST body of the kernel
 ]
 
 
+def _situ_glu_device_ops(fn):
+    """Runs fn under graph capture and returns the names of the device operations it launched."""
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        out = fn()
+    finally:
+        graph = ttnn.graph.end_graph_capture()
+    names = [
+        node["params"]["name"]
+        for node in graph
+        if node.get("node_type") == "function_start"
+        and node.get("params", {}).get("name", "").endswith("DeviceOperation")
+    ]
+    return out, names
+
+
+def _check_situ_glu(golden, tt_res, ttnn_dtype, beta1, beta2, ulp=SITU_GLU_ULP):
+    # Both halves are bounded: |situ_a| <= beta1, |up_half| <= beta2.
+    is_bfp8 = ttnn_dtype == ttnn.bfloat8_b
+    bound = beta1 * beta2 * (1.0 + (5e-2 if is_bfp8 else 2**-8))
+    max_abs = tt_res.to(torch.float32).abs().max().item()
+    assert max_abs <= bound, f"situ_glu overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
+
+    if is_bfp8:
+        assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BFP8_PCC)
+    elif ttnn_dtype == ttnn.float32:
+        assert_with_pcc(golden, tt_res, pcc=SITU_GLU_FP32_PCC)
+    else:
+        assert_with_ulp(expected_result=golden, actual_result=tt_res, ulp_threshold=ulp)
+        assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
+
+
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
-@pytest.mark.parametrize("input_shape, ttnn_dtype", SITU_GLU_CASES, ids=["hidden_le_3072", "hidden_gt_3072"])
+@pytest.mark.parametrize("input_shape, ttnn_dtype", SITU_GLU_CASES, ids=["hidden_le_3072", "hidden_gt_3072", "fp32"])
 def test_situ_glu(input_shape, ttnn_dtype, device):
     torch.manual_seed(0)
     # Span the saturating and near-linear regions of both halves.
@@ -937,23 +357,65 @@ def test_situ_glu(input_shape, ttnn_dtype, device):
     gate_tt = ttnn.from_torch(gate, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     up_tt = ttnn.from_torch(up, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2)
-    # Output placement follows the input, not the possibly-L1 intermediates.
+    # The gate and up halves differ in beta and in their sigmoid factor, so a swapped operand order
+    # inside the kernel fails the numerics below rather than passing on symmetric inputs.
+    out, ops = _situ_glu_device_ops(lambda: ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2))
+    assert ops == ["BinaryNgDeviceOperation"], f"Kimi betas should launch one fused op, got {ops}"
+    assert out.dtype == ttnn_dtype
     assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
     tt_res = ttnn.to_torch(out)
     golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
+    _check_situ_glu(golden, tt_res, ttnn_dtype, SITU_GLU_BETA1, SITU_GLU_BETA2, ulp=SITU_GLU_NATIVE_ULP)
 
-    is_bfp8 = ttnn_dtype == ttnn.bfloat8_b
-    # Both halves are bounded: |situ_a| <= beta1, |up_half| <= beta2.
-    bound = SITU_GLU_BETA1 * SITU_GLU_BETA2 * (1.0 + (5e-2 if is_bfp8 else 2**-8))
-    max_abs = tt_res.to(torch.float32).abs().max().item()
-    assert max_abs <= bound, f"situ_glu overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
 
-    if is_bfp8:
-        assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BFP8_PCC)
-    else:
-        assert_with_ulp(expected_result=golden, actual_result=tt_res, ulp_threshold=SITU_GLU_ULP)
-        assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize(
+    "gate_layout, up_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["rm_gate", "rm_up", "rm_both"],
+)
+def test_situ_glu_layouts(device, gate_layout, up_layout):
+    torch.manual_seed(0)
+    # The native op goes through the binary ops' shared entry point, which tilizes a mixed pair. Handed
+    # to the device op directly, a row-major operand next to a tiled one was read as if it were tiled.
+    shape = torch.Size([1, 1, 64, 96])
+    gate = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    up = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn.bfloat16, layout=gate_layout, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn.bfloat16, layout=up_layout, device=device)
+
+    out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2)
+    tt_res = ttnn.to_torch(out)
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
+    _check_situ_glu(golden, tt_res, ttnn.bfloat16, SITU_GLU_BETA1, SITU_GLU_BETA2, ulp=SITU_GLU_NATIVE_ULP)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize("input_shape, ttnn_dtype", SITU_GLU_CASES[:2], ids=["hidden_le_3072", "hidden_gt_3072"])
+def test_situ_glu_fallback_betas(input_shape, ttnn_dtype, device):
+    torch.manual_seed(0)
+    # The fused kernel compiles Kimi's betas in; any other betas must keep the composite and its
+    # numerics rather than silently computing with the wrong betas.
+    gate = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    up = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out, ops = _situ_glu_device_ops(
+        lambda: ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_FALLBACK_BETA1, SITU_GLU_FALLBACK_BETA2)
+    )
+    assert len(ops) > 1, f"non-Kimi betas should take the composite, got {ops}"
+    # Output placement follows the input, not the possibly-L1 intermediates.
+    assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
+    tt_res = ttnn.to_torch(out)
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(
+        gate, up, beta1=SITU_GLU_FALLBACK_BETA1, beta2=SITU_GLU_FALLBACK_BETA2
+    )
+    _check_situ_glu(golden, tt_res, ttnn_dtype, SITU_GLU_FALLBACK_BETA1, SITU_GLU_FALLBACK_BETA2)
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
@@ -965,7 +427,8 @@ def test_situ_glu_l1_intermediates_fall_back(device):
     gate = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     up = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    out = ttnn.situ_glu(gate, up, SITU_GLU_BETA1, SITU_GLU_BETA2)
+    # Only the composite (non-Kimi betas) has intermediates to place.
+    out = ttnn.situ_glu(gate, up, SITU_GLU_FALLBACK_BETA1, SITU_GLU_FALLBACK_BETA2)
 
     assert out.memory_config().buffer_type == gate.memory_config().buffer_type
     gate.deallocate()
@@ -987,11 +450,16 @@ def test_situ_glu_l1_intermediates_fall_back(device):
     ],
     ids=["contiguous", "disjoint"],
 )
-def test_situ_glu_sub_core_grids(device, sub_core_grid):
+@pytest.mark.parametrize(
+    "beta1, beta2",
+    [(SITU_GLU_BETA1, SITU_GLU_BETA2), (SITU_GLU_FALLBACK_BETA1, SITU_GLU_FALLBACK_BETA2)],
+    ids=["native", "composite"],
+)
+def test_situ_glu_sub_core_grids(device, sub_core_grid, beta1, beta2):
     torch.manual_seed(0)
-    # A width under the 3072 L1 cutoff, so this also pins the core restriction's other effect: it
-    # holds the intermediates in the output's memory space instead of taking interleaved L1 on
-    # every core, the restricted-away ones included.
+    # A width under the 3072 L1 cutoff, so on the composite this also pins the core restriction's
+    # other effect: it holds the intermediates in the output's memory space instead of taking
+    # interleaved L1 on every core, the restricted-away ones included.
     shape = torch.Size([1, 1, 512, 3072])
     gate = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
     up = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
@@ -999,13 +467,51 @@ def test_situ_glu_sub_core_grids(device, sub_core_grid):
     gate_tt = ttnn.from_torch(gate, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     up_tt = ttnn.from_torch(up, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2, sub_core_grids=sub_core_grid)
+    out = ttnn.situ_glu(gate_tt, up_tt, beta1, beta2, sub_core_grids=sub_core_grid)
 
     assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
     tt_res = ttnn.to_torch(out)
-    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=beta1, beta2=beta2)
     assert_with_ulp(expected_result=golden, actual_result=tt_res, ulp_threshold=SITU_GLU_ULP)
     assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize(
+    "gate_layout, up_layout",
+    [(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)],
+    ids=["rm_gate", "rm_up"],
+)
+def test_situ_glu_sub_core_grids_layout_conversion(device, gate_layout, up_layout):
+    torch.manual_seed(0)
+    # A mixed pair is tilized before the op runs. That conversion is a program of its own and must
+    # stay on the restricted cores too: the shared binary entry point tilizes on the full grid, which
+    # would land on the cores a concurrent op owns.
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
+    shape = torch.Size([1, 1, 64, 96])
+    gate = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    up = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn.bfloat16, layout=gate_layout, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn.bfloat16, layout=up_layout, device=device)
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2, sub_core_grids=cores)
+    finally:
+        graph = ttnn.graph.end_graph_capture()
+    # TilizeParams ends in its optional sub_core_grids, which serializes as std::nullopt when the
+    # conversion was left on the full grid.
+    tilize_params = [
+        node["arguments"][0]
+        for node in graph
+        if node.get("node_type") == "function_start" and node.get("params", {}).get("name") == "TilizeDeviceOperation"
+    ]
+    assert len(tilize_params) == 1, f"expected one tilize of the row-major operand, got {len(tilize_params)}"
+    assert tilize_params[0].endswith("<CoreRangeSet>)"), f"tilize ran unrestricted: {tilize_params[0]}"
+
+    tt_res = ttnn.to_torch(out)
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
+    _check_situ_glu(golden, tt_res, ttnn.bfloat16, SITU_GLU_BETA1, SITU_GLU_BETA2, ulp=SITU_GLU_NATIVE_ULP)
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")

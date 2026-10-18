@@ -1,0 +1,8 @@
+# Generated bring-up artifacts. All of it is reproducible from the committed
+# scripts, and the reference tensors run to tens of megabytes, so none of it
+# belongs in the repo.
+#
+#   demo/sample_images/  <- tests/ocr_corpus.py (deterministic: fixed seed, bundled fonts)
+#   demo/golden/         <- tests/generate_goldens.py (HuggingFace CPU reference)
+demo/sample_images/
+demo/golden/

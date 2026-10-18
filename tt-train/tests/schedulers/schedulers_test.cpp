@@ -28,10 +28,16 @@ public:
     void step() override {};
 
     [[nodiscard]] serialization::StateDict get_state_dict() const override {
-        return {};
+        serialization::StateDict dict;
+        dict["lr"] = m_lr;
+        save_initial_lr(dict);
+        return dict;
     }
 
-    void set_state_dict(const serialization::StateDict &dict) override {};
+    void set_state_dict(const serialization::StateDict &dict) override {
+        m_lr = serialization::get_value_type<float>(dict, "lr");
+        restore_initial_lr(dict);
+    }
 
     [[nodiscard]] size_t get_steps() const override {
         return {};
@@ -66,8 +72,8 @@ TEST(LambdaSchedulerTest, ConstantFactor) {
         return 0.5F;
     });
 
-    // Initial LR
-    EXPECT_FLOAT_EQ(optimizer->get_lr(), 0.1F);
+    // Construction applies lambda(0) (matches PyTorch's LambdaLR).
+    EXPECT_FLOAT_EQ(optimizer->get_lr(), 0.1F * 0.5F);
 
     scheduler.step();  // epoch 0
     EXPECT_FLOAT_EQ(optimizer->get_lr(), 0.1F * 0.5F);
@@ -152,6 +158,32 @@ TEST(LinearSchedulerTest, DecreasingLR) {
     // Extra steps keep it at 0.0
     scheduler.step();
     EXPECT_FLOAT_EQ(optimizer->get_lr(), 0.0f);
+}
+
+TEST(LinearSchedulerTest, ConstructorAppliesStartFactor) {
+    // Matches PyTorch's LinearLR: the pre-first-step LR is base_lr * start_factor.
+    auto optimizer = std::make_unique<ttml::optimizers::MockOptimizer>(0.2F);
+    ttml::schedulers::LinearScheduler scheduler(optimizer.get(), 0.25F, 1.0F, 4);
+
+    EXPECT_FLOAT_EQ(optimizer->get_lr(), 0.2F * 0.25F);
+    EXPECT_FLOAT_EQ(scheduler.get_last_lr(), 0.2F * 0.25F);
+
+    // step 1: factor = 0.25 + 0.75 * 1/4
+    scheduler.step();
+    EXPECT_FLOAT_EQ(optimizer->get_lr(), 0.2F * (0.25F + 0.75F * 0.25F));
+}
+
+TEST(LinearSchedulerDeathTest, InvalidFactorsRejected) {
+    // Bounds match PyTorch's LinearLR: 0 < start_factor <= 1, 0 <= end_factor <= 1.
+    auto optimizer = std::make_unique<ttml::optimizers::MockOptimizer>(0.1F);
+    EXPECT_ANY_THROW(ttml::schedulers::LinearScheduler(optimizer.get(), /*start_factor=*/0.0F, 1.0F, 10));
+    EXPECT_ANY_THROW(ttml::schedulers::LinearScheduler(optimizer.get(), /*start_factor=*/-0.1F, 1.0F, 10));
+    EXPECT_ANY_THROW(ttml::schedulers::LinearScheduler(optimizer.get(), /*start_factor=*/1.5F, 1.0F, 10));
+    EXPECT_ANY_THROW(ttml::schedulers::LinearScheduler(optimizer.get(), 1.0F, /*end_factor=*/-0.1F, 10));
+    EXPECT_ANY_THROW(ttml::schedulers::LinearScheduler(optimizer.get(), 1.0F, /*end_factor=*/1.5F, 10));
+    // Boundary values are legal: start_factor == 1, end_factor == 0 or 1.
+    EXPECT_NO_THROW(ttml::schedulers::LinearScheduler(optimizer.get(), 1.0F, 0.0F, 10));
+    EXPECT_NO_THROW(ttml::schedulers::LinearScheduler(optimizer.get(), 1.0F, 1.0F, 10));
 }
 
 // ----------------------------------
@@ -289,8 +321,11 @@ TEST(SequentialSchedulerTest, WarmupSetup) {
     auto start_lr = 3.e-4F;
     auto optimizer = std::make_unique<ttml::optimizers::MockOptimizer>(start_lr);
 
-    // First: LinearScheduler for 10 steps from 0 to start_lr
-    auto warmup_scheduler = std::make_unique<ttml::schedulers::LinearScheduler>(optimizer.get(), 0.0F, 1.0F, 10);
+    // First: LinearScheduler for 10 steps from start_lr / 10 to start_lr
+    // (start_factor == 0 is rejected, matching PyTorch's LinearLR).
+    const float warmup_start_factor = 1.0F / 10;
+    auto warmup_scheduler =
+        std::make_unique<ttml::schedulers::LinearScheduler>(optimizer.get(), warmup_start_factor, 1.0F, 10);
 
     // Then: LinearScheduler for 50 steps from start_lr to 0.1F * start_lr
     auto linear_scheduler = std::make_unique<ttml::schedulers::LinearScheduler>(optimizer.get(), 1.F, 0.1F, 50);
@@ -303,16 +338,52 @@ TEST(SequentialSchedulerTest, WarmupSetup) {
     milestones.push_back(50);
     ttml::schedulers::SequentialScheduler seq_scheduler(optimizer.get(), std::move(schedulers), std::move(milestones));
 
+    // Construction already applies the warmup child's start factor, so the
+    // first optimizer step runs at start_lr / 10 (not the full start_lr).
+    EXPECT_NEAR(optimizer->get_lr(), start_lr * warmup_start_factor, 1e-9);
+
     for (int i = 0; i < 10; i++) {
-        // Linear warmup: 10 steps from 0 to start_lr
+        // Linear warmup: 10 steps from start_lr / 10 to start_lr
         seq_scheduler.step();
-        EXPECT_NEAR(optimizer->get_lr(), start_lr * (i + 1) / 10, 1e-5);
+        const float warmup_factor = warmup_start_factor + (1.0F - warmup_start_factor) * (i + 1) / 10.F;
+        EXPECT_NEAR(optimizer->get_lr(), start_lr * warmup_factor, 1e-5);
     }
     for (int i = 0; i < 50; i++) {
         // Linear decay: 50 steps from start_lr to 0.1F * start_lr
         seq_scheduler.step();
         EXPECT_NEAR(optimizer->get_lr(), start_lr * (1.0F - 0.9F * (i + 1) / 50.F), 1e-5);
     }
+}
+
+TEST(SequentialSchedulerTest, ConstructionRestoresFirstChildInitialLr) {
+    // Children are constructed back-to-back on the same optimizer, so the last
+    // child's construction-time LR write would otherwise "win". The chain must
+    // restore the FIRST child's initial LR, and the second child must have
+    // captured the ORIGINAL base LR (via the optimizer's initial_lr), not the
+    // scaled value left behind by the first child's construction.
+    constexpr float kBaseLr = 0.1F;
+    auto optimizer = std::make_unique<ttml::optimizers::MockOptimizer>(kBaseLr);
+
+    std::vector<std::unique_ptr<ttml::schedulers::LRSchedulerBase>> children;
+    children.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(
+        optimizer.get(), /*start_factor=*/0.1F, /*end_factor=*/1.0F, /*total_steps=*/10));
+    // After the line above the optimizer's LR is kBaseLr * 0.1.
+    children.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(
+        optimizer.get(), /*start_factor=*/1.0F, /*end_factor=*/0.5F, /*total_steps=*/10));
+    // The second child's construction wrote kBaseLr * 1.0 (its own initial LR,
+    // computed from the shared initial_lr rather than the scaled live LR).
+    EXPECT_FLOAT_EQ(optimizer->get_lr(), kBaseLr);
+
+    ttml::schedulers::SequentialScheduler seq(
+        optimizer.get(), std::move(children), /*milestones=*/std::vector<size_t>{10U, 10U});
+
+    // Construction restored the first (active) child's initial LR.
+    EXPECT_FLOAT_EQ(optimizer->get_lr(), kBaseLr * 0.1F);
+
+    // Warmup proceeds from the original base LR, proving the first child's
+    // base was not polluted either.
+    seq.step();
+    EXPECT_FLOAT_EQ(optimizer->get_lr(), kBaseLr * (0.1F + 0.9F * 0.1F));
 }
 
 // ----------------------------------
@@ -453,7 +524,7 @@ TEST(SequentialSchedulerTest, StateDictSavesAllChildSchedulers) {
 
     std::vector<std::unique_ptr<ttml::schedulers::LRSchedulerBase>> src_children;
     src_children.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(
-        src_opt.get(), /*start_factor=*/0.0F, /*end_factor=*/1.0F, /*total_steps=*/10));
+        src_opt.get(), /*start_factor=*/0.1F, /*end_factor=*/1.0F, /*total_steps=*/10));
     src_children.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(
         src_opt.get(), /*start_factor=*/1.0F, /*end_factor=*/0.1F, /*total_steps=*/50));
     ttml::schedulers::SequentialScheduler src(
@@ -469,7 +540,7 @@ TEST(SequentialSchedulerTest, StateDictSavesAllChildSchedulers) {
     auto state = src.get_state_dict();
 
     // Both children's hyperparameters are present under their per-index prefix.
-    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "scheduler_0/m_start_factor"), 0.0F);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "scheduler_0/m_start_factor"), 0.1F);
     EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "scheduler_0/m_end_factor"), 1.0F);
     EXPECT_EQ(ttml::serialization::get_value_type<int>(state, "scheduler_0/m_total_steps"), 10);
     EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "scheduler_1/m_start_factor"), 1.0F);
@@ -494,7 +565,7 @@ TEST(SequentialSchedulerTest, StateDictSavesAllChildSchedulers) {
     dst.set_state_dict(state);
 
     auto dst_state = dst.get_state_dict();
-    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "scheduler_0/m_start_factor"), 0.0F);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "scheduler_0/m_start_factor"), 0.1F);
     EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "scheduler_0/m_end_factor"), 1.0F);
     EXPECT_EQ(ttml::serialization::get_value_type<int>(dst_state, "scheduler_0/m_total_steps"), 10);
     EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "scheduler_1/m_start_factor"), 1.0F);
@@ -517,7 +588,7 @@ TEST(SequentialSchedulerTest, MismatchedMilestonesRejected) {
 
     auto make_two_schedulers = [&] {
         std::vector<std::unique_ptr<ttml::schedulers::LRSchedulerBase>> v;
-        v.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(opt.get(), 0.0F, 1.0F, 5));
+        v.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(opt.get(), 0.2F, 1.0F, 5));
         v.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(opt.get(), 1.0F, 0.1F, 5));
         return v;
     };
@@ -668,4 +739,102 @@ TEST(LambdaSchedulerTest, BaseLrPersistsWhenResumedOptimizerHasDecayedLr) {
     src.step();
     dst.step();
     EXPECT_FLOAT_EQ(src.get_last_lr(), dst.get_last_lr());
+}
+
+// ----------------------------------
+// Live LR is restored together with scheduler state
+//
+// Scheduler constructors write the construction-time LR to the optimizer, so
+// in the resume order "load optimizer state -> construct scheduler -> load
+// scheduler state" the checkpoint's live LR gets overwritten at construction.
+// set_state_dict must push m_last_lr back to the optimizer or the first
+// resumed optimizer step runs at the wrong LR.
+// ----------------------------------
+TEST(SchedulerLiveLrTest, LiveLrRestoredWhenOptimizerLoadedBeforeSchedulerConstruction) {
+    // Source run: decay a few steps mid-warmup, checkpoint both.
+    ttml::optimizers::MockOptimizer src_opt(1.0F);
+    ttml::schedulers::LinearScheduler src(&src_opt, /*start_factor=*/0.5F, /*end_factor=*/1.0F, /*total_steps=*/10);
+    for (int i = 0; i < 3; ++i) {
+        src.step();
+    }
+    const float live_lr = src_opt.get_lr();
+    auto opt_state = src_opt.get_state_dict();
+    auto sched_state = src.get_state_dict();
+
+    // Resume in the hazardous order: optimizer state FIRST, then scheduler
+    // construction (which overwrites the live LR with base_lr * 0.5)...
+    ttml::optimizers::MockOptimizer dst_opt(1.0F);
+    dst_opt.set_state_dict(opt_state);
+    EXPECT_FLOAT_EQ(dst_opt.get_lr(), live_lr);
+    ttml::schedulers::LinearScheduler dst(&dst_opt, /*start_factor=*/0.5F, /*end_factor=*/1.0F, /*total_steps=*/10);
+    EXPECT_FLOAT_EQ(dst_opt.get_lr(), 0.5F);
+
+    // ...then scheduler state: the live LR must come back BEFORE any step()
+    // call, so the first resumed optimizer step uses it.
+    dst.set_state_dict(sched_state);
+    EXPECT_FLOAT_EQ(dst_opt.get_lr(), live_lr);
+}
+
+TEST(SchedulerLiveLrTest, SequentialRestoresActiveChildsLiveLr) {
+    // Chain: 10-step warmup then 20-step decay; checkpoint 3 steps into the
+    // warmup (child 0 active).
+    auto make = [](ttml::optimizers::MockOptimizer &opt) {
+        std::vector<std::unique_ptr<ttml::schedulers::LRSchedulerBase>> children;
+        children.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(&opt, 0.1F, 1.0F, 10));
+        children.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(&opt, 1.0F, 0.01F, 20));
+        return std::make_unique<ttml::schedulers::SequentialScheduler>(
+            &opt, std::move(children), std::vector<size_t>{10, 20});
+    };
+
+    ttml::optimizers::MockOptimizer src_opt(1.0F);
+    auto src = make(src_opt);
+    for (int i = 0; i < 3; ++i) {
+        src->step();
+    }
+    const float live_lr = src_opt.get_lr();
+    auto state = src->get_state_dict();
+
+    // Restoring child states pushes each child's saved live LR to the
+    // optimizer in turn (the LAST child's would win); the chain must re-apply
+    // the ACTIVE child's live LR afterwards.
+    ttml::optimizers::MockOptimizer dst_opt(1.0F);
+    auto dst = make(dst_opt);
+    dst->set_state_dict(state);
+    EXPECT_FLOAT_EQ(dst_opt.get_lr(), live_lr);
+}
+
+// ----------------------------------
+// Optimizer initial_lr serialization
+// (mirrors PyTorch, where param_group["initial_lr"] rides along in
+// optimizer.state_dict())
+// ----------------------------------
+TEST(OptimizerInitialLrTest, StateDictAlwaysContainsInitialLr) {
+    // Before any scheduler attaches, the base LR is simply the current LR.
+    ttml::optimizers::MockOptimizer optimizer(1.0F);
+    auto state = optimizer.get_state_dict();
+    ASSERT_TRUE(state.contains("initial_lr"));
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "initial_lr"), 1.0F);
+}
+
+TEST(OptimizerInitialLrTest, InitialLrSurvivesOptimizerStateDictRoundTrip) {
+    // Source run: a scheduler attaches (recording initial_lr = 1.0) and the
+    // LR later decays before the checkpoint is taken.
+    ttml::optimizers::MockOptimizer src(1.0F);
+    ttml::schedulers::LinearScheduler src_sched(&src, /*start_factor=*/0.5F, /*end_factor=*/1.0F, /*total_steps=*/10);
+    src.set_lr(0.25F);  // simulate decay before checkpointing
+    auto state = src.get_state_dict();
+    ASSERT_TRUE(state.contains("initial_lr"));
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "initial_lr"), 1.0F);
+
+    // Resume into a fresh optimizer BEFORE any scheduler attaches (the usual
+    // restore order). The decayed LR is restored...
+    ttml::optimizers::MockOptimizer dst(0.999F);
+    dst.set_state_dict(state);
+    EXPECT_FLOAT_EQ(dst.get_lr(), 0.25F);
+
+    // ...and a brand-new scheduler attached afterwards must use the ORIGINAL
+    // base LR from the checkpoint, not the decayed one.
+    EXPECT_FLOAT_EQ(dst.get_initial_lr(), 1.0F);
+    ttml::schedulers::StepScheduler dst_sched(&dst, /*step_size=*/10, /*gamma=*/0.1F);
+    EXPECT_FLOAT_EQ(dst.get_lr(), 1.0F);
 }

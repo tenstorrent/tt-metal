@@ -28,7 +28,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_qv = 1;  // cb for Q, V heads
 
     constexpr uint32_t onetile = 1;
-    const DataFormat data_format = get_dataformat(cb_id_qv);
 
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
 

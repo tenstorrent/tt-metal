@@ -80,7 +80,7 @@ inline std::vector<ShardedHeightPerCoreArgs> get_pad_runtime_args_rm_sharded(
     uint32_t shard_height_padded,
     uint32_t shard_height_unpadded,
     const std::vector<CoreCoord>& unpadded_cores) {
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
@@ -255,8 +255,6 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat dst_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    IDevice* device = a.device();
-
     // input shard spec
     auto shard_spec_unpadded = a.shard_spec().value();
     uint32_t shard_height_unpadded = shard_spec_unpadded.shape[0];
@@ -378,7 +376,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
                 {"num_sticks_padded", shard_height_padded},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_cores_read"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = num_reader_varargs},
     };
 
@@ -431,7 +429,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
                      "start_dim_offset_c",
                      "start_dim_offset_n"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     KernelRunArgs reader_run_args{.kernel = SH_H_READER};

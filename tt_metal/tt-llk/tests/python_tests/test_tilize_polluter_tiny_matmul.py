@@ -17,12 +17,16 @@ regular-tilize state; `_llk_unpack_tilize_uninit_` then restores the baseline (g
 Because the tiny-matmul run re-runs `_llk_unpack_hw_configure_` for its operands, this
 primarily validates that the regular-tilize -> uninit -> tiny-matmul SEQUENCE produces a
 correct result; `do_restore=False` is the negative control.
+
+The Blackhole mixed-width (input and output format differ) `dest_acc=Yes` cases are the
+silicon reproducer for the packer drain in `configure_pack`: run 1 calls
+`_llk_pack_hw_configure_` straight after run 0's pack, and without the drain they hang the
+Tensix. Keep them in the sweep.
 """
 
 from dataclasses import dataclass
 
 import torch
-from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import (
@@ -99,7 +103,6 @@ def _tiny_matmul_layout(in0_tile_r_dim: int):
     return tile_dims, face
 
 
-@skip_for_blackhole
 @parametrize(
     formats=input_output_formats(
         [
