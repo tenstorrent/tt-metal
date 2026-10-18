@@ -123,12 +123,17 @@ ALWI void dummy_unpack(std::uint32_t cb_id) { UNPACK((llk_unpack_dummy(cb_id)));
  * */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
+ALWI void copy_tile(
+    std::uint32_t in_cb_id,
+    std::uint32_t in_tile_index,
+    std::uint32_t dst_tile_index,
+    std::uint32_t transpose = 0,
+    std::uint32_t transpose_within_16x16_face = false) {
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
     reconfig_data_format_srca(in_cb_id);
-    copy_init<is_fp32_dest_acc_en>(in_cb_id);
+    copy_init<is_fp32_dest_acc_en>(in_cb_id, transpose, transpose_within_16x16_face);
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(

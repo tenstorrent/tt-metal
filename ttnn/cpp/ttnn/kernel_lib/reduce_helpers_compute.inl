@@ -246,7 +246,12 @@ ALWI void reload_accumulator_if_needed(
                 /*transpose_of_faces=*/0,
                 /*transpose_within_16x16_face=*/reload_within_face_transpose ? 1u : 0u);
             for (uint32_t tile = 0; tile < dest_chunk_size; ++tile) {
-                copy_tile(accumulate.config.cb_accumulator, tile, accumulate.config.dst_index + tile);
+                copy_tile(
+                    accumulate.config.cb_accumulator,
+                    tile,
+                    accumulate.config.dst_index + tile,
+                    /*transpose_of_faces=*/0,
+                    /*transpose_within_16x16_face=*/reload_within_face_transpose ? 1u : 0u);
             }
             accum_dfb.pop_front(dest_chunk_size);
 

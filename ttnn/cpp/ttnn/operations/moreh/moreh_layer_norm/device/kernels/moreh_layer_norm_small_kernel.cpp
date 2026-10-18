@@ -195,7 +195,7 @@ void kernel_main() {
             dfb_mean_obj.reserve_back(onetile);
 
             copy_tile_init_with_dt(dfb_ex_obj, is_lastdim_layernorm);
-            copy_tile(cb_ex, first_tile, dst0);
+            copy_tile(cb_ex, first_tile, dst0, is_lastdim_layernorm);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -341,7 +341,7 @@ void kernel_main() {
             dfb_rstd_obj.reserve_back(onetile);
 
             copy_tile_init_with_dt(dfb_recip_std_obj, is_lastdim_layernorm);
-            copy_tile(cb_recip_std, first_tile, dst0);
+            copy_tile(cb_recip_std, first_tile, dst0, is_lastdim_layernorm);
             tile_regs_commit();
 
             tile_regs_wait();
