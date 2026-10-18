@@ -126,6 +126,8 @@ class DeepseekV41ForCausalLM:
         self.prefill_traced = False
         spec = os.environ.get(TRACE_PREFILL_LENGTHS, "").strip()
         self.trace_lengths = sorted({int(x) for x in spec.split(",") if x.strip()})
+        # with the generic trace, lengths past one chunk get their final chunk captured (generic in its start)
+        # instead of a per-length capture of every chunk
         self.trace_on_miss = os.environ.get(TRACE_PREFILL_ON_MISS, "0") == "1"
         bad = [n for n in self.trace_lengths if n + ROWS > model.max_seq_len or n < C.SLIDING_WINDOW]
         assert not bad, f"{TRACE_PREFILL_LENGTHS} {bad}: outside [{C.SLIDING_WINDOW}, max_seq_len - {ROWS}]"
@@ -283,8 +285,12 @@ class DeepseekV41ForCausalLM:
                 logger.info(f"DeepSeek-V4.1-Flash: prefill of {n} tokens captured in {time.time() - t0:.1f} s")
                 t0 = time.time()
             generic = self.generic_traces.get(id(state)) if trace is None and n - start > 0 else None
-            if generic is not None and n - start <= self.model.chunk and n % self.model.chunk:
-                generic = None  # one partial chunk: eager either way
+            if (
+                generic is not None
+                and n - start <= self.model.chunk
+                and generic.key_of(start // self.model.chunk, n) is None
+            ):
+                generic = None  # one chunk without a capture: eager either way
             if trace is not None:
                 logits, _ = trace.run(prompt)
                 mode = "replay"
@@ -398,7 +404,10 @@ class DeepseekV41ForCausalLM:
             logger.info(
                 f"DeepSeek-V4.1-Flash warm-up: {len(self.decoder.join_traces)} joins captured in {time.time() - t0:.1f} s"
             )
+            chunk = self.model.chunk
             for n in self.trace_lengths:
+                if self.generic and n > chunk:
+                    continue  # the generic captures below serve it (its final chunk captured per length)
                 for state in self.prefill_states:
                     t0 = time.time()
                     self._capture_prefill(state, n)
@@ -410,9 +419,15 @@ class DeepseekV41ForCausalLM:
                     t0 = time.time()
                     trace = V41GenericPrefillTrace(self.model, state, self.prefill_buffers, warmup=2 if k == 0 else 1)
                     self.generic_traces[id(state)] = trace
+                    # the final chunks of the listed prompt lengths (a partial chunk's capture is exact in its
+                    # valid length, generic in its start within the bucket)
+                    for n in self.trace_lengths:
+                        if n > chunk and trace.final_key(n)[0] is not None:
+                            trace.capture_final(n)
                     logger.info(
                         f"DeepSeek-V4.1-Flash warm-up: generic prefill of state {k} captured in {time.time() - t0:.1f} s"
-                        f" ({len(trace.controllers)} buckets {sorted(trace.captured_at)}, {trace.num_segments} segments)"
+                        f" ({len(trace.controllers)} captures {sorted(map(str, trace.captured_at))}, "
+                        f"{trace.num_segments} segments)"
                     )
             self.prefill_traced = True
             return

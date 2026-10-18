@@ -224,10 +224,12 @@ def test_v41_prefill_generic(mesh_device, device_params, monkeypatch):
     # (b) the bucket captures and their replays
     t0 = time.time()
     trace = V41GenericPrefillTrace(model, gstate, {})
+    if trace.final_key(total)[0] is not None:  # the prompt's partial final chunk, captured too (bead: every chunk)
+        trace.capture_final(total)
     capture_s = time.time() - t0
     report |= {
         "capture_s": round(capture_s, 1),
-        "captured_at": trace.captured_at,
+        "captured_at": {str(k): v for k, v in trace.captured_at.items()},
         "captures": len(trace.controllers),
         "trace_segments": trace.num_segments,
         "trace_bytes": _trace_bytes(mesh_device),
@@ -243,7 +245,7 @@ def test_v41_prefill_generic(mesh_device, device_params, monkeypatch):
         logger.info(f"generic prefill: traced run of prompt {i} {s:.3f} s {trace.last}")
     # device-only time of each bucket's capture: replays issued back to back, synchronized once (no host work)
     device_only = {}
-    for key, controller in sorted(trace.controllers.items()):
+    for key, controller in sorted(trace.controllers.items(), key=lambda kv: str(kv[0])):
         ttnn.synchronize_device(mesh_device)
         t0 = time.time()
         for _ in range(5):
@@ -252,7 +254,7 @@ def test_v41_prefill_generic(mesh_device, device_params, monkeypatch):
         device_only[str(key)] = round((time.time() - t0) / 5, 4)
     # and the host's issue time of one replay (the segments' execute_trace calls and manager switches), alone
     ttnn.synchronize_device(mesh_device)
-    key = max(trace.controllers)
+    key = max(k for k in trace.controllers if isinstance(k, int))
     t0 = time.time()
     trace.controllers[key].replay(blocking=False)
     issue_s = time.time() - t0

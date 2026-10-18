@@ -639,37 +639,64 @@ class V41GenericPrefillTrace:
         assert model.dspark is None, "generic prefill does not seed DSpark rings"
         self.model, self.state, self.chunk = model, state, model.chunk
         self.buffers = {} if buffers is None else buffers
-        self.controllers: dict[int, SubDeviceTraceController] = {}
-        self.scored: dict[int, list] = {}  # per capture: the last row's device logits (fixed addresses)
+        self.controllers: dict = {}  # bucket (full chunks) or (bucket, valid length) (final chunks) -> capture
+        self.scored: dict = {}  # per capture: the last valid row's device logits (fixed addresses)
+        self.carry_after: dict = {}  # per final capture: the compressor-carry host state its replay leaves
         self.tokens = torch.randint(1, model.config.VOCAB_SIZE, (self.chunk,), dtype=torch.int64)
-        self.captured_at: dict[int, int] = {}
+        self.captured_at: dict = {}
+        self.warmup = warmup
         for key in [0] + list(state.tables.buckets):
             # the last full chunk (at a chunk boundary, not chunk 0) whose visible count falls in the bucket
             start = 0 if key == 0 else (key - self.chunk) // self.chunk * self.chunk
             if key and (start < self.chunk or state.tables.bucket(start, self.chunk) != key):
                 continue  # no full chunk after chunk 0 falls in this bucket
-            t0 = time.perf_counter()
-            for _ in range(warmup):
-                self._one_chunk(start, lambda forward: forward())
-            self.scored[key] = self._one_chunk(start, self._capture(key))
-            self.captured_at[key] = start
-            logger.info(
-                f"generic prefill: bucket {key} captured at chunk start {start} in {time.perf_counter() - t0:.1f} s "
-                f"({self.controllers[key].num_segments} segments)"
-            )
+            self._capture_at(key, start, self.chunk)
         self.last: dict = {}
 
-    def _one_chunk(self, start: int, step: Callable):
-        """Run one full non-final chunk of synthetic tokens at ``start`` through the state: ``step(forward)``."""
+    def _capture_at(self, key, start: int, length: int) -> None:
+        """Warm up and capture the chunk at ``start`` with ``length`` valid tokens under ``key``."""
+        t0 = time.perf_counter()
+        for _ in range(self.warmup):
+            self._one_chunk(start, length, lambda forward: forward())
+        self.scored[key] = self._one_chunk(start, length, self._capture(key))
+        self.captured_at[key] = start
+        self.carry_after[key] = dict(self.state.compressor_carry)
+        logger.info(
+            f"generic prefill: {key} captured at chunk start {start} ({length} tokens) in "
+            f"{time.perf_counter() - t0:.1f} s ({self.controllers[key].num_segments} segments)"
+        )
+
+    def final_key(self, total: int):
+        """The key of the final-chunk capture a prompt of ``total`` tokens would replay (a partial final chunk, or
+        a full one: the full-chunk capture serves that), and that chunk's start."""
+        start = (total - 1) // self.chunk * self.chunk
+        length = total - start
+        if length == self.chunk or start == 0:
+            return None, start
+        return (self.state.tables.bucket(start, length), length), start
+
+    def capture_final(self, total: int) -> None:
+        """Capture the final chunk of prompts of ``total`` tokens (``total`` past the first chunk, not a multiple
+        of it): generic in the chunk's start within its bucket, exact in its valid length (which sets the rows
+        the chunk writes, the carry and the scored row). Replayed for every prompt whose final chunk has that
+        bucket and length."""
+        key, start = self.final_key(total)
+        assert key is not None, f"{total} tokens: the final chunk is a full chunk, or the only chunk"
+        if key not in self.controllers:
+            self._capture_at(key, start, key[1])
+
+    def _one_chunk(self, start: int, length: int, step: Callable):
+        """Run one chunk of ``length`` synthetic tokens at ``start`` (a full chunk, or a partial final one) through
+        the state: ``step(forward)``; the chunk's last valid row is scored."""
         model, state = self.model, self.state
         model.reset_state(state)
         state.start = start
-        request = _Request(self.tokens, self.chunk - 1, None, None)  # the chunk's last row scored
+        request = _Request(self.tokens[:length], length - 1, None, None)  # the chunk's last valid row scored
         host = next(model._host_chunks(request))
         host = _HostChunk(start, host.length, host.token_ids, host.engram, host.types)
         token_ids, engram_inputs = model._stage(host, self.buffers)
-        state.tables.prepare_chunk(start, self.chunk)
-        first_scored = start + self.chunk - 1
+        state.tables.prepare_chunk(start, length)
+        first_scored = start + length - 1
         out = step(lambda: model._chunk_forward(state, host, token_ids, engram_inputs, None, None, first_scored, None))
         ttnn.synchronize_device(model.mesh_device)
         return out
@@ -697,13 +724,17 @@ class V41GenericPrefillTrace:
     def num_segments(self) -> int:
         return sum(c.num_segments for c in self.controllers.values())
 
-    def key_of(self, c: int, total: int, logit_positions: int = 1) -> int | None:
-        """The capture a prompt of ``total`` tokens replays for chunk ``c``: 0, a bucket, or None (untraced: a
-        partial final chunk, or the final chunk when more than its last row is scored)."""
+    def key_of(self, c: int, total: int, logit_positions: int = 1):
+        """The capture a prompt of ``total`` tokens replays for chunk ``c``: 0, a bucket, a (bucket, length) of a
+        final chunk, or None (untraced: a final chunk without a capture, or one scoring more than its last row)."""
         start = c * self.chunk
-        if start + self.chunk > total or (start + self.chunk == total and logit_positions != 1):
+        final = start + self.chunk >= total
+        if final and logit_positions != 1:
             return None
-        key = 0 if c == 0 else self.state.tables.bucket(start, self.chunk)
+        if start + self.chunk > total:  # a partial final chunk
+            key, _ = self.final_key(total)
+        else:
+            key = 0 if c == 0 else self.state.tables.bucket(start, self.chunk)
         return key if key in self.controllers else None
 
     def run(self, tokens: torch.Tensor, logit_positions: int = 1, start: int = 0):
@@ -725,7 +756,10 @@ class V41GenericPrefillTrace:
                 return forward()
             self.last["replayed"] += 1
             self.controllers[key].replay(blocking=False)
-            return self.scored[key] if (c + 1) * self.chunk == total else []
+            if (c + 1) * self.chunk >= total:  # the final chunk: its logits, and the carry its replay leaves
+                state.compressor_carry.update(self.carry_after[key])
+                return self.scored[key]
+            return []
 
         scored = model._run(request, state, self.buffers, step, timings=self.last, start=start)
         t0 = time.perf_counter()
