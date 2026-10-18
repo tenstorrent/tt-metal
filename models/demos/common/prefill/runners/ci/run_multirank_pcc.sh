@@ -65,6 +65,11 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/glm53.json"
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+    # EXPERIMENT: with the indexer top-k carried across boundaries (#58151) a rank may start on a shared
+    # layer, so sc4 can move one full layer from rank 2 to the lighter rank 0.
+    if [ "${CONFIG}" = sc4 ]; then
+        RUNNER_ENV="${RUNNER_ENV} export PREFILL_PP_LAYER_COUNTS=19,20,19,20;"
+    fi
     PCC_THRESHOLD=0.83
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
