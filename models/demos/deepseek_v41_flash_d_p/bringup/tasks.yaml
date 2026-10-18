@@ -9187,7 +9187,7 @@ tasks:
   step: perf
   role: perf
   deps:
-  - P.4
+  - P.3
   device: true
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
@@ -9234,6 +9234,7 @@ tasks:
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
   deps:
+  - P.4
   - P.5
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
