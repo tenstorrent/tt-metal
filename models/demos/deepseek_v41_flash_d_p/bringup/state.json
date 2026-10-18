@@ -6901,6 +6901,434 @@
   "status": "PASS",
   "waiting": null
  },
+ "P.3": {
+  "ab": {
+   "at": "2026-10-18T08:09:59",
+   "by": "dnijemcevic",
+   "changed": [
+    "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.3.perf.1.json",
+    "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+    "ttnn/ttnn/bringup/flat_routed_expert_ttnn/CHANGELOG.md"
+   ],
+   "decided": "2026-10-18T10:10:37",
+   "decision": "accept",
+   "env": {
+    "DS41_EXPERTS_KERNEL": "unified"
+   },
+   "gate_on": {
+    "failing": [],
+    "ok": true
+   },
+   "key": "a66e6c472a203049",
+   "ladder": {
+    "last": {
+     "new": {
+      "min layer": "L03",
+      "min layer PCC": 0.9968118905390597,
+      "rc": 0
+     },
+     "old": {
+      "min layer": "L03",
+      "min layer PCC": 0.9968118905390597,
+      "rc": 0
+     }
+    },
+    "s55296": {
+     "new": {
+      "min layer": "L03",
+      "min layer PCC": 0.9966064152120209,
+      "rc": 0
+     },
+     "old": {
+      "min layer": "L03",
+      "min layer PCC": 0.9966064152120209,
+      "rc": 0
+     }
+    }
+   },
+   "note": "overseer under owner delegation (exact, fastest wins): Marko's flat expert 149.3 vs unified 176.8 ms experts per chunk, device 652.0 vs 679.5 ms, ladder identical (0.9966 at s55296), 16 frozen expert tests pass",
+   "on": {
+    "DS41_EXPERTS_KERNEL": "flat"
+   },
+   "profile": {
+    "new": {
+     "device_ms_experts": 149.29,
+     "device_ms_total": 652.05,
+     "pcc_chunk_out": 0.9998086319792844,
+     "rc": 0
+    },
+    "old": {
+     "device_ms_experts": 176.81,
+     "device_ms_total": 679.5,
+     "pcc_chunk_out": 0.9998086319792844,
+     "rc": 0
+    }
+   },
+   "rungs": [
+    "last",
+    "s55296"
+   ],
+   "table": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/ab/P.3/table.md",
+   "tests": {
+    "test_c_${t}_experts": {
+     "new": {
+      "checks": [],
+      "rc": 0
+     },
+     "old": {
+      "checks": [],
+      "rc": 0
+     }
+    },
+    "test_swap_${t}_experts": {
+     "new": {
+      "checks": [
+       "FAIL swap_ffn_hc vs the CPU step on the same inputs: rel=0.000195 (<= 0.00015, component error 0.00230) row=0.000354 ratio=[1.00002, 1.00015] bias=+0.000077 own-floor row=9.21 col=3.6 bias=60.1 (rel 0.00020 > 0.00015; median row norm ratio off by +0.00008 (limit 0.00007))"
+      ],
+      "rc": 0
+     },
+     "old": {
+      "checks": [
+       "FAIL swap_ffn_hc vs the CPU step on the same inputs: rel=0.000195 (<= 0.00015, component error 0.00230) row=0.000354 ratio=[1.00002, 1.00015] bias=+0.000077 own-floor row=9.21 col=3.6 bias=60.1 (rel 0.00020 > 0.00015; median row norm ratio off by +0.00008 (limit 0.00007))"
+      ],
+      "rc": 0
+     }
+    }
+   },
+   "why": "apply P.3 or not? A/B table at /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/ab/P.3/table.md; the gate with the change on would PASS; then: python -m models.demos.common.bringup.orchestrator decide --task P.3 --accept|--reject --spec /localdev/dnijemcevic/tt-metal2/models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml, and resume"
+  },
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "f7a0752de548f2dc735d5fbb6ce21b8225c9d575",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "017ee34082ef63614ec88eaf407a57c1d26fec70",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "f8198e9f-4710-4ab7-ba33-e02fecf12fa7"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/P.3.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "f7a0752de548f2dc735d5fbb6ce21b8225c9d575",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "017ee34082ef63614ec88eaf407a57c1d26fec70",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/P.3.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:61: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:87: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:265: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:276: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:277: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:279: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:308: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:328: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:363: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:364: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:395: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:411: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:442: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:502: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:505: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:515: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:524: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:530: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:541: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:567: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:574: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:584: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:678: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:686: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:693: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:765: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:770: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:793: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:872: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:924: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:929: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:933: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:974: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:1037: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:1057: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:1082: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:1117: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:1148: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:1151: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:1156: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:1161: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:1172: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp:1202: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:76: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:107: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:152: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:160: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:208: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:223: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:226: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:231: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:242: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:246: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:263: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:265: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:268: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:271: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:274: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:277: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:280: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:286: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:287: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:288: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:308: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:314: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:317: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:320: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:325: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:410: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:420: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:465: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:468: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:471: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:474: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:578: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:583: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:758: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:769: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:772: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:775: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:780: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:781: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:783: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:786: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:790: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:804: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:807: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:846: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:862: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:865: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:910: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:1065: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:1090: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:1190: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:1196: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:1222: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp:1386: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:51: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:57: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:84: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:89: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:90: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:91: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:92: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:93: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:95: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:96: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:97: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:98: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:102: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:103: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:104: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:105: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:108: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:110: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:112: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:113: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:114: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:115: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:118: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:119: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:120: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:123: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:124: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:133: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:140: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:149: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:150: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:151: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:157: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:179: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:190: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:191: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:220: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:222: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:378: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:578: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:631: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:633: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:637: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:641: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:643: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:648: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:665: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:703: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:722: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:744: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:761: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:836: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:932: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1010: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1204: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1222: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1238: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1239: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1242: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1312: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1313: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1314: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1333: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1401: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1431: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1432: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1460: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1504: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1557: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1568: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1585: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1639: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1647: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1648: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py:1661: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)",
+     "settings: ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_routed_expert.cpp:241: a fork reads the environment; take it as an op argument (or mark a pure diagnostic knob `diagnostic` on that line)"
+    ],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 7309.8,
+    "session_id": "00ae635c-9395-4823-92d6-edd6c8dfbeee",
+    "t": "2026-10-18T07:51:48"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 2,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/P.3.perf.2.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "f7a0752de548f2dc735d5fbb6ce21b8225c9d575",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "017ee34082ef63614ec88eaf407a57c1d26fec70",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": [
+     "no knowledge report P.3.perf.2.json"
+    ],
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/P.3.perf.2.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [
+     "aborted by the overseer: the settings lint flagged 173 environment reads that are the imported fork's own pre-existing tuning knobs (Marko's MIMO_FL_*), not this task's; converting them is out of scope; the framework lint is being fixed to judge only lines the task adds"
+    ],
+    "rc": 143,
+    "role": "perf",
+    "seconds": 36.2,
+    "session_id": "8d2f219e-4ade-4049-9a02-2209fe34124d",
+    "t": "2026-10-18T07:52:26"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/P.3.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "f7a0752de548f2dc735d5fbb6ce21b8225c9d575",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "017ee34082ef63614ec88eaf407a57c1d26fec70",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/P.3.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 755.7,
+    "session_id": "f8198e9f-4710-4ab7-ba33-e02fecf12fa7",
+    "t": "2026-10-18T08:09:59"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 0.0,
+  "history": [
+   {
+    "status": "ABORTED",
+    "t": "2026-10-18T07:52:26",
+    "why": "the settings lint flagged 173 environment reads that are the imported fork's own pre-existing tuning knobs (Marko's MIMO_FL_*), not this task's; converting them is out of scope; the framework lint is being fixed to judge only lines the task adds"
+   },
+   {
+    "attempt": 3,
+    "from": "RUNNING",
+    "role": "perf",
+    "status": "RESUMED",
+    "t": "2026-10-18T07:57:19"
+   },
+   {
+    "s": 0.0,
+    "status": "PASS",
+    "t": "2026-10-18T10:10:55"
+   }
+  ],
+  "last_run": "2026-10-18T10:10:55",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/P.3.log",
+  "metrics": {
+   "device_ms_experts": 149.29,
+   "host_transfers_per_layer": 0,
+   "pcc_layer_L00": 0.9998096962571833,
+   "pcc_layer_L01": 0.9995432249500419,
+   "pcc_layer_L02": 0.998647640915454,
+   "pcc_layer_L03": 0.9968118905390597,
+   "pcc_layer_L14": 0.9977270249068632,
+   "pcc_layer_L20": 0.9997245393441603,
+   "pcc_layer_L21": 0.9981701072020613,
+   "pcc_layer_L24": 0.9998086319792844,
+   "pcc_state_min": 0.9976656221708882
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "started": "2026-10-18T10:10:55",
+  "status": "PASS",
+  "waiting": null
+ },
  "PL.0": {
   "attempts": 0,
   "duration_s": 10.5,

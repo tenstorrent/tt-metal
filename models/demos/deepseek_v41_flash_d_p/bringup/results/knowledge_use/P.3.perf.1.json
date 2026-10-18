@@ -1,0 +1,118 @@
+{
+ "overseer": [
+  {
+   "id": "OV-15",
+   "answer": "done",
+   "evidence": "no MIMO_FL_* / FLAT_CMB_LOG knob converted, removed or marked; git diff of the fork adds no os.environ / getenv read beyond the import"
+  },
+  {
+   "id": "OV-16",
+   "answer": "done",
+   "evidence": "attempt-1 work kept, not redone; EXPERTS_KERNEL default back to unified (tt/settings.py; DS41_EXPERTS_KERNEL=flat selects flat); fork unit suite options off 19 passed / 13 failed vs 18 / 14 at 9003c0fd2ca, failures all pre-existing (12 tp2/tp4 p.nsg == 1, MiMo indexed_perf band fast 1710341 < 1720090 ns); GLM case tests/test_flat_bench.py (glm53flash) PASS; CHANGELOG regression line, repo_map row, BREADCRUMBS updated, DS41-63 added"
+  }
+ ],
+ "used": [
+  {
+   "id": "DS41-35",
+   "how": "the flat op takes the stored [N, K] matrices laid out tile-transposed (weights_nk) and transposes in1 in its matmuls, so bfp8 groups run along K and stay exact; _load_block's _bfp8_exact on [N, K] covers the same 16-value groups, so the op's own load-time check is off",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-23",
+   "how": "the routing weight still travels as three bf16 pieces in the dispatched row; _routing_rows sums them by one selector matmul into the op's Float32 routing_weights [rows, 32]",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-16",
+   "how": "the selector matmul is exact by one product per tile-dot; the fork's exactness test uses selection gate / up weights (one power of two per output) so the device GEMMs are exact",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-60",
+   "how": "test_ds41_h_options.py (flat fork) checks the in-kernel quant bit for bit on exact GEMMs (identity down), negative controls incl. per-half scales",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-59",
+   "how": "the flat SFPU steps (se_rh.hpp) keep unified's two-pass structure: h *= r first for every h tile, then the quant with s / 1/s parked in the consumed weight tile",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-58",
+   "how": "the routing-weight tile and the exchanged fp32 halves unpack straight into the fp32 DEST (UnpackToDestFp32), never through SrcA at TF32",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-30",
+   "how": "same as DS41-58: Float32 tiles for the weight and the split-tile halves bypass SrcA",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-13",
+   "how": "rh_quant reproduces tt/quant.fp8_qdq's arithmetic (clamp 1e-4, fp32(1/448), ue8m0 from the bits, e4m3 RNE on the integer bits, subnormal step 2^-9)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-2",
+   "how": "counts / region offsets passed as the global [1, E] rows; local expert ids from the per-device gidx table",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "every frozen test, profile and fork test run with --no-precompile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD on every run",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "deleted the tt-probe directory (flat_plan_probe) the planner probe wrote into the tests tree",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "flat_routed_expert's plan with bfp8 weights + bf16 x on a p150 (11 x 10): only 16-column units, 3 a core, fit the gate/up L1, so per-32 h quantization meets split tiles (now DS41-61)",
+  "how much of a layer's experts time the fused op is (op 3.8 of 17.4 ms; the chain around it dominates): a synced kernel-part timer in tt/perf_experts.py answers it without the per-op profile (now DS41-62)",
+  "a plain profile of this model takes 8-9.5 min, close to the 10-minute foreground tool limit",
+  "which of the flat fork's unit-suite failures are pre-existing on a p150 2x2 (now DS41-63), and that GLM-5.3's experts_ag never builds on 2x2 (72 experts a chip > 64), so its fork case is the bench"
+ ],
+ "cited_only": [
+  "DS41-62",
+  "DS41-63",
+  "GLM-5"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.3",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-18T08:09:58",
+  "head": "7e92fd7a4a4",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.3.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/CHANGELOG.md"
+  ]
+ }
+}

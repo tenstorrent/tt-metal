@@ -34,6 +34,12 @@ constexpr uint32_t DATA = 4, HARR = 5, GO = 6, DONE = 7, GATH = 8, XARR = 9, SFR
 constexpr uint32_t GATH3 = 3;
 // DRISC mode: the gate/up cores' grant counter (polled by their DRISC sender; id 1 is otherwise unused on them)
 constexpr uint32_t GRANT = 1;
+// fp8_act_quant on odd 16-column units: the partner-half ring on the gate/up cores, arrivals (on the receiving core)
+// and frees (on the sending one); ids 2 / 3 are free on gate/up cores (they count relays 2 / 1 only with MIMO_FL_X2)
+constexpr uint32_t RH_XARR = 2, RH_XFREE = 3;
+// the h options' CBs on the gate/up cores (arena, Float32 tiles): routing-weight tiles, the own half, the partner's
+// half, the half sent
+constexpr uint32_t RH_RW_CB = 8, RH_HOWN_CB = 10, RH_XIN_CB = 11, RH_XOUT_CB = 12;
 constexpr const char* KDIR = "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/kernels/";
 
 // A runtime-arg list whose buffer-address words are recorded for the cache-hit patch.
@@ -183,6 +189,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     dn_reg = dn_reg && (!p.rdown || p.ring_dr == nreg_gu * p.nblk_r);
     Defines dyn_def = {
         {"SE_DYN", "1"}, {"SE_DYN_HALF", std::to_string(dyn_half)}, {"SE_META_BYTES", std::to_string(meta_bytes)}};
+    if (cfg.weights_nk) {  // [N, K] weight tiles: every weight matmul transposes its in1 tile (se_meta.hpp SE_WT)
+        dyn_def["SE_W_NK"] = "1";
+    }
     for (const auto& [k, v] : flat_schedule_defines(cfg, p)) {  // (SE_RPS, SE_MAX_E, SE_GU_NREG, pinning)
         dyn_def[k] = v;
     }
@@ -355,10 +364,19 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                   const std::vector<uint32_t>& ct,
                   const Defines& defs,
                   bool fp32 = false,
-                  bool full_sync = false) {
+                  bool full_sync = false,
+                  const std::vector<uint32_t>& fp32_unpack_cbs = {}) {
         Defines d = defs;
         if (cfg.pack_stochastic_rounding) {
             d["SE_PACK_SRND"] = "1";
+        }
+        // (CBs unpacked straight into the fp32 DEST: the h options' Float32 tiles, exact)
+        std::vector<UnpackToDestMode> utd;
+        if (!fp32_unpack_cbs.empty()) {
+            utd.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+            for (const uint32_t cb : fp32_unpack_cbs) {
+                utd[cb] = UnpackToDestMode::UnpackToDestFp32;
+            }
         }
         const KernelHandle k = CreateKernel(
             program,
@@ -368,6 +386,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 .math_fidelity = expert_fidelity(cfg.math_fidelity),
                 .fp32_dest_acc_en = fp32,
                 .dst_full_sync_en = full_sync,
+                .unpack_to_dest_mode = utd,
                 .compile_args = ct,
                 .defines = d});
         krec.push_back({k, name, cores, ct, d, 2});
@@ -720,8 +739,10 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // the relay reads x in segments of sbt x 32 bf16 (one super-block row): a segment must not straddle two x
         // pages (they sit in different banks), so the page is a multiple of the segment or divides it
         const uint32_t x_page_bytes = t.x.logical_shape()[-1] * 2, seg_bytes = p.sbt * 64;
+        // (x rows wider than H: one page per row, its first H values read in whole segments)
+        const bool x_wide = t.x.logical_shape()[-1] > p.H;
         TT_FATAL(
-            x_page_bytes % seg_bytes == 0 || seg_bytes % x_page_bytes == 0,
+            x_wide ? (p.H * 2) % seg_bytes == 0 : (x_page_bytes % seg_bytes == 0 || seg_bytes % x_page_bytes == 0),
             "flat_routed_expert: x page of {} B (hidden {} / x_pages_per_row {}) must be a multiple or a divisor of "
             "the "
             "{} B read segment",
@@ -793,7 +814,15 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             ((xhelp_noc0 || xhelp_all) && helper ? xrel_h : xrel_p).push_back(c);
         }
         const std::vector<uint32_t> xrd_ct = {
-            0, t.x.logical_shape()[-1] * 2, E, MT, p.nsb, S, xrd_batch, idx_arg, p.H / t.x.logical_shape()[-1]};
+            0,
+            t.x.logical_shape()[-1] * 2,
+            E,
+            MT,
+            p.nsb,
+            S,
+            xrd_batch,
+            idx_arg,
+            t.x.logical_shape()[-1] > p.H ? 1u : p.H / t.x.logical_shape()[-1]};
         const auto kxr =
             dm("se11_xrd.cpp",
                xrel_p,
@@ -979,6 +1008,37 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             recv_def["SE_X_RELAY2"] = std::to_string(p.sbt / KBLK);
             recv_def["SE_X_NRELAY"] = "2";
         }
+        // h options (cfg.routed_weight / fp8_act_quant): the receivers fetch each sub-block's routing-weight tile and,
+        // with fp8_act_quant on odd 16-column units, pass split h tiles' halves between partner cores (RT from RH_RT:
+        // partner xy, routing weights address, staging tile, role 1 sends / 2 receives, the partner-half ring)
+        const bool rh = p.routed;
+        const bool rh_x = cfg.fp8_act_quant && p.nu % 2 == 1;
+        const uint32_t rh_rt = 21 + static_cast<uint32_t>(head_xy_sg[0].size() + dyn.v.size() + sgx(0).size());
+        constexpr uint32_t T4K = 4096;
+        // (the arena's h-option region: routing-weight CB, staging tile, own-half CB, partner-half ring, sent-half CB)
+        const uint32_t rh_stage = p.rh_off + 2 * T4K, rh_xin = p.rh_off + 5 * T4K;
+        if (rh) {
+            TT_FATAL(!x_two, "flat_routed_expert: the h options take one x stream (semaphores 2 / 3)");
+            if (cfg.routed_weight) {
+                recv_def["SE_RH_W"] = "1";
+            }
+            if (rh_x) {
+                recv_def["SE_RH_X"] = "1";
+            }
+            recv_def["SE_RH_RT"] = std::to_string(rh_rt);
+            recv_def["SE_RH_XD"] = std::to_string(kRhXd);
+            recv_def["SE_RH_XARR"] = std::to_string(RH_XARR);
+            recv_def["SE_RH_XFREE"] = std::to_string(RH_XFREE);
+            recv_def["SE_RH_RW_CB"] = std::to_string(RH_RW_CB);
+            recv_def["SE_RH_XIN_CB"] = std::to_string(RH_XIN_CB);
+            recv_def["SE_RH_XOUT_CB"] = std::to_string(RH_XOUT_CB);
+        }
+        std::map<uint32_t, CoreCoord> core_of_cg;  // column group -> its gate/up core (the h options' partners)
+        for (uint32_t r = 0; r < n_rd; ++r) {
+            for (uint32_t j = 0; j < p.r_of(r); ++j) {
+                core_of_cg[(p.ps0.empty() ? (r % p.n_rd_sg) * p.rg : p.ps0[r]) + j / G] = p.gu[p.gu_at(r, j)];
+            }
+        }
         std::vector<CoreCoord> gu_t, gu_d;
         for (uint32_t ci = 0; ci < ngu; ++ci) {
             (!p.uneven && p.drisc_slot(ci / p.r_) ? gu_d : gu_t).push_back(p.gu[ci]);
@@ -1030,13 +1090,33 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         if (std::getenv("MIMO_FL_NO_ACT")) {  // probe: no gate/up activation (wrong h), the bare matmul + pack
             cdef["SE_NO_ACT"] = "1";
         }
+        std::vector<uint32_t> rh_fp32_cbs;
+        if (rh) {  // (one 32-row pass, the weight tile / quantizer scratch in DEST tile gwt; RT 1 / 2 lead / tail)
+            TT_FATAL(!gu_rp && !gu_full_sync && MT == 1 && G == 1, "flat_routed_expert: h options plan");
+            if (cfg.routed_weight) {
+                cdef["SE_RH_W"] = "1";
+            }
+            if (cfg.fp8_act_quant) {
+                cdef["SE_RH_Q"] = "1";
+            }
+            if (rh_x) {
+                cdef["SE_RH_X"] = "1";
+            }
+            cdef["SE_RH_WS"] = std::to_string(p.gwt);
+            cdef["SE_RH_RW_CB"] = std::to_string(RH_RW_CB);
+            cdef["SE_RH_HOWN_CB"] = std::to_string(RH_HOWN_CB);
+            cdef["SE_RH_XIN_CB"] = std::to_string(RH_XIN_CB);
+            cdef["SE_RH_XOUT_CB"] = std::to_string(RH_XOUT_CB);
+            rh_fp32_cbs = {RH_RW_CB, RH_HOWN_CB, RH_XIN_CB};
+        }
         const auto kc =
             cp("se3_compute.cpp",
                p.gu,
                {KBLK, MTG, p.nk_gu, 0, 1, E, S, p.slot, 1, 1, NP, 0, p.ring_g},
                cdef,
                p.gu_fp32,
-               gu_full_sync);
+               gu_full_sync,
+               rh_fp32_cbs);
         for (uint32_t r = 0; r < n_rd; ++r) {
             const uint32_t sg = p.sg_rd(r);
             for (uint32_t j = 0; j < p.r_of(r); ++j) {
@@ -1064,9 +1144,30 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                     .lits(head_xy_sg[sg])
                     .cat(dyn)
                     .lits(sgx(sg));
-                add_rt(dr ? kr_d : kr_t, gc, a);
                 const uint32_t cg_ = (p.ps0.empty() ? (r % p.n_rd_sg) * p.rg : p.ps0[r]) + j / G;
-                SetRuntimeArgs(program, kc, gc, std::vector<uint32_t>{j % G, (cg_ * p.nu) & 1u});
+                const uint32_t lead = (cg_ * p.nu) & 1u, tail = ((cg_ + 1) * p.nu) & 1u;
+                if (rh) {
+                    TT_FATAL(a.v.size() == rh_rt, "flat_routed_expert: h options runtime args at {}", rh_rt);
+                    // role 1: this core's first h tile is a right half (sent to column group cg - 1); role 2: its last
+                    // is a left half (it receives the right one from cg + 1 and quantizes the whole tile)
+                    const uint32_t role = rh_x ? (lead ? 1u : (tail ? 2u : 0u)) : 0u;
+                    const uint32_t pcg = role == 1 ? cg_ - 1 : cg_ + 1;
+                    TT_FATAL(
+                        role == 0 || core_of_cg.contains(pcg), "flat_routed_expert: no partner for column {}", cg_);
+                    a.lit(role ? pk(core_of_cg.at(pcg)) : 0u);
+                    if (cfg.routed_weight) {
+                        a.a(AddrSrc::RoutingWeights);
+                    } else {
+                        a.lit(0);
+                    }
+                    a.a(AddrSrc::Arena, rh_stage).lit(role).a(AddrSrc::Arena, rh_xin);
+                }
+                add_rt(dr ? kr_d : kr_t, gc, a);
+                if (rh) {
+                    SetRuntimeArgs(program, kc, gc, std::vector<uint32_t>{j % G, lead, rh_x ? tail : 0u});
+                } else {
+                    SetRuntimeArgs(program, kc, gc, std::vector<uint32_t>{j % G, (cg_ * p.nu) & 1u});
+                }
             }
         }
     }
@@ -1252,6 +1353,13 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     if (p.gu_l1acc) {
         arena_cb(5, p.p_off, MTG * p.gwt * 2048, p.gu, tt::DataFormat::Float16_b, 2048);
     }
+    if (p.routed) {  // the h options' Float32 tiles (factory RH_* CBs; the staging tile at rh_off + 2 tiles is no CB)
+        const auto f32 = tt::DataFormat::Float32;
+        arena_cb(RH_RW_CB, p.rh_off, 2 * 4096, p.gu, f32, 4096);
+        arena_cb(RH_HOWN_CB, p.rh_off + 3 * 4096, 2 * 4096, p.gu, f32, 4096);
+        arena_cb(RH_XIN_CB, p.rh_off + 5 * 4096, kRhXd * 4096, p.gu, f32, 4096);
+        arena_cb(RH_XOUT_CB, p.rh_off + (5 + kRhXd) * 4096, 2 * 4096, p.gu, f32, 4096);
+    }
     arena_cb(2, p.h_off, p.hbuf * p.h_tiles * p.h_tile, p.down, h_fmt, p.h_tile);
     for (const auto& [pw, ds] : dgroups) {
         const uint32_t kd = FlatRoutedExpertPlan::kd_of(pw, It);
@@ -1334,6 +1442,7 @@ void FlatRoutedExpertProgramFactory::override_runtime_arguments(
     addr[size_t(AddrSrc::Arena)] = t.arena.buffer()->address();
     addr[size_t(AddrSrc::Words)] = t.words.buffer()->address();
     addr[size_t(AddrSrc::TokenIndex)] = t.token_index ? t.token_index->buffer()->address() : 0;
+    addr[size_t(AddrSrc::RoutingWeights)] = t.routing_weights ? t.routing_weights->buffer()->address() : 0;
     for (const auto& pa : cached.shared_variables.patches) {
         GetRuntimeArgs(program, pa.kernel, pa.core)[pa.index] = addr[size_t(pa.src)] + pa.offset;
     }

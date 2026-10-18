@@ -28,6 +28,9 @@ struct FlatRoutedExpertInputs {
     // indexed mode: [1, rows] uint32 row-major DRAM; flat row r reads x row token_index[r] (x = e.g. all-gathered
     // tokens instead of a dispatch buffer)
     std::optional<Tensor> token_index;
+    // config routed_weight: [rows of x, 32] Float32 TILE, DRAM interleaved; row i column le = dispatched row i's
+    // routing weight for local expert le
+    std::optional<Tensor> routing_weights;
 };
 
 }  // namespace ttnn::operations::bringup::flat_routed_expert

@@ -24,11 +24,19 @@ void FlatRoutedExpertDeviceOperation::validate_on_program_cache_miss(
         t.x.layout() == Layout::ROW_MAJOR && t.x.dtype() == DataType::BFLOAT16 && dram_interleaved(t.x),
         "flat_routed_expert: x must be a row-major bf16 DRAM interleaved dispatch buffer");
     const uint32_t xw = t.x.logical_shape()[-1];
+    // (x rows wider than hidden: one page per row, the relays read its first hidden values)
+    const bool wide = xw > cfg.hidden;
     TT_FATAL(
-        cfg.hidden % xw == 0 && (cfg.hidden / xw) * xw * 2 >= 1024 && ((xw * 2) % 1024 == 0 || cfg.hidden == xw),
-        "flat_routed_expert: x width {} must be hidden {} / pages per row, pages a multiple of 1 KB",
+        wide ? (!t.token_index && (cfg.hidden * 2) % 512 == 0)
+             : (cfg.hidden % xw == 0 && (cfg.hidden / xw) * xw * 2 >= 1024 &&
+                ((xw * 2) % 1024 == 0 || cfg.hidden == xw)),
+        "flat_routed_expert: x width {} must be hidden {} / pages per row, pages a multiple of 1 KB (or wider rows "
+        "whose first hidden values are whole 512 B read segments)",
         xw,
         cfg.hidden);
+    TT_FATAL(
+        cfg.routed_weight == t.routing_weights.has_value(),
+        "flat_routed_expert: routing_weights iff the config's routed_weight");
     for (const Tensor* r : {&t.counts, &t.regions}) {
         TT_FATAL(
             r->layout() == Layout::ROW_MAJOR && (r->dtype() == DataType::UINT32 || r->dtype() == DataType::INT32) &&
@@ -51,7 +59,7 @@ void FlatRoutedExpertDeviceOperation::validate_on_program_cache_miss(
             "flat_routed_expert: token_index must be a [1, rows] uint32 row-major DRAM interleaved row");
     }
     const uint32_t rows =
-        t.token_index ? t.token_index->logical_shape()[-1] : t.x.logical_shape()[-2] / (cfg.hidden / xw);
+        t.token_index ? t.token_index->logical_shape()[-1] : t.x.logical_shape()[-2] / (wide ? 1 : cfg.hidden / xw);
     const bool out_ok = cfg.y_row_major
                             ? t.output.layout() == Layout::ROW_MAJOR && t.output.dtype() == DataType::BFLOAT16
                             : t.output.layout() == Layout::TILE &&
@@ -65,7 +73,9 @@ void FlatRoutedExpertDeviceOperation::validate_on_program_cache_miss(
 
 void FlatRoutedExpertDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& cfg, const tensor_args_t& t) {
-    TT_FATAL(cfg.hidden % t.x.logical_shape()[-1] == 0, "flat_routed_expert: x width");
+    TT_FATAL(
+        cfg.hidden % t.x.logical_shape()[-1] == 0 || t.x.logical_shape()[-1] > cfg.hidden,
+        "flat_routed_expert: x width");
 }
 
 FlatRoutedExpertDeviceOperation::spec_return_value_t FlatRoutedExpertDeviceOperation::compute_output_specs(
