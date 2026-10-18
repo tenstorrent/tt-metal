@@ -73,13 +73,29 @@ def test_combine_plan(mesh_device, device_params, routing):
     m = int(os.environ.get("FC_PLAN_CORES", "8"))  # (0: the one-core planner)
     cores = [(i % 8, i // 8) for i in range(m)] if m else None
     run = combine_planner_prepare(
-        mesh_device, S=S, K=K, EPC=EPC, A=A, L=L, port_luts=luts, n_ports=nps, rows_cap=ROWS_CAP, cores=cores, row_pages=ROWS, joint=JOINT
+        mesh_device,
+        S=S,
+        K=K,
+        EPC=EPC,
+        A=A,
+        L=L,
+        port_luts=luts,
+        n_ports=nps,
+        rows_cap=ROWS_CAP,
+        cores=cores,
+        row_pages=ROWS,
+        joint=JOINT,
+        token_major=os.environ.get("FC_PLAN_TM", "1") == "1",  # (0: an expert's rows by home, then token)
     )
     if JOINT:
         both = torch.cat([ids.reshape(N * S, K).to(torch.int64), wbits.reshape(N * S, K)], 1).to(torch.int32)
         ids_t = w_t = ttnn.from_torch(
-            both, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=rep,
+            both,
+            dtype=ttnn.uint16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=rep,
         )
     outs = run(ids_t, w_t)
     ttnn.synchronize_device(mesh_device)
@@ -89,7 +105,9 @@ def test_combine_plan(mesh_device, device_params, routing):
     }
     chips = [(r, c) for r in range(R) for c in range(C)]
     for ci, ch in enumerate(chips):
-        ref = plan_reference(ids, wbits, ci, R, C, S, K, EPC, N * EPC, A, L, nps[ch], luts[ch], ROWS_CAP)
+        ref = plan_reference(
+            ids, wbits, ci, R, C, S, K, EPC, N * EPC, A, L, nps[ch], luts[ch], ROWS_CAP, token_major=run.token_major
+        )
         for k, v in ref.items():
             exp = torch.tensor(v, dtype=torch.int64)
             bad = (got[k][ci][: exp.numel()] != exp).nonzero().flatten()

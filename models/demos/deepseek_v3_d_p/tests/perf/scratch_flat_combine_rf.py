@@ -234,6 +234,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
             )
             if DET
             else None,
+            token_major=os.environ.get("FC_PLAN_TM", "1") == "1",  # (0: an expert's rows by home, then token)
         )
         pl = planner(ids_t, w_t)
         ttnn.synchronize_device(mesh_device)
@@ -316,12 +317,14 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
             f"combine has {len(fused.cells['accs'])} accumulators, the planner {n_acc}: set FC_NACC "
             f"({len(cells)} free cells)"
         )
-    # (combine alone: the same cells in the same roles - the arena's cumulative counters are shared; with
+    # (combine alone: the same cells in the same roles and ring depth - the arena's cumulative counters are shared; with
     # accumulators on the ports (L1 hand-off only) there is no alone variant)
     alone = (
         None
         if ACC_ON_PORTS
-        else sparse_combine_rf_prepare(mesh_device, S, H, rows, writers=0, ports_per_direction=PER_DIR_PORTS, **common)
+        else sparse_combine_rf_prepare(
+            mesh_device, S, H, rows, writers=0, ports_per_direction=PER_DIR_PORTS, **{**common, "depth": fused.depth}
+        )
     )
     coll = fused.collector
     logger.info(

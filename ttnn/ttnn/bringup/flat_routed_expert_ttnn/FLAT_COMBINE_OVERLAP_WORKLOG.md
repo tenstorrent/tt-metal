@@ -1284,3 +1284,39 @@ quantize fits the down cores' epilogue - one DEST tile row = one 1x32 block - an
 gate multiply as a column broadcast), level 2 combine (one row per (token, chip): K3 2x4 2.3x fewer rows, but rows
 wait for the token's last local expert), and the balanced-routing link efficiency (fabric forwarding: 64-77% of the
 floor today).
+
+### GLM-5.3-Flash flat + combine overlap (2026-10-18, 2 x 4, bh-lb-09 12 x 10, harness, DRISC-only 64 gate/up + 32 down)
+Run: `SPC_PIECE=8192 FC_PAYLOAD=8704 FC_H=4096 FC_I=2048 FC_EPC=36 FC_K=8 FC_ACT=clamped_silu FC_S=640 FC_L1=1
+FC_DEVPLAN=1 FC_PIPE=1 MIMO_FL_CMB_DRISC=1 MIMO_FL_DRISC_DUAL=0 MIMO_FL_ND=32` (32 down = 36 down: 128 column tiles,
+4 a core either way; single chip within 0.2-1.4%). 19 free cells: separate layout 7 ports + 12 accumulators
+(FC_NACC=12), or accumulators on ports (16, MIMO_FL_NH=2). Ring depth 3 at S 640 (L1), 4 at S 320. Exact (2.4e-3).
+| S / chip, layout | uniform flat / fused | spread | packed | combine alone u / s / p |
+| 640, separate | 1305 / 1444 (1.11) | 1592 / 2156 (1.35) | 4191 / 6254 (1.49) | 1270 / 1457 / 2844 |
+| 640, acc on ports | 1311 / 1533 (1.17) | 1605 / 2294 (1.43) | 4262 / 7018 (1.65) | - |
+| 320, acc on ports | 1224 / 1251 (1.02) | 1347 / 1453 (1.08) | 2440 / 2969 (1.22) | - |
+Link floors (S 640, busiest link at 25 GB/s): 847 / 961 / 2425 us.
+**Why packed does not overlap: the device planner's row order.** Rows of a local expert are in (home, token) order
+(combine_plan docstring), so a hot expert's rows go out home by home: 640 rows to one home, then the next. A burst to
+one home uses only the ports toward it (2 of the hot corner chip's 4 links) and that home's accumulator rings (A x D
+= 36 slots in flight); the senders block on credits instead of the link. Hot chip, fused separate layout: rows handed
+off by 6197 us (flat alone 4191), senders send ~0.8-1.0 ms, slot wait ~0.2 ms, idle 3.5-4.0 ms, blocked 7-12.7k
+times. Proof with the combine alone (DRAM y, host tables): token-major order (the harness default) 2844 us, link
+bound (slot wait 0.66-0.82 ms, blocked ~1.2k); home-major (FC_ORDER=home, as the planner) 4121 us with blocked
+6.9-12.5k and slot wait 0.24-0.31 ms - the fused run's signature. Uniform does not care (1270 vs 1297: an expert's
+rows per home are few). Roofline per burst: the flat makes a home's 640 rows in ~92 us (0.144 us a row); the 2 links
+toward that home need 640 x 8192 B / 44.8 GB/s = 117 us - each remote burst is link bound on half the links, while
+over the call the links are only 63% busy. K3 (S 320, 7 KB rows, 0.20 us a row) was under that line (64 vs 51 us).
+Accumulators on ports is worse on packed (7018 vs 6254): the port RISC also runs the hand-off grants.
+**Fix (combine_plan token_major, default):** the multi-core planner's core p takes tokens [p S / M, (p + 1) S / M) of
+every home (one id / weight run per home), so an expert's rows come out in (token, home, k) order; the deterministic
+combine keeps (home, token, k) (its order table assumes it). Bit-exact vs plan_reference(token_major=True) on all
+chips: K3, GLM S 640 and V4.1 shapes, single-page routing and K3's joint row pages. Planner +7-10 us (32 cores: K3
+joint 69 -> 76, GLM 48 -> 59 us). Fused / flat, home order -> token order:
+| | uniform | spread | packed |
+| GLM S 640, separate | 1444 -> 1353 (1.036) | 2156 -> 1704 (1.055) | 6254 -> 4744 (1.130) |
+| GLM S 640, acc on ports | 1533 -> 1445 (1.101) | 2294 -> 1758 (1.088) | 7018 -> 4846 (1.138) |
+| GLM S 320, acc on ports | 1251 -> 1248 (1.020) | 1453 -> 1389 (1.029) | 2969 -> 2610 (1.066) |
+| K3 production layout (same day A/B) | 2289 -> 2287 | 2625 -> 2490 (1.009) | 5800 -> 5380 (1.020) |
+| V4.1 (28 down, separate, same day) | 1180 -> 1172 | 1355 -> 1295 | 2816 -> 2722 |
+K3 block: PCC 0.99622 (unchanged), traced forward 3322 us (3312: its near-uniform routing gains nothing, the
+planner's +10 us shows), 99 CI-mode replays bit-exact. Open at GLM S 640: fused still +4-14% (ring depth 3 there).

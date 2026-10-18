@@ -12,7 +12,11 @@ tokens:
                                         L1 hand-off (se_yrm.hpp SE_Y_L1); header = home | t << 8 | local expert << 24
   plan [1, 1024] uint32                 the combine's per-call counts: n_inj[8], n_ret[8] per port id, n_local[16] per
                                         accumulator, want[16][32] per accumulator and source chip (N <= 32)
-Rows of a local expert are in (home, token, k) scan order. A row of home token t goes to accumulator a = t % A over
+Rows of a local expert are in (token, home, k) scan order with the multi-core planner (token_major, the default; the
+deterministic combine and the one-core planners: (home, token, k)): a hot expert's consecutive rows go to every home,
+over every first-hop port and accumulator ring, not to one home at a time (in home order a hot expert's burst to one
+home has only the ports toward it and that home's rings: the combine blocks on credits, FLAT_COMBINE_OVERLAP_WORKLOG
+"GLM-5.3-Flash"). A row of home token t goes to accumulator a = t % A over
 link (a + source + home) % L - fixed per (accumulator, source, home), so each accumulator ring has one producer port
 per source chip - through this chip's first-hop port toward home (Y first, then X; rings the shorter way, ties Y- /
 X+ as the fabric's tables; port_lut[direction * 2 + link] = port id); a local row (home is this chip) goes to
@@ -417,7 +421,11 @@ constexpr uint32_t M = get_compile_time_arg_val(11), CH = get_compile_time_arg_v
 constexpr uint32_t N = R * C, T = N * S * K, SK = S * K;
 constexpr uint32_t al64(uint32_t v) { return (v + 63) / 64 * 64; }
 constexpr uint32_t CNT = al64(2 * EPC * 4);  // a chunk's counts per expert, then its bucket prefix per expert
-constexpr uint32_t O_IDS = 0, O_WTS = O_IDS + al64(CH * 2), O_HOME = O_WTS + al64(CH * 2);
+// token-major rows (TM): core p plans tokens [p TPC, (p + 1) TPC) of every home (its ids / weights one run per home,
+// 64 B of slack for a run's unaligned start), so an expert's rows come out in (token, home, k) order
+constexpr uint32_t TM = __TM__, TPC = S / M, RUNB = al64(TPC * K * 2) + 64;
+constexpr uint32_t IDB = TM ? N * RUNB : al64(CH * 2);
+constexpr uint32_t O_IDS = 0, O_WTS = O_IDS + IDB, O_HOME = O_WTS + IDB;
 constexpr uint32_t O_LST = O_HOME + al64(SK * 2);           // my local entries: chunk index << 8 | expert
 constexpr uint32_t O_BUCK = O_LST + al64(CH * 4);           // CH entries x 8 bytes, sorted by expert
 constexpr uint32_t O_MYC = O_BUCK + al64(CH * 8);           // my counts (sent to everyone)
@@ -487,13 +495,17 @@ void kernel_main() {
     const InterleavedAddrGen<true> w_g = {.bank_base_address = w_addr, .page_size = RP ? RP * PT : T * 2};
     // (row pages land 64 bytes apart in local scratch, free until the sort: a DRAM read keeps its source's 64-byte
     // alignment in L1; then unpacked)
-    uint32_t stg = B + O_BUCK, pk_src[3], pk_dst[3], pk_dw[3], pk_rows[3], npk = 0;
+    constexpr uint32_t NPK = TM ? 2 * N + 1 : 3;
+    uint32_t stg = B + O_BUCK, pk_src[NPK], pk_dst[NPK], pk_dw[NPK], pk_rows[NPK], npk = 0;
+    // (returns where entry e0 lands: dst, or dst + e0's offset in its 64 B with one routing page)
     auto rd = [&](const InterleavedAddrGen<true>& g, uint32_t e0, uint32_t n, uint32_t dst, uint32_t dst_w,
-                  bool home = false) {
+                  bool home = false) -> uint32_t {
         if (home) stg = B + O_STG;  // (the home ids: in the slice staging, sized for them; the bucket region's tail
                                     // is the other cores' counts exchange, written any time)
         if constexpr (RP == 0) {
-            noc_async_read(get_noc_addr(0, g) + e0 * 2, dst, al64(n * 2));
+            const uint32_t d0 = TM ? (e0 * 2) & 63 : 0;  // (TM: a home's run may start mid 64 B)
+            noc_async_read(get_noc_addr(0, g) + e0 * 2 - d0, dst, al64(n * 2 + d0));
+            return dst + d0;
         } else {
             const uint32_t r0 = e0 / K, rows = n / K;
             if constexpr (PT == 1) {
@@ -507,9 +519,17 @@ void kernel_main() {
             }
             pk_src[npk] = stg, pk_dst[npk] = dst, pk_dw[npk] = dst_w, pk_rows[npk++] = rows;
             stg += rows * 64;
+            return dst;
         }
     };
-    if (chl) {
+    uint32_t runi[TM ? N : 1], runw[TM ? N : 1];  // (TM: each home's ids / weights for my tokens)
+    if constexpr (TM) {
+        for (uint32_t o = 0; o < N; ++o) {
+            const uint32_t e0 = (o * S + p * TPC) * K;
+            runi[o] = rd(ids_g, e0, TPC * K, B + O_IDS + o * RUNB, JW ? B + O_WTS + o * RUNB : 0);
+            runw[o] = JW ? B + O_WTS + o * RUNB : rd(w_g, e0, TPC * K, B + O_WTS + o * RUNB, 0);
+        }
+    } else if (chl) {
         rd(ids_g, c0, chl, B + O_IDS, JW ? B + O_WTS : 0);
         if constexpr (!JW) rd(w_g, c0, chl, B + O_WTS, 0);
     }
@@ -555,6 +575,37 @@ void kernel_main() {
         }
     };
     uint32_t i4 = 0;
+    if constexpr (TM) {  // (chunk index (token, home, k): what the placement decodes)
+        for (uint32_t tt = 0; tt < TPC; ++tt) {
+            for (uint32_t o = 0; o < N; ++o) {
+                const uint32_t ci0 = (tt * N + o) * K;
+                if constexpr (K % 2 == 0) {  // (two ids a word: a run starts 4-byte aligned with K even)
+                    const uint32_t* r2 = reinterpret_cast<const uint32_t*>(runi[o] + tt * K * 2);
+                    for (uint32_t kk = 0; kk < K; kk += 2) {
+                        const uint32_t v = r2[kk / 2], e0 = (v & 0xFFFF) - E0, e1 = (v >> 16) - E0;
+                        if (e0 < EPC) {
+                            ++cnt[e0];
+                            lst[nl++] = (ci0 + kk) << 8 | e0;
+                        }
+                        if (e1 < EPC) {
+                            ++cnt[e1];
+                            lst[nl++] = (ci0 + kk + 1) << 8 | e1;
+                        }
+                    }
+                } else {
+                    const uint16_t* r_ = reinterpret_cast<const uint16_t*>(runi[o]) + tt * K;
+                    for (uint32_t kk = 0; kk < K; ++kk) {
+                        const uint32_t e = r_[kk] - E0;
+                        if (e < EPC) {
+                            ++cnt[e];
+                            lst[nl++] = (ci0 + kk) << 8 | e;
+                        }
+                    }
+                }
+            }
+        }
+        i4 = chl / 2;  // (the pairwise scan below: nothing left)
+    }
     for (; i4 + 4 <= chl / 2; i4 += 4) {  // (four loads in flight)
         const uint32_t v0 = ids2[i4], v1 = ids2[i4 + 1], v2 = ids2[i4 + 2], v3 = ids2[i4 + 3];
         take(v0, i4);
@@ -563,7 +614,7 @@ void kernel_main() {
         take(v3, i4 + 3);
     }
     for (; i4 < chl / 2; ++i4) take(ids2[i4], i4);
-    if (chl & 1) {
+    if (!TM && (chl & 1)) {
         const uint32_t e0 = (ids2[chl / 2] & 0xFFFF) - E0;
         if (e0 < EPC) {
             ++cnt[e0];
@@ -596,8 +647,19 @@ void kernel_main() {
     uint32_t* buck = reinterpret_cast<uint32_t*>(B + O_BUCK);
     uint32_t ninj[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     for (uint32_t x = 0; x < nl; ++x) {
-        const uint32_t v = lst[x], ci = v >> 8, e = v & 0xFF, gi = c0 + ci;
-        const uint32_t o = gi / SK, rem = gi - o * SK, t = rem / K, kk = rem - t * K;
+        const uint32_t v = lst[x], ci = v >> 8, e = v & 0xFF;
+        uint32_t o, t, wv;
+        if constexpr (TM) {
+            const uint32_t q = ci / K, kk = ci - q * K, tt = q / N;
+            o = q - tt * N;
+            t = p * TPC + tt;
+            wv = reinterpret_cast<const uint16_t*>(runw[o])[tt * K + kk];
+        } else {
+            const uint32_t gi = c0 + ci;
+            o = gi / SK;
+            t = (gi - o * SK) / K;
+            wv = wts[ci];
+        }
         const uint32_t pos = bo[e]++;
         uint32_t dest;
         if (o == ME) {
@@ -607,7 +669,7 @@ void kernel_main() {
             dest = hop[o * L + l];
             ++ninj[dest];
         }
-        buck[2 * pos] = dest | (static_cast<uint32_t>(wts[ci]) << 16);
+        buck[2 * pos] = dest | (wv << 16);
         buck[2 * pos + 1] = o | (t << 8) | (e << 24);
     }
     ts[2] = get_timestamp_32b();
@@ -914,12 +976,12 @@ def _mc2_det_bytes(M, A, N, NG, VM, S, K):
     )
 
 
-def _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, home_rows=0):
+def _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, home_rows=0, idb=None):
     al = lambda v: (v + 63) // 64 * 64  # noqa: E731
     CNT = al(2 * EPC * 4)
     XP = al((M + 2) * 4)
     return (
-        2 * al(CH * 2)
+        2 * (al(CH * 2) if idb is None else idb)
         + al(HS * M * 2)
         + al(CH * 4)
         + al(CH * 8)
@@ -956,8 +1018,10 @@ def link_of(acc, src, home, L):
     return (acc + src + home) % L
 
 
-def plan_reference(ids, wbits, me, R, C, S, K, EPC, NG, A, L, P, lut, rows_cap, wrap=(False, False)):
-    """Host model of the planner for chip `me`: ids / wbits [N, S, K] (global expert ids, bf16 bits)."""
+def plan_reference(ids, wbits, me, R, C, S, K, EPC, NG, A, L, P, lut, rows_cap, wrap=(False, False), token_major=False):
+    """Host model of the planner for chip `me`: ids / wbits [N, S, K] (global expert ids, bf16 bits); token_major: an
+    expert's rows in (token, home, k) order (the multi-core planner's default, run.token_major), else (home, token, k).
+    """
     N = R * C
     E0 = me * EPC
     lc = [0] * EPC
@@ -975,32 +1039,32 @@ def plan_reference(ids, wbits, me, R, C, S, K, EPC, NG, A, L, P, lut, rows_cap, 
     plan = [0] * 1024
     plan[P_ROWS], plan[P_OVER] = off, int(off > rows_cap)
     idsl, wl = ids.tolist(), wbits.tolist()
-    for o in range(N):
+    scan = [(o, t) for t in range(S) for o in range(N)] if token_major else [(o, t) for o in range(N) for t in range(S)]
+    for o, t in scan:
         dh = 0 if o == me else first_hop_idx(me, o, C, R, wrap)
-        for t in range(S):
-            for k in range(K):
-                g, wb = idsl[o][t][k], wl[o][t][k]
-                src = g // EPC
-                l = link_of(t % A, src, o, L)
-                if src == me:
-                    e = g - E0
-                    r = fill[e]
-                    fill[e] += 1
-                    if r < rows_cap:
-                        tidx[r] = o * S + t
-                        if o == me:
-                            dest = P + t % A
-                        else:
-                            dest = lut[dh * 2 + l]
-                            plan[P_NINJ + dest] += 1
-                        tab[2 * r] = dest | (wb << 16)
-                        tab[2 * r + 1] = o | (t << 8) | (e << 24)
-                if o == me:
-                    if src == me:
-                        plan[P_NLOC + t % A] += 1
+        for k in range(K):
+            g, wb = idsl[o][t][k], wl[o][t][k]
+            src = g // EPC
+            l = link_of(t % A, src, o, L)
+            if src == me:
+                e = g - E0
+                r = fill[e]
+                fill[e] += 1
+                if r < rows_cap:
+                    tidx[r] = o * S + t
+                    if o == me:
+                        dest = P + t % A
                     else:
-                        plan[P_WANT + (t % A) * 32 + src] += 1
-                        plan[P_NRET + lut[first_hop_idx(me, src, C, R, wrap) * 2 + l]] += 1
+                        dest = lut[dh * 2 + l]
+                        plan[P_NINJ + dest] += 1
+                    tab[2 * r] = dest | (wb << 16)
+                    tab[2 * r + 1] = o | (t << 8) | (e << 24)
+            if o == me:
+                if src == me:
+                    plan[P_NLOC + t % A] += 1
+                else:
+                    plan[P_WANT + (t % A) * 32 + src] += 1
+                    plan[P_NRET + lut[first_hop_idx(me, src, C, R, wrap) * 2 + l]] += 1
     return dict(counts=cnt, regions=reg, token_index=tidx, table=tab, plan=plan)
 
 
@@ -1042,6 +1106,7 @@ def combine_planner_prepare(
     tokens_per_page=1,
     torus=(False, False),
     det=None,
+    token_major=True,
 ):
     """port_luts[coord] = 8 port ids (direction * 2 + link; 0xFF none), n_ports[coord] = P. Returns run(ids, wts) ->
     dict of the per-chip output tensors (counts, regions, token_index, table, plan), allocated once. ids / wts: one
@@ -1139,7 +1204,12 @@ def combine_planner_prepare(
         mcs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*x), ttnn.CoreCoord(*x)) for x in cores])
         vv = [mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(*x)) for x in cores]
         pxy = [w for v in vv for w in (v.x, v.y)]
-        mc_bytes = _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, HR) if V2 else _mc_l1_bytes(M, CH, HS, EPC, NG, rows_cap)
+        # token-major rows (an expert's rows by token, then home): V2 without det, tokens split evenly over the cores
+        TM = bool(token_major and V2 and det is None and S % M == 0)
+        idb = N * ((S // M * K * 2 + 63) // 64 * 64 + 64) if TM else None
+        mc_bytes = (
+            _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, HR, idb) if V2 else _mc_l1_bytes(M, CH, HS, EPC, NG, rows_cap)
+        )
         if det is not None:
             assert V2, "det: the V2 multi-core planner"
             mc_bytes += _mc2_det_bytes(M, A, N, NG, VM, S, K)
@@ -1196,6 +1266,7 @@ def combine_planner_prepare(
                         .replace("__RJOINT__", str(int(joint)))
                         .replace("__RPT__", str(tokens_per_page))
                         .replace("__DET__", str(int(det is not None)))
+                        .replace("__TM__", str(int(TM)))
                         .replace("__DPG__", str(det_page_bytes(S, K)))
                         .replace("__WR__", str(int(det.get("w_rows", 160)) if det is not None else 1))
                         .replace("__VM__", str(VM))
@@ -1272,6 +1343,7 @@ def combine_planner_prepare(
 
     run.outs = outs
     run.tdbg = tdbg_t if cores is not None else None
+    run.token_major = bool(cores is not None and TM)
     if cores is not None:  # (the per-chip programs, for merging another op onto the cores it leaves)
         run.programs = lambda ids, wts: build_mc(ids, wts, per_chip=True)
         run.cores = [ttnn.CoreCoord(*x) for x in cores]
