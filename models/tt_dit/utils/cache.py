@@ -228,6 +228,31 @@ def load_model(
             _reclaim_superseded(model_cache_dir(**key_args, content=None, required=False))
         logger.info(f"Writing cache to '{cache_dir}'.")
         _publish_cache(tt_model, cache_dir, key)
+        _place_like_a_cache_hit(tt_model, cache_dir, key, post_load_hook)
+
+
+def _place_like_a_cache_hit(
+    tt_model: Module, cache_dir: Path, key: str | None, post_load_hook: Callable[[Module], None] | None
+) -> None:
+    """After a miss has published the cache, reload the weights from it, so they sit on the device
+    exactly where every later cache hit puts them.
+
+    A miss builds the weights from the state dict, which allocates differently from a cache load. A
+    trace captured on those weights bakes their addresses, and a dynamic-load mesh reloads the module
+    from the cache before the next replay: the replay then reads memory the reload did not put there.
+    On f07cs04 a job whose transformer missed in-gen captured its denoise traces on the state-dict
+    weights, and the next job, reloaded from the cache, replayed them into pure noise (jobs 2749-2750,
+    2026-10-18). Reloading here costs one cache read, on a miss only. A cache that was not published
+    (capture-only pass, failed verify, no disk room) keeps the weights as built.
+    """
+    if not _cache_is_complete(cache_dir, tt_model, key):
+        return
+    tt_model.deallocate_weights()
+    logger.info(f"reloading from the cache just written at '{cache_dir}', as a cache hit places it.")
+    tt_model.load(cache_dir)
+    if post_load_hook is not None:
+        post_load_hook(tt_model)
+    ttnn.distributed_context_barrier()
 
 
 def verify_saved_model(tt_model: Module, cache_dir: str | Path, /, *, prefix: str = "") -> bool:
