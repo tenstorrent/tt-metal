@@ -317,15 +317,18 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         extra = []
         if (
             not fixed.isdigit()
-            and os.environ.get("DSV41_PF_SMALL_BUCKET", "0") == "1"
+            and os.environ.get("DSV41_PF_SMALL_BUCKET", "1") == "1"
             and self.m.max_ctx >= int(os.environ.get("DSV41_PF_SMALL_MIN_CTX", "524288"))
         ):
-            # OPT-IN (DSV41_PF_SMALL_BUCKET=1; verified at 4 users / 524288 tokens, does NOT fit the DRAM of the 1M build): prompts whose first call is certainly the whole prompt replay a chunk
+            # DEFAULT ON for max context >= 524288 (DSV41_PF_SMALL_BUCKET=0 disables; verified at 4 users / 1M with the 16384 context + lean mask): prompts whose first call is certainly the whole prompt replay a chunk
             # trace of a SMALL S_pad (default 32768) instead of the max-context one (``Model.prefill_interleaved``)
-            sm = int(os.environ.get("DSV41_PF_SMALL_SPAD", "32768"))
+            sm = int(os.environ.get("DSV41_PF_SMALL_SPAD", "16384"))
             sm = -(-sm // chunk) * chunk
             if sm < s_pad:
                 extra = [sm]
+                # what the build needs to fit the DRAM next to the second context (read at call time): tile-native key export, bf16 decode score mask
+                os.environ.setdefault("DSV41_KEY_EXPORT_FILL", "1")
+                os.environ.setdefault("DSV41_MASK_LEAN", "1")
         self.m.warm_serving(chunk, s_pad, [u for u in self.bucket_users if u < self.U], extra)
         if self.spec is not None:
             # every spec runner was compiled at load (before any trace exists): capture their traces NOW, after the prefill chunk trace and the decode traces, and never release them:
