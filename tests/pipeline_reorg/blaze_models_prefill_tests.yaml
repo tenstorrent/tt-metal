@@ -906,7 +906,7 @@
   budget_type: demo
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 18
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
@@ -936,7 +936,7 @@
   budget_type: demo
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 27
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
