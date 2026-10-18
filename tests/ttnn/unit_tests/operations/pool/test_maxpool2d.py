@@ -471,6 +471,7 @@ def test_max_pool2d_in_mem_config(device, input_spec, cores, tensor_map):
         config_tensor_in_dram=True,
     )
 
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_max_pool2d_dram_slice_ceil_pad_same_process(device):
     # The first height slice of the second call matches the first call except for its ceil padding, which includes
