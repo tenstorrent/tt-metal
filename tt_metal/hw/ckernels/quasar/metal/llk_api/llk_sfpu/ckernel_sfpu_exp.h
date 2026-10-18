@@ -330,7 +330,8 @@ template <
     bool EN_32BIT_DEST,
     bool SCALE_EN /*maybe_unused*/ = false,
     int ITERATIONS = SFPU_ITERATIONS,
-    bool CLAMP_NEGATIVE /*maybe_unused*/ = true>
+    bool CLAMP_NEGATIVE /*maybe_unused*/ = true,
+    bool SATURATE_POSITIVE /*maybe_unused*/ = false>
 void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     static_assert(SCALE_EN == false, "Non-default SCALE_EN not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");

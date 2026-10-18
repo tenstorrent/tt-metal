@@ -462,12 +462,34 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std
     return result;
 }
 
+// Approximate exp is round_u16(A * x + (B - C)) << 15: past 0xFF00 that is a NaN pattern, not +inf. Bit compares
+// (NaN sorts above +inf) give finite overflows +inf and keep NaN; a float compare would send +NaN to +inf.
+constexpr float EXP_APPROX_OVERFLOW_IN = 89.0f;  // overflows; exact in bf16 and fp32 Dest
+
+// From ~89.44 the round saturates to 0xFFFF, where NaN inputs land too, so larger inputs become 89.0.
+// xi >= 0 keeps the signed compares from wrapping.
+sfpi_inline void _exp_approx_overflow_in_(const int d) {
+    sfpi::vInt xi = sfpi::as<sfpi::vInt>(sfpi::vFloat(sfpi::dst_reg[d]));
+    v_if(xi >= 0 && xi > __builtin_bit_cast(int, EXP_APPROX_OVERFLOW_IN) && xi <= 0x7f800000) {
+        sfpi::dst_reg[d] = EXP_APPROX_OVERFLOW_IN;
+    }
+    v_endif;
+}
+
+// Above +inf and below 0x7fff0000 (a NaN input) is an overflow from up to 89.0.
+sfpi_inline void _exp_approx_overflow_out_(const int d) {
+    sfpi::vInt yi = sfpi::as<sfpi::vInt>(sfpi::vFloat(sfpi::dst_reg[d]));
+    v_if(yi > 0x7f800000 && yi < 0x7fff0000) { sfpi::dst_reg[d] = std::numeric_limits<float>::infinity(); }
+    v_endif;
+}
+
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
     bool SCALE_EN = false,
     int ITERATIONS = 8,
-    bool CLAMP_NEGATIVE = true>
+    bool CLAMP_NEGATIVE = true,
+    bool SATURATE_POSITIVE = false>
 void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
@@ -482,6 +504,16 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
             }
         }
     } else if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
+        static_assert(!(SATURATE_POSITIVE && SCALE_EN), "SATURATE_POSITIVE assumes the unscaled A and B - C");
+        // bf16 Dest already stores the overflow pattern as +inf; only fp32 Dest needs the two passes.
+        constexpr bool saturate = SATURATE_POSITIVE && is_fp32_dest_acc_en;
+        if constexpr (saturate) {
+#pragma GCC unroll 8
+            for (int d = 0; d < ITERATIONS; d++) {
+                _exp_approx_overflow_in_(d);
+            }
+            TTI_SFPNOP;
+        }
 #ifdef DISABLE_SFPLOADMACRO
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
@@ -490,6 +522,10 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
             TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
             TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+            if constexpr (saturate) {
+                TTI_SFPNOP;
+                _exp_approx_overflow_out_(0);
+            }
             sfpi::dst_reg++;
         }
 #else
@@ -605,6 +641,15 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
         TTI_SFPNOP;
         // TTI_SFPNOP;
         // TTI_SFPNOP;
+        if constexpr (saturate) {
+            static_assert(ITERATIONS == 8, "the macro path above covers 8 rows");
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+#pragma GCC unroll 8
+            for (int d = 0; d < 8; d++) {
+                _exp_approx_overflow_out_(d);
+            }
+        }
 #endif
     }
 #ifdef DISABLE_SFPLOADMACRO

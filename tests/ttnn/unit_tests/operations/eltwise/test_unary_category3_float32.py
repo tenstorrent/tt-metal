@@ -63,7 +63,8 @@ Accuracy criteria (SNB = smallest normal bfloat16)
 | exp              | fast     | [-87, 88.5]           | PCC ≥ 0.999, rtol 0.05,      |
 |                  |          |                       | atol 1e-6                    |
 |                  | both     | x <= -87.5            | exactly 0                    |
-|                  | both     | x >= 89               | +inf (fast mode xfail: NaN)  |
+|                  | both     | x >= 89               | +inf                         |
+|                  | fast     | 88.7..88.99, inf, NaN | +inf; 88.7 finite, NaN stays |
 | erf              | accurate | [-10, 10]             | ULP ≤ 3 (BH 4)               |
 |                  | fast     | [-10, 10]             | rtol 1.1e-4 (BH 5.4e-3)      |
 | gelu             | accurate | x >= 0                | ULP ≤ 2                      |
@@ -214,20 +215,7 @@ def test_exp_underflow(device, fast):
     assert torch.all(result == 0.0), "expected exp underflow region (x <= -87.5) to be exactly 0"
 
 
-@pytest.mark.parametrize(
-    "fast",
-    [
-        False,
-        pytest.param(
-            True,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="#60792: fast-mode float32 exp returns NaN instead of +inf for x >= 89",
-            ),
-        ),
-    ],
-    ids=["accurate", "fast"],
-)
+@pytest.mark.parametrize("fast", [False, True], ids=["accurate", "fast"])
 def test_exp_overflow(device, fast):
     """exp overflow tail, both modes, sampled per binade.
 
@@ -237,13 +225,38 @@ def test_exp_overflow(device, fast):
     | mantissa of every binade, plus 89               |       |
 
     Every input here overflows to +inf, so a few values per binade are enough.
-    Fast mode returns NaN for every input here.
     """
     input_tensor = bf16_binade_samples(89.0)
     tt_in = to_float32_tt_tensor(input_tensor, device)
 
     result = ttnn.to_torch(ttnn.exp(tt_in, fast_and_approximate_mode=fast))
     assert torch.all(torch.isposinf(result)), "expected exp overflow region (x > 88.5) to be +inf"
+
+
+def test_exp_fast_overflow_edge(device):
+    """Fast mode at its own overflow point (#60792), spread over every row and face of a tile.
+
+    | Input            | Check  | Reason                                               |
+    |------------------|--------|------------------------------------------------------|
+    | 88.7             | finite | below the fast kernel's overflow point               |
+    | 88.76 to 88.99   | +inf   | overflow below the 89 where the binade samples start |
+    | +inf             | +inf   | main returns NaN here too                            |
+    | NaN              | NaN    | the overflow fix must not turn NaN into +inf         |
+    """
+    values = torch.tensor([88.7, 88.76, 88.8, 88.9, 88.99, float("inf"), float("nan")], dtype=torch.float32)
+    index = torch.arange(32 * 32) % len(values)
+    input_tensor = values[index].reshape(32, 32)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    result = ttnn.to_torch(ttnn.exp(tt_in, fast_and_approximate_mode=True)).to(torch.float32).reshape(-1)
+    expect_finite = index == 0
+    expect_nan = index == len(values) - 1
+    expect_inf = ~expect_finite & ~expect_nan
+    assert torch.all(torch.isfinite(result[expect_finite])), "exp(fast)(88.7) should be finite"
+    assert torch.all(
+        torch.isposinf(result[expect_inf])
+    ), f"exp(fast) above its overflow point should be +inf; got {result[expect_inf & ~torch.isposinf(result)][:8]}"
+    assert torch.all(torch.isnan(result[expect_nan])), "exp(fast)(NaN) should be NaN"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
