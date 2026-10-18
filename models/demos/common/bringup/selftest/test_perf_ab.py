@@ -313,3 +313,32 @@ def test_a_setting_name_switches_its_variable(mk, monkeypatch):
     )
     with pytest.raises(ValueError, match="takes one of"):
         model_precision.switch_env(None, {"FIDELITY": "lofi"})
+
+
+def test_accepting_a_setting_switch_ships_it_as_the_default(tmp_path, monkeypatch):
+    """F104: an accepted pick behind a model setting becomes its default (tt/settings.py rewritten in place), so the
+    accept gate and every later task run the change (DeepSeek-V4.1 P.2: the opt-in EXPERTS_KERNEL stayed `loop`, the
+    accept gate measured the old path and failed device_ms_experts < 2522 at 2522)."""
+    from types import SimpleNamespace
+
+    from models.demos.common.bringup.core.model_settings import Setting, Settings
+    from models.demos.common.bringup.testing import model_precision
+
+    (tmp_path / "tt").mkdir()
+    src = (
+        "TABLE = {\n"
+        '    "KERNEL": Setting(\n        "loop",\n        ("loop", "unified"),\n        "the experts",\n    ),\n'
+        '    "FIDELITY": Setting("HiFi4", ("HiFi4", "HiFi2")),\n'
+        '    "FP32": Setting(True),\n'
+        "}\n"
+    )
+    (tmp_path / "tt" / "settings.py").write_text(src)
+    table = {"KERNEL": Setting("loop", ("loop", "unified")), "FIDELITY": Setting("HiFi4"), "FP32": Setting(True)}
+    monkeypatch.setattr(model_precision, "model_settings", lambda spec, fresh=False: [Settings("TOY_", table)])
+    spec = SimpleNamespace(model_dir=str(tmp_path))
+    done = model_precision.set_defaults(spec, {"KERNEL": "unified", "TOY_FP32": "0", "OTHER_VAR": "1"})
+    assert done == ["KERNEL: 'loop' -> 'unified'", "FP32: True -> False"]
+    out = (tmp_path / "tt" / "settings.py").read_text()
+    assert '"KERNEL": Setting(\n        "unified",\n        ("loop", "unified")' in out
+    assert '"FP32": Setting(False)' in out and '"FIDELITY": Setting("HiFi4", ("HiFi4", "HiFi2"))' in out
+    assert model_precision.set_defaults(spec, {"FIDELITY": "HiFi4"}) == []  # already the default: no edit
