@@ -11,7 +11,10 @@ the framework (bringup_fw); the framework's lint fails it if it does.
 
 import torch
 
-NORM_WEIGHTS = {"attn_norm": "input_layernorm"}  # step -> checkpoint norm (the other norms: their own tasks)
+NORM_WEIGHTS = {  # step -> checkpoint norm (the other norms: their own tasks)
+    "attn_norm": "input_layernorm",
+    "post_attn_norm": "post_attention_layernorm",
+}
 
 
 def residual_to_device(mesh, x: torch.Tensor):

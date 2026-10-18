@@ -116,3 +116,10 @@
   - pcc 0.99998, auto_margin_min 1.026, device_ops 49, host_flops_frac 0. Deterministic (A,B,A x5 bit-identical).
   - Golden case: rel 0.0069 (limit 0.0084), bias +0.0023 (limit 0.004). The closest check is the column rel:
     0.0329 against 0.0338 at column 5161.
+
+## C.sliding.post_attn_norm (run 20261018-003406-gemma31-glx-3, attempt 1), 2026-10-18
+
+- `bringup/hooks.py`: `NORM_WEIGHTS["post_attn_norm"] = "post_attention_layernorm"`. It reuses the attn_norm
+  `RMSNorm` (block-sharded, HiFi4 + fp32 acc) on the residual layout through `_ResidualStep`. No new module.
+- Check (`bfw job check --task C.sliding.post_attn_norm`): PASS. Metrics: pcc 0.9999961, auto_margin_min 2.87,
+  device_ops 3, host_flops_frac 0. Regressions C.sliding.attn_norm and C.sliding.attention: PASS.
