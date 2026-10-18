@@ -19,7 +19,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     global_to_local_token_id,
     mtp_lookahead_positions,
-    rotated_chip_positions,
+    rotated_chip_row,
     rotated_row_of_position,
 )
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPSplitChipLookahead, MTPUnionEmbedding
@@ -217,21 +217,21 @@ class MTPTraceGeometry:
     def _generation_rows(self, actual_start: int, actual_end: int, levels) -> dict:
         """Per level, the (chips, union rows) that position ``actual_end + level`` lands on.
 
-        Same answer as ``mtp_generation_union_rows``, with the chip positions built once per chunk
-        instead of twice per level: list ``index`` keeps its first-occurrence rule, trunk before slots.
+        Same answer as ``mtp_generation_union_rows``, trunk before slots on each chip, from closed forms: one
+        chip's trunk can carry the position, and each chip's lookahead slots are consecutive positions.
         """
         w = self.window_len
-        trunks = rotated_chip_positions(actual_start, self.sp_factor, w)
         slots = mtp_lookahead_positions(actual_start, self.sp_factor, w, actual_end, self.num_levels)
         assert all(len(s) <= self.num_mtp_tokens for s in slots), f"lookahead slots do not fit in {self.num_mtp_tokens}"
         out = {}
         for level in levels:
             pos, chips, rows = actual_end + level, [], []
-            for c, (trunk, chip_slots) in enumerate(zip(trunks, slots)):
-                if pos in trunk:
-                    chips.append(c), rows.append(trunk.index(pos))
-                elif pos in chip_slots:
-                    chips.append(c), rows.append(w + chip_slots.index(pos))
+            for c, chip_slots in enumerate(slots):
+                row = rotated_chip_row(actual_start, self.sp_factor, w, c, pos)
+                if row is not None:
+                    chips.append(c), rows.append(row)
+                elif chip_slots[0] <= pos < chip_slots[0] + len(chip_slots):
+                    chips.append(c), rows.append(w + pos - chip_slots[0])
             assert chips, f"no chip holds global position {pos}: chunk_start={actual_start} level={level}"
             out[level] = (torch.tensor(chips), torch.tensor(rows))
         return out
