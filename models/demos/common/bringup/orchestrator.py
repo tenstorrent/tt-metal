@@ -1654,7 +1654,13 @@ class Orchestrator:
         for t in tids:
             if not state.get(t, {}).get("waiting") or satisfied(state.get(t, {}).get("status")):
                 continue
-            if not self.changed_under(self.led.task(t)):
+            dirty_here = set(self.changed_under(self.led.task(t)))
+            rec = state.get(t, {}).get("ab")
+            if (
+                isinstance(rec, dict) and rec.get("changed") is not None
+            ):  # its own change, not a neighbour's (paths overlap)
+                dirty_here &= set(rec["changed"])
+            if not dirty_here:
                 out.add(t)
         return out
 
