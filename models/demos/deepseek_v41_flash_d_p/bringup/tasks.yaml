@@ -9136,11 +9136,57 @@ tasks:
       pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_experts: '< 2522'
+- id: P.4
+  title: 'Routed experts at Marko''s GLM production precision (flat kernel, LoFi, bfp4 weights, bfp8 x / h / y) vs full precision: owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.3
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup/flat_routed_expert_ttnn
+  - ttnn/ttnn/bringup/INDEX.md
+  ab:
+    change:
+      EXPERTS_KERNEL: flat
+      EXPERTS_IMPL: bfp4
+      EXPERTS_PRECISION: glm
+    env:
+      EXPERTS_KERNEL: flat
+      EXPERTS_IMPL: bfp8
+      EXPERTS_PRECISION: full
+  brief:
+    details: 'Owner (2026-10-18): show the routed experts exactly as Marko Staletovic runs his flat expert in GLM-5.3
+      (models/demos/glm53_flash_d_p/tt/experts_ag.py), against the chosen kernel (flat) at full precision, in an
+      on/off table the owner decides on. Add ONE model setting in tt/settings.py, EXPERTS_PRECISION {full (default),
+      glm}: glm = the expert matmuls at LoFi (a per-expert fidelity, not MATMUL_FIDELITY, which stays HiFi4 for the rest
+      of the model), the flat op''s x and h tiles in bfp8 (x_bf16 = h_bf16 = False) and its y in bfp8 (y_bf16 = False),
+      fp32 DEST in gate/up and down as GLM runs it; with EXPERTS_KERNEL=unified, glm = LoFi only (the fused op has no
+      bfp8 tile options). The model''s V4.1 numerics stay on in both (routing weight on h, fp8 q(h) before w2: the
+      model''s math, not a precision choice). EXPERTS_IMPL=bfp4 already exists (P.1). Add EXPERTS_PRECISION: "full" and
+      EXPERTS_IMPL: "bfp8" to MAX_PRECISION in tt/settings.py so every frozen component / swap test keeps checking the
+      experts at full precision (framework rule: a precision drop is judged end to end only); the frozen tests must pass
+      unchanged. No kernel change is expected (the op already has every knob); if one is needed it goes behind an option,
+      default off. Do not accept or flip defaults: the owner decides from the table. Report in the commit: expert ms per
+      chunk and device total for full vs glm, and the ladder min layer / state PCC you saw.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done
+      && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_experts: '> 0'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
   deps:
-  - P.3
+  - P.4
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
