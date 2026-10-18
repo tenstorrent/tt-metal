@@ -196,8 +196,9 @@ def parse_sessions(path):
             launch(None, by_trigger.get(-1, []))
             for i, m in enumerate(mains):
                 deps = [prev] if prev is not None else []
-                done = [s for s in pending_subs if s[0] <= m["t"] + 1.0]
-                pending_subs[:] = [s for s in pending_subs if s[0] > m["t"] + 1.0]
+                # Only sub-agents that ended before this main request was sent fed it.
+                done = [s for s in pending_subs if s[0] <= m["t"]]
+                pending_subs[:] = [s for s in pending_subs if s[0] > m["t"]]
                 deps += [nid for _, nid in done]
                 prev = add(m, deps)
                 launch(prev, by_trigger.get(i, []))
@@ -379,6 +380,8 @@ def run(
             send, g = heapq.heappop(arrivals)
             admit(g, send)
         if not req:
+            if not arrivals and (not freed or next_sess >= len(order)):
+                break  # nothing left to run: the clock stays at the last step's end
             t = min(arrivals[0][0] if arrivals else math.inf, freed[0] if freed else math.inf)
             continue
         # pick this step's pieces: [(node, units)]
@@ -442,6 +445,11 @@ def run(
             }
         )
     return out
+
+
+def json_record(r):
+    """r for --json: empty buckets' NaN percentiles become null, since strict JSON has no NaN."""
+    return {k: None if isinstance(v, float) and not math.isfinite(v) else v for k, v in r.items()}
 
 
 def pct(xs, p):
@@ -562,6 +570,9 @@ def main():
     G.update(model=Model.load(a.data), seed=a.seed, max_sessions=a.sessions)
     for cfg in split(a.config):  # before the traces load and the workers fork
         parse_config(cfg, G["model"])
+    for align in split(a.align):
+        if align not in ("chunk", "exact"):
+            ap.error(f"bad --align {align!r}: choose chunk or exact")
     G["sessions"] = load_sessions(a.traces)
     jobs = list(
         itertools.product(
@@ -600,7 +611,7 @@ def main():
             )
             if a.json:
                 with open(a.json, "a") as f:
-                    f.write(json.dumps(r) + "\n")
+                    f.write(json.dumps(json_record(r), allow_nan=False) + "\n")
     for cfg, why in uncalibrated.items():
         print(f"* {cfg}: not fitted on silicon, {why}")
 

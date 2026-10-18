@@ -4,13 +4,14 @@
 """Host-only checks of the AgentX simulator: the prefix cache, the cache state a request sent mid-step sees, and the
 --config validation. No device and no traces: `pytest models/demos/gemma4_d_p/agentx_sim/test_agentx_sim.py`."""
 
+import json
 import os
 import sys
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from agentx_sim import BLOCK, PrefixCache, parse_config, run  # noqa: E402
+from agentx_sim import BLOCK, PrefixCache, json_record, parse_config, parse_sessions, run  # noqa: E402
 from cost_model import Model  # noqa: E402
 
 
@@ -90,3 +91,79 @@ def test_next_session_starts_when_the_first_response_ends():
     by_len = {x.n_in: x for x in res["_stats"]}
     first_response_end = min(by_len[BLOCK].done, by_len[BLOCK - 1].done + 100.0)
     assert by_len[2 * BLOCK].send == pytest.approx(first_response_end)
+    # The run ends at the last step, not at the last response or past it.
+    assert res["makespan_s"] == pytest.approx(by_len[2 * BLOCK].done)
+    assert res["tok_s_wall"] > 0
+
+
+def test_main_request_joins_only_sub_agents_that_ended_before_it(tmp_path):
+    """A sub-agent launched after main 0 ends at 2.5 s: main 1, sent at 2.0 s, must not wait for it; main 2 does."""
+
+    def req(t, kind="main"):
+        return {"type": kind, "t": t, "in": BLOCK, "out": 0, "hash_ids": [1], "api_time": 0.0}
+
+    sub = {"type": "subagent", "t": 1.0, "duration_ms": 1500, "requests": [req(1.0, "subagent")]}
+    trace = {"block_size": BLOCK, "hash_id_scope": "local", "requests": [req(0.0), sub, req(2.0), req(5.0)]}
+    path = tmp_path / "traces.jsonl"
+    path.write_text(json.dumps(trace) + "\n")
+    nodes = parse_sessions(str(path))[0]
+    mains = [i for i, n in enumerate(nodes) if n["t"] in (0.0, 2.0, 5.0)]
+    sub_node = next(i for i, n in enumerate(nodes) if n["t"] == 1.0)
+    assert nodes[mains[1]]["deps"] == [mains[0]]
+    assert sorted(nodes[mains[2]]["deps"]) == sorted([mains[1], sub_node])
+
+
+def test_json_record_is_strict_json_for_empty_buckets():
+    """One request leaves the other size buckets empty; their NaN percentiles must export as null."""
+    res = run(_OneSecondSteps(), [[_node(BLOCK, [1])]], BLOCK, BLOCK, "fcfs", 1)
+    res.pop("_stats")
+    record = json.loads(json.dumps(json_record(res), allow_nan=False))
+    assert record["p50_>16K"] is None
+    assert record["ttft_p50"] == res["ttft_p50"]
+
+
+class _RecordedSteps(_OneSecondSteps):
+    """One-second steps that record each step's lanes and check it fits the step's token budget."""
+
+    def __init__(self):
+        self.steps = []
+
+    def step_s(self, batch, C, budget, calibrated=True):
+        assert sum(width for width, _ in batch) <= budget, f"step of {len(batch)} lanes over the {budget}-token budget"
+        self.steps.append(len(batch))
+        return super().step_s(batch, C, budget, calibrated)
+
+
+def _by_rows(res):
+    return {x.n_in: x for x in res["_stats"]}
+
+
+def test_pack_gives_a_lone_request_every_lane():
+    model = _RecordedSteps()
+    res = run(model, [[_node(4 * BLOCK, [1])]], BLOCK, 4 * BLOCK, "pack", 1)
+    (stat,) = res["_stats"]
+    assert model.steps == [4] and stat.done == pytest.approx(stat.send + 1.0)
+
+
+def test_pack_serves_the_shortest_request_first():
+    """A 1-chunk request sent during an 8-chunk request's first step goes first on the next step; the long one takes
+    the other 3 lanes. Sessions start at seeded times: session 1 (long) before session 0 (short)."""
+    model = _RecordedSteps()
+    res = run(model, [[_node(BLOCK, [1])], [_node(8 * BLOCK, [2])]], BLOCK, 4 * BLOCK, "pack", 2)
+    short, long_ = _by_rows(res)[BLOCK], _by_rows(res)[8 * BLOCK]
+    assert long_.send < short.send < long_.send + 1.0, "precondition: short sent during the long one's first step"
+    assert model.steps == [4, 4, 1]
+    assert short.done == pytest.approx(long_.send + 2.0)
+    assert long_.done == pytest.approx(long_.send + 3.0)
+
+
+def test_fcfs_keeps_admitted_requests_ahead_of_later_arrivals():
+    """Two slots, one lane each: A and B (6 chunks each) hold them, so C (1 chunk, sent later) waits until A finishes.
+    Seeded starts: session 2 (A) at 4.2 s, session 1 (B) at 7.6 s, session 0 (C) at 8.4 s."""
+    model = _RecordedSteps()
+    sessions = [[_node(BLOCK, [1])], [_node(6 * BLOCK - 1, [2])], [_node(6 * BLOCK, [3])]]
+    res = run(model, sessions, BLOCK, 2 * BLOCK, "fcfs", 3)
+    a, b, c = (_by_rows(res)[n] for n in (6 * BLOCK, 6 * BLOCK - 1, BLOCK))
+    assert a.send < b.send < c.send < a.done, "precondition: C is sent while A still holds a slot"
+    assert c.done == pytest.approx(a.done + 1.0), "C took A's slot on the step after A finished"
+    assert max(model.steps) <= 2
