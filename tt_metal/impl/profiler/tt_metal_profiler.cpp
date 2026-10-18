@@ -744,9 +744,12 @@ void ClearProfilerControlBuffer(IDevice* device) {
 }
 
 void InitDeviceProfiler(IDevice* device) {
+    InitDeviceProfiler(MetalContext::instance(extract_context_id(device)), device);
+}
+
+void InitDeviceProfiler(MetalContext& ctx, IDevice* device) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    auto& ctx = MetalContext::instance(extract_context_id(device));
     auto& env = MetalEnvAccessor(ctx.get_env()).impl();
     if (!getDeviceProfilerState(env)) {
         return;
