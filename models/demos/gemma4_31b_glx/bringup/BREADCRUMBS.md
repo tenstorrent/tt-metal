@@ -138,3 +138,19 @@
   (block-sharded, HiFi4 + fp32 acc) on the residual layout through `_ResidualStep`. No new module.
 - Check (`bfw job check --task C.sliding.ffn_norm`): PASS. pcc 0.9999957, auto_margin_min 2.83, device_ops 3,
   host_flops_frac 0. Regressions C.sliding.attn_norm, attention, post_attn_norm, attn_residual: PASS.
+
+## C.sliding.mlp (run 20261018-003406-gemma31-glx-3, attempt 1), 2026-10-18
+
+- `tt/mlp.py`: `MLP(mesh, w)`, adapted from gemma4_d_p `tt/mlp.py` on this package's residual layout.
+  - Per chunk: all_gather rows over TP; gate linear with fused gelu_tanh and up linear (column-parallel, 21504 / 4 =
+    5376 intermediate per chip); gate * up; down linear (row-parallel); reduce_scatter rows over TP. 6 device ops.
+  - Weights are bfp8 in DRAM, transposed once at load. Default ttnn.linear program configs (no explicit blocking).
+- `tt/settings.py` adds MLP_FIDELITY (HiFi4), MLP_FP32_ACC (True) and MLP_FP32_INTERMEDIATE.
+  - MLP_FP32_INTERMEDIATE: gate and up outputs are fp32 before the multiply. The shipped default is False (bf16, as
+    in gemma4_d_p); MAX_PRECISION is True, so the component test ran with fp32.
+- `bringup/hooks.py`: `device_component` returns `_ResidualStep(mesh, MLP(...))` for step `mlp`, for any block type.
+  The attn block's MLP is the same module.
+- Check (`bfw job check --task C.sliding.mlp`): PASS. pcc 0.9999828, auto_margin_min 1.705, device_ops 6,
+  host_flops_frac 0.
+  - Golden case: rel 0.0059 (limit 0.0114), bias +0.00085.
+  - Regressions attn_norm, attention, post_attn_norm, attn_residual and ffn_norm: PASS.

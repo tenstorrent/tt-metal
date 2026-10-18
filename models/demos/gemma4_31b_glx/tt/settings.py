@@ -80,6 +80,17 @@ TABLE = {
     ),
     "ATTN_RING_NUM_LINKS": Setting(2, (1, 2), "Ethernet links per direction for the ring SDPA's CP exchange (BH: 2)."),
     "KV_SLOTS": Setting(2, None, "User slots in the served KV cache (serving_answers.yaml)."),
+    "MLP_FIDELITY": Setting(
+        "HiFi4",
+        ("HiFi4", "HiFi3", "HiFi2", "LoFi"),
+        "gate / up / down matmuls. gemma4_d_p runs them at LoFi with fp32 acc (a perf choice for later).",
+    ),
+    "MLP_FP32_ACC": Setting(True, None, "fp32 accumulation for the MLP matmuls."),
+    "MLP_FP32_INTERMEDIATE": Setting(
+        False,
+        None,
+        "gate (after gelu_tanh) and up outputs in fp32 before gate * up; False: bf16 as in gemma4_d_p.",
+    ),
 }
 
 MAX_PRECISION = {
@@ -89,6 +100,9 @@ MAX_PRECISION = {
     "ATTN_PROJ_FP32_ACC": True,
     "ATTN_SDPA_FIDELITY": "HiFi4",
     "ATTN_SDPA_FP32_ACC": False,  # the op's ceiling on the served path (see the setting)
+    "MLP_FIDELITY": "HiFi4",
+    "MLP_FP32_ACC": True,
+    "MLP_FP32_INTERMEDIATE": True,
 }
 
 settings = Settings("GEMMA4_31B_GLX_", TABLE, max_precision=MAX_PRECISION)

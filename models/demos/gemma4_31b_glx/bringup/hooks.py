@@ -123,6 +123,11 @@ def device_component(mesh, spec, layer, step):
         from models.demos.gemma4_31b_glx.tt.residual import ResidualAdd
 
         return _ResidualStep(mesh, ResidualAdd())
+    if step == "mlp":
+        from models.demos.gemma4_31b_glx.tt.mlp import MLP
+
+        w = {n: weights.load(ckpt, f"layers.{layer}.mlp.{n}.weight") for n in ("gate_proj", "up_proj", "down_proj")}
+        return _ResidualStep(mesh, MLP(mesh, w))
     cfg = weights.text_config(ckpt)
     if step == "attention" and cfg["layer_types"][layer] == "sliding_attention":
         from models.demos.gemma4_31b_glx.tt.attention import SlidingAttention
