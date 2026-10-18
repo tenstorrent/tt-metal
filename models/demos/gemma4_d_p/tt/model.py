@@ -51,11 +51,13 @@ def create_packed_rope_tables(mesh_device, hf_config, max_seq_len):
     return tables_by_type
 
 
-def prefill_chunk_geometry_error(prefill_chunk_size, cp_degree, max_seq_len, *, tp_degree):
+def prefill_chunk_geometry_error(prefill_chunk_size, cp_degree, max_seq_len, *, tp_degree, stripe_size=None):
     """Reason this chunk geometry is unusable, or None. The ring SDPA validates the rest at compile."""
     if max_seq_len <= 0 or prefill_chunk_size <= 0:
         return "sequence and chunk lengths must be positive"
-    if max_seq_len % prefill_chunk_size:
+    if stripe_size is not None and (stripe_size != 32 or max_seq_len % (cp_degree * stripe_size)):
+        return "striped prefill requires 32-token stripes and whole CP groups in the cache"
+    if stripe_size is None and max_seq_len % prefill_chunk_size:
         return "prefill chunks must divide max_seq_len"
     # Each chunk is split across CP, then across TP.
     # Each device keeps chunk_size / (CP * TP) token rows,
@@ -94,6 +96,7 @@ class Gemma4Model:
         max_local_batch_size=1,
         num_layers=None,
         ring_kv_caches=None,
+        stripe_size=None,
     ):
         assert state_dict and any(
             key.startswith("model.language_model.") for key in state_dict
@@ -101,7 +104,11 @@ class Gemma4Model:
         mesh_device = mesh_config.device
 
         geometry_error = prefill_chunk_geometry_error(
-            prefill_chunk_size, mesh_config.cp_degree, max_seq_len, tp_degree=mesh_config.tp_degree
+            prefill_chunk_size,
+            mesh_config.cp_degree,
+            max_seq_len,
+            tp_degree=mesh_config.tp_degree,
+            stripe_size=stripe_size,
         )
         if geometry_error:
             raise ValueError(geometry_error)
@@ -230,18 +237,19 @@ class Gemma4Model:
         on_layer_complete=None,
         d2h_service=None,
         metadata_msg=None,
+        prefill_batch=None,
     ):
-        """Prefill one user's chunk and return its final decoder hidden states.
+        """Prefill a token batch and return its final decoder hidden states.
 
         ``hidden_states`` holds this TP device's 1/TP of the chunk's rows, as
         ``transform_and_embed_prefill_inputs_device`` returns them. The caller owns
         trace staging. Migration acknowledgements follow each layer's KV writes.
         """
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
-            raise ValueError("Ring prefill processes one user per call")
+            raise ValueError("Prefill expects [1, 1, local_tokens, hidden_size] with requests packed along tokens")
         if d2h_service is not None and metadata_msg is None:
             raise ValueError("metadata_msg is required for D2H layer acknowledgements")
-        if not self._prefill_metadata_external:
+        if prefill_batch is None and not self._prefill_metadata_external:
             self.prefill_metadata.update(slot_idx=user_id, kv_actual_global=chunk_start_idx)
 
         # Each layer type's RoPE lanes are looked up once per chunk and shared by all its layers.
@@ -255,6 +263,7 @@ class Gemma4Model:
             hidden_states = layer(
                 hidden_states,
                 prefill_metadata=self.prefill_metadata,
+                prefill_batch=prefill_batch,
                 chunk_start_idx=chunk_start_idx,
                 packed_global_rope=packed_rope if layer_type == "full_attention" else None,
                 packed_sliding_rope=packed_rope if layer_type == "sliding_attention" else None,

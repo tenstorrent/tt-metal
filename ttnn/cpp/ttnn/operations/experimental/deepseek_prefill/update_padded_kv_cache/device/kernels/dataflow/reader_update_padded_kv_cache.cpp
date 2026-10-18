@@ -83,6 +83,11 @@ static void run_reader() {
     cb_in0.push_back(num_pages);
 #else
     Noc noc;
+#ifdef CACHE_STRIPE_SIZE
+    const uint32_t base = 0;
+    const uint32_t start_in_stripe = 0;
+    const uint32_t jump = 0;
+#else
     uint32_t kv_actual_global;
     if constexpr (HasMeta) {
         // Same on-device read the writer performs, so both derive the chunk start from ONE value and
@@ -129,6 +134,8 @@ static void run_reader() {
     const uint32_t base =
         ((linear_coord % tp_factor) * chunk_local_t + start_in_stripe + input_Ht - start_in_window) % input_Ht;
     const uint32_t jump = chunk_local_t * (tp_factor - 1);  // skip the other TP stripes; 0 at tp_factor == 1
+
+#endif
 
     constexpr uint32_t onetile = 1;
     const auto s = TensorAccessor(src_args, src_addr);

@@ -1,6 +1,6 @@
 # Gemma4 prefill service
 
-The service supports **Gemma4-31B-it, Blackhole 8×4, 262144 tokens per slot, 8192-token chunks, and batch 1**, with up to six resident KV slots. Defaults are in [the model manifest](../tt/runners/manifest.json).
+The service packs multiple requests into **8192 total tokens** on Gemma4-31B-it, Blackhole CP8/TP4, with up to six resident KV slots and 262144 tokens per slot. Each request is padded to a multiple of 256 tokens. Rank `r` owns `[32r, 32r+32)`, `[256+32r, 256+32r+32)`, and so on, regardless of request length. Defaults are in [the model manifest](../tt/runners/manifest.json).
 
 Run this setup from the repository root in both terminals:
 
@@ -21,20 +21,32 @@ Start the service:
 python -m models.demos.gemma4_d_p.tt.runners.prefill_runner
 ```
 
-Prepare six 256K prompts, one different Gutenberg book per slot, then send them with the shared producer:
+Prepare six prompts of 256, 512, 768, 1024, 1536, and 2048 tokens, then send them with the shared producer:
 
 ```bash
 python -m models.demos.gemma4_d_p.tt.runners.prepare_prefill_inputs
 python -m models.demos.common.prefill.runners.prefill_producer --manifest /tmp/gemma4_prefill_inputs/producer.json
 ```
 
-The preparation helper downloads and caches the books under `/tmp/gemma4_prefill_text`, then writes per-slot `metadata.json` token files and a producer manifest under `/tmp/gemma4_prefill_inputs`. Use one `--text /path/to/book.txt` per slot for local text, `--slots` for fewer prompts, or `--tokens 8193` to exercise a partial final chunk.
+The preparation helper downloads and caches the books under `/tmp/gemma4_prefill_text`, then writes per-slot `metadata.json` token files and a producer manifest under `/tmp/gemma4_prefill_inputs`. Use one `--text /path/to/book.txt` per slot for local text, `--slots` for fewer prompts, or `--tokens 1600,512,768,1024,1536,2048` for custom lengths. A single count applies to every slot; `--tokens 262144` restores the full-context workload.
 
-The shared producer uses round-robin scheduling and leaves the service running by default. Set `PREFILL_SEND_SHUTDOWN=1` when launching it to stop the service after the requests. These inputs contain tokens only, so golden-KV verification is disabled. In this mode the shared producer does not wait for layer acknowledgments; the hardware test below checks them separately.
+The shared producer coalesces ready requests without exceeding the padded token budget or using a KV slot twice in one batch. It flushes before idle gaps and at the end of the workload. Round-robin scheduling leaves the service running by default. Set `PREFILL_SEND_SHUTDOWN=1` when launching it to stop the service after the requests. These inputs contain tokens only, so golden-KV verification is disabled. In this mode the shared producer does not wait for layer acknowledgments; the hardware test below checks them separately.
 
-Set `PREFILL_NUM_USERS` to 1–6 for the runner and prepare the same number of prompts with `--slots`. `PREFILL_H2D_SERVICE_ID` selects the shared service name and must match in both terminals. The service uses `google/gemma-4-31B-it`. `PREFILL_TTNN_CACHE` overrides the `TT_CACHE_PATH` root. One of these cache variables must be set. The runner reuses `tensor_cache_bf16_mesh8x4` beneath that root; no cache path is derived from the HF model ID or `HF_HOME`. Starting at position zero replaces a slot's prompt; subsequent chunks must be contiguous.
+Set `PREFILL_NUM_USERS` to 1–6 for the runner and prepare the same number of prompts with `--slots`. `PREFILL_H2D_SERVICE_ID` selects the shared service name and must match in both terminals. The service uses `google/gemma-4-31B-it`. `PREFILL_TTNN_CACHE` overrides the `TT_CACHE_PATH` root. One of these cache variables must be set. The runner reuses `tensor_cache_bf16_mesh8x4` beneath that root; no cache path is derived from the HF model ID or `HF_HOME`. Starting at position zero replaces a slot's prompt; continuation starts must equal that slot's previous end and align to 256 tokens. A partial final chunk is supported, but cannot be continued at an unaligned position. Set `PREFILL_CHUNK_SIZE` identically in runner and producer to change the total budget; it must be a positive multiple of 1024 because the residual tensor is split across CP8 and TP4.
 
-The service captures one trace and stages tokens, slot metadata, and absolute RoPE positions before each replay. Device acknowledgments follow each layer's KV writes. The engine owns the caches and sockets. The populated caches remain resident until shutdown.
+Projection matmuls, normalization, RoPE, output projection, and MLP operate on the full packed tensor. Only KV updates and attention split into per-request slices. Global attention uses `ttnn.experimental.gemma4.rjsdpa(stripe_size=32)`; sliding attention uses the same op with `communication="halo"`. Absolute RoPE positions restart independently for each request.
+
+A trace captures a fixed tuple of padded request sizes. Slot IDs, prefix lengths, valid ends, token IDs, and RoPE positions are staged in persistent device buffers before replay. New size tuples are compiled and captured lazily; `GEMMA4_PREFILL_MAX_TRACES` bounds the LRU cache (default 4). All traces share persistent input/output buffers. Shape changes incur a warmup and capture; steady replays do not. `PREFILL_LAYER_ACK_D2H=0` is required: host acknowledgments are emitted per request/layer after the completed batch, so warmup cannot generate false completions. Migration may start later than with per-layer device acknowledgments.
+
+The H2D metadata format is now uint32 `[request_count, slot, start, end, ...]`, padded to `1 + 3 * min(num_users, chunk_size / 256)` words. Token payloads concatenate padded requests and unused batch padding, then transpose 32-token stripes into CP-major order. Use `packing.py` or the shared producer; old clients sending three metadata words must be updated. A metadata record filled with `0xffffffff` shuts down the service. KV migration tables and command-queue validation use the same fixed stripe ownership. The engine owns the caches and sockets; populated caches remain resident until shutdown.
+
+Run the short integration check (two synthetic decoder layers, global and sliding attention, full 8k projection batch):
+
+```bash
+pytest models/demos/gemma4_d_p/tests/test_packed_prefill.py -sv
+```
+
+It compares mixed requests and continuation chunks against Hugging Face, checks trace reuse with changed slots/prefixes, partial final requests, trace eviction, and completion counts. It does not load the 31B checkpoint.
 
 Run the end-to-end hardware check, which starts both the runner and producer:
 

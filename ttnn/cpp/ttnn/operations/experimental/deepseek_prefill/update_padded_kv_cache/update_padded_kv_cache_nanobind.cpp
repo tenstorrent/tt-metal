@@ -92,6 +92,11 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     input_rows)`` of every head as if that slice were the input. Plain page copy only.
                 input_rows (int, optional, tensor form): rows in the window (multiple of 32).
 
+                stripe_size (int, optional): Cache ownership stripe in tokens per CP rank,
+                    independent of the input length. Input packs each rank's rows in increasing
+                    global position. Requires TILE layout, whole stripes and no TP dedup or
+                    fused packing. Omitted: the input length determines the ownership stripe.
+
             Returns:
                 ttnn.Tensor: handle to `cache` with the new slab written in place.
         )doc",
@@ -108,7 +113,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 std::optional<uint32_t>,
                 std::optional<uint32_t>,
                 const std::optional<Tensor>&,
-                const std::optional<Tensor>&>(&update_padded_kv_cache),
+                const std::optional<Tensor>&,
+                std::optional<uint32_t>>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
             nb::arg("slot_idx"),
@@ -119,7 +125,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("valid_global") = nb::none(),
             nb::arg("tp_axis") = nb::none(),
             nb::arg("rope").noconvert() = nb::none(),
-            nb::arg("scales").noconvert() = nb::none()),
+            nb::arg("scales").noconvert() = nb::none(),
+            nb::arg("stripe_size") = nb::none()),
         // Per-element-tensor form (traceable).
         ttnn::overload_t(
             nb::overload_cast<
@@ -135,6 +142,7 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 const std::optional<Tensor>&,
                 const std::optional<Tensor>&,
                 uint32_t,
+                std::optional<uint32_t>,
                 std::optional<uint32_t>>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
@@ -148,7 +156,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("rope").noconvert() = nb::none(),
             nb::arg("scales").noconvert() = nb::none(),
             nb::arg("input_row_offset") = 0,
-            nb::arg("input_rows") = nb::none()));
+            nb::arg("input_rows") = nb::none(),
+            nb::arg("stripe_size") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::detail

@@ -52,6 +52,7 @@ struct UpdatePaddedKvCacheDeviceOperation {
         // offset is a runtime arg. nullopt input_rows = every row from the offset on.
         uint32_t input_row_offset = 0;
         std::optional<uint32_t> input_rows;
+        std::optional<uint32_t> stripe_size;
     };
 
     struct tensor_args_t {
@@ -148,6 +149,7 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& rope = std::nullopt,
     const std::optional<ttnn::Tensor>& scales = std::nullopt,
     uint32_t input_row_offset = 0,
-    std::optional<uint32_t> input_rows = std::nullopt);
+    std::optional<uint32_t> input_rows = std::nullopt,
+    std::optional<uint32_t> stripe_size = std::nullopt);
 
 }  // namespace ttnn::prim

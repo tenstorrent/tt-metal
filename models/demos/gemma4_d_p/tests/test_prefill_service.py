@@ -79,34 +79,32 @@ def test_prefill_service_six_slots(monkeypatch, tmp_path):
     full_manifest = write_producer_manifest(tmp_path / "full", prompts)
     reuse_manifest = write_producer_manifest(tmp_path / "reuse", [tokens[:8193] for tokens in prompts])
     snapshots = {}
-    original_prefill = Gemma4PrefillRuntime.prefill_chunk
+    original_prefill = Gemma4PrefillRuntime.prefill_batch
     original_loop = prefill_runner.run_request_loop
 
     def checked_prefill(runtime, input_tensor, kv_cache, **request):
-        if request["actual_start"] == 0 or request["actual_end"] in (8193, 262144):
-            shards = ttnn.get_device_tensors(input_tensor)
-            received = torch.cat([ttnn.to_torch(shards[row * 4]).flatten() for row in range(8)]).tolist()
-            expected = prompts[request["slot_id"]][request["actual_start"] : request["actual_end"]]
-            assert received[: len(expected)] == expected
+        segments = request["segments"]
+        shards = ttnn.get_device_tensors(input_tensor)
+        rows = torch.stack([ttnn.to_torch(shards[row * 4]).flatten() for row in range(8)])
+        received = rows.reshape(8, -1, 32).permute(1, 0, 2).flatten().tolist()
+        offset = 0
+        for segment in segments:
+            expected = prompts[segment.slot_id][segment.actual_start : segment.actual_end]
+            assert received[offset : offset + len(expected)] == expected
+            offset += segment.padded_length()
         original_prefill(runtime, input_tensor, kv_cache, **request)
-        if request["actual_end"] in (8193, 262144):
+        if any(s.actual_end in (8193, 262144) for s in segments):
             hidden = ttnn.to_torch(ttnn.get_device_tensors(runtime.output)[0]).float()
             assert torch.isfinite(hidden).all()
             assert hidden.std() > 0.001
-            ack_service = runtime.d2h_service
-            runtime.d2h_service = None
-            try:
-                eager_output = runtime._forward()
-                ttnn.synchronize_device(runtime.mesh_device)
-            finally:
-                runtime.d2h_service = ack_service
-            eager_hidden = ttnn.to_torch(ttnn.get_device_tensors(eager_output)[0]).float()
+            runtime._forward()
+            ttnn.synchronize_device(runtime.mesh_device)
+            eager_hidden = ttnn.to_torch(ttnn.get_device_tensors(runtime.output)[0]).float()
             pcc = torch.corrcoef(torch.stack((hidden.flatten(), eager_hidden.flatten())))[0, 1]
-            assert pcc > 0.999, f"Slot {request['slot_id']} trace/eager PCC={pcc}"
-            logger.info(f"Slot {request['slot_id']} final-chunk trace/eager PCC={float(pcc):.8f}")
-            eager_output.deallocate(True)
-            if request["actual_end"] == 262144:
-                snapshots[request["slot_id"]] = read_slot_samples(runtime, kv_cache, request["slot_id"])
+            assert pcc > 0.999, f"Batch trace/eager PCC={pcc}"
+            for segment in segments:
+                if segment.actual_end == 262144:
+                    snapshots[segment.slot_id] = read_slot_samples(runtime, kv_cache, segment.slot_id)
 
     def checked_loop(runtime, kv_cache, *args, **kwargs):
         import threading
@@ -161,7 +159,7 @@ def test_prefill_service_six_slots(monkeypatch, tmp_path):
             run_draining(12 * 60, before_first_chunk=None)
         assert runtime.slot_ends == [8193] * 6
 
-    monkeypatch.setattr(Gemma4PrefillRuntime, "prefill_chunk", checked_prefill)
+    monkeypatch.setattr(Gemma4PrefillRuntime, "prefill_batch", checked_prefill)
     monkeypatch.setattr(prefill_runner, "run_request_loop", checked_loop)
     with producer_process(tmp_path / "producer.log", full_manifest):
         prefill_runner.main()

@@ -122,14 +122,19 @@ static void run_writer() {
     // Cache linearization: users outer, layers inner.
     const uint32_t batch_idx = slot_idx * num_layers + layer_idx;
 
-    const uint32_t update_idxt = local_cache_offset(kv_actual_global_t, my_sp_coord, sp_factor, chunk_local_t);
+#ifdef CACHE_STRIPE_SIZE
+    constexpr uint32_t ownership_stripe_t = CACHE_STRIPE_SIZE / tile_height;
+#else
+    const uint32_t ownership_stripe_t = chunk_local_t;
+#endif
+    const uint32_t update_idxt = local_cache_offset(kv_actual_global_t, my_sp_coord, sp_factor, ownership_stripe_t);
 
     const uint32_t input_Ht = chunk_local_t;
 
     // Real rows are a prefix on every chip, so their end is the staircase above at valid_global_t.
     uint32_t rows_to_write = input_Ht;
     if constexpr (HasValid) {
-        const uint32_t end_idxt = local_cache_offset(valid_global_t, my_sp_coord, sp_factor, chunk_local_t);
+        const uint32_t end_idxt = local_cache_offset(valid_global_t, my_sp_coord, sp_factor, ownership_stripe_t);
         rows_to_write = (end_idxt > update_idxt) ? (end_idxt - update_idxt) : 0;
         if (rows_to_write > input_Ht) {
             rows_to_write = input_Ht;

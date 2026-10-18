@@ -110,8 +110,9 @@ class Gemma4DecoderLayer:
         chunk_start_idx=0,
         packed_global_rope=None,
         packed_sliding_rope=None,
+        prefill_batch=None,
     ):
-        """Prefill one CP-sharded chunk."""
+        """Prefill one CP-sharded batch of token rows."""
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
         # hidden_states holds this TP device's 1/TP of the rows: gather the normed rows before each block, whose
         # closing reduce-scatter returns 1/TP again.
@@ -121,6 +122,7 @@ class Gemma4DecoderLayer:
         attn_output = self.self_attn(
             normed,
             prefill_metadata=prefill_metadata,
+            prefill_batch=prefill_batch,
             chunk_start_idx=chunk_start_idx,
             packed_global_rope=packed_global_rope,
             packed_sliding_rope=packed_sliding_rope,

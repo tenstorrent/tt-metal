@@ -127,8 +127,9 @@ class Gemma4Attention:
         chunk_start_idx=0,
         packed_global_rope=None,
         packed_sliding_rope=None,
+        prefill_batch=None,
     ):
-        """Write a user's chunk and attend its cached prefix."""
+        """Project the full token batch, then attend each request's cached prefix."""
         if self.ring_kv_cache is None:
             raise ValueError("Galaxy prefill requires a ring KV cache")
         tp = self.mesh_config.tp_degree
@@ -225,28 +226,32 @@ class Gemma4Attention:
                 value_is_packed=True,
                 memory_config=act_mc,
             )
-            write_chunk_to_global_ring_cache(
-                self.ring_kv_cache.kv,
-                packed_kv,
-                self.mesh_config,
-                kv_actual_global=chunk_offset,
-                layer_idx=self.ring_layer_idx,
-                num_layers=self.ring_num_layers,
-                prefill_metadata=prefill_metadata,
-            )
         else:
             packed_q = None
-            write_chunk_to_sliding_ring_cache(
-                self.ring_kv_cache.k,
-                self.ring_kv_cache.v,
-                tt_k,
-                tt_v,
-                self.mesh_config,
-                kv_actual_global=chunk_offset,
-                layer_idx=self.ring_layer_idx,
-                num_layers=self.ring_num_layers,
-                prefill_metadata=prefill_metadata,
-            )
+
+        if prefill_batch is None:
+            if is_global:
+                write_chunk_to_global_ring_cache(
+                    self.ring_kv_cache.kv,
+                    packed_kv,
+                    self.mesh_config,
+                    kv_actual_global=chunk_offset,
+                    layer_idx=self.ring_layer_idx,
+                    num_layers=self.ring_num_layers,
+                    prefill_metadata=prefill_metadata,
+                )
+            else:
+                write_chunk_to_sliding_ring_cache(
+                    self.ring_kv_cache.k,
+                    self.ring_kv_cache.v,
+                    tt_k,
+                    tt_v,
+                    self.mesh_config,
+                    kv_actual_global=chunk_offset,
+                    layer_idx=self.ring_layer_idx,
+                    num_layers=self.ring_num_layers,
+                    prefill_metadata=prefill_metadata,
+                )
 
         sdpa_compute_config = ttnn.init_device_compute_kernel_config(
             tt_q.device().arch(),
@@ -257,43 +262,51 @@ class Gemma4Attention:
         )
         num_local_kv_heads_ring = tt_v.shape[1]
         ring_logical_n = self.ring_max_seq_len
-        if is_global:
-            tt_sdpa = global_ring_prefill_attention(
-                packed_q,
-                self.ring_kv_cache.kv,
-                mesh_config=self.mesh_config,
-                prefill_metadata=prefill_metadata,
-                ccl_manager=self.ccl_manager,
-                num_local_kv_heads=num_local_kv_heads_ring,
-                max_seq_len=self.ring_max_seq_len,
-                logical_n=ring_logical_n,
-                kv_actual_global=chunk_offset,
-                scale=1.0,
-                compute_kernel_config=sdpa_compute_config,
-                layer_idx=self.ring_layer_idx,
-                num_layers=self.ring_num_layers,
+        if prefill_batch is not None:
+            from models.demos.gemma4_d_p.tt.attention.striped_prefill import striped_prefill_attention
+
+            tt_sdpa = striped_prefill_attention(
+                self, tt_q, packed_kv if is_global else tt_k, tt_v, prefill_batch, sdpa_compute_config
             )
-            packed_kv.deallocate(True)
         else:
-            tt_sdpa = sliding_ring_prefill_attention(
-                tt_q,
-                self.ring_kv_cache.k,
-                self.ring_kv_cache.v,
-                mesh_config=self.mesh_config,
-                prefill_metadata=prefill_metadata,
-                ccl_manager=self.ccl_manager,
-                num_local_kv_heads=num_local_kv_heads_ring,
-                head_dim=self.config.head_dim,
-                max_seq_len=self.ring_max_seq_len,
-                logical_n=ring_logical_n,
-                kv_actual_global=chunk_offset,
-                gather_buffer_key=self.layer_idx % NUM_SWA_HALO_BUFFER_PAIRS,
-                sliding_window_size=sliding_window_size,
-                scale=1.0,
-                compute_kernel_config=sdpa_compute_config,
-                layer_idx=self.ring_layer_idx,
-                num_layers=self.ring_num_layers,
-            )
+            if is_global:
+                tt_sdpa = global_ring_prefill_attention(
+                    packed_q,
+                    self.ring_kv_cache.kv,
+                    mesh_config=self.mesh_config,
+                    prefill_metadata=prefill_metadata,
+                    ccl_manager=self.ccl_manager,
+                    num_local_kv_heads=num_local_kv_heads_ring,
+                    max_seq_len=self.ring_max_seq_len,
+                    logical_n=ring_logical_n,
+                    kv_actual_global=chunk_offset,
+                    scale=1.0,
+                    compute_kernel_config=sdpa_compute_config,
+                    layer_idx=self.ring_layer_idx,
+                    num_layers=self.ring_num_layers,
+                )
+            else:
+                tt_sdpa = sliding_ring_prefill_attention(
+                    tt_q,
+                    self.ring_kv_cache.k,
+                    self.ring_kv_cache.v,
+                    mesh_config=self.mesh_config,
+                    prefill_metadata=prefill_metadata,
+                    ccl_manager=self.ccl_manager,
+                    num_local_kv_heads=num_local_kv_heads_ring,
+                    head_dim=self.config.head_dim,
+                    max_seq_len=self.ring_max_seq_len,
+                    logical_n=ring_logical_n,
+                    kv_actual_global=chunk_offset,
+                    gather_buffer_key=self.layer_idx % NUM_SWA_HALO_BUFFER_PAIRS,
+                    sliding_window_size=sliding_window_size,
+                    scale=1.0,
+                    compute_kernel_config=sdpa_compute_config,
+                    layer_idx=self.ring_layer_idx,
+                    num_layers=self.ring_num_layers,
+                )
+        if is_global:
+            packed_kv.deallocate(True)
         tt_q.deallocate(True)
         if tt_k is not None:
             tt_k.deallocate(True)

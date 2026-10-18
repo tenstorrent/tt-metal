@@ -50,6 +50,7 @@ def create_tt_model(
     ring_kv_caches=None,
     force_rebuild=False,
     tt_cache_path=None,
+    stripe_size=None,
 ):
     """
     Create Gemma4 model with all weights loaded to device.
@@ -59,7 +60,7 @@ def create_tt_model(
     """
     mesh_device = mesh_config.device
     geometry_error = prefill_chunk_geometry_error(
-        prefill_chunk_size, mesh_config.cp_degree, max_seq_len, tp_degree=mesh_config.tp_degree
+        prefill_chunk_size, mesh_config.cp_degree, max_seq_len, tp_degree=mesh_config.tp_degree, stripe_size=stripe_size
     )
     if geometry_error:
         raise ValueError(geometry_error)
@@ -114,6 +115,7 @@ def create_tt_model(
         max_local_batch_size=max_batch_size,
         num_layers=num_layers,
         ring_kv_caches=ring_kv_caches,
+        stripe_size=stripe_size,
     )
 
     # After a full cold build, record completion (+ capture host-consumed weights to the sidecar)

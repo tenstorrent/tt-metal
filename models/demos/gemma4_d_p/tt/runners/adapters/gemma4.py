@@ -30,7 +30,6 @@ def validate_params(params):
         "is_first_rank": True,
         "is_last_rank": True,
         "max_seq_len": Gemma4ServiceConfig.MAX_SEQ_LEN,
-        "chunk_size": Gemma4ServiceConfig.CHUNK_SIZE,
         "sp_axis": 0,
         "tp_axis": 1,
         "use_trace": True,
@@ -39,6 +38,8 @@ def validate_params(params):
     for name, value in expected.items():
         if getattr(params, name) != value:
             raise ValueError(f"Gemma4 prefill requires {name}={value}, got {getattr(params, name)}")
+    if params.chunk_size <= 0 or params.chunk_size % (8 * 4 * 32) or params.chunk_size > params.max_seq_len:
+        raise ValueError("Gemma4 packed chunk size must be a positive multiple of 1024 within the context limit")
     if not 1 <= params.num_users <= Gemma4ServiceConfig.MAX_USER_SLOTS:
         raise ValueError(f"Gemma4 prefill requires 1 to {Gemma4ServiceConfig.MAX_USER_SLOTS} KV slots")
 
@@ -50,6 +51,27 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
     ttnn_cache_default = ""
     prefill_trace_default = "/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135"
     pipeline_activation_emb_tp_sharded = False
+
+    def prefill_metadata_size_bytes(self, chunk_size, cp, num_users):
+        from models.demos.gemma4_d_p.tt.runners.packing import metadata_size_bytes
+
+        return metadata_size_bytes(chunk_size, cp, num_users)
+
+    def decode_prefill_metadata(self, words):
+        from models.demos.gemma4_d_p.tt.runners.packing import decode_metadata
+
+        segments = decode_metadata([int(v) & 0xFFFFFFFF for v in words])
+        if segments is None:
+            return dict(slot_id=-1, actual_start=-1, actual_end=-1)
+        first = segments[0]
+        return dict(
+            slot_id=first.slot_id, actual_start=first.actual_start, actual_end=first.actual_end, segments=segments
+        )
+
+    def create_prefill_sender(self, send, *, chunk_size, cp, num_users, max_seq_len):
+        from models.demos.gemma4_d_p.tt.runners.packing import PackedPrefillSender
+
+        return PackedPrefillSender(send, chunk_size=chunk_size, cp=cp, num_users=num_users, max_seq_len=max_seq_len)
 
     @property
     def hf_model_id(self):

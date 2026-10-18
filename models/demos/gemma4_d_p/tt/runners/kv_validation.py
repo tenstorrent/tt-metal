@@ -264,7 +264,7 @@ def read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir):
 
 
 def read_cache_tensor(tensor, slot_id, real_len, staging=None):
-    """Gather one slot's populated prefix and restore chunk-major CP order.
+    """Gather one slot's populated prefix and restore natural token order.
 
     `staging` keeps one host tensor per cache shape across calls. Reading into it and viewing its
     shards without a copy avoids allocating and freeing ~2 GB of host memory per call, which costs
@@ -272,13 +272,12 @@ def read_cache_tensor(tensor, slot_id, real_len, staging=None):
     """
     staging = {} if staging is None else staging
     cp, tp = Gemma4ServiceConfig.MESH_SHAPE
-    local_chunk = Gemma4ServiceConfig.CHUNK_SIZE // cp
-    if real_len % Gemma4ServiceConfig.CHUNK_SIZE:
-        raise ValueError("Command-queue validation requires complete prefill chunks")
+    local_chunk = 32
+    padded_len = math.ceil(real_len / (cp * local_chunk)) * cp * local_chunk
     selected = ttnn.slice(
         tensor,
         (slot_id, 0, 0, 0),
-        (slot_id + 1, tensor.shape[1], real_len // cp, tensor.shape[3]),
+        (slot_id + 1, tensor.shape[1], padded_len // cp, tensor.shape[3]),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     try:
@@ -296,24 +295,25 @@ def read_cache_tensor(tensor, slot_id, real_len, staging=None):
     # Views of the staging buffers, consumed by the gather below before the next read reuses them.
     shards = [shard.to_torch_with_padded_shape() for shard in ttnn.get_device_tensors(host)]
     local_heads, width = shards[0].shape[1], shards[0].shape[3]
-    chunks = real_len // Gemma4ServiceConfig.CHUNK_SIZE
+    chunks = padded_len // (cp * local_chunk)
     gathered = torch.empty((local_heads * tp, chunks, cp, local_chunk, width), dtype=shards[0].dtype)
     for row in range(cp):
         for column in range(tp):
             shard = shards[row * tp + column].reshape(local_heads, chunks, local_chunk, width)
             gathered[column * local_heads : (column + 1) * local_heads, :, row].copy_(shard)
-    return gathered.reshape(local_heads * tp, real_len, width)
+    return gathered.reshape(local_heads * tp, padded_len, width)[:, :real_len]
 
 
 def check_table_samples(table, device_map, layer, slot_id, config_id, actual):
     """Check each CP rank's first and last populated block against the table."""
     from models.demos.common.prefill.runners.prefill_producer import _decode_bfp8_chunk, _resolve_unique_id
 
-    chunk_size = Gemma4ServiceConfig.CHUNK_SIZE
-    local_chunk = chunk_size // Gemma4ServiceConfig.MESH_SHAPE[0]
-    last_chunk = actual.shape[0] - chunk_size
-    for row in range(Gemma4ServiceConfig.MESH_SHAPE[0]):
-        for position in (row * local_chunk, last_chunk + (row + 1) * local_chunk - 32):
+    cp = Gemma4ServiceConfig.MESH_SHAPE[0]
+    for row in range(cp):
+        positions = range(row * 32, actual.shape[0] - 31, cp * 32)
+        if not positions:
+            continue
+        for position in {positions[0], positions[-1]}:
             location = table.lookup(layer, position, slot_id, config_id)
             if location.size_bytes != actual.shape[1] // 32 * 1088:
                 raise ValueError(f"Invalid table sample: layer={layer} config={config_id} pos={position}")

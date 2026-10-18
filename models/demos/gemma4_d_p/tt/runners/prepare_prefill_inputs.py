@@ -18,8 +18,11 @@ def load_prompts(text_paths, num_slots, num_tokens, cache_dir):
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(Gemma4PrefillAdapter().hf_model_id)
+    lengths = [num_tokens] * num_slots if isinstance(num_tokens, int) else list(num_tokens)
+    if len(lengths) != num_slots:
+        raise ValueError("Provide one length per slot")
     prompts = []
-    for slot in range(num_slots):
+    for slot, num_tokens in enumerate(lengths):
         if text_paths:
             path = text_paths[slot]
         else:
@@ -72,15 +75,22 @@ def main():
         default=Gemma4ServiceConfig.MAX_USER_SLOTS,
         choices=range(1, Gemma4ServiceConfig.MAX_USER_SLOTS + 1),
     )
-    parser.add_argument("--tokens", type=int, default=Gemma4ServiceConfig.MAX_SEQ_LEN)
+    parser.add_argument("--tokens", help="One token count for all slots, or comma-separated counts per slot")
     parser.add_argument("--text", type=Path, action="append", help="One UTF-8 text file per slot")
     parser.add_argument("--text-cache", type=Path, default=Path("/tmp/gemma4_prefill_text"))
     args = parser.parse_args()
-    if not 1 <= args.tokens <= Gemma4ServiceConfig.MAX_SEQ_LEN:
-        parser.error(f"--tokens must be between 1 and {Gemma4ServiceConfig.MAX_SEQ_LEN}")
+    lengths = (
+        [256, 512, 768, 1024, 1536, 2048][: args.slots]
+        if args.tokens is None
+        else [int(n) for n in args.tokens.split(",")]
+    )
+    if len(lengths) == 1:
+        lengths *= args.slots
+    if len(lengths) != args.slots or any(not 1 <= n <= Gemma4ServiceConfig.MAX_SEQ_LEN for n in lengths):
+        parser.error(f"--tokens needs one count or {args.slots} counts between 1 and {Gemma4ServiceConfig.MAX_SEQ_LEN}")
     if args.text and len(args.text) != args.slots:
         parser.error("supply one --text per slot")
-    prompts = load_prompts(args.text, args.slots, args.tokens, args.text_cache)
+    prompts = load_prompts(args.text, args.slots, lengths, args.text_cache)
     manifest_path = write_producer_manifest(args.output_dir, prompts)
     logger.info(f"Prepared {len(prompts)} prompts: {manifest_path}")
 

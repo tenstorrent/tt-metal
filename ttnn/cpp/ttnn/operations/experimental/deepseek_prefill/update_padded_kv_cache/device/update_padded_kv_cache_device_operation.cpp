@@ -164,6 +164,19 @@ void validate_runtime_args(
         cache.storage_type());
     const auto& mesh_view = cache.device()->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "update_padded_kv_cache requires a 2D mesh");
+    if (args.stripe_size.has_value()) {
+        const auto& input = tensor_args.input;
+        const auto stripe = *args.stripe_size;
+        TT_FATAL(stripe > 0 && stripe % TILE_HEIGHT == 0, "stripe_size must be a positive multiple of 32");
+        TT_FATAL(
+            cache.layout() == Layout::TILE && input.layout() == Layout::TILE && !args.tp_axis.has_value() &&
+                !tensor_args.rope.has_value() && !tensor_args.scales.has_value(),
+            "Explicit cache stripes require tiled input/cache without TP dedup or fused packing");
+        TT_FATAL(
+            input.padded_shape()[-2] % stripe == 0 && cache.padded_shape()[-2] % stripe == 0,
+            "Input and cache sequence lengths must contain whole ownership stripes");
+    }
+
     if (!args.cluster_axis.has_value()) {
         const uint32_t mesh_size = mesh_view.num_rows() * mesh_view.num_cols();
         TT_FATAL(
@@ -555,6 +568,7 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         args.layer_idx,
         args.num_layers,
         args.cluster_axis,
+        args.stripe_size,
         args.tp_axis.has_value(),
         args.tp_axis.value_or(0),
         tensor_args.rope.has_value(),
@@ -811,6 +825,11 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     writer_kernel.core_ranges = all_cores;
     writer_kernel.compile_time_args = std::move(writer_compile_args);
     writer_kernel.config = WriterConfigDescriptor{};
+    if (args.stripe_size.has_value()) {
+        const auto stripe = std::to_string(*args.stripe_size);
+        reader_kernel.defines.emplace_back("CACHE_STRIPE_SIZE", stripe);
+        writer_kernel.defines.emplace_back("CACHE_STRIPE_SIZE", stripe);
+    }
 
     // Common rt-args: per-chip kernel inputs for on-device update_idxt + start_id derivation. Indices
     // 0-7 are structural (constant for this cached program): linear_coord/linear_factor/chunk_local_t are
@@ -1011,7 +1030,8 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& rope,
     const std::optional<ttnn::Tensor>& scales,
     uint32_t input_row_offset,
-    std::optional<uint32_t> input_rows) {
+    std::optional<uint32_t> input_rows,
+    std::optional<uint32_t> stripe_size) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::UpdatePaddedKvCacheDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
@@ -1024,6 +1044,7 @@ ttnn::Tensor update_padded_kv_cache(
         .tp_axis = tp_axis,
         .input_row_offset = input_row_offset,
         .input_rows = input_rows,
+        .stripe_size = stripe_size,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .cache = cache,

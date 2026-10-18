@@ -99,6 +99,7 @@ CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
 
 
 def _load_env_config() -> None:
+    global CHUNK_METADATA_SIZE_BYTES
     global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
     global MTP_DECODE_LEVELS
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
@@ -119,6 +120,9 @@ def _load_env_config() -> None:
     # NUM_LAYERS * pushes waits for acks that are never sent and burns the full 600 s timeout twice,
     # once after warmup and once after the measured request.
     NUM_ACK_LAYERS = getattr(ADAPTER, "num_kv_cache_layers", lambda n: n)(NUM_LAYERS)
+    CHUNK_METADATA_SIZE_BYTES = ADAPTER.prefill_metadata_size_bytes(
+        CHUNK_SIZE, SP_AXIS, int(os.environ.get("PREFILL_NUM_USERS", "1"))
+    )
 
 
 _load_env_config()
@@ -510,7 +514,9 @@ class RunStats:
     wall_s: float
 
 
-def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, sleep_fn=time.sleep, rng=None):
+def run_schedule(
+    cfg: ProducerConfig, *, push_fn, flush_fn=None, now_fn=time.perf_counter, sleep_fn=time.sleep, rng=None
+):
     rng = rng if rng is not None else random.Random(cfg.seed)
     slots = [_Slot(i) for i in range(cfg.num_users)]
     resident: dict = {}
@@ -556,6 +562,8 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 
         roll = rng.random()
         if roll < cfg.p_gap:
+            if flush_fn is not None:
+                flush_fn()
             sleep_fn(rng.uniform(*cfg.gap_ms) / 1000.0)
             continue
 
@@ -576,6 +584,8 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
         else:
             send_chunk(slot)
 
+    if flush_fn is not None:
+        flush_fn()
     return RunStats(
         resident=resident, total_pushes=total_pushes, push_ms=push_ms, completed=completed, wall_s=now_fn() - start
     )
@@ -1617,9 +1627,23 @@ def main() -> None:
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
+    packed_sender = ADAPTER.create_prefill_sender(
+        lambda rows, metadata: _push(
+            service, payload_bytes, _to_host_array(torch.tensor(rows).unsqueeze(1)), None, metadata
+        ),
+        chunk_size=CHUNK_SIZE,
+        cp=SP_AXIS,
+        num_users=cfg.num_users,
+        max_seq_len=MAX_SEQ_LEN,
+    )
+
     def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
         pool = pools_by_trace[slot_traces[slot_id]]
         tokens = _chunk_slice(pool, actual_start, actual_isl)
+        if packed_sender is not None:
+            push_start = time.perf_counter()
+            packed_sender.append_request(tokens[: actual_end - actual_start], slot_id, actual_start, actual_end)
+            return (time.perf_counter() - push_start) * 1000.0
         metadata = _pack_metadata(slot_id, actual_start, actual_end)
         logger.info(f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
         push_start = time.perf_counter()
@@ -1641,11 +1665,17 @@ def main() -> None:
             logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
             for cidx in range(warmup_chunks):
                 push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
+            if packed_sender is not None:
+                packed_sender.flush()
             service.barrier()
             wait_for_layer_completions(drain, chunk_layers * warmup_chunks)
             logger.info("[producer] warmup complete; starting the measured request")
 
-        stats = run_schedule(cfg, push_fn=push_chunk)
+        packed_tokens_before = packed_sender.num_tokens if packed_sender is not None else 0
+        packed_batches_before = packed_sender.num_batches if packed_sender is not None else 0
+        stats = run_schedule(
+            cfg, push_fn=push_chunk, flush_fn=packed_sender.flush if packed_sender is not None else None
+        )
         service.barrier()
         # One completion per layer per chunk; chunk_layers is what the runner emits (KV-writing layers plus
         # MTP/DFlash extras), not NUM_LAYERS. The count is cumulative, so it includes the warm-up.
@@ -1655,7 +1685,16 @@ def main() -> None:
             drain.stop()
 
     sorted_ms = sorted(stats.push_ms)
-    total_tokens = stats.total_pushes * CHUNK_SIZE
+    total_tokens = (
+        (packed_sender.num_tokens - packed_tokens_before)
+        if packed_sender is not None
+        else stats.total_pushes * CHUNK_SIZE
+    )
+    if packed_sender is not None:
+        logger.info(
+            f"[producer] packed {stats.total_pushes} request chunks into "
+            f"{packed_sender.num_batches - packed_batches_before} batches"
+        )
     logger.info(
         f"[producer] DONE wall={stats.wall_s:.1f}s pushes={stats.total_pushes} requests={stats.completed} "
         f"tokens={total_tokens} throughput={total_tokens / stats.wall_s if stats.wall_s else 0:.0f} tok/s "

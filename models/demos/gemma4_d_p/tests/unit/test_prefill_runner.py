@@ -42,10 +42,10 @@ def test_adapter_uses_canonical_weight_cache(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "override", [{"num_users": 7}, {"mesh_shape": (4, 8)}, {"num_layers": 30}, {"chunk_size": 4096}]
+    "override", [{"num_users": 7}, {"mesh_shape": (4, 8)}, {"num_layers": 30}, {"chunk_size": 768}]
 )
 def test_unsupported_service_shapes(override, expect_error):
-    with expect_error(ValueError, "Gemma4|KV slot|Chunk|Slot"):
+    with expect_error(ValueError, "Gemma4|KV slot|Chunk|Slot|Request|request"):
         validate_params(replace(service_params(), **override))
 
 
@@ -58,7 +58,7 @@ def test_slot_offsets_and_partial_final_chunk(expect_error):
     runtime.validate_chunk(5, 253952, 262144)
     runtime.validate_chunk(5, 0, 8192)
     for chunk in [(6, 0, 8192), (0, 16384, 24576), (0, 1, 8193), (5, 253952, 262145)]:
-        with expect_error(ValueError, "Gemma4|KV slot|Chunk|Slot"):
+        with expect_error(ValueError, "Gemma4|KV slot|Chunk|Slot|Request|request"):
             runtime.validate_chunk(*chunk)
 
 

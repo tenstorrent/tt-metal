@@ -124,7 +124,7 @@ assert MTP_DECODE_LEVELS == MTP_LEVELS or (
 NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
 TOKEN_ID_BYTES = 4
 _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
+CHUNK_METADATA_SIZE_BYTES = ADAPTER.prefill_metadata_size_bytes(CHUNK_SIZE, _sp, NUM_USERS)
 
 D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
 TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_default))) == "1"
@@ -177,11 +177,7 @@ def _handle_sigterm(signum, frame):
 def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False) -> dict:
     # One D2H read; the 4th word is MTP provided_levels.
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-    meta = {
-        "slot_id": int(m[0]),
-        "actual_start": int(m[1]),
-        "actual_end": int(m[2]),
-    }
+    meta = ADAPTER.decode_prefill_metadata(m.tolist())
     if with_provided_levels:
         meta["provided_levels"] = max(0, int(m[3]))
     return meta
@@ -493,18 +489,28 @@ def _compute_and_send(
     )
 
     mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
-    out = runtime.prefill_chunk(
-        inp,
-        kv_caches,
-        slot_id=meta["slot_id"],
-        actual_start=meta["actual_start"],
-        actual_end=meta["actual_end"],
-        request_id=c,
-        d2h_service=d2h_service,
-        metadata_msg=metadata_msg,
-        **mtp_kwargs,
-        **({"indexer_indices": indices} if indices is not None else {}),
-    )
+    if "segments" in meta:
+        out = runtime.prefill_batch(
+            inp,
+            kv_caches,
+            segments=meta["segments"],
+            d2h_service=d2h_service,
+            metadata_msg=metadata_msg,
+        )
+    else:
+        out = runtime.prefill_chunk(
+            inp,
+            kv_caches,
+            slot_id=meta["slot_id"],
+            actual_start=meta["actual_start"],
+            actual_end=meta["actual_end"],
+            request_id=c,
+            d2h_service=d2h_service,
+            metadata_msg=metadata_msg,
+            **mtp_kwargs,
+            **({"indexer_indices": indices} if indices is not None else {}),
+        )
+
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
