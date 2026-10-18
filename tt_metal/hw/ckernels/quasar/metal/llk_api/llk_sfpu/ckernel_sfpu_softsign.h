@@ -11,7 +11,7 @@
 
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_softsign() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -32,7 +32,7 @@ inline void calculate_softsign() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void init_softsign() {
     // The store walks dest through ADDR_MOD_6 (one SFPU row = two dest counter steps), so the loop needs no separate
     // increment.

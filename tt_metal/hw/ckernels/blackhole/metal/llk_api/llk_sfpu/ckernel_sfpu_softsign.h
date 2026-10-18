@@ -76,18 +76,18 @@ inline void calculate_softsign_bf16() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_softsign() {
-    if constexpr (!APPROXIMATION_MODE && DST_ACCUM_MODE) {
+    if constexpr (!APPROXIMATION_MODE && is_fp32_dest_acc_en) {
         calculate_softsign_fp32<ITERATIONS>();
         return;
     }
-    if constexpr (!APPROXIMATION_MODE && !DST_ACCUM_MODE) {
+    if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) {
         calculate_softsign_bf16<ITERATIONS>();
         return;
     }
     // Reached with APPROXIMATION_MODE only; the precise paths are above.
-    constexpr int recip_iters = APPROXIMATION_MODE ? 0 : (DST_ACCUM_MODE ? 2 : 1);
+    constexpr int recip_iters = APPROXIMATION_MODE ? 0 : (is_fp32_dest_acc_en ? 2 : 1);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
@@ -105,18 +105,18 @@ inline void calculate_softsign() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void init_softsign() {
     // The store walks dest through ADDR_MOD_6, so the loop needs no separate increment.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = APPROXIMATION_MODE ? 2 : 4}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
-    if constexpr (!APPROXIMATION_MODE && !DST_ACCUM_MODE) {
+    if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) {
         // Bias the single Newton step up so the bfloat16 store does not truncate below 1.
         sfpi::vConstFloatPrgm0 = 2.0f + 0x1.0p-10f;
     }
     // bf16: 2^-64 scales 1 + |v| into SFPARECIP's range; fp32 and the approximate loop clamp |v| at 2^26.
-    sfpi::vConstFloatPrgm1 = (!APPROXIMATION_MODE && !DST_ACCUM_MODE) ? 0x1.0p-64f : 0x1.0p26f;
+    sfpi::vConstFloatPrgm1 = (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) ? 0x1.0p-64f : 0x1.0p26f;
 }
 
 }  // namespace ckernel::sfpu

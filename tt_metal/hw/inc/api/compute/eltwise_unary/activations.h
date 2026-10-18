@@ -69,15 +69,24 @@ ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sf
 * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
 */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softsign_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_softsign,
+        (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softsign_tile_init() { MATH(SFPU_UNARY_INIT_FN(softsign, sfpu::init_softsign, (APPROX))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void softsign_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(softsign, sfpu::init_softsign, (APPROX, is_fp32_dest_acc_en)));
+}
 
 // clang-format off
 /**
