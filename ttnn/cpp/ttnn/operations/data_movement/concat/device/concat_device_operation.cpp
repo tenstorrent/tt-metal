@@ -613,6 +613,17 @@ Tensor concat_impl(
                 ttnn::to_layout(input_tensor, target_layout, std::nullopt, std::nullopt, sub_core_grids));
         }
     }
+    // Each input is written after the previous one in the output row, so all but the last need an aligned
+    // last dim. The check above only sees the inputs before conversion, and only when the first is ROW_MAJOR.
+    if (target_layout == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
+        for (size_t i = 0; i + 1 < formatted_tensors.size(); ++i) {
+            const auto& input_tensor = formatted_tensors[i];
+            TT_FATAL(
+                (input_tensor.padded_shape()[dim] * input_tensor.element_size()) % input_tensor.buffer()->alignment() ==
+                    0,
+                "Current concat implementation requires aligned last dim when concatting on last dim");
+        }
+    }
 
     if (output_mem_config.is_sharded() && target_layout == Layout::ROW_MAJOR &&
         output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {

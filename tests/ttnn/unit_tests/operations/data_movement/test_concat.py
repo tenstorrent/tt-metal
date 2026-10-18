@@ -704,6 +704,45 @@ def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids
 
 
 @pytest.mark.parametrize(
+    "shapes, layouts, rejected",
+    [
+        # A ROW_MAJOR input that is not a whole number of tiles makes the concat run in ROW_MAJOR.
+        (((1, 2, 32, 50),) * 2, (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT), True),
+        (((1, 2, 32, 50),) * 3, (ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT), True),
+        (((1, 2, 32, 50),) * 3, (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), True),
+        (((1, 1, 30, 50), (1, 1, 30, 64)), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT), True),
+        (
+            ((1, 1, 30, 64), (1, 1, 30, 50), (1, 1, 30, 64)),
+            (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+            True,
+        ),
+        (((1, 2, 32, 50),) * 2, (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), True),
+        # Only the last input is unaligned, or none is.
+        (((1, 1, 30, 64), (1, 1, 30, 50)), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT), False),
+        (((1, 2, 32, 64), (1, 2, 32, 50)), (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), False),
+        (((1, 2, 30, 64),) * 2, (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT), False),
+    ],
+)
+def test_concat_sub_core_grids_mixed_layout_last_dim(device, expect_error, shapes, layouts, rejected):
+    """
+    With sub_core_grids, a TILE / ROW_MAJOR mix along the last dim is concatenated in ROW_MAJOR, which needs
+    every input but the last to have an aligned last dim once the TILE inputs are converted.
+    """
+    torch_inputs = [torch.randn(shape, dtype=torch.bfloat16) for shape in shapes]
+    inputs = [
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device, layout=layout)
+        for t, layout in zip(torch_inputs, layouts)
+    ]
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+    if rejected:
+        with expect_error(RuntimeError, "requires aligned last dim"):
+            ttnn.concat(inputs, dim=-1, sub_core_grids=sub_core_grids)
+    else:
+        output = ttnn.concat(inputs, dim=-1, sub_core_grids=sub_core_grids)
+        assert_equal(torch.concat(torch_inputs, dim=-1), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize(
     "shapes, dim",
     [
         ([[217413, 1]] * 4, 1),
