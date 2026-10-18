@@ -31,6 +31,8 @@ from models.demos.deepseek_v3_b1.weights.transforms.attention import (
     fuse_q_ab_kv_a,
 )
 
+NUM_DEVICES_4x2 = 4 * 2
+
 
 def test_get_device_mla_work_assignment():
     """Unit tests for get_device_mla_work_assignment, covering the key SP scenarios.
@@ -215,6 +217,9 @@ def test_get_device_mla_work_assignment():
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_pre_sdpa(
     bh_2d_mesh_device,
     mesh_rows,
@@ -234,10 +239,6 @@ def test_pre_sdpa(
     skip_ccl = False
     if num_devices == 1:
         skip_ccl = True
-
-    # Validate mesh size
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
 
     # Create submesh used by the test
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))

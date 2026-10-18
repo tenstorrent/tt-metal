@@ -5,6 +5,13 @@
 #pragma once
 
 #include <tt-metalium/constants.hpp>
+#if !defined(ARCH_QUASAR)
+// ckernel::load_blocking (the store drain in drain_pad_stores) is WH/BH only: Quasar's ckernel.h has no
+// load_blocking, and from a data-movement build it #errors unless COMPILE_FOR_TRISC is defined. The Quasar
+// branch below uses a plain volatile load instead, so the header is not needed there. Same guard as
+// data_movement/common/kernels/common.hpp.
+#include "ckernel.h"
+#endif
 
 /**
  * @brief Pads a face within a tile.
@@ -335,6 +342,7 @@ void fill_pad_tile_blockfloat(uint32_t l1_tile_ptr) {
  */
 template <DataFormat data_format>
 constexpr uint32_t blockfloat_mantissa_bits() {
+#ifndef ARCH_QUASAR
     if constexpr (data_format == DataFormat::Bfp8 || data_format == DataFormat::Bfp8_b) {
         return 8;
     } else if constexpr (data_format == DataFormat::Bfp4 || data_format == DataFormat::Bfp4_b) {
@@ -344,6 +352,67 @@ constexpr uint32_t blockfloat_mantissa_bits() {
     } else {
         return 0;
     }
+#else
+    // Quasar's DataFormat enum has NO WH-style block-float formats: the codes WH/BH use for Bfp8/Bfp4/Bfp2
+    // (2/3/11) are reused on Quasar for the microscaling MxInt8/MxInt4/MxInt2, and there is no Bfp8_b/Bfp4_b/
+    // Bfp2_b at all. So this WH-Bfp mantissa accounting does not apply on Quasar; report 0 (same as the
+    // non-block-float branch on WH/BH). The one block-float DataType a caller could otherwise pass, BFLOAT8_B,
+    // is rejected up front by the quasar matmul op (experimental/quasar/matmul/matmul.cpp) -- the only Quasar
+    // caller of pad_last_ktile* -- so a block-float format never reaches here on Quasar (no silent mis-pad).
+    // A value-based assert is deliberately NOT added: the codes 2/3/11 are legitimate Quasar MxInt formats,
+    // so asserting on them would false-fire; the op-level dtype reject is the correct guard. (Padding for
+    // Quasar's Mx microscaling formats, if ever needed, is a separate Mx-specific path -- not this.)
+    return 0;
+#endif
+}
+
+/**
+ * @brief Bytes occupied by one padded tile of the given format.
+ */
+template <DataFormat data_format>
+constexpr uint32_t padded_tile_bytes() {
+    using namespace tt::constants;
+    constexpr uint32_t elems = TILE_HEIGHT * TILE_WIDTH;
+    constexpr uint32_t mantissa_bits = blockfloat_mantissa_bits<data_format>();
+    if constexpr (data_format == DataFormat::Float32) {
+        return elems * sizeof(uint32_t);
+    } else if constexpr (mantissa_bits > 0) {
+        // exponent section (one byte per face row) + packed mantissas
+        constexpr uint32_t num_faces = (TILE_WIDTH / FACE_WIDTH) * (TILE_HEIGHT / FACE_HEIGHT);
+        return num_faces * FACE_HEIGHT + elems * mantissa_bits / BITS_PER_BYTE;
+    } else {
+        return elems * sizeof(uint16_t);
+    }
+}
+
+/**
+ * @brief Forces the padding stores of one tile to be processed by L1 before the caller hands the
+ * tile to another L1 client (the NoC multicast in the matmul in0 senders).
+ *
+ * The padding is written with baby-RISCV stores. A store can retire before its write-request
+ * reaches L1, and the RISCV core and the NoC are different L1 clients with no program-order
+ * guarantee between them (tt-isa-documentation TensixTile/BabyRISCV/MemoryOrdering.md: "there is
+ * no general mechanism to ensure that a store's write-request has been processed before a
+ * subsequent memory operation's request is emitted"). A blocking load of an address this core has
+ * just stored to is processed by L1 only after that store, and the RISCV's L1 access port
+ * processes its requests in order, so reading back the tile's last word orders every earlier
+ * padding store ahead of whatever the caller issues next. Same construction as #50374
+ * (deepseek_grouped_gate) and the pad reader's loop-back guard.
+ *
+ * Every padding pattern writes the tile's last word: right padding covers column 31 of every row,
+ * bottom padding covers row 31, and the block-float variants zero the mantissa of face 3, row 15,
+ * column 15 in both cases.
+ */
+template <DataFormat data_format>
+inline void drain_pad_stores(uint32_t l1_tile_ptr) {
+    constexpr uint32_t last_word = padded_tile_bytes<data_format>() - sizeof(uint32_t);
+    volatile tt_l1_ptr uint32_t* drain_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_tile_ptr + last_word);
+#if defined(ARCH_QUASAR)
+    // Quasar has no ckernel::load_blocking; a volatile load is the local ordering barrier there.
+    (void)*drain_ptr;
+#else
+    (void)ckernel::load_blocking(drain_ptr);
+#endif
 }
 
 /**
@@ -373,6 +442,7 @@ void pad_last_ktile(uint32_t l1_write_addr_in0) {
         fill_pad_tile_blockfloat<mantissa_bits, in0_last_ktile_w, /*num_elements_unpadded_h=*/TILE_HEIGHT>(
             l1_write_addr_in0);
     }
+    drain_pad_stores<in0_data_format>(l1_write_addr_in0);
 }
 
 /**
@@ -402,4 +472,5 @@ void pad_last_transposed_ktile(uint32_t l1_write_addr_in0) {
         fill_pad_tile_blockfloat<mantissa_bits, /*num_elements_unpadded_w=*/TILE_WIDTH, in0_last_ktile_h>(
             l1_write_addr_in0);
     }
+    drain_pad_stores<in0_data_format>(l1_write_addr_in0);
 }

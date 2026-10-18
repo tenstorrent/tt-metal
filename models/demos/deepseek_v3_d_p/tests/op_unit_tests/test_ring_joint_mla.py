@@ -9,16 +9,19 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
+
+_WORKER_L1_SIZE = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
 
 
 def get_cache_file_path(cache_path, name, dtype, layout):
@@ -462,7 +465,24 @@ def run_ring_joint_sdpa(
         logger.debug("✓ Distributed synchronization completed")
 
 
+def _ci_unsupported_param_combos_mla_sdpa(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
+def _ci_unsupported_param_combos_mla_sdpa_perf(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
 #  Note: seq_len and nhq_v will be scaled down to the hw test runs on, inputs are for 32x4 devices configuration
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_mla_sdpa)
 @pytest.mark.parametrize("q_dtype, kv_dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)], ids=["q_bf16_kv_bf8"])
 @pytest.mark.parametrize(
     "seq_len, q_chunk_size, k_chunk_size",
@@ -483,32 +503,12 @@ def run_ring_joint_sdpa(
 @pytest.mark.parametrize("skip_check", [True, False], ids=["skip_pcc", "pcc_check"])
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        (
-            {
-                "trace_region_size": 1000000,
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
-            ttnn.Topology.Linear,
-        ),
-        (
-            {
-                "trace_region_size": 1000000,
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
-            ttnn.Topology.Linear,
-        ),
+        fabric2d_device_params(trace_region_size=1000000, worker_l1_size=_WORKER_L1_SIZE),
     ],
     indirect=["device_params"],
-    ids=[
-        "line",
-        "fabric2d",
-    ],
+    ids=["fabric2d"],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -529,6 +529,7 @@ def run_ring_joint_sdpa(
 @pytest.mark.timeout(0)
 def test_mla_sdpa(
     mesh_device,
+    device_params,
     b,
     nhq_v,
     nhk,
@@ -544,11 +545,11 @@ def test_mla_sdpa(
     num_links,
     rp_axis,
     up_axis,
-    all_gather_topology,
     skip_check,
     is_balanced,
     reset_seeds,
 ):
+    all_gather_topology = per_axis_topology(device_params["fabric_config"])[rp_axis]
     production_shape = [32, 4]  # hardcoded for now
 
     mesh_device_shape = list(mesh_device.shape)
@@ -847,6 +848,7 @@ def run_ring_joint_sdpa_perf(
 
 # Perf test: 1 compile run + num_perf_runs measured runs with tracy signposts
 # Inputs are for 32x4 production config, scaled down for smaller meshes
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_mla_sdpa_perf)
 @pytest.mark.parametrize("q_dtype, kv_dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)], ids=["q_bf16_kv_bf8"])
 @pytest.mark.parametrize(
     "seq_len, q_chunk_size, k_chunk_size",
@@ -868,40 +870,28 @@ def run_ring_joint_sdpa_perf(
 # perf harness allocates trace separately when needed; setting it here would over-allocate
 # device L1 for runs that don't enable tracing.
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "mesh_device, device_params",
     [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
-            ttnn.Topology.Linear,
+        pytest.param(
+            (32, 4),
+            fabric2d_device_params(worker_l1_size=_WORKER_L1_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(32, 4), topology="mesh-32x4"),
+            id="fabric2d-32x4",
         ),
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
-            ttnn.Topology.Ring,
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(worker_l1_size=_WORKER_L1_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
         ),
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
-            ttnn.Topology.Linear,
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(worker_l1_size=_WORKER_L1_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
         ),
     ],
-    indirect=["device_params"],
-    ids=["line", "ring", "fabric2d"],
-)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(32, 4), (8, 4), (2, 4)],
-    ids=["32x4", "8x4", "2x4"],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
     "rp_axis, up_axis",
@@ -912,6 +902,7 @@ def run_ring_joint_sdpa_perf(
 @pytest.mark.timeout(0)
 def test_mla_sdpa_perf(
     mesh_device,
+    device_params,
     b,
     nhq_v,
     nhk,
@@ -926,10 +917,10 @@ def test_mla_sdpa_perf(
     num_links,
     rp_axis,
     up_axis,
-    all_gather_topology,
     is_balanced,
     reset_seeds,
 ):
+    all_gather_topology = per_axis_topology(device_params["fabric_config"])[rp_axis]
     if num_links == 2 and is_wormhole_b0():
         pytest.skip("2 links not supported on Wormhole")
 

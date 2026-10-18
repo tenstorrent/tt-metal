@@ -39,9 +39,13 @@ void kernel_main() {
 #ifdef UNALIGNED
     constexpr uint32_t local_unit_size_padded = get_arg(args::local_unit_size_padded);
     constexpr uint32_t remote_unit_size_padded = get_arg(args::remote_unit_size_padded);
+    constexpr uint32_t remote_units_per_shard = get_arg(args::remote_units_per_shard);
+    constexpr uint32_t is_reader = get_arg(args::is_reader);
+    // Second RISC uses the upper half so both do not write the same scratch bytes.
+    constexpr uint32_t scratch_base_offset = is_reader ? 0 : remote_units_per_shard * remote_unit_size_padded;
     DataflowBuffer dfb_scratch(dfb::scratch);
-    uint32_t l1_scratch_write_addr = dfb_scratch.get_write_ptr();
-    uint32_t l1_scratch_read_addr = dfb_scratch.get_read_ptr();
+    uint32_t l1_scratch_write_addr = dfb_scratch.get_write_ptr() + scratch_base_offset;
+    uint32_t l1_scratch_read_addr = dfb_scratch.get_read_ptr() + scratch_base_offset;
     for (uint32_t i = 0; i < num_reads; ++i) {
         uint32_t bank_id = get_vararg(args_idx++);
         uint32_t src_offset = get_vararg(args_idx++);

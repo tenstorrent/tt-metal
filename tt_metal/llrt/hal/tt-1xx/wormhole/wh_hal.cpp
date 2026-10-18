@@ -375,12 +375,15 @@ void Hal::initialize_wh(
         STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX;
     this->operand_start_stream_ = OPERAND_START_STREAM;
     this->has_stream_registers_ = true;
+    this->supports_fds_ = false;
     this->noc_topology_ = NoCTopologyType::TORUS;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = true;
     this->virtualized_core_types_ = {dev_msgs::AddressableCoreType::TENSIX, dev_msgs::AddressableCoreType::ETH};
+    // Wormhole addresses its PCIE/DRAM non-worker cores physically.
+    this->virtualizes_non_worker_cores_ = false;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = false;
     this->supports_implicit_dfb_sync_ = false;

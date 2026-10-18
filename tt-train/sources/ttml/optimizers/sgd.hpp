@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <unordered_set>
+
 #include "optimizers/optimizer_base.hpp"
 #include "serialization/serializable.hpp"
 
@@ -56,6 +58,11 @@ private:
     size_t m_steps{0};
     SGDConfig m_config;
     ttml::serialization::NamedParameters m_momentum;
+    // Buffers that have received at least one update. PyTorch seeds a fresh momentum
+    // buffer with the raw gradient (buf = g), so each buffer's first update must skip
+    // dampening — tracked per buffer because a lazily-unfrozen parameter can take its
+    // first step at any global step count.
+    std::unordered_set<std::string> m_momentum_initialized;
 };
 
 }  // namespace ttml::optimizers

@@ -10,7 +10,7 @@ Validates correctness against:
 - Old implementation from tt_moe.py (to_layout + mul + sum)
 
 Tests structured data, random data, sparse weights, and non-local expert skipping.
-Shape: [1, 3200, 8, 7168] - DeepSeek-V3 dimensions.
+Shape: [1, 640, 8, 7168] - DeepSeek-V3 dimensions.
 """
 
 import pytest
@@ -21,22 +21,23 @@ from loguru import logger
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
-NUM_TOKENS = 3200
+NUM_TOKENS = PREFILL_CHUNK_TOKENS_PER_CHIP
 NUM_EXPERTS = 8
 EXPERT_DIM = 2
 PCC_THRESHOLD = 0.999
 
 # Per-model (id, config, extended). Each test reads emb_dim (EMB_SIZE) and the routed-expert
 # count (NUM_ROUTED_EXPERTS) from the config, so every model exercises its own shape:
-#   dsv3 7168/256, glm_51 6144/256, minimax_m27 3072/256,
+#   dsv3 7168/256, glm_53 6144/256, minimax_m27 3072/256,
 #   dsv4_pro 7168/384, dsv4_flash 4096/256, gptoss_120b 2880/128.
 MODELS = [
     ("dsv3", DeepSeekV3Config, False),
-    ("glm_51", GLM51Config, True),
+    ("glm_53", GLM53Config, True),
     ("minimax_m27", MiniMaxM27Config, True),
     ("dsv4_pro", DeepSeekV4ProConfig, True),
     ("dsv4_flash", DeepSeekV4FlashConfig, True),
@@ -51,15 +52,11 @@ MODEL_PARAMS = [
 # are worked on. These get dedicated param lists (rather than reusing MODEL_PARAMS) because the
 # same models pass the other tests that share MODEL_PARAMS. gptoss_120b's emb_dim (2880) is not a
 # multiple of the hardcoded 1024 tile_width used by the structured patterns, so its reshape is
-# invalid; dsv4_flash just lands slightly under the structured PCC threshold. strict=True keeps CI
-# green either way. Remove a model from the per-test xfail dict once its issue is resolved.
+# invalid. strict=True keeps CI green either way. Remove a model from the per-test xfail dict once
+# its issue is resolved.
 _GPTOSS_STRUCTURED_XFAIL = (
     "GPT-OSS 120B post-combine reduce: structured reshape invalid (tile_width hardcoded 1024) — "
     "https://github.com/tenstorrent/tt-metal/issues/46731"
-)
-_DSV4_FLASH_STRUCTURED_XFAIL = (
-    "DeepSeek V4 Flash post-combine reduce: structured PCC below threshold — "
-    "https://github.com/tenstorrent/tt-metal/issues/46609"
 )
 
 
@@ -76,9 +73,7 @@ def _model_params_with_xfail(xfails):
     return params
 
 
-STRUCTURED_DATA_MODEL_PARAMS = _model_params_with_xfail(
-    {"gptoss_120b": _GPTOSS_STRUCTURED_XFAIL, "dsv4_flash": _DSV4_FLASH_STRUCTURED_XFAIL}
-)
+STRUCTURED_DATA_MODEL_PARAMS = _model_params_with_xfail({"gptoss_120b": _GPTOSS_STRUCTURED_XFAIL})
 
 # test_multi_chunk_structured crosses config with num_tokens, so its failures are keyed per
 # (model, num_tokens) and applied by _xfail_multi_chunk_structured. gptoss_120b's emb_dim makes the
@@ -353,6 +348,8 @@ def test_output_layout(device, config):
 # ============================================================================
 # Multi-chunk-per-core tests: num_tokens / 32 > num_cores, so some cores must
 # process more than one 32-token chunk. Covers issue #41777.
+# These counts are deliberately not the 640-token prefill ISL: at 20 tile-rows every
+# core takes one chunk and the path under test stops being exercised.
 # ============================================================================
 
 
@@ -388,7 +385,7 @@ def test_multi_chunk_structured(device, num_tokens, config):
     assert_pcc(result, ref, threshold=0.998, label=f"multi_chunk_structured_{num_tokens}")
 
 
-@pytest.mark.parametrize("num_tokens", [4096, 6400, 8192])
+@pytest.mark.parametrize("num_tokens", _MULTI_CHUNK_NUM_TOKENS)
 @pytest.mark.parametrize("config", MODEL_PARAMS)
 def test_multi_chunk_random(device, num_tokens, config):
     """Random data with >100 chunks so some cores get 2+ chunks each."""

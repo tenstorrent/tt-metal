@@ -25,6 +25,9 @@ class DeepSeekV41FlashConfig:
 
     EMB_SIZE = 5120
     FABRIC_PAYLOAD_SIZE = 14 * 1024
+    # the contract's layer count (prefill_runner.NUM_LAYERS: the driver migrates layers [0, 40) and drains 40 acks per chunk;
+    # PREFILL_NUM_LAYERS still overrides). Without it the runner fell back to 61 (DeepSeek-V3's).
+    NUM_LAYERS = 40
 
 
 def _physical_users(params) -> int:

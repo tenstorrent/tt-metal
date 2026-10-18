@@ -54,6 +54,10 @@ public:
     // Clears the log file of a currently-running print server.
     void clear_log_file();
 
+    // Prepares a long-lived print server to serve a fresh run (i.e. the next test in a suite that
+    // shares one set of open devices).
+    void reset_for_new_run();
+
     bool reads_dispatch_cores(ChipId device_id);
 
     // Returns the list of cores the print server polls for the given device.

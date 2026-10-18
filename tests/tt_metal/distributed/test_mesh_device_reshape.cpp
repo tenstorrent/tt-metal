@@ -118,13 +118,16 @@ public:
 
 TEST_F(MeshDevice1x8ReshapeTest, InvalidRequestedShape) {
     auto& system_mesh = tt::tt_metal::MetalContext::instance().get_system_mesh();
+    const auto& system_shape = system_mesh.shape();
+    ASSERT_EQ(system_shape.dims(), 2);
 
     // Shape too big.
-    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(9)));
-    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 5)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(system_shape.mesh_size() + 1)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(system_shape[0] + 1, system_shape[1])));
 
     // Invalid offset.
-    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 3), /*offset=*/MeshCoordinate(1, 1)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(
+        MeshShape(2, 2), /*offset=*/MeshCoordinate(system_shape[0] - 1, system_shape[1] - 1)));
 
     // Offset dimensionality mismatch.
     EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 3), /*offset=*/MeshCoordinate(1)));

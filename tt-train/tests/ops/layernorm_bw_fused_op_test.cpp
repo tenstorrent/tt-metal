@@ -107,7 +107,12 @@ static void CompareKernelVsXArray(
     const uint32_t seq_len,
     const uint32_t heads,
     const uint32_t features,
-    const int num_iterations = 3) {
+    const int num_iterations = 3,
+    // dx comes straight from the kernel (<=0.014 max abs error on device), while
+    // dgamma/dbeta are host-side sums of bf16 per-row components whose noise grows
+    // with rows*features (~0.29 at features~8k on device) - graded separately.
+    const float dx_atol = 2e-2F,
+    const float dgb_atol = 5e-2F) {
     using namespace ttml;
 
     for (int iter = 0; iter < num_iterations; iter++) {
@@ -175,9 +180,12 @@ static void CompareKernelVsXArray(
         ASSERT_EQ(dbeta_ref.shape(), metal_dbeta_flat.shape());
 
         // Compare values
-        EXPECT_TRUE(xt::allclose(metal_dx_flat, dx_ref, 1.0e-3F, 5e-1F));
-        EXPECT_TRUE(xt::allclose(metal_dgamma_flat, dgamma_ref, 1.0e-3F, 5e-1F));
-        EXPECT_TRUE(xt::allclose(metal_dbeta_flat, dbeta_ref, 1.0e-3F, 5e-1F));
+        EXPECT_TRUE(xt::allclose(metal_dx_flat, dx_ref, 1.0e-3F, dx_atol))
+            << "dx max_abs_diff=" << xt::amax(xt::abs(metal_dx_flat - dx_ref))();
+        EXPECT_TRUE(xt::allclose(metal_dgamma_flat, dgamma_ref, 1.0e-3F, dgb_atol))
+            << "dgamma max_abs_diff=" << xt::amax(xt::abs(metal_dgamma_flat - dgamma_ref))();
+        EXPECT_TRUE(xt::allclose(metal_dbeta_flat, dbeta_ref, 1.0e-3F, dgb_atol))
+            << "dbeta max_abs_diff=" << xt::amax(xt::abs(metal_dbeta_flat - dbeta_ref))();
     }
 }
 
@@ -194,11 +202,11 @@ TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_TwoIncompleteTiles) {
 }
 
 TEST_F(LayerNormBackwardOpTest, NIGHTLY_MetalLayerNormBw_LargeFeatures_NoL1Fit) {
-    CompareKernelVsXArray(3, 273, 1, 8462);
+    CompareKernelVsXArray(3, 273, 1, 8462, 3, /*dx_atol=*/2e-2F, /*dgb_atol=*/4e-1F);
 }
 
 TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_DoesNotFitInL1_WtNotDivisibleBy4) {
-    CompareKernelVsXArray(3, 100, 1, 8191, 10);
+    CompareKernelVsXArray(3, 100, 1, 8191, 10, /*dx_atol=*/2e-2F, /*dgb_atol=*/4e-1F);
 }
 
 TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_OneTilePerRow) {

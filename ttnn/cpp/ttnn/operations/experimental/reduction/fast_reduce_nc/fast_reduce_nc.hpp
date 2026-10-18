@@ -22,4 +22,12 @@ ttnn::Tensor fast_reduce_nc(
     const std::optional<tt::tt_metal::DataType>& output_dtype = std::nullopt,
     bool fp32_intermediate_stages = false);
 
+// Single non-spatial reduction with two contiguous, tile-aligned output channel regions.
+std::tuple<Tensor, Tensor> fast_reduce_nc_split(
+    const Tensor& input,
+    int32_t dim,
+    uint32_t split_output_width,
+    const MemoryConfig& memory_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
+
 }  // namespace ttnn::experimental::reduction

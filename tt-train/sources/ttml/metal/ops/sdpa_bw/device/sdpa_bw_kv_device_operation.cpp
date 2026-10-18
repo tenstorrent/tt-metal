@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <ttnn/tensor/tensor_utils.hpp>
 
+#include "metal/common/tensor_validation.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::sdpa_bw::device {
@@ -47,10 +48,15 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
         query_shape,
         key_shape);
 
-    // Validate data formats
-    TT_FATAL(
-        grad_output.dtype() == query.dtype() && query.dtype() == key.dtype() && key.dtype() == value.dtype(),
-        "All input tensors must have the same data type");
+    // Validate data formats. The program factory sizes every input CB for BFLOAT16 tiles,
+    // so any other dtype would overrun CB pages and silently corrupt gradients.
+    // Activations and the mask go through TensorAccessor and were never required to be interleaved; only the
+    // intermediates are.
+    const DeviceTensorRequirements any_memory_layout{.memory_layout = std::nullopt};
+    check_device_tensor(grad_output, "SDPABackwardKV", "grad_output", any_memory_layout);
+    check_device_tensor(query, "SDPABackwardKV", "query", any_memory_layout);
+    check_device_tensor(key, "SDPABackwardKV", "key", any_memory_layout);
+    check_device_tensor(value, "SDPABackwardKV", "value", any_memory_layout);
 
     // Validate device placement
     TT_FATAL(
@@ -58,11 +64,11 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
         "All input tensors must be on the same device");
 
     TT_FATAL(tensor_args.u_scaler.device() == query.device(), "u_scaler must be on the same device as query");
-    TT_FATAL(tensor_args.u_scaler.layout() == tt::tt_metal::Layout::TILE, "u_scaler must have TILE layout");
-    TT_FATAL(
-        tensor_args.u_scaler.dtype() == tt::tt_metal::DataType::FLOAT32,
-        "u_scaler must be FLOAT32, got {}",
-        tensor_args.u_scaler.dtype());
+    check_device_tensor(
+        tensor_args.u_scaler,
+        "SDPABackwardKV",
+        "u_scaler",
+        {.dtypes = {tt::tt_metal::DataType::FLOAT32}, .memory_layout = std::nullopt});
 
     const auto [qB, qH, qS, qE] = query_shape.to_array_4D();
 
@@ -81,6 +87,57 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
     const auto [kB, kH, kS, kE] = key_shape.to_array_4D();
     const auto [vB, vH, vS, vE] = value_shape.to_array_4D();
 
+    // The softmax scaler is 1/sqrt(head_dim) computed from the padded shape and kernels
+    // iterate the padded sequence, so tile padding on S or head_dim would silently
+    // mis-scale attention instead of erroring out.
+    // V's head_dim never feeds the softmax scaler and non-tile-aligned vdim is a
+    // supported configuration (DiffVDim), so V is only checked on the sequence dim.
+    const auto check_tile_aligned = [](const ttnn::Tensor& tensor, const char* name, bool check_last_dim) {
+        const auto& logical = tensor.logical_shape();
+        const auto& padded = tensor.padded_shape();
+        TT_FATAL(
+            (!check_last_dim || logical[-1] == padded[-1]) && logical[-2] == padded[-2],
+            "Tensor '{}' must be tile-aligned in sequence{} (padded shape == logical shape). "
+            "Got logical={}, padded={}",
+            name,
+            check_last_dim ? " and head_dim" : "",
+            logical,
+            padded);
+    };
+    check_tile_aligned(query, "Query", /*check_last_dim=*/true);
+    check_tile_aligned(key, "Key", /*check_last_dim=*/true);
+    check_tile_aligned(value, "Value", /*check_last_dim=*/false);
+
+    // The reader streams `intermediates` (forward-pass logsumexp) as FP32 tiles via a
+    // TensorAccessor, which handles DRAM and L1 interleaved buffers alike; a wrong tensor
+    // here would produce garbage gradients with no error. sdpa_fw allocates it with query's
+    // memory config, so an L1-interleaved query legitimately yields L1-interleaved
+    // intermediates — only sharded layouts are unsupported.
+    const auto& intermediates = tensor_args.intermediates;
+    TT_FATAL(intermediates.device() == query.device(), "intermediates must be on the same device as query");
+    check_device_tensor(
+        intermediates, "SDPABackwardKV", "intermediates", {.dtypes = {tt::tt_metal::DataType::FLOAT32}});
+    {
+        constexpr uint32_t kIntermediateWidth = 32U;  // one logsumexp tile per query row
+        const auto interm_shape = intermediates.logical_shape();
+        TT_FATAL(
+            interm_shape[0] == qB && interm_shape[1] == qH && interm_shape[2] == qS &&
+                interm_shape[3] == kIntermediateWidth,
+            "intermediates shape must be (B, q_heads, S, 32) = ({}, {}, {}, {}). Got {}",
+            qB,
+            qH,
+            qS,
+            kIntermediateWidth,
+            interm_shape);
+    }
+
+    // Dropout backward is not implemented; accepting a nonzero probability would silently
+    // return gradients of the dropout-free forward.
+    TT_FATAL(
+        operation_attributes.dropout_probability == 0.0F,
+        "Dropout is not supported in SDPA backward. Got dropout_probability={}, expected 0.0.",
+        operation_attributes.dropout_probability);
+
     TT_FATAL(
         qH > 0 && kH > 0 && vH > 0,
         "Number of heads must be greater than zero. Got q_heads={}, kv_heads={}, v_heads={}",
@@ -98,15 +155,11 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(qE == kE, "Query and Key must have the same embedding dimension. Got qEmbd={}, kEmbd={}", qE, kE);
 
-    // Validate tensors have tile layout
-    TT_FATAL(
-        grad_output.layout() == tt::tt_metal::Layout::TILE && query.layout() == tt::tt_metal::Layout::TILE &&
-            key.layout() == tt::tt_metal::Layout::TILE && value.layout() == tt::tt_metal::Layout::TILE,
-        "All input tensors must have TILE layout");
-
     // Validate mask shape if provided - must be (1, 1, S, S)
     if (tensor_args.attn_mask.has_value()) {
         const auto& mask = tensor_args.attn_mask.value();
+        check_device_tensor(mask, "SDPABackwardKV", "attn_mask", any_memory_layout);
+        TT_FATAL(mask.device() == query.device(), "Attention mask must be on the same device as query");
         auto mask_shape = mask.logical_shape();
         auto [mB, mH, mS1, mS2] = mask_shape.to_array_4D();
 

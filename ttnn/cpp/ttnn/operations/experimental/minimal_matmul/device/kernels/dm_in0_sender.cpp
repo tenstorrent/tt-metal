@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// dm_in0_sender_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and
+// this file is retired, changes here likely belong in the fork too.
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -293,7 +298,7 @@ void kernel_main() {
                     if constexpr (is_output_writer) {
 #ifdef FUSE_SWIGLU
                         cb_out.wait_front(out_block_num_tiles_swiglu);
-                        uint32_t out_read_ptr_swiglu = get_read_ptr(cb_out_id);
+                        uint32_t out_read_ptr_swiglu = cb_out.get_read_ptr();
                         if constexpr (N_chunks == 1) {
                             write_block_sync<M_block_tiles, out_N_block_tiles>(
                                 std::get<0>(outputs_tuple),

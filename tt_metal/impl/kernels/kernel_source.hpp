@@ -35,6 +35,14 @@ struct KernelSource {
         return "Kernel_Source_Code";
     }
 
+    // The full path, not name(): stems recur across ops and would fuse unrelated TUs onto one zone tu-id.
+    std::string profiler_zone_src_id() const {
+        if (this->source_type_ == SourceType::FILE_PATH) {
+            return this->path_.string();
+        }
+        return "inline:" + std::to_string(std::hash<std::string>{}(this->source_));
+    }
+
     // Returns the actual source code (file content or source string)
     std::string get_content() const {
         switch (source_type_) {

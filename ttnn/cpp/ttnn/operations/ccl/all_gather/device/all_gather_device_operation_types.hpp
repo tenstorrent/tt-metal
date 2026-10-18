@@ -33,6 +33,7 @@ struct AllGatherParams {
     tt::tt_fabric::FabricConfig fabric_config{};
     // Per-axis info (an inactive axis has num_devices = 1, num_links = 0, and Linear topology)
     std::array<tt::tt_fabric::Topology, 2> axis_topology{};
+    std::array<bool, 2> axis_is_straight{};  // is the axis wired as a straight physical line
     std::array<uint32_t, 2> axis_num_devices{};
     std::array<uint32_t, 2> axis_num_links{};
     uint32_t num_devices = 0;  // number of devices participating in the collective
@@ -48,6 +49,7 @@ struct AllGatherParams {
         "cluster_axis",
         "fabric_config",
         "axis_topology",
+        "axis_is_straight",
         "axis_num_devices",
         "axis_num_links",
         "num_devices",
@@ -61,6 +63,7 @@ struct AllGatherParams {
             cluster_axis,
             fabric_config,
             axis_topology,
+            axis_is_straight,
             axis_num_devices,
             axis_num_links,
             num_devices,

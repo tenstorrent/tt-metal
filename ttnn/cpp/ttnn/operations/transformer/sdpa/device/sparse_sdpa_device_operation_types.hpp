@@ -34,10 +34,11 @@ struct SparseSDPAInputs {
     Tensor q;        // [1, H, S, K_DIM] bf16/fp8_e4m3 ROW_MAJOR  (K_DIM = head dim, e.g. 576)
     Tensor kv;       // Plain [B,1,T,K_DIM] or packed scaled-FP8 rows; format is explicit in SparseSDPAParams
     Tensor indices;  // [1, 1, S, TOPK] uint32 ROW_MAJOR  (0xFFFFFFFF = masked)
-    // Optional per-head attention sink: [1, 1, H, 32] bf16 TILE, DRAM interleaved; row h (column 0, expanded
-    // across the 32 columns) holds sink_h / scale, so the kernel's exp((sink - max) * scale) equals the
-    // reference's extra softmax logit sink_h against the scaled scores. No V contribution.
-    std::optional<Tensor> attention_sink = std::nullopt;
+    // [1, 1, 1, H] ROW_MAJOR BF16; scaled like QK. Also accepted: [1, 1, H, 32] BF16 TILE (row h = head h's
+    // value in column 0, repeated across the 32 columns -- the DeepSeek-V4/V4.1 TtCSA layout), same semantics.
+    // Either way the value is sink_h / scale, so the kernel's exp((sink - max) * scale) equals the reference's
+    // extra softmax logit sink_h against the scaled scores. DRAM interleaved; no V contribution.
+    std::optional<Tensor> attention_sink;
 };
 
 }  // namespace ttnn::prim

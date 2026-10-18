@@ -64,6 +64,7 @@ void read_in0_block_sync(
     // current write pointer minus the CB base (write_ptr at entry).
     Noc noc;
     const uint32_t cb_base = write_ptr;
+    bool zeros_pending = false;
 
     // i sweeps M (matmul-outer), j sweeps K (matmul-inner).
     const uint32_t m_bound = TransposeA ? shape.logical_d1 : shape.logical_d0;
@@ -96,6 +97,7 @@ void read_in0_block_sync(
                     tensor_accessor, CoreLocalMem<uint32_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
             } else {
                 fill_zeros_async(noc, dst_cb_id, tile_size_bytes, write_ptr - cb_base);
+                zeros_pending = true;
             }
             write_ptr += tile_size_bytes;
         }
@@ -103,6 +105,13 @@ void read_in0_block_sync(
         write_ptr += (K_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc.async_read_barrier();
+    if (zeros_pending) {
+        // Pad fills went through async_write_zeros; one barrier covers the whole
+        // batch, completes the fills (the read barrier does not cover them), and
+        // restores the write path (Quasar zero mode) before the caller's NoC
+        // writes (block forwarding / output writes).
+        noc.write_zeros_l1_barrier();
+    }
 }
 
 /**
@@ -131,6 +140,7 @@ void read_in1_block_sync(
     // Padded/out-of-range tiles are zero-filled into dst_cb_id; offset within the CB is the
     // target write pointer minus the CB base (write_ptr_base).
     Noc noc;
+    bool zeros_pending = false;
     // i sweeps K (matmul-inner), j sweeps N (matmul-outer).
     // shape carries storage-layout sizes: when TransposeB, logical_d0=N, logical_d1=K.
     const uint32_t k_bound = TransposeB ? shape.logical_d1 : shape.logical_d0;
@@ -145,6 +155,7 @@ void read_in1_block_sync(
                     uint32_t wp = write_ptr_base + ((i - d0_start) * N_block_tiles + n_col) * tile_size_bytes;
                     fill_zeros_async(noc, dst_cb_id, tile_size_bytes, wp - write_ptr_base);
                 }
+                zeros_pending = true;
                 continue;
             }
             for (uint32_t i = d0_start; i < d0_end; i++) {
@@ -160,6 +171,7 @@ void read_in1_block_sync(
                         tensor_accessor, CoreLocalMem<uint32_t>(wp), tile_size_bytes, {.page_id = tile_id}, {});
                 } else {
                     fill_zeros_async(noc, dst_cb_id, tile_size_bytes, wp - write_ptr_base);
+                    zeros_pending = true;
                 }
             }
         }
@@ -183,6 +195,7 @@ void read_in1_block_sync(
                         tensor_accessor, CoreLocalMem<uint32_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
                 } else {
                     fill_zeros_async(noc, dst_cb_id, tile_size_bytes, write_ptr - write_ptr_base);
+                    zeros_pending = true;
                 }
                 write_ptr += tile_size_bytes;
             }
@@ -191,6 +204,13 @@ void read_in1_block_sync(
         }
     }
     noc.async_read_barrier();
+    if (zeros_pending) {
+        // Pad fills went through async_write_zeros; one barrier covers the whole
+        // batch, completes the fills (the read barrier does not cover them), and
+        // restores the write path (Quasar zero mode) before the caller's NoC
+        // writes (block forwarding / output writes).
+        noc.write_zeros_l1_barrier();
+    }
 }
 
 /**

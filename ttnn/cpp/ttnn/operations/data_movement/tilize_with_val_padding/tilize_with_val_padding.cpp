@@ -5,6 +5,7 @@
 #include "tilize_with_val_padding.hpp"
 
 #include "device/tilize_with_val_padding_device_operation.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -109,28 +110,67 @@ ttnn::Tensor tilize_with_val_padding(
     const uint32_t staging_bytes_per_tile = input_single_tile_size / tt::constants::TILE_HEIGHT;
     const uint32_t fixed_staging_bytes = 2 * dram_alignment;
 
+    // Reserve the output buffer's per-core L1 up front: it is allocated after this check
+    // but before the CBs are placed, so leaving it out overestimates the CB budget and can
+    // pick a factory whose static CBs then clash with it (issue #21358).
+    const uint32_t pending_l1_output_bytes = operations::data_movement::get_pending_l1_output_reservation(
+        input_tensor,
+        output_padded_shape,
+        memory_config.value_or(input_tensor.memory_config()),
+        output_dtype.value_or(input_tensor.dtype()),
+        Layout::TILE);
+
     bool enough_space_width = operations::data_movement::is_enough_space(
         input_tensor,
         input_single_tile_size,
         output_single_tile_size,
         num_tiles_per_col,
         staging_bytes_per_tile,
-        fixed_staging_bytes);
+        fixed_staging_bytes,
+        pending_l1_output_bytes);
     bool enough_space_height = operations::data_movement::is_enough_space(
         input_tensor,
         input_single_tile_size,
         output_single_tile_size,
         num_tiles_per_row,
         staging_bytes_per_tile,
-        fixed_staging_bytes);
+        fixed_staging_bytes,
+        pending_l1_output_bytes);
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
+        const auto output_shape = operations::data_movement::squeeze_output_shape(output_padded_shape);
+        const auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
+        const auto dtype = output_dtype.value_or(input_tensor.dtype());
+        // Wide rows overflow the default factory's L1 CBs; tilize via DRAM interleaved as ttnn::tilize does.
+        if (input_tensor.memory_config().is_sharded() && !enough_space_height &&
+            !ttnn::prim::can_use_tilize_with_val_padding_sharded_factory(
+                {.output_padded_shape = output_shape,
+                 .pad_value = pad_value,
+                 .output_mem_config = output_mem_config,
+                 .output_dtype = dtype,
+                 .use_multicore = use_multicore,
+                 .enough_space_width = enough_space_width,
+                 .enough_space_height = enough_space_height,
+                 .sub_core_grids = sub_core_grids},
+                input_tensor)) {
+            auto interleaved_tile = ttnn::prim::tilize_with_val_padding(
+                ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG),
+                output_shape,
+                pad_value,
+                ttnn::DRAM_MEMORY_CONFIG,
+                dtype,
+                use_multicore,
+                enough_space_width,
+                /*enough_space_height=*/false,
+                sub_core_grids);
+            return ttnn::to_memory_config(interleaved_tile, output_mem_config);
+        }
         return ttnn::prim::tilize_with_val_padding(
             input_tensor,
-            operations::data_movement::squeeze_output_shape(output_padded_shape),
+            output_shape,
             pad_value,
-            memory_config.value_or(input_tensor.memory_config()),
-            output_dtype.value_or(input_tensor.dtype()),
+            output_mem_config,
+            dtype,
             use_multicore,
             enough_space_width,
             enough_space_height,

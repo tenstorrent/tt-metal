@@ -578,7 +578,11 @@ def run(
     ttnn_output = ttnn.transformer.scaled_dot_product_attention(
         q_tensor, k_tensor, v_tensor, is_causal=bool(is_causal), **op_kwargs
     )
-    output_tensor = mesh_tensor_to_torch(ttnn_output, device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(
+        ttnn_output,
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
     if is_mesh_device and output_tensor.shape != torch_output_golden.shape:
         dev_tensors = ttnn.get_device_tensors(ttnn_output)
         output_tensor = ttnn.to_torch(dev_tensors[0])

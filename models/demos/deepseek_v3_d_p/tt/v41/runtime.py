@@ -56,6 +56,10 @@ class V41PrefillRuntime:
             chunk_size=int(chunk_size),
             max_seq_len=int(max_seq_len),
             mesh_shape=tuple(mesh_device.shape),
+            # main's runner sizes the D2D planes from these (prefill_runner._serve_request): this one rank holds the
+            # whole contract, layers [0, n_layers)
+            first_layer_idx=0,
+            num_layers=int(cfg.n_layers),
         )
         self.chunk_size, self.max_seq_len, self.num_users = int(chunk_size), int(max_seq_len), int(num_users)
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
@@ -125,9 +129,24 @@ class V41PrefillRuntime:
     def kv_migration_base_address(self, kv_caches) -> int:
         return int(kv_caches.swa.buffer_address())
 
+    def kv_migration_stages(self, kv_caches, first_layer_idx: int, num_my_layers: int):
+        """Main's migration contract (common/prefill/runners/migration.py): ONE stage -- the contract export's base address
+        (the same address kv_migration_base_address gave the old single-stage protocol) spanning this rank's layers."""
+        from models.demos.common.prefill.runners.migration import KvCacheStage
+
+        return [KvCacheStage(self.kv_migration_base_address(kv_caches), int(first_layer_idx), int(num_my_layers))]
+
     def build_kv_chunk_table(
-        self, kv_caches, path: str, *, first_layer_idx: int = 0, num_my_layers=None, stage_layout=None
+        self,
+        kv_caches,
+        path: str,
+        *,
+        first_layer_idx: int = 0,
+        num_my_layers=None,
+        stage_layouts=None,
+        stage_layout=None,
     ) -> str:
+        # single rank: the table comes from the local export tensors; the gathered stage layouts carry nothing more
         return build_v41_kv_chunk_table(kv_caches, self.cfg, self.mesh_device, path)
 
     # ---- the engine contract ----------------------------------------------------------------------------------------
@@ -153,7 +172,16 @@ class V41PrefillRuntime:
         )
         return full[:, 0, :].reshape(-1).to(torch.int64).tolist()
 
-    def prefill_chunk(
+    def prefill_chunk(self, input_tensor, kv_caches, *, metadata_msg=None, **kwargs):
+        """Main's runner hands each chunk's metadata tensor to the runtime; this single untraced rank never forwards it, so it
+        frees it after the chunk (as the reference runtimes do; the pre-merge runner leaked it as record_dev)."""
+        try:
+            return self._prefill_chunk(input_tensor, kv_caches, **kwargs)
+        finally:
+            if metadata_msg is not None and self.config.is_last_rank:
+                ttnn.deallocate(metadata_msg)
+
+    def _prefill_chunk(
         self,
         input_tensor,
         kv_caches,

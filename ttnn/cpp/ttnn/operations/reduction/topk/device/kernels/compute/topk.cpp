@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/topk.h"
 #include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
@@ -20,10 +21,11 @@
  * @param dest_dfb_index     Dataflow buffer id to store transposed tiles (destination buffer)
  * @param total_tiles       Number of tiles to process and transpose
  */
+template <bool strip_rank_tags = false>
 FORCE_INLINE void transpose_and_pack(
     const uint32_t input_dfb_index, const uint32_t dest_dfb_index, const uint32_t total_tiles) {
-    DataflowBuffer input_dfb(input_dfb_index);
-    DataflowBuffer dest_dfb(dest_dfb_index);
+    DataflowBuffer input_dfb(static_cast<uint16_t>(input_dfb_index));
+    DataflowBuffer dest_dfb(static_cast<uint16_t>(dest_dfb_index));
 
     // Configure data formats for transpose operation.
     // Pack using the DESTINATION CB format: input_dfb may be bf16 (higher-precision
@@ -33,11 +35,16 @@ FORCE_INLINE void transpose_and_pack(
     pack_reconfig_data_format(dest_dfb_index);
 
     // Wait for all tiles to be available (double-buffered, hence 2 * total_tiles)
-    input_dfb.wait_front(2 * total_tiles);
+    input_dfb.wait_front(static_cast<uint16_t>(2 * total_tiles));
     for (uint32_t i = 0; i < total_tiles; ++i) {
         // Transpose tile from WH to HW format
         tile_regs_acquire();
         transpose_tile(input_dfb_index, i, 0);
+        if constexpr (strip_rank_tags) {
+            // Rank-stamped values carry stale rank tags in their low 16 bits; clear them so the
+            // following Float32->bf16 pack is exact instead of RNE-rounding on tag bits.
+            ckernel::topk_strip_rank_tags(0);
+        }
         tile_regs_commit();
 
         dest_dfb.reserve_back(1);
@@ -51,8 +58,8 @@ FORCE_INLINE void transpose_and_pack(
     }  // i loop
     // Pop in two halves so a single pop never crosses the circular buffer
     // wrap boundary (fifo_rd_ptr must not exceed fifo_limit in one step).
-    input_dfb.pop_front(total_tiles);
-    input_dfb.pop_front(total_tiles);
+    input_dfb.pop_front(static_cast<uint16_t>(total_tiles));
+    input_dfb.pop_front(static_cast<uint16_t>(total_tiles));
 }
 
 /**
@@ -98,9 +105,9 @@ FORCE_INLINE void read_cb_and_transpose(const uint32_t dfb, const uint32_t base_
  * @param count   Number of tiles to wait for and then remove from the front of the buffer
  */
 FORCE_INLINE void cb_wait_pop_front(const uint32_t dfb, const uint32_t count) {
-    DataflowBuffer dfb_obj(dfb);
-    dfb_obj.wait_front(count);
-    dfb_obj.pop_front(count);
+    DataflowBuffer dfb_obj(static_cast<uint16_t>(dfb));
+    dfb_obj.wait_front(static_cast<uint16_t>(count));
+    dfb_obj.pop_front(static_cast<uint16_t>(count));
 }
 
 /**
@@ -111,9 +118,9 @@ FORCE_INLINE void cb_wait_pop_front(const uint32_t dfb, const uint32_t count) {
  * @param count   Number of tile slots to reserve at the back and then mark as available
  */
 FORCE_INLINE void cb_reserve_push_back(const uint32_t dfb, const uint32_t count) {
-    DataflowBuffer dfb_obj(dfb);
-    dfb_obj.reserve_back(count);
-    dfb_obj.push_back(count);
+    DataflowBuffer dfb_obj(static_cast<uint16_t>(dfb));
+    dfb_obj.reserve_back(static_cast<uint16_t>(count));
+    dfb_obj.push_back(static_cast<uint16_t>(count));
 }
 
 void kernel_main() {
@@ -137,9 +144,18 @@ void kernel_main() {
     constexpr uint32_t largest = get_arg(args::largest);            // 1 for largest K, 0 for smallest K
     constexpr bool stable_sort = get_arg(args::stable_sort) == 1;   // Ties keep the lowest index
 
+    // Rank-stamped stable mode: sort [bf16 value | local-rank tag] keys with the unstable network
+    // while the true u32 indices ride the index-tracking swaps, instead of running the index-aware
+    // comparator network on every compare. The stamp before each local sort provides the
+    // torch-stable tie order; the value intermediates travel as raw Float32 tiles.
+    constexpr bool rank_stamped = get_arg(args::rank_stamped) == 1;
+    // The rank tag IS the stable tie-break; the network itself runs unstable in rank-stamped mode.
+    constexpr bool network_stable = stable_sort && !rank_stamped;
+
     // Initialize kernel components
     compute_kernel_hw_startup(input_val_dfb_index, input_ind_dfb_index, output_val_dfb_index);
-    ckernel::topk_tile_init();
+    ckernel::topk_tile_init<false, rank_stamped>();
+    constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(largest != 0);
 
     DataflowBuffer input_val_dfb(input_val_dfb_index);
     DataflowBuffer input_ind_dfb(input_ind_dfb_index);
@@ -264,6 +280,9 @@ void kernel_main() {
             // Insertion sort into result preparation buffer
             // Process each output tile position for insertion sort
             for (uint32_t index = 0; index < output_tiles; index++) {
+                // Cases A/B below overwrite `index` to exit the loop; the rank-stamp needs the
+                // cascade level this iteration actually processes.
+                const uint32_t cascade_level = index;
                 // Initialize variables for current insertion iteration
                 uint32_t incr = 1;                        // Default buffer advance increment
                 uint32_t transposed_offset = 0;           // Offset in transposed buffer (0 or 1)
@@ -306,10 +325,10 @@ void kernel_main() {
 
                 // Prepare data for merge operation
                 // Wait for required tiles to be available
-                DataflowBuffer dfb0_obj(dfb0);
-                DataflowBuffer dfb1_obj(dfb1);
-                dfb0_obj.wait_front(in_dfb_offset);  // Wait for existing sorted data
-                dfb1_obj.wait_front(in_dfb_offset);
+                DataflowBuffer dfb0_obj(static_cast<uint16_t>(dfb0));
+                DataflowBuffer dfb1_obj(static_cast<uint16_t>(dfb1));
+                dfb0_obj.wait_front(static_cast<uint16_t>(in_dfb_offset));  // Wait for existing sorted data
+                dfb1_obj.wait_front(static_cast<uint16_t>(in_dfb_offset));
                 if (transposed_offset == 0) {
                     transposed_val_dfb.wait_front(1);  // Wait for new input tile
                     transposed_ind_dfb.wait_front(1);
@@ -323,11 +342,13 @@ void kernel_main() {
 
                 // Load tiles into destination registers for merging
                 // Load existing sorted values into dest reg 0
-                copy_tile_to_dst_init_short_with_dt(dfb1, dfb0);
+                reconfig_data_format_srca(dfb1, dfb0);
+                copy_init(dfb0);
                 copy_tile(dfb0, 0, DST_VAL);
 
                 // Load existing sorted indices into dest reg 2
-                copy_tile_to_dst_init_short_with_dt(dfb0, dfb1);
+                reconfig_data_format_srca(dfb0, dfb1);
+                copy_init(dfb1);
                 copy_tile(dfb1, 0, DST_IND);
 
                 if (first_sort_from_transposed) {
@@ -338,18 +359,51 @@ void kernel_main() {
                 }
 
                 // Load new input values into dest reg 1
-                copy_tile_to_dst_init_short_with_dt(transposed_ind_dfb_index, transposed_val_dfb_index);
+                reconfig_data_format_srca(transposed_ind_dfb_index, transposed_val_dfb_index);
+                copy_init(transposed_val_dfb_index);
                 copy_tile(transposed_val_dfb_index, transposed_offset, 1);
 
                 // Load new input indices into dest reg 3
-                copy_tile_to_dst_init_short_with_dt(transposed_val_dfb_index, transposed_ind_dfb_index);
+                reconfig_data_format_srca(transposed_val_dfb_index, transposed_ind_dfb_index);
+                copy_init(transposed_ind_dfb_index);
                 copy_tile(transposed_ind_dfb_index, transposed_offset, 3);
 
                 // Perform merge and sort operation
                 // Merge and sort 64 elements (32 existing + 32 new) using topk_local_sort
                 // Results: dest reg 0 = top 32 elements, dest reg 1 = bottom 32 elements
                 // largest flag determines ascending (0) vs descending (1) sort order
-                ckernel::topk_local_sort<stable_sort>(0, (int)!largest, end_phase);
+                if constexpr (rank_stamped) {
+                    // Chain-rank stamps: every tag in one insertion round is that element's
+                    // round-start CHAIN position (accumulator tile p = range [32p, 32p+32), the
+                    // fresh chunk = the top range), which is globally consistent with the true
+                    // (value, index) order — the accumulator chain is the (value, index)-sorted
+                    // prefix of everything seen, and the fresh chunk holds the highest indices in
+                    // ascending position order. Each 64-sort therefore compares distinct keys
+                    // whose tie order is the true index order, at every cascade level: the
+                    // accumulator side is re-stamped with its level's range when loaded, while a
+                    // loser tile's tags RIDE unchanged into the next level (raw Float32
+                    // transport), so a displaced OLD element still outranks NEWER accumulator
+                    // entries. The stamp also folds -0.0 into +0.0; every fresh datum passes
+                    // through exactly one stamp (level 0 / first sort) before its first compare.
+                    if (first_sort_from_transposed) {
+                        // Both tiles fresh (width chunks 0 and 1): plain positions [0, 64).
+                        ckernel::topk_stamp_local_positions<largest != 0>(0);
+                    } else {
+                        ckernel::topk_stamp_tile_rank_range<largest != 0>(
+                            0 /*idst*/, 0 /*dst_tile_index*/, 32 * cascade_level /*rank_base*/);
+                        if (cascade_level == 0) {
+                            ckernel::topk_stamp_tile_rank_range<largest != 0>(
+                                0 /*idst*/, 1 /*dst_tile_index*/, 32 * output_tiles /*rank_base*/);
+                        }
+                    }
+                }
+                if constexpr (network_stable) {
+                    if (cascade_level == 0) {
+                        ckernel::topk_canonicalize_negzero_values(0);
+                    }
+                }
+                ckernel::topk_local_sort<network_stable, DST_ACCUM_MODE, /*fused=*/false, rank_stamped, tie_order>(
+                    0, (int)!largest, end_phase);
 
                 // Pack sorted results: dest reg 0 -> result buffer, dest reg 1 -> secondary buffer
                 tile_regs_commit();
@@ -359,14 +413,14 @@ void kernel_main() {
                     transposed_val_dfb.pop_front(1);
                     transposed_ind_dfb.pop_front(1);
                 } else {
-                    dfb0_obj.pop_front(in_dfb_offset);
-                    dfb1_obj.pop_front(in_dfb_offset);
+                    dfb0_obj.pop_front(static_cast<uint16_t>(in_dfb_offset));
+                    dfb1_obj.pop_front(static_cast<uint16_t>(in_dfb_offset));
                 }
 
                 // Store sorted results back to buffers
                 // Reserve space for storing the best K elements
-                result_prep_val_dfb.reserve_back(incr);
-                result_prep_ind_dfb.reserve_back(incr);
+                result_prep_val_dfb.reserve_back(static_cast<uint16_t>(incr));
+                result_prep_ind_dfb.reserve_back(static_cast<uint16_t>(incr));
 
                 tile_regs_wait();
                 pack_results(result_prep_val_dfb_index, dfb2, 0);  // Store top 32 elements
@@ -374,8 +428,8 @@ void kernel_main() {
                 tile_regs_release();
 
                 // Advance result prep buffer pointers
-                result_prep_val_dfb.push_back(incr);
-                result_prep_ind_dfb.push_back(incr);
+                result_prep_val_dfb.push_back(static_cast<uint16_t>(incr));
+                result_prep_ind_dfb.push_back(static_cast<uint16_t>(incr));
 
                 // Clean up transposed buffers if we consumed from them
                 if ((transposed_offset == 0) && !first_sort_from_transposed) {
@@ -403,7 +457,7 @@ void kernel_main() {
 
         // Transpose and pack final results to output buffers
         // Convert sorted results from HW back to WH format for output
-        transpose_and_pack(result_prep_val_dfb_index, output_val_dfb_index, output_tiles);
+        transpose_and_pack<rank_stamped>(result_prep_val_dfb_index, output_val_dfb_index, output_tiles);
         transpose_and_pack(result_prep_ind_dfb_index, output_ind_dfb_index, output_tiles);
     }  // core_loop loop
 }

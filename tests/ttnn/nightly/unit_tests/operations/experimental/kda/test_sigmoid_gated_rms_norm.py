@@ -14,16 +14,18 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.reference.kda.ops import sigmoid_gated_rms_norm_reference
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
     assert_equal,
+    collect_accuracy_and_determinism_results,
 )
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True),
+    pytest.mark.use_module_device({"l1_small_size": 24576}),
 ]
 
 _BATCH = 1
@@ -57,6 +59,70 @@ _PRODUCTION_CASES = (
     _ProductionCase("sp2-tp4-local", num_heads=24, sequence=2560, expected_duration_ns=154_054),
     _ProductionCase("sp4-tp2-local", num_heads=48, sequence=1280, expected_duration_ns=153_799),
 )
+
+
+def _sigmoid_gated_rms_norm_ops(
+    input_tensor: torch.Tensor | ttnn.Tensor,
+    gate: torch.Tensor | ttnn.Tensor,
+    weight: torch.Tensor | ttnn.Tensor,
+    output: torch.Tensor | ttnn.Tensor,
+) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
+    tensors = (input_tensor, gate, weight, output)
+    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in tensors):
+        raise ValueError("sigmoid-gated RMSNorm tensor shapes must be positive")
+    if len(input_tensor.shape) != 3 or len(gate.shape) != 3 or len(weight.shape) != 1 or output.shape != gate.shape:
+        raise ValueError("sigmoid-gated RMSNorm tensor shapes are inconsistent")
+
+    batch, sequence, hidden = gate.shape
+    value_dim = input_tensor.shape[-1]
+    if hidden % value_dim or weight.shape != (value_dim,):
+        raise ValueError("sigmoid-gated RMSNorm tensor shapes are inconsistent")
+    num_heads = hidden // value_dim
+    if input_tensor.shape != (batch * num_heads, sequence, value_dim):
+        raise ValueError("sigmoid-gated RMSNorm tensor shapes are inconsistent")
+
+    rows = batch * num_heads * sequence
+    elements = rows * value_dim
+    return (
+        perf_model.FpuOps(
+            multiply_ops=4 * elements,
+            add_ops=rows,
+            reduction_ops=rows * (value_dim - 1),
+        ),
+        perf_model.SfpuOps(rsqrt_ops=rows, sigmoid_ops=elements),
+    )
+
+
+def _sigmoid_gated_rms_norm_performance(
+    input_tensor: ttnn.Tensor,
+    gate: ttnn.Tensor,
+    weight: ttnn.Tensor,
+    output: ttnn.Tensor,
+    *,
+    measured_ns: float,
+    math_fidelity: ttnn.MathFidelity,
+) -> perf_model.KdaPerformance:
+    fpu, sfpu = _sigmoid_gated_rms_norm_ops(input_tensor, gate, weight, output)
+    return perf_model.performance(
+        fpu=fpu,
+        sfpu=sfpu,
+        inputs=(input_tensor, gate, weight),
+        outputs=(output,),
+        measured_ns=measured_ns,
+        math_fidelity=math_fidelity,
+    )
+
+
+def test_sigmoid_gated_rms_norm_work_golden() -> None:
+    fpu, sfpu = _sigmoid_gated_rms_norm_ops(
+        torch.empty((2, 1, 2)),
+        torch.empty((1, 1, 4)),
+        torch.empty((2,)),
+        torch.empty((1, 1, 4)),
+    )
+
+    assert fpu == perf_model.FpuOps(multiply_ops=16, add_ops=2, reduction_ops=2)
+    assert sfpu == perf_model.SfpuOps(rsqrt_ops=2, sigmoid_ops=4)
 
 
 def _torch_dtype(dtype: ttnn.DataType) -> torch.dtype:
@@ -133,6 +199,7 @@ def _run(
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
     output_dtype: ttnn.DataType = ttnn.float32,
+    gate_column_offset: int = 0,
 ) -> ttnn.Tensor:
     return ttnn.experimental.kda.sigmoid_gated_rms_norm(
         input_tt,
@@ -143,6 +210,7 @@ def _run(
         memory_config=memory_config,
         compute_kernel_config=compute_kernel_config,
         output_dtype=output_dtype,
+        gate_column_offset=gate_column_offset,
     )
 
 
@@ -177,43 +245,6 @@ def _reference(
     )
 
 
-def _collect_accuracy_and_determinism_results(
-    device: ttnn.Device,
-    run: Callable[[], ttnn.Tensor],
-    *,
-    count: int = 3,
-) -> tuple[ttnn.Tensor, torch.Tensor, torch.Tensor]:
-    assert count > 1
-    reference_output = run()
-    mismatch_scratch = ttnn.empty(
-        reference_output.shape,
-        dtype=ttnn.bfloat16,
-        layout=reference_output.layout,
-        device=device,
-        memory_config=reference_output.memory_config(),
-    )
-    mismatch_marker = None
-    for _ in range(1, count):
-        output_tt = run()
-        ttnn.ne(reference_output, output_tt, dtype=ttnn.bfloat16, output_tensor=mismatch_scratch)
-        current_mismatch = ttnn.max(mismatch_scratch)
-        ttnn.deallocate(output_tt)
-        if mismatch_marker is None:
-            mismatch_marker = current_mismatch
-        else:
-            updated_marker = ttnn.maximum(mismatch_marker, current_mismatch)
-            ttnn.deallocate(mismatch_marker)
-            ttnn.deallocate(current_mismatch)
-            mismatch_marker = updated_marker
-
-    assert mismatch_marker is not None
-    reference_output_host = ttnn.to_torch(reference_output).clone()
-    mismatch_marker_host = ttnn.to_torch(mismatch_marker).clone()
-    ttnn.deallocate(mismatch_scratch)
-    ttnn.deallocate(mismatch_marker)
-    return reference_output, reference_output_host, mismatch_marker_host
-
-
 def _assert_output_contract(
     output_tt: ttnn.Tensor,
     output: torch.Tensor,
@@ -244,7 +275,7 @@ def _assert_accurate_and_exact_value_deterministic(
         mismatch_marker,
         name=f"{name} device-side exact-value determinism marker",
     )
-    assert_accurate(expected, actual, name=f"{name} invocation 0", pcc_threshold=0.999)
+    assert_accurate(expected, actual, name=f"{name} invocation 0", pcc_threshold=0.999, nrmse_threshold=0.004)
 
 
 def _assert_inputs_unchanged(
@@ -272,11 +303,11 @@ def test_sigmoid_gated_rms_norm_is_accurate_and_deterministic(
     )
     input_snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in device_inputs)
 
-    def run() -> ttnn.Tensor:
+    def run() -> tuple[ttnn.Tensor]:
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            return _run(input_tt, gate_tt, weight_tt, output_dtype=output_dtype)
+            return (_run(input_tt, gate_tt, weight_tt, output_dtype=output_dtype),)
 
-    output_tt, output, mismatch_marker = _collect_accuracy_and_determinism_results(device, run)
+    (output_tt,), (output,), mismatch_marker = collect_accuracy_and_determinism_results(device, run)
     _assert_output_contract(
         output_tt,
         output,
@@ -317,18 +348,20 @@ def test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic(
     )
     compute_kernel_config = _production_compute_kernel_config(device)
 
-    def run() -> ttnn.Tensor:
+    def run() -> tuple[ttnn.Tensor]:
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            return _run(
-                input_tt,
-                gate_tt,
-                weight_tt,
-                num_heads=case.num_heads,
-                compute_kernel_config=compute_kernel_config,
-                output_dtype=_PRODUCTION_OUTPUT_DTYPE,
+            return (
+                _run(
+                    input_tt,
+                    gate_tt,
+                    weight_tt,
+                    num_heads=case.num_heads,
+                    compute_kernel_config=compute_kernel_config,
+                    output_dtype=_PRODUCTION_OUTPUT_DTYPE,
+                ),
             )
 
-    output_tt, output, mismatch_marker = _collect_accuracy_and_determinism_results(device, run)
+    (output_tt,), (output,), mismatch_marker = collect_accuracy_and_determinism_results(device, run)
     _assert_output_contract(
         output_tt,
         output,
@@ -381,10 +414,23 @@ def test_sigmoid_gated_rms_norm_production_performance(device: ttnn.Device, case
         case.sequence,
         case.num_heads * _PRODUCTION_VALUE_DIM,
     )
+    performance = _sigmoid_gated_rms_norm_performance(
+        input_tt,
+        gate_tt,
+        weight_tt,
+        output_tt,
+        measured_ns=duration_ns,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+    )
     logger.info(
-        f"sigmoid-gated RMSNorm {case.case_id}: duration={duration_ns:.0f} ns, "
+        f"sigmoid-gated RMSNorm {case.case_id}: measured_ns={duration_ns:.0f}, "
         f"reference={case.expected_duration_ns} ns, band=[{lower:.0f}, {upper:.0f}] ns, "
-        f"profiler_runtime_id={perf_record['runtime_id']}"
+        f"runtime_id={perf_record['runtime_id']}, work={performance.work}, "
+        f"ideal_fpu_ns={performance.ideal_fpu_ns:.2f}, ideal_dram_ns={performance.ideal_dram_ns:.2f}, "
+        f"ideal_ns={performance.ideal_ns:.2f}, "
+        f"fpu_utilization_pct={performance.fpu_utilization_pct:.2f}, "
+        f"dram_utilization_pct={performance.dram_utilization_pct:.2f}, "
+        f"utilization_pct={performance.utilization_pct:.2f}"
     )
     assert lower <= duration_ns <= upper, (
         f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
@@ -392,7 +438,7 @@ def test_sigmoid_gated_rms_norm_production_performance(device: ttnn.Device, case
     )
 
 
-def test_sigmoid_gated_rms_norm_program_key_includes_epsilon(device: ttnn.Device) -> None:
+def test_sigmoid_gated_rms_norm_program_key_includes_epsilon(device: ttnn.Device, isolated_program_cache: None) -> None:
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(
         device, batch=1, sequence=32, num_heads=2, value_dim=64, seed=1321
     )
@@ -404,7 +450,9 @@ def test_sigmoid_gated_rms_norm_program_key_includes_epsilon(device: ttnn.Device
     assert device.num_program_cache_entries() == entries + 1
 
 
-def test_sigmoid_gated_rms_norm_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
+def test_sigmoid_gated_rms_norm_cache_hit_rebinds_fresh_tensors(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     host_a, device_inputs_a = _device_inputs(device, batch=1, sequence=32, num_heads=2, value_dim=64, seed=1911)
     host_b, device_inputs_b = _device_inputs(device, batch=1, sequence=32, num_heads=2, value_dim=64, seed=1912)
 
@@ -439,12 +487,14 @@ def test_sigmoid_gated_rms_norm_cache_hit_rebinds_fresh_tensors(device: ttnn.Dev
     )
     actual_a = ttnn.to_torch(output_a)
     actual_b = ttnn.to_torch(output_b)
-    assert_accurate(expected_a, actual_a, name="cache miss tensors", pcc_threshold=0.999)
-    assert_accurate(expected_b, actual_b, name="cache hit fresh tensors", pcc_threshold=0.999)
+    assert_accurate(expected_a, actual_a, name="cache miss tensors", pcc_threshold=0.999, nrmse_threshold=0.0025)
+    assert_accurate(expected_b, actual_b, name="cache hit fresh tensors", pcc_threshold=0.999, nrmse_threshold=0.002)
     assert not torch.equal(actual_a, actual_b)
 
 
-def test_sigmoid_gated_rms_norm_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
+def test_sigmoid_gated_rms_norm_default_compute_config_matches_explicit_defaults(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(device, seed=817)
     implicit = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt))
     entries = device.num_program_cache_entries()
@@ -462,7 +512,9 @@ def test_sigmoid_gated_rms_norm_default_compute_config_matches_explicit_defaults
     assert_bit_identical(implicit, explicit, name="implicit vs explicit production compute defaults")
 
 
-def test_sigmoid_gated_rms_norm_exact_math_changes_program_and_output(device: ttnn.Device) -> None:
+def test_sigmoid_gated_rms_norm_exact_math_changes_program_and_output(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(device, seed=818)
     approximate = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt))
     entries = device.num_program_cache_entries()
@@ -502,6 +554,29 @@ def test_sigmoid_gated_rms_norm_rejects_unsupported_compute_config(
         _run(input_tt, gate_tt, weight_tt, compute_kernel_config=compute_kernel_config)
 
 
+@pytest.mark.parametrize("gate_column_offset", [0, 64], ids=["leading", "offset"])
+def test_sigmoid_gated_rms_norm_gate_column_offset_matches_sliced_gate(
+    device: ttnn.Device, gate_column_offset: int
+) -> None:
+    """Reading the gate columns of a wider tensor in place matches passing those columns alone."""
+    host, (input_tt, gate_tt, weight_tt) = _device_inputs(device, batch=2, seed=4211)
+    gate = host[1]
+    batch, sequence, width = gate.shape
+    generator = torch.Generator().manual_seed(4212)
+    wide = torch.cat(
+        (
+            torch.randn(batch, sequence, gate_column_offset, generator=generator, dtype=torch.bfloat16),
+            gate,
+            torch.randn(batch, sequence, 96, generator=generator, dtype=torch.bfloat16),
+        ),
+        dim=-1,
+    )
+    wide_tt = _to_device(wide, device, dtype=ttnn.bfloat16)
+    expected = _run(input_tt, gate_tt, weight_tt)
+    actual = _run(input_tt, wide_tt, weight_tt, gate_column_offset=gate_column_offset)
+    assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name="gate_column_offset")
+
+
 @pytest.mark.parametrize(
     ("case", "message"),
     [
@@ -510,7 +585,7 @@ def test_sigmoid_gated_rms_norm_rejects_unsupported_compute_config(
         ("gate_dtype", "gate has unsupported dtype"),
         ("weight_dtype", "weight has unsupported dtype"),
         ("input_layout", "input must use TILE layout"),
-        ("gate_shape", "gate must have shape"),
+        ("gate_shape", "columns at gate_column_offset"),
         ("weight_shape", r"weight must be \[V\]"),
         ("sequence_alignment", "sequence must be positive and tile aligned"),
         ("value_alignment", "value_dim must be positive and tile aligned"),
@@ -558,13 +633,15 @@ def test_sigmoid_gated_rms_norm_rejects_invalid_tensors(
 
 
 @pytest.mark.parametrize(
-    ("num_heads", "epsilon", "output_dtype", "message"),
+    ("num_heads", "epsilon", "output_dtype", "gate_column_offset", "message"),
     [
-        (0, 1e-5, ttnn.float32, "num_heads must be positive"),
-        (5, 1e-5, ttnn.float32, "leading dimension must be divisible"),
-        (12, 0.0, ttnn.float32, "epsilon must be finite and positive"),
-        (12, float("nan"), ttnn.float32, "epsilon must be finite and positive"),
-        (12, 1e-5, ttnn.uint32, "output_dtype must be FLOAT32 or BFLOAT16"),
+        (0, 1e-5, ttnn.float32, 0, "num_heads must be positive"),
+        (5, 1e-5, ttnn.float32, 0, "leading dimension must be divisible"),
+        (12, 0.0, ttnn.float32, 0, "epsilon must be finite and positive"),
+        (12, float("nan"), ttnn.float32, 0, "epsilon must be finite and positive"),
+        (12, 1e-5, ttnn.uint32, 0, "output_dtype must be FLOAT32 or BFLOAT16"),
+        (12, 1e-5, ttnn.float32, 16, "gate_column_offset must be tile aligned"),
+        (12, 1e-5, ttnn.float32, 64, "columns at gate_column_offset"),
     ],
 )
 def test_sigmoid_gated_rms_norm_rejects_invalid_options(
@@ -573,11 +650,20 @@ def test_sigmoid_gated_rms_norm_rejects_invalid_options(
     num_heads: int,
     epsilon: float,
     output_dtype: ttnn.DataType,
+    gate_column_offset: int,
     message: str,
 ) -> None:
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(device)
     with expect_error(RuntimeError, message):
-        _run(input_tt, gate_tt, weight_tt, num_heads=num_heads, epsilon=epsilon, output_dtype=output_dtype)
+        _run(
+            input_tt,
+            gate_tt,
+            weight_tt,
+            num_heads=num_heads,
+            epsilon=epsilon,
+            output_dtype=output_dtype,
+            gate_column_offset=gate_column_offset,
+        )
 
 
 def test_sigmoid_gated_rms_norm_rejects_sharded_output(device: ttnn.Device, expect_error: Callable) -> None:

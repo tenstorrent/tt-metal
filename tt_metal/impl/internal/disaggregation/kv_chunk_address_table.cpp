@@ -2,16 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp>
+#include <internal/disaggregation/kv_chunk_address_table.hpp>
+
+#include "impl/dispatch/host_device_transfer.hpp"
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include "tt_metal/impl/internal/disaggregation/noc_addr.hpp"
 
 namespace tt::tt_metal::internal::disaggregation {
@@ -21,23 +25,27 @@ namespace {
 tt::tt_metal::IDevice* resolve_device(const tt::tt_fabric::FabricNodeId& node_id) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto chip_id = cp.get_physical_chip_id_from_fabric_node_id(node_id);
-    auto* dev = tt::tt_metal::detail::GetActiveDevice(chip_id);
-    TT_FATAL(dev != nullptr, "GetActiveDevice({}) returned null for {}", chip_id, node_id);
-    return dev;
+    const auto& device_manager = tt::tt_metal::MetalContext::instance().device_manager();
+    TT_FATAL(device_manager->is_device_active(chip_id), "Device {} for {} is not active", chip_id, node_id);
+    return device_manager->get_active_device(chip_id);
 }
 
 }  // namespace
 
 void KvChunkAddressTable::init_configs(
-    std::span<const KvChunkAddressTableConfig> configs, std::vector<std::string> names) {
+    std::span<const KvChunkAddressTableConfig> configs,
+    std::vector<std::string> names,
+    std::span<const ChunkCompression> compressions) {
     TT_FATAL(!configs.empty(), "KvChunkAddressTable requires at least one config");
     TT_FATAL(configs.size() == names.size(), "internal: configs/names size mismatch");
+    TT_FATAL(
+        compressions.empty() || compressions.size() == configs.size(),
+        "internal: configs/compressions size mismatch");
 
     configs_.assign(configs.begin(), configs.end());
     config_names_ = std::move(names);
     num_position_chunks_.resize(configs_.size());
-    num_layers_x_chunks_.resize(configs_.size());
-    entries_.resize(configs_.size());
+    maps_.resize(configs_.size());
 
     for (uint32_t c = 0; c < configs_.size(); c++) {
         const auto& cfg = configs_[c];
@@ -46,10 +54,26 @@ void KvChunkAddressTable::init_configs(
         auto [it, inserted] = name_to_config_id_.emplace(config_names_[c], c);
         TT_FATAL(inserted, "duplicate config name '{}'", config_names_[c]);
 
-        uint32_t npc = (cfg.max_sequence_length + cfg.chunk_n_tokens - 1) / cfg.chunk_n_tokens;
+        const uint32_t npc = (cfg.max_sequence_length + cfg.chunk_n_tokens - 1) / cfg.chunk_n_tokens;
         num_position_chunks_[c] = npc;
-        num_layers_x_chunks_[c] = cfg.num_layers * npc;
-        entries_[c].resize(static_cast<size_t>(cfg.num_slots) * cfg.num_layers * npc);
+        if (!compressions.empty() && compressions[c] == ChunkCompression::kStridedRows) {
+            // Strided from birth (import path): rows pre-sized (all step=0) so lookup/view
+            // are safe before install_strided_map() fills them. No unrolled grid is
+            // allocated — the point of the compressed form is that a runs-only import never
+            // pays the grid's memory.
+            StridedRowMap map;
+            map.num_layers = cfg.num_layers;
+            map.num_position_chunks = npc;
+            map.num_slots = cfg.num_slots;
+            map.rows.resize(static_cast<size_t>(cfg.num_slots) * cfg.num_layers);
+            maps_[c] = std::move(map);
+        } else {
+            UnrolledGrid grid;
+            grid.num_layers = cfg.num_layers;
+            grid.num_position_chunks = npc;
+            grid.entries.resize(static_cast<size_t>(cfg.num_slots) * cfg.num_layers * npc);
+            maps_[c] = std::move(grid);
+        }
     }
 }
 
@@ -78,6 +102,21 @@ KvChunkAddressTable::KvChunkAddressTable(const std::map<std::string, KvChunkAddr
     init_configs(cfgs, std::move(names));
 }
 
+KvChunkAddressTable::KvChunkAddressTable(const std::map<std::string, NamedConfigInit>& configs) {
+    std::vector<KvChunkAddressTableConfig> cfgs;
+    std::vector<std::string> names;
+    std::vector<ChunkCompression> compressions;
+    cfgs.reserve(configs.size());
+    names.reserve(configs.size());
+    compressions.reserve(configs.size());
+    for (const auto& [name, init] : configs) {  // std::map iterates in sorted key order
+        names.push_back(name);
+        cfgs.push_back(init.config);
+        compressions.push_back(init.compression);
+    }
+    init_configs(cfgs, std::move(names), compressions);
+}
+
 uint32_t KvChunkAddressTable::resolve_config(const std::string& name) const {
     auto it = name_to_config_id_.find(name);
     TT_FATAL(it != name_to_config_id_.end(), "config name '{}' not found", name);
@@ -86,11 +125,6 @@ uint32_t KvChunkAddressTable::resolve_config(const std::string& name) const {
 
 void KvChunkAddressTable::validate_config_id(uint32_t config_id) const {
     TT_FATAL(config_id < configs_.size(), "config_id {} >= num_configs {}", config_id, configs_.size());
-}
-
-size_t KvChunkAddressTable::flat_index(uint32_t config_id, uint32_t layer, uint32_t position_chunk, uint32_t slot) const {
-    return (static_cast<size_t>(slot) * num_layers_x_chunks_[config_id]) +
-           (static_cast<size_t>(layer) * num_position_chunks_[config_id]) + static_cast<size_t>(position_chunk);
 }
 
 uint32_t KvChunkAddressTable::to_chunk_index(uint32_t config_id, uint32_t position) const {
@@ -116,6 +150,101 @@ void KvChunkAddressTable::validate_args(uint32_t config_id, uint32_t layer, uint
         config_id);
 }
 
+// --- UnrolledGrid ---
+
+size_t KvChunkAddressTable::UnrolledGrid::flat_index(uint32_t layer, uint32_t chunk, uint32_t slot) const {
+    return (static_cast<size_t>(slot) * num_layers * num_position_chunks) +
+           (static_cast<size_t>(layer) * num_position_chunks) + chunk;
+}
+
+const KvCacheLocation& KvChunkAddressTable::UnrolledGrid::lookup(uint32_t layer, uint32_t chunk, uint32_t slot)
+    const {
+    return entries[flat_index(layer, chunk, slot)];
+}
+
+std::span<const KvCacheLocation> KvChunkAddressTable::UnrolledGrid::lookup_range(
+    uint32_t layer, uint32_t start_chunk, uint32_t end_chunk, uint32_t slot) const {
+    const size_t base = flat_index(layer, start_chunk, slot);
+    return std::span<const KvCacheLocation>(entries.data() + base, end_chunk - start_chunk);
+}
+
+// --- StridedRowMap ---
+
+KvCacheLocation KvChunkAddressTable::StridedRowMap::lookup(uint32_t layer, uint32_t chunk, uint32_t slot) const {
+    const Row& row = rows[static_cast<size_t>(slot) * num_layers + layer];
+    if (row.step == 0) {
+        return KvCacheLocation{};
+    }
+    const uint32_t r = chunk % row.step;
+    return KvCacheLocation{
+        .noc_addr = row.bases[r] + static_cast<uint64_t>(row.strides[r]) * (chunk / row.step),
+        .size_bytes = row.size_bytes,
+        .device_group_index = row.device_group_indices[r],
+    };
+}
+
+StridedRowRangeView KvChunkAddressTable::StridedRowMap::lookup_range(
+    uint32_t layer, uint32_t start_chunk, uint32_t end_chunk, uint32_t slot) const {
+    return StridedRowRangeView(this, layer, slot, start_chunk, end_chunk);
+}
+
+// --- StridedRowRangeView ---
+
+StridedRowRangeView::StridedRowRangeView(
+    const KvChunkAddressTable::StridedRowMap* map, uint32_t layer, uint32_t slot, uint32_t first, uint32_t last) :
+    map_(map), layer_(layer), slot_(slot), first_(first), last_(last) {}
+
+StridedRowRangeView::Iterator StridedRowRangeView::begin() const {
+    return Iterator(map_, layer_, slot_, first_, 0);
+}
+StridedRowRangeView::Iterator StridedRowRangeView::end() const {
+    return Iterator(map_, layer_, slot_, first_, last_ - first_);
+}
+size_t StridedRowRangeView::size() const { return last_ - first_; }
+bool StridedRowRangeView::empty() const { return last_ == first_; }
+KvCacheLocation StridedRowRangeView::front() const { return *begin(); }
+KvCacheLocation StridedRowRangeView::back() const { return *Iterator(map_, layer_, slot_, first_, last_ - first_ - 1); }
+KvCacheLocation StridedRowRangeView::operator[](size_t i) const { return *Iterator(map_, layer_, slot_, first_, i); }
+
+StridedRowRangeView::Iterator::Iterator(
+    const KvChunkAddressTable::StridedRowMap* map, uint32_t layer, uint32_t slot, uint32_t first, uint32_t i) :
+    map_(map), layer_(layer), slot_(slot), first_(first), i_(i) {}
+
+KvCacheLocation StridedRowRangeView::Iterator::operator*() const {
+    return map_->lookup(layer_, first_ + i_, slot_);
+}
+KvCacheLocation StridedRowRangeView::Iterator::operator[](difference_type n) const { return *(*this + n); }
+StridedRowRangeView::Iterator& StridedRowRangeView::Iterator::operator++() { return ++i_, *this; }
+StridedRowRangeView::Iterator StridedRowRangeView::Iterator::operator++(int) {
+    auto t = *this;
+    ++i_;
+    return t;
+}
+StridedRowRangeView::Iterator& StridedRowRangeView::Iterator::operator--() { return --i_, *this; }
+StridedRowRangeView::Iterator StridedRowRangeView::Iterator::operator--(int) {
+    auto t = *this;
+    --i_;
+    return t;
+}
+StridedRowRangeView::Iterator& StridedRowRangeView::Iterator::operator+=(difference_type n) { return i_ += n, *this; }
+StridedRowRangeView::Iterator& StridedRowRangeView::Iterator::operator-=(difference_type n) { return i_ -= n, *this; }
+StridedRowRangeView::Iterator StridedRowRangeView::Iterator::operator+(difference_type n) const {
+    return Iterator(map_, layer_, slot_, first_, i_ + n);
+}
+StridedRowRangeView::Iterator StridedRowRangeView::Iterator::operator-(difference_type n) const {
+    return Iterator(map_, layer_, slot_, first_, i_ - n);
+}
+StridedRowRangeView::Iterator::difference_type StridedRowRangeView::Iterator::operator-(const Iterator& o) const {
+    // i_ is unsigned; cast BEFORE subtracting so negative distances don't wrap.
+    return static_cast<difference_type>(i_) - static_cast<difference_type>(o.i_);
+}
+bool StridedRowRangeView::Iterator::operator==(const Iterator& o) const { return i_ == o.i_; }
+bool StridedRowRangeView::Iterator::operator!=(const Iterator& o) const { return i_ != o.i_; }
+bool StridedRowRangeView::Iterator::operator<(const Iterator& o) const { return i_ < o.i_; }
+bool StridedRowRangeView::Iterator::operator>(const Iterator& o) const { return i_ > o.i_; }
+bool StridedRowRangeView::Iterator::operator<=(const Iterator& o) const { return i_ <= o.i_; }
+bool StridedRowRangeView::Iterator::operator>=(const Iterator& o) const { return i_ >= o.i_; }
+
 DeviceGroupIndex KvChunkAddressTable::add_device_group(std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids) {
     std::sort(fabric_node_ids.begin(), fabric_node_ids.end());
 
@@ -140,7 +269,13 @@ const DeviceGroup& KvChunkAddressTable::get_device_group(DeviceGroupIndex index)
 void KvChunkAddressTable::set(
     uint32_t layer, uint32_t position, uint32_t slot, KvCacheLocation location, uint32_t config_id) {
     validate_args(config_id, layer, position, slot);
-    entries_[config_id][flat_index(config_id, layer, to_chunk_index(config_id, position), slot)] = location;
+    auto* grid = std::get_if<UnrolledGrid>(&maps_[config_id]);
+    TT_FATAL(
+        grid != nullptr,
+        "set() on a compressed (STRIDED_ROWS) config {} — author its rows with set_strided_row(), "
+        "or build it unrolled and serialize / install_strided_map()",
+        config_id);
+    grid->entries[grid->flat_index(layer, to_chunk_index(config_id, position), slot)] = location;
 }
 
 void KvChunkAddressTable::set(
@@ -148,44 +283,103 @@ void KvChunkAddressTable::set(
     set(layer, position, slot, location, resolve_config(config));
 }
 
+void KvChunkAddressTable::install_strided_map(uint32_t config_id, StridedRowMap map) {
+    validate_config_id(config_id);
+    TT_FATAL(
+        map.num_slots == configs_[config_id].num_slots && map.num_layers == configs_[config_id].num_layers &&
+            map.num_position_chunks == num_position_chunks_[config_id],
+        "strided map dims do not match config {}",
+        config_id);
+    TT_FATAL(
+        map.rows.size() == static_cast<size_t>(map.num_slots) * map.num_layers,
+        "strided map rows {} != slots*layers {} for config {}",
+        map.rows.size(),
+        static_cast<size_t>(map.num_slots) * map.num_layers,
+        config_id);
+    for (const auto& row : map.rows) {
+        TT_FATAL(
+            row.step == 0 || (row.bases.size() == row.step && row.strides.size() == row.step &&
+                              row.device_group_indices.size() == row.step),
+            "strided row has step {} but bases {} / strides {} / device groups {}",
+            row.step,
+            row.bases.size(),
+            row.strides.size(),
+            row.device_group_indices.size());
+    }
+    maps_[config_id] = std::move(map);
+}
+
+void KvChunkAddressTable::set_strided_row(
+    uint32_t layer,
+    uint32_t slot,
+    uint32_t size_bytes,
+    std::vector<uint64_t> bases,
+    std::vector<int64_t> strides,
+    std::vector<DeviceGroupIndex> device_group_indices,
+    uint32_t config_id) {
+    validate_config_id(config_id);
+    auto* map = std::get_if<StridedRowMap>(&maps_[config_id]);
+    TT_FATAL(
+        map != nullptr, "set_strided_row() on an UNROLLED config {} — construct the config as STRIDED_ROWS", config_id);
+    TT_FATAL(layer < map->num_layers, "layer {} out of range [0, {})", layer, map->num_layers);
+    TT_FATAL(slot < map->num_slots, "slot {} out of range [0, {})", slot, map->num_slots);
+    const size_t step = bases.size();
+    TT_FATAL(
+        step > 0 && step <= map->num_position_chunks,
+        "strided row step {} must be in [1, {}] (config {})",
+        step,
+        map->num_position_chunks,
+        config_id);
+    TT_FATAL(
+        strides.size() == step && device_group_indices.size() == step,
+        "strided row has bases {} / strides {} / device groups {}; all must match",
+        step,
+        strides.size(),
+        device_group_indices.size());
+    for (const auto& dg : device_group_indices) {
+        TT_FATAL(*dg < device_groups_.size(), "device group index {} not registered", *dg);
+    }
+    // A zero-size chunk with base 0 / group 0 is indistinguishable from an unset cell.
+    TT_FATAL(size_bytes > 0, "strided row size_bytes must be > 0 (config {})", config_id);
+    for (size_t r = 0; r < step; r++) {
+        // Residue r holds ceil((npc - r) / step) chunks; its last address must not wrap.
+        const uint64_t count = (map->num_position_chunks - r + step - 1) / step;
+        const __int128 last = static_cast<__int128>(bases[r]) + static_cast<__int128>(strides[r]) * (count - 1);
+        TT_FATAL(
+            last >= 0 && last <= static_cast<__int128>(std::numeric_limits<uint64_t>::max()),
+            "strided row residue {} wraps: base {:#x} + stride {} x {} (config {})",
+            r,
+            bases[r],
+            strides[r],
+            count - 1,
+            config_id);
+        if (count <= 1) {
+            strides[r] = 0;  // unused; canonical like the serializer's detect_row(), so exports compare equal
+        }
+    }
+    auto& row = map->rows[static_cast<size_t>(slot) * map->num_layers + layer];
+    row.step = static_cast<uint32_t>(step);
+    row.size_bytes = size_bytes;
+    row.bases = std::move(bases);
+    row.strides = std::move(strides);
+    row.device_group_indices = std::move(device_group_indices);
+}
+
 void KvChunkAddressTable::set_fabric_node_host(
     const tt::tt_fabric::FabricNodeId& node_id, const std::string& host_name) {
     fabric_node_to_host_[node_id] = host_name;
 }
 
-const KvCacheLocation& KvChunkAddressTable::lookup(
+KvCacheLocation KvChunkAddressTable::lookup(
     uint32_t layer, uint32_t position, uint32_t slot, uint32_t config_id) const {
     validate_args(config_id, layer, position, slot);
-    return entries_[config_id][flat_index(config_id, layer, to_chunk_index(config_id, position), slot)];
+    const uint32_t chunk = to_chunk_index(config_id, position);
+    return visit_map(config_id, [&](const auto& map) { return map.lookup(layer, chunk, slot); });
 }
 
-const KvCacheLocation& KvChunkAddressTable::lookup(
+KvCacheLocation KvChunkAddressTable::lookup(
     uint32_t layer, uint32_t position, uint32_t slot, const std::string& config) const {
     return lookup(layer, position, slot, resolve_config(config));
-}
-
-std::span<const KvCacheLocation> KvChunkAddressTable::lookup_range(
-    uint32_t layer, uint32_t start_pos, uint32_t end_pos, uint32_t slot, uint32_t config_id) const {
-    validate_args(config_id, layer, start_pos, slot);
-    const auto& cfg = configs_[config_id];
-    TT_FATAL(
-        end_pos <= cfg.max_sequence_length,
-        "end_pos {} > max_sequence_length {} (config {})",
-        end_pos,
-        cfg.max_sequence_length,
-        config_id);
-    if (start_pos >= end_pos) {
-        return {};
-    }
-    uint32_t start_chunk = to_chunk_index(config_id, start_pos);
-    uint32_t end_chunk = to_chunk_index(config_id, end_pos + cfg.chunk_n_tokens - 1);
-    size_t base = flat_index(config_id, layer, start_chunk, slot);
-    return std::span<const KvCacheLocation>(entries_[config_id].data() + base, end_chunk - start_chunk);
-}
-
-std::span<const KvCacheLocation> KvChunkAddressTable::lookup_range(
-    uint32_t layer, uint32_t start_pos, uint32_t end_pos, uint32_t slot, const std::string& config) const {
-    return lookup_range(layer, start_pos, end_pos, slot, resolve_config(config));
 }
 
 const std::string& KvChunkAddressTable::get_host(const tt::tt_fabric::FabricNodeId& node_id) const {
@@ -200,7 +394,7 @@ bool KvChunkAddressTable::has_host(const tt::tt_fabric::FabricNodeId& node_id) c
 
 std::vector<uint8_t> KvChunkAddressTable::read_device_chunk(
     uint32_t layer, uint32_t position, uint32_t slot, uint32_t config_id) const {
-    const auto& loc = lookup(layer, position, slot, config_id);
+    const auto loc = lookup(layer, position, slot, config_id);
     const auto& dg = get_device_group(loc.device_group_index);
     TT_FATAL(
         !dg.fabric_node_ids.empty(),
@@ -211,8 +405,8 @@ std::vector<uint8_t> KvChunkAddressTable::read_device_chunk(
         config_id);
 
     std::vector<uint8_t> buf(loc.size_bytes);
-    tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
-        resolve_device(dg.fabric_node_ids.front()),
+    tt::tt_metal::slow_dispatch::ReadFromDeviceDRAMChannel(
+        *resolve_device(dg.fabric_node_ids.front()),
         static_cast<int>(addr_channel(loc.noc_addr)),
         addr_local(loc.noc_addr),
         std::span<uint8_t>(buf));
@@ -241,10 +435,17 @@ uint32_t KvChunkAddressTable::num_position_chunks(uint32_t config_id) const {
     return num_position_chunks_[config_id];
 }
 
+ChunkCompression KvChunkAddressTable::compression(uint32_t config_id) const {
+    validate_config_id(config_id);
+    return std::holds_alternative<UnrolledGrid>(maps_[config_id]) ? ChunkCompression::kUnrolled
+                                                                  : ChunkCompression::kStridedRows;
+}
+
 size_t KvChunkAddressTable::total_entries() const {
     size_t total = 0;
-    for (const auto& grid : entries_) {
-        total += grid.size();
+    for (uint32_t c = 0; c < configs_.size(); c++) {
+        // Grid-equivalent chunk count, independent of representation.
+        total += static_cast<size_t>(configs_[c].num_slots) * configs_[c].num_layers * num_position_chunks_[c];
     }
     return total;
 }

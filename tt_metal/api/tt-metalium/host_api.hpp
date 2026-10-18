@@ -4,23 +4,27 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
+#include <memory>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device_types.hpp>
 
 /** @file */
 
@@ -72,10 +76,13 @@ void SetRootDir(const std::string& root_dir);
 size_t GetNumAvailableDevices();
 
 /**
- * Returns whether Tenstorrent devices are in a Galaxy cluster
+ * Returns whether Tenstorrent devices are in a Galaxy cluster.
+ *
+ * @deprecated This API always returns false and will be removed.
  *
  * Return value: bool
  */
+[[deprecated("This API always returns false and will be removed after 2026-11-13.")]]
 bool IsGalaxyCluster();
 
 /**
@@ -86,53 +93,6 @@ bool IsGalaxyCluster();
 size_t GetNumPCIeDevices();
 
 ChipId GetPCIeDeviceID(ChipId device_id);
-
-// clang-format off
-/**
- * Instantiates a device object.
- *
- * Return value: IDevice*
- *
- * | Argument   | Description                | Type            | Valid Range                       | Required |
- * |------------|----------------------------|-----------------|-----------------------------------|----------|
- * | device_id  | ID of the device to target| ChipId (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
- * */
-// clang-format on
-IDevice* CreateDevice(
-    ChipId device_id,
-    uint8_t num_hw_cqs = 1,
-    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-    const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-    const std::vector<uint32_t>& l1_bank_remap = {},
-    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
-
-// clang-format off
-/**
- * Instantiates a device with minimal setup, used to attach to a device in a bad state.
- *
- * Return value: IDevice*
- *
- * | Argument   | Description                | Type            | Valid Range                       | Required |
- * |------------|----------------------------|-----------------|-----------------------------------|----------|
- * | device_id  | ID of the device to target| ChipId (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
- * */
-// clang-format on
-IDevice* CreateDeviceMinimal(
-    ChipId device_id, uint8_t num_hw_cqs = 1, const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
-
-// clang-format off
-/**
- * Resets device and closes device
- *
- * Return value: bool
- *
- * | Argument | Description                | Type     | Valid Range | Required |
- * |----------|----------------------------|----------|-------------|----------|
- * | device   | Pointer to a device object | IDevice* |             | True     |
- */
-// clang-format on
-bool CloseDevice(IDevice* device);
 
 // ==================================================
 //                  HOST API: program & kernels
@@ -323,127 +283,17 @@ uint32_t CreateSemaphore(
  *
  * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
  * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
- * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
- * | cores          | Range of the Tensix coordinates using the semaphore    | const CoreRangeSet &                                      |              | Yes      |
- * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
- * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
- */
-// clang-format on
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
-
-// clang-format off
-/**
- * Initializes a global semaphore on all cores within the specified CoreRangeSet.
- * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
- *
- * Return value: GlobalSemaphore
- *
- * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
- * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
- * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
+ * | device         | The mesh device to create the semaphore on             | distributed::MeshDevice&                                  |              | Yes      |
  * | cores          | Range of the Tensix coordinates using the semaphore    | CoreRangeSet &&                                           |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
  */
 // clang-format on
 GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
-
-// clang-format off
-/**
-*  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on device
-*
-*  Return value: std::shared_ptr<Buffer>
-*
-*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
-*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
-*/
-// clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config);
-
-// clang-format off
-/**
-*  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on device
-*
-*  Return value: std::shared_ptr<Buffer>
-*
-*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
-*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
-*  | address         | Device address of the buffer                                      | DeviceAddr                |             | No       |
-*/
-// clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, DeviceAddr address);
-
-// clang-format off
-/**
-*  Creates a pre-allocated interleaved DRAM or L1 buffer on device
-*
-*  Return value: std::shared_ptr<Buffer>
-*
-*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
-*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
-*  | sub_device_id   | The sub-device id to allocate on                                  | SubDeviceId               |             | No       |
-*/
-// clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubDeviceId sub_device_id);
-
-// clang-format off
-/**
-*  Creates a pre-allocated sharded DRAM or L1 buffer with the global allocator on device
-*
-*  Return value: std::shared_ptr<Buffer>
-*
-*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
-*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
-*/
-// clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config);
-
-// clang-format off
-/**
-*  Creates a pre-allocated sharded DRAM or L1 buffer with the global allocator on device
-*
-*  Return value: std::shared_ptr<Buffer>
-*
-*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
-*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
-*  | address         | Device address of the buffer                                      | DeviceAddr                |             | No       |
-*/
-// clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAddr address);
-
-// clang-format off
-/**
-*  Creates a pre-allocated sharded DRAM or L1 buffer on device
-*
-*  Return value: std::shared_ptr<Buffer>
-*
-*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
-*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
-*  | sub_device_id   | The sub-device id to allocate on                                  |                           |             | No       |
-*/
-// clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDeviceId sub_device_id);
-
-// clang-format off
-/**
-*  Deallocates buffer from device by marking its memory as free.
-*
-*  Return value: void
-*
-*  | Argument | Description                          | Type     | Valid Range | Required |
-*  |----------|--------------------------------------|----------|-------------|----------|
-*  | buffer   | The buffer to deallocate from device | Buffer & |             | Yes      |
-*/
-// clang-format on
-void DeallocateBuffer(Buffer& buffer);
+    distributed::MeshDevice& device,
+    CoreRangeSet cores,
+    uint32_t initial_value,
+    BufferType buffer_type = BufferType::L1);
 
 // clang-format off
 /**

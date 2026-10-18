@@ -31,11 +31,37 @@ struct DeviceBinaryStatus {
     status @1 :BinaryStatus;
 }
 
+struct LogicalCoreRange {
+    start @0 :LogicalCoord;
+    end @1 :LogicalCoord;
+}
+
+enum SemaphoreCoreType {
+    tensix @0;
+    eth @1;
+}
+
+struct SemaphoreData {
+    id @0 :UInt32;
+    coreType @1 :SemaphoreCoreType;
+    initialValue @2 :UInt32;
+    offset @3 :UInt32;  # bytes from kernel_config_base + sem_offset
+    coreRanges @4 :List(LogicalCoreRange);
+}
+
 struct ProgramData {
     programId @0 :UInt64;
     compiled @1 :Bool;
     binaryStatusPerDevice @2 :List(DeviceBinaryStatus);
     kernels @3 :List(KernelData);
+    semaphores @4 :List(SemaphoreData);
+}
+
+struct GlobalSemaphoreRecord {
+    address @0 :UInt64;
+    coreRanges @1 :List(LogicalCoreRange);
+    chipIds @2 :List(UInt32);  # metal device ids this rank owns
+    resetValue @3 :Int64;  # last value the host wrote (initial value or reset), -1 if none
 }
 
 struct MeshDeviceData {
@@ -49,6 +75,31 @@ struct MeshDeviceData {
 
 struct MeshCoordinate {
     coordinates @0 :List(Int32);
+}
+
+struct MeshSocketCore {
+    fabricChipId @0 :UInt32;
+    coreX @1 :UInt32;
+    coreY @2 :UInt32;
+}
+
+struct MeshSocketLocalCore {
+    core @0 :MeshSocketCore;
+    chipId @1 :UInt32;            # metal device id, resolvable only for cores this rank owns
+    peers @2 :List(MeshSocketCore);  # more than one when a sender core feeds several downstreams
+}
+
+struct MeshSocketRecord {
+    isSender @0 :Bool;
+    configBufferAddress @1 :UInt64;
+    dataBufferAddress @2 :UInt64;
+    localCores @3 :List(MeshSocketLocalCore);  # only the cores this rank owns
+    fifoSize @4 :UInt64;
+    bytesAckedOffsetBytes @5 :UInt32;  # config_addr + this = bytes_acked_array[0]
+    bytesAckedStrideBytes @6 :UInt32;
+    # One mesh id per side, so these are per socket, not per core.
+    localMeshId @7 :UInt32;       # cross-rank stitch key for this side
+    peerMeshId @8 :UInt32;        # matches the peer rank's localMeshId
 }
 
 struct MeshWorkloadProgramData {
@@ -236,4 +287,10 @@ interface Inspector {
 
     # Get the host's SystemMesh shape (global + local).
     getSystemMesh @11 () -> (systemMesh :SystemMeshData);
+
+    # Get MeshSockets created during this run (config buffer address + graph edges).
+    getSockets @12 () -> (sockets :List(MeshSocketRecord));
+
+    # Get GlobalSemaphores currently alive.
+    getGlobalSemaphores @13 () -> (semaphores :List(GlobalSemaphoreRecord));
 }

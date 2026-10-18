@@ -18,6 +18,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 namespace {
@@ -27,7 +28,8 @@ constexpr uint32_t kTilesPerNeoPerDfb = kNumEntries;
 
 #define DRAIN_ALL_DFB(dfb_handle, dfb_operand)                       \
     do {                                                             \
-        unary_op_init_common(dfb_operand, dfb_operand);              \
+        reconfig_data_format_srca(dfb_operand, dfb_operand);         \
+        copy_init(dfb_operand);                                      \
         for (uint32_t _i = 0; _i < kTilesPerNeoPerDfb; _i++) {       \
             tile_regs_acquire();                                     \
             tile_regs_wait();                                        \
@@ -53,6 +55,7 @@ void kernel_main() {
     DataflowBuffer in10(dfb::in10);
     DataflowBuffer in11(dfb::in11);
 
+    compute_kernel_hw_startup(dfb::in0, dfb::in0);
     DRAIN_ALL_DFB(in0, dfb::in0);
     DRAIN_ALL_DFB(in1, dfb::in1);
     DRAIN_ALL_DFB(in2, dfb::in2);

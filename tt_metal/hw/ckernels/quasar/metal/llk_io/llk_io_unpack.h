@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "ckernel.h"
 #include "ckernel_trisc_common.h"
 #include "internal/circular_buffer_interface.h"
@@ -25,6 +25,12 @@ inline void llk_wait_tiles(const std::int32_t dfb_id, const std::uint32_t num_ti
     TT_WAIT_TILES(ckernel::p_stall::STALL_UNPACK, num_tiles, tc_id);
     // TEN-4746: arm this dfb; a real unpack (UNPACR) on it must clear this before the matching pop.
     LLK_TDMA_GUARD_NOTE_WAIT(dfb_id);
+
+    // TT_WAIT_TILES only gates the Tensix instruction stream and returns to the RISC-V core immediately. We want to
+    // also block the RISC until that WAIT_TILES has resolved, so wait_front() has the same contract as on Blackhole:
+    // when it returns, a RISC-side L1 read of the waited entries is safe. Poll this thread's SYNC busy bit in the
+    // tensix_busy_status CSR.
+    ckernel::wait_sync_idle();
 }
 
 /**

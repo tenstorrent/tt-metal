@@ -22,6 +22,9 @@ class BgeM3EmbeddingsConfig:
     mesh_device: ttnn.MeshDevice | None = None
     embedding_dtype: ttnn.DataType | None = None
     embedding_memcfg: ttnn.MemoryConfig | None = None
+    # Placement of the looked-up activations (default: embedding_memcfg, which also
+    # places the weight tables).
+    output_memcfg: ttnn.MemoryConfig | None = None
 
 
 class BgeM3Embedding(LightweightModule):
@@ -56,6 +59,7 @@ class BgeM3Embedding(LightweightModule):
             )
         )
         self._device_weights_loaded = False
+        self._fold_token_type = False
         self.pos: ttnn.Tensor | None = None
 
     @classmethod
@@ -64,6 +68,7 @@ class BgeM3Embedding(LightweightModule):
         super(BgeM3Embedding, instance).__init__()
         instance.config = _resolve_embeddings_config(config)
         instance._device_weights_loaded = False
+        instance._fold_token_type = False
         instance.pos = None
         return instance
 
@@ -71,9 +76,27 @@ class BgeM3Embedding(LightweightModule):
         if self._device_weights_loaded:
             return
 
+        # When type_vocab_size == 1 (BGE-M3), fold token_type_emb[0] into
+        # word_embeddings at load time. Saves ~35 µs/forward (embed + add).
+        tt_src = self.config.token_type_embeddings_weight.source
+        self._fold_token_type = tt_src is not None and tt_src.shape[0] == 1
+        if self._fold_token_type:
+            word_lw = self.config.word_embeddings_weight
+            word_src = word_lw.source
+            tt_row = tt_src.to(dtype=word_src.dtype).reshape(-1)
+            folded = word_src.clone()
+            folded.add_(tt_row.to(folded.device))
+            word_lw.source = folded
+            if word_lw.cache_dir_weight_name is not None:
+                cdir, wname = word_lw.cache_dir_weight_name
+                word_lw.cache_dir_weight_name = (cdir, wname + "_tt_folded")
+
         self.word_embeddings_weight = self.config.word_embeddings_weight.get_device_weight()
         self.position_embeddings_weight = self.config.position_embeddings_weight.get_device_weight()
-        self.token_type_embeddings_weight = self.config.token_type_embeddings_weight.get_device_weight()
+        if not self._fold_token_type:
+            self.token_type_embeddings_weight = self.config.token_type_embeddings_weight.get_device_weight()
+        else:
+            self.token_type_embeddings_weight = None
         self._device_weights_loaded = True
 
     def forward(
@@ -81,7 +104,8 @@ class BgeM3Embedding(LightweightModule):
         input_ids: ttnn.Tensor,
         token_type_ids: ttnn.Tensor | None = None,
         position_ids: ttnn.Tensor | None = None,
-    ) -> ttnn.Tensor:
+        defer_position_add: bool = False,
+    ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Public forward API.
 
@@ -89,9 +113,11 @@ class BgeM3Embedding(LightweightModule):
             input_ids: rank-2 IDs tensor with shape [B, S].
             token_type_ids: optional rank-2 IDs tensor with shape [B, S].
             position_ids: optional rank-2 IDs tensor with shape [B, S].
+            defer_position_add: when True, return (word+token_type, position) separately
+                so the caller can fold the add into the next LayerNorm as residual.
 
         Returns:
-            Embedding activations with shape [B, 1, S, D].
+            Embedding activations with shape [B, 1, S, D] (or tuple if defer_position_add).
         """
         if token_type_ids is None:
             token_type_ids = ttnn.subtract(input_ids, input_ids)
@@ -102,34 +128,43 @@ class BgeM3Embedding(LightweightModule):
             batch_size, seq_len = input_ids.shape
             position_ids = self._build_position_ids(batch_size=batch_size, seq_len=seq_len)
 
+        out_memcfg = self.config.output_memcfg or self.config.embedding_memcfg
         word_embeddings = ttnn.embedding(
             input_ids,
             weight=self.word_embeddings_weight,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=self.config.embedding_memcfg,
+            memory_config=out_memcfg,
             padding_idx=self.config.pad_token_id,
-        )
-        token_type_embeddings = ttnn.embedding(
-            token_type_ids,
-            weight=self.token_type_embeddings_weight,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.config.embedding_memcfg,
         )
         position_embeddings = ttnn.embedding(
             position_ids,
             weight=self.position_embeddings_weight,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=self.config.embedding_memcfg,
+            memory_config=out_memcfg,
         )
 
-        word_plus_token = ttnn.add(word_embeddings, token_type_embeddings)
-        embeddings = ttnn.add(word_plus_token, position_embeddings)
+        if self._fold_token_type:
+            # token_type[0] already baked into word_embeddings_weight
+            main = word_embeddings
+        else:
+            token_type_embeddings = ttnn.embedding(
+                token_type_ids,
+                weight=self.token_type_embeddings_weight,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=out_memcfg,
+            )
+            main = ttnn.add(word_embeddings, token_type_embeddings)
+            ttnn.deallocate(word_embeddings)
+            ttnn.deallocate(token_type_embeddings)
 
-        ttnn.deallocate(word_embeddings)
-        ttnn.deallocate(token_type_embeddings)
+        if defer_position_add:
+            main = ttnn.unsqueeze(main, dim=1)
+            position_embeddings = ttnn.unsqueeze(position_embeddings, dim=1)
+            return main, position_embeddings
+
+        embeddings = ttnn.add(main, position_embeddings)
+        ttnn.deallocate(main)
         ttnn.deallocate(position_embeddings)
-        ttnn.deallocate(word_plus_token)
-
         embeddings = ttnn.unsqueeze(embeddings, dim=1)
         return embeddings
 

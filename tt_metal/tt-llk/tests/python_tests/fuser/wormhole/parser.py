@@ -18,6 +18,8 @@ from fuser.validator import (
     DATACOPY_TILE_32X32_ONLY,
     DEST_TO_SRCA_NEEDS_ACC,
     ELTWISE_DIMS,
+    IN0_REQUIRED,
+    IN1_REQUIRED,
     INT32_NEEDS_UNPACK_TO_DEST,
     L1_ACC_FORMAT_SUPPORTED,
     LOFI_ONLY,
@@ -47,14 +49,15 @@ from fuser.validator import (
     FpuMathSchemaBase,
     OperationSchemaBase,
     PackSchema,
+    TernarySfpuMathSchema,
+    TopKSfpuMathSchema,
     UnarySfpuMathSchema,
     eltwise_unpacker_rules,
     forced_unpackers,
+    require_dest_tiles,
     require_src_a_tiles,
 )
-from helpers.llk_params import (
-    MathOperation,
-)
+from helpers.llk_params import MathOperation
 from pydantic import Field
 
 from .fpu.datacopy import DatacopyFpu
@@ -69,6 +72,8 @@ from .fpu.transpose_dest import TransposeDestFpu
 from .packer.packer import Packer
 from .packer.untilize import PackUntilize
 from .sfpu.binary import BinarySfpu
+from .sfpu.ternary import TernarySfpu
+from .sfpu.topk import TopKSfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
@@ -83,39 +88,39 @@ from .unpacker.unpack_ab import UnpackerAB
 UNPACKER_MAP = {
     "UnpackerA": (
         lambda s: UnpackerA(),
-        [INT32_NEEDS_UNPACK_TO_DEST, NO_TRANSPOSE_UNPACK_TO_DEST],
+        [IN0_REQUIRED, INT32_NEEDS_UNPACK_TO_DEST, NO_TRANSPOSE_UNPACK_TO_DEST],
     ),
     "UnpackerAB": (
         lambda s: UnpackerAB(),
-        [SCALAR_BCAST_NO_TRANSPOSE_FACES],
+        [IN0_REQUIRED, IN1_REQUIRED, SCALAR_BCAST_NO_TRANSPOSE_FACES],
     ),
     "UnpackerTilizeA": (
         lambda s: UnpackerTilizeA(),
-        [NO_BROADCAST, NO_TRANSPOSE],
+        [IN0_REQUIRED, NO_BROADCAST, NO_TRANSPOSE],
     ),
     "MatmulUnpacker": (
         lambda s: MatmulUnpacker(),
-        [NO_TRANSPOSE_FACES],
+        [IN0_REQUIRED, IN1_REQUIRED, NO_TRANSPOSE_FACES],
     ),
     "ReduceUnpacker": (
         lambda s: ReduceUnpacker(s.reduce_dim, s.reduce_pool),
-        None,
+        [IN0_REQUIRED, IN1_REQUIRED],
     ),
     "ReduceBlockMaxUnpacker": (
         lambda s: ReduceBlockMaxUnpacker(),
-        None,
+        [IN0_REQUIRED, IN1_REQUIRED],
     ),
     "ReduceBlockMaxRuntimeUnpacker": (
         lambda s: ReduceBlockMaxRuntimeUnpacker(),
-        None,
+        [IN0_REQUIRED, IN1_REQUIRED],
     ),
     "SubBcastColCustomUnpacker": (
         lambda s: SubBcastColCustomUnpacker(),
-        None,
+        [IN0_REQUIRED, IN1_REQUIRED],
     ),
     "TransposeDestUnpacker": (
         lambda s: TransposeDestUnpacker(),
-        None,
+        [],
     ),
 }
 
@@ -208,7 +213,7 @@ FPU_MAP = {
             NO_REUSE_DEST,
             forced_unpackers("TransposeDestUnpacker"),
             TRANSPOSE_WITHIN_FACE_REQUIRED,
-            require_src_a_tiles((32, 32)),
+            require_dest_tiles((32, 32)),
         ],
     ),
 }
@@ -275,6 +280,11 @@ BINARY_SFPU_OPS = {
 }
 
 
+TERNARY_SFPU_OPS = {
+    MathOperation.SfpuWhere,
+}
+
+
 class FpuMathSchema(FpuMathSchemaBase):
     _fpu_map: ClassVar = FPU_MAP
     _unpacker_map: ClassVar = UNPACKER_MAP
@@ -291,8 +301,23 @@ class WormholeBinarySfpuMathSchema(BinarySfpuMathSchema):
     _sfpu_ops: ClassVar = BINARY_SFPU_OPS
 
 
+class WormholeTernarySfpuMathSchema(TernarySfpuMathSchema):
+    _sfpu_cls: ClassVar = TernarySfpu
+    _sfpu_ops: ClassVar = TERNARY_SFPU_OPS
+
+
+class WormholeTopKSfpuMathSchema(TopKSfpuMathSchema):
+    _sfpu_cls: ClassVar = TopKSfpu
+
+
 MathSchema = Annotated[
-    Union[FpuMathSchema, WormholeUnarySfpuMathSchema, WormholeBinarySfpuMathSchema],
+    Union[
+        FpuMathSchema,
+        WormholeUnarySfpuMathSchema,
+        WormholeBinarySfpuMathSchema,
+        WormholeTernarySfpuMathSchema,
+        WormholeTopKSfpuMathSchema,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -302,7 +327,11 @@ class WormholePackSchema(PackSchema):
 
 
 PackEntrySchema = Union[
-    WormholeUnarySfpuMathSchema, WormholeBinarySfpuMathSchema, WormholePackSchema
+    WormholeUnarySfpuMathSchema,
+    WormholeBinarySfpuMathSchema,
+    WormholeTernarySfpuMathSchema,
+    WormholeTopKSfpuMathSchema,
+    WormholePackSchema,
 ]
 
 

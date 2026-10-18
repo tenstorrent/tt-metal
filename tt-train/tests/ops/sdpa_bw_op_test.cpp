@@ -994,6 +994,136 @@ TEST_F(SDPABackwardTest, ShapeMismatch_GradOutputLastDim) {
         << "sdpa_bw should reject grad_output whose last dim doesn't match value's last dim";
 }
 
+// ========== Validation-Contract Negative Tests ==========
+// Each test below takes a minimal valid input set and corrupts exactly one property,
+// checking that sdpa_bw rejects it instead of silently producing garbage gradients.
+
+namespace {
+
+struct SdpaBwInputs {
+    ttnn::Tensor grad_output;
+    ttnn::Tensor attn_output;
+    ttnn::Tensor query;
+    ttnn::Tensor key;
+    ttnn::Tensor value;
+    ttnn::Tensor intermediates;
+};
+
+SdpaBwInputs make_minimal_sdpa_bw_inputs() {
+    using namespace ttml;
+    constexpr std::size_t B = 1U, H = 1U, S = 32U, D = 32U;
+    constexpr std::size_t kIntermediateWidth = 32U;  // one logsumexp tile per query row
+    auto* device = &autograd::ctx().get_device();
+    auto& rng = autograd::ctx().get_generator();
+    const uint32_t seed = rng();
+
+    const std::array<std::size_t, 4> shape{B, H, S, D};
+    const std::array<std::size_t, 4> interm_shape{B, H, S, kIntermediateWidth};
+
+    const auto make_bf16 = [&](const std::array<std::size_t, 4>& s) {
+        return core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(s, -1.0F, 1.0F, seed), device);
+    };
+    return SdpaBwInputs{
+        .grad_output = make_bf16(shape),
+        .attn_output = make_bf16(shape),
+        .query = make_bf16(shape),
+        .key = make_bf16(shape),
+        .value = make_bf16(shape),
+        .intermediates = core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+            ttml::test_utils::make_uniform_xarray<float>(interm_shape, -1.0F, 1.0F, seed), device)};
+}
+
+}  // namespace
+
+TEST_F(SDPABackwardTest, Validation_RejectsFP32Inputs) {
+    using namespace ttml;
+    const auto in = make_minimal_sdpa_bw_inputs();
+    auto* device = &autograd::ctx().get_device();
+
+    const std::array<std::size_t, 4> shape{1U, 1U, 32U, 32U};
+    const auto fp32_tensor = core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 42U), device);
+
+    EXPECT_ANY_THROW(metal::sdpa_bw(
+        fp32_tensor, in.attn_output, in.query, in.key, in.value, in.intermediates, metal::AttentionMaskType::None))
+        << "sdpa_bw should reject FP32 grad_output (input CBs are sized for BFLOAT16 tiles)";
+
+    EXPECT_ANY_THROW(metal::sdpa_bw(
+        in.grad_output, fp32_tensor, in.query, in.key, in.value, in.intermediates, metal::AttentionMaskType::None))
+        << "sdpa_bw should reject FP32 attn_output (input CBs are sized for BFLOAT16 tiles)";
+}
+
+TEST_F(SDPABackwardTest, Validation_RejectsMalformedIntermediates) {
+    using namespace ttml;
+    const auto in = make_minimal_sdpa_bw_inputs();
+    auto* device = &autograd::ctx().get_device();
+
+    // Wrong shape: last dim must be the 32-wide logsumexp tile
+    const std::array<std::size_t, 4> wide_shape{1U, 1U, 32U, 64U};
+    const auto wrong_shape_intermediates = core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        ttml::test_utils::make_uniform_xarray<float>(wide_shape, -1.0F, 1.0F, 42U), device);
+    EXPECT_ANY_THROW(metal::sdpa_bw(
+        in.grad_output,
+        in.attn_output,
+        in.query,
+        in.key,
+        in.value,
+        wrong_shape_intermediates,
+        metal::AttentionMaskType::None))
+        << "sdpa_bw should reject intermediates whose shape isn't (B, q_heads, S, 32)";
+
+    // Wrong dtype: the reader streams intermediates as FP32 tiles
+    const std::array<std::size_t, 4> interm_shape{1U, 1U, 32U, 32U};
+    const auto bf16_intermediates =
+        core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(interm_shape, -1.0F, 1.0F, 42U), device);
+    EXPECT_ANY_THROW(metal::sdpa_bw(
+        in.grad_output,
+        in.attn_output,
+        in.query,
+        in.key,
+        in.value,
+        bf16_intermediates,
+        metal::AttentionMaskType::None))
+        << "sdpa_bw should reject non-FP32 intermediates";
+}
+
+TEST_F(SDPABackwardTest, Validation_RejectsNonzeroDropout) {
+    using namespace ttml;
+    const auto in = make_minimal_sdpa_bw_inputs();
+
+    EXPECT_ANY_THROW(metal::sdpa_bw(
+        in.grad_output,
+        in.attn_output,
+        in.query,
+        in.key,
+        in.value,
+        in.intermediates,
+        metal::AttentionMaskType::None,
+        std::nullopt,
+        /*dropout_probability=*/0.5F))
+        << "sdpa_bw should reject nonzero dropout: backward has no dropout support and would "
+           "silently return gradients of the dropout-free forward";
+}
+
+TEST_F(SDPABackwardTest, Validation_RejectsPaddedQK) {
+    using namespace ttml;
+    const auto in = make_minimal_sdpa_bw_inputs();
+    auto* device = &autograd::ctx().get_device();
+
+    // head_dim=48 is not tile-aligned; TILE layout pads it to 64, and the softmax scaler
+    // would be computed from the padded dim, silently mis-scaling attention.
+    const std::array<std::size_t, 4> unaligned_shape{1U, 1U, 32U, 48U};
+    const auto padded_query =
+        core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(unaligned_shape, -1.0F, 1.0F, 42U), device);
+    const auto padded_key =
+        core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(unaligned_shape, -1.0F, 1.0F, 43U), device);
+
+    EXPECT_ANY_THROW(metal::sdpa_bw(
+        in.grad_output, in.attn_output, padded_query, padded_key, in.value, in.intermediates,
+        metal::AttentionMaskType::None))
+        << "sdpa_bw should reject Q/K with non-tile-aligned head_dim";
+}
+
 // ========== Ring Attention Simulation on Single Device ==========
 // Simulates ring attention forward + backward on a single device by splitting
 // K/V into chunks along the sequence dimension and combining outputs with the

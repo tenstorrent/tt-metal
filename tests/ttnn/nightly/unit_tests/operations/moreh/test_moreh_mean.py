@@ -18,6 +18,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
 )
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def run_moreh_mean(
     input_shape_dim,
@@ -190,6 +193,8 @@ def test_moreh_mean_optional_output(input_shape_dim, optional_output, device):
 )
 def test_moreh_mean_callback(input_shape_dim, device):
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_mean(input_shape_dim, device, keepdim=True)
@@ -261,6 +266,8 @@ def test_moreh_mean_backward_compute_kernel_options(input_shape_dim, compute_ker
 )
 def test_moreh_mean_backward_callback(input_shape_dim, device):
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_mean_backward(input_shape_dim, device, keepdim=True)
@@ -280,6 +287,9 @@ def test_moreh_mean_backward_callback(input_shape_dim, device):
         [[TILE_HEIGHT * 4 - 10, TILE_WIDTH * 5 - 20], [1]],  # h
         # ncd multiple tile
         [[3, 4, 5, TILE_HEIGHT * 3 - 15, TILE_WIDTH * 4 - 10], [0, 2]],  # c
+        # rank-1
+        [[5], [0]],
+        [[5], None],
     ],
 )
 @pytest.mark.parametrize("keepdim", [True, False])

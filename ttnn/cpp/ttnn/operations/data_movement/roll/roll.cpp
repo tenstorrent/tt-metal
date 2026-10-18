@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "roll.hpp"
+
+#include <algorithm>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -60,6 +62,14 @@ ttnn::Tensor roll(
     const auto& native_mem_config = input_tensor.memory_config();
     const auto output_mem_config = memory_config.value_or(native_mem_config);
 
+    // A zero shift never reaches the device op below, so padding only matters for non-zero shifts.
+    const bool has_shift = std::any_of(adjusted_shifts.begin(), adjusted_shifts.end(), [](int s) { return s != 0; });
+    if (is_sharded && has_shift && ttnn::prim::sharded_roll_input_has_padding(input_tensor)) {
+        // The native roll would move padding into real data, so roll the logical shape in DRAM.
+        const ttnn::Tensor interleaved = ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG, std::nullopt);
+        return ttnn::to_memory_config(roll(interleaved, shifts, input_dims), output_mem_config, std::nullopt);
+    }
+
     if (is_sharded) {
         bool native_ok = true;
         if (is_tile) {
@@ -70,6 +80,22 @@ ttnn::Tensor roll(
                     dim += num_dims;
                 }
                 if ((dim == num_dims - 1 || dim == num_dims - 2) && (adjusted_shifts[i] % tile_dim) != 0) {
+                    native_ok = false;
+                    break;
+                }
+            }
+        } else {
+            // DRAM RM reader stages sources in `src_base[2]`; higher-dim rolls whose shard band
+            // straddles an outer-dim period can need 3+ sources → route via interleaved.
+            for (size_t i = 0; i < adjusted_shifts.size(); ++i) {
+                int dim = input_dims[i];
+                if (dim < 0) {
+                    dim += num_dims;
+                }
+                if (ttnn::prim::dram_rm_roll_needs_extra_source_shards(
+                        input_tensor,
+                        static_cast<uint32_t>(adjusted_shifts[i]),
+                        static_cast<int32_t>(dim))) {
                     native_ok = false;
                     break;
                 }
@@ -97,15 +123,23 @@ ttnn::Tensor roll(
             return result;
         }
 
-        // Sub-tile rotation must move elements inside tiles: untilize, roll, tilize, all
-        // staying sharded in L1.
-        ttnn::Tensor rm = ttnn::untilize(input_tensor, native_mem_config);
-        ttnn::Tensor rolled = roll(rm, shifts, input_dims);
-        ttnn::Tensor retiled = ttnn::tilize(rolled, native_mem_config, input_tensor.dtype());
-        if (output_mem_config != native_mem_config) {
-            return ttnn::to_memory_config(retiled, output_mem_config, std::nullopt);
+        ttnn::Tensor rolled;
+        if (is_tile) {
+            // Sub-tile rotation must move elements inside tiles: untilize, roll, tilize, all
+            // staying sharded in L1.
+            ttnn::Tensor rm = ttnn::untilize(input_tensor, native_mem_config);
+            ttnn::Tensor rolled_rm = roll(rm, shifts, input_dims);
+            rolled = ttnn::tilize(rolled_rm, native_mem_config, input_tensor.dtype());
+        } else {
+            // RM sharded fallback: interleaved DRAM round-trip. Recurses into the interleaved
+            // slice+concat branch below, then reshards back to the caller's requested config.
+            ttnn::Tensor interleaved = ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG, std::nullopt);
+            rolled = roll(interleaved, shifts, input_dims);
         }
-        return retiled;
+        if (output_mem_config != rolled.memory_config()) {
+            return ttnn::to_memory_config(rolled, output_mem_config, std::nullopt);
+        }
+        return rolled;
     }
 
     for (size_t i = 0; i < adjusted_shifts.size(); ++i) {

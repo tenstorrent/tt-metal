@@ -3,7 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """DeepSeek-V4 Heavily Compressed Attention (TTNN prefill).
-Mirrors ``DeepseekV4Attention`` in ``reference/deepseek_v4/modeling_deepseek_v4.py``."""
+Mirrors ``DeepseekV4Attention`` in ``reference/deepseek_v4/modeling_deepseek_v4.py``.
+
+This file keeps the DeepSeek-V4-Flash / V4.1-Flash production prefill implementation (compressor, trace islands,
+unified-cache export, shared per-layer constants), which ``tt/v4`` and ``tt/v41`` build on. Main's split of the same
+code into ``compressor.py`` (``TtCompressorBase`` / ``TtHCACompressor`` / ``TtCSACompressor``) and
+``v4_attention_base.py`` (``TtV4AttentionBase``, used by ``sliding_window_attention.TtSWA`` and
+``compressed_sparse_attention.TtCSA``) lives alongside it unchanged; what main changed in HCA's own behaviour -- a
+per-axis ``(sp, tp)`` topology tuple and the ``chunk_align`` property -- is carried here too."""
 
 from __future__ import annotations
 
@@ -16,7 +23,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 
 
 def _cache_write_rows(chunk_entries: int) -> int:
@@ -274,7 +281,10 @@ class TtHCACompressor(_TtHCABase):
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
         self.sp_factor = device.shape[sp_axis] if self.is_mesh else 1
         self.tp_factor = device.shape[tp_axis] if self.is_mesh else 1
-        self.ccl_topology = topology
+        # A (sp, tp) tuple configures each mesh axis separately (main #56723); a scalar applies to both, which is
+        # every V4 / V4.1 production caller. ``ccl_topology`` stays the TP-axis one: subclasses read it by that name.
+        self.sp_ccl_topology, self.tp_ccl_topology = resolve_per_axis_topology(topology, sp_axis, tp_axis)
+        self.ccl_topology = self.tp_ccl_topology
         self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and (self.sp_factor > 1 or self.tp_factor > 1)) else None
         self.ccl_num_links = 2 if is_blackhole() else 1
 
@@ -480,7 +490,7 @@ class TtHCACompressor(_TtHCABase):
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
+                topology=self.sp_ccl_topology,
                 cluster_axis=self.sp_axis,
             )
 
@@ -569,7 +579,9 @@ class TtHCA(_TtHCABase):
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
         self.sp_factor = device.shape[sp_axis] if self.is_mesh else 1
         self.tp_factor = device.shape[tp_axis] if self.is_mesh else 1
-        self.tp_ccl_topology = topology
+        # q/kv/o-proj collectives ride the TP axis, the sliding_kv all-gather rides SP (main #56723/#57195): a
+        # (sp, tp) tuple splits them, a scalar -- every V4 / V4.1 production caller -- applies to both.
+        self.sp_ccl_topology, self.tp_ccl_topology = resolve_per_axis_topology(topology, sp_axis, tp_axis)
         self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and (self.sp_factor > 1 or self.tp_factor > 1)) else None
         self.ccl_num_links = 2 if is_blackhole() else 1
 
@@ -907,7 +919,7 @@ class TtHCA(_TtHCABase):
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.tp_ccl_topology,
+                topology=self.sp_ccl_topology,
                 cluster_axis=self.sp_axis,
             )
 
@@ -1062,6 +1074,12 @@ class TtHCA(_TtHCABase):
             take = torch.zeros(1, 1, tile, buf)
             take[0, 0, rows, rows + s - tile] = 1.0
             self._take_cache[s] = self._from_torch(take)
+
+    @property
+    def chunk_align(self) -> int:
+        """Token granularity of a non-final chunk's real length for the carry index (main's ``TtHCA.chunk_align``):
+        one compression window for HCA, one TILE for a sliding-window layer or a CSA subclass."""
+        return self._carry_step()
 
     def _carry_key(self, real_len):
         """The carry index is tabulated per whole compression window. A ragged chunk rounds down, which is

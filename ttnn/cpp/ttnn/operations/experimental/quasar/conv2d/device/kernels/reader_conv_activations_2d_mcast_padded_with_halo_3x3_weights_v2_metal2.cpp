@@ -223,7 +223,7 @@ void kernel_main() {
     }
 #else
     packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::reader_indices).get_noc_addr(0)));
+        noc_address_backend::extract_local_address(TensorAccessor(tensor::reader_indices).get_noc_addr(0)));
     (void)dram_config_reader_index;
 #endif
 
@@ -240,7 +240,7 @@ void kernel_main() {
 
     // Fully create act matrix and tilize it before mcast. The resident activation shard is reached by
     // L1 base address from a local TensorAccessor (tensor::act_sharded), not a borrowed self-loop CB.
-    uint32_t act_l1_read_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::act_sharded).get_noc_addr(0));
+    uint32_t act_l1_read_addr = noc_address_backend::extract_local_address(TensorAccessor(tensor::act_sharded).get_noc_addr(0));
 
     experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
 

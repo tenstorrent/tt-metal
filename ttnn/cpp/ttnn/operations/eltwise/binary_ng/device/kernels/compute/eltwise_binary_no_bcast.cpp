@@ -17,13 +17,17 @@ void kernel_main() {
     constexpr auto cb_pre_lhs_id = tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs_id = tt::CBIndex::c_1;
 
-    CircularBuffer cb_post_lhs(HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id);
+    constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
+    static_assert(
+        cb_post_lhs_id == BINARY_FPU_SRCA_FORMAT_CB,
+        "binary_ng: FPU SrcA startup operand disagrees with the preprocessing restore reference");
+    CircularBuffer cb_post_lhs(cb_post_lhs_id);
     CircularBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
     CircularBuffer cb_out(tt::CBIndex::c_2);
 
     compute_kernel_hw_startup(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), cb_out.get_cb_id());
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))

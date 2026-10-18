@@ -3,52 +3,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/logsigmoid.h"
-#include "api/compute/eltwise_unary/negative.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"         // Exp
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"         // Negative
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // Logsigmoid
+#include "experimental/kernel_args.h"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg(args::num_tiles);
 
-    constexpr auto cb_input = tt::CBIndex::c_0;
-    constexpr auto cb_output = tt::CBIndex::c_2;
+    DataflowBuffer dfb_in_obj(dfb::in);
+    DataflowBuffer dfb_out_obj(dfb::out);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
 
-    DataflowBuffer dfb_in(cb_input);
-    DataflowBuffer dfb_out(cb_output);
-
-    init_sfpu(cb_input, cb_output);
-
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        dfb_in.wait_front(1);
-        dfb_out.reserve_back(1);
-
-        tile_regs_acquire();
-
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 0);
-        copy_tile(cb_input, 0, 1);
-
-        negative_tile_init();
-        negative_tile(1);
-
-        exp_tile_init<true>();
-        exp_tile<true>(1);
-
-        logsigmoid_tile_init();
-        logsigmoid_tile(0, 1, 0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-        tile_regs_release();
-
-        dfb_in.pop_front(1);
-        dfb_out.push_back(1);
-    }
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(num_tiles),
+        ckl::CopyTile<
+            ckl::input(dfb::in, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{dfb_in_obj},
+        ckl::CopyTile<
+            ckl::input(dfb::in, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D1>{dfb_in_obj},
+        ckl::Negative<ckl::Dst::D1>{},
+        ckl::Exp<ckl::Approx::Fast, ckl::Dst::D1>{},
+        ckl::Logsigmoid<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
+        ckl::PackTile<ckl::output(
+            dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            dfb_out_obj});
 }

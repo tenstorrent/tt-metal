@@ -7,7 +7,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
@@ -270,8 +270,8 @@ void kernel_main() {
     }
 
     fabric_connection.close();
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_async_full_barrier();
+    noc_clear_packet_tags(noc_index);
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
     set_l1_data_cache<false>();

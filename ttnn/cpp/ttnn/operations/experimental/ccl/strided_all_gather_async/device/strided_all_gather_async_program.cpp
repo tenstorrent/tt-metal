@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
+#include <tt-metalium/allocator.hpp>
 #include <algorithm>
 
 #include <tt-metalium/core_coord.hpp>
@@ -20,6 +21,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
@@ -544,6 +546,8 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
+    // The mux stays below the floor of the L1_SMALL region, where carried semaphores live (#56769).
+    const size_t mux_l1_small_floor_address = ttnn::ccl::l1_small_floor_address(*mesh_device);
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             // Fabrix mux kernel
@@ -560,16 +564,20 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                 num_buffers_full_size_channels,
                 0,
                 buffer_size_bytes_full_size_channel,
-                mux_base_l1_address);
+                mux_base_l1_address,
+                tt::CoreType::WORKER,
+                mux_l1_small_floor_address);
 
             // V2 places one logical channel per worker
             std::optional<tt::tt_fabric::FabricMuxV2Config> mux_v2_config;
             if (use_mux_v2) {
                 mux_v2_config.emplace(
+                    *mesh_device,
                     static_cast<uint8_t>(num_full_size_channels),
                     static_cast<uint8_t>(num_buffers_full_size_channels),
                     buffer_size_bytes_full_size_channel,
-                    mux_base_l1_address);
+                    mux_base_l1_address,
+                    mux_l1_small_floor_address);
             }
 
             const bool mux_connection_valid =

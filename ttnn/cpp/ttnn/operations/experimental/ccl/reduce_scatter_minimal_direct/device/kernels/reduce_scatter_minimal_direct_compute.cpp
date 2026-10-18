@@ -61,7 +61,7 @@ void kernel_main() {
     CircularBuffer cb_out(cb_out_id);
 
     if constexpr (num_devices % 2 == 0) {
-        add_tiles_init(cb_reduce_id, cb_reduce_id, true);
+        add_init(cb_reduce_id, cb_reduce_id, true);
     }
 
     uint32_t tiles_done = 0;
@@ -76,11 +76,11 @@ void kernel_main() {
         uint32_t block = 0;
         if constexpr (num_devices % 2 != 0) {
             // Odd block count: seed DST with block0, leaving an even number to fold pairwise.
-            copy_tile_init(cb_reduce_id);
+            copy_init(cb_reduce_id);
             for (uint32_t t = 0; t < n; ++t) {
                 copy_tile(cb_reduce_id, half_off + t, t);
             }
-            add_tiles_init(cb_reduce_id, cb_reduce_id, true);
+            add_init(cb_reduce_id, cb_reduce_id, true);
             block = 1;
         }
         for (; block + 1 < num_devices; block += 2) {

@@ -49,6 +49,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/rotary_embedding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/single_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/conv3d_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.hpp
@@ -61,8 +62,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/linear_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/losses.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/mla_qkv_assemble_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/mla_qkv_assemble_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/mla_kv_assemble_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/mla_kv_assemble_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/polynorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
@@ -74,6 +75,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/softmax_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_packed_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ffn_swiglu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_group_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ungroup_op.cpp
@@ -112,6 +114,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/memory_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils/training_utils.cpp
 )
 
 # Manually select only specific files from metal ops
@@ -180,6 +183,12 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_packed_fw/swiglu_packed_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_packed_fw/device/swiglu_packed_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_packed_fw/device/swiglu_packed_fw_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_packed_bw/swiglu_packed_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_packed_bw/device/swiglu_packed_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_packed_bw/device/swiglu_packed_bw_program_factory.cpp
     # SDPA Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
@@ -220,14 +229,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/frobenius_normalize/frobenius_normalize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/frobenius_normalize/device/frobenius_normalize_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/frobenius_normalize/device/frobenius_normalize_program_factory.cpp
-    # MLA QKV Assemble Forward (DeepSeek)
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_fw/mla_qkv_assemble_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_fw/device/mla_qkv_assemble_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_fw/device/mla_qkv_assemble_fw_program_factory.cpp
-    # MLA QKV Assemble Backward (DeepSeek)
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_bw/mla_qkv_assemble_bw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_bw/device/mla_qkv_assemble_bw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_bw/device/mla_qkv_assemble_bw_program_factory.cpp
+    # MLA KV Assemble Forward (DeepSeek)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_kv_assemble_fw/mla_kv_assemble_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_kv_assemble_fw/device/mla_kv_assemble_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_kv_assemble_fw/device/mla_kv_assemble_fw_program_factory.cpp
+    # MLA KV Assemble Backward (DeepSeek)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_kv_assemble_bw/mla_kv_assemble_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_kv_assemble_bw/device/mla_kv_assemble_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_kv_assemble_bw/device/mla_kv_assemble_bw_program_factory.cpp
     # MLA Q RoPE forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_q_rope/mla_q_rope.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_q_rope/device/mla_q_rope_device_operation.cpp
@@ -236,6 +245,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/variable_matmul/variable_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/variable_matmul/device/variable_matmul_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/variable_matmul/device/variable_matmul_program_factory.cpp
+    # Fused Gumbel-max sampling
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gumbel_sample/gumbel_sample.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gumbel_sample/device/gumbel_sample_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gumbel_sample/device/gumbel_sample_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
@@ -418,11 +431,11 @@ target_link_libraries(
 
 target_include_directories(ttml_pch PRIVATE ${PROJECT_SOURCE_DIR})
 
-if(COMMAND tt_disable_ccache_for_pch)
-    tt_disable_ccache_for_pch(ttml_pch)
+if(COMMAND tt_configure_ccache_for_pch)
+    tt_configure_ccache_for_pch(ttml_pch)
 endif()
 
-target_precompile_headers(ttml REUSE_FROM ttml_pch)
+tt_reuse_precompile_headers(ttml ttml_pch)
 
 if(ENABLE_LIBCXX)
     target_link_libraries(

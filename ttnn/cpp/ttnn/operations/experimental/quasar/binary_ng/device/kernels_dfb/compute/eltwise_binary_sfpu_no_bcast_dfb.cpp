@@ -47,21 +47,21 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu_dfb.hpp"
 
+// The DataflowBuffer arguments are kernel_main's objects: an object built here would drain at every return.
 FORCE_INLINE void process_sfpu_tiles(
     uint32_t n,
-    uint32_t dfb_pre_lhs_id,
-    uint32_t dfb_post_lhs_id,
-    uint32_t dfb_pre_rhs_id,
-    uint32_t dfb_post_rhs_id,
-    uint32_t dfb_out_id ISCLOSE_RT_ARG_PARAMS) {
-    DataflowBuffer dfb_post_lhs(dfb_post_lhs_id);
-    DataflowBuffer dfb_post_rhs(dfb_post_rhs_id);
-    DataflowBuffer dfb_out(dfb_out_id);
-
-    PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, n);
+    DataflowBuffer& dfb_pre_lhs,
+    DataflowBuffer& dfb_post_lhs,
+    DataflowBuffer& dfb_pre_rhs,
+    DataflowBuffer& dfb_post_rhs,
+    DataflowBuffer& dfb_out ISCLOSE_RT_ARG_PARAMS) {
+    const uint32_t dfb_post_lhs_id = dfb_post_lhs.get_id();
+    const uint32_t dfb_post_rhs_id = dfb_post_rhs.get_id();
+    const uint32_t dfb_out_id = dfb_out.get_id();
+    PREPROCESS(LHS, dfb_pre_lhs, dfb_post_lhs, dfb_out_id, n);
     dfb_post_lhs.wait_front(n);
 
-    PREPROCESS(RHS, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id, n);
+    PREPROCESS(RHS, dfb_pre_rhs, dfb_post_rhs, dfb_out_id, n);
     dfb_post_rhs.wait_front(n);
 
     dfb_out.reserve_back(n);
@@ -71,23 +71,13 @@ FORCE_INLINE void process_sfpu_tiles(
 #endif
 
     tile_regs_acquire();
-#ifdef ARCH_QUASAR
-    // Quasar's copy_tile_to_dst_init_short_with_dt is a no-op and cannot switch which operand the
-    // unpacker reads, so use copy_tile_to_dst_init_short (which reprograms the unpacker descriptor)
-    // to point at each operand before its copy_tile loop. matches_metal_v2_slice requires lhs and rhs
-    // to share a data format, so the data-format reconfig the WH/BH _with_dt path performs is not needed.
-    copy_tile_to_dst_init_short(dfb_post_lhs_id);
-#else
-    copy_tile_to_dst_init_short_with_dt(dfb_post_rhs_id, dfb_post_lhs_id);
-#endif
+    // Startup and preprocessing preserve the physical-LHS SrcA format.
+    copy_init(dfb_post_lhs_id);
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_lhs_id, i, i * 2);
     }
-#ifdef ARCH_QUASAR
-    copy_tile_to_dst_init_short(dfb_post_rhs_id);
-#else
-    copy_tile_to_dst_init_short_with_dt(dfb_post_lhs_id, dfb_post_rhs_id);
-#endif
+    reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
+    copy_init(dfb_post_rhs_id);
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
 #if HAS_ACTIVATIONS(POST)
@@ -100,6 +90,7 @@ FORCE_INLINE void process_sfpu_tiles(
 #endif
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
+    reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -141,31 +132,42 @@ void kernel_main() {
     constexpr uint32_t dfb_post_rhs_id = dfb_pre_rhs_id;
 #endif
 
-    unary_op_init_common(dfb_post_lhs_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
+    copy_init(dfb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT
 #endif
 
+    // Each object drains once, at kernel exit. An activation chain reads its operand from the pre ring. Without
+    // one, PREPROCESS compiles to nothing, and the pre object is the post one.
+    DataflowBuffer dfb_post_lhs(dfb_post_lhs_id);
+    DataflowBuffer dfb_post_rhs(dfb_post_rhs_id);
+    DataflowBuffer dfb_out(dfb_out_id);
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
+#else
+    DataflowBuffer& dfb_pre_lhs = dfb_post_lhs;
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);
+#else
+    DataflowBuffer& dfb_pre_rhs = dfb_post_rhs;
+#endif
+
     // Process full chunks
     uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
         process_sfpu_tiles(
-            num_tiles_per_cycle,
-            dfb_pre_lhs_id,
-            dfb_post_lhs_id,
-            dfb_pre_rhs_id,
-            dfb_post_rhs_id,
-            dfb_out_id ISCLOSE_RT_ARG_FWD);
+            num_tiles_per_cycle, dfb_pre_lhs, dfb_post_lhs, dfb_pre_rhs, dfb_post_rhs, dfb_out ISCLOSE_RT_ARG_FWD);
     }
 
     // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
-        process_sfpu_tiles(
-            remainder, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id ISCLOSE_RT_ARG_FWD);
+        process_sfpu_tiles(remainder, dfb_pre_lhs, dfb_post_lhs, dfb_pre_rhs, dfb_post_rhs, dfb_out ISCLOSE_RT_ARG_FWD);
     }
 }

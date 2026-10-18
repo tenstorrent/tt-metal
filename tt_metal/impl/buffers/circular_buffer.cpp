@@ -5,11 +5,13 @@
 #include <buffer.hpp>
 #include <circular_buffer.hpp>
 #include <global_circular_buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <array>
 #include <string>
 
 #include <tt_stl/assert.hpp>
 #include "impl/buffers/circular_buffer.hpp"
+#include "impl/buffers/global_circular_buffer_impl.hpp"
 #include "circular_buffer_config.hpp"
 #include "circular_buffer_constants.h"
 #include "tile.hpp"
@@ -18,24 +20,6 @@ namespace tt::tt_metal {
 // We use 16 bits to store tiles_received and tiles_acked.
 static constexpr uint32_t cb_page_count_bits = 16;
 static constexpr uint32_t max_num_cb_pages = (1 << cb_page_count_bits) - 1;
-
-// A dynamic CB backed by a PER-CORE-allocated buffer (experimental_set_per_core_allocation) has a different L1
-// address on every core, but CircularBufferConfig only carries the buffer's single Buffer::address(). When such a CB
-// spans exactly one core, resolve that core's real address; otherwise fall back to the single address (callers that
-// need per-core CBs fan them out one core per CB). Without this, every core's CB pointed at the FIRST core's
-// address -- measured as a DRAM-streaming weights FIFO on 8 bank workers overwriting another tensor on the cores
-// whose per-core stack differed (DS4F-0138).
-static uint32_t resolve_global_cb_address(const CircularBufferConfig& config, const CoreRangeSet& core_ranges) {
-    uint32_t base = config.globally_allocated_address().value();
-    const Buffer* buf = config.shadow_global_buffer;
-    if (buf != nullptr && experimental::per_core_allocation::is_per_core_allocation(*buf) &&
-        core_ranges.num_cores() == 1) {
-        const CoreCoord core = core_ranges.ranges().front().start_coord;
-        base = static_cast<uint32_t>(experimental::per_core_allocation::get_per_core_address(*buf, core)) +
-               config.address_offset();
-    }
-    return base;
-}
 
 // Dynamic CBs will be created with address_ initialized to globally allocated address
 // Static CBs will not have address set until their owning Program allocates them
@@ -49,7 +33,13 @@ CircularBufferImpl::CircularBufferImpl(const CoreRangeSet& core_range_set, const
         this->config_.remote_buffer_indices().empty(),
         "Remote buffer indices are not supported without a GlobalCircularBuffer");
     if (globally_allocated()) {
-        globally_allocated_address_ = resolve_global_cb_address(config, core_ranges_);
+        // The config holds Buffer::address(), which is wrong for a per-core buffer; resolve on this CB's cores.
+        // Without a backing buffer (e.g. a config rebuilt from a trace), keep the stored address.
+        if (config_.shadow_global_buffer != nullptr) {
+            this->assign_global_address();
+        } else {
+            globally_allocated_address_ = config_.globally_allocated_address().value();
+        }
     }
 }
 
@@ -87,7 +77,12 @@ CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
         this->set_global_circular_buffer(*descriptor.global_circular_buffer);
     } else {
         if (globally_allocated()) {
-            globally_allocated_address_ = resolve_global_cb_address(config_, core_ranges_);
+            // See the constructor above.
+            if (config_.shadow_global_buffer != nullptr) {
+                this->assign_global_address();
+            } else {
+                globally_allocated_address_ = config_.globally_allocated_address().value();
+            }
         }
     }
 }
@@ -190,26 +185,44 @@ uint32_t CircularBufferImpl::address() const {
     return this->globally_allocated() ? globally_allocated_address_ : locally_allocated_address_.value();
 }
 
+void CircularBufferImpl::set_total_size(uint32_t total_size) {
+    config_.set_total_size(total_size);
+    ++config_generation_;
+}
+
+void CircularBufferImpl::set_page_size(uint8_t buffer_index, uint32_t page_size) {
+    config_.set_page_size(buffer_index, page_size);
+    ++config_generation_;
+}
+
+void CircularBufferImpl::set_global_buffer(const Buffer& buffer, uint32_t total_size, uint32_t address_offset) {
+    // Resolve first so a rejected buffer leaves the CB unchanged.
+    const DeviceAddr base_address =
+        experimental::per_core_allocation::get_shard_base_address(buffer, this->core_ranges_);
+    config_.set_globally_allocated_address_and_total_size(buffer, total_size, address_offset);
+    set_global_base_address(base_address);
+}
+
 void CircularBufferImpl::assign_global_address() {
-    globally_allocated_address_ = config_.shadow_global_buffer->address() + config_.address_offset();
-    const Buffer* buf = config_.shadow_global_buffer;
-    if (buf != nullptr && experimental::per_core_allocation::is_per_core_allocation(*buf) &&
-        core_ranges_.num_cores() == 1) {
-        const CoreCoord core = core_ranges_.ranges().front().start_coord;
-        globally_allocated_address_ =
-            static_cast<uint32_t>(experimental::per_core_allocation::get_per_core_address(*buf, core)) +
-            config_.address_offset();  // DS4F-0138: per-core buffer -> this core's address, not the buffer's single one
-    }
+    // Buffer::address() is only the first core's for a per-core buffer; use this CB's cores.
+    set_global_base_address(
+        experimental::per_core_allocation::get_shard_base_address(*config_.shadow_global_buffer, this->core_ranges_));
+}
+
+void CircularBufferImpl::set_global_base_address(DeviceAddr base_address) {
+    globally_allocated_address_ = base_address + config_.address_offset();
+    ++config_generation_;
 }
 
 void CircularBufferImpl::set_global_circular_buffer(const experimental::GlobalCircularBuffer& global_circular_buffer) {
     TT_FATAL(
-        global_circular_buffer.all_cores().contains(this->core_ranges_),
+        global_circular_buffer.impl().all_cores().contains(this->core_ranges_),
         "Specified cores are not contained in associated GlobalCircularBuffer");
-    this->config().set_globally_allocated_address(global_circular_buffer.cb_buffer());
+    config_.set_globally_allocated_address(global_circular_buffer.cb_buffer());
     this->shadow_global_circular_buffer_ = &global_circular_buffer;
     this->globally_allocated_address_ = global_circular_buffer.buffer_address();
     this->global_circular_buffer_config_address_ = global_circular_buffer.config_address();
+    ++config_generation_;
 }
 
 DeviceAddr CircularBufferImpl::config_address() const { return this->global_circular_buffer_config_address_; }

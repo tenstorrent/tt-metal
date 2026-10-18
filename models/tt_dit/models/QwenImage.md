@@ -38,11 +38,17 @@ Current performance for two systems are detailed below. Performance is measured 
 # Note: the first run will populate the cache and will not benefit from faster startup.
 export TT_DIT_CACHE_DIR=/your/cache/path
 
+# Run the pipeline test on a 4-chip box such as BH QuietBox 2 (2x2 mesh)
+pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k "2x2sp1tp2 and traced and encoder_device"
+
 # Run the pipeline test on QuietBox (2x4 mesh)
 pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k "2x4sp1tp4 and traced and encoder_device"
 
 # Run the pipeline test on Galaxy (4x8 mesh)
 pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k "4x8sp4tp4 and traced and encoder_device"
+
+# Run the performance test on a 4-chip box such as BH QuietBox 2 (2x2 mesh)
+pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k "2x2cfg2sp1tp2"
 
 # Run the performance test on QuietBox (2x4 mesh)
 pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k "2x4cfg2sp1tp4"
@@ -54,8 +60,8 @@ pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k "4x
 
 ## Scalability
 
-Qwen-Image has been implemented to support execution on 8-chip (QuietBox and LoudBox with 2x4 mesh topology) as well as 32-chip (Galaxy with 4x8 mesh topology) systems.
-The model has only been tested on Wormhole. Blackhole support is coming soon.
+Qwen-Image has been implemented to support execution on 4-chip (BH QuietBox 2 with 2x2 mesh topology), 8-chip (QuietBox and LoudBox with 2x4 mesh topology) as well as 32-chip (Galaxy with 4x8 mesh topology) systems.
+The 2x4 and 4x8 configurations have been tested on Wormhole. The 2x2 configuration targets Blackhole (BH QuietBox 2) and is the configuration exercised in CI; it runs 1024x1024 at 50 steps in ~57s end to end.
 
 The DiT model can be parallelized on 3 axes:
 1. `cfg` (classifier-free guidance) - execute conditional and unconditional steps in parallel

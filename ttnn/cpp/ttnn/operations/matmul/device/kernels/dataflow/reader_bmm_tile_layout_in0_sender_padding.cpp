@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_bmm_tile_layout_in0_sender_padding_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this
+// file serves the consumers still on the legacy API. Until the last of them migrates and this
+// file is retired, changes here likely belong in the fork too.
+
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
@@ -20,18 +25,18 @@
 void kernel_main() {
     uint32_t rt_args_idx = 0;
     // in0 tensor args
-    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     // in0 mcast args
-    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
     // padding args
-    const uint32_t last_block_h = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t last_block_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     // sparsity args
-    const uint32_t sparsity_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t sparsity_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
     // COMPILE TIME ARGS
     // in0 tensor args
@@ -46,7 +51,7 @@ void kernel_main() {
     constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(7);
     constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(8);
 
-    constexpr bool extract_shard_sub_blocks = (bool)get_compile_time_arg_val(9);
+    constexpr bool extract_shard_sub_blocks = static_cast<bool>(get_compile_time_arg_val(9));
     constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(11);
     // in0/in1 common args
@@ -60,7 +65,7 @@ void kernel_main() {
     constexpr uint32_t MtKt = get_compile_time_arg_val(19);  // if 0
     constexpr uint32_t in0_B = get_compile_time_arg_val(20);
     constexpr uint32_t in1_B = get_compile_time_arg_val(21);
-    constexpr uint32_t in0_reuse_in_CB = get_compile_time_arg_val(22);
+    constexpr bool in0_reuse_in_CB = get_compile_time_arg_val(22) == 1;
 
     // sparsity args
 
@@ -68,15 +73,15 @@ void kernel_main() {
     constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(24);
     // Boolean that is set when input A is sparse. If set, both input A and B are assumed to be sparse.
     // Based on the sparsity tensor, the corresponding batch in input A and B are skipped.
-    constexpr bool bcast_A = (bool)get_compile_time_arg_val(25);
+    constexpr bool bcast_A = static_cast<bool>(get_compile_time_arg_val(25));
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(26);
+    constexpr bool get_batch_from_reader = static_cast<bool>(get_compile_time_arg_val(26));
 
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(27);
+    constexpr bool fuse_op = static_cast<bool>(get_compile_time_arg_val(27));
 
     constexpr auto in0_args = TensorAccessorArgs<28>();
 
-    constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+    constexpr auto sparsity_args = TensorAccessorArgs<decltype(in0_args)::next_compile_time_args_offset()>();
 
     // Number of valid (non-zero sparsity) batches the receiver and compute kernels are configured to
     // process. When nnz is supplied (get_batch_from_reader == false), those kernels loop exactly
@@ -88,7 +93,7 @@ void kernel_main() {
     // asserting the contract holds -- surfacing a loud assert (under watcher) instead of a silent hang.
     // See https://github.com/tenstorrent/tt-metal/issues/45943.
     [[maybe_unused]] constexpr uint32_t num_batch_compute =
-        get_compile_time_arg_val(sparsity_args.next_compile_time_args_offset());
+        get_compile_time_arg_val(decltype(sparsity_args)::next_compile_time_args_offset());
 
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
     // 0x1 is used to specify "VALID" state, i.e. when the batch is valid.
@@ -132,7 +137,7 @@ void kernel_main() {
     constexpr uint32_t in0_block_size_bytes = in0_block_num_tiles * in0_aligned_tile_size_bytes;
 #endif
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
     Semaphore<> sender_sem(get_compile_time_arg_val(15));
     Semaphore<> receiver_sem(get_compile_time_arg_val(16));
@@ -149,7 +154,7 @@ void kernel_main() {
     if constexpr (extract_shard_sub_blocks) {
         constexpr uint32_t dfb_id_in2 =
             get_named_compile_time_arg_val("cb_in0_sharded");  // in0 sharded cb if extract_shard_sub_blocks
-        DataflowBuffer dfb_in2(dfb_id_in2);
+        const DataflowBuffer dfb_in2(dfb_id_in2);
         noc_shard_read_start_addr = dfb_in2.get_read_ptr();
     }
 
@@ -183,7 +188,20 @@ void kernel_main() {
     // count_nonzero(sparsity) == num_batch_compute when nnz is supplied (see num_batch_compute above).
     [[maybe_unused]] uint32_t num_valid_batches = 0;
 
-    for (uint32_t b = 0; b < in0_B; ++b) {
+    // Broadcast-A reuse (in0_B == 1, in1_B > 1): the in0 buffer holds one per-core copy of A
+    // (per_core_M * K tiles, i.e. num_blocks_h_dim * num_blocks_inner_dim blocks), but compute consumes
+    // num_blocks_h_dim * num_blocks_w_dim * num_blocks_inner_dim blocks per batch. Batch 0 leaves the
+    // buffer in exactly the order compute re-reads it only when one outer block count is 1: with
+    // h == 1 each W block is the same K pass again, and with w == 1 the buffer is the whole M x K image
+    // filled once. Then the extra batches just replay pointer credits. With both > 1 later W blocks
+    // overwrite earlier M blocks, so the extra batches re-read A from DRAM instead.
+    // See https://github.com/tenstorrent/tt-metal/issues/57183.
+    constexpr bool in0_replay_in_buffer = in0_reuse_in_CB && (num_blocks_h_dim == 1 || num_blocks_w_dim == 1);
+    constexpr bool in0_reread_per_batch = in0_reuse_in_CB && !in0_replay_in_buffer;
+    constexpr uint32_t in0_num_batches_read = in0_reread_per_batch ? in1_B : in0_B;
+
+    for (uint32_t b = 0; b < in0_num_batches_read; ++b) {
+        [[maybe_unused]] const uint32_t in0_batch_start_tile_id = in0_tensor_start_tile_id;
         if constexpr (batchB > 0 && !use_indices) {
             noc.async_read(s_sparsity, dfb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
@@ -213,9 +231,9 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
                     // We need to pass the value to compute cores regardless of the value of is_batch_valid
-                    ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_batch_valid);
-                    ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_batch_valid);
-                    ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, is_batch_valid);
+                    ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, static_cast<uint32_t>(is_batch_valid));
+                    ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(is_batch_valid));
+                    ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(is_batch_valid));
                 }
 
                 if (!is_batch_valid) {
@@ -312,7 +330,7 @@ void kernel_main() {
                                 l1_write_addr_in0;  // copy start address of block, to be used for mcasting
 #endif  // SKIP_MCAST
 
-                            UnicastEndpoint self_ep;
+                            const UnicastEndpoint self_ep;
                             uint32_t noc_shard_read_l1_addr = in0_tensor_current_inner_dim_block_start_addr;
 
                             for (uint32_t i = 0; i < in0_block_h; i++) {
@@ -333,21 +351,21 @@ void kernel_main() {
 
                         {
                             constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
-                            uint32_t in0_pad_base_addr = dfb_in0.get_write_ptr();
+                            const uint32_t in0_pad_base_addr = dfb_in0.get_write_ptr();
                             if constexpr (in0_last_ktile_w > 0) {
-                                if ((block == num_blocks_inner_dim - 1)) {
+                                if (block == num_blocks_inner_dim - 1) {
                                     for (uint32_t h = 0; h < in0_block_h; ++h) {
                                         auto ptr = in0_pad_base_addr +
-                                                   (h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes;
+                                                   ((h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes);
                                         pad_last_ktile<in0_data_format, in0_last_ktile_w>(ptr);
                                     }
                                 }
                             }
                             if constexpr (in0_last_ktile_h > 0) {
-                                if ((block == num_blocks_inner_dim - 1)) {
+                                if (block == num_blocks_inner_dim - 1) {
                                     for (uint32_t w = 0; w < in0_block_w; ++w) {
                                         auto ptr = in0_pad_base_addr +
-                                                   ((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes;
+                                                   (((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes);
                                         pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(ptr);
                                     }
                                 }
@@ -363,7 +381,7 @@ void kernel_main() {
                         sender_sem.set(0);
 
                         // Now we have the block in the CB address, we can mcast to dests!
-                        MulticastEndpoint mcast_dst;
+                        const MulticastEndpoint mcast_dst;
                         // num_dests must not include source, since we are NOT really doing a local copy!
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(in0_start_address),
@@ -422,13 +440,17 @@ void kernel_main() {
         // optimization we just read the tensor slice once into each core's L1 and keep it there for all weight
         // batches since the needed in0 data is already in L1 after batch 0, we can just move read pointer for this
         // CB so compute kernel thinks it has new data
-        if (in0_reuse_in_CB) {
+        if constexpr (in0_replay_in_buffer) {
             for (uint32_t fake_batch = 0; fake_batch < in1_B - in0_B; ++fake_batch) {
-                for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
+                for (uint32_t blk = 0; blk < num_blocks_h_dim * num_blocks_w_dim * num_blocks_inner_dim; ++blk) {
                     dfb_in0.reserve_back(in0_block_num_tiles);
                     dfb_in0.push_back(in0_block_num_tiles);
                 }
             }
+        }
+        if constexpr (in0_reread_per_batch) {
+            // Every weight batch reads the same A slice.
+            in0_tensor_start_tile_id = in0_batch_start_tile_id;
         }
     }
     noc.async_write_barrier();

@@ -5,6 +5,7 @@ import struct
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ScalarBinopGolden, get_golden_generator
 from helpers.llk_params import (
@@ -14,6 +15,13 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.sfpu_accuracy_budget import assert_against_contract
+from helpers.sfpu_domains import (
+    SPECIALS_READY_OPS,
+    edge_spec,
+    specials_after_nan_sign_gate,
+    specials_safe,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -22,7 +30,6 @@ from helpers.test_variant_parameters import (
     SFPU_BINOP_MODE,
     SFPU_UNARY_SCALAR,
 )
-from helpers.utils import passed_test
 
 
 def _bits(value: float) -> int:
@@ -39,6 +46,9 @@ def _bits(value: float) -> int:
 # one kernel parameter. Presubmit drives the ops at a single representative scalar and the
 # remaining values run nightly.
 _PRESUBMIT_SCALAR = 2.0
+
+#: The approximation mode this kernel compiles, and so the one its contract names.
+_APPROX_MODE = ApproximationMode.No
 _SCALARS = (0.0, 1.0, 2.0, -2.0, 8.0, 0.25)
 _NIGHTLY_SCALARS = tuple(s for s in _SCALARS if s != _PRESUBMIT_SCALAR)
 
@@ -91,7 +101,9 @@ def _run_sfpu_binop_scalar(
     )
 
     generate_golden = get_golden_generator(ScalarBinopGolden)
-    golden = generate_golden(mathop, src_A, scalar_bits, formats.output_format)
+    golden = generate_golden(
+        mathop, src_A, scalar_bits, formats.output_format, dest_acc
+    )
 
     configuration = TestConfig(
         "sources/sfpu_binop_scalar_test.cpp",
@@ -99,7 +111,7 @@ def _run_sfpu_binop_scalar(
         templates=[
             SFPU_BINOP_MODE(mathop),
             SFPU_UNARY_SCALAR(scalar_bits),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(_APPROX_MODE),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -128,9 +140,17 @@ def _run_sfpu_binop_scalar(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    # The whole contract, step budget included, as the binary and ternary drivers gate:
+    # every Scalar* row was measured over this driver's own variants. The mode the
+    # kernel compiled: an unset query dimension would not match a row keyed on it.
+    assert_against_contract(
+        mathop,
+        formats,
+        dest_acc,
+        golden_tensor,
+        res_tensor,
+        approx_mode=_APPROX_MODE,
+    )
 
 
 _SCALAR_FORMATS = input_output_formats(
@@ -185,31 +205,64 @@ def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
     _run_sfpu_binop_scalar(formats, dest_acc, mathop, scalar=scalar)
 
 
-# Not swept here yet: edge values on the *tensor* operand. All five ops are
-# x (+|-|*|/) c for a compile-time c, which is smooth in x -- no pole, no knee -- so cat A
-# and cat D contribute nothing and edge_spec() returns None for every one of them. What is
-# left is cat B, gated per op on SPECIALS_READY_OPS, which is empty until the goldens
-# define a result for non-finite inputs.
+# Edge values on the *tensor* operand. All five ops are x (+|-|*|/) c for a compile-time c,
+# which is smooth in x -- no pole, no knee -- so cat A and cat D contribute nothing and
+# edge_spec() returns None unless specials are on. Cat B is their entire edge story, which is
+# why this test only exists now the scalar ops are enrolled in SPECIALS_READY_OPS.
 #
-# A wrapper written now would therefore skip every variant it collected: nightly runtime
-# and a test name that reads like protection, with no executable assertion behind it. What
-# it needed to exist was the spec_A hook on _run_sfpu_binop_scalar, and that is in place —
-# so add the wrapper in the commit that makes the first scalar golden specials-ready,
-# where its skips turn into runs:
+# Two of the eight (format, dest_acc) pairs survive both gates, and they are complementary
+# rather than redundant -- between them they cover both sides of the delivery split:
 #
-#     @pytest.mark.nightly
-#     @parametrize(formats=_SCALAR_FORMATS, dest_acc=[...], mathop=_SCALAR_OPS)
-#     def test_sfpu_binop_scalar_edges(formats, dest_acc, mathop):
-#         _skip_unsupported(formats, dest_acc, mathop, _PRESUBMIT_SCALAR)
-#         specials = mathop in SPECIALS_READY_OPS and specials_safe(
-#             formats.input_format, formats.output_format, dest_acc
-#         )
-#         spec_A = edge_spec(mathop, formats.input_format, formats.output_format,
-#                            specials=specials)
-#         ...
-#         _run_sfpu_binop_scalar(formats, dest_acc, mathop,
-#                                scalar=_PRESUBMIT_SCALAR, spec_A=spec_A)
+#   Float32->Float32   dest_acc=Yes  unpack-to-dest, so a real -0.0 arrives
+#   Float16_b->Float16_b dest_acc=No datacopy, so -0.0 arrives as +0.0 and is not sent
 #
-# Also deliberately out of scope there: |scalar| > 8 and the +/-tiny, +/-large tensor
-# values. Both need a per-op tolerance first -- the default bf16 tolerance is only
-# meaningful while the result stays in range -- which is its own piece of work.
+# The other six are excluded by _skip_unsupported (Float32 needs a 32-bit dest, Float16_b
+# cannot use one) or by specials_safe.
+#
+# Still out of scope, and both need a per-op tolerance first -- the default bf16 tolerance is
+# only meaningful while the result stays in range: |scalar| > 8, and +/-tiny / +/-large on the
+# tensor operand. That is the pattern sfpu_accuracy_budget.yaml uses for pow and xlogy.
+@pytest.mark.nightly
+@parametrize(
+    formats=_SCALAR_FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=_SCALAR_OPS,
+)
+def test_sfpu_binop_scalar_edges(formats, dest_acc, mathop):
+    """Drive IEEE specials through the tensor operand of each scalar binop."""
+    _skip_unsupported(formats, dest_acc, mathop, _PRESUBMIT_SCALAR)
+
+    # Both gates, as everywhere else: SPECIALS_READY_OPS says the *golden* defines a result
+    # for a non-finite input, specials_safe() says the *pipeline* delivers one intact.
+    specials = mathop in SPECIALS_READY_OPS and specials_safe(
+        formats.input_format, formats.output_format, dest_acc
+    )
+
+    # The unary sweep's gate, same rule and same helper: ScalarRsub builds `c - x` through
+    # SFPMAD, so a NaN operand comes back as a NaN of the kernel's own making rather than the
+    # one it was handed. See sfpu_domains.GENERATED_NAN_SIGN_OPS.
+    specials = specials_after_nan_sign_gate(
+        mathop,
+        formats.input_format,
+        formats.output_format,
+        dest_acc,
+        specials,
+        TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE,
+    )
+
+    spec_A = edge_spec(
+        mathop,
+        formats.input_format,
+        formats.output_format,
+        specials=specials,
+        dest_acc=dest_acc,
+    )
+    if spec_A is None:
+        pytest.skip(
+            reason=f"{mathop.name} has no edge values for this pipeline "
+            "(smooth in x, and specials not preserved here)"
+        )
+
+    _run_sfpu_binop_scalar(
+        formats, dest_acc, mathop, scalar=_PRESUBMIT_SCALAR, spec_A=spec_A
+    )

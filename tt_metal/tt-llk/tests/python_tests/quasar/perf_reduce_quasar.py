@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.chip_architecture import is_4row_arch
+from helpers.constraints import get_valid_math_fidelities
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
+    PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
-    MathFidelity,
     ReduceDimension,
     ReducePool,
 )
@@ -14,8 +16,8 @@ from quasar.test_reduce_quasar import (
     REDUCE_FORMATS,
     reduce_dest_acc_modes,
     reduce_dest_sync_modes,
-    reduce_implied_math_formats,
     reduce_pool_type_and_math_fidelity_combinations,
+    reduce_tile_dimensions,
 )
 from quasar.test_reduce_quasar import test_reduce_quasar as run_reduce_quasar
 from quasar.test_reduce_quasar import (
@@ -28,18 +30,15 @@ from quasar.test_reduce_quasar import (
 @pytest.mark.nightly
 @parametrize(
     formats=REDUCE_FORMATS,
-    tile_dimensions=[(32, 32)],
+    tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=True),
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    pool_type_and_math_fidelity=lambda: reduce_pool_type_and_math_fidelity_combinations(
-        is_perf=True
-    ),
-    dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=True),
-    implied_math_format=lambda formats: reduce_implied_math_formats(
+    pool_type_and_math_fidelity=lambda formats: reduce_pool_type_and_math_fidelity_combinations(
         formats, is_perf=True
     ),
+    dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=True),
     run_types=PERF_RUN_TYPES_QUASAR,
-    loop_factor=[32],
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_reduce_quasar(
@@ -50,7 +49,6 @@ def test_perf_reduce_quasar(
     reduce_dim,
     pool_type_and_math_fidelity,
     dest_sync_mode,
-    implied_math_format,
     run_types,
     loop_factor,
     is_perf,
@@ -62,7 +60,6 @@ def test_perf_reduce_quasar(
         reduce_dim,
         pool_type_and_math_fidelity,
         dest_sync_mode,
-        implied_math_format,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,
@@ -72,6 +69,10 @@ def test_perf_reduce_quasar(
 
 @pytest.mark.perf
 @pytest.mark.quasar
+@pytest.mark.skipif(
+    is_4row_arch(),
+    reason="MxFp4_2x GAPOOL reduce is not implemented on the 4-row Quasar architecture",
+)
 @parametrize(
     register_format_hint=[DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B],
     formats=lambda register_format_hint: [
@@ -89,10 +90,10 @@ def test_perf_reduce_quasar(
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
-    math_fidelity=[MathFidelity.LoFi],
+    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=True),
     run_types=PERF_RUN_TYPES_QUASAR,
-    loop_factor=[32],
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_reduce_quasar_mxfp4_2x_gapool(

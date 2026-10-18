@@ -62,12 +62,11 @@ export HOSTSP=<H0>:1,<H1>:1       # runner + driver: the --host list, passed to 
 Two shape constraints apply: `MAX_SEQ_LEN % CHUNK_SIZE == 0` and `CHUNK_SIZE % (SP*32) == 0` (each SP shard
 stays 32-token-block aligned).
 
-**`PREFILL_MOCK_MIGRATION=1` is single-rank only** — the runner rejects it for `num_ranks > 1`, because each
-rank would publish a table covering just its own layer slice and a merged mock table is not implemented. So
-**Gate 1** needs a 1-rank binding. `PREFILL_ENABLE_MIGRATION=1` (Gate 2) has no such restriction: the real
-path merges the per-rank stage layouts through the worker
-(`deliver_device_map_and_gather_stage_layout`), so a pipelined runner publishes one table spanning every
-rank's layers. Gate 2 runs on 1, 2 or 4 ranks — see *Covering every rank* below for what that costs on the
+**`PREFILL_ENABLE_MIGRATION` picks the table's consumer, not whether one is built.** Every run all-gathers
+the per-rank stage layouts and rank 0 builds one merged table spanning every rank's layers. `1` (Gate 2)
+hands it to a live migration worker over the client queues (`deliver_device_map_and_gather_stage_layouts`)
+and blocks on the worker's ready; `0` (Gate 1, mock migration) leaves it on disk for an offline reader such as
+`prefill_producer`. Both run on 1, 2 or 4 ranks — see *Covering every rank* below for what that costs on the
 read-back side.
 
 ---
@@ -100,7 +99,8 @@ global_env:
   PREFILL_NUM_USERS: "4"           # must cover every dst slot: src 0,1 -> dst 2,3
 
   PREFILL_ENABLE_MIGRATION: "1"
-  PREFILL_MIGRATION_WAIT_READY_MS: "120000"
+  PREFILL_MIGRATION_WAIT_READY_MS: "120000"   # worker handshake, AFTER attach succeeds
+  PREFILL_MIGRATION_ATTACH_WAIT_S: "0"        # seconds to wait for the shm queues to appear; 0/unset = forever
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/prefill_kv_chunk_table.pb"
   PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_kv_device_map.json"
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"      # endpoint default is /mig_ep<id>_{cmd,table,resp}
@@ -231,9 +231,28 @@ crossed slot→prompt wiring or a slot-index bug in the address table still pass
 `slot_lengths` is keyed by slot, so with `max_requests > num_users` a recycled slot replays the *same*
 prompt; set `max_requests == num_users` for one resident request per slot.
 
-Coverage: `tests/test_producer_slot_prompts.py` (device-free, host logic) and
-`tests/test_producer_runner_e2e.py::test_producer_runner_multiprompt_pcc` (on-device, opt-in via
-`PREFILL_CI_MULTIPROMPT_TRACES`).
+### Multi-turn conversations
+
+`PREFILL_PRODUCER_MULTI_TURN_PROB` (manifest: `workload.multi_turn_prob`, default `0.0`) is the probability
+that a recycled slot **continues** its conversation instead of starting a fresh one. A continued turn
+resumes writing at the previous turn's length **aligned down to 32** and replays the ≤31 dropped tokens as
+part of its first chunk; aligning up instead would leave a permanent unwritten hole mid-sequence, and a
+sub-tile write offset is rejected outright (`update_padded_kv_cache` asserts `kv_actual_global % 32 == 0`,
+and the kernel's staircase disagrees with the host mirror off-tile). The replay is PCC-idempotent because
+the rope table is keyed on absolute position, though it is not bit-idempotent.
+
+Every length the producer reports stays **absolute** — measured from cache position 0, never relative to
+the turn — because `actual_end` is a cache position. When a conversation no longer has room for another
+full chunk the slot restarts from 0 rather than overrunning the per-user cache.
+
+At the default `0.0` nothing draws from the rng and the schedule is byte-for-byte what it was before the
+knob existed, so existing legs are unaffected.
+
+Coverage: the multi-turn scheduling described here has no dedicated automated test yet — a device-free
+host-logic test for turn continuation (align-down/replay and absolute-length bookkeeping) is a TODO. The
+closest existing coverage is the on-device producer/runner PCC gate
+`tests/test_producer_runner_e2e.py::test_producer_runner_pcc`, which drives the producer end to end and
+fails if any resident slot's KV PCC is below threshold, though it is not multi-turn-specific.
 
 ---
 
@@ -399,7 +418,7 @@ asserts when a chunk overruns the cache — it no longer derives from a chunk co
 In the binding, replace the migration block with:
 
 ```yaml
-  PREFILL_MOCK_MIGRATION: "1"
+  PREFILL_ENABLE_MIGRATION: "0"
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/prefill_kv_chunk_table.pb"
   PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_kv_device_map.json"
   PREFILL_NUM_USERS: "2"
@@ -422,17 +441,17 @@ Expect `[producer] KV cache PCC PASSED` (threshold `PREFILL_STANDALONE_CHUNKED_P
 `0.93`).
 
 This gate is not a prerequisite for the producer's golden PCC on the real-migration path, because the runner
-serialises the device map there too: one `serialize_device_map` call sits above the mock/real split inside the
-`_migration_enabled` block, so **every rank on either path** publishes its own host-local sidecar. It has to
-be: `deliver_device_map_and_gather_stage_layout` hands the map to the co-located *worker* over the migration
-client and leaves nothing on disk, while every device-less read-back resolves chips from the JSON.
+serialises the device map there too: **every rank on either path** publishes its own host-local JSON sidecar.
+It has to: `deliver_device_map_and_gather_stage_layouts` hands the map to the co-located *worker* over the
+migration client and leaves nothing on disk, while every device-less read-back resolves chips from the JSON.
+`PREFILL_MIGRATION_EXPORT_TO_FILE=1` is the third transport — a plain-text map at
+`PREFILL_MIGRATION_DEVICE_MAP_PATH` for a worker that reads it off disk — and it suppresses the JSON sidecar,
+so a device-less read-back cannot run alongside it.
 
-That call **had** regressed to living under `if _mock_migration:` only, and the symptom is exactly as quiet as
-you would fear — a real-migration run published no sidecar, each reader polled 60 s, logged `device map ... not
-found; skipping KV read`, and every PCC plus the `--dump-src-kv` reference vanished with nothing raising. If
-you see that line, check this call before suspecting the table. Beware the confusing variant too: a *stale*
-map left in `/tmp` by an earlier mock run makes the same misconfiguration look like it works. Gate 1 remains
-the cheapest way to separate a table problem from a transport problem.
+A reader that polls 60 s and logs `device map ... not found; skipping KV read` loses every PCC and the
+`--dump-src-kv` reference with nothing raising; check the sidecar before suspecting the table. Beware the
+inverse too: a *stale* map left in `/tmp` by an earlier run makes the same misconfiguration look like it
+works. Gate 1 remains the cheapest way to separate a table problem from a transport problem.
 
 ## Gate 2 — loopback migration
 
@@ -520,7 +539,9 @@ gates you intend to run require.
 | Gate | Hook | Signature requirement |
 |------|------|-----------------------|
 | 1 | `build_kv_chunk_table` | serialises the block-cyclic layout; issues no comms |
-| 2 | `kv_migration_base_address` | this rank's KV base DRAM address, for the cross-stage table merge |
+| 2 | `kv_migration_stages` | one `KvCacheStage` per migratable cache, for the cross-stage table merge |
+| 1, 2 | `cache_kind` (adapter) | what each table config holds (`kvpe` / `index` / other); the producer's index check and the driver's cache plan key on it instead of the config count. Kimi-K3 declares its KDA state configs here (`tt/kda/KDA_STATE_MIGRATION.md`) |
+| 2 | `layer_position_range` (adapter) | positions one /migrate of a layer covers; default `[0, real_len)`. Kimi-K3 returns the KDA version window `[v * 36864, (v + 1) * 36864)`, `v = (real_len - 1) % 8`, for its KDA layers, so MLA and KDA layers go in separate calls and the byte verify walks that window |
 | 2 `dst-bytes` | **none** | nothing is decoded — the byte compare is model-agnostic |
 | 2 `dst-golden` | none beyond Gate 1 | reuses the producer's own read-back, not a runtime hook |
 
@@ -576,11 +597,34 @@ runner supplies the first two, then waits — it cannot distinguish a slow worke
 
 ---
 
+## Troubleshooting: the runner sits at startup with no error
+
+```
+[migration] still waiting for endpoint queues (/mig_ep1_cmd) after 45s (no timeout) — ...
+```
+
+The **attach** wait, repeating every 15s: the shm queues do not exist yet. This is not the `wait_ready`
+handshake below, so `PREFILL_MIGRATION_WAIT_READY_MS` has no effect on it. Unbounded by default because the
+runner often reaches table-publish before `migration_endpoint` has created its queues — bound it when a hang
+costs more than a race:
+
+```bash
+export PREFILL_MIGRATION_ATTACH_WAIT_S=120   # seconds; 0 or unset = wait forever
+```
+
+Permission problems fail on the first attempt rather than looping, so a heartbeat that persists means the
+queues are genuinely absent: the worker for this host never came up, or the queue names do not match the
+endpoint's.
+
 ## Troubleshooting: the runner times out in `wait_ready`
 
 ```
 RuntimeError: MigrationLayerClient::wait_ready: timeout after 120000ms
 ```
+
+This is the phase **after** attach: the queues were found and opened, and the workers are not answering on
+them. If instead there is no error at all and the log just repeats `still waiting for ...`, that is the
+attach wait above and `PREFILL_MIGRATION_WAIT_READY_MS` will not change it.
 
 Almost always: the two workers were never started, so nothing can answer. Confirm in the endpoint log
 (`/tmp/launch_mig_ep_<id>_*.log`; it holds binary bytes, so `grep` needs `-a`):
