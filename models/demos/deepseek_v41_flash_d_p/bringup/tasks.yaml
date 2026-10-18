@@ -9137,7 +9137,7 @@ tasks:
       host_transfers_per_layer: == 0
       device_ms_experts: '< 2522'
 - id: P.4
-  title: 'Routed experts at Marko''s GLM production precision (flat kernel, LoFi, bfp4 weights, bfp8 x / h / y) vs full precision: owner comparison'
+  title: 'Routed experts at LoFi with bfp8 x / h / y tiles and bfp8 weights (Marko''s GLM precision without bfp4) vs full precision: owner comparison'
   step: perf
   role: perf
   deps:
@@ -9151,7 +9151,7 @@ tasks:
   ab:
     change:
       EXPERTS_KERNEL: flat
-      EXPERTS_IMPL: bfp4
+      EXPERTS_IMPL: bfp8
       EXPERTS_PRECISION: glm
     env:
       EXPERTS_KERNEL: flat
