@@ -47,7 +47,7 @@ class RMSNorm(nn.Module):
         # a plain RMSNorm is out = x_normed * weight. ttnn.rms_norm only does the
         # `* weight` form, so when use_gemma_norm is set we fold the +1 into the weight
         # at load time (in fp32, before the bf16 cast) — equivalent and free at runtime.
-        self.use_gemma_norm = bool(getattr(hf_config, "use_gemma_norm", False))
+        self.use_gemma_norm = bool(hf_config.use_gemma_norm)
         if state_dict:
             weight = state_dict["weight"]
             if self.use_gemma_norm:

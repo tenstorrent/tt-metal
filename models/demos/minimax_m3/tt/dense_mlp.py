@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-MiniMax-M3 dense MLP for the first 3 layers (moe_layer_freq == 0).
+MiniMax-M3 dense MLP for the moe_layer_freq == 0 layers (0-2) and the MoE shared expert.
 
 A plain clamped-"swigluoai" SwiGLU FFN: down(swiglu(gate(x), up(x))), at
 dense_intermediate_size (12288). Weights load from mlp.{gate,up,down}_proj. gate/up are
@@ -26,7 +26,7 @@ from .residual import use_sharded_residual
 
 
 class DenseMLP:
-    """Dense SwiGLU FFN for MiniMax-M3 layers 0-2."""
+    """Dense SwiGLU FFN (moe_layer_freq == 0 layers, and the MoE shared expert)."""
 
     def __init__(
         self,
@@ -49,10 +49,7 @@ class DenseMLP:
         self.hidden_size = hf_config.hidden_size
         self.scatter_output = use_sharded_residual() if scatter_output is None else scatter_output
         # apply_swiglu only reads .swiglu_limit and .alpha.
-        self.swiglu_cfg = SimpleNamespace(
-            swiglu_limit=getattr(hf_config, "swiglu_limit", 7.0),
-            alpha=getattr(hf_config, "swiglu_alpha", 1.702),
-        )
+        self.swiglu_cfg = SimpleNamespace(swiglu_limit=hf_config.swiglu_limit, alpha=hf_config.swiglu_alpha)
 
         col_mapper = mesh_config.column_parallel(mesh_device)  # shard output (intermediate) dim
         row_mapper = mesh_config.row_parallel(mesh_device)  # shard input (intermediate) dim

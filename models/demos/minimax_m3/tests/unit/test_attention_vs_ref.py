@@ -28,12 +28,21 @@ from models.demos.minimax_m3.tt.attention_configs import MiniMaxM3AttentionProgr
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.model import create_rope_setup
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
+from models.demos.minimax_m3.utils.model_variant import load_config
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 
 from ..test_factory import compose_tp_hidden, parametrize_mesh_with_fabric
 
 # M3 attention dims (text_config).
-HIDDEN, NQ, NKV, HEAD_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 128, 64, 5_000_000.0, 1e-6
+# Dims and RoPE from the selected variant's config (M3_MODEL_VARIANT / HF_MODEL; utils/model_variant.py).
+_CFG = load_config()
+HIDDEN, NQ, NKV, HEAD_DIM = (
+    _CFG["hidden_size"],
+    _CFG["num_attention_heads"],
+    _CFG["num_key_value_heads"],
+    _CFG["head_dim"],
+)
+ROTARY_DIM, THETA, EPS = _CFG["rotary_dim"], float(_CFG["rope_theta"]), _CFG["rms_norm_eps"]
 
 
 def _rotate_half(x):

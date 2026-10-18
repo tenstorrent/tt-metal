@@ -9,7 +9,8 @@ PCC-checks every layer's post-RoPE K / raw V / MSA index_k against the golden tr
 scripts/generate_golden_kv_cache.py.
 
 Env:
-  PREFILL_TRACE_DIR   golden trace dir (metadata.json + kv_cache/layer_N.safetensors)   [required in single-run;
+  PREFILL_TRACE_DIR   golden trace dir (metadata.json + kv_cache/layer_N.safetensors), or a bare trace name under the
+                      variant's golden dir                                            [required in single-run;
                       in multi-run optional: seeds the initial capacity and the default PREFILL_GOLDEN_ROOT]
   PREFILL_CHUNKED     "1" -> chunked prefill (chunk loop, cache-read path); "0" -> one-shot  [default 0]
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode)                                  [default 5120]
@@ -27,9 +28,12 @@ Env:
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs; also auto-sets
                       M3_LOAD_NLAYERS so only those layers' weight shards are read)          [default: all]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8" (cache holds both)      [default bf4]
-  HF_MODEL            real weights dir (read by ModelArgs): the bf16 MiniMax-M3 checkpoint or an MXFP8/NVFP4
-                      checkpoint of the same architecture (dequantized to bf16 at load). For any checkpoint other
-                      than the default M3 dir, set TT_CACHE_PATH (else the cache goes under HF_MODEL)
+  HF_MODEL            real weights dir (read by ModelArgs): a MiniMax-M3 / MiniMax-M3.1 checkpoint (bf16, or MXFP8/NVFP4
+                      dequantized to bf16 at load); its config.json decides the variant. For a checkpoint other than
+                      the variant's default dir, set TT_CACHE_PATH (else the cache goes under HF_MODEL)
+                                                                  [default: the M3_MODEL_VARIANT checkpoint dir]
+  M3_MODEL_VARIANT    MiniMax-M3 or MiniMax-M3.1: picks the default HF_MODEL and golden root when HF_MODEL is unset
+                      (utils/model_variant.py)                                              [default MiniMax-M3]
 
 Multi-run mode (load weights + compile ONCE, then run many specs against the resident model):
   PREFILL_RUNS        where run specs come from:
@@ -51,7 +55,8 @@ Multi-run mode (load weights + compile ONCE, then run many specs against the res
                         capacity=N         KV-cache capacity for this run (tokens; rounded up to a chunk
                                            multiple)                          [default: PREFILL_MAX_SEQ_LEN or fit]
                         label=<str>        tag for the log lines / summary
-  PREFILL_GOLDEN_ROOT dir that bare trace names resolve under   [default: dirname(PREFILL_TRACE_DIR)]
+  PREFILL_GOLDEN_ROOT dir that bare trace names resolve under
+                      [default: dirname(PREFILL_TRACE_DIR), else the variant's golden dir (<cache root>/golden)]
   PREFILL_MAX_SEQ_LEN when set, the FIXED KV-cache capacity (tokens) for every run without its own
                       capacity=; when unset each run FITS the cache to its trace (padded length), as a
                       standalone run would. [default: unset -> fit]
@@ -91,7 +96,10 @@ Run (after weights are present on disk):
   PREFILL_CHUNKED=1 PREFILL_TPS_ITERS=5 \
     PREFILL_TRACE_DIR=$HF_MODEL/golden/longbook_10240 \
     python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
-  # another checkpoint of the same architecture (e.g. MXFP8/NVFP4): its own cache root and golden
+  # MiniMax-M3.1 from its default checkpoint, cache root and golden dir (bare trace name):
+  env -u HF_MODEL M3_MODEL_VARIANT=MiniMax-M3.1 PREFILL_TRACE_DIR=longbook_10240 PREFILL_CHUNKED=1 \
+    python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
+  # another checkpoint of the same architecture: its own cache root and golden
   HF_MODEL=<checkpoint dir> TT_CACHE_PATH=<fresh cache dir> PREFILL_TRACE_DIR=<golden dir> PREFILL_CHUNKED=1 \
     python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
 """
@@ -107,6 +115,7 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 from loguru import logger
@@ -116,6 +125,8 @@ from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
 from models.demos.minimax_m3.tt.moe import shared_overlap
 from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk
 from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env
+from models.demos.minimax_m3.utils.general_utils import msa_topk_window
+from models.demos.minimax_m3.utils.model_variant import select_variant
 
 
 def _raise_nproc_limit():
@@ -138,11 +149,15 @@ def _raise_nproc_limit():
             )
 
 
-# MSA (sparse) layers pick the top-TOPK_BLOCKS of BLOCK_SIZE-token blocks. A cold chunk of at least
+# The run's model variant (HF_MODEL's config.json, else M3_MODEL_VARIANT; utils/model_variant.py). It supplies the
+# default checkpoint and golden root below.
+VARIANT = select_variant()
+
+# MSA (sparse) layers pick the top sparse_topk_blocks of sparse_block_size-token blocks. A cold chunk of at least
 # this many tokens runs the exact-size MSA path; a shorter one reads the KV cache instead. One-shot pads to
 # it so it stays on the exact-size path; chunked only needs whole 128-token blocks per SP rank (a multiple
-# of 1024 at SP=8). Keep in sync with TOPK_BLOCKS * BLOCK_SIZE in models/demos/minimax_m3/tt/attention/msa.py.
-MSA_MIN_TOKENS = 16 * 128  # = 2048
+# of 1024 at SP=8).
+MSA_MIN_TOKENS = msa_topk_window(SimpleNamespace(**VARIANT.config))
 
 
 class GateFailure(AssertionError):
@@ -187,7 +202,7 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config,
     if threshold is None:
         threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
     head_dim = hf_config.head_dim
-    rotary_dim = getattr(hf_config, "rotary_dim", head_dim)
+    rotary_dim = hf_config.rotary_dim
     half = rotary_dim // 2
     src = list(range(head_dim))
     for m in range(rotary_dim):
@@ -609,13 +624,18 @@ def main():
             )
             return 0
 
+    # ModelArgs reads HF_MODEL; default it (and the golden root) to the variant's.
+    os.environ.setdefault("HF_MODEL", VARIANT.weights_dir)
+    print(f"[prefill-pcc] model variant {VARIANT.name}: HF_MODEL={os.environ['HF_MODEL']}", flush=True)
     golden_dir = os.environ.get("PREFILL_TRACE_DIR")
+    if golden_dir and os.sep not in golden_dir:  # a bare trace name
+        golden_dir = os.path.join(VARIANT.golden_dir, golden_dir)
     runs_source = os.environ.get("PREFILL_RUNS")
     chunked = os.getenv("PREFILL_CHUNKED", "0") == "1"
     chunk_size = int(os.getenv("PREFILL_CHUNK_SIZE", "5120"))
     forward_tokens_budget = int(os.getenv("PREFILL_FORWARD_TOKENS_BUDGET") or chunk_size)
     golden_root = os.environ.get("PREFILL_GOLDEN_ROOT") or (
-        os.path.dirname(os.path.normpath(golden_dir)) if golden_dir else None
+        os.path.dirname(os.path.normpath(golden_dir)) if golden_dir else VARIANT.golden_dir
     )
 
     # --- resolve the process-wide (chunk, capacity) and the run list -----------------------------
@@ -641,8 +661,8 @@ def main():
             print(
                 f"\n{bang}\n"
                 f"[prefill-pcc] WARNING: prompt is only {n_tokens} tokens, below the one-shot MSA floor of\n"
-                f"  {MSA_MIN_TOKENS} (TOPK_BLOCKS*BLOCK_SIZE = 16*128): the exact-size MSA path needs 16\n"
-                f"  128-token blocks (a shorter cold chunk would read the KV cache instead). PADDING the\n"
+                f"  {MSA_MIN_TOKENS} (sparse_topk_blocks * sparse_block_size): the exact-size MSA path needs that\n"
+                f"  many blocks (a shorter cold chunk would read the KV cache instead). PADDING the\n"
                 f"  sequence {n_tokens} -> {capacity} tokens (token 0) so one-shot stays on that path.\n"
                 f"  * ACCURACY IS STILL VALID: KV PCC compares only the first {n_tokens} real tokens, and\n"
                 f"    causal masking keeps the trailing pad (positionally future) from touching them.\n"

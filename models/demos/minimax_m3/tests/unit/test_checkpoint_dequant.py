@@ -27,6 +27,7 @@ from models.demos.minimax_m3.utils.checkpoint import (
     text_config_of,
     unpack_e2m1,
 )
+from models.demos.minimax_m3.utils.model_variant import load_config
 
 FP8_MAX = 448.0
 FP4_MAX = 6.0
@@ -219,10 +220,14 @@ def test_reference_weights_read_quantized_checkpoint(tmp_path):
 # ---- config ---------------------------------------------------------------------------------------------
 def test_text_config_of_wraps_dict():
     class Wrapper:
-        text_config = {"hidden_size": 8, "rope_theta": 1e7, "sparse_attention_config": {"sparse_attention_freq": [1]}}
+        text_config = load_config("MiniMax-M3.1")
 
     tc = text_config_of(Wrapper())
-    assert tc.hidden_size == 8 and tc.rope_theta == 1e7 and tc.sparse_attention_config["sparse_attention_freq"] == [1]
+    assert (
+        tc.hidden_size == 6144
+        and tc.rope_theta == 1e7
+        and tc.sparse_attention_config["sparse_attention_freq"] == [1] * 60
+    )
 
 
 @pytest.mark.parametrize(

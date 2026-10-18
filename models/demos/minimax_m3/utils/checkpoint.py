@@ -160,8 +160,101 @@ def text_config_of(cfg):
         from transformers import PretrainedConfig
 
         text = PretrainedConfig(**text)
-    check_supported_sparse_attention(getattr(text, "sparse_attention_config", None))
+    check_supported_config(text)
+    check_supported_quantization(getattr(cfg, "quantization_config", None))
     return text
+
+
+def _getter(cfg):
+    """``get(key, default)`` over a config that is a dict or an attribute object."""
+    if isinstance(cfg, dict):
+        return cfg.get
+    return lambda key, default=None: getattr(cfg, key, default)
+
+
+# Text-config fields the model reads directly (no defaults: a missing one is an error, not an M3 fallback).
+REQUIRED_CONFIG_KEYS = (
+    "hidden_size",
+    "num_hidden_layers",
+    "num_attention_heads",
+    "num_key_value_heads",
+    "head_dim",
+    "rotary_dim",
+    "rope_theta",
+    "rms_norm_eps",
+    "vocab_size",
+    "use_qk_norm",
+    "use_gemma_norm",
+    "hidden_act",
+    "swiglu_alpha",
+    "swiglu_limit",
+    "intermediate_size",
+    "dense_intermediate_size",
+    "shared_intermediate_size",
+    "num_local_experts",
+    "num_experts_per_tok",
+    "n_shared_experts",
+    "scoring_func",
+    "use_routing_bias",
+    "routed_scaling_factor",
+    "moe_layer_freq",
+    "sparse_attention_config",
+    "tie_word_embeddings",
+)
+
+# (alpha, limit) baked into the routed-expert kernels' clamped swigluoai (ttnn.RoutedExpertActivation.SwiGluOai).
+# The dense MLP and the shared expert take both from the config.
+ROUTED_EXPERT_SWIGLU = (1.702, 7.0)
+
+
+def check_supported_config(cfg) -> None:
+    """Reject text configs this implementation cannot run as written: missing fields, and values that are
+    baked into kernels or have a single code path (listed with the reason). ``cfg`` is a dict or an object."""
+    get = _getter(cfg)
+    problems = [f"{key} missing" for key in REQUIRED_CONFIG_KEYS if get(key) is None]
+    if problems:
+        raise ValueError(f"MiniMax-M3 text config is missing fields: {problems}")
+
+    def expect(ok, what):
+        if not ok:
+            problems.append(what)
+
+    n_layers = get("num_hidden_layers")
+    head_dim, rotary_dim = get("head_dim"), get("rotary_dim")
+    expect(get("hidden_act") == "swigluoai", f"hidden_act={get('hidden_act')!r}: only swigluoai is implemented")
+    # Per-layer lists may be longer than num_hidden_layers: a partial-model run lowers the layer count only.
+    expect(
+        len(get("moe_layer_freq")) >= n_layers,
+        f"moe_layer_freq has {len(get('moe_layer_freq'))} entries for {n_layers} layers",
+    )
+    if any(get("moe_layer_freq")):
+        expect(
+            (get("swiglu_alpha"), get("swiglu_limit")) == ROUTED_EXPERT_SWIGLU,
+            f"swiglu alpha/limit {(get('swiglu_alpha'), get('swiglu_limit'))}: the routed-expert kernels bake "
+            f"{ROUTED_EXPERT_SWIGLU}",
+        )
+        expect(get("scoring_func") == "sigmoid", f"scoring_func={get('scoring_func')!r}: the MoE gate is sigmoid-only")
+        expect(get("n_shared_experts") == 1, f"n_shared_experts={get('n_shared_experts')}: the MoE builds exactly one")
+    expect(
+        0 < rotary_dim <= head_dim and rotary_dim % 2 == 0,
+        f"rotary_dim={rotary_dim} must be even and in (0, head_dim={head_dim}]",
+    )
+    factor = get("partial_rotary_factor")
+    expect(
+        factor is None or factor * head_dim == rotary_dim,
+        f"partial_rotary_factor={factor} disagrees with rotary_dim={rotary_dim} / head_dim={head_dim}",
+    )
+    expect(not get("rope_scaling"), f"rope_scaling={get('rope_scaling')!r}: only plain RoPE is implemented")
+    expect(
+        not get("use_qk_norm") or get("qk_norm_type", "per_head") == "per_head",
+        f"qk_norm_type={get('qk_norm_type')!r}: only per_head QK-norm is implemented",
+    )
+    expect(not get("attention_output_gate"), "attention_output_gate is not implemented")
+    expect(not get("sliding_window"), "sliding_window attention is not implemented")
+    expect(not get("tie_word_embeddings"), "tie_word_embeddings: the LM head loads its own lm_head.weight")
+    if problems:
+        raise NotImplementedError(f"unsupported MiniMax-M3 text config: {problems}")
+    check_supported_sparse_attention(get("sparse_attention_config"), cfg)
 
 
 # sparse_attention_config switches for MSA variants this implementation does not have.
@@ -173,11 +266,14 @@ _UNSUPPORTED_SPARSE_FLAGS = (
 )
 
 
-def check_supported_sparse_attention(sparse_cfg) -> None:
-    """Reject sparse-attention variants the model does not implement (index value branch, KV share, ...)."""
+def check_supported_sparse_attention(sparse_cfg, text_cfg=None) -> None:
+    """Reject sparse-attention variants the model does not implement (index value branch, KV share, ...).
+    With ``text_cfg`` also check the MSA parameters the kernels fix: ``topk_large_indices`` force-selects
+    exactly the current block (local block 1, no init / sink block), the indexer block-max-pools
+    (score type "max") and scores one index head per GQA group, and the index_k cache shares the K head width."""
     if sparse_cfg is None:
         return
-    get = sparse_cfg.get if isinstance(sparse_cfg, dict) else lambda k, d=None: getattr(sparse_cfg, k, d)
+    get = _getter(sparse_cfg)
     enabled = [flag for flag in _UNSUPPORTED_SPARSE_FLAGS if get(flag, False)]
     # The index value branch only exists on MSA layers (dense layers ignore the flag).
     freq = get("sparse_attention_freq", None) or []
@@ -186,5 +282,41 @@ def check_supported_sparse_attention(sparse_cfg) -> None:
         with_value = [i for i, (f, d) in enumerate(zip(freq, disable_index_value)) if f and not d]
         if with_value:
             enabled.append(f"index value branch on MSA layers {with_value}")
+    if text_cfg is not None:
+        text = _getter(text_cfg)
+        if freq and len(freq) < text("num_hidden_layers"):
+            enabled.append(f"sparse_attention_freq has {len(freq)} entries for {text('num_hidden_layers')} layers")
+        if get("use_sparse_attention") and any(freq):
+            fixed = {
+                "sparse_score_type": "max",
+                "sparse_init_block": 0,
+                "sparse_local_block": 1,
+                "sparse_num_index_heads": text("num_key_value_heads"),
+                "sparse_index_dim": text("head_dim"),
+            }
+            enabled += [f"{k}={get(k)!r} (supported: {v!r})" for k, v in fixed.items() if get(k) != v]
+            enabled += [f"{k} missing" for k in ("sparse_block_size", "sparse_topk_blocks") if not get(k)]
     if enabled:
         raise NotImplementedError(f"unsupported sparse attention options in the checkpoint config: {enabled}")
+
+
+def check_supported_quantization(quant_cfg) -> None:
+    """Reject checkpoint quantization formats ``load_plain`` does not decode. None = a bf16 checkpoint."""
+    if quant_cfg is None:
+        return
+    get = _getter(quant_cfg)
+    expected = {
+        "quant_method": "mxfp8",
+        "weight_block_size": [1, MXFP8_BLOCK_SIZE],
+        "group_size": NVFP4_GROUP_SIZE,
+        "moe_quant_format": "nvfp4-pack-quantized",
+    }
+    bad = {k: get(k) for k, v in expected.items() if get(k) is not None and _as_list(get(k)) != v}
+    if get("quant_method") != "mxfp8" or bad:
+        raise NotImplementedError(
+            f"unsupported checkpoint quantization {bad or get('quant_method')!r}; expected {expected}"
+        )
+
+
+def _as_list(v):
+    return list(v) if isinstance(v, (list, tuple)) else v

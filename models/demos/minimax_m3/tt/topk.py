@@ -88,8 +88,9 @@ class TopKRouter:
         self.hidden_dim = hf_config.hidden_size
         self.num_tokens = num_tokens
         self.mesh_config = mesh_config
-        # M3: routed-expert output is scaled by routed_scaling_factor (2.0, from config; 1.0 if absent).
-        self.routed_scaling_factor = getattr(hf_config, "routed_scaling_factor", 1.0)
+        # Routed-expert output is scaled by routed_scaling_factor.
+        self.routed_scaling_factor = hf_config.routed_scaling_factor
+        self.use_routing_bias = bool(hf_config.use_routing_bias)
         self.tensor_cache_path = tensor_cache_path
 
         # MiniMax-M3 gate Linear has no bias; weight is [num_experts, hidden] -> [hidden, num_experts].
@@ -107,14 +108,16 @@ class TopKRouter:
         # e_score_correction_bias [num_experts] -> [1, num_experts], replicated; added to
         # selection scores only. Absent in some checkpoints -> no correction.
         score_bias_torch = None
-        if state_dict and "e_score_correction_bias" in state_dict:
+        if self.use_routing_bias and state_dict and "e_score_correction_bias" in state_dict:
             score_bias_torch = state_dict["e_score_correction_bias"].reshape(1, -1)
         bias_cache_file = get_cache_file_name(tensor_cache_path, "e_score_correction_bias")
         # Build the bias tensor when we have the source weight, OR (cache-only loading, empty
         # state_dict) when it was previously cached — torch=None then loads it straight from disk.
         # Whether the checkpoint HAS a correction bias can't be known without the source, so the
         # cached file's existence is the signal.
-        build_bias = score_bias_torch is not None or (not state_dict and cache_file_exists(bias_cache_file))
+        build_bias = score_bias_torch is not None or (
+            self.use_routing_bias and not state_dict and cache_file_exists(bias_cache_file)
+        )
         self.score_bias = (
             ttnn.as_tensor(
                 score_bias_torch,
@@ -141,11 +144,11 @@ class TopKRouter:
         if self.score_bias is not None:
             self.score_bias_wide = ttnn.repeat(self.score_bias, ttnn.Shape([num_tokens, 1]))
         else:
-            logger.warning(
-                "[TopKRouter] no e_score_correction_bias for this checkpoint — routing on unbiased "
-                "scores. M3 ships one for every MoE layer, so this usually means a weight-loading "
-                "problem rather than a bias-free model."
-            )
+            if self.use_routing_bias:
+                logger.warning(
+                    "[TopKRouter] use_routing_bias is set but there is no e_score_correction_bias — routing on "
+                    "unbiased scores. This usually means a weight-loading problem rather than a bias-free model."
+                )
             self.score_bias_wide = ttnn.zeros(
                 [num_tokens, self.num_experts],
                 dtype=ttnn.bfloat16,

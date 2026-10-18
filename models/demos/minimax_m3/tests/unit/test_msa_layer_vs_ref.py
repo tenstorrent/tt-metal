@@ -37,13 +37,25 @@ from models.demos.minimax_m3.tt.attention.weights import load_attention_weights
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.model import create_rope_setup
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
+from models.demos.minimax_m3.utils.model_variant import load_config, select_variant
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_msa_test_utils import sparse_attention_ref_msa_sampled_tokens
 
 from ..test_factory import parametrize_mesh_with_fabric
 
-HIDDEN, NQ, NKV, NIDX, HEAD_DIM, IDX_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 4, 128, 128, 64, 5_000_000.0, 1e-6
-BLOCK, TOPK = 128, 16
+# Dims, RoPE and MSA parameters from the config of the variant the test checkpoint (M3_CKPT / HF_MODEL) belongs to
+# (utils/model_variant.py).
+_CFG = load_config(select_variant(os.environ.get("M3_CKPT")).name)
+_SPARSE = _CFG["sparse_attention_config"]
+HIDDEN, NQ, NKV, HEAD_DIM = (
+    _CFG["hidden_size"],
+    _CFG["num_attention_heads"],
+    _CFG["num_key_value_heads"],
+    _CFG["head_dim"],
+)
+ROTARY_DIM, THETA, EPS = _CFG["rotary_dim"], float(_CFG["rope_theta"]), _CFG["rms_norm_eps"]
+NIDX, IDX_DIM = _SPARSE["sparse_num_index_heads"], _SPARSE["sparse_index_dim"]
+BLOCK, TOPK = _SPARSE["sparse_block_size"], _SPARSE["sparse_topk_blocks"]
 
 
 def _rotate_half(x):

@@ -3,7 +3,12 @@
 
 
 import ttnn
-from models.demos.minimax_m3.utils.general_utils import get_cache_file_name, is_sparse_attention_layer
+from models.demos.minimax_m3.utils.general_utils import (
+    get_cache_file_name,
+    is_dense_mlp_layer,
+    is_sparse_attention_layer,
+    msa_params,
+)
 from models.demos.minimax_m3.utils.profiler_utils import COARSE, FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
@@ -67,13 +72,9 @@ class DecoderLayer:
         self.gather_before_norm = self.sharded_residual and gather_before_norm()
         self.mesh_config = mesh_config
         self.ccl_manager = ccl_manager
-        # Hybrid dense/MoE schedule (M3): layers with moe_layer_freq[idx]==0 are a plain dense
-        # SwiGLU MLP (mlp.{gate,up,down}_proj); the rest are MoE (block_sparse_moe.*). If
-        # moe_layer_freq is absent, default to MoE.
-        moe_layer_freq = getattr(hf_config, "moe_layer_freq", None)
-        self.is_dense = (
-            moe_layer_freq is not None and layer_idx < len(moe_layer_freq) and moe_layer_freq[layer_idx] == 0
-        )
+        # Per-layer MLP from the config's moe_layer_freq: 0 = plain dense SwiGLU MLP (mlp.{gate,up,down}_proj),
+        # 1 = MoE (block_sparse_moe.*). Both variants: layers 0-2 dense, 3-59 MoE.
+        self.is_dense = is_dense_mlp_layer(hf_config, layer_idx)
         if self.is_dense:
             self.mlp = DenseMLP(
                 mesh_device,
@@ -99,45 +100,28 @@ class DecoderLayer:
                 overlap_shared_expert=overlap_shared_expert,
             )
 
-        # MiniMax-M3 lists per-layer attention types in `attn_type_list` (all 1 =
-        # full attention) via attn_type_list. Fall back gracefully.
-        attn_types = getattr(hf_config, "attn_type_list", None) or getattr(hf_config, "layer_types", None)
-        self.attention_type = attn_types[layer_idx] if attn_types is not None else 1
-
-        # M3 MSA: layers with sparse_attention_freq[layer_idx]==1 run block-sparse attention, the rest
-        # dense (M3: 3-59 / 0-2). sparse_attention_config may be a dict or an object.
-        sparse_cfg = getattr(hf_config, "sparse_attention_config", None)
+        # Per-layer attention from the config's sparse_attention_freq: 1 = MSA block-sparse, 0 = dense GQA
+        # (M3: dense 0-2 / MSA 3-59; M3.1: MSA everywhere). MSA hyperparameters come from sparse_attention_config;
+        # the values the kernels fix (local block, score type, index heads) are checked by check_supported_config.
         is_sparse = is_sparse_attention_layer(hf_config, layer_idx)
+        msa = msa_params(hf_config) if is_sparse else {}
 
-        # MSA hyperparams from sparse_attention_config (dict or object); defaults match M3.
-        def _sc(name, default):
-            if sparse_cfg is None:
-                return default
-            return sparse_cfg.get(name, default) if isinstance(sparse_cfg, dict) else getattr(sparse_cfg, name, default)
-
-        msa_block_size = _sc("sparse_block_size", 128)
-        msa_topk_blocks = _sc("sparse_topk_blocks", 16)
-        msa_index_dim = _sc("sparse_index_dim", 128)
-
-        # Create attention configuration
         attention_config = AttentionConfig(
             hidden_size=hf_config.hidden_size,
             num_heads=hf_config.num_attention_heads,
             num_kv_heads=hf_config.num_key_value_heads,
             head_dim=hf_config.head_dim,
-            rotary_dim=getattr(hf_config, "rotary_dim", hf_config.head_dim),
+            rotary_dim=hf_config.rotary_dim,
             rms_norm_eps=hf_config.rms_norm_eps,
-            use_qk_norm=getattr(hf_config, "use_qk_norm", True),
-            use_gemma_norm=getattr(hf_config, "use_gemma_norm", False),
+            use_qk_norm=hf_config.use_qk_norm,
+            use_gemma_norm=hf_config.use_gemma_norm,
             sliding_window=getattr(hf_config, "sliding_window", None),
             max_seq_len=max_seq_len,
             max_local_batch_size=max_local_batch_size,
             users_row_sharded=users_row_sharded,
             is_sparse=is_sparse,
-            msa_block_size=msa_block_size,
-            msa_topk_blocks=msa_topk_blocks,
-            msa_index_dim=msa_index_dim,
             sequence_parallel=sequence_parallel,
+            **msa,
         )
 
         # Create attention program config
