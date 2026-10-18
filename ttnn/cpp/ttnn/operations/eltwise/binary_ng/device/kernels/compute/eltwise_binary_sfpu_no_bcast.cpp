@@ -31,6 +31,12 @@
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
+
+#ifdef PACK_RELU
+constexpr ReluConfig pack_relu = ReluConfig::zero();
+#else
+constexpr ReluConfig pack_relu = ReluConfig::none();
+#endif
 FORCE_INLINE void process_sfpu_tiles(
     uint32_t n,
     uint32_t cb_pre_lhs_id,
@@ -79,7 +85,7 @@ FORCE_INLINE void process_sfpu_tiles(
 
     tile_regs_wait();
     for (uint32_t i = 0; i < n; ++i) {
-        pack_tile(i * 2, cb_out.get_cb_id());
+        pack_tile(i * 2, cb_out.get_cb_id(), 0, false, pack_relu);
     }
     tile_regs_release();
 

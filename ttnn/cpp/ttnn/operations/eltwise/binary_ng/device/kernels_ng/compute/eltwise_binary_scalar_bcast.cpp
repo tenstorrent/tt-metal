@@ -13,6 +13,12 @@
 // still used for the shared preprocess_*_impl helper call sites (see PREPROCESS below).
 #include "api/dataflow/dataflow_buffer.h"
 
+#ifdef PACK_RELU
+constexpr ReluConfig pack_relu = ReluConfig::zero();
+#else
+constexpr ReluConfig pack_relu = ReluConfig::none();
+#endif
+
 ALWI void process_tile(
     tt::CBIndex cb_bcast,
     tt::CBIndex cb_llk_post,
@@ -56,7 +62,7 @@ ALWI void process_tile(
     unary_bcast<BroadcastType::SCALAR>(cb_bcast, 0, 0);
     tile_regs_commit();
     tile_regs_wait();
-    pack_tile(0, cb_llk_post);
+    pack_tile(0, cb_llk_post, 0, false, pack_relu);
     exp_dfb_llk_post.push_back(num_tiles_per_cycle);
     tile_regs_release();
 
@@ -94,7 +100,7 @@ ALWI void process_tile(
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_out);
+        pack_tile(0, cb_out, 0, false, pack_relu);
         tile_regs_release();
 
         exp_dfb_out.push_back(num_tiles_per_cycle);

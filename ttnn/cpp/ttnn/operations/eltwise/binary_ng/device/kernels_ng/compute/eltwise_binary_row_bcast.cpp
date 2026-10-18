@@ -12,6 +12,12 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"
 #include "api/dataflow/circular_buffer.h"
 
+#ifdef PACK_RELU
+constexpr ReluConfig pack_relu = ReluConfig::zero();
+#else
+constexpr ReluConfig pack_relu = ReluConfig::none();
+#endif
+
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
@@ -58,7 +64,7 @@ void kernel_main() {
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_llk_post);
+        pack_tile(0, cb_llk_post, 0, false, pack_relu);
         exp_cb_llk_post.push_back(num_tiles_per_cycle);
         tile_regs_release();
         exp_cb_bcast.pop_front(num_tiles_per_cycle);
@@ -80,7 +86,7 @@ void kernel_main() {
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_out);
+        pack_tile(0, cb_out, 0, false, pack_relu);
         tile_regs_release();
 
         exp_cb_out.push_back(num_tiles_per_cycle);

@@ -33,6 +33,12 @@
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
 
+#ifdef PACK_RELU
+constexpr ReluConfig pack_relu = ReluConfig::zero();
+#else
+constexpr ReluConfig pack_relu = ReluConfig::none();
+#endif
+
 ALWI void process_tile(
     tt::CBIndex cb_pre_lhs,
     tt::CBIndex cb_post_lhs,
@@ -86,7 +92,7 @@ ALWI void process_tile(
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_llk_post);
+        pack_tile(0, cb_llk_post, 0, false, pack_relu);
         exp_cb_llk_post.push_back(num_tiles_per_cycle);
         tile_regs_release();
         exp_cb_raw_other.pop_front(num_tiles_per_cycle);
@@ -125,7 +131,7 @@ ALWI void process_tile(
 
         tile_regs_wait();
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            pack_tile(i * 2, cb_out);
+            pack_tile(i * 2, cb_out, 0, false, pack_relu);
         }
         tile_regs_release();
         exp_cb_out.push_back(num_tiles_per_cycle);

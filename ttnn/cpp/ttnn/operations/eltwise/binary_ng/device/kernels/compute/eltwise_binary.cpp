@@ -10,6 +10,12 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
 
+#ifdef PACK_RELU
+constexpr ReluConfig pack_relu = ReluConfig::zero();
+#else
+constexpr ReluConfig pack_relu = ReluConfig::none();
+#endif
+
 ALWI void process_tile(
     tt::CBIndex cb_pre_lhs_id,
     tt::CBIndex cb_post_lhs_id,
@@ -55,7 +61,7 @@ ALWI void process_tile(
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_out.get_cb_id());
+        pack_tile(0, cb_out.get_cb_id(), 0, false, pack_relu);
         tile_regs_release();
 
         cb_out.push_back(num_tiles_per_cycle);

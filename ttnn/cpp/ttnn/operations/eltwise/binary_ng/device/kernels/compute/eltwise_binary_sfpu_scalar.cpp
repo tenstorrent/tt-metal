@@ -28,6 +28,12 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
+#ifdef PACK_RELU
+constexpr ReluConfig pack_relu = ReluConfig::zero();
+#else
+constexpr ReluConfig pack_relu = ReluConfig::none();
+#endif
+
 // Process n LHS tiles against a scalar tile at index 0 in cb_post_rhs
 FORCE_INLINE void process_sfpu_scalar_tiles(
     uint32_t n,
@@ -77,7 +83,7 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 
     tile_regs_wait();
     for (uint32_t i = 0; i < n; ++i) {
-        pack_tile(i * 2, cb_out.get_cb_id());
+        pack_tile(i * 2, cb_out.get_cb_id(), 0, false, pack_relu);
     }
     tile_regs_release();
 

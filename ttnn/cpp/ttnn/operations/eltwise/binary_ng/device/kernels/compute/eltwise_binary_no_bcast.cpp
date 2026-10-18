@@ -9,6 +9,12 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
 
+#ifdef PACK_RELU
+constexpr ReluConfig pack_relu = ReluConfig::zero();
+#else
+constexpr ReluConfig pack_relu = ReluConfig::none();
+#endif
+
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
@@ -56,7 +62,7 @@ void kernel_main() {
 
         tile_regs_wait();
         for (uint32_t i = 0; i < n; ++i) {
-            pack_tile(i, cb_out.get_cb_id());
+            pack_tile(i, cb_out.get_cb_id(), 0, false, pack_relu);
         }
         tile_regs_release();
 
