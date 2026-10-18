@@ -35,7 +35,7 @@ class TTTRolloutSampler(RolloutSampler):
     """tt-transformers rollout sampler; its log-probs come from tt-transformers' on-device sampling.
 
     Uses the caller's already-open [1, N] mesh (never closes it) and owns its submeshes.
-    Boots with the HF weights of ``model_source`` at weight_version 0.
+    Boots with the HF weights of ``model_source`` at weight_version 0, or with dummy weights at weight_version -1.
     """
 
     def __init__(
@@ -65,7 +65,7 @@ class TTTRolloutSampler(RolloutSampler):
         self._pad_token_id: int = int(pad_token_id)
         self._completions_per_prompt: int = int(completions_per_prompt)
         self._max_completion_length: int = int(max_completion_length)
-        self._weight_version: int = 0
+        self._weight_version: int = -1 if dummy_weights else 0
 
         # one [1,1] submesh per device of the parent mesh
         self._data_parallel: int = mesh_device.get_num_devices()
@@ -175,6 +175,8 @@ class TTTRolloutSampler(RolloutSampler):
 
     def generate(self, prompts: List[List[int]]) -> RolloutBatch:
         """Generate completions_per_prompt completions per prompt, in calls of at most slots_per_call."""
+        if self._weight_version < 0:
+            raise RuntimeError("TTTRolloutSampler has dummy weights; call update_weights before generate")
         version = self._weight_version
         g, W = self._completions_per_prompt, self._max_completion_length
         prompts_x = [list(p) for p in prompts for _ in range(g)]
@@ -449,6 +451,10 @@ class TTTRolloutSampler(RolloutSampler):
     def update_weights(self, weights: List[dict], version: int) -> None:
         """Apply one HF-keyed weight dict per submesh (order matches ``self.submeshes`` /
         the bridge's replication targets) and set ``weight_version`` to ``version``."""
+        if version <= self._weight_version:
+            raise ValueError(
+                f"update_weights: version {version} must be > current weight_version {self._weight_version}"
+            )
         if len(weights) != len(self.models):
             raise RuntimeError(f"update_weights got {len(weights)} dicts but sampler has {len(self.models)} submeshes")
         for model, hf_dict in zip(self.models, weights):
