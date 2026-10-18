@@ -1647,11 +1647,12 @@ class Orchestrator:
                 return DONE
 
     def parked_waiting(self, tids: list[str], state: dict) -> set[str]:
-        """F109: tasks waiting for a person that the run may pass: nothing of theirs uncommitted in the tree (another
-        task's commit would take it along). Their dependents stay blocked (the ledger's runnable)."""
+        """F109: tasks waiting for a person that the run may pass: not done themselves (so their dependents stay
+        blocked; a done task that stops for a decision, e.g. the opportunity list's picks, still stops the run) and
+        nothing of theirs uncommitted in the tree (another task's commit would take it along)."""
         out = set()
         for t in tids:
-            if not state.get(t, {}).get("waiting"):
+            if not state.get(t, {}).get("waiting") or satisfied(state.get(t, {}).get("status")):
                 continue
             if not self.changed_under(self.led.task(t)):
                 out.add(t)
