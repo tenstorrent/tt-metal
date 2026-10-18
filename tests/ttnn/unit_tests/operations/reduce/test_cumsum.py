@@ -494,3 +494,132 @@ def test_cumsum_tile_axis_fallback_permutes(torch_dtype, reverse_order, device):
     else:
         expected = torch.cumsum(torch_input, dim)
     assert_cumsum_quality(expected, ttnn.to_torch(output_tensor, dtype=torch_dtype))
+
+
+def _inf_scan_cases(n):
+    """(name, input-row) pairs whose scan hits infinity, with the row where it starts.
+
+    torch.cumsum reference values for every case (fp32, CPU), measured, not assumed:
+      posinf:    [1, 2, inf, inf, inf ...]        inf at index 2, stays inf
+      neginf:    [1, 2, -inf, -inf, ...]          mirror of posinf
+      overflow:  [3e38, 1e38, inf, inf, ...]      finite sum overflows to +inf
+      infneginf: [1, inf, nan, nan, ...]           +inf then -inf -> nan forever after
+      inf_last:  [1, 2, ..., inf]                  inf exactly at the final element
+      nan_mid:   [1, nan, nan, ...]                NaN poisons the tail (must still do so)
+    """
+    assert n >= 4
+    rows = {}
+    pos, neg, nan = float("inf"), float("-inf"), float("nan")
+    rows["posinf"] = ([1.0, pos] + [2.0, 3.0] * n)[:n], 1
+    rows["neginf"] = ([1.0, neg] + [2.0, 3.0] * n)[:n], 1
+    # 3e38 + 1e38 exceeds FLT_MAX: the total overflows at index 1, not at an explicit inf.
+    rows["overflow"] = ([3.0e38, 1.0e38] + [2.0, 3.0] * n)[:n], 1
+    rows["infneginf"] = ([1.0, pos, neg] + [5.0] * n)[:n], 2
+    rows["inf_last"] = ([1.0, 2.0, 3.0, 4.0] * n)[: n - 1] + [pos], n - 1
+    if n >= 3:
+        rows["nan_mid"] = ([1.0, nan] + [2.0] * n)[:n], 1
+    return rows
+
+
+def _row_along(n, values):
+    row = list(values) + [0.0] * (n - len(values))
+    return row[:n]
+
+
+@pytest.mark.parametrize("n", [4, 8, 33])
+@pytest.mark.parametrize("name", ["posinf", "neginf", "overflow", "infneginf", "inf_last", "nan_mid"])
+@pytest.mark.parametrize("compensated", [True, False])
+def test_cumsum_fp32_infinite_total(n, name, compensated, device):
+    """After the running total reaches +/-inf the scan must match torch, on BOTH paths.
+
+    The regression (#cumsum-inf): the compensated kernel computed c = (t - acc) - y with t and
+    acc both +/-inf, so c became NaN, and that NaN poisoned every later element -- the finite
+    tail came back NaN. torch keeps emitting +/-inf (IEEE). The inf_last and infneginf cases
+    pin behavior that must NOT change: inf at the final element is a single-element difference,
+    and +inf followed by -inf must still produce NaN from that point (IEEE, matching torch),
+    so a guard that reset too eagerly -- or suppressed legitimate NaN -- fails here.
+
+    Plain (disable_compensated_sum=True) path never had the bug and is asserted identical to
+    its own pre-fix output: it is the control that shows the fix does not touch the plain path.
+    """
+    torch.manual_seed(29112024)
+    cases = _inf_scan_cases(n)
+    values, inf_at = cases[name]
+
+    # 2D [B, n]: [B, n] exercises dim=-1 (== last); the dim-0 shape below pairs with it.
+    b = 3
+    row = _row_along(n, values)
+    torch_input = torch.tensor([row] * b, dtype=torch.float32)
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=-1, disable_compensated_sum=not compensated))
+    expected = torch.cumsum(torch_input, dim=-1, dtype=torch.float32)
+
+    # NaN positions must match exactly (allclose is NaN-blind): same mask, then values.
+    assert torch.equal(torch.isnan(output), torch.isnan(expected)), (
+        f"NaN pattern mismatch (n={n}, {name}, compensated={compensated}): "
+        f"got {torch.isnan(output).tolist()} want {torch.isnan(expected).tolist()}"
+    )
+    assert torch.equal(
+        torch.isinf(output) & (output > 0), torch.isinf(expected) & (expected > 0)
+    ), f"+inf positions mismatch (n={n}, {name})"
+    assert torch.equal(
+        torch.isinf(output) & (output < 0), torch.isinf(expected) & (expected < 0)
+    ), f"-inf positions mismatch (n={n}, {name})"
+    finite = torch.isfinite(expected)
+    assert torch.allclose(output[finite], expected[finite], rtol=0, atol=0), (
+        f"finite values changed (n={n}, {name}, compensated={compensated}): "
+        f"got {output[finite].tolist()} want {expected[finite].tolist()}"
+    )
+
+
+@pytest.mark.parametrize("dim", [0, -2])
+@pytest.mark.parametrize("n", [4, 8, 33])
+def test_cumsum_fp32_infinite_total_dim0(n, dim, device):
+    """Same fix seen through the OUTER scan axis: dim=0 and dim=-2 (2D: the same axis,
+    named two ways — both spellings must reach the guarded kernel path).
+
+    The compensated loop is per-row of the flattened [rows, cols] device layout, so the dim the
+    user names maps to which axis is contiguous on device; both orientations must guard.
+    """
+    torch.manual_seed(29112024)
+    values, _ = _inf_scan_cases(n)["posinf"]
+    b = 8
+    col = torch.tensor(_row_along(n, values), dtype=torch.float32)
+    torch_input = col.view(n, 1).expand(n, b).contiguous()
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim))
+    expected = torch.cumsum(torch_input, dim=dim, dtype=torch.float32)
+
+    assert torch.equal(torch.isnan(output), torch.isnan(expected))
+    assert torch.equal(torch.isinf(output), torch.isinf(expected))
+    finite = torch.isfinite(expected)
+    assert torch.allclose(output[finite], expected[finite], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("n", [4, 8, 33])
+@pytest.mark.parametrize("compensated", [True, False])
+def test_cumsum_fp32_infinite_matches_plain_path(n, compensated, device):
+    """With the guard, the compensated path must equal the plain path exactly once an inf is in.
+
+    Rationale: after the total goes infinite the Kahan term is dead weight; IEEE says every
+    following sum is just +/-inf, which the plain path also produces. If the two paths differ
+    after the inf, either the guard or the compensation is doing something order-dependent.
+    Before the inf they may differ by at most one rounding step (the compensation), so the
+    finite prefix is compared to torch instead; here both paths must agree on the ENTIRE
+    output because every case's inf arrives at or near the front and dominates the rest.
+    """
+    torch.manual_seed(29112024)
+    b = 3
+    row = _row_along(n, _inf_scan_cases(n)["posinf"][0])
+    torch_input = torch.tensor([row] * b, dtype=torch.float32)
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    comp = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=-1))
+    plain = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=-1, disable_compensated_sum=True))
+
+    assert torch.equal(torch.isnan(comp), torch.isnan(plain))
+    assert torch.equal(comp, plain), (
+        f"compensated and plain paths diverge on the inf scan (n={n}): " f"comp={comp.tolist()} plain={plain.tolist()}"
+    )

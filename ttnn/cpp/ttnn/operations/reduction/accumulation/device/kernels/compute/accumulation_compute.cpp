@@ -8,6 +8,9 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/where.h"
+#include "api/compute/copy_dest_values.h"
+#include "api/compute/eltwise_unary/isinf_isnan.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
@@ -130,6 +133,28 @@ void kernel_main() {
             add_binary_tile(DST_ACC, DST_IN, DST_T);      // t = acc + y
             sub_binary_tile(DST_T, DST_ACC, DST_COMP);    // (t - acc)
             sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = (t - acc) - y
+            // Once the running total is +/-inf the compensation term dies: (t - acc) becomes
+            // inf - inf = NaN and that NaN poisons every following element of the scan, so a
+            // finite tail turns into NaN (cumsum inf regression). Reset c to +0.0f whenever the
+            // new total t is not finite. NaN inputs still propagate through t/acc unchanged;
+            // only the dead compensation term is cleared. A multiply mask would NOT work:
+            // NaN * 0 = NaN re-poisons the very register the mask was meant to clean, so this
+            // is a real select. where(cond, a, b) keeps `a` where cond is non-zero; isfinite
+            // emits 1.0f / 0.0f, whose bit patterns are non-zero / zero, so the polarity is
+            // exact. y and old-acc are dead after the two subs above, which frees DST_IN and
+            // DST_ACC as scratch for the mask and the zero. DST_T (the packed result) is read
+            // via a dest copy so it survives untouched.
+            // Init adjacent to each op, like FILL_TILE in the row loop and fill_pad_compute.cpp
+            // (the existing where_tile consumer): SFPU families share LUT state, so an init far
+            // from its op can be clobbered by another family's init in between.
+            copy_dest_values_init();
+            copy_dest_values<DataFormat::Float32>(DST_T, DST_IN);  // scratch = t
+            isfinite_tile_init();
+            isfinite_tile(DST_IN);  // mask = isfinite(t)
+            fill_tile_init();
+            fill_tile_bitcast(DST_ACC, 0u);  // +0.0f literal
+            where_tile_init();
+            where_tile<DataFormat::Float32>(DST_IN, DST_COMP, DST_ACC, DST_COMP);  // c = mask ? c : 0
             constexpr uint32_t DST_RESULT = DST_T;
             dfb_comp_obj.pop_front(ONE_TILE);
 #else
