@@ -35,7 +35,7 @@ frame sampling = Molmo2 default (uniform_last_frame, <=2 fps, <=384 frames). Run
 | MotionBench (dev, 4018) | 62.29% | 62.2 | test split answers are hidden |
 | LVBench | 53.15% (785/1477) | 52.8 | 72 questions skipped (see bug below) |
 | EgoSchema (public 500-question subset) | 59.20% (296/500) | 62.0 (full test) | full set has hidden answers |
-| PerceptionTest (val, every 4th question) | see below | 82.1 (test) | |
+| PerceptionTest (val, every 16th question) | 81.37% (974/1197) | 82.1 (test) | subsample for time (full val = 19140); semantics 91.1, memory 82.0, physics 80.2, abstraction 71.9 |
 
 Not run: MLVU, VideoEval-Pro (150-216 GB datasets), Tomato (no open copy found), Molmo2 Caption (needs an LLM judge, not named),
 Molmo2 Count (data not located). Server errors across all runs: 0. No comparison against the GPU reference was done.
