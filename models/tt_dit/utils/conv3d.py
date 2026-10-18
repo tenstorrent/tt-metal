@@ -480,6 +480,27 @@ _BLOCKINGS = {
     (2, 4, 128, 128, (3, 3, 3), 147, 88, 80): (64, 128, 6, 4, 8),  # s4_res
     (2, 4, 128, 48, (3, 3, 3), 147, 88, 80): (128, 64, 6, 4, 8),  # s4_out
     # ===================================================================
+    # LTX VAE decoder, BH Loud Box 2x4 (h_factor=2, w_factor=4), 1088x576 (1080p-portrait).
+    # Per-device (H,W) 1088x576: s0(17,5) s1(34,9) s2/s3(68,18) s4(136,36).
+    # It had no entry, so every 512/1024-ch conv (incl. both 4096-ch depth-to-space convs)
+    # fell to the (256, 32, 1, 1, 1) channel fallback: 1088x576 decoded 3x slower than 1088x1920.
+    # C_in/C_out/T blocks come from the same-channel 1080p/720p 2x4 entries above; the H/W block is
+    # re-shaped to fit inside the per-device output (product 32, or 16 where 32 does not fit) to waste
+    # the least padding. Other clip lengths reuse these through the T-relaxed lookup.
+    # 448x768 (s0(7,6) .. s4(56,48)) is left out on purpose: blockings of this kind hung the device there
+    # in the A/B (twice); it keeps the fallback (2.7 s per 121 frames) until a sweep finds safe ones.
+    # ===================================================================
+    (2, 4, 128, 1024, (3, 3, 3), 21, 17, 5): (64, 256, 1, 8, 4),  # 1088x576 s0_conv_in
+    (2, 4, 1024, 1024, (3, 3, 3), 21, 17, 5): (128, 64, 5, 8, 4),  # 1088x576 s0_res
+    (2, 4, 1024, 4096, (3, 3, 3), 21, 17, 5): (128, 64, 5, 8, 4),  # 1088x576 s0_up
+    (2, 4, 512, 512, (3, 3, 3), 39, 34, 9): (64, 256, 1, 8, 4),  # 1088x576 s1_res
+    (2, 4, 512, 4096, (3, 3, 3), 39, 34, 9): (128, 64, 5, 8, 4),  # 1088x576 s1_up
+    (2, 4, 512, 512, (3, 3, 3), 75, 68, 18): (64, 256, 1, 8, 4),  # 1088x576 s2_res
+    (2, 4, 256, 256, (3, 3, 3), 147, 68, 18): (64, 256, 1, 8, 4),  # 1088x576 s3_res
+    (2, 4, 256, 512, (3, 3, 3), 147, 68, 18): (64, 256, 1, 8, 4),  # 1088x576 s3_chg
+    (2, 4, 128, 128, (3, 3, 3), 147, 136, 36): (64, 128, 6, 8, 4),  # 1088x576 s4_res
+    (2, 4, 128, 48, (3, 3, 3), 147, 136, 36): (128, 64, 6, 8, 4),  # 1088x576 s4_out
+    # ===================================================================
     # LTX-2.3 22B Video VAE decoder, BH Galaxy 4x8 (h_factor=4, w_factor=8), 1080p.
     # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h4w8"
     # ===================================================================
