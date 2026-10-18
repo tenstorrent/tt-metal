@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host-only pins for the DeepSeek-V4-Flash prefill adapter's M1: the hand-built config, the layer-kind
-schedule, the per-kind KV geometry + the prefill <-> decode KV contract, and the registry. No device, no weights."""
+"""Host-only pins for the DeepSeek-V4-Flash prefill adapter: the hand-built config, the layer-kind schedule, the
+per-kind KV geometry + the prefill <-> decode KV contract, and the registry / runtime config. No device, no weights."""
 
 import json
 import os
@@ -77,7 +77,9 @@ def test_config_class_default_schedule_is_not_flash():
     assert default.layer_types != deepseek_v4_flash_hf_config().layer_types
 
 
-def test_adapter_is_registered_lazy_and_describes_m1(expect_error):
+def test_adapter_is_registered_lazy_and_describes_v4_flash(expect_error):
+    """The registry resolves the adapter lazily; its config, layer split, NFS defaults and the runtime config the
+    adapter's build_runtime fills are checked device-free (build_runtime itself needs a mesh and the checkpoint)."""
     assert "deepseek_v4_flash" in ADAPTER_PATHS
     adapter = get_adapter("deepseek_v4_flash")
     assert adapter.name == "deepseek_v4_flash" and adapter.model_config is DeepSeekV4FlashConfig

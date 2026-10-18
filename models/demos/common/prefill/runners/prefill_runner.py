@@ -94,8 +94,8 @@ D2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(
 _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
 GLOBAL_MESH_SHAPE = (_sp, _tp)
-# getattr: a model_config without NUM_LAYERS (DeepSeek-V4.1-Flash's DeepSeekV41FlashConfig) keeps the old literal
-# default instead of failing at import; its launchers set PREFILL_NUM_LAYERS.
+# getattr: a model_config without NUM_LAYERS keeps the old literal default (61, DeepSeek-V3's) instead of failing at
+# import; PREFILL_NUM_LAYERS overrides either way.
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", getattr(MODEL_CFG, "NUM_LAYERS", 61)))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))

@@ -8,9 +8,14 @@ mHC hyper-connections (4 residual streams mixed around every sublayer), three at
 head_dim 512, a 256-expert MoE with the sqrtsoftplus gate and 3 hash-routed layers. The V4 HCA prefill
 (``tt/mla/heavily_compressed_attention.py``), the V4 gate and the V4 references already live in this package.
 
-What this adapter does today (plan M1): config, layer-kind schedule, the per-kind KV geometry and caches
-(``tt/v4/kv_contract.py`` is the prefill <-> decode contract), registry + manifest. ``build_runtime`` lands with
-the block/transformer/runtime (plan M2..M6, tt-blaze ``docs/plans/deepseek_v4_flash_prefill_ttnn_plan.md``).
+What this adapter provides: the hand-built config with Flash's layer-kind schedule (``load_hf_config``), the weight
+cache path, the engine-owned KV caches of this rank's layer slice (``allocate_kv_cache`` -> ``tt/v4/kv_cache.py``, laid
+out per the prefill <-> decode contract ``tt/v4/kv_contract.py``), and ``build_runtime``: the pure-ttnn
+``TtV4PrefillRuntime`` (``tt/v4/runtime.py``) over that slice, with trace islands when the runner sets ``use_trace``
+(PREFILL_USE_TRACE=1). Weights are dequantised per layer from the checkpoint through ``tt/v4/weights`` or read from the
+.tensorbin cache; a layer whose routed experts are all cached skips their checkpoint read (PREFILL_SKIP_CACHED_EXPERTS,
+default 1). The runner manifest is ``tt/runners/manifests/deepseek_v4_flash.json`` (43 layers, the last one in full for
+the first token).
 """
 
 from __future__ import annotations

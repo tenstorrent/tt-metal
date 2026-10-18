@@ -8,8 +8,8 @@ asserts against it. Migration is a verbatim byte copy per (config, layer, 32-row
 must agree on: config ORDER and names, per-config dtype/layout and row width (hence ``chunk_size_bytes``), the
 meaning of the position axis, and the migratable extent per layer.
 
-Decode's caches, which fix the dtypes (tt-blaze ``tests/blaze/fused_ops/dsv4_hca_layer/harness.py:545, :4103-4124``;
-``blaze/ops/csa_attention/op.py:6-31``):
+Decode's caches, which fix the dtypes (tt-blaze ``tests/blaze/fused_ops/dsv4_hca_layer_stage/harness.py``:
+``_CACHE_DTYPE`` and the CSA cache layout block at ``_csa_row_major``, DS4F-0027; ``blaze/ops/csa_attention/op.py``):
   * CSA layers: ONE unified ROW_MAJOR bf16 cache per layer -- rows [0, 128) are the sliding window at row
     ``p % 128``, row ``128 + w`` is compressed entry ``w = p // 4``.
   * HCA layers: the same window + entries layout at ``128 + p // 128`` in ``_CACHE_DTYPE`` (bfp8_b TILE by
