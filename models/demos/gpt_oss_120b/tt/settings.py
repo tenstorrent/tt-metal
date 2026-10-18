@@ -64,6 +64,12 @@ TABLE = {
     # operands: 4 ops per local expert between extract and insert instead of 11. False: fused gate_up linear,
     # 2 slices and 7 eltwise ops
     "PERF_P1": Setting(True, (True, False), "experts: split gate / up linears, SwiGLU fused into one multiply"),
+    # P.2: attention is host-dispatch bound too (ROPE_FP32's two rotations are 14 ttnn calls per layer). True:
+    # rot(x W + b) = x (W R) + b R with R the meta rotation (a signed column permutation, exact in any dtype), so a second
+    # QKV linear with the weight W R and one nlp_create_qkv_heads give rot(q), rot(k) in fp32, bit-equal to the columns
+    # of q, k: 2 calls instead of 14, for 2.5 MB more bf16 weight per chip per layer. False: TtRope._rotate (hi / lo
+    # bf16 halves times R)
+    "PERF_P2": Setting(True, (True, False), "attention: RoPE rotation folded into a second QKV linear (W R)"),
     # serving_answers slots:the runner test interleaves two user slots; production ships 16 (1.1 GB per chip)
     "KV_SLOTS": Setting(2, None, "user slots the device model's KV state allocates (serving_answers slots)"),
 }

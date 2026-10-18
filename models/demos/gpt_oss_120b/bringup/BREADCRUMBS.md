@@ -257,3 +257,20 @@
 - `bfw perf try --task P.1`: chunk_wall_ms 169.9 (X.1 209.1), device_ms_experts 61.93 (78.42), device_ms_total
   66.8 (83.0), pcc_chunk_out 0.99993, host transfers 0.
 - Re-run: `bfw perf accuracy --task P.1 && bfw perf try --task P.1`.
+
+## P.2 (perf pick: attention)
+
+- Why: the chunk is host-dispatch bound (P.1, ~0.7 ms per ttnn call on the 32-chip mesh). Attention's kernels take
+  4.3 ms of device time, but it issues many calls. ROPE_FP32's `TtRope._rotate` alone costs 7 calls per q / k: 2
+  typecasts, a subtract, a typecast, 2 matmuls and an add. That is 14 per layer.
+- Change (`PERF_P2`, default True; `tt/attention.py`): rot(x W + b) = x (W R) + b R, where R is the per-head meta
+  rotation (block-diagonal; zero on the v columns). R is a signed column permutation within each 32-column tile, so
+  W R holds exactly W's values (bf16 / bfp8 lossless). The q / k columns of a second QKV linear (`wqkv_rot`,
+  `bqkv_rot`, fp32 out) are rot(q), rot(k) bit for bit (CPU-checked: max diff 0). One `nlp_create_qkv_heads` splits
+  them, and `TtRope.__call__(..., rot=)` uses them instead of `_rotate`. That is 2 calls per layer instead of 14. Cost:
+  +2.5 MB of bf16 weight per chip per layer ([2880, 1280] at TP 4). False (or ROPE_FP32 off): the old path.
+- Accuracy (`bfw perf accuracy --task P.2`): PASS. L00 vs_golden rel 0.00901 (limit 0.0280), pcc 0.999965; L01
+  vs_golden rel 0.01722 (limit 0.0457), pcc 0.999858.
+- `bfw perf try --task P.2`: chunk_wall_ms 154.0 (P.1 try 169.9, X.1 209.1), device_ms_attention 4.22 (4.28),
+  device_ms_total 66.6, pcc_chunk_out 0.99993, host transfers 0.
+- Re-run: `bfw perf accuracy --task P.2 && bfw perf try --task P.2`.

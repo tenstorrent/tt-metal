@@ -140,10 +140,7 @@ class TtRope:
         self.pos_tables = [dev(bf(p)), dev(p - bf(p))]
         if self.fp32:
             self.tables = [dev(h) for t in (cos, sin) for h in (bf(t), t - bf(t))]  # cos hi, lo, sin hi, lo
-            rot = torch.zeros(HEAD_DIM, HEAD_DIM)
-            for b in range(0, HEAD_DIM, ttnn.TILE_SIZE):
-                rot[b : b + ttnn.TILE_SIZE, b : b + ttnn.TILE_SIZE] = rot_transformation_mat()[0, 0]
-            self.rot = rep(rot[None, None])
+            self.rot = rep(self.rotation(1)[None, None])
             self.mm_config = ttnn.init_device_compute_kernel_config(
                 mesh.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -154,6 +151,14 @@ class TtRope:
         else:
             self.cos, self.sin = dev(cos), dev(sin)
         self.trans = rep(rot_transformation_mat())
+
+    @staticmethod
+    def rotation(n_heads: int) -> torch.Tensor:
+        """[n_heads * 64]^2 block-diagonal meta rotation: rot(x) = x @ R per head (a signed permutation of columns)."""
+        r = torch.zeros(HEAD_DIM, HEAD_DIM)
+        for b in range(0, HEAD_DIM, ttnn.TILE_SIZE):
+            r[b : b + ttnn.TILE_SIZE, b : b + ttnn.TILE_SIZE] = rot_transformation_mat()[0, 0]
+        return torch.block_diag(*[r] * n_heads)
 
     def _pick(self, tables, start: int):
         """Rows of hi / lo table pairs for the chunk at ``start``, each pair summed in fp32 -> [1, 1, S_local, 64]."""
@@ -197,7 +202,8 @@ class TtRope:
             p.deallocate(True)
         return out
 
-    def __call__(self, t: ttnn.Tensor, start: int, tables=None) -> ttnn.Tensor:
+    def __call__(self, t: ttnn.Tensor, start: int, tables=None, rot=None) -> ttnn.Tensor:
+        """``rot`` (fp32, optional): rot(t) already computed (PERF_P2), consumed."""
         if not self.fp32:
             return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
                 t, self.cos, self.sin, self.trans, kv_actual_global=start, cluster_axis=SP_AXIS
@@ -205,7 +211,7 @@ class TtRope:
         cos, sin = tables
         if t.dtype != ttnn.float32:
             t = ttnn.typecast(t, ttnn.float32)
-        rot = self._rotate(t)
+        rot = self._rotate(t) if rot is None else rot
         a = ttnn.multiply(t, cos, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         b = ttnn.multiply(rot, sin, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         rot.deallocate(True)
@@ -241,22 +247,34 @@ class TtAttention:
             wcols.append(torch.cat([wq[sl_q], wk[sl_kv], wv[sl_kv]], dim=0).T)
             bcols.append(torch.cat([bq[sl_q], bk[sl_kv], bv[sl_kv]], dim=0))
         col_mapper = ttnn.ShardTensor2dMesh(mesh, mesh_shape=(rows, cols), dims=(None, 3))
-        self.wqkv = ttnn.from_torch(
-            torch.cat(wcols, dim=-1)[None, None],
-            device=mesh,
-            dtype=getattr(ttnn, settings.get("ATTN_QKV_WEIGHT_DTYPE")),
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=col_mapper,
-        )
-        self.bqkv = ttnn.from_torch(
-            torch.cat(bcols, dim=-1).reshape(1, 1, 1, -1),
-            device=mesh,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=col_mapper,
-        )
+
+        def qkv_weights(wc, bc):
+            w_dev = ttnn.from_torch(
+                torch.cat(wc, dim=-1)[None, None],
+                device=mesh,
+                dtype=getattr(ttnn, settings.get("ATTN_QKV_WEIGHT_DTYPE")),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=col_mapper,
+            )
+            b_dev = ttnn.from_torch(
+                torch.cat(bc, dim=-1).reshape(1, 1, 1, -1),
+                device=mesh,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=col_mapper,
+            )
+            return w_dev, b_dev
+
+        self.wqkv, self.bqkv = qkv_weights(wcols, bcols)
+        # PERF_P2: rot(x W + b) = x (W R) + b R, R the per-head meta rotation on the q and k columns and 0 on v's.
+        # R is a signed column permutation within each 32-column tile, so W R holds W's own values (also in bfp8) and
+        # the second linear's q / k columns are rot(q), rot(k) bit for bit
+        self.rot_fold = rope.fp32 and settings.get("PERF_P2")
+        if self.rot_fold:
+            r = torch.block_diag(TtRope.rotation(self.nq_local + self.nkv_local), torch.zeros(kv_rows, kv_rows))
+            self.wqkv_rot, self.bqkv_rot = qkv_weights([wc @ r for wc in wcols], [bc @ r for bc in bcols])
         # o_proj row-parallel: column c holds the in-features of its q heads (columns 1024c..1024c+1023 of wo). Kept
         # [out, in] and applied with transpose_b, so the bfp8 blocks of 16 run along the in-features, as the checkpoint
         # rows are; blocks along the out-features share one exponent across 16 output columns and lose small columns
@@ -401,8 +419,27 @@ class TtAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         qkv.deallocate(True)
+        q_r = k_r = None
+        if self.rot_fold:  # rot(q), rot(k) straight from x (fp32 out: the rotation path is fp32)
+            qkv_r = ttnn.linear(
+                x,
+                self.wqkv_rot,
+                bias=self.bqkv_rot,
+                dtype=ttnn.float32,
+                compute_kernel_config=self.mm_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            q_r, k_r, v_r = ttnn.experimental.nlp_create_qkv_heads(
+                qkv_r,
+                num_heads=self.nq_local,
+                num_kv_heads=self.nkv_local,
+                transpose_k_heads=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            qkv_r.deallocate(True)
+            v_r.deallocate(True)
         tables = self.rope.tables_at(start) if self.rope.fp32 else None
-        q_rot, k_rot = self.rope(q, start, tables), self.rope(k, start, tables)
+        q_rot, k_rot = self.rope(q, start, tables, q_r), self.rope(k, start, tables, k_r)
         for t in tables or ():
             t.deallocate(True)
         q.deallocate(True)
