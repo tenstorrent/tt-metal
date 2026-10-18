@@ -329,7 +329,7 @@ ADAPTER_PATHS = {
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
     "glm_5_3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3:GLM53Adapter",
     # DeepSeek-V4-Flash: mHC hyper-connections + SWA / CSA(indexer) / HCA attention + V4 MoE (adapters/deepseek_v4_flash.py).
-    # Config + KV geometry + caches today; the block / transformer / runtime land per the plan (M2..M6).
+    # Config, KV caches and the pure-ttnn runtime (tt/v4/runtime.py: chunked, trace islands with PREFILL_USE_TRACE=1).
     "deepseek_v4_flash": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4_flash:DeepSeekV4FlashAdapter",
     # DeepSeek-V4.1-Flash: the ENCODER half of the disaggregated split (layers 0..19 + layer 20 KV-only), tt-blaze DS41F-0037.
     "deepseek_v4_1_flash": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4_1_flash:DeepSeekV41FlashAdapter",

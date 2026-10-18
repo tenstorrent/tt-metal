@@ -105,7 +105,7 @@ def _load_env_config() -> None:
     # Default from the adapter's own depth (see prefill_runner.py's MODEL_CFG.NUM_LAYERS
     # pattern) rather than a literal -- a hardcoded default silently under-covers any model
     # deeper than that literal when a manifest omits PREFILL_NUM_LAYERS. getattr: a model_config without NUM_LAYERS
-    # (DeepSeek-V4.1-Flash) keeps the old 61 default instead of failing here.
+    # keeps the old 61 default instead of failing here.
     NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", getattr(ADAPTER.model_config, "NUM_LAYERS", 61)))
     # One ack fires per layer that WRITES KV, not per layer. Dense stacks are the same number, but a
     # hybrid one is not: Kimi-K3 at 93 layers acks only its 24 full-attention layers, so draining

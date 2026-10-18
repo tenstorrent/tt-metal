@@ -1,12 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Trace islands: the position-independent slices of a V4 prefill block (mHC sites, norms, MoE) captured ONCE as a
-segmented ttnn trace and replayed every chunk, while the chunk-position-dependent attention core stays eager.
+"""Trace islands: slices of a V4 prefill block captured ONCE as a segmented ttnn trace and replayed every chunk. The
+position-independent ones are islands A (attn mHC site + input norm) and B (mHC mix, ffn site, post norm, MoE). Path A3
+(DS4F-0246/0300) also traces the attention, as two islands per slot (A1 = stems + compressor(s), A2 = attention core +
+o-proj + export prep, ``TtV4PrefillBlock.enable_trace_islands``), with the chunk-position-dependent writes left as eager
+glue / epilogue between them.
 
 Why: the eager block is host-dispatch bound (DS4F-0246: ~0.12 ms per program, 571-780 programs per layer; the device
 idles ~55-60%). The mHC sites alone are ~280 of those programs and know nothing about the chunk position, so they trace
 once per layer and serve every chunk of every request; the attention (slice starts, fill_cache offsets, tail matrices
-keyed by the entry count) is the part whose program arguments change per chunk (DS4F-0247).
+keyed by the entry count) is the part whose program arguments change per chunk (DS4F-0247), so path A3 moves those
+per-chunk values into persistent device scalars the captured programs read, and keeps only the writes eager.
 
 Rules a caller must keep (the trace bakes ADDRESSES):
   * an island's inputs are persistent device buffers (owned by this island, or the persistent outputs of another

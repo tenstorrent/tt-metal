@@ -4,7 +4,10 @@
 ``models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md`` section 2).
 
 The engine owns the caches (``V4FlashKvCaches``), the chunk loop, the sockets and the migration comms; this runtime
-owns the model and knows how to write the caches. Eager only (no trace) in this milestone.
+owns the model and knows how to write the caches. ``compile`` warms every chunk index eagerly; with ``use_trace``
+(PREFILL_USE_TRACE=1) ``capture_trace`` then captures every layer's trace islands once (``tt/v4/trace_island.py``,
+``TtV4PrefillBlock.enable_trace_islands``): the mHC / norm / MoE islands A and B, and on the path-A3 kinds the attention
+as two islands per slot with eager glue for the position-dependent writes. Without it every chunk runs eagerly.
 """
 
 from __future__ import annotations
@@ -58,8 +61,11 @@ class TtV4PrefillRuntimeConfig:
     kv_only_last_layer: bool = True
     weight_cache_path: Optional[Path] = None
     # Trace islands (tt/v4/trace_island.py): the mHC sites, norms and MoE of every layer captured once and replayed per
-    # chunk; the attention core stays eager. Needs the mesh opened with a trace region (PREFILL_USE_TRACE=1 ->
-    # PREFILL_TRACE_REGION_SIZE, 256 MB default). The runner calls capture_trace() after the D2D endpoints exist.
+    # chunk (islands A / B), plus path A3 (DS4F-0246/0300): the attention of every SWA / HCA layer, and of every CSA
+    # layer on path A + the fused indexer, as two islands per slot (A1, A2, a chunk-0 A2; CSA adds capacity-bucket
+    # A2s) with the position-dependent writes as eager glue. PREFILL_{CSA,HCA,SWA}_ISLANDS=0 keeps that kind eager.
+    # Needs the mesh opened with a trace region (PREFILL_USE_TRACE=1 -> PREFILL_TRACE_REGION_SIZE, 256 MB default). The
+    # runner calls capture_trace() after the D2D endpoints exist.
     use_trace: bool = False
 
     @property

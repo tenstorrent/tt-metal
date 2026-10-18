@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """DeepSeek-V4.1-Flash image front end on ONE chip: the ttnn ViT + aligner (``tt/v41/vision.py``) on each image, through the
-checkpoint's own ``image_processor.load_image``, written as an aligner-rows file per image that tt-blaze's
-``prof/vit_prompt.py --rows`` turns into a ring prompt (virtual ids + span rows; tt-blaze vit_plan.md V1 / V3).
+checkpoint's own ``image_processor.load_image``, written as an aligner-rows file per image that ``vit_prompt.py --rows``
+turns into a ring prompt (tt-blaze vit_plan.md V1 / V3). ``vit_prompt.py`` is NOT in tt-blaze's git: it lives only on
+the pod NFS, ``/mnt/tt-data/sdawle/pod_v41/prof/vit_prompt.py`` (CPU only). It writes the prompt's token ids (image +
+question) with the image span on VIRTUAL ids (vocab + k), and the span rows in span order (START, the aligner rows with
+a NEWLINE after each grid row, END), the way ``model.py``'s ``merge_image_embeddings`` fills h.
 
     python models/demos/deepseek_v3_d_p/scripts/v41_vit_rows.py --image a.jpg [--image b.jpg ...] --out-dir <dir>
 

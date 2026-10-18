@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Compressed Sparse Attention (V4-Flash even layers 2..42) in ttnn -- plan path B (dense mask).
+"""Compressed Sparse Attention (V4-Flash even layers 2..42) in ttnn -- path B (dense mask) and path A (sparse_sdpa).
 
 ``TtCSACompressor`` (two-series rate-4 compressor, W = 512 for the attention entries and W = 128 for the lightning
 indexer's keys) follows ``tt/v4/attention/csa_math.py`` exactly: kv/gate are SP-all-gathered so every chip computes
@@ -10,9 +10,15 @@ rows from the state. ``TtCSAIndexer`` scores every (query, entry) pair per head 
 heads, all-reduce), applies the causal cut, and turns the top-512 into an additive 0/-inf selection mask by
 THRESHOLD (k-th largest score per row), so no scatter is needed. ``TtCSA`` is ``TtHCA`` with that compressor, the
 indexer's mask folded into the compressed columns of the persistent mask, and tile-aligned entry writes (1280
-entries per 5120-token chunk -- no tail tile). Attention itself is TtHCA's dense SDPA over
-``[carry | chunk | entries(cap) | pad]`` with sinks -- correct at any length, ~4x HCA's cost at 64k (path A,
-``sparse_sdpa`` + sink, is plan M8).
+entries per 5120-token chunk -- no tail tile).
+
+Path B (the default, and chunk 0 on the eager path): TtHCA's dense SDPA over ``[carry | chunk | entries(cap) | pad]``
+with sinks -- correct at any length, ~4x HCA's cost at 64k. Path A (``PREFILL_CSA_SPARSE=1``, DS4F-0252/0255;
+``_attention_sparse`` / ``_sparse_core``): once every query sees a full window and >= top-k entries, ``sparse_sdpa``
+with the sink over ``[128 window rows | top-k entries]`` per query, gathered from a persistent row-major slab, from the
+indexer's top-k INDICES. Path A2 is its fused indexer scorer (``PREFILL_CSA_FUSED_INDEXER``, default on); path A3 runs
+it as trace islands (``traceable`` / ``forward_pre`` / ``glue_chunk`` / ``forward_attn`` / ``epilogue_chunk``, with
+DS4F-0300's capacity buckets and a chunk-0 island whose index rows are sentinel-packed).
 """
 
 from __future__ import annotations
@@ -1559,8 +1565,9 @@ class TtCSA(TtHCA):
         row = self.sliding_window + int(state.entry_count)
         self._write_rm(unified, entries, batch_idx, row)
         # The decode ring's indexer key cache holds k @ H128 / sqrt(128) (the Hadamard rotation its indexer applies to q and
-        # k -- tt-blaze DS4F-0209; the rollout in tests/blaze/fused_ops/dsv4_hca_layer/harness.py stores `_c @ _H128.T /
-        # sqrt(128)`), so the EXPORTED rows are rotated here; the prefill's own working keys stay plain (DS4F-0254).
+        # k -- tt-blaze DS4F-0209; the rollout in tests/blaze/fused_ops/dsv4_hca_layer_stage/harness.py stores
+        # `_c @ _H128.T / sqrt(128)`), so the EXPORTED rows are rotated here; the prefill's own working keys stay plain
+        # (DS4F-0254).
         k = ttnn.matmul(keys, self._h128_export(), memory_config=self.memory_config)
         k = k if k.dtype == index_k.dtype else ttnn.typecast(k, index_k.dtype)
         ttnn.kv_cache.fill_cache_for_user_(index_k, k, int(batch_idx), update_idx=int(state.entry_count))
