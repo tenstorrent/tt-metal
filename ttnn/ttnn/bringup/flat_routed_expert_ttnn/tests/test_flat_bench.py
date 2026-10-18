@@ -186,6 +186,8 @@ def test_flat_bench(device):
     finally:
         if hdl is not None:
             ttnn.device.UnregisterProgramRealtimeProfilerCallback(hdl)
-    print(f"[bench] | case | M_total | total ms | us/expert | DRAM % | math % ({n_compute} compute) | math % ({n_grid} grid) |")
+    print(
+        f"[bench] | case | M_total | total ms | us/expert | DRAM % | math % ({n_compute} compute) | math % ({n_grid} grid) |"
+    )
     for name, rows, ms, pe, dram, mc, mg in rows_out:
         print(f"[bench] | {name} | {rows} | {ms:.3f} | {pe:.1f} | {dram:.0%} | {mc:.0%} | {mg:.0%} |")

@@ -64,6 +64,18 @@ Kernel (setting EXPERTS_KERNEL, bfp8 / bfp4 weights):
                 same block-float tensors the loop uses, w1 and w3 separate), q in-kernel per 32 (ue8m0, e4m3 RNE,
                 bit-exact with tt/quant.fp8_qdq on exact inputs: the fork's tests/unit/test_ds41_h_options.py)
            -> the same combine / sum / reduce.
+  flat     ONE ttnn.bringup.flat_routed_expert program (Marko Staletovic's flat spatially pipelined expert, P.3:
+           16 DRAM bank readers stream every local expert's weights once into the gate/up cores, x relays tilize the
+           dispatched rows and multicast them, down cores write y at each expert's region), on the dispatched buffer:
+             x      = buf (q(x) | routing pieces, bf16 ROW_MAJOR; the op reads each row's first H values, hidden=H)
+             r_rows = pieces @ SelAll as for unified, kept Float32 TILE [rows, 32]
+             op(x, routing_weights=r_rows, fp8_act_quant=True, weights_nk, clamped_silu, x / h / y bf16, fp32 DEST
+                (gate/up, down_fp32), fidelity MATMUL_FIDELITY): per local expert le and routed row i,
+                y_i = w2 q(r_i,le silu(min(w1 x_i, 10)) clamp(w3 x_i, +-10)), w1 / w3 / w2 laid out once at load in
+                the op's bank layout from the stored [N, K] matrices (every tile the transpose of the x @ W tile, so
+                bfp8 shares its exponents along K: exact, asserted at load, DS41-35), q in-kernel per 32 (ue8m0, e4m3
+                RNE; the fork's tests/unit/test_ds41_h_options.py: bit-exact on exact GEMMs)
+           -> the same combine / sum / reduce.
 
 The per-expert cap is the whole chunk (a token picks an expert once; the counts stay on the device), the flat
 dispatch buffer K x the cap (all K of a token's experts may sit on one chip). expert counts / region offsets are
@@ -191,8 +203,8 @@ class TtExperts:
         assert self.impl in ("bfp8", "bfp4", "fp4_decode"), self.impl
         self.decode_mode = settings.get("EXPERTS_DECODE")
         self.kernel = settings.get("EXPERTS_KERNEL")
-        assert self.kernel in ("loop", "unified"), self.kernel
-        assert self.kernel == "loop" or self.impl in BLOCK_DTYPES, f"EXPERTS_KERNEL=unified needs block-float weights"
+        assert self.kernel in ("loop", "unified", "flat"), self.kernel
+        assert self.kernel == "loop" or self.impl in BLOCK_DTYPES, f"EXPERTS_KERNEL={self.kernel} needs block weights"
         self.sum_mode = settings.get("EXPERTS_SUM")
         self.mesh, self.layer, self.num_links = mesh, layer, num_links
         self.E, self.K, self.H, self.I = E, int(top_k), int(hidden), int(inter)
@@ -238,11 +250,14 @@ class TtExperts:
             for le in range(self.epc)
         ]
 
-        if self.kernel == "unified":
-            # the fused op bakes ClampedSiluGlu's limit 10 (unified_routed_expert_ffn_types.hpp)
-            assert self.lim == 10.0, f"EXPERTS_KERNEL=unified: swiglu_limit {self.lim} != the op's 10"
+        if self.kernel in ("unified", "flat"):
+            # the fused ops bake ClampedSiluGlu's limit 10 (unified_routed_expert_ffn_types.hpp; flat's se3_compute.cpp
+            # SE_ACT 3, ClampedSiluGluConfigDsV4)
+            assert self.lim == 10.0, f"EXPERTS_KERNEL={self.kernel}: swiglu_limit {self.lim} != the op's 10"
             # the routing-weight rows carry one column per local expert in one tile (24 per chip on 2x2 / 4x4, 12 on 8x4)
-            assert self.epc <= TILE, f"EXPERTS_KERNEL=unified: {self.epc} experts per chip > {TILE} weight columns"
+            assert (
+                self.epc <= TILE
+            ), f"EXPERTS_KERNEL={self.kernel}: {self.epc} experts per chip > {TILE} weight columns"
             # one selector for every local expert: column le of mesh row r = the group's expert j = r epc + le
             sel_all = torch.zeros(rows, 1, 3 * self.Egp, TILE)
             for r in range(rows):
@@ -257,12 +272,12 @@ class TtExperts:
                 memory_config=DRAM,
                 mesh_mapper=_mapper(mesh, (0, None)),
             )
+        self._seq = {}
+        self._modules(self.max_chunk // rows)  # the serving chunk's dispatch / combine sizes, built at load
         if self.impl in BLOCK_DTYPES:
             self._load_block(ck, gtab)
         else:
             self._load_fp4(ck, gtab)
-        self._seq = {}
-        self._modules(self.max_chunk // rows)  # the serving chunk's dispatch / combine sizes, built at load
 
     def _load_fp4(self, ck, gtab):
         """fp4_decode: per local slot le and matrix, nibble planes + scales (one mesh tensor whose chip (r, c) shard
@@ -334,6 +349,8 @@ class TtExperts:
         the fraction of this layer's expert values bfloat4_b changes and the worst per-matrix relative change."""
         rows, cols, mesh, layer, H, I = self.dgs, self.ngroups, self.mesh, self.layer, self.H, self.I
         dtype = BLOCK_DTYPES[self.impl]
+        flat = self.kernel == "flat"
+        flat_w = [[None] * self.epc for _ in range(rows * cols)]  # flat: [device r cols + c][le] = (W1, W3, W2) stored
         self.w13, self.w2 = [], []
         self.w1, self.w3 = [], []  # EXPERTS_KERNEL=unified: w1 and w3 as separate [I, H] tensors (the op's gate / up)
         changed = total = 0
@@ -351,6 +368,8 @@ class TtExperts:
                     w2[c, r] = w["w2"]
                     for t in w.values():
                         assert bool(torch.equal(t.to(torch.bfloat16).float(), t)), "e2m1 x 2^e not bf16-exact"
+                    if flat:  # (the flat op's layout is built from these below, one device's experts at a time)
+                        flat_w[r * cols + c][le] = (w13[c, r, :I], w13[c, r, I:], w2[c, r])
             if self.impl == "bfp8":
                 for t, nm in ((w13, "w1 | w3"), (w2, "w2")):
                     assert _bfp8_exact(t), f"layer {layer} slot {le} {nm}: bfloat8_b would round a value (DS41-35)"
@@ -365,6 +384,8 @@ class TtExperts:
             pairs = [(w13, self.w13), (w2, self.w2)]
             if self.kernel == "unified":
                 pairs = [(w13[:, :, :I].contiguous(), self.w1), (w13[:, :, I:].contiguous(), self.w3), (w2, self.w2)]
+            if flat:
+                pairs = []  # (no per-expert device tensors: the flat op's bank layout below)
             for t, out in pairs:
                 out.append(
                     ttnn.from_torch(
@@ -376,6 +397,8 @@ class TtExperts:
                         mesh_mapper=get_ep_mesh_mapper(mesh),
                     )
                 )
+        if flat:
+            self._load_flat(flat_w, gtab)
         if self.impl == "bfp4":
             self.bfp4_stats = {
                 "layer": layer,
@@ -387,6 +410,42 @@ class TtExperts:
                 f"EXPERTS_BFP4 layer={layer} values_changed={changed}/{total} ({100 * changed / total:.2f} %) "
                 f"worst_matrix_rel={worst[0]:.4g} (expert, matrix)={worst[1]}"
             )
+
+    def _load_flat(self, flat_w, gtab):
+        """EXPERTS_KERNEL=flat: every local expert's (W1, W3, W2) as stored ([N, K], bf16-exact e2m1 x 2^e) in the
+        flat op's per-core bank layout (FlatRoutedExpert, weights_nk: each tile the transpose of x @ W's tile, so a bfp8
+        tile shares its exponents along K: exact, the groups _load_block asserts on [N, K]; bfp4: ttnn's lossy packing
+        of the same groups, the values EXPERTS_IMPL=bfp4 gives the other kernels). Built once per layer; the plan is the
+        op's for this chip's grid (16-column units, 32-row sub-blocks with the h options)."""
+        from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+
+        rows, cols = self.dgs, self.ngroups
+        gids = [[int(gtab[c, r, le]) for le in range(self.epc)] for r in range(rows) for c in range(cols)]
+        _, _, cap = self._modules(self.max_chunk // rows)
+        self.flat_cap = max(256, _ceil(cap, TILE))  # (the op is built for >= 256 rows per expert)
+        self.fe = FlatRoutedExpert(
+            self.mesh,
+            flat_w,
+            m=self.flat_cap,
+            H=self.H,
+            I=self.I,
+            gids=gids,
+            n_global=self.E,
+            wdtype={"bfp8": "bf8", "bfp4": "bf4"}[self.impl],
+            act="clamped_silu",
+            pin=1,
+            x_bf16=True,
+            h_bf16=True,
+            weights_nk=True,
+            routed=True,
+            # (no second exactness pass: a laid-out tile row is 32 consecutive K values of one stored row, the same
+            # 16-value groups _bfp8_exact asserted on the [N, K] matrices above)
+            check_exact=False,
+        )
+        logger.info(
+            f"EXPERTS_FLAT layer={self.layer} plan nu={self.fe.plan['nu']} np={self.fe.plan['np']} "
+            f"mt={self.fe.plan['mt']} gate/up={len(self.fe.plan['gu'])} down={self.fe.plan['nd']} cap={self.flat_cap}"
+        )
 
     # ------------------------------------------------------------------ sizes (built once per rows-per-chip)
     def _modules(self, s: int):
@@ -611,6 +670,41 @@ class TtExperts:
         ttnn.deallocate(rwr)
         return out
 
+    def _routing_rows(self, buf: ttnn.Tensor) -> ttnn.Tensor:
+        """buf [n, W] bf16 ROW_MAJOR -> [n, 32] fp32 TILE: row i column le = row i's routing weight for local expert le
+        (its three bf16 pieces summed exactly by one 0/1 selector matmul, one product per tile-dot, DS41-16)."""
+        n = buf.shape[-2]
+        wp = ttnn.slice(buf, [0, self.H], [n, self.W], memory_config=DRAM)
+        wpt = ttnn.to_layout(wp, ttnn.TILE_LAYOUT, memory_config=DRAM)
+        ttnn.deallocate(wp)
+        rw = ttnn.matmul(
+            ttnn.reshape(wpt, (1, 1, n, 3 * self.Egp)),
+            self.sel_all,
+            dtype=ttnn.float32,
+            compute_kernel_config=self.cfg,
+            memory_config=DRAM,
+        )
+        ttnn.deallocate(wpt)
+        return ttnn.reshape(rw, (n, TILE))
+
+    def _flat(self, buf: ttnn.Tensor, counts, region_offsets) -> ttnn.Tensor:
+        """EXPERTS_KERNEL=flat. buf [max_buf, W] bf16 ROW_MAJOR (the dispatched rows: q(x) | routing pieces) -> expert
+        outputs [max_buf, H] bf16 TILE (each expert's rows at its region; a fresh buffer, buf untouched)."""
+        rw = self._routing_rows(buf)
+        out = self.fe(
+            buf,
+            counts,
+            region_offsets,
+            y_bf16=True,
+            down_fp32=bool(settings.get("FP32_DEST_ACC")),
+            math_fidelity=int(getattr(ttnn.MathFidelity, settings.get("MATMUL_FIDELITY")).value),
+            routing_weights=rw,
+            fp8_act_quant=True,
+            hidden=self.H,
+        )
+        ttnn.deallocate(rw)
+        return out
+
     def partial(self, x: ttnn.Tensor, dense: ttnn.Tensor, idx: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """This column group's experts over the chip's rows. x: ffn_norm [1, 1, s, H] fp32 TILE (rows split over axis
         0, replicated over axis 1); dense: routing [1, 1, s, E] fp32 (same placement); idx: the router's top-k ids
@@ -646,6 +740,9 @@ class TtExperts:
         b2 = ttnn.reshape(buf, (buf.shape[-2], self.W))
         if self.kernel == "unified":
             out = self._unified(b2, counts, region_offsets, cap)
+            ttnn.deallocate(buf)
+        elif self.kernel == "flat":
+            out = self._flat(b2, counts, region_offsets)
             ttnn.deallocate(buf)
         else:
             bt = ttnn.to_layout(b2, ttnn.TILE_LAYOUT, memory_config=DRAM)
@@ -696,6 +793,12 @@ class TtExperts:
                 ttnn.deallocate(t)
         self.w13, self.w2, self.planes, self.scales = [], [], [], []
         self.w1, self.w3 = [], []
+        fe = getattr(self, "fe", None)
+        if fe is not None:  # the flat op's bank-layout weights, expert ids and done words
+            for t in (fe.w_gu, fe.w_d, fe.w_rd, fe.gidx, fe.done):
+                if t is not None:
+                    ttnn.deallocate(t)
+            self.fe = None
 
     def __call__(self, x: ttnn.Tensor, dense: ttnn.Tensor, idx: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """experts_out [1, 1, s, H/TP] fp32 (rows over axis 0, hidden columns over axis 1)."""

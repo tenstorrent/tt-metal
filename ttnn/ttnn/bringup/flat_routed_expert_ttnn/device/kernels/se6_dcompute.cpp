@@ -119,7 +119,7 @@ void kernel_main() {
 #ifdef SE_PACK_SRND  // stochastic rounding in the packer (the default rounds bf16 -> bfp8 ties away from zero)
     UNPACK((_llk_unpack_configure_stoch_rnd_<StochRndType::Pack>()));
 #endif
-    matmul_block_init(h_all_cb, in1_cb, false, cpw, 1, hk);
+    matmul_block_init(h_all_cb, in1_cb, SE_WT, cpw, 1, hk);
 #if defined(SE_Y_RM) && !defined(SE_YRM_PACKTILE)
     pack_untilize_dest_init<cpw, pcd>(out_cb);
 #endif
@@ -183,7 +183,7 @@ void kernel_main() {
                 const uint32_t cw = pcd - c0 < cpw ? pcd - c0 : cpw;
                 const bool final_pass = c0 + cw == pcd;
                 if constexpr (pcd > cpw) {
-                    matmul_block_init(h_all_cb, in1_cb, false, cw, 1, hk);
+                    matmul_block_init(h_all_cb, in1_cb, SE_WT, cw, 1, hk);
                 }
 #ifdef SE_DZ  // (detail zones on sub-blocks v % 16 == 5: DEST acquire, the K loop, pack)
                 const bool dz = v % 16 == 5;
@@ -209,7 +209,7 @@ void kernel_main() {
 #endif
                         }
                         matmul_block(
-                            h_all_cb, in1_cb, h0 + kk * mtg, w + (kk % kblk_d) * pcd + c0, 0, false, cw, 1, hk);
+                            h_all_cb, in1_cb, h0 + kk * mtg, w + (kk % kblk_d) * pcd + c0, 0, SE_WT, cw, 1, hk);
 #ifdef SE_EARLY_POP
                         // The expert's last row (final column pass): each weight block goes as soon as it is used, so
                         // the next expert's blocks stream into the ring while this row still runs.
@@ -270,7 +270,7 @@ void kernel_main() {
         }
 #ifdef SE_SMALL_T
         if (xs) {
-            matmul_block_init(h_all_cb, x_cb, false, pcx, 1, hk);
+            matmul_block_init(h_all_cb, x_cb, SE_WT, pcx, 1, hk);
             cb_reserve_back(xo_cb, mt * pcx);
             for (uint32_t r = 0; r < rows; ++r) {
                 const uint32_t h0 = (r / mtg) * group_tiles + r % mtg;
@@ -290,7 +290,7 @@ void kernel_main() {
                     if (kk % kblk_x == 0) {
                         w = wblock_x(e * nblk_x + kk / kblk_x);
                     }
-                    matmul_block(h_all_cb, x_cb, h0 + kk * mtg, w + (kk % kblk_x) * pcx, 0, false, pcx, 1, hk);
+                    matmul_block(h_all_cb, x_cb, h0 + kk * mtg, w + (kk % kblk_x) * pcx, 0, SE_WT, pcx, 1, hk);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -304,7 +304,7 @@ void kernel_main() {
                 cb_pop_front(x_cb, nblk_x * slot_x);
                 popped_x += nblk_x;
             }
-            matmul_block_init(h_all_cb, in1_cb, false, cpw, 1, hk);
+            matmul_block_init(h_all_cb, in1_cb, SE_WT, cpw, 1, hk);
         }
 #endif
         cb_pop_front(h_all_cb, h_all_tiles);

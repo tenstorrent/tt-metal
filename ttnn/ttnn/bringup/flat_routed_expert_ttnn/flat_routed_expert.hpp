@@ -41,7 +41,11 @@ ttnn::Tensor flat_routed_expert(
     bool x_bf16 = false,
     bool h_bf16 = false,
     bool y_bf16 = false,
-    uint32_t math_fidelity = 0);
+    uint32_t math_fidelity = 0,
+    const std::optional<ttnn::Tensor>& routing_weights = std::nullopt,
+    bool fp8_act_quant = false,
+    bool weights_nk = false,
+    uint32_t hidden = 0);
 
 // The flat routed expert overlapped with combine_fabric2d in one program per chip (initial version; see
 // device/flat_combine_overlap_device_operation.hpp): the flat expert's arguments as for flat_routed_expert, combine's

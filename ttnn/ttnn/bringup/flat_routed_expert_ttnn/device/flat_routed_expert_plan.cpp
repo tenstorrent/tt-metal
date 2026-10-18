@@ -541,6 +541,21 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     if (const char* mt = std::getenv("MIMO_FL_MT")) {  // (perf probe: cap the sub-block's row tiles)
         p.mt = std::min(mt_full, static_cast<uint32_t>(std::atoi(mt)) / p.g * p.g);
     }
+    // h options (routed_weight / fp8_act_quant): each 32-row sub-block in one gate/up pass in the half-sync fp32 DST
+    // (4 tiles: gwt gate/up tiles + the routing-weight tile, which the SFPU also uses as the quantizer's scratch)
+    p.routed = cfg.routed_weight || cfg.fp8_act_quant;
+    if (p.routed) {
+        TT_FATAL(
+            p.nsg == 1 && p.g == 1 && p.gu_fp32 && !p.gu_l1acc && !p.hu,
+            "flat_routed_expert: the h options need one subgrid, one M-group, fp32 gate/up DEST, no h units");
+        TT_FATAL(
+            p.gwt + 1 <= 4,
+            "flat_routed_expert: the h options need gate/up width {} + the weight tile <= 4 fp32 DST tiles",
+            p.gwt);
+        p.mt = 1;
+        p.dst_tiles = 4;
+        p.gu_rp = false;
+    }
     // bf16 x + bfp8 h (128-row sub-blocks): gate/up in a full-sync DST (bf16 x + bfp8 h at M 160 / 512 / 2048: 48.9 /
     // 101.6 / 373.1 -> 44.2 / 91.4 / 366.5 us per expert); with 64-row sub-blocks there is one row pass anyway
     p.gu_full_sync = (cfg.x_bf16 || p.gwt > 4) && p.gu_fp32 && p.gu_rp && p.mt / p.g * p.gwt > 4;
@@ -1117,7 +1132,8 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     TT_FATAL(
         p.o_off + al(std::max(pcd, p.rdown ? p.pcd_r : 0u) * 2048) + 2048 <= L1_BANK,
         "flat_routed_expert: down core arena does not fit");
-    const uint32_t gu_bytes = p.hl_off + (p.hl_in_arena ? al(p.hl_slots * p.mtg * p.hpc * p.h_tile) : 0);
+    p.rh_off = p.hl_off + (p.hl_in_arena ? al(p.hl_slots * p.mtg * p.hpc * p.h_tile) : 0);
+    const uint32_t gu_bytes = p.rh_off + (p.routed ? kRhTiles * 4096 : 0);
     TT_FATAL(gu_bytes <= L1_BANK, "flat_routed_expert: gate/up core arena does not fit");
     for (uint32_t t : {32u, 16u, 8u}) {
         if (p.Ht % t == 0 && t % KBLK == 0) {

@@ -134,8 +134,8 @@ TABLE = {
         "bfp8 (max precision)",
     ),
     "EXPERTS_KERNEL": Setting(
-        "unified",
-        ("loop", "unified"),
+        "flat",
+        ("loop", "unified", "flat"),
         "how the routed experts run on the dispatched buffer (tt/experts.py; EXPERTS_IMPL bfp8 or bfp4): loop = per "
         "local expert extract -> ttnn.linear w1 | w3 -> SFPU SwiGLU x r -> tt/quant.fp8_qdq -> ttnn.linear w2 -> "
         "insert (24 experts x ~10 ops at the whole-chunk cap; 2522 of 3025 ms device per chunk on 2x2, X.1); "
@@ -143,8 +143,15 @@ TABLE = {
         "device, only the routed rows computed): ClampedSiluGlu, HiFi4 + fp32 dest, high_precision, the fork's "
         "routing_weights (each dispatched row's fp32 weight from its routing pieces, one selector matmul per chunk) "
         "+ fp8_act_quant (q(r h) per 32, ue8m0, bit-exact with tt/quant.fp8_qdq, fork tests/unit) + "
-        "weights_transposed (the [N, K] block-float weights as stored: bfp8 exact, DS41-35). Owner (2026-10-17, "
-        "P.2): default stays loop until the owner's table",
+        "weights_transposed (the [N, K] block-float weights as stored: bfp8 exact, DS41-35). flat (P.3, owner "
+        "pick to try Marko Staletovic's flat expert; the default stays unified until the owner accepts the pick, "
+        "F104) = ONE ttnn.bringup.flat_routed_expert program (spatially pipelined: the DRAM bank readers stream "
+        "every local expert's weights once, x relays tilize and multicast the dispatched rows, the down cores write y at each expert's region), clamped_silu, fidelity "
+        "MATMUL_FIDELITY, fp32 DEST (gate/up; down: FP32_DEST_ACC), bf16 x / h / y, the fork's routing_weights + "
+        "fp8_act_quant (q(r h) per 32 in the gate/up cores' fp32 DEST, bit-exact with tt/quant.fp8_qdq on exact "
+        "inputs; a 16-column-unit plan's split h tiles are quantized whole on one core) + weights_nk (the stored "
+        "[N, K] matrices laid out tile-transposed: bfp8 exact, asserted at load); the dispatched row's first H values "
+        "read in place (hidden=H, no x copy)",
     ),
     "EXPERTS_DECODE": Setting(
         "gather",
