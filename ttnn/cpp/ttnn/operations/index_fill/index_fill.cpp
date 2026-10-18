@@ -5,7 +5,7 @@
 #include "index_fill.hpp"
 
 #include "ttnn/operations/index_fill/device/index_fill_device_operation.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
 
 namespace ttnn {
 
@@ -16,7 +16,7 @@ Tensor index_fill(
     const std::variant<float, int> value,
     const std::optional<MemoryConfig>& memory_config) {
     // The kernels read the index as one row of values, so a TILE index (padded to a full tile) is untilized first.
-    const Tensor& index_rm = index.layout() == tt::tt_metal::Layout::ROW_MAJOR
+    const Tensor index_rm = index.layout() == tt::tt_metal::Layout::ROW_MAJOR
                                  ? index
                                  : ttnn::to_layout(index, tt::tt_metal::Layout::ROW_MAJOR);
     return ttnn::prim::index_fill(input, dim, index_rm, value, memory_config);
