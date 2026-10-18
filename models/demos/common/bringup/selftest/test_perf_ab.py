@@ -393,3 +393,19 @@ def test_the_report_measures_an_earlier_attempts_change(mk, sandbox):
     rec = o.led.state()["P.1"]["ab"]
     assert "changed nothing" not in rec["note"] and len(mk.calls) == 8
     assert "src/impl.txt" in rec["changed"]
+
+
+def test_a_pick_waiting_for_the_owner_does_not_hold_up_independent_tasks(mk, sandbox):
+    """F109: while a pick waits for a person, the run goes on with tasks that do not depend on it, but only when the
+    pick has nothing uncommitted in the tree (another task's commit would take it along); its dependents wait.
+    (DeepSeek-V4.1: the owner asked to run P.5 regardless of the P.4 decision.)"""
+    other = {"id": "X.9", "title": "independent", "step": "perf", "deps": [], "gate": {"cmd": record_cmd(n=1)}}
+    after = {"id": "X.10", "title": "after the pick", "step": "perf", "deps": ["P.1"], "gate": {"cmd": record_cmd(n=1)}}
+    o = mk([pick(), other, after], CHANGE)
+    assert o.run() == HUMAN, mk.lines
+    assert o.led.status("X.9") != "PASS"  # the pick's change is uncommitted: the run stops at the pick
+    sandbox.git("add", "src")
+    sandbox.git("commit", "-q", "-m", "the pick's switch, opt-in")
+    assert o.run() == HUMAN, mk.lines
+    assert o.led.status("X.9") == "PASS" and o.led.status("X.10") != "PASS"
+    assert any("waits for a person; the run goes on" in ln for ln in mk.lines) or o.led.state()["P.1"].get("waiting")
