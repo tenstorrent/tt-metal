@@ -1155,13 +1155,13 @@ class HADAMARD(TemplateParameter):
     hadamard_normalize: bool = True
     h16_tile_index: int = 0
     # Math sets the Src zero flag to keep before the init, as a preceding copy_tile_init does.
-    preserve_src_zero_flag: bool = False
+    hadamard_preserve_src_zero_flag: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
             f"constexpr bool HADAMARD_NORMALIZE = {str(self.hadamard_normalize).lower()};",
             f"constexpr std::uint32_t HADAMARD_H16_TILE_INDEX = {self.h16_tile_index};",
-            f"constexpr bool HADAMARD_PRESERVE_SRC_ZERO_FLAG = {str(self.preserve_src_zero_flag).lower()};",
+            f"constexpr bool HADAMARD_PRESERVE_SRC_ZERO_FLAG = {str(self.hadamard_preserve_src_zero_flag).lower()};",
         ]
         return "\n".join(lines)
 

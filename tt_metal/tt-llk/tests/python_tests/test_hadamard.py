@@ -118,7 +118,7 @@ def _config(
             HADAMARD(
                 hadamard_normalize=normalize,
                 h16_tile_index=h16_tile_index,
-                preserve_src_zero_flag=preserve_src_zero_flag,
+                hadamard_preserve_src_zero_flag=preserve_src_zero_flag,
             ),
             MATH_FIDELITY(fidelity),
             DEST_SYNC(dest_sync),
