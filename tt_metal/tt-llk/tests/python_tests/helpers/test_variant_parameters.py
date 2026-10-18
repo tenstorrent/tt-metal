@@ -298,10 +298,10 @@ class SFPU_UNARY_ITERATIONS(TemplateParameter):
     as the datacopy wrote them. Honoured by ``eltwise_unary_sfpu_test.cpp`` only.
     """
 
-    iterations: int = 32
+    unary_iterations: int = 32
 
     def convert_to_cpp(self) -> str:
-        return f"#define SFPU_UNARY_ITERATIONS {self.iterations}"
+        return f"#define SFPU_UNARY_ITERATIONS {self.unary_iterations}"
 
 
 @dataclass
