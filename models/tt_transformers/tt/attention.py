@@ -321,8 +321,11 @@ class Attention(LightweightModule):
                 x = ttnn.to_memory_config(x, mem_cfg, dtype=x.dtype)
             return x
 
+        self._q_norm_module: RMSNorm | None = None
+        self._k_norm_module: RMSNorm | None = None
+
         if f"{q_norm_str}.weight" in state_dict:
-            fn_q_norm = RMSNorm(
+            self._q_norm_module = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 eps=configuration.norm_eps,
@@ -335,12 +338,13 @@ class Attention(LightweightModule):
                 is_distributed=False,
                 tt_ccl=self.tt_ccl,
             )
+            fn_q_norm = self._q_norm_module
             self.q_norm = lambda x, mode, norm_config: norm_reshard(x, fn_q_norm, mode, norm_config)
         else:
             self.q_norm = lambda x, mode, norm_config: x
 
         if f"{k_norm_str}.weight" in state_dict:
-            fn_k_norm = RMSNorm(
+            self._k_norm_module = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 eps=configuration.norm_eps,
@@ -353,6 +357,7 @@ class Attention(LightweightModule):
                 is_distributed=False,
                 tt_ccl=self.tt_ccl,
             )
+            fn_k_norm = self._k_norm_module
             self.k_norm = lambda x, mode, norm_config: norm_reshard(x, fn_k_norm, mode, norm_config)
         else:
             self.k_norm = lambda x, mode, norm_config: x
@@ -630,12 +635,11 @@ class Attention(LightweightModule):
         raise NotImplementedError("wqkv_bias update is not yet implemented")
 
     def _update_qk_norm(self, which: str, weight: ttnn.Tensor) -> None:
-        """In-place replace the optional Q-/K-RMSNorm gamma. Not yet implemented:
-        ``self.q_norm``/``self.k_norm`` are lambdas closing over an internal
-        ``RMSNorm`` not exposed on ``self``, so we can't delegate to
-        ``RMSNorm.update`` without a small refactor.
-        """
-        raise NotImplementedError(f"{which} update is not yet implemented")
+        """In-place replace the optional Q-/K-RMSNorm gamma via ``RMSNorm.update``."""
+        module = self._q_norm_module if which == "q_norm" else self._k_norm_module
+        if module is None:
+            raise ValueError(f"Attention was constructed without a {which}, but an update was requested.")
+        module.update(weight=weight)
 
     def update(
         self,
