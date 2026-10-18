@@ -1310,3 +1310,6 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   rung among the A/B rungs) instead of running again; the code key now hashes the committed files minus the run's own
   records (state, results, breadcrumbs, supervision, tasks.yaml), so a ledger commit in between is no code change.
   DeepSeek-V4.1 P.2: the accept re-ran ~50 min of tests the A/B had just measured.
+- F106: the settings lint on a fork flags only the environment reads a change adds (vs HEAD): an imported fork's own
+  knobs are not the editing agent's. DeepSeek-V4.1 P.3: 173 flags on Marko's MIMO_FL_* reads after an edit to
+  flat_routed_expert; attempt 2 began converting them (aborted, OV-15). Model code stays strict.

@@ -81,3 +81,25 @@ def test_component_tests_get_the_max_precision_overrides(monkeypatch, tmp_path):
     assert model_precision.apply(Spec()) == {"TOY_KV": "bf16"}
     assert s.get("KV") == "bf16" and s.get("FID") == "hifi2"
     os.environ.pop("TOY_KV", None)  # apply() sets the environment directly
+
+
+def test_lint_flags_only_the_env_reads_a_change_adds_to_a_fork(tmp_path):
+    """F106: an imported fork's own knobs (committed) are not the editing agent's violations; a knob it adds is; model
+    code stays strict even when the read was committed (DeepSeek-V4.1 P.3: 173 flags on flat_routed_expert's MIMO_FL_*
+    reads after an edit, attempt 2 started to convert them)."""
+    import subprocess
+
+    def git(*a):
+        subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True)
+
+    fork, model = "ttnn/ttnn/bringup/op/op.py", f"{MD}/tt/attention.py"
+    for rel, text in ((fork, "import os\nn = os.environ.get('OP_ITERS')\n"), (model, "import os\nos.getenv('Q')\n")):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+    git("init", "-q")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "add", ".")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "import")
+    (tmp_path / fork).write_text("import os\nn = os.environ.get('OP_ITERS')\nm = os.environ.get('OP_NEW')\n")
+    got = violations(tmp_path, MD, [fork, model])
+    assert sorted(v.split(": ")[0] for v in got) == sorted([f"{model}:2", f"{fork}:3"])
+    assert len(violations(tmp_path, MD, [fork], base=None)) == 2  # no base: every read counts (the audit's view)
