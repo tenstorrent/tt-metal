@@ -215,6 +215,12 @@ class PrefillModelAdapter(ABC):
         rank starts fall off them."""
         return None
 
+    def layer_split_costs(self, num_layers: int, mtp_levels: int) -> Optional[tuple]:
+        """Relative per-chunk cost of each trunk layer and of the last rank's MTP tail, as
+        ``(list of num_layers floats, tail float)``, for ``compute_layer_split`` to balance the pipeline
+        on. ``None`` (the default) deals layers and MTP levels out evenly."""
+        return None
+
     @abstractmethod
     def build_runtime(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams):
         """Construct the model for this rank and return a runtime handle. The runtime

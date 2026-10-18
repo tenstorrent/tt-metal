@@ -219,9 +219,45 @@ def _snap_counts_to_starts(counts, valid_starts, num_layers):
     return out
 
 
+def _balanced_counts(layer_costs, num_ranks: int, tail_cost: float, valid_starts=None) -> list[int]:
+    """Contiguous partition of ``layer_costs`` into ``num_ranks`` non-empty runs minimizing the costliest rank,
+    the last rank also paying ``tail_cost``. Exact (DP over cut points); ties prefer cuts further right.
+    ``valid_starts`` restricts every rank start but the first."""
+    n = len(layer_costs)
+    prefix = [0.0]
+    for c in layer_costs:
+        prefix.append(prefix[-1] + c)
+    allowed = (lambda i: True) if valid_starts is None else (lambda i: i in valid_starts)
+    inf = float("inf")
+    # best[r][i]: min over splits of layers [0, i) into r ranks of the costliest rank; cut[r][i]: last start.
+    best = [[inf] * (n + 1) for _ in range(num_ranks + 1)]
+    cut = [[0] * (n + 1) for _ in range(num_ranks + 1)]
+    best[0][0] = 0.0
+    for r in range(1, num_ranks + 1):
+        for i in range(r, n + 1):
+            extra = tail_cost if (r == num_ranks and i == n) else 0.0
+            for j in range(r - 1, i):
+                if j > 0 and not allowed(j):
+                    continue
+                v = max(best[r - 1][j], prefix[i] - prefix[j] + extra)
+                if v <= best[r][i]:
+                    best[r][i], cut[r][i] = v, j
+    if best[num_ranks][n] == inf:
+        raise ValueError(f"cannot split {n} layers into {num_ranks} ranks on valid starts {sorted(valid_starts)}")
+    counts, i = [], n
+    for r in range(num_ranks, 0, -1):
+        j = cut[r][i]
+        counts.append(i - j)
+        i = j
+    return counts[::-1]
+
+
 def compute_layer_split(
-    num_layers: int, num_ranks: int, valid_starts=None, mtp_levels: int = 0
+    num_layers: int, num_ranks: int, valid_starts=None, mtp_levels: int = 0, layer_costs=None
 ) -> list[tuple[int, int]]:
+    """Each rank's ``(first_layer, count)``. ``PREFILL_PP_LAYER_COUNTS`` overrides. With ``layer_costs`` --
+    ``(per-trunk-layer costs, last-rank tail cost)``, the tail being the MTP levels -- the split balances
+    that cost; otherwise layers and MTP levels are dealt out evenly."""
     override = os.environ.get("PREFILL_PP_LAYER_COUNTS")
     if override:
         counts = [int(x) for x in override.split(",")]
@@ -230,6 +266,10 @@ def compute_layer_split(
                 f"PREFILL_PP_LAYER_COUNTS={override!r} must list {num_ranks} counts summing to "
                 f"{num_layers} (got {len(counts)} counts summing to {sum(counts)})"
             )
+    elif layer_costs is not None:
+        costs, tail_cost = layer_costs
+        assert len(costs) == num_layers, f"{len(costs)} layer costs for {num_layers} layers"
+        counts = _balanced_counts(costs, num_ranks, tail_cost, valid_starts)
     else:
         base, rem = divmod(num_layers + mtp_levels, num_ranks)
         counts = [base + (1 if r >= num_ranks - rem else 0) for r in range(num_ranks)]
