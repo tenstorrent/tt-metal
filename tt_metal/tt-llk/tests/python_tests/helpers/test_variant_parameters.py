@@ -278,6 +278,17 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
 
 
 @dataclass
+class SFPU_CLOBBER_LREGS(TemplateParameter):
+    """Fill the SFPU registers with garbage before the op's init (``clobber_sfpu_lregs()``).
+
+    Honoured by ``sfpu_ternary_test.cpp`` only; other harnesses ignore it.
+    """
+
+    def convert_to_cpp(self) -> str:
+        return "#define SFPU_CLOBBER_LREGS"
+
+
+@dataclass
 class SFPU_BINOP_MODE(TemplateParameter):
     """Select the float unary-with-scalar binop at compile time.
 
@@ -399,6 +410,32 @@ class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
     def convert_to_cpp(self) -> str:
         bits = struct.unpack("<I", struct.pack("<f", self.relu_max_threshold))[0]
         return f"#define SFPU_RELU_MAX_THRESHOLD {bits:#010x}u"
+
+
+@dataclass
+class SFPU_UNARY_MAX_MIN_SCALAR(TemplateParameter):
+    """Unary max/min scalar, emitted as fp32 bits (float) or two's-complement int32 (int).
+    A macro because the dispatcher selects on ``#ifdef``; unset keeps its 0.0f / 1000 default.
+    """
+
+    max_min_scalar: float | int = 0.0
+
+    def convert_to_cpp(self) -> str:
+        value = self.max_min_scalar
+        bits = _fp32_bits(value) if isinstance(value, float) else value & 0xFFFFFFFF
+        return f"#define SFPU_UNARY_MAX_MIN_SCALAR {bits:#010x}u"
+
+
+@dataclass
+class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
+    """Int32 unary max/min on a sign-magnitude Dest (macro, like SFPU_UNARY_MAX_MIN_SCALAR)."""
+
+    max_min_sign_magnitude: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if not self.max_min_sign_magnitude:
+            return ""
+        return "#define SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE 1"
 
 
 @dataclass
@@ -1986,6 +2023,16 @@ class EMA_ALPHA_BETA(TemplateParameter):
 
 
 @dataclass
+class EMA_INTERLEAVED_INIT(TemplateParameter):
+    """Whether sfpu_ema_test.cpp issues an eltwise binary init between the datacopy and ema_tile."""
+
+    binary_init_before_ema: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool EMA_BINARY_INIT_BEFORE_EMA = {str(self.binary_init_before_ema).lower()};"
+
+
+@dataclass
 class TILE_DST_CT_OFFSET(TemplateParameter):
     offset: int = 0
 
@@ -2032,6 +2079,93 @@ class FILL_INT_FORMAT(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr auto FILL_INT_FORMAT = DataFormat::{self.data_format.name};"
+
+
+@dataclass
+class WELFORDS(TemplateParameter):
+    """Compile-time schedule of sfpu_welfords_quasar_test.cpp (tiles_per_block 0 = one Dest section)."""
+
+    reciprocal_size: int = 0
+    partial_last_tile: bool = False
+    welfords_start_row: int = 0
+    welfords_num_rows: int = 32
+    face_layout: bool = False
+    final_grouped: bool = False
+    final_group_id: int = 0
+    final_dst: int = 0
+    save_restore: bool = False
+    state_grouped: bool = False
+    state_group_id: int = 0
+    state_dst: int = 0
+    save_after_tiles: int = 0
+    tiles_per_block: int = 0
+
+    def convert_to_cpp(self) -> str:
+        def b(value: bool) -> str:
+            return str(value).lower()
+
+        lines: list[str] = [
+            f"constexpr std::size_t WELFORDS_RECIP_SIZE = {self.reciprocal_size};",
+            f"constexpr bool WELFORDS_PARTIAL_LAST_TILE = {b(self.partial_last_tile)};",
+            f"constexpr std::uint32_t WELFORDS_START_ROW = {self.welfords_start_row};",
+            f"constexpr std::uint32_t WELFORDS_NUM_ROWS = {self.welfords_num_rows};",
+            f"constexpr bool WELFORDS_FACE_LAYOUT = {b(self.face_layout)};",
+            f"constexpr bool WELFORDS_FINAL_GROUPED = {b(self.final_grouped)};",
+            f"constexpr std::uint32_t WELFORDS_FINAL_GROUP_ID = {self.final_group_id};",
+            f"constexpr std::uint32_t WELFORDS_FINAL_DST = {self.final_dst};",
+            f"constexpr bool WELFORDS_SAVE_RESTORE = {b(self.save_restore)};",
+            f"constexpr bool WELFORDS_STATE_GROUPED = {b(self.state_grouped)};",
+            f"constexpr std::uint32_t WELFORDS_STATE_GROUP_ID = {self.state_group_id};",
+            f"constexpr std::uint32_t WELFORDS_STATE_DST = {self.state_dst};",
+            f"constexpr std::uint32_t WELFORDS_SAVE_AFTER_TILES = {self.save_after_tiles};",
+            f"constexpr std::uint32_t WELFORDS_TILES_PER_BLOCK = {self.tiles_per_block};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class TWO_PASS_STATS(TemplateParameter):
+    """Compile-time schedule of sfpu_welfords_two_pass_quasar_test.cpp.
+
+    two_pass_mode: 0 STREAM, 1 COMBINE, 2 SWITCH; two_pass_finalize: 0 row, 1 raw, 2 split, 3 combined, 4 row w/o mean.
+    """
+
+    two_pass_mode: int = 0
+    two_pass_dual: bool = True
+    two_pass_finalize: int = 0
+    two_pass_retain_anchor: bool = False
+    two_pass_average_variance: bool = True
+    two_pass_group_a: int = 0
+    two_pass_group_b: int = 0
+    two_pass_final_dst: int = 0
+    two_pass_state_dst: int = 0
+    two_pass_tiles_per_block: int = 0
+    two_pass_block_tiles: int = 1
+    two_pass_partial_last_tile: bool = False
+    two_pass_start_row: int = 0
+    two_pass_num_rows: int = 32
+
+    def convert_to_cpp(self) -> str:
+        def b(value: bool) -> str:
+            return str(value).lower()
+
+        lines: list[str] = [
+            f"constexpr std::uint32_t TWO_PASS_MODE = {self.two_pass_mode};",
+            f"constexpr bool TWO_PASS_DUAL = {b(self.two_pass_dual)};",
+            f"constexpr std::uint32_t TWO_PASS_FINALIZE = {self.two_pass_finalize};",
+            f"constexpr bool TWO_PASS_RETAIN_ANCHOR = {b(self.two_pass_retain_anchor)};",
+            f"constexpr bool TWO_PASS_AVERAGE_VARIANCE = {b(self.two_pass_average_variance)};",
+            f"constexpr std::uint32_t TWO_PASS_GROUP_A = {self.two_pass_group_a};",
+            f"constexpr std::uint32_t TWO_PASS_GROUP_B = {self.two_pass_group_b};",
+            f"constexpr std::uint32_t TWO_PASS_FINAL_DST = {self.two_pass_final_dst};",
+            f"constexpr std::uint32_t TWO_PASS_STATE_DST = {self.two_pass_state_dst};",
+            f"constexpr std::uint32_t TWO_PASS_TILES_PER_BLOCK = {self.two_pass_tiles_per_block};",
+            f"constexpr std::uint32_t TWO_PASS_BLOCK_TILES = {self.two_pass_block_tiles};",
+            f"constexpr bool TWO_PASS_PARTIAL_LAST_TILE = {b(self.two_pass_partial_last_tile)};",
+            f"constexpr std::uint32_t TWO_PASS_START_ROW = {self.two_pass_start_row};",
+            f"constexpr std::uint32_t TWO_PASS_NUM_ROWS = {self.two_pass_num_rows};",
+        ]
+        return "\n".join(lines)
 
 
 @dataclass
