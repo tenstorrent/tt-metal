@@ -381,3 +381,15 @@ def test_a_resumed_pick_continues_the_attempt_numbering(mk):
     o.led.update("P.1", agent_runs=runs)
     assert o.run() == HUMAN, mk.lines
     assert mk.agents() == ["P.1.perf.3.md bringup-engineer"]
+
+
+def test_the_report_measures_an_earlier_attempts_change(mk, sandbox):
+    """F108: a later attempt that changes nothing (the change is already in the tree from an earlier attempt) still
+    gets a report of that change (DeepSeek-V4.1 P.4 attempt 2: 'the agent changed nothing', nothing measured)."""
+    (sandbox.repo / "src/impl.txt").write_text("hifi2\n")  # an earlier attempt's uncommitted change
+    (sandbox.repo / "src/new_path.py").write_text("import os\nF = os.environ.get('TOY_FIDELITY', 'hifi2')\n")
+    o = mk([pick()], {})
+    assert o.run() == HUMAN, mk.lines
+    rec = o.led.state()["P.1"]["ab"]
+    assert "changed nothing" not in rec["note"] and len(mk.calls) == 8
+    assert "src/impl.txt" in rec["changed"]
