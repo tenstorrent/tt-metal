@@ -123,3 +123,11 @@
   `RMSNorm` (block-sharded, HiFi4 + fp32 acc) on the residual layout through `_ResidualStep`. No new module.
 - Check (`bfw job check --task C.sliding.post_attn_norm`): PASS. Metrics: pcc 0.9999961, auto_margin_min 2.87,
   device_ops 3, host_flops_frac 0. Regressions C.sliding.attn_norm and C.sliding.attention: PASS.
+
+## C.sliding.attn_residual (run 20261018-003406-gemma31-glx-3, attempt 1), 2026-10-18
+
+- `tt/residual.py`: `ResidualAdd`, a single `ttnn.add` (bf16 out, DRAM) on the residual layout, as in gemma4_d_p
+  `tt/layer.py`. Both inputs share the TP row split, so no collective. ffn_residual (with layer_scalar) is its own task.
+- `bringup/hooks.py`: `device_component` returns `_ResidualStep(mesh, ResidualAdd())` for `attn_residual`.
+- Check (`bfw job check --task C.sliding.attn_residual`): PASS. pcc 0.9999963, auto_margin_min 1.936, device_ops 1,
+  host_flops_frac 0. Regressions C.sliding.attn_norm, C.sliding.attention, C.sliding.post_attn_norm: PASS.

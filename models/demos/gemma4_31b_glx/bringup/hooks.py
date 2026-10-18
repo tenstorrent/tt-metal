@@ -118,6 +118,10 @@ def device_component(mesh, spec, layer, step):
     if step in NORM_WEIGHTS:
         w = weights.load(ckpt, f"layers.{layer}.{NORM_WEIGHTS[step]}.weight")
         return _ResidualStep(mesh, RMSNorm(mesh, w, weights.text_config(ckpt)["rms_norm_eps"]))
+    if step == "attn_residual":
+        from models.demos.gemma4_31b_glx.tt.residual import ResidualAdd
+
+        return _ResidualStep(mesh, ResidualAdd())
     cfg = weights.text_config(ckpt)
     if step == "attention" and cfg["layer_types"][layer] == "sliding_attention":
         from models.demos.gemma4_31b_glx.tt.attention import SlidingAttention
