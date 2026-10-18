@@ -1713,7 +1713,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc4 7
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, mtp, glm53_trace]
+  test_tags: [glm_5_3, runner, kv_cache, mtp, glm53_trace, mtp_perf_ci]
   test_group: disagg_prefill
   skus:
     bh_sc4:
@@ -1817,10 +1817,14 @@
     ) || exit $?
     echo "===== both sections passed ====="
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, mtp, glm53_trace]
+  test_tags: [glm_5_3, runner, kv_cache, mtp, glm53_trace, mtp_perf_ci]
   test_group: disagg_prefill
   skus:
     bh_sc1:
+      timeout: 120
+      tier: 1
+      release_ready: false
+    bh_sc1_high_power:
       timeout: 120
       tier: 1
       release_ready: false
