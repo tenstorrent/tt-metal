@@ -444,7 +444,8 @@ class MiniMaxM3TextModel:
         select = scores
         if cfg.use_routing_bias:
             select = scores + self.w.get(p + "block_sparse_moe.e_score_correction_bias").float()
-        sel = torch.topk(select, cfg.num_experts_per_tok, dim=-1).indices  # bias selects only
+        # bias selects only; ties go to the lowest expert id (stable descending sort), as in the vendor router
+        sel = torch.sort(select, dim=-1, descending=True, stable=True).indices[:, : cfg.num_experts_per_tok]
         tw = torch.gather(scores, 1, sel)  # un-biased scores weight the combine
         tw = (tw / tw.sum(-1, keepdim=True)) * cfg.routed_scaling_factor  # [T, topk]
 

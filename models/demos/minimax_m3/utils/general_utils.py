@@ -8,6 +8,10 @@ General utilities for MiniMax-M3.
 
 from models.common.utility_functions import is_blackhole
 
+# Cache name of the MoE router's correction bias (fp32, mean-centered; tt/topk.py). Distinct from the bf16
+# un-centered "e_score_correction_bias" entry so that one is never loaded in its place.
+ROUTER_BIAS_CACHE_NAME = "e_score_correction_bias_centered"
+
 
 def get_cache_file_name(tensor_cache_path, name):
     return f"{tensor_cache_path}/{name}" if tensor_cache_path else None

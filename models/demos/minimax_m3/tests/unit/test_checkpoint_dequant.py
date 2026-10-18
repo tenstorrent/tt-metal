@@ -189,7 +189,9 @@ def test_read_text_backbone_rewrites_keys_and_drops_aux(tmp_path):
         "model.layers.0.block_sparse_moe.experts.0.w1.weight",
         "lm_head.weight",
     }
-    assert all(t.dtype == torch.bfloat16 for t in sd.values())
+    gate = "model.layers.0.block_sparse_moe.gate.weight"
+    assert sd[gate].dtype == torch.float32  # the MoE router stays fp32 (test_router_precision.py)
+    assert all(t.dtype == torch.bfloat16 for k, t in sd.items() if k != gate)
     assert torch.equal(sd["model.layers.0.self_attn.q_proj.weight"], dequant_mxfp8(q_fp8, q_scale))
     assert torch.equal(sd["model.layers.0.block_sparse_moe.experts.0.w1.weight"], dequant_nvfp4(*nvfp4))
     # a shard subset reads only its own keys but still finds scales in the other shard

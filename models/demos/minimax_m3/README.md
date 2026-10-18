@@ -98,7 +98,9 @@ The MiniMax-M3.1 checkpoint's `config.json` carries an MXFP8 `quantization_confi
 [1, 32]; compressed-tensors NVFP4 routed experts, group 16). It loads through the same path:
 `ModelArgs.load_state_dict` and the torch reference (`reference/model.py`) dequantize every weight to bf16 on
 read ([`utils/checkpoint.py`](utils/checkpoint.py)), and the tilized cache is then built from those bf16 weights
-exactly as for the bf16 checkpoint. Each variant's default checkpoint dir defaults to its own cache root; any
+exactly as for the bf16 checkpoint. The MoE router tensors are stored fp32 and stay fp32 on the host: the gate
+weight is rounded to bf16 for the device, and the correction bias is cached fp32 and mean-centered
+(`mlp/router/e_score_correction_bias_centered*`; see [`tt/topk.py`](tt/topk.py)). Each variant's default checkpoint dir defaults to its own cache root; any
 other checkpoint needs `TT_CACHE_PATH` (cache files do not record their source, so a checkpoint never shares
 another's cache):
 

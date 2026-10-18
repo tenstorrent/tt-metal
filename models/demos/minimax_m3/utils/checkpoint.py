@@ -4,7 +4,8 @@
 """Checkpoint reading helpers shared by the TT loader (``tt/model_config.py``) and the torch reference.
 
 Quantized checkpoints are dequantized to bf16 at load time, so everything downstream sees the same
-plain ``<name>.weight`` keys and bf16 tensors as the bf16 checkpoint:
+plain ``<name>.weight`` keys and bf16 tensors as the bf16 checkpoint (the MoE router tensors stay fp32,
+see ``ROUTER_FP32_SUFFIXES``):
 
 * MXFP8 linears: ``<name>.weight`` (float8_e4m3fn ``[N, K]``) + ``<name>.weight_scale_inv``
   (uint8 UE8M0 exponents ``[N, K/32]``, one per 32 consecutive K elements):
@@ -85,6 +86,28 @@ def dequant_nvfp4(
     return (values * block_scale).view(n, k).to(torch.bfloat16)
 
 
+# MoE router tensors, kept fp32 on the host. The checkpoint stores both fp32 and the vendor routes in fp32:
+# the correction bias sits at ~10-37 with a spread of ~0.05, so bf16 (step 0.06-0.25 there) collapses it
+# to a handful of distinct values and changes the top-4 set on most tokens.
+ROUTER_FP32_SUFFIXES = ("block_sparse_moe.gate.weight", "block_sparse_moe.e_score_correction_bias")
+
+
+def is_router_fp32_key(key: str) -> bool:
+    """True for the MoE gate weight and correction bias (kept fp32 by ``read_text_backbone``)."""
+    return key.endswith(ROUTER_FP32_SUFFIXES)
+
+
+def centered_correction_bias(bias: torch.Tensor) -> torch.Tensor:
+    """``e_score_correction_bias`` in fp32 minus its mean.
+
+    Top-k selection on ``sigmoid + bias`` is invariant to a constant shift, and the combine weights use the
+    unbiased sigmoid, so routing is unchanged. Centering keeps the biased keys near the sigmoid's [0, 1]
+    instead of ~10-37, where ``moe_grouped_topk``'s sort keys (fp32 truncated to 10 mantissa bits) resolve
+    only ~0.008-0.03, more than the typical 4th-vs-5th expert gap."""
+    bias = bias.to(torch.float32)
+    return bias - bias.mean()
+
+
 def is_aux_key(key: str) -> bool:
     """True for scale / activation-scale tensors that dequantization consumes."""
     return key.rpartition(".")[2] in AUX_SUFFIXES
@@ -127,7 +150,8 @@ def iter_dequantized(keys: Iterable[str], get: Callable[[str], torch.Tensor]) ->
 def read_text_backbone(weights_path, weight_map: dict, shards: Iterable[str], prefix: str = "language_model.") -> dict:
     """The text-backbone state dict from ``shards`` of a sharded safetensors checkpoint: keys under ``prefix``
     with the prefix stripped, quantized weights dequantized to bf16 under their plain ``.weight`` key (their
-    scales may live in other shards), fp32 tensors cast to bf16, everything else (multimodal towers) dropped."""
+    scales may live in other shards), fp32 tensors cast to bf16 except the MoE router's (``is_router_fp32_key``),
+    everything else (multimodal towers) dropped."""
     import os
 
     from safetensors import safe_open
@@ -148,7 +172,9 @@ def read_text_backbone(weights_path, weight_map: dict, shards: Iterable[str], pr
     for shard in shards:
         for key, tensor in iter_dequantized(shard_keys.get(shard, []), get):
             # language_model.model.X -> model.X ; language_model.lm_head -> lm_head
-            state_dict[key[len(prefix) :]] = tensor.to(torch.bfloat16) if tensor.dtype == torch.float32 else tensor
+            if tensor.dtype == torch.float32 and not is_router_fp32_key(key):
+                tensor = tensor.to(torch.bfloat16)
+            state_dict[key[len(prefix) :]] = tensor
     return state_dict
 
 

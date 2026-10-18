@@ -21,7 +21,11 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn
-from models.demos.minimax_m3.utils.general_utils import is_dense_mlp_layer, is_sparse_attention_layer
+from models.demos.minimax_m3.utils.general_utils import (
+    ROUTER_BIAS_CACHE_NAME,
+    is_dense_mlp_layer,
+    is_sparse_attention_layer,
+)
 
 # Each pipeline rank builds its own layers, so each writes its own cache files.
 CACHE_DUMP_MODE = ttnn.DumpTensorMode.LOCAL
@@ -107,6 +111,8 @@ def weight_cache_is_complete(
             # MoE: top-level router + shared expert, plus the DeepSeek-style EP-MoE's own gate +
             # per-local-expert routed weights (dtype-specific).
             required += [f"{base}/mlp/router/weight", f"{base}/mlp/shared_expert/gate_proj"]
+            if hf_config.use_routing_bias:
+                required.append(f"{base}/mlp/router/{ROUTER_BIAS_CACHE_NAME}")
             required += [
                 f"{base}/mlp/experts_ep/layer_0.gate.weight",
                 f"{base}/mlp/experts_ep/layer_0.routed_expert.local_0_gate_dtype_{edt}",
