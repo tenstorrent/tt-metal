@@ -97,8 +97,8 @@ def test_fresh_row_select_rejects_out_of_range(expect_error):
 
 
 def test_flag_read(monkeypatch):
-    """QWEN36_SPEC_FAST_JOIN is an explicit opt-in: only "1" turns the fast path on."""
-    for val, want in (("1", True), ("0", False), (None, False), ("2", False)):
+    """QWEN36_SPEC_FAST_JOIN is on by default: only "1" (or unset) turns the fast path on."""
+    for val, want in (("1", True), ("0", False), (None, True), ("2", False)):
         if val is None:
             monkeypatch.delenv("QWEN36_SPEC_FAST_JOIN", raising=False)
         else:
@@ -385,7 +385,7 @@ def test_engine_init_reads_the_flag(monkeypatch):
         gdn_fused_decode=True,
         layers=[gdn_layer],
     )
-    for val, want in (("1", True), ("0", False), (None, False)):
+    for val, want in (("1", True), ("0", False), (None, True)):
         if val is None:
             monkeypatch.delenv("QWEN36_SPEC_FAST_JOIN", raising=False)
         else:

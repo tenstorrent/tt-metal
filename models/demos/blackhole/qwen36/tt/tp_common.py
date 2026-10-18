@@ -62,11 +62,12 @@ def spec_hostfix_enabled():
 
 
 def spec_fast_join_enabled():
-    """QWEN36_SPEC_FAST_JOIN (default "0"; "1" opts in): a fresh row's first verify (the seed, or a join into a running
+    """QWEN36_SPEC_FAST_JOIN (default "1"; "0" opts out): a fresh row's first verify (the seed, or a join into a running
     batch) runs INSIDE the normal verify replay as an ordinary 0-draft row, after its ring slot 0 / conv window are
     seeded from the prefill state with a few exact data-movement ops per GDN layer (TPGatedDeltaNet.seed_spec_rows_select).
-    "0" keeps the eager T = 1 seed forward (model.seed_spec_step) plus the per-row ring rebuild, byte for byte."""
-    return os.environ.get("QWEN36_SPEC_FAST_JOIN", "0") == "1"
+    "0" opts out and keeps the eager T = 1 seed forward (model.seed_spec_step) plus the per-row ring rebuild, byte for byte.
+    """
+    return os.environ.get("QWEN36_SPEC_FAST_JOIN", "1") == "1"
 
 
 def kv_cache_bf8_enabled():

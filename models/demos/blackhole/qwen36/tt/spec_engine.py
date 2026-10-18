@@ -24,7 +24,7 @@ remaps, so there the two numberings coincide. With the flag at 0 (not the defaul
 Every per-row device input the verify stages (tokens, positions, mi_prev -> state_blk_idx / conv_sel, or under
 QWEN36_VERIFY_SPEC_STEP=1 the gdn_spec_step ctrl page {parity, mi, ring block}) is built from ENGINE rows.
 
-Fast join (QWEN36_SPEC_FAST_JOIN, default 0): with the flag at 1 a fresh row's first verify is NOT a separate eager
+Fast join (QWEN36_SPEC_FAST_JOIN, default 1): with the flag at 1 a fresh row's first verify is NOT a separate eager
 T = 1 forward (_seed / _join: model.seed_spec_step over all 64 layers, ~3000 dispatches, plus the ring rebuild) but the
 normal verify replay itself: the row's ring slot 0 / E_prev are first seeded from its prefill state
 (TPGatedDeltaNet.seed_spec_rows_select, ~6 exact data-movement ops per GDN layer), then it runs as an ordinary 0-draft
