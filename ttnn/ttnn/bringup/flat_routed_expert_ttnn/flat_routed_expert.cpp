@@ -4,7 +4,6 @@
 
 #include "flat_routed_expert.hpp"
 
-#include <map>
 #include <mutex>
 #include <tuple>
 
@@ -371,7 +370,8 @@ ttnn::Tensor flat_routed_expert_with_program(
     bool down_fp32,
     bool x_bf16,
     bool h_bf16,
-    const std::vector<std::vector<uint32_t>>& l1_args) {
+    const std::vector<std::vector<uint32_t>>& l1_args,
+    const std::optional<ttnn::Tensor>& relay_words) {
     using namespace tt::tt_metal;
     FlatRoutedExpertConfig cfg{
         .hidden = x.logical_shape()[-1],
@@ -409,10 +409,20 @@ ttnn::Tensor flat_routed_expert_with_program(
     // the writers report local experts in slot order, with cumulative counts and no go handshake
     setenv("MIMO_FL_CMB_SLOT_ORDER", "1", 0);
     setenv("MIMO_FL_CMB_NO_GO", "1", 0);
-    ttnn::Tensor words = create_device_tensor(l1_sharded_spec(plan->relays, 32), device);
+    // (the relays' words: the caller's persistent tensor if given - a per-call one can land elsewhere, and its address
+    // is part of the program-cache key a caller predicts; launches initialize it)
+    ttnn::Tensor words = relay_words ? *relay_words : create_device_tensor(l1_sharded_spec(plan->relays, 32), device);
+    if (relay_words) {
+        TT_FATAL(
+            relay_words->tensor_spec() == l1_sharded_spec(plan->relays, 32),
+            "flat_routed_expert_with_program: relay_words must be l1_sharded_spec(plan relays, 32)");
+    }
     FlatWithProgramParams p{
         .flat = cfg,
-        .extra = extra,
+        // (an empty extra: the caller expects a program-cache hit, where the program is reused as is)
+        .extra = extra.mesh_programs.empty()
+                     ? nullptr
+                     : std::make_shared<const tt::tt_metal::experimental::MeshProgramDescriptor>(extra),
         .collector = collector,
         .counts_addr = counts_addr,
         .writers = writers,
@@ -469,7 +479,9 @@ ttnn::Tensor flat_routed_expert_with_program(
             .words = words,
             .output = y,
             .token_index = token_index});
-    words.deallocate(true);
+    if (!relay_words) {  // (the caller's persistent words stay)
+        words.deallocate(true);
+    }
     return result;
 }
 

@@ -1363,3 +1363,20 @@ per MoE call (fused op 7-8 ms: the combine's MeshProgramDescriptor converted and
 x 2 KB of L1 per down coordinator under the arena), one x helper (the second cost 104 KB of arena: the dispatch's
 103 KB manifest stopped fitting in the whole model), dispatch row group 2 for 8 KB rows, persistent dispatch buffers.
 test_generate fails in both modes in MLA (seq_len_local 7040 not a multiple of block_cyclic.chunk_local 256).
+Host side of the token-split block (2026-10-18): 45 -> ~5 ms per MoE call (zz_scratch_experts_ts.py GLM_TS_PROF: 4.8 /
+3.5 ms uniform / hot). What it took:
+- flat_routed_expert_with_program: the extra MeshProgramDescriptor held by shared_ptr (was copied with the attributes
+  on every call, ~7 ms); an empty one means "a cache hit is expected" (a miss without it fails validate loudly); a
+  custom compute_program_hash over the attributes (every baked address, the plan key, extra_key) and the x / arena /
+  output specs - the default canonical key also encoded the struct's other members and the tensors' mesh coordinates,
+  so identical calls missed; optional caller-owned relay_words (the per-call one sat at a key address the caller
+  could not see, and was freed by the op). The block passes the descriptor (rebound to this call's arena) only for an
+  address set it has not passed before.
+- descriptors cached by buffer addresses: sparse_all_gather_2d, fabric_all_gather (combine_rf), the block's dispatch
+  prep (every key in routed_only); the routing gather into one persistent buffer; place_ports, the fabric all-gather
+  plan and the span / manifest helpers memoized.
+Whole model, warm 56k prefill: ag 5.85 s; ts 8.51 -> 6.54-6.70 s (8406-8608 tok/s), synced layers ts / ag: dsa_moe 19.1-19.3
+/ 19.8, kda_moe 13.3-13.7 / 11.8 ms. ts device is lower per chunk (~478 vs ~501 ms) but eager it is host bound (~600 ms
+of host per chunk): ~5 ms of host per MoE call, 2.2 of it the fused op's enqueue (a flat + combine program per chip),
+the rest seven small ops. Last-chunk top1 / top5 ts 0.6482-0.6831 / 0.8650-0.8849 (run-to-run). K3 block: untraced back to
+back 6.7 -> 4.8 ms per call, traced 3320 us, PCC 0.99622, CI replays bit-exact.

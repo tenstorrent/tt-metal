@@ -384,6 +384,24 @@ class TtK3TokenSplitMoE:
             ),
             mesh_mapper=rep,
         )
+        # routed_only: the x relays' words, persistent (the fused op otherwise allocates them per call, at an address the
+        # program-cache key includes but the caller cannot see: _experts_combine predicts its hits)
+        self.relay_words = None
+        if routed_only:
+            from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import crs_rects
+
+            rl = [ttnn.CoreCoord(*c) for c in plan["relays"]]
+            self.relay_words = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([len(rl) * 32, 32]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                mesh_device,
+                ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(crs_rects(rl), (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+            )
         # the arena: the flat expert's buffers, the combine's state / rings / CBs (~all of L1 on every core). Per call:
         # allocated after the dense ops before the experts, its combine state zeroed on the device, freed after (a
         # persistent one leaves the other ops no L1 for their circular buffers). The dispatch all-gather between the
@@ -438,8 +456,10 @@ class TtK3TokenSplitMoE:
             ids0, wts0 = z(ttnn.uint16), z(ttnn.bfloat16)
             g0, _ = self.gather_routing(ids0, wts0)
             ttnn.synchronize_device(mesh_device)
-            for t in (ids0, wts0, g0):
+            for t in (ids0, wts0):
                 ttnn.deallocate(t)
+            if g0 is not getattr(self, "_rg_out", None):
+                ttnn.deallocate(g0)
         a_rows = int(plan["arena_tiles"]) * 32
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self._arena_spec = (
@@ -660,8 +680,16 @@ class TtK3TokenSplitMoE:
             if x_se is not None:  # (and the shared expert's row-major x, untilized under it)
                 ua = self.untilize_gather.programs(x_se, x_rm)
                 extra = ([x_se, x_rm], lambda coord: (list(ua[coord].cbs), list(ua[coord].kernels)))
+            out = None
+            if self.routed_only and extra is None:  # (one gathered-routing buffer: the planner's descriptor keys on it)
+                out = getattr(self, "_rg_out", None)
+                want = [self.N * int(both.shape[0]), int(both.shape[1])]
+                if out is None or not out.is_allocated() or list(out.shape) != want:
+                    out = self._rg_out = ttnn.allocate_tensor_on_device(
+                        ttnn.Shape(want), both.dtype, both.layout, self.mesh, ttnn.DRAM_MEMORY_CONFIG
+                    )
             g = fabric_all_gather(
-                both, cluster_axis=None, topology=ttnn.Topology.Linear, num_links=1, dim=0, extra=extra
+                both, cluster_axis=None, topology=ttnn.Topology.Linear, num_links=1, dim=0, extra=extra, output=out
             )
             ttnn.deallocate(both)
             return g, g
@@ -729,7 +757,14 @@ class TtK3TokenSplitMoE:
         xbuf, route = bufs
         if self.lat_direct:  # (lat_rm is the tiled latent: own rows straight into the buffer; one program, both ops)
             k = tuple(int(t.buffer_address()) for t in (lat_rm, gi, xbuf, route))
-            if self._prep_merged.get("key") != k:
+            # (routed_only: every key's descriptor kept - the caller's x and routing land at a few addresses per layer;
+            # else the last one, as before)
+            cache = self.__dict__.setdefault("_prep_descs", {}) if self.routed_only else {}
+            if self._prep_merged.get("key") == k:
+                md = self._prep_merged["desc"]
+            elif k in cache:
+                md = cache[k]
+            else:
                 ua, da = self.untilize_x.programs(lat_rm, xbuf), self.dprep.programs(gi, None, xbuf, route)
                 md = ttnn.MeshProgramDescriptor()
                 for (r, c), pu in ua.items():
@@ -737,8 +772,10 @@ class TtK3TokenSplitMoE:
                     pd.cbs = list(pu.cbs) + list(pr.cbs)
                     pd.kernels = list(pu.kernels) + list(pr.kernels)
                     md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = pd
-                self._prep_merged = {"key": k, "desc": md}
-            ttnn.generic_op([lat_rm, gi, xbuf, route], self._prep_merged["desc"])
+                if self.routed_only and len(cache) < 512:
+                    cache[k] = md
+            self._prep_merged = {"key": k, "desc": md}
+            ttnn.generic_op([lat_rm, gi, xbuf, route], md)
         else:
             self.dprep(gi, lat_rm, xbuf, route)
         return xbuf, route
@@ -787,8 +824,12 @@ class TtK3TokenSplitMoE:
         ), f"the arena landed at {int(arena.buffer_address())}, not {self.arena_addr}: an L1 tensor outlives its op"
         if self.desc is None:
             self.desc, self.l1_args = self.combine.build_l1(self.y, self.out, arena)
-        else:  # (the CBs bind the arena's buffer: a program-cache miss rebuilds them from this one)
+            self._desc_arena = arena
+        elif (
+            not self.routed_only
+        ):  # (the CBs bind the arena's buffer: a program-cache miss rebuilds them from this one)
             self.desc = self.combine.rebind(arena)
+        # (routed_only: rebound only when the experts op will build a program - _experts_combine)
         ttnn.generic_op([arena, self.words], self.zero_desc)
         return arena
 
@@ -813,6 +854,29 @@ class TtK3TokenSplitMoE:
                 os.environ.pop(k, None)
 
     def _experts_combine(self, xg, pl, arena, op):
+        extra = self.desc
+        if self.routed_only:
+            # the fused op's program-cache key is its buffer addresses (+ the plan): a key seen before is a hit, where the
+            # combine's descriptor is not needed - pass an empty one (no copy of ~a whole program set per call: ~7 ms of
+            # host); a new key gets the descriptor rebound to this call's arena (C++ fails loudly on a miss without it)
+            a = lambda t: 0 if t is None else int(t.buffer_address())  # noqa: E731
+            key = tuple(
+                a(t)
+                for t in (xg, pl["counts"], pl["regions"], op.gidx, op.w_gu, op.w_d, op.w_rd, op.done, arena, self.y)
+            ) + (a(pl["token_index"]), op.m, op.act, self.x_bf16, self.h_bf16)
+            seen = self.__dict__.setdefault("_seen_keys", set())
+            if os.environ.get("FLAT_WP_KEYLOG"):
+                from loguru import logger
+
+                logger.info(f"K3 routed key {'seen' if key in seen else 'new'}: {key}")
+            if key in seen:
+                extra = self.__dict__.setdefault("_empty_desc", ttnn.MeshProgramDescriptor())
+            else:
+                if getattr(self, "_desc_arena", None) is not arena:
+                    self.desc = self.combine.rebind(arena)
+                    self._desc_arena = arena
+                extra = self.desc
+                seen.add(key)
         return ttnn.bringup.flat_routed_expert_with_program(
             xg,
             pl["counts"],
@@ -826,7 +890,7 @@ class TtK3TokenSplitMoE:
             max_tokens_per_expert=op.m,
             arena=arena,
             y=self.y,
-            extra=self.desc,
+            extra=extra,
             extra_key=self.key,
             collector=self.coll["core"],
             counts_addr=self.coll["counts_addr"],
@@ -838,6 +902,7 @@ class TtK3TokenSplitMoE:
             x_bf16=self.x_bf16,
             h_bf16=self.h_bf16,
             l1_args=self.l1_args,
+            relay_words=self.relay_words,
         )
 
     def latent_up(self, yr_l1=False):
@@ -1097,7 +1162,8 @@ class TtK3TokenSplitMoE:
 
             logger.info(f"K3 routed: experts program cache miss ({self.mesh.num_program_cache_entries()} entries)")
         ttnn.deallocate(arena)
-        ttnn.deallocate(gi)
+        if gi is not getattr(self, "_rg_out", None):
+            ttnn.deallocate(gi)
         mark("experts_combine")
         y = self.tilize(ttnn.reshape(self.out, [self.S, self.d.H]))
         mark("tilize")

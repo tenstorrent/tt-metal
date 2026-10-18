@@ -659,6 +659,7 @@ def allowed_cores(mesh_device, sub_core_grid=None):
 
 
 _PLAN_CACHE = {}
+_DESC_CACHE = {}  # fabric_all_gather's descriptors by buffers, semaphores and options
 
 
 def plan(
@@ -1089,6 +1090,31 @@ def fabric_all_gather(
             _SEM_CACHE[key] = (mesh_device, sems)
         sems = _SEM_CACHE[key][1]
     arrival_addr, ready_addr = (int(ttnn.get_global_semaphore_address(x)) for x in sems)
+    # (no merged op: the descriptor of the same buffers, semaphores and options is kept - ~1 ms of host per call)
+    dkey = None
+    if extra is None:
+        dkey = (
+            id(mesh_device),
+            int(input_tensor.buffer_address()),
+            int(output.buffer_address()),
+            tuple(input_tensor.shape),
+            str(input_tensor.dtype),
+            str(layout),
+            arrival_addr,
+            ready_addr,
+            cluster_axis,
+            str(topology),
+            num_links,
+            dim,
+            placement,
+            scheme,
+            balance,
+            desync,
+            None if sub_core_grid is None else str(sub_core_grid),
+        )
+        hit = _DESC_CACHE.get(dkey)
+        if hit is not None and hit[0] is mesh_device:
+            return ttnn.generic_op([input_tensor, output], hit[1])
     desc = create_mesh_program_descriptor(
         mesh_device,
         input_tensor,
@@ -1100,5 +1126,9 @@ def fabric_all_gather(
         desync=desync,
         extra=extra,
     )
+    if dkey is not None:
+        if len(_DESC_CACHE) >= 256:
+            _DESC_CACHE.pop(next(iter(_DESC_CACHE)))
+        _DESC_CACHE[dkey] = (mesh_device, desc)
     # (extra = (tensors, fn((r, c)) -> (cbs, kernels)): another op merged in, off worker_cores(plan(..)[0]))
     return ttnn.generic_op(([] if extra is None else list(extra[0])) + [input_tensor, output], desc)

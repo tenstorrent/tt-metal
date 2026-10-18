@@ -24,6 +24,8 @@ when END(GMAX) is out and every input delivered END(GMAX). Rings hold a whole ca
 space): ring k holds S entries per origin chip whose trees can reach a ring k of some port (manifest_layout), not N S.
 """
 
+import functools
+
 import torch
 
 import ttnn
@@ -66,6 +68,7 @@ def span_entry(n, wrap, pos, tmask, tie):
     return a | b << 4
 
 
+@functools.lru_cache(maxsize=None)  # (pure in its integer arguments: per-call host time otherwise)
 def span_table(n, wrap):
     return [span_entry(n, wrap, pos, tm, tie) for pos in range(n) for tm in range(1 << n) for tie in range(2)]
 
@@ -75,6 +78,7 @@ def ring_table(n, wrap):
     return [span_entry(n, True, 0, rm, tie) for rm in range(1 << n) for tie in range(2)] if wrap else [0]
 
 
+@functools.lru_cache(maxsize=None)  # (pure in its integer arguments: per-call host time otherwise)
 def span_subs(R, C, wrap_x, wrap_y):
     """The _COMMON substitutions of the span helpers."""
     return {
@@ -527,6 +531,7 @@ def mesh_plan(mesh_device, num_links, torus=(False, False)):
 
 
 _PORTS_CACHE = {}
+_DESC_CACHE = {}  # sparse_all_gather_2d's descriptors by buffers and options
 
 
 def place_ports(mesh_device, chips, allowed=None):
@@ -584,6 +589,7 @@ def ensure_semaphores(mesh_device, *, num_links=2, torus=(False, False)):
     return _SEM_CACHE[key][1]
 
 
+@functools.lru_cache(maxsize=None)  # (pure in its integer arguments: per-call host time otherwise)
 def axis_reach(n, wrap):
     """Per position: the most hops a tree's span goes forward / backward from it (over every mask and tie)."""
     t = span_table(n, wrap)
@@ -593,6 +599,7 @@ def axis_reach(n, wrap):
     ]
 
 
+@functools.lru_cache(maxsize=None)  # (pure in its integer arguments: per-call host time otherwise)
 def manifest_layout(R, C, wrap_x, wrap_y, S):
     """(ring 1's offset, ring 2's offset, total) in 16-byte entries of a port core's manifest. A row enters a given
     ring of a given port at most once, so ring k needs S entries per origin chip whose trees can put a row there (max
@@ -674,6 +681,28 @@ def sparse_all_gather_2d(
     slots idx * S + t, idx = r * C + c); plan_tensor: [1, 1, 1, S] uint32 per chip, the route words of its own rows.
     Fills every destination's slots; returns output. extra = (tensors, fn((r, c)) -> (cbs, kernels)): another op's
     CBs / kernels appended to each chip's program, on cores off port_cores_all(..) (it runs under the dispatch)."""
+    # (the same buffers, options and no merged op: the descriptor of the last such call - its runtime args are these
+    # buffers' addresses; ~2 ms of host per call otherwise)
+    dkey = None
+    if extra is None:
+        a_ = lambda t: None if t is None else int(t.buffer_address())  # noqa: E731
+        dkey = (
+            id(output.device()),
+            a_(output),
+            a_(plan_tensor),
+            a_(manifest),
+            a_(debug),
+            num_links,
+            tuple(torus),
+            group,
+            manifest_batch,
+            pack,
+            spin_limit,
+            ttnn.get_tt_fabric_max_payload_size_bytes(),
+        )
+        hit = _DESC_CACHE.get(dkey)
+        if hit is not None and hit[0] is output.device():
+            return ttnn.generic_op([plan_tensor, output], hit[1])
     mesh_device = output.device()
     R, C = tuple(mesh_device.shape)
     N = R * C
@@ -842,6 +871,10 @@ def sparse_all_gather_2d(
             program.cbs = list(program.cbs) + list(cbs_x)
             program.kernels = list(program.kernels) + list(kernels_x)
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(*coord), ttnn.MeshCoordinate(*coord))] = program
+    if dkey is not None:
+        if len(_DESC_CACHE) >= 256:  # (bounded: callers with per-call buffers at ever new addresses)
+            _DESC_CACHE.pop(next(iter(_DESC_CACHE)))
+        _DESC_CACHE[dkey] = (mesh_device, mesh_desc)
     return ttnn.generic_op(([] if extra is None else list(extra[0])) + [plan_tensor, output], mesh_desc)
 
 
