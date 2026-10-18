@@ -17,9 +17,9 @@ import ttml
 import ttnn
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, load_config
-from ttml.trainers.grpo_trainer.remote_rollout.llama_ttt_presets import (
+from ttml.trainers.grpo_trainer.remote_rollout.ttt_presets import (
     bf16_attn_bfp8_mlp_optimizations,
-    llama_stop_and_pad,
+    stop_and_pad,
 )
 from ttml.trainers.grpo_trainer.remote_rollout.ttt_rollout_sampler import TTTRolloutSampler
 
@@ -113,7 +113,7 @@ def build_sampler(
         stop_token_ids: Any = ()
         pad_token_id = 0
     else:
-        stop_token_ids, pad_token_id = llama_stop_and_pad(model_source)
+        stop_token_ids, pad_token_id = stop_and_pad(model_source)
 
     worker = TTTRolloutSampler(
         mesh_device=mesh_device,
