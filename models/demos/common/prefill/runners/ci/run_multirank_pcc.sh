@@ -60,6 +60,10 @@ case "${MODEL}" in
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-256000-last5120;"
+    # EXPERIMENT: inter-mesh D2D lands on VC0 (no VC1 on intra-mesh routers).
+    if [ "${CONFIG}" != sc1 ]; then
+        RUNNER_ENV="${RUNNER_ENV} export TT_METAL_FABRIC_INTERMESH_VC0=1;"
+    fi
     ;;
   glm53)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
