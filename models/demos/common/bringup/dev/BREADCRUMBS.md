@@ -1315,3 +1315,6 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   flat_routed_expert; attempt 2 began converting them (aborted, OV-15). Model code stays strict.
 - F107: a perf pick's agent attempts continue the numbering across a resume or a new brief (F95's rule, which the
   perf loop missed): DeepSeek-V4.1 P.3 restarted at attempt 1 after an overseer stop, reusing attempt 1's brief name.
+- F108: a perf pick's A/B report measures every uncommitted change under the task's paths (any attempt's), not only
+  the last attempt's edits: DeepSeek-V4.1 P.4 attempt 2 (the code already in the tree from attempt 1) was reported as
+  "the agent changed nothing" and nothing was measured.
