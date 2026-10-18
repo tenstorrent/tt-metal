@@ -1157,8 +1157,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     compute_kernel_desc.compile_time_args = std::move(compute_ct_args);
     compute_kernel_desc.named_compile_time_args = std::move(compute_named_args);
     compute_kernel_desc.defines = std::move(compute_defines);
+    auto math_fidelity = ttnn::get_math_fidelity(op.compute_kernel_config);
+    if (math_fidelity == tt::tt_metal::MathFidelity::Invalid) {
+        math_fidelity = tt::tt_metal::MathFidelity::LoFi;
+    }
     compute_kernel_desc.config = tt::tt_metal::ComputeConfigDescriptor{
-        .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
+        .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = kFp32DestAccEn,
         .dst_full_sync_en = false,
         .math_approx_mode = false,

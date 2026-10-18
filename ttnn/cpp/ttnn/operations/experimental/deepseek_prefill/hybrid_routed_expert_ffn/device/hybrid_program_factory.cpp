@@ -2280,6 +2280,11 @@ void append_to_descriptor(
         compute_defines["FUSE_BIAS"] = "1";
     }
 
+    auto math_fidelity = ttnn::get_math_fidelity(op.compute_kernel_config);
+    if (math_fidelity == tt::tt_metal::MathFidelity::Invalid) {
+        math_fidelity = tt::tt_metal::MathFidelity::LoFi;
+    }
+
     tt::tt_metal::KernelDescriptor compute_descriptor{
         .kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn/device/kernels/compute/"
@@ -2291,7 +2296,7 @@ void append_to_descriptor(
         .defines = {compute_defines.begin(), compute_defines.end()},
         .config =
             tt::tt_metal::ComputeConfigDescriptor{
-                .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
+                .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = kFp32DestAccEn,
                 .math_approx_mode = false,
             },
