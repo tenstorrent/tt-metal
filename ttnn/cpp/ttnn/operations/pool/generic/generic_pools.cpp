@@ -564,9 +564,8 @@ public:
                 additional_padded_width);
 
             output_slice_width += additional_padded_width;
-            // Each extra output needs stride[1] more input columns. Append them after the right padding (after the
-            // ceil padding if there is one, so the last real window keeps its ceil-mode divisor); the real outputs
-            // keep their windows, and the extra ones are dropped when the slice is written back.
+            // Each extra output needs stride[1] more input columns, added after the right (or ceil) padding so the
+            // real windows and the ceil-mode divisor stay; the extra outputs are dropped on write-back.
             if (this_ceil_pad[1] > 0) {
                 this_ceil_pad[1] += additional_padded_width * stride[1];
             } else {
