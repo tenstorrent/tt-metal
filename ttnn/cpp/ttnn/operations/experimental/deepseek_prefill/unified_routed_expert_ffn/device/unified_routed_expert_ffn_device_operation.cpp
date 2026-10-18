@@ -50,6 +50,7 @@ bool is_dram_nd_sharded_by_tile_rows(const ttnn::Tensor& t) {
 
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
+    resolve_compute_kernel_config(op.compute_kernel_config);
     TT_FATAL(t.x.storage_type() == ttnn::StorageType::DEVICE, "x must be on device");
     // Scoped to Blackhole, matching ttnn::softcap / ttnn::situ_glu. The underlying SFPU
     // primitives exist on Wormhole, but that combination is unverified.
@@ -362,7 +363,9 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
 }
 
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t&, const tensor_args_t&) {}
+    const operation_attributes_t& op, const tensor_args_t&) {
+    resolve_compute_kernel_config(op.compute_kernel_config);
+}
 
 UnifiedRoutedExpertFfnDeviceOperation::spec_return_value_t UnifiedRoutedExpertFfnDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& t) {
@@ -406,7 +409,9 @@ ttnn::Tensor unified_routed_expert_moe(
             .x_is_row_major = x_is_row_major,
             .activation = activation,
             .fuse_bias = !gate_biases.empty(),
-            .compute_kernel_config = compute_kernel_config,
+            .compute_kernel_config =
+                ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::resolve_compute_kernel_config(
+                    compute_kernel_config),
             .min_active_tokens = min_active_tokens,
             .max_active_tokens = max_active_tokens},
         OperationType::tensor_args_t{

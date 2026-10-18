@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -59,6 +60,31 @@ enum class RoutedExpertActivation : uint8_t {
     ClampedSiluGlu = 3,
 };
 
+// Fidelity is shared by the gate/up/down matmuls AND the gate-product multiply.
+// Other compute modes require coordinated changes to destination capacity, SFPU
+// templates and packer accumulation, so reject them instead of silently ignoring them.
+inline ttnn::DeviceComputeKernelConfig resolve_compute_kernel_config(
+    const std::optional<ttnn::DeviceComputeKernelConfig>& requested) {
+    const auto config = requested.value_or(ttnn::DeviceComputeKernelConfig{
+        .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
+        .math_approx_mode = false,
+        .fp32_dest_acc_en = false,
+        .packer_l1_acc = true,
+        .dst_full_sync_en = false});
+    TT_FATAL(
+        config.math_fidelity == tt::tt_metal::MathFidelity::LoFi ||
+            config.math_fidelity == tt::tt_metal::MathFidelity::HiFi2,
+        "unified_routed_expert_moe supports only LoFi or HiFi2 compute fidelity");
+    TT_FATAL(!config.math_approx_mode, "unified_routed_expert_moe requires math_approx_mode=false");
+    TT_FATAL(!config.fp32_dest_acc_en, "unified_routed_expert_moe requires fp32_dest_acc_en=false");
+    TT_FATAL(config.packer_l1_acc, "unified_routed_expert_moe requires packer_l1_acc=true");
+    TT_FATAL(!config.dst_full_sync_en, "unified_routed_expert_moe requires dst_full_sync_en=false");
+    TT_FATAL(
+        config.throttle_level == ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE,
+        "unified_routed_expert_moe requires throttle_level=NO_THROTTLE");
+    return config;
+}
+
 // Attributes (the constants known at host time).
 struct UnifiedRoutedExpertFfnParams {
     // Per-expert M dimension in tiles — the row count the matmul grid, chunk
@@ -106,11 +132,19 @@ struct UnifiedRoutedExpertFfnParams {
         "x_is_row_major",
         "activation",
         "fuse_bias",
+        "compute_kernel_config",
         "min_active_tokens",
         "max_active_tokens");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias, min_active_tokens, max_active_tokens);
+            m_tiles,
+            experts_per_chip,
+            x_is_row_major,
+            activation,
+            fuse_bias,
+            compute_kernel_config,
+            min_active_tokens,
+            max_active_tokens);
     }
 };
 

@@ -1077,8 +1077,10 @@ void kernel_main() {
     }  // end chunk loop
     }  // end per-local-expert loop
 
-    // The last in-flight Semaphore<>::set_multicast (act_valid / in1_valid)
-    // is a posted atomic; without an explicit barrier it can still be in
-    // flight at kernel exit, leading to timing-dependent corruption.
+    // Weight/data and valid-semaphore multicasts are nonposted writes. Some
+    // senders issue them after their last activated-sender write barrier, so
+    // drain their acknowledgements before the next kernel initializes its
+    // NoC counters. Ready-semaphore increments also need the atomic barrier.
+    noc.async_write_barrier();
     noc.async_atomic_barrier();
 }

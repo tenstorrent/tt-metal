@@ -44,7 +44,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 //   max_dispatched_tokens_per_expert: per-expert M the program is sized for.
 //
 // Keyword args:
-//   compute_kernel_config: optional matmul math fidelity / accumulator config.
+//   compute_kernel_config: optional LoFi (default) or HiFi2 fidelity for gate/up/down
+//     matmuls and the gate-product multiply. Requires math_approx_mode=false,
+//     fp32_dest_acc_en=false, packer_l1_acc=true, dst_full_sync_en=false, and
+//     throttle_level=NO_THROTTLE. Other compute modes are rejected.
 //   activation: Silu (default, DeepSeek), SwiGluOai (clamped, MiniMax-M3 /
 //     gpt-oss), SituGlu (Kimi K3) or ClampedSiluGlu (DeepSeek V4).
 //   gate_biases/up_biases/down_biases: optional per-local-expert biases

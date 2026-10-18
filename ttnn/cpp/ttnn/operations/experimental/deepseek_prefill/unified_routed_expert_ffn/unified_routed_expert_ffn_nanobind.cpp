@@ -58,7 +58,11 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             max_dispatched_tokens_per_expert (int): rows extract gives back.
 
         Keyword Args:
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
+                LoFi (default) or HiFi2 for all expert matmuls and the gate-product
+                multiply. Requires math_approx_mode=False, fp32_dest_acc_en=False,
+                packer_l1_acc=True, dst_full_sync_en=False and NO_THROTTLE.
+                Unsupported compute modes are rejected.
             activation (ttnn.RoutedExpertActivation, optional):
                 Silu (default, DeepSeek), SwiGluOai (clamped, MiniMax-M3 / gpt-oss),
                 SituGlu (tanh-capped, Kimi K3; Blackhole only), or ClampedSiluGlu
