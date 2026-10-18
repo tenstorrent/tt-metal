@@ -86,6 +86,30 @@ A companion plotting helper
 ([`boolq/boolq_plot_example.py`](boolq/boolq_plot_example.py)) turns the
 per-step CSV from `GRPOMonitor` into a training curve.
 
+### GSM8K (Qwen3-0.6B, remote rollouts)
+
+[`gsm8k/gsm8k_training_example.py`](gsm8k/gsm8k_training_example.py) — trains
+the think-tagged SFT checkpoint `ichovpanTT/qwen3-0.6b-base-think-sft` on
+`openai/gsm8k` with
+[`grpo_gsm8k_qwen3_p6b_remote_rollout.yaml`](../../../configs/training_configs/grpo_gsm8k_qwen3_p6b_remote_rollout.yaml):
+rank 0 trains the ttml Qwen3 policy on one chip, rank 1 generates with
+`tt-transformers` on another. Prompts use the plain "Question:/Answer:" layout
+the SFT checkpoint was trained on, not a chat template. The reward is the sum of
+five signals, each logged as a `{name}_mean` CSV column: correctness of the
+number in `<answer>`, tag counts, loose and strict `<think>`/`<answer>` format,
+and an integer answer.
+
+```bash
+./tt-train/sources/examples/grpo/gsm8k/run_remote_rollout.sh
+```
+
+[`gsm8k/run_remote_rollout.sh`](gsm8k/run_remote_rollout.sh) uses the rank
+bindings in [`gsm8k/configurations/split_1_1/`](gsm8k/configurations/split_1_1/)
+(one P150 per rank) and takes the same `--config`, `--script`, `--hostfile` and
+`--rank-bindings` overrides as the BoolQ launcher. The rollout rank boots with
+dummy weights, so the checkpoint must be registered in tt-transformers'
+`LOCAL_HF_PARAMS` (`qwen3-0.6b-base-think-sft` is).
+
 ---
 
 ## Device Config
