@@ -14,8 +14,8 @@
 namespace ckl = compute_kernel_lib;
 
 // out = input*cos + rotate_half(input)*sin.
-template <uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id>
-ALWI void mul_tiles_chain(DataflowBuffer& in0_cb, DataflowBuffer& in1_cb, DataflowBuffer& out_cb) {
+template <uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, typename DFB0, typename DFB1, typename DFB2>
+ALWI void mul_tiles_chain(DFB0& in0_cb, DFB1& in1_cb, DFB2& out_cb) {
     // Multiply input by cos or sin
     ckl::mul<
         ckl::input(in0_cb_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
