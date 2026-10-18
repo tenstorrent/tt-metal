@@ -43,7 +43,7 @@ def test_packed_prefill_runner(mesh_device, monkeypatch):
         intermediate_size=3072,
         vocab_size=256,
         num_hidden_layers=2,
-        num_attention_heads=8,
+        num_attention_heads=16,
         num_key_value_heads=4,
         num_global_key_value_heads=4,
         head_dim=256,
@@ -60,6 +60,9 @@ def test_packed_prefill_runner(mesh_device, monkeypatch):
     )
     config._attn_implementation = "sdpa"
     reference = Gemma4TextModel(config).eval()
+    # Gemma uses scale=1; keep synthetic QK logits at unit variance.
+    for layer in reference.layers:
+        layer.self_attn.q_norm.weight.fill_(layer.self_attn.head_dim**-0.5)
     state = {f"model.language_model.{k}": v.bfloat16() for k, v in reference.state_dict().items()}
     reference.load_state_dict({k.removeprefix("model.language_model."): v.float() for k, v in state.items()})
     reference.norm = torch.nn.Identity()
@@ -68,7 +71,7 @@ def test_packed_prefill_runner(mesh_device, monkeypatch):
         intermediate_size=3072,
         vocab_size=256,
         num_hidden_layers=2,
-        num_attention_heads=8,
+        num_attention_heads=16,
         num_key_value_heads=4,
         num_global_key_value_heads=4,
         layer_types=tuple(config.layer_types),

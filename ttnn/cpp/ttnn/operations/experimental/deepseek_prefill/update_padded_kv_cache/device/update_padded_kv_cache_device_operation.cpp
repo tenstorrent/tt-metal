@@ -498,13 +498,15 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
         "input seq in tiles ({}) must be divisible by tp_factor ({}) so each chip writes whole tiles",
         input_seq / TILE_HEIGHT,
         tp_factor);
-    TT_FATAL(
-        cache_seq % written_seq == 0,
-        "cache seq ({}) must be a multiple of the per-chip written chunk ({} = input_seq {} / tp {})",
-        cache_seq,
-        written_seq,
-        input_seq,
-        tp_factor);
+    if (!args.stripe_size.has_value()) {
+        TT_FATAL(
+            cache_seq % written_seq == 0,
+            "cache seq ({}) must be a multiple of the per-chip written chunk ({} = input_seq {} / tp {})",
+            cache_seq,
+            written_seq,
+            input_seq,
+            tp_factor);
+    }
 
     TT_FATAL(args.num_layers > 0, "num_layers must be positive");
     TT_FATAL(
