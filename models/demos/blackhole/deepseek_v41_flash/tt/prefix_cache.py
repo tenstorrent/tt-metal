@@ -388,6 +388,7 @@ class PrefixStore:
 
     def __init__(self, chunk, budget_bytes, signature=""):
         self.chunk, self.budget, self.signature = int(chunk), int(budget_bytes), signature
+        self.tag = ""  # S_pad context of the carried-state layout (several prefill contexts: a snapshot is only restored into the context it was taken in)
         self.snaps = OrderedDict()  # key -> PrefixSnapshot (oldest first)
         self.bytes = 0
         self.hits = self.misses = self.evictions = self.puts = 0
@@ -400,7 +401,7 @@ class PrefixStore:
         h, out = hashlib.sha256(), {}
         for s in range(self.chunk, top + 1, self.chunk):
             h.update(t[s - self.chunk : s].tobytes())
-            out[s] = (self.signature, s, h.copy().hexdigest())
+            out[s] = (self.signature, self.tag, s, h.copy().hexdigest())
         return out
 
     def key(self, tokens, s):

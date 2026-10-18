@@ -393,6 +393,28 @@ class Model:
             f"UNI auto: unified prefill MoE on {n}/{len(pls)} layers {self.uni_layers} (reserve {reserve} MiB/bank)"
         )
 
+    def mem_report(self, tag):
+        """One log line with the free DRAM per bank and the trace-region occupancy (always on, a device sync + two view queries: used at the end of the serving warm-up)."""
+        try:
+            ttnn.synchronize_device(self.md)
+            mv = ttnn.get_memory_view(self.md, ttnn.BufferType.DRAM)
+            mib = 2**20
+            s = (
+                f"MEMREPORT {tag}: DRAM allocated {mv.total_bytes_allocated_per_bank / mib:.1f} MiB/bank, free {mv.total_bytes_free_per_bank / mib:.1f}, "
+                f"largest free block {mv.largest_contiguous_bytes_free_per_bank / mib:.1f}"
+            )
+            try:
+                tv = ttnn.get_memory_view(self.md, ttnn.BufferType.TRACE)
+                s += (
+                    f"; trace region allocated {tv.total_bytes_allocated_per_bank / mib:.1f} MiB/bank, free {tv.total_bytes_free_per_bank / mib:.1f}, "
+                    f"largest free block {tv.largest_contiguous_bytes_free_per_bank / mib:.1f}"
+                )
+            except Exception as e:  # noqa: BLE001
+                s += f"; trace view unavailable ({type(e).__name__})"
+            self.log(s)
+        except Exception as e:  # noqa: BLE001
+            self.log(f"MEMREPORT {tag}: failed ({type(e).__name__}: {str(e)[:100]})")
+
     def log_dram(self, tag):
         """DSV41_MEMLOG=1: allocated / free DRAM per bank (MiB) at this point (diagnosing capacity / leaks across ISLs)."""
         if os.environ.get("DSV41_MEMLOG") not in ("1", "2", "3"):
@@ -971,7 +993,7 @@ class Model:
             )
         return st[(NA, UD)]
 
-    def _export_user_keys(self, ix, k_cache, i_src, u_dst, rows_sel, off, n):
+    def _export_user_keys(self, ix, k_cache, i_src, u_dst, rows_sel, off, n, warm_limit=None):
         """Hand-off of the index keys of the users held by prefill slot ``i_src`` of the mesh rows ``rows_sel`` (decode user ``u_dst`` of each of those rows) only: slab
         slots [off, off + n) of the prefill key FIFO -> decode key slab entries [0, n). The other mesh rows / users / entries keep their decode keys (bfp8 -> bf16 -> bfp8 is exact).
         The decode key slab ``k_cache`` is referenced by the CAPTURED decode traces, so it is updated IN PLACE (``ttnn.copy`` of the rebuilt slab; ``slice_write`` re-allocates).
@@ -1012,6 +1034,10 @@ class Model:
                 blocks.append((cols * q0 - dL, cols * Lq, q0))
             blocks = list(dict.fromkeys(blocks))
         warm = n == 0 and off == 0 and not rows_sel
+        KEY_FILL = os.environ.get("DSV41_KEY_EXPORT_FILL", "0") == "1"
+        FILL_MAX = int(
+            os.environ.get("DSV41_KEY_EXPORT_FILL_MAX", "262144")
+        )  # (rows of the prefix written in one fill_cache: beyond it the slice_write path as before)
         NP = -(-NA // P)
         for base, SB, q0 in blocks:
             hi = min(base + SB, KL)
@@ -1021,7 +1047,7 @@ class Model:
             ):  # the last piece is shifted back (its overlap is served twice with equal values)
                 j1 = j0 + P
                 a_, b_ = max(off + j0, base, 0), min(off + min(j1, n), hi)  # source slots served by this (block, piece)
-                if warm or a_ < b_:
+                if (warm and (warm_limit is None or j0 < warm_limit)) or a_ < b_:
                     pieces.append((j0, j1, a_, b_))
             if not pieces:
                 continue
@@ -1063,7 +1089,23 @@ class Model:
                 old_bf = old if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(old, ttnn.bfloat16)
                 new = ttnn.where(cond, emb_full, old_bf)
                 out = new if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(new, k_cache.dtype)
-                ttnn.experimental.slice_write(out, k_cache, [0, 0, j0, 0], [UD, 1, j0 + P, IDIM], [1, 1, 1, 1])
+                if KEY_FILL and j0 + P <= FILL_MAX:
+                    # in-place write of the prefix [0, j0 + P) of every user with fill_cache (tile native): slice_write converts the WHOLE slab to row-major first (a 256 MiB temporary at a
+                    # 1M context: 32 MiB/bank contiguous, and the cost of the export). The rows [0, j0) are the slab's own (read back, written unchanged).
+                    full = (
+                        out
+                        if j0 == 0
+                        else ttnn.concat([ttnn.slice(k_cache, [0, 0, 0, 0], [UD, 1, j0, IDIM]), out], dim=2)
+                    )
+                    for u_ in range(UD):
+                        inp = full if UD == 1 else ttnn.slice(full, [u_, 0, 0, 0], [u_ + 1, 1, j0 + P, IDIM])
+                        ttnn.fill_cache(k_cache, inp, u_)
+                        if inp is not full:
+                            ttnn.deallocate(inp)
+                    if full is not out:
+                        ttnn.deallocate(full)
+                else:
+                    ttnn.experimental.slice_write(out, k_cache, [0, 0, j0, 0], [UD, 1, j0 + P, IDIM], [1, 1, 1, 1])
                 seen = {ix.keys.buffer_unique_id(), k_cache.buffer_unique_id()}
                 for t in (emb, emb_full, cond, old, old_bf, new, out):
                     if t.is_allocated() and t.buffer_unique_id() not in seen:
@@ -1140,7 +1182,16 @@ class Model:
         )
         return res
 
-    def warm_key_export(self):
+    def _prealloc_export_state(self):
+        """Create the persistent state of the key export (``_export_state``) of every decode key slab without running an export."""
+        if not self.use_indexer or not getattr(self, "prefill_sparse", None):
+            return
+        for L, dec in self.dec_idx.items():
+            if L in self.index_owner:
+                P = min(dec.k_cache.shape[2], int(os.environ.get("DSV41_KEY_EXPORT_PIECE", "65536")))
+                self._export_state(P, dec.k_cache.shape[0])
+
+    def warm_key_export(self, limit=None):
         """Allocate the persistent key-export tensors and compile the export programs of every key-owner layer for every prefill slot (a no-change export: empty user mask), before any
         trace is captured."""
         if not self.use_indexer or not getattr(self, "prefill_sparse", None):
@@ -1153,7 +1204,7 @@ class Model:
             if ix is None or ix.key_owner is not None or ix.keys is None:
                 continue
             for i_src in range(ix.keys.shape[0]):
-                self._export_user_keys(ix, dec.k_cache, i_src, 0, [], 0, 0)
+                self._export_user_keys(ix, dec.k_cache, i_src, 0, [], 0, 0, warm_limit=limit)
         ttnn.synchronize_device(self.md)
 
     def _export_keys_users(self, users, ends, s_end, slot_of):
@@ -1249,7 +1300,69 @@ class Model:
             self.pool.sync_page_table()
         return [(b, t, start.get(b, st), e) for b, t, st, e in wave]
 
+    def _pf_pick_bucket(self, e, C, buckets, first):
+        """S_pad context for a prompt whose first call ends at ``e``: the smallest context >= e when this call certainly holds the WHOLE prompt (``e`` is not a multiple of the chunk: the plugin's
+        scheduler ends every non-final piece of a split prompt on a chunk multiple), else the largest (a continuation must stay in the context of its first call).
+        """
+        need = -(-e // C) * C
+        if first and e % C == 0:
+            return buckets[-1]
+        for b in buckets:
+            if b >= need:
+                return b
+        return buckets[-1]
+
     def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False, vis=None):
+        """See ``_prefill_interleaved_one``. With several captured S_pad contexts (``warm_serving(extra_spads=...)``) the users of the call are split by the context their carried state lives in
+        (``pf_bucket_of``): a new prompt takes the smallest context that holds it when its first call is certainly the whole prompt, otherwise the largest; a continuation stays in its context, a
+        prompt that outgrows it is recomputed from position 0 in a larger one (always correct). Each group is one ``_prefill_interleaved_one`` call on its context.
+        """
+        pm = self.prefill_model
+        buckets = pm.dyn_buckets() if os.environ.get("DSV41_PF_SMALL_BUCKET", "1") != "0" else []
+        if len(buckets) <= 1 or self.Up != self.U:
+            return self._prefill_interleaved_one(items, chunk, s_pad_max, want_logits, vis)
+        C = int(chunk)
+        of = self.__dict__.setdefault("pf_bucket_of", {})
+        resume = self.__dict__.setdefault("pf_resume", {})
+        groups = {}
+        for b, t, st, e in items:
+            b, st, e = int(b), int(st), int(e)
+            cb = of.get(b)
+            if st > 0 and cb is not None and resume.get(b) == st and e <= cb:
+                k = cb
+            else:
+                if (
+                    st > 0
+                ):  # the carried state is gone or lives in a context that is too small: recompute from position 0 in a context chosen like a new prompt's
+                    if resume.get(b) == st:
+                        self.log(
+                            f"prefill_interleaved: user {b} outgrew its S_pad {cb} context at {e}: recomputing from 0"
+                        )
+                    resume.pop(b, None)
+                    st = 0
+                k = self._pf_pick_bucket(e, C, buckets, True)
+            groups.setdefault(k, []).append((b, t, st, e))
+        res, tms = {}, []
+        for k in sorted(groups, reverse=True):  # (continuations of the large context first: they are the long ones)
+            grp = groups[k]
+            pm.use_dyn(k)
+            if getattr(self, "apc", None) is not None:
+                self.apc.store.tag = k
+            vg = None if not vis else {b: v for b, v in vis.items() if b in {g[0] for g in grp}}
+            res.update(self._prefill_interleaved_one(grp, C, k, want_logits, vg or None))
+            for g in grp:
+                of[g[0]] = k
+            tms.append((k, [g[0] for g in grp], dict(self.timing)))
+        tm = {}
+        for _, _, d in tms:
+            for key, v in d.items():
+                if isinstance(v, (int, float)):
+                    tm[key] = tm.get(key, 0.0) + v
+        tm["spad_groups"] = ";".join(f"{k}:{us}" for k, us, _ in tms)
+        self.timing = tm
+        return res
+
+    def _prefill_interleaved_one(self, items, chunk, s_pad_max=None, want_logits=False, vis=None):
         """Prefill of SOME users (new requests / prompt chunks) through the captured chunk trace while the other users keep their decode state.
 
         ``items``: [(user b, tokens 1-D [>= end], start, end)]: positions [start, end) of user b are computed. ``start`` must be 0 or the position the previous call for
@@ -1729,7 +1842,7 @@ class Model:
             self._dfill = f
         return f
 
-    def warm_serving(self, chunk, s_pad, bucket_users=()):
+    def warm_serving(self, chunk, s_pad, bucket_users=(), extra_spads=()):
         """Everything a server needs before its first request, in the order that keeps device allocation out of any captured trace: (1) allocate every persistent buffer (prefill
         per-chunk buffers, the full decode loop buffers, every decode bucket), (2) compile every program (prefill chunk, full decode step, every bucket step), (3) capture the traces
         (prefill chunk, full decode, every bucket). A request afterwards only replays traces and copies into persistent tensors. ``bucket_users``: users per mesh row of the
@@ -1750,7 +1863,28 @@ class Model:
             self._hooks_set = pm
         pm.timing = {}
         compiled = pm.compile_dyn(chunk, s_pad)
-        self.warm_key_export()
+        self.warm_key_export()  # (the max-context export first: with the slice_write export its temporaries need a 32 MiB/bank hole that exists only now; the fill_cache export warms every prefix size)
+        # smaller S_pad contexts (DSV41_PF_SMALL_BUCKET): a short prompt replays a chunk trace whose FIFOs / masks / index scores have S_pad / ratio entries instead of max_ctx / ratio.
+        # Each owns its carried tables and trace; ALL of them are allocated + compiled here, before the first capture.
+        extra = sorted({int(x) for x in extra_spads if 0 < int(x) < int(s_pad)}) if (compiled and Up == U) else []
+        for sp_ in extra:
+            self.log_dram(f"before the S_pad {sp_} prefill context")
+            pm.compile_dyn_extra(chunk, sp_)
+            pm.use_dyn(sp_)
+            self.warm_key_export(
+                limit=sp_
+            )  # (a prompt of this context has <= sp_ entries per ratio: only the first prefix sizes ever run)
+            pm.use_dyn(int(s_pad))
+            self.log_dram(f"after the S_pad {sp_} prefill context")
+        guard = None
+        if extra:
+            # the eager pass right before the max-context capture needs ~17 MiB/bank contiguous (the sharded indexer's scores): keep a hole for it until then (the small contexts' tables and
+            # program buffers would otherwise split every such block)
+            gm = int(os.environ.get("DSV41_PF_GUARD_MIB", "21"))
+            if gm > 0:
+                guard = ttnn.zeros(
+                    [1, 1, gm * 8 * 1024, 512], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.md
+                )
         t1 = time.perf_counter()
         from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import DecodeBucket
 
@@ -1782,7 +1916,26 @@ class Model:
         gc.collect()
         t2 = time.perf_counter()
         if compiled:  # (a (re)capture of the prefill trace: the carried prefill state of every user is gone)
+            if guard is not None:
+                ttnn.deallocate(guard)
+                guard = None
             pm.capture_dyn_trace(chunk)
+            self.mem_report(f"after the S_pad {s_pad} chunk trace")
+            for sp_ in extra:
+                pm.use_dyn(sp_)
+                pm.capture_dyn_trace(chunk)
+                self.mem_report(f"after the S_pad {sp_} chunk trace")
+            if extra:
+                pm.use_dyn(int(s_pad))
+            self.__dict__.pop("pf_bucket_of", None)
+            if extra and int(os.environ.get("DSV41_PF_GUARD_MIB", "21")) > 0:
+                # the eager decode step right before the decode capture needs a ~17 MiB/bank contiguous block (the indexer's score mask): hold one until then
+                guard = ttnn.zeros(
+                    [1, 1, int(os.environ.get("DSV41_PF_GUARD2_MIB", "24")) * 8 * 1024, 512],
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.md,
+                )
             self.__dict__.setdefault("pf_resume", {}).clear()
             self.__dict__.pop("pf_slot_of", None)
             self.__dict__.pop("pf_slot_owner", None)
@@ -1791,11 +1944,15 @@ class Model:
             b.capture(*feeds[Ub])
         for name, (b, tok, pos, phys) in self.buckets_x.items():
             b.capture(tok, pos)
+        if guard is not None:
+            ttnn.deallocate(guard)
+            guard = None
         if self.trace_id is None:
             # one more eager decode step right before the capture (the program of paged_update_cache of the decode indexer was missing from the program cache at a 1M context with the
             # spec runner built: "Cannot load new binaries during trace capture"); costs one step, state restored
             self._capture_decode(filler, zeros, compile_pass=os.environ.get("DSV41_DEC_PRECAPTURE_WARM", "1") == "1")
         self.log_dram("serving warm-up done (all traces captured)")
+        self.mem_report("after the model warm-up (prefill chunk + decode traces captured)")
         t3 = time.perf_counter()
         self.timing["warm_serving"] = {"alloc_compile": t2 - t0, "prefill_compile": t1 - t0, "capture": t3 - t2}
         self.log(

@@ -748,8 +748,106 @@ class DSV41PrefillModel:
         self.pre_replay_hooks = getattr(self, "pre_replay_hooks", [])
         self.post_replay_hooks = getattr(self, "post_replay_hooks", [])
 
+    # ---- several S_pad contexts (small-prompt buckets): each owns its DynCtx, per-layer carried tables and chunk trace; one is ACTIVE (the attributes the forward reads), the others are stashed
+    _PA_ATTRS = ("dyn", "halo", "lat_buf", "_lat_pre")
+    _SP_ATTRS = ("ctx", "dyn_on", "kvt", "ids")
+    _IX_ATTRS = ("keys", "keys_rm", "KL", "KL_full", "sh")
+    _PM_ATTRS = ("dyn", "dyn_trace", "dyn_out", "head_out", "_dyn_compiled")
+    _PA_FRESH = {"dyn": None, "halo": None, "lat_buf": None, "_lat_pre": None}
+    _SP_FRESH = {"ctx": None, "dyn_on": False, "kvt": None, "ids": None}
+    _IX_FRESH = {"keys": None, "keys_rm": None, "sh": None}
+
+    def _dyn_objs(self):
+        pas, sps, ixs, seen = [], [], [], set()
+        for _, pl in self.layers:
+            pa = pl.pa
+            sp = pa.sparse
+            ix = None if sp is None else sp.indexer
+            for lst, o in ((pas, pa), (sps, sp), (ixs, ix)):
+                if o is not None and id(o) not in seen:
+                    seen.add(id(o))
+                    lst.append(o)
+        return pas, sps, ixs
+
+    @staticmethod
+    def _grab(o, names):
+        return {n: o.__dict__[n] for n in names if n in o.__dict__}
+
+    @staticmethod
+    def _put(o, names, vals):
+        for n in names:
+            o.__dict__.pop(n, None)
+        o.__dict__.update(vals)
+
+    def _dyn_save(self):
+        pas, sps, ixs = self._dyn_objs()
+        return {
+            "pm": self._grab(self, self._PM_ATTRS),
+            "pa": [self._grab(o, self._PA_ATTRS) for o in pas],
+            "sp": [self._grab(o, self._SP_ATTRS) for o in sps],
+            "ix": [self._grab(o, self._IX_ATTRS) for o in ixs],
+        }
+
+    def _dyn_load(self, st):
+        pas, sps, ixs = self._dyn_objs()
+        self._put(self, self._PM_ATTRS, st["pm"])
+        for o, v in zip(pas, st["pa"]):
+            self._put(o, self._PA_ATTRS, v)
+        for o, v in zip(sps, st["sp"]):
+            self._put(o, self._SP_ATTRS, v)
+        for o, v in zip(ixs, st["ix"]):
+            self._put(o, self._IX_ATTRS, v)
+
+    def _dyn_blank(self):
+        """the active context becomes empty WITHOUT freeing anything (its owner keeps the references in a stash)"""
+        pas, sps, ixs = self._dyn_objs()
+        self._put(
+            self,
+            self._PM_ATTRS,
+            {"dyn": None, "dyn_trace": None, "dyn_out": None, "head_out": [], "_dyn_compiled": None},
+        )
+        for o in pas:
+            self._put(o, self._PA_ATTRS, dict(self._PA_FRESH))
+        for o in sps:
+            self._put(o, self._SP_ATTRS, dict(self._SP_FRESH))
+        for o in ixs:
+            self._put(o, ("keys", "keys_rm", "sh"), dict(self._IX_FRESH))
+
+    @property
+    def dyn_stash(self):
+        return self.__dict__.setdefault("_dyn_stash", {})
+
+    def stash_dyn(self):
+        """move the active context aside (kept alive, not freed)"""
+        if self.dyn is None:
+            return
+        self.dyn_stash[self.dyn.S_pad] = self._dyn_save()
+        self._dyn_blank()
+
+    def use_dyn(self, S_pad):
+        """make the context of ``S_pad`` the active one (a no-op when it is)"""
+        if self.dyn is not None and self.dyn.S_pad == S_pad:
+            return
+        st = self.dyn_stash.pop(S_pad)
+        self.stash_dyn()
+        self._dyn_load(st)
+
+    def dyn_buckets(self):
+        """S_pads of every context holding a CAPTURED chunk trace (active + stashed), ascending"""
+        out = [] if self.dyn is None or self.dyn_trace is None else [self.dyn.S_pad]
+        out += [k for k, st in self.dyn_stash.items() if st["pm"].get("dyn_trace") is not None]
+        return sorted(out)
+
     def teardown_dyn(self):
-        """Release the chunk trace and the per-chunk buffers (a different chunk size / padded prompt length needs a new capture)."""
+        """Release the chunk trace(s) and the per-chunk buffers of EVERY context (a different chunk size / padded prompt length needs a new capture)."""
+        while self.dyn_stash:
+            self.stash_dyn()  # (the active one keeps living until its turn)
+            k = next(iter(self.dyn_stash))
+            self._dyn_load(self.dyn_stash.pop(k))
+            self._teardown_active()
+        self._teardown_active()
+
+    def _teardown_active(self):
         if getattr(self, "dyn_trace", None) is not None:
             if isinstance(self.dyn_trace, moe_overlap.SegTrace):
                 self.dyn_trace.release()
@@ -812,12 +910,33 @@ class DSV41PrefillModel:
         assert C % 128 == 0
         if self.dyn is not None and self.dyn.C == C and self.dyn.S_pad == S_pad and self.dyn_trace is not None:
             return False
+        self.teardown_dyn()
+        self._compile_dyn_body(C, S_pad)
+        return True
+
+    def compile_dyn_extra(self, C, S_pad, after_setup=None):
+        """Allocate + compile one ADDITIONAL (smaller) S_pad context next to the active one (kept: the active context is stashed meanwhile and active again afterwards). The new context is left
+        stashed with its trace not captured: ``use_dyn(S_pad)`` + ``capture_dyn_trace(C)`` captures it (every persistent buffer of every context must exist before the first capture).
+        """
+        assert C % 128 == 0 and self.dyn is not None and S_pad not in self.dyn_stash and S_pad != self.dyn.S_pad
+        cur = self.dyn.S_pad
+        self.stash_dyn()
+        try:
+            self._compile_dyn_body(C, S_pad, after_setup)
+            self.stash_dyn()
+        finally:
+            if self.dyn is None:
+                self.use_dyn(cur)
+        self.use_dyn(cur)
+
+    def _compile_dyn_body(self, C, S_pad, after_setup=None):
         assert (
             type(self).last_logits is not DSV41PrefillModel.last_logits
         ), "interleaved prefill needs the ragged hand-off head (GenPrefillModel)"
         t0 = time.perf_counter()
-        self.teardown_dyn()
         self.setup_dyn(C, S_pad)
+        if after_setup is not None:
+            after_setup()  # (the tables of this context exist: allocations that must not split their blocks come now)
         bufs = self.alloc_inputs(C)
         self.active_mask = torch.zeros(self.rows * self.U)
         self.upload_inputs(self.dummy_inputs(C), bufs)
@@ -831,7 +950,6 @@ class DSV41PrefillModel:
             pl.pa.reset_dyn()  # before any capture only
         ttnn.synchronize_device(self.md)
         self._dyn_compiled = (C, bufs, t0)
-        return True
 
     def capture_dyn_trace(self, C):
         """Second half of ``capture_dyn``: capture the chunk trace (everything is compiled and allocated)."""

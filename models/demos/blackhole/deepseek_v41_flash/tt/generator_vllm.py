@@ -297,6 +297,8 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             t1 = time.perf_counter()
             self.vision.capture_traces()
             logger.info(f"DSV4.1 vLLM: vision tower traces captured in {time.perf_counter() - t1:.1f} s")
+            if hasattr(self.m, "mem_report"):
+                self.m.mem_report("after the vision traces (end of the build)")
         return self
 
     def warm_serving(self):
@@ -312,7 +314,19 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         self.s_pad_cur = s_pad
         logger.info(f"DSV4.1 vLLM: warm-up (chunk {chunk}, S_pad {s_pad}, decode buckets U' {self.bucket_users})")
         t0 = time.perf_counter()
-        self.m.warm_serving(chunk, s_pad, [u for u in self.bucket_users if u < self.U])
+        extra = []
+        if (
+            not fixed.isdigit()
+            and os.environ.get("DSV41_PF_SMALL_BUCKET", "0") == "1"
+            and self.m.max_ctx >= int(os.environ.get("DSV41_PF_SMALL_MIN_CTX", "524288"))
+        ):
+            # OPT-IN (DSV41_PF_SMALL_BUCKET=1; verified at 4 users / 524288 tokens, does NOT fit the DRAM of the 1M build): prompts whose first call is certainly the whole prompt replay a chunk
+            # trace of a SMALL S_pad (default 32768) instead of the max-context one (``Model.prefill_interleaved``)
+            sm = int(os.environ.get("DSV41_PF_SMALL_SPAD", "32768"))
+            sm = -(-sm // chunk) * chunk
+            if sm < s_pad:
+                extra = [sm]
+        self.m.warm_serving(chunk, s_pad, [u for u in self.bucket_users if u < self.U], extra)
         if self.spec is not None:
             # every spec runner was compiled at load (before any trace exists): capture their traces NOW, after the prefill chunk trace and the decode traces, and never release them:
             # no prefill / decode call allocates device memory afterwards, so nothing needs a recapture per request
@@ -335,6 +349,8 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             logger.info(f"DSV4.1 vLLM: spec traces captured ({1 + len(self.spec_buckets)} runner(s))")
         self._warm = True
         logger.info(f"DSV4.1 vLLM: warm-up done in {time.perf_counter() - t0:.1f} s")
+        if hasattr(self.m, "mem_report"):
+            self.m.mem_report("after the vLLM warm-up (spec traces captured)")
         if os.environ.get("DSV41_VLLM_BUCKET_BENCH", "0") == "1":
             for k, v in self.m.bench_buckets().items():
                 logger.info(f"DSV4.1 bucket bench: {k}: {v:.2f} ms per step (host loop, replay + token read)")
