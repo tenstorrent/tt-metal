@@ -49,6 +49,10 @@ _TP_POLICY = {
         # prefill ring, twenty wins from 512 rows up and loses at 256 and below, so short prompts
         # and every decode step keep the library default.
         "ccl_chunks_min_rows": 512,
+        # A core owns 20 output tiles for down and output, 17 for the packed gate/up, so QB2's 16
+        # leaves every one of them a second block holding four tiles or one. Twenty is the
+        # smallest value that gives one block per core; larger is the same block, not a better one.
+        "minimal_n": 20,
         # DRAM-sharded matmul rejects num_workers_per_dram_bank > 1 outside Blackhole, so every
         # projection and the LM head fall back to a single reader per bank.
         "attention_readers": 1,
