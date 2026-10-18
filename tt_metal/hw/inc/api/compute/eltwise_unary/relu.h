@@ -205,9 +205,26 @@ ALWI void relu_tile_int32(uint32_t idst) {
  */
 // clang-format on
 ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope = 0) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lrelu, (APPROX), idst, VectorMode::RC, slope));
+    MATH(if constexpr (ckernel::sfpu::leaky_relu_bf16_whole_tile && !DST_ACCUM_MODE) {
+        if (slope == 0x3c23d70au) {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_lrelu,
+                (APPROX, 32, DST_ACCUM_MODE),
+                idst,
+                VectorMode::None,
+                slope);
+            return;
+        }
+    });
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lrelu, (APPROX, 8, DST_ACCUM_MODE), idst, VectorMode::RC, slope));
 }
 
-ALWI void leaky_relu_tile_init() { MATH(SFPU_UNARY_INIT(lrelu)); }
+ALWI void leaky_relu_tile_init() {
+    MATH(SFPU_UNARY_INIT(lrelu));
+    MATH(ckernel::sfpu::leaky_relu_bf16_tile_init<!DST_ACCUM_MODE>());
+}
 #endif
 }  // namespace ckernel

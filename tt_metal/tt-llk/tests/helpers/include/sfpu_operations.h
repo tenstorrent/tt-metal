@@ -82,6 +82,7 @@
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
+#include "llk_sfpu/ckernel_sfpu_relu.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
 #include "llk_sfpu/ckernel_sfpu_rpow.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
@@ -698,9 +699,8 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
         //     matches production behavior.
         //   - add1/identity/cast_fp32_to_fp16a/sqrt_custom/expm1_cw: the
         //     OPERATION-keyed bare init has no delegate branch.
-        //   - lrelu: no linkable definition in this test build, since only the tt-llk common
-        //     (not the metal llk_api) header is included.
         llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
+        ckernel::sfpu::leaky_relu_bf16_tile_init<OPERATION == SfpuType::lrelu && !is_fp32_dest_acc_en && ITERATIONS == 32>();
     }
     else if constexpr (
         OPERATION == SfpuType::equal_zero || OPERATION == SfpuType::not_equal_zero || OPERATION == SfpuType::less_than_zero ||
@@ -1241,7 +1241,14 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::lrelu)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_lrelu_, (APPROX_MODE), dst_index, vector_mode, ITERATIONS, 0x3dcccccdu /* slope = 0.1f */);
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_lrelu,
+            (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE),
+            dst_index,
+            vector_mode,
+            0x3c23d70au /* slope = 0.009999999776482582f */);
     }
     else if constexpr (OPERATION == SfpuType::add_int32)
     {
