@@ -120,17 +120,34 @@ class GLM53Adapter(MLAPrefillAdapter):
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
 
-    # Per-chunk device time relative to a MoE layer, from a traced 8x4 profile at 5k context (8 kW): a
-    # dense layer 3.7 ms vs 6.5 ms; the kv-only last layer (no MTP) runs its MLA only; an MTP level is a
-    # MoE layer plus its fused projection and norms; the last level is kv-only. Long context adds the same
-    # sparse-attention time to every one of these, so the ratios only drift toward 1.
-    _DENSE_LAYER_COST = 0.57
-    _KV_ONLY_LAYER_COST = 0.3
-    _MTP_LEVEL_COST = 1.08
+    # Per-chunk device time relative to a typical MoE layer (6.26 ms), from a traced 78-layer 8x4 profile at
+    # 5-15k context (8 kW). Layer 0 carries the embedding; the first MoE layer absorbs the skew the dense
+    # layers leave at its first cross-device barrier, and the next five route less evenly. The kv-only last
+    # layer (no MTP) runs its MLA only; an MTP level is a MoE layer plus its fused projection and norms, the
+    # last level kv-only. On 4 galaxies every rank measured 1.13-1.18x these, so the ratios hold.
+    _FIRST_LAYER_COST = 0.74
+    _DENSE_LAYER_COST = 0.52
+    _FIRST_MOE_LAYER_COST = 1.55
+    _EARLY_MOE_LAYER_COST = 1.24
+    _EARLY_MOE_LAYERS = 5
+    _KV_ONLY_LAYER_COST = 0.32
+    _MTP_LEVEL_COST = 1.12
     _MTP_KV_ONLY_LEVEL_COST = 0.4
 
     def layer_split_costs(self, num_layers, mtp_levels):
-        costs = [self._DENSE_LAYER_COST if i < GLM53Config.NUM_DENSE_LAYERS else 1.0 for i in range(num_layers)]
+        dense = GLM53Config.NUM_DENSE_LAYERS
+        costs = []
+        for i in range(num_layers):
+            if i == 0:
+                costs.append(self._FIRST_LAYER_COST)
+            elif i < dense:
+                costs.append(self._DENSE_LAYER_COST)
+            elif i == dense:
+                costs.append(self._FIRST_MOE_LAYER_COST)
+            elif i <= dense + self._EARLY_MOE_LAYERS:
+                costs.append(self._EARLY_MOE_LAYER_COST)
+            else:
+                costs.append(1.0)
         if not mtp_levels:
             costs[-1] = self._KV_ONLY_LAYER_COST
             return costs, 0.0
