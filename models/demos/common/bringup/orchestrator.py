@@ -60,6 +60,7 @@ failure (including a box that fails at device open: reset it, then resume), 3 wa
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -844,8 +845,8 @@ class Orchestrator:
         return problems
 
     # ---- steps
-    def gate(self, tid: str):
-        res = run_gate(self.spec, self.led, tid, commit=True)
+    def gate(self, tid: str, reuse: dict | None = None):
+        res = run_gate(self.spec, self.led, tid, commit=True, reuse=reuse)
         if res.verdict in ("FAIL", "HANG"):
             sig = self.infra_failure(res)
             if sig:
@@ -1154,27 +1155,22 @@ class Orchestrator:
         return hashlib.sha256(json.dumps(keep, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
     def ab_code_key(self, task: dict) -> str:
-        """The code a side measures: the committed tree plus the uncommitted changes (the agent's) of the repo."""
+        """The code a side measures: the committed files plus the uncommitted changes (the agent's) of the repo, without
+        the run's own records (state, results, breadcrumbs, supervision, tasks.yaml: the side's commands are stamped
+        apart), so a ledger commit between the A/B report and the accept does not count as a code change (F105)."""
         import hashlib
 
         def git(*a):
             return subprocess.run(["git", *a], cwd=self.spec.repo, capture_output=True, text=True).stdout
 
-        return hashlib.sha256(
-            (
-                git("rev-parse", "HEAD^{tree}")
-                + git(
-                    "diff",
-                    "HEAD",
-                    "--",
-                    ".",
-                    ":!*state.json",
-                    ":!*/results/*",
-                    ":!*BREADCRUMBS.md",
-                    ":!*supervision.md",
-                )
-            ).encode()
-        ).hexdigest()[:16]
+        skip = ("*state.json", "*/results/*", "*BREADCRUMBS.md", "*supervision.md", "*/bringup/tasks.yaml")
+        files = [
+            ln
+            for ln in git("ls-tree", "-r", "HEAD").splitlines()
+            if not any(fnmatch.fnmatch(ln.split("\t")[-1], p) for p in skip)
+        ]
+        diff = git("diff", "HEAD", "--", ".", *(f":!{p}" for p in skip))
+        return hashlib.sha256(("\n".join(files) + diff).encode()).hexdigest()[:16]
 
     def changed_under(self, task: dict) -> list[str]:
         """Uncommitted files under the task's paths (the change a report measures)."""
@@ -1460,10 +1456,13 @@ class Orchestrator:
         gate, the commit and every later task run it (an opt-in switch left at the old default measured the old path).
         """
         tid = task["id"]
+        reuse = self.ab_on_reuse(task, rec)  # F105: before set_defaults (it changes the tree the key covers)
         shipped = model_precision.set_defaults(self.spec, (task.get("ab") or {}).get("change") or {})
         if shipped:
             self.echo(f"  [{tid}] accepted: default {'; '.join(shipped)} (tt/settings.py)")
-        res = self.gate(tid)
+        if reuse is not None:
+            self.echo(f"  [{tid}] accept gate: the A/B 'on' side's measurement, not run again ({reuse['source']})")
+        res = self.gate(tid, reuse=reuse)
         if res.verdict == "PASS":
             return self._after(task)
         why = (
@@ -1471,6 +1470,37 @@ class Orchestrator:
             f"gate in tasks.yaml or change a threshold (the owner's edit), then resume; or decide --task {tid} --reject"
         )
         return self._human(task, why)
+
+    def ab_on_reuse(self, task: dict, rec: dict) -> dict | None:
+        """F105: the accept gate's metrics from the A/B report's 'on' side when that side measured exactly the gate's
+        commands on the tree as it is now (same code key), every command exited 0, and the gate's ladder rung was one
+        of its rungs; else None (the gate runs). The A/B ran the change explicitly on, which F104's new default makes
+        the tree's behaviour."""
+        tid = task["id"]
+        side = self.run_dir / "ab" / tid / "new"
+        stamp_file = side / "side.json"
+        if not stamp_file.exists() or not rec.get("on"):
+            return None
+        kept = json.loads(stamp_file.read_text())
+        if (kept.get("stamp") or {}).get("code") != self.ab_code_key(task):
+            return None
+        m = re.search(r"BRINGUP_RUNG=(\S+)", task["gate"]["cmd"])
+        rung = m.group(1) if m else None
+        rcs = [r.get("rc") for r in kept.get("tests", {}).values()] + [
+            r.get("rc") for r in kept.get("ladder", {}).values()
+        ]
+        if (kept.get("profile") or {}).get("rc") is not None:
+            rcs.append(kept["profile"]["rc"])
+        if any(rc != 0 for rc in rcs) or (rung and rung not in kept.get("ladder", {})):
+            return None
+        metrics = {}
+        names = [d.name for d in side.iterdir() if d.is_dir()]
+        ladder = set(kept.get("ladder", {}))
+        for name in sorted(names, key=lambda n: (n in ladder, n == "profile")):  # tests, then the gate's rung, profile
+            if name in ladder and name != rung:
+                continue
+            metrics.update({k: v["value"] for k, v in M.load(tid, side / name).items()})
+        return {"metrics": metrics, "source": str(side)}
 
     def perf_reject(self, task: dict, rec: dict) -> int:
         """The owner declines the change: the agent's files under the task's paths go back to HEAD, the task is
