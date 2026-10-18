@@ -21,6 +21,7 @@ from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -306,6 +307,11 @@ class TtPrefillTransformer(LightweightModule):
                 topology=tp_topology,
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix="norm",
+                use_fused=(
+                    use_fused_rmsnorm
+                    if use_fused_rmsnorm is not None
+                    else getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole() and is_chunked
+                ),
             )
             if build_tail
             else None
