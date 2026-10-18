@@ -120,6 +120,22 @@ class GLM53Adapter(MLAPrefillAdapter):
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
 
+    # Per-chunk device time relative to a MoE layer, from a traced 8x4 profile at 5k context (8 kW): a
+    # dense layer 3.7 ms vs 6.5 ms; the kv-only last layer (no MTP) runs its MLA only; an MTP level is a
+    # MoE layer plus its fused projection and norms; the last level is kv-only. Long context adds the same
+    # sparse-attention time to every one of these, so the ratios only drift toward 1.
+    _DENSE_LAYER_COST = 0.57
+    _KV_ONLY_LAYER_COST = 0.3
+    _MTP_LEVEL_COST = 1.08
+    _MTP_KV_ONLY_LEVEL_COST = 0.4
+
+    def layer_split_costs(self, num_layers, mtp_levels):
+        costs = [self._DENSE_LAYER_COST if i < GLM53Config.NUM_DENSE_LAYERS else 1.0 for i in range(num_layers)]
+        if not mtp_levels:
+            costs[-1] = self._KV_ONLY_LAYER_COST
+            return costs, 0.0
+        return costs, (mtp_levels - 1) * self._MTP_LEVEL_COST + self._MTP_KV_ONLY_LEVEL_COST
+
     # --- test metadata (HF download coordinates + PCC thresholds + golden trace) ---
     # FP8 repo (a bf16 checkout would diverge from an FP8-derived trace). The bare
     # `zai-org/GLM-5.3` repo IS the FP8 one; hf_model_default above is a local copy of it.

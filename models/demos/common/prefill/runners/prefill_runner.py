@@ -737,7 +737,13 @@ def main() -> None:
     num_ranks = int(ttnn.distributed_context_get_size())
     _assert_ranks_agree_on_config(rank, num_ranks)
 
-    layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS), MTP_LEVELS)
+    layer_split = compute_layer_split(
+        NUM_LAYERS,
+        num_ranks,
+        ADAPTER.layer_split_boundaries(NUM_LAYERS),
+        MTP_LEVELS,
+        layer_costs=ADAPTER.layer_split_costs(NUM_LAYERS, MTP_LEVELS),
+    )
     first_layer_idx, num_my_layers = layer_split[rank]
     is_first_rank = rank == 0
     is_last_rank = rank == num_ranks - 1
@@ -901,7 +907,13 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     #
     # Derived here rather than taken from main(): this is a separate function and main()'s
     # `layer_split` is not in its scope. The migration block below reads the layer-space pair.
-    layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS), MTP_LEVELS)
+    layer_split = compute_layer_split(
+        NUM_LAYERS,
+        num_ranks,
+        ADAPTER.layer_split_boundaries(NUM_LAYERS),
+        MTP_LEVELS,
+        layer_costs=ADAPTER.layer_split_costs(NUM_LAYERS, MTP_LEVELS),
+    )
     first_layer_idx, num_my_layers = layer_split[rank]
     ack_layer_ids = getattr(ADAPTER, "kv_slot_layer_ids", lambda n: None)(NUM_LAYERS)
     if ack_layer_ids is None:
