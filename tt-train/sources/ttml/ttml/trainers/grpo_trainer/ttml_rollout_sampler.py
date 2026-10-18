@@ -321,7 +321,7 @@ class TTMLRolloutSampler(RolloutSampler):
         the full prefill logits, one CE pass for the logprob, both readbacks
         via a composer-reassembled ``gather_to_host`` inner helper, then the
         first completion token per row is picked on host by ``pred_pos[b]``.
-        Decode is a fixed-shape per-step loop that stores raw ttnn token and
+        Decode is a per-step loop that stores raw ttnn token and
         nlog columns and reads them back at the end, with chunked async
         readbacks along the way for stop-token detection.
         """
@@ -453,8 +453,7 @@ class TTMLRolloutSampler(RolloutSampler):
                 deallocate_tensors([sampled_full, nlog_full, logits, input_tensor, prefill_mask])
                 ttml.autograd.AutoContext.get_instance().reset_graph()
 
-                # -------- Decode: fixed-shape per-step loop --------
-                cache_len = self._max_seq_len
+                # -------- Decode: per-step loop --------
                 last_input = self._tokens_to_tensor(first_tokens.reshape(B, 1).astype(np.uint32), B)
 
                 for i in range(tokens_to_complete - 1):
@@ -462,6 +461,7 @@ class TTMLRolloutSampler(RolloutSampler):
                         break
 
                     cur_pos = self._cache_position(kv)
+                    cache_len = round_up_to_tile(cur_pos + 1) if self._kind == "llama" else self._max_seq_len
                     decode_mask = self._decode_causal_mask_right_padded(cur_pos, cache_len, pad_positions)
 
                     # Llama's tile-pad trick: pad the single-token input up to a
