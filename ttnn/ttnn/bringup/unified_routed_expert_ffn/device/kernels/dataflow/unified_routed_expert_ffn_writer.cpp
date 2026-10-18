@@ -141,8 +141,15 @@ void kernel_main() {
     // narrower on a ragged one, where the compute kernel packs fewer tiles for that subblock --
     // waiting on the full width here would hang.
     constexpr uint32_t d_out_subblock_w_tail = get_compile_time_arg_val(32);
+#ifdef WEIGHTS_NK
+    // weights_transposed: [N, K] weights, read tile by tile (weight_runs.hpp); the host passes shard widths 0.
+    static_assert(GU_SHARD_W == 0 && D_SHARD_W == 0, "WEIGHTS_NK reads tile by tile");
+    using GuRuns = unified_routed_expert_ffn::WeightRuns<0, K_gate_tiles>;
+    using DRuns = unified_routed_expert_ffn::WeightRuns<0, K_down_tiles>;
+#else
     using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
     using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
+#endif
 
     // This core's weight tile-column window, clipped to the tensor's real N. Both weight reads
     // below walk the same window on every K-row, so it is computed once.

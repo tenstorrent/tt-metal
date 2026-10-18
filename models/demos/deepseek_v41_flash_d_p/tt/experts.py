@@ -51,8 +51,19 @@ Weights (setting EXPERTS_IMPL, DS41-10 / DS41-35):
     plane i: (P >> 4i) & 15 -> ttnn.gather from the 16-entry e2m1 table (EXPERTS_DECODE 'gather') or the composed
              arithmetic (0.5 c + 0.5 relu(c - 4) + relu(c - 6), sign from bit 3; 'arith')
     T = concat(planes, rows) * (Rep [K, K/32] @ S^T)  (the 0/1 Rep matmul repeats each scale over its 32 rows, exact)
-The fused ttnn.bringup.unified_routed_expert_moe cannot run this expert: the routing weight must multiply h before
-its fp8 act quant and q(h) sits between the activation and w2; the op has neither (BREADCRUMBS FIX.1).
+Kernel (setting EXPERTS_KERNEL, bfp8 / bfp4 weights):
+  loop     the per-local-expert pipeline above (extract -> ttnn.linear -> SFPU -> fp8_qdq -> ttnn.linear -> insert).
+  unified  ONE ttnn.bringup.unified_routed_expert_moe program over every local expert (P.2), on the dispatched buffer:
+             x      = buf[:, :H] (q(x), bf16 ROW_MAJOR)
+             r_rows = pieces @ SelAll (bf16 0/1 [3 Egp, 32] per mesh row r, column le = local expert le's three piece
+                      columns r epc + le: one nonzero product per tile-dot, exact, DS41-16) -> fp32 ROW_MAJOR
+                      [rows, 32], row i column le = row i's routing weight for local expert le
+             op(x, routing_weights=r_rows, fp8_act_quant=True, weights_transposed=True, ClampedSiluGlu,
+                high_precision, HiFi4 + fp32 dest): per local expert le and routed row i,
+                y_i = w2 q(r_i,le silu(min(w1 x_i, 10)) clamp(w3 x_i, +-10)); w1 / w3 / w2 as stored ([N, K], the
+                same block-float tensors the loop uses, w1 and w3 separate), q in-kernel per 32 (ue8m0, e4m3 RNE,
+                bit-exact with tt/quant.fp8_qdq on exact inputs: the fork's tests/unit/test_ds41_h_options.py)
+           -> the same combine / sum / reduce.
 
 The per-expert cap is the whole chunk (a token picks an expert once; the counts stay on the device), the flat
 dispatch buffer K x the cap (all K of a token's experts may sit on one chip). expert counts / region offsets are
@@ -179,6 +190,9 @@ class TtExperts:
         self.impl = impl or settings.get("EXPERTS_IMPL")
         assert self.impl in ("bfp8", "bfp4", "fp4_decode"), self.impl
         self.decode_mode = settings.get("EXPERTS_DECODE")
+        self.kernel = settings.get("EXPERTS_KERNEL")
+        assert self.kernel in ("loop", "unified"), self.kernel
+        assert self.kernel == "loop" or self.impl in BLOCK_DTYPES, f"EXPERTS_KERNEL=unified needs block-float weights"
         self.sum_mode = settings.get("EXPERTS_SUM")
         self.mesh, self.layer, self.num_links = mesh, layer, num_links
         self.E, self.K, self.H, self.I = E, int(top_k), int(hidden), int(inter)
@@ -224,6 +238,25 @@ class TtExperts:
             for le in range(self.epc)
         ]
 
+        if self.kernel == "unified":
+            # the fused op bakes ClampedSiluGlu's limit 10 (unified_routed_expert_ffn_types.hpp)
+            assert self.lim == 10.0, f"EXPERTS_KERNEL=unified: swiglu_limit {self.lim} != the op's 10"
+            # the routing-weight rows carry one column per local expert in one tile (24 per chip on 2x2 / 4x4, 12 on 8x4)
+            assert self.epc <= TILE, f"EXPERTS_KERNEL=unified: {self.epc} experts per chip > {TILE} weight columns"
+            # one selector for every local expert: column le of mesh row r = the group's expert j = r epc + le
+            sel_all = torch.zeros(rows, 1, 3 * self.Egp, TILE)
+            for r in range(rows):
+                for le in range(self.epc):
+                    for p in range(3):
+                        sel_all[r, 0, p * self.Egp + r * self.epc + le, le] = 1.0
+            self.sel_all = ttnn.from_torch(
+                sel_all,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=DRAM,
+                mesh_mapper=_mapper(mesh, (0, None)),
+            )
         if self.impl in BLOCK_DTYPES:
             self._load_block(ck, gtab)
         else:
@@ -302,6 +335,7 @@ class TtExperts:
         rows, cols, mesh, layer, H, I = self.dgs, self.ngroups, self.mesh, self.layer, self.H, self.I
         dtype = BLOCK_DTYPES[self.impl]
         self.w13, self.w2 = [], []
+        self.w1, self.w3 = [], []  # EXPERTS_KERNEL=unified: w1 and w3 as separate [I, H] tensors (the op's gate / up)
         changed = total = 0
         worst = (0.0, None)
         for le in range(self.epc):
@@ -328,7 +362,10 @@ class TtExperts:
                     if float(v) > worst[0]:
                         c, r = divmod(int(i), rows)
                         worst = (float(v), (int(gtab[c, r, le]), mats[1]))
-            for t, out in ((w13, self.w13), (w2, self.w2)):
+            pairs = [(w13, self.w13), (w2, self.w2)]
+            if self.kernel == "unified":
+                pairs = [(w13[:, :, :I].contiguous(), self.w1), (w13[:, :, I:].contiguous(), self.w3), (w2, self.w2)]
+            for t, out in pairs:
                 out.append(
                     ttnn.from_torch(
                         t,
@@ -535,6 +572,45 @@ class TtExperts:
             ttnn.deallocate(y)
         return out
 
+    def _unified(self, buf: ttnn.Tensor, counts, region_offsets, cap: int) -> ttnn.Tensor:
+        """EXPERTS_KERNEL=unified. buf [max_buf, W] bf16 ROW_MAJOR (the dispatched rows: q(x) | routing pieces) ->
+        expert outputs [max_buf, H] bf16 TILE (each expert's rows at its region; a fresh buffer, buf untouched)."""
+        n, H = buf.shape[-2], self.H
+        xr = ttnn.slice(buf, [0, 0], [n, H], memory_config=DRAM)  # q(x), ROW_MAJOR bf16
+        wp = ttnn.slice(buf, [0, H], [n, self.W], memory_config=DRAM)
+        wpt = ttnn.to_layout(wp, ttnn.TILE_LAYOUT, memory_config=DRAM)
+        ttnn.deallocate(wp)
+        # row i column le = row i's fp32 routing weight for local expert le (exact: one product per tile-dot)
+        rw = ttnn.matmul(
+            ttnn.reshape(wpt, (1, 1, n, 3 * self.Egp)),
+            self.sel_all,
+            dtype=ttnn.float32,
+            compute_kernel_config=self.cfg,
+            memory_config=DRAM,
+        )
+        ttnn.deallocate(wpt)
+        rwr = ttnn.to_layout(ttnn.reshape(rw, (n, TILE)), ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+        ttnn.deallocate(rw)
+        out = ttnn.bringup.unified_routed_expert_moe(
+            xr,
+            region_offsets,
+            counts,
+            self.gidx,
+            self.w1,
+            self.w3,
+            self.w2,
+            max_dispatched_tokens_per_expert=cap,
+            compute_kernel_config=self.cfg,
+            activation=ttnn.bringup.RoutedExpertActivation.ClampedSiluGlu,
+            high_precision=True,
+            routing_weights=rwr,
+            fp8_act_quant=True,
+            weights_transposed=True,
+        )
+        ttnn.deallocate(xr)
+        ttnn.deallocate(rwr)
+        return out
+
     def partial(self, x: ttnn.Tensor, dense: ttnn.Tensor, idx: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """This column group's experts over the chip's rows. x: ffn_norm [1, 1, s, H] fp32 TILE (rows split over axis
         0, replicated over axis 1); dense: routing [1, 1, s, E] fp32 (same placement); idx: the router's top-k ids
@@ -568,10 +644,14 @@ class TtExperts:
         buf, meta = _dispatch(dispatch, ttnn.reshape(xr, (1, s, self.W)), ind, offsets, self.dispatch_table)
         ttnn.deallocate(xr)
         b2 = ttnn.reshape(buf, (buf.shape[-2], self.W))
-        bt = ttnn.to_layout(b2, ttnn.TILE_LAYOUT, memory_config=DRAM)
-        ttnn.deallocate(buf)
-        out = self._loop(bt, counts, region_offsets, cap)
-        ttnn.deallocate(bt)
+        if self.kernel == "unified":
+            out = self._unified(b2, counts, region_offsets, cap)
+            ttnn.deallocate(buf)
+        else:
+            bt = ttnn.to_layout(b2, ttnn.TILE_LAYOUT, memory_config=DRAM)
+            ttnn.deallocate(buf)
+            out = self._loop(bt, counts, region_offsets, cap)
+            ttnn.deallocate(bt)
         out4 = ttnn.reshape(out, (1, 1, out.shape[-2], H))
         comb = _combine(combine, out4, meta, counts, region_offsets, s)  # [1, 1, s, K, H] bf16 ROW_MAJOR
         ttnn.deallocate(out)
@@ -608,13 +688,14 @@ class TtExperts:
 
     def free(self):
         """Release the device weights (tests that build several layers' or impls' experts in one process)."""
-        mats = [getattr(self, "w13", []), getattr(self, "w2", [])]
+        mats = [getattr(self, "w13", []), getattr(self, "w2", []), getattr(self, "w1", []), getattr(self, "w3", [])]
         for d in getattr(self, "planes", []) + getattr(self, "scales", []):
             mats.append(list(d.values()))
         for ts in mats:
             for t in ts:
                 ttnn.deallocate(t)
         self.w13, self.w2, self.planes, self.scales = [], [], [], []
+        self.w1, self.w3 = [], []
 
     def __call__(self, x: ttnn.Tensor, dense: ttnn.Tensor, idx: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """experts_out [1, 1, s, H/TP] fp32 (rows over axis 0, hidden columns over axis 1)."""

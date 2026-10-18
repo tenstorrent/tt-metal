@@ -83,3 +83,47 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   model since the 2026-10-01 rebase).
 - Needed by: every model using the fork (task O.1)
 - Files: `tests/cases.py`, `tests/test_unified_routed_expert_ffn.py`
+
+### Opt-in DeepSeek-V4.1 expert numerics: `routing_weights`, `fp8_act_quant`, `weights_transposed`
+- What: three keyword arguments of `unified_routed_expert_moe`, each default off (None / False) = the previous program
+  (no define, no CT / runtime arg, CB or unpack mode changes; only the program-cache key grows three fields):
+  - `routing_weights` (FLOAT32 ROW_MAJOR [rows of the dispatched buffer, C >= experts_per_chip]; row i column le =
+    dispatched row i's routing weight for local expert le): the activation is multiplied by its row's weight (fp32,
+    SFPU) before the down projection, `down(r * act(gate, up))`. The reader stages each tile-row's sticks and builds
+    one Float32 tile per tile-row (the weight in every column of faces 0 / 2, CB c_20, staging c_21); compute copies
+    it into DEST slot 2 (define `ROUTED_ROW_WEIGHT`).
+  - `fp8_act_quant`: fp8 e4m3 quantize-dequantize of that activation per 32 hidden values (one tile row) with a
+    power-of-two scale 2^ceil(log2(fp32(max(amax, 1e-4) * fp32(1/448)))), round to nearest even, before the down
+    projection: DeepSeek's `act_quant(h, 32, 'ue8m0')` + its dequantizing GEMM. A custom SFPU function on the fp32
+    DEST tile (`calculate_routed_h`: row amax by a compare tree + SUBVEC_SHFLROR1 butterfly over the 8 lanes of a
+    row, the scale from the exponent bits, e4m3 rounding on the integer bits, subnormals by the 2^14 add; s and 1/s
+    parked in the consumed up slot to stay within the 8 LREGs). Define `FP8_ACT_QUANT`.
+  - `weights_transposed`: gate / up / down given as stored by nn.Linear, [N, K]; the reader / writer read each tile
+    at page n * K_tiles + k (`WeightRuns<0, K_TILES>`, tile by tile; ND shard widths ignored) and every matmul
+    transposes its in1 tile (`IN1_TRANSPOSE`), as ttnn.matmul's transpose_b. A bfp8 [N, K] weight keeps its exponent
+    groups along K (DeepSeek-V4.1's fp4 experts are exact in bfp8 only that way, DS41-35). Define `WEIGHTS_NK`.
+  - With routing_weights or fp8_act_quant the gate / up accumulators (and the routing-weight tile and the down
+    accumulator) unpack straight into the fp32 DEST (UnpackToDestFp32). Through SrcA (the high_precision default) a
+    Float32 partial is read at TF32: the activation's inputs lose 13 mantissa bits, truncated.
+  - Refused (validation): the h options without high_precision, without fp32_dest_acc_en, with a non-fused
+    activation (Silu, GeluTanh) or with expert biases; routing_weights not FLOAT32 / ROW_MAJOR / DRAM interleaved,
+    with another row count than the buffer, or narrower than experts_per_chip; weight shapes that do not fit x in the
+    claimed orientation.
+- Why: DeepSeek-V4.1's routed expert multiplies h by the token's routing weight BEFORE the fp8 act quant of h
+  (q(r h) != r q(h)) and w2 reads the quantized h; the op had neither, so the model ran a per-expert ttnn.linear loop
+  (2522 of 3025 ms device per 2048-token chunk on 2x2). With the options: experts section 176.8 ms (bfp8) / 173.7 ms
+  (bfp4) per chunk, device total 679.6 ms; frozen expert component / swap tests pass at bfp8.
+- Tests: `tests/unit/test_ds41_h_options.py` (8 cases on the 2x2 FABRIC_2D mesh): exact quant + weight against the
+  torch reference on selection weights (0 differences over 1528 rows x 1024; negative controls on corrupted copies;
+  by hand a kernel scale floor and a reader weight column off by one both failed), weight-only row scales, [N, K] vs
+  [K, N] bit-identical (bf16, and bfp8 e2m1 x 2^e vs bf16), DeepSeek-V4.1 shapes (emb 5120, hidden 2304) vs the
+  float reference (rel 0.0030-0.0058), refusals. `tests/reference.py` gains `fp8_act_qdq`, `fp8_act_scale`,
+  `pow2_ceil`, `routed_h`.
+- Regression (options off): fork_source 75 tests, 0 regressions vs the baseline; every model case passes (mimo 1x4,
+  gemma4 1x4, mimo 2x2, glm53 2x2, hy4 2x2; xing40's 4x2 case skips on this 4-chip box).
+- Needed by: deepseek_v41_flash_d_p P.2
+- Files: `unified_routed_expert_ffn.{hpp,cpp}`, `unified_routed_expert_ffn_nanobind.cpp`,
+  `device/unified_routed_expert_ffn_types.hpp`, `device/unified_routed_expert_ffn_device_operation.{hpp,cpp}`,
+  `device/unified_routed_expert_ffn_program_factory.cpp`, `device/kernels/weight_runs.hpp`,
+  `device/kernels/dataflow/unified_routed_expert_ffn_{reader,writer}.cpp`, `device/kernels/compute/fused_swiglu.cpp`,
+  `tests/reference.py`, `tests/unit/{__init__,test_ds41_h_options}.py`

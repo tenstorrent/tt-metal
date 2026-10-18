@@ -175,8 +175,15 @@ void kernel_main() {
     // value (the program factory pins them equal), down carries its own.
     constexpr uint32_t GU_SHARD_W = get_compile_time_arg_val(34);
     constexpr uint32_t D_SHARD_W = get_compile_time_arg_val(35);
+#ifdef WEIGHTS_NK
+    // weights_transposed: [N, K] weights, read tile by tile (weight_runs.hpp); the host passes shard widths 0.
+    static_assert(GU_SHARD_W == 0 && D_SHARD_W == 0, "WEIGHTS_NK reads tile by tile");
+    using GuRuns = unified_routed_expert_ffn::WeightRuns<0, K_gate_tiles>;
+    using DRuns = unified_routed_expert_ffn::WeightRuns<0, K_down_tiles>;
+#else
     using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
     using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
+#endif
 
     constexpr uint32_t x_accessor_offset = 36;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
@@ -241,6 +248,26 @@ void kernel_main() {
     CircularBuffer cb_gate_bias_obj(cb_gate_bias);
     CircularBuffer cb_up_bias_obj(cb_up_bias);
     CircularBuffer cb_down_bias_obj(cb_down_bias);
+#endif
+
+#ifdef ROUTED_ROW_WEIGHT
+    // DeepSeek-V4.1 routing weights (routing_weights input): FLOAT32 ROW_MAJOR [rows of x, C], one stick per
+    // dispatched row; expert le's rows use column le. Per chunk the reader stages the TILE_HEIGHT sticks of each of
+    // this core's tile-rows and builds one Float32 tile per tile-row whose row r holds that row's weight in every
+    // column of faces 0 and 2 (the compute kernel's SFPU reads it from the even columns of the left faces).
+    // Biases are refused with routing_weights, so this block follows the `start` accessor directly.
+    constexpr uint32_t rw_ct_offset = start_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_row_weight = get_compile_time_arg_val(rw_ct_offset + 0);
+    constexpr uint32_t cb_row_weight_rm = get_compile_time_arg_val(rw_ct_offset + 1);
+    constexpr uint32_t rw_stick_bytes = get_compile_time_arg_val(rw_ct_offset + 2);
+    constexpr uint32_t rw_stick_stride = get_compile_time_arg_val(rw_ct_offset + 3);
+    constexpr auto rw_args = TensorAccessorArgs<rw_ct_offset + 4>();
+    const uint32_t rw_addr = get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 3 * experts_per_chip);
+    const auto rw_acc = TensorAccessor(rw_args, rw_addr, rw_stick_bytes);
+    CircularBuffer cb_row_weight_obj(cb_row_weight);
+    // The staging CB is this RISC's private scratch: its address only, never pushed.
+    const uint32_t rw_stage_l1 = CircularBuffer(cb_row_weight_rm).get_write_ptr();
+    constexpr uint32_t RW_TILE_BYTES = 32 * 32 * sizeof(uint32_t);
 #endif
 
     // D2.0 NoC handles. `noc` uses default noc_index for mcasts/sem ops.
@@ -522,6 +549,45 @@ void kernel_main() {
             // are max_chunk; the tail is last, so its start is num_full*max_chunk too).
             const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
             const uint32_t this_core_first_row = chunk * chunk_M_max + my_mt * per_core_M;
+
+#ifdef ROUTED_ROW_WEIGHT
+            // This chunk's routing-weight tiles (one per tile-row of this core). The CB moves a constant
+            // per_core_M_max block (adaptive_chunk.hpp); rows past the token count stay stale (free-dim rows,
+            // dropped downstream like the x rows the reader skips).
+            {
+                cb_row_weight_obj.reserve_back(per_core_M_max);
+                uint32_t tile_l1 = cb_row_weight_obj.get_write_ptr();
+                volatile tt_l1_ptr uint32_t* stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rw_stage_l1);
+                for (uint32_t m = 0; m < per_core_M; ++m) {
+                    const uint32_t tile_row = this_core_first_row + m;
+                    if (tile_row < count_tiles) {
+                        const uint32_t row_base = tile_row * TILE_HEIGHT;
+                        const uint32_t real_r =
+                            (row_base + TILE_HEIGHT <= count_value) ? TILE_HEIGHT : (count_value - row_base);
+                        for (uint32_t r = 0; r < real_r; ++r) {
+                            noc_read.async_read(
+                                rw_acc,
+                                CoreLocalMem<uint32_t>(rw_stage_l1 + r * rw_stick_stride),
+                                rw_stick_bytes,
+                                {.page_id = x_start_stick + row_base + r},
+                                {});
+                        }
+                        noc_read.async_read_barrier();
+                        volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_l1);
+                        for (uint32_t r = 0; r < real_r; ++r) {
+                            const uint32_t w = stage[r * (rw_stick_stride / sizeof(uint32_t)) + local_expert_id];
+                            // row r: face 0 (r < 16) or face 2 (r >= 16), all 16 columns
+                            volatile tt_l1_ptr uint32_t* dst = tile + (r >> 4) * 512 + (r & 15) * 16;
+                            for (uint32_t c = 0; c < 16; ++c) {
+                                dst[c] = w;
+                            }
+                        }
+                    }
+                    tile_l1 += RW_TILE_BYTES;
+                }
+                cb_row_weight_obj.push_back(per_core_M_max);
+            }
+#endif
 
             // -------- PHASES 1+2 fused — push x ONCE per K-block, then gate then up.
             //

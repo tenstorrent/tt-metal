@@ -1,0 +1,128 @@
+{
+ "used": [
+  {
+   "id": "DS41-35",
+   "how": "unified path keeps the stored [N, K] bfp8 / bfp4 weights; the fork option weights_transposed reads them transposed inside the op instead of uploading W^T (which rounds 48 matrices)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-23",
+   "how": "the routing weight keeps travelling as three bf16 pieces in the dispatched row; one selector matmul per chunk (one product per tile-dot) turns them into the op's fp32 routing_weights",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-16",
+   "how": "the selector matmul is exact by the one-nonzero-per-tile-dot rule; the 2.6 % fp8 differences of the first unit test were traced to this in-tile GEMM rounding, so the exact test uses selection weights (DS41-60)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-13",
+   "how": "the in-kernel fp8 q-dq reproduces tt/quant.fp8_qdq's arithmetic (clamp 1e-4, fp32(1/448), ue8m0 from the bits, e4m3 RNE on the integer bits, subnormal step 2^-9)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-30",
+   "how": "the h options unpack the Float32 gate / up partials straight into the fp32 DEST (UnpackToDestFp32) instead of through SrcA at TF32 (DS41-58)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-22",
+   "how": "the unified call keeps high_precision=True with HiFi4 + fp32 dest (ROW_MAJOR bf16 x)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-2",
+   "how": "counts / region offsets passed as the global [1, E] vectors from offset_cumsum",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-1",
+   "how": "the dispatched buffer is freed only after the op returned (ROW_MAJOR x gives a fresh output)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "deleted tests/ttnn/unit_tests/operations/ds41_urffn (tt-probe scripts) before finishing",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-58",
+   "how": "read the hand-run profile metrics from generated/bringup_adhoc/P.2.json",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "--no-precompile on every model-sized and fork test run",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD on every run",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-68",
+   "how": "fork unit tests open the box's full 2x2 FABRIC_2D mesh with require_exact_physical_num_devices",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how SFPU lanes map to a 32x32 DEST tile for row-wise reductions (4 rows x 8 even/odd columns per load, an 8-lane sub-vector per row; dst_reg stride 2; tile = 32 dst_reg indices) - found in ckernel_sfpu_reduce.h",
+  "copy_tile of a Float32 CB reads through SrcA (TF32) unless the CB is UnpackToDestFp32 (DS41-58)",
+  "run_safe_pytest wrapped in timeout gets SIGTERM and marks the cards dirty: split long fork_tests runs per case"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-57",
+  "DS41-58"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.2",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-18T02:03:00",
+  "head": "456e55dde27",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.2.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/kernels/weight_runs.hpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/unified_routed_expert_ffn_device_operation.cpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/unified_routed_expert_ffn_device_operation.hpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/unified_routed_expert_ffn_types.hpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/tests/reference.py",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/tests/unit/__init__.py",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/tests/unit/test_ds41_h_options.py",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/unified_routed_expert_ffn.cpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/unified_routed_expert_ffn.hpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.cpp"
+  ]
+ }
+}

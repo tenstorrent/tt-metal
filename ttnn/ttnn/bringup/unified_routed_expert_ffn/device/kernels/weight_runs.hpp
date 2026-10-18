@@ -24,10 +24,16 @@
 //
 // SHARD_W == 0 — DRAM-interleaved. Consecutive n land in different banks by construction, so no
 // contiguous run exists: run() collapses to 1 and this degenerates to the per-tile read.
+//
+// NK_K_TILES > 0 (weights_transposed, the WEIGHTS_NK define) — the weight is stored [N, K] (nn.Linear), NK_K_TILES
+// tile columns per stored row: the tile at (k = row, n = j) of the [K, N] matrix the kernels multiply is stored page
+// j * NK_K_TILES + row, transposed within the tile (the compute kernel's matmuls transpose it back). Consecutive j
+// are NK_K_TILES pages apart, so every tile is its own read.
 namespace unified_routed_expert_ffn {
 
-template <uint32_t SHARD_W = 0>
+template <uint32_t SHARD_W = 0, uint32_t NK_K_TILES = 0>
 struct WeightRuns {
+    static_assert(NK_K_TILES == 0 || SHARD_W == 0, "[N, K] weights are read tile by tile");
     // Length of the maximal contiguous run starting at tile column j, clipped to end.
     static FORCE_INLINE uint32_t run(uint32_t j, uint32_t end) {
         if constexpr (SHARD_W > 0) {
@@ -53,6 +59,17 @@ struct WeightRuns {
         uint32_t jend,
         uint32_t l1_base,
         uint32_t page_bytes) {
+        if constexpr (NK_K_TILES > 0) {
+            for (uint32_t j = j0; j < jend; ++j) {
+                noc.async_read(
+                    acc,
+                    CoreLocalMem<uint32_t>(l1_base + (j - j0) * page_bytes),
+                    page_bytes,
+                    {.page_id = j * NK_K_TILES + row},
+                    {});
+            }
+            return;
+        }
         const uint32_t page_row_base = row * n_tiles_full;
         uint32_t j = j0;
         uint32_t off = 0;

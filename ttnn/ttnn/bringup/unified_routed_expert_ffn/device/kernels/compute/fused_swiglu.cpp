@@ -120,6 +120,129 @@
 #define GATE_ACT_TILE(i) silu_tile(i)
 #endif
 
+// weights_transposed (WEIGHTS_NK): the weights arrive as [N, K] tiles in transposed order (weight_runs.hpp); every
+// matmul transposes its in1 tile back, as ttnn.matmul's transpose_b does.
+#ifdef WEIGHTS_NK
+#define IN1_TRANSPOSE 1
+#else
+#define IN1_TRANSPOSE 0
+#endif
+
+// DeepSeek-V4.1 h options (routing_weights -> ROUTED_ROW_WEIGHT, fp8_act_quant -> FP8_ACT_QUANT), applied to the
+// activated tile in the fp32 DEST between the fused binary activation and its pack:
+//   h = act(gate, up) * r_row                                         (ROUTED_ROW_WEIGHT; one fp32 SFPU multiply)
+//   per row of 32 values (one tile row = one quantization block along the hidden dim):
+//     amax = max |h| over the row, clamped below at 1e-4
+//     s    = 2^ceil(log2(fp32(amax * fp32(1/448))))                    (ue8m0: on the exponent bits)
+//     q    = e4m3fn(min(|h| / s, 448)), round to nearest even          (|h| / s = |h| * 2^-k: exact)
+//     h    = sign(h) * q * s                                           (FP8_ACT_QUANT; bf16-exact)
+// DeepSeek's act_quant(h, 32, 'ue8m0') + its dequantizing GEMM, as models/demos/deepseek_v41_flash_d_p/tt/quant.py
+// composes it from ttnn ops. Every step is exact or one IEEE fp32 SFPU operation, the row max a compare tree.
+#if defined(ROUTED_ROW_WEIGHT) || defined(FP8_ACT_QUANT)
+#define ROUTED_H_OPTS 1
+#ifndef FUSED_BINARY_ACT
+#error "routing_weights / fp8_act_quant need a fused binary activation (the host refuses the others)"
+#endif
+#ifdef TRISC_MATH
+namespace ckernel::sfpu {
+
+// |y| in [0, 448] -> its nearest e4m3fn magnitude (ties to even), fp32.
+sfpi_inline sfpi::vFloat routed_e4m3_magnitude(sfpi::vFloat a) {
+    // normals (|y| >= 2^-6): keep 3 mantissa bits, rounding on the integer bits
+    sfpi::vUInt b = sfpi::as<sfpi::vUInt>(a);
+    sfpi::vUInt lsb = (b >> 20) & 1;
+    b = (b + lsb + sfpi::vUInt(0x7FFFF)) & sfpi::vUInt(0xFFF00000u);
+    sfpi::vFloat q = sfpi::as<sfpi::vFloat>(b);
+    // subnormals (|y| < 2^-6): multiples of 2^-9; adding 2^14 (ulp 2^-9) rounds to nearest even
+    v_if(a < 0.015625f) { q = (a + 16384.0f) - 16384.0f; }
+    v_endif;
+    return q;
+}
+
+// SFPU lanes: one load is 4 rows x 8 columns of a face (even or odd columns); each 8-lane sub-vector is one row.
+// Tile at DEST slot t: dst_reg[32 t + 16 half + 2 g + {0 even, 1 odd} + {0 left face, 8 right face}] = rows
+// 16 half + 4 g .. + 3 (half 0: faces 0 | 1, half 1: faces 2 | 3).
+// Two passes per 4-row group keep the live values within the 8 LREGs: (1) h *= r, stored back, and the row amax;
+// the scale s and 1/s are parked in the free up slot (S_TILE, same lanes); (2) each value is quantized from DEST.
+template <uint32_t H_TILE, uint32_t S_TILE, uint32_t o_k>
+sfpi_inline void routed_qdq_value(const uint32_t o) {
+    constexpr uint32_t T = 32;
+    const sfpi::vFloat inv = sfpi::dst_reg[S_TILE * T + o + 1];
+    const sfpi::vFloat a = sfpi::min(sfpi::abs(sfpi::vFloat(sfpi::dst_reg[H_TILE * T + o + o_k])) * inv, 448.0f);
+    const sfpi::vFloat q = routed_e4m3_magnitude(a) * sfpi::vFloat(sfpi::dst_reg[S_TILE * T + o]);
+    sfpi::dst_reg[H_TILE * T + o + o_k] = sfpi::copysgn(q, sfpi::vFloat(sfpi::dst_reg[H_TILE * T + o + o_k]));
+}
+
+template <bool HAS_W, bool HAS_Q, uint32_t H_TILE, uint32_t S_TILE, uint32_t W_TILE>
+inline void calculate_routed_h() {
+    constexpr uint32_t T = 32;
+#pragma GCC unroll 0
+    for (uint32_t half = 0; half < 2; ++half) {
+#pragma GCC unroll 0
+        for (uint32_t g = 0; g < 4; ++g) {
+            const uint32_t o = half * 16 + g * 2;
+            if constexpr (HAS_W) {
+                // the weight tile holds row r's weight in every column of faces 0 and 2
+                const sfpi::vFloat w = sfpi::dst_reg[W_TILE * T + o];
+                sfpi::dst_reg[H_TILE * T + o] = sfpi::vFloat(sfpi::dst_reg[H_TILE * T + o]) * w;
+                sfpi::dst_reg[H_TILE * T + o + 1] = sfpi::vFloat(sfpi::dst_reg[H_TILE * T + o + 1]) * w;
+                sfpi::dst_reg[H_TILE * T + o + 8] = sfpi::vFloat(sfpi::dst_reg[H_TILE * T + o + 8]) * w;
+                sfpi::dst_reg[H_TILE * T + o + 9] = sfpi::vFloat(sfpi::dst_reg[H_TILE * T + o + 9]) * w;
+            }
+            if constexpr (HAS_Q) {
+                // row amax: max over the 4 column sets, then over the 8 lanes of each row (rotate 4, 2, 1)
+                sfpi::vFloat m = sfpi::abs(sfpi::vFloat(sfpi::dst_reg[H_TILE * T + o]));
+                m = sfpi::max(m, sfpi::abs(sfpi::vFloat(sfpi::dst_reg[H_TILE * T + o + 1])));
+                m = sfpi::max(m, sfpi::abs(sfpi::vFloat(sfpi::dst_reg[H_TILE * T + o + 8])));
+                m = sfpi::max(m, sfpi::abs(sfpi::vFloat(sfpi::dst_reg[H_TILE * T + o + 9])));
+                sfpi::vFloat r = sfpi::subvec_shflror1(m);
+                r = sfpi::subvec_shflror1(r);
+                r = sfpi::subvec_shflror1(r);
+                r = sfpi::subvec_shflror1(r);
+                m = sfpi::max(m, r);
+                r = sfpi::subvec_shflror1(m);
+                r = sfpi::subvec_shflror1(r);
+                m = sfpi::max(m, r);
+                r = sfpi::subvec_shflror1(m);
+                m = sfpi::max(m, r);
+                // ue8m0 scale s and 1/s from the exponent bits of amax / 448
+                const sfpi::vFloat t = sfpi::max(m, 1e-4f) * 0.002232142724096775f;
+                const sfpi::vUInt sb = (sfpi::as<sfpi::vUInt>(t) + sfpi::vUInt(0x7FFFFF)) & sfpi::vUInt(0x7F800000);
+                sfpi::dst_reg[S_TILE * T + o] = sfpi::as<sfpi::vFloat>(sb);
+                sfpi::dst_reg[S_TILE * T + o + 1] = sfpi::as<sfpi::vFloat>(sfpi::vUInt(0x7F000000) - sb);
+                routed_qdq_value<H_TILE, S_TILE, 0>(o);
+                routed_qdq_value<H_TILE, S_TILE, 1>(o);
+                routed_qdq_value<H_TILE, S_TILE, 8>(o);
+                routed_qdq_value<H_TILE, S_TILE, 9>(o);
+            }
+        }
+    }
+}
+
+}  // namespace ckernel::sfpu
+#endif  // TRISC_MATH
+#ifdef ROUTED_ROW_WEIGHT
+#define ROUTED_HAS_W true
+#else
+#define ROUTED_HAS_W false
+#endif
+#ifdef FP8_ACT_QUANT
+#define ROUTED_HAS_Q true
+#else
+#define ROUTED_HAS_Q false
+#endif
+// h in DEST slot 0, the (consumed) up tile in slot 1 as scratch, the routing-weight tile in slot 2 (one output tile
+// per acquire, see binary_activation_phase).
+#define ROUTED_H_TILE()                        \
+    MATH((SFPU_UNARY_CALL(                     \
+        DST_SYNC_MODE,                         \
+        DST_ACCUM_MODE,                        \
+        calculate_routed_h,                    \
+        (ROUTED_HAS_W, ROUTED_HAS_Q, 0, 1, 2), \
+        0,                                     \
+        VectorMode::RC_custom)))
+#endif
+
 namespace {
 
 // Packer-completion barrier for the K-block boundary of a PACKER_L1_ACC phase.
@@ -269,7 +392,7 @@ FORCE_INLINE void matmul_phase(
                                     in0_index,
                                     in1_index,
                                     /*dst_index=*/0,
-                                    /*transpose=*/0,
+                                    /*transpose=*/IN1_TRANSPOSE,
                                     this_w,
                                     out_subblock_h,
                                     in0_block_w);
@@ -530,7 +653,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                 }
             }
             reconfig_data_format_srca(gate_cb_id);
-            matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+            matmul_block_init(x_cb_id, gate_cb_id, IN1_TRANSPOSE, out_subblock_w, out_subblock_h, in0_block_w);
             pack_reconfig_data_format(x_cb_id, partials_gu_cb_id);
 #ifdef PACKER_L1_ACC
             PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
@@ -563,7 +686,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                                 in0_index,
                                 in1_index,
                                 /*dst_index=*/0,
-                                /*transpose=*/0,
+                                /*transpose=*/IN1_TRANSPOSE,
                                 out_subblock_w,
                                 out_subblock_h,
                                 in0_block_w);
@@ -590,7 +713,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                                 in0_index,
                                 in1_index,
                                 /*dst_index=*/0,
-                                /*transpose=*/0,
+                                /*transpose=*/IN1_TRANSPOSE,
                                 out_subblock_w,
                                 out_subblock_h,
                                 in0_block_w);
@@ -730,7 +853,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
 // The binary op pins BOTH gate and up in dst, so each output tile costs 2 dst slots. With
 // 8 dst tiles available we stream in chunks of <=4 output tiles. The activated CB is
 // drained count-based, so push granularity need not match out_subblock_num_tiles.
-template <uint32_t out_block_num_tiles, uint32_t per_core_N_gu = 0>
+template <uint32_t out_block_num_tiles, uint32_t per_core_N_gu = 0, uint32_t row_weight_block_tiles = 0>
 FORCE_INLINE void binary_activation_phase(
     uint32_t prev_srcA_cb_id,
     uint32_t gate_partials_cb_id,
@@ -738,7 +861,8 @@ FORCE_INLINE void binary_activation_phase(
     uint32_t activated_cb_id,
     uint32_t eff_out_tiles,
     uint32_t gate_bias_cb_id = 0,
-    uint32_t up_bias_cb_id = 0) {
+    uint32_t up_bias_cb_id = 0,
+    uint32_t row_weight_cb_id = 0) {
     // Adaptive per_core_M: this core produces eff_out_tiles = per_core_M * pcN
     // activated tiles this chunk (0 if it owns no row -> nothing to do).
     const uint32_t EFF_OUT = eff_out_tiles;
@@ -755,7 +879,13 @@ FORCE_INLINE void binary_activation_phase(
     // host fp32_dest_acc_en, so assert they agree rather than trusting it.
     static_assert(kFp32DestAccEn == DST_ACCUM_MODE, "FP32_DEST_ACC_EN disagrees with DST_ACCUM_MODE");
     constexpr uint32_t kDstCapacity = kFp32DestAccEn ? 4u : 8u;
+#ifdef ROUTED_H_OPTS
+    // One output tile per acquire: gate in slot 0 (h in place), up in slot 1, the row's routing-weight tile in 2.
+    static_assert(kFp32DestAccEn, "routing_weights / fp8_act_quant need an fp32 dest (the host refuses otherwise)");
+    constexpr uint32_t kActChunk = 1;
+#else
     constexpr uint32_t kActChunk = kDstCapacity / 2;
+#endif
 
     CircularBuffer gate_partials_cb(gate_partials_cb_id);
     CircularBuffer up_partials_cb(up_partials_cb_id);
@@ -763,6 +893,13 @@ FORCE_INLINE void binary_activation_phase(
 
     gate_partials_cb.wait_front(EFF_OUT_MAX);
     up_partials_cb.wait_front(EFF_OUT_MAX);
+#ifdef ROUTED_ROW_WEIGHT
+    // One routing-weight tile per tile-row of this core's chunk (a constant block; only the live rows are read).
+    CircularBuffer row_weight_cb(row_weight_cb_id);
+    row_weight_cb.wait_front(row_weight_block_tiles);
+#else
+    (void)row_weight_cb_id;
+#endif
 
     pack_reconfig_data_format(activated_cb_id);
     // SrcA was last configured for the up matmul's in1 weights (prev_srcA_cb_id,
@@ -807,11 +944,19 @@ FORCE_INLINE void binary_activation_phase(
             copy_tile(up_partials_cb_id, base + j, c + j);
 #endif
         }
+#ifdef ROUTED_ROW_WEIGHT
+        // The output tile's row block: tiles leave in row-major (m, n) order, per_core_N_gu per row block. Same
+        // Float32 unpack-to-DEST format as the partials, so the copy needs no reconfig.
+        copy_tile(row_weight_cb_id, base / per_core_N_gu, 2);
+#endif
         // Fused gate/up activation; result written in place to dst[j]
         // (out == gate slot, mirroring moe_gpt's swiglu(0,1,0)).
         for (uint32_t j = 0; j < c; ++j) {
             BINARY_ACT_TILE(kFp32DestAccEn, j, c + j, j);
         }
+#ifdef ROUTED_H_OPTS
+        ROUTED_H_TILE();  // h *= r_row, then fp8 q-dq per row (slot 0; c == 1)
+#endif
         tile_regs_commit();
         tile_regs_wait();
         activated_cb.reserve_back(c);
@@ -832,6 +977,9 @@ FORCE_INLINE void binary_activation_phase(
     }
     gate_partials_cb.pop_front(EFF_OUT_MAX);
     up_partials_cb.pop_front(EFF_OUT_MAX);
+#ifdef ROUTED_ROW_WEIGHT
+    row_weight_cb.pop_front(row_weight_block_tiles);
+#endif
 }
 #endif
 
@@ -996,6 +1144,11 @@ void kernel_main() {
     constexpr uint32_t cb_up_bias = 0;
     constexpr uint32_t cb_down_bias = 0;
 #endif
+#ifdef ROUTED_ROW_WEIGHT
+    constexpr uint32_t cb_row_weight = get_named_compile_time_arg_val("cb_row_weight");
+#else
+    constexpr uint32_t cb_row_weight = 0;
+#endif
 
     // First Compute API call in the kernel, as compute_kernel_hw_startup.h requires: it does MMIO
     // config of MATH/PACK/UNPACK and needs those units idle. Nothing below it depends on the count
@@ -1088,7 +1241,7 @@ void kernel_main() {
             matmul_block_init(
                 cb_in0_x,
                 cb_in1_gate,
-                /*transpose=*/0,
+                /*transpose=*/IN1_TRANSPOSE,
                 gu_out_subblock_w,
                 gu_out_subblock_h,
                 g_in0_block_w);
@@ -1128,8 +1281,15 @@ void kernel_main() {
             // Phase 3: fused activation on the raw bf16 accumulators -> cb_activated.
             // cb_in1_up is the unpacker's last SrcA operand, passed so the partials reconfig
             // (weights df -> Float16_b) actually fires.
-            binary_activation_phase<gu_out_block_num_tiles, g_in1_per_core_w>(
-                cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated, re_eff_out_gu, cb_gate_bias, cb_up_bias);
+            binary_activation_phase<gu_out_block_num_tiles, g_in1_per_core_w, g_in0_num_subblocks>(
+                cb_in1_up,
+                cb_partials_gu,
+                cb_partials_up,
+                cb_activated,
+                re_eff_out_gu,
+                cb_gate_bias,
+                cb_up_bias,
+                cb_row_weight);
             (void)cb_gate_intermed;
             (void)cb_up_intermed;
 #else
@@ -1151,7 +1311,7 @@ void kernel_main() {
             matmul_block_init(
                 cb_in0_down_full,
                 cb_in1_down,
-                /*transpose=*/0,
+                /*transpose=*/IN1_TRANSPOSE,
                 d_out_subblock_w,
                 d_out_subblock_h,
                 d_in0_block_w);
