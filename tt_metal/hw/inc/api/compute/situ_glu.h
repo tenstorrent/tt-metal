@@ -28,8 +28,8 @@ namespace ckernel {
  *
  * Both halves are bounded, so |odst| <= beta_gate * beta_up, up to the rounding of the two
  * halves and of the packed result. The betas are the compile-time
- * Kimi K3 values (4 for the gate half, 25 for the up half); other models add a config next to
- * ckernel::sfpu::SituGluConfigKimi and call ckernel::sfpu::calculate_situ_glu directly.
+ * Kimi K3 values (4 for the gate half, 25 for the up half). The Blackhole kernel is fitted for
+ * these values only: ckernel::sfpu::calculate_situ_glu rejects any other config at compile time.
  *
  * Both operands stay in DST, so no intermediate is materialized to L1 or DRAM. The DST register
  * buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
@@ -46,6 +46,22 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void situ_glu_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+#ifdef ARCH_BLACKHOLE
+    if constexpr (!DST_ACCUM_MODE) {
+        if (vector_mode == VectorMode::RC) {
+            MATH((SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_situ_glu,
+                (DST_ACCUM_MODE, 32, sfpu::SituGluConfigKimi),
+                idst0,
+                idst1,
+                odst,
+                VectorMode::None)));
+            return;
+        }
+    }
+#endif
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

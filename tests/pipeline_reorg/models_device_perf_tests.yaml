@@ -13,6 +13,19 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
+- name: "ttnn eltwise generated bf16 situ_glu"
+  cmd: >-
+    pytest --timeout 120 -s -v
+    tests/ttnn/unit_tests/operations/eltwise/test_situ_glu_sfpu.py::test_situ_glu_sfpu_generated_bf16_sweep
+    tests/ttnn/unit_tests/operations/eltwise/test_situ_glu_sfpu.py::test_situ_glu_sfpu_generated_specials
+  model: situ_glu
+  skus:
+    bh_p150b_civ2:
+      timeout: 2
+  team: ttnn
+  budget_type: device_perf
+  owner_id: U09LVP68R7F # Nachiket Kapre
+
 - name: Llama 3.1-8B device perf tests
   cmd: |
     export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000

@@ -2315,6 +2315,13 @@ void call_binary_sfpu_operation(
     else if constexpr (BINOP == BinaryOp::SITU_GLU)
     {
         // situ_glu(gate, up) with gate = in0 and up = in1; DST_ACCUM_MODE selects the in-kernel BF16 round.
+        if constexpr (!DST_ACCUM_MODE) {
+            if (vector_mode == VectorMode::RC) {
+                SFPU_BINARY_CALL(
+                    DST_SYNC_MODE, DST_ACCUM_MODE, calculate_situ_glu, (DST_ACCUM_MODE, 32), dst_index_in0, dst_index_in1, dst_index_out, VectorMode::None);
+                return;
+            }
+        }
         SFPU_BINARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_situ_glu, (DST_ACCUM_MODE, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }
