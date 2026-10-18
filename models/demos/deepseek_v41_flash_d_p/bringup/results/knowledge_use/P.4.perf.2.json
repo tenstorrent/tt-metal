@@ -1,0 +1,46 @@
+{
+ "overseer": [
+  {
+   "id": "OV-17",
+   "answer": "done",
+   "evidence": "attempt-1 code unchanged; test_c_swa_experts with DS41_EXPERTS_PRECISION=glm DS41_EXPERTS_IMPL=bfp8 PASS (vs CPU rel 0.0162, limit 0.0849); perf_experts.py::test_kernels bfp8 glm: flat 16.38 ms call / 2.68 ms op (full, P.3: 17.35 / 3.76); BREADCRUMBS P.4 attempt 2"
+  }
+ ],
+ "used": [
+  {
+   "id": "DS41-62",
+   "how": "timed with tt/perf_experts.py::test_kernels (the test DS41-62 names) and compared against its full-precision flat numbers 17.35 / 3.76 ms",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-64",
+   "how": "used attempt 1's glm + bfp4 component numbers (rel 0.131) to attribute the limit miss to bfp4 weights, since glm + bfp8 passes (rel 0.016)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "ran every device test with --no-precompile",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.4",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-18T16:06:59",
+  "head": "557862d736f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.4.perf.2.json"
+  ]
+ }
+}

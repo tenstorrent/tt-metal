@@ -57,7 +57,8 @@ import torch
 
 import ttnn
 
-from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, tp_sum
+from . import ccl
+from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, sum_cols
 from .quant import fp8_qdq, round_tf32
 from .rope import RopeTable, deinterleave_perm, deinterleave_tail, rope_heads
 from .served import CacheSlab, DeviceScalars, alloc_served
@@ -222,9 +223,9 @@ class TtWindowCache:
         """[1, 1, n, 512] TILE per chip -> [1, 1, N n, 512] on every chip, chip-linear order r TP + c."""
         out = t
         if self.geo.tp > 1:
-            out = ttnn.all_gather(out, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
+            out = ccl.all_gather(out, 2, TP_AXIS)
         if self.geo.sp > 1:
-            nxt = ttnn.all_gather(out, dim=2, cluster_axis=SP_AXIS, memory_config=DRAM)
+            nxt = ccl.all_gather(out, 2, SP_AXIS)
             if out is not t:
                 ttnn.deallocate(out)
             out = nxt
@@ -406,7 +407,7 @@ class TtWindowAttention:
         g = self.geo
         full = kv
         if g.sp > 1:
-            full = ttnn.all_gather(kv, dim=2, cluster_axis=SP_AXIS, memory_config=DRAM)  # [1, 1, S, 512] bf16
+            full = ccl.all_gather(kv, 2, SP_AXIS)  # [1, 1, S, 512] bf16
         keep = ttnn.lt(self.tables.iota, float(end - start), dtype=ttnn.bfloat16, memory_config=DRAM)
         masked = ttnn.multiply(full, keep, dtype=ttnn.bfloat16, memory_config=DRAM)  # pad rows -> 0 (exact)
         ttnn.deallocate(keep)
@@ -543,9 +544,7 @@ class TtWindowAttention:
         if self.o_sum == "reduce_scatter":
             out = ttnn.reduce_scatter(z, dim=3, cluster_axis=TP_AXIS, memory_config=DRAM)
         else:
-            full = tp_sum(self.mesh, z, how="gather_add")
-            out = ttnn.mesh_partition(full, dim=3, cluster_axis=TP_AXIS, memory_config=DRAM)
-            ttnn.deallocate(full)
+            out = sum_cols(self.mesh, z)
         ttnn.deallocate(z)
         return out
 

@@ -1,0 +1,72 @@
+{
+ "overseer": [],
+ "used": [
+  {
+   "id": "DS41-35",
+   "how": "glm keeps the weights_nk [N, K] layout; only the tile formats of x / h / y and the fidelity change, so full stays exact bfp8",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-23",
+   "how": "the routing-weight selector matmuls (pieces -> fp32 weights) stay on the model's MATMUL_FIDELITY config in glm; only expert matmuls go to LoFi",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-56",
+   "how": "used P.1's bfp4-at-HiFi4 ladder (worst L03 0.99535, state 0.99726) as the reference point for the glm ladder",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-62",
+   "how": "expected the gain only in the op (3.8 of 17.4 ms per layer); measured 2.55 ms per layer saved, the chain unchanged",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-58",
+   "how": "read hand-run metrics from generated/bringup_adhoc/P.4*.json",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "ran every device test with --no-precompile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-65",
+   "how": "profile with TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 as the gate does",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "whether ttnn.bringup.combine accepts a bfp8 TILE expert output (it does: combine_device_operation.cpp validates BFLOAT8_B TILE)"
+ ],
+ "cited_only": [
+  "DS41-64"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.4",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-18T11:09:49",
+  "head": "2bbb41e2bb8",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.4.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
