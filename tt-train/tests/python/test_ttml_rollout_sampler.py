@@ -186,7 +186,7 @@ def test_llama_rollout_sampler_capital_of_france():
     sampler = TTMLRolloutSampler(model, tokenizer, MAX_COMPLETION_LENGTH, 0.0, 1)
 
     prompt_str = _to_capitals_chat_prompt(tokenizer, "The capital of France is")
-    prompt_ids = tokenizer.encode(prompt_str)
+    prompt_ids = tokenizer.encode(prompt_str, add_special_tokens=False)
 
     batch = sampler.generate([prompt_ids])
     assert model.get_run_mode() == RunMode.TRAIN, "generate() must restore the model's run mode"
