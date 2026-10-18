@@ -71,3 +71,10 @@ def extract_tag_answer(text: str) -> Optional[str]:
     body = text.split(ANSWER_OPEN)[-1].split(ANSWER_CLOSE)[0]
     nums = _NUM_RE.findall(body)
     return normalize_number(nums[-1]) if nums else None
+
+
+def extract_last_number(text: str) -> Optional[str]:
+    """Last number in the completion outside the <think> block (falls back to the whole text)."""
+    cleaned = re.sub(re.escape(THINK_OPEN) + r".*?" + re.escape(THINK_CLOSE), "", text, flags=re.DOTALL)
+    nums = _NUM_RE.findall(cleaned) or _NUM_RE.findall(text)
+    return normalize_number(nums[-1]) if nums else None
