@@ -5,13 +5,16 @@
   model code      `models/demos/<model>/tt/**.py` and `bringup/hooks.py` read no environment variable except in
                   `tt/settings.py` (which builds the Settings table)
   bring-up forks  `ttnn/ttnn/bringup/**` (not tests/): behaviour comes in as op arguments set from the model's
-                  settings; an environment knob is allowed only for diagnostics, marked `diagnostic` on its line
+                  settings; an environment knob is allowed only for diagnostics, marked `diagnostic` on its line.
+                  F106: only the lines a change adds count (vs ``base``, default HEAD): an imported fork's own knobs
+                  (e.g. 170 MIMO_FL_* reads in flat_routed_expert) are not the editing agent's to convert
 The orchestrator runs it on every agent's changed files; `python -m models.demos.common.bringup.testing.settings_lint`
 checks the whole model (the settings audit's gate, metric settings_violations)."""
 
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,7 +22,15 @@ ENV_READ = re.compile(r"os\.environ\b|os\.getenv\(|\bgetenv\s*\(|std::getenv")
 FORKS = "ttnn/ttnn/bringup/"
 
 
-def violations(repo: Path, model_dir: str, files: list[str]) -> list[str]:
+def _base_lines(repo: Path, rel: str, base: str | None) -> set[str]:
+    """The stripped lines of ``rel`` at ``base`` (empty: a new file, or no base)."""
+    if not base:
+        return set()
+    r = subprocess.run(["git", "show", f"{base}:{rel}"], cwd=repo, capture_output=True, text=True)
+    return {ln.strip() for ln in r.stdout.splitlines()} if r.returncode == 0 else set()
+
+
+def violations(repo: Path, model_dir: str, files: list[str], base: str | None = "HEAD") -> list[str]:
     out = []
     model_dir = model_dir.rstrip("/") + "/"
     for rel in files:
@@ -30,8 +41,11 @@ def violations(repo: Path, model_dir: str, files: list[str]) -> list[str]:
         in_fork = rel.startswith(FORKS) and "/tests/" not in rel
         if not (in_model or in_fork) or rel == model_dir + "tt/settings.py":
             continue
+        had = _base_lines(repo, rel, base) if in_fork else set()
         for n, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
             if not ENV_READ.search(line) or line.lstrip().startswith(("#", "//", "*")):
+                continue
+            if line.strip() in had:  # F106: the fork had this knob before the change
                 continue
             if in_model:
                 out.append(f"{rel}:{n}: reads the environment; put the switch in {model_dir}tt/settings.py")
