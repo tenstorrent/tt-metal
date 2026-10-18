@@ -645,13 +645,13 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             ADDR_MOD_7,
             14);  // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[3] for loading and
                   // intermediate results - Dest offset 14 is targeting the even columns for rows  15:12
-        // NOP needed to allow time for the final Computation Loadmacro to complete before returning to the Sanitation
-        // Loadmacro at the top for the next iteration
-        //  - to be completely safe, use 3 NOP; in practice 1 seems to be enough, probably because the overhead of the
-        //  DEST INCRW stuff introduces 2 cycles of delay
+        // exp_init sets UnitDelayKind=0xF, so the delays of the macro's scheduled ops count issued SFPU
+        // instructions rather than cycles. The Store runs 4 instructions after its LOADMACRO and stays pending
+        // until 4 more issue; anything that follows, including the next exp_init, must not land in its place.
         TTI_SFPNOP;
-        // TTI_SFPNOP;
-        // TTI_SFPNOP;
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        TTI_SFPNOP;
 #endif
     }
 #ifdef DISABLE_SFPLOADMACRO
