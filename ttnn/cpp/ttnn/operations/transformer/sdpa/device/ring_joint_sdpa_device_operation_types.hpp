@@ -206,7 +206,15 @@ struct RingJointSDPAInputs {
     // Lanes: a slot_id / kv_actual_isl pair with B elements selects B requests ("lanes") whose CP-local Q rows
     // are stacked request-major along Q's row dim; lane b reads cache slot slot_id[b] with prefix kv_actual_isl[b].
     // One element (the default) is the single-request op.
-    uint32_t num_lanes() const { return slot_id.has_value() ? static_cast<uint32_t>(slot_id->logical_volume()) : 1u; }
+    // The program hash reads this before validation runs, so an empty slot_id is rejected here, not divided by.
+    uint32_t num_lanes() const {
+        if (!slot_id.has_value()) {
+            return 1u;
+        }
+        const auto count = slot_id->logical_volume();
+        TT_FATAL(count > 0, "slot_id must contain at least one element (one per lane)");
+        return static_cast<uint32_t>(count);
+    }
     uint32_t q_lane_rows() const { return static_cast<uint32_t>(input_q.logical_shape()[2]) / num_lanes(); }
     uint32_t q_lane_padded_rows() const { return static_cast<uint32_t>(input_q.padded_shape()[2]) / num_lanes(); }
     // Split KV is block-cyclic from depth one, even when local K is shorter than Q.
