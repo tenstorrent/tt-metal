@@ -496,7 +496,9 @@ inline Tensor to_layout(
         return input;
     }
 
-    return ttnn::to_layout(input, layout, std::nullopt, std::nullopt, sub_core_grids);
+    // A sharded tensor is converted where its shards live; the tilize/untilize factories reject a grid for it.
+    return ttnn::to_layout(
+        input, layout, std::nullopt, std::nullopt, input.is_sharded() ? std::nullopt : sub_core_grids);
 }
 
 inline float to_layout(

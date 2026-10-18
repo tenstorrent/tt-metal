@@ -5111,3 +5111,25 @@ def test_binary_mixed_layout_keeps_sub_core_grids(layout_a, layout_b, device):
     for node in device_ops:
         assert "<CoreRangeSet>" in str(node.get("arguments")), node["params"]["name"]
     assert_with_pcc(torch_a + torch_b, ttnn.to_torch(out), 0.9999)
+
+
+def test_binary_sharded_row_major_with_sub_core_grids(device):
+    """Sharded row-major inputs are tilized and untilized in place; a sub_core_grids argument must not break that."""
+    torch.manual_seed(0)
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    memory_config = ttnn.create_sharded_memory_config(
+        (32, 64),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    torch_a = torch.rand(128, 64, dtype=torch.bfloat16)
+    torch_b = torch.rand(128, 64, dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config)
+    b = ttnn.from_torch(torch_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config)
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))])
+
+    out = ttnn.add(a, b, sub_core_grids=grid)
+
+    assert_with_pcc(torch_a + torch_b, ttnn.to_torch(out), 0.9999)
