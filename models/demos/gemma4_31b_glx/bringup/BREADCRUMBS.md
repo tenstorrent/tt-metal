@@ -154,3 +154,11 @@
   host_flops_frac 0.
   - Golden case: rel 0.0059 (limit 0.0114), bias +0.00085.
   - Regressions attn_norm, attention, post_attn_norm, attn_residual and ffn_norm: PASS.
+
+## C.sliding.post_ffn_norm (run 20261018-003406-gemma31-glx-3, attempt 1), 2026-10-18
+
+- `bringup/hooks.py`: added `post_ffn_norm -> post_feedforward_layernorm` to `NORM_WEIGHTS`. It reuses the existing
+  `tt/rms_norm.py` RMSNorm (x * w, eps from config) on the residual's TP row split, through `_ResidualStep`.
+- Check (`bfw job check --task C.sliding.post_ffn_norm`): PASS. pcc 0.9999959, auto_margin_min 2.84, device_ops 3,
+  host_flops_frac 0.
+  - Regressions attn_norm, attention, post_attn_norm, attn_residual, ffn_norm and mlp: PASS.

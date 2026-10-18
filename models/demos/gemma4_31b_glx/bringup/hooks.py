@@ -11,10 +11,11 @@ the framework (bringup_fw); the framework's lint fails it if it does.
 
 import torch
 
-NORM_WEIGHTS = {  # step -> checkpoint norm (the other norms: their own tasks)
+NORM_WEIGHTS = {  # step -> checkpoint norm
     "attn_norm": "input_layernorm",
     "post_attn_norm": "post_attention_layernorm",
     "ffn_norm": "pre_feedforward_layernorm",
+    "post_ffn_norm": "post_feedforward_layernorm",
 }
 
 
