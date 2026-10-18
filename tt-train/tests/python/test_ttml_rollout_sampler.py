@@ -293,7 +293,8 @@ def test_rollout_logprobs_match_teacher_forced_for_mixed_prompt_lengths(
     model, tokenizer = setup_ttml_model(transformer_config, DEVICE_CONFIG, model_source)
     sampler = TTMLRolloutSampler(model, tokenizer, MAX_COMPLETION_LENGTH, 0.0, 1)
     prompts = [
-        tokenizer.encode(_to_capitals_chat_prompt(tokenizer, q, **template_kwargs)) for q in MIXED_LENGTH_QUESTIONS
+        tokenizer.encode(_to_capitals_chat_prompt(tokenizer, q, **template_kwargs), add_special_tokens=False)
+        for q in MIXED_LENGTH_QUESTIONS
     ]
     gaps = max(len(p) for p in prompts) - np.array([len(p) for p in prompts])
     assert gaps.max() >= 32, f"prompts are too close in length to exercise padding: {gaps}"
