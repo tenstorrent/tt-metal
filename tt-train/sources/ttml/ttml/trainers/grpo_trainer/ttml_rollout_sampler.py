@@ -11,7 +11,14 @@ import torch
 import ttnn
 
 import ttml
-from ttml.common.utils import build_causal_mask, no_grad, round_up_to_tile, run_mode
+from ttml.common.utils import (
+    build_causal_mask,
+    deallocate_tensors,
+    no_grad,
+    resolve_pad_token_id,
+    round_up_to_tile,
+    run_mode,
+)
 from ttml.modules import RunMode
 from ttml.models.llama import Llama
 from ttml.models.qwen3 import Qwen3
@@ -23,20 +30,6 @@ TILE_SIZE = 32
 
 # Chunked async d2h readback cadence for stop-token detection during decode.
 CHUNK = 32
-
-
-def deallocate_tensors(tensors: Any) -> None:
-    if tensors is None:
-        return
-    if not isinstance(tensors, (list, tuple)):
-        tensors = [tensors]
-    for t in tensors:
-        if t is None:
-            continue
-        if isinstance(t, ttml.autograd.Tensor):
-            ttnn.deallocate(t.get_value(), force=True)
-        elif isinstance(t, ttnn.Tensor):
-            ttnn.deallocate(t, force=True)
 
 
 def async_read_to_host(tensors: List[Any], mesh_device: Any) -> Tuple[List[Any], Any]:
@@ -98,10 +91,7 @@ class TTMLRolloutSampler(RolloutSampler):
         else:
             self._init_qwen3_layout()
 
-        pad_token = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
-        if pad_token is None:
-            raise ValueError("TTMLRolloutSampler: could not resolve pad_token from tokenizer")
-        self._pad_token = int(pad_token)
+        self._pad_token = resolve_pad_token_id(tokenizer)
 
         self._kv_cache: Any = None
         self._kv_cache_B: int = 0

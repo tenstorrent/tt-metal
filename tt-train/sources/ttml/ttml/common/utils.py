@@ -251,6 +251,27 @@ def build_causal_mask(T: int, device: bool = False):
     return ttml.autograd.Tensor.from_numpy(m, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
 
 
+def deallocate_tensors(tensors) -> None:
+    if tensors is None:
+        return
+    if not isinstance(tensors, (list, tuple)):
+        tensors = [tensors]
+    for t in tensors:
+        if t is None:
+            continue
+        if isinstance(t, ttml.autograd.Tensor):
+            ttnn.deallocate(t.get_value(), force=True)
+        elif isinstance(t, ttnn.Tensor):
+            ttnn.deallocate(t, force=True)
+
+
+def resolve_pad_token_id(tokenizer) -> int:
+    pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    if pad is None:
+        raise ValueError("tokenizer has neither pad_token_id nor eos_token_id")
+    return int(pad)
+
+
 def summary(model) -> None:
     """Print a torchsummary-style overview of model parameters.
 
