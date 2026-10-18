@@ -24,8 +24,8 @@ import numpy as np
 import torch
 import ttml
 import ttnn
-from safetensors.numpy import save_file
 from ttml.common.schedulers import CosineAnnealingScheduler, LambdaScheduler, LinearScheduler, SequentialScheduler
+from ttml import checkpointing
 from ttml.common.utils import (
     build_causal_mask,
     create_optimizer,
@@ -39,7 +39,7 @@ from ttml.modules import RunMode
 
 from ..callback import TrainerCallback
 from .distributed import init_distributed_training, is_rollout_rank
-from .grpo_ttml_model import setup_ttml_model
+from .grpo_ttml_model import CHECKPOINT_FILE, setup_ttml_model
 
 if TYPE_CHECKING:
     from .rollout_batch_source import RolloutBatchSource, ScoredRolloutBatch
@@ -937,7 +937,6 @@ def save_checkpoint(
     model: Any,
     step: int,
     output_dir: str,
-    dp_composer: Any = None,
     tokenizer: Any = None,
     grpo_config: Optional[GRPOConfig] = None,
     optimizer: Any = None,
@@ -948,8 +947,15 @@ def save_checkpoint(
     ckpt_dir = os.path.join(output_dir, "checkpoints", f"grpo_step_{step}")
     os.makedirs(ckpt_dir, exist_ok=True)
 
-    tensors = {name: param.to_numpy(ttnn.DataType.FLOAT32, dp_composer) for name, param in model.parameters().items()}
-    save_file(tensors, os.path.join(ckpt_dir, "model.safetensors"))
+    header = {
+        "global_step": step,
+        "learning_rate": learning_rate,
+        "rng": {"python": random.getstate(), "numpy": np.random.get_state(), "torch": torch.random.get_rng_state()},
+        "grpo_config": asdict(grpo_config) if grpo_config is not None else None,
+    }
+    checkpointing.save_checkpoint(
+        os.path.join(ckpt_dir, CHECKPOINT_FILE), header=header, model_params=model.parameters(), optimizer=optimizer
+    )
 
     if model_source:
         try:
@@ -973,34 +979,6 @@ def save_checkpoint(
             gen_config["pad_token_id"] = tokenizer.pad_token_id
         with open(os.path.join(ckpt_dir, "generation_config.json"), "w") as f:
             json.dump(gen_config, f, indent=2)
-
-    trainer_state = {"global_step": step}
-    if learning_rate is not None:
-        trainer_state["learning_rate"] = learning_rate
-    elif optimizer is not None:
-        trainer_state["learning_rate"] = optimizer.get_group_lrs()
-    with open(os.path.join(ckpt_dir, "trainer_state.json"), "w") as f:
-        json.dump(trainer_state, f, indent=2)
-
-    if scheduler is not None:
-        torch.save(scheduler.get_state_dict(), os.path.join(ckpt_dir, "scheduler.pt"))
-    else:
-        scheduler_state = {
-            "base_lr": optimizer.get_initial_lr() if optimizer else None,
-            "warmup_steps": grpo_config.warmup_steps if grpo_config else 0,
-            "last_step": step,
-        }
-        torch.save(scheduler_state, os.path.join(ckpt_dir, "scheduler.pt"))
-
-    rng_state = {
-        "python": random.getstate(),
-        "numpy": np.random.get_state(),
-        "torch": torch.random.get_rng_state(),
-    }
-    torch.save(rng_state, os.path.join(ckpt_dir, "rng_state.pth"))
-
-    if grpo_config is not None:
-        torch.save(asdict(grpo_config), os.path.join(ckpt_dir, "training_args.bin"))
 
     with open(os.path.join(ckpt_dir, "timestamp.txt"), "w") as f:
         f.write(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC\n"))
@@ -1109,7 +1087,6 @@ class GRPOTrainer:
         self._ddp_context_enabled: bool = False
         self._fsdp_sync_axes: Tuple[str, ...] = ()
         self._dp_mapper: Any = None
-        self._dp_composer: Any = None
         self._grad_sync_world_size: int = 1
         self._completions_per_microbatch: int = 0
         self.rollout_batch_source: Optional[RolloutBatchSource] = None
@@ -1317,7 +1294,6 @@ class GRPOTrainer:
         )
         batch_sharded: bool = ddp_enabled or fsdp_enabled
         dp_mapper: Any = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0) if batch_sharded else None
-        dp_composer: Any = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if batch_sharded else None
         if not batch_sharded:
             num_devices = 1
 
@@ -1425,7 +1401,6 @@ class GRPOTrainer:
         self._ddp_context_enabled = ddp_context_enabled
         self._fsdp_sync_axes = fsdp_sync_axes
         self._dp_mapper = dp_mapper
-        self._dp_composer = dp_composer
         self._grad_sync_world_size = grad_sync_world_size
         self._completions_per_microbatch = completions_per_microbatch
         self._monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
@@ -1660,7 +1635,6 @@ class GRPOTrainer:
             self.model,
             step,
             cfg.output_dir,
-            dp_composer=self._dp_composer,
             tokenizer=self.tokenizer,
             grpo_config=cfg,
             optimizer=self._optimizer,
