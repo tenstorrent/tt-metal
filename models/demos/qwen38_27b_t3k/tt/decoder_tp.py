@@ -37,9 +37,10 @@ _TP_POLICY = {
         "rectangular_working": False,
         # The second ethernet link of each chip pair carries the dispatch datapath.
         "num_links": 1,
-        # Prefill collectives move the whole sequence, where the narrower dtype costs more in
-        # typecast than it saves in payload; decode keeps the value the precision policy sets.
-        "ccl_dtype_prefill": "bfloat16",
+        # A prefill collective is wire-bound: one T3K hop carries 100 Gbps for user kernels once
+        # the dispatch link is reserved, and the ring already runs at three quarters of it. Halving
+        # the payload buys more than the two typecasts around it cost.
+        "ccl_dtype_prefill": "bfloat8_b",
         # DRAM-sharded matmul rejects num_workers_per_dram_bank > 1 outside Blackhole, so every
         # projection and the LM head fall back to a single reader per bank.
         "attention_readers": 1,
