@@ -128,6 +128,7 @@ def test_k3_moe_layer(mesh_device, device_params):
         S,
         torus=k3_torus(),
         weight_cache=WEIGHT_CACHE,
+        acc_on_ports=os.environ.get("K3_ACC_ON_PORTS", "1") == "1",
         deterministic=os.environ.get("K3_DET", "0") == "1",
     )
     logger.info(
@@ -323,6 +324,7 @@ def test_k3_moe_layer_trace(mesh_device, device_params):
         S,
         torus=k3_torus(),
         weight_cache=WEIGHT_CACHE,
+        acc_on_ports=os.environ.get("K3_ACC_ON_PORTS", "1") == "1",
         deterministic=os.environ.get("K3_DET", "0") == "1",
     )
     x = torch.randn(N * S, d.H, generator=torch.Generator().manual_seed(1)).to(torch.bfloat16)
@@ -433,6 +435,7 @@ def test_k3_moe_determinism_trace(mesh_device, device_params):
         S,
         torus=k3_torus(),
         weight_cache=WEIGHT_CACHE,
+        acc_on_ports=os.environ.get("K3_ACC_ON_PORTS", "1") == "1",
         deterministic=os.environ.get("K3_DET", "1") == "1",
     )  # (the CI mode: fixed combine sum order)
     x = torch.randn(N * S, d.H, generator=torch.Generator().manual_seed(1)).to(torch.bfloat16)

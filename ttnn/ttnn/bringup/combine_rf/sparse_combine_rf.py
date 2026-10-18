@@ -992,9 +992,10 @@ def sparse_combine_rf_prepare(
         sh_ = arena.memory_config().shard_spec
         arena_bytes = int(sh_.shape[0]) * int(sh_.shape[1]) * (4 if arena.dtype == ttnn.uint32 else 2)
         QP0 = int(os.environ.get("SPC_QP", "64"))
-        fit = (arena_bytes - RINGS - acc_cbs - (2 * ISLOT if l1 else 0) - (QP0 * ISLOT if FUSED else 0)) // (
-            (N - 1) * SLOT
-        )
+        # (fused: room kept for an 8-slot local ring and a 32-slot injection ring; what is left after the rings
+        # grows them, below)
+        keep = (8 + min(32, QP0)) * ISLOT if FUSED else (2 * ISLOT if l1 else 0)
+        fit = (arena_bytes - RINGS - acc_cbs - keep) // ((N - 1) * SLOT)
         D = min(depth, fit)
     else:
         D = depth
@@ -1002,6 +1003,11 @@ def sparse_combine_rf_prepare(
     assert D >= 1, f"combine: no room for one ring slot per source chip ({N - 1} x {SLOT} B)"
     QP = int(os.environ.get("SPC_QP", "64"))  # a port's L1 hand-off injection ring (its own region, no rings there)
     acc_area = RINGS + (N - 1) * D * SLOT
+    if FUSED and arena is not None:  # (local ring up to 16 slots, then the injection ring up to QP, from what is left)
+        a_end = al(acc_area) + acc_cbs
+        QL_F = min(16, (arena_bytes - a_end - min(32, QP) * ISLOT) // ISLOT)
+        QP = min(QP, (arena_bytes - a_end - QL_F * ISLOT) // ISLOT)
+        assert QL_F >= 2 and QP >= 8, f"acc_on_ports: local ring {QL_F} / injection ring {QP} slots"
     port_area = RINGS + (QP * ISLOT if l1 is not None else 0)  # (fused: the ring after the accumulator's, see build)
     area_bytes = max(acc_area, port_area)
     all_cores = sorted(used_cores | {(c.x, c.y) for c in acc_cores})
@@ -1254,7 +1260,7 @@ def sparse_combine_rf_prepare(
                     l1 is not None
                 ):  # the accumulators' local ring: what is left of the arena (fused: and the port's ring)
                     loc_off = ends["a"]
-                    QL = min(16, (arena_bytes - loc_off - (QP * ISLOT if FUSED else 0)) // ISLOT)
+                    QL = QL_F if FUSED else min(16, (arena_bytes - loc_off) // ISLOT)
                     assert QL >= 2, f"no room for the accumulators' local ring ({(arena_bytes - loc_off) >> 10} KB)"
                     inj_off = loc_off + QL * ISLOT if FUSED else RINGS
                     if FUSED:
@@ -1445,7 +1451,7 @@ def sparse_combine_rf_prepare(
     run.counts = dict(n_inj={k: len(v) for k, v in inj.items()}, n_ret=n_ret)
     run.cells = run_cells
     run.depth = D
-    run.l1 = dict(acc_area=acc_area, port_area=port_area, rings=(N - 1) * D * SLOT, state=RINGS, slot=SLOT)
+    run.l1 = dict(acc_area=acc_area, port_area=port_area, rings=(N - 1) * D * SLOT, state=RINGS, slot=SLOT, inj=QP)
     run.zero_runs = zero_runs
     run.dbg = dbg_t
     return run

@@ -151,6 +151,7 @@ class TtK3TokenSplitMoE:
         deterministic=False,
         torus=(False, False),
         weight_cache=None,
+        acc_on_ports=True,
     ):
         self.mesh, self.d, self.S, self.torus = mesh_device, d, S, tuple(torus)
         R, C = tuple(mesh_device.shape)
@@ -465,7 +466,9 @@ class TtK3TokenSplitMoE:
             l1=dict(writers=wcores, words=int(self.words.buffer_address())),
             devplan=dict(plan=probe.outs["plan"], table=probe.outs["table"], dord=probe.outs.get("dord"), top_k=d.K),
             deterministic=deterministic,
+            acc_on_ports=acc_on_ports,
         )
+        self.acc_on_ports = acc_on_ports
         self.A = len(self.combine.cells["accs"])
         self.planner = combine_planner_prepare(mesh_device, A=self.A, **self._planner_args) if self.A != 15 else probe
         if self.planner is not probe:  # (the combine baked the probe's tensors: give the planner those)

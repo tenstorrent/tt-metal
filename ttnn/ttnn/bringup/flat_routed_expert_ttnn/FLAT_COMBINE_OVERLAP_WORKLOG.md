@@ -1202,3 +1202,28 @@ alone is now on par with the Tensix layout on the skewed routings and 1% faster 
 | DRISC-only both tiles, 32 down, arrival-order combine | **1103 / 1082** | **1306 / 1228** | 2869 / 2624 |
 | same, deterministic v1 (global order) | 1103 / 1082 | 1528 / 1229 | 2823 / 2620 |
 Exact (rel err 2.4e-3) on all routings; v1 bit-exact across 10 repeats on all.
+
+### Smaller combine footprint (2026-10-18): small-ring fix, ports per direction, accumulators on ports
+Why: the combine took ~21-23 cells (a port core per (direction, link) + 14-16 accumulators), more on Galaxy (more
+directions / links); the flat expert could use them (or must give them up on Galaxy).
+- **Small-ring hang** (the "7 accumulator" hang): a y writer issued a row tile only once every destination had
+  granted slots for all of that tile's rows; an accumulator's local ring smaller than that (5 slots: 7 accumulators in
+  1242 KB, or 8 in 1190 KB) could never be granted. Fix (se_yrm.hpp): a tile goes out in grant-sized units. 8 / 9 / 10
+  / 7 accumulators all pass; fewer accumulators still cost under skew (7: packed fused 3149 vs 2727 us).
+- **Ports per direction** (ports_per_direction, port_luts(per_direction=True)): one sender drives both links of a
+  direction. Exact; V4.1 fused 1106 / 1344 / 2947 vs 1103 / 1304 / 2727 us per link. The hot chip (packed: chip 0) is
+  link bound and its writers stall on the shared 64-slot ring (rows all handed off 2939 vs 2721 us); a 90-slot ring
+  2881. Ring capacity per link matters on skew: per link with 32 slots 1354 / 2865. Kept as an option for Galaxy (where
+  ports outnumber accumulators); off on 2x4.
+- **Accumulators on the ports** (acc_on_ports): the A accumulator cells are the same on every chip, each chip's ports
+  take the nearest to its Ethernet cores, and a port core is also an accumulator: its sender RISC also runs the
+  hand-off grants / pushes and the accumulator's output writes; RISCV_1 runs the accumulator reader, the TRISCs its
+  compute. Combine cells = max(ports, A). The rings come from what the arena leaves (local ring <= 16, injection
+  ring <= 64 slots).
+| layout | combine cells | V4.1 fused u / s / p (us) | K3 fused u / s / p (harness) |
+| separate, 64-slot rings | ~19-23 | 1103 / 1304 / 2727 | 2289 / 2596 / 5727 |
+| accumulators on ports | 15 (V4.1) / 16 (K3) | 1106 / 1360 / 2877 (32-slot ring: L1) | 2289 / 2592 / 5807 |
+K3 block (default now): PCC 0.99622, experts_combine 2356 us, traced forward 3312 us (was 3314), 99 CI-mode replays
+bit-exact. Freed cells: K3 with 32 down cores (min(96, 96) effective) gains nothing (flat alone packed 5528 vs 5592:
+K3 packed is not down bound); V4.1 72 gate/up now runs with its combine (13 cells) but loses to 48 (1303 / 1670 /
+2822 us).
