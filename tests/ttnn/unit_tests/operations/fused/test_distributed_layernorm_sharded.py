@@ -929,8 +929,7 @@ def _run_simulated_distributed_norm_pre_all_gather_stats(device, is_rmsnorm, w, 
     """Single-device distributed pre-all-gather stats over a non-tile-aligned width.
 
     Checks the per-shard statistics directly (E[x] and E[x^2]) rather than the full pre + post
-    pipeline, so it isolates the pre-all-gather reduction and avoids the unrelated single-core
-    post-all-gather hang (see _SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG). The statistics must be
+    pipeline, so it isolates the pre-all-gather reduction. The statistics must be
     reduced over the logical width only; the implicit tile padding is poisoned so any inclusion of the
     padded columns is observable.
     """
@@ -990,24 +989,12 @@ def _run_simulated_distributed_norm_pre_all_gather_stats(device, is_rmsnorm, w, 
         )
 
 
-# The single-core (1x1 grid) simulated distributed post-all-gather flow hangs waiting on the
-# cb_ex_global multicast. It reproduces for both tile-aligned and non-tile-aligned widths, so the hang
-# is a distributed post-all-gather issue independent of non-tile-aligned padding handling. run=False
-# keeps the hang from stalling CI.
-_SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG = (
-    "Single-core simulated distributed post-all-gather hangs on the cb_ex_global multicast. Issue #48661"
-)
-
-
-@pytest.mark.xfail(reason=_SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG, run=False)
+# Regression coverage for the one-core post-all-gather self-multicast hang (#48661).
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
 @pytest.mark.parametrize("w", [64, 128])
 @pytest.mark.parametrize("eps", [1e-6])
 def test_simulated_distributed_norm_tile_aligned_width(device, is_rmsnorm, w, eps):
-    """Tile-aligned single-core widths through the full pipeline. Shows the post-all-gather hang
-    affects tile-aligned widths too, not just non-tile-aligned ones (see
-    _SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG).
-    """
+    """Tile-aligned single-core widths exercise the local statistics copy."""
     _run_simulated_distributed_norm(device, is_rmsnorm, w, eps)
 
 
@@ -1016,21 +1003,16 @@ def test_simulated_distributed_norm_tile_aligned_width(device, is_rmsnorm, w, ep
 @pytest.mark.parametrize("eps", [1e-6])
 def test_simulated_distributed_norm_pre_all_gather_non_tile_aligned_width(device, is_rmsnorm, w, eps):
     """Non-tile-aligned single-core widths, for both norms. Checks the pre-all-gather per-shard
-    statistics directly rather than the full pipeline, because the single-core post-all-gather hangs
-    (see _SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG).
+    statistics directly, independently of the full-pipeline coverage below.
     """
     _run_simulated_distributed_norm_pre_all_gather_stats(device, is_rmsnorm, w, eps)
 
 
-@pytest.mark.xfail(reason=_SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG, run=False)
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
 @pytest.mark.parametrize("w", [40, 72, 200])
 @pytest.mark.parametrize("eps", [1e-6])
 def test_simulated_distributed_norm_non_tile_aligned_width(device, is_rmsnorm, w, eps):
-    """Non-tile-aligned single-core widths through the full pipeline. Does not run: the single-core
-    post-all-gather hangs (see _SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG). The pre-all-gather padding
-    exclusion is verified directly by test_simulated_distributed_norm_pre_all_gather_non_tile_aligned_width.
-    """
+    """Non-aligned widths preserve padding exclusion through the local statistics copy."""
     _run_simulated_distributed_norm(device, is_rmsnorm, w, eps)
 
 

@@ -53,18 +53,32 @@ void kernel_main() {
     const auto& global_reduce_sender = [&](DataflowBuffer& dfb_ex_obj,
                                            DataflowBuffer& dfb_ex_global_obj_inner) __attribute__((always_inline)) {
         const uint32_t l1_read_addr_ex_global = dfb_ex_global_obj_inner.get_read_ptr();
-        noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-            dfb_ex_obj,
-            mcast_ep,
-            stats_tiles * num_tiles_per_worker_bytes,
-            num_blocks,
-            {},
-            {.noc_x_start = mcast_dest_noc_start_x,
-             .noc_y_start = mcast_dest_noc_start_y,
-             .noc_x_end = mcast_dest_noc_end_x,
-             .noc_y_end = mcast_dest_noc_end_y,
-             .addr = l1_read_addr_ex_global},
-            false);
+        if constexpr (num_blocks == 1) {
+            // A loopback multicast with self as its only destination can stall
+            // on Blackhole. Publish the same payload with ordinary unicast.
+            // Use self explicitly: 2D height-sharded grids may describe the
+            // multicast rectangle starting at the next (absent) width core.
+            const UnicastEndpoint local_ep;
+            noc.async_write(
+                dfb_ex_obj,
+                local_ep,
+                stats_tiles * num_tiles_per_worker_bytes,
+                {},
+                {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = l1_read_addr_ex_global});
+        } else {
+            noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                dfb_ex_obj,
+                mcast_ep,
+                stats_tiles * num_tiles_per_worker_bytes,
+                num_blocks,
+                {},
+                {.noc_x_start = mcast_dest_noc_start_x,
+                 .noc_y_start = mcast_dest_noc_start_y,
+                 .noc_x_end = mcast_dest_noc_end_x,
+                 .noc_y_end = mcast_dest_noc_end_y,
+                 .addr = l1_read_addr_ex_global},
+                false);
+        }
         noc.async_write_barrier();
     };
 
@@ -73,5 +87,7 @@ void kernel_main() {
     global_reduce_sender(dfb_stats_reduced_obj, dfb_ex_global_obj);
     dfb_ex_global_obj.push_back(stats_tiles * block_h);
     dfb_stats_reduced_obj.pop_front(stats_tiles * block_h);
-    global_semaphore_set();
+    if constexpr (num_blocks > 1) {
+        global_semaphore_set();
+    }
 }
