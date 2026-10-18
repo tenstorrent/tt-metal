@@ -26,7 +26,14 @@ import ttml
 import ttnn
 from safetensors.numpy import save_file
 from ttml.common.schedulers import WarmupConstantScheduler, WarmupCosineScheduler
-from ttml.common.utils import build_causal_mask, create_optimizer, round_up_to_tile, validate_clip_grad_norm
+from ttml.common.utils import (
+    build_causal_mask,
+    create_optimizer,
+    deallocate_tensors,
+    resolve_pad_token_id,
+    round_up_to_tile,
+    validate_clip_grad_norm,
+)
 from ttml.modules import RunMode
 
 from ..callback import TrainerCallback
@@ -726,20 +733,6 @@ def _preview(text: Any, max_len: int = 300) -> str:
     return s if len(s) <= max_len else s[: max_len - 1] + "\u2026"
 
 
-def _deallocate_tensors(tensors: Any) -> None:
-    if tensors is None:
-        return
-    if not isinstance(tensors, (list, tuple)):
-        tensors = [tensors]
-    for t in tensors:
-        if t is None:
-            continue
-        if isinstance(t, ttml.autograd.Tensor):
-            ttnn.deallocate(t.get_value(), force=True)
-        elif isinstance(t, ttnn.Tensor):
-            ttnn.deallocate(t, force=True)
-
-
 def dispatch_reward(
     reward_func: Callable[..., List[float]],
     completions: List[str],
@@ -1220,9 +1213,7 @@ class GRPOTrainer:
         grpo_cfg = self.config
         tt_model = self.model
         tokenizer = self.tokenizer
-        pad_token = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
-        if pad_token is None:
-            raise ValueError("GRPOTrainer: tokenizer has neither pad_token_id nor eos_token_id")
+        pad_token = resolve_pad_token_id(tokenizer)
 
         optimizer = create_optimizer(tt_model, self.optimizer_dict)
         if grpo_cfg.use_clip_grad_norm:
@@ -1545,7 +1536,7 @@ class GRPOTrainer:
         )
         loss.backward(retain_graph=False)
         ttml.autograd.AutoContext.get_instance().reset_graph()
-        _deallocate_tensors([nlog_old, nlog_new, mask, adv_ttml, loss])
+        deallocate_tensors([nlog_old, nlog_new, mask, adv_ttml, loss])
 
     def _apply_gradients(self) -> None:
         """Grad sync + ``on_before_optimizer_step`` + optional grad clip +
