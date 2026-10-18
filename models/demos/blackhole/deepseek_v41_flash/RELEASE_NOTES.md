@@ -1,25 +1,22 @@
 # DeepSeek-V4.1-Flash on Blackhole Galaxy: release notes
 
-## This release: image `0.24.0-5cfe4d9-84b529b` (vLLM 0.31.0)
+## This release: image `0.24.0-c9cfb00-ffd1a57` (vLLM 0.31.0)
 
 | | |
 |---|---|
-| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-5cfe4d9-84b529b` |
-| tt-metal | `5cfe4d92d309793f070876e3023838c35ff7922e` (branch `ssinghal/dsv4p1`; the image was built from this commit, later commits change documentation only) |
-| tt-inference-server | `84b529b9afdeaa12c230523c1c90ed2c307b18bf` (branch `ssinghal/dsv4p1`; the catalog carries the production defaults, see below) |
+| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-c9cfb00-ffd1a57` |
+| tt-metal | `c9cfb008c651ea5b5a7978f0569cd4358196f8ce` (branch `ssinghal/dsv4p1`; the image was built from this commit, later commits change documentation only) |
+| tt-inference-server | `ffd1a57ceece25c02b668bbcc4682dba52dbd9da` (branch `ssinghal/dsv4p1`) |
 | vllm-tt-plugin | `ff71d290df8e95e5e956d49ba860478db2cb034c` (branch `ssinghal/dsv4p1`) |
 | Stack | vLLM 0.31.0, torch 2.11.0+cpu, transformers 5.12.1 |
-| Previous image | `0.24.0-c9cfb00-ffd1a57` (vLLM 0.31.0; before it `0.24.0-799a223-ffd1a57`) |
-| Build | an overlay on the previous image (`0.24.0-c9cfb00-ffd1a57`): the compiled tt-metal (C++), the Python environment and the vLLM install are reused unchanged (no file outside `models/` differs in tt-metal between `3dce07e3792` and this commit); `models/` and the plugin package are replaced from the commits above, the tt-inference-server tree is unchanged. |
+| Previous image | `0.24.0-799a223-ffd1a57` (vLLM 0.31.0; before it `0.24.0-3dce07e-233b250`) |
+| Build | an overlay on the previous image (`0.24.0-799a223-ffd1a57`): the compiled tt-metal (C++), the Python environment and the vLLM install are reused unchanged (no file outside `models/` differs in tt-metal between `3dce07e3792` and this commit); `models/` and the plugin package are replaced from the commits above, the tt-inference-server tree is unchanged. |
 
 ## What changed since `0.24.0-799a223-ffd1a57`
 
-New since `0.24.0-c9cfb00-ffd1a57`: the small prefill context at 1,048,576 tokens, the `DSV41_SHARED_SAMPLER_SPEC` flag (default off), and the catalog defaults of tt-inference-server (a launch without a runtime spec serves 16 users at 262,144 tokens with prefix caching, chunk budget 4,096 and k = 5; `--impl deepseek-v41-flash-1m` serves 4 users at 1,048,576 tokens). The other items below are in both images.
-
 - **Plain decode is fixed.** A server without speculative decoding used the fused decode-indexer backend and answered wrongly at 16 users (GSM8K 85.67 % at 131,072 tokens, 80.59 % at 262,144). Plain decode now uses the matmul backend up to 262,144 index entries, like the speculative servers (`DSV41_IDX_SWITCH` default 262144 for every launch). See "Known issues" for how this was verified.
-- **Prefix caching (APC) and chunked prefill, on by default in the 262,144 / 1,048,576-token specs.** They start the server with APC on and a token budget of 4,096 per step (`_noapc` copies switch it off). Shared-prefix bursts get their first token about 3x sooner at 16 users / 262,144 tokens, and a 32k-token prompt no longer stops decoding for 33 s (9 s). The 131,072-token specs are unchanged (APC off, budget 67,584; APC is wrong with the unsharded prefill-indexer layout of those sizes).
-- **Plain (non-speculative) decode samples with the shared tt_transformers sampler** (`DSV41_SHARED_SAMPLER`, default 1 for launches without `speculative_config`, 0 selects the previous full-vocabulary sampler). It takes the top 32 candidates of the vocabulary per step: `top_k` above 32 is clamped to 32 and "no top_k" (the model card's recommended sampling: temperature 1.0, top_p 0.95 or 1.0) means the top-32 of the vocabulary (logged once at the first such request); candidates are bf16 roundings of the logits. Greedy rows (temperature 0 / `top_k` 1) stay the exact argmax and seeds keep their meaning. Speculative launches keep the in-trace full-vocabulary sampler in the verify rounds (the shared sampler for the verify trace exists behind `DSV41_SHARED_SAMPLER_SPEC=1`, default off, not part of the shipped configurations). About 4x less sampler time per step (0.28 ms against 1.1-3.4 ms).
-- **Small prefill context at 4 users / 1,048,576 tokens (default for builds with max context >= 524,288).** The traced prefill chunk used to run at the max-context size, so a short prompt paid the O(context) work of the 8 indexer layers on every chunk (0.661 s per chunk replay at 1,048,576 against 0.428 s at 262,144). The build now captures a second chunk trace at a 16,384-token context (`DSV41_PF_SMALL_SPAD`); a prompt whose first call is certainly the whole prompt replays it, longer prompts use the max-context trace (prefix-cache snapshots are keyed by the context they were taken in). Measured at 4 users and 1,048,576 tokens, short-prompt TTFT 0.73 / 0.68 / 0.74 s at concurrency 1 / 2 / 4 against 0.90 / 0.83 / 0.87 s for the same build without it (the gap to the 262,144-token build is closed); TPOT is unchanged. Fitting the DRAM needs two settings that are set automatically when the context is active: `DSV41_KEY_EXPORT_FILL=1` (tile-native key export) and `DSV41_MASK_LEAN=1` (bf16 decode score mask, bit-identical). It costs trace-region headroom: 3.0 MiB per bank free at the end of the 1M build (9.0 without), with `trace_region_size` 650000000 as in the shipped 1M specs; do not lower it. Switches: `DSV41_PF_SMALL_BUCKET=0` turns it off, `DSV41_PF_SMALL_MIN_CTX` (default 524288) is the smallest max context that enables it. It is inactive below 524,288 tokens (the 16-user 262,144-token server is unchanged). Checks at 1M / 4 users: API suite 23/23, image input, needle 100,020 tokens -> 4817, GSM8K 98-99 %.
+- **Prefix caching (APC) and chunked prefill, on by default in the 262,144 / 524,288 / 1,048,576-token specs.** They start the server with APC on and a token budget of 4,096 per step (`_noapc` copies switch it off). Shared-prefix bursts get their first token about 3x sooner at 16 users / 262,144 tokens, and a 32k-token prompt no longer stops decoding for 33 s (9 s). The 131,072-token specs are unchanged (APC off, budget 67,584; APC is wrong with the unsharded prefill-indexer layout of those sizes).
+- **Sampling uses the shared tt_transformers sampler**, in plain decode (`DSV41_SHARED_SAMPLER`) and in the speculative verify rounds (`DSV41_SHARED_SAMPLER_SPEC`), both default 1; 0 selects the previous full-vocabulary sampler. It takes the top 32 candidates of the vocabulary per step: `top_k` above 32 is clamped to 32 and "no top_k" (the model card's recommended sampling: temperature 1.0, top_p 0.95 or 1.0) means the top-32 of the vocabulary (logged once at the first such request); candidates are bf16 roundings of the logits. Greedy rows (temperature 0 / `top_k` 1) stay the exact argmax and seeds keep their meaning. Sampler time per step: 1.2-1.9 ms against 1.5-3.6 ms (ours, top-k / full vocabulary) in plain decode, and 1.85 ms against 2.3 / 8.5 ms per verify round at 16 users.
 - **Image input at 4 users and 1,048,576 tokens** now works (`runtime_spec_b4_k5_1048576_vision.json`). The Engram reduce-scatter of the prefill trace capture is split into 4 pieces when vision is on (`DSV41_PFA_ENGRAM_RS_SPLIT`), which makes the contiguous blocks it needs 4 times smaller.
 
 ## What this release adds
@@ -33,6 +30,8 @@ The budget that fits one galaxy is about **1M tokens of context per mesh row** (
 | **Default, 16 users** | 16 | **262,144** | k = 5 | yes | `assets/runtime_spec_b16_k5_262144_vision.json` |
 | Smaller context, 16 users (the previous default) | 16 | 131,072 | k = 5 | optional | `assets/runtime_spec_b16_k5_131072.json` / `_vision.json` |
 | **Long context, 4 users** | 4 | **1,048,576** | k = 5 | optional | `assets/runtime_spec_b4_k5_1048576.json` / `_vision.json` |
+| **Long context with images, 4 users** | 4 | **786,432** | k = 5 | yes | `assets/runtime_spec_b4_k5_786432_vision.json` (GSM8K 97.7 / 97.7 / 97.3 %) |
+| Not recommended: long context with images, 4 users | 4 | 524,288 | k = 5 | yes | `assets/runtime_spec_b4_k5_524288_vision.json` (GSM8K about 91 %, see Known issues) |
 | **APC + chunked prefill, 16 users** (default) | 16 | 262,144 | k = 5 | yes | `assets/runtime_spec_b16_k5_262144_vision.json` |
 | **APC + chunked prefill, 4 users** (default) | 4 | 1,048,576 | k = 5 | yes | `assets/runtime_spec_b4_k5_1048576_vision.json` |
 

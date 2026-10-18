@@ -37,8 +37,8 @@ How the vLLM concepts map onto the model
     rows (temperature 0 or top_k 1) are the exact argmax. The uniform of a row comes from the request's own ``torch.Generator`` (seeded with the request ``seed``, so a seeded request is
     reproducible whatever slot / bucket it runs in; unseeded rows share the server generator): the seed state stays on the host, the draw (threshold search for top-k / top-p over the full
     vocabulary and the inverse CDF at u) runs on the device. No candidate read, no full-row fallback. The first token of a SAMPLED request is drawn on the host from the prefill's logits row
-    (one row per request). PLAIN launches (no speculative_config) sample the decode steps with the shared tt_transformers sampler by default (tt/shared_sampler.py, DSV41_SHARED_SAMPLER=1: top-k clamped to 32,
-    "no top_k" = top-32, same per-request seeds); speculative launches keep our sampler. Logprobs requests are not supported (a clear error). Prefix caching, async scheduling are off; chunked prefill is on (INTERLEAVE_NOTES.md).
+    (one row per request). Decode steps and verify rows are sampled with the shared tt_transformers sampler by default (tt/shared_sampler.py, DSV41_SHARED_SAMPLER=1: top-k clamped to 32,
+    "no top_k" = top-32, same per-request seeds); speculative launches too (verify trace S, DSV41_SHARED_SAMPLER_SPEC=1). Logprobs requests are not supported (a clear error). Prefix caching, async scheduling are off; chunked prefill is on (INTERLEAVE_NOTES.md).
   * Traces. Decode and prefill run traced. The decode trace is released before every prefill (prefill and decode traces share DRAM and the page table / state are
     rewritten) and recaptured by the first decode afterwards. One ISL range per process: a prefill with a longer S_pad than the captured one tears the prefill trace
     down and re-captures it (see ``vllm_state.s_pad_bucket``; a second, much longer ISL can run out of DRAM).
@@ -217,8 +217,9 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             "DSV41_IDX_SWITCH", "262144"
         )  # spec and plain decode alike: the spec verify needs the matmul indexer backend, which the default switch (65536 entries) drops at max_model_len >= 64k (indexer layers with ratio 1); a plain-decode server on the fused backend at 16 users (U = 4 per mesh row) answered the 8-shot GSM8K prompts wrongly (85.67 % at 131072 tokens, 80.59 % at 262144)
         # Plain decode traces sample with the shared tt_transformers sampler (tt/shared_sampler.py, top-32 candidates, ~4x faster than ours; DSV41_SHARED_SAMPLER=0 selects our full-vocabulary one).
-        # A speculative launch keeps our sampler everywhere (its verify rows draw from the full vocabulary: one law for every step of a request).
-        os.environ.setdefault("DSV41_SHARED_SAMPLER", "0" if spec_k else "1")
+        # Speculative launches too (DSV41_SHARED_SAMPLER_SPEC: the verify trace S, 24 rows per mesh row at 16 users: 1.85 ms against 8.5 ms full-vocabulary): one law (top-32) for every step of a request.
+        os.environ.setdefault("DSV41_SHARED_SAMPLER", "1")
+        os.environ.setdefault("DSV41_SHARED_SAMPLER_SPEC", "1")
         # Sampling is done INSIDE the decode / verify traces (tt/device_sampler.py: temperature, top-k, top-p over the full vocabulary, per-row parameters and uniform draws uploaded with the step):
         # no device top-k candidates, no host draw, no full-row fallback (DSV41_DEV_CAND_K / DSV41_SPEC_CAND_K stay 0).
         os.environ.setdefault("MOE_COMPUTE_FP32_ACC", "1")
