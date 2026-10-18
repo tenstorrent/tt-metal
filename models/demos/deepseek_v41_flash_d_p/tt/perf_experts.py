@@ -267,3 +267,72 @@ def test_unified_vs_loop(mesh_device, impl, monkeypatch):
         f"EXPERTS_KERNEL_CMP impl={impl} unified vs loop: rel {rel:.5f} pcc {pcc:.7f} finite {bool(torch.isfinite(b).all())}"
     )
     assert bool(torch.isfinite(b).all()) and pcc > 0.999, (rel, pcc)
+
+
+@pytest.mark.timeout(3600)
+@mesh_parametrize
+@pytest.mark.parametrize("impl", ["bfp8", "bfp4"])
+@pytest.mark.parametrize("kernels", ["flat,unified", "flat,unified,loop"], ids=["fu", "ful"])
+def test_kernels(mesh_device, impl, kernels, monkeypatch):
+    """EXPERTS_KERNEL A/B (P.3: flat vs unified vs loop) on the same random inputs, layer LAYER at the run's chunk: the
+    mean time of a whole experts call (dispatch .. reduce, no host sync) and of its kernel part alone (the fused op or
+    the loop, timed with a device sync before and after it), plus rel / PCC of every kernel's output vs the first."""
+    S = spec()
+    ck, cfg = hooks._checkpoint(S), hooks._config(S)
+    chunk = hooks._chunk(S)
+    g = torch.Generator().manual_seed(0)
+    x = torch.randn(chunk, cfg.dim, generator=g)
+    sc = torch.rand(chunk, cfg.n_experts, generator=g)
+    top = sc.topk(cfg.topk_experts, dim=-1)
+    dense = torch.zeros(chunk, cfg.n_experts)
+    dense.scatter_(1, top.indices, 1.5 * top.values / top.values.sum(-1, keepdim=True))
+    outs = {}
+    for kernel in kernels.split(","):
+        monkeypatch.setenv("DS41_EXPERTS_KERNEL", kernel)
+        t0 = time.time()
+        mod = E.build_experts(mesh_device, ck, cfg, LAYER, chunk, impl=impl)
+        load = time.time() - t0
+        xd = row_split_to_device(mesh_device, x)
+        rd = row_split_to_device(mesh_device, dense)
+        for _ in range(2):
+            ttnn.deallocate(mod(xd, rd))
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.time()
+        for _ in range(N_CALLS):
+            ttnn.deallocate(mod(xd, rd))
+        ttnn.synchronize_device(mesh_device)
+        dt = (time.time() - t0) / N_CALLS
+        name = {"flat": "_flat", "unified": "_unified", "loop": "_loop"}[kernel]
+        orig, spent = getattr(mod, name), []
+
+        def timed(*a, _orig=orig, _spent=spent):
+            ttnn.synchronize_device(mesh_device)
+            t = time.time()
+            out = _orig(*a)
+            ttnn.synchronize_device(mesh_device)
+            _spent.append(time.time() - t)
+            return out
+
+        setattr(mod, name, timed)
+        for _ in range(N_CALLS):
+            ttnn.deallocate(mod(xd, rd))
+        k_ms = 1e3 * sum(spent) / len(spent)
+        od = mod(xd, rd)
+        outs[kernel] = torch.cat([ttnn.to_torch(t).float().reshape(-1) for t in ttnn.get_device_tensors(od)])
+        print(
+            f"EXPERTS_KERNELS impl={impl} kernel={kernel} layer={LAYER} chunk={chunk} call_ms={dt * 1e3:.2f} "
+            f"kernel_part_ms={k_ms:.2f} load_s={load:.1f}"
+        )
+        for t in (od, xd, rd):
+            ttnn.deallocate(t)
+        mod.free()
+        del mod
+    first = kernels.split(",")[0]
+    a = outs[first].double()
+    for kernel, o in outs.items():
+        b = o.double()
+        rel = ((b - a).norm() / a.norm()).item()
+        ac, bc = a - a.mean(), b - b.mean()
+        pcc = (ac @ bc / (ac.norm() * bc.norm())).item()
+        print(f"EXPERTS_KERNELS_CMP impl={impl} {kernel} vs {first}: rel {rel:.5f} pcc {pcc:.7f}")
+        assert bool(torch.isfinite(b).all()) and pcc > 0.999, (kernel, rel, pcc)

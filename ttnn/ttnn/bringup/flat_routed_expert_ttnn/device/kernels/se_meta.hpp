@@ -21,3 +21,11 @@ constexpr uint32_t SE_META_SMALL = SE_META_SUBS + SE_MAX_V;
 constexpr uint32_t SE_META_GU = SE_META_SMALL + 1;
 constexpr uint32_t SE_META_LMT = SE_META_GU + SE_MAX_V;
 constexpr uint32_t SE_META_WORDS = SE_META_LMT + SE_MAX_V;  // the page must hold this many words (host: CB 6 page)
+
+// Weight tiles stored as nn.Linear [N, K] blocks (config weights_nk, define SE_W_NK): every weight matmul transposes
+// its in1 tile back (the matmul_block / matmul_block_init transpose argument).
+#ifdef SE_W_NK
+constexpr bool SE_WT = true;
+#else
+constexpr bool SE_WT = false;
+#endif

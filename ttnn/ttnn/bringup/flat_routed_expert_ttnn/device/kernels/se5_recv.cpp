@@ -262,6 +262,45 @@ void kernel_main() {
 #endif
     uint32_t out_done = 0, out_popped = 0, go_sent = 0;
 
+#if defined(SE_RH_W) || defined(SE_RH_X)
+    // The h options (config routed_weight / fp8_act_quant; mt 1, one row tile per sub-block), RT from SE_RH_RT:
+    // partner xy, routing_weights address, staging tile (L1), role (1: send this core's first h tile, a right half, to
+    // the partner; 2: receive the partner's into the CB XIN ring), the partner-half ring's address (same on every core)
+    static_assert(mt == 1, "the h options: one row tile per sub-block");
+    const uint32_t rh_pxy = get_arg_val<uint32_t>(SE_RH_RT);
+    const uint32_t rh_stage = get_arg_val<uint32_t>(SE_RH_RT + 2);
+    const uint32_t rh_role = get_arg_val<uint32_t>(SE_RH_RT + 3);
+    const uint32_t rh_xin = get_arg_val<uint32_t>(SE_RH_RT + 4);
+    (void)rh_pxy;
+    (void)rh_stage;
+    (void)rh_role;
+    (void)rh_xin;
+#endif
+#ifdef SE_RH_W
+    // Routing-weight tiles: per sub-block (schedule order), tile off / 32 + s of routing_weights ([rows, 32] Float32
+    // TILE: one 4 KB page per 32 rows) is read into the staging tile and its column le (the entry's local expert) is
+    // spread over all 16 columns of faces 0 / 2 of the CB's next tile (rows 0-15 face 0, 16-31 face 2): the layout
+    // se_rh.hpp's rh_wmul reads.
+    constexpr uint32_t rh_rw_cb = SE_RH_RW_CB;
+    const InterleavedAddrGen<true> rh_rg = {
+        .bank_base_address = get_arg_val<uint32_t>(SE_RH_RT + 1), .page_size = 4096};
+    uint32_t rw_a = 0, rw_s = 0, rw_done = 0;
+    bool rw_pending = false;
+#endif
+#ifdef SE_RH_X
+    // The partner-half ring (SE_RH_XD Float32 tiles at rh_xin on the receiving core): the sender writes tile k into
+    // slot k % XD once the receiver has freed it (XFREE here counts the receiver's frees), then bumps the receiver's
+    // XARR; the receiver publishes arrivals to its compute and reports each tile the compute has consumed.
+    constexpr uint32_t rh_xd = SE_RH_XD, rh_xin_cb = SE_RH_XIN_CB, rh_xout_cb = SE_RH_XOUT_CB;
+    volatile tt_l1_ptr uint32_t* rh_xarr = sem(SE_RH_XARR);
+    volatile tt_l1_ptr uint32_t* rh_xfree = sem(SE_RH_XFREE);
+    const uint64_t rh_p_xarr = get_noc_addr(rh_pxy >> 16, rh_pxy & 0xFFFF, get_semaphore(SE_RH_XARR));
+    const uint64_t rh_p_xfree = get_noc_addr(rh_pxy >> 16, rh_pxy & 0xFFFF, get_semaphore(SE_RH_XFREE));
+    const uint64_t rh_p_ring = get_noc_addr(rh_pxy >> 16, rh_pxy & 0xFFFF, rh_xin);
+    uint32_t xo_sent = 0, xi_pub = 0, xi_free = 0;
+    bool xo_pending = false;
+#endif
+
     uint32_t iters = 0;
 #ifdef SE_GU_ONLY
     const uint32_t my_group = get_arg_val<uint32_t>(14);
@@ -273,7 +312,14 @@ void kernel_main() {
 #endif
     while (h_sent < num_v || (nsucc > 0 && x_fwd[0] < num_v * x_per_v * xp) ||
            (nsucc > 1 && x_fwd[1] < num_v * x_per_v * xp) || (!is_b && pushed < total_w) ||
-           (all_x && x_pub < num_v * x_per_v)) {
+           (all_x && x_pub < num_v * x_per_v)
+#ifdef SE_RH_W
+           || rw_done < num_v
+#endif
+#ifdef SE_RH_X
+           || (rh_role == 1 && xo_sent < num_v) || (rh_role == 2 && xi_pub < num_v)
+#endif
+    ) {
 #else
     while (out_done < num_v) {
 #endif
@@ -361,6 +407,55 @@ void kernel_main() {
                 ++x_fwd[k];
             }
         }
+#ifdef SE_RH_W
+        if (!rw_pending && rw_done < num_v && cb_pages_reservable_at_back(rh_rw_cb, 1)) {
+            noc_async_read(get_noc_addr(dyn.off[rw_a] / 32 + rw_s, rh_rg), rh_stage, 4096);
+            rw_pending = true;
+        }
+        if (rw_pending && ncrisc_noc_reads_flushed(noc_index)) {
+            const uint32_t le = dyn.eid[rw_a];
+            volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rh_stage);
+            volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(rh_rw_cb));
+            for (uint32_t r = 0; r < 32; ++r) {
+                const uint32_t v = src[((r >> 4) * 2 + (le >> 4)) * 256 + (r & 15) * 16 + (le & 15)];
+                volatile tt_l1_ptr uint32_t* d = dst + (r >> 4) * 512 + (r & 15) * 16;
+                for (uint32_t c = 0; c < 16; ++c) {
+                    d[c] = v;
+                }
+            }
+            cb_push_back(rh_rw_cb, 1);
+            rw_pending = false;
+            ++rw_done;
+            if (++rw_s == dyn.subs[rw_a]) {
+                rw_s = 0;
+                ++rw_a;
+            }
+        }
+#endif
+#ifdef SE_RH_X
+        if (rh_role == 1) {  // sender: this core's split first h tile (Float32) into the partner's ring
+            if (!xo_pending && xo_sent < num_v && *rh_xfree + rh_xd >= xo_sent + 1 &&
+                cb_pages_available_at_front(rh_xout_cb, 1)) {
+                noc_async_write(get_read_ptr(rh_xout_cb), rh_p_ring + (xo_sent % rh_xd) * 4096, 4096);
+                xo_pending = true;
+            }
+            if (xo_pending && ncrisc_noc_nonposted_writes_flushed(noc_index)) {
+                noc_semaphore_inc(rh_p_xarr, 1);
+                cb_pop_front(rh_xout_cb, 1);
+                ++xo_sent;
+                xo_pending = false;
+            }
+        } else if (rh_role == 2) {  // receiver: arrivals to the compute, consumed tiles back to the sender
+            while (*rh_xarr > xi_pub) {
+                cb_push_back(rh_xin_cb, 1);
+                ++xi_pub;
+            }
+            if (xi_free < xi_pub && cb_pages_reservable_at_back(rh_xin_cb, rh_xd - (xi_pub - xi_free) + 1)) {
+                ++xi_free;
+                noc_semaphore_inc(rh_p_xfree, 1);
+            }
+        }
+#endif
 #ifndef SE_GU_ONLY
         // Pieces of h that have arrived here: a head has all of h(v) once every slice of the group is in.
         const uint32_t harr = h_head ? (*gath_sem / group_ncc) * h_pieces : *harr_sem[0];
@@ -464,7 +559,12 @@ void kernel_main() {
                 // the halves go face by face (bf16: faces 512 B; bfp8: 16 B exponents of each face, then 256 B data)
                 {
                     static_assert(h_tile_bytes == 2048 || h_tile_bytes == 1088, "SE_HG_NU: bf16 or bfp8 h tiles");
+#ifdef SE_RH_X
+                    // (fp8_act_quant: the split tiles are whole on the tail core, the lead core sends none of them)
+                    const uint32_t u0 = cg * hg_nu, k0 = u0 / 2, lead = u0 & 1, tail = 0;
+#else
                     const uint32_t u0 = cg * hg_nu, k0 = u0 / 2, lead = u0 & 1, tail = (u0 + hg_nu) & 1;
+#endif
                     const uint32_t j0 = lead, j1 = hpc - tail;
                     const uint64_t base = bc_h + dst + k0 * mt * h_tile_bytes;
                     if (j1 > j0) {
@@ -489,9 +589,11 @@ void kernel_main() {
                             }
                         }
                     };
+#ifndef SE_RH_X
                     if (lead) {
                         half(0, 1);
                     }
+#endif
                     if (tail) {
                         half(hpc - 1, 0);
                     }

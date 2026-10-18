@@ -23,7 +23,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/pack.h"
-#ifdef SE_GU_L1ACC
+#if defined(SE_GU_L1ACC) || defined(SE_RH_W) || defined(SE_RH_X)
 #include "api/compute/tile_move_copy.h"
 #endif
 #include "api/compute/reconfig_data_format.h"
@@ -39,6 +39,10 @@
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #ifdef SE_HG  // (half-width gate / up tiles: the face-wise GLU, se_glu_faces.hpp)
 #include "se_glu_faces.hpp"
+#endif
+#if defined(SE_RH_W) || defined(SE_RH_Q)  // (the h options: routing weight, fp8 q-dq, half merge)
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "se_rh.hpp"
 #endif
 #if SE_ACT == 1
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
@@ -93,6 +97,107 @@ constexpr uint32_t hpc = np;     // h tiles a row
 uint32_t hg_lead = 0;
 // SE_HG: the DST tile (of a row's gw) that holds local h tile j: its first unit's (lead: unit 0 is a right half)
 FORCE_INLINE uint32_t h_slot(uint32_t j) { return j == 0 ? 0 : 2 * j - hg_lead; }
+
+#if defined(SE_RH_W) || defined(SE_RH_Q)
+// The h options (config routed_weight / fp8_act_quant; the plan: one 32-row sub-block, gw gate/up DEST tiles + tile
+// SE_RH_WS), on the fp32 DEST between the activation and h's pack (se_rh.hpp):
+//   SE_RH_W  the sub-block's routing-weight tile (CB SE_RH_RW_CB, Float32, unpacked straight into DEST tile WS before
+//            the K loop; se5_recv.cpp builds it) multiplies every h tile of the row
+//   SE_RH_Q  each whole h tile is fp8-quantized in place (scratch: tile WS)
+//   SE_RH_X  odd 16-column units: a split h tile's halves meet on the core whose LAST h tile is a left half (tail):
+//            the lead core (first h tile a right half) packs its half (Float32) to SE_RH_XOUT_CB, its receiver sends it
+//            to the tail core's SE_RH_XIN_CB; the tail core packs its own half to SE_RH_HOWN_CB and, after the
+//            sub-block, merges both into one DEST tile, quantizes it and packs it as its h tile hpc - 1
+constexpr uint32_t rh_ws = SE_RH_WS;
+static_assert(rh_ws >= gw && rh_ws < 4, "the h options: the weight / scratch tile after the gate/up tiles");
+uint32_t rh_lead = 0, rh_tail = 0;
+#ifdef SE_RH_W
+constexpr uint32_t rh_rw_cb = SE_RH_RW_CB;
+#endif
+#ifdef SE_RH_X
+constexpr uint32_t rh_hown_cb = SE_RH_HOWN_CB, rh_xin_cb = SE_RH_XIN_CB, rh_xout_cb = SE_RH_XOUT_CB;
+#endif
+
+// SFPU steps at a runtime DEST tile (0..2) of the pack thread's section
+FORCE_INLINE void rh_wmul_at(uint32_t t) {
+#ifdef SE_RH_W
+    if (t == 0) {
+        PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, rh_wmul, (0, rh_ws), 0, VectorMode::RC_custom)));
+    } else if (t == 1) {
+        PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, rh_wmul, (1, rh_ws), 0, VectorMode::RC_custom)));
+    } else {
+        PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, rh_wmul, (2, rh_ws), 0, VectorMode::RC_custom)));
+    }
+#endif
+}
+FORCE_INLINE void rh_quant_at(uint32_t t) {
+#ifdef SE_RH_Q
+    if (t == 0) {
+        PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, rh_quant, (0, rh_ws), 0, VectorMode::RC_custom)));
+    } else if (t == 1) {
+        PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, rh_quant, (1, rh_ws), 0, VectorMode::RC_custom)));
+    } else {
+        PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, rh_quant, (2, rh_ws), 0, VectorMode::RC_custom)));
+    }
+#endif
+}
+
+// (math) the sub-block's routing-weight tile into DEST tile WS, in the acquire the K loop then accumulates into
+FORCE_INLINE void rh_acquire_with_weight(uint32_t rows) {
+#ifdef SE_RH_W
+    cb_wait_front(rh_rw_cb, 1);
+    reconfig_data_format_srca(in1_cb, rh_rw_cb);
+    copy_tile_to_dst_init_short(rh_rw_cb);
+    tile_regs_acquire();
+    copy_tile(rh_rw_cb, 0, rh_ws);
+    cb_pop_front(rh_rw_cb, 1);
+    reconfig_data_format_srca(rh_rw_cb, in1_cb);
+    matmul_block_init(x_cb, in1_cb, SE_WT, gw, rows, kblk);
+#else
+    tile_regs_acquire();
+#endif
+}
+
+// (pack, after the activation) the routing weight on every h tile, then the fp8 q-dq of the whole ones
+FORCE_INLINE void rh_dst() {
+    PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+    for (uint32_t j = 0; j < hpc; ++j) {
+        rh_wmul_at(h_slot(j));
+    }
+    for (uint32_t j = rh_lead; j + rh_tail < hpc; ++j) {
+        rh_quant_at(h_slot(j));
+    }
+    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+}
+
+#ifdef SE_RH_X
+// (tail core, after the sub-block's pack) its own half (CB HOWN) and the partner's (CB XIN) into DEST tiles 0 / 1,
+// merged (right faces from the partner), quantized, packed as h tile hpc - 1 of the h_local block
+FORCE_INLINE void rh_phase2() {
+    cb_wait_front(rh_hown_cb, 1);
+    cb_wait_front(rh_xin_cb, 1);
+    reconfig_data_format_srca(in1_cb, rh_hown_cb);
+    copy_tile_to_dst_init_short(rh_hown_cb);
+    tile_regs_acquire();
+    copy_tile(rh_hown_cb, 0, 0);
+    copy_tile(rh_xin_cb, 0, 1);
+    tile_regs_commit();
+    cb_pop_front(rh_hown_cb, 1);
+    cb_pop_front(rh_xin_cb, 1);
+    reconfig_data_format_srca(rh_hown_cb, in1_cb);
+    matmul_block_init(x_cb, in1_cb, SE_WT, gw, mt, kblk);  // (the caller records the matmul state)
+    tile_regs_wait();
+    PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+    PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, rh_merge, (0, 1), 0, VectorMode::RC_custom)));
+    PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, rh_quant, (0, rh_ws), 0, VectorMode::RC_custom)));
+    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+    pack_reconfig_data_format(out_cb, h_local_cb);
+    pack_tile<true>(0, h_local_cb, (hpc - 1) * mt);
+    pack_reconfig_data_format(h_local_cb, out_cb);
+    tile_regs_release();
+}
+#endif
+#endif
 constexpr bool gu_pipe = get_compile_time_arg_val(11) != 0;
 constexpr uint32_t ring_ct = get_compile_time_arg_val(12);
 constexpr uint32_t nk_dd = kt_d / kblk_d;
@@ -128,7 +233,7 @@ uint32_t cur_ct = gw, cur_rt = mt;
 
 FORCE_INLINE void set_mm(uint32_t ct, uint32_t rt) {
     if (ct != cur_ct || rt != cur_rt) {
-        matmul_block_init(h_all_cb, in1_cb, false, ct, rt, kblk);
+        matmul_block_init(h_all_cb, in1_cb, SE_WT, ct, rt, kblk);
         cur_ct = ct;
         cur_rt = rt;
     }
@@ -254,7 +359,7 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
         DeviceZoneScopedN("SE_GU_MM");
 #endif
         if (rows != cur_rt || cur_ct != gw) {  // (x is in0 here: re-init against x_cb)
-            matmul_block_init(x_cb, in1_cb, false, gw, rows, kblk);
+            matmul_block_init(x_cb, in1_cb, SE_WT, gw, rows, kblk);
             cur_ct = gw;
             cur_rt = rows;
         }
@@ -266,6 +371,10 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
         constexpr uint32_t grp = SE_GU_L1ACC;
         cb_reserve_back(part_cb, mt * gw);
         pack_reconfig_data_format(out_cb, part_cb);
+#elif defined(SE_RH_W)
+        rh_acquire_with_weight(rows);  // (the routing-weight tile into DEST tile WS first; the matmul re-initialized)
+        cur_ct = gw;
+        cur_rt = rows;
 #else
         tile_regs_acquire();
 #endif
@@ -294,7 +403,7 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
             const uint32_t w = wblock(pos_gu(e, b));
 #endif
             for (uint32_t k = 0; k < kblk; ++k) {
-                matmul_block(x_cb, in1_cb, x_row0 + k, w + k * gw, 0, false, gw, rows, kblk);
+                matmul_block(x_cb, in1_cb, x_row0 + k, w + k * gw, 0, SE_WT, gw, rows, kblk);
             }
             cb_pop_front(x_cb, xmt * kblk);
             if (last) {  // free the block for the next expert as soon as possible
@@ -336,7 +445,7 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
         tile_regs_commit();
         reconfig_data_format_srca(part_cb, in1_cb);
         pack_reconfig_data_format(part_cb, out_cb);
-        matmul_block_init(x_cb, in1_cb, false, gw, rows, kblk);
+        matmul_block_init(x_cb, in1_cb, SE_WT, gw, rows, kblk);
         cur_ct = gw;
         cur_rt = rows;
 #else
@@ -359,8 +468,27 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
 #ifndef SE_NO_ACT
         act_dst(rows * gw);
 #endif
+#if defined(SE_RH_W) || defined(SE_RH_Q)
+        rh_dst();  // (one row tile: mt 1)
+#endif
         pack_reconfig_data_format(out_cb, h_local_cb);
-#ifdef SE_GU_ONLY
+#if defined(SE_GU_ONLY) && defined(SE_RH_X)
+        // split h tiles: the lead core's first (right half) to the partner, the tail core's last (left half) kept for
+        // the merge (both Float32); the whole ones into h_local at their [p][m] place (mt 1)
+        for (uint32_t p = 0; p < hpc; ++p) {
+            const bool send = p == 0 && rh_lead, keep = p + 1 == hpc && rh_tail;
+            if (send || keep) {
+                const uint32_t cb = send ? rh_xout_cb : rh_hown_cb;
+                cb_reserve_back(cb, 1);
+                pack_reconfig_data_format(h_local_cb, cb);
+                pack_tile(h_slot(p), cb);
+                pack_reconfig_data_format(cb, h_local_cb);
+                cb_push_back(cb, 1);
+            } else {
+                pack_tile<true>(h_slot(p), h_local_cb, p * mt);
+            }
+        }
+#elif defined(SE_GU_ONLY)
         for (uint32_t p = 0; p < hpc; ++p) {     // [p][m]: K-tile-major, one contiguous run on the down cores
             for (uint32_t m = 0; m < mt; ++m) {  // (rows past ROWS: whatever DST holds, never used)
                 pack_tile(m < rows ? m * gw + h_slot(p) : h_slot(p), h_local_cb);
@@ -373,6 +501,13 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
 #endif
         pack_reconfig_data_format(h_local_cb, out_cb);
         tile_regs_release();
+#ifdef SE_RH_X
+        if (rh_tail) {  // the split last h tile: merged with the partner's half, quantized, packed as tile hpc - 1
+            rh_phase2();
+            cur_ct = gw;
+            cur_rt = mt;
+        }
+#endif
         cb_push_back(h_local_cb, mt * hpc);
     }
 }
@@ -405,7 +540,7 @@ FORCE_INLINE void gate_up_rp(uint32_t e, bool last, uint32_t ph0, uint32_t rows)
             DeviceZoneScopedN("SE_GU_MM");
 #endif
             if (rr != cur_rt || cur_ct != gw) {
-                matmul_block_init(x_cb, in1_cb, false, gw, rr, kblk);
+                matmul_block_init(x_cb, in1_cb, SE_WT, gw, rr, kblk);
                 cur_ct = gw;
                 cur_rt = rr;
             }
@@ -440,7 +575,7 @@ FORCE_INLINE void gate_up_rp(uint32_t e, bool last, uint32_t ph0, uint32_t rows)
                 }
                 const uint32_t w = wblock_dyn(e * nk_gu + b, ph0 + b);
                 for (uint32_t k = 0; k < kblk; ++k) {
-                    matmul_block(x_cb, in1_cb, xo + x_row0 + r0 * kblk + k, w + k * gw, 0, false, gw, rr, kblk);
+                    matmul_block(x_cb, in1_cb, xo + x_row0 + r0 * kblk + k, w + k * gw, 0, SE_WT, gw, rr, kblk);
                 }
                 if (fin) {
                     cb_pop_front(x_cb, xblk);
@@ -496,7 +631,7 @@ FORCE_INLINE void down(uint32_t v) {
                     (kk / hk) * mt * hk + r * hk + kk % hk,
                     w + (kk % kblk_d) * pcd,
                     0,
-                    false,
+                    SE_WT,
                     pcd,
                     rt_d,
                     hk);
@@ -529,12 +664,21 @@ void kernel_main() {
 #ifdef SE_HG_NU
     hg_lead = get_arg_val<uint32_t>(1);  // (RT 1: this core's first unit is odd)
 #endif
+#if defined(SE_RH_W) || defined(SE_RH_Q)
+#ifdef SE_RH_X
+    rh_lead = hg_lead;
+    rh_tail = get_arg_val<uint32_t>(2);  // (RT 2: this core's last h tile is a left half)
+#endif
+#ifdef SE_GU_RP
+#error "the h options run one gate/up pass per sub-block (the plan's mt 1, no row passes)"
+#endif
+#endif
     x_row0 = grp * mt * kblk;
     compute_kernel_hw_startup<SrcOrder::Reverse>(x_cb, in1_cb, out_cb);
 #ifdef SE_PACK_SRND  // stochastic rounding in the packer (the default rounds bf16 -> bfp8 ties away from zero)
     UNPACK((_llk_unpack_configure_stoch_rnd_<StochRndType::Pack>()));
 #endif
-    matmul_block_init(x_cb, in1_cb, false, gw, mt, kblk);
+    matmul_block_init(x_cb, in1_cb, SE_WT, gw, mt, kblk);
 #ifndef SE_NO_ACT
 #if defined(SE_HG)  // (every face-wise GLU uses SiTU's sigmoid: tanh_init, no vConstFloatPrgm for the sigmoid)
     PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));

@@ -21,7 +21,8 @@ namespace ttnn::operations::bringup::flat_routed_expert {
 
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
     tt::tt_metal::IDevice* device, const FlatRoutedExpertConfig& c) {
-    using Key = std::tuple<const void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, bool, bool>;
+    using Key =
+        std::tuple<const void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, bool, bool, bool>;
     static std::mutex mu;
     static std::map<Key, std::shared_ptr<const FlatRoutedExpertPlan>> cache;
     const Key key{
@@ -34,7 +35,8 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
         c.weights_bf8,
         c.pin,
         c.x_bf16,
-        c.h_bf16};
+        c.h_bf16,
+        c.routed_weight || c.fp8_act_quant};  // (the h options: mt 1, the gate/up h-option region)
     std::lock_guard<std::mutex> lock(mu);
     auto it = cache.find(key);
     if (it == cache.end()) {
@@ -96,11 +98,40 @@ ttnn::Tensor flat_routed_expert(
     bool x_bf16,
     bool h_bf16,
     bool y_bf16,
-    uint32_t math_fidelity) {
+    uint32_t math_fidelity,
+    const std::optional<ttnn::Tensor>& routing_weights,
+    bool fp8_act_quant,
+    bool weights_nk,
+    uint32_t hidden) {
     using namespace tt::tt_metal;
     TT_FATAL(!(y_bf16 && y_row_major), "flat_routed_expert: y_bf16 is for tiled y (row-major y is bf16 already)");
+    // hidden (0: x width x pages per row): x rows wider than H (x_pages_per_row 1), e.g. a dispatch buffer whose rows
+    // carry extra columns after the token's H values; the relays read each row's first H values
+    const uint32_t xw = x.logical_shape()[-1];
+    TT_FATAL(
+        hidden == 0 || (x_pages_per_row == 1 && hidden <= xw && hidden % 32 == 0 && !token_index),
+        "flat_routed_expert: hidden {} needs x_pages_per_row 1, hidden <= x width {}, no token_index",
+        hidden,
+        xw);
+    if (routing_weights || fp8_act_quant) {
+        TT_FATAL(
+            !token_index && !y_row_major,
+            "flat_routed_expert: routing_weights / fp8_act_quant need a dispatch buffer x and tiled y");
+    }
+    if (routing_weights) {
+        const auto& r = *routing_weights;
+        TT_FATAL(
+            r.layout() == Layout::TILE && r.dtype() == DataType::FLOAT32 &&
+                r.memory_config().buffer_type() == BufferType::DRAM &&
+                r.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED && r.logical_shape()[-1] == 32 &&
+                r.logical_shape()[-2] == x.logical_shape()[-2] && r.logical_volume() == r.logical_shape()[-2] * 32 &&
+                global_expert_ids.logical_volume() <= 32,
+            "flat_routed_expert: routing_weights must be a FLOAT32 TILE DRAM interleaved [rows of x, 32] tensor "
+            "(column "
+            "le = the row's routing weight for local expert le, <= 32 local experts)");
+    }
     FlatRoutedExpertConfig cfg{
-        .hidden = x.logical_shape()[-1] * x_pages_per_row,
+        .hidden = hidden ? hidden : xw * x_pages_per_row,
         .intermediate = intermediate,
         .experts_per_chip = static_cast<uint32_t>(global_expert_ids.logical_volume()),
         .num_global_experts = counts.logical_shape()[-1],
@@ -114,7 +145,10 @@ ttnn::Tensor flat_routed_expert(
         .x_bf16 = x_bf16,
         .h_bf16 = h_bf16,
         .y_bf16 = y_bf16,
-        .math_fidelity = math_fidelity};
+        .math_fidelity = math_fidelity,
+        .weights_nk = weights_nk,
+        .routed_weight = routing_weights.has_value(),
+        .fp8_act_quant = fp8_act_quant};
     auto* device = x.device();
     const auto plan = flat_routed_expert_plan(device, cfg);
     TT_FATAL(
@@ -146,7 +180,8 @@ ttnn::Tensor flat_routed_expert(
             .arena = arena,
             .words = words,
             .output = output,
-            .token_index = token_index});
+            .token_index = token_index,
+            .routing_weights = routing_weights});
     arena.deallocate(true);
     words.deallocate(true);
     return y;

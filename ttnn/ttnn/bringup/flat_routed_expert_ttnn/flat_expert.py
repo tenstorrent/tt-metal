@@ -338,9 +338,20 @@ def _fake_bank_sharded(n_regions, region_tiles, banks, dtype, device, n_dev):
     return ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, device, mc)
 
 
+def block_float_exact(t, wdtype="bf8"):
+    """True when the block-float dtype holds every value of t exactly as ttnn packs a tile: per 16 values of a tile row
+    (t [..., 32] rows), one shared exponent E (the group's largest binary exponent), each value an integer multiple of
+    2^(E - m + 1), |v| < 2^m (m = 7 magnitude bits for bfp8, 3 for bfp4); zeros are exact."""
+    mant = {"bf8": 7, "bf4": 3}[wdtype]
+    g = t.float().reshape(-1, 16)
+    _, e = torch.frexp(g.abs().amax(dim=-1, keepdim=True))  # amax = m 2^e, m in [0.5, 1): leading bit 2^(e - 1)
+    q = torch.ldexp(g, mant - e)
+    return bool((q == q.round()).all()) and bool((q.abs() < 2**mant).all())
+
+
 def flat_weight_shapes(H, I, E, lay):
     """(regions, tiles per region) of each laid-out weight tensor, from flat_weight_regions on shape-only (meta)
-    tensors: no data is made."""
+    tensors: no data is made (the [N, K] layout has the same shapes)."""
     meta = lambda r, c: torch.empty(r, c, device="meta")  # noqa: E731
     regions, dregs, rregs = flat_weight_regions([(meta(H, I), meta(H, I), meta(I, H))] * E, lay)
     out = {"w_gu": (len(regions), regions[0].shape[0]), "w_d": (len(dregs), dregs[0].shape[0])}
@@ -410,9 +421,33 @@ def _hg_units(Wg, Wu):
     return torch.cat([Wg.reshape(H, I // 16, 16), Wu.reshape(H, I // 16, 16)], dim=2).reshape(H, 2 * I)
 
 
-def flat_weight_regions(W_l, lay):
+def _tiles_nk(w):
+    """w [N, K] (nn.Linear's weight) -> [K/32, N/32, 32, 32]: tile (k, n) = the transpose of x @ W's tile (k, n)."""
+    return w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(2, 0, 1, 3)
+
+
+def _hg_units_nk(W1, W3):
+    """(W1, W3) [I, H] (stored) -> [2 I, H]: unit u's 32 rows = gate rows 16 u..16 u + 15 then up rows 16 u.. (the
+    rows of _hg_units' columns)."""
+    I, H = W1.shape
+    return torch.cat([W1.reshape(I // 16, 16, H), W3.reshape(I // 16, 16, H)], dim=1).reshape(2 * I, H)
+
+
+def _hg_pair_nk(W1, W3):
+    """_hg_pair on the stored [I, H] matrices (rows for columns)."""
+    I, H = W1.shape
+    g, u = W1.reshape(I // 32, 2, 16, H), W3.reshape(I // 32, 2, 16, H)
+    A = torch.cat([g[:, 0], u[:, 0]], dim=1).reshape(I, H)
+    B = torch.cat([g[:, 1], u[:, 1]], dim=1).reshape(I, H)
+    return A, B
+
+
+def flat_weight_regions(W_l, lay, nk=False):
     """One device's weights in the flat expert's per-core bank regions (the C++ op's flat_routed_expert_plan and this
-    builder share it). W_l: per local expert (Wg [H, I], Wu [H, I], Wd [I, H]). Returns (gate/up regions per reader,
+    builder share it). W_l: per local expert (Wg [H, I], Wu [H, I], Wd [I, H]); ``nk``: (W1 [I, H], W3 [I, H],
+    W2 [H, I]) as nn.Linear stores them, every tile then holding the transpose of the x @ W tile at the same place
+    (the op's weights_nk transposes it back in the matmul; a bfp8 tile then shares its exponents along K). Returns
+    (gate/up regions per reader,
     down regions per down core, reader-tail down regions or None), each a list of equal-size [tiles, 32, 32]:
     * reader r: per expert, per K-block of KBLK tiles, its RG pair-sets' [KBLK x (gate, up) x NP] blocks
       (pair-set column (r % n_rd_sg) * RG + pl; an uneven split: rgs[r] pair-sets from ps0[r], the region zero-padded
@@ -421,14 +456,18 @@ def flat_weight_regions(W_l, lay):
       (zero-padded to the widest core's region);
     * reader tail i: per expert, per K-block of kd_r tiles, [kd_r x pcd_r] columns from rem_cols + (i % n_rdn) pcd_r."""
     kblk = 8
-    tiles = lambda w: w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)
+    if nk:
+        tiles, units_of, pair_of = _tiles_nk, _hg_units_nk, _hg_pair_nk
+    else:
+        tiles = lambda w: w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)  # noqa: E731
+        units_of, pair_of = _hg_units, _hg_pair
     nu = lay.get("nu") or 0
     if nu:  # 16-column units: unit u's tile = [gate | up] of columns 16 u..; a column group's NU units in order
-        U_l = [tiles(_hg_units(a, b)) for a, b, _ in W_l]
+        U_l = [tiles(units_of(a, b)) for a, b, _ in W_l]
     elif lay.get("hg"):  # half-width tiles: a pair's "gate" tile [gate | up] of its columns 0..15, "up" tile of 16..31
-        W_l = [_hg_pair(a, b) + (c,) for a, b, c in W_l]
+        W_l = [pair_of(a, b) + (c,) for a, b, c in W_l]
     T_l = [(tiles(a), tiles(b), tiles(c)) for a, b, c in W_l]
-    it = W_l[0][0].shape[1] // 32
+    it = (W_l[0][0].shape[0] if nk else W_l[0][0].shape[1]) // 32
     RG, NP = lay["rg"], lay["np"]
     rgs, ps0 = lay.get("rgs") or [], lay.get("ps0") or []
     regions = []
@@ -1891,17 +1930,36 @@ class FlatRoutedExpert:
         cache_prefix=None,
         x_bf16=False,
         h_bf16=False,
+        weights_nk=False,
+        routed=False,
+        check_exact=False,
     ):
         """``weights``: per device, per local expert (Wg [H, I], Wu [H, I], Wd [I, H]), or a callable returning that
         (only called when the weight cache misses), or ``"fake"``: uninitialised weight tensors in the right layout
         (perf only: no host packing / upload; outputs are garbage). ``cache_prefix``: path stem of the laid-out weight
         cache; the file names carry the dtype and a hash of the C++ plan, so a layout change never loads a stale
-        layout."""
+        layout. ``weights_nk``: the weights are given as nn.Linear stores them, (W1 [I, H], W3 [I, H], W2 [H, I]),
+        laid out tile by tile transposed (flat_weight_regions nk) and every call passes weights_nk (the matmuls
+        transpose them back): a bfp8 tile then shares its exponents along K. ``routed``: the plan of the h options
+        (routing_weights / fp8_act_quant calls: 32-row sub-blocks). ``check_exact``: assert the block-float dtype
+        holds every weight value exactly (each 16-value group of a tile row: integer multiples of 2^(E - 6) for bfp8,
+        E the group's largest exponent)."""
         E, n_dev = len(gids[0]), len(gids)
         self.device, self.H, self.I, self.m, self.act, self.pin = device, H, I, m, ACTS[act], pin
         self.x_bf16, self.h_bf16 = x_bf16, h_bf16  # x / h tile formats (else bfp8): part of the plan
+        self.weights_nk, self.routed = weights_nk, routed
         self.plan = ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
-            device, H, I, E, n_global, m, weights_bf8=wdtype == "bf8", pin=pin, x_bf16=x_bf16, h_bf16=h_bf16
+            device,
+            H,
+            I,
+            E,
+            n_global,
+            m,
+            weights_bf8=wdtype == "bf8",
+            pin=pin,
+            x_bf16=x_bf16,
+            h_bf16=h_bf16,
+            routed=routed,
         )
         lay = dict(self.plan)
         w_dtype = W_DTYPES[wdtype][0]
@@ -1919,6 +1977,8 @@ class FlatRoutedExpert:
                 layout["hg"] = True
             if lay.get("nu"):
                 layout["nu"] = lay["nu"]
+            if weights_nk:
+                layout["nk"] = True
             key = hashlib.sha1(repr((sorted(layout.items()), gids, n_dev)).encode()).hexdigest()[:12]
             files = {n: f"{cache_prefix}.flat.{wdtype}.lay{key}.{n}.tensorbin" for n in names}
             _adopt_legacy(cache_prefix, wdtype, files)
@@ -1933,7 +1993,11 @@ class FlatRoutedExpert:
             assert len(weights) == n_dev and all(len(w_) == E for w_ in weights)
             w_all, wd_all, wr_all = [], [], []
             for W_l in weights:
-                regions, dregs, rregs = flat_weight_regions(W_l, lay)
+                regions, dregs, rregs = flat_weight_regions(W_l, lay, nk=weights_nk)
+                if check_exact:
+                    for nm, rs in (("gate/up", regions), ("down", dregs), ("reader-tail down", rregs or [])):
+                        for i_, r_ in enumerate(rs):
+                            assert block_float_exact(r_, wdtype), f"{wdtype} would round a {nm} weight (region {i_})"
                 w_all.append(regions)
                 wd_all.append(dregs)
                 if lay["rdown"]:
@@ -1979,8 +2043,14 @@ class FlatRoutedExpert:
         pack_stochastic_rounding=False,
         y_bf16=False,
         math_fidelity=0,
+        routing_weights=None,
+        fp8_act_quant=False,
+        hidden=0,
     ):
-        """x: the row-major bf16 dispatch buffer [rows, H]; counts / regions: the routing's [1, n_global] uint32 rows.
+        """x: the row-major bf16 dispatch buffer [rows, H] (``hidden``: [rows, W >= H], each row's first H values);
+        counts / regions: the routing's [1, n_global] uint32 rows. ``routing_weights`` ([rows, 32] fp32 TILE, column
+        = local expert) / ``fp8_act_quant``: DeepSeek-V4.1's h = q(r * act) before the down projection (the plan
+        must be built with routed=True).
         token_index ([1, rows] uint32): indexed mode, x is then e.g. the all-gathered tokens and flat row r reads x row
         token_index[r]. x_pages_per_row P: x is [rows * P, H / P] (P = 8: every row spread over the 8 DRAM banks).
         Returns y [rows, H] bfp8 TILE (the active experts' rows); ``y_row_major``: bf16 ROW_MAJOR (pack-untilized on
@@ -2009,4 +2079,8 @@ class FlatRoutedExpert:
             h_bf16=self.h_bf16,
             y_bf16=y_bf16,
             math_fidelity=math_fidelity,
+            routing_weights=routing_weights,
+            fp8_act_quant=fp8_act_quant,
+            weights_nk=self.weights_nk,
+            hidden=hidden,
         )
