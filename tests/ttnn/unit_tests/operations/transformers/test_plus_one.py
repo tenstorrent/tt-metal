@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 @pytest.mark.parametrize("w", [1, 4, 8, 32])
@@ -26,7 +26,7 @@ def test_plus_one(device, w, dtype):
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, device=device)
     ttnn.plus_one(input_tensor)
     output_tensor = ttnn.to_torch(input_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("w", [1, 4, 8, 32])
@@ -38,7 +38,7 @@ def test_plus_one_subdevice(device, w):
         input_tensor, sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(1, 1))])
     )
     output_tensor = ttnn.to_torch(input_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("input_shape", [(16, 32), (32, 32), (4, 16, 32), (4, 8, 16, 32)])
@@ -51,7 +51,7 @@ def test_plus_one_subdevice_nd(device, input_shape):
         sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(1, 1))]),
     )
     output_tensor = ttnn.to_torch(input_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("w", [1, 4, 8, 32])
@@ -65,7 +65,7 @@ def test_plus_one_with_neg_entries(device, w, val):
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int32, device=device)
     ttnn.plus_one(input_tensor, skip_negative_entries=True)
     output_tensor = ttnn.to_torch(input_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("input_shape", [(16, 32), (32, 32), (4, 16, 32), (4, 8, 16, 32)])
@@ -79,7 +79,7 @@ def test_plus_one_with_neg_entries_nd(device, input_shape, val):
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int32, device=device)
     ttnn.plus_one(input_tensor, skip_negative_entries=True)
     output_tensor = ttnn.to_torch(input_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("w", [4, 8, 32])
@@ -98,8 +98,8 @@ def test_plus_one_program_cache(device, w):
     ttnn.plus_one(tensor_b)
     assert device.num_program_cache_entries() == 1
 
-    assert_with_pcc(torch_a + 1, ttnn.to_torch(tensor_a), 0.9999)
-    assert_with_pcc(torch_b + 1, ttnn.to_torch(tensor_b), 0.9999)
+    assert_equal(torch_a + 1, ttnn.to_torch(tensor_a))
+    assert_equal(torch_b + 1, ttnn.to_torch(tensor_b))
 
 
 @pytest.mark.parametrize("w", [4, 8, 32])
@@ -124,8 +124,8 @@ def test_plus_one_sharded_program_cache(device, w):
     ttnn.plus_one(tensor_b)
     assert device.num_program_cache_entries() == 1
 
-    assert_with_pcc(torch_a + 1, ttnn.to_torch(tensor_a), 0.9999)
-    assert_with_pcc(torch_b + 1, ttnn.to_torch(tensor_b), 0.9999)
+    assert_equal(torch_a + 1, ttnn.to_torch(tensor_a))
+    assert_equal(torch_b + 1, ttnn.to_torch(tensor_b))
 
 
 @pytest.mark.parametrize("input_shape", [(32,), (4, 32), (2, 8, 32)])
