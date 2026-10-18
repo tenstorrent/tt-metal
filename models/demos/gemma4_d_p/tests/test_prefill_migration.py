@@ -396,7 +396,11 @@ def run_slots_case(gate, slot_lengths, migration_sources, output_dir):
             table_and_map = setup.submit(load_table_and_open_umd)
             try:
                 # The migration driver drains the acks itself.
-                acks = prefill_producer._connect_layer_ack_channel(120) if gate == "mock" else None
+                acks = None
+                if gate == "mock":
+                    acks = prefill_producer._connect_layer_ack_channel(120)
+                    if acks is None:  # the helper returns None instead of raising, which would skip the ack check
+                        raise RuntimeError("the mock migration test needs the layer-ack channel; see the log above")
                 original_loop(runtime, kv_cache, *args, **kwargs)
                 producer_returncode = producer.wait(timeout=120)
                 if producer_returncode != 0:
@@ -404,7 +408,7 @@ def run_slots_case(gate, slot_lengths, migration_sources, output_dir):
                         f"Producer exited with code {producer_returncode}. See {output_dir / 'producer.log'}."
                     )
                 assert runtime.slot_ends == list(slot_lengths) + [0] * (num_slots - len(slot_lengths))
-                if acks is not None:
+                if gate == "mock":
                     # One ack per layer per chunk, however the chunks were grouped into steps.
                     drained = prefill_producer._drain_layer_acks(acks, expected_acks, timeout_s=120)
                     assert drained == expected_acks, f"{drained} layer acks, expected {expected_acks}"

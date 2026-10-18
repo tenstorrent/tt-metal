@@ -116,6 +116,10 @@ class Scheduler:
             start=min(int(start), n_tokens - 1),
         )
         self.incoming.put(request)
+        if self.stop.is_set():
+            # run() sets stop before its final drain, so a request that missed the drain fails here instead of
+            # waiting for an event nobody will set.
+            raise RuntimeError("scheduler stopped")
         return request
 
     def play(self, arrivals):
