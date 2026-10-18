@@ -8,7 +8,7 @@
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_logsigmoid.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
-#if defined(ARCH_BLACKHOLE)
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "ckernel_sfpu_logsigmoid_bf16.h"
 #endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
@@ -49,9 +49,9 @@ ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_ou
  */
 ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
 
-// Blackhole only: ckernel_sfpu_logsigmoid_bf16.h exists under that ckernel tree.
-// Wormhole and Quasar keep the op's own kernel.
-#if defined(ARCH_BLACKHOLE)
+// Blackhole and Wormhole only: ckernel_sfpu_logsigmoid_bf16.h exists under those ckernel trees.
+// Quasar keeps the op's own kernel.
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 
 // clang-format off
 /**
@@ -82,6 +82,6 @@ ALWI void log_sigmoid_tile_init() {
     MATH(sfpu::init_logsigmoid_bf16());
 }
 
-#endif  // ARCH_BLACKHOLE
+#endif  // ARCH_BLACKHOLE || ARCH_WORMHOLE
 
 }  // namespace ckernel

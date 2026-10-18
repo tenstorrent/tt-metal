@@ -25,7 +25,7 @@ PATH = "tests/ttnn/perf_tests/operations/eltwise/test_log_sigmoid_device_perf.py
 
 # op: (this change's call, the boards the change installs on)
 CASES = {
-    "log_sigmoid": (lambda x: ttnn.log_sigmoid(x), ("blackhole",)),
+    "log_sigmoid": (lambda x: ttnn.log_sigmoid(x), ("blackhole", "wormhole_b0")),
 }
 
 

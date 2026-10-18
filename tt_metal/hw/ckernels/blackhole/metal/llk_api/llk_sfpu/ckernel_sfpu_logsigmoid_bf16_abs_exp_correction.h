@@ -14,14 +14,14 @@
 #include "sfpu/ckernel_sfpu_logsigmoid_bf16_finite_reciprocal.h"
 #include "sfpu/ckernel_sfpu_logsigmoid_bf16_abs_exp_correction_core.h"
 #include "sfpu/ckernel_sfpu_logsigmoid_bf16_abs_exp_correction.h"
-namespace ckernel::sfpu::bf16 {
+namespace ckernel::sfpu::bf16::logsigmoid {
 template <typename Config>
 inline void init_abs_exp_correction() {
     sfpi::vConstFloatPrgm0 = Config::kMultiplier;
     sfpi::vConstFloatPrgm1 =
-        Config::kExpCoefficients[Config::kExpDegree] * ttpoly::correction_exp_scale(Config::kExpDegree);
-    sfpi::vConstFloatPrgm2 =
-        Config::kExpCoefficients[Config::kExpDegree - 1] * ttpoly::correction_exp_scale(Config::kExpDegree - 1);
+        Config::kExpCoefficients[Config::kExpDegree] * ttpoly::logsigmoid::correction_exp_scale(Config::kExpDegree);
+    sfpi::vConstFloatPrgm2 = Config::kExpCoefficients[Config::kExpDegree - 1] *
+                             ttpoly::logsigmoid::correction_exp_scale(Config::kExpDegree - 1);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
-}  // namespace ckernel::sfpu::bf16
+}  // namespace ckernel::sfpu::bf16::logsigmoid

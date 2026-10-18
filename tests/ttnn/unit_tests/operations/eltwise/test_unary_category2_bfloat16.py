@@ -12,12 +12,13 @@ from tests.ttnn.utils_for_testing import (
     generate_all_bfloat16_bitpatterns,
 )
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    assert_ftz_band,
     generate_bfloat16_bits,
     generate_bfloat16_bits_in_range,
     to_tt_tensor,
     SMALLEST_NORMAL_BF16,
 )
-from models.common.utility_functions import run_for_blackhole, run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 
 pytestmark = pytest.mark.use_module_device
 
@@ -52,18 +53,6 @@ Accuracy criteria
   tanhshrink     : ULP ≤ 2 for |x| >= 1; PCC ≥ 0.999 for |x| < 1; see
                               test_tanhshrink
 """
-
-
-def assert_ftz_band(result, band_mask, band_desc):
-    """Assert a known flush-to-zero band is non-empty and device-flushed to 0.
-
-    The band is a deterministic slice of the exhaustive sweep, so the
-    non-emptiness assertion guards against a future golden/kernel change that
-    shifts a boundary and silently empties the band (which would otherwise let
-    the test pass without ever checking the documented FTZ behavior).
-    """
-    assert band_mask.any(), f"expected {band_desc} to be non-empty for this exhaustive sweep"
-    assert_equal(torch.zeros_like(result[band_mask]), result[band_mask])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -359,6 +348,7 @@ LOG_SIGMOID_CLASS_CODES = {"inf": 0, "-inf": 1, "zero": 2, "finite": 3}
 # with subnormals as zero, and the class their outputs are stored as).
 LOG_SIGMOID_DECLARED = {
     "blackhole": [],
+    "wormhole_b0": [],
 }
 
 
@@ -404,7 +394,7 @@ def _log_sigmoid_pure_ulp(reference, actual):
     return torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
 
 
-@run_for_blackhole("the generated kernel runs on Blackhole only")
+@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
 def test_log_sigmoid_exhaustive_bfloat16(device):
     x = generate_all_bfloat16_bitpatterns(torch.bfloat16)
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -454,7 +444,7 @@ def _log_sigmoid_on_device(x, device, **kwargs):
     return ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, **kwargs)
 
 
-@run_for_blackhole("the generated kernel runs on Blackhole only")
+@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
 @pytest.mark.parametrize("placement", ["row_major", "height_sharded", "unaligned", "cached"])
 def test_log_sigmoid_every_placement_matches_interleaved_tiles(device, placement):
     """The generated kernel computes each element alone, so placement must not change a result."""
@@ -477,7 +467,7 @@ def test_log_sigmoid_every_placement_matches_interleaved_tiles(device, placement
     assert torch.equal(actual, expected)
 
 
-@run_for_blackhole("the generated kernel runs on Blackhole only")
+@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
 def test_log_sigmoid_many_tiles_per_core_match_torch(device):
     """One core holds 128 tiles, so the kernel's per-call state carries across many tiles of one program."""
     x = _log_sigmoid_inputs((1, 1, 2048, 64))
@@ -493,7 +483,7 @@ def test_log_sigmoid_many_tiles_per_core_match_torch(device):
     assert ulp.max().item() < 1.0, f"{(ulp >= 1.0).sum().item()} of {ulp.numel()} outputs at or beyond 1 ulp of torch"
 
 
-@run_for_blackhole("the generated kernel runs on Blackhole only")
+@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
 @pytest.mark.parametrize("call", ["float32", "bfloat16_to_float32"])
 def test_log_sigmoid_keeps_its_own_path_elsewhere(device, call):
     """A call the generated kernel does not serve runs the op's existing path and matches its golden."""
@@ -511,12 +501,3 @@ def test_log_sigmoid_keeps_its_own_path_elsewhere(device, call):
         assert ttnn.log_sigmoid(_log_sigmoid_on_device(x, device), output_tensor=output).dtype == ttnn.float32
         return
     assert_with_pcc(expected, ttnn.to_torch(actual).float(), 0.999)
-
-
-@run_for_wormhole_b0("TT-NN's own path is kept on this board")
-def test_log_sigmoid_keeps_its_own_path(device):
-    """On a board the generated kernel does not install on, ttnn.log_sigmoid runs TT-NN's own path, checked against
-    torch over the range the kernel is fitted on."""
-    x = _log_sigmoid_inputs((1, 1, 64, 64))
-    actual = ttnn.to_torch(ttnn.log_sigmoid(_log_sigmoid_on_device(x, device))).float()
-    assert_with_pcc(_log_sigmoid_reference(x.to(torch.float64)).float(), actual, 0.999)

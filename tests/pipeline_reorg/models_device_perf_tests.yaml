@@ -74,7 +74,6 @@
     pytest --timeout 120 -s -v
     tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_bfloat16.py::test_log_sigmoid_every_placement_matches_interleaved_tiles
     tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_bfloat16.py::test_log_sigmoid_exhaustive_bfloat16
-    tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_bfloat16.py::test_log_sigmoid_keeps_its_own_path
     tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_bfloat16.py::test_log_sigmoid_keeps_its_own_path_elsewhere
     tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_bfloat16.py::test_log_sigmoid_many_tiles_per_core_match_torch
     && TRACY_NO_SYS_TRACE=1 pytest --timeout 120 -s -m models_device_performance_bare_metal

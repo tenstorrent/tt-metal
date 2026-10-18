@@ -8,7 +8,7 @@
 // row count, address modes and counter restoration.
 #include <cstdint>
 
-namespace ckernel::sfpu::ttpoly
+namespace ckernel::sfpu::ttpoly::logsigmoid
 {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
@@ -280,4 +280,4 @@ inline void abs_exp_residual_suffix()
         TTI_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, (kExpC0 & 0xffffu));
     }
 }
-} // namespace ckernel::sfpu::ttpoly
+} // namespace ckernel::sfpu::ttpoly::logsigmoid

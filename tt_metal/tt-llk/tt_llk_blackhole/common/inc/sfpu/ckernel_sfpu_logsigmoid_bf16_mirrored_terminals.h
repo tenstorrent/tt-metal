@@ -4,7 +4,7 @@
 
 #pragma once
 
-namespace ckernel::sfpu::ttpoly
+namespace ckernel::sfpu::ttpoly::logsigmoid
 {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
@@ -59,4 +59,4 @@ inline void nan_class_terminal(vUInt raw_u16, vFloat& result)
     }
     v_endif;
 }
-} // namespace ckernel::sfpu::ttpoly
+} // namespace ckernel::sfpu::ttpoly::logsigmoid

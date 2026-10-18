@@ -26,12 +26,12 @@ struct LogsigmoidBf16Config {
 
 namespace ckernel::sfpu {
 
-template <int ITERATIONS = 8>
+template <int ITERATIONS = 32>
 inline void calculate_logsigmoid_bf16() {
-    ckernel::sfpu::bf16::calculate_abs_exp_correction<ckernel::sfpu::LogsigmoidBf16Config, ITERATIONS>();
+    ckernel::sfpu::bf16::logsigmoid::calculate_abs_exp_correction<ckernel::sfpu::LogsigmoidBf16Config, ITERATIONS>();
 }
 inline void init_logsigmoid_bf16() {
-    ckernel::sfpu::bf16::init_abs_exp_correction<ckernel::sfpu::LogsigmoidBf16Config>();
+    ckernel::sfpu::bf16::logsigmoid::init_abs_exp_correction<ckernel::sfpu::LogsigmoidBf16Config>();
 }
 
 }  // namespace ckernel::sfpu

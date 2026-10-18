@@ -4,7 +4,7 @@
 
 #pragma once
 
-namespace ckernel::sfpu::ttpoly
+namespace ckernel::sfpu::ttpoly::logsigmoid
 {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
@@ -16,4 +16,4 @@ inline vFloat correction_finite_reciprocal(vFloat x, [[maybe_unused]] Reciprocal
     vFloat residual = x * y - sfpi::vConstFloatPrgm0;
     return y * -residual - 0.0f;
 }
-} // namespace ckernel::sfpu::ttpoly
+} // namespace ckernel::sfpu::ttpoly::logsigmoid
