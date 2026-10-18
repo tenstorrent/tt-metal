@@ -156,7 +156,7 @@ class BlockAttention:
             cb(cb_aux, bf16, 2048, 6),
             cb(cb_scr, bf16, 256 + max(pt_page, 64), 1),
             cb(cb_qs, bf16, 2048, 2),
-            cb(cb_s, f32, 4096, G + 1),
+            cb(cb_s, f32, 4096, 2 * (G + 1)),  # 2 groups: the next group's scores while P of this one runs
             cb(cb_p, bf16, 2048, G + 1),
             cb(cb_ab, f32, 4096, 2),
             cb(cb_out, bf16, 2048, 2),
