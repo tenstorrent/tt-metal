@@ -16,7 +16,7 @@ from ttml.trainers import GRPOConfig, GRPOTrainer
 
 # 1. Model and device configs. The trainer opens the device and loads the model
 #    named by transformer_config.model_type from model_source, then builds its
-#    rollout sampler from GRPOConfig.rollout_source with that model.
+#    rollout sampler from GRPOConfig.rollout_backend with that model.
 transformer_config = get_model_config("tt-train/configs/model_configs/llama3_2_1B.yaml")
 device_config = DeviceConfig({"device_config": {"enable_ddp": False, "mesh_shape": [1, 1]}})
 
@@ -38,7 +38,7 @@ trainer = GRPOTrainer(
     model_source="...",                  # HF ID or local checkpoint dir; also saved with checkpoints
     dataset_func=lambda: dataset,        # called once, in the constructor
     config=GRPOConfig(
-        rollout_source="ttml",           # in yaml: grpo_config.rollout_source
+        rollout_backend="ttml_in_process_sync",  # in yaml: grpo_config.rollout_backend
         epsilon=0.2,
         per_device_train_batch_size=8,
         num_iterations=1,
@@ -87,11 +87,11 @@ GRPO training is split into three components:
 In its constructor the trainer opens the device and builds the policy model and
 tokenizer (`trainer.model` / `trainer.tokenizer`) with `setup_ttml_model` from
 [`ttml/trainers/grpo_trainer/grpo_ttml_model.py`](../sources/ttml/ttml/trainers/grpo_trainer/grpo_ttml_model.py).
-In `in_process` mode it then builds its sampler from `GRPOConfig.rollout_source`
+For an in-process backend it then builds its sampler from `GRPOConfig.rollout_backend`
 (see [RolloutSampler](#rolloutsampler)), passing it that model and tokenizer, and
 exposes it as `trainer.rollout_sampler`. Finally it calls `dataset_func()`,
 tokenizes the prompts and builds `trainer.rollout_batch_source` for
-`GRPOConfig.rollout_mode`.
+`GRPOConfig.rollout_backend`.
 
 Per generation batch the data flows as follows:
 
@@ -122,13 +122,13 @@ that becomes a sampler `update_weights(weights, version=step)`.
 
 ## Rollout modes
 
-`grpo_config.rollout_source` picks the sampler and `grpo_config.rollout_mode`
-picks where it runs. The valid pairs are `VALID_ROLLOUT_COMBINATIONS`:
+`grpo_config.rollout_backend` picks the sampler and where it runs. The supported
+backends are the keys of `ROLLOUT_BACKENDS`:
 
-| `rollout_source` | `rollout_mode` | Launch | What runs where |
-|------------------|----------------|--------|-----------------|
-| `"ttml"` | `"in_process"` | `python script.py` | One process. `TTMLRolloutSampler` generates with the trainer's own model. |
-| `"ttt"` | `"remote_sync"` | `tt-run --rank-binding ... python script.py` | Rank 0 trains. Rank 1 generates with `TTTRolloutSampler` (tt-transformers, traced decode) behind `MPIRolloutServer`. |
+| `rollout_backend` | Launch | What runs where |
+|-------------------|--------|-----------------|
+| `"ttml_in_process_sync"` | `python script.py` | One process. `TTMLRolloutSampler` generates with the trainer's own model. |
+| `"ttt_remote_sync"` | `tt-run --rank-binding ... python script.py` | Rank 0 trains. Rank 1 generates with `TTTRolloutSampler` (tt-transformers, traced decode) behind `MPIRolloutServer`. |
 
 The user script is the same in both modes:
 
@@ -145,7 +145,7 @@ trainer = GRPOTrainer(
 trainer.train()
 ```
 
-In `remote_sync` both ranks run this script. The constructor picks the role:
+In `ttt_remote_sync` both ranks run this script. The constructor picks the role:
 
 - **Rank 0 (trainer)** builds the policy, calls `dataset_func`, and builds a
   `SyncRemoteRolloutBatchSource`. For each batch it sends the unexpanded
@@ -158,7 +158,7 @@ In `remote_sync` both ranks run this script. The constructor picks the role:
   `dataset_func`. Its `train()` serves generate and weight-update requests until
   rank 0 finishes, then closes its mesh.
 
-Rules and limitations of `remote_sync`:
+Rules and limitations of `ttt_remote_sync`:
 
 - **Llama only, no FSDP**, and `model_source` must be a HuggingFace Hub id
   (both ranks load HF-named weights from it; a local path raises `ValueError`).
@@ -187,12 +187,12 @@ Rules and limitations of `remote_sync`:
 from ttml.trainers import RolloutBatch, RolloutSampler, build_rollout_sampler
 ```
 
-`GRPOTrainer` calls `build_rollout_sampler(config.rollout_source, ...)` with the
+`GRPOTrainer` calls `build_rollout_sampler(config.backend.sampler, ...)` with the
 config's `max_completion_length`, `temperature` and `num_generations`, plus its
 `model` and `tokenizer` (`"ttml"`) or the rollout mesh, `model_source` and
 `remote_rollout` (`"ttt"`). Supported values:
 
-| `rollout_source` | Sampler |
+| `RolloutBackend.sampler` | Sampler |
 |------------------|---------|
 | `"ttml"` | [`TTMLRolloutSampler`](#ttmlrolloutsampler): in-process generation on the trainer's own model and mesh. |
 | `"ttt"` | [`TTTRolloutSampler`](#tttrolloutsampler): tt-transformers generation on the rollout rank. |
@@ -225,7 +225,7 @@ sampler = TTMLRolloutSampler(model, tokenizer, max_completion_length, temperatur
 
 In-process sampler for the ttml Llama and Qwen3 models
 ([`ttml/trainers/grpo_trainer/ttml_rollout_sampler.py`](../sources/ttml/ttml/trainers/grpo_trainer/ttml_rollout_sampler.py)),
-selected with `rollout_source: "ttml"`. It generates with the trainer's own
+selected with `rollout_backend: "ttml_in_process_sync"`. It generates with the trainer's own
 model and tokenizer on the already-open device: a KV-cached, right-padded
 prefill + decode loop that captures `log pi_old` on device. Its `temperature`
 and `completions_per_prompt` properties can be changed between `generate()`
@@ -259,7 +259,7 @@ optimizer state end up sharded `1/N` across the FSDP axis.
 
 Rollout-rank sampler for Llama on tt-transformers
 ([`ttml/trainers/grpo_trainer/remote_rollout/ttt_rollout_sampler.py`](../sources/ttml/ttml/trainers/grpo_trainer/remote_rollout/ttt_rollout_sampler.py)),
-selected with `rollout_source: "ttt"`. It splits the rollout mesh into `[1, 1]`
+selected with `rollout_backend: "ttt_remote_sync"`. It splits the rollout mesh into `[1, 1]`
 submeshes and runs one data-parallel model per submesh with on-device sampling
 and a captured decode trace. One tt-transformers call serves
 `slots_per_call = max_batch_size * data_parallel` completions; `generate` splits
@@ -291,10 +291,9 @@ from ttml.trainers import GRPOConfig
 | `warmup_steps` | `int` | — | `warmup_steps` | Number of linear learning rate warmup steps. |
 | `lr_scheduler_type` | `str` | `"constant_with_warmup"` | `lr_scheduler_type` | Same values and semantics as TRL: `"constant"` (flat; ignores `warmup_steps`), `"constant_with_warmup"`, `"cosine"` (decays to 0), `"cosine_with_min_lr"` (decays to `base_lr * min_lr_rate`). Other TRL values are not supported. Warmup is `(i + 1) / warmup_steps` for 0-indexed step `i`; TRL's is `i / warmup_steps`. |
 | `min_lr_rate` | `float` | `0.0` | `lr_scheduler_kwargs={"min_lr_rate": ...}` | Final LR as a fraction of the base LR for `"cosine_with_min_lr"`; ignored otherwise. |
-| `rollout_source` | `str` | — | *(no direct equivalent)* | Which rollout sampler generates: `"ttml"` or `"ttt"`; see [RolloutSampler](#rolloutsampler). Required in `grpo_config`. |
-| `rollout_mode` | `str` | `"in_process"` | *(no direct equivalent)* | Where the sampler runs: `"in_process"` or `"remote_sync"`; see [Rollout modes](#rollout-modes). The `(rollout_source, rollout_mode)` pair must be in `VALID_ROLLOUT_COMBINATIONS`. |
-| `weight_sync_every` | `int` | `1` | *(no direct equivalent)* | `remote_sync` only: push the policy weights to the rollout rank every *N* optimizer steps. |
-| `remote_rollout` | `RemoteRolloutConfig \| None` | `None` | *(no direct equivalent)* | Rollout rank settings, required for `remote_sync`. `get_grpo_config` reads it from the top-level `remote_rollout_config` YAML section: `mesh_shape`, `max_batch_size` (per tt-transformers model), `max_seq_len`, and optional `seed`, `top_k` (default 32), `top_p` (default 1.0). |
+| `rollout_backend` | `str` | — | *(no direct equivalent)* | Which sampler generates and where it runs: `"ttml_in_process_sync"` or `"ttt_remote_sync"`; see [Rollout modes](#rollout-modes). Required in `grpo_config`. |
+| `weight_sync_every` | `int` | `1` | *(no direct equivalent)* | `ttt_remote_sync` only: push the policy weights to the rollout rank every *N* optimizer steps. |
+| `remote_rollout` | `RemoteRolloutConfig \| None` | `None` | *(no direct equivalent)* | Rollout rank settings, required for `ttt_remote_sync`. `get_grpo_config` reads it from the top-level `remote_rollout_config` YAML section: `mesh_shape`, `max_batch_size` (per tt-transformers model), `max_seq_len`, and optional `seed`, `top_k` (default 32), `top_p` (default 1.0). |
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |
 | `checkpoint_interval` | `int` | — | *(use `save_steps`)* | Save a checkpoint every *N* optimizer steps (when `checkpointing=True`). |
@@ -334,7 +333,7 @@ GRPOTrainer(
 | `device_config` | `DeviceConfig` | Device mesh the trainer opens (see [Device Config](#device-config)). |
 | `model_source` | `str` | HuggingFace model ID or local checkpoint directory the trainer loads the model from. Its HF config is also saved with checkpoints. |
 | `dataset_func` | `Callable[[], Dataset]` | Zero-argument callable returning a HuggingFace `datasets.Dataset` with at least a `"prompt"` column. All other columns are passed to the reward function. Called once, in the constructor. |
-| `config` | `GRPOConfig` | Training configuration (see above); `rollout_source` selects the sampler. |
+| `config` | `GRPOConfig` | Training configuration (see above); `rollout_backend` selects the sampler. |
 | `reward_func` | `Callable` | Reward function. Receives decoded completions and any dataset columns (see [Reward Functions](#reward-functions)). |
 | `optimizer_dict` | `dict` | Optimizer config dict passed to the [ttml optimizer registry](TTML_ONBOARDING.md). Must include a `"type"` key. |
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
@@ -344,7 +343,7 @@ sampler (in-process), the optimizer and the LR scheduler, tokenizes the
 dataset and builds the rollout batch source, so `trainer.rollout_sampler`,
 `trainer.rollout_batch_source`, `trainer.model` and `trainer.tokenizer` are
 available before `train()` — e.g. to callbacks in `on_train_begin`. In
-`remote_sync` mode `trainer.rollout_sampler` is `None` on rank 0, and on rank 1
+`ttt_remote_sync` mode `trainer.rollout_sampler` is `None` on rank 0, and on rank 1
 only `trainer.rollout_sampler` is set.
 
 ### Methods
@@ -535,7 +534,7 @@ Two contracts are worth calling out:
 The only built-in logging is the auto-added `GRPOMonitor`; other CSV writing,
 progress bars, or dashboards belong in additional callbacks.
 
-> **Cross-rank weight transfer** needs no callback: in `remote_sync` the
+> **Cross-rank weight transfer** needs no callback: in `ttt_remote_sync` the
 > trainer's rollout batch source pushes the weights to the rollout rank
 > every `weight_sync_every` steps (see [Rollout modes](#rollout-modes)).
 
@@ -737,7 +736,7 @@ Llama-3.2-1B-Instruct on BoolQ using `GRPOTrainer` with a custom reward
 function and CSV logging via the framework's built-in `GRPOMonitor`. The
 model family comes from the config's model yaml.
 
-In-process (`rollout_source: "ttml"`, `rollout_mode: "in_process"`): the
+In-process (`rollout_backend: "ttml_in_process_sync"`): the
 trainer generates with a `TTMLRolloutSampler` on its own model.
 
 ```bash
@@ -753,7 +752,7 @@ python3 boolq/boolq_training_example.py \
     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
 ```
 
-Remote rollouts (`rollout_source: "ttt"`, `rollout_mode: "remote_sync"`): the
+Remote rollouts (`rollout_backend: "ttt_remote_sync"`): the
 same script on two tt-run ranks, with rank 1 generating through
 `tt-transformers` inside a captured ttnn trace (much faster than ttml decode).
 [`boolq/run_remote_rollout.sh`](../sources/examples/grpo/boolq/run_remote_rollout.sh)

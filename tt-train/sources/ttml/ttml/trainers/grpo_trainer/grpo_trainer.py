@@ -89,9 +89,20 @@ class RolloutSampler(ABC):
         pass
 
 
-ROLLOUT_SOURCES = ("ttml", "ttt")
-ROLLOUT_MODES = ("in_process", "remote_sync")
-VALID_ROLLOUT_COMBINATIONS = (("ttml", "in_process"), ("ttt", "remote_sync"))
+@dataclass(frozen=True)
+class RolloutBackend:
+    sampler: str
+    in_process: bool
+    sync: bool
+    weight_push_before_training: bool
+
+
+ROLLOUT_BACKENDS = {
+    "ttml_in_process_sync": RolloutBackend(
+        sampler="ttml", in_process=True, sync=True, weight_push_before_training=False
+    ),
+    "ttt_remote_sync": RolloutBackend(sampler="ttt", in_process=False, sync=True, weight_push_before_training=True),
+}
 
 
 def build_rollout_sampler(
@@ -122,7 +133,7 @@ def build_rollout_sampler(
         from .remote_rollout.ttt_rollout_sampler import TTTRolloutSampler
 
         if model_source is None or mesh_device is None or remote_rollout is None:
-            raise ValueError("rollout_source='ttt' needs model_source, mesh_device and remote_rollout")
+            raise ValueError("rollout sampler 'ttt' needs model_source, mesh_device and remote_rollout")
         stop_token_ids, pad_token_id = llama_stop_and_pad(model_source)
         return TTTRolloutSampler(
             mesh_device=mesh_device,
@@ -141,12 +152,12 @@ def build_rollout_sampler(
             seed=remote_rollout.seed,
             dummy_weights=True,
         )
-    raise ValueError(f"unknown rollout_source {source!r}; expected one of {list(ROLLOUT_SOURCES)}")
+    raise ValueError(f"unknown rollout sampler {source!r}")
 
 
 @dataclass
 class RemoteRolloutConfig:
-    """Rollout rank settings for rollout_mode="remote_sync"."""
+    """Rollout rank settings for rollout_backend="ttt_remote_sync"."""
 
     mesh_shape: List[int]
     max_batch_size: int
@@ -184,9 +195,10 @@ class GRPOConfig:
     max_completion_length: int
     num_generations: int
     warmup_steps: int
-    # Which engine generates rollouts (see ROLLOUT_SOURCES above).
-    # "ttml": TTMLRolloutSampler with the trainer's policy model; "ttt": tt-transformers.
-    rollout_source: str
+    # Which engine generates rollouts and how they reach the trainer (see ROLLOUT_BACKENDS above).
+    # "ttml_in_process_sync": TTMLRolloutSampler with the trainer's policy model, same process.
+    # "ttt_remote_sync": tt-transformers on rank 1 of a 2-rank tt-run job, on request.
+    rollout_backend: str
     # LR schedule; values and semantics follow TRL's ``lr_scheduler_type``:
     #   "constant"             -> flat at base_lr; ``warmup_steps`` is ignored.
     #   "constant_with_warmup" -> linear warmup, then flat at base_lr.
@@ -214,9 +226,6 @@ class GRPOConfig:
     # num_generations. Kept only so older configs that still set it construct
     # without error; the trainer ignores any value provided here.
     batch_size: Optional[int] = None
-    # How rollouts reach the trainer (see ROLLOUT_MODES / VALID_ROLLOUT_COMBINATIONS above).
-    # "in_process": same process. "remote_sync": rank 1 of a 2-rank tt-run job generates on request.
-    rollout_mode: str = "in_process"
     # remote_sync: push the policy weights to the rollout rank every N optimizer steps.
     weight_sync_every: int = 1
     # remote_sync: rollout rank settings, from the top-level remote_rollout_config yaml section.
@@ -275,30 +284,22 @@ class GRPOConfig:
                 f"(got {self.clip_grad_norm_max_norm})."
             )
 
-        if not isinstance(self.rollout_source, str):
+        if not isinstance(self.rollout_backend, str):
             raise TypeError(
-                f"grpo_config: 'rollout_source' must be a str, got {type(self.rollout_source).__name__}. "
-                f"Supported values: {list(ROLLOUT_SOURCES)}."
+                f"grpo_config: 'rollout_backend' must be a str, got {type(self.rollout_backend).__name__}. "
+                f"Supported values: {list(ROLLOUT_BACKENDS)}."
             )
-        if self.rollout_source not in ROLLOUT_SOURCES:
+        if self.rollout_backend not in ROLLOUT_BACKENDS:
             raise ValueError(
-                f"grpo_config: 'rollout_source' must be one of {list(ROLLOUT_SOURCES)} "
-                f"(got {self.rollout_source!r})."
-            )
-        if self.rollout_mode not in ROLLOUT_MODES:
-            raise ValueError(
-                f"grpo_config: 'rollout_mode' must be one of {list(ROLLOUT_MODES)} (got {self.rollout_mode!r})."
-            )
-        if (self.rollout_source, self.rollout_mode) not in VALID_ROLLOUT_COMBINATIONS:
-            raise ValueError(
-                f"grpo_config: rollout_source={self.rollout_source!r} with rollout_mode={self.rollout_mode!r} "
-                f"is not supported; valid (rollout_source, rollout_mode) pairs: {list(VALID_ROLLOUT_COMBINATIONS)}."
+                f"grpo_config: 'rollout_backend' must be one of {list(ROLLOUT_BACKENDS)} "
+                f"(got {self.rollout_backend!r})."
             )
         if self.weight_sync_every < 1:
             raise ValueError(f"grpo_config: 'weight_sync_every' must be >= 1 (got {self.weight_sync_every}).")
-        if self.rollout_mode == "remote_sync" and self.remote_rollout is None:
+        if not self.backend.in_process and self.remote_rollout is None:
             raise ValueError(
-                "grpo_config: rollout_mode='remote_sync' needs a top-level 'remote_rollout_config' section."
+                f"grpo_config: rollout_backend={self.rollout_backend!r} needs a top-level "
+                "'remote_rollout_config' section."
             )
 
         # ``report_to`` is intentionally a plain string in this framework
@@ -338,6 +339,10 @@ class GRPOConfig:
                 "size is now derived from per_device_train_batch_size, num_devices, "
                 "num_generations, and gradient_accumulation_steps. Remove it from your config."
             )
+
+    @property
+    def backend(self) -> RolloutBackend:
+        return ROLLOUT_BACKENDS[self.rollout_backend]
 
 
 def get_grpo_config(yaml_config: dict, output_dir: str = "") -> GRPOConfig:
@@ -957,19 +962,22 @@ def save_checkpoint(
 
 
 def _validate_remote_inputs(config: GRPOConfig, transformer_config: Any, device_config: Any, model_source: str) -> None:
-    if config.rollout_source == "ttt" and transformer_config.model_type != "llama":
+    if config.backend.sampler == "ttt" and transformer_config.model_type != "llama":
         raise ValueError(
-            f"GRPOTrainer: rollout_source='ttt' supports Llama models only, got model_type={transformer_config.model_type!r}."
+            f"GRPOTrainer: rollout_backend={config.rollout_backend!r} supports Llama models only, "
+            f"got model_type={transformer_config.model_type!r}."
         )
-    if config.rollout_mode != "remote_sync":
+    if config.backend.in_process:
         return
     if getattr(device_config, "enable_fsdp", False):
         raise ValueError(
-            "GRPOTrainer: rollout_mode='remote_sync' does not support FSDP: the weight push needs replicated parameters."
+            f"GRPOTrainer: rollout_backend={config.rollout_backend!r} does not support FSDP: "
+            "the weight push needs replicated parameters."
         )
     if os.path.exists(model_source):
         raise ValueError(
-            f"GRPOTrainer: rollout_mode='remote_sync' needs a HuggingFace Hub model id, got local path {model_source!r}."
+            f"GRPOTrainer: rollout_backend={config.rollout_backend!r} needs a HuggingFace Hub model id, "
+            f"got local path {model_source!r}."
         )
 
 
@@ -1004,7 +1012,7 @@ class GRPOTrainer:
         :class:`RolloutBatchSource` over the tokenized prompts
         (``self.rollout_batch_source``), so ``train()`` only runs the loop. In
         ``in_process`` mode the source generates with ``self.rollout_sampler``,
-        built from ``config.rollout_source`` with the trainer's model and
+        built from ``config.rollout_backend`` with the trainer's model and
         tokenizer. The trainer runs its own forward pass with gradients on the
         model and never changes its run mode.
 
@@ -1070,12 +1078,12 @@ class GRPOTrainer:
 
     def _build_policy(self, transformer_config: Any, device_config: Any, dataset_func: Callable[[], Any]) -> None:
         cfg = self.config
-        if cfg.rollout_mode != "in_process":
+        if not cfg.backend.in_process:
             ttml.autograd.AutoContext.get_instance().initialize_distributed_context(*sys.argv)
         self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, self.model_source)
-        if cfg.rollout_mode == "in_process":
+        if cfg.backend.in_process:
             self.rollout_sampler = build_rollout_sampler(
-                cfg.rollout_source,
+                cfg.backend.sampler,
                 model=self.model,
                 tokenizer=self.tokenizer,
                 max_completion_length=cfg.max_completion_length,
@@ -1107,7 +1115,7 @@ class GRPOTrainer:
             mesh_shape=ttnn.MeshShape(*rr.mesh_shape), offset=ttnn.MeshCoordinate(0, 0)
         )
         self.rollout_sampler = build_rollout_sampler(
-            cfg.rollout_source,
+            cfg.backend.sampler,
             model_source=self.model_source,
             mesh_device=self._rollout_mesh,
             remote_rollout=rr,
@@ -1655,8 +1663,7 @@ class GRPOTrainer:
             cb.on_train_begin(self)
 
         try:
-            # The ttt rollout sampler boots with dummy weights; push the real ones as version 0.
-            if self.config.rollout_source == "ttt":
+            if self.config.backend.weight_push_before_training:
                 self.rollout_batch_source.update_weights(self.model, 0)
             for scored in self._iter_scored_batches():
                 advantages_np = self._compute_advantages(scored.rewards)

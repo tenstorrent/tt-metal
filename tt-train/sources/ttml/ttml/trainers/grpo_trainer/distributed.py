@@ -16,10 +16,12 @@ if TYPE_CHECKING:
 
 def init_distributed_training(config: "GRPOConfig") -> None:
     """Check the process layout the rollout mode needs, and set it up for remote modes."""
-    if config.rollout_mode == "in_process":
+    if config.backend.in_process:
         world = int(ttnn.distributed_context_get_size()) if ttnn.distributed_context_is_initialized() else 1
         if world != 1:
-            raise ValueError(f"rollout_mode='in_process' runs in a single process, got world size {world}")
+            raise ValueError(
+                f"rollout_backend={config.rollout_backend!r} runs in a single process, got world size {world}"
+            )
         return
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
     if not ttnn.distributed_context_is_initialized():
@@ -27,9 +29,9 @@ def init_distributed_training(config: "GRPOConfig") -> None:
     world = int(ttnn.distributed_context_get_size())
     if world != 2:
         raise ValueError(
-            f"rollout_mode={config.rollout_mode!r} needs 2 ranks (tt-run with rank bindings), got world size {world}"
+            f"rollout_backend={config.rollout_backend!r} needs 2 ranks (tt-run with rank bindings), got world size {world}"
         )
 
 
 def is_rollout_rank(config: "GRPOConfig") -> bool:
-    return config.rollout_mode != "in_process" and int(ttnn.distributed_context_get_rank()) == TTT_RANK
+    return not config.backend.in_process and int(ttnn.distributed_context_get_rank()) == TTT_RANK
