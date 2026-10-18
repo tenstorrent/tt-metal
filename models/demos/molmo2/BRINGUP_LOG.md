@@ -44,10 +44,10 @@ Molmo2 Count (data not located). Server errors across all runs: 0. No comparison
 1. **vLLM decoded every video frame into RAM before sampling** (8.6 min of 720p30 = 148 GB resident, a 1.4M-token input and HTTP 400).
    Fixed in the Molmo2 specs with `vllm_args: media-io-kwargs: {video: {frame_sample_mode: uniform_last_frame, num_frames: 384,
    max_fps: 2}}` (tt-inference-server commit 3b1e5e50): the same clip takes 29 s and 3.4 GB; 105-suite still 98/100 (135 s, was 203 s).
-   The Docker image must be rebuilt to pick it up.
+   The Docker image was rebuilt with it (see the decoder-crash fix below).
 2. **Five LVBench videos segfault the OpenCV decoder inside the API server** (Aiem1w_TvaA, KLIa2UaE2KE, T1yhBv1ytzw, rSE2YPcv89U,
    oZEVgDXJwCc; exit -11 in `Molmo2VideoBackend.load_bytes`). One request kills the API server and leaves `VLLM::EngineCore`
-   orphaned holding the device. Not fixed: needs decoding in a separate process (or a different backend). The LVBench run excludes
+   orphaned holding the device. **Fixed** (plugin commits `6e4fd11`, `49a986f`, `video_guard.py`): decoding runs in persistent helper processes, so a crash returns HTTP 400 in ~8 s and the server stays up. The helper sets RLIMIT_CORE=1 (0 still runs the piped apport handler, which stalled a 3.4 GB crash for >10 min). Verified in the rebuilt `molmo2-ti-dev:local`: 2 crashing videos -> 400, normal videos before/after OK, health 200, 105-suite 98/100 (same misses idx 22, 84), 0 errors. The LVBench run excludes
    these videos (`verification/evals/lvbench_bad_videos.json`, found with `screen_videos.py`).
 3. Prefill is serialised across the 4 DP replicas (engine admits one prefill at a time; ~3.4k prompt tokens/s), so hour-long-video
    benchmarks run at ~3 questions/min. Candidate for the chunked/concurrent-prefill optimization step.
