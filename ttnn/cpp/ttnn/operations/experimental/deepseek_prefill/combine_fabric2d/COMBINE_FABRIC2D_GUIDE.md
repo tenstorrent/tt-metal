@@ -281,6 +281,7 @@ whole number of 64 B lines, so the row is padded after its scales up to one:
 - The selected mesh axis must have at least four chips and an even extent.
 - Inputs must be device, interleaved-DRAM tensors; token data is BF16 (or
   BFLOAT8_B tiles), and moves as BF16 or, with `fp8_scale_block`, as packed fp8.
+  FP8_E4M3 ROW_MAJOR rows already packed that way move as their bytes.
 - Metadata is exactly three INT32 values per token.
 - `expert_offsets` has one replicated row for every origin chip in the ring.
 - The token payload and token-plus-routing-tail must satisfy NoC/DRAM/Fabric

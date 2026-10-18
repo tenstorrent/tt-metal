@@ -37,7 +37,7 @@ std::vector<UntilizerCb> untilizer_cbs(const CombineFabric2dParams& args, const 
     const bool fp8 = args.fp8_scale_block != 0;
     std::vector<UntilizerCb> cbs{
         // The packer converts as it writes, so the ring is in the wire's format.
-        {cmbf2d::UNT_CB_OUT, token_data_format(args), token,
+        {cmbf2d::UNT_CB_OUT, token_data_format(args, tensor_args), token,
          cmbf2d::UNT_RING_BATCHES * cmbf2d::UNT_BATCH_ROWS * token},
         {cmbf2d::UNT_CB_BATCHES, tt::DataFormat::UInt32, BATCH_COUNT_PAGE_BYTES, BATCH_COUNT_PAGE_BYTES},
         // In the dispatched buffer's own format, so the unpacker dequantises a bfp8 tile on its way through.

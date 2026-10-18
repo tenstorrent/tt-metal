@@ -21,9 +21,10 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
 
         Called exactly like `ttnn.experimental.deepseek_prefill.combine`, plus `expert_offsets`.
 
-            dispatched_buffer     the tokens: BFLOAT16 ROW_MAJOR, BFLOAT16 TILE or BFLOAT8_B TILE. A
-                                  chip's token range for one expert holds that expert's tokens grouped
-                                  by the chip they ORIGINATED on.
+            dispatched_buffer     the tokens: BFLOAT16 ROW_MAJOR, BFLOAT16 TILE, BFLOAT8_B TILE, or
+                                  FP8_E4M3 ROW_MAJOR rows already quantized by per_token_cast_to_fp8
+                                  with the scales packed in. A chip's token range for one expert holds
+                                  that expert's tokens grouped by the chip they ORIGINATED on.
             dispatched_metadata   3 int32 per token: (linearized_coord, token_idx, topk_idx). The
                                   token's destination slot is page token_idx * num_experts_per_tok +
                                   topk_idx of the origin chip's output.
@@ -43,8 +44,8 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         Returns the combined output, (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim) BFLOAT16
         ROW_MAJOR per device.
 
-        The output is BFLOAT16 whatever the input: a BFLOAT8_B buffer is dequantised by the untilize,
-        exactly, since every BFLOAT8_B value is representable in BFLOAT16. There is no BFLOAT8_B
+        Without fp8 the output is BFLOAT16 whatever the input: a BFLOAT8_B buffer is dequantised by the
+        untilize, exactly, since every BFLOAT8_B value is representable in BFLOAT16. There is no BFLOAT8_B
         ROW_MAJOR input (BFLOAT8_B only exists tiled).
 
         fp8_scale_block=128 (Blackhole, TILE dispatched_buffer) has the untilize quantize each token
@@ -53,6 +54,10 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         (1, 1, seq_len_per_chip, num_experts_per_tok, row) FP8_E4M3, one byte per element, with row
         emb_dim + emb_dim / 32 padded up to a multiple of 64 B (the padding follows the scales), which
         post_combine_reduce dequantizes with fp8_scale_block_w=128. emb_dim must be a multiple of 128.
+
+        An FP8_E4M3 ROW_MAJOR dispatched_buffer is already in that format, scales included, so combine moves
+        each token as its bytes, with no untilize, and the output is the same FP8_E4M3 rows. fp8_scale_block
+        must then be 0.
         )doc",
         &combine_fabric2d,
         nb::arg("dispatched_buffer"),

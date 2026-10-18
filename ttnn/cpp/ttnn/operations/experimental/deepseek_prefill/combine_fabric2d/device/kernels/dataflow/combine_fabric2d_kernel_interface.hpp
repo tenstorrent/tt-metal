@@ -38,14 +38,17 @@ inline uint32_t ring_extent(const CombineFabric2dParams& args) {
 }
 
 // The format every token moves in, from the untilized rows through the ring and the fabric to the output, so
-// also the output's dtype: BFLOAT16, or FP8_E4M3 when fp8_scale_block is set. A BFLOAT8_B dispatched buffer is
-// unpacked by the untilize, so only the tile read from DRAM is bfp8.
-inline tt::tt_metal::DataType token_dtype(const CombineFabric2dParams& args) {
-    return args.fp8_scale_block != 0 ? tt::tt_metal::DataType::FP8_E4M3 : tt::tt_metal::DataType::BFLOAT16;
+// also the output's dtype: FP8_E4M3 when fp8_scale_block is set or the dispatched buffer holds rows quantized
+// before combine, else BFLOAT16. A BFLOAT8_B dispatched buffer is unpacked by the untilize, so only the tile read
+// from DRAM is bfp8.
+inline tt::tt_metal::DataType token_dtype(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+    const bool fp8 =
+        args.fp8_scale_block != 0 || tensor_args.dispatched_buffer.dtype() == tt::tt_metal::DataType::FP8_E4M3;
+    return fp8 ? tt::tt_metal::DataType::FP8_E4M3 : tt::tt_metal::DataType::BFLOAT16;
 }
 
-inline tt::DataFormat token_data_format(const CombineFabric2dParams& args) {
-    return tt::tt_metal::datatype_to_dataformat_converter(token_dtype(args));
+inline tt::DataFormat token_data_format(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+    return tt::tt_metal::datatype_to_dataformat_converter(token_dtype(args, tensor_args));
 }
 
 // One token's row of the embedding as it crosses the wire: emb bf16 values, or with fp8_scale_block set the packed
@@ -61,6 +64,10 @@ inline uint32_t token_size_bytes(uint32_t emb, uint32_t fp8_scale_block) {
 // Its width is read off the tensor's SHAPE, not its page: a ROW_MAJOR dispatched buffer pages by exactly one
 // token, a TILE one does not. Its format is token_dtype's whatever the dispatched dtype.
 inline uint32_t token_size_bytes(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+    // A ROW_MAJOR FP8_E4M3 buffer holds rows quantized before combine, scales included: a token is its bytes.
+    if (tensor_args.dispatched_buffer.dtype() == tt::tt_metal::DataType::FP8_E4M3) {
+        return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]);
+    }
     return token_size_bytes(
         static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]), args.fp8_scale_block);
 }

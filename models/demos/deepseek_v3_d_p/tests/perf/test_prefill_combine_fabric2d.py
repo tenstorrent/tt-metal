@@ -14,7 +14,9 @@ Environment:
     TT_DS_INPUT_DTYPE      bf16 (default) or bf8: the dispatched buffer's dtype. bf8 needs tile; the routed expert
                            hands combine bf8 tiles.
     TT_DS_COMBINE_WIRE     bf16 (default) or fp8: the tokens combine sends. fp8 has the untilizers quantize each token
-                           in 1x128 blocks (fp8_scale_block=128) and needs tile.
+                           in 1x128 blocks (fp8_scale_block=128) and needs tile. fp8-pre quantizes them before combine
+                           instead, with per_token_cast_to_fp8 on the full grid, and combine moves the ROW_MAJOR fp8
+                           rows as bytes; every launch runs both ops.
     TT_DS_MODEL            glm53 or kimi27: that model's emb_dim, routed experts and top-k, and an extra 8x4 mesh
                            opened at the payload the model's TtMoe opens it with (fabric2d-torus-xy-8x4-2link-model).
 
@@ -33,7 +35,11 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d import PRODUCTION_ROUTING, _Fixture
+from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d import (
+    PRODUCTION_ROUTING,
+    _Fixture,
+    quantize_before_combine,
+)
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config, moe_fabric_payload_size
 
@@ -122,10 +128,18 @@ def test_combine_fabric2d_perf_worker(mesh_device, device_params, num_links):
     input_dtype = os.environ.get("TT_DS_INPUT_DTYPE", "bf16")
     assert input_dtype in ("bf16", "bf8"), f"TT_DS_INPUT_DTYPE: expected bf16 or bf8, got {input_dtype!r}"
     wire = os.environ.get("TT_DS_COMBINE_WIRE", "bf16")
-    assert wire in ("bf16", "fp8"), f"TT_DS_COMBINE_WIRE: expected bf16 or fp8, got {wire!r}"
+    assert wire in ("bf16", "fp8", "fp8-pre"), f"TT_DS_COMBINE_WIRE: expected bf16, fp8 or fp8-pre, got {wire!r}"
     assert layout == "tile" or (input_dtype == "bf16" and wire == "bf16"), "bf8 input and the fp8 wire need tile"
     tt_dtype = ttnn.bfloat8_b if input_dtype == "bf8" else ttnn.bfloat16
     fp8_scale_block = 128 if wire == "fp8" else 0
+
+    def launch():
+        if wire == "fp8-pre":
+            rows = quantize_before_combine(fx.tt_payload(tt_layout, tt_dtype))
+            out = fx.run(sp_axis, num_links, payload=rows)
+            ttnn.deallocate(rows)
+            return out
+        return fx.run(sp_axis, num_links, layout=tt_layout, dtype=tt_dtype, fp8_scale_block=fp8_scale_block)
 
     logger.info(
         f"perf worker: mesh={tuple(mesh_device.shape)} seq={SEQ_LEN_PER_CHIP} emb={EMB_DIM} "
@@ -142,15 +156,13 @@ def test_combine_fabric2d_perf_worker(mesh_device, device_params, num_links):
             f"and drew {100 * realized:.1f}%"
         )
 
-    fx.run(
-        sp_axis, num_links, layout=tt_layout, dtype=tt_dtype, fp8_scale_block=fp8_scale_block
-    )  # warm-up; the gate sums it with the rest
+    launch()  # warm-up; the gate sums it with the rest
     ttnn.synchronize_device(mesh_device)
 
     # Synced after every launch so launches never overlap; overlap is test_combine_fabric2d_back_to_back's
     # subject, not this one's.
     signpost("combine_fabric2d")
     for _ in range(ITERATIONS):
-        fx.run(sp_axis, num_links, layout=tt_layout, dtype=tt_dtype, fp8_scale_block=fp8_scale_block)
+        launch()
         ttnn.synchronize_device(mesh_device)
     signpost("done")

@@ -94,9 +94,10 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         args.seq_len_per_chip >= 1, "combine_fabric2d: seq_len_per_chip must be >= 1 (got {})", args.seq_len_per_chip);
 
-    // ---- Token data. The last dim is the embedding and the rest is the flat slot index. BFLOAT16 in either
-    // layout, or BFLOAT8_B TILE, which the untilizer cores unpack to BFLOAT16 rows. Tokens move as BFLOAT16
-    // from there on, or as fp8 when fp8_scale_block is set, whatever the input.
+    // ---- Token data. The last dim is the embedding and dim -2 the slot. BFLOAT16 in either layout, or
+    // BFLOAT8_B TILE, which the untilizer cores unpack to BFLOAT16 rows. Tokens move as BFLOAT16 from there on,
+    // or as fp8 when fp8_scale_block is set, whatever the input. An FP8_E4M3 ROW_MAJOR buffer holds rows already
+    // quantized that way, and moves as its bytes.
     // The id table is what the overlapped fork needs and the standalone op never passes, and unlike the
     // routed-expert fields it is already set by the time validation runs -- those are filled in later,
     // by the program factory.
@@ -107,13 +108,20 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         buf.layout() == tt::tt_metal::Layout::ROW_MAJOR || buf.layout() == tt::tt_metal::Layout::TILE,
         "combine_fabric2d: dispatched_buffer must be ROW_MAJOR or TILE, got {}",
         buf.layout());
+    const bool prequantized =
+        buf.dtype() == tt::tt_metal::DataType::FP8_E4M3 && buf.layout() == tt::tt_metal::Layout::ROW_MAJOR;
     TT_FATAL(
-        buf.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+        buf.dtype() == tt::tt_metal::DataType::BFLOAT16 || prequantized ||
             (buf.dtype() == tt::tt_metal::DataType::BFLOAT8_B && buf.layout() == tt::tt_metal::Layout::TILE),
-        "combine_fabric2d: dispatched_buffer must be BFLOAT16 (ROW_MAJOR or TILE) or BFLOAT8_B (TILE), got {} "
-        "{}. A BFLOAT8_B buffer is dequantised by the untilize, which only the TILE path has.",
+        "combine_fabric2d: dispatched_buffer must be BFLOAT16 (ROW_MAJOR or TILE), BFLOAT8_B (TILE) or FP8_E4M3 "
+        "(ROW_MAJOR), got {} {}. A BFLOAT8_B buffer is dequantised by the untilize, which only the TILE path has.",
         buf.dtype(),
         buf.layout());
+    // Rows quantized before combine (per_token_cast_to_fp8 with the scales packed in) are moved as they are.
+    TT_FATAL(
+        !prequantized || args.fp8_scale_block == 0,
+        "combine_fabric2d: an FP8_E4M3 dispatched_buffer is already quantized, so fp8_scale_block must be 0, got {}",
+        args.fp8_scale_block);
     // fp8 tokens are quantized by the untilizers, from tiles: one 1/scale per row of four tiles.
     if (args.fp8_scale_block != 0) {
         TT_FATAL(
@@ -268,14 +276,15 @@ CombineFabric2dDeviceOperation::spec_return_value_t CombineFabric2dDeviceOperati
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // one page per (token, top-k slot), the token as it crossed the wire along the last dim: the embedding, or for fp8
     // its e4m3 values and their scales, one byte per element.
-    const bool fp8 = args.fp8_scale_block != 0;
-    const uint32_t row = fp8 ? token_size_bytes(args, tensor_args)
+    const tt::tt_metal::DataType dtype = token_dtype(args, tensor_args);
+    const uint32_t row = dtype == tt::tt_metal::DataType::FP8_E4M3
+                             ? token_size_bytes(args, tensor_args)
                              : static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]);
     const ttnn::Shape output_shape({1, 1, args.seq_len_per_chip, args.num_experts_per_tok, row});
     return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            token_dtype(args), tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), args.output_mem_config));
+            dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), args.output_mem_config));
 }
 
 CombineFabric2dDeviceOperation::tensor_return_value_t CombineFabric2dDeviceOperation::create_output_tensors(

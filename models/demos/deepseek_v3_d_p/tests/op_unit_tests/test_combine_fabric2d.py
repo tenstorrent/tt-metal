@@ -319,9 +319,18 @@ class _Fixture:
         assert dtype in self._delivered, f"no {dtype} payload was uploaded, or combine does not take it"
         return self._delivered[dtype]
 
-    def run(self, cluster_axis, num_links, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, fp8_scale_block=0):
+    def run(
+        self,
+        cluster_axis,
+        num_links,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        fp8_scale_block=0,
+        payload=None,
+    ):
+        """`payload` replaces the uploaded one, e.g. rows quantized on device before combine."""
         return ttnn.experimental.deepseek_prefill.combine_fabric2d(
-            self.tt_payload(layout, dtype),
+            self.tt_payload(layout, dtype) if payload is None else payload,
             self.tt_meta,
             self.tt_counts,
             self.tt_region,
@@ -859,6 +868,16 @@ def _fp8_cases():
     return cases
 
 
+def _spread_octaves(fx, emb_dim):
+    """Spread the payload's magnitudes over several octaves per 32 columns, so a block boundary in the wrong place
+    moves a scale."""
+    generator = torch.Generator().manual_seed(1)
+    octaves = torch.randint(-6, 6, fx.payload.shape[:-1] + (emb_dim // 32, 1), generator=generator).float()
+    spread = torch.pow(2.0, octaves).expand(*fx.payload.shape[:-1], emb_dim // 32, 32).reshape(fx.payload.shape)
+    # In place: the fixture's bf16 reference is this tensor.
+    fx.payload.copy_((fx.payload.float() * spread).to(torch.bfloat16))
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, emb_dim",
     _fp8_cases(),
@@ -875,12 +894,7 @@ def test_combine_fabric2d_fp8(mesh_device, device_params, num_links, emb_dim, ex
     cfg = extract_mesh_config(mesh_device)
     H, G = cfg.dispatch_group_size, cfg.num_dispatch_groups
     fx = _Fixture(mesh_device, H, G, seed=9, emb_dim=emb_dim)
-    # Magnitudes spread over several octaves per 32 columns, so a block boundary in the wrong place moves a scale.
-    generator = torch.Generator().manual_seed(1)
-    octaves = torch.randint(-6, 6, fx.payload.shape[:-1] + (emb_dim // 32, 1), generator=generator).float()
-    spread = torch.pow(2.0, octaves).expand(*fx.payload.shape[:-1], emb_dim // 32, 32).reshape(fx.payload.shape)
-    # In place: the fixture's bf16 reference is this tensor.
-    fx.payload.copy_((fx.payload.float() * spread).to(torch.bfloat16))
+    _spread_octaves(fx, emb_dim)
 
     with expect_error(RuntimeError, "only a TILE dispatched_buffer"):
         fx.run(cfg.sp_axis, num_links, layout=ttnn.ROW_MAJOR_LAYOUT, fp8_scale_block=block)
@@ -891,3 +905,49 @@ def test_combine_fabric2d_fp8(mesh_device, device_params, num_links, emb_dim, ex
         assert tuple(output.shape)[-3:] == (fx.seq_len_per_chip, fx.topk, _fp8_row_bytes(emb_dim)), output.shape
         # The reference quantizes what the device holds: for bf8 tiles, the payload as the upload rounded it.
         fx.check_fp8(output, f"combine fp8 from {label}", block, dtype)
+
+
+def quantize_before_combine(tt_payload, block=128):
+    """Q2 ahead of combine, on the whole grid: TILE tokens to ROW_MAJOR [e4m3 | fp32 scale per block] rows, padded
+    to whole 64 B lines as combine's untilizers pad them, with the same power-of-two scales and RNE."""
+    rows, _ = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+        tt_payload,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        round_scale_to_power_of_two=True,
+        round_to_nearest_even=True,
+        pack_scales_in_row=True,
+        scale_block_w=block,
+        packed_row_align=64,
+    )
+    return rows
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, emb_dim",
+    _fp8_cases(),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="FP8_E4M3 is packed by the Blackhole packer")
+@pytest.mark.timeout(900)
+def test_combine_fabric2d_fp8_prequantized(mesh_device, device_params, num_links, emb_dim, expect_error):
+    """Rows quantized before combine (per_token_cast_to_fp8 on the full grid) go through combine's ROW_MAJOR path as
+    bytes, with no untilizers, and land exactly where and as the untilizers' fp8 tokens do."""
+    block = 128
+    cfg = extract_mesh_config(mesh_device)
+    H, G = cfg.dispatch_group_size, cfg.num_dispatch_groups
+    fx = _Fixture(mesh_device, H, G, seed=9, emb_dim=emb_dim)
+    _spread_octaves(fx, emb_dim)
+    # As the routed expert hands it over; the reference quantizes what the device holds.
+    tile_payload = fx.tt_payload(ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
+    rows = quantize_before_combine(tile_payload, block)
+    assert rows.dtype == ttnn.fp8_e4m3 and rows.layout == ttnn.ROW_MAJOR_LAYOUT, (rows.dtype, rows.layout)
+
+    with expect_error(RuntimeError, "already quantized"):
+        fx.run(cfg.sp_axis, num_links, fp8_scale_block=block, payload=rows)
+
+    output = fx.run(cfg.sp_axis, num_links, payload=rows)
+    assert output.dtype == ttnn.fp8_e4m3, output.dtype
+    assert tuple(output.shape)[-3:] == (fx.seq_len_per_chip, fx.topk, _fp8_row_bytes(emb_dim)), output.shape
+    fx.check_fp8(output, "combine of rows quantized before it", block, ttnn.bfloat8_b)
+    untilized = fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, fp8_scale_block=block)
+    fx.check_fp8(untilized, "combine fp8 from bf8 tiles", block, ttnn.bfloat8_b)
