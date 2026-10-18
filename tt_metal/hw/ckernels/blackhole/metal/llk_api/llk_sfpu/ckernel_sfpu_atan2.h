@@ -4,9 +4,10 @@
 
 #pragma once
 
+#include <limits>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_recip.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -25,8 +26,20 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     // case handling.
     auto [min, max] = sfpi::min_max(sfpi::setsgn(x, 0), sfpi::setsgn(y, 0));
 
-    // a = min(|x|, |y|) / max(|x|, |y|), i.e. a is on [0, 1].
-    sfpi::vFloat a = min * sfpu_reciprocal<is_bf16>(max);
+    // a = -min / max on [-1, 0] (the angle stays negated until copysgn below). approx_recip(max) is 0 for
+    // max >= 2^126, so divide by m = max * 2^(128 - max.Exp) in [2, 4) and scale min by -2^(128 - max.Exp).
+    sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(~sfpi::as<sfpi::vUInt>(max)), 0);
+    sfpi::vFloat m = sfpi::setexp(max, 128);
+    sfpi::vFloat recip = sfpi::approx_recip(m);
+    sfpi::vFloat scaled_min = min * scale;
+    if constexpr (!is_bf16) {
+        // Two Newton steps as in sfpu_reciprocal_iter<2>, inline because Prgm0 holds -π/2 here.
+        sfpi::vFloat e = m * recip - 2.0f;
+        recip = recip * -e - 0.0f;
+        e = m * recip - 2.0f;
+        recip = recip * -e - 0.0f;
+    }
+    sfpi::vFloat a = scaled_min * recip;
 
     // Next we compute the minimax approximation for atan(a).
 
@@ -43,9 +56,9 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c3.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
         sfpi::vFloat c2 = -0x1.24p-3f;
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c2.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-        sfpi::vFloat c1 = 0x1.99938ap-3f;
+        sfpi::vFloat c1 = sfpi::vConstFloatPrgm1;  // 0x1.99938ap-3f, set by calculate_sfpu_atan2_init
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c1.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-        sfpi::vFloat c0 = -0x1.555558p-2f;
+        sfpi::vFloat c0 = sfpi::vConstFloatPrgm2;  // -0x1.555558p-2f, set by calculate_sfpu_atan2_init
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
     } else {
         q = -0x1.de8p-5f;
@@ -55,7 +68,7 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
         sfpi::vFloat c0 = -0x1.54p-2f;
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
     }
-    sfpi::vFloat half_pi = 0x1.921fb6p+0f;
+    sfpi::vFloat neg_half_pi = sfpi::vConstFloatPrgm0;  // -π/2, set by calculate_sfpu_atan2_init
     sfpi::vFloat t = q * s;
     sfpi::vFloat x_abs = sfpi::setsgn(x, 0);
     r = t * a + a;
@@ -64,10 +77,10 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
 
     v_if(sfpi::as<sfpi::vInt>(min) >= sfpi::as<sfpi::vInt>(x_abs)) {
         // if |y| ≥ |x| then r = π/2 - r
-        r = half_pi - r;
+        r = neg_half_pi - r;
         v_if(sfpi::as<sfpi::vInt>(min) >= sfpi::as<sfpi::vInt>(max)) {
             // if |x| = |y| (including both infinite), then r = π/4
-            r = sfpi::addexp(half_pi, -1);
+            r = sfpi::addexp(neg_half_pi, -1);
             v_if(max == 0.0f) {
                 // if both zero, then r = ±0
                 // SFPI note: the later v_if(x < 0.0f) behaves like a signbit check, so r=-0
@@ -82,8 +95,13 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
 
     // if sign of x is negative (including x=-0), then r = π - r
     v_if(x < 0.0f) {
-        sfpi::vFloat pi = sfpi::addexp(half_pi, 1);
-        r = pi - r;
+        sfpi::vFloat neg_pi;
+        if constexpr (!is_fp32_dest_acc_en) {
+            neg_pi = sfpi::vConstFloatPrgm2;  // -π, set by calculate_sfpu_atan2_init
+        } else {
+            neg_pi = sfpi::addexp(neg_half_pi, 1);
+        }
+        r = neg_pi - r;
     }
     v_endif;
 
@@ -94,7 +112,12 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     r = sfpi::copysgn(r, y);
 
     // If |x| = NaN or |y| = NaN, vec_min_max will ensure max=NaN as mentioned above.
-    sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
+    sfpi::vFloat infinity;
+    if constexpr (!is_fp32_dest_acc_en) {
+        infinity = sfpi::vConstFloatPrgm1;  // set by calculate_sfpu_atan2_init
+    } else {
+        infinity = std::numeric_limits<float>::infinity();
+    }
     v_if(sfpi::as<sfpi::vInt>(infinity) < sfpi::as<sfpi::vInt>(max)) {
         // if |x| = NaN or |y| = NaN, then r = NaN
         r = std::numeric_limits<float>::quiet_NaN();
@@ -120,7 +143,15 @@ inline void calculate_sfpu_atan2(const uint dst_index_in0, const uint dst_index_
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_atan2_init() {
-    sfpu_reciprocal_init<APPROXIMATION_MODE || !is_fp32_dest_acc_en>();
+    // Kept here instead of being rebuilt every row: -π/2, then c1 / c0 (fp32 Dest) or +inf / -π.
+    sfpi::vConstFloatPrgm0 = -0x1.921fb6p+0f;
+    if constexpr (is_fp32_dest_acc_en) {
+        sfpi::vConstFloatPrgm1 = 0x1.99938ap-3f;
+        sfpi::vConstFloatPrgm2 = -0x1.555558p-2f;
+    } else {
+        sfpi::vConstFloatPrgm1 = std::numeric_limits<float>::infinity();
+        sfpi::vConstFloatPrgm2 = -0x1.921fb6p+1f;
+    }
 }
 
 }  // namespace sfpu
