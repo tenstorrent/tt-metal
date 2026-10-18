@@ -21,7 +21,8 @@ class KVPoolConfigurationTests(unittest.TestCase):
             self.assertEqual(Qwen38ForCausalLM.get_max_tokens_all_users(262144), 262144)
 
     def test_served_pool_is_granted(self):
-        # Two full contexts plus slack, the value the serving spec sets.
+        # Two full contexts plus slack. Serving currently asks for less (see run_ci.sh); this
+        # pins that an explicit request inside the ceiling is granted verbatim, whatever CI sets.
         with patch.dict(os.environ, {"QWEN_VLLM_KV_POOL_TOKENS": "525312"}):
             self.assertEqual(Qwen38ForCausalLM.get_max_tokens_all_users(262144, max_num_seqs=8), 525312)
 

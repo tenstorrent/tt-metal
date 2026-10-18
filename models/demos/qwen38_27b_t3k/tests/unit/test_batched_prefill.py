@@ -219,6 +219,7 @@ class PassSplitDispatchTests(unittest.TestCase):
 
     def setUp(self):
         self.calls = []
+        self.releases = []
         self.ops = SimpleNamespace(uint32="u32", ROW_MAJOR_LAYOUT="rm")
         self.cache = SimpleNamespace(batch_size=16, capacity=16384)
         self.table = torch.zeros(16, 512, dtype=torch.int32)
@@ -239,7 +240,7 @@ class PassSplitDispatchTests(unittest.TestCase):
                 prefill_batch=self.batch,
                 prefill=lambda x, **kw: self.calls.append(("single", x.clone(), kw)) or "single",
             ),
-            _release_traces=lambda **kw: None,
+            _release_traces=self.release,
             _refresh_table=lambda table: None,
             _slot_prefix_len=[0] * self.cache.batch_size,
         )
@@ -249,6 +250,9 @@ class PassSplitDispatchTests(unittest.TestCase):
         self.gen._begin_prefix = MethodType(methods["_begin_prefix"], self.gen)
         self.gen._end_prefix = MethodType(methods["_end_prefix"], self.gen)
         self.forward = MethodType(methods["prefill_forward"], self.gen)
+
+    def release(self, **kwargs):
+        self.releases.append(kwargs)
 
     def batch(self, tokens, **kwargs):
         self.calls.append(("batch", tokens.clone(), kwargs))
@@ -285,4 +289,16 @@ class PassSplitDispatchTests(unittest.TestCase):
     def test_an_uncapped_generator_runs_one_pass(self):
         self.gen.prefill_pass_tokens = 0
         self.run_prefill([4096] * 4, [0, 1, 2, 3])
+        self.assertEqual([call[2]["slots"] for call in self.calls], [[0, 1, 2, 3]])
+
+    def test_a_changed_budget_releases_traces_before_it_compiles_new_widths(self):
+        # The budget decides the pass widths, so the same caller shape at a new budget is a new
+        # set of programs. Those own persistent buffers; compiling them while a trace still holds
+        # the addresses puts them on reserved memory.
+        self.run_prefill([4096] * 4, [0, 1, 2, 3])
+        self.releases.clear()
+        self.calls.clear()
+        self.gen.prefill_pass_tokens = 16384
+        self.run_prefill([4096] * 4, [0, 1, 2, 3])
+        self.assertTrue(self.releases, "a new pass budget compiled new widths beside a live trace")
         self.assertEqual([call[2]["slots"] for call in self.calls], [[0, 1, 2, 3]])

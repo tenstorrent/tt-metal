@@ -65,14 +65,18 @@ export MODEL_WEIGHTS_DIR
 MODEL_WEIGHTS_DIR=$(python -c 'from models.demos.qwen38_27b_t3k.tt.model import checkpoint_path; print(checkpoint_path())')
 python -m pytest "$model_dir/tests/unit" "$model_dir/tests/vllm" "$model_dir/tests/test_benchmark.py" \
     --timeout 300 --junitxml "$results/host.xml"
-python -m pytest "$model_dir/tests/test_decode_conv.py" --timeout 300 --junitxml "$results/device.xml"
+# test_prefill_group_fallback carries the only assertion that a grouped prefill split across
+# passes leaves the state one pass leaves. It is a two-layer harness, about 50 s.
+python -m pytest "$model_dir/tests/test_decode_conv.py" "$model_dir/tests/test_prefill_group_fallback.py" \
+    --timeout 600 --junitxml "$results/device.xml"
 
 export QWEN_DECODE_BUCKETS=1 QWEN_COMPACT_DECODE_RESIDUAL=1 QWEN_COMPACT_DECODE_MLP=1
 export QWEN_BATCHED_DECODE_ROPE=1 QWEN_COMPACT_DECODE_ATTENTION=1
-# The pool leaves the prefill warmup room to allocate its activations. Capacity is not the
-# binding constraint -- the warmup dies with ~98 MiB per bank free but no block above 51 MiB --
-# so QWEN_PREFILL_PASS_TOKENS, not this number, is what keeps a pass inside the largest hole.
-export QWEN_VLLM_KV_POOL_TOKENS=458752 QWEN_BATCHED_PREFILL=1
+# Capacity is not the binding constraint: the warmup dies with ~98 MiB per bank free but no block
+# above 51 MiB. QWEN_PREFILL_PASS_TOKENS, not the pool, is what keeps one pass inside the largest
+# hole; it is stated here rather than left to the default so the serving shape is declared in one
+# place. The pool has not been re-measured since the pass cap landed -- see doc/context_contract.json.
+export QWEN_VLLM_KV_POOL_TOKENS=458752 QWEN_BATCHED_PREFILL=1 QWEN_PREFILL_PASS_TOKENS=32768
 export QWEN_PREFILL_RESIDUAL_LAYOUT=sharded_replicated_norm QWEN_PREFILL_BATCHED_HEAD=1
 export QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD=1 QWEN_PREFILL_STARTUP_WARMUP=1
 export QWEN_VLLM_HOST_COMPATIBILITY=1 VLLM_DEBUG_LOG_API_SERVER_RESPONSE=false

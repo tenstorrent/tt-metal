@@ -70,7 +70,9 @@ def batched_prefill_passes(rows, chunk, budget):
     property of the graph, and minimal_matmul takes no preallocated output.
 
     Widths are balanced rather than greedy because prefill_batch refuses a lone row, and a
-    greedy split of an odd count ends on one.
+    greedy split of an odd count ends on one. That refusal outranks the budget: a count that
+    cannot be split without stranding a single row stays whole and exceeds it. Unreachable at
+    the serving budget, where 32768 covers eight 4096-token rows.
     """
     if budget <= 0 or rows * chunk <= budget:
         return [rows]
@@ -495,9 +497,9 @@ class Qwen38Generator:
                 raise ValueError("Serving prompt positions or slots exceed the bound cache")
         validate_prefix_continuity(starts, slots, self._slot_prefix_len)
         if len(ends) == 1 and slots == [0] and starts == [0] and ends[0] <= 4096:
-            # Only this branch writes the slot itself; the one below delegates to prefill_forward,
-            # which marks and clears each row it touches. Marking here too would leave the slot
-            # indeterminate under that call, and a continuation chunk matches no such slot.
+            # Only this branch writes the slot itself. The one below delegates to prefill_forward,
+            # whose per-row path marks and clears each row; its grouped path does not, so marking
+            # here would leave the slot indeterminate under that call and no continuation would match.
             self._begin_prefix(slots)
             self._refresh_table(page_table)
             output = self._prefill_for_generate(tokens[:, : ends[0]], trace_sampling=True)
@@ -699,7 +701,19 @@ class Qwen38Generator:
             batched_shape in self.batched_prefill_shapes or getattr(self, "_batched_prefill_compiling", False)
         )
         if batched:
-            signatures.add(("batched", tuple(slots), tuple(starts), tuple(prompt_lens), return_all_logits))
+            # The budget belongs in the signature: it decides the pass widths, so two calls with the
+            # same caller shape but different budgets build different programs, and a program that
+            # the set does not name can land on addresses a live trace already reserved.
+            signatures.add(
+                (
+                    "batched",
+                    tuple(slots),
+                    tuple(starts),
+                    tuple(prompt_lens),
+                    return_all_logits,
+                    getattr(self, "prefill_pass_tokens", 0),
+                )
+            )
         # New prefill programs own persistent buffers. Compile them before a
         # decode trace reserves scratch addresses; known shapes reuse the trace.
         if not signatures.issubset(self.prefill_signatures):

@@ -141,6 +141,7 @@ def test_a_split_pass_leaves_what_one_pass_leaves(harness):
         gen._batched_prefill_compiling = False
 
     # Exact, not approximate: a pass computes whole rows, so narrowing it reorders nothing a
-    # row can see. Measured 0 against a scale of 45.5. Any drift at all means rows interact.
+    # row can see. A device run measured exactly 0 against a state scale of 45.5, so there is no
+    # tolerance to spend here: any drift at all means rows interact.
     drift = max(float((a - b).abs().max()) for a, b in zip(whole, split))
     assert drift == 0, f"the split pass drifted {drift} from the whole one"
