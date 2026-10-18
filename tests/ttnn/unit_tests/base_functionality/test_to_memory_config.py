@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 import pytest
 import torch
@@ -2841,3 +2842,22 @@ def test_to_memory_config_interleaved_to_sharded_with_resident_l1(device):
         assert_equal(torch_input, ttnn.to_torch(output_tensor))
     finally:
         ttnn.deallocate(resident)
+
+
+def test_shard_spec_str_grid_is_json():
+    spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 2)),
+                ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 1)),
+            ]
+        ),
+        (32, 64),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    text = str(spec)
+    grid = json.loads(text[text.index("grid=") + len("grid=") : text.index(", shape=")])
+    assert grid == [
+        {"start": {"x": 0, "y": 0}, "end": {"x": 1, "y": 2}},
+        {"start": {"x": 3, "y": 0}, "end": {"x": 3, "y": 1}},
+    ]
