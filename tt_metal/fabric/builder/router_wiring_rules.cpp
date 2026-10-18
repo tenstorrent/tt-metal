@@ -263,8 +263,10 @@ RouterVcShape router_vc_shape(
     TT_FATAL(
         !z_boundary_router || is_2D_topology(topology), "A Z-facing intermesh boundary router requires a 2D topology");
     // And it cannot exist without VC1: its whole shape is the from-boundary VC1 fanout.
+    const bool intermesh_on_vc0 = vc_config && vc_config->intermesh_on_vc0;
     TT_FATAL(
-        !z_boundary_router || requires_vc1, "A Z-facing intermesh boundary router cannot be constructed without VC1");
+        !z_boundary_router || requires_vc1 || intermesh_on_vc0,
+        "A Z-facing intermesh boundary router cannot be constructed without VC1");
 
     RouterVcShape shape{};
 
@@ -297,6 +299,11 @@ RouterVcShape router_vc_shape(
         // producer exists on VC0 regardless of the chip's role -- the role addend lands on VC1.
         if (z_boundary_router) {
             vc0_senders = boundary_vc0_sender_count();
+        } else if (intermesh_on_vc0 && chip_z_role == ZPortRole::INTERMESH_BOUNDARY && !is_x_axis_direction(facing)) {
+            TT_FATAL(!express_routing_enabled, "intermesh_on_vc0 does not support express routing");
+            // The landing traffic's from-boundary slot moves from VC1 to VC0, on Y routers only: landed
+            // traffic routes Y first and (coordinate-matched) never needs an X hop on the landing chip.
+            vc0_senders = non_express_vc0_sender_count() + 1;
         } else if (express_routing_enabled) {
             vc0_senders = express_vc0_sender_count();
         } else {
@@ -356,8 +363,9 @@ RouterTurnSet turn_set_for_router(
     TT_FATAL(
         !z_boundary_router || is_2D_topology(topology), "A Z-facing intermesh boundary router requires a 2D topology");
     // And it cannot exist without VC1: its whole shape is the from-boundary VC1 fanout.
+    const bool intermesh_on_vc0 = vc_config && vc_config->intermesh_on_vc0;
     TT_FATAL(
-        !z_boundary_router || enable_vc1,
+        !z_boundary_router || enable_vc1 || intermesh_on_vc0,
         "A Z-facing intermesh boundary router cannot be constructed without VC1: its entire "
         "shape is the from-boundary VC1 fanout");
 
@@ -383,7 +391,11 @@ RouterTurnSet turn_set_for_router(
     // set is the full set: not a special case, a consequence.
     if (z_boundary_router) {
         for (const auto dir : k_cardinal_directions) {
-            if (vc1_target(dir)) {
+            if (intermesh_on_vc0) {
+                if (!is_x_axis_direction(dir)) {
+                    turn_set[0].push_back(ConnectionTarget(0, dir));
+                }
+            } else if (vc1_target(dir)) {
                 turn_set[1].push_back(ConnectionTarget(1, dir));
             }
         }
