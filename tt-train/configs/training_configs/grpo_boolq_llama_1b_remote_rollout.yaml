@@ -19,8 +19,7 @@ training_config:
     kahan_summation: false
 
   grpo_config:
-    rollout_source: "ttt"
-    rollout_mode: "remote_sync"
+    rollout_backend: "ttt_remote_sync"
     # Push the policy weights to the rollout rank every N optimizer steps.
     weight_sync_every: 1
     epsilon: 0.4

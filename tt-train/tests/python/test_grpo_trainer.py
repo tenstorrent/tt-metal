@@ -206,7 +206,7 @@ def test_grpo_trainer_one_step_smoke(
         max_completion_length=4,
         num_generations=2,
         warmup_steps=warmup_steps,
-        rollout_source="ttml",
+        rollout_backend="ttml_in_process_sync",
         lr_scheduler_type=lr_scheduler_type,
         use_clip_grad_norm=use_clip_grad_norm,
     )
@@ -365,19 +365,21 @@ _GRPO_CONFIG_FIELDS = dict(
 )
 
 
-def test_grpo_config_requires_rollout_source(expect_error):
-    with expect_error(TypeError, "rollout_source"):
+def test_grpo_config_requires_rollout_backend(expect_error):
+    with expect_error(TypeError, "rollout_backend"):
         GRPOConfig(**_GRPO_CONFIG_FIELDS)
 
 
-def test_grpo_config_rejects_unknown_rollout_source(expect_error):
-    with expect_error(ValueError, "'rollout_source' must be one of"):
-        GRPOConfig(**_GRPO_CONFIG_FIELDS, rollout_source="vllm")
+def test_grpo_config_rejects_unknown_rollout_backend(expect_error):
+    with expect_error(ValueError, "'rollout_backend' must be one of"):
+        GRPOConfig(**_GRPO_CONFIG_FIELDS, rollout_backend="vllm")
 
 
-def test_get_grpo_config_reads_rollout_source():
-    cfg = get_grpo_config({"training_config": {"grpo_config": {**_GRPO_CONFIG_FIELDS, "rollout_source": "ttml"}}})
-    assert cfg.rollout_source == "ttml"
+def test_get_grpo_config_reads_rollout_backend():
+    cfg = get_grpo_config(
+        {"training_config": {"grpo_config": {**_GRPO_CONFIG_FIELDS, "rollout_backend": "ttml_in_process_sync"}}}
+    )
+    assert cfg.rollout_backend == "ttml_in_process_sync"
 
 
 def test_layout_microbatch_rejects_short_prompt(expect_error):
@@ -451,7 +453,7 @@ _HOST_GRPO_CONFIG = dict(
     max_completion_length=4,
     num_generations=2,
     warmup_steps=0,
-    rollout_source="ttml",
+    rollout_backend="ttml_in_process_sync",
 )
 
 

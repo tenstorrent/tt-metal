@@ -173,12 +173,12 @@ def build_rollout_batch_source(
         num_generations=config.num_generations,
         max_completion_length=config.max_completion_length,
     )
-    if config.rollout_mode == "in_process":
+    if config.backend.in_process:
         return InProcessRolloutBatchSource(sampler=sampler, **common)
-    if config.rollout_mode == "remote_sync":
+    if config.backend.sync:
         from .remote_rollout.sync_remote_rollout_batch_source import SyncRemoteRolloutBatchSource
 
         return SyncRemoteRolloutBatchSource(
             mesh_device=mesh_device, weight_sync_every=config.weight_sync_every, **common
         )
-    raise ValueError(f"unsupported rollout_mode {config.rollout_mode!r}")
+    raise ValueError(f"unsupported rollout_backend {config.rollout_backend!r}")
