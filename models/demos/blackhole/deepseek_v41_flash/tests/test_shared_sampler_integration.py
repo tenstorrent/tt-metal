@@ -191,3 +191,69 @@ def test_law(mesh_device):
                 flush=True,
             )
         ttnn.release_trace(md, tid)
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", DEV_PARAMS, indirect=True)
+@pytest.mark.parametrize("T", [1, 4])
+@torch.no_grad()
+def test_step_cost(mesh_device, T):
+    """Cost of one sampled decode step's sampler part as the decode path pays it: host ``set_params`` (changing seeds / uniforms every step), the sampler trace replay, and both together
+    (set_params + replay + wait), shared adapter against our sampler (top-k 20 fast path / full vocabulary). ms per step.
+    """
+    import time
+
+    from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import DSV41DeviceSampler
+
+    md = mesh_device
+    sm, prm, B, to_dev, tok_dev, read = _setup(md, T)
+    ours = DSV41DeviceSampler(md, mesh_4x8(), sm.ccl, T, J=16, levels=3, levels_k=4)
+    ours.alloc_params()
+    row = _real_rows(1)[0]
+    logits = to_dev(row.expand(B, VOCAB).contiguous())
+    base = tok_dev(torch.zeros(B, dtype=torch.long))
+    for fast in (True, False):  # compile passes of every variant before ANY trace exists
+        ttnn.copy(ours.run(logits, ours.params, fast), base)
+    ttnn.copy(sm.run(logits, sm.params, False, base_tok=base), base)
+    ttnn.synchronize_device(md)
+    traces = {}
+    for name, fast in (("ours_topk20", True), ("ours_full", False)):
+        t = ttnn.begin_trace_capture(md, cq_id=0)
+        ttnn.copy(ours.run(logits, ours.params, fast), base)
+        ttnn.end_trace_capture(md, t, cq_id=0)
+        traces[name] = (t, fast)
+    tid_s = ttnn.begin_trace_capture(md, cq_id=0)
+    ttnn.copy(sm.run(logits, sm.params, False, base_tok=base), base)
+    ttnn.end_trace_capture(md, tid_s, cq_id=0)
+    traces["shared"] = (tid_s, False)
+    g = torch.Generator().manual_seed(3)
+    N = 60
+    for name, (tid, fast) in traces.items():
+        smp = sm if name == "shared" else ours
+        kk = torch.full((B,), 20.0 if name != "ours_full" else 0.0)
+
+        def prm_args():
+            u = torch.rand(B, generator=g)
+            return (torch.ones(B), kk, torch.full((B,), 0.95), u, torch.zeros(B))
+
+        smp.set_params(*prm_args())
+        t0 = time.perf_counter()
+        for _ in range(N):
+            smp.set_params(*prm_args())
+        t_set = (time.perf_counter() - t0) / N * 1e3
+        ttnn.execute_trace(md, tid, cq_id=0, blocking=True)
+        t0 = time.perf_counter()
+        for _ in range(N):
+            ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(md)
+        t_rep = (time.perf_counter() - t0) / N * 1e3
+        t0 = time.perf_counter()
+        for _ in range(N):
+            smp.set_params(*prm_args())
+            ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(md)
+        t_both = (time.perf_counter() - t0) / N * 1e3
+        print(
+            f"SAMPLER_STEP_COST T={T} {name}: set_params {t_set:.3f} ms, trace replay {t_rep:.3f} ms, set_params + replay + wait {t_both:.3f} ms",
+            flush=True,
+        )

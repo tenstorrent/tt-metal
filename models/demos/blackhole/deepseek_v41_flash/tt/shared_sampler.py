@@ -61,6 +61,7 @@ class SharedSamplerAdapter:
         )
         self.ts = TTSampling(mesh_device, ccl, args)
         self._last_kpt = None
+        self._last_greedy = None
 
     # host side -------------------------------------------------------------------------------------------------------------------------
     def alloc_params(self):
@@ -120,11 +121,16 @@ class SharedSamplerAdapter:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=self.ts._param_dims, mesh_shape=self.ts.cluster_shape),
         )
         ttnn.copy_host_to_device_tensor(host_seeds, self.ts.seeds_tt_tensor)
-        gh = torch.zeros(1, 1, B, 32)
-        gh[0, 0, :, 4] = gr.float()
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(gh, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._pmap), self.params
-        )
+        gkey = gr.tolist()
+        if (
+            gkey != self._last_greedy
+        ):  # the greedy flags change rarely: upload them only then (one host-to-device copy less per step)
+            gh = torch.zeros(1, 1, B, 32)
+            gh[0, 0, :, 4] = gr.float()
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(gh, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._pmap), self.params
+            )
+            self._last_greedy = gkey
 
     # device side (inside the trace) -----------------------------------------------------------------------------------------------------
     def run(self, logits, params, fast=False, base_tok=None):
