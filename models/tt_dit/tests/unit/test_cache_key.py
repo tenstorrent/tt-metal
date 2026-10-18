@@ -16,6 +16,10 @@ never open a device.
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import stat
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -335,3 +339,49 @@ def test_a_miss_that_publishes_nothing_keeps_the_weights_it_built(checkpoint, mo
     log = []
     _load(_LoadingModule(log), checkpoint, lambda m: log.append("hook"))
     assert log == ["state dict", "hook"]
+
+
+# A published cache directory must be readable by the other users of a shared cache root:
+# tempfile.mkdtemp staged it 0700 and the rename published that mode; under a default ACL that also
+# set the leaf mask to ---, so the serving account could not read a cache another user had built.
+class _SavesOneFile:
+    def save(self, path) -> None:
+        (path / "w.tensorbin").write_bytes(b"x")
+
+
+@pytest.fixture
+def umask_022():
+    old = os.umask(0o022)
+    yield
+    os.umask(old)
+
+
+def test_published_cache_dir_gets_the_umask_mode_not_0700(tmp_path, umask_022) -> None:
+    leaf = tmp_path / "model" / "transformer" / "leaf"
+    cache._publish_cache(_SavesOneFile(), leaf, None)
+    assert (leaf / "w.tensorbin").read_bytes() == b"x"
+    assert stat.S_IMODE(leaf.stat().st_mode) == 0o755
+    assert not [p for p in leaf.parent.iterdir() if ".staging-" in p.name]
+
+
+def test_published_cache_dir_keeps_the_parents_setgid_group(tmp_path, umask_022) -> None:
+    parent = tmp_path / "root"
+    parent.mkdir()
+    parent.chmod(0o2775)
+    cache._publish_cache(_SavesOneFile(), parent / "leaf", None)
+    assert (parent / "leaf").stat().st_mode & stat.S_ISGID
+
+
+@pytest.mark.skipif(not (shutil.which("setfacl") and shutil.which("getfacl")), reason="needs setfacl/getfacl")
+def test_published_cache_dir_has_an_open_acl_mask_under_a_default_acl(tmp_path, umask_022) -> None:
+    """The shared cache root grants the serving account a named default ACL entry, which brings a
+    mask; a 0700 staging dir published mask ---, denying that account."""
+    parent = tmp_path / "root"
+    parent.mkdir()
+    spec = f"u::rwx,u:{os.getuid()}:rwx,g::rwx,o::rx"
+    if subprocess.run(["setfacl", "-d", "-m", spec, str(parent)], capture_output=True).returncode:
+        pytest.skip("filesystem without ACL support")
+    cache._publish_cache(_SavesOneFile(), parent / "leaf", None)
+    acl = subprocess.run(["getfacl", "-p", str(parent / "leaf")], capture_output=True, text=True, check=True).stdout
+    access = [line for line in acl.splitlines() if line and not line.startswith(("#", "default:"))]
+    assert "mask::rwx" in access, acl

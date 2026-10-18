@@ -7,8 +7,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import shutil
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -446,7 +446,13 @@ def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> 
     """
     cache_dir = Path(cache_dir)
     cache_dir.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{cache_dir.name}.staging-", dir=cache_dir.parent))
+    # Not tempfile.mkdtemp: it creates the directory 0700 and the rename below publishes that mode.
+    # Under a default ACL (a cache root shared by several users) the 0700 also sets the leaf's ACL
+    # mask to ---, so every other user, the serving account included, is denied the cache. A plain
+    # mkdir gets 0777 less the umask, the parent's default ACL and its setgid group like any other
+    # directory; the pid and random suffix keep concurrent builders apart as mkdtemp did.
+    staging = cache_dir.parent / f".{cache_dir.name}.staging-{os.getpid()}-{secrets.token_hex(4)}"
+    staging.mkdir()
 
     try:
         tt_model.save(staging)
