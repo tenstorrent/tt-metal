@@ -35,6 +35,7 @@
 #include "fabric/fabric_builder_context.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/math.hpp>
 #include "tt_align.hpp"
 #include <umd/device/types/blackhole_eth.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -66,9 +67,12 @@ int firmware_wait_timeout_ms(const llrt::RunTimeOptions& rtoptions) {
 
     if (rtoptions.get_simulator_enabled()) {
         // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
-        // llrt treats timeout_ms==0 on sim as infinite wait.
+        // llrt treats timeout_ms==0 on sim as infinite wait; TT_METAL_OPERATION_TIMEOUT_SECONDS bounds it.
         if (rtoptions.get_simulator_path().extension() != ".so") {
-            return 0;
+            const auto bound = rtoptions.get_timeout_duration_for_operations();
+            return bound.count() > 0.0f
+                       ? static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(bound).count())
+                       : 0;
         }
         return kFunctionalSimTimeoutMs;
     }

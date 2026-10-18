@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <internal/fabric.hpp>
@@ -21,7 +22,9 @@
 #include <optional>
 #include <vector>
 
+#include "impl/buffers/semaphore.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <umd/device/types/xy_pair.hpp>
@@ -65,17 +68,6 @@ size_t get_tt_fabric_max_payload_size_bytes() {
     return control_plane.get_fabric_context().get_fabric_max_payload_size_bytes();
 }
 
-FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    return control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
-}
-
-std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
-    FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    return control_plane.get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, routing_direction);
-}
-
 std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
     std::unordered_map<MeshId, MeshShape> mesh_shapes;
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -105,6 +97,7 @@ extern "C" int __emule_gchip_for_node(uint32_t mesh_id, uint32_t chip_id);
 
 template <typename ProgramOrDescriptor>
 void append_fabric_connection_rt_args(
+    const FabricContext& fabric_context,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     const uint32_t link_idx,
@@ -118,8 +111,7 @@ void append_fabric_connection_rt_args(
         src_fabric_node_id,
         dst_fabric_node_id);
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& control_plane = fabric_context.get_control_plane();
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
     if (!is_2d_fabric) {
@@ -190,22 +182,20 @@ void append_fabric_connection_rt_args(
         auto teardown_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
         TT_FATAL(teardown_sem_id_opt.has_value(), "No available semaphore ID for teardown semaphore");
         worker_teardown_semaphore_id = teardown_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(
-            tt::tt_metal::SemaphoreDescriptor{
-                .id = worker_teardown_semaphore_id,
-                .core_type = core_type,
-                .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
-                .initial_value = 0});
+        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = worker_teardown_semaphore_id,
+            .core_type = core_type,
+            .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+            .initial_value = 0});
 
         auto buffer_index_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
         TT_FATAL(buffer_index_sem_id_opt.has_value(), "No available semaphore ID for buffer index semaphore");
         worker_buffer_index_semaphore_id = buffer_index_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(
-            tt::tt_metal::SemaphoreDescriptor{
-                .id = worker_buffer_index_semaphore_id,
-                .core_type = core_type,
-                .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
-                .initial_value = 0});
+        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = worker_buffer_index_semaphore_id,
+            .core_type = core_type,
+            .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+            .initial_value = 0});
     } else {
         worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
         worker_buffer_index_semaphore_id =
@@ -245,8 +235,7 @@ void append_fabric_connection_rt_args(
         ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
 
         tt::tt_metal::CoreCoord fabric_router_virtual_core =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-                src_chip_id, fabric_router_channel);
+            fabric_context.get_cluster().get_virtual_eth_core_from_channel(src_chip_id, fabric_router_channel);
 
         const auto& edm_config = fabric_context.get_builder_context().get_fabric_router_config();
         auto* channel_allocator = edm_config.channel_allocator.get();
@@ -273,12 +262,11 @@ void append_fabric_connection_rt_args(
             TT_FATAL(flow_control_sem_id_opt.has_value(), "No available semaphore ID for flow control semaphore");
             worker_flow_control_semaphore_id = flow_control_sem_id_opt.value();
 
-            worker_program_or_desc.semaphores.push_back(
-                tt::tt_metal::SemaphoreDescriptor{
-                    .id = worker_flow_control_semaphore_id,
-                    .core_type = core_type,
-                    .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
-                    .initial_value = 0});
+            worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_flow_control_semaphore_id,
+                .core_type = core_type,
+                .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
         } else {
             worker_flow_control_semaphore_id =
                 tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
@@ -293,13 +281,34 @@ void append_fabric_connection_rt_args(
     }
 }
 
+template <typename ProgramOrDescriptor>
+void append_fabric_connection_rt_args(
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    const uint32_t link_idx,
+    ProgramOrDescriptor& worker_program_or_desc,
+    const tt::tt_metal::CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    CoreType core_type) {
+    // TODO(#52020): resolves the default context; take a const MeshDevice& instead.
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    append_fabric_connection_rt_args<ProgramOrDescriptor>(
+        fabric_context,
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        link_idx,
+        worker_program_or_desc,
+        worker_core,
+        worker_args,
+        core_type);
+}
+
 bool are_intra_mesh_neighbors(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, const FabricNodeId& node_a, const FabricNodeId& node_b) {
     if (node_a.mesh_id != node_b.mesh_id) {
         return false;
     }
-    const auto& control_plane =
-        tt::tt_metal::MetalContext::instance(mesh_device.impl().get_context_id()).get_control_plane();
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
     const auto& directions = FabricContext::routing_directions;
     return std::any_of(directions.begin(), directions.end(), [&](const auto direction) {
         return is_neighbor_in_direction(control_plane, node_a, node_b, direction);
@@ -307,8 +316,10 @@ bool are_intra_mesh_neighbors(
 }
 
 std::vector<eth_chan_directions> get_neighbor_eth_directions(
-    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id) {
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
     std::vector<eth_chan_directions> directions;
     directions.reserve(FabricContext::routing_directions.size());
     for (const auto& direction : FabricContext::routing_directions) {
@@ -505,21 +516,18 @@ void append_routing_plane_connection_manager_rt_args(
 
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    // find the forwarding direction b/w src and dest chip
-    const auto& forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
-    if (!forwarding_direction.has_value()) {
-        return {};
-    }
-
-    return get_forwarding_link_indices_in_direction(
-        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+    // TODO(#52020): resolves the default context; take a const MeshDevice& instead.
+    return get_forwarding_link_indices(
+        tt::tt_metal::MetalContext::instance().get_control_plane(), src_fabric_node_id, dst_fabric_node_id);
 }
 
 tt::tt_metal::CoreCoord get_forwarding_eth_core(
-    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t link_idx) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    uint32_t link_idx) {
+    auto& metal_env = mesh_device.impl().metal_env();
+    const auto& control_plane = metal_env.get_control_plane();
     const auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
     TT_FATAL(
         forwarding_direction.has_value(),
@@ -537,7 +545,7 @@ tt::tt_metal::CoreCoord get_forwarding_eth_core(
         src_fabric_node_id,
         dst_fabric_node_id);
 
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = metal_env.get_cluster();
     const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
     return cluster.get_logical_ethernet_core_from_virtual(
         physical_chip_id, cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_chans[link_idx]));
@@ -591,16 +599,12 @@ bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
 }
 
-size_t get_num_usable_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    return control_plane.get_num_usable_routing_planes(fabric_node_id, routing_direction);
-}
 namespace experimental {
 
 size_t get_number_of_available_routing_planes(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t cluster_axis, size_t row_or_col) {
     TT_FATAL(cluster_axis < 2, "Invalid cluster axis {}. Must be 0 or 1", cluster_axis);
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
     const auto& mesh_view = mesh_device.get_view();
 
     // Axis 0 runs down a column, axis 1 along a row.
@@ -608,7 +612,7 @@ size_t get_number_of_available_routing_planes(
                                          : mesh_view.get_fabric_node_ids_on_row(row_or_col);
 
     auto usable_planes = [&](const FabricNodeId& src, const FabricNodeId& dst) -> size_t {
-        const auto directions = get_neighbor_eth_directions(src, dst);
+        const auto directions = get_neighbor_eth_directions(mesh_device, src, dst);
         if (directions.empty()) {
             return 0;  // the two chips are not wired together
         }
@@ -640,6 +644,26 @@ size_t get_number_of_available_routing_planes(
 }
 
 }  // namespace experimental
+
+template void append_fabric_connection_rt_args<tt::tt_metal::Program>(
+    const FabricContext&,
+    const FabricNodeId&,
+    const FabricNodeId&,
+    const uint32_t,
+    tt::tt_metal::Program&,
+    const tt::tt_metal::CoreCoord&,
+    std::vector<uint32_t>&,
+    CoreType);
+
+template void append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+    const FabricContext&,
+    const FabricNodeId&,
+    const FabricNodeId&,
+    const uint32_t,
+    tt::tt_metal::ProgramDescriptor&,
+    const tt::tt_metal::CoreCoord&,
+    std::vector<uint32_t>&,
+    CoreType);
 
 template void append_fabric_connection_rt_args<tt::tt_metal::Program>(
     const FabricNodeId&,
@@ -734,59 +758,144 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
     return defines;
 }
 
+namespace {
+
+size_t fabric_connection_rt_args_size(const tt::tt_fabric::FabricContext& fabric_context, size_t num_connections) {
+    // RoutingPlaneConnectionManager consumes four words per connection: direction,
+    // ethernet channel, teardown semaphore, and producer cursor. 2D routing also has
+    // two shared header words and two destination words per connection. No template
+    // option changes this layout.
+    constexpr size_t connection_words = 4;
+    constexpr size_t routing_2d_header_words = 2;
+    constexpr size_t routing_2d_destination_words = 2;
+    return num_connections * connection_words +
+           (fabric_context.is_2D_routing_enabled()
+                ? routing_2d_header_words + num_connections * routing_2d_destination_words
+                : 0);
+}
+
+}  // namespace
+
+size_t fabric_connection_rt_args_size(size_t num_connections) {
+    // TODO(#52020): resolves the default context, because this tt-blaze API has no device or env
+    // parameter to resolve from.
+    return fabric_connection_rt_args_size(
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context(), num_connections);
+}
+
 // Compute fabric connection RT args without any PD mutation.
-// Caller provides pre-allocated semaphore IDs (2 per connection: teardown + buffer_index).
+// The two per-connection semaphore values are copied through verbatim; sem_args_are_l1_addresses
+// only says what they are, so they can be validated here.
 // Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
-    const std::vector<uint32_t>& teardown_sem_ids,
-    const std::vector<uint32_t>& buffer_index_sem_ids) {
+    const std::vector<uint32_t>& teardown_sem_args,
+    const std::vector<uint32_t>& buffer_index_sem_args,
+    bool sem_args_are_l1_addresses) {
     TT_FATAL(
-        teardown_sem_ids.size() == dst_nodes.size(),
-        "teardown_sem_ids size ({}) must match dst_nodes size ({})",
-        teardown_sem_ids.size(),
+        teardown_sem_args.size() == dst_nodes.size(),
+        "teardown_sem_args size ({}) must match dst_nodes size ({})",
+        teardown_sem_args.size(),
         dst_nodes.size());
     TT_FATAL(
-        buffer_index_sem_ids.size() == dst_nodes.size(),
-        "buffer_index_sem_ids size ({}) must match dst_nodes size ({})",
-        buffer_index_sem_ids.size(),
+        buffer_index_sem_args.size() == dst_nodes.size(),
+        "buffer_index_sem_args size ({}) must match dst_nodes size ({})",
+        buffer_index_sem_args.size(),
         dst_nodes.size());
     TT_FATAL(
         connection_link_indices.empty() ||
             (connection_link_indices.size() == 1 || connection_link_indices.size() == dst_nodes.size()),
         "connection_link_indices must be empty or have size 1 or the same size as dst_nodes");
 
+    // TODO(#52020): resolves the default context, because this tt-blaze API has no device or env
+    // parameter to resolve from. Read the HAL, routing and RT-arg size from this control plane below,
+    // not through the public queries, which each do their own lookup.
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
 
+    const std::pair<const std::vector<uint32_t>&, const char*> sem_arg_arrays[] = {
+        {teardown_sem_args, "teardown_sem_args"}, {buffer_index_sem_args, "buffer_index_sem_args"}};
+    if (sem_args_are_l1_addresses) {
+        // Both are 16 B NoC targets: the EDM remotely increments the teardown flag and block-reads
+        // a 16 B SenderChannelProducerCursor into the buffer-index address.
+        constexpr uint32_t k_sem_address_alignment = 16;
+        const auto& hal = fabric_context.get_hal();
+        const uint32_t l1_unreserved_base = hal.get_dev_addr(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+        const uint32_t l1_end = l1_unreserved_base + hal.get_dev_size(
+                                                         tt::tt_metal::HalProgrammableCoreType::TENSIX,
+                                                         tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+        for (const auto& [values, name] : sem_arg_arrays) {
+            for (size_t i = 0; i < values.size(); i++) {
+                TT_FATAL(
+                    values[i] % k_sem_address_alignment == 0,
+                    "{}[{}] ({:#x}) must be {} B aligned",
+                    name,
+                    i,
+                    values[i],
+                    k_sem_address_alignment);
+                TT_FATAL(
+                    values[i] >= l1_unreserved_base,
+                    "{}[{}] ({:#x}) is below the unreserved L1 base ({:#x}); it looks like a program "
+                    "semaphore id, but sem_args_are_l1_addresses says these are addresses",
+                    name,
+                    i,
+                    values[i],
+                    l1_unreserved_base);
+                TT_FATAL(
+                    values[i] <= l1_end - k_sem_address_alignment,
+                    "{}[{}] ({:#x}) must leave its {} B landing zone below the Tensix L1 end ({:#x})",
+                    name,
+                    i,
+                    values[i],
+                    k_sem_address_alignment,
+                    l1_end);
+            }
+        }
+    } else {
+        for (const auto& [values, name] : sem_arg_arrays) {
+            for (size_t i = 0; i < values.size(); i++) {
+                TT_FATAL(
+                    values[i] < tt::tt_metal::NUM_SEMAPHORES,
+                    "{}[{}] ({}) exceeds the maximum program semaphore id ({})",
+                    name,
+                    i,
+                    values[i],
+                    tt::tt_metal::NUM_SEMAPHORES - 1);
+            }
+        }
+    }
+
     std::vector<uint32_t> worker_args;
-    worker_args.reserve(dst_nodes.size() * 4 + (fabric_context.is_2D_routing_enabled() ? 2 + dst_nodes.size() * 2 : 0));
+    const size_t expected_size = fabric_connection_rt_args_size(fabric_context, dst_nodes.size());
+    worker_args.reserve(expected_size);
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];
 
         // Direction tag
-        auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
+        const auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_node);
         TT_FATAL(
-            dir_opt.has_value(),
+            forwarding_direction.has_value(),
             "Could not determine forwarding direction from src {} to first hop {}",
             src_fabric_node_id,
             dst_node);
-        worker_args.push_back(static_cast<uint32_t>(dir_opt.value()));
+        worker_args.push_back(
+            static_cast<uint32_t>(control_plane.routing_direction_to_eth_direction(forwarding_direction.value())));
 
         // ETH channel
         uint32_t link_idx = 0;
         if (!connection_link_indices.empty()) {
             link_idx = (connection_link_indices.size() == 1) ? connection_link_indices[0] : connection_link_indices[i];
         } else {
-            const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_node);
+            const auto links = tt::tt_fabric::get_forwarding_link_indices_in_direction(
+                control_plane, src_fabric_node_id, dst_node, forwarding_direction.value());
             TT_FATAL(!links.empty(), "No forwarding links available from {} to {}", src_fabric_node_id, dst_node);
             link_idx = links[0];
         }
 
-        auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_node);
         const auto candidate_eth_chans =
             control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
         TT_FATAL(link_idx < candidate_eth_chans.size(), "Link index {} out of bounds", link_idx);
@@ -794,8 +903,8 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
 
         // Per-connection RT args: [eth_channel, teardown_sem, buffer_idx_sem]
         worker_args.push_back(fabric_router_channel);
-        worker_args.push_back(teardown_sem_ids[i]);
-        worker_args.push_back(buffer_index_sem_ids[i]);
+        worker_args.push_back(teardown_sem_args[i]);
+        worker_args.push_back(buffer_index_sem_args[i]);
     }
 
     // 2D metadata
@@ -808,6 +917,13 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
             worker_args.push_back(static_cast<uint16_t>(*dst_node.mesh_id));
         }
     }
+
+    TT_FATAL(
+        worker_args.size() == expected_size,
+        "Fabric connection RT-arg layout emitted {} words, expected {} for {} connections",
+        worker_args.size(),
+        expected_size,
+        dst_nodes.size());
 
     return worker_args;
 }

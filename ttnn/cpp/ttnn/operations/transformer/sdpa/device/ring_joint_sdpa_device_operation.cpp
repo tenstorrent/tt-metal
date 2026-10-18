@@ -12,6 +12,7 @@
 #include <variant>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"

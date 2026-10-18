@@ -5,6 +5,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <utility>
 
 #include "device.hpp"
@@ -133,6 +134,8 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 
 void EventSynchronize(const MeshEvent& event) {
     if (!event.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
+        // Slow dispatch records no event, so wait for the recording queue's workloads to finish.
+        event.device()->mesh_command_queue(event.impl().mesh_cq_id()).enqueue_wait_for_event(event);
         return;
     }
     for (const auto& coord : event.impl().device_range()) {
@@ -193,10 +196,6 @@ void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_
     mesh_cq.finish(sub_device_ids);
 }
 
-bool UsingDistributedEnvironment() {
-    using multihost::DistributedContext;
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    return DistributedContext::is_initialized() && *(distributed_context.size()) > 1;
-}
+bool UsingDistributedEnvironment() { return *(multihost::DistributedContext::get_current_world()->size()) > 1; }
 
 }  // namespace tt::tt_metal::distributed
