@@ -55,14 +55,6 @@ on:
         type: string
         default: ''
         description: "Comma-separated category filter. Keep only entries whose `category` field appears in this list."
-      per-test-timeout:
-        required: false
-        type: string
-        default: ""
-        description: >-
-          Max allowed timeout (minutes) for any individual test SKU entry in the
-          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
-          Empty skips the per-test ceiling check.
       summary-scope:
         required: false
         type: string
@@ -98,28 +90,15 @@ jobs:
       - name: Install dependencies
         run: pip3 install PyYAML
 
-      - name: Verify test timeouts against budget
-        if: ${{ inputs.timeout-minutes-override == 0 }}
-        run: |
-          set -euo pipefail
-          extra=()
-          if [ -n "${{ inputs.per-test-timeout }}" ]; then
-            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
-          fi
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}" \
-            "${extra[@]}"
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml \
-            --event "${{ github.event_name }}"
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
 
       - name: Filter matrix by subcategories
         if: ${{ inputs.subcategories != '' }}
@@ -148,14 +127,7 @@ jobs:
       image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         LOGURU_LEVEL: INFO
-        TT_METAL_HOME: /work
-        TT_METAL_RUNTIME_ROOT: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        PYTHONPATH: /work
-        TEST_DATA_DIR: /work/data
-        ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
         TT_LOGGER_LEVEL: warn
-        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -186,10 +158,12 @@ jobs:
           redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
           auto-triage: ${{ !inputs.enable-watcher }}
 
-      - name: Install ttml module
-        if: ${{ inputs.wheel-artifact-name }}
+      - name: Set up tt-train
+        uses: ./docker-job/.github/actions/setup-tt-train
         timeout-minutes: 10
-        run: bash -c ./tt-train/scripts/setup_pth.sh
+        with:
+          install-ttml: ${{ inputs.wheel-artifact-name != '' }}
+          hf-token: ${{ secrets.HUGGINGFACE_TOKEN }}
 
       - name: Install Python dependencies for metrics
         if: ${{ inputs.test-category == 'perf' }}
@@ -208,25 +182,16 @@ jobs:
               --out /work/power_report.json \
               -- bash -c '${{ matrix.test-group.cmd }}'
 
-      - name: Upload loss plot
-        id: upload-loss-plot
+      - name: 📈 Publish tt-train metrics
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: ./docker-job/.github/actions/publish-tt-train-metrics
         with:
-          # Set archive: false to get a direct link to the PNG. run_models.py prefixes
-          # each PNG filename with the model + card, so avoiding collision between each
-          # matrix job.
-          name: loss-plot-${{ matrix.test-group.name }}-${{ matrix.test-group.sku }}
-          path: /work/generated/tt-train-metrics/plots/*losses.png
-          if-no-files-found: warn
-          retention-days: 30
-          archive: false
-
-      - name: Add loss plot to summary
-        if: ${{ !cancelled() && steps.upload-loss-plot.outputs.artifact-url != '' }}
-        run: |
-          cat /work/generated/tt-train-metrics/plots/*losses.md >> $GITHUB_STEP_SUMMARY
-          echo "[Download full loss plot image](${{ steps.upload-loss-plot.outputs.artifact-url }})" >> $GITHUB_STEP_SUMMARY
+          repo-root: /work
+          plot-artifact-name: loss-plot-${{ matrix.test-group.name }}-${{ matrix.test-group.sku }}
+          upload-to-sftp: ${{ inputs.test-category == 'perf' }}
+          sftp-ssh-private-key: ${{ secrets.TT_TRAIN_AWS_KEY }}
+          sftp-username: ${{ secrets.TT_TRAIN_AWS_USERNAME }}
+          sftp-hostname: ${{ secrets.TT_TRAIN_AWS_HOSTNAME }}
 
       - name: Upload power report
         if: ${{ !cancelled() }}
@@ -236,16 +201,6 @@ jobs:
           path: ${{ github.workspace }}/docker-job/power_report.json
           if-no-files-found: warn
           retention-days: 30
-
-      - name: Upload metrics data to AWS SFTP bucket
-        if: ${{ !cancelled() && inputs.test-category == 'perf' && hashFiles('docker-job/generated/tt-train-metrics/**') != '' }}
-        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
-        with:
-          ssh-private-key: ${{ secrets.TT_TRAIN_AWS_KEY }}
-          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/tt_train_model_metrics.txt
-          username: ${{ secrets.TT_TRAIN_AWS_USERNAME }}
-          hostname: ${{ secrets.TT_TRAIN_AWS_HOSTNAME }}
-          path: /work
 
       - name: 📊 CCache Report
         if: ${{ !cancelled() }}

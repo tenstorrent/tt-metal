@@ -249,6 +249,10 @@ inline std::string get_debug_assert_message(
             return "detected invalid NOC command buffer state before starting the next kernel "
                    "(write-capable NOC packet tags must be zero so implicit transaction ID users start with "
                    "transaction ID 0).";
+        case dev_msgs::DebugAssertNocMidNotClearedTripped:
+            return "detected invalid NOC command buffer state before starting the next kernel "
+                   "(NOC_TARG/RET_ADDR_MID must be zero; a PCIe address left there is inherited by the next "
+                   "on-chip transaction on that command buffer and silently misroutes it).";
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
         case dev_msgs::DebugAssertHwFault:
@@ -367,7 +371,7 @@ inline EnableSymbolsInfo get_enable_symbols_info(const Hal& hal, HalProgrammable
             info.processor_names.push_back(hal.get_processor_class_name(core_type, i, false));
         }
         for (uint32_t i = 0; i < num; ++i) {
-            std::string abbrev = hal.get_processor_class_name(core_type, i, true);
+            const std::string& abbrev = hal.get_processor_class_name(core_type, i, true);
             add_legacy_entry(abbrev, info.processor_names[i]);
         }
     } else if (core_type == HalProgrammableCoreType::DISPATCH) {

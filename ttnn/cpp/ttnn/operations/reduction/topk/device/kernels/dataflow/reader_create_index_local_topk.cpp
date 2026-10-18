@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "topk_dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/index_tile_dataflow.hpp"
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -55,9 +55,11 @@ void kernel_main() {
 #if GENERATE_INDICES
             // Generate corresponding index tile for position tracking during sort
             if (is32_bit_data) {
-                generate_index_tile<uint32_t>(dfb_id_in1, j);  // Generate indices for width position j
+                dataflow_kernel_lib::generate_index_tile<uint32_t>(
+                    dfb_id_in1, j);  // Generate indices for width position j
             } else {
-                generate_index_tile<uint16_t>(dfb_id_in1, j);  // Generate indices for width position j
+                dataflow_kernel_lib::generate_index_tile<uint16_t>(
+                    dfb_id_in1, j);  // Generate indices for width position j
             }
 #else
             // Read precomputed indices to circular buffer

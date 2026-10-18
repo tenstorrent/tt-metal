@@ -96,6 +96,12 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 gathered_slab_global: Block-cyclic slab width in gathered-dim elements
                     (``chunk_local * num_devices``). Required with ``gathered_prefix_tensor`` and hashed,
                     being structural rather than per-chunk.
+                ready_semaphore: Optional caller-owned persistent startup semaphore. Must be
+                    supplied together with ``data_valid_semaphore`` and initialized to zero on
+                    the complete worker-core restriction before the first call.
+                data_valid_semaphore: Optional caller-owned persistent relay/completion semaphore.
+                    Supplying both semaphore handles selects the allocation-free, no-internal-sync
+                    dispatch path intended for sub-device overlap.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -112,7 +118,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("batch_slot_num_layers") = 1,
         nb::arg("batch_slot_layer_idx") = 0,
         nb::arg("gathered_prefix_tensor") = nb::none(),
-        nb::arg("gathered_slab_global") = 0);
+        nb::arg("gathered_slab_global") = 0,
+        nb::arg("ready_semaphore") = nb::none(),
+        nb::arg("data_valid_semaphore") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail

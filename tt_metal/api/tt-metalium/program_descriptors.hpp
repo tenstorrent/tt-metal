@@ -4,22 +4,26 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
+#include <string>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
+#include <fmt/base.h>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
+#include <internal/reload_table.hpp>
 #include <tt_stl/small_vector.hpp>
+#include <tt-metalium/base_types.hpp>
 
 #include <functional>
 
 // UMD: re-exports CoreType (used in SemaphoreDescriptor::core_type member).
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
-#include <bitset>
 #include <filesystem>
 #include <optional>
 #include <utility>
@@ -223,6 +227,8 @@ struct ProgramDescriptor {
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
     std::optional<std::uint64_t> custom_program_hash;
+    // Blaze-only internal runtime binary reload; std::nullopt when the program does not reload.
+    std::optional<internal::ReloadTable> reload_table;
 
     std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;
 };

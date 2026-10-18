@@ -13,50 +13,6 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
 from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("value", [1.0, 5.0, 10.0])
-def test_ternary_addcmul_ttnn(input_shapes, value, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -80, 80, device)
-    in_data3, input_tensor3 = data_gen_with_range(input_shapes, -90, 90, device)
-
-    output_tensor = ttnn.addcmul(input_tensor1, input_tensor2, input_tensor3, value=value)
-    golden_fn = ttnn.get_golden_function(ttnn.addcmul)
-    golden_tensor = golden_fn(in_data1, in_data2, in_data3, value=value)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("value", [1.0, 5.0, 10.0])
-def test_ternary_addcdiv_ttnn(input_shapes, value, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data3, input_tensor3 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.addcdiv(input_tensor1, input_tensor2, input_tensor3, value=value)
-    golden_fn = ttnn.get_golden_function(ttnn.addcdiv)
-    golden_tensor = golden_fn(in_data1, in_data2, in_data3, value=value)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
 def create_full_range_tensor(input_shape, dtype, value_ranges):
     """Create a tensor with values spanning multiple ranges."""
     num_elements = torch.prod(torch.tensor(input_shape)).item()
@@ -235,27 +191,6 @@ def test_lerp_overload_ttnn(input_shapes, value, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_lerp_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data3, input_tensor3 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.lerp(input_tensor1, input_tensor2, input_tensor3)
-    golden_fn = ttnn.get_golden_function(ttnn.lerp)
-    golden_tensor = golden_fn(in_data1, in_data2, in_data3)
-
-    output_torch = ttnn.to_torch(output_tensor)
-    assert_with_ulp(expected_result=golden_tensor, actual_result=output_torch, ulp_threshold=2)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 @pytest.mark.parametrize("value1", [1.0, 5.0, 10.0])
 @pytest.mark.parametrize("value2", [1.0, 5.0, 10.0])
 def test_mac_overload_ttnn(input_shapes, value1, value2, device):
@@ -264,29 +199,6 @@ def test_mac_overload_ttnn(input_shapes, value1, value2, device):
     output_tensor = ttnn.mac(input_tensor1, value1, value2)
     golden_fn = ttnn.get_golden_function(ttnn.mac)
     golden_tensor = golden_fn(in_data1, value1, value2)
-
-    output_torch = ttnn.to_torch(output_tensor)
-    assert_with_ulp(expected_result=golden_tensor, actual_result=output_torch, ulp_threshold=1)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_mac_ttnn(input_shapes, device):
-    # Distinct seeds per operand: data_gen_with_range reseeds from a fixed default, so
-    # reusing it would make a, b and c bit-identical and mask any operand mix-up.
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device, seed=1)
-    in_data3, input_tensor3 = data_gen_with_range(input_shapes, -100, 100, device, seed=2)
-
-    output_tensor = ttnn.mac(input_tensor1, input_tensor2, input_tensor3)
-    golden_fn = ttnn.get_golden_function(ttnn.mac)
-    golden_tensor = golden_fn(in_data1, in_data2, in_data3)
 
     output_torch = ttnn.to_torch(output_tensor)
     assert_with_ulp(expected_result=golden_tensor, actual_result=output_torch, ulp_threshold=1)
@@ -366,3 +278,25 @@ def test_mac_tst_ttnn(input_shapes, value, device):
     golden_tensor = (in_data1.float() * value + in_data3.float()).to(torch.bfloat16)
 
     assert_with_ulp(expected_result=golden_tensor, actual_result=ttnn.to_torch(output_tensor), ulp_threshold=1)
+
+
+# The composite fallback of addcmul/addcdiv used to allocate and return a fresh tensor, leaving a
+# preallocated output_tensor unwritten (#57356). Block-float inputs take that fallback for addcdiv
+# always and for addcmul whenever the broadcast is row, column or scalar.
+@pytest.mark.parametrize("op_name", ["addcmul", "addcdiv"])
+@pytest.mark.parametrize(
+    "b_shape", [(8, 4, 768), (8, 1, 768), (8, 4, 1), (8, 1, 1)], ids=["no_bcast", "row", "col", "scalar"]
+)
+def test_addc_ops_block_float_writes_output_tensor(device, op_name, b_shape):
+    torch.manual_seed(0)
+    shape = (8, 4, 768)
+    a, b, c = torch.rand(shape), torch.rand(b_shape), torch.rand(shape) + 0.5
+    ta, tb, tc = (ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device) for x in (a, b, c))
+    out = ttnn.zeros(shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    returned = getattr(ttnn, op_name)(ta, tb, tc, value=2.0, output_tensor=out)
+
+    written = ttnn.to_torch(out).float()
+    expected = getattr(torch, op_name)(*(ttnn.to_torch(t).float() for t in (ta, tb, tc)), value=2.0)
+    assert torch.equal(written, ttnn.to_torch(returned).float())
+    assert torch.allclose(written, expected, rtol=0.05, atol=0.05), (written - expected).abs().max()

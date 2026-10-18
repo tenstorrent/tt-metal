@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <variant>
 
@@ -16,6 +17,26 @@
 
 namespace ttnn::prim {
 
+// Complete L1-dependent identity of the interleaved program. Both the cache
+// hash and factory use this plan so allocator changes matter only when they
+// select a different descriptor.
+struct LayerNormInterleavedPlan {
+    bool use_welford = false;
+    bool large_tensor = false;
+    bool compact_fp32_finalizer = false;
+    bool fused_pre_add_replay = false;
+    bool affine_mcast = false;
+    std::uint32_t width_block_tiles = 0;
+    std::uint32_t input_tiles = 0;
+    std::uint32_t residual_tiles = 0;
+    std::uint32_t output_tiles = 0;
+    std::uint32_t centred_tiles = 0;
+    std::uint32_t squared_tiles = 0;
+    std::uint32_t gamma_tiles = 0;
+    std::uint32_t beta_tiles = 0;
+    std::uint32_t residual_value_tiles = 0;
+};
+
 struct LayerNormMultiCoreProgramFactory {
     // The framework calls this with three arguments. The fourth restricts the cores the program may
     // touch: non-sharded layernorm splits its tile rows over whichever range it is given, so the
@@ -27,7 +48,12 @@ struct LayerNormMultiCoreProgramFactory {
         const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
 
     // Returns the core range non-sharded LayerNorm distributes its tile rows over by default
-    static CoreRangeSet default_core_range(tt::tt_metal::IDevice* device);
+    static CoreRangeSet default_core_range(const tt::tt_metal::distributed::MeshDevice& device);
+
+    static LayerNormInterleavedPlan select_plan(
+        const LayerNormParams& operation_attributes,
+        const LayerNormInputs& tensor_args,
+        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
 };
 
 struct LayerNormShardedProgramFactory {
@@ -49,6 +75,9 @@ struct LayerNormDeviceOperation {
     using program_factory_t = std::variant<LayerNormMultiCoreProgramFactory, LayerNormShardedProgramFactory>;
 
     static program_factory_t select_program_factory(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(

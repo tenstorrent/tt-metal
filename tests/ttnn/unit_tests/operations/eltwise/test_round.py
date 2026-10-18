@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from functools import partial
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 pytestmark = pytest.mark.use_module_device
@@ -25,7 +25,8 @@ pytestmark = pytest.mark.use_module_device
 @pytest.mark.parametrize(
     "dtypes",
     [
-        (torch.bfloat16, ttnn.bfloat16),
+        # (torch.bfloat16, ttnn.bfloat16) is now covered exhaustively (and with a tighter
+        # ULP<=1 gate, vs. this test's PCC>=0.999) by test_unary_category6_bfloat16.py::test_round_op.
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )

@@ -8,6 +8,7 @@ import os
 import torch
 from loguru import logger
 
+from models.demos.gemma4.tt.warmup_isls import run_prefill_ladder, warmup_prefill_isls
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
@@ -647,8 +648,46 @@ def resolve_gemma4_prefill_chunk_size(
                 continue
             chunk = int(tier["chunk"])
             break
-        return min(chunk, max_seq_len)
-    return non_qb2_default if non_qb2_default is not None else max_seq_len
+        return min(_floor_chunk_for_spec_ring(chunk, policy), max_seq_len)
+    base = non_qb2_default if non_qb2_default is not None else max_seq_len
+    return min(_floor_chunk_for_spec_ring(base, policy), max_seq_len)
+
+
+def _floor_chunk_for_spec_ring(chunk: int, policy) -> int:
+    """Raise the prefill chunk to fit a bounded last-chunk expansion.
+
+    When the last chunk's remnant is shorter than the sliding window, the
+    generator expands it to cover a full window and aligns the start DOWN to the
+    ring (``paged_fill_cache`` writes row r to slot r % ring, so the origin must
+    be ring-aligned). Worst case that needs ``ring + window`` rows, which cannot
+    fit a smaller chunk: at 128k (chunk 2048, ring 2048) it raised
+    "Expanded bounded last chunk has 2489 rows, exceeding chunk_size=2048".
+
+    Only applies with speculative ring headroom on (ring > window); the
+    exact-window ring always fit. Verified no OOM at 256k with chunk 4096
+    (16.37 vs 16.35 tok/s/u at 2048).
+    """
+    from models.demos.gemma4.tt.attention import bounded_ring_modulo
+
+    window = None
+    try:
+        window = int(policy.get("sliding_window") or 0) or None
+    except (AttributeError, TypeError, ValueError):
+        window = None
+    if window is None:
+        window = int(os.environ.get("GEMMA4_SLIDING_WINDOW", "1024") or 1024)
+    ring = bounded_ring_modulo(window)
+    if not ring or ring <= window:
+        return chunk  # no headroom -> historical behaviour
+    need = ring + window
+    if chunk >= need:
+        return chunk
+    floored = 1 << (need - 1).bit_length()
+    logger.info(
+        f"Gemma4 prefill chunk floored {chunk} -> {floored} for the bounded "
+        f"last-chunk expansion (ring {ring} + window {window} = {need} rows)"
+    )
+    return floored
 
 
 def model_uses_pli(model) -> bool:
@@ -868,7 +907,29 @@ def warmup_gemma4_batched_prefill_traces(
     if generator.already_warmed_up_prefill:
         return
     generator.already_warmed_up_prefill = True
+    generator._defer_prefill_recording = enable_trace
+    try:
+        _warmup_gemma4_prefill_sweep(
+            generator,
+            kv_cache,
+            enable_trace=enable_trace,
+            can_sample_on_device=can_sample_on_device,
+            greedy_only=greedy_only,
+            prefill_forward_fn=prefill_forward_fn,
+        )
+        generator._defer_prefill_recording = False
+        generator._record_pending_prefill_traces()
+    except BaseException:
+        generator.already_warmed_up_prefill = False
+        raise
+    finally:
+        generator._defer_prefill_recording = False
+        generator._pending_prefill_traces.clear()
 
+
+def _warmup_gemma4_prefill_sweep(
+    generator, kv_cache, *, enable_trace, can_sample_on_device, greedy_only, prefill_forward_fn
+):
     prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
 
     model_args = generator.model_args[0]
@@ -1044,6 +1105,20 @@ def warmup_gemma4_batched_prefill_traces(
         logger.info("Vision encoder warmup completed")
 
 
+def _warmup_gemma4_prefill_isl_ladder(generator, kv_cache, *, prefill_forward_fn=None) -> None:
+    """One eager batch-1 prefill per ``GEMMA4_WARMUP_PREFILL_ISLS`` length, once
+    per process, so the first real request at that length does not pay the
+    shape compile. Selection and orchestration live in
+    ``models.demos.gemma4.tt.warmup_isls`` (host-only, unit-tested)."""
+    model_args = generator.model_args[0]
+    ladder = warmup_prefill_isls(getattr(model_args, "max_seq_len", None))
+    if not ladder:
+        return
+    prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
+    chunk = int(getattr(model_args, "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
+    run_prefill_ladder(generator, kv_cache, prefill_forward, ladder, chunk=chunk)
+
+
 def warmup_gemma4_model_prefill(
     generator,
     kv_cache,
@@ -1082,6 +1157,7 @@ def warmup_gemma4_model_prefill(
         greedy_only=greedy_only,
         prefill_forward_fn=prefill_forward_fn,
     )
+    _warmup_gemma4_prefill_isl_ladder(generator, kv_cache, prefill_forward_fn=prefill_forward_fn)
     # Once-only: tt_transformers calls warmup_model_prefill on *every*
     # prefill (warmup_prefill=True). The batched helper early-returns via
     # already_warmed_up_prefill, but this 8192 sp1 capture used to re-run

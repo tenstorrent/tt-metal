@@ -17,6 +17,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::prim::sharded_layernorm_helpers {
 
@@ -187,6 +188,8 @@ struct DFBSizeParams {
     uint32_t block_wt_resharded = 0;
     uint32_t Kt = 0;
     uint32_t in_single_tile_size = 0;
+    // Tile size of the fused pre-add residual; it may differ from the input's dtype.
+    uint32_t residual_single_tile_size = 0;
     uint32_t single_tile_size = 0;
     uint32_t out_single_tile_size = 0;
     uint32_t gamma_single_tile_size = 0;
@@ -276,6 +279,7 @@ struct SpecConfig {
 
     // Data formats
     tt::DataFormat in_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat residual_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat dfb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat out_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat gamma_dfb_data_format = tt::DataFormat::Float16_b;
@@ -285,6 +289,7 @@ struct SpecConfig {
 
     // Tile sizes
     uint32_t in_single_tile_size = 0;
+    uint32_t residual_single_tile_size = 0;
     uint32_t single_tile_size = 0;
     uint32_t out_single_tile_size = 0;
     uint32_t gamma_single_tile_size = 0;
@@ -304,7 +309,6 @@ struct SpecConfig {
     uint32_t tile_width = 32;
     bool fp32_dest_acc_en = false;
     bool legacy_reduction = false;
-    bool legacy_rsqrt = false;
     float eps = 0.0f;
     uint32_t per_core_recip_lut_size = 0;
 
@@ -432,7 +436,7 @@ RunArgsAndWriterVarargs build_run_args(
     const std::vector<CoreCoord>& cores,
     const RuntimeArgsContext& ctx,
     const SpecConfig& config,
-    IDevice* device,
+    const MeshDevice& device,
     const Tensor& input,
     const std::optional<Tensor>& residual,
     const std::optional<Tensor>& gamma,

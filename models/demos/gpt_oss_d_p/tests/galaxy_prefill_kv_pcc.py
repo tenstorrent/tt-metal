@@ -20,9 +20,8 @@ Env:
   PREFILL_NUM_USERS   cache slots; EVERY slot prefills the same prompt and is PCC-checked
                       independently (exercises the packed multi-user slot math)              [default 1]
   GPT_OSS_BOUNDED_SLIDING_KV  "1" -> bounded circular KV cache on sliding layers (circular write +
-                      host-readback PCC; the on-device ring cache-read of a bounded layer is not
-                      supported in this build, and the ring path serves EVERY chunk, so chunked
-                      mode rejects the flag)                                                [default 0]
+                      on-device circular ring cache-read + host-readback PCC;
+                      chunked runs cover every chunk)                                       [default 0]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8"                        [default bf4]
   GPT_OSS_WEIGHTS_FROM_CACHE  "1" -> pass an empty state_dict (load tilized weights from the TTNN cache)
   HF_MODEL            real gpt-oss weights dir (read by ModelArgs)
@@ -52,7 +51,7 @@ ROWS, COLS = 4, 8  # SP=4 (rows), TP=8 (cols), EP=32
 
 def _raise_nproc_limit():
     """Raise RLIMIT_NPROC to the hard limit so tt-metal's parallel kernel JIT (a burst of g++/make
-    procs) doesn't starve with EAGAIN mid-build. See M3's harness for the full rationale."""
+    procs) doesn't starve with EAGAIN mid-build."""
     soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
     if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
         try:

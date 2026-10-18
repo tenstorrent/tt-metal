@@ -24,25 +24,31 @@ void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(2);
     constexpr bool synchronize_full_block = get_compile_time_arg_val(3) != 0;
 
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
+
     compute_kernel_hw_startup(cb_in, cb_out);
 
     using namespace compute_kernel_lib;
     constexpr auto tail_sync = synchronize_full_block ? BlockTailSync::FullBlock : BlockTailSync::ValidTiles;
+#ifdef RESERVE_UPFRONT
+    constexpr auto reserve = ReservePolicy::Upfront;
+#else
+    constexpr auto reserve = ReservePolicy::PerBlockSize;
+#endif
     if constexpr (Ht == 1) {
         eltwise_chain(
             IterationShape::tiles(Wt).block_size(block_size, tail_sync),
-            CopyTile<
-                input(cb_in, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block),
-                Dst::D0>{},
+            CopyTile<input(cb_in, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block), Dst::D0>{
+                cb_in_obj},
             Exp<>{},
-            PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
+            PackTile<output(cb_out, reserve, PushPolicy::PerBlockSize)>{cb_out_obj});
     } else {
         eltwise_chain(
             IterationShape::grid(Ht, Wt).block_size(block_size, tail_sync),
-            CopyTile<
-                input(cb_in, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block),
-                Dst::D0>{},
+            CopyTile<input(cb_in, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block), Dst::D0>{
+                cb_in_obj},
             Exp<>{},
-            PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
+            PackTile<output(cb_out, reserve, PushPolicy::PerBlockSize)>{cb_out_obj});
     }
 }

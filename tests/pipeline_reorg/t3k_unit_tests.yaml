@@ -17,6 +17,7 @@
       timeout: 40
   owner_id: U06US5C7M7X # Sean Nijjar
   team: scaleout
+  budget_type: unit
 
 - name: t3k_ttnn_tests
   model-name: t3k_ttnn_tests
@@ -26,6 +27,7 @@
       timeout: 25
   owner_id: U07D5N7QL4U # Joseph Chu
   team: ttnn
+  budget_type: unit
 
 - name: t3k_tt_metal_multiprocess_tests
   cmd: run_t3000_tt_metal_multiprocess_tests
@@ -34,6 +36,7 @@
       timeout: 15
   owner_id: U0709049XNK # Aditya Saigal
   team: scaleout
+  budget_type: unit
 
 - name: t3k_ttnn_udm_tests
   cmd: run_t3000_ttnn_udm_tests
@@ -42,6 +45,7 @@
       timeout: 5
   owner_id: U06MJ6CVCGZ # Yu Gao
   team: ttnn
+  budget_type: unit
 
 - name: t3k_ttnn_multiprocess_slow_tests
   cmd: run_t3000_ttnn_multiprocess_slow_tests
@@ -50,3 +54,4 @@
       timeout: 5
   owner_id: U09BZ5Q33LK # Piotr Stankiewicz
   team: scaleout
+  budget_type: unit

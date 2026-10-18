@@ -18,6 +18,7 @@ mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_2x
 
 global_env:
   PREFILL_MANIFEST: "models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json"
+  M3_INDEX_CACHE_BF16: "0"        # migration needs a bf8 index_k (the decode peer's dtype), as the manifest
 
   PREFILL_FABRIC_MODE: "2d"
   PREFILL_SP: "4"
@@ -27,7 +28,7 @@ global_env:
   PREFILL_H2D_SERVICE_ID: "m3_prefill"
   # Every dst slot must exist in the table: src 0,1 -> dst 2,3.
   PREFILL_NUM_USERS: "4"
-  PREFILL_TRACE_DIR: "/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240"
+  PREFILL_TRACE_DIR: "/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_10240"
   # Only 12B of metadata transits the queue; the default 64KB clashes with the MoE FFN L1 allocation.
   PREFILL_PP_D2D_FIFO_BYTES: "32768"
 

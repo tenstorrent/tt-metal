@@ -32,7 +32,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/pcie/tlb_window.hpp>
+#include <umd/device/io_window/io_window.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
@@ -86,7 +86,7 @@ TEST_F(SimulatorFixture, SimulatorDeviceInitialization) {
     }
 }
 
-TEST_F(AnyDispatchSimulatorFixture, QuasarStaticTlbReadWrite) {
+TEST_F(AnyDispatchSimulatorFixture, QuasarIoWindowReadWrite) {
     auto& cluster = MetalContext::instance().get_cluster();
     if (cluster.arch() != tt::ARCH::QUASAR) {
         GTEST_SKIP();
@@ -105,21 +105,19 @@ TEST_F(AnyDispatchSimulatorFixture, QuasarStaticTlbReadWrite) {
             sdesc.get_cores(tt::CoreType::TENSIX, tt::CoordSystem::TRANSLATED);
         ASSERT_FALSE(tensix_cores.empty());
         const tt::umd::CoreCoord tensix = tensix_cores.front();
-        const tt_cxy_pair target(chip_id, tensix.x, tensix.y);
 
-        ASSERT_TRUE(cluster.get_tlb_data(target).has_value());
-
-        tt::umd::TlbWindow* window = cluster.get_static_tlb_window(target);
+        std::unique_ptr<tt::umd::IoWindow> window = cluster.get_driver()->create_io_window(
+            chip_id, tensix, /*addr=*/scratch_addr, {.size = 16 * sizeof(uint32_t)});
         ASSERT_NE(window, nullptr);
 
-        window->write32(scratch_addr, value32);
-        EXPECT_EQ(window->read32(scratch_addr), value32);
+        window->write32(0, value32);
+        EXPECT_EQ(window->read32(0), value32);
 
         std::array<uint32_t, 16> tx;
         std::iota(tx.begin(), tx.end(), 0x12345678);
         std::array<uint32_t, 16> rx{};
-        window->write_block(scratch_addr, tx.data(), tx.size() * sizeof(uint32_t));
-        window->read_block(scratch_addr, rx.data(), rx.size() * sizeof(uint32_t));
+        window->write_block(0, tx.data(), tx.size() * sizeof(uint32_t));
+        window->read_block(0, rx.data(), rx.size() * sizeof(uint32_t));
         EXPECT_EQ(tx, rx);
     }
 }

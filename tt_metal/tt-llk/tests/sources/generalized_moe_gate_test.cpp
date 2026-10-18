@@ -63,7 +63,8 @@ constexpr std::uint32_t ID_FORMAT = ckernel::to_underlying(DataFormat::UInt16);
 //
 // BINARY stays at Transpose::None: it is here to pin the FPU mop's arithmetic across all four faces,
 // and a transposed SrcA would only make its golden restate what the unpacker did.
-constexpr auto GATE_UNPACK_TRANSPOSE = (GMG_MODE == MODE_GATE) ? ckernel::Transpose::Both : ckernel::Transpose::None;
+constexpr auto GATE_UNPACK_TRANSPOSE =
+    (GMG_MODE == MODE_GATE) ? (GMG_TRANSPOSE_OF_FACES ? ckernel::Transpose::Both : ckernel::Transpose::IntraFace) : ckernel::Transpose::None;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -103,7 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             if constexpr (GMG_MODE == MODE_GATE && GMG_SIGMOID)
             {
-                // transpose_wh_tile: the 32x32 transpose is the unpacker's, both flags set.
+                // transpose_tile: the 32x32 transpose is the unpacker's, both flags set.
                 //
                 // acc_to_dest is true on the init and false on the call, which is the asymmetry
                 // transpose_init/transpose_tile ship and neither value is arbitrary. The init ignores
@@ -257,7 +258,14 @@ static inline void run_gate()
         GMG_SFPU_CALL(generalized_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init_<false /* is_32bit */>();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_<is_fp32_dest_acc_en, false /* is_32bit */>();
-        GMG_SFPU_CALL(generalized_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE);
+        if constexpr (GMG_DO_EXTRA_SCALE)
+        {
+            GMG_SFPU_CALL(generalized_moe_gate_top8_scaled, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE, GMG_EXTRA_SCALE);
+        }
+        else
+        {
+            GMG_SFPU_CALL(generalized_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE);
+        }
     }
     else
     {
@@ -297,7 +305,7 @@ static inline void run_gate()
     // transpose is the one step the run-producing path skips.
     if constexpr (!(GMG_PRODUCE_RUN && !GMG_GROUPED))
     {
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */, GMG_OUTPUT_TILES>();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false /* is_32bit */>();
     }
 }
@@ -324,7 +332,7 @@ static inline void run_move()
     }
     else if constexpr (GMG_SUB_OP == MOVE_STEP2)
     {
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */, GMG_OUTPUT_TILES>();
         mop_dest_reset();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false /* is_32bit */>();
     }
@@ -469,7 +477,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             if constexpr (GMG_MODE == MODE_GATE && GMG_SIGMOID)
             {
-                // The op's enable_sigmoid front-end: transpose_wh_tile then sigmoid_tile leave the
+                // The op's enable_sigmoid front-end: transpose_tile then sigmoid_tile leave the
                 // activated score in the score region, which the RELOAD binary below reads back through
                 // MOVD2A instead of taking SrcA from the unpacker. The transpose itself is the
                 // unpacker's; math only datacopies what it produced.

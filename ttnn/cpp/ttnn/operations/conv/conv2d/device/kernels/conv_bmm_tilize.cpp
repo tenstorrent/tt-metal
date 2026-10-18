@@ -61,8 +61,8 @@ void tilize_in(
         reconfig_mode>(in_num_subblocks);
 }  // tilize_in()
 
-template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
-inline void tilize_single_block(DataflowBuffer in_dfb) {
+template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, typename DFBIn>
+inline void tilize_single_block(DFBIn in_dfb) {
     in_dfb.wait_front(in_block_w);
     fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
     in_dfb.pop_front(in_block_w);
@@ -74,8 +74,8 @@ inline uint32_t update_in_cb(uint32_t in_cb_addr) {
     return in_cb_addr + window_reuse_offset;
 }
 
-template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, uint32_t tilized_cb_row_offset>
-inline void tilize_single_block_with_out_cb_update(DataflowBuffer in_dfb, uint32_t& out_cb_addr) {
+template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, uint32_t tilized_cb_row_offset, typename DFBIn>
+inline void tilize_single_block_with_out_cb_update(DFBIn in_dfb, uint32_t& out_cb_addr) {
     PACK((get_local_cb_interface(out_cb_id).fifo_wr_ptr = out_cb_addr));
     PACK((out_cb_addr += tilized_cb_row_offset));
     tilize_single_block<in_cb_id, in_block_w, out_cb_id>(in_dfb);
@@ -92,11 +92,14 @@ template <
     uint32_t window_reuse_offset,
     uint32_t tilized_cb_row_offset,
     uint32_t tilized_cb_second_reader_offset,
-    uint32_t image_width_in_tiles>
+    uint32_t image_width_in_tiles,
+    typename DFBIn1,
+    typename DFBIn2,
+    typename DFBOut>
 inline void tilize_in_reuse_split_reader(
-    DataflowBuffer in1_dfb,
-    DataflowBuffer in2_dfb,
-    DataflowBuffer out_dfb,
+    DFBIn1 in1_dfb,
+    DFBIn2 in2_dfb,
+    DFBOut out_dfb,
     uint32_t act_cb_start_address,
     uint32_t act_cb_second_reader_start_address) {
     // with activation reuse, the activation buffers are sized to fit one output image width only,
@@ -167,10 +170,10 @@ inline void tilize_in_reuse_split_reader(
     fast_tilize_uninit(in2_cb_id, out_cb_id, in_block_w);
 }
 
-template <uint32_t out_subblock_w, uint32_t out_block_w>
+template <uint32_t out_subblock_w, uint32_t out_block_w, typename DFBInterm, typename DFBOut>
 inline void reblock_and_untilize(
-    DataflowBuffer interm_dfb,
-    DataflowBuffer out_dfb,
+    DFBInterm interm_dfb,
+    DFBOut out_dfb,
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h) {
@@ -299,7 +302,7 @@ void kernel_main() {
         for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
             if constexpr (pack_relu) {
                 // for each output block we start we relu disabled so that intermediate results are not relu'd
-                PACK((llk_pack_relu_config(ReluConfig::none())));
+                pack_relu_config(ReluConfig::none());
             }
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 const bool last_inner_dim_block = (in0_block_w_i == in0_num_blocks_w - 1);
@@ -312,7 +315,7 @@ void kernel_main() {
                         if constexpr (pack_relu && !fuse_bias) {
                             if (last_inner_dim_block) {
                                 // if last block we pack the final result with relu enabled
-                                PACK((llk_pack_relu_config(ReluConfig::none())));
+                                pack_relu_config(ReluConfig::none());
                             }
                         }
                         if constexpr (packer_l1_acc) {
@@ -343,7 +346,7 @@ void kernel_main() {
                     if constexpr (pack_relu && !fuse_bias) {
                         if (last_inner_dim_block) {
                             // if last block we pack the final result with relu enabled
-                            PACK((llk_pack_relu_config(ReluConfig::none())));
+                            pack_relu_config(ReluConfig::none());
                         }
                     }
                     if constexpr (packer_l1_acc) {
@@ -408,7 +411,7 @@ void kernel_main() {
                     if constexpr (!fuse_bias) {
                         if constexpr (pack_relu) {
                             // if last block we pack the final result with relu enabled
-                            PACK((llk_pack_relu_config(ReluConfig::zero())));
+                            pack_relu_config(ReluConfig::zero());
                         }
                     }
                 }
@@ -476,8 +479,7 @@ void kernel_main() {
                         }
 #endif
                         tile_regs_commit();
-                        DataflowBuffer curr_out_dfb =
-                            curr_matmul_out_cb == matmul_partials_cb ? dfb_matmul_partials : dfb_mm_out;
+                        auto curr_out_dfb = curr_matmul_out_cb == matmul_partials_cb ? dfb_matmul_partials : dfb_mm_out;
                         curr_out_dfb.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
 
@@ -517,7 +519,7 @@ void kernel_main() {
             if constexpr (fuse_bias) {
                 if constexpr (pack_relu) {
                     // if last block we pack the final result with relu enabled
-                    PACK((llk_pack_relu_config(ReluConfig::zero())));
+                    pack_relu_config(ReluConfig::zero());
                 }
                 pack_reconfig_data_format(matmul_partials_cb, untilize_mode_out_cb_id);
                 if constexpr (packer_l1_acc) {
@@ -569,7 +571,7 @@ void kernel_main() {
                     pack_reconfig_l1_acc(0);
                 }
                 if constexpr (pack_relu) {
-                    PACK((llk_pack_relu_config(ReluConfig::none())));
+                    pack_relu_config(ReluConfig::none());
                 }
                 if constexpr (!fuse_bias) {
                     reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
@@ -607,4 +609,12 @@ void kernel_main() {
             bias_block_offset += in1_block_w;
         }
     }  // for in1_num_blocks_w
+    if constexpr (fuse_bias) {
+        // The bias row is pushed once by the reader and re-waited by every output block that folds
+        // it in, so it is popped once here rather than per block. Cores that skip compute never
+        // reach that wait, so they must not pop either.
+        if (!skip_compute) {
+            dfb_bias.pop_front(bias_ntiles_w);
+        }
+    }
 }  // void kernel_main()

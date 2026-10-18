@@ -20,7 +20,8 @@
 // Access to internal API: ProgramImpl::logical_cores
 #include "impl/program/program_impl.hpp"
 
-inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, const tt::tt_metal::Program& program) {
+inline uint64_t get_t0_to_any_riscfw_end_cycle(
+    tt::tt_metal::distributed::MeshDevice& mesh_device, const tt::tt_metal::Program& program) {
     uint64_t t0_to_any_riscfw_end = 0;
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
         return t0_to_any_riscfw_end;
@@ -29,10 +30,10 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
     enum BufferIndex { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };
     enum TimerDataIndex { TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE };
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    auto worker_cores_used_in_program = device->worker_cores_from_logical_cores(
+    auto worker_cores_used_in_program = mesh_device.worker_cores_from_logical_cores(
         program.impl()
             .logical_cores()[hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX)]);
-    auto device_id = device->id();
+    auto device_id = mesh_device.get_device_ids()[0];
     uint64_t min_cycle = -1;
     uint64_t max_cycle = 0;
     tt::tt_metal::DeviceAddr dprint_msg_addr =

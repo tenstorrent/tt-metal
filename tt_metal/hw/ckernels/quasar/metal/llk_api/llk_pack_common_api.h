@@ -35,13 +35,16 @@ inline constexpr ckernel::trisc::BfdResource pack_bfd_resource =
  *
  * @tparam MODE: L1 access mode for the descriptor; Strided collapses y/z dims to 1 for the
  * PACR_STRIDE untilize sequences.
+ * @param output_id: Output DFB used to look up the descriptor parameters
+ * @return Allocated BFD id for the pack init
  */
 template <ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
-inline void llk_pack_program_bfd(const std::uint32_t output_id) {
+inline std::uint8_t llk_pack_program_bfd(const std::uint32_t output_id) {
+    LLK_REINIT_GUARD_NOTE_PROGRAMMED(pack_bfd_resource, output_id);
     // TODO: multi-TC not handled — only tc_slots[0]'s L1 base is programmed. When a DFB is mapped
     // across multiple TCs this must program one descriptor per active tc_slot (same gap in
     // llk_unpack_program_bfd). Tied to the DFB<->buffer-descriptor decouple work.
-    ckernel::trisc::bfd_alloc_and_program<pack_bfd_resource, MODE>(
+    return ckernel::trisc::bfd_alloc_and_program<pack_bfd_resource, MODE>(
         get_output_tensor_shape(output_id),
         get_local_dfb_interface(output_id).tc_slots[0].base_addr,
         static_cast<std::uint32_t>(pack_dst_format[output_id]));
@@ -75,7 +78,7 @@ inline bool should_reconfig_pack_in_data_format(const std::uint32_t old_output, 
 /**
  * Reprograms packer THCON IN_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
  */
-template <[[maybe_unused]] bool EN_32BIT_DEST>
+template <bool EN_32BIT_DEST /*maybe_unused*/>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     _llk_pack_reconfig_data_format_<p_pacr::PACK0>(pack_src_format[output_id], pack_dst_format[output_id]);
@@ -132,7 +135,8 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  * @brief Signals that the packer has finished consuming the current Destination Register section.
  * Posts to the math–pack semaphore and clears/zeros the dest bank(s) used by the packer;
  *
- * @tparam EN_32BIT_DEST True if math destination is in 32-bit mode, false for 16-bit mode.
+ * @tparam EN_32BIT_DEST True if math destination is in 32-bit mode, false for 16-bit mode. On the unpack-to-dest
+ * path it must equal DST_ACCUM_MODE (enforced by a static_assert), see the body.
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
@@ -141,9 +145,15 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
 template <bool EN_32BIT_DEST>
 inline void llk_pack_dest_section_done() {
     if constexpr (UnpackToDestEn) {
+        // The unpack side sizes its SyncHalf bank flip from DST_ACCUM_MODE (llk_unpack_A / llk_unpack_A_block). The two
+        // strides must agree or unpack and pack address different DEST halves, and the compute API lets callers
+        // override is_fp32_dest_acc_en (tile_regs_release, release_dst, tilize_block, ...), so pin it here.
+        static_assert(
+            EN_32BIT_DEST == DST_ACCUM_MODE,
+            "unpack-to-dest: EN_32BIT_DEST must equal DST_ACCUM_MODE, the stride the unpack side flips banks with");
         _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
         if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
-            _llk_sync_advance_dest_section_<ckernel::TRISC_ID, true /*EN_32BIT_DEST*/, p_stall::PACK0>();
+            _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::PACK0>();
         }
     } else {
         _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, EN_32BIT_DEST>();
@@ -151,13 +161,26 @@ inline void llk_pack_dest_section_done() {
 }
 
 /**
- * @brief Reset packer dest-bank parity to bank 0 at program start (pack-side mirror of llk_math_pack_sync_init).
+ * @brief Reset packer dest-bank parity to bank 0 at program start (pack-side mirror of llk_math_pack_sync_init and of
+ * the unpack-side reset in llk_unpack_hw_configure).
+ *
+ * In the unpack-to-dest path PACR addresses DEST via SEC{TRISC_ID}_Offset on the pack thread, and
+ * llk_pack_dest_section_done flips it per tile in SyncHalf. The bank-0 base is established here, once per program, and
+ * not in the per-op llk_pack_init: op inits may run inside a tile loop, and a reset there would desync pack from unpack.
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
  * compute APIs.
  */
-inline void llk_pack_dest_init() { _llk_pack_dest_init_<p_pacr::PACK0, DST_SYNC_MODE>(); }
+inline void llk_pack_dest_init() {
+    _llk_pack_dest_init_<p_pacr::PACK0, DST_SYNC_MODE>();
+
+    if constexpr (UnpackToDestEn) {
+        // _llk_pack_dest_init_ has just zeroed the bank offset, so this writes the bank-0 base. Unconditional on the
+        // sync mode, like the math-side SEC1 write, so a SyncFull program never inherits a SyncHalf predecessor's bank.
+        _set_dest_section_base_<ckernel::TRISC_ID>(_get_dest_buffer_base_());
+    }
+}
 
 /**
  * @brief Configure packer ReLU at runtime from a packed uint32.

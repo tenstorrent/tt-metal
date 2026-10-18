@@ -4,8 +4,8 @@
 
 // Chunked fused multiply + reduce-to-scalar LLK test (experimental, Blackhole only).
 //
-// This is the REVERTED "chunked" driver for mul_reduce_scalar (promotion strategy
-// §3, open-question #1). The non-chunked mul_reduce_scalar_tile caps num_tiles at
+// This is a legacy standalone chunked driver for mul_reduce_scalar.
+// The non-chunked mul_reduce_scalar_tile caps num_tiles at
 // the DEST half-sync capacity (8 bf16 / 4 fp32) because every multiply product must
 // be resident in DEST before the reduce phase consumes it. The chunked driver lifts
 // that cap by processing the tile stream in fixed-size chunks: for each chunk it runs
@@ -24,11 +24,12 @@
 //   sum(A). Only DEST element [0] is defined (REDUCE_SCALAR pack mask); every other
 //   lane is unspecified and MUST NOT be validated.
 //
-// KNOWN FAILURE (why this test is xfail): on silicon the chunked result comes out
-// ~5-30x too high. The suspected cause is the between-chunk DEST[0] restore: the
-// running scalar in DEST[0] is clobbered / double-counted when the next chunk's
-// multiply phase and clear/fill sequence re-touch DEST[0]. The test is written to
-// COMPILE cleanly for Blackhole; it is expected to FAIL numerically at runtime.
+// KNOWN FAILURE (why this test is xfail): this loop does not call the corrected
+// mul_reduce_scalar_chunked_tile in api/compute/experimental/rmsnorm.h. That API
+// clears reused product tiles while preserving a separate accumulator and restores
+// initialization between chunks. This driver does not implement that sequence and
+// remains expected to fail numerically. The compute-API fix is covered by
+// test_rmsnorm_chunked.cpp; test_rmsnorm_clear_product_tile.py covers the clear LLK.
 //
 // This expands the Compute API (api/compute/experimental/mul_reduce_scalar.h) into
 // its underlying _llk_* calls, wrapped in a per-chunk loop, so the kernel runs inside
@@ -153,9 +154,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
-    // The running scalar total accumulates across chunks in DEST[0]. On the FIRST
-    // chunk it is initialized to 0; on later chunks the between-reduces restore is
-    // where the reverted driver's ~5-30x error is believed to originate.
+    // This legacy loop attempts to retain its running scalar in DEST[0], unlike
+    // the corrected compute API, which reserves a separate accumulator tile.
     bool first_chunk = true;
 
     for (std::uint32_t base = 0; base < tile_cnt; base += chunk_size)
@@ -182,7 +182,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Step 4 - stage chunk tile 0 into SrcA, fill SrcB with the scaler, then set
         // up DEST[0]. On the first chunk DEST[0] is cleared to 0. On later chunks the
         // running total already lives in DEST[0] and must be preserved so this chunk
-        // accumulates onto it -- this between-reduces restore is the reverted step.
+        // accumulates onto it. This is the legacy sequence retained by the xfail.
         _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(DST_INDEX);
         _llk_math_eltwise_unary_sfpu_params_(
             ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, DST_INDEX, VectorMode::RC_custom, REDUCE_SCALER);

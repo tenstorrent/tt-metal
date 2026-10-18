@@ -816,11 +816,11 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
 
     KernelSpec k0 = make_worker(
         "reader",
-        ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         DFBEndpointType::PRODUCER);
     KernelSpec k1 = make_worker(
         "writer",
-        ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         DFBEndpointType::CONSUMER);
 
     // The borrowed DFB is only an address source (the kernel writes via get_write_ptr() + offset and

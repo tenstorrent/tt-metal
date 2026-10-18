@@ -6,27 +6,30 @@
 
 // DataflowBuffer (DFB) port of kernels/compute/eltwise_utils_sfpu.hpp (SFPU preprocess).
 //
-// Mechanically identical to the CircularBuffer helper, with the CB->DFB swap. SFPU variant: no
-// unpacker srca reconfigure here (the downstream binary SFPU op selects each operand before its
-// copy_tile loop). LLK operand ids come from DFBBindingToken's `operator uint32_t()`.
+// The same SrcA switch/restore contract as the descriptor helper. The helper takes the kernel's DataflowBuffer
+// objects and reads each operand id with get_id().
 
 #include "api/compute/common.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "eltwise_format_reference_dfb.hpp"
 
-template <typename ActivationFn>
+template <typename ActivationFn, typename DFBPre, typename DFBPost>
 ALWI void preprocess_sfpu_impl_dfb(
-    uint32_t dfb_pre_id,
-    uint32_t dfb_post_id,
+    DFBPre& dfb_pre,
+    DFBPost& dfb_post,
     uint32_t dfb_out_id,
     uint32_t per_core_block_size,
     ActivationFn&& process_activations) {
     using namespace ckernel;
 
-    DataflowBuffer dfb_pre(dfb_pre_id);
-    DataflowBuffer dfb_post(dfb_post_id);
+    // dfb_pre and dfb_post are the kernel's own objects. An object built here would drain when it returns and
+    // wait for tiles that only this thread pops later.
+    const uint32_t dfb_pre_id = dfb_pre.get_id();
+    const uint32_t dfb_post_id = dfb_post.get_id();
 
+    reconfig_data_format_srca(/*old*/ QSR_BINARY_SRCA_FORMAT_DFB, /*new*/ dfb_pre_id);
     pack_reconfig_data_format(/*old*/ dfb_out_id, /*new*/ dfb_post_id);
 #ifdef ARCH_QUASAR
     // On Quasar pack_reconfig_data_format only reprograms the packer format gasket, not the packer
@@ -55,6 +58,7 @@ ALWI void preprocess_sfpu_impl_dfb(
     dfb_pre.pop_front(per_core_block_size);
     dfb_post.push_back(per_core_block_size);
 
+    reconfig_data_format_srca(/*old*/ dfb_pre_id, /*new*/ QSR_BINARY_SRCA_FORMAT_DFB);
     pack_reconfig_data_format(/*old*/ dfb_post_id, /*new*/ dfb_out_id);
 #ifdef ARCH_QUASAR
     pack_init(dfb_out_id);  // restore the packer destination ring to dfb_out (see above)

@@ -43,30 +43,7 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     const DataFormat srca_format = static_cast<DataFormat>(unpack_dst_format[srca_operand_id]);
     const DataFormat srcb_format = static_cast<DataFormat>(unpack_dst_format[srcb_operand_id]);
 
-    // TODO: AM; introduce dest mode enum, issue #37483
-    // Determine the dest format based on the srcA/B formats and EN_32BIT_DEST_FORMAT
-    if (EN_32BIT_DEST_FORMAT && _is_src_fmt_fp32_dest_compatible_(srca_format) &&
-        _is_src_fmt_fp32_dest_compatible_(srcb_format)) {
-        // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
-        _llk_math_srcAB_hw_configure_<
-            false /*EN_IMPLIED_MATH_FORMAT*/,
-            true /*EN_FP32_DEST_FORMAT*/,
-            false /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
-    } else if (
-        EN_32BIT_DEST_FORMAT && _is_src_fmt_int32_dest_compatible_(srca_format) &&
-        _is_src_fmt_int32_dest_compatible_(srcb_format)) {
-        // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
-        _llk_math_srcAB_hw_configure_<
-            false /*EN_IMPLIED_MATH_FORMAT*/,
-            false /*EN_FP32_DEST_FORMAT*/,
-            true /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
-    } else {
-        // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
-        _llk_math_srcAB_hw_configure_<
-            false /*EN_IMPLIED_MATH_FORMAT*/,
-            false /*EN_FP32_DEST_FORMAT*/,
-            false /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
-    }
+    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, EN_32BIT_DEST_FORMAT>(srca_format, srcb_format);
 }
 
 inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}
@@ -126,13 +103,14 @@ inline void llk_math_wait_for_dest_available() {
     if constexpr (UnpackToDestEn) {
         _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(
             semaphore::UNPACK_MATH);
-        _llk_sync_get_(semaphore::UNPACK_MATH);
+        // The UNPACK_MATH get is in llk_math_dest_section_done: the tile stays counted until MATH_PACK holds it.
     }
 }
 
 /**
  * @brief Signals that the current destination section is done.
- * After math is done, posts to the MATH_PACK semaphore so the packer can proceed;
+ * After math is done, posts to the MATH_PACK semaphore so the packer can proceed; on the unpack-to-dest path it then
+ * gets UNPACK_MATH, releasing the unpacker's count for this section.
  * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
@@ -144,6 +122,12 @@ inline void llk_math_dest_section_done() {
     // Always post MATH_PACK, the math thread is in the chain for every op, including the
     // no-real-work unpack-to-dest forwarder.
     _llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
+    if constexpr (UnpackToDestEn) {
+        // Release the unpacker's count for this section. This comes after the MATH_PACK post on purpose: the section
+        // is then always held by one of the two semaphores, from the unpacker's write until pack releases it.
+        // No stall before the get: the post above already waited for MATH and SFPU, and nothing ran in between.
+        _llk_sync_get_(semaphore::UNPACK_MATH);
+    }
     if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
         _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
     }
@@ -169,27 +153,27 @@ inline void llk_math_pack_sync_init() {
 // Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.
 // The wrappers below are intentionally empty no-ops, kept so reconfig_data_format.h
 // can issue MATH((...)) uniformly across arches.
-template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format_srca(const std::uint32_t /*srca_new_operand*/) {}
 
-template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format_srcb(const std::uint32_t /*srcb_new_operand*/) {}
 
-template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format(
     const std::uint32_t /*srca_new_operand*/, const std::uint32_t /*srcb_new_operand*/) {}
 
-template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format(
     const std::uint32_t /*srca_old_operand*/,
     const std::uint32_t /*srca_new_operand*/,
     const std::uint32_t /*srcb_old_operand*/,
     const std::uint32_t /*srcb_new_operand*/) {}
 
-template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format_srca(
     const std::uint32_t /*srca_old_operand*/, const std::uint32_t /*srca_new_operand*/) {}
 
-template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format_srcb(
     const std::uint32_t /*srcb_old_operand*/, const std::uint32_t /*srcb_new_operand*/) {}

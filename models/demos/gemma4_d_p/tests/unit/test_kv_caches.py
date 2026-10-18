@@ -16,28 +16,28 @@ def test_external_cache_allocation_preserves_semantic_layer_order(monkeypatch):
     )
     monkeypatch.setattr(
         kv_caches,
-        "init_packed_ring_kv_cache",
+        "init_global_ring_kv_cache",
         lambda *args, **kwargs: calls.append(("global", args, kwargs)) or "global-cache",
     )
     monkeypatch.setattr(
         kv_caches,
-        "init_ring_kv_cache",
+        "init_sliding_ring_kv_cache",
         lambda *args, **kwargs: calls.append(("sliding", args, kwargs)) or "sliding-cache",
     )
     hf = SimpleNamespace(
         num_hidden_layers=3,
         layer_types=["sliding_attention", "full_attention", "sliding_attention"],
     )
-    mesh_config = SimpleNamespace(prefill=SimpleNamespace(sp=8), tp=4)
+    mesh_config = SimpleNamespace(device=object(), cp_degree=8, tp_degree=4)
 
-    result = kv_caches.allocate_ring_kv_caches(object(), hf, mesh_config, num_users=8, max_seq_len=262144)
+    result = kv_caches.allocate_ring_kv_caches(mesh_config, hf, num_users=8, max_seq_len=262144)
 
     assert result.layers == ["sliding-cache", "global-cache", "sliding-cache"]
     assert result.global_layers == (1,)
     assert result.sliding_layers == (0, 2)
     assert [call[0] for call in calls] == ["sliding", "global", "sliding"]
-    assert calls[0][1][2:] == (4, 256, 262144)
-    assert calls[1][1][2:] == (1, 262144)
+    assert calls[0][1][1:] == (4, 256, 262144)
+    assert calls[1][1][1:] == (1, 262144)
     assert all(call[2]["num_users"] == 8 for call in calls)
 
 
@@ -48,7 +48,7 @@ def test_chunk_locations_match_user_head_major_nd_shards():
         iter_cache_chunk_locations(
             seq_len=1024,
             chunk_size=256,
-            sp=2,
+            cp=2,
             num_users=2,
             heads_per_device=4,
             local_head=3,

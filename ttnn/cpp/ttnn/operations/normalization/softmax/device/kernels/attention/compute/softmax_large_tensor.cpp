@@ -343,7 +343,6 @@ void kernel_main() {
     constexpr auto dfb_out0 = dfb::out0;
     constexpr auto dfb_x = dfb::x;
     constexpr auto dfb_recip = dfb::recip;
-    constexpr auto dfb_prev_max = dfb::prev_max;
     constexpr auto dfb_mask_padded = dfb::mask_padded;
 #ifdef FUSED_SCALE_MASK
     // fused_scale/fused_attn/scale_mask are bound only on the fused scale-mask path.
@@ -372,6 +371,9 @@ void kernel_main() {
     // Ping-pong reduce outputs: odd num_dfb_passes -> dfb_max/dfb_sumexps, even -> dfb_prev_max/dfb_prev_reduce
 #ifdef NUMERIC_STABLE
     constexpr auto dfb_max = dfb::max;
+    // dfb_prev_max is only ever referenced on this numeric-stable path (both here and in the
+    // reduce_dfb_pass<> calls below), so it is scoped to this #ifdef along with dfb_max.
+    constexpr auto dfb_prev_max = dfb::prev_max;
     const std::uint32_t dfb_max_final = ((num_dfb_passes & 1) != 0) ? static_cast<std::uint32_t>(dfb_max) : static_cast<std::uint32_t>(dfb_prev_max);
 #else
     // dfb_max is only consumed on the numeric-stable path; exp_cb ignores its dfb_max argument otherwise. Bind
@@ -503,8 +505,14 @@ void kernel_main() {
 
         DataflowBuffer(static_cast<uint16_t>(dfb_sum_final)).pop_front(1);
 
-        recip_tile_init();
-        recip_tile(dst0);
+        // Preserve the FP32 row sum's precision in its reciprocal, independently of exp approximation.
+        if constexpr (DST_ACCUM_MODE) {
+            recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
+            recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(dst0);
+        } else {
+            recip_tile_init();
+            recip_tile(dst0);
+        }
 
         tile_regs_commit();
         tile_regs_wait();
@@ -564,5 +572,17 @@ void kernel_main() {
         DataflowBuffer(static_cast<uint16_t>(dfb_max_final)).pop_front(1);
 #endif
     }
-    dfb_mask_padded_obj.pop_front(1);
+    // The writer generates and pushes the padding mask only when there is padding to mask, and
+    // the masking passes above wait it under the same condition, so the pop carries it too.
+    if (mask_padded_data) {
+        dfb_mask_padded_obj.pop_front(1);
+    }
+
+    // The reduce scalers are pushed once by the reader and read by every pass over the row, so they
+    // are waited once up front rather than per pass. Pop them here to balance the buffers.
+    dfb_max_scaler_obj.pop_front(1);
+    dfb_sum_scaler_obj.pop_front(1);
+#ifdef FUSED_SCALE_MASK
+    dfb_fused_scale_obj.pop_front(1);
+#endif
 }  // MAIN

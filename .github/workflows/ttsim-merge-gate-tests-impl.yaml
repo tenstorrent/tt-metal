@@ -66,25 +66,14 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          # 15 = the merge-gate per-test ceiling; this pipeline must stay under the
-          # workflow's 15-min end-to-end requirement.
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "merge_gate" \
-            --max-per-test-timeout 15
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "ALL_SKUS_IN_TESTS" \
-            ./.github/sku_config.yaml \
-            --event "${{ github.event_name }}"
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "ALL_SKUS_IN_TESTS"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
 
   # Fetch ttsim simulator binaries once; only needed when the matrix has sim_* SKUs.
   fetch-ttsim:

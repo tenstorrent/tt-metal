@@ -33,7 +33,6 @@ public:
 
     void abort(int error_code) const override;
 
-    /* --------------- the rest of the methods are unsupported and throw --------- */
     void barrier() const override;
 
     /* ---------------- point‑to‑point ------------------- */

@@ -13,10 +13,10 @@ from helpers.golden_generators import (
     quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
+    BlocksCalculationAlgorithm,
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     PerfRunType,
     Transpose,
     UnpackerEngine,
@@ -24,7 +24,8 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     generate_perf_input_dimensions,
-    generate_unary_input_dimensions,
+    generate_reduced_input_dimensions,
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
     runtime,
@@ -39,11 +40,12 @@ from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
+    NUM_BLOCKS,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
@@ -143,7 +145,7 @@ def generate_unpack_unary_operand_combinations(
                                     dest_acc, dest_sync, tile_shape
                                 )
                                 if is_perf
-                                else generate_unary_input_dimensions(
+                                else generate_reduced_input_dimensions(
                                     dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
                                 )
                             )
@@ -155,7 +157,7 @@ def generate_unpack_unary_operand_combinations(
                                         dest_sync,
                                         transpose_en,
                                         unpacker_sel,
-                                        dimensions,
+                                        runtime(dimensions),
                                         runtime(tile_dims),
                                     )
                                 )
@@ -168,6 +170,8 @@ UNPACK_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
         DataFormat.MxFp4,
         DataFormat.MxInt8,
         DataFormat.MxInt4,
@@ -220,6 +224,15 @@ def test_unpack_unary_operand_quasar(
 
     num_faces = tile_shape.total_num_faces()
 
+    num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync_mode,
+        dest_acc,
+        formats,
+        input_dimensions,
+        tile_dimensions,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
     golden_src = (
         src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
     )  # use A for UnpA and UnpDest
@@ -270,7 +283,6 @@ def test_unpack_unary_operand_quasar(
         "test_name": "sources/quasar/unpack_unary_operand_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             UNPACKER_ENGINE_SEL(unpacker_sel),
             DATA_COPY_TYPE(
                 DataCopyType.B2D
@@ -290,6 +302,8 @@ def test_unpack_unary_operand_quasar(
             TEST_FACE_DIMS(tile_shape.face_r_dim),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(tiles_in_block),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             LOOP_FACTOR(loop_factor),
@@ -312,7 +326,6 @@ def test_unpack_unary_operand_quasar(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         "dest_acc": dest_acc,
-        "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
     configuration = create_test_or_perf_config(

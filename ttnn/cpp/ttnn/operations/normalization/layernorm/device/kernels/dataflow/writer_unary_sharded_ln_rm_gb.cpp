@@ -8,6 +8,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
+#include "ttnn/operations/kernel_helper_functions/local_l1_copy.hpp"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "reshard_writer.hpp"
@@ -94,7 +95,9 @@ void kernel_main() {
         constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
 
-        const UnicastEndpoint local_ep;
+#ifndef ARCH_QUASAR
+        const UnicastEndpoint local_ep;  // Gen1 loopback source; Quasar copies with the RISC below
+#endif
         dfb_gamma_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             const uint32_t tile_id = width_shard_tile_start_id + w;
@@ -105,6 +108,15 @@ void kernel_main() {
                 {.page_id = tile_id},
                 {.offset_bytes = w * gamma_tile_bytes});
             noc.async_read_barrier();
+#ifdef ARCH_QUASAR
+            // Relocate the second half-row into face 1 with a scalar copy: already resident from the
+            // barriered DRAM read above (see local_l1_copy).
+            {
+                const uint32_t base = dfb_gamma_obj.get_write_ptr() + (w * gamma_tile_bytes);
+                local_l1_copy(
+                    base + mask_read_tile_offset_bytes, base + mask_read_tile_face_bytes, mask_read_tile_face_bytes);
+            }
+#else
             noc.async_read(
                 local_ep,
                 dfb_gamma_obj,
@@ -113,6 +125,7 @@ void kernel_main() {
                  .noc_y = my_y[noc.get_noc_id()],
                  .addr = dfb_gamma_obj.get_write_ptr() + (w * gamma_tile_bytes) + mask_read_tile_face_bytes},
                 {.offset_bytes = (w * gamma_tile_bytes) + mask_read_tile_offset_bytes});
+#endif
         }
         noc.async_read_barrier();
         dfb_gamma_obj.push_back(block_w);
@@ -127,7 +140,9 @@ void kernel_main() {
         const uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_BETA ? 64 : 32;
         const uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_BETA ? 1024 : 512;
 
-        const UnicastEndpoint local_ep;
+#ifndef ARCH_QUASAR
+        const UnicastEndpoint local_ep;  // Gen1 loopback source; Quasar copies with the RISC below
+#endif
         dfb_beta_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             const uint32_t tile_id = width_shard_tile_start_id + w;
@@ -138,6 +153,15 @@ void kernel_main() {
                 {.page_id = tile_id},
                 {.offset_bytes = w * beta_tile_bytes});
             noc.async_read_barrier();
+#ifdef ARCH_QUASAR
+            // Relocate the second half-row into face 1 with a scalar copy: already resident from the
+            // barriered DRAM read above (see local_l1_copy).
+            {
+                const uint32_t base = dfb_beta_obj.get_write_ptr() + (w * beta_tile_bytes);
+                local_l1_copy(
+                    base + mask_read_tile_offset_bytes, base + mask_read_tile_face_bytes, mask_read_tile_face_bytes);
+            }
+#else
             noc.async_read(
                 local_ep,
                 dfb_beta_obj,
@@ -146,6 +170,7 @@ void kernel_main() {
                  .noc_y = my_y[noc.get_noc_id()],
                  .addr = dfb_beta_obj.get_write_ptr() + (w * beta_tile_bytes) + mask_read_tile_face_bytes},
                 {.offset_bytes = (w * beta_tile_bytes) + mask_read_tile_offset_bytes});
+#endif
         }
         noc.async_read_barrier();
         dfb_beta_obj.push_back(block_w);

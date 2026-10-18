@@ -13,7 +13,7 @@
 void kernel_main() {
     const uint32_t num_tiles = get_arg(args::num_tiles);
     const uint32_t start_id = get_arg(args::start_id);
-    constexpr auto scaler_bits = get_arg(args::scaler_bits);
+    const auto scaler_bits = get_arg(args::scaler_bits);
     constexpr uint32_t tiles_per_batch = get_arg(args::tiles_per_batch);
 
     const float scaler_f = __builtin_bit_cast(float, scaler_bits);

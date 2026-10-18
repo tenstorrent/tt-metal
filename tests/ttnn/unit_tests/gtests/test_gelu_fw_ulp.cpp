@@ -6,7 +6,7 @@
  * GELU Forward ULP Precision Tests
  *
  * This test file validates the accuracy of ttnn::gelu (forward) across
- * the entire BFloat16 range using the same methodology as test_gelu_bw_ulp.cpp.
+ * the entire BFloat16 range using the same exhaustive-BFloat16 methodology.
  *
  * MATHEMATICAL FORMULA:
  * GELU(x) = x * Phi(x) = x * 0.5 * (1 + erf(x / sqrt(2)))
@@ -52,7 +52,7 @@
 namespace ttnn::test {
 
 // =============================================================================
-// BFloat16 ULP Calculator (shared with test_gelu_bw_ulp.cpp)
+// BFloat16 ULP Calculator
 // =============================================================================
 
 namespace bf16_ulp_fw {

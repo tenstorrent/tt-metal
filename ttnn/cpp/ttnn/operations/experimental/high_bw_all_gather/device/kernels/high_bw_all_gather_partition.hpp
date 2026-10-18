@@ -24,8 +24,8 @@
 
 namespace ttnn::operations::experimental::high_bw_all_gather::partition {
 
-inline constexpr uint32_t part_min(uint32_t a, uint32_t b) { return a < b ? a : b; }
-inline constexpr uint32_t part_max(uint32_t a, uint32_t b) { return a > b ? a : b; }
+constexpr uint32_t part_min(uint32_t a, uint32_t b) { return a < b ? a : b; }
+constexpr uint32_t part_max(uint32_t a, uint32_t b) { return a > b ? a : b; }
 
 // Active source pages for a given gathered extent, counted in whole block-cyclic SLABS.
 //
@@ -34,8 +34,7 @@ inline constexpr uint32_t part_max(uint32_t a, uint32_t b) { return a > b ? a : 
 // fractional and a row-based multiply cannot be exact. Every extent this op is ever asked for is a whole
 // number of slabs (gathered_dim_size_for_prefix rounds up to one), so `pages_per_slab` -- the worst-case
 // page count divided by the slab count -- is an integer for both layouts and the multiply stays exact.
-inline constexpr uint32_t active_num_input_pages(
-    uint32_t gathered_dim_size, uint32_t slab_global, uint32_t pages_per_slab) {
+constexpr uint32_t active_num_input_pages(uint32_t gathered_dim_size, uint32_t slab_global, uint32_t pages_per_slab) {
     if (slab_global == 0) {
         return 0;
     }
@@ -45,7 +44,7 @@ inline constexpr uint32_t active_num_input_pages(
 // Round a populated prefix up to whole block-cyclic slabs and clamp to the full extent. This is the
 // caller-side derivation of `gathered_dim_size` itself: block-cyclic storage is only meaningful in
 // complete slabs, and the gather must never claim more than the allocation.
-inline constexpr uint32_t gathered_dim_size_for_prefix(
+constexpr uint32_t gathered_dim_size_for_prefix(
     uint32_t populated_global, uint32_t slab_global, uint32_t full_gathered_dim_size) {
     if (slab_global == 0) {
         return full_gathered_dim_size;
@@ -61,8 +60,7 @@ struct WorkerPageRange {
     uint32_t input_page_end;
     uint32_t page_count;
 };
-inline constexpr WorkerPageRange even_worker_page_range(
-    uint32_t num_input_pages, uint32_t total_slices, uint32_t slice_idx) {
+constexpr WorkerPageRange even_worker_page_range(uint32_t num_input_pages, uint32_t total_slices, uint32_t slice_idx) {
     if (total_slices == 0) {
         return {0, 0, 0};
     }
@@ -75,7 +73,7 @@ inline constexpr WorkerPageRange even_worker_page_range(
 
 // data_valid semaphore granularity in CB pages. Must match on both sides of the protocol: the reader
 // waits on it and the writer signals in these units.
-inline constexpr uint32_t data_valid_granularity_pages(
+constexpr uint32_t data_valid_granularity_pages(
     uint32_t input_page_size,
     uint32_t output_chunk_size,
     uint32_t num_output_chunks,
@@ -100,7 +98,7 @@ struct BankOwnedPageRange {
     uint32_t page_count;
     bool valid;
 };
-inline constexpr BankOwnedPageRange bank_owned_page_range(
+constexpr BankOwnedPageRange bank_owned_page_range(
     uint32_t num_input_pages,
     uint32_t num_links,
     uint32_t workers_per_direction,
@@ -155,7 +153,7 @@ struct WorkerSchedule {
     uint32_t total_chunks;
     uint32_t data_valid_granularity;
 };
-inline constexpr WorkerSchedule worker_schedule(
+constexpr WorkerSchedule worker_schedule(
     uint32_t num_input_pages,
     uint32_t split_factor,
     uint32_t total_slices,

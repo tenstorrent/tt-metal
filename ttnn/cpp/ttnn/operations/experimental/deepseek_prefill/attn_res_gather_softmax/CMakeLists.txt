@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_attn_res_gather_softmax
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_attn_res_gather_softmax REUSE_FROM TTNN::PCHFull)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_attn_res_gather_softmax TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_attn_res_gather_softmax)
 
 set_target_properties(

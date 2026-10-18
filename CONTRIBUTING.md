@@ -50,8 +50,13 @@ Thank you for your interest in this project.
 If you are interested in making a contribution, then please familiarize
 yourself with our technical contribution standards as set forth in this guide.
 
-[Fork the repo](https://github.com/tenstorrent/tt-metal/fork) and submit your
-pull request from your personal fork.
+External contributors without repository write access should
+[fork the repo](https://github.com/tenstorrent/tt-metal/fork) and submit pull
+requests from their personal fork.
+
+Contributors with write access should create branches directly in this
+repository and submit pull requests from those branches so repository workflows
+can run against them.
 
 All contributions require:
 - an issue
@@ -160,6 +165,9 @@ them first.
 Exceptions are rare and must be justified. When in doubt, split the PR.
 
 ### Code reviews
+
+For changes to the Metalium host API, follow the
+[API review policy and validation guide](scripts/validate_api/README.md).
 
 - A PR must be opened for any code change with the following criteria:
   - Be approved, by a maintaining team member and any codeowners whose modules

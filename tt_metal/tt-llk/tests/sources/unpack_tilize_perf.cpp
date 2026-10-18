@@ -65,32 +65,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
-            return;
-        }
-
-        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-        {
-            for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                const std::uint32_t tile_row_addr = L1_ADDRESS(src + (i % 8) * 0x1000); // TODO SS<-LP use PERF_ADDRESS here
-                for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
+                for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
                 {
-                    _llk_unpack_tilize_wrapper_(
-                        tile_row_addr,
-                        j,
-                        formats.unpack_A_src,
-                        formats.unpack_A_dst,
-                        0 /* block_ct_dim */,
-                        FACE_R_DIM,
-                        4 /* num_faces */,
-                        false /* narrow_tile */);
+                    const std::uint32_t tile_row_addr = L1_ADDRESS(src + (i % 8) * 0x1000); // TODO SS<-LP use PERF_ADDRESS here
+                    for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
+                    {
+                        _llk_unpack_tilize_wrapper_(
+                            tile_row_addr,
+                            j,
+                            formats.unpack_A_src,
+                            formats.unpack_A_dst,
+                            0 /* block_ct_dim */,
+                            FACE_R_DIM,
+                            4 /* num_faces */,
+                            false /* narrow_tile */);
+                    }
                 }
             }
         }
         PROFILER_SYNC();
     }
+    _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst);
 }
 
 #endif

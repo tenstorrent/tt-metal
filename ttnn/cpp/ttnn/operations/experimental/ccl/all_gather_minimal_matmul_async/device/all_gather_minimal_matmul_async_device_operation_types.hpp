@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <utility>
+
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -78,8 +80,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         bool fuse_swiglu = false,
         std::vector<uint32_t> chunk_sizes = {}) :
         config(config),
-        fused_activation(fused_activation),
-        output_mem_config(output_mem_config),
+        fused_activation(std::move(fused_activation)),
+        output_mem_config(std::move(output_mem_config)),
         output_dtype(output_dtype),
         compute_kernel_config(compute_kernel_config),
         num_links(num_links),
@@ -120,7 +122,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         "fsdp_cluster_axis",
         "fsdp_ring_size",
         "using_persistent_weight_buffer",
-        "fuse_swiglu");
+        "fuse_swiglu",
+        // Selects DST_SYNC_MODE and the other compile-time compute settings.
+        "compute_kernel_config");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -139,7 +143,8 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->fsdp_cluster_axis,
             this->fsdp_ring_size,
             this->using_persistent_weight_buffer,
-            this->fuse_swiglu);
+            this->fuse_swiglu,
+            this->compute_kernel_config);
     }
 };
 

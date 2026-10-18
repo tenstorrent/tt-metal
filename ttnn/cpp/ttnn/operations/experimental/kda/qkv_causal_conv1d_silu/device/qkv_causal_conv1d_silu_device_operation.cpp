@@ -5,6 +5,7 @@
 
 #include <array>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -24,6 +25,11 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace kda_factory_detail;
     constexpr std::string_view operation_name = "qkv_causal_conv1d_silu";
+    kda_factory_detail::check_actual_start(in.input, in.actual_start, operation_name);
+    kda_factory_detail::check_allocated_device_tensor(in.predecessor_carry, operation_name, "predecessor_carry");
+    kda_factory_detail::check_same_device(in.input, in.predecessor_carry, operation_name, "predecessor_carry");
+    TT_FATAL(in.predecessor_carry.tensor_spec() == in.history.tensor_spec(), "qkv convolution: carries must match");
+
     check_allocated_device_tensor(in.input, operation_name, "input");
     check_layout(in.input, Layout::ROW_MAJOR, operation_name, "input");
     check_dtype(in.input, DataType::BFLOAT16, operation_name, "input");
@@ -72,6 +78,19 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     TT_FATAL(
         channels % attrs.channel_chunk_size == 0,
         "qkv_causal_conv1d_silu: channel_chunk_size must divide Q+K+V width exactly");
+    const auto* mesh = in.input.device();
+    const uint64_t required_l1_bytes = qkv_causal_conv1d_silu_l1_bytes(
+        attrs.channel_chunk_size / tt::constants::TILE_WIDTH,
+        tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(in.input.dtype())),
+        in.input.element_size());
+    const uint64_t available_l1_bytes =
+        mesh->l1_size_per_core() - mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    TT_FATAL(
+        required_l1_bytes <= available_l1_bytes,
+        "qkv_causal_conv1d_silu: channel_chunk_size = {} needs {} bytes of L1 per core, only {} are available",
+        attrs.channel_chunk_size,
+        required_l1_bytes,
+        available_l1_bytes);
 
     const auto& input_shape = in.input.logical_shape();
     const auto& history_shape = in.history.logical_shape();
@@ -85,7 +104,6 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     TT_FATAL(
         attrs.sequence > 0 && attrs.sequence % tt::constants::TILE_HEIGHT == 0,
         "qkv_causal_conv1d_silu: sequence must be positive and tile aligned");
-
     for (const auto& [tensor, name] : std::array{
              std::pair{&in.tap0, "tap0"},
              std::pair{&in.tap1, "tap1"},
@@ -151,7 +169,10 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     uint32_t v_width,
     uint32_t channel_chunk_size,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const Tensor& actual_start,
+    uint32_t sequence_parallel_axis,
+    const Tensor& predecessor_carry) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V]");
     return ttnn::device_operation::launch<QkvCausalConv1dSiluOperation>(
@@ -161,10 +182,18 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
             .k_width = k_width,
             .v_width = v_width,
             .channel_chunk_size = channel_chunk_size,
+            .sequence_parallel_axis = sequence_parallel_axis,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         QkvCausalConv1dSiluInputs{
-            .input = input, .history = history, .tap0 = tap0, .tap1 = tap1, .tap2 = tap2, .tap3 = tap3});
+            .input = input,
+            .history = history,
+            .tap0 = tap0,
+            .tap1 = tap1,
+            .tap2 = tap2,
+            .tap3 = tap3,
+            .actual_start = actual_start,
+            .predecessor_carry = predecessor_carry});
 }
 
 }  // namespace ttnn::experimental::prim

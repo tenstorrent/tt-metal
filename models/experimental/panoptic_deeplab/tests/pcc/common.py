@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+
 import torch
+import torch.nn.functional as F
 import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc
 from loguru import logger
@@ -23,6 +26,47 @@ def get_abs_and_relative_error(tensor_a, tensor_b):
 
 def check_with_tolerance(abs_err, rel_err, exp_abs_err, exp_rel_err):
     return abs_err <= exp_abs_err and rel_err <= exp_rel_err
+
+
+def _host_bf16_conv_has_onednn_kernels():
+    """Return whether this CPU has oneDNN bf16 kernels (else PyTorch's naive bf16 conv2d runs)."""
+    try:
+        return bool(torch.ops.mkldnn._is_mkldnn_bf16_supported())
+    except (AttributeError, RuntimeError):
+        return True
+
+
+@contextlib.contextmanager
+def bf16_conv_via_fp32():
+    """On hosts without oneDNN bf16 kernels, run the reference's bf16 conv2d through the fp32 kernel.
+
+    PyTorch's bf16 conv2d on such CPUs takes the naive fallback: the ASPP reference alone ran
+    5 min on the 2026-09-12 and 2026-09-16 P150 runners (0.13 s on the others) and timed out
+    the 8-minute unit job. Inside the context, F.conv2d on bf16 inputs runs the fp32 kernel on
+    the same bf16-valued weights and rounds the result to bf16 once, which is the arithmetic of
+    the bf16 kernel (fp32 accumulation, bf16 output). Hosts with oneDNN bf16 kernels are left
+    untouched: the tolerance gates measure a relative error over near-zero bf16 activations, and
+    any change of accumulation order moves it (res3 0.60 vs 0.78 between two hosts with the
+    emulation on, 0.51 on the reference host), so the emulation is only for hosts that would
+    otherwise not finish.
+    """
+    if _host_bf16_conv_has_onednn_kernels():
+        yield
+        return
+    logger.warning("host bf16 conv2d has no oneDNN kernels on this CPU; routing it through the fp32 kernel")
+    orig = F.conv2d
+
+    def conv2d(input, weight, bias=None, *args, **kwargs):
+        if input.dtype != torch.bfloat16:
+            return orig(input, weight, bias, *args, **kwargs)
+        out = orig(input.float(), weight.float(), None if bias is None else bias.float(), *args, **kwargs)
+        return out.to(torch.bfloat16)
+
+    F.conv2d = conv2d
+    try:
+        yield
+    finally:
+        F.conv2d = orig
 
 
 def check_ttnn_output(

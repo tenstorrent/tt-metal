@@ -1,41 +1,48 @@
 transaction_sizes: [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]
-num_entries: 740
+num_entries: 820
 entries:
   - key:
       num_subordinates: 0
+      noc_index: 1
       pattern: 0
     latencies: [293, 301, 301, 309, 333, 366, 437, 581, 880, 1453, 2589]
   - key:
       num_subordinates: 0
       stateful: true
+      noc_index: 1
       pattern: 0
     latencies: [302, 310, 310, 326, 342, 375, 446, 590, 881, 1453, 2605]
   - key:
       num_subordinates: 0
       same_axis: true
+      noc_index: 1
       pattern: 0
     latencies: [205, 213, 213, 221, 245, 286, 357, 493, 792, 1381, 2525]
   - key:
       num_subordinates: 0
       same_axis: true
       stateful: true
+      noc_index: 1
       pattern: 0
     latencies: [214, 214, 222, 230, 246, 287, 366, 510, 801, 1373, 2517]
   - key:
       num_transactions: 4
       num_subordinates: 0
+      noc_index: 1
       pattern: 0
     latencies: [359, 359, 359, 375, 447, 592, 887, 1439, 2588, 4889, 9456]
   - key:
       num_transactions: 4
       num_subordinates: 0
       stateful: true
+      noc_index: 1
       pattern: 0
     latencies: [364, 363, 363, 379, 451, 596, 883, 1443, 2603, 4884, 9444]
   - key:
       num_transactions: 4
       num_subordinates: 0
       same_axis: true
+      noc_index: 1
       pattern: 0
     latencies: [263, 271, 271, 279, 359, 496, 792, 1375, 2509, 4800, 9352]
   - key:
@@ -43,23 +50,27 @@ entries:
       num_subordinates: 0
       same_axis: true
       stateful: true
+      noc_index: 1
       pattern: 0
     latencies: [267, 275, 275, 292, 371, 508, 795, 1372, 2522, 4836, 9381]
   - key:
       num_transactions: 16
       num_subordinates: 0
+      noc_index: 1
       pattern: 0
     latencies: [587, 587, 587, 603, 899, 1460, 2611, 4883, 9436, 18732, 36836]
   - key:
       num_transactions: 16
       num_subordinates: 0
       stateful: true
+      noc_index: 1
       pattern: 0
     latencies: [571, 572, 571, 611, 899, 1468, 2603, 4875, 9438, 18518, 36902]
   - key:
       num_transactions: 16
       num_subordinates: 0
       same_axis: true
+      noc_index: 1
       pattern: 0
     latencies: [491, 499, 499, 515, 811, 1372, 2523, 4803, 9372, 18676, 36804]
   - key:
@@ -67,23 +78,27 @@ entries:
       num_subordinates: 0
       same_axis: true
       stateful: true
+      noc_index: 1
       pattern: 0
     latencies: [475, 484, 483, 523, 819, 1388, 2523, 4803, 9382, 18542, 36759]
   - key:
       num_transactions: 64
       num_subordinates: 0
+      noc_index: 1
       pattern: 0
     latencies: [1874, 1874, 1874, 1890, 2666, 4939, 9474, 18594, 36836, 73772, 146612]
   - key:
       num_transactions: 64
       num_subordinates: 0
       stateful: true
+      noc_index: 1
       pattern: 0
     latencies: [1403, 1403, 1403, 1531, 2676, 4940, 9483, 18691, 36846, 73998, 146406]
   - key:
       num_transactions: 64
       num_subordinates: 0
       same_axis: true
+      noc_index: 1
       pattern: 0
     latencies: [1778, 1786, 1786, 1794, 2586, 4859, 9394, 18522, 36796, 73462, 146300]
   - key:
@@ -91,23 +106,27 @@ entries:
       num_subordinates: 0
       same_axis: true
       stateful: true
+      noc_index: 1
       pattern: 0
     latencies: [1307, 1315, 1315, 1451, 2595, 4860, 9403, 18611, 36790, 73970, 146326]
   - key:
       num_transactions: 256
       num_subordinates: 0
+      noc_index: 1
       pattern: 0
     latencies: [6674, 6674, 6674, 6690, 9770, 18803, 36994, 73634, 146414, 295390, 584620]
   - key:
       num_transactions: 256
       num_subordinates: 0
       stateful: true
+      noc_index: 1
       pattern: 0
     latencies: [4731, 4731, 4731, 5171, 9779, 18828, 37003, 73515, 146414, 293288, 584639]
   - key:
       num_transactions: 256
       num_subordinates: 0
       same_axis: true
+      noc_index: 1
       pattern: 0
     latencies: [6579, 6586, 6586, 6594, 9698, 18723, 36922, 73554, 146322, 295318, 584548]
   - key:
@@ -115,22 +134,26 @@ entries:
       num_subordinates: 0
       same_axis: true
       stateful: true
+      noc_index: 1
       pattern: 0
     latencies: [4635, 4643, 4643, 5083, 9699, 18758, 36935, 73422, 146302, 293178, 585416]
   - key:
       num_subordinates: 0
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [373, 393, 372, 379, 388, 414, 439, 510, 636, 916, 1457]
   - key:
       num_subordinates: 0
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [402, 383, 407, 388, 396, 417, 444, 508, 654, 931, 1456]
   - key:
       num_subordinates: 0
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [226, 240, 244, 228, 246, 253, 286, 355, 503, 754, 1300]
@@ -138,12 +161,14 @@ entries:
       num_subordinates: 0
       same_axis: true
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [230, 228, 230, 236, 245, 262, 294, 356, 493, 764, 1297]
   - key:
       num_transactions: 4
       num_subordinates: 0
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [461, 464, 479, 480, 480, 503, 634, 913, 1453, 2514, 4653]
@@ -151,6 +176,7 @@ entries:
       num_transactions: 4
       num_subordinates: 0
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [472, 471, 480, 479, 488, 521, 655, 927, 1454, 2521, 4622]
@@ -158,6 +184,7 @@ entries:
       num_transactions: 4
       num_subordinates: 0
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [318, 314, 314, 330, 320, 359, 492, 762, 1312, 2373, 4486]
@@ -166,12 +193,14 @@ entries:
       num_subordinates: 0
       same_axis: true
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [318, 319, 318, 326, 336, 368, 495, 766, 1302, 2369, 4508]
   - key:
       num_transactions: 16
       num_subordinates: 0
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [880, 879, 887, 887, 919, 929, 1448, 2511, 4633, 8866, 17402]
@@ -179,6 +208,7 @@ entries:
       num_transactions: 16
       num_subordinates: 0
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [881, 888, 886, 889, 895, 937, 1478, 2526, 4631, 8872, 17441]
@@ -186,6 +216,7 @@ entries:
       num_transactions: 16
       num_subordinates: 0
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [724, 731, 729, 736, 744, 777, 1319, 2363, 4472, 8752, 17269]
@@ -194,12 +225,14 @@ entries:
       num_subordinates: 0
       same_axis: true
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [726, 727, 726, 736, 742, 776, 1329, 2375, 4503, 8744, 17242]
   - key:
       num_transactions: 64
       num_subordinates: 0
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [2558, 2559, 2566, 2566, 2585, 2594, 4705, 8894, 17391, 34410, 68313]
@@ -207,6 +240,7 @@ entries:
       num_transactions: 64
       num_subordinates: 0
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [2512, 2513, 2522, 2520, 2526, 2592, 4702, 8935, 17406, 34352, 68474]
@@ -214,6 +248,7 @@ entries:
       num_transactions: 64
       num_subordinates: 0
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [2418, 2408, 2408, 2414, 2423, 2441, 4554, 8760, 17248, 34298, 68244]
@@ -222,12 +257,14 @@ entries:
       num_subordinates: 0
       same_axis: true
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [2359, 2359, 2361, 2367, 2375, 2464, 4582, 8776, 17264, 34240, 68196]
   - key:
       num_transactions: 256
       num_subordinates: 0
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [9280, 9288, 9288, 9287, 9294, 9312, 17615, 34473, 68423, 136340, 272293]
@@ -235,6 +272,7 @@ entries:
       num_transactions: 256
       num_subordinates: 0
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [9040, 9040, 9046, 9049, 9057, 9163, 17592, 34535, 68375, 136277, 272330]
@@ -242,6 +280,7 @@ entries:
       num_transactions: 256
       num_subordinates: 0
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [9129, 9127, 9127, 9136, 9145, 9160, 17489, 34366, 68254, 136270, 272369]
@@ -250,11 +289,18 @@ entries:
       num_subordinates: 0
       same_axis: true
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 0
     latencies: [8888, 8886, 8886, 8897, 8904, 9025, 17422, 34294, 68247, 136222, 272939]
   - key:
       num_subordinates: 0
+      memory: 2
+      pattern: 0
+    latencies: [500, 404, 404, 412, 436, 485, 565, 732, 732, 732, 732]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
       memory: 2
       pattern: 0
     latencies: [397, 405, 405, 421, 437, 478, 565, 733, 733, 733, 733]
@@ -263,10 +309,24 @@ entries:
       num_subordinates: 0
       memory: 2
       pattern: 0
+    latencies: [453, 461, 477, 485, 613, 750, 1085, 1893, 1893, 1893, 1893]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
+      memory: 2
+      pattern: 0
     latencies: [489, 457, 481, 482, 585, 906, 1225, 1745, 1745, 1745, 1745]
   - key:
       num_transactions: 16
       num_subordinates: 0
+      memory: 2
+      pattern: 0
+    latencies: [721, 721, 761, 729, 1097, 1914, 3401, 6249, 6249, 6249, 6249]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
       memory: 2
       pattern: 0
     latencies: [729, 801, 729, 889, 1097, 1914, 3265, 6257, 6257, 6257, 6257]
@@ -275,15 +335,36 @@ entries:
       num_subordinates: 0
       memory: 2
       pattern: 0
+    latencies: [1705, 1745, 1713, 1897, 3265, 6274, 12273, 23785, 23785, 23785, 23785]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
+      memory: 2
+      pattern: 0
     latencies: [1745, 1865, 1833, 1897, 3265, 6266, 12130, 23969, 23969, 23969, 23969]
   - key:
       num_transactions: 256
       num_subordinates: 0
       memory: 2
       pattern: 0
+    latencies: [5770, 5761, 5753, 6401, 12265, 24026, 47337, 47337, 47337, 47337, 47337]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
+      memory: 2
+      pattern: 0
     latencies: [5817, 5753, 5801, 6249, 12151, 23840, 47367, 47367, 47367, 47367, 47367]
   - key:
       num_subordinates: 0
+      arch: 3
+      memory: 2
+      pattern: 0
+    latencies: [481, 482, 489, 497, 513, 538, 578, 665, 841, 841, 841]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 2
       pattern: 0
@@ -294,10 +375,26 @@ entries:
       arch: 3
       memory: 2
       pattern: 0
+    latencies: [554, 554, 564, 585, 587, 674, 841, 1244, 1881, 1881, 1881]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 2
+      pattern: 0
     latencies: [554, 554, 561, 585, 585, 785, 841, 1242, 1882, 1882, 1882]
   - key:
       num_transactions: 16
       num_subordinates: 0
+      arch: 3
+      memory: 2
+      pattern: 0
+    latencies: [810, 818, 833, 818, 842, 1242, 1978, 3410, 6074, 6074, 6074]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 2
       pattern: 0
@@ -308,10 +405,26 @@ entries:
       arch: 3
       memory: 2
       pattern: 0
+    latencies: [1859, 1866, 1906, 1899, 2032, 3466, 6673, 12585, 22818, 22818, 22818]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 2
+      pattern: 0
     latencies: [1874, 1874, 1890, 1890, 2032, 3602, 6693, 12705, 22905, 22905, 22905]
   - key:
       num_transactions: 256
       num_subordinates: 0
+      arch: 3
+      memory: 2
+      pattern: 0
+    latencies: [6089, 6154, 6114, 6129, 6970, 12898, 26034, 26034, 26034, 26034, 26034]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 2
       pattern: 0
@@ -531,29 +644,64 @@ entries:
   - key:
       num_subordinates: 0
       memory: 2
+    latencies: [409, 413, 609, 448, 469, 517, 591, 763, 763, 763, 763]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
+      memory: 2
     latencies: [521, 425, 436, 457, 473, 520, 601, 768, 768, 768, 768]
   - key:
       num_transactions: 4
       num_subordinates: 0
+      memory: 2
+    latencies: [705, 496, 522, 518, 604, 828, 1289, 1944, 1944, 1944, 1944]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
       memory: 2
     latencies: [591, 488, 512, 513, 598, 768, 1280, 1955, 1955, 1955, 1955]
   - key:
       num_transactions: 16
       num_subordinates: 0
       memory: 2
+    latencies: [1325, 829, 820, 828, 1284, 1781, 3301, 6525, 6525, 6525, 6525]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
+      memory: 2
     latencies: [1427, 837, 812, 996, 1097, 1961, 3474, 6410, 6410, 6410, 6410]
   - key:
       num_transactions: 64
       num_subordinates: 0
+      memory: 2
+    latencies: [4492, 2020, 2020, 2060, 3309, 6352, 12274, 24286, 24286, 24286, 24286]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
       memory: 2
     latencies: [4484, 2024, 2023, 2182, 3476, 6348, 12264, 24298, 24298, 24298, 24298]
   - key:
       num_transactions: 256
       num_subordinates: 0
       memory: 2
+    latencies: [16979, 6829, 6788, 6939, 12451, 24129, 48156, 48156, 48156, 48156, 48156]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
+      memory: 2
     latencies: [17007, 6773, 6867, 7044, 12271, 24282, 47971, 47971, 47971, 47971, 47971]
   - key:
       num_subordinates: 0
+      arch: 3
+      memory: 2
+    latencies: [381, 381, 381, 389, 397, 413, 453, 523, 669, 669, 669]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 2
     latencies: [380, 388, 388, 391, 396, 422, 454, 523, 678, 678, 678]
@@ -562,10 +710,24 @@ entries:
       num_subordinates: 0
       arch: 3
       memory: 2
+    latencies: [462, 462, 470, 470, 478, 528, 670, 951, 1542, 1542, 1542]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 2
     latencies: [463, 464, 472, 471, 479, 531, 671, 952, 1543, 1543, 1543]
   - key:
       num_transactions: 16
       num_subordinates: 0
+      arch: 3
+      memory: 2
+    latencies: [776, 776, 782, 782, 790, 974, 1694, 3168, 5692, 5692, 5692]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 2
     latencies: [775, 775, 783, 783, 791, 976, 1695, 3293, 5717, 5717, 5717]
@@ -574,10 +736,24 @@ entries:
       num_subordinates: 0
       arch: 3
       memory: 2
+    latencies: [2027, 2022, 2030, 2034, 2042, 3223, 6447, 12671, 22342, 22342, 22342]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 2
     latencies: [2025, 2023, 2031, 2031, 2039, 3230, 6607, 12752, 22351, 22351, 22351]
   - key:
       num_transactions: 256
       num_subordinates: 0
+      arch: 3
+      memory: 2
+    latencies: [7019, 7014, 7025, 7022, 7030, 13064, 26206, 26206, 26206, 26206, 26206]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 2
     latencies: [7015, 7015, 7023, 7023, 7031, 13060, 26191, 26191, 26191, 26191, 26191]
@@ -585,6 +761,7 @@ entries:
       num_transactions: 55
       num_subordinates: 55
       same_axis: true
+      noc_index: 1
       pattern: 2
     latencies: [1800, 1823, 1821, 1827, 2132, 3932, 7438, 14786, 29429, 58067, 116930]
   - key:
@@ -592,12 +769,14 @@ entries:
       num_subordinates: 55
       same_axis: true
       stateful: true
+      noc_index: 1
       pattern: 2
     latencies: [2297, 2309, 2309, 2317, 2391, 3921, 7507, 14815, 29253, 58684, 115781]
   - key:
       num_transactions: 220
       num_subordinates: 55
       same_axis: true
+      noc_index: 1
       pattern: 2
     latencies: [6260, 6252, 6271, 6286, 7685, 14862, 29175, 58093, 116639, 233548, 467567]
   - key:
@@ -605,12 +784,14 @@ entries:
       num_subordinates: 55
       same_axis: true
       stateful: true
+      noc_index: 1
       pattern: 2
     latencies: [5614, 5609, 5614, 5622, 7613, 14865, 29153, 57958, 116592, 233216, 466417]
   - key:
       num_transactions: 880
       num_subordinates: 55
       same_axis: true
+      noc_index: 1
       pattern: 2
     latencies: [18027, 18029, 18031, 18067, 29704, 58210, 116398, 232917, 463130, 937431, 1.88179e+06]
   - key:
@@ -618,12 +799,14 @@ entries:
       num_subordinates: 55
       same_axis: true
       stateful: true
+      noc_index: 1
       pattern: 2
     latencies: [17034, 17036, 17032, 17076, 29503, 58653, 116007, 233201, 466965, 935925, 1.8636e+06]
   - key:
       num_transactions: 3520
       num_subordinates: 55
       same_axis: true
+      noc_index: 1
       pattern: 2
     latencies: [68174, 68178, 68203, 68216, 117725, 233271, 462477, 927189, 1.88055e+06, 3.80891e+06, 7.79335e+06]
   - key:
@@ -631,12 +814,14 @@ entries:
       num_subordinates: 55
       same_axis: true
       stateful: true
+      noc_index: 1
       pattern: 2
     latencies: [62839, 62832, 62839, 63182, 118075, 235235, 463353, 925417, 1.86061e+06, 3.8009e+06, 7.79297e+06]
   - key:
       num_transactions: 14080
       num_subordinates: 55
       same_axis: true
+      noc_index: 1
       pattern: 2
     latencies: [268819, 268828, 268853, 268847, 479632, 954867, 1.90684e+06, 3.80911e+06, 7.79257e+06, 1.58552e+07, 3.19056e+07]
   - key:
@@ -644,12 +829,14 @@ entries:
       num_subordinates: 55
       same_axis: true
       stateful: true
+      noc_index: 1
       pattern: 2
     latencies: [245842, 245843, 245844, 251956, 480817, 955766, 1.90836e+06, 3.81086e+06, 7.78978e+06, 1.59565e+07, 3.19074e+07]
   - key:
       num_transactions: 109
       num_subordinates: 109
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 2
     latencies: [3837, 3829, 3841, 3851, 3864, 4056, 7678, 14690, 29081, 58096, 114746]
@@ -658,6 +845,7 @@ entries:
       num_subordinates: 109
       same_axis: true
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 2
     latencies: [4740, 4727, 4727, 4732, 4766, 4840, 7607, 14725, 29126, 57861, 116802]
@@ -665,6 +853,7 @@ entries:
       num_transactions: 436
       num_subordinates: 109
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 2
     latencies: [14931, 14923, 14948, 14937, 14980, 15160, 29225, 57820, 115336, 231741, 464338]
@@ -673,6 +862,7 @@ entries:
       num_subordinates: 109
       same_axis: true
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 2
     latencies: [15505, 15486, 15501, 15522, 15532, 15644, 29229, 58193, 116032, 234054, 467344]
@@ -680,6 +870,7 @@ entries:
       num_transactions: 1744
       num_subordinates: 109
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 2
     latencies: [60754, 60711, 60718, 60755, 60792, 60812, 116598, 236686, 461721, 927467, 1.83591e+06]
@@ -688,6 +879,7 @@ entries:
       num_subordinates: 109
       same_axis: true
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 2
     latencies: [59982, 59971, 59981, 59985, 59988, 60125, 116644, 232417, 469535, 925203, 1.84047e+06]
@@ -695,6 +887,7 @@ entries:
       num_transactions: 6976
       num_subordinates: 109
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 2
     latencies: [243908, 243849, 243861, 243874, 243895, 243913, 463128, 921799, 1.84482e+06, 3.67296e+06, 7.36426e+06]
@@ -703,6 +896,7 @@ entries:
       num_subordinates: 109
       same_axis: true
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 2
     latencies: [237857, 237839, 237856, 237832, 237857, 238208, 463107, 922202, 1.84171e+06, 3.67136e+06, 7.38835e+06]
@@ -710,6 +904,7 @@ entries:
       num_transactions: 27904
       num_subordinates: 109
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 2
     latencies: [976341, 976314, 976331, 976347, 976365, 976381, 1.87379e+06, 3.70654e+06, 7.37701e+06, 1.47553e+07, 2.9568e+07]
@@ -718,11 +913,18 @@ entries:
       num_subordinates: 109
       same_axis: true
       stateful: true
+      noc_index: 1
       arch: 3
       pattern: 2
     latencies: [949386, 949394, 949401, 949410, 949403, 958498, 1.87414e+06, 3.69238e+06, 7.39737e+06, 1.47694e+07, 2.95345e+07]
   - key:
       num_subordinates: 0
+      memory: 1
+      pattern: 2
+    latencies: [389, 389, 397, 405, 429, 470, 557, 725, 725, 725, 725]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
       memory: 1
       pattern: 2
     latencies: [390, 398, 398, 414, 430, 479, 558, 878, 878, 878, 878]
@@ -731,10 +933,24 @@ entries:
       num_subordinates: 0
       memory: 1
       pattern: 2
+    latencies: [491, 507, 499, 507, 532, 661, 924, 1451, 1451, 1451, 1451]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
+      memory: 1
+      pattern: 2
     latencies: [500, 499, 507, 515, 539, 725, 1019, 1539, 1539, 1539, 1539]
   - key:
       num_transactions: 16
       num_subordinates: 0
+      memory: 1
+      pattern: 2
+    latencies: [863, 863, 863, 879, 927, 1457, 2511, 4623, 4623, 4623, 4623]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
       memory: 1
       pattern: 2
     latencies: [879, 879, 887, 896, 983, 1465, 2519, 4623, 4623, 4623, 4623]
@@ -743,15 +959,36 @@ entries:
       num_subordinates: 0
       memory: 1
       pattern: 2
+    latencies: [2696, 2607, 2544, 2559, 2607, 4657, 8863, 17351, 17351, 17351, 17351]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
+      memory: 1
+      pattern: 2
     latencies: [2599, 2607, 2615, 2647, 2647, 4665, 8879, 17383, 17383, 17383, 17383]
   - key:
       num_transactions: 256
       num_subordinates: 0
       memory: 1
       pattern: 2
+    latencies: [9255, 9263, 9263, 9279, 9303, 17377, 34251, 34251, 34251, 34251, 34251]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
+      memory: 1
+      pattern: 2
     latencies: [9519, 9519, 9527, 9616, 9567, 17249, 34199, 34199, 34199, 34199, 34199]
   - key:
       num_subordinates: 0
+      arch: 3
+      memory: 1
+      pattern: 2
+    latencies: [480, 480, 488, 496, 512, 537, 576, 664, 832, 832, 832]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 1
       pattern: 2
@@ -762,10 +999,26 @@ entries:
       arch: 3
       memory: 1
       pattern: 2
+    latencies: [567, 693, 573, 589, 742, 629, 709, 1021, 1519, 1519, 1519]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 1
+      pattern: 2
     latencies: [573, 567, 574, 589, 605, 649, 822, 1078, 1605, 1605, 1605]
   - key:
       num_transactions: 16
       num_subordinates: 0
+      arch: 3
+      memory: 1
+      pattern: 2
+    latencies: [977, 889, 905, 915, 921, 1042, 1521, 2552, 4705, 4705, 4705]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 1
       pattern: 2
@@ -776,10 +1029,26 @@ entries:
       arch: 3
       memory: 1
       pattern: 2
+    latencies: [2185, 2185, 2193, 2201, 2244, 2689, 4675, 9122, 17514, 17514, 17514]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 1
+      pattern: 2
     latencies: [2184, 2194, 2192, 2209, 2218, 2669, 4745, 8953, 17384, 17384, 17384]
   - key:
       num_transactions: 256
       num_subordinates: 0
+      arch: 3
+      memory: 1
+      pattern: 2
+    latencies: [7361, 7433, 7369, 7385, 7401, 9105, 17321, 17321, 17321, 17321, 17321]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 1
       pattern: 2
@@ -1423,10 +1692,23 @@ entries:
       num_subordinates: 0
       memory: 1
       pattern: 3
+    latencies: [404, 412, 420, 440, 468, 512, 582, 754, 754, 754, 754]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
+      memory: 1
+      pattern: 3
     latencies: [411, 412, 427, 451, 467, 511, 595, 763, 763, 763, 763]
   - key:
       num_transactions: 4
       num_subordinates: 0
+      memory: 1
+      pattern: 3
+    latencies: [512, 513, 528, 554, 567, 710, 1192, 1772, 1772, 1772, 1772]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
       memory: 1
       pattern: 3
     latencies: [521, 535, 569, 561, 639, 726, 1025, 1677, 1677, 1677, 1677]
@@ -1435,10 +1717,24 @@ entries:
       num_subordinates: 0
       memory: 1
       pattern: 3
+    latencies: [931, 933, 949, 964, 1021, 1511, 2684, 5273, 5273, 5273, 5273]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
+      memory: 1
+      pattern: 3
     latencies: [949, 960, 1012, 1059, 1016, 1573, 2727, 5150, 5150, 5150, 5150]
   - key:
       num_transactions: 64
       num_subordinates: 0
+      memory: 1
+      pattern: 3
+    latencies: [2923, 2803, 2859, 3086, 2860, 4722, 9387, 20080, 20080, 20080, 20080]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
       memory: 1
       pattern: 3
     latencies: [2873, 2983, 2889, 2912, 2928, 5005, 9562, 19171, 19171, 19171, 19171]
@@ -1447,9 +1743,23 @@ entries:
       num_subordinates: 0
       memory: 1
       pattern: 3
+    latencies: [10293, 10292, 10379, 10325, 10348, 17523, 36140, 36140, 36140, 36140, 36140]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
+      memory: 1
+      pattern: 3
     latencies: [10553, 10552, 10568, 10625, 10608, 18690, 36903, 36903, 36903, 36903, 36903]
   - key:
       num_subordinates: 0
+      arch: 3
+      memory: 1
+      pattern: 3
+    latencies: [379, 379, 380, 387, 396, 413, 451, 523, 667, 667, 667]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 1
       pattern: 3
@@ -1460,10 +1770,26 @@ entries:
       arch: 3
       memory: 1
       pattern: 3
+    latencies: [477, 474, 486, 485, 495, 516, 650, 931, 1508, 1508, 1508]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 1
+      pattern: 3
     latencies: [476, 477, 484, 484, 493, 521, 661, 938, 1516, 1516, 1516]
   - key:
       num_transactions: 16
       num_subordinates: 0
+      arch: 3
+      memory: 1
+      pattern: 3
+    latencies: [849, 846, 857, 857, 862, 930, 1470, 2559, 4862, 4862, 4862]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 1
       pattern: 3
@@ -1474,10 +1800,26 @@ entries:
       arch: 3
       memory: 1
       pattern: 3
+    latencies: [2334, 2334, 2342, 2342, 2350, 2562, 4712, 9040, 18151, 18151, 18151]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 1
+      pattern: 3
     latencies: [2335, 2336, 2343, 2343, 2352, 2575, 4663, 8973, 17879, 17879, 17879]
   - key:
       num_transactions: 256
       num_subordinates: 0
+      arch: 3
+      memory: 1
+      pattern: 3
+    latencies: [8289, 8286, 8294, 8294, 8307, 9051, 17673, 17673, 17673, 17673, 17673]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 1
       pattern: 3
@@ -1781,10 +2123,23 @@ entries:
       num_subordinates: 0
       memory: 1
       pattern: 4
+    latencies: [1048, 1026, 1031, 1128, 1597, 2706, 5778, 11611, 11611, 11611, 11611]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
+      memory: 1
+      pattern: 4
     latencies: [1109, 1121, 1164, 1198, 1194, 1440, 2448, 3648, 3648, 3648, 3648]
   - key:
       num_transactions: 4
       num_subordinates: 0
+      memory: 1
+      pattern: 4
+    latencies: [1773, 1209, 1802, 3188, 5688, 10615, 21110, 43788, 43788, 43788, 43788]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
       memory: 1
       pattern: 4
     latencies: [1799, 1198, 1282, 1451, 1957, 3829, 8022, 15579, 15579, 15579, 15579]
@@ -1793,10 +2148,24 @@ entries:
       num_subordinates: 0
       memory: 1
       pattern: 4
+    latencies: [5405, 3447, 5658, 10241, 19036, 37753, 79941, 168860, 168860, 168860, 168860]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
+      memory: 1
+      pattern: 4
     latencies: [5460, 1732, 2206, 3508, 6574, 13444, 26841, 62355, 62355, 62355, 62355]
   - key:
       num_transactions: 64
       num_subordinates: 0
+      memory: 1
+      pattern: 4
+    latencies: [19897, 12248, 20407, 37769, 73046, 146430, 312600, 670153, 670153, 670153, 670153]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
       memory: 1
       pattern: 4
     latencies: [20051, 4986, 7432, 12527, 25025, 51568, 110648, 231005, 231005, 231005, 231005]
@@ -1805,9 +2174,23 @@ entries:
       num_subordinates: 0
       memory: 1
       pattern: 4
+    latencies: [79485, 46381, 79592, 147017, 285489, 576097, 1.21728e+06, 1.21728e+06, 1.21728e+06, 1.21728e+06, 1.21728e+06]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
+      memory: 1
+      pattern: 4
     latencies: [78485, 18846, 25766, 46902, 93201, 200699, 436857, 436857, 436857, 436857, 436857]
   - key:
       num_subordinates: 0
+      arch: 3
+      memory: 1
+      pattern: 4
+    latencies: [1596, 1559, 1585, 1589, 1610, 2067, 4044, 7752, 14976, 14976, 14976]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 1
       pattern: 4
@@ -1818,10 +2201,26 @@ entries:
       arch: 3
       memory: 1
       pattern: 4
+    latencies: [1675, 1693, 1711, 2163, 4293, 7583, 14367, 28618, 61000, 61000, 61000]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 1
+      pattern: 4
     latencies: [1696, 1773, 1757, 1706, 2452, 4471, 8775, 17537, 34864, 34864, 34864]
   - key:
       num_transactions: 16
       num_subordinates: 0
+      arch: 3
+      memory: 1
+      pattern: 4
+    latencies: [2020, 2910, 4633, 7963, 14588, 27765, 57307, 113408, 227599, 227599, 227599]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 1
       pattern: 4
@@ -1832,10 +2231,26 @@ entries:
       arch: 3
       memory: 1
       pattern: 4
+    latencies: [7837, 11030, 16547, 28974, 55527, 110290, 222191, 452751, 917133, 917133, 917133]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 1
+      pattern: 4
     latencies: [5129, 6696, 10033, 16700, 31755, 62330, 130573, 274740, 570189, 570189, 570189]
   - key:
       num_transactions: 256
       num_subordinates: 0
+      arch: 3
+      memory: 1
+      pattern: 4
+    latencies: [29484, 41360, 64005, 115168, 222332, 436012, 885278, 885278, 885278, 885278, 885278]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 1
       pattern: 4
@@ -1844,10 +2259,23 @@ entries:
       num_subordinates: 0
       memory: 2
       pattern: 4
+    latencies: [1105, 1134, 1031, 1259, 1613, 2722, 5791, 10963, 10963, 10963, 10963]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
+      memory: 2
+      pattern: 4
     latencies: [1184, 1219, 1096, 1215, 1308, 1496, 2186, 3780, 3780, 3780, 3780]
   - key:
       num_transactions: 4
       num_subordinates: 0
+      memory: 2
+      pattern: 4
+    latencies: [1960, 1244, 1614, 2937, 5398, 10139, 20720, 42825, 42825, 42825, 42825]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
       memory: 2
       pattern: 4
     latencies: [1953, 1290, 1229, 1473, 1974, 3886, 6503, 13323, 13323, 13323, 13323]
@@ -1856,10 +2284,24 @@ entries:
       num_subordinates: 0
       memory: 2
       pattern: 4
+    latencies: [5988, 3282, 5544, 10186, 19353, 37712, 80488, 170799, 170799, 170799, 170799]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
+      memory: 2
+      pattern: 4
     latencies: [5767, 1473, 2194, 3378, 5936, 11853, 24366, 50983, 50983, 50983, 50983]
   - key:
       num_transactions: 64
       num_subordinates: 0
+      memory: 2
+      pattern: 4
+    latencies: [25706, 12233, 20708, 38693, 74961, 147895, 321339, 679496, 679496, 679496, 679496]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
       memory: 2
       pattern: 4
     latencies: [23102, 4392, 6327, 11418, 21722, 44806, 98637, 202028, 202028, 202028, 202028]
@@ -1868,9 +2310,23 @@ entries:
       num_subordinates: 0
       memory: 2
       pattern: 4
+    latencies: [142171, 46390, 80832, 151333, 296907, 588706, 1.27096e+06, 1.27096e+06, 1.27096e+06, 1.27096e+06, 1.27096e+06]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
+      memory: 2
+      pattern: 4
     latencies: [96564, 15050, 23315, 43508, 84411, 177418, 380978, 380978, 380978, 380978, 380978]
   - key:
       num_subordinates: 0
+      arch: 3
+      memory: 2
+      pattern: 4
+    latencies: [1595, 1602, 1515, 1592, 1633, 1974, 4287, 7376, 14601, 14601, 14601]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 2
       pattern: 4
@@ -1881,10 +2337,26 @@ entries:
       arch: 3
       memory: 2
       pattern: 4
+    latencies: [1690, 1661, 1820, 2059, 4198, 7211, 13387, 27522, 55997, 55997, 55997]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 2
+      pattern: 4
     latencies: [1683, 1746, 1703, 1821, 2600, 4979, 9214, 18652, 37068, 37068, 37068]
   - key:
       num_transactions: 16
       num_subordinates: 0
+      arch: 3
+      memory: 2
+      pattern: 4
+    latencies: [1999, 2923, 4969, 7605, 13654, 26756, 54351, 109061, 217782, 217782, 217782]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 2
       pattern: 4
@@ -1895,10 +2367,26 @@ entries:
       arch: 3
       memory: 2
       pattern: 4
+    latencies: [7733, 10973, 15992, 26566, 53883, 110510, 224139, 455175, 906625, 906625, 906625]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 2
+      pattern: 4
     latencies: [5220, 6993, 10134, 19605, 37725, 75779, 147330, 301965, 594629, 594629, 594629]
   - key:
       num_transactions: 256
       num_subordinates: 0
+      arch: 3
+      memory: 2
+      pattern: 4
+    latencies: [28401, 40469, 59724, 110585, 223375, 448057, 906657, 906657, 906657, 906657, 906657]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 2
       pattern: 4
@@ -1907,126 +2395,147 @@ entries:
       num_transactions: 4
       num_subordinates: 4
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [353, 357, 357, 366.5, 414, 509.5, 854, 1561, 4412.5, 8513.5, 13867]
   - key:
       num_transactions: 9
       num_subordinates: 9
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [529, 520, 523, 568, 790, 1288, 2473, 4783, 10375, 21148, 53015]
   - key:
       num_transactions: 16
       num_subordinates: 4
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [562.5, 562.5, 564, 657, 1005, 1697, 4707, 6985, 13996, 30273.5, 69538.5]
   - key:
       num_transactions: 25
       num_subordinates: 25
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [1086, 1119, 1313, 2093, 3907, 6609, 14510, 27024, 101512, 217630, 469584]
   - key:
       num_transactions: 36
       num_subordinates: 9
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [1105, 1127, 1206, 1605, 2838, 5008, 11129, 22580, 51942, 124154, 251346]
   - key:
       num_transactions: 56
       num_subordinates: 56
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [2454.5, 2597, 8066.5, 17932, 40660, 87722, 97576, 261894, 553458, 1.51034e+06, 2.61353e+06]
   - key:
       num_transactions: 64
       num_subordinates: 4
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [1989, 1981, 2006.5, 2587.5, 4360.5, 8594.5, 15291, 32096.5, 73734, 164885, 329979]
   - key:
       num_transactions: 100
       num_subordinates: 25
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [3584, 3609, 5286, 12622, 21535, 51024, 105732, 225104, 574437, 825833, 1.75864e+06]
   - key:
       num_transactions: 144
       num_subordinates: 9
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [4477, 4666, 4697, 7465, 14016, 28392, 66747, 114798, 270774, 522576, 903276]
   - key:
       num_transactions: 224
       num_subordinates: 56
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [7925, 19902.5, 33986, 81915.5, 140793, 305435, 678698, 1.47820e+06, 2.79077e+06, 5.9019e+06, 9.59486e+06]
   - key:
       num_transactions: 256
       num_subordinates: 4
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [8417, 8415, 8497.5, 11424, 21942, 45185.5, 89924, 160835, 335219, 664354, 1.34957e+06]
   - key:
       num_transactions: 400
       num_subordinates: 25
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [11245, 12452, 22171, 38718, 84227, 194711, 479048, 965122, 1.62223e+06, 2.80066e+06, 6.07301e+06]
   - key:
       num_transactions: 576
       num_subordinates: 9
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [16008, 16245, 17809, 29064, 60749, 117252, 233285, 503277, 901637, 1.88771e+06, 3.74978e+06]
   - key:
       num_transactions: 896
       num_subordinates: 56
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [27681.5, 51152.5, 138433, 386638, 605335, 1.68036e+06, 2.86471e+06, 6.16931e+06, 1.09557e+07, 1.90359e+07, 2.78622e+07]
   - key:
       num_transactions: 1024
       num_subordinates: 4
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [29039, 28982, 29390, 43133.5, 82822.5, 164626, 327903, 663918, 1.34978e+06, 2.72220e+06, 5.56734e+06]
   - key:
       num_transactions: 1600
       num_subordinates: 25
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [45875, 49264, 91208, 186923, 293404, 767220, 1.76588e+06, 3.34276e+06, 6.08993e+06, 9.9605e+06, 1.85009e+07]
   - key:
       num_transactions: 2304
       num_subordinates: 9
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [75194, 76013, 75798, 116970, 230369, 489390, 1.03955e+06, 1.83207e+06, 3.75695e+06, 7.81378e+06, 1.73101e+07]
   - key:
       num_transactions: 3584
       num_subordinates: 56
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [116773, 325159, 455958, 942792, 2.46060e+06, 5.33179e+06, 8.78188e+06, 2.23413e+07, 2.78049e+07, 4.44927e+07, 8.7031e+07]
   - key:
       num_transactions: 6400
       num_subordinates: 25
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [200386, 206298, 351175, 647461, 1.17849e+06, 2.21359e+06, 5.34628e+06, 1.01461e+07, 1.77649e+07, 3.62730e+07, 8.35404e+07]
   - key:
       num_transactions: 14336
       num_subordinates: 56
       same_axis: true
+      noc_index: 1
       pattern: 5
     latencies: [573876, 796053, 1.71799e+06, 3.53393e+06, 6.04237e+06, 1.13066e+07, 2.65516e+07, 5.24331e+07, 8.98929e+07, 1.66202e+08, 3.23945e+08]
   - key:
       num_transactions: 4
       num_subordinates: 4
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [435, 440.5, 442.5, 451, 452.5, 469, 591.5, 895.5, 1537, 3461, 7065]
@@ -2034,6 +2543,7 @@ entries:
       num_transactions: 9
       num_subordinates: 9
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [618, 647, 654, 637, 682, 861, 1404, 2924, 4684, 10710, 22581]
@@ -2041,6 +2551,7 @@ entries:
       num_transactions: 16
       num_subordinates: 4
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [750.5, 760, 755, 762.5, 846.5, 1217.5, 1898.5, 3293, 7345, 13602.5, 31804]
@@ -2048,6 +2559,7 @@ entries:
       num_transactions: 25
       num_subordinates: 25
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [1221, 1237, 1257, 1413, 2379, 3521, 9179, 15773, 32102, 73231, 212066]
@@ -2055,6 +2567,7 @@ entries:
       num_transactions: 36
       num_subordinates: 9
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [1610, 1612, 1602, 1643, 1956, 3140, 5402, 10220, 23680, 54986, 130781]
@@ -2062,6 +2575,7 @@ entries:
       num_transactions: 64
       num_subordinates: 4
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [2530, 2525, 2514.5, 2548, 3058.5, 4650.5, 8981, 15887, 33844, 73351, 157049]
@@ -2069,6 +2583,7 @@ entries:
       num_transactions: 64
       num_subordinates: 64
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [2892, 2959.5, 3461.5, 5309.5, 13631.5, 28772, 67745.5, 142224, 313508, 724263, 2.44278e+06]
@@ -2076,6 +2591,7 @@ entries:
       num_transactions: 100
       num_subordinates: 25
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [4122, 4202, 4428, 5912, 10048, 17135, 37829, 80552, 188665, 501283, 1.08589e+06]
@@ -2083,6 +2599,7 @@ entries:
       num_transactions: 110
       num_subordinates: 110
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [5281, 5613, 17680.5, 42260, 80396, 138345, 292950, 554083, 1.31367e+06, 2.51037e+06, 5.28774e+06]
@@ -2090,6 +2607,7 @@ entries:
       num_transactions: 144
       num_subordinates: 9
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [5824, 5839, 5816, 5840, 7361, 13316, 31405, 63602, 127641, 242087, 478302]
@@ -2097,6 +2615,7 @@ entries:
       num_transactions: 256
       num_subordinates: 4
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [9888, 9879.5, 9892.5, 9978, 12073.5, 20490, 42582, 85949.5, 160687, 325235, 633034]
@@ -2104,6 +2623,7 @@ entries:
       num_transactions: 256
       num_subordinates: 64
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [10340.5, 14059.5, 36411.5, 51676, 118207, 239292, 553958, 1.04474e+06, 2.26407e+06, 4.93258e+06, 7.39629e+06]
@@ -2111,6 +2631,7 @@ entries:
       num_transactions: 400
       num_subordinates: 25
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [16012, 16004, 17939, 21834, 40947, 85523, 216007, 530901, 847618, 1.53206e+06, 3.56071e+06]
@@ -2118,6 +2639,7 @@ entries:
       num_transactions: 440
       num_subordinates: 110
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [31275, 48004, 106122, 191399, 408959, 668773, 1.35249e+06, 2.93472e+06, 5.6079e+06, 1.27913e+07, 2.45100e+07]
@@ -2125,6 +2647,7 @@ entries:
       num_transactions: 576
       num_subordinates: 9
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [23813, 23793, 23737, 23681, 29547, 53631, 113379, 215079, 474840, 1.02217e+06, 1.71864e+06]
@@ -2132,6 +2655,7 @@ entries:
       num_transactions: 1024
       num_subordinates: 4
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [40148.5, 40152.5, 40148.5, 40138, 48057.5, 80375, 157484, 314196, 635863, 1.28705e+06, 2.61628e+06]
@@ -2139,6 +2663,7 @@ entries:
       num_transactions: 1024
       num_subordinates: 64
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [42434, 52272, 107610, 192895, 391273, 995613, 1.44344e+06, 3.45071e+06, 6.4134e+06, 1.36055e+07, 1.96165e+07]
@@ -2146,6 +2671,7 @@ entries:
       num_transactions: 1600
       num_subordinates: 25
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [66033, 66080, 66938, 85848, 167993, 314827, 697776, 1.67407e+06, 2.97599e+06, 5.59434e+06, 9.73126e+06]
@@ -2153,6 +2679,7 @@ entries:
       num_transactions: 1760
       num_subordinates: 110
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [79931.5, 152989, 298426, 593281, 910364, 2.55527e+06, 4.76925e+06, 1.01318e+07, 2.41432e+07, 4.19175e+07, 6.79879e+07]
@@ -2160,6 +2687,7 @@ entries:
       num_transactions: 2304
       num_subordinates: 9
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [94578, 94480, 94592, 95493, 129241, 232195, 440410, 882853, 1.82203e+06, 3.30779e+06, 7.18134e+06]
@@ -2167,6 +2695,7 @@ entries:
       num_transactions: 4096
       num_subordinates: 64
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [172246, 193021, 300966, 725935, 1.15698e+06, 2.47796e+06, 5.25669e+06, 1.18686e+07, 2.53148e+07, 3.90936e+07, 6.85966e+07]
@@ -2174,6 +2703,7 @@ entries:
       num_transactions: 6400
       num_subordinates: 25
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [263982, 264117, 271631, 358144, 649915, 1.15943e+06, 2.08953e+06, 5.06898e+06, 1.02885e+07, 1.78435e+07, 3.44665e+07]
@@ -2181,6 +2711,7 @@ entries:
       num_transactions: 7040
       num_subordinates: 110
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [306905, 556287, 1.00349e+06, 2.14735e+06, 3.34200e+06, 7.89912e+06, 1.56001e+07, 3.31273e+07, 6.6991e+07, 1.03376e+08, 1.80645e+08]
@@ -2188,6 +2719,7 @@ entries:
       num_transactions: 16384
       num_subordinates: 64
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [690868, 731061, 1.08215e+06, 1.82805e+06, 3.94793e+06, 9.31501e+06, 1.7299e+07, 3.06645e+07, 6.41989e+07, 1.13292e+08, 1.95941e+08]
@@ -2195,11 +2727,18 @@ entries:
       num_transactions: 28160
       num_subordinates: 110
       same_axis: true
+      noc_index: 1
       arch: 3
       pattern: 5
     latencies: [1.26116e+06, 1.87336e+06, 3.6938e+06, 6.076e+06, 1.36058e+07, 2.52343e+07, 4.90624e+07, 9.10564e+07, 2.02869e+08, 3.43164e+08, 6.16605e+08]
   - key:
       num_subordinates: 0
+      memory: 1
+      pattern: 5
+    latencies: [1090, 1150, 1094, 1105, 1217, 1288, 1677, 2871, 2871, 2871, 2871]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
       memory: 1
       pattern: 5
     latencies: [1146, 1083, 1162, 1182, 1352, 2077, 3813, 7589, 7589, 7589, 7589]
@@ -2208,10 +2747,24 @@ entries:
       num_subordinates: 0
       memory: 1
       pattern: 5
+    latencies: [1126, 1210, 1207, 1322, 1658, 2940, 6900, 11559, 11559, 11559, 11559]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
+      memory: 1
+      pattern: 5
     latencies: [1266, 1267, 1471, 2290, 4037, 7929, 15772, 33742, 33742, 33742, 33742]
   - key:
       num_transactions: 16
       num_subordinates: 0
+      memory: 1
+      pattern: 5
+    latencies: [1595, 1638, 1744, 2725, 5355, 10112, 20928, 43857, 43857, 43857, 43857]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
       memory: 1
       pattern: 5
     latencies: [1802, 2643, 4238, 7541, 14125, 29234, 58884, 119369, 119369, 119369, 119369]
@@ -2220,15 +2773,36 @@ entries:
       num_subordinates: 0
       memory: 1
       pattern: 5
+    latencies: [3252, 3221, 4950, 9082, 18397, 38142, 82576, 175323, 175323, 175323, 175323]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
+      memory: 1
+      pattern: 5
     latencies: [5458, 8610, 15309, 28611, 57095, 115235, 232598, 473688, 473688, 473688, 473688]
   - key:
       num_transactions: 256
       num_subordinates: 0
       memory: 1
       pattern: 5
+    latencies: [10079, 12867, 20431, 36567, 79791, 179355, 382181, 382181, 382181, 382181, 382181]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
+      memory: 1
+      pattern: 5
     latencies: [22560, 34273, 59133, 110972, 219935, 444011, 906188, 906188, 906188, 906188, 906188]
   - key:
       num_subordinates: 0
+      arch: 3
+      memory: 1
+      pattern: 5
+    latencies: [1685, 1643, 1680, 1696, 1717, 1779, 2085, 3634, 7041, 7041, 7041]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 1
       pattern: 5
@@ -2239,10 +2813,26 @@ entries:
       arch: 3
       memory: 1
       pattern: 5
+    latencies: [1887, 1762, 1770, 1912, 2183, 3546, 6620, 12783, 25164, 25164, 25164]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 1
+      pattern: 5
     latencies: [1767, 1812, 1898, 2029, 3182, 5490, 10773, 21124, 41948, 41948, 41948]
   - key:
       num_transactions: 16
       num_subordinates: 0
+      arch: 3
+      memory: 1
+      pattern: 5
+    latencies: [4480, 4691, 4445, 4793, 7061, 12334, 24018, 48746, 100885, 100885, 100885]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 1
       pattern: 5
@@ -2253,10 +2843,26 @@ entries:
       arch: 3
       memory: 1
       pattern: 5
+    latencies: [15272, 15528, 15312, 16886, 25251, 48319, 95774, 195070, 405694, 405694, 405694]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 1
+      pattern: 5
     latencies: [14891, 15091, 15888, 21639, 40277, 78064, 157528, 322085, 659773, 659773, 659773]
   - key:
       num_transactions: 256
       num_subordinates: 0
+      arch: 3
+      memory: 1
+      pattern: 5
+    latencies: [58442, 59452, 60109, 66925, 101157, 195695, 392473, 392473, 392473, 392473, 392473]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 1
       pattern: 5
@@ -2265,10 +2871,23 @@ entries:
       num_subordinates: 0
       memory: 2
       pattern: 5
+    latencies: [1047, 1076, 1077, 1103, 1097, 1377, 1733, 3071, 3071, 3071, 3071]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
+      memory: 2
+      pattern: 5
     latencies: [1170, 1108, 1085, 1160, 1394, 2203, 4250, 8136, 8136, 8136, 8136]
   - key:
       num_transactions: 4
       num_subordinates: 0
+      memory: 2
+      pattern: 5
+    latencies: [1195, 1159, 1204, 1358, 1684, 3471, 6433, 13383, 13383, 13383, 13383]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
       memory: 2
       pattern: 5
     latencies: [1153, 1135, 1465, 2199, 3731, 7428, 15801, 31689, 31689, 31689, 31689]
@@ -2277,10 +2896,24 @@ entries:
       num_subordinates: 0
       memory: 2
       pattern: 5
+    latencies: [1501, 1428, 1830, 2928, 6191, 12711, 21722, 44685, 44685, 44685, 44685]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
+      memory: 2
+      pattern: 5
     latencies: [1753, 2510, 3822, 7286, 15858, 30140, 61168, 116746, 116746, 116746, 116746]
   - key:
       num_transactions: 64
       num_subordinates: 0
+      memory: 2
+      pattern: 5
+    latencies: [2847, 3349, 5306, 10505, 22000, 45543, 86898, 178545, 178545, 178545, 178545]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
       memory: 2
       pattern: 5
     latencies: [5277, 8427, 14916, 28592, 58131, 115192, 232868, 464809, 464809, 464809, 464809]
@@ -2289,9 +2922,23 @@ entries:
       num_subordinates: 0
       memory: 2
       pattern: 5
+    latencies: [11608, 13193, 23714, 47973, 101588, 208170, 415711, 415711, 415711, 415711, 415711]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
+      memory: 2
+      pattern: 5
     latencies: [20066, 32631, 58550, 110600, 226790, 456982, 921077, 921077, 921077, 921077, 921077]
   - key:
       num_subordinates: 0
+      arch: 3
+      memory: 2
+      pattern: 5
+    latencies: [1786, 1689, 1719, 1727, 1667, 1779, 2091, 3793, 6926, 6926, 6926]
+  - key:
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 2
       pattern: 5
@@ -2302,10 +2949,26 @@ entries:
       arch: 3
       memory: 2
       pattern: 5
+    latencies: [1709, 1803, 1801, 1820, 2228, 3714, 6610, 13048, 26392, 26392, 26392]
+  - key:
+      num_transactions: 4
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 2
+      pattern: 5
     latencies: [1924, 1905, 1850, 2131, 3178, 5638, 10578, 21762, 42859, 42859, 42859]
   - key:
       num_transactions: 16
       num_subordinates: 0
+      arch: 3
+      memory: 2
+      pattern: 5
+    latencies: [5051, 5119, 4978, 5512, 7796, 14230, 27555, 55400, 108293, 108293, 108293]
+  - key:
+      num_transactions: 16
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 2
       pattern: 5
@@ -2316,10 +2979,26 @@ entries:
       arch: 3
       memory: 2
       pattern: 5
+    latencies: [17816, 18082, 18171, 19895, 29063, 53941, 114861, 228485, 450126, 450126, 450126]
+  - key:
+      num_transactions: 64
+      num_subordinates: 0
+      noc_index: 1
+      arch: 3
+      memory: 2
+      pattern: 5
     latencies: [15370, 16461, 17263, 22336, 42486, 82299, 159668, 335702, 682414, 682414, 682414]
   - key:
       num_transactions: 256
       num_subordinates: 0
+      arch: 3
+      memory: 2
+      pattern: 5
+    latencies: [70378, 70486, 72953, 84908, 124123, 238745, 495730, 495730, 495730, 495730, 495730]
+  - key:
+      num_transactions: 256
+      num_subordinates: 0
+      noc_index: 1
       arch: 3
       memory: 2
       pattern: 5

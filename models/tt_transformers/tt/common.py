@@ -12,7 +12,7 @@ from typing import List, Optional, Union
 import torch
 from loguru import logger
 from PIL import Image as PIL_Image
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat as get_rot_transformation_mat_v2
@@ -28,8 +28,7 @@ class URL(BaseModel):
 class ImageMedia(BaseModel):
     image: Union[PIL_Image.Image, URL]
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class Role(Enum):
@@ -944,6 +943,21 @@ def create_tt_model(
         else:
             state_dict = tt_model_args.load_state_dict()
             loaded_real_weights = bool(state_dict) and not tt_model_args.dummy_weights
+
+    # A populated state_dict handed in by the caller (DP submeshes after the first) bypasses
+    # load_state_dict(), which is the only place the cold path sets is_mixture_of_experts. Without
+    # this the later lanes build a dense MLP for an MoE checkpoint and fail on the missing
+    # feed_forward.w1 key. Derive the flag from the keys, as load_state_dict does.
+    # (The warm-cache placeholder mapping is deliberately falsy, so test for None, not truthiness.)
+    if state_dict is not None and not getattr(tt_model_args, "is_mixture_of_experts", False):
+        tt_model_args.is_mixture_of_experts = any(".experts." in k for k in state_dict.keys())
+    if getattr(tt_model_args, "is_mixture_of_experts", False):
+        # Reused weights must initialize the same MoE configuration as load_state_dict.
+        tt_model_args.moe = True
+        expert_indices = [
+            int(k.split(".experts.")[1].split(".")[0]) + 1 for k in state_dict if "block_sparse_moe.experts." in k
+        ]
+        tt_model_args.num_experts = max(expert_indices) if expert_indices else tt_model_args.num_local_experts
 
     model = Transformer(
         args=tt_model_args,

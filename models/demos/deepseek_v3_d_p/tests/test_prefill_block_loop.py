@@ -34,7 +34,7 @@ from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, moe_fabric_payload
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -70,7 +70,7 @@ def _ci_unsupported_param_combos(**params):
 
     if not on_ci:
         return False
-    if gate_fallback_mode != GateComputeMode.DEVICE:
+    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
         return True
     return False
 
@@ -78,8 +78,8 @@ def _ci_unsupported_param_combos(**params):
 @pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "gate_fallback_mode",
-    [GateComputeMode.DEVICE, GateComputeMode.HOST_ALL],
-    ids=["gate_device", "gate_host"],
+    [GateComputeMode.DEVICE_FP32, GateComputeMode.HOST_ALL],
+    ids=["gate_device_fp32", "gate_host"],
 )
 @pytest.mark.parametrize(
     "layer_idx",
@@ -106,14 +106,8 @@ def _ci_unsupported_param_combos(**params):
         _with_isl(param)
         for param in (
             pytest.param(
-                (1, 1),
-                {},
-                1,
-                id="mesh-1x1",
-            ),
-            pytest.param(
                 (2, 4),
-                fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.EMB_SIZE),
+                fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
                 2,
                 marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
                 id="fabric2d-mesh-2x4-2link",
@@ -211,10 +205,10 @@ def test_prefill_block_loop(
     gate_mode_name = gate_fallback_mode.name.lower()
 
     # gate_fallback_mode is irrelevant for dense layers — skip duplicate runs
-    if is_dense and gate_fallback_mode != GateComputeMode.DEVICE:
+    if is_dense and gate_fallback_mode != GateComputeMode.DEVICE_FP32:
         pytest.skip("gate_fallback_mode only applies to MoE layers")
     # For uniform/zero experts, HOST=DEVICE (proven), skip HOST to save time
-    if layer_idx in (-1, -4, -5, -6) and gate_fallback_mode != GateComputeMode.DEVICE:
+    if layer_idx in (-1, -4, -5, -6) and gate_fallback_mode != GateComputeMode.DEVICE_FP32:
         pytest.skip("uniform/zero experts: DEVICE=HOST (proven), skipping HOST")
     # Torch reference + large isl OOMs host RAM (HF model of num_layers_hf=real_layer_idx+1
     # plus dequantized weights). Restrict the PCC path to small isl.

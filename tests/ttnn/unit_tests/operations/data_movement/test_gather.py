@@ -4,10 +4,12 @@
 
 import contextlib
 
+import numpy as np
 import pytest
 import torch
 import ttnn
-import numpy as np
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
+
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
 
 TILE_HEIGHT = 32
@@ -491,6 +493,7 @@ def _trace_case(device):
     ids=["warm_under_pressure", "warm_then_pressure"],
 )
 @pytest.mark.parametrize("device_params", [_TRACE_DEVICE_PARAMS], indirect=True)
+@skip_for_slow_dispatch("trace capture requires fast dispatch")
 def test_gather_codegen_trace_capture_under_pressure(device, pin_before_warmup):
     """Capturing with L1 constrained must record the plan that frontier admits.
 
@@ -547,3 +550,21 @@ def test_gather_codegen_trace_capture_under_pressure(device, pin_before_warmup):
             _best_effort(lambda: ttnn.release_trace(device, trace_id))
         if resident is not None:
             ttnn.deallocate(resident)
+
+
+def test_gather_codegen_invalid_index_public_reproduction(device):
+    # Keep the public #55819 hang witness in the pre-merge `-k codegen` selection;
+    # the exhaustive reader/dtype/cache matrix remains in the nightly suite.
+    torch.manual_seed(55819)
+    x = torch.randn(64, 128, dtype=torch.bfloat16)
+    index = torch.randint(0, 64, (32, 128), dtype=torch.int64)
+    index[0, 0] = 0x800000
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    it = ttnn.from_torch(index.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.gather(xt, 0, it)
+    ttnn.synchronize_device(device)
+    actual = ttnn.to_torch(out)
+    valid = index < x.shape[0]
+    expected = torch.gather(x, 0, index.masked_fill(~valid, 0))
+    assert actual.shape == expected.shape, f"Public gather reproduction returned shape {actual.shape}"
+    assert torch.equal(actual[valid], expected[valid]), "Invalid index corrupted valid BF16 gather positions"

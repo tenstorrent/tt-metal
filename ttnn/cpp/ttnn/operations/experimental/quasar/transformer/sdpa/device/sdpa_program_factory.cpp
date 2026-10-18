@@ -64,13 +64,14 @@ struct CoreChainInfo {
 
 namespace {
 
-// Select the mask data format: user-provided mask dtype, or Float16_b for streaming (avoids Bfp4_b precision loss),
-// or Bfp4_b for legacy path.
-tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bool use_streaming_compute) {
+// Select the mask data format: user-provided mask dtype, or Float16_b for streaming (avoids Bfp4_b precision loss)
+// and on Quasar (no block-float formats), or Bfp4_b for legacy path.
+tt::DataFormat select_mask_dataformat(
+    const std::optional<Tensor>& attn_mask, bool use_streaming_compute, tt::ARCH arch) {
     if (attn_mask.has_value()) {
         return tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype());
     }
-    return use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
+    return (use_streaming_compute || arch == tt::ARCH::QUASAR) ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
 }
 
 // Streaming compute (v2) handles every SDPA variant; only fp32 dest-accumulate falls back to the
@@ -357,10 +358,15 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         log_debug(tt::LogOp, "page_table_df: {}", page_table_df);
     }
 
-    IDevice* device = input_tensor_q.device();
+    MeshDevice* device = input_tensor_q.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+
+    // Quasar cannot do 32-bit-DEST block reduce_max (used in the softmax), so force bf16 DEST there.
+    if (device->arch() == tt::ARCH::QUASAR) {
+        fp32_dest_acc_en = false;
+    }
 
     bool use_attention_sink = attention_sink.has_value();
 
@@ -409,7 +415,10 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
-    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
+    // The streaming compute path uses LLK primitives not available on Quasar; it is neither built nor
+    // selected there (compute kernel guards the include under #ifndef ARCH_QUASAR). Force the standard path.
+    const bool use_streaming_compute =
+        can_use_streaming_compute(fp32_dest_acc_en) && device->arch() != tt::ARCH::QUASAR;
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
@@ -529,7 +538,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     const DFBSpecName K_IN{"k_in"};
     const DFBSpecName V_IN{"v_in"};
     const DFBSpecName MASK_IN{"mask_in"};
-    const DFBSpecName CU_WINDOW{"cu_window_seqlens"};
+    const ScratchpadSpecName CU_WINDOW{"cu_window_seqlens"};
     const DFBSpecName IDENTITY_SCALE_IN{"identity_scale_in"};
     const DFBSpecName COL_IDENTITY{"col_identity"};
     const ScratchpadSpecName PAGE_TABLE_SCRATCH{"page_table"};
@@ -548,9 +557,9 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     const DFBSpecName OUT{"out"};
     // Windowed K-range narrowing (#54492): the reader's own cu_window copy, the {k_lo,k_hi} ctrl CB
     // (reader -> compute), and the per-device Q-offset tensor CB.
-    const DFBSpecName WINDOWED_CU_READER{"windowed_cu_reader"};
+    const ScratchpadSpecName WINDOWED_CU_READER{"windowed_cu_reader"};
     const DFBSpecName WINDOWED_K_RANGE{"windowed_k_range"};
-    const DFBSpecName WINDOWED_Q_OFFSET{"windowed_q_offset"};
+    const ScratchpadSpecName WINDOWED_Q_OFFSET{"windowed_q_offset"};
 
     const TensorParamName T_Q_IN{"q_in"};
     const TensorParamName T_K_IN{"k_in"};
@@ -588,8 +597,8 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
     // Windowed mask is generated on-device. Float16_b so it works on both the streaming path (which does
     // not decode block-float masks) and the standard path; windowed_mask_gen.hpp fills the right format.
-    tt::DataFormat mask_df =
-        is_windowed ? tt::DataFormat::Float16_b : select_mask_dataformat(attn_mask, use_streaming_compute);
+    tt::DataFormat mask_df = is_windowed ? tt::DataFormat::Float16_b
+                                         : select_mask_dataformat(attn_mask, use_streaming_compute, device->arch());
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -687,6 +696,27 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         DataflowBufferSpec{
             .unique_id = OUT, .entry_size = out_tile_size, .num_entries = out0_t, .data_format_metadata = out_df},
     };
+    // The non-streaming STANDARD path (no attention sink) merges the running-sum ping-pong (SUM_A/
+    // SUM_B) into a single 3-deep DFB bound to SUM_A (depth 3*statistics_tiles): the kernel keeps prev
+    // at the ring front [0,statistics_tiles) and appends cur behind it, reading both from that
+    // contiguous layout (fma_block_merged_sum) and re-basing the running sum to the front. SUM_B is
+    // dropped, reclaiming one self-loop counter. (Since the native SrcA-transpose QK^T removed the kt
+    // DFB, the op now fits Quasar's 8-DFB budget without this merge too; the merge is kept as-is.)
+    // Merging sum (not max) avoids the
+    // reduce_c prev==out in-place hazard. This runs on WH too so WH exercises the same merged code
+    // path. The streaming path and the attention-sink block keep two separate sum DFBs. See
+    // compute_common.hpp sdpa_inner_loop (merged_sum).
+    const bool merge_sum = !use_streaming_compute && !use_attention_sink;
+    if (merge_sum) {
+        for (auto& dfb : dfbs) {
+            if (dfb.unique_id == SUM_A) {
+                // 3-deep: prev [0,statistics_tiles), cur [statistics_tiles,2*), and the running-sum
+                // region [2*,3*) that fma_block_merged_sum reserves before re-basing to the front.
+                dfb.num_entries = 3 * statistics_tiles;
+            }
+        }
+        std::erase_if(dfbs, [&](const DataflowBufferSpec& dfb) { return dfb.unique_id == SUM_B; });
+    }
     if (needs_mask_cb) {
         // Lightweight mask: Float16_b palette; legacy: full Sq×Sk matrix in mask_df.
         const tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
@@ -700,39 +730,33 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     uint32_t cu_window_seqlens_eles = 0;
     const uint32_t windowed_q_token_offset = operation_attributes.windowed_q_token_offset;
     const bool windowed_q_offset_present = tensor_args.windowed_q_token_offset_tensor.has_value();
+    uint32_t windowed_q_offset_size = 0;
+    uint32_t cu_window_size = 0;
     if (is_windowed) {
         const auto& cu = tensor_args.cu_window_seqlens.value();
         const tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
-        // Writer's cu_window copy (windowed-mask generation).
-        dfbs.push_back(DataflowBufferSpec{
-            .unique_id = CU_WINDOW,
-            .entry_size = tt::tile_size(cu_df),
-            .num_entries = 1,
-            .data_format_metadata = cu_df});
+        // The writer's cu_window copy (windowed-mask generation) and, for K-range narrowing (#54492), the
+        // reader's own copy: private Scratchpads of the same size, registered on the ProgramSpec below.
+        // Single-entry, so the kernels size their one NoC read of cu_window_seqlens with the scratchpad's
+        // size_in_bytes() -- keep num_entries at 1, or give the kernels the entry size another way.
+        constexpr uint32_t cu_window_num_entries = 1;
+        cu_window_size = tt::tile_size(cu_df) * cu_window_num_entries;
         cu_window_seqlens_eles = cu.logical_shape()[-1];
-        // K-range narrowing (#54492): the reader's OWN cu_window copy (a second producer on the writer's
-        // CB is illegal), plus a small reader->compute ctrl CB carrying each Q chunk's {k_lo, k_hi},
-        // double-buffered so the reader can run a Q chunk ahead.
-        dfbs.push_back(DataflowBufferSpec{
-            .unique_id = WINDOWED_CU_READER,
-            .entry_size = tt::tile_size(cu_df),
-            .num_entries = 1,
-            .data_format_metadata = cu_df});
+        // A small reader->compute ctrl CB carries each Q chunk's {k_lo, k_hi}, double-buffered so the
+        // reader can run a Q chunk ahead.
         constexpr uint32_t k_range_page_size = 16;
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = WINDOWED_K_RANGE,
             .entry_size = k_range_page_size,
             .num_entries = 2,
             .data_format_metadata = tt::DataFormat::Int32});
-        // Per-device Q-offset tensor CB (only when the offset arrives as a tensor).
+        // Per-device Q-offset tensor landing spot (only when the offset arrives as a tensor): a private
+        // Scratchpad of the writer, registered on the ProgramSpec below.
         if (windowed_q_offset_present) {
             const auto& off = tensor_args.windowed_q_token_offset_tensor.value();
             const tt::DataFormat off_df = tt::tt_metal::datatype_to_dataformat_converter(off.dtype());
-            dfbs.push_back(DataflowBufferSpec{
-                .unique_id = WINDOWED_Q_OFFSET,
-                .entry_size = tt::tile_size(off_df),
-                .num_entries = 1,
-                .data_format_metadata = off_df});
+            constexpr uint32_t windowed_q_offset_num_entries = 1;
+            windowed_q_offset_size = tt::tile_size(off_df) * windowed_q_offset_num_entries;
         }
     }
     // Chunked page table: the reader both fills and reads it (former DM self-loop DFB). Converted to a
@@ -799,15 +823,14 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     }
 
     // ---- Semaphores (KV chain forwarding, non-causal only) ----
-    // sender / receiver default to 0 (INVALID); valid initializes to VALID (non-zero: WH/BH only, a
-    // deprecated capability slated for removal, mirrored here to preserve the legacy op's behavior).
+    // All three start at 0 (INVALID). valid is only ever the source value of the reader's relay writes,
+    // and the reader sets it to VALID on every chain participant before the chain runs, so it needs no
+    // host-side initial value (a non-zero one is unsupported on Quasar).
     Group<SemaphoreSpec> sems;
     if (!is_causal) {
         sems.push_back(SemaphoreSpec{.unique_id = SEM_SENDER, .target_nodes = core_grid});
         sems.push_back(SemaphoreSpec{.unique_id = SEM_RECEIVER, .target_nodes = core_grid});
-        SemaphoreSpec valid_sem{.unique_id = SEM_VALID, .target_nodes = core_grid};
-        valid_sem.advanced_options.initial_value = VALID;
-        sems.push_back(valid_sem);
+        sems.push_back(SemaphoreSpec{.unique_id = SEM_VALID, .target_nodes = core_grid});
     }
 
     uint32_t num_phases = 1;
@@ -1418,18 +1441,12 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         }
     }
     if (is_windowed) {
-        // #54492 K-range narrowing: the reader keeps its own cu_window copy (self-loop) and produces
-        // the {k_lo, k_hi} ctrl CB consumed by compute. It binds cu_window_seqlens under its own
+        // #54492 K-range narrowing: the reader keeps its own cu_window copy (a private Scratchpad) and
+        // produces the {k_lo, k_hi} ctrl CB consumed by compute. It binds cu_window_seqlens under its own
         // accessor, and the per-device Q-offset tensor when supplied (read into the cu copy's landing
-        // spot — no separate CB on the reader side).
-        reader_dfbs.push_back(DFBBinding{
-            .dfb_spec_name = WINDOWED_CU_READER,
-            .accessor_name = "windowed_cu_reader",
-            .endpoint_type = DFBEndpointType::PRODUCER});
-        reader_dfbs.push_back(DFBBinding{
-            .dfb_spec_name = WINDOWED_CU_READER,
-            .accessor_name = "windowed_cu_reader",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+        // spot — no separate buffer on the reader side).
+        reader_scratch.push_back(
+            ScratchpadBinding{.scratchpad_spec_name = WINDOWED_CU_READER, .accessor_name = "windowed_cu_reader"});
         reader_dfbs.push_back(DFBBinding{
             .dfb_spec_name = WINDOWED_K_RANGE,
             .accessor_name = "windowed_k_range",
@@ -1457,7 +1474,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         .tensor_bindings = reader_tensors,
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec::CompileTimeArgs writer_cta = {
@@ -1518,31 +1535,20 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
             .dfb_spec_name = MASK_IN, .accessor_name = "mask_in", .endpoint_type = DFBEndpointType::PRODUCER});
         writer_defines.insert({"WRITER_PRODUCES_MASK", "1"});
     }
+    Group<ScratchpadBinding> writer_scratch;
     if (is_windowed) {
-        // cu_window_seqlens is filled and read within the writer — self-loop.
-        writer_dfbs.push_back(DFBBinding{
-            .dfb_spec_name = CU_WINDOW,
-            .accessor_name = "cu_window_seqlens",
-            .endpoint_type = DFBEndpointType::PRODUCER});
-        writer_dfbs.push_back(DFBBinding{
-            .dfb_spec_name = CU_WINDOW,
-            .accessor_name = "cu_window_seqlens",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+        // cu_window_seqlens is filled and read within the writer — a private Scratchpad.
+        writer_scratch.push_back(
+            ScratchpadBinding{.scratchpad_spec_name = CU_WINDOW, .accessor_name = "cu_window_seqlens"});
         writer_tensors.push_back(
             TensorBinding{.tensor_parameter_name = T_CU_WINDOW, .accessor_name = "cu_window_seqlens"});
         writer_defines.insert({"USE_WINDOWED_MASK", "1"});
-        // #54492: per-Q-chunk K narrowing origin. Scalar via a named RTA; per-device via a dedicated
-        // self-loop CB fed by the windowed_q_token_offset tensor (writer reads it into its own CB).
+        // #54492: per-Q-chunk K narrowing origin. Scalar via a named RTA; per-device via a private
+        // Scratchpad fed by the windowed_q_token_offset tensor.
         writer_rta_names.push_back("windowed_q_tok_offset");
         if (windowed_q_offset_present) {
-            writer_dfbs.push_back(DFBBinding{
-                .dfb_spec_name = WINDOWED_Q_OFFSET,
-                .accessor_name = "windowed_q_offset",
-                .endpoint_type = DFBEndpointType::PRODUCER});
-            writer_dfbs.push_back(DFBBinding{
-                .dfb_spec_name = WINDOWED_Q_OFFSET,
-                .accessor_name = "windowed_q_offset",
-                .endpoint_type = DFBEndpointType::CONSUMER});
+            writer_scratch.push_back(
+                ScratchpadBinding{.scratchpad_spec_name = WINDOWED_Q_OFFSET, .accessor_name = "windowed_q_offset"});
             writer_tensors.push_back(
                 TensorBinding{.tensor_parameter_name = T_WINDOWED_Q_OFFSET, .accessor_name = "windowed_q_offset"});
             writer_defines.insert({"WINDOWED_Q_OFFSET_TENSOR", "1"});
@@ -1558,13 +1564,16 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
 
     KernelSpec writer{
         .unique_id = WRITER,
-        .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp",
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/"
+            "writer_interleaved.cpp",
         .compiler_options = {.defines = writer_defines},
         .dfb_bindings = writer_dfbs,
+        .scratchpad_bindings = writer_scratch,
         .tensor_bindings = writer_tensors,
         .compile_time_args = writer_cta,
         .runtime_arg_schema = {.runtime_arg_names = writer_rta_names},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     KernelSpec::CompileTimeArgs compute_cta = {
@@ -1629,13 +1638,20 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         DFBBinding{.dfb_spec_name = MAX_B, .accessor_name = "max_B", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{.dfb_spec_name = SUM_A, .accessor_name = "sum_A", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = SUM_A, .accessor_name = "sum_A", .endpoint_type = DFBEndpointType::CONSUMER},
-        DFBBinding{.dfb_spec_name = SUM_B, .accessor_name = "sum_B", .endpoint_type = DFBEndpointType::PRODUCER},
-        DFBBinding{.dfb_spec_name = SUM_B, .accessor_name = "sum_B", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{
             .dfb_spec_name = EXP_MAX_DIFF, .accessor_name = "exp_max_diff", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{
             .dfb_spec_name = EXP_MAX_DIFF, .accessor_name = "exp_max_diff", .endpoint_type = DFBEndpointType::CONSUMER},
     };
+    if (!merge_sum) {
+        // Streaming and the attention-sink path keep two separate sum ping-pong DFBs. When merged,
+        // SUM_B is dropped (see the dfbs SUM_B erase above) and the kernel aliases dfb::sum_B onto
+        // dfb::sum_A.
+        compute_dfbs.push_back(
+            DFBBinding{.dfb_spec_name = SUM_B, .accessor_name = "sum_B", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_dfbs.push_back(
+            DFBBinding{.dfb_spec_name = SUM_B, .accessor_name = "sum_B", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
     KernelSpec::CompilerOptions::Defines compute_defines = base_defines;
     if (needs_mask_cb) {
         compute_dfbs.push_back(DFBBinding{
@@ -1676,25 +1692,34 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         compute_defines.insert({"USE_WINDOWED_NARROWING", "1"});
     }
 
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
+    // to_compute_hardware_config bakes enable_32_bit_dest from the ORIGINAL config; Quasar cannot do
+    // 32-bit-DEST block reduce_max (softmax), so force it off here too (mirrors fp32_dest_acc_en above,
+    // which the JIT reads via this config, not the local).
+    if (device->arch() == tt::ARCH::QUASAR) {
+        compute_hw.enable_32_bit_dest = false;
+    }
     if (fp32_dest_acc_en) {
         // qk_im / sum_A / sum_B are Float32 when enable_32_bit_dest is on; the validator requires an
         // explicit unpack_modes entry for each Float32 DFB the compute consumes. Legacy defaulted to
         // UnpackToSrc (no explicit unpack_to_dest_mode), preserved here.
-        // Reach unpack_modes through the generation-neutral accessor rather than
-        // std::get<ComputeGen1Config>: the helper above builds the config from device->arch(), so on
-        // Quasar it returns the Gen2 alternative and naming Gen1 here throws std::bad_variant_access.
         // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
-        auto& dfb_unpack_modes = unpack_modes(compute_hw);
+        auto& dfb_unpack_modes = compute_hw.unpack_modes;
         dfb_unpack_modes.insert({QK_IM, tt::tt_metal::UnpackMode::UnpackToSrc});
         dfb_unpack_modes.insert({SUM_A, tt::tt_metal::UnpackMode::UnpackToSrc});
-        dfb_unpack_modes.insert({SUM_B, tt::tt_metal::UnpackMode::UnpackToSrc});
+        if (!merge_sum) {
+            // SUM_B is dropped when the running-sum ping-pong is merged into SUM_A; no unpack mode for it.
+            dfb_unpack_modes.insert({SUM_B, tt::tt_metal::UnpackMode::UnpackToSrc});
+        }
     }
 
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/compute/sdpa.cpp",
-        .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
+        .compiler_options =
+            {.defines = compute_defines,
+             // Quasar stays on Os: at O3 sdpa.cpp overflows trisc0's ~24KB code region on the emulator.
+             .opt_level = (device->arch() == tt::ARCH::QUASAR) ? KernelBuildOptLevel::Os : KernelBuildOptLevel::O3},
         .dfb_bindings = compute_dfbs,
         .compile_time_args = compute_cta,
         .runtime_arg_schema =
@@ -1715,6 +1740,14 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     if (is_chunked) {
         // size_per_node = entry_size * num_entries = page_table_stick_size * 1 (single entry).
         scratchpads.push_back(ScratchpadSpec{.unique_id = PAGE_TABLE_SCRATCH, .size_per_node = page_table_stick_size});
+    }
+    if (is_windowed) {
+        scratchpads.push_back(ScratchpadSpec{.unique_id = CU_WINDOW, .size_per_node = cu_window_size});
+        scratchpads.push_back(ScratchpadSpec{.unique_id = WINDOWED_CU_READER, .size_per_node = cu_window_size});
+        if (windowed_q_offset_present) {
+            scratchpads.push_back(
+                ScratchpadSpec{.unique_id = WINDOWED_Q_OFFSET, .size_per_node = windowed_q_offset_size});
+        }
     }
 
     ProgramSpec spec{

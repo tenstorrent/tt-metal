@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_unified_routed_expert_ffn
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_unified_routed_expert_ffn REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_unified_routed_expert_ffn TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_unified_routed_expert_ffn)
 
 set_target_properties(

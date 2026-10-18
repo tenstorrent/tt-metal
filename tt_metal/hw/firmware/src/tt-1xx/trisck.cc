@@ -9,10 +9,11 @@
 // 2) instantiate global variables
 
 #include "internal/firmware_common.h"
+#include "api/compile_time_args.h"
 
 #include "chlkc_list.h"
 
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "api/remote_circular_buffer.h"
@@ -83,7 +84,7 @@ uint32_t _start() {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
-    llk::san::thread_init();
+    SAN_HOOK(thread_init());
     RecordPerfCounters();
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG

@@ -464,9 +464,9 @@ void kernel_main() {
     // ARGS
     ///////////////////////////////////////////////////
     size_t arg_idx = 0;
-    address_t output_address = get_arg_val<address_t>(arg_idx++);
-    uint32_t global_init_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t global_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+    address_t output_address = get_common_arg_val<address_t>(0);
+    uint32_t global_init_semaphore_addr = get_common_arg_val<uint32_t>(1);
+    uint32_t global_semaphore_addr = get_common_arg_val<uint32_t>(2);
 
     uint32_t core_id = get_arg_val<uint32_t>(arg_idx++);
     uint32_t link_id = get_arg_val<uint32_t>(arg_idx++);

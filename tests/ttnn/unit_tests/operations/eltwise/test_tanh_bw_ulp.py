@@ -27,30 +27,15 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
-from mpmath import mp, cosh as mp_cosh
+
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
-    float_to_bf16_bits,
     bf16_bits_to_float,
     bf16_daz_normalize,
-    ulp_distance_bf16_daz,
     bf16_quantize_rne,
+    float_to_bf16_bits,
+    sech2_exact,
+    ulp_distance_bf16_daz,
 )
-
-
-def sech2_exact(x: float) -> float:
-    """
-    Exact tanh derivative using mpmath 256-bit precision.
-
-    tanh'(x) = sech²(x) = 1 / cosh²(x)
-
-    Uses 1/cosh²(x) form (not 1 - tanh²(x)) to avoid the catastrophic cancellation
-    that motivated this PR's existence (the original buggy composite kernel).
-    """
-    mp.prec = 256
-    x_mp = mp.mpf(x)
-    cosh_x = mp_cosh(x_mp)
-    result = 1 / (cosh_x * cosh_x)
-    return float(result)
 
 
 def tanh_derivative_expected_bf16_daz(x: float) -> float:
@@ -226,6 +211,28 @@ class TestTanhBwDeepTail:
         ), f"ULP {ulp_error} and abs error {abs(actual - expected):.3e} both exceed thresholds"
 
 
+@pytest.mark.skipif(
+    ttnn.get_arch_name() != "blackhole",
+    reason=(
+        "Wormhole's tanh derivative still builds |x| with sfpi::abs, which leaves a sign-set NaN "
+        "sign-set; tracked by https://github.com/tenstorrent/tt-metal/issues/57509"
+    ),
+)
+class TestTanhBwNonFinite:
+    """Non-finite inputs return 0, whatever the sign bit. The sign-set NaNs are the
+    ones that matter: torch rounds every NaN to bf16 as 0xFFFF, and with |x| taken by
+    sfpi::abs those came out as +inf while 0x7FC0 gave 0."""
+
+    @pytest.mark.parametrize("bits", [0x7FC0, 0xFFC0, 0xFFFF, 0x7F81, 0xFF81, 0x7F80, 0xFF80])
+    def test_non_finite_is_zero(self, device, bits):
+        x = torch.tensor([bits], dtype=torch.int32).to(torch.int16).view(torch.bfloat16).reshape(1, 1)
+        tt_x = ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_g = ttnn.from_torch(torch.ones_like(x), device=device, layout=ttnn.TILE_LAYOUT)
+        actual = ttnn.to_torch(ttnn.tanh_bw(tt_g, tt_x)[0]).reshape(-1)[0].item()
+        logger.info(f"x=0x{bits:04X}: actual={actual!r}")
+        assert actual == 0.0, f"x=0x{bits:04X}: expected 0, got {actual!r}"
+
+
 class TestTanhBwWithGradientScaling:
     """Correctness guard (unique): only tests using grad != 1.0 (grad=0.5, 2.0, -1.0, 0.1, 10.0).
     Catches swapped grad/input tensors or missing gradient multiplication in backward pass."""
@@ -311,3 +318,47 @@ def test_tanh_bw_ulp_summary(device):
     assert max_ulp <= 2, (
         f"Max ULP {max_ulp} at x={worst_x} exceeds threshold 2. " f"See table above for per-point details."
     )
+
+
+def test_tanh_bw_cache_miss_same_volume_different_alignment(device):
+    """Equal padded volume, different alignment, must be two cache entries.
+
+    logical 32x32 padded to 64x32 versus padded to 32x64. Both volumes are 2048.
+    """
+    device.enable_program_cache()
+    logical = (1, 1, 32, 32)
+
+    def pair(padded):
+        grad = torch.rand(logical, dtype=torch.bfloat16)
+        x = torch.rand(logical, dtype=torch.bfloat16)
+        tt_grad = ttnn.tilize_with_val_padding(
+            ttnn.from_torch(grad, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16),
+            padded,
+            0.0,
+        )
+        tt_x = ttnn.tilize_with_val_padding(
+            ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16),
+            padded,
+            0.0,
+        )
+        return tt_grad, tt_x
+
+    torch.manual_seed(0)
+    wide = pair([1, 1, 64, 32])
+    tall = pair([1, 1, 32, 64])
+
+    def volume(shape):
+        n = 1
+        for dim in shape:
+            n *= int(dim)
+        return n
+
+    assert volume(wide[1].padded_shape) == volume(tall[1].padded_shape)
+    assert list(wide[1].padded_shape) != list(tall[1].padded_shape)
+
+    device.clear_program_cache()
+    ttnn.tanh_bw(*wide)
+    assert device.num_program_cache_entries() == 1
+    ttnn.tanh_bw(*tall)
+    assert device.num_program_cache_entries() == 2
+    device.disable_and_clear_program_cache()

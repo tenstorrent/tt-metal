@@ -400,7 +400,6 @@ def _validate_lm_head_program_configs(config: LMHead1DConfig) -> None:
             raise ValueError("LMHead1D DRAM-sharded programs require input_memcfg in L1")
         if config.input_memcfg.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
             raise ValueError("LMHead1D DRAM-sharded programs require width-sharded input_memcfg")
-        num_compute_cores = config.input_memcfg.shard_spec.grid.num_cores()
 
     for split_index, program_config in enumerate(config.program_configs):
         if program_config is None:
@@ -429,11 +428,16 @@ def _validate_lm_head_program_configs(config: LMHead1DConfig) -> None:
             raise ValueError(f"LMHead1D split {split_index} weight memory must reside in DRAM")
         if weight_memcfg.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
             raise ValueError(f"LMHead1D split {split_index} weight memory must be width sharded")
-        covered_width = program_config.per_core_N * TILE_SIZE * num_compute_cores
-        if covered_width < physical_widths[split_index]:
+        # per_core_N sizes output storage shards, independently of the input
+        # shards and DRAM readers. Matmul places these on the full compute grid;
+        # per_core_M covers the padded batch, so only one row of blocks is needed.
+        output_cores = math.ceil(physical_widths[split_index] / (program_config.per_core_N * TILE_SIZE))
+        grid = config.mesh_device.compute_with_storage_grid_size()
+        available_cores = grid.x * grid.y
+        if output_cores > available_cores:
             raise ValueError(
-                f"LMHead1D split {split_index} program covers {covered_width} columns, "
-                f"below physical width {physical_widths[split_index]}"
+                f"LMHead1D split {split_index} program requires {output_cores} output storage cores, "
+                f"but the device compute grid has only {available_cores}"
             )
 
 

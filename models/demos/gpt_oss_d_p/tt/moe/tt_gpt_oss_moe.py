@@ -19,7 +19,7 @@ GPT-OSS-specific differences vs the MiniMax-M3 template:
     ``use_expert_bias`` (the kernel adds gate/up bias before the clamp and down bias after the down
     matmul, SwiGluOai only). ``use_expert_bias=False`` keeps the bias-free path.
 
-Keeps M3's ``combine(init_zeros=True)`` (safe for skewed routing) and
+Keeps ``combine(init_zeros=True)`` (safe for skewed routing) and
 ``activation=ttnn.RoutedExpertActivation.SwiGluOai`` (bakes GPT-OSS's alpha=1.702 / limit=7.0).
 
 Reference: models/demos/minimax_m3/tt/moe/tt_minimax_moe.py (TtMiniMaxMoE.__init__/forward).
@@ -174,7 +174,7 @@ class TtGptOssMoE(LightweightModule):
         )
         indices, scores = topk_indices, topk_weights
 
-        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
+        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _, _ = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
             num_experts_per_tok=self.num_experts_per_tok,

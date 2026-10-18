@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "topk_dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/index_tile_dataflow.hpp"
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -54,9 +54,9 @@ void kernel_main() {
             dfb_in0.push_back(onetile);
 #if GENERATE_INDICES
             if (uint16_output) {
-                generate_index_tile<uint16_t>(dfb::index, w);
+                dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, w);
             } else {
-                generate_index_tile<uint32_t>(dfb::index, w);
+                dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index, w);
             }
 #else
             // Read precomputed indices to dataflow buffer

@@ -64,6 +64,7 @@ add_subdirectory(deepseek/moe/moe_gate_mm)
 add_subdirectory(deepseek_moe_post_combine_tilize)
 add_subdirectory(dropout)
 add_subdirectory(fft)
+add_subdirectory(fused_msda)
 add_subdirectory(multi_scale_deformable_attn)
 add_subdirectory(plusone)
 add_subdirectory(reshape)
@@ -71,7 +72,6 @@ add_subdirectory(ssm)
 add_subdirectory(tensor_prefetcher)
 add_subdirectory(test)
 add_subdirectory(topk_router_gpt)
-add_subdirectory(unary_backward)
 
 # Umbrella target for everything migrated into this file: ttnncpp links this
 # one target instead of enumerating these op libraries itself. Add/remove
@@ -111,6 +111,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::FFT
+        TTNN::Ops::Experimental::FusedMSDA
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reshape
@@ -118,7 +119,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::TensorPrefetcher
         TTNN::Ops::Experimental::Test
         TTNN::Ops::Experimental::TopkRouterGpt
-        TTNN::Ops::Experimental::UnaryBackward
 )
 
 # target_link_libraries() alone is not enough: per the CMake docs, an OBJECT
@@ -163,6 +163,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Dropout>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FFT>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::FusedMSDA>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MultiScaleDeformableAttn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PlusOne>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reshape>
@@ -170,5 +171,4 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TensorPrefetcher>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Test>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkRouterGpt>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::UnaryBackward>
 )

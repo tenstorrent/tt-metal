@@ -6,6 +6,7 @@
 #include "batch_norm_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 using namespace tt::tt_metal;
 

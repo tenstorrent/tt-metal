@@ -4,12 +4,51 @@
 
 #include "optimizer_base.hpp"
 
+#include <stdexcept>
+
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 
 namespace ttml::optimizers {
 
+void require_bf16_parameters(const serialization::NamedParameters& parameters, std::string_view optimizer_name) {
+    for (const auto& [name, tensor_ptr] : parameters) {
+        if (!tensor_ptr->get_requires_grad()) {
+            continue;
+        }
+        const auto dtype = tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE).dtype();
+        TT_FATAL(
+            dtype == ttnn::DataType::BFLOAT16,
+            "{} supports bf16 parameters only, but parameter '{}' is stored as {}. fp32 parameters are supported by "
+            "AdamW, and by other optimizers once the precision config lands (#56513).",
+            optimizer_name,
+            name,
+            dtype);
+    }
+}
+
 OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
+}
+
+float OptimizerBase::get_initial_lr() {
+    if (!m_initial_lr.has_value()) {
+        m_initial_lr = get_lr();
+    }
+    return *m_initial_lr;
+}
+
+void OptimizerBase::save_initial_lr(serialization::StateDict& dict) const {
+    // If no scheduler has recorded a base LR yet, the current LR is the base.
+    dict["initial_lr"] = m_initial_lr.value_or(get_lr());
+}
+
+void OptimizerBase::restore_initial_lr(const serialization::StateDict& dict) {
+    if (!dict.contains("initial_lr")) {
+        throw std::runtime_error(
+            "Optimizer state dict has no \"initial_lr\" entry. Optimizer checkpoints must include initial_lr; "
+            "checkpoints written before it was added are not supported and must be regenerated.");
+    }
+    m_initial_lr = serialization::get_value_type<float>(dict, "initial_lr");
 }
 
 void OptimizerBase::print_stats() const {

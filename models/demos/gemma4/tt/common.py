@@ -15,7 +15,12 @@ import os
 from loguru import logger
 
 import ttnn
-from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
+from models.common.weight_cache import (
+    build_cached_state_dict,
+    checkpoint_name,
+    mark_weight_cache_complete,
+    weight_cache_is_complete,
+)
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.assistant.model import Gemma4AssistantModel
 from models.demos.gemma4.tt.ccl import CCLManager
@@ -40,6 +45,32 @@ _GEMMA4_HOST_WEIGHT_SUFFIXES = (
 
 def _gemma4_is_host_weight(key):
     return any(key.endswith(s) for s in _GEMMA4_HOST_WEIGHT_SUFFIXES)
+
+
+def gemma4_env_flag(name, default="0"):
+    return os.environ.get(name, default).lower() in ("1", "true", "yes")
+
+
+# Generator prefill chunk used with CP prefill: 6144 rows per column fill the SDPA grid.
+GEMMA4_CP_PREFILL_CHUNK = 24576
+
+
+def gemma4_cp_prefill_engaged(mesh_device):
+    """True only when ``create_tt_model`` will actually set ``mesh_config.cp_prefill``.
+
+    Prefill-chunk defaults use this so GEMMA4_CP_PREFILL=1 without fracture cannot select the large chunk.
+    """
+    shape = getattr(mesh_device, "shape", None)
+    try:
+        is2d = shape is not None and shape[0] > 1 and shape[1] > 1
+    except (TypeError, IndexError):
+        is2d = False
+    return (
+        gemma4_env_flag("GEMMA4_CP_PREFILL")
+        and gemma4_env_flag("GEMMA4_GALAXY_FRACTURE")
+        and is2d
+        and not gemma4_env_flag("GEMMA4_GALAXY_LANES")
+    )
 
 
 def create_tt_model(
@@ -80,7 +111,27 @@ def create_tt_model(
     if mesh_config is None:
         is_mesh = hasattr(mesh_device, "shape")
         num_devices = mesh_device.get_num_devices() if is_mesh else 1
-        if is_mesh and num_devices > 1:
+        _fracture = gemma4_env_flag("GEMMA4_GALAXY_FRACTURE")
+        _lanes = gemma4_env_flag("GEMMA4_GALAXY_LANES")
+        if is_mesh and num_devices > 1 and _fracture and mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
+            # Galaxy one-instance: 2D-fractured weights with TP (heads) on the size-8 axis; (8,4) and (4,8)
+            # are both valid, so orientation stays a MESH_DEVICE knob. GEMMA4_GALAXY_LANES=1 lane-shards the batch.
+            _shape = tuple(mesh_device.shape)
+            _tp_axis = 0 if _shape[0] == 8 else (1 if _shape[1] == 8 else 0)
+            mesh_config = MeshConfig(
+                mesh_device.shape,
+                decode=ModeConfig(tp=_shape[_tp_axis]),
+                tp_axis=_tp_axis,
+                weight_fracture=True,
+            )
+            mesh_config.lane_sharded = _lanes
+            mesh_config.cp_prefill = gemma4_env_flag("GEMMA4_CP_PREFILL")
+            if mesh_config.lane_sharded and mesh_config.cp_prefill:
+                # Lane prefill hands the real page table only to the owner column, while CP partitions Q
+                # across every column; lanes win until CP gathers KV to the owner lane first.
+                logger.warning("GEMMA4_CP_PREFILL ignored: incompatible with GEMMA4_GALAXY_LANES (owner-lane KV)")
+                mesh_config.cp_prefill = False
+        elif is_mesh and num_devices > 1:
             mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
         else:
             mesh_config = MeshConfig((1, 1), decode=ModeConfig(tp=1))
@@ -111,7 +162,11 @@ def create_tt_model(
     # precision_overrides.json changes which files a build needs. Without the precision in the
     # variant, a marker seeded under the old overrides would certify a warm build whose files do
     # not exist -- and as_tensor would persist placeholders for them. (#45400 review, finding B2)
-    _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh)
+    # NOTE: use the SERVED max_seq_len argument, not model_args.max_seq_len --
+    # model_args still carries its construction default here (the served value is
+    # applied further below), so reading it silently skipped the bfp8 context
+    # ceiling at long context.
+    _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh, max_seq_len=max_seq_len)
     # The variant must also pin every knob that decides WHICH tensorbin FILENAMES a build needs, not
     # only their dtype: a warm marker seeded before a filename change certifies a build whose files
     # do not exist yet, and as_tensor then persists the dataless placeholders under the new names
@@ -122,12 +177,20 @@ def create_tt_model(
     # whenever a cache filename scheme changes.
     _cache_layout = {
         "layout": "v2-fused-gate-up-ws",
+        # Fractured builds write *_f8x4_* MLP files; a marker seeded by a plain
+        # TP build must not certify them.
+        "weight_layout": (
+            f"fractured-tp_axis{mesh_config.tp_axis}" if bool(getattr(mesh_config, "weight_fracture", False)) else "tp"
+        ),
         "attn_dram_shard": os.environ.get("GEMMA4_ATTN_DRAM_SHARD", "1"),
         "mlp_dram_shard": os.environ.get("GEMMA4_MLP_DRAM_SHARD", "1"),
         "dram_cores": os.environ.get("GEMMA4_DRAM_CORES", "8"),
     }
     cache_identity = dict(
-        model_name=os.path.basename(str(model_path).rstrip("/")) or "gemma4",
+        # vLLM hands over the resolved hub snapshot dir, not the HF id: keyed on the plain
+        # basename the marker seeded by the e2e demo never matched and every server start
+        # cold-loaded the full HF checkpoint (31B on QB2: ~12 of the 20 budgeted minutes).
+        model_name=checkpoint_name(model_path) or "gemma4",
         n_layers=model_args.num_hidden_layers,
         mesh_shape=_worker_mesh,
         build_variant={
@@ -186,6 +249,8 @@ def create_assistant_model(
     assistant_path=None,
     state_dict=None,
     max_local_batch_size=1,
+    bounded_sliding_kv_cache=None,
+    max_seq_len=None,
 ):
     """Create the Gemma4 it-assistant drafter, sharing the target's mesh/CCL.
 
@@ -212,17 +277,50 @@ def create_assistant_model(
             f"Assistant backbone_hidden_size ({assistant_args.backbone_hidden_size}) != target hidden_size "
             f"({target_model.hidden_size}). The assistant must match its target model."
         )
+    # Bounded target KV is supported now: the drafter's attention configs take
+    # the same cache_position_modulo as the target's sliding layers (see the
+    # bounded_sliding_kv_cache plumbing below and assistant/model.py), so its
+    # cross-attention wraps absolute positions into the same ring. This is what
+    # makes >=128k spec decode reachable on 31B, where unbounded KV does not fit.
+    # It requires the ring sizes to agree; the assistant's own sliding_window
+    # matches its target's (1024 on both 12B and 31B), so verify that here
+    # rather than assuming it.
+    # GATE LIFTED. The clobbering described here was real -- verify writes all K+1
+    # candidates up front, and in a ring of EXACTLY the window, slot (p+j)%W still
+    # holds live position p+j-W. It is fixed by ring HEADROOM (the spec path runs
+    # ring = 2*window, so speculative slots fall outside the window; see
+    # attention.bounded_ring_modulo), plus the last-chunk expansion threshold fix
+    # in Gemma4Generator._expand_bounded_last_chunk.
+    # Measured 31B @ 32k, greedy/traced: bounded 2.40/5 @ 42.26 tok/s/u vs
+    # unbounded 2.40/5 @ 42.42 -- parity, matching text. 128k 2.78/5 @ 36.08
+    # (baseline 24.44); 256k 1.70/5 @ 16.35 (baseline 16.97 -- coherent but spec
+    # is NOT a win at 256k: verify cost scales with context, acceptance falls).
     if getattr(target_model, "bounded_sliding_kv_cache", False):
-        raise NotImplementedError(
-            "Speculative decoding requires the target to use unbounded sliding KV caches "
-            "(bounded_sliding_kv_cache=False); the drafter cross-attention reads absolute cache positions."
+        _tgt_win = getattr(target_model, "sliding_window", None) or getattr(
+            getattr(target_model, "hf_config", None), "sliding_window", None
         )
+        _asst_win = getattr(assistant_args.text_args, "sliding_window", None)
+        if _tgt_win is not None and _asst_win is not None and int(_tgt_win) != int(_asst_win):
+            raise NotImplementedError(
+                f"Bounded spec decode needs matching sliding windows: target {_tgt_win} vs "
+                f"assistant {_asst_win}. The drafter cross-attends the target's bounded ring, "
+                "so a different window would wrap positions to the wrong slots."
+            )
 
     if state_dict is None:
         state_dict = Gemma4AssistantArgs.load_state_dict(assistant_path, dummy_weights=False)
 
     mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
     assistant_args.cluster_shape = mesh_shape
+    # Serve length: Gemma4AssistantArgs.max_seq_len DEFAULTS to 131072, and the
+    # drafter's layers are built from it (assistant/model.py max_seq_len=...). Left
+    # unset, a 256k run builds the drafter for HALF the context while positions run
+    # to 262143 -- the drafter then produces noise and acceptance collapses to
+    # ~0.00/5 (measured), while <=128k looked fine because the default covered it.
+    if max_seq_len is not None:
+        assistant_args.max_seq_len = int(max_seq_len)
+        if hasattr(assistant_args, "text_args"):
+            assistant_args.text_args.max_seq_len = int(max_seq_len)
     tensor_cache_path = str(assistant_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
 
     model = Gemma4AssistantModel(
@@ -235,5 +333,25 @@ def create_assistant_model(
         tensor_cache_path=tensor_cache_path,
         mesh_config=mesh_config,
         max_local_batch_size=max_local_batch_size,
+        # Match the TARGET's KV mode: with bounded sliding caches the drafter's
+        # cross-attention must wrap positions into the same ring. Inferred from
+        # the target when not stated explicitly.
+        # Whether the DRAFTER wraps positions must match the caches it actually
+        # reads, not the target's global mode. The drafter cross-attends only the
+        # LAST layer of each type; full-attention layers are always unbounded, and
+        # the last sliding layer is EXEMPTED from bounding for exactly this reason
+        # (Gemma4Model._spec_unbounded_layer). So when that exemption is active,
+        # both caches the drafter touches hold absolute positions and it must NOT
+        # apply the ring modulo -- otherwise it looks up p % window in a
+        # full-length cache and drafts noise (measured: acceptance 0.12/5 at 128k
+        # bounded vs 2.78/5 unbounded, 0.00/5 at 256k).
+        bounded_sliding_kv_cache=(
+            bounded_sliding_kv_cache
+            if bounded_sliding_kv_cache is not None
+            else (
+                bool(getattr(target_model, "bounded_sliding_kv_cache", False))
+                and getattr(target_model, "_spec_unbounded_layer", None) is None
+            )
+        ),
     )
     return assistant_args, model

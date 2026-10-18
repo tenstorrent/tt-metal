@@ -17,6 +17,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "llk_device_fixture.hpp"
@@ -107,14 +108,7 @@ static vector<std::uint32_t> run_fp8_typecast(
     SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, num_tiles});
     SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles});
 
-    // Wrap the program into a MeshWorkload so we can dispatch via the mesh command queue.
-    // This path works under both fast dispatch and slow dispatch, unlike detail::LaunchProgram.
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    LaunchProgram(mesh_device, std::move(program));
 
     vector<std::uint32_t> result_vec;
     distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);
@@ -258,53 +252,53 @@ using namespace unit_tests::llk::fp8_typecast;
 // ============================================================================
 // Legacy CB-id datacopy API — pre-existing fp8 typecast coverage (#40287), validated against a host golden.
 // ============================================================================
-TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToFloat16b) { case_fp8_to_bf16(*devices_[0], kLegacyKernel); }
-TEST_F(LLKBlackholeSingleCardFixture, TensixFloat16bToFp8e4m3) { case_bf16_to_fp8(*devices_[0], kLegacyKernel); }
-TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToBfp8b) { case_fp8_to_bfp8(*devices_[0], kLegacyKernel); }
-TEST_F(LLKBlackholeSingleCardFixture, TensixBfp8bToFp8e4m3) { case_bfp8_to_fp8(*devices_[0], kLegacyKernel); }
+TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToFloat16b) { case_fp8_to_bf16(this->device(), kLegacyKernel); }
+TEST_F(LLKBlackholeSingleCardFixture, TensixFloat16bToFp8e4m3) { case_bf16_to_fp8(this->device(), kLegacyKernel); }
+TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToBfp8b) { case_fp8_to_bfp8(this->device(), kLegacyKernel); }
+TEST_F(LLKBlackholeSingleCardFixture, TensixBfp8bToFp8e4m3) { case_bfp8_to_fp8(this->device(), kLegacyKernel); }
 TEST_F(LLKBlackholeSingleCardFixture, TensixBfp8bToBfp8b) {
-    case_bfp8_to_bfp8(*devices_[0], kLegacyKernel, /*fp32_dest_acc_en=*/false);
+    case_bfp8_to_bfp8(this->device(), kLegacyKernel, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(LLKBlackholeSingleCardFixture, TensixBfp8bToBfp8bFp32Dest) {
-    case_bfp8_to_bfp8(*devices_[0], kLegacyKernel, /*fp32_dest_acc_en=*/true);
+    case_bfp8_to_bfp8(this->device(), kLegacyKernel, /*fp32_dest_acc_en=*/true);
 }
-TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToFp8e4m3) { case_fp8_to_fp8(*devices_[0], kLegacyKernel); }
+TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToFp8e4m3) { case_fp8_to_fp8(this->device(), kLegacyKernel); }
 TEST_F(LLKBlackholeSingleCardFixture, TensixFloat16bToFloat16b) {
-    case_bf16_to_bf16(*devices_[0], kLegacyKernel, /*fp32_dest_acc_en=*/false);
+    case_bf16_to_bf16(this->device(), kLegacyKernel, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(LLKBlackholeSingleCardFixture, TensixFloat16bToFloat16bFp32Dest) {
-    case_bf16_to_bf16(*devices_[0], kLegacyKernel, /*fp32_dest_acc_en=*/true);
+    case_bf16_to_bf16(this->device(), kLegacyKernel, /*fp32_dest_acc_en=*/true);
 }
 
 // ============================================================================
 // Id-free (2.0) datacopy API — same cases/golden as above, exercising the LLKOperand kernel.
 // ============================================================================
 TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToFloat16bIdFreeGolden) {
-    case_fp8_to_bf16(*devices_[0], kComputeKernel);
+    case_fp8_to_bf16(this->device(), kComputeKernel);
 }
 TEST_F(LLKBlackholeSingleCardFixture, TensixFloat16bToFp8e4m3IdFreeGolden) {
-    case_bf16_to_fp8(*devices_[0], kComputeKernel);
+    case_bf16_to_fp8(this->device(), kComputeKernel);
 }
 TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToBfp8bIdFreeGolden) {
-    case_fp8_to_bfp8(*devices_[0], kComputeKernel);
+    case_fp8_to_bfp8(this->device(), kComputeKernel);
 }
 TEST_F(LLKBlackholeSingleCardFixture, TensixBfp8bToFp8e4m3IdFreeGolden) {
-    case_bfp8_to_fp8(*devices_[0], kComputeKernel);
+    case_bfp8_to_fp8(this->device(), kComputeKernel);
 }
 TEST_F(LLKBlackholeSingleCardFixture, TensixBfp8bToBfp8bIdFreeGolden) {
-    case_bfp8_to_bfp8(*devices_[0], kComputeKernel, /*fp32_dest_acc_en=*/false);
+    case_bfp8_to_bfp8(this->device(), kComputeKernel, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(LLKBlackholeSingleCardFixture, TensixBfp8bToBfp8bFp32DestIdFreeGolden) {
-    case_bfp8_to_bfp8(*devices_[0], kComputeKernel, /*fp32_dest_acc_en=*/true);
+    case_bfp8_to_bfp8(this->device(), kComputeKernel, /*fp32_dest_acc_en=*/true);
 }
 TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToFp8e4m3IdFreeGolden) {
-    case_fp8_to_fp8(*devices_[0], kComputeKernel);
+    case_fp8_to_fp8(this->device(), kComputeKernel);
 }
 TEST_F(LLKBlackholeSingleCardFixture, TensixFloat16bToFloat16bIdFreeGolden) {
-    case_bf16_to_bf16(*devices_[0], kComputeKernel, /*fp32_dest_acc_en=*/false);
+    case_bf16_to_bf16(this->device(), kComputeKernel, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(LLKBlackholeSingleCardFixture, TensixFloat16bToFloat16bFp32DestIdFreeGolden) {
-    case_bf16_to_bf16(*devices_[0], kComputeKernel, /*fp32_dest_acc_en=*/true);
+    case_bf16_to_bf16(this->device(), kComputeKernel, /*fp32_dest_acc_en=*/true);
 }
 
 }  // namespace tt::tt_metal

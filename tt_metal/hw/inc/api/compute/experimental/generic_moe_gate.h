@@ -32,6 +32,10 @@ ALWI void generic_moe_gate_init(uint32_t icb0, uint32_t icb1) {
 // what standalone GenericMoeGate needs since it uploads no index tensor. Set it false when the caller has
 // pre-loaded DST[1] via copy_tile(input_indices, 0, 1) and wants that mapping to survive the sort -- the
 // bit-15-flagged SRAM slots the hot/cold KimiMoeGate path relies on.
+// scores_include_bias returns the biased selection scores as the payload (for
+// callers such as GPT-OSS that apply softmax to those logits). The default returns
+// the original scores; normalize, when enabled, operates on the chosen payload.
+// Keep is_fp32_dest_acc_en in its existing position for source compatibility.
 template <
     bool normalize = false,
     int num_selected_experts = 8,
@@ -40,7 +44,8 @@ template <
     bool full_sort = false,
     bool generate_indices = true,
     bool do_extra_scale = false,
-    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool scores_include_bias = false>
 ALWI void generic_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale, uint32_t extra_scale = 0) {
     static_assert(num_selected_experts >= 1 && num_selected_experts <= 16);
 
@@ -57,7 +62,8 @@ ALWI void generic_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t 
           zero_tail,
           full_sort,
           generate_indices,
-          do_extra_scale>(eps, scale, extra_scale)));
+          do_extra_scale,
+          scores_include_bias>(eps, scale, extra_scale)));
 }
 
 #endif

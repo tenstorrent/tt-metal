@@ -278,10 +278,16 @@ class LMHead(LightweightModule):
 
         # Concatenate the outputs
         # outputs shape: a list of tensors, each tensor is 1,1,32,size_per_device per device
+        # Decode traces retain these logits across requests. Honor the model's placement
+        # so large vocabularies do not occupy L1 needed by the next eager prefill.
         output = ttnn.concat(
             outputs,
             dim=-1,
-            memory_config=ttnn.L1_MEMORY_CONFIG if not use_prefetcher else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=(
+                self.args.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
+                if not use_prefetcher
+                else ttnn.DRAM_MEMORY_CONFIG
+            ),
             sub_core_grids=self.prefetcher.all_worker_cores_range_set if use_prefetcher else None,
         )
 

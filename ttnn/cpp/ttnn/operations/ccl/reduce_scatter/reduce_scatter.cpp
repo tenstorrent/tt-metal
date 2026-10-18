@@ -143,7 +143,7 @@ ttnn::Tensor reduce_scatter(
     // TODO: until #27196 is resolved, the fabric API does not subtract out the one link correctly for dispatch used
     // when not all devices are mmio capable. Manually doing it requires the use of "is_mmio_capable" counting, but as
     // the one link that's subtracted out is only along one cluster axis, we will be using less links we would like
-    uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
+    uint32_t num_links_ = num_links.has_value() ? *num_links : common::get_num_links(*mesh_device, cluster_axis);
 
     auto resolved_compute_kernel_config =
         ttnn::ccl::resolve_fp32_acc_compute_kernel_config(compute_kernel_config, input_tensor.dtype());

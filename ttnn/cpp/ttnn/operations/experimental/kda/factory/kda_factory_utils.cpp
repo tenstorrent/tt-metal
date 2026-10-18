@@ -9,6 +9,7 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace ttnn::experimental::prim::kda_factory_detail {
 
@@ -92,6 +93,15 @@ void check_interleaved(const Tensor& tensor, std::string_view operation_name, st
     TT_FATAL(!tensor.is_sharded(), "{}: {} must use interleaved memory", operation_name, tensor_name);
 }
 
+void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name) {
+    check_allocated_device_tensor(actual_start, operation_name, "actual_start");
+    check_layout(actual_start, tt::tt_metal::Layout::ROW_MAJOR, operation_name, "actual_start");
+    check_dtype(actual_start, tt::tt_metal::DataType::UINT32, operation_name, "actual_start");
+    check_interleaved(actual_start, operation_name, "actual_start");
+    check_same_device(reference, actual_start, operation_name, "actual_start");
+    TT_FATAL(actual_start.logical_shape().volume() == 1, "{}: actual_start must be a scalar", operation_name);
+}
+
 void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name) {
     TT_FATAL(
         !memory_config.is_sharded(),
@@ -129,6 +139,50 @@ KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, ui
     }
     distribution.core_set = tt::tt_metal::num_cores_to_corerangeset(count, grid, true);
     return distribution;
+}
+
+ValueBlockDistribution distribute_value_blocks(
+    tt::tt_metal::CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles) {
+    TT_FATAL(batch_heads <= grid.x * grid.y, "KDA heads {} exceed compute cores {}", batch_heads, grid.x * grid.y);
+    // The most blocks each head can split into when its blocks share a line of `line` cores and there are `lines`.
+    const auto best_split = [&](uint32_t line, uint32_t lines) {
+        for (uint32_t candidate = std::min(value_tiles, line); candidate > 1; --candidate) {
+            if (value_tiles % candidate == 0 && batch_heads <= (line / candidate) * lines) {
+                return candidate;
+            }
+        }
+        return 1u;
+    };
+    // Per-column math is identical for any split, but more blocks mean fewer value tiles and less L1 per core, so
+    // keep the largest split. On a tie a head's blocks take one grid column: the worker rows are physically
+    // contiguous, while a grid row can straddle non-worker columns, and value block 0's multicast over such a gap was
+    // intermittently twice as slow.
+    const uint32_t row_blocks = best_split(grid.x, grid.y);
+    const bool vertical = row_blocks > 1 && best_split(grid.y, grid.x) == row_blocks;
+    const uint32_t value_blocks = row_blocks;
+    const uint32_t line = vertical ? grid.y : grid.x;
+    const uint32_t heads_per_line = line / value_blocks;
+    ValueBlockDistribution result;
+    result.value_blocks = value_blocks;
+    result.value_tiles_per_core = value_tiles / value_blocks;
+    const auto at = [&](uint32_t along, uint32_t across) {
+        return vertical ? tt::tt_metal::CoreCoord{across, along} : tt::tt_metal::CoreCoord{along, across};
+    };
+    std::vector<tt::tt_metal::CoreRange> lanes;
+    for (uint32_t lane = 0; lane * heads_per_line < batch_heads; ++lane) {
+        const uint32_t lane_heads = std::min(heads_per_line, batch_heads - lane * heads_per_line);
+        lanes.emplace_back(at(0, lane), at(lane_heads * value_blocks - 1, lane));
+    }
+    for (uint32_t head = 0; head < batch_heads; ++head) {
+        for (uint32_t block = 0; block < value_blocks; ++block) {
+            result.cores.push_back(at((head % heads_per_line) * value_blocks + block, head / heads_per_line));
+            result.head.push_back(head);
+            result.value_block.push_back(block);
+        }
+    }
+    // Merged ranges keep dispatch to one multicast when the lanes fill the same span.
+    result.core_set = tt::tt_metal::CoreRangeSet(lanes).merge_ranges();
+    return result;
 }
 
 }  // namespace ttnn::experimental::prim::kda_factory_detail

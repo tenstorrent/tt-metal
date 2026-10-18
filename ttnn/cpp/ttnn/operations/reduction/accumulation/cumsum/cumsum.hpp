@@ -18,6 +18,7 @@ Tensor cumsum(
     std::optional<DataType> dtype = std::nullopt,
     const bool& reverse_order = false,
     std::optional<Tensor> optional_out = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    bool disable_compensated_sum = false);
 
 }  // namespace ttnn

@@ -8,6 +8,7 @@
 #include "api/compute/src_order.h"                     // SrcOrder
 #include "api/compute/experimental/2_0/llk_operand.h"  // LLKOperand
 #include "experimental/2_0/llk_hw_configure.h"  // id-free llk_{unpack,math,pack}_hw_configure (+ pack_dest_init / math_pack_sync_init per TRISC)
+#include "api/compute/experimental/semaphore_compute_impl.h"  // compute_semaphore_hw_startup (Blackhole compute semaphore seed)
 
 #ifdef TRISC_PACK
 #include "experimental/2_0/llk_pack_tile.h"  // id-free llk_pack_init<DESC>
@@ -73,13 +74,14 @@ ALWI void compute_kernel_hw_startup(
     static_assert(experimental::is_legal_tile_shape(SO), "compute_kernel_hw_startup: illegal out tile shape.");
     // Map the operands onto the physical source registers. For SrcOrder::Reverse (matmul), in0 -> SrcB and
     // in1 -> SrcA (resolved at compile time). Each descriptor is referenced only inside its own thread's
-    // macro (UNPACK/MATH/PACK), so it is unused on the other threads -- fine under -Wno-unused-variable.
+    // macro (UNPACK/MATH/PACK). The other threads see a set-but-unused variable (-Wunused-but-set-variable),
+    // so the descriptors are marked maybe_unused.
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
-    constexpr experimental::LLKMemDescriptor SRCA =
+    [[maybe_unused]] constexpr experimental::LLKMemDescriptor SRCA =
         reverse ? experimental::LLKOperand<FB, SB>::descriptor : experimental::LLKOperand<FA, SA>::descriptor;
-    constexpr experimental::LLKMemDescriptor SRCB =
+    [[maybe_unused]] constexpr experimental::LLKMemDescriptor SRCB =
         reverse ? experimental::LLKOperand<FA, SA>::descriptor : experimental::LLKOperand<FB, SB>::descriptor;
-    constexpr experimental::LLKMemDescriptor OUT = experimental::LLKOperand<FO, SO>::descriptor;
+    [[maybe_unused]] constexpr experimental::LLKMemDescriptor OUT = experimental::LLKOperand<FO, SO>::descriptor;
 
     UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en, SRCA, SRCB>()));
 
@@ -89,6 +91,10 @@ ALWI void compute_kernel_hw_startup(
     PACK((llk_pack_hw_configure<is_fp32_dest_acc_en, OUT>()));
     PACK((llk_pack_init<OUT, is_fp32_dest_acc_en, PackMode::Default>()));
     PACK((_llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>()));
+    // Seed the Blackhole compute semaphore (SemScope::COMPUTE_ATOMIC): Value 0, Max = the host-baked
+    // capacity. PACK is its producer, so this needs no handshake with UNPACK; see
+    // compute_semaphore_hw_startup().
+    PACK((compute_semaphore_hw_startup()));
 }
 
 // clang-format off

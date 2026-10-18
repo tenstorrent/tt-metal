@@ -186,6 +186,38 @@ def test_slice_sampling_params_preserves_field_alignment_without_mutating_input(
     assert params.temperature == [0.1, 0.2, 0.3]
 
 
+def test_slice_sampling_params_broadcasts_scalars_to_every_selected_row():
+    # A demo-style request: one scalar per field, meant for every active decode slot.
+    params = SamplingParams(temperature=0.0, top_k=32, top_p=0.08, seed=7)
+
+    sliced = slice_sampling_params(params, [4, 0, 9])
+
+    assert sliced.temperature == [0.0, 0.0, 0.0]
+    assert sliced.top_k == [32, 32, 32]
+    assert sliced.top_p == [0.08, 0.08, 0.08]
+    assert sliced.presence_penalty == [0.0, 0.0, 0.0]
+    assert sliced.enable_log_probs == [False, False, False]
+    # Seeds are request-owned and never broadcast to sibling rows.
+    assert sliced.seed == 7
+    assert params.temperature == 0.0
+
+
+def test_scalar_sampling_request_places_onto_every_active_decode_slot():
+    # Regression for #55953: qwen3-32b eval-32-perf-report compiles decode for 32 active slots with
+    # SamplingParams(temperature=0.0, top_k=32, top_p=0.08); the sliced request must describe 32 rows.
+    slots = tuple(range(32))
+    request = slice_sampling_params(SamplingParams(temperature=0.0, top_k=32, top_p=0.08), slots)
+
+    prepared = prepare_sampling_params(request, 32, max_device_top_k=32, allow_force_argmax=True)
+    placed = place_prepared_sampling_params(prepared, slots)
+
+    assert prepared.active_rows == 32
+    assert placed.active_mask == tuple([True] * 32)
+    assert placed.top_k == tuple([1] * 32)  # temperature 0 normalizes to greedy rows
+    assert placed.greedy_mask == tuple([True] * 32)
+    assert placed.temperature == tuple([1.0] * 32)  # greedy rows carry the neutral temperature
+
+
 def test_prepared_slice_preserves_prompt_output_and_slot_remap_alignment():
     prompt_tokens = torch.tensor([[10, 11], [20, 21], [30, 31]])
     output_tokens = [[100], [200, 201], [300]]
@@ -302,6 +334,30 @@ def test_legacy_device_sampling_capabilities_declare_the_exact_limit(relative_pa
 
     assert advertised
     assert all(capabilities.get("max_device_top_k") == 32 for _, capabilities in advertised)
+
+
+@pytest.mark.parametrize(
+    "class_name",
+    ["LlamaForCausalLM", "QwenForCausalLM", "MistralForCausalLM"],
+)
+def test_device_grammar_generators_retain_sampling_capabilities(class_name):
+    relative_path = "models/tt_transformers/tt/generator_vllm.py"
+    tree = ast.parse(
+        Path(relative_path).read_text(encoding="utf-8"),
+        filename=relative_path,
+    )
+    class_node = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name)
+    assignment = next(
+        node
+        for node in class_node.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "model_capabilities" for target in node.targets)
+    )
+    capabilities = ast.literal_eval(assignment.value)
+
+    assert capabilities["supports_sample_on_device"] is True
+    assert capabilities["supports_device_grammar"] is True
+    assert capabilities["max_device_top_k"] == 32
 
 
 def test_tttv2_runtime_import_boundary_excludes_legacy_sampling_state():
