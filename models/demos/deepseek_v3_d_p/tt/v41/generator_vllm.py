@@ -117,7 +117,7 @@ class DeepseekV41ForCausalLM:
         self.generic_traces: dict[int, V41GenericPrefillTrace] = {}  # id(state) -> its bucket captures
         # requests prefilled (wholly or up to a chunk boundary) but not yet joined into a decode slot:
         # request key -> (its prefill state, the prefix so far); oldest first
-        self.pending: OrderedDict[int, tuple[V41PrefillState, torch.Tensor]] = OrderedDict()
+        self.pending: OrderedDict[int, tuple[V41PrefillState, torch.Tensor, dict]] = OrderedDict()
         self.next_prefill_state = 0
         self.warmed_up = False
         # traced prefill per (slot, prompt length): the fixed input buffers are shared by every trace
@@ -240,15 +240,15 @@ class DeepseekV41ForCausalLM:
         if start == 0:
             if key in self.pending:  # the same request restarted (preempted and resumed from position 0)
                 return self.pending.pop(key)[0]
-            owned = {id(st) for st, _ in self.pending.values()}
+            owned = {id(st) for st, _, _ in self.pending.values()}
             free = [st for st in self.prefill_states if id(st) not in owned]
             if free:
                 return free[0]
-            old_key, (state, _) = next(iter(self.pending.items()))
+            old_key, (state, _, _) = next(iter(self.pending.items()))
             self._join_pending(old_key)
             return state
         assert key in self.pending, f"request {key}: a chunk at {start} without its earlier chunks"
-        state, _ = self.pending[key]
+        state, _, _ = self.pending[key]
         assert state.start == start, f"request {key}: chunk at {start}, its state is at {state.start}"
         return state
 
@@ -256,11 +256,14 @@ class DeepseekV41ForCausalLM:
         """``tokens`` [B, S] (padded), ``prompt_lens`` [B], ``page_table`` [B, blocks], ``start_pos`` [B] ->
         fp32 logits ``[B, 1, vocab]`` of each row's last token (host sampling reads row -1). A row is a prompt
         (``start_pos`` 0, ``prompt_lens`` its length) or one chunk of it (chunked prefill: ``start_pos`` a
-        multiple of the chunk, ``prompt_lens`` the end of the chunk, ``tokens`` the whole prefix); either way the
-        row's state keeps the prefix and the request joins its decode slot at its first ``decode_forward``.
-        Rows resuming a prefill run before rows starting one (one state can finish before the next takes it)."""
+        multiple of the chunk, ``prompt_lens`` the end of the chunk, ``tokens`` the whole prefix, or the whole
+        prompt with ``prompt_total_lens`` its length, so the next chunk's host inputs are prepared ahead);
+        either way the row's state keeps the prefix and the request joins its decode slot at its first
+        ``decode_forward``. Rows resuming a prefill run before rows starting one (one state can finish before
+        the next takes it)."""
         tokens, lengths, page_table = kwargs["tokens"], kwargs["prompt_lens"], kwargs["page_table"]
         start_pos = kwargs.get("start_pos")
+        total_lens = kwargs.get("prompt_total_lens")  # the whole prompt's length per row, when ``tokens`` has it
         assert "sampling_params" not in kwargs or kwargs["sampling_params"] is None, "host sampling only"
         out = torch.zeros(tokens.shape[0], 1, self.config.VOCAB_SIZE, dtype=torch.float32)
         rows = [i for i in range(tokens.shape[0]) if int(lengths[i]) > 0]
@@ -275,12 +278,14 @@ class DeepseekV41ForCausalLM:
             assert (
                 n + ROWS <= self.model.max_seq_len
             ), f"prompt of {n} tokens beyond max_seq_len {self.model.max_seq_len}"
-            prompt = tokens[i, :n].to(torch.int64)
+            total = n if total_lens is None else max(n, int(total_lens[i]))
+            prompt = tokens[i, :total].to(torch.int64)  # the whole prompt when given, else the prefix so far
             key = self._request_key(page_table, i)
             state = self._state_for(key, start)
+            resume = self.pending[key][2] if key in self.pending else {}
             t0 = time.time()
-            trace = self.prefill_traces.get((id(state), n)) if start == 0 else None
-            if trace is None and start == 0 and self.trace_on_miss:
+            trace = self.prefill_traces.get((id(state), n)) if start == 0 and n == total else None
+            if trace is None and start == 0 and n == total and self.trace_on_miss:
                 trace = self._capture_prefill(state, n)
                 logger.info(f"DeepSeek-V4.1-Flash: prefill of {n} tokens captured in {time.time() - t0:.1f} s")
                 t0 = time.time()
@@ -288,19 +293,19 @@ class DeepseekV41ForCausalLM:
             if (
                 generic is not None
                 and n - start <= self.model.chunk
-                and generic.key_of(start // self.model.chunk, n) is None
+                and generic.key_of(start // self.model.chunk, total) is None
             ):
                 generic = None  # one chunk without a capture: eager either way
             if trace is not None:
                 logits, _ = trace.run(prompt)
                 mode = "replay"
             elif generic is not None:
-                logits, _ = generic.run(prompt, start=start)
+                logits, _ = generic.run(prompt, start=start, end=n, resume=resume)
                 mode = f"generic {generic.last['replayed']}+{generic.last['eager']}"
             else:
-                logits = self.model.prefill_into(prompt, state, start=start)
+                logits = self.model.prefill_into(prompt, state, start=start, end=n, resume=resume)
                 mode = "eager"
-            self.pending[key] = (state, prompt)
+            self.pending[key] = (state, prompt, resume)
             self.pending.move_to_end(key)
             phases = trace if trace is not None else generic
             logger.info(
@@ -312,10 +317,10 @@ class DeepseekV41ForCausalLM:
 
     def _join_pending(self, key: int) -> None:
         """Move request ``key``'s prefilled state into its decode slot (its first decode step)."""
-        state, prompt = self.pending.pop(key)
+        state, prompt, _ = self.pending.pop(key)
         slot = self._slot_for_prefill(key)
         t0 = time.time()
-        self.decoder.join(slot, prompt, state)
+        self.decoder.join(slot, prompt[: state.start], state)
         logger.info(
             f"DeepSeek-V4.1-Flash: request of {prompt.numel()} tokens joined slot {slot} in {time.time() - t0:.3f} s "
             f"({self.decoder.last_join.get('mode')})"

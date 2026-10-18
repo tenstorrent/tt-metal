@@ -120,19 +120,22 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
     chunked = os.environ.get("V41_GEN_CHUNKED", "0") == "1"  # drive each prompt chunk by chunk, as the plugin
     result["chunked"] = chunked
 
-    def prefill_call(rows: list[tuple[int, torch.Tensor]], starts: list[int]) -> torch.Tensor:
-        """One ``prefill_forward``: per row the prefix so far and the chunk's start."""
+    def prefill_call(rows: list[tuple[int, torch.Tensor]], starts: list[int], ends: list[int] | None = None):
+        """One ``prefill_forward``: per row the whole prompt, the chunk's start and (chunked) its end, as the
+        plugin passes them (``prompt_total_lens`` with the whole prompt)."""
         width = max(int(t.numel()) for _, t in rows)
         tokens = torch.zeros(len(rows), width, dtype=torch.int32)
         for i, (_, t) in enumerate(rows):
             tokens[i, : t.numel()] = t
+        totals = [int(t.numel()) for _, t in rows]
         out = model.prefill_forward(
             tokens=tokens,
-            prompt_lens=torch.tensor([int(t.numel()) for _, t in rows]),
+            prompt_lens=torch.tensor(totals if ends is None else ends),
             page_table=_page_table([b for b, _ in rows]),
             start_pos=torch.tensor(starts, dtype=torch.int32),
             kv_cache=kv,
             enable_trace=True,
+            **({} if ends is None else {"prompt_total_lens": torch.tensor(totals)}),
         )
         assert out.shape == (len(rows), 1, C.VOCAB_SIZE) and not torch.isnan(out).any()
         return out
@@ -149,7 +152,7 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
                 n = int(t.numel())
                 for start in range(0, n, chunk):
                     end = min(start + chunk, n)
-                    out[i] = prefill_call([(block, t[:end])], [start])[0]
+                    out[i] = prefill_call([(block, t)], [start], [end])[0]
         result.setdefault("prefill_s", []).append(round(time.time() - t0, 3))
         return out
 

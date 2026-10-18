@@ -373,26 +373,36 @@ class TtV41Transformer(LightweightModule):
         on_block=None,
         timings: dict | None = None,
         start: int = 0,
+        end: int | None = None,
+        resume: dict | None = None,
     ) -> list:
         """The chunk loop of one request from position ``start`` (0, or a multiple of the chunk the state is at:
-        a prefill resumed after its earlier chunks). ``step(c, forward)`` runs chunk ``c``'s device forward:
-        ``forward()`` (untraced or captured) or a replay of its capture. Returns every chunk's scored device
-        logits. ``timings`` accumulates the host seconds of each phase (``prepare``: the chunks' host inputs,
-        ``stage``: their copies to the device, ``step``: the device call, untraced or a replay issued without
-        waiting)."""
+        a prefill resumed after its earlier chunks) to ``end`` (the prompt's end, or a chunk boundary before it:
+        one call of a chunked prefill). ``step(c, forward)`` runs chunk ``c``'s device forward: ``forward()``
+        (untraced or captured) or a replay of its capture. Returns every chunk's scored device logits.
+        ``timings`` accumulates the host seconds of each phase (``prepare``: the chunks' host inputs, ``stage``:
+        their copies to the device, ``step``: the device call, untraced or a replay issued without waiting).
+        ``resume`` carries the host-input pipeline across the calls of one chunked prefill (the prompt's
+        remaining chunks are prepared ahead while this call's run): pass the dict the previous call filled."""
         total = int(request.tokens.numel())
+        end = total if end is None else end
+        assert start < end <= total and (end == total or end % self.chunk == 0), (start, end, total)
         assert state.start == start, f"the state is at {state.start}, the chunk loop starts at {start}"
         if self.dspark is not None and "dspark_rope" not in buffers:
             buffers["dspark_rope"] = [
                 self.dspark.seed_rope(s, min(self.chunk, total - s)) for s in range(0, total, self.chunk)
             ]
         t = timings if timings is not None else {}
-        chunks, scored = self._prefetched(self._host_chunks(request, start), prefill_prefetch()), []
+        scored = []
         t0 = time.perf_counter()
-        host = next(chunks)
+        if resume is not None and resume.get("next") == start and resume.get("host") is not None:
+            chunks, host = resume["chunks"], resume["host"]  # the pipeline of the previous call, a chunk ahead
+        else:
+            chunks = self._prefetched(self._host_chunks(request, start), prefill_prefetch())
+            host = next(chunks)
         t["prepare"] = t.get("prepare", 0.0) + time.perf_counter() - t0
         chunk_log = os.environ.get("TT_V41_PREFILL_CHUNK_LOG", "0") == "1"
-        for c in range(start // self.chunk, -(-total // self.chunk)):
+        for c in range(start // self.chunk, -(-end // self.chunk)):
             t0 = time.perf_counter()
             token_ids, engram_inputs = self._stage(host, buffers)
             if state.generic:
@@ -416,6 +426,8 @@ class TtV41Transformer(LightweightModule):
             host = next(chunks, None)  # the next chunk's host inputs, while the device runs this chunk
             t["prepare"] += time.perf_counter() - t0
             state.advance(length)
+        if resume is not None:
+            resume.update(chunks=chunks, host=host, next=end)
         return scored
 
     @staticmethod
@@ -480,17 +492,26 @@ class TtV41Transformer(LightweightModule):
         return self._logits(scored), state
 
     def prefill_into(
-        self, tokens: torch.Tensor, state: V41PrefillState, logit_positions: int = 1, start: int = 0
+        self,
+        tokens: torch.Tensor,
+        state: V41PrefillState,
+        logit_positions: int = 1,
+        start: int = 0,
+        end: int | None = None,
+        resume: dict | None = None,
     ) -> torch.Tensor:
         """``prefill`` of a text prompt into an existing ``state`` (one of ``new_state()``, or one a previous request
         used: it is reset to what a fresh request starts from, as ``V41PrefillTrace.run`` does), so a request pool can
         keep its states, and the decode captures made on them, across requests. ``start`` > 0 resumes the prompt's
         prefill at that chunk boundary instead (``tokens`` the whole prefix; the state at ``start`` from the earlier
-        chunks, not reset). Returns the logits of the prefix's last ``logit_positions`` positions."""
+        chunks, not reset); ``end`` stops after the chunk ending there (``_run``: ``resume`` carries the host
+        pipeline to the next call). Returns the logits of the last ``logit_positions`` positions before ``end``."""
+        end = int(tokens.numel()) if end is None else end
         request = self._request(tokens, logit_positions)
+        request = _Request(request.tokens, end - logit_positions, request.token_types, request.image_features)
         if start == 0:
             self.reset_state(state)
-        scored = self._run(request, state, {}, lambda c, forward: forward(), start=start)
+        scored = self._run(request, state, {}, lambda c, forward: forward(), start=start, end=end, resume=resume)
         return self._logits(scored)
 
     def new_state(self, generic: bool = False) -> V41PrefillState:
@@ -737,13 +758,16 @@ class V41GenericPrefillTrace:
             key = 0 if c == 0 else self.state.tables.bucket(start, self.chunk)
         return key if key in self.controllers else None
 
-    def run(self, tokens: torch.Tensor, logit_positions: int = 1, start: int = 0):
-        """tokens [S] -> (fp32 logits [logit_positions, vocab], state) as ``prefill``; ``self.last`` the phases.
-        ``start`` > 0 resumes the prompt at that chunk boundary (as ``prefill_into``)."""
+    def run(self, tokens: torch.Tensor, logit_positions: int = 1, start: int = 0, end: int | None = None, resume=None):
+        """tokens [S] (the whole prompt) -> (fp32 logits [logit_positions, vocab] of the position before ``end``,
+        state) as ``prefill``; ``self.last`` the phases. ``start`` > 0 resumes the prompt at that chunk boundary
+        (as ``prefill_into``); ``end`` (a chunk boundary, default the prompt's end) stops after that chunk, the
+        next chunks' host inputs prepared ahead through ``resume`` (``TtV41Transformer._run``)."""
         model, state = self.model, self.state
         total = int(tokens.numel())
+        end = total if end is None else end
         assert logit_positions <= total - (total - 1) // self.chunk * self.chunk, "scored rows lie in the final chunk"
-        request = model._request(tokens, logit_positions)
+        request = _Request(tokens, end - logit_positions, None, None)
         t0 = time.perf_counter()
         if start == 0:
             model.reset_state(state)
@@ -756,12 +780,12 @@ class V41GenericPrefillTrace:
                 return forward()
             self.last["replayed"] += 1
             self.controllers[key].replay(blocking=False)
-            if (c + 1) * self.chunk >= total:  # the final chunk: its logits, and the carry its replay leaves
+            if (c + 1) * self.chunk >= end:  # this call's last chunk: its logits, and the carry its replay leaves
                 state.compressor_carry.update(self.carry_after[key])
                 return self.scored[key]
             return []
 
-        scored = model._run(request, state, self.buffers, step, timings=self.last, start=start)
+        scored = model._run(request, state, self.buffers, step, timings=self.last, start=start, end=end, resume=resume)
         t0 = time.perf_counter()
         ttnn.synchronize_device(model.mesh_device)
         self.last["wait"] = time.perf_counter() - t0
