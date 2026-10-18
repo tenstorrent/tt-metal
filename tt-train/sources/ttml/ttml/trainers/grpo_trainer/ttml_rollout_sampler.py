@@ -189,6 +189,10 @@ class TTMLRolloutSampler(RolloutSampler):
 
     def update_weights(self, weights: Any, version: int) -> None:
         """The sampler shares the trainer's model, so there is nothing to install: only record ``version``."""
+        if version <= self._weight_version:
+            raise ValueError(
+                f"update_weights: version {version} must be > current weight_version {self._weight_version}"
+            )
         self._weight_version = version
 
     # --------------------------------------------------------------
