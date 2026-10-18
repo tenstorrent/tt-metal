@@ -448,6 +448,32 @@ def test_erfc_tail(device):
     assert_allclose(expected_result=golden, actual_result=result, atol=0, rtol=3.2e-1)
 
 
+@pytest.mark.parametrize("ttnn_op", [ttnn.erf, ttnn.erfc, ttnn.i1])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_erf_erfc_i1_nan_input(device, ttnn_op, dtype):
+    """#59184, #59185, #59186: the input clamp must not turn a NaN into a finite result. A BF16 Dest reads
+    a NaN back as an infinity (tenstorrent/tt-llk#675), so for bfloat16 any non-finite output passes."""
+    # NaNs of both signs and payloads, built from bit patterns (a float32 -> bfloat16 cast would rewrite them).
+    nan_bits = [0x7FC0, 0x7F81, 0x7FFF, 0xFFC0, 0xFF81, 0xFFFF]
+    nans = torch.tensor([b - (1 << 16) if b & 0x8000 else b for b in nan_bits], dtype=torch.int16)
+    finite = torch.tensor([0.0, 0.5, -0.5, 4.0, -4.0, 6.0, -6.0, 20.0, -20.0], dtype=torch.bfloat16)
+    row = torch.cat([nans.view(torch.bfloat16), finite])
+    inputs = torch.zeros((32, 32), dtype=torch.bfloat16)
+    for r in range(32):
+        inputs[r, (torch.arange(len(row)) + r) % 32] = row
+    if dtype == ttnn.float32:
+        inputs = (inputs.view(torch.int16).to(torch.int32) << 16).view(torch.float32)
+    tt_in = ttnn.from_torch(inputs, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True)
+    out = ttnn.to_torch(ttnn_op(tt_in)).float()
+
+    nan_in = torch.isnan(inputs)
+    bad = nan_in & torch.isfinite(out)
+    assert not bad.any(), f"{bad.sum().item()} NaN inputs produced finite outputs, e.g. {out[bad][:4].tolist()}"
+    if dtype == ttnn.float32:
+        assert torch.isnan(out[nan_in]).all()
+    assert torch.isfinite(out[~nan_in]).all()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # reciprocal: 1/x, swept over the bfloat16 lattice stored as float32
 #

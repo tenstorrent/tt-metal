@@ -91,10 +91,10 @@ inline void calculate_i1() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // Clamp to [-88.5, 88.5] — exp() saturates near ±88.7 in FP32.
-        x = sfpi::symmetric_clamp(x, I1_MAX_INPUT);
-
-        const sfpi::vFloat abs_x = sfpi::abs(x);
+        // Clamp to [-88.5, 88.5] — exp() saturates near ±88.7 in FP32. setsgn before abs
+        // turns a NaN into -NaN, which SFPABS leaves alone and min keeps.
+        const sfpi::vFloat abs_x = sfpi::min(sfpi::abs(sfpi::setsgn(x, 1)), I1_MAX_INPUT);
+        x = sfpi::copysgn(abs_x, x);
 
         // ─── Polynomial path (always; valid for |x| ≤ 10) ────────────────
         // Computed unconditionally and stored — its LRegs are then free

@@ -52,23 +52,36 @@ constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
 
 #endif
 
+// ERF_LUT with the numerator negated: the rational then returns -erf(x) (see calculate_erf).
+constexpr std::array<float, ERF_LUT_SIZE> erf_lut_negated_numerator() {
+    std::array<float, ERF_LUT_SIZE> lut = ERF_LUT;
+    for (uint32_t i = ERF_NUM_SEGMENTS + 1; i <= ERF_NUM_SEGMENTS + 1 + ERF_NUM_DEGREE; i++) {
+        lut[i] = -lut[i];
+    }
+    return lut;
+}
+constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT_NEG_NUM = erf_lut_negated_numerator();
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_erf() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        // Clamp |x| to 10.0 before evaluation (erf is odd, rational is exact at boundary)
-        x = sfpi::symmetric_clamp(x, 10.0f);
+        // Clamp |x| to 10.0 before evaluation. setsgn before abs turns a NaN into -NaN,
+        // which SFPABS leaves alone and min keeps, so the NaN reaches the rational.
+        sfpi::vFloat ax = sfpi::min(sfpi::abs(sfpi::setsgn(x, 1)), 10.0f);
         sfpi::vFloat result = piecewise_rational_eval<
             ERF_NUM_DEGREE,
             ERF_DEN_DEGREE,
             ERF_NUM_SEGMENTS,
             ERF_LUT_SIZE,
             true,
-            APPROXIMATION_MODE>(ERF_LUT, x);
+            APPROXIMATION_MODE>(ERF_LUT_NEG_NUM, ax);
         // Saturate to [-1, 1]: rational fit is not bounded and overshoots by
         // up to ~3e-8 (FP32) / ~2e-4 (BF16 LUT) in the tail. Persists in FP32
         // dest register and biases downstream ops (e.g. decomposed GELU in CLIP).
-        result = sfpi::clamp(result, -1.0f, +1.0f);
+        // erf is odd: the rational gave -erf(|x|), so clamp it and put the sign of x back.
+        // SFPMAD returns +NaN for a NaN input, which max keeps.
+        result = sfpi::copysgn(sfpi::max(result, -1.0f), x);
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
