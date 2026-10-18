@@ -65,6 +65,10 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/glm53.json"
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+    # EXPERIMENT: inter-mesh D2D lands on VC0 (no VC1 on intra-mesh routers).
+    if [ "${CONFIG}" != sc1 ]; then
+        RUNNER_ENV="${RUNNER_ENV} export TT_METAL_FABRIC_INTERMESH_VC0=1;"
+    fi
     PCC_THRESHOLD=0.83
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
