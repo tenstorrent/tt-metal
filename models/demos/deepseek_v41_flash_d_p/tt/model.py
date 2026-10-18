@@ -435,7 +435,9 @@ class TtDS41Block:
 
         def moe_add(ctx, a, b):
             # the two partials summed before the one exchange over TP (components.yaml moe_add notes)
-            s = ttnn.add(a, b, dtype=ttnn.float32, memory_config=DRAM)
+            # CCL_IMPL=fabric_bf16 (P.6): the sum written in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
+            sdt = ccl.partial_dtype(self.mesh) if self.experts.sum_mode == "gather_add" else ttnn.float32
+            s = ttnn.add(a, b, dtype=sdt, memory_config=DRAM)
             out = self.experts.reduce(s)
             ttnn.deallocate(s)
             return out

@@ -12,6 +12,14 @@
             of the sum, no full sum and no mesh_partition); tp_sum = a reduce-scatter by row blocks + a fabric
             all_gather of the rows (the sum replicated, bit-identical on every chip of the row).
 
+    fabric_bf16  (P.6, owner comparison: Marko Staletovic's GLM-5.3 choice, glm53_flash_d_p/tt/common.py:scatter_rows,
+            GLM_SCATTER_OP=fabric_bf16) fabric, but the TP partial sums that go through the reduce-scatter (sum_cols:
+            ATTN_O_SUM / EXPERTS_SUM; tp_sum: HC_TP_SUM's tile-aligned ones: mHC mixes, q_a, compressor, indexer
+            gates) are typecast to bf16 and reduced by fabric_reduce_scatter's default FPU add (bf16 in, bf16 out),
+            tp_sum's row gather in bf16 too, then typecast back to fp32 for the consumers. Lossy: one bf16 rounding of
+            each partial and of the sum. The sums the fork does not take (norm sum of squares [S/SP, 1], engram gates
+            [S/SP, 12]) stay the exact fp32 gather_add.
+
 A group of 2 (TP = 2: 2x2, 2x4 rows) adds a + b once: bit-identical to the stock gather_add. With TP = 4 (Galaxy) the
 fabric line adds in its own order (own + upstream partials), still one exact fp32 rounding per add.
 
@@ -35,7 +43,45 @@ _RS_LINKS: dict = {}
 
 
 def fabric() -> bool:
-    return settings.get("CCL_IMPL") == "fabric"
+    """The bring-up fabric forks (CCL_IMPL fabric or fabric_bf16)."""
+    return settings.get("CCL_IMPL") in ("fabric", "fabric_bf16")
+
+
+def bf16_sums() -> bool:
+    """CCL_IMPL=fabric_bf16: the reduce-scattered TP partial sums in bf16 (P.6)."""
+    return settings.get("CCL_IMPL") == "fabric_bf16"
+
+
+def partial_dtype(mesh) -> ttnn.DataType:
+    """The dtype a producer writes a TP partial in when the sum is sum_cols / tp_sum's gather_add path: bf16 under
+    CCL_IMPL=fabric_bf16 on a split TP axis (the producer's packer rounds its fp32 DEST to bf16 once, the rounding the
+    typecast would do, without the typecast's DRAM round trip: [1024, 5120] 0.071 ms), else fp32."""
+    return ttnn.bfloat16 if bf16_sums() and mesh.shape[TP_AXIS] > 1 else ttnn.float32
+
+
+def _rs_bf16(mesh, t: ttnn.Tensor, dim: int) -> ttnn.Tensor:
+    """fp32 or bf16 partials ``t`` -> bf16 (typecast when fp32) -> fabric_reduce_scatter with its default FPU add
+    (bf16 output, as GLM-5.3's scatter_rows). Does not consume ``t``."""
+    tb = t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16, memory_config=DRAM)
+    out = ttnn.bringup.fabric_reduce_scatter(
+        tb, cluster_axis=TP_AXIS, num_links=rs_links(mesh), dim=dim, cache_descriptors=True
+    )
+    if tb is not t:
+        ttnn.deallocate(tb)
+    return out
+
+
+def _exact_input(t: ttnn.Tensor) -> ttnn.Tensor:
+    """A bf16 partial (partial_dtype) on a path that sums exactly: typecast to fp32 (exact). Returns ``t`` itself
+    when it is fp32; the caller frees what it got only when it is not ``t``."""
+    return t if t.dtype == ttnn.float32 else ttnn.typecast(t, ttnn.float32, memory_config=DRAM)
+
+
+def _to_fp32(t: ttnn.Tensor) -> ttnn.Tensor:
+    """bf16 -> fp32 (exact), consuming ``t``: the consumers of the sums take fp32."""
+    out = ttnn.typecast(t, ttnn.float32, memory_config=DRAM)
+    ttnn.deallocate(t)
+    return out
 
 
 def _sems(mesh):
@@ -140,7 +186,8 @@ def _gather_add(mesh, t: ttnn.Tensor) -> ttnn.Tensor:
 def _rs_ok(t: ttnn.Tensor, dim: int, g: int) -> bool:
     s = list(t.shape)
     mc = t.memory_config()
-    if t.layout != ttnn.TILE_LAYOUT or t.dtype != ttnn.float32 or s[0] != 1 or s[1] != 1:
+    ok_dtype = t.dtype == ttnn.float32 or (t.dtype == ttnn.bfloat16 and bf16_sums())
+    if t.layout != ttnn.TILE_LAYOUT or not ok_dtype or s[0] != 1 or s[1] != 1:
         return False
     if mc.buffer_type != ttnn.BufferType.DRAM or mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
         return False
@@ -155,10 +202,20 @@ def tp_sum(mesh, t: ttnn.Tensor) -> ttnn.Tensor:
     """The exact fp32 sum of ``t`` ([1, 1, R, W] fp32 TILE) over the TP axis, replicated on every chip of the row,
     bit-identical across them. Does not consume ``t``. stock: _gather_add. fabric: fabric_reduce_scatter of row
     blocks (exact SFPU add) -> fabric_all_gather of the rows; when R is not a multiple of 32 TP or W of 32 (the norms'
-    [S/SP, 1] sum of squares, the engram gates' [S/SP, 12]), _gather_add on the fabric gather."""
+    [S/SP, 1] sum of squares, the engram gates' [S/SP, 12]), _gather_add on the fabric gather. fabric_bf16 (P.6): the
+    RS (FPU add) and the row gather in bf16, the result typecast to fp32; ``t`` may be bf16 (partial_dtype)."""
     tp = mesh.shape[TP_AXIS]
     if not fabric() or not _rs_ok(t, 2, tp):
-        return _gather_add(mesh, t)
+        tf = _exact_input(t)
+        out = _gather_add(mesh, tf)
+        if tf is not t:
+            ttnn.deallocate(tf)
+        return out
+    if bf16_sums():  # CCL_IMPL=fabric_bf16: RS and row gather in bf16, back to fp32 (P.6)
+        part = _rs_bf16(mesh, t, 2)
+        out = all_gather(part, 2, TP_AXIS)
+        ttnn.deallocate(part)
+        return _to_fp32(out)
     part = ttnn.bringup.fabric_reduce_scatter(
         t, cluster_axis=TP_AXIS, num_links=rs_links(mesh), dim=2, exact_fp32_add=True, cache_descriptors=True
     )
@@ -170,13 +227,19 @@ def tp_sum(mesh, t: ttnn.Tensor) -> ttnn.Tensor:
 def sum_cols(mesh, t: ttnn.Tensor) -> ttnn.Tensor:
     """The exact fp32 sum of ``t`` ([1, 1, R, H] fp32 TILE) over the TP axis, the chip's hidden columns
     [1, 1, R, H/TP] (mesh column c: [c H/TP, (c+1) H/TP)). Does not consume ``t``. stock: _gather_add +
-    mesh_partition. fabric: ONE fabric_reduce_scatter by column blocks (dim 3, exact SFPU add)."""
+    mesh_partition. fabric: ONE fabric_reduce_scatter by column blocks (dim 3, exact SFPU add). fabric_bf16 (P.6):
+    the same RS in bf16 (FPU add), the result typecast to fp32 (mhc_post takes fp32); ``t`` may be bf16."""
     tp = mesh.shape[TP_AXIS]
+    if fabric() and _rs_ok(t, 3, tp) and bf16_sums():  # CCL_IMPL=fabric_bf16 (P.6)
+        return _to_fp32(_rs_bf16(mesh, t, 3))
     if fabric() and _rs_ok(t, 3, tp):
         return ttnn.bringup.fabric_reduce_scatter(
             t, cluster_axis=TP_AXIS, num_links=rs_links(mesh), dim=3, exact_fp32_add=True, cache_descriptors=True
         )
-    full = _gather_add(mesh, t)
+    tf = _exact_input(t)
+    full = _gather_add(mesh, tf)
+    if tf is not t:
+        ttnn.deallocate(tf)
     out = ttnn.mesh_partition(full, dim=3, cluster_axis=TP_AXIS, memory_config=DRAM)
     ttnn.deallocate(full)
     return out

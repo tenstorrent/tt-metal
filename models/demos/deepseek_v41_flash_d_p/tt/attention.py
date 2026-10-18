@@ -537,7 +537,9 @@ class TtWindowAttention:
                 ttnn.deallocate(t)
         yq = fp8_qdq(yt, dtype=ttnn.bfloat16)
         ttnn.deallocate(yt)
-        z = ttnn.linear(yq, self.wo_b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+        # CCL_IMPL=fabric_bf16 (P.6): the partial written in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
+        zdt = ccl.partial_dtype(self.mesh) if self.o_sum == "gather_add" else ttnn.float32
+        z = ttnn.linear(yq, self.wo_b, dtype=zdt, compute_kernel_config=self.ckc, memory_config=DRAM)
         ttnn.deallocate(yq)
         if self.geo.tp == 1:
             return z
