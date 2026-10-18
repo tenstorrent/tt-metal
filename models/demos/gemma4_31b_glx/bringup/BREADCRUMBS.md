@@ -171,3 +171,29 @@
 - `bringup/hooks.py`: `ffn_residual` reads `layers.{layer}.layer_scalar` once at load as a Python float.
 - Check (`bfw job check --task C.sliding.ffn_residual`): PASS. pcc 0.9999943, auto_margin_min 1.369 (vs_cpu rel
   0.00342 against 0.00469), bias -0.0024, device_ops 1, host_flops_frac 0. All 7 earlier sliding tasks: PASS.
+
+## C.attn.attention (run 20261018-003406-gemma31-glx-3, attempt 1), 2026-10-18
+
+- `tt/global_attention.py`: `GlobalAttention` (layer 5 and every full_attention layer). 62 device ops.
+  - Tied QK projection (fp32 out). fp32 q / k / v head norms; V = norm(k_raw) without weight; k_norm gamma
+    folded into q. Elementwise fp32 RoPE on the 128 rotary lanes.
+  - Packed served cache `[2, 1, 7040, 640]` bfp8 as `[K rot 128 adjacent pairs | V value order 512]`, written with
+    `deepseek_prefill.update_padded_kv_cache` from fp32 rows.
+  - SDPA, `ATTN_GLOBAL_SDPA=composed`: per chip, all_gather the slot's rows over SP. QK^T in fp32 against the cache
+    prefix (bfp8) and this chunk's fresh bf16 rows, plus a causal mask on the chunk. Then a composed fp32 softmax
+    (max, subtract, exact exp, sum, reciprocal) and P V in fp32. q and heads stay fp32.
+  - o_proj as `[out, in]` bfp8 with transpose_b (`ATTN_GLOBAL_W_LAYOUT=out_in`), fp32 partials through the TP
+    reduce_scatter, and one bf16 typecast at the end.
+- Why not ring_mla (kept as `ATTN_GLOBAL_SDPA=ring_mla`): with kv_actual_isl it only runs the streaming compute, which
+  needs fp32_dest_acc False and keeps bf16 O / sum / max state. At head_dim 512 that put column 2524 at 1.42x its
+  limit (margin 0.71).
+- `bringup/hooks.py` `_GlobalAttentionStep._load_prefix` hands the prefix to `write_kv` as host-rounded bfp8, not
+  fp32. The device's fp32 -> bfp8 typecast of the bf16-exact state biased prefix magnitudes by +0.28 %. That alone
+  kept column 1658 at 1.02x its limit (margin 0.98 in runs 5-10).
+- New settings: ATTN_GLOBAL_SDPA, ATTN_GLOBAL_FP32_REDUCE and ATTN_GLOBAL_FP32_QK, all at max precision in
+  MAX_PRECISION.
+- Check (`bfw job check --task C.attn.attention`): PASS. pcc 0.999991, auto_margin_min 1.133, device_ops 62,
+  host_flops_frac 0.
+  - vs_cpu: rel 0.0047 (limit 0.0096), column 1658 0.0338 (limit 0.0382).
+  - vs golden: column 5264 0.0379 (limit 0.0475).
+  - Regressions on all 8 sliding tasks and C.attn.attn_norm: PASS.

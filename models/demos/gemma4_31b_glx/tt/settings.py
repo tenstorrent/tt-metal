@@ -78,6 +78,44 @@ TABLE = {
         ("auto", "1", "3"),
         "Ring SDPA max_k_splits. auto: 3 when the cores hold three bands of every (head, Q chunk) unit (gemma4_d_p).",
     ),
+    "ATTN_GLOBAL_Q_CHUNK": Setting(
+        96,
+        (32, 64, 96, 128),
+        "Global ring_mla q chunk (head_dim 512, packed 640 K). gemma4_d_p: q96 / k256 at a 640-row slab; q160 overflows "
+        "L1 beside k256.",
+    ),
+    "ATTN_GLOBAL_K_CHUNK": Setting(256, (128, 256), "Global ring_mla k chunk (gemma4_d_p: 256)."),
+    "ATTN_GLOBAL_SEGMENTED": Setting(
+        True,
+        None,
+        "Global ring_mla segmented accumulation when every (head, Q chunk) unit has its own core (gemma4_d_p).",
+    ),
+    "ATTN_GLOBAL_W_LAYOUT": Setting(
+        "out_in",
+        ("out_in", "in_out"),
+        "Global QK and o_proj bfp8 storage. out_in: the checkpoint's [out, in], matmul transpose_b, bfp8 blocks along "
+        "the input (as the framework's precision model). in_out: W^T, blocks along the output channels; a large o_proj "
+        "channel flushes its 15 neighbours (layer 5 column 2294: rel 0.12 vs limit 0.038).",
+    ),
+    "ATTN_GLOBAL_SDPA": Setting(
+        "composed",
+        ("composed", "ring_mla"),
+        "Global attention over the packed cache. composed: all_gather the slot's rows over SP, QK^T (fp32 out), causal "
+        "mask on the current chunk, fp32 softmax, P V (fp32 out), all HiFi4 + fp32 acc. ring_mla: the fused ring op, "
+        "whose streaming path (the only one with kv_actual_isl) runs bf16 DEST with bf16 O / sum / max state; at head "
+        "dim 512 that puts layer 5's worst output column at 1.4x its component limit (composed: within it).",
+    ),
+    "ATTN_GLOBAL_FP32_REDUCE": Setting(
+        True,
+        None,
+        "Global o_proj partials fp32 through the TP reduce_scatter, one bf16 rounding at the end; False: bf16 partials "
+        "(rounded per chip, then summed in bf16).",
+    ),
+    "ATTN_GLOBAL_FP32_QK": Setting(
+        True,
+        None,
+        "Global tied QK projection output in fp32 (into the fp32 head norms); False: bf16.",
+    ),
     "ATTN_RING_NUM_LINKS": Setting(2, (1, 2), "Ethernet links per direction for the ring SDPA's CP exchange (BH: 2)."),
     "KV_SLOTS": Setting(2, None, "User slots in the served KV cache (serving_answers.yaml)."),
     "MLP_FIDELITY": Setting(
@@ -100,6 +138,9 @@ MAX_PRECISION = {
     "ATTN_PROJ_FP32_ACC": True,
     "ATTN_SDPA_FIDELITY": "HiFi4",
     "ATTN_SDPA_FP32_ACC": False,  # the op's ceiling on the served path (see the setting)
+    "ATTN_GLOBAL_SDPA": "composed",
+    "ATTN_GLOBAL_FP32_REDUCE": True,
+    "ATTN_GLOBAL_FP32_QK": True,
     "MLP_FIDELITY": "HiFi4",
     "MLP_FP32_ACC": True,
     "MLP_FP32_INTERMEDIATE": True,

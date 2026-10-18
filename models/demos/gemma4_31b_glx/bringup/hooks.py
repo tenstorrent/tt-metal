@@ -108,6 +108,37 @@ class _AttentionStep:
         return residual_to_host(self.mesh, y)
 
 
+class _GlobalAttentionStep(_AttentionStep):
+    """A global attention layer called by the component test: (ctx, x [S, H]) -> [S, H].
+
+    Harness boundary: the ctx's KV prefix (key / value [4, >= prefix_len, 512], NeoX lanes) is packed into the served
+    640-wide rows ([K rotary 128 | V in value order], tt/global_attention.pack_global_kv) and written one chunk at a time
+    through the forward's cache write. SP row r, TP column t gets chunk k's positions k*C + r*L + [0, L) of head t."""
+
+    def _load_prefix(self, state, prefix_len):
+        import ttnn
+        from models.demos.gemma4_31b_glx.tt.global_attention import pack_global_kv
+
+        m = self.module
+        rows, cols = tuple(self.mesh.shape)
+        for start in range(0, prefix_len, m.chunk):
+            x = pack_global_kv(state["key"][:, start : start + m.chunk], state["value"][:, start : start + m.chunk])
+            # [Hkv = TP, SP * L, 640] -> [SP, TP, L, 640]; mesh (r, t) takes SP slab r, head t
+            x = x.reshape(x.shape[0], rows, m.slab, m.packed).permute(1, 0, 2, 3).contiguous()
+            t = ttnn.from_torch(
+                # bfp8 rounded on the host: the device's fp32 -> bfp8 typecast of these (bf16-exact) state values
+                # biased the prefix magnitudes +0.28 % (host: -0.007 %), layer 5 column 1658 at 1.02x its limit.
+                x.float(),
+                device=self.mesh,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, (rows, cols), dims=(0, 1)),
+            )
+            m.write_kv(t, start)
+            ttnn.deallocate(t)
+
+
 def device_component(mesh, spec, layer, step):
     import ttnn
     from models.demos.gemma4_31b_glx.tt import weights
@@ -142,6 +173,13 @@ def device_component(mesh, spec, layer, step):
         w = {n: weights.load(ckpt, f"layers.{layer}.self_attn.{n}.weight").float() for n in names}
         module = SlidingAttention(mesh, w, cfg, max_seq=spec.get("target.seq"), chunk=spec.get("target.chunk"))
         return _AttentionStep(mesh, module)
+    if step == "attention" and cfg["layer_types"][layer] == "full_attention":
+        from models.demos.gemma4_31b_glx.tt.global_attention import GlobalAttention
+
+        names = ["q_proj", "k_proj", "o_proj", "q_norm", "k_norm"]
+        w = {n: weights.load(ckpt, f"layers.{layer}.self_attn.{n}.weight").float() for n in names}
+        module = GlobalAttention(mesh, w, cfg, max_seq=spec.get("target.seq"), chunk=spec.get("target.chunk"))
+        return _GlobalAttentionStep(mesh, module)
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 
