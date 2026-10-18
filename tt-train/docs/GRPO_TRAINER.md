@@ -413,12 +413,13 @@ before the next step runs). The columns are a fixed base set —
 
 ```
 step, reward_mean, reward_std, mean_completion_len, min_completion_len,
-max_completion_len, lr, step_time_s, generation_time_s, rollout_weight_version
+max_completion_len, lr, step_time_s, generation_time_s, reward_time_s,
+rollout_wait_s, rollout_weight_version
 ```
 
-(`generation_time_s` is the wait for the next scored batch, so it includes
-reward computation; `rollout_weight_version` is the weight version that
-generated the step's batch.)
+(`generation_time_s` times `generate()`, `reward_time_s` the reward functions,
+`rollout_wait_s` the trainer's wait for the batch; `rollout_weight_version` is
+the weight version that generated the step's batch.)
 
 — followed by one `<CallbackClassName>_time_s` column per callback present at
 `on_train_begin` (**excluding `GRPOMonitor` itself**), followed by every extra
@@ -526,7 +527,7 @@ Two contracts are worth calling out:
 | Hook | Signature | When |
 |------|-----------|------|
 | `on_train_begin` | `(trainer)` | Before the first batch. |
-| `on_step_end` | `(trainer, step, **kwargs)` | Every optimizer step (matches the base `TrainerCallback.on_step_end` contract; not gated by `logging_steps`). Keyword args are the current step's `trainer.metrics`: `reward_mean`, `reward_std`, `mean_completion_len`, `min_completion_len`, `max_completion_len`, `lr`, `generation_time_s`, and one `<CallbackClassName>_time_s` per non-monitor callback (accumulated for the current step across every hook fired so far — a callback later in the list sees the current-step total for every callback before it). `step_time_s` is only present for `GRPOMonitor`, which runs after the timer is sealed; other callbacks see `trainer.metrics` without it. When `log_completions=True`, truncated `prompts` / `completions` / `rewards` lists are also passed. The built-in `GRPOMonitor` accumulates these values across every step and only emits a CSV / wandb row every `logging_steps` steps (see [Built-in GRPOMonitor](#built-in-grpomonitor)). |
+| `on_step_end` | `(trainer, step, **kwargs)` | Every optimizer step (matches the base `TrainerCallback.on_step_end` contract; not gated by `logging_steps`). Keyword args are the current step's `trainer.metrics`: `reward_mean`, `reward_std`, `mean_completion_len`, `min_completion_len`, `max_completion_len`, `lr`, `generation_time_s`, `reward_time_s`, `rollout_wait_s`, and one `<CallbackClassName>_time_s` per non-monitor callback (accumulated for the current step across every hook fired so far — a callback later in the list sees the current-step total for every callback before it). `step_time_s` is only present for `GRPOMonitor`, which runs after the timer is sealed; other callbacks see `trainer.metrics` without it. When `log_completions=True`, truncated `prompts` / `completions` / `rewards` lists are also passed. The built-in `GRPOMonitor` accumulates these values across every step and only emits a CSV / wandb row every `logging_steps` steps (see [Built-in GRPOMonitor](#built-in-grpomonitor)). |
 | `on_before_optimizer_step` | `(trainer)` | After gradient accumulation, before `optimizer.step()`. |
 | `on_save` | `(trainer, step, path)` | After a checkpoint is saved. `path` is the checkpoint directory. |
 | `on_train_end` | `(trainer)` | After the final batch. |

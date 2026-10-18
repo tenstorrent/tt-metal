@@ -281,7 +281,14 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path, lr_sc
 
     metrics = recorder.last_step_metrics
     assert metrics is not None
-    for key in ("reward_mean", "reward_std", "mean_completion_len", "generation_time_s"):
+    for key in (
+        "reward_mean",
+        "reward_std",
+        "mean_completion_len",
+        "generation_time_s",
+        "reward_time_s",
+        "rollout_wait_s",
+    ):
         assert key in metrics, f"missing metric {key}"
         assert np.isfinite(metrics[key]), f"metric {key} is not finite: {metrics[key]}"
 

@@ -398,6 +398,8 @@ _CSV_BASE_COLUMNS = (
     "lr",
     "step_time_s",
     "generation_time_s",
+    "reward_time_s",
+    "rollout_wait_s",
 )
 
 
@@ -1432,7 +1434,9 @@ class GRPOTrainer:
 
     def _record_batch_metrics(self, scored: ScoredRolloutBatch, wait_s: float) -> None:
         rollout, rewards = scored.rollout, scored.rewards
-        self.metrics["generation_time_s"] = wait_s
+        self.metrics["generation_time_s"] = scored.generation_time_s
+        self.metrics["reward_time_s"] = scored.reward_time_s
+        self.metrics["rollout_wait_s"] = wait_s
         if len(self.reward_funcs) > 1:
             for name, arr in scored.reward_components.items():
                 self.metrics[f"{name}_mean"] = float(arr.mean()) if arr.size else 0.0
@@ -1670,7 +1674,8 @@ class GRPOTrainer:
                 for mini_epoch in range(self.config.num_iterations):
                     if mini_epoch > 0:
                         # Metrics are averaged over steps; later mini-epochs don't generate, so they report 0.
-                        self.metrics["generation_time_s"] = 0.0
+                        for key in ("generation_time_s", "reward_time_s", "rollout_wait_s"):
+                            self.metrics[key] = 0.0
                         for cb in self.callbacks:
                             self.metrics.pop(f"{type(cb).__name__}_time_s", None)
                         self._step_start_time = time.perf_counter()
