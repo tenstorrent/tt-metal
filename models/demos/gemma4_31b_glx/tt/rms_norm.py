@@ -5,6 +5,7 @@
 
 Adapted from models/demos/gemma4_d_p/tt/rms_norm.py. Each chip holds [1, 1, rows, 5376] (160 rows between blocks: 640
 SP rows split over the 4 TP columns), so the norm needs no collective. The weight is bf16, replicated on every chip.
+NORM_WEIGHT fp32 (default): the unweighted norm in fp32, then the weight multiply to bf16 (see the setting).
 """
 
 import functools
@@ -79,6 +80,7 @@ class RMSNorm:
             )
             self.tt_weight = ttnn.to_layout(ttnn.reshape(w, (1, 1, 1, hidden)), ttnn.TILE_LAYOUT)
         self.sharded = settings.get("NORM_SHARDED")
+        self.fp32 = self.tt_weight is not None and settings.get("NORM_WEIGHT") == "fp32"
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh.arch(),
             math_fidelity=getattr(ttnn.MathFidelity, settings.get("NORM_FIDELITY")),
@@ -88,8 +90,23 @@ class RMSNorm:
         )
 
     def __call__(self, x, memory_config=None):
-        """x: [1, 1, rows, hidden] bf16 TILE on every chip. Returns the same shape, interleaved in memory_config (DRAM by
+        """x: [1, 1, rows, hidden] bf16 (or fp32: the device model's residual stream) TILE on every chip. Returns the same shape, interleaved in memory_config (DRAM by
         default)."""
+        if self.fp32:
+            x32 = ttnn.typecast(x, ttnn.float32) if x.dtype != ttnn.float32 else x
+            y = ttnn.rms_norm(
+                x32,
+                epsilon=self.eps,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            if x32 is not x:
+                ttnn.deallocate(x32)
+            out = ttnn.multiply(
+                y, self.tt_weight, dtype=ttnn.bfloat16, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG
+            )
+            ttnn.deallocate(y)
+            return out
         geometry = _block_shard_geometry(x.padded_shape[-2], x.padded_shape[-1]) if self.sharded else None
         if geometry is None:
             return ttnn.rms_norm(

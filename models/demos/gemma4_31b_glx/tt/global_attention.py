@@ -31,7 +31,15 @@ import torch
 
 import ttnn
 
-from .attention import SP_AXIS, TILE, TP_AXIS, _allocate_ring_cache, _compute_config, rot_transformation_mat
+from .attention import (
+    SP_AXIS,
+    TILE,
+    TP_AXIS,
+    _allocate_ring_cache,
+    _compute_config,
+    matmul_grid,
+    rot_transformation_mat,
+)
 from .settings import settings
 
 ROTARY_DIM = 128  # rotating lanes of a 512-wide global head (partial_rotary_factor 0.25 of 512)
@@ -55,9 +63,11 @@ def pack_global_kv(key: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
 
 
 class GlobalAttention:
-    def __init__(self, mesh, w: dict, cfg: dict, max_seq: int, chunk: int):
+    def __init__(self, mesh, w: dict, cfg: dict, max_seq: int, chunk: int, chunk_tables: bool = True):
         """w: checkpoint tensors q_proj, k_proj, o_proj, q_norm, k_norm (HF names without the prefix).
-        cfg: the text config. max_seq / chunk: the served geometry (cache capacity and chunk size)."""
+        cfg: the text config. max_seq / chunk: the served geometry (cache capacity and chunk size).
+        chunk_tables: build this layer's own per-chunk RoPE tables, offsets and causal mask (chunk-aligned starts, the
+        component test). The device model passes False and hands every call a ChunkMeta (tt/model.py)."""
         self.mesh = mesh
         sp, tp = tuple(mesh.shape)
         self.sp, self.tp = sp, tp
@@ -125,6 +135,7 @@ class GlobalAttention:
 
         # q_norm weight in packed-Q order, its non-rotary lanes times k_norm's gamma (moved from K to Q).
         k_gamma = w["k_norm"].float()
+        self.k_gamma = k_gamma  # host copy: state.to_torch rebuilds K's non-rotary lanes as V's times gamma
         q_scale = torch.cat((torch.ones(ROTARY_DIM), k_gamma[nonrotary]))
         self.q_norm_w = fp32_const((w["q_norm"].float()[query_order] * q_scale).reshape(1, 1, 1, d))
         # K rotary gamma, adjacent-pair order (applied after the NeoX-halves -> adjacent permutation).
@@ -144,7 +155,8 @@ class GlobalAttention:
         # order (cos 1 / sin 0 beyond the 128 rotary lanes), and the cache-write offset k*C (replicated uint32).
         inv_freq = 1.0 / (rope["rope_theta"] ** (torch.arange(0, ROTARY_DIM, 2, dtype=torch.int64).float() / d))
         inv_freq = torch.cat((inv_freq, torch.zeros(d // 2 - rh)))
-        n_chunks = max_seq // chunk
+        self.inv_freq = inv_freq  # float32 [d / 2]; tt/model.py builds the any-position tables from it
+        n_chunks = max_seq // chunk if chunk_tables else 0
 
         def table(c, fn):
             pos = torch.arange(c * chunk, (c + 1) * chunk, dtype=torch.float64)
@@ -180,13 +192,16 @@ class GlobalAttention:
         self.cache = _allocate_ring_cache(mesh, [self.slots, 1, max_seq // sp, self.packed], self.packed)
         # ring_mla gathers every chip's whole shard: the receive buffer spans the full capacity, DRAM interleaved
         # (the fused gather's bank-owned schedule needs an interleaved output).
-        self.gather = ttnn.zeros(
-            [1, 1, max_seq, self.packed],
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Only the ring_mla mode reads it (38 MB per layer per chip).
+        self.sdpa_mode = settings.get("ATTN_GLOBAL_SDPA")
+        if self.sdpa_mode == "ring_mla":
+            self.gather = ttnn.zeros(
+                [1, 1, max_seq, self.packed],
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         # Ring SDPA: CCL workers on the last compute column, SDPA on the rest.
         grid = mesh.compute_with_storage_grid_size()
@@ -206,24 +221,26 @@ class GlobalAttention:
             segmented_accumulation=segmented and settings.get("ATTN_GLOBAL_SEGMENTED"),
         )
         self.num_links = settings.get("ATTN_RING_NUM_LINKS")
-        self.sdpa_mode = settings.get("ATTN_GLOBAL_SDPA")
         self.partial_dtype = ttnn.float32 if settings.get("ATTN_GLOBAL_FP32_REDUCE") else ttnn.bfloat16
         self.qk_dtype = ttnn.float32 if settings.get("ATTN_GLOBAL_FP32_QK") else ttnn.bfloat16
 
         # Composed SDPA: the current chunk's keys arrive SP-gathered (key row r' * L + i = position start + r' * L + i);
         # SP row r's query j (position start + r * L + j) sees key row i' iff i' <= r * L + j. Prefix keys: all visible.
-        qpos = (torch.arange(sp)[:, None] * self.slab + torch.arange(self.slab)[None, :])[:, :, None]
-        mask = torch.where(torch.arange(chunk)[None, None, :] <= qpos, 0.0, -1e9).reshape(sp, 1, self.slab, chunk)
-        self.chunk_mask = ttnn.from_torch(
-            mask,
-            device=mesh,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, (sp, tp), dims=(0, None)),
-        )
+        # (The device model's ChunkMeta carries this mask for any start, and a key mask for a partial prefix slab.)
+        if chunk_tables:
+            qpos = (torch.arange(sp)[:, None] * self.slab + torch.arange(self.slab)[None, :])[:, :, None]
+            mask = torch.where(torch.arange(chunk)[None, None, :] <= qpos, 0.0, -1e9).reshape(sp, 1, self.slab, chunk)
+            self.chunk_mask = ttnn.from_torch(
+                mask,
+                device=mesh,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh, (sp, tp), dims=(0, None)),
+            )
 
         self.proj_cfg = _compute_config(mesh, settings.get("ATTN_PROJ_FIDELITY"), settings.get("ATTN_PROJ_FP32_ACC"))
+        self.grid = matmul_grid()
         self.sdpa_cfg = _compute_config(mesh, settings.get("ATTN_SDPA_FIDELITY"), settings.get("ATTN_SDPA_FP32_ACC"))
         self.norm_cfg = _compute_config(mesh, "HiFi4", True)
 
@@ -231,23 +248,49 @@ class GlobalAttention:
         assert start % self.chunk == 0 and 0 <= start < self.max_seq, start
         return start // self.chunk
 
-    def write_kv(self, packed, start: int):
+    def write_kv(self, packed, start: int, meta=None):
         """Append one chunk's packed rows ([1, 1, L, 640] per chip, SP row r holding its slab) to slot 0. fp32 input:
         the device's bf16 -> bfp8 typecast rounds row norms up on average, fp32 -> bfp8 does not (except on bf16-exact
-        fp32 values, e.g. a loaded bf16 state: +0.28 %, so pass those as host-rounded bfp8)."""
-        c = self.chunk_index(start)
+        fp32 values, e.g. a loaded bf16 state: +0.28 %, so pass those as host-rounded bfp8). meta (ChunkMeta): its
+        on-device slot, start and actual_end; rows from ceil32(actual_end) on are not written."""
         xb = ttnn.typecast(packed, ttnn.bfloat8_b) if packed.dtype != ttnn.bfloat8_b else packed
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache=self.cache,
-            input=xb,
-            slot_idx=self.slot,
-            kv_actual_global=self.kv_actual[c],
-            layer_idx=0,
-            num_layers=1,
-            cluster_axis=SP_AXIS,
-        )
+        if meta is None:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                cache=self.cache,
+                input=xb,
+                slot_idx=self.slot,
+                kv_actual_global=self.kv_actual[self.chunk_index(start)],
+                layer_idx=0,
+                num_layers=1,
+                cluster_axis=SP_AXIS,
+            )
+        else:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                cache=self.cache,
+                input=xb,
+                slot_idx=meta.slot,
+                kv_actual_global=meta.kv_actual,
+                layer_idx=0,
+                num_layers=1,
+                cluster_axis=SP_AXIS,
+                valid_global=meta.valid,
+            )
         if xb is not packed:
             ttnn.deallocate(xb)
+
+    def load_rows(self, packed, start: int, end: int):
+        """Harness / state loading (not the forward): chunk-aligned start, rows [start, ceil32(end)) of slot 0 from
+        packed laid out as write_kv's (host scalars)."""
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache=self.cache,
+            input=packed,
+            slot_idx=0,
+            layer_idx=0,
+            num_layers=1,
+            kv_actual_global=start,
+            cluster_axis=SP_AXIS,
+            valid_global=end,
+        )
 
     def _norm(self, x, weight):
         """fp32 per-head RMS norm over d: x * rsqrt(mean(x^2) + eps) (* weight), x [1, h, L, d] -> fp32."""
@@ -270,7 +313,12 @@ class GlobalAttention:
 
     def _matmul(self, x, m):
         return ttnn.matmul(
-            x, m, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self.norm_cfg
+            x,
+            m,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.norm_cfg,
+            core_grid=self.grid,
         )
 
     def _rope(self, x, rot, cos, sin, dtype):
@@ -284,9 +332,15 @@ class GlobalAttention:
         ttnn.deallocate(rs)
         return y
 
-    def __call__(self, x, start: int):
-        """x: the residual chunk [1, 1, L / TP, hidden] bf16 per chip. Returns the same layout."""
-        c = self.chunk_index(start)
+    def __call__(self, x, start: int, meta=None):
+        """x: the residual chunk [1, 1, L / TP, hidden] bf16 per chip. Returns the same layout.
+        meta: the device model's ChunkMeta (any tile-aligned start, pad rows); None: chunk-aligned start, own tables."""
+        if meta is None:
+            c = self.chunk_index(start)
+            cos, sin = self.cos[c], self.sin[c]
+        else:
+            assert self.sdpa_mode == "composed", "the device model runs the composed global attention"
+            cos, sin = meta.global_rope
         xg = ttnn.all_gather(x, dim=2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         qk = ttnn.linear(
             xg,
@@ -295,6 +349,7 @@ class GlobalAttention:
             dtype=self.qk_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.proj_cfg,
+            core_grid=self.grid,
         )
         ttnn.deallocate(xg)
         q, k_raw, v_raw = ttnn.experimental.nlp_create_qkv_heads(
@@ -311,7 +366,6 @@ class GlobalAttention:
         # Q: norm (folded weight), RoPE on the 128 rotary lanes, bf16 for the SDPA.
         q_n = self._norm(q, self.q_norm_w)
         ttnn.deallocate(q)
-        cos, sin = self.cos[c], self.sin[c]
         q_r = self._rope(q_n, self.rot_q, cos, sin, ttnn.float32 if self.sdpa_mode == "composed" else ttnn.bfloat16)
         ttnn.deallocate(q_n)
 
@@ -332,13 +386,21 @@ class GlobalAttention:
         packed = ttnn.concat((k_rot, v), dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(k_rot)
         ttnn.deallocate(v)
+        if meta is not None and meta.keep is not None:
+            # Pad rows (positions >= actual_end) reach the cache as exact zeros: the last 32-token record ships whole.
+            kept = ttnn.multiply(packed, meta.keep, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(packed)
+            packed = kept
         if self.sdpa_mode == "composed":
             # The cache keeps bfp8; the chunk attends its own fresh K / V in bf16 (as the reference, whose state only
             # rounds what later chunks read).
-            self.write_kv(packed, start)
+            self.write_kv(packed, start, meta)
             fresh = ttnn.typecast(packed, ttnn.bfloat16)
             ttnn.deallocate(packed)
-            attn = self._composed_sdpa(q_r, fresh, c)
+            if meta is None:
+                attn = self._composed_sdpa(q_r, fresh, c * self.slab, self.chunk_mask, None)
+            else:
+                attn = self._composed_sdpa(q_r, fresh, meta.prefix_rows, meta.chunk_mask, meta.prefix_mask)
             ttnn.deallocate(fresh)
         else:
             self.write_kv(packed, start)
@@ -354,6 +416,7 @@ class GlobalAttention:
             dtype=self.partial_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.proj_cfg,
+            core_grid=self.grid,
         )
         ttnn.deallocate(heads)
         out = ttnn.reduce_scatter(partial, dim=2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -377,10 +440,11 @@ class GlobalAttention:
         ttnn.deallocate(g)
         return k, v
 
-    def _composed_sdpa(self, q, chunk_rows, c):
-        """Causal attention of q [1, 8, L, 512] over slot 0's packed rows of chunks 0..c (prefix: the bfp8 cache; chunk
-        c: chunk_rows, this chunk's packed rows in bf16): QK^T in fp32, mask, fp32 softmax, P V; scale 1.0.
-        -> [1, 8, L, 512]."""
+    def _composed_sdpa(self, q, chunk_rows, prefix_rows, chunk_mask, prefix_mask):
+        """Causal attention of q [1, 8, L, 512] over slot 0's prefix and this chunk (prefix: the bfp8 cache's local rows
+        [0, prefix_rows) on every SP row, prefix_mask [1, 1, 1, SP * prefix_rows] masking keys at or past the start, None:
+        all visible; chunk: chunk_rows, this chunk's packed rows in bf16, chunk_mask the causal mask of q against them):
+        QK^T in fp32, mask, fp32 softmax, P V; scale 1.0. -> [1, 8, L, 512]."""
         _, h, s, d = q.shape
         q2 = ttnn.reshape(q, (1, 1, h * s, d))
         k_cur, v_cur = self._gather_rows(chunk_rows)
@@ -391,16 +455,17 @@ class GlobalAttention:
             dtype=ttnn.float32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.norm_cfg,
+            core_grid=self.grid,
         )
         ttnn.deallocate(k_cur)
         scores4 = ttnn.reshape(scores, (1, h, s, self.chunk))
-        masked = ttnn.add(scores4, self.chunk_mask, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        masked = ttnn.add(scores4, chunk_mask, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(scores)
         masked = ttnn.reshape(masked, (1, 1, h * s, self.chunk))
         vs = [v_cur]
-        if c:
+        if prefix_rows:
             prefix = ttnn.slice(
-                self.cache, (0, 0, 0, 0), (1, 1, c * self.slab, self.packed), memory_config=ttnn.DRAM_MEMORY_CONFIG
+                self.cache, (0, 0, 0, 0), (1, 1, prefix_rows, self.packed), memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
             k_pre, v_pre = self._gather_rows(prefix)
             ttnn.deallocate(prefix)
@@ -411,8 +476,13 @@ class GlobalAttention:
                 dtype=ttnn.float32,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.norm_cfg,
+                core_grid=self.grid,
             )
             ttnn.deallocate(k_pre)
+            if prefix_mask is not None:
+                pm = ttnn.add(pre, prefix_mask, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(pre)
+                pre = pm
             allsc = ttnn.concat((pre, masked), dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(pre)
             ttnn.deallocate(masked)
@@ -430,7 +500,12 @@ class GlobalAttention:
         )
         v = ttnn.concat(vs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG) if len(vs) > 1 else vs[0]
         ev = ttnn.matmul(
-            e, v, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self.norm_cfg
+            e,
+            v,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.norm_cfg,
+            core_grid=self.grid,
         )
         ttnn.deallocate(e)
         for t in {id(x): x for x in vs + [v]}.values():

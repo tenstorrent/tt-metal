@@ -15,6 +15,7 @@ Per chunk (160 rows per chip between blocks, 640 per SP row):
 
 import ttnn
 
+from .attention import matmul_grid
 from .settings import settings
 
 TP_AXIS = 1
@@ -48,6 +49,7 @@ class MLP:
             fp32_dest_acc_en=settings.get("MLP_FP32_ACC"),
             packer_l1_acc=False,
         )
+        self.grid = matmul_grid()
         self.act_dtype = ttnn.float32 if settings.get("MLP_FP32_INTERMEDIATE") else ttnn.bfloat16
 
     def __call__(self, x):
@@ -60,6 +62,7 @@ class MLP:
             dtype=self.act_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.cfg,
+            core_grid=self.grid,
         )
         up = ttnn.linear(
             xg,
@@ -67,6 +70,7 @@ class MLP:
             dtype=self.act_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.cfg,
+            core_grid=self.grid,
         )
         ttnn.deallocate(xg)
         hidden = ttnn.multiply(gate, up, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -78,6 +82,7 @@ class MLP:
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.cfg,
+            core_grid=self.grid,
         )
         ttnn.deallocate(hidden)
         out = ttnn.reduce_scatter(partial, dim=2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)

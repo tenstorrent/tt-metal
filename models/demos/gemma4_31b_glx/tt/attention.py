@@ -50,6 +50,16 @@ def rot_transformation_mat(size: int = TILE) -> torch.Tensor:
     return m
 
 
+def sliding_rope_tables(cfg: dict, max_seq: int):
+    """cos / sin [max_seq, head_dim] (fp32, lanes in adjacent-pair order) of the sliding layers' RoPE."""
+    d = cfg["head_dim"]
+    theta = cfg["rope_parameters"]["sliding_attention"]["rope_theta"]
+    inv_freq = 1.0 / (theta ** (torch.arange(0, d, 2, dtype=torch.int64).float() / d))
+    freqs = torch.arange(max_seq, dtype=torch.float32)[:, None] * inv_freq[None, :]
+    emb = torch.cat((freqs, freqs), dim=-1)[:, sliding_kv_indices(d)]
+    return emb.cos(), emb.sin()
+
+
 def _compute_config(mesh, fidelity, fp32_acc):
     return ttnn.init_device_compute_kernel_config(
         mesh.arch(),
@@ -58,6 +68,12 @@ def _compute_config(mesh, fidelity, fp32_acc):
         fp32_dest_acc_en=fp32_acc,
         packer_l1_acc=False,
     )
+
+
+def matmul_grid():
+    """MATMUL_CORE_GRID as a linear's core_grid (None: ttnn's default)."""
+    g = settings.get("MATMUL_CORE_GRID")
+    return None if g == "auto" else ttnn.CoreGrid(y=int(g.split("x")[0]), x=int(g.split("x")[1]))
 
 
 def _ring_cache_memory_config(mesh, width):
@@ -93,9 +109,12 @@ def _allocate_ring_cache(mesh, shape, width):
 
 
 class SlidingAttention:
-    def __init__(self, mesh, w: dict, cfg: dict, max_seq: int, chunk: int):
+    def __init__(self, mesh, w: dict, cfg: dict, max_seq: int, chunk: int, chunk_tables: bool = True):
         """w: checkpoint tensors q_proj, k_proj, v_proj, o_proj, q_norm, k_norm (HF names without the prefix).
-        cfg: the text config. max_seq / chunk: the served geometry (cache capacity and chunk size)."""
+        cfg: the text config. max_seq / chunk: the served geometry (cache capacity and chunk size).
+        chunk_tables: build this layer's own RoPE tables and per-chunk positions / offsets (chunk-aligned starts,
+        the component test). The device model passes False: it hands every call a ChunkMeta (tt/model.py) with the
+        chunk's RoPE values and on-device scalars for any tile-aligned start."""
         self.mesh = mesh
         sp, tp = tuple(mesh.shape)
         self.sp, self.tp = sp, tp
@@ -104,7 +123,6 @@ class SlidingAttention:
         self.n_q_local, self.n_kv_local = self.n_q // tp, self.n_kv // tp
         self.eps = cfg["rms_norm_eps"]
         self.window = cfg["sliding_window"]
-        theta = cfg["rope_parameters"]["sliding_attention"]["rope_theta"]
         self.chunk, self.max_seq = chunk, max_seq
         assert max_seq % chunk == 0 and chunk % (sp * tp * TILE) == 0, (max_seq, chunk)
         self.slab = chunk // sp
@@ -160,20 +178,18 @@ class SlidingAttention:
         self.q_norm_w, self.k_norm_w = norm_weight(w["q_norm"]), norm_weight(w["k_norm"])
 
         # RoPE tables [max_seq, d], lanes in adjacent-pair order, looked up per chunk with ttnn.embedding.
-        inv_freq = 1.0 / (theta ** (torch.arange(0, d, 2, dtype=torch.int64).float() / d))
-        freqs = torch.arange(max_seq, dtype=torch.float32)[:, None] * inv_freq[None, :]
-        emb = torch.cat((freqs, freqs), dim=-1)[:, order]
-        self.cos, self.sin = (
-            ttnn.from_torch(
-                t.to(torch.bfloat16),  # ttnn.embedding takes bf16 tables only
-                device=mesh,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=replicate,
+        if chunk_tables:
+            self.cos, self.sin = (
+                ttnn.from_torch(
+                    t.to(torch.bfloat16),  # ttnn.embedding takes bf16 tables only
+                    device=mesh,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=replicate,
+                )
+                for t in sliding_rope_tables(cfg, max_seq)
             )
-            for t in (emb.cos(), emb.sin())
-        )
         self.trans_mat = ttnn.from_torch(
             rot_transformation_mat(d if self.rope == "elementwise" else TILE),
             device=mesh,
@@ -195,7 +211,7 @@ class SlidingAttention:
                 mesh_mapper=replicate,
             )
 
-        n_chunks = max_seq // chunk
+        n_chunks = max_seq // chunk if chunk_tables else 0
         self.positions = [
             ttnn.from_torch(
                 torch.arange(c * chunk, (c + 1) * chunk, dtype=torch.int64).reshape(1, chunk),
@@ -236,7 +252,9 @@ class SlidingAttention:
             max_k_splits=self.k_splits,
         )
         # Compact halo receive buffers: the window rounded up to whole k chunks (a full-capacity one is rejected).
-        halo = max(-(-(self.window - 1) // k_chunk) * k_chunk, TILE)
+        # A chunk whose start is not on a slab boundary packs Q from two ring groups on one device: the op then needs
+        # two predecessor-halo slots (ring_joint_sdpa_device_operation.cpp, chunked_q_wraps).
+        halo = max(-(-(self.window - 1) // k_chunk) * k_chunk, TILE) * (1 if chunk_tables else 2)
         self.halo_k, self.halo_v = (
             ttnn.zeros(
                 [1, self.n_kv_local, halo, d],
@@ -250,6 +268,7 @@ class SlidingAttention:
         self.num_links = settings.get("ATTN_RING_NUM_LINKS")
 
         self.proj_cfg = _compute_config(mesh, settings.get("ATTN_PROJ_FIDELITY"), settings.get("ATTN_PROJ_FP32_ACC"))
+        self.grid = matmul_grid()
         self.sdpa_cfg = _compute_config(mesh, settings.get("ATTN_SDPA_FIDELITY"), settings.get("ATTN_SDPA_FP32_ACC"))
         self.norm_cfg = _compute_config(mesh, "HiFi4", True)
 
@@ -257,21 +276,51 @@ class SlidingAttention:
         assert start % self.chunk == 0 and 0 <= start < self.max_seq, start
         return start // self.chunk
 
-    def write_kv(self, k, v, start: int):
+    def write_kv(self, k, v, start: int, meta=None):
         """Append one chunk's K and V ([1, n_kv_local, L, d] per chip, SP row r holding its slab) to slot 0. fp32 (or
         bfp8) inputs: the device's bf16 -> bfp8 typecast rounds up on average (row norms +0.28 %), fp32 -> bfp8 does
-        not."""
-        c = self.chunk_index(start)
+        not. meta (ChunkMeta): its on-device slot, start and actual_end; rows from ceil32(actual_end) on are not
+        written."""
+        for cache, x in ((self.cache_k, k), (self.cache_v, v)):
+            xb = ttnn.typecast(x, ttnn.bfloat8_b) if x.dtype != ttnn.bfloat8_b else x
+            if meta is None:
+                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                    cache=cache,
+                    input=xb,
+                    slot_idx=self.slot,
+                    kv_actual_global=self.kv_actual[self.chunk_index(start)],
+                    layer_idx=0,
+                    num_layers=1,
+                    cluster_axis=SP_AXIS,
+                )
+            else:
+                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                    cache=cache,
+                    input=xb,
+                    slot_idx=meta.slot,
+                    kv_actual_global=meta.kv_actual,
+                    layer_idx=0,
+                    num_layers=1,
+                    cluster_axis=SP_AXIS,
+                    valid_global=meta.valid,
+                )
+            if xb is not x:
+                ttnn.deallocate(xb)
+
+    def load_rows(self, k, v, start: int, end: int):
+        """Harness / state loading (not the forward): chunk-aligned start, rows [start, ceil32(end)) of slot 0 from
+        k / v laid out as write_kv's (host scalars)."""
         for cache, x in ((self.cache_k, k), (self.cache_v, v)):
             xb = ttnn.typecast(x, ttnn.bfloat8_b) if x.dtype != ttnn.bfloat8_b else x
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 cache=cache,
                 input=xb,
-                slot_idx=self.slot,
-                kv_actual_global=self.kv_actual[c],
+                slot_idx=0,
                 layer_idx=0,
                 num_layers=1,
+                kv_actual_global=start,
                 cluster_axis=SP_AXIS,
+                valid_global=end,
             )
             if xb is not x:
                 ttnn.deallocate(xb)
@@ -323,6 +372,7 @@ class SlidingAttention:
             dtype=ttnn.float32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.norm_cfg,
+            core_grid=self.grid,
         )
         xc = ttnn.multiply(x, cos, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         rs = ttnn.multiply(rot, sin, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -332,9 +382,9 @@ class SlidingAttention:
         ttnn.deallocate(rs)
         return y
 
-    def __call__(self, x, start: int):
-        """x: the residual chunk [1, 1, L / TP, hidden] bf16 per chip. Returns the same layout."""
-        c = self.chunk_index(start)
+    def __call__(self, x, start: int, meta=None):
+        """x: the residual chunk [1, 1, L / TP, hidden] bf16 per chip. Returns the same layout.
+        meta: the device model's ChunkMeta (any tile-aligned start, pad rows); None: chunk-aligned start, own tables."""
         xg = ttnn.all_gather(x, dim=2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         qkv = ttnn.linear(
             xg,
@@ -342,6 +392,7 @@ class SlidingAttention:
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.proj_cfg,
+            core_grid=self.grid,
         )
         ttnn.deallocate(xg)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -359,17 +410,31 @@ class SlidingAttention:
         for t in (q, k, v):
             ttnn.deallocate(t)
 
-        cos, sin = (
-            ttnn.unsqueeze_to_4D(ttnn.embedding(self.positions[c], t, layout=ttnn.TILE_LAYOUT))
-            for t in (self.cos, self.sin)
-        )
-        if self.rope == "elementwise":
-            cos, sin = (ttnn.typecast(t, ttnn.float32) for t in (cos, sin))
+        if meta is None:
+            c = self.chunk_index(start)
+            cos, sin = (
+                ttnn.unsqueeze_to_4D(ttnn.embedding(self.positions[c], t, layout=ttnn.TILE_LAYOUT))
+                for t in (self.cos, self.sin)
+            )
+            if self.rope == "elementwise":
+                cos, sin = (ttnn.typecast(t, ttnn.float32) for t in (cos, sin))
+            slot, kv_actual = self.slot, self.kv_actual[c]
+        else:
+            cos, sin = meta.sliding_rope  # looked up once per chunk, shared by every sliding layer
+            slot, kv_actual = meta.slot, meta.kv_actual
         q_r, k_r = self._rope(q_n, cos, sin), self._rope(k_n, cos, sin, self.kv_dtype)
-        for t in (q_n, k_n, cos, sin):
+        for t in (q_n, k_n) + ((cos, sin) if meta is None else ()):
             ttnn.deallocate(t)
 
-        self.write_kv(k_r, v_n, start)
+        if meta is not None and meta.keep is not None:
+            # Pad rows (positions >= actual_end) reach the cache as exact zeros: the last 32-token record ships whole.
+            k_m, v_m = (
+                ttnn.multiply(t, meta.keep, dtype=t.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in (k_r, v_n)
+            )
+            ttnn.deallocate(k_r)
+            ttnn.deallocate(v_n)
+            k_r, v_n = k_m, v_m
+        self.write_kv(k_r, v_n, start, meta)
         ttnn.deallocate(k_r)
         ttnn.deallocate(v_n)
 
@@ -397,8 +462,8 @@ class SlidingAttention:
             use_column_major_ccl=True,
             is_causal=True,
             is_balanced=False,
-            slot_id=self.slot,
-            kv_actual_isl_tensor=self.kv_actual[c],
+            slot_id=slot,
+            kv_actual_isl_tensor=kv_actual,
             kv_cache_num_layers=1,
             kv_cache_layer_idx=0,
             sliding_window_size=self.window,
@@ -412,6 +477,7 @@ class SlidingAttention:
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.proj_cfg,
+            core_grid=self.grid,
         )
         ttnn.deallocate(heads)
         out = ttnn.reduce_scatter(partial, dim=2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)

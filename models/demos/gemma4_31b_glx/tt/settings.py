@@ -23,6 +23,14 @@ TABLE = {
         None,
         "Block-sharded rms_norm (gemma4_d_p rms_norm.py geometry); False: interleaved, one core per tile row.",
     ),
+    "NORM_WEIGHT": Setting(
+        "fp32",
+        ("fp32", "fused"),
+        "fp32: rms_norm without the weight on the fp32-cast input (fp32 out), then one multiply by the weight to bf16; "
+        "median row norm -0.00005 vs the golden (layers 14 / 52, golden inputs). fused: the weight inside the bf16 "
+        "rms_norm (gemma4_d_p), -0.0005 to -0.0008 per norm, four per layer: the assembled 60-layer residual drifts "
+        "past the 0.005 norm bias limit.",
+    ),
     "COMPONENT_FAST_RUNTIME": Setting(
         False,
         None,
@@ -129,11 +137,42 @@ TABLE = {
         None,
         "gate (after gelu_tanh) and up outputs in fp32 before gate * up; False: bf16 as in gemma4_d_p.",
     ),
+    "MATMUL_CORE_GRID": Setting(
+        "8x8",
+        ("8x8", "auto"),
+        "Core grid of every model matmul (projections, MLP, RoPE rotation, composed global SDPA). auto: ttnn's default (the full 12x10 grid), on which a bf16 x bfp8 "
+        "HiFi4 fp32-acc linear on chip (4, 0) wrote different values in a few output tiles run to run (the same chunk "
+        "sent twice gave different KV bytes); 8x8 and 4x4 were bit-identical over 20 repeats.",
+    ),
+    "RESIDUAL_STREAM": Setting(
+        "fp32",
+        ("fp32", "bf16"),
+        "Device model residual stream (embedding, h_mid, block out) dtype; the branch inputs (norm outputs) stay bf16. "
+        "bf16: s10240 median row norm bias up to 0.0070 mid / late stack (limit 0.005) with every step unbiased on "
+        "golden inputs: the stack amplifies the per-layer rounding noise into norm growth.",
+    ),
+    "RESIDUAL_FP32_SCALE": Setting(
+        True,
+        None,
+        "ffn_residual (h_mid + mlp_post) * layer_scalar with an fp32 output, then one typecast to bf16. False: bf16 "
+        "output with the fused scale (gemma4_d_p), median row norm -0.26 % per layer, compounding to 0.022 over 60.",
+    ),
+    "MODEL_ROPE_LOOKUP": Setting(
+        "hilo",
+        ("hilo", "bf16"),
+        "Device model RoPE values per chunk (any start): looked up by position from load-time tables with "
+        "ttnn.embedding (bf16 tables only). hilo: each fp32 table as a bf16 head plus a bf16 remainder, summed in fp32 "
+        "(~2^-17 relative, the global layers' fp32 tables); bf16: the head only.",
+    ),
+    "LM_HEAD_FIDELITY": Setting(
+        "HiFi4", ("HiFi4", "HiFi3", "HiFi2", "LoFi"), "Tied LM head matmul (fp32 accumulation, fp32 logits)."
+    ),
 }
 
 MAX_PRECISION = {
     "NORM_FIDELITY": "HiFi4",
     "NORM_FP32_ACC": True,
+    "NORM_WEIGHT": "fp32",
     "ATTN_PROJ_FIDELITY": "HiFi4",
     "ATTN_PROJ_FP32_ACC": True,
     "ATTN_SDPA_FIDELITY": "HiFi4",
@@ -144,6 +183,11 @@ MAX_PRECISION = {
     "MLP_FIDELITY": "HiFi4",
     "MLP_FP32_ACC": True,
     "MLP_FP32_INTERMEDIATE": True,
+    "MATMUL_CORE_GRID": "8x8",
+    "RESIDUAL_STREAM": "fp32",
+    "RESIDUAL_FP32_SCALE": True,
+    "MODEL_ROPE_LOOKUP": "hilo",
+    "LM_HEAD_FIDELITY": "HiFi4",
 }
 
 settings = Settings("GEMMA4_31B_GLX_", TABLE, max_precision=MAX_PRECISION)

@@ -184,4 +184,10 @@ def device_component(mesh, spec, layer, step):
 
 
 def device_model(mesh, spec, layers, lm_head=True):
-    raise NotImplementedError("assemble stage: no device model yet")
+    import ttnn
+    from models.demos.gemma4_31b_glx.tt.model import Model
+    from models.demos.gemma4_31b_glx.tt.settings import settings
+
+    # The fast runtime skips ttnn's pre-operation hooks (the framework's device-execution proof counts ops by them).
+    ttnn.CONFIG.enable_fast_runtime_mode = settings.get("COMPONENT_FAST_RUNTIME")
+    return Model(mesh, spec, layers, lm_head=lm_head)

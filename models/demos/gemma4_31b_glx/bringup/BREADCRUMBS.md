@@ -197,3 +197,41 @@
   - vs_cpu: rel 0.0047 (limit 0.0096), column 1658 0.0338 (limit 0.0382).
   - vs golden: column 5264 0.0379 (limit 0.0475).
   - Regressions on all 8 sliding tasks and C.attn.attn_norm: PASS.
+
+## M.1 (run 20261018-003406-gemma31-glx-3, attempt 1), 2026-10-18
+
+- `tt/model.py` (new): the all-device Model. `bringup/hooks.py:device_model(mesh, spec, layers, lm_head=True)`
+  returns it.
+  - embed (bf16 table, `* sqrt(H)` in fp32) -> 60 blocks through `run_block` over the reference graph (`BLOCK`) ->
+    final RMSNorm -> tied bfp8 LM head split over all 32 chips, soft-capped, fp32 logits.
+  - `embed(tokens, start)` stages one `ChunkMeta` per chunk, shared by every layer:
+    - the positions in device-row order (`chunk_positions`, the block-cyclic staircase of update_padded_kv_cache);
+    - RoPE values looked up on device from load-time tables (`MODEL_ROPE_LOOKUP=hilo`);
+    - the pad keep mask and the global causal / prefix masks;
+    - the slot / kv_actual / valid scalars.
+  - With no start, embed continues from the last chunk embedded since new_state (sequential ladder), so layer() runs
+    no host transfer. layer() stages lazily only for a chunk-aligned start after from_host.
+  - `State`: bfp8 key / value. `load_prefix`, `to_torch` and the de-block-cycled reads cover both the global packed
+    cache and the sliding caches.
+- Precision fixes (all Settings, all at max precision):
+  - `RESIDUAL_FP32_SCALE`: the ffn_residual uses an fp32 output plus a typecast instead of the bf16 fused-scale add
+    (-0.0026 norm bias per layer).
+  - `NORM_WEIGHT=fp32`: unweighted fp32 rms_norm, then the weight multiply to bf16 (fused weight: -0.0005 to -0.0008
+    per norm).
+  - `RESIDUAL_STREAM=fp32`: the residual stream (embedding, h_mid, out) stays fp32 between blocks. With a bf16 stream,
+    norm bias reached 0.0070 at layers 47-53 even with every step unbiased on golden inputs. The component steps
+    (hooks) keep bf16.
+- Determinism: `MATMUL_CORE_GRID=8x8` passes an explicit core grid to every model matmul (projections, MLP, RoPE
+  rotation, the composed global SDPA; with only the linears, the C.attn.attention regression's A,B,A determinism
+  check failed on 5 elements). On the default 12x10 grid, mesh chip (4, 0) gave run-to-run differences in a few
+  output tiles, so test_pad_rows' resend was not bit-identical. 8x8 and 4x4 were bit-identical over 20 repeats.
+- s10240 ladder (fp32 stream):
+  - chunk 0 90 s, chunk 1 41 s;
+  - worst layer pcc 0.9936, max rel 0.113, max bias 0.0015;
+  - final hidden 0.9991, top1 0.989, top5 0.967;
+  - worst state pcc 0.989.
+  test_kv_layout and test_pad_rows: PASS.
+- Final `bfw job check --task M.1` (750 s): PASS. Worst layer pcc 0.9936, max rel 0.113, max bias 0.0013,
+  worst state pcc 0.989, final hidden 0.9991, top1 0.986, top5 0.967, 59 device ops / 0 host transfers per layer.
+  All 32 C.*/S.* regressions PASS.
+- Re-run: `bfw job check --task M.1`.
