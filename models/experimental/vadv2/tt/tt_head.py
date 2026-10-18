@@ -307,7 +307,9 @@ class TtVADHead:
         if cached_bev_pos is None:
             bev_mask = ttnn.zeros((bs, self.bev_h, self.bev_w), device=self.device, dtype=ttnn.bfloat16)
             bev_pos = self.positional_encoding(bev_mask)
-            bev_pos = ttnn.to_layout(bev_pos, layout=ttnn.ROW_MAJOR_LAYOUT)
+            # Cached across calls: in L1 it would push the next call's L1 tensors into the
+            # backbone convs' static circular buffer region.
+            bev_pos = ttnn.to_layout(bev_pos, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             self._bev_mask_cache[bev_key] = bev_mask
             self._bev_pos_cache[bev_key] = bev_pos
         else:
