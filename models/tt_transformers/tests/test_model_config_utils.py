@@ -293,3 +293,25 @@ def test_llama8_n150_prefill_k_block_scope(device_name, model_name, seq_len, exp
     assert overrides == [expected_override]
     assert config.in0_block_w == (4 if expected_override else 8)
     assert (args.dim // ttnn.TILE_SIZE) % config.in0_block_w == 0
+
+
+@pytest.mark.parametrize(
+    ("mesh_shape", "dim", "distributed_prefill_norm", "mode", "expected"),
+    [
+        ((1, 2), 4096, False, Mode.PREFILL, False),  # default: dim 4096 gathers the full width for the prefill norm
+        ((1, 2), 4096, True, Mode.PREFILL, True),  # opted in
+        ((1, 2), 4096, True, Mode.DECODE, False),  # decode is unchanged
+        ((1, 1), 4096, True, Mode.PREFILL, False),  # nothing to distribute on one device
+        ((1, 2), 5120, False, Mode.PREFILL, True),  # dim > 4096 always distributes it
+    ],
+)
+def test_distributed_prefill_norm_is_opt_in_for_dim_4096_and_below(
+    mesh_shape, dim, distributed_prefill_norm, mode, expected
+):
+    args = object.__new__(ModelArgs)
+    args.mesh_device = SimpleNamespace(shape=mesh_shape)
+    args.is_multichip = mesh_shape[0] * mesh_shape[1] > 1
+    args.dim = dim
+    args.distributed_prefill_norm = distributed_prefill_norm
+
+    assert args.is_distributed_norm(mode) is expected

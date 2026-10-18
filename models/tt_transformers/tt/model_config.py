@@ -699,6 +699,10 @@ class ModelArgs:
         # Mathematically a no-op for softmax; keeps QK^T small enough for the bf16 score
         # intermediates of the decode SDPA kernel. See Attention._create_k_bias_shift.
         self.subtract_k_bias_post_rope = False
+        # Opt-in (DISTRIBUTED_PREFILL_NORM=1): distribute the prefill norm for dim <= 4096 too. Each device then
+        # normalizes its own shard instead of the gathered full width, which needs far less L1 for circular
+        # buffers (e.g. when the model shares its devices with another model). See is_distributed_norm.
+        self.distributed_prefill_norm = os.getenv("DISTRIBUTED_PREFILL_NORM") == "1"
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -2743,6 +2747,8 @@ class ModelArgs:
         elif (
             self.dim > 4096 and mode == Mode.PREFILL
         ):  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
+            return True
+        elif self.distributed_prefill_norm and mode == Mode.PREFILL:
             return True
         return False
 
