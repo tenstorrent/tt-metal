@@ -24,6 +24,7 @@ from .settings import settings
 
 _FIDELITY = {"HiFi4": ttnn.MathFidelity.HiFi4, "HiFi2": ttnn.MathFidelity.HiFi2, "LoFi": ttnn.MathFidelity.LoFi}
 _GELU = {"Tanh": ttnn.GeluVariant.Tanh, "Accurate": ttnn.GeluVariant.Accurate}
+_GELU_FUSED = {"Tanh": ttnn.UnaryOpType.GELU_TANH}  # gelu as a binary op's input activation (PERF_P2)
 
 SP_AXIS = 0
 EP_AXIS = 1
@@ -62,6 +63,15 @@ class TtExperts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
+        # PERF_P2: the same selector over all E routing columns, column-sharded like w_gate: chip c holds [E, 32*I]
+        # whose rows 32c..32c+31 are its experts (the other rows are 0), so the full routing row needs no EP slice.
+        self.perf_p2 = settings.get("PERF_P2") and settings.get("MLP_GELU_VARIANT") in _GELU_FUSED
+        if self.perf_p2:
+            full = torch.zeros(n_exp, n_exp * inter)
+            for e in range(n_exp):
+                full[e, e * inter : (e + 1) * inter] = 1.0
+            self.sel_full = self._shard(full, dim=-1, dtype=ttnn.bfloat16)  # 0/1, exact
+            del full
         self.mm_cfg = ttnn.init_device_compute_kernel_config(
             mesh.arch(),
             math_fidelity=_FIDELITY[settings.get("EXPERTS_MATMUL_FIDELITY")],
@@ -70,11 +80,12 @@ class TtExperts:
             packer_l1_acc=False,
         )
         self.gelu = _GELU[settings.get("MLP_GELU_VARIANT")]
+        self.gelu_fused = _GELU_FUSED.get(settings.get("MLP_GELU_VARIANT"))
 
-    def _shard(self, w, dim):
+    def _shard(self, w, dim, dtype=ttnn.bfloat8_b):
         return ttnn.from_torch(
             w.reshape(1, 1, *w.shape),
-            dtype=ttnn.bfloat8_b,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -87,6 +98,12 @@ class TtExperts:
         split = self.split_tokens and self.mesh.shape[SP_AXIS] > 1
         xs = ttnn.mesh_partition(x, dim=2, cluster_axis=SP_AXIS) if split else x
         rs = ttnn.mesh_partition(routing, dim=2, cluster_axis=SP_AXIS) if split else routing
+        if self.perf_p2:
+            h = self._act_p2(xs, rs)
+            if split:
+                ttnn.deallocate(xs)
+                ttnn.deallocate(rs)
+            return self._down(h, split)
         w = ttnn.mesh_partition(rs, dim=3, cluster_axis=EP_AXIS)  # [1, 1, T, 32]: this chip's experts
         if split:
             ttnn.deallocate(rs)
@@ -109,6 +126,27 @@ class TtExperts:
         hw = ttnn.mul(h, wexp, dtype=ttnn.bfloat16)
         ttnn.deallocate(h)
         ttnn.deallocate(wexp)
+        return self._down(hw, split)
+
+    def _act_p2(self, xs, rs):
+        """PERF_P2: w-weighted GeGLU activation [1, 1, T, 32*I] bf16 in 5 ops (the old path takes 7): the routing
+        weight comes from the full [T, E] row through the column-sharded selector (no EP mesh_partition), scales up,
+        and gelu_tanh runs as the lhs activation of the gate * (w up) multiply (no separate gelu pass)."""
+        rf = ttnn.typecast(rs, ttnn.float32) if rs.dtype != ttnn.float32 else rs
+        wexp = ttnn.linear(rf, self.sel_full, dtype=ttnn.float32, compute_kernel_config=self.mm_cfg)  # [1,1,T,32*I]
+        if rf is not rs:
+            ttnn.deallocate(rf)
+        gate = ttnn.linear(xs, self.w_gate, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
+        up = ttnn.linear(xs, self.w_up, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
+        upw = ttnn.mul(up, wexp, dtype=ttnn.float32)
+        ttnn.deallocate(up)
+        ttnn.deallocate(wexp)
+        h = ttnn.mul(gate, upw, dtype=ttnn.bfloat16, input_tensor_a_activations=[self.gelu_fused])
+        ttnn.deallocate(gate)
+        ttnn.deallocate(upw)
+        return h
+
+    def _down(self, hw, split):
         part = ttnn.linear(hw, self.w_down, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
         ttnn.deallocate(hw)
         red = ttnn.all_reduce(part, cluster_axis=EP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)

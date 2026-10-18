@@ -403,3 +403,29 @@ I re-applied the attempt above unchanged; it had passed under an older framework
 - `bringup/hooks.py`: `cache_tensors`, `contract_read_slot_kv`, `contract_independent_pcc` (the producer's own
   UMD reader and bfp8 decoder).
 - Re-run: `bfw job check --task K.1`.
+
+## P.2 perf pick: experts (run 20261017-192425-gemma4-glx-followup-5)
+- Change (`tt/experts.py`, switch `PERF_P2`, default True; False keeps the old path unchanged): 2 fewer device ops
+  per layer per chip on the dense-EP path (programs in the experts section: 12480 -> 10560 per profiled chunk).
+  - The routing weight is expanded from the full [T, 128] row through a selector [128, 32*704] that is column-sharded
+    like w_gate (chip c holds rows 32c..32c+31 as its 0/1 blocks, the other rows are 0). This drops the EP
+    `mesh_partition` of the routing.
+  - gelu_tanh is now the lhs activation of the multiply (`ttnn.mul(gate, up*w, input_tensor_a_activations=
+    [UnaryOpType.GELU_TANH])`). This drops the separate `ttnn.gelu` pass. `up*w` is kept in fp32.
+  - Only taken when `MLP_GELU_VARIANT=Tanh` (no fused UnaryOpType is mapped for Accurate).
+- Accuracy: `bfw perf accuracy --task P.2` printed `accuracy: PASS`. Sliding: vs_cpu rel 0.007444 (0.007444 before),
+  pcc_experts_L00 unchanged. Global: PASS.
+- Profile (`bfw perf try --task P.2`), warm chunk [8192, 16384):
+  - chunk_wall_ms 2154.9 (X.1 2209.3; P.1's off side 2196.2).
+  - device_ms_experts 316.56 (332.0).
+  - device_ms_total 1339.35 (1352.2).
+  - pcc_chunk_out 0.99930.
+  - host_transfers 0.
+- Why fewer ops rather than fewer flops: the warm chunk is host-dispatch bound (host_overhead 816-857 ms of a
+  2.2 s wall). P.1 cut attention device time by 161 ms and the wall did not move. Here 2 ops/layer/chip removed
+  about 15 ms of device time and 41-54 ms of wall.
+- Op-level profile (`BRINGUP_PROFILE_OPS=1 BRINGUP_PROFILE_LAYERS=0`) on the 8x4 mesh did not finish. It hit the
+  3600 s pytest timeout inside `ReadDeviceProfiler`, with "Profiler DRAM buffers were full" warnings.
+- Not done: real sparse dispatch (deepseek_prefill dispatch/combine). Its routed-expert ops have no GeluTanh
+  activation, and this tt-metal has no `ttnn/ttnn/bringup` fork tree.
+- Re-run: `bfw perf accuracy --task P.2`, then `bfw perf try --task P.2`. Old path: `GEMMA4_A4B_GLX_PERF_P2=0`.

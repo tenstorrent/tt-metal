@@ -67,6 +67,13 @@ TABLE = {
         "chunk offset) or ttnn.experimental.rotary_embedding (fused; its core group 1 runs a default compute config, so "
         "a row's bits depend on where it falls in the chunk and a pulled-back rewrite differs)",
     ),
+    "PERF_P2": Setting(
+        True,
+        (True, False),
+        "2026-10-18 P.2: experts with 2 fewer ops per layer: routing weight from the full [T, 128] row through a "
+        "column-sharded block selector (no EP mesh_partition), applied to up (fp32), gelu_tanh fused into the "
+        "gate * up multiply (no separate gelu pass); False = gelu, fp32 h, selector on the EP-sliced [T, 32]",
+    ),
 }
 
 MAX_PRECISION = {
