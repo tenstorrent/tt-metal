@@ -226,29 +226,38 @@ def _snap_counts_to_starts(counts, valid_starts, num_layers):
 
 def _balanced_counts(layer_costs, num_ranks: int, tail_cost: float, valid_starts=None) -> list[int]:
     """Contiguous partition of ``layer_costs`` into ``num_ranks`` non-empty runs minimizing the costliest rank,
-    the last rank also paying ``tail_cost``. Exact (DP over cut points); ties prefer cuts further right.
-    ``valid_starts`` restricts every rank start but the first."""
+    the last rank also paying ``tail_cost``; among those, the most even one (least sum of squared rank costs).
+    Exact: one DP for the bound, a second under it. ``valid_starts`` restricts every rank start but the first."""
     n = len(layer_costs)
     prefix = [0.0]
     for c in layer_costs:
         prefix.append(prefix[-1] + c)
     allowed = (lambda i: True) if valid_starts is None else (lambda i: i in valid_starts)
     inf = float("inf")
-    # best[r][i]: min over splits of layers [0, i) into r ranks of the costliest rank; cut[r][i]: last start.
-    best = [[inf] * (n + 1) for _ in range(num_ranks + 1)]
-    cut = [[0] * (n + 1) for _ in range(num_ranks + 1)]
-    best[0][0] = 0.0
-    for r in range(1, num_ranks + 1):
-        for i in range(r, n + 1):
-            extra = tail_cost if (r == num_ranks and i == n) else 0.0
-            for j in range(r - 1, i):
-                if j > 0 and not allowed(j):
-                    continue
-                v = max(best[r - 1][j], prefix[i] - prefix[j] + extra)
-                if v <= best[r][i]:
-                    best[r][i], cut[r][i] = v, j
-    if best[num_ranks][n] == inf:
+
+    def solve(score, bound):
+        # best[r][i]: best score over splits of layers [0, i) into r ranks; cut[r][i]: that split's last start.
+        best = [[inf] * (n + 1) for _ in range(num_ranks + 1)]
+        cut = [[0] * (n + 1) for _ in range(num_ranks + 1)]
+        best[0][0] = 0.0
+        for r in range(1, num_ranks + 1):
+            for i in range(r, n + 1):
+                extra = tail_cost if (r == num_ranks and i == n) else 0.0
+                for j in range(r - 1, i):
+                    if (j > 0 and not allowed(j)) or best[r - 1][j] == inf:
+                        continue
+                    rank = prefix[i] - prefix[j] + extra
+                    if rank > bound:
+                        continue
+                    v = score(best[r - 1][j], rank)
+                    if v < best[r][i]:
+                        best[r][i], cut[r][i] = v, j
+        return best[num_ranks][n], cut
+
+    worst, _ = solve(max, inf)
+    if worst == inf:
         raise ValueError(f"cannot split {n} layers into {num_ranks} ranks on valid starts {sorted(valid_starts)}")
+    _, cut = solve(lambda acc, rank: acc + rank * rank, worst + 1e-9)
     counts, i = [], n
     for r in range(num_ranks, 0, -1):
         j = cut[r][i]
