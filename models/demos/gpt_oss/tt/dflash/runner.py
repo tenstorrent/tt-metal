@@ -6,8 +6,8 @@
 Per round, all on device: the drafter's draft pass (dflash/fused_draft.py) writes [last token, 7 drafts] into the verify
 pass's token input; the 8-row verify pass (dflash/verify.py) computes the target's argmax for every row, the acceptance,
 and the next round's drafter / verify / context inputs; the context pass adds the accepted rows' target features to the
-drafter's K / V cache. The host reads one [block, argmaxes] result per round. All three passes are traced after one eager
-compile pass (capture_traces).
+drafter's K / V cache. The host reads one [block, argmaxes] result per round. The three passes are one trace (one per
+round) after one eager compile pass (capture_traces).
 """
 
 import time
@@ -41,7 +41,7 @@ class DFlashRunner:
             draft.mask_token_id,
             [self.verify.pos, draft.t_toks, draft.t_pos, draft.t_rot, draft.t_bound, draft.t_cpos, draft.t_crot],
         )
-        self.verify_trace = self.draft_trace = self.ctx_trace = None
+        self.round_trace = None
 
     def compile(self):
         """One eager pass of each traced program (compiles them and allocates their cached buffers and CCL semaphores
@@ -51,26 +51,25 @@ class DFlashRunner:
         self.fused.context()
 
     def capture_traces(self):
-        """Capture the draft, verify and context traces (after one eager generate). A replayed trace writes to its
+        """Capture the round trace: draft, verify and context passes in one trace (after one eager generate; as three
+        traces the first program of each pass started 11-16 us late, its dispatch not overlapped with the previous
+        trace's end: 4.835 -> 4.805 ms per round at ISL 256, 4.971 -> 4.941 at 4K). A replayed trace writes to its
         intermediates' addresses, which are free again once the capture ends: a buffer allocated after the capture and
         alive at a replay can be overwritten, so every program is compiled first, and prefill re-captures the traces
         when a prompt compiled new programs (see prefill)."""
         mesh = self.model.mesh_device
         self.compile()
-        traces = []
-        for fn in (self.fused.forward, self.verify.forward, self.fused.context):
-            tid = ttnn.begin_trace_capture(mesh, cq_id=0)
-            fn()
-            ttnn.end_trace_capture(mesh, tid, cq_id=0)
-            traces.append(tid)
-        self.draft_trace, self.verify_trace, self.ctx_trace = traces
+        tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+        self.fused.forward()
+        self.verify.forward()
+        self.fused.context()
+        ttnn.end_trace_capture(mesh, tid, cq_id=0)
+        self.round_trace = tid
 
     def release_traces(self):
-        mesh = self.model.mesh_device
-        for tid in (self.draft_trace, self.verify_trace, self.ctx_trace):
-            if tid is not None:
-                ttnn.release_trace(mesh, tid)
-        self.verify_trace = self.draft_trace = self.ctx_trace = None
+        if self.round_trace is not None:
+            ttnn.release_trace(self.model.mesh_device, self.round_trace)
+        self.round_trace = None
 
     def set_draft_window(self, w):
         """The drafter's attention window (0: none, the checkpoint's setting); call with no traces captured."""
@@ -86,7 +85,7 @@ class DFlashRunner:
         mesh = self.model.mesh_device
         n0 = mesh.num_program_cache_entries()
         first = self._prefill(prompt_ids)
-        if self.verify_trace is not None and mesh.num_program_cache_entries() != n0:
+        if self.round_trace is not None and mesh.num_program_cache_entries() != n0:
             logger.warning(
                 f"DFlash: prompt length {len(prompt_ids)} compiled new prefill programs after the trace capture; "
                 "re-capturing the traces"
@@ -118,24 +117,19 @@ class DFlashRunner:
             first = self.prefill(prompt_ids)
         ids = list(prompt_ids) + [first]
         t_prefill = time.perf_counter() - t0
-        if self.verify_trace is not None:
+        if self.round_trace is not None:
             accept, rounds = self._generate_traced(ids, L, max_new_tokens)
             return ids[L:], accept, dict(prefill=t_prefill, rounds=rounds)
         accept, rounds = [], []
         B = self.draft.block
-        mesh = self.model.mesh_device
         while len(ids) - L < max_new_tokens and not (set(ids[L:]) & self.eos_ids):
             t = time.perf_counter()
             start = len(ids) - 1
             if not accept:  # later rounds: the previous verify pass wrote the inputs on device
                 self.draft.set_draft_inputs(ids[-1], start)
                 self.verify.set_positions(start)
-            if self.verify_trace is None:
-                self.fused.forward()
-                self.verify.forward()
-            else:
-                ttnn.execute_trace(mesh, self.draft_trace, cq_id=0, blocking=False)
-                ttnn.execute_trace(mesh, self.verify_trace, cq_id=0, blocking=False)
+            self.fused.forward()
+            self.verify.forward()
             t1 = time.perf_counter()
             block, post = self.verify.read_result()
             d = block[1:]
@@ -144,25 +138,19 @@ class DFlashRunner:
             while k < B - 1 and d[k] == post[k]:
                 k += 1
             ids += d[:k] + [post[k]]
-            if self.ctx_trace is None:  # the context positions are on device already
-                self.fused.context()
-            else:
-                ttnn.execute_trace(mesh, self.ctx_trace, cq_id=0, blocking=False)
+            self.fused.context()  # the context positions are on device already
             t3 = time.perf_counter()
             accept.append(k + 1)
             rounds.append((t1 - t, t2 - t1, t3 - t2))
         return ids[L:], accept, dict(prefill=t_prefill, rounds=rounds)
 
     def _enqueue_round(self):
-        """Queue one traced round: draft, verify, a non-blocking read of the result, context. Returns (host result,
+        """Queue one traced round (draft, verify, context) and a non-blocking read of its result. Returns (host result,
         event recorded after the read)."""
         mesh = self.model.mesh_device
-        ttnn.execute_trace(mesh, self.draft_trace, cq_id=0, blocking=False)
-        ttnn.execute_trace(mesh, self.verify_trace, cq_id=0, blocking=False)
+        ttnn.execute_trace(mesh, self.round_trace, cq_id=0, blocking=False)
         host = self.verify.result.cpu(blocking=False)
-        event = ttnn.record_event(mesh, 0)
-        ttnn.execute_trace(mesh, self.ctx_trace, cq_id=0, blocking=False)
-        return host, event
+        return host, ttnn.record_event(mesh, 0)
 
     def _generate_traced(self, ids, L, max_new_tokens):
         """Traced rounds, extends ids in place; returns (per-round accepted counts, per-round wall times). Every round's
