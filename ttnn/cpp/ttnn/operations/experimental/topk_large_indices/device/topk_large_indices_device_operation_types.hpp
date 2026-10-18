@@ -44,7 +44,8 @@ struct operation_attributes_t {
 
 struct tensor_args_t {
     Tensor input_tensor;
-    // Optional 1-element UINT32 row-major DRAM tensor used for trace-safe valid lengths.
+    // Optional UINT32 row-major DRAM scalar, or [rows,1] per-row bounds when rows
+    // fit the resolved worker grid (at most one input row per worker core).
     std::optional<Tensor> valid_length_tensor{std::nullopt};
     bool has_valid_length_metadata() const { return valid_length_tensor.has_value(); }
     // Optional 1-element UINT32 row-major DRAM tensor holding the REAL token end. Without it the derived

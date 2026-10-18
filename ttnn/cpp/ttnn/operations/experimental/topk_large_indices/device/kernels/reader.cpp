@@ -36,6 +36,9 @@ void kernel_main() {
     // Real-token-end block, appended after the accessor above so those offsets are untouched.
     constexpr uint32_t vend_args_base = meta_args.next_compile_time_args_offset();
     constexpr auto vend_args = TensorAccessorArgs<vend_args_base>();
+    constexpr uint32_t row_meta_args_base = vend_args.next_compile_time_args_offset();
+    constexpr bool per_row_metadata = get_compile_time_arg_val(row_meta_args_base) != 0;
+    constexpr uint32_t metadata_page_stride = get_compile_time_arg_val(row_meta_args_base + 1);
 
     const auto input = TensorAccessor(input_args, src_addr, input_page_bytes);
     const uint32_t input_width = input_page_bytes / element_bytes;
@@ -47,8 +50,21 @@ void kernel_main() {
         CircularBuffer meta_cb_obj(meta_cb);
         meta_cb_obj.reserve_back(1);
         const uint32_t scratch = meta_cb_obj.get_write_ptr();
-        const uint32_t metadata_length = trace_metadata::read_metadata_scalar_u32(
-            noc, meta_args, get_common_arg_val<uint32_t>(topk_common_args::metadata_address), scratch);
+        uint32_t metadata_length;
+        if constexpr (per_row_metadata) {
+            const auto metadata = TensorAccessor(
+                meta_args, get_common_arg_val<uint32_t>(topk_common_args::metadata_address), metadata_page_stride);
+            // Inactive cores still publish the mailbox consumed by compute
+            // before its row loop, but must not read past the final metadata row.
+            const uint32_t metadata_row = num_rows == 0 ? 0 : start_row;
+            noc.async_read(metadata, CoreLocalMem<uint8_t>(scratch), sizeof(uint32_t), {.page_id = metadata_row}, {});
+            noc.async_read_barrier();
+            invalidate_l1_cache();
+            metadata_length = CoreLocalMem<volatile uint32_t>(scratch)[0];
+        } else {
+            metadata_length = trace_metadata::read_metadata_scalar_u32(
+                noc, meta_args, get_common_arg_val<uint32_t>(topk_common_args::metadata_address), scratch);
+        }
         // Validate before addition so the offset cannot wrap and no malformed metadata can produce a NoC read
         // outside the input row. ASSERT is watcher-gated, so it compiles to nothing in a normal build; pair it
         // with a clamp, as bounded_kv_actual_isl / bounded_cache_batch_idx do, or the bound would hold only

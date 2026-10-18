@@ -232,6 +232,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     // one flag now, and the kernel reads presence from the common arg's VALUE (0 = uncapped).
     const bool has_vend = tensor_args.has_valid_end_metadata();
     interleaved_accessor_args(has_vend ? *tensor_args.valid_end_tensor : input).append_to(reader_compile_args);
+    const bool per_row_meta = has_meta && tensor_args.valid_length_tensor->logical_volume() != 1;
+    reader_compile_args.push_back(per_row_meta ? 1u : 0u);
+    reader_compile_args.push_back(per_row_meta ? tensor_args.valid_length_tensor->buffer()->aligned_page_size() : 0u);
 
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,

@@ -99,14 +99,20 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
             "topk_large_indices valid_length_tensor must be on the same device as the input");
         TT_FATAL(m.dtype() == DataType::UINT32, "topk_large_indices valid_length_tensor must be UINT32");
         TT_FATAL(m.layout() == Layout::ROW_MAJOR, "topk_large_indices valid_length_tensor must be ROW_MAJOR");
-        TT_FATAL(
-            m.logical_volume() == 1,
-            "topk_large_indices valid_length_tensor must hold exactly 1 element (got {})",
-            m.logical_volume());
+        if (m.logical_volume() != 1) {
+            // One metadata page per input row. The existing compute mailbox is
+            // consumed once per core, so this mode deliberately permits only
+            // one assigned input row per core; scalar metadata is unrestricted.
+            TT_FATAL(
+                m.logical_shape().rank() == 2 && m.logical_shape()[0] == num_rows && m.logical_shape()[1] == 1,
+                "topk_large_indices per-row valid_length_tensor must have shape [rows, 1]");
+            TT_FATAL(
+                num_rows <= attrs.resolved_worker_core_grid.num_cores(),
+                "topk_large_indices per-row valid_length_tensor requires at most one input row per worker core");
+        }
         TT_FATAL(
             m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "topk_large_indices valid_length_tensor must be interleaved (the kernel reads page 0 at a single "
-            "fixed address)");
+            "topk_large_indices valid_length_tensor must be interleaved");
         TT_FATAL(
             m.memory_config().buffer_type() == BufferType::DRAM,
             "topk_large_indices valid_length_tensor must be in DRAM");
@@ -172,7 +178,7 @@ void TopkLargeIndicesDeviceOperation::validate_on_program_cache_miss(
 ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
-    return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
+    const auto scalar_hash = tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
         // Metadata presence changes the reader/compute binaries (extra CBs + accessor args + the on-device
         // derivation) and the offset is baked in as a compile arg, so both must be hashed. The per-chunk
         // VALUE never enters the key -- that is what lets one captured program serve every chunk.
@@ -190,6 +196,13 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         input.memory_config().memory_layout(),
         input.memory_config().buffer_type(),
         static_cast<uint32_t>(program::compute_body_mode(attrs.k, input.logical_shape()[-1])));
+    if (tensor_args.has_valid_length_metadata() && tensor_args.valid_length_tensor->logical_volume() != 1) {
+        // Values, addresses and row count remain dynamic. Only the optional
+        // reader mode and its physical metadata-page stride change the binary.
+        return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
+            scalar_hash, true, tensor_args.valid_length_tensor->buffer()->aligned_page_size());
+    }
+    return scalar_hash;
 }
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(
