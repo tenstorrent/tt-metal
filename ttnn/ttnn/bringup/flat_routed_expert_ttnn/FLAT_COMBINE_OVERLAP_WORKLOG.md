@@ -1350,3 +1350,16 @@ ts PCC 0.98831, rel L2 0.1581, scale 1.0224; ag 0.98831 / 0.1585 / 1.0236; ts vs
 the 26-down plan's larger arena clashes with the sparse dispatch's CBs again (64 / 32 runs). Caution: on a layout-
 key miss FlatRoutedExpert hard-links the newest whole-plan-keyed set (_adopt_legacy), which can be another plan's
 layout (it linked an 11 x 10-era set under the 12 x 10 64 / 36 key here; removed): FLAT_CACHE_NO_ADOPT=1.
+Whole model (2026-10-18, 12 x 10, real weights; the flat cache repacked for 64 / 32 - zz_scratch_flat_repack.py, 58 min,
+160 GB - shared by both modes: the all-gather path now plans 32 down cores too). test_perf, 56k in 5120 chunks:
+| | ag | ts |
+| warm prefill | 5.85 s (9630 tok/s) | 8.51-8.83 s (6380-6619 tok/s) |
+| last chunk top1 / top5 vs text | 0.6468 / 0.8615 | 0.6470-0.6699 / 0.8650-0.8785 (4 runs) |
+ts run to run spreads ~2 points of top1 (arrival-order fp32 sums, compounded over 45 layers); ag once. Both below the
+2026-10-12 11 x 10 record (0.6816 / 0.8865): not localized yet. Real-weight layers (test_layer_perf GLM_LP_REAL=1):
+device L3 16.05 -> 15.36, L4 9.59 -> 9.08 ms; eager wall L4 11.18 -> 16.23 ms. ts is host bound eager: ~16 ms of host
+per MoE call (fused op 7-8 ms: the combine's MeshProgramDescriptor converted and copied on every call; dispatch prep
+2.5, dispatch 2.1, routing gather 1.4) vs ~9 ms of device. Fixed on the way: one done-words buffer for all layers (43
+x 2 KB of L1 per down coordinator under the arena), one x helper (the second cost 104 KB of arena: the dispatch's
+103 KB manifest stopped fitting in the whole model), dispatch row group 2 for 8 KB rows, persistent dispatch buffers.
+test_generate fails in both modes in MLA (seq_len_local 7040 not a multiple of block_cyclic.chunk_local 256).

@@ -712,12 +712,21 @@ class TtK3TokenSplitMoE:
             return None
         N, S, W = self.N, self.S, self.d.latent
         dram = ttnn.DRAM_MEMORY_CONFIG
-        xbuf = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, N * S, W]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram
-        )
-        route = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, 1, route_words(N) * S]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram
-        )
+        # (routed_only: one buffer pair for every call - the fused experts op's program cache is keyed on its buffer
+        # addresses, so a per-call dispatch buffer that lands elsewhere for every layer rebuilt its program each call)
+        bufs = getattr(self, "_dprep_bufs", None) if self.routed_only else None
+        if bufs is None:
+            bufs = (
+                ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([1, 1, N * S, W]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram
+                ),
+                ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([1, 1, 1, route_words(N) * S]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, dram
+                ),
+            )
+            if self.routed_only:
+                self._dprep_bufs = bufs
+        xbuf, route = bufs
         if self.lat_direct:  # (lat_rm is the tiled latent: own rows straight into the buffer; one program, both ops)
             k = tuple(int(t.buffer_address()) for t in (lat_rm, gi, xbuf, route))
             if self._prep_merged.get("key") != k:
@@ -753,12 +762,13 @@ class TtK3TokenSplitMoE:
             )
             ua = self.untilize_disp.programs(x_se, x_rm)
             extra = ([x_se, x_rm], lambda coord: (list(ua[coord].cbs), list(ua[coord].kernels)))
-        # (rows wider than K3's 7 KB: a 4-row group, its CBs (2 x group rows) below the arena: GLM's 8 KB rows at 8 a group
-        # clashed with it)
-        group = 8 if 2 * self.d.latent <= 7168 else 4
+        # (rows wider than K3's 7 KB: a 2-row group, its CBs (2 x group rows) below the arena and the manifest: GLM's 8 KB
+        # rows at 8 a group clashed with the arena in the layer test, at 4 with the manifest in the whole model)
+        group = 8 if 2 * self.d.latent <= 7168 else 2
         sparse_all_gather_2d(xbuf, route, num_links=2, manifest=man, extra=extra, torus=self.torus, group=group)
         ttnn.deallocate(man)
-        ttnn.deallocate(route)
+        if not self.routed_only:
+            ttnn.deallocate(route)
         g = ttnn.reshape(xbuf, [self.N * self.S, self.d.latent])
         return (g, x_rm) if x_se is not None else g
 
@@ -1048,6 +1058,27 @@ class TtK3TokenSplitMoE:
         weights already normalized / scaled) and op (a FlatRoutedExpert of this block's plan: the layer's weights) ->
         the routed experts' sum [S, H] bf16 TILE (a fresh tensor)."""
         mark = hook or (lambda _: None)
+        if os.environ.get("K3_HOST_LOG") == "1":  # (host time per stage, no syncs: dispatch cost)
+            import time as _t
+
+            st = self.__dict__.setdefault("_host", {"n": 0})
+            last = [_t.perf_counter()]
+
+            def mark(name, _m=mark):
+                now = _t.perf_counter()
+                st[name] = st.get(name, 0.0) + now - last[0]
+                last[0] = now
+                _m(name)
+                if name == "tilize":
+                    st["n"] += 1
+                    if st["n"] % 42 == 0:
+                        from loguru import logger
+
+                        logger.info(
+                            "K3 routed host ms per call: "
+                            + " ".join(f"{k} {1e3 * v / st['n']:.1f}" for k, v in st.items() if k != "n")
+                        )
+
         os.environ["MIMO_FL_Y_L1"] = "1"
         gi, _ = self.gather_routing(ids, wts)
         mark("routing_gather")
@@ -1059,9 +1090,13 @@ class TtK3TokenSplitMoE:
         mark("arena_zero")
         xg = self.dispatch(x, prep)  # (also the barrier: every chip zeroed its arena before any chip's experts start)
         mark("dispatch")
+        n0 = self.mesh.num_program_cache_entries() if os.environ.get("K3_CACHE_LOG") == "1" else None
         self.experts_combine(xg, pl, arena, op)
+        if n0 is not None and self.mesh.num_program_cache_entries() > n0:
+            from loguru import logger
+
+            logger.info(f"K3 routed: experts program cache miss ({self.mesh.num_program_cache_entries()} entries)")
         ttnn.deallocate(arena)
-        ttnn.deallocate(xg)
         ttnn.deallocate(gi)
         mark("experts_combine")
         y = self.tilize(ttnn.reshape(self.out, [self.S, self.d.H]))

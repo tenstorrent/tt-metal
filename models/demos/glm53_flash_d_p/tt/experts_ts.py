@@ -25,14 +25,18 @@ import ttnn
 from models.demos.glm53_flash_d_p.tt.experts import LazyExpertWeights
 from models.demos.glm53_flash_d_p.tt.experts_ag import _dram, all_gather_rows, default_gids, flat_cache_dir
 
-# the routed experts' plan: DRISC-only weight readers, 32 down cores (128 output tile columns, 4 a core), two x helpers
+# the routed experts' plan: DRISC-only weight readers, 32 down cores (128 output tile columns, 4 a core), one x helper
+# (a second one costs ~104 KB of every core's arena (1208 vs 1104 KB): in the whole model the dispatch's 103 KB
+# manifest then no longer fits beside it at S 640; no gain on GLM in the overlap harness)
 FLAT_ENV = {
     "MIMO_FL_CMB_DRISC": "1",
     "MIMO_FL_DRISC_DUAL": "0",
     "MIMO_FL_ND": "32",
-    "MIMO_FL_NH": "2",
+    "MIMO_FL_NH": "1",
 }
 _BLOCKS = {}
+_HOST = {}
+_DONE = {}  # mesh -> the done words every layer's flat expert shares
 _GX = {}  # (mesh, T) -> the gathered x tiles and the full-mesh topology
 
 
@@ -105,6 +109,14 @@ class TtExpertsTs:
             pin=1,
             cache_prefix=prefix,
         )
+        # (one done-words buffer for every layer: 2 KB of L1 on each down coordinator per layer otherwise - 86 KB over
+        # 42 layers, under the token-split block's arena; launches leave it zeroed and the layers run one at a time)
+        shared = _DONE.get(id(mesh))
+        if shared is None or shared[0] is not mesh:
+            _DONE[id(mesh)] = (mesh, self.flat.done)
+        else:
+            ttnn.deallocate(self.flat.done)
+            self.flat.done = shared[1]
 
     def _block(self, s):
         from models.demos.deepseek_v3_d_p.tt.moe.tt_k3_token_split_moe import K3Dims, TtK3TokenSplitMoE
@@ -132,6 +144,17 @@ class TtExpertsTs:
                 routed_only=True,
                 flat_env=FLAT_ENV,
             )
+            logger.info(f"GLM experts ts: arena at {hit.arena_addr} (L1 below it: the dispatch manifest, the CBs)")
+            if os.environ.get("GLM_TS_L1_REPORT") == "1":  # (debug: the L1 buffers the model holds besides the arena)
+                bufs = [
+                    b
+                    for b in ttnn._ttnn.reports.get_buffers(self.mesh)
+                    if "L1" in str(b.buffer_type) and b.device_id == 0
+                ]
+                for b in sorted(bufs, key=lambda b: -b.address):
+                    logger.info(
+                        f"GLM experts ts L1: addr {b.address} size/bank {b.max_size_per_bank} {b.buffer_type} {b.buffer_layout}"
+                    )
         return hit
 
     def _gather_x(self, x, T):
@@ -166,10 +189,28 @@ class TtExpertsTs:
         if wts.dtype != ttnn.bfloat16:
             wts = ttnn.typecast(wts, ttnn.bfloat16)
             tmp.append(wts)
+        import time as _t
+
+        t0 = _t.perf_counter()
         self.gathered_x = self._gather_x(x, n * s)
+        t1 = _t.perf_counter()
         blk = self._block(s)
         x2 = ttnn.reshape(x, [s, self.H])
+        t2 = _t.perf_counter()
         y = blk.routed(x2, ttnn.reshape(idx, [s, self.K]), ttnn.reshape(wts, [s, self.K]), self.flat)
+        if os.environ.get("K3_HOST_LOG") == "1":
+            h = _HOST.setdefault("t", [0.0, 0.0, 0.0, 0])
+            h[0] += t1 - t0
+            h[1] += t2 - t1
+            h[2] += _t.perf_counter() - t2
+            h[3] += 1
+            if h[3] % 42 == 0:
+                from loguru import logger
+
+                logger.info(
+                    f"GLM ts host ms per call: x gather {1e3 * h[0] / h[3]:.1f}, block lookup + reshape "
+                    f"{1e3 * h[1] / h[3]:.1f}, routed {1e3 * h[2] / h[3]:.1f}"
+                )
         for t in tmp:
             ttnn.deallocate(t)
         return ttnn.reshape(y, [1, 1, s, self.H])
