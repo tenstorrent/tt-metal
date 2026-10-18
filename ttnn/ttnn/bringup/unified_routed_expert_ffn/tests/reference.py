@@ -70,3 +70,43 @@ def expert_ffn(x: torch.Tensor, wg: torch.Tensor, wu: torch.Tensor, wd: torch.Te
     if activation in GLU:
         return GLU[activation](x @ wg, x @ wu) @ wd
     return (ACT[activation](x @ wg) * (x @ wu)) @ wd
+
+
+# --------------------------------------------------------------------------- DeepSeek-V4.1 h options (P.2)
+# unified_routed_expert_moe(..., routing_weights=R, fp8_act_quant=True, weights_transposed=True): per local expert le
+# and dispatched row i of its region,
+#     h_i = act(x_i @ W1^T, x_i @ W3^T) * R[i, le]                  W1, W3 [hidden, emb], W2 [emb, hidden] as stored
+#     y_i = fp8_act_qdq(h_i) @ W2^T
+# fp8_act_qdq = DeepSeek's act_quant(h, 32, 'ue8m0') followed by its dequantizing GEMM (inference kernel.py; the same
+# arithmetic as models/demos/deepseek_v41_flash_d_p/reference/kernels.py:act_quant_dequant).
+FP8_MAX = 448.0
+FP8_AMAX_MIN = 1e-4
+INV_FP8_MAX = torch.tensor(1.0 / 448.0, dtype=torch.float32)  # fp32(1/448), the kernels' constant
+
+
+def pow2_ceil(t: torch.Tensor) -> torch.Tensor:
+    """2^ceil(log2 t) of positive normal fp32 t, from the bits (ue8m0)."""
+    b = t.float().contiguous().view(torch.int32)
+    return ((b + 0x7FFFFF) & 0x7F800000).view(torch.float32)
+
+
+def fp8_act_scale(h: torch.Tensor, block: int = 32) -> torch.Tensor:
+    """The per-block ue8m0 scale s [..., n/block, 1] of fp32 h [..., n]."""
+    g = h.float().reshape(*h.shape[:-1], h.shape[-1] // block, block)
+    return pow2_ceil(g.abs().amax(dim=-1, keepdim=True).clamp_min(FP8_AMAX_MIN) * INV_FP8_MAX)
+
+
+def fp8_act_qdq(h: torch.Tensor, block: int = 32) -> torch.Tensor:
+    """fp32 e4m3(clamp(h / s, +-448)) * s per block of `block` values along the last dim (round to nearest even)."""
+    g = h.float().reshape(*h.shape[:-1], h.shape[-1] // block, block)
+    s = fp8_act_scale(h, block)
+    return ((g / s).clamp(-FP8_MAX, FP8_MAX).to(torch.float8_e4m3fn).float() * s).reshape(h.shape)
+
+
+def routed_h(x, w1, w3, r, activation: str = "ClampedSiluGlu") -> torch.Tensor:
+    """x [n, emb] bf16; w1, w3 [hidden, emb] (stored); r [n] fp32 or None -> h [n, hidden] fp32 (before the quant).
+    The GEMMs in float64, rounded once to fp32 (the device accumulates in fp32)."""
+    g = (x.double() @ w1.double().T).float()
+    u = (x.double() @ w3.double().T).float()
+    h = GLU[activation](g, u)
+    return h if r is None else h * r.float()[:, None]

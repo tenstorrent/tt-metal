@@ -74,7 +74,18 @@ ttnn::Tensor unified_routed_expert_moe(
     // Opt-in precise path: honour compute_kernel_config's math_fidelity / fp32_dest_acc_en for
     // every activation, keep x, intermediates and the output in bf16 (ROW_MAJOR x only; the
     // returned buffer is TILE bf16 instead of bf8_b). Default false = unchanged behaviour.
-    bool high_precision = false);
+    bool high_precision = false,
+    // Opt-in DeepSeek-V4.1 expert numerics (each default keeps today's program):
+    //   routing_weights: FLOAT32 ROW_MAJOR [rows of the dispatched buffer, C >= experts_per_chip]; expert le's
+    //     row i activation is multiplied by routing_weights[i, le] (fp32, SFPU) before the down projection.
+    //   fp8_act_quant: fp8 e4m3 quantize-dequantize of that activation per 32 hidden values with a power-of-two
+    //     (ue8m0) scale before the down projection (DeepSeek act_quant(h, 32, 'ue8m0')).
+    //   Both need high_precision, fp32_dest_acc_en and a fused binary activation (ClampedSiluGlu, ...).
+    //   weights_transposed: gate/up/down given as [N, K] (gate/up [hidden, emb], down [emb, hidden]), read and
+    //     multiplied transposed inside the op (a bfp8 [N, K] weight keeps its own block exponents).
+    const std::optional<ttnn::Tensor>& routing_weights = std::nullopt,
+    bool fp8_act_quant = false,
+    bool weights_transposed = false);
 
 }  // namespace ttnn::operations::bringup::unified_routed_expert_ffn
 
