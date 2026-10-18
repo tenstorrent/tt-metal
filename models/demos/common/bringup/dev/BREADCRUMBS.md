@@ -1318,3 +1318,6 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F108: a perf pick's A/B report measures every uncommitted change under the task's paths (any attempt's), not only
   the last attempt's edits: DeepSeek-V4.1 P.4 attempt 2 (the code already in the tree from attempt 1) was reported as
   "the agent changed nothing" and nothing was measured.
+- F109: a task waiting for a person no longer stops the run when other runnable tasks exist and the waiting task has
+  nothing uncommitted in the tree (another task's commit would take it along); its dependents stay blocked. Owner:
+  run P.5 regardless of the P.4 decision.

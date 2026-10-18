@@ -1599,6 +1599,9 @@ class Orchestrator:
             ]
             if only:
                 runnable = [t for t in runnable if t == only]
+            parked = self.parked_waiting(runnable, state)
+            if parked and len(parked) < len(runnable):  # F109: a person's decision does not hold up independent work
+                runnable = [t for t in runnable if t not in parked]
             if not runnable:
                 stopped = [t for t in self.led.tasks() if state.get(t, {}).get("status") == "STOPPED"]
                 if stopped:
@@ -1631,10 +1634,28 @@ class Orchestrator:
                 rc = self.step(tid)
             except InfraStop as e:
                 rc = self.stop_for_infra(e.tid, e.sig)
+            if rc == HUMAN and not only:
+                state = self.led.state()
+                rest = [t for t in self.led.runnable() if t != tid and state.get(t, {}).get("status") != "STOPPED"]
+                rest = [t for t in rest if t not in stop_at and t not in self.parked_waiting(rest, state)]
+                if rest and tid in self.parked_waiting([tid], state):
+                    self.echo(f"  [{tid}] waits for a person; the run goes on with {rest[0]} (F109)")
+                    continue
             if rc != DONE:
                 return rc
             if only:
                 return DONE
+
+    def parked_waiting(self, tids: list[str], state: dict) -> set[str]:
+        """F109: tasks waiting for a person that the run may pass: nothing of theirs uncommitted in the tree (another
+        task's commit would take it along). Their dependents stay blocked (the ledger's runnable)."""
+        out = set()
+        for t in tids:
+            if not state.get(t, {}).get("waiting"):
+                continue
+            if not self.changed_under(self.led.task(t)):
+                out.add(t)
+        return out
 
 
 def _place_fixes(orch: Orchestrator) -> bool:
