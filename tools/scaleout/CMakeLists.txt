@@ -360,7 +360,7 @@ if(ENABLE_DISTRIBUTED)
                 COMPONENT metalium-runtime
         )
 
-        # PGDs used by find_and_load_physical_grouping_descriptor() in fabric_host_utils (default + arch/cluster-specific under
+        # PGDs used by PhysicalGroupingDescriptor::find_and_load() (default + arch/cluster-specific under
         # TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/). Mirror that tree under the install datadir.
         file(
             GLOB _generate_rank_bindings_pgd_files
@@ -377,3 +377,26 @@ if(ENABLE_DISTRIBUTED)
         endif()
     endif()
 endif()
+
+# First-step triage, device side. Driven by kmd_triage/device_side.sh from the
+# exabox health check. Deliberately depends on nothing in this repo: it reaches
+# tt-kmd through its ioctl interface so it still reports on a host where the
+# runtime will not load, which is exactly when triage is needed. Keep it that
+# way -- linking tt_metal or UMD here would defeat the point.
+find_package(Threads REQUIRED)
+
+add_executable(kmd_triage)
+target_sources(kmd_triage PRIVATE ${KMD_TRIAGE_SRCS})
+
+# Stated rather than inherited from CMAKE_CXX_STANDARD: the source uses
+# designated initializers, so C++20 is a hard requirement, not a preference.
+target_compile_features(kmd_triage PRIVATE cxx_std_20)
+
+target_link_libraries(kmd_triage PRIVATE Threads::Threads)
+
+set_target_properties(
+    kmd_triage
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${Metalium_BINARY_DIR}/tools/scaleout
+)

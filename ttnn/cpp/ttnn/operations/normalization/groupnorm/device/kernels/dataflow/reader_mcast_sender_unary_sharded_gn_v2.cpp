@@ -38,8 +38,8 @@ void kernel_main() {
     constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
     constexpr uint32_t tile_height = get_compile_time_arg_val(9);
 
-    const bool has_mcast_first_group = get_arg_val<uint32_t>(0);
-    const bool has_mcast_last_group = get_arg_val<uint32_t>(1);
+    const bool has_mcast_first_group = get_arg_val<uint32_t>(0) == 1;
+    const bool has_mcast_last_group = get_arg_val<uint32_t>(1) == 1;
 
     // mid mcast group
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(2);
@@ -49,21 +49,21 @@ void kernel_main() {
     const uint32_t num_mcast_cores_mid_group = get_arg_val<uint32_t>(6);
 
     // first mcast group
-    uint32_t mcast_first_group_dest_noc_start_x;
-    uint32_t mcast_first_group_dest_noc_start_y;
-    uint32_t mcast_first_group_dest_noc_end_x;
-    uint32_t mcast_first_group_dest_noc_end_y;
+    uint32_t mcast_first_group_dest_noc_start_x = 0;
+    uint32_t mcast_first_group_dest_noc_start_y = 0;
+    uint32_t mcast_first_group_dest_noc_end_x = 0;
+    uint32_t mcast_first_group_dest_noc_end_y = 0;
     // last mcast group
-    uint32_t mcast_last_group_dest_noc_start_x;
-    uint32_t mcast_last_group_dest_noc_start_y;
-    uint32_t mcast_last_group_dest_noc_end_x;
-    uint32_t mcast_last_group_dest_noc_end_y;
+    uint32_t mcast_last_group_dest_noc_start_x = 0;
+    uint32_t mcast_last_group_dest_noc_start_y = 0;
+    uint32_t mcast_last_group_dest_noc_end_x = 0;
+    uint32_t mcast_last_group_dest_noc_end_y = 0;
     tt_l1_ptr uint32_t* noc_coord_x;
     tt_l1_ptr uint32_t* noc_coord_y;
 
     // number of cores in mcast groups
-    uint32_t num_mcast_cores_first_group;
-    uint32_t num_mcast_cores_last_group;
+    uint32_t num_mcast_cores_first_group = 0;
+    uint32_t num_mcast_cores_last_group = 0;
 
     // first and last group mcast coordinates passed directly in async_write_multicast calls below
 
@@ -80,8 +80,8 @@ void kernel_main() {
         mcast_last_group_dest_noc_end_y = get_arg_val<uint32_t>(15);
         num_mcast_cores_last_group = get_arg_val<uint32_t>(16);
 
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(17));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(17 + num_mcast_cores));
+        noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(17));
+        noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(17 + num_mcast_cores));
 
     } else if (has_mcast_first_group and not has_mcast_last_group) {
         mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(7);
@@ -90,8 +90,8 @@ void kernel_main() {
         mcast_first_group_dest_noc_end_y = get_arg_val<uint32_t>(10);
         num_mcast_cores_first_group = get_arg_val<uint32_t>(11);
 
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(12));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(12 + num_mcast_cores));
+        noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(12));
+        noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(12 + num_mcast_cores));
 
     } else if (not has_mcast_first_group and has_mcast_last_group) {
         mcast_last_group_dest_noc_start_x = get_arg_val<uint32_t>(7);
@@ -100,15 +100,15 @@ void kernel_main() {
         mcast_last_group_dest_noc_end_y = get_arg_val<uint32_t>(10);
         num_mcast_cores_last_group = get_arg_val<uint32_t>(11);
 
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(12));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(12 + num_mcast_cores));
+        noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(12));
+        noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(12 + num_mcast_cores));
 
     } else {
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(7 + num_mcast_cores));
+        noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(7));
+        noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(7 + num_mcast_cores));
     }
 
-    Noc noc;
+    const Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     reduce_sender_sem.set(VALID);
@@ -124,13 +124,12 @@ void kernel_main() {
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex(dfb_ex_id);
     DataflowBuffer dfb_ex_external(dfb_ex_external_id);
-    DataflowBuffer dfb_in0(dfb_in0_id);
+    const DataflowBuffer dfb_in0(dfb_in0_id);
     DataflowBuffer dfb_repack(dfb_repack_id);
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
-    DataflowBuffer dfb_out0(dfb_out0_id);
+    const DataflowBuffer dfb_out0(dfb_out0_id);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
-    const DataFormat data_format = get_dataformat(dfb_ex_partial_id);
+    const uint32_t single_tile_size_bytes = dfb_ex_partial.get_tile_size();
     const uint32_t num_bytes_read = datum_size_bytes;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
@@ -167,7 +166,7 @@ void kernel_main() {
             for (uint32_t n = 0; n < 2; ++n) {
                 dfb_ex_partial.wait_front(1);
 
-                uint32_t l1_read_addr_ex_par = dfb_ex_partial.get_read_ptr();
+                const uint32_t l1_read_addr_ex_par = dfb_ex_partial.get_read_ptr();
                 dfb_ex_external.reserve_back(1);
                 uint32_t l1_write_addr_external = dfb_ex_external.get_write_ptr();
 
@@ -192,7 +191,7 @@ void kernel_main() {
                 // trailing-tile bytes past slot num_mcast_cores-1, stay zero, so
                 // the downstream reduce_tile sum on dfb_ex_external is not
                 // polluted.
-                UnicastEndpoint remote_ep;
+                const UnicastEndpoint remote_ep;
                 // fp32: read self at datum width (gaps zeroed up front); bf16: full-tile self-read zero-inits the
                 // reserved tile.
                 noc.async_read(
@@ -207,9 +206,9 @@ void kernel_main() {
                 reduce_receiver_sem.wait(num_mcast_cores - 1);
                 reduce_receiver_sem.set(0);
                 for (uint32_t i = 0; i < num_mcast_cores - 1; ++i) {
-                    UnicastEndpoint remote_ep;
+                    const UnicastEndpoint peer_ep;
                     noc.async_read(
-                        remote_ep,
+                        peer_ep,
                         CoreLocalMem<uint32_t>(l1_write_addr_external),
                         num_bytes_read,
                         {.noc_x = noc_coord_x[i + 1], .noc_y = noc_coord_y[i + 1], .addr = l1_read_addr_ex_par},
@@ -222,8 +221,8 @@ void kernel_main() {
                 dfb_ex.wait_front(1);
                 dfb_ex_partial.pop_front(1);
 
-                uint32_t l1_read_addr_ex = dfb_ex.get_read_ptr();
-                MulticastEndpoint mcast_dst;
+                const uint32_t l1_read_addr_ex = dfb_ex.get_read_ptr();
+                const MulticastEndpoint mcast_dst;
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(l1_read_addr_ex),
                     mcast_dst,

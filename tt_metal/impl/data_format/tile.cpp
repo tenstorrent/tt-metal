@@ -33,38 +33,104 @@ constexpr std::array<std::array<std::array<uint32_t, 2>, 2>, 12> TILE_FACE_HW_CH
      {{{2, 16}, {2, 16}}},
      {{{1, 16}, {1, 16}}}}};
 
-Tile::Tile(std::array<uint32_t, 2> tile_shape, bool transpose_tile) : tile_shape(tile_shape) {
-    const auto* it = std::find_if(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(), [this](const auto& pair) {
-        if (pair[0] == this->tile_shape) {
-            this->face_shape = pair[1];
-            return true;
-        }
-        return false;
-    });
+std::array<uint32_t, 2> get_default_face_shape(std::array<uint32_t, 2> tile_shape) {
+    const auto* it =
+        std::find_if(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(), [tile_shape](const auto& pair) {
+            return pair[0] == tile_shape;
+        });
+    TT_FATAL(it != TILE_FACE_HW_CHOICES.end(), "Tile size is not valid for our hardware");
+    return (*it)[1];
+}
 
-    if (it == TILE_FACE_HW_CHOICES.end()) {
-        TT_THROW("Tile size is not valid for our hardware");
-    }
-
-    if (transpose_tile) {
-        transpose_within_face = true;
-        transpose_of_faces = true;
-    } else {
-        transpose_within_face = false;
-        transpose_of_faces = false;
-    }
-
+void validate_transpose_height(uint32_t tile_height, bool transpose_tile) {
     if (transpose_tile) {
         TT_FATAL(
-            (this->tile_shape[0] == constants::FACE_HEIGHT || this->tile_shape[0] == constants::TILE_HEIGHT),
+            tile_height == constants::FACE_HEIGHT || tile_height == constants::TILE_HEIGHT,
             "Tile height must equal 16 or 32 in transpose mode");
     }
+}
 
-    tile_hw = this->tile_shape[0] * this->tile_shape[1];
-    face_hw = face_shape[0] * face_shape[1];
-    num_faces = tile_hw / face_hw;
-    partial_face = static_cast<uint32_t>(this->tile_shape[0] < constants::TILE_HEIGHT);
-    narrow_tile = static_cast<uint32_t>(this->tile_shape[1] < constants::TILE_WIDTH);
+Tile::Tile(std::array<uint32_t, 2> tile_shape, bool transpose_tile) :
+    tile_shape(tile_shape),
+    face_shape(get_default_face_shape(tile_shape)),
+    tile_hw(tile_shape[0] * tile_shape[1]),
+    face_hw(face_shape[0] * face_shape[1]),
+    num_faces(tile_hw / face_hw),
+    partial_face(static_cast<uint32_t>(tile_shape[0] < constants::TILE_HEIGHT)),
+    narrow_tile(static_cast<uint32_t>(tile_shape[1] < constants::TILE_WIDTH)),
+    transpose_within_face(transpose_tile),
+    transpose_of_faces(transpose_tile) {
+    validate_transpose_height(this->tile_shape[0], transpose_tile);
+}
+
+Tile::Tile(std::array<uint32_t, 2> tile_shape, std::array<uint32_t, 2> face_shape, bool transpose_tile) :
+    tile_shape(tile_shape),
+    face_shape(face_shape),
+    tile_hw(tile_shape[0] * tile_shape[1]),
+    face_hw(face_shape[0] * face_shape[1]),
+    num_faces(tile_hw / face_hw),
+    partial_face(static_cast<uint32_t>(tile_shape[0] < constants::TILE_HEIGHT)),
+    narrow_tile(static_cast<uint32_t>(tile_shape[1] < constants::TILE_WIDTH)),
+    transpose_within_face(transpose_tile),
+    transpose_of_faces(transpose_tile) {
+    const bool known_tile_shape =
+        std::any_of(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(), [&tile_shape](const auto& pair) {
+            return pair[0] == tile_shape;
+        });
+
+    TT_FATAL(known_tile_shape, "Tile size is not valid for our hardware");
+
+    // Face shape must fit evenly into tile shape
+    TT_FATAL(
+        (tile_shape[0] % face_shape[0]) == 0 && (tile_shape[1] % face_shape[1]) == 0,
+        "tile shape ({}x{}) must tile evenly into face shape ({}x{})",
+        tile_shape[0],
+        tile_shape[1],
+        face_shape[0],
+        face_shape[1]);
+
+    // These constants are derived from device side constants at (tt-llk/common/tensor_shape.h)
+    // Maintainers: Please keep these in sync with device side constants.
+    constexpr std::uint8_t MAX_FACE_R_DIM = 16;
+    constexpr std::uint8_t MAX_FACE_C_DIM = 16;
+    constexpr std::uint8_t MAX_TILE_R_DIM = 32;
+    constexpr std::uint8_t MAX_TILE_C_DIM = 32;
+    constexpr std::uint8_t MAX_NUM_FACES_R_DIM = 2;
+    constexpr std::uint8_t MAX_NUM_FACES_C_DIM = 2;
+    constexpr std::uint8_t MAX_NUM_FACES = MAX_NUM_FACES_R_DIM * MAX_NUM_FACES_C_DIM;
+
+    TT_FATAL(
+        face_shape[0] <= MAX_FACE_R_DIM && face_shape[1] <= MAX_FACE_C_DIM,
+        "face shape ({}x{}) exceeds the maximum supported face shape ({}x{})",
+        face_shape[0],
+        face_shape[1],
+        MAX_FACE_R_DIM,
+        MAX_FACE_C_DIM);
+    TT_FATAL(
+        tile_shape[0] <= MAX_TILE_R_DIM && tile_shape[1] <= MAX_TILE_C_DIM,
+        "tile shape ({}x{}) exceeds the maximum supported tile shape ({}x{})",
+        tile_shape[0],
+        tile_shape[1],
+        MAX_TILE_R_DIM,
+        MAX_TILE_C_DIM);
+
+    auto num_faces_r = tile_shape[0] / face_shape[0];
+    auto num_faces_c = tile_shape[1] / face_shape[1];
+    TT_FATAL(
+        num_faces_r <= MAX_NUM_FACES_R_DIM && num_faces_c <= MAX_NUM_FACES_C_DIM,
+        "num_faces ({}x{}) exceeds the maximum supported num_faces ({}x{})",
+        num_faces_r,
+        num_faces_c,
+        MAX_NUM_FACES_R_DIM,
+        MAX_NUM_FACES_C_DIM);
+
+    TT_FATAL(
+        num_faces <= MAX_NUM_FACES,
+        "num_faces ({}) exceeds the maximum supported num_faces ({})",
+        num_faces,
+        MAX_NUM_FACES);
+
+    validate_transpose_height(this->tile_shape[0], transpose_tile);
 }
 
 uint32_t Tile::get_tile_size(const DataFormat& format) const {

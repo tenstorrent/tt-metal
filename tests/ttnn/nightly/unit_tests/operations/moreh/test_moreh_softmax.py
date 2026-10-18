@@ -16,6 +16,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
 )
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def get_torch_dtype(dtype):
     if dtype == ttnn.int32:
@@ -39,8 +42,6 @@ def run_moreh_softmax_test(
     strategy=None,
     compute_kernel_options=None,
 ):
-    if ttnn_dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported")
     torch_dtype = get_torch_dtype(ttnn_dtype)
     if use_randint == True:
         torch_input = torch.randint(low=0, high=4, size=shape).to(torch_dtype) + 100
@@ -177,6 +178,7 @@ def test_softmax_for_dim_hw(shape_dim, dtype, compute_kernel_options, device):
     "dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
@@ -216,6 +218,7 @@ def test_softmax_large_algorithm_for_dim_hw(shape_dim, dtype, compute_kernel_opt
     "dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
@@ -436,6 +439,8 @@ def test_softmax_callback(shape_dim_strategy, dtype, device):
     torch.manual_seed(0)
     rtol = atol = 0.05
 
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     for i in range(2):
         run_moreh_softmax_test(shape, dim, dtype, ttnn.TILE_LAYOUT, device, rtol, atol, True, strategy=strategy)
         if i == 0:
@@ -468,6 +473,8 @@ def test_softmax_backward_callback(shape_dim_strategy, dtype, device):
     torch.manual_seed(0)
     rtol = atol = 0.05
 
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     for i in range(2):
         run_moreh_softmax_backward_test(
             shape, dim, dtype, ttnn.TILE_LAYOUT, device, rtol, atol, True, strategy=strategy

@@ -13,7 +13,7 @@ namespace tt::tt_metal {
 // must produce different hashes. ShapeBase::init() pads value_ to min-4D with
 // leading 1s, so [128, 128] and [1, 128, 128] both store {1, 1, 128, 128}.
 // The rank must be included in the hash to distinguish them.
-TEST(TensorShapeTests, DifferentRankShapesProduceDifferentHashes) {
+TEST(TensorShapeTests, CPU_DifferentRankShapesProduceDifferentHashes) {
     tt::tt_metal::Shape shape_2d({128, 128});
     tt::tt_metal::Shape shape_3d({1, 128, 128});
 
@@ -29,7 +29,7 @@ TEST(TensorShapeTests, DifferentRankShapesProduceDifferentHashes) {
     EXPECT_NE(hash_2d, hash_3d);
 }
 
-TEST(TensorShapeTests, SameRankShapesWithDifferentDimsProduceDifferentHashes) {
+TEST(TensorShapeTests, CPU_SameRankShapesWithDifferentDimsProduceDifferentHashes) {
     tt::tt_metal::Shape shape_a({32, 64});
     tt::tt_metal::Shape shape_b({64, 32});
 
@@ -38,7 +38,7 @@ TEST(TensorShapeTests, SameRankShapesWithDifferentDimsProduceDifferentHashes) {
     EXPECT_NE(hash_a, hash_b);
 }
 
-TEST(TensorShapeTests, IdenticalShapesProduceSameHash) {
+TEST(TensorShapeTests, CPU_IdenticalShapesProduceSameHash) {
     tt::tt_metal::Shape shape_a({1, 128, 128});
     tt::tt_metal::Shape shape_b({1, 128, 128});
 

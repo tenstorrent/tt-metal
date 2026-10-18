@@ -4,49 +4,18 @@
 
 #pragma once
 
+#include "internal/debug/assert_common.h"
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
 #if defined(ARCH_QUASAR)
 #include "internal/tt-2xx/quasar/error_handling.h"
+
+#if defined(COMPILE_FOR_DM)
+#include "internal/tt-2xx/quasar/cache.h"
+#elif defined(COMPILE_FOR_TRISC)
+#include "tensix.h"
 #endif
-
-// ASSERT must be defined before including risc_common.h. That header includes this file mid-way
-// (so assert_and_hang can see flush_l2_cache_*), then uses ASSERT in ISR handlers. When this file
-// is the include entry point (e.g. ckernel.h -> llk_assert.h -> here), the mid-file re-include is
-// skipped by #pragma once, so ASSERT would otherwise be used before it is defined.
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
-
-// Definition below, after risc_common.h provides flush_l2_cache_range and related symbols.
-inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type = DebugAssertTripped);
-
-#define ASSERT(condition, ...) (void(not(condition) ? assert_and_hang(__LINE__, ##__VA_ARGS__), 0 : 0))
-
-#define ASSERT_ENABLED 1
-#define WATCHER_ASSERT_ENABLED 1
-#define LIGHTWEIGHT_ASSERT_ENABLED 0
-
-#elif defined(LIGHTWEIGHT_KERNEL_ASSERTS)
-
-#define ASSERT(condition, ...) (void(not(condition) ? ({ asm("ebreak"); }), 0 : 0))
-
-#define ASSERT_ENABLED 1
-#define LIGHTWEIGHT_ASSERT_ENABLED 1
-#define WATCHER_ASSERT_ENABLED 0
-
-#else
-
-// Avoid unused variable warnings here.
-#define ASSERT(condition, ...) (void(sizeof(not(condition))))
-
-#define ASSERT_ENABLED 0
-#define LIGHTWEIGHT_ASSERT_ENABLED 0
-#define WATCHER_ASSERT_ENABLED 0
-
 #endif
-
-// Included after ASSERT so risc_common.h's ISR handlers can use the macro even when this header
-// is the include entry point (circular include with risc_common.h).
-#include "risc_common.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
@@ -69,7 +38,11 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type) 
 #endif
     {
         v->line_num = line_num;
+#if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_DM) || defined(COMPILE_FOR_TRISC))
+        v->which = internal_::read_hw_thread_idx();
+#else
         v->which = internal_::get_hw_thread_idx();
+#endif
         if (assert_type == DebugAssertHwFault) {  // only valid on Quasar
 #ifndef COMPILE_FOR_TRISC
             uint64_t mcause;
@@ -80,6 +53,37 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type) 
             asm volatile("csrr %0, mtval" : "=r"(mtval));
             v->line_num = mepc;  // mepc is the instruction address that caused the fault
             v->hw_fault_info = mtval << 32 | (mcause & 0xffffffff);  // mtval is the faulting address or instruction
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+            // line_num truncates mepc to 16 bits. Leave the full trap state in a fixed ring slot per DM
+            // hart (slot = hart * 8 + k: tag, mepc lo/hi, mcause, mtval, mstatus, mie|mip<<16, sp) so
+            // the 8 DM harts cannot collide; the host dumps them as raw ring-buffer words.
+            {
+                uint64_t mstatus, mie, mip, mhartid, sp;
+                asm volatile("csrr %0, mstatus" : "=r"(mstatus));
+                asm volatile("csrr %0, mie" : "=r"(mie));
+                asm volatile("csrr %0, mip" : "=r"(mip));
+                asm volatile("csrr %0, mhartid" : "=r"(mhartid));
+                asm volatile("mv %0, sp" : "=r"(sp));
+                uint32_t hart = internal_::read_hw_thread_idx();
+                auto* wrapper = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
+                auto* rb = reinterpret_cast<debug_mpsc_ring_buf_msg_quasar_t tt_l1_ptr*>(wrapper->data);
+                constexpr uint32_t mask = DEBUG_RING_BUFFER_MPSC_ELEMENTS_QUASAR - 1;
+                uint32_t base = (hart & 0xF) * 8;
+                const uint32_t words[8] = {
+                    0xFA000000u | (static_cast<uint32_t>(mhartid & 0xff) << 8) | (hart & 0xff),
+                    static_cast<uint32_t>(mepc),
+                    static_cast<uint32_t>(mepc >> 32),
+                    static_cast<uint32_t>(mcause),
+                    static_cast<uint32_t>(mtval),
+                    static_cast<uint32_t>(mstatus),
+                    static_cast<uint32_t>(mie & 0xffff) | (static_cast<uint32_t>(mip & 0xffff) << 16),
+                    static_cast<uint32_t>(sp)};
+                for (uint32_t k = 0; k < 8; ++k) {
+                    rb->slots[(base + k) & mask].data = words[k];
+                    rb->slots[(base + k) & mask].write_id = hart + 1;
+                }
+            }
+#endif
 #elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC)
             // Layout constants and block IDs both come from error_handling.h, shared with the
             // host decoder so the two can't drift.

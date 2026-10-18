@@ -9,6 +9,9 @@
 // The binding names below (dfb::out, tensor::dst) and the named argument set are this fork's
 // interface: every later consumer inherits them, so they are taken from the kernel's own vocabulary
 // rather than any one op's locals, and are not renamed once a consumer exists.
+//
+// TODO(#52228): retire this duplication. The issue records why it exists, the full consumer
+// list, and the sunset plan: https://github.com/tenstorrent/tt-metal/issues/52228
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -25,15 +28,22 @@ void kernel_main() {
     // its consumer.
     DataflowBuffer dfb(dfb::out);
 
-    // Get page size from the DFB entry size (works for both TILE and ROW_MAJOR layouts)
+#ifdef ENTRIES_PER_PAGE
+    // The op sets these when a page spans several DFB entries, or is shorter than one.
+    constexpr uint32_t onepage = ENTRIES_PER_PAGE;
+    constexpr uint32_t page_bytes = PAGE_BYTES;
+#else
+    // One page per DFB entry (works for both TILE and ROW_MAJOR layouts)
+    constexpr uint32_t onepage = 1;
     const uint32_t page_bytes = dfb.get_entry_size();
+#endif
 
 #ifdef OUT_SHARDED
-    dfb.wait_front(num_pages);
+    // Output is sharded in place; the wait is only a readiness handshake. Pop to
+    // leave the DFB balanced.
+    dfb.wait_front(num_pages * onepage);
+    dfb.pop_front(num_pages * onepage);
 #else
-
-    // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
-    constexpr uint32_t onepage = 1;
 
     const auto s = TensorAccessor(tensor::dst);
 

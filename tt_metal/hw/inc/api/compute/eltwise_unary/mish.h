@@ -35,10 +35,10 @@ namespace ckernel {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mish_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mish, (APPROXIMATION_MODE, DST_ACCUM_MODE), idst, VectorMode::RC));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_mish, (APPROXIMATION_MODE, is_fp32_dest_acc_en), idst, VectorMode::RC));
 }
 
 /**
@@ -46,7 +46,7 @@ ALWI void mish_tile(uint32_t idst) {
  */
 template <bool APPROXIMATION_MODE>
 ALWI void mish_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(mish, sfpu::mish_init, (APPROXIMATION_MODE, DST_ACCUM_MODE)));
+    MATH(SFPU_UNARY_INIT_FN(mish, sfpu::mish_init, (APPROXIMATION_MODE)));
 }
 
 }  // namespace ckernel

@@ -39,26 +39,27 @@ class ckernel_template
     // This means that in this case, last_inner_loop_instr will be replaced by the last_outer_loop_instr
 
 public:
-    ckernel_template(std::uint32_t outer_loop_len, std::uint32_t inner_loop_len, std::uint32_t loop_op);
-    ckernel_template(std::uint32_t outer_loop_len, std::uint32_t inner_loop_len, std::uint32_t loop_op0, std::uint32_t loop_op1);
-    void set_end_ops(std::uint32_t end_op0, std::uint32_t end_op1);
-    void set_end_op(std::uint32_t end_op0);
-    void set_start_op(std::uint32_t start_op0);
-    void set_last_inner_loop_instr(std::uint32_t op);
-    void set_last_outer_loop_instr(std::uint32_t op);
-    void set_outer_loop_len(std::uint32_t len);
-    void set_inner_loop_len(std::uint32_t len);
-    void set_loop_instr(std::uint32_t loop_op0, std::uint32_t loop_op1);
+    inline ckernel_template(std::uint32_t outer_loop_len, std::uint32_t inner_loop_len, std::uint32_t loop_op);
+    inline ckernel_template(std::uint32_t outer_loop_len, std::uint32_t inner_loop_len, std::uint32_t loop_op0, std::uint32_t loop_op1);
+    inline void set_end_ops(std::uint32_t end_op0, std::uint32_t end_op1);
+    inline void set_end_op(std::uint32_t end_op0);
+    inline void set_start_op(std::uint32_t start_op0);
+    inline void set_last_inner_loop_instr(std::uint32_t op);
+    inline void set_last_outer_loop_instr(std::uint32_t op);
+    inline void set_outer_loop_len(std::uint32_t len);
+    inline void set_inner_loop_len(std::uint32_t len);
+    inline void set_loop_instr(std::uint32_t loop_op0, std::uint32_t loop_op1);
 
-    void program(volatile std::uint32_t *instrn_buffer);                  // just programs the registers
-    void program_bank0_sw_cntl(volatile std::uint32_t *instrn_buffer);    // programs BANK0 in software control mode
-    void program_bank1_sw_cntl(volatile std::uint32_t *instrn_buffer);    // programs BANK1 in software control mode
-    static void run(volatile std::uint32_t *instrn_buffer);               // runs - assumes that registers were already programmed
-    static void run_and_finish(volatile std::uint32_t *instrn_buffer);    // runs and switches mop_config bank - assumes that registers were already programmed
-    static void run_bank0_sw_cntl(volatile std::uint32_t *instrn_buffer); // run bank 0 in SW control mode
-    static void run_bank1_sw_cntl(volatile std::uint32_t *instrn_buffer); // run bank 1 in SW control mode
-    void program_and_run(volatile std::uint32_t *instrn_buffer);          // calls program, then run
-    void program_and_run_and_finish(volatile std::uint32_t *instrn_buffer); // calls program, then runs and switches the mop_config bank
+    inline void program(volatile std::uint32_t *instrn_buffer);               // just programs the registers
+    inline void program_bank0_sw_cntl(volatile std::uint32_t *instrn_buffer); // programs BANK0 in software control mode
+    inline void program_bank1_sw_cntl(volatile std::uint32_t *instrn_buffer); // programs BANK1 in software control mode
+    inline static void run(volatile std::uint32_t *instrn_buffer);            // runs - assumes that registers were already programmed
+    inline static void run_and_finish(
+        volatile std::uint32_t *instrn_buffer); // runs and switches mop_config bank - assumes that registers were already programmed
+    inline static void run_bank0_sw_cntl(volatile std::uint32_t *instrn_buffer);   // run bank 0 in SW control mode
+    inline static void run_bank1_sw_cntl(volatile std::uint32_t *instrn_buffer);   // run bank 1 in SW control mode
+    inline void program_and_run(volatile std::uint32_t *instrn_buffer);            // calls program, then run
+    inline void program_and_run_and_finish(volatile std::uint32_t *instrn_buffer); // calls program, then runs and switches the mop_config bank
 };
 
 #if 0

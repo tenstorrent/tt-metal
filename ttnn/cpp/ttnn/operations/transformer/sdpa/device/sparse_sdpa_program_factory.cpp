@@ -7,8 +7,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>  // GetRuntimeArgs (cache-hit in-place patch)
+#include <tt-metalium/host_api.hpp>  // GetCommonRuntimeArgs (cache-hit in-place patch)
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <array>
@@ -34,20 +33,21 @@ enum SparseCB : uint32_t {
     cb_sum_b,
     cb_out_a,  // running out ping-pong [Sqt, vDHt] (single-buffered for L1 accumulation)
     cb_out_b,
-    cb_corr,           // exp(prev_max - cur_max) correction [Sqt, 1]
-    cb_out_im,         // fixed pre-untilize copy of the final out [Sqt, vDHt]
-    cb_out_rm,         // untilized row-major out (compute -> writer)
-    cb_idx,            // reader-internal: one token's index row (uint32)
-    cb_ctrl,           // reader -> compute: [active chunk count (=ceil(valid_keys/k_chunk)), valid_keys] per token
-    cb_col_identity,   // ones-in-col0 (writer-built): finalizes the partial row-sum via matmul_reduce
-    cb_recip_scratch,  // 1-tile reciprocal scratch for normalize_row_streaming
-    cb_kreq,           // reader->writer K-gather handoff (dual-NoC split)
-    cb_kack,           // writer->reader ack that its half of the chunk landed in cb_k_rm
-    cb_k_rope_rm,      // scaled FP8 only: format-only BF16 view of one packed row slab
-    cb_k_scale_bcast,  // scaled FP8 only: one FP32 per-row broadcast tile per scale block
-    cb_k_latent_tile,  // scaled FP8 only: one TILE_HEIGHT-row BFP8 latent slab
-    cb_k_rope_tile,    // scaled FP8 only: one K chunk's BF16 RoPE tiles
-    cb_sink,  // attention sink only: [Sqt, 1] tiles, row = head, col 0 = sink logit / scale (writer-built once)
+    cb_corr,            // exp(prev_max - cur_max) correction [Sqt, 1]
+    cb_out_im,          // fixed pre-untilize copy of the final out [Sqt, vDHt]
+    cb_out_rm,          // untilized row-major out (compute -> writer)
+    cb_idx,             // reader-internal: one token's index row (uint32)
+    cb_ctrl,            // reader -> compute: [active chunk count (=ceil(valid_keys/k_chunk)), valid_keys] per token
+    cb_col_identity,    // ones-in-col0 (writer-built): finalizes the partial row-sum via matmul_reduce
+    cb_recip_scratch,   // 1-tile reciprocal scratch for normalize_row_streaming
+    cb_kreq,            // reader->writer K-gather handoff (dual-NoC split)
+    cb_kack,            // writer->reader ack that its half of the chunk landed in cb_k_rm
+    cb_k_rope_rm,       // scaled FP8 only: format-only BF16 view of one packed row slab
+    cb_k_scale_bcast,   // scaled FP8 only: one FP32 per-row broadcast tile per scale block
+    cb_k_latent_tile,   // scaled FP8 only: one TILE_HEIGHT-row BFP8 latent slab
+    cb_k_rope_tile,     // scaled FP8 only: one K chunk's BF16 RoPE tiles
+    cb_attention_sink,  // persistent first-column vector: one sink scalar per head
+    cb_sink_scratch,    // writer scratch for gathering sink scalars (ROW_MAJOR sink only)
     cb_count
 };
 
@@ -55,6 +55,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const SparseSDPAParams& attrs, const SparseSDPAInputs& t, Tensor& output) {
     tt::tt_metal::ProgramDescriptor desc;
 
+    const bool use_attention_sink = t.attention_sink.has_value();
+    // A TILE [1,1,H,32] sink (the DeepSeek-V4/V4.1 TtCSA column layout) is already the compute layout: the writer
+    // copies its Sqt tiles straight into cb_attention_sink, so it needs no gather scratch.
+    const bool attention_sink_is_tile = use_attention_sink && t.attention_sink->layout() == tt::tt_metal::Layout::TILE;
     const uint32_t H = t.q.logical_shape()[1];  // head count, from the tensor (any multiple of TILE_HEIGHT)
     const uint32_t S = t.q.logical_shape()[2];
     const uint32_t topk = t.indices.logical_shape()[3];
@@ -164,18 +168,19 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     cb(cb_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     cb(cb_col_identity, tile_bytes, 1, bf);
     cb(cb_recip_scratch, tile_bytes, 1, bf);
-    // Attention sink (optional): one bf16 tile per query tile-row; the writer copies the [1,1,H,32] TILE
-    // tensor in once, compute folds exp((sink - max) * scale) into every token's softmax denominator.
-    const bool use_sink = t.attention_sink.has_value();
-    if (use_sink) {
-        cb(cb_sink, tile_bytes, Sqt, bf);
-    }
     cb(cb_kreq, ::sparse_sdpa::gather_request::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     cb(cb_kack, ::sparse_sdpa::ACK_PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     if (scaled_kv) {
         cb(cb_k_scale_bcast, fp32_tile_bytes, scale_blocks * ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, fp32);
         cb(cb_k_latent_tile, k_in_tile_bytes, vDHt, tt::DataFormat::Bfp8_b);
         cb(cb_k_rope_tile, tile_bytes, Skt * (DHt - vDHt), bf);
+    }
+
+    if (use_attention_sink) {
+        cb(cb_attention_sink, tile_bytes, Sqt, bf);
+        if (!attention_sink_is_tile) {
+            cb(cb_sink_scratch, H * sizeof(uint16_t), 1, bf);
+        }
     }
 
     // ---- compile-time args ----
@@ -229,7 +234,12 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     writer_ct.insert(
         writer_ct.end(),
         {static_cast<uint32_t>(scaled_kv), k_dim, kv_elem_bytes, cb_idx, cb_kreq, cb_kack, packed_page_bytes});
-    writer_ct.insert(writer_ct.end(), {static_cast<uint32_t>(cb_sink), static_cast<uint32_t>(use_sink)});
+    writer_ct.insert(
+        writer_ct.end(),
+        {static_cast<uint32_t>(use_attention_sink),
+         cb_attention_sink,
+         cb_sink_scratch,
+         static_cast<uint32_t>(attention_sink_is_tile)});
     TT_FATAL(
         writer_ct.size() == ::sparse_sdpa::writer_ct_arg::END,
         "sparse_sdpa writer compile-time argument layout is out of sync");
@@ -237,9 +247,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.kv.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_ct, writer_crt);
-    // The sink accessor slot is always present so the kernel's compile-time arg layout is fixed; without a
-    // sink it describes q (never read: the kernel guards every use on USE_SINK).
-    tt::tt_metal::TensorAccessorArgs(use_sink ? t.attention_sink->buffer() : t.q.buffer())
+    tt::tt_metal::TensorAccessorArgs(use_attention_sink ? t.attention_sink->buffer() : nullptr)
         .append_to(writer_ct, writer_crt);
 
     std::vector<uint32_t> compute_ct = {H,
@@ -278,7 +286,6 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = core_grid;
     reader_desc.compile_time_args = reader_ct;
-    reader_desc.common_runtime_args = reader_crt;  // kv runtime tensor-shape metadata (same on every core)
     reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
 
     tt::tt_metal::KernelDescriptor writer_desc;
@@ -286,14 +293,13 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     writer_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = writer_ct;
-    writer_desc.common_runtime_args = writer_crt;  // kv runtime tensor-shape metadata (same on every core)
     writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     // Order matches get_compute_kernel_config_args: (fidelity, approx_mode, fp32_dest_acc, packer_l1_acc,
     // dst_full_sync). packer_l1_acc has no ComputeConfigDescriptor field for this op (no L1 packer accum), so
     // it is unused here.
     auto [math_fidelity, math_approx, fp32_acc, packer_l1_acc, dst_full_sync] =
-        get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), attrs.compute_kernel_config);
+        get_compute_kernel_config_args(device->arch(), attrs.compute_kernel_config);
     (void)packer_l1_acc;
 
     // Query sub-blocking: the DST-bound primitives (matmuls, reduce, sub_exp, salad) hold `qsb` query
@@ -311,8 +317,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     compute_ct.push_back(static_cast<uint32_t>(math_approx));
     compute_ct.push_back(qsb);
     compute_ct.push_back(packed_page_bytes);
-    compute_ct.push_back(static_cast<uint32_t>(cb_sink));
-    compute_ct.push_back(static_cast<uint32_t>(use_sink));
+    compute_ct.insert(compute_ct.end(), {static_cast<uint32_t>(use_attention_sink), cb_attention_sink});
     TT_FATAL(
         compute_ct.size() == ::sparse_sdpa::compute_ct_arg::END,
         "sparse_sdpa compute compile-time argument layout is out of sync");
@@ -342,18 +347,26 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     auto* idx_buf = t.indices.buffer();
     auto* out_buf = output.buffer();
     // Indexed KV cache: the gather page ids are offset by cache_batch_idx * T to select the cache's batch
-    // slot. Re-derived here from the current attrs/tensor T on every dispatch (this factory is the single
-    // source of truth run by override_runtime_arguments on a hit). 0 when not indexed (single [1,1,T,K_DIM]).
+    // slot. The cache-hit override re-derives this from the current attrs/tensor T on every dispatch.
+    // 0 when not indexed (single [1,1,T,K_DIM]).
     const uint32_t kv_T = t.kv.logical_shape()[2];
     const uint32_t kv_batch_page_offset = attrs.cache_batch_idx.value_or(0) * kv_T;
-    const uint32_t sink_addr = use_sink ? t.attention_sink->buffer()->address() : 0u;
+    reader_desc.emplace_common_runtime_args({q_buf, kv_buf, idx_buf, kv_batch_page_offset});
+    writer_desc.emplace_common_runtime_args(
+        {out_buf, kv_buf, kv_batch_page_offset, use_attention_sink ? t.attention_sink->buffer() : nullptr});
+    TT_FATAL(
+        reader_desc.common_runtime_args.size() == ::sparse_sdpa::reader_common_arg::END &&
+            writer_desc.common_runtime_args.size() == ::sparse_sdpa::writer_common_arg::END,
+        "sparse_sdpa common runtime argument layout is out of sync");
+    reader_desc.common_runtime_args.insert(reader_desc.common_runtime_args.end(), reader_crt.begin(), reader_crt.end());
+    writer_desc.common_runtime_args.insert(writer_desc.common_runtime_args.end(), writer_crt.begin(), writer_crt.end());
+
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
-        reader_desc.emplace_runtime_args(core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset});
-        writer_desc.emplace_runtime_args(
-            core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset, sink_addr});
+        reader_desc.emplace_runtime_args(core, {tok_start, tok_count});
+        writer_desc.emplace_runtime_args(core, {tok_start, tok_count});
         compute_desc.emplace_runtime_args(core, {tok_start, tok_count});
     }
 
@@ -369,27 +382,22 @@ void SparseSDPAOperation::SparseSDPAProgramFactory::override_runtime_arguments(
     const SparseSDPAInputs& tensor_args,
     Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Only the buffer addresses and kv_batch_page_offset vary per dispatch (tok_start/tok_count are pinned by
-    // the hashed q shape); patch those slots in place instead of rebuilding the whole descriptor on every hit.
-    const SparseSDPAInputs& t = tensor_args;
-    const tt::tt_metal::CoreCoord grid = t.q.device()->compute_with_storage_grid_size();
+    // Token assignments are fixed by the hashed q shape. Refresh only the uniform dispatch values;
+    // tensor-accessor metadata follows these slots and remains unchanged under the cache key.
+    const auto& t = tensor_args;
     const uint32_t offset = operation_attributes.cache_batch_idx.value_or(0) * t.kv.logical_shape()[2];
-    const uint32_t q = t.q.buffer()->address(), kv = t.kv.buffer()->address(), idx = t.indices.buffer()->address(),
-                   out = tensor_return_value.buffer()->address();
-    const uint32_t sink = t.attention_sink.has_value() ? t.attention_sink->buffer()->address() : 0u;
-    for (uint32_t i = 0; i < grid.x * grid.y; ++i) {
-        const tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
-        auto& r = tt::tt_metal::GetRuntimeArgs(program, 0, core);  // {q, kv, idx, tok_start, tok_count, offset}
-        auto& w = tt::tt_metal::GetRuntimeArgs(program, 1, core);  // {out, tok_start, tok_count, kv, offset, sink}
-        r[0] = q;
-        r[1] = kv;
-        r[2] = idx;
-        r[5] = offset;
-        w[0] = out;
-        w[3] = kv;
-        w[4] = offset;
-        w[5] = sink;
-    }
+    const uint32_t kv = t.kv.buffer()->address();
+    auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, 0);
+    auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, 1);
+    reader_args[::sparse_sdpa::reader_common_arg::Q_ADDRESS] = t.q.buffer()->address();
+    reader_args[::sparse_sdpa::reader_common_arg::KV_ADDRESS] = kv;
+    reader_args[::sparse_sdpa::reader_common_arg::INDICES_ADDRESS] = t.indices.buffer()->address();
+    reader_args[::sparse_sdpa::reader_common_arg::KV_BATCH_PAGE_OFFSET] = offset;
+    writer_args[::sparse_sdpa::writer_common_arg::OUTPUT_ADDRESS] = tensor_return_value.buffer()->address();
+    writer_args[::sparse_sdpa::writer_common_arg::KV_ADDRESS] = kv;
+    writer_args[::sparse_sdpa::writer_common_arg::KV_BATCH_PAGE_OFFSET] = offset;
+    writer_args[::sparse_sdpa::writer_common_arg::ATTENTION_SINK_ADDRESS] =
+        t.attention_sink.has_value() ? t.attention_sink->buffer()->address() : 0u;
 }
 
 }  // namespace ttnn::prim

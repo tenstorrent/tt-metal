@@ -64,19 +64,20 @@ void kernel_main() {
 
     // kv carries a RUNTIME tensor shape (its T dim is common runtime args, not compile-time), so its accessor
     // spans both the compile-time AND common-runtime arg streams. Thread both offsets through all three.
-    constexpr auto q_args = TensorAccessorArgs<sparse_sdpa::reader_ct_arg::END, 0>();
+    constexpr auto q_args = TensorAccessorArgs<sparse_sdpa::reader_ct_arg::END, sparse_sdpa::reader_common_arg::END>();
     constexpr auto kv_args =
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto idx_args =
         TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
 
-    const uint32_t q_addr = get_arg_val<uint32_t>(0);
-    const uint32_t kv_addr = get_arg_val<uint32_t>(1);
-    const uint32_t idx_addr = get_arg_val<uint32_t>(2);
-    const uint32_t tok_start = get_arg_val<uint32_t>(3);
-    const uint32_t tok_count = get_arg_val<uint32_t>(4);
+    const uint32_t q_addr = get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::Q_ADDRESS);
+    const uint32_t kv_addr = get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::KV_ADDRESS);
+    const uint32_t idx_addr = get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::INDICES_ADDRESS);
+    const uint32_t tok_start = get_arg_val<uint32_t>(0);
+    const uint32_t tok_count = get_arg_val<uint32_t>(1);
     // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
-    const uint32_t kv_batch_page_offset = get_arg_val<uint32_t>(5);
+    const uint32_t kv_batch_page_offset =
+        get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::KV_BATCH_PAGE_OFFSET);
 
     constexpr uint32_t q_row_bytes = k_dim * q_elem_bytes;   // Q row (bf16)
     constexpr uint32_t k_row_bytes = k_dim * kv_elem_bytes;  // K row (native dtype: fp8 or bf16)

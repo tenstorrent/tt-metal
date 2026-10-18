@@ -9,6 +9,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "sfpi.h"
 
@@ -52,7 +53,6 @@ struct dst_container<DataFormat::UInt16> {
 template <DataFormat FMT>
 struct zero_comp_traits {
     static constexpr bool is_float = (FMT == DataFormat::Float32);
-    static constexpr bool is_raw8 = (FMT == DataFormat::Int8 || FMT == DataFormat::UInt8);
 
     // Result encoding: float formats emit 0.0f/1.0f, every integer format emits integer 0/1.
     using result_t = std::conditional_t<is_float, sfpi::vFloat, sfpi::vInt>;
@@ -61,28 +61,34 @@ struct zero_comp_traits {
     // every float width, else the per-format integer container.
     using container_t = std::conditional_t<is_float, sfpi::vFloat, typename dst_container<FMT>::type>;
 
-    // sfpmem mode for the raw 8-bit SFPLOAD/SFPSTORE path.
-    static constexpr std::uint32_t sfpmem8 =
-        (FMT == DataFormat::UInt8) ? ckernel::p_sfpu::sfpmem::UINT8 : ckernel::p_sfpu::sfpmem::INT8;
-
+    // Load and store avoids converting SM8 to/from 2's complement
     static inline __attribute__((always_inline)) sfpi::vInt load() {
-        if constexpr (is_raw8) {
-            return sfpi::vInt(__builtin_rvtt_sfpload(0, sfpmem8, sfpi::SFPLOAD_ADDR_MODE_NOINC));
+        if constexpr (FMT == DataFormat::UInt8) {
+            return sfpi::vInt(sfpi::dst_reg[0].mode<sfpi::DataLayout::U8>());
+        } else if constexpr (FMT == DataFormat::Int8) {
+            // The signed 8-bit format is sign magnitude.  Just pun it
+            // to vInt.
+            return sfpi::as<sfpi::vInt>(sfpi::vSMag(sfpi::dst_reg[0].mode<sfpi::DataLayout::SM8>()));
         } else {
             container_t c = sfpi::dst_reg[0];
             return sfpi::as<sfpi::vInt>(c);
         }
     }
-    // result_t(0)/result_t(1): vInt(0/1), or vFloat(0/1) which the vFloat(float) ctor folds to 0.0f/1.0f.
-    static inline __attribute__((always_inline)) result_t zero() { return result_t(0); }
-    static inline __attribute__((always_inline)) result_t one() { return result_t(1); }
     static inline __attribute__((always_inline)) void store(result_t r) {
-        if constexpr (is_raw8) {
-            __builtin_rvtt_sfpstore(r.get(), 0, sfpmem8, ckernel::ADDR_MOD_6);
+        if constexpr (FMT == DataFormat::UInt8) {
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::U8>(ckernel::ADDR_MOD_6) = r;
+        } else if constexpr (FMT == DataFormat::Int8) {
+            // The signed 8-bit format is sign magnitude.  Just pun
+            // the vInt.
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::SM8>(ckernel::ADDR_MOD_6) = sfpi::as<sfpi::vSMag>(r);
         } else {
             sfpi::dst_reg[0].mode<>(ckernel::ADDR_MOD_6) = sfpi::as<container_t>(r);
         }
     }
+
+    // result_t(0)/result_t(1): vInt(0/1), or vFloat(0/1) which the vFloat(float) ctor folds to 0.0f/1.0f.
+    static inline __attribute__((always_inline)) result_t zero() { return result_t(0); }
+    static inline __attribute__((always_inline)) result_t one() { return result_t(1); }
 };
 
 /**
@@ -207,6 +213,20 @@ inline void calculate_zero_comp() {
 
         traits::store(result);
     }
+}
+
+// The Int32 unary comparisons (unary_*_tile_int32) are not ported to Quasar. The Compute API
+// keeps one signature on every arch, so their kernel entry points (ne / eq call the metal
+// calculate_comp_unary_int, gt / ge / lt / le the tt-llk _calculate_comp_unary_int_ on
+// Blackhole / Wormhole) reject the call here.
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp_unary_int([[maybe_unused]] int scalar) {
+    LLK_ASSERT(false, "Int32 unary comparisons (unary_*_tile_int32) are not supported on Quasar");
+}
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void _calculate_comp_unary_int_([[maybe_unused]] int scalar) {
+    LLK_ASSERT(false, "Int32 unary comparisons (unary_*_tile_int32) are not supported on Quasar");
 }
 
 }  // namespace sfpu

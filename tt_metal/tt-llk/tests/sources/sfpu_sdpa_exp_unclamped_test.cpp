@@ -113,7 +113,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
             0 /* dst_index */, formats.math, formats.math);
 
-        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_sdpa_exp_unclamped, (SFPU_SCALE_EN), 0 /* dst_index */, VectorMode::RC, SFPU_UNARY_SCALAR);
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_sdpa_exp_unclamped,
+            (SFPU_SCALE_EN, is_fp32_dest_acc_en),
+            0 /* dst_index */,
+            VectorMode::RC,
+            SFPU_UNARY_SCALAR);
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }

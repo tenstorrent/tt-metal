@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// matmul_dataflow_common_metal2.hpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and
+// this file is retired, changes here likely belong in the fork too.
+
 #pragma once
 
 #include <cstdint>
@@ -237,10 +242,11 @@ void write_block_sync(
  * as soon as the first row is ready, rather than waiting for the entire block. This overlapping
  * of data movement and compute improves overall throughput.
  */
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+// The ternary tensors can have different memory layouts or buffer types.
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TernaryAAccessor, typename TernaryBAccessor>
 void read_ternary_blocks_sync(
-    const TensorAccessorType& ternary_a_accessor,
-    const TensorAccessorType& ternary_b_accessor,
+    const TernaryAAccessor& ternary_a_accessor,
+    const TernaryBAccessor& ternary_b_accessor,
     const TensorShape2D& shape,
     uint32_t ternary_a_cb,
     uint32_t ternary_b_cb,

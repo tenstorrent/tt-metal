@@ -62,37 +62,38 @@
 // then run the SFPU binary op freq times (reusing the expanded tile) against the streamed OTHER operand.
 // Mirrors the CB sfpu scalar-bcast process_tile with the DFB API + the ROW/COL kernels' ARCH_QUASAR
 // gasket / SFPU body.
+// The DataflowBuffer arguments are kernel_main's objects: an object built here would drain at every return.
 ALWI void process_tile(
-    uint32_t dfb_bcast_id,
-    uint32_t dfb_llk_post_id,
-    uint32_t dfb_pre_lhs_id,
-    uint32_t dfb_post_lhs_id,
-    uint32_t dfb_pre_rhs_id,
-    uint32_t dfb_post_rhs_id,
-    uint32_t dfb_out_id,
+    DataflowBuffer& dfb_bcast,
+    DataflowBuffer& dfb_llk_post,
+    DataflowBuffer& dfb_pre_lhs,
+    DataflowBuffer& dfb_post_lhs,
+    DataflowBuffer& dfb_pre_rhs,
+    DataflowBuffer& dfb_post_rhs,
+    DataflowBuffer& dfb_out,
     uint32_t freq,
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle ISCLOSE_RT_ARG_PARAMS) {
     using namespace ckernel;
+    const uint32_t dfb_bcast_id = dfb_bcast.get_id();
+    const uint32_t dfb_llk_post_id = dfb_llk_post.get_id();
+    const uint32_t dfb_post_lhs_id = dfb_post_lhs.get_id();
+    const uint32_t dfb_post_rhs_id = dfb_post_rhs.get_id();
+    const uint32_t dfb_out_id = dfb_out.get_id();
 
     // BCAST_OP / OTHER_OP (eltwise_utils_common.hpp) resolve to LHS / RHS off BCAST_INPUT; pair the
-    // pre/post DFB ids the same way so the broadcast operand is preprocessed once and the other streams.
+    // pre/post DFBs the same way so the broadcast operand is preprocessed once and the other streams.
 #if BCAST_INPUT
-    const uint32_t dfb_pre_bcast_id = dfb_pre_rhs_id;
-    const uint32_t dfb_post_bcast_id = dfb_post_rhs_id;
-    const uint32_t dfb_pre_other_id = dfb_pre_lhs_id;
-    const uint32_t dfb_post_other_id = dfb_post_lhs_id;
+    DataflowBuffer& dfb_pre_bcast = dfb_pre_rhs;
+    DataflowBuffer& dfb_post_bcast = dfb_post_rhs;
+    DataflowBuffer& dfb_pre_other = dfb_pre_lhs;
+    DataflowBuffer& dfb_post_other = dfb_post_lhs;
 #else
-    const uint32_t dfb_pre_bcast_id = dfb_pre_lhs_id;
-    const uint32_t dfb_post_bcast_id = dfb_post_lhs_id;
-    const uint32_t dfb_pre_other_id = dfb_pre_rhs_id;
-    const uint32_t dfb_post_other_id = dfb_post_rhs_id;
+    DataflowBuffer& dfb_pre_bcast = dfb_pre_lhs;
+    DataflowBuffer& dfb_post_bcast = dfb_post_lhs;
+    DataflowBuffer& dfb_pre_other = dfb_pre_rhs;
+    DataflowBuffer& dfb_post_other = dfb_post_rhs;
 #endif
-    DataflowBuffer dfb_bcast(dfb_bcast_id);
-    DataflowBuffer dfb_llk_post(dfb_llk_post_id);
-    DataflowBuffer dfb_post_bcast(dfb_post_bcast_id);
-    DataflowBuffer dfb_post_other(dfb_post_other_id);
-    DataflowBuffer dfb_out(dfb_out_id);
 
     // --- Broadcast pass (ONCE per (N,C) slab): single-element tile -> full tile in llk_post. Identical to
     // the FPU SCALAR kernel's broadcast pass. ---
@@ -106,7 +107,7 @@ ALWI void process_tile(
     // for llk_post, so this is belt-and-suspenders on the LHS side.)
     pack_init(dfb_llk_post_id);
 #endif
-    compute_kernel_hw_startup(dfb_bcast_id, dfb_llk_post_id);
+    reconfig_data_format(dfb_bcast_id, dfb_bcast_id);
     unary_bcast_init<BroadcastType::SCALAR>(dfb_bcast_id);
 
     tile_regs_acquire();
@@ -125,19 +126,14 @@ ALWI void process_tile(
     // buffer (the ~constant-output symptom). Mirrors eltwise_utils_dfb.hpp.
     pack_init(dfb_out_id);
 #endif
-#if defined(ARCH_BLACKHOLE)
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
-#elif defined(ARCH_QUASAR)
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
-#endif
 
     // Broadcast operand's activation chain runs ONCE (its expanded tile is reused across the whole slab).
-    PREPROCESS(BCAST_OP, dfb_pre_bcast_id, dfb_post_bcast_id, dfb_out_id, num_tiles_per_cycle);
+    PREPROCESS(BCAST_OP, dfb_pre_bcast, dfb_post_bcast, dfb_out_id, num_tiles_per_cycle);
     dfb_post_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         // OTHER operand streams one tile per iteration.
-        PREPROCESS(OTHER_OP, dfb_pre_other_id, dfb_post_other_id, dfb_out_id, num_tiles_per_cycle);
+        PREPROCESS(OTHER_OP, dfb_pre_other, dfb_post_other, dfb_out_id, num_tiles_per_cycle);
         dfb_post_other.wait_front(num_tiles_per_cycle);
 
         dfb_out.reserve_back(num_tiles_per_cycle);
@@ -146,23 +142,13 @@ ALWI void process_tile(
         BINARY_SFPU_INIT;
 #endif
         tile_regs_acquire();
-#ifdef ARCH_QUASAR
-        // Quasar's copy_tile_to_dst_init_short_with_dt is a no-op and cannot switch which operand the
-        // unpacker reads, so use copy_tile_to_dst_init_short (which reprograms the unpacker descriptor)
-        // to point at each operand before its copy_tile loop. matches_metal_v2_slice requires lhs and rhs
-        // to share a data format, so the data-format reconfig the WH/BH _with_dt path performs is not needed.
-        copy_tile_to_dst_init_short(dfb_post_lhs_id);
-#else
-        copy_tile_to_dst_init_short_with_dt(dfb_post_rhs_id, dfb_post_lhs_id);
-#endif
+        // Startup and preprocessing preserve the physical-LHS SrcA format.
+        copy_init(dfb_post_lhs_id);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_post_lhs_id, i, i * 2);
         }
-#ifdef ARCH_QUASAR
-        copy_tile_to_dst_init_short(dfb_post_rhs_id);
-#else
-        copy_tile_to_dst_init_short_with_dt(dfb_post_lhs_id, dfb_post_rhs_id);
-#endif
+        reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
+        copy_init(dfb_post_rhs_id);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
 #if HAS_ACTIVATIONS(POST)
@@ -175,6 +161,7 @@ ALWI void process_tile(
 #endif
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
+        reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -237,13 +224,32 @@ void kernel_main() {
     constexpr auto dfb_post_rhs_id = dfb_pre_rhs_id;
 #endif
 
-    unary_op_init_common(dfb_post_lhs_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
+    copy_init(dfb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT
+#endif
+
+    // Each object drains once, at kernel exit. An activation chain reads its operand from the pre ring. Without
+    // one, PREPROCESS compiles to nothing, and the pre object is the post one.
+    DataflowBuffer dfb_bcast(dfb_bcast_id);
+    DataflowBuffer dfb_llk_post(dfb_llk_post_id);
+    DataflowBuffer dfb_post_lhs(dfb_post_lhs_id);
+    DataflowBuffer dfb_post_rhs(dfb_post_rhs_id);
+    DataflowBuffer dfb_out(dfb_out_id);
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
+#else
+    DataflowBuffer& dfb_pre_lhs = dfb_post_lhs;
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);
+#else
+    DataflowBuffer& dfb_pre_rhs = dfb_post_rhs;
 #endif
 
     // freq/tile_start reuse loop: freq = Ht * Wt tiles per broadcast (the whole (N,C) slab), tile_start is
@@ -255,13 +261,13 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
-            dfb_bcast_id,
-            dfb_llk_post_id,
-            dfb_pre_lhs_id,
-            dfb_post_lhs_id,
-            dfb_pre_rhs_id,
-            dfb_post_rhs_id,
-            dfb_out_id,
+            dfb_bcast,
+            dfb_llk_post,
+            dfb_pre_lhs,
+            dfb_post_lhs,
+            dfb_pre_rhs,
+            dfb_post_rhs,
+            dfb_out,
             tile_freq,
             tile_start,
             num_tiles_per_cycle ISCLOSE_RT_ARG_FWD);
@@ -269,13 +275,13 @@ void kernel_main() {
 
     if (remaining_iterations > 0) {
         process_tile(
-            dfb_bcast_id,
-            dfb_llk_post_id,
-            dfb_pre_lhs_id,
-            dfb_post_lhs_id,
-            dfb_pre_rhs_id,
-            dfb_post_rhs_id,
-            dfb_out_id,
+            dfb_bcast,
+            dfb_llk_post,
+            dfb_pre_lhs,
+            dfb_post_lhs,
+            dfb_pre_rhs,
+            dfb_post_rhs,
+            dfb_out,
             remaining_iterations,
             tile_start,
             num_tiles_per_cycle ISCLOSE_RT_ARG_FWD);

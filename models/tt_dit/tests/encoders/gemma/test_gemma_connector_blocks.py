@@ -16,6 +16,7 @@ sys.path.append(str(Path(__file__).resolve().parents[6]))
 
 import pytest
 import torch
+from huggingface_hub.constants import HF_HUB_CACHE
 from loguru import logger
 from safetensors import safe_open
 
@@ -46,11 +47,9 @@ def _ltx_ckpt() -> str | None:
     explicit = os.environ.get("LTX_CHECKPOINT")
     if explicit and os.path.exists(explicit):
         return explicit
-    cands = glob.glob(
-        os.path.expanduser(
-            "~/.cache/huggingface/hub/models--Lightricks--LTX-2.3/snapshots/*/ltx-2.3-22b-dev.safetensors"
-        )
-    )
+    # HF_HUB_CACHE resolves HF_HUB_CACHE / HF_HOME / the default. Hardcoding ~/.cache/huggingface
+    # here made this unfindable in CI, which points HF_HUB_CACHE at the shared weights mount.
+    cands = glob.glob(os.path.join(HF_HUB_CACHE, "models--Lightricks--LTX-2.3/snapshots/*/ltx-2.3-22b-dev.safetensors"))
     return cands[0] if cands else None
 
 

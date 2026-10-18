@@ -5,21 +5,15 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <vector>
-#include <algorithm>
+#include <ostream>
+#include <utility>
 
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/float8.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt_stl/span.hpp>
 #include <tt-metalium/shape.hpp>
-#include <tt_stl/fmt.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <fmt/base.h>
 
 namespace tt::tt_metal {
 
@@ -68,6 +62,13 @@ bool is_block_float(DataType dtype);
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);
+
+/**
+ * Returns the format to declare a CB when moving a tensor of this dtype through the unpacker/packer.
+ *
+ *This differs from datatype_to_dataformat_converter only for INT8.
+ */
+tt::DataFormat cb_dataformat_for(DataType datatype);
 
 /**
  * Returns tile size of given data type in bytes.

@@ -35,6 +35,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include "eth_test_common.hpp"
+#include "impl/context/metal_env_accessor.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -331,6 +332,9 @@ bool noc_reader_and_writer_kernels(
 namespace tt::tt_metal {
 
 TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -370,6 +374,9 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
 }
 
 TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (arch_ == ARCH::BLACKHOLE) {
         GTEST_SKIP() << "See GH Issue #18384";
     }
@@ -403,6 +410,9 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) {
 }
 
 TEST_F(N300MeshDeviceFixture, ActiveEthKernelsNocReadNoSend) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
@@ -448,6 +458,9 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsNocReadNoSend) {
 }
 
 TEST_F(N300MeshDeviceFixture, ActiveEthKernelsNocWriteNoReceive) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
@@ -624,6 +637,51 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnBothIdleEriscs) {
             eth_core,
             erisc0_ethernet_config,
             erisc1_ethernet_config));
+    }
+}
+
+TEST_F(BlackholeSingleCardFixture, ActiveEthPtpTraceStamped) {
+    auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
+
+    // PTP stamping is compiled out under watcher, outside 2-erisc mode, and on older eth FW.
+    const char* disabled = nullptr;
+    if (env.get_rtoptions().get_watcher_enabled()) {
+        disabled = "watcher build";
+    } else if (!env.get_rtoptions().get_enable_2_erisc_mode()) {
+        disabled = "single-erisc mode";
+    } else if (!env.get_rtoptions().get_eth_ptp_trace()) {
+        disabled = "eth FW predates debug_buf_t::scratchpad";
+    }
+    if (disabled != nullptr) {
+        GTEST_SKIP() << "PTP trace is compiled out: " << disabled;
+    }
+
+    const auto trace_addr =
+        env.get_hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_PTP_TRACE);
+
+    // Must match AERISC_PTP_TRACE_MAGIC in eth_fw_api.h.
+    constexpr uint32_t expected_magic = 0x1234ABCD;
+    enum : size_t { kMagic, kRunCount, kEntryLo, kEntryHi, kExitLo, kExitHi, kExitValid, kNumWords };
+
+    for (const auto& mesh_device : devices_) {
+        auto* device = mesh_device->get_devices()[0];
+        for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
+            const auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core);
+            const auto trace =
+                env.get_cluster().read_core(device->id(), eth_noc_xy, trace_addr, kNumWords * sizeof(uint32_t));
+
+            EXPECT_EQ(trace[kMagic], expected_magic) << "no PTP trace on eth core " << eth_noc_xy.str();
+            if (trace[kMagic] != expected_magic) {
+                continue;
+            }
+
+            const uint64_t entry = (static_cast<uint64_t>(trace[kEntryHi]) << 32) | trace[kEntryLo];
+            EXPECT_NE(entry, 0u) << "empty entry stamp on " << eth_noc_xy.str();
+            if (trace[kExitValid] != 0) {
+                const uint64_t exit = (static_cast<uint64_t>(trace[kExitHi]) << 32) | trace[kExitLo];
+                EXPECT_GT(exit, entry) << "exit precedes entry on " << eth_noc_xy.str();
+            }
+        }
     }
 }
 

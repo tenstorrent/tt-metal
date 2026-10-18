@@ -82,7 +82,7 @@ def run_resnet_imagenet_inference(
         predictions = []
         inputs = input_tensors_all[iter]
         labels = input_labels_all[iter]
-        tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device, inputs)
+        tt_inputs_host, input_mem_config = test_infra.setup_input(device, inputs)
         test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
         if is_first_run:
             profiler.start("compile")
@@ -165,7 +165,7 @@ def run_resnet_inference(
     profiler.end(f"move_weights")
 
     profiler.start(f"preprocessing")
-    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device, inputs)
+    tt_inputs_host, input_mem_config = test_infra.setup_input(device, inputs)
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     ttnn.synchronize_device(device)
     profiler.end(f"preprocessing")

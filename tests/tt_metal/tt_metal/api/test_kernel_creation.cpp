@@ -26,7 +26,6 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -65,7 +64,8 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
-        const auto& dispatch_core_config = get_dispatch_core_config();
+        const auto& dispatch_core_config =
+            MetalContext::instance(mesh_device->impl().get_context_id()).get_dispatch_core_config();
         CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
         MetalEnvImpl& env_impl =
             MetalEnvAccessor(MetalContext::instance(mesh_device->impl().get_context_id()).get_env()).impl();
@@ -97,7 +97,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDir) {
     const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     create_kernel(kernel_file);
-    slow_dispatch::CompileProgram(this->device(), this->program_);
+    this->program_.impl().compile(&this->device());
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderKernelRootDir) {
@@ -105,7 +105,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderKernelRootDir
     const std::string& new_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/new_kernel.cpp";
     this->setup_kernel_dir(orig_kernel_file, new_kernel_file);
     this->create_kernel(new_kernel_file);
-    slow_dispatch::CompileProgram(this->device(), this->program_);
+    this->program_.impl().compile(&this->device());
     this->cleanup_kernel_dir();
 }
 
@@ -113,7 +113,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDirA
     const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     this->setup_kernel_dir(kernel_file, kernel_file);
     this->create_kernel(kernel_file);
-    slow_dispatch::CompileProgram(this->device(), this->program_);
+    this->program_.impl().compile(&this->device());
     this->cleanup_kernel_dir();
 }
 

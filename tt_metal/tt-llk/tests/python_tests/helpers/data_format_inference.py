@@ -8,6 +8,7 @@ This module provides functionality to automatically infer data formats across
 the unpacking, math, and packing stages of compute pipelines, handling
 architecture-specific differences between Wormhole and Blackhole.
 """
+
 from typing import List, Optional
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
@@ -17,14 +18,25 @@ from .llk_params import DestAccumulation
 VALID_QUASAR_SRC_REG_FORMATS = [
     DataFormat.Float16_b,
     DataFormat.Float16,
+    DataFormat.Tf32,
+    DataFormat.Int8,
+    DataFormat.UInt8,
+    DataFormat.Int16,
+    DataFormat.MxFp4_2x_A,
+    DataFormat.MxFp4_2x_B,
+    DataFormat.Int8_2x,
+    DataFormat.UInt8_2x,
+]
+
+VALID_QUASAR_SRCS_REG_FORMATS = [
+    DataFormat.Float16_b,
+    DataFormat.Float16,
     DataFormat.Float32,
     DataFormat.Tf32,
     DataFormat.Int32,
     DataFormat.Int8,
     DataFormat.UInt8,
     DataFormat.Int16,
-    DataFormat.MxFp4_2x_A,
-    DataFormat.MxFp4_2x_B,
 ]
 
 VALID_QUASAR_DEST_REG_FORMATS = [
@@ -43,6 +55,8 @@ def validate_quasar_data_formats(
     unpack_out_B: DataFormat,
     pack_in: DataFormat,
     unpacking_to_dest: bool,
+    unpack_out_S: Optional[DataFormat] = None,
+    unpacking_to_srcs: bool = False,
 ):
     """
     Checks if the given unpack_out and pack_in formats are supported as source or destination register formats on the Quasar architecture.
@@ -52,10 +66,19 @@ def validate_quasar_data_formats(
         unpack_out_B: The unpack_out_B data format, also the source register B format
         pack_in: The pack_in data format, also the destination register format
         unpacking_to_dest: Flag indicating if unpacking targets the destination register
+        unpack_out_S: The unpack_out_S data format, also the SrcS register format
+        unpacking_to_srcs: Flag indicating if unpacking targets SrcS; SrcA/SrcB are then unused and not checked
 
     Returns:
         None if the formats are valid; raises a ValueError otherwise
     """
+    if unpacking_to_srcs:
+        if unpack_out_S not in VALID_QUASAR_SRCS_REG_FORMATS:
+            raise ValueError(
+                f"Unpack_out_S format {unpack_out_S.name} is not a supported SrcS register format"
+            )
+        return
+
     if unpacking_to_dest:
         if unpack_out_A not in VALID_QUASAR_DEST_REG_FORMATS:
             raise ValueError(
@@ -64,11 +87,13 @@ def validate_quasar_data_formats(
     else:
         if unpack_out_A not in VALID_QUASAR_SRC_REG_FORMATS:
             raise ValueError(
-                f"Unpack_out_A format {unpack_out_A.name} is not a supported SrcA register format"
+                f"Unpack_out_A format {unpack_out_A.name} is not a supported SrcA register format "
+                "(32-bit formats only reach Dest or SrcS, pass unpack_to_dest or unpack_to_srcs)"
             )
         if unpack_out_B not in VALID_QUASAR_SRC_REG_FORMATS:
             raise ValueError(
-                f"Unpack_out_B format {unpack_out_B.name} is not a supported SrcB register format"
+                f"Unpack_out_B format {unpack_out_B.name} is not a supported SrcB register format "
+                "(32-bit formats only reach Dest or SrcS, pass unpack_to_dest or unpack_to_srcs)"
             )
         if pack_in not in VALID_QUASAR_DEST_REG_FORMATS:
             raise ValueError(
@@ -113,10 +138,44 @@ def is_format_combination_outlier(
     )
 
 
-_SRCAB_ONLY_FORMATS = {
-    DataFormat.MxFp4_2x_A: ChipArchitecture.QUASAR,
-    DataFormat.MxFp4_2x_B: ChipArchitecture.QUASAR,
+def effective_dest_acc(
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: DestAccumulation,
+    arch: Optional[ChipArchitecture] = None,
+) -> DestAccumulation:
+    """The Dest width a kernel built for this variant actually runs with.
+
+    ``TestConfig`` promotes ``dest_acc`` to ``Yes`` for an outlier combination (an
+    exponent-B input packed to Float16, see :func:`is_format_combination_outlier`) on
+    every architecture but Quasar, and does so silently. Everything that reasons about
+    the kernel that ran -- the Dest capacity in block sizing, the distinct modes of a
+    perf sweep, the cells an exhaustive sweep can key a measurement on -- has to apply
+    the same rule, and used to spell it out again each time. *arch* defaults to the
+    chip this session targets; a host check of another architecture's table passes
+    its own. It is looked up only for an outlier, so sizing an ordinary combination
+    stays a host-only call.
+    """
+    if not is_format_combination_outlier(input_format, output_format, dest_acc):
+        return dest_acc
+    if arch is None:
+        arch = get_chip_architecture()
+    return DestAccumulation.Yes if arch != ChipArchitecture.QUASAR else dest_acc
+
+
+_2X_L1_FORMAT = {
+    DataFormat.MxFp4_2x_A: DataFormat.MxFp4,
+    DataFormat.MxFp4_2x_B: DataFormat.MxFp4,
+    DataFormat.Int8_2x: DataFormat.Int8,
+    DataFormat.UInt8_2x: DataFormat.UInt8,
 }
+
+_SRCS_PASSTHROUGH_FORMATS = [
+    DataFormat.Int32,
+    DataFormat.Int16,
+    DataFormat.Int8,
+    DataFormat.UInt8,
+]
 
 
 def infer_unpack_out(
@@ -140,39 +199,13 @@ def infer_unpack_out(
         output_format: The final desired output format
         is_fp32_dest_acc_en: Whether FP32 accumulation is enabled
         unpacking_to_dest: Indicates whether unpacking targets the destination register
-        register_format_hint: Optional opt-in for a SrcA/SrcB-only register format
-            (MxFp4_2x_A or MxFp4_2x_B). When set, returned as the unpack-out format
-            instead of the default. Only valid when input_format == MxFp4; the hint is
-            compatible with any output_format (output_format is not constrained here).
-            The exponent family it implies for downstream math/pack is derived in
-            infer_data_formats via infer_downstream_unpack_out (2x_A -> Float16, 2x_B -> Float16_b).
+        register_format_hint: Optional 2x register format that the input is unpacked into instead of its default source register format.
 
     Returns:
         The inferred output data format for unpacking to registers
     """
-    # 2x-packed SrcA/SrcB opt-in: caller explicitly requests MxFp4 to be stored
-    # in src registers as MxFp4_2x_A / MxFp4_2x_B (vs. default unpack-to-Float16_b path).
     if register_format_hint is not None:
-        if unpacking_to_dest:
-            raise ValueError(
-                f"register_format_hint={register_format_hint.name} is a SrcA/SrcB-only register "
-                "format and cannot be used when unpacking_to_dest=True. The 2x-packed formats "
-                "are not valid Dest register formats."
-            )
-        if register_format_hint not in _SRCAB_ONLY_FORMATS:
-            raise ValueError(
-                f"register_format_hint={register_format_hint.name} is not a supported "
-                f"SrcA/SrcB-only register format."
-            )
-        if _SRCAB_ONLY_FORMATS[register_format_hint] != get_chip_architecture():
-            raise ValueError(
-                f"{register_format_hint.name} is only valid on "
-                f"{_SRCAB_ONLY_FORMATS[register_format_hint].value}"
-            )
-        if input_format == DataFormat.MxFp4 and register_format_hint not in [
-            DataFormat.MxFp4_2x_A,
-            DataFormat.MxFp4_2x_B,
-        ]:
+        if input_format != _2X_L1_FORMAT.get(register_format_hint):
             raise ValueError(
                 f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
             )
@@ -205,8 +238,11 @@ def infer_unpack_out(
         return DataFormat.Float16  # Tilize to Float16
 
     if unpacking_to_srcs and is_fp32_dest_acc_en == DestAccumulation.Yes:
+        # Unpack-to-SrcS cannot convert fp16 to TF32 (Tensix Formats conversion table).
         if input_format in (DataFormat.Float16, DataFormat.Float16_b):
-            return DataFormat.Tf32
+            return input_format
+        if input_format in _SRCS_PASSTHROUGH_FORMATS:
+            return input_format
         return DataFormat.Float32
 
     # For all other cases, we can keep the format the same in L1 and src register or dest register
@@ -246,6 +282,10 @@ def infer_pack_in(
     # For MX formats, unpack_out is already Float16_b (handled in infer_unpack_out).
 
     if is_quasar:
+        if unpacking_to_srcs:
+            # PACK1 reads SrcS; dest_acc does not widen pack_in.
+            return unpack_out
+
         if output_format.is_32_bit() and is_fp32_dest_acc_en == DestAccumulation.No:
             # When the dest register is in 32-bit mode, input_fmt=Fp16/16_b -> output_fmt=Fp32 is valid
             # because pack_in=pack_out=Fp32, which is a supported packer conversion.
@@ -262,11 +302,11 @@ def infer_pack_in(
                 and is_fp32_dest_acc_en == DestAccumulation.Yes
                 and not unpacking_to_dest
             ):
-                # Int16 cannot reach a 32-bit Dest through the FPU datacopy:
-                # the 16-bit datum never lands in the 32-bit Dest. But unpack-to-Dest path can --
-                # UNPACR_DEST writes the 16-bit datum straight into the 32-bit Dest
+                # Int16 cannot reach a 32-bit Dest through FPU datacopy. Typecast
+                # remains valid because it uses the direct Unpack-to-Dest path,
+                # where SFPU overwrites the narrow representation with Int32.
                 raise ValueError(
-                    f"If the input format is Int16, 32-bit dest is not supported and the packer input format must be Int16"
+                    "Quasar does not support Int16 to 32-bit Dest through the FPU path"
                 )
             # When the dest register is in 32-bit mode, the packer input format is 32-bit
             return (
@@ -348,17 +388,21 @@ def infer_downstream_unpack_out(unpack_out: DataFormat) -> DataFormat:
         return DataFormat.Float16
     if unpack_out == DataFormat.MxFp4_2x_B:
         return DataFormat.Float16_b
+    if unpack_out == DataFormat.Int8_2x:
+        return DataFormat.Int8
+    if unpack_out == DataFormat.UInt8_2x:
+        return DataFormat.UInt8
     return unpack_out
 
 
 def infer_math_format(a: DataFormat, b: DataFormat = None) -> DataFormat:
     # Design rationale:
-    # - The only constraint enforced here is that both inputs belong to the same exponent "family"
-    #   (e.g. exponent-B vs. non-exponent-B). Mixing families is not supported and is rejected above.
-    # - Once formats are in the same family, the math pipeline can operate in either format; any
+    # - Both inputs must belong to the same exponent "family" (e.g. exponent-B vs. non-exponent-B),
+    #   and integer inputs must be the same format. Mixing is not supported and is rejected below.
+    # - Once formats pass those checks, the math pipeline can operate in either format; any
     #   required conversions from L1 to the math format and back are already handled by unpack/pack.
-    # - Therefore, choosing `a` as the math format is always correct when the compatibility check
-    #   passes, and keeps the behavior deterministic and simple compared to the previous heuristic.
+    # - Therefore, choosing `a` as the math format is always correct when the compatibility checks
+    #   pass, and keeps the behavior deterministic and simple compared to the previous heuristic.
 
     if b is None:
         return a
@@ -368,6 +412,11 @@ def infer_math_format(a: DataFormat, b: DataFormat = None) -> DataFormat:
     ):
         raise ValueError(
             f"Incompatible formats {a.name} and {b.name} with different exponent bit widths were provided."
+        )
+
+    if (a.is_integer() or b.is_integer()) and a != b:
+        raise ValueError(
+            f"Incompatible integer formats {a.name} and {b.name}: SrcA and SrcB must use the same integer format."
         )
 
     return a
@@ -394,9 +443,7 @@ def infer_data_formats(
         chip_arch: The chip architecture (Wormhole or Blackhole). If None, will be detected automatically.
         input_format_B: Optional input data format for src_B if different from src_A, used for testing specific scenarios with different A and B formats.
         unpacking_to_srcs: Whether unpacking also targets SrcS (default: False). When True, the SrcS unpack-out is inferred via a separate path.
-        register_format_hint: Optional opt-in SrcA/SrcB-only register format (e.g. MxFp4_2x_A / MxFp4_2x_B). When set,
-        overrides the default unpack_*_dst inferred for the input (e.g. for MxFp4 input, default is Float16_b).
-        Incompatible with unpacking_to_dest=True.
+        register_format_hint: Optional 2x register format that the input is unpacked into instead of its default source register format.
 
     Returns:
         FormatConfig struct containing all inferred formats. The same_src_format field
@@ -411,18 +458,18 @@ def infer_data_formats(
     # encoding, Int16 -- the unpacker, the SrcA/SrcB/dest register files, and the packer all lack a
     # UInt16 encoding, so UInt16 is pass-through as Int16 across the whole unpack/math/pack datapath.
     # The unsigned-16 semantics exist only as an SFPU access mode (sfpmem::UINT16), so we carry the
-    # real UInt16 intent in sfpu_math to still test SFPU support for it.
-    sfpu_math_override = None
+    # real UInt16 intent in sfpu_src to still test SFPU support for it.
+    sfpu_src_override = None
     if chip_arch == ChipArchitecture.QUASAR:
         if input_format == DataFormat.UInt16:
             input_format = DataFormat.Int16
-            sfpu_math_override = DataFormat.UInt16
+            sfpu_src_override = DataFormat.UInt16
         if input_format_B == DataFormat.UInt16:
             input_format_B = DataFormat.Int16
-            sfpu_math_override = DataFormat.UInt16
+            sfpu_src_override = DataFormat.UInt16
         if output_format == DataFormat.UInt16:
             output_format = DataFormat.Int16
-            sfpu_math_override = DataFormat.UInt16
+            sfpu_src_override = DataFormat.UInt16
 
     # Determine the intermediate formats
     unpack_out_A = infer_unpack_out(
@@ -460,23 +507,26 @@ def infer_data_formats(
     downstream_unpack_out_B = infer_downstream_unpack_out(unpack_out_B)
     downstream_unpack_out_S = infer_downstream_unpack_out(unpack_out_S)
 
-    # The data format used for mathematical computations, desired format in dest register (typically matches unpack_out if both regs have same format)
-    math = infer_math_format(downstream_unpack_out_A, downstream_unpack_out_B)
+    # The format family the dest register, SFPU and packer work in (typically matches unpack_out if both regs have same format)
+    dest_family = infer_math_format(downstream_unpack_out_A, downstream_unpack_out_B)
 
     # FP8 is a compressed L1 format; hardware unpacks it to Float16 (float16_a) in
     # source registers. The ALU and packer must see Float16, not Lf8/Fp8_e4m3.
-    if math == DataFormat.Fp8_e4m3:
-        math = DataFormat.Float16
+    if dest_family == DataFormat.Fp8_e4m3:
+        dest_family = DataFormat.Float16
 
-    # SFPU-side math format: same as math unless the SFPU operates in a format with no Tensix HW
+    # The ALU SrcA/SrcB format: a 2x register format stays 2x, everything else uses the dest family
+    math = unpack_out_A if unpack_out_A.is_2x_format() else dest_family
+
+    # SFPU source format: same as the dest family unless the SFPU operates in a format with no Tensix HW
     # encoding (UInt16 on Quasar), in which case the unpack/math/pack datapath was defaulted to Int16
-    # above and only sfpu_math retains the UInt16 intent (via the sfpmem::UINT16 SFPU access mode).
-    sfpu_math = sfpu_math_override if sfpu_math_override is not None else math
+    # above and only sfpu_src retains the UInt16 intent (via the sfpmem::UINT16 SFPU access mode).
+    sfpu_src = sfpu_src_override if sfpu_src_override is not None else dest_family
 
     pack_in = infer_pack_in(
         input_format,
         output_format,
-        math,
+        dest_family,
         is_fp32_dest_acc_en,
         unpacking_to_dest,
         chip_arch,
@@ -484,10 +534,12 @@ def infer_data_formats(
     # potentially different from unpack_out and pack_out depending on FP32 accumulation
 
     # FP8 output: gasket must produce Float16 for packer's Pac_LF8_4b_exp encode path.
-    # When math is a B-format (Float16_b), use Float16_b so the packer can distinguish
+    # When the dest family is a B-format (Float16_b), use Float16_b so the packer can distinguish
     # A-format vs B-format pipelines and enable 10-bit mantissa rounding accordingly.
     if output_format == DataFormat.Fp8_e4m3:
-        pack_in = DataFormat.Float16_b if math.is_exponent_B() else DataFormat.Float16
+        pack_in = (
+            DataFormat.Float16_b if dest_family.is_exponent_B() else DataFormat.Float16
+        )
 
     # Input to the SrcS packer (PACK1)
     pack_in_S = infer_pack_in(
@@ -509,7 +561,12 @@ def infer_data_formats(
     # Check if unpack_out (src or dest reg) and pack_in (dest reg) formats are valid for Quasar
     if chip_arch == ChipArchitecture.QUASAR:
         validate_quasar_data_formats(
-            unpack_out_A, unpack_out_B, pack_in, unpacking_to_dest
+            unpack_out_A,
+            unpack_out_B,
+            pack_in,
+            unpacking_to_dest,
+            unpack_out_S,
+            unpacking_to_srcs,
         )
 
     return FormatConfig(
@@ -518,7 +575,7 @@ def infer_data_formats(
         pack_src=pack_in,
         pack_dst=output_format,
         math=math,
-        sfpu_math=sfpu_math,
+        sfpu_src=sfpu_src,
         same_src_format=same_src_format,
         unpack_B_src=input_format_B,
         unpack_B_dst=unpack_out_B,
@@ -587,11 +644,7 @@ def data_formats(
                                   (which is an inference-time directive); passing both raises ValueError.
         input_format_B: Optional input data format for src_B if different from src_A, used for testing specific scenarios with different A and B formats.
         unpacking_to_srcs: Whether the unpacker target is SrcS (default: False)
-        register_format_hint: Optional opt-in for a SrcA/SrcB-only register format (e.g. MxFp4_2x_A / MxFp4_2x_B). When set, the inferred
-                              unpack_A_dst / unpack_B_dst become the hint instead of the default (e.g. for MxFp4 input, Float16_b). Honored
-                              by the inference path only; must be paired with `disable_format_inference=False`. Currently valid only when
-                              `input_format == DataFormat.MxFp4`; the hint is compatible with any `output_format`. The exponent family it
-                              implies for downstream math/pack is derived via infer_downstream_unpack_out (2x_A -> Float16, 2x_B -> Float16_b).
+        register_format_hint: Optional 2x register format that the input is unpacked into instead of its default source register format.
     Returns:
         A list of FormatConfig objects of length num_iterations
     """
@@ -641,8 +694,8 @@ def data_formats(
 
         # Even with inference disabled, UInt16 must ride the Int16 data path on Quasar: there is no
         # UInt16 HW encoding in the unpacker, the register files/dest, or the packer, so the whole
-        # datapath defaults to Int16 and only sfpu_math keeps the UInt16 intent. See infer_data_formats.
-        sfpu_math_format = math_format
+        # datapath defaults to Int16 and only sfpu_src keeps the UInt16 intent. See infer_data_formats.
+        sfpu_src_format = math_format
         resolved_arch = chip_arch if chip_arch is not None else get_chip_architecture()
         if (
             resolved_arch == ChipArchitecture.QUASAR
@@ -651,7 +704,7 @@ def data_formats(
             unpack_dst = DataFormat.Int16
             math_format = DataFormat.Int16
             pack_src_format = DataFormat.Int16
-            sfpu_math_format = DataFormat.UInt16
+            sfpu_src_format = DataFormat.UInt16
             input_format = DataFormat.Int16
             output_format = (
                 DataFormat.Int16
@@ -680,7 +733,7 @@ def data_formats(
                 pack_src=pack_src_format,
                 pack_dst=output_format,
                 math=math_format,
-                sfpu_math=sfpu_math_format,
+                sfpu_src=sfpu_src_format,
                 same_src_format=same_src_format,
                 unpack_B_src=unpack_B_src_val,
                 unpack_B_dst=unpack_B_dst_val,

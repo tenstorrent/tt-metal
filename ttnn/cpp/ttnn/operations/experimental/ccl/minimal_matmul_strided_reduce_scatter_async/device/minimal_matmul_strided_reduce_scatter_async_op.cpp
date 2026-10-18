@@ -113,6 +113,96 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
             tb_shape[-1]);
     }
 
+    // An L1 MM output opts into the L1 handoff (see compute_output_specs). Unwindowed, the
+    // resident shard is Mt_per_core * Nt_per_core tiles on every matmul core for the life of the
+    // tensor: past a point it fails allocation outright, and well before that it lowers the L1
+    // floor enough that a LATER program's static circular buffers clash with it — a failure this
+    // op cannot see and the caller cannot easily attribute (issue #52863). Require the window so
+    // the footprint is bounded and explicit. W = M_blocks_per_core reproduces the full-residency
+    // layout exactly for callers that genuinely want it.
+    //
+    // The minimal matmul resolves an omitted memory_config_mm as the INPUT's memory config
+    // (minimal_matmul_device_operation.cpp compute_output_specs), so an L1 input with no explicit
+    // request still produces an L1 MM output — resolve the effective config the same way, or that
+    // path would silently bypass the window requirement.
+    const bool l1_mm_output =
+        attributes.matmul_struct.output_mem_config.value_or(tensor_args.input_tensor.memory_config()).buffer_type() ==
+        tt::tt_metal::BufferType::L1;
+    TT_FATAL(
+        !l1_mm_output || attributes.mm_window_blocks.has_value(),
+        "An L1 MM output (explicit memory_config_mm, or inherited from an L1 input when "
+        "memory_config_mm is omitted) requires mm_window_blocks: the L1 handoff must bound its "
+        "resident shard. Pass mm_window_blocks=2 (measured perf-neutral vs full residency), or "
+        "mm_window_blocks=ceil(Mt_per_core / M_block_size) to keep the whole MM output resident.");
+    TT_FATAL(
+        !attributes.mm_window_blocks.has_value() || *attributes.mm_window_blocks >= 1,
+        "mm_window_blocks must be >= 1, got {} — a zero-height window has no valid shard geometry "
+        "(2 is the measured perf-neutral default).",
+        *attributes.mm_window_blocks);
+
+    // The windowed handoff also requires the caller-owned counter arrays. Without them the op
+    // falls back to a private per-program L1 allocation, retained for the program's cached life —
+    // and because L1 is handed out top-down, each such block permanently lowers the L1 floor:
+    // the slow-motion version of the failure the window prevents. Detailed shape/layout checks
+    // (L1 sharded, grid coverage, row width) happen at program build; this only requires presence.
+    // Sizing: both are uint32, HEIGHT_SHARDED in L1 over the full compute grid (grid.x * grid.y
+    // cores). mm_progress_counters rows need one slot per matmul core; mm_credit_counters rows
+    // need one slot per RS reader (2 * num_links * num_workers_per_link). A square
+    // [num_cores, num_cores] allocation covers both — see CCLManager.get_mm_progress_counters_buffer
+    // / get_mm_credit_counters_buffer.
+    if (attributes.mm_window_blocks.has_value()) {
+        TT_FATAL(
+            tensor_args.mm_progress_counters.has_value(),
+            "mm_window_blocks requires a caller-owned mm_progress_counters tensor (uint32, L1 "
+            "HEIGHT_SHARDED over the compute grid, one slot per matmul core per row); see "
+            "CCLManager.get_mm_progress_counters_buffer.");
+        TT_FATAL(
+            tensor_args.mm_credit_counters.has_value(),
+            "mm_window_blocks requires a caller-owned mm_credit_counters tensor (uint32, L1 "
+            "HEIGHT_SHARDED over the compute grid, one slot per RS reader per row, i.e. at least "
+            "2 * num_links * num_workers_per_link slots); see "
+            "CCLManager.get_mm_credit_counters_buffer.");
+
+        // Layout/size checks, on every call rather than only at program build: on a cached run the
+        // factory's checks never rerun, and the address-stability guard alone would miss a
+        // same-address reallocation of a smaller tensor. The factory keeps the exact checks that
+        // need build-time information (resolved worker count, chosen core placement); these cover
+        // what validation can know.
+        const auto validate_counter_array = [&tensor_args](const Tensor& t, const char* name, uint32_t min_row_slots) {
+            // The factory embeds t.buffer()->address() into kernels running on the input's device;
+            // a counter allocated on a different device would pass the layout checks below while
+            // pointing the kernels at an unrelated local L1 address.
+            TT_FATAL(
+                t.device() == tensor_args.input_tensor.device(),
+                "{} must be allocated on the same device as the input tensor",
+                name);
+            TT_FATAL(
+                t.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 &&
+                    t.memory_config().shard_spec().has_value(),
+                "{} must be an L1 sharded tensor so that its row lands at the same local address on "
+                "every core that reads it",
+                name);
+            TT_FATAL(t.dtype() == DataType::UINT32, "{} must be uint32, got {}", name, t.dtype());
+            const uint32_t row_slots = t.memory_config().shard_spec()->shape[1];
+            TT_FATAL(
+                row_slots >= min_row_slots,
+                "{} provides {} uint32 slots per row but at least {} are needed; allocate a "
+                "[num_cores, num_cores] square over the full compute grid (see CCLManager)",
+                name,
+                row_slots,
+                min_row_slots);
+        };
+        const auto device_grid = tensor_args.input_tensor.device()->compute_with_storage_grid_size();
+        const uint32_t full_grid_slots = device_grid.x * device_grid.y;
+        // Progress rows are indexed by MM core id over the full device grid (see the RS factory).
+        validate_counter_array(*tensor_args.mm_progress_counters, "mm_progress_counters", full_grid_slots);
+        // Credit rows need one slot per RS reader: 2 directions * num_links * workers-per-direction.
+        // When num_workers_per_link is defaulted its value is resolved at build, so check the
+        // lower bound here; the factory validates the exact count.
+        const uint32_t min_rs_readers = 2 * attributes.num_links * attributes.num_workers_per_link.value_or(1);
+        validate_counter_array(*tensor_args.mm_credit_counters, "mm_credit_counters", min_rs_readers);
+    }
+
     // RS validation: checks we can perform without the (not-yet-created) MM output tensor.
     TT_FATAL(attributes.num_links > 0, "num_links must be greater than 0.");
 
@@ -156,9 +246,13 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
     // Derive RS intermediate and output specs from the MM output shape
     auto mm_output_shape = mm_output_spec.logical_shape();
 
-    // RS intermediate shape: same as MM output for Ring topology
+    // RS intermediate shape: same as MM output for Ring topology.
+    // The default is DRAM, NOT the MM output's memory config: the intermediate is a full-size
+    // [M, N] tensor, so inheriting an L1 MM config would silently place ~M*N bytes in L1
+    // interleaved — far more than the handoff shard the caller opted into. A caller that wants
+    // an L1 intermediate must say so explicitly.
     MemoryConfig rs_intermediate_mem_config =
-        attributes.rs_intermediate_mem_config.value_or(mm_output_spec.memory_config());
+        attributes.rs_intermediate_mem_config.value_or(MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
 
     tt::tt_metal::TensorSpec rs_intermediate_spec(
         mm_output_shape,
@@ -182,11 +276,11 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
     // circular buffers — and past roughly Mt/gy * Nt/gx > bank capacity does not fit at all. A caller
     // that asked for a DRAM MM output therefore keeps getting one. Opting in means either requesting
     // an L1 MM output outright, or setting mm_window_blocks, which bounds the shard to W M blocks and
-    // is only meaningful in L1.
-    const bool caller_requested_l1_mm_output =
-        attributes.matmul_struct.output_mem_config.has_value() &&
-        attributes.matmul_struct.output_mem_config->buffer_type() == BufferType::L1;
-    const bool use_l1_handoff = attributes.mm_window_blocks.has_value() || caller_requested_l1_mm_output;
+    // is only meaningful in L1. Tested against the RESOLVED matmul output spec rather than the raw
+    // attribute: an omitted memory_config_mm inherits the input's memory config inside the matmul,
+    // so an L1 input lands here too (validation has already required its window).
+    const bool l1_mm_output = mm_output_spec.memory_config().buffer_type() == BufferType::L1;
+    const bool use_l1_handoff = attributes.mm_window_blocks.has_value() || l1_mm_output;
     if (use_l1_handoff && attributes.matmul_struct.config.has_value() &&
         attributes.matmul_struct.config->compute_with_storage_grid_size.x > 0) {
         const auto grid = attributes.matmul_struct.config->compute_with_storage_grid_size;
@@ -203,6 +297,15 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
         uint32_t shard_ht = Mt_per_core;
         auto windowed_shape = mm_output_shape;
         if (attributes.mm_window_blocks.has_value()) {
+            // Checked here as well as in validate: create_output_tensors (and therefore this
+            // function) runs BEFORE validate_on_program_cache_miss in the launch path, and a zero
+            // window would otherwise reach TensorSpec's shard-grid check as a zero-height shard —
+            // a SIGFPE, not an actionable error.
+            TT_FATAL(
+                *attributes.mm_window_blocks >= 1,
+                "mm_window_blocks must be >= 1, got {} — a zero-height window has no valid shard "
+                "geometry (2 is the measured perf-neutral default).",
+                *attributes.mm_window_blocks);
             const uint32_t mm_block_ht = attributes.matmul_struct.config->M_block_size;
             shard_ht = attributes.mm_window_blocks.value() * mm_block_ht;
             windowed_shape[-2] = gy * shard_ht * tt::constants::TILE_HEIGHT;

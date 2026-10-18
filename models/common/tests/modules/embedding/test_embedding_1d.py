@@ -24,6 +24,9 @@ from models.common.modules.embedding.embedding_1d import Embedding1D, Embedding1
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.utility_functions import comp_allclose, comp_pcc
 
+# 1D module suites target the T3K; skip when the host system is a Galaxy.
+pytestmark = pytest.mark.usefixtures("skip_on_galaxy_system")
+
 # ============================================================================
 # HF model name constants
 # ============================================================================

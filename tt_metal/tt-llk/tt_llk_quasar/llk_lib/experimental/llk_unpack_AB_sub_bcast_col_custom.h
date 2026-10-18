@@ -32,7 +32,7 @@ using namespace ckernel;
  * @note On the math thread, pair with @ref _llk_math_eltwise_binary_init_custom_ (T1); on pack, with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_unpack_AB_sub_bcast_col_custom_ is the matching execute call on this thread.
  */
-inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
+inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     // One predicate for all three threads; see @ref validate_tensor_shape_sub_bcast_col_custom_ for why
     // this path is stricter than validate_tensor_shape_tile_dependent_ops_.
@@ -53,7 +53,7 @@ inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const ckernel::TensorShape
  * ahead of the math thread.
  *
  * A 16x32 tiny tile is registered as one HW tile per face (buffer-descriptor z_dim = 1, see
- * @ref ckernel::trisc::construct_tdma_desc), so a SrcA tile takes one UNPACR per face and its L1 tile
+ * @ref ckernel::trisc::construct_buf_desc), so a SrcA tile takes one UNPACR per face and its L1 tile
  * indices count faces, not tiles. A full 32x32 tile is a single HW tile (z_dim = 4) unpacked by one
  * UNPACR. Either way exactly one dvalid is raised per tile, which is what the math thread's per-tile
  * CLR_A (and single CLR_B for the held SrcB) consumes. SrcB stays at one UNPACR in both cases: a full

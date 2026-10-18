@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
@@ -19,6 +20,7 @@
 #include "tt_cluster.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
+#include "mock_psd_builder.hpp"
 
 namespace tt::tt_fabric {
 
@@ -319,29 +321,29 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor2) {
 }
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
-    // Load PSD from pre-written test file
-    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
-    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
-    const std::filesystem::path psd_file_path =
-        std::filesystem::path(tt_metal_home) / "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto";
+    // Two disconnected 1x2 meshes: ASICs 100-101 and 102-103.
+    auto physical_system_descriptor = tt::tt_fabric::test::build_mock_psd(
+        std::vector<std::string>(4, "host0"), std::vector<std::pair<int, int>>{{0, 1}, {2, 3}});
 
-    // Verify the file exists
-    ASSERT_TRUE(std::filesystem::exists(psd_file_path)) << "PSD test file not found: " << psd_file_path.string();
+    // The graph is keyed on addresses, so name the four ASICs by asking the descriptor for theirs
+    // rather than by their labels in the file. That is the whole point of the indirection: the labels
+    // here happen to be 100..103, and nothing downstream may depend on that.
+    auto node = [&](std::uint64_t asic_label) {
+        return physical_system_descriptor.get_physical_node_id(tt::tt_metal::AsicID{asic_label});
+    };
 
-    // Load PhysicalSystemDescriptor from file
-    tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor(psd_file_path.string());
-
-    // Hand-craft the asic_id_to_mesh_rank mapping
+    // Hand-craft the physical_node_id_to_mesh_rank mapping
     // Mesh 0: ASICs 100, 101 (connected)
     // Mesh 1: ASICs 102, 103 (connected)
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    asic_id_to_mesh_rank[MeshId{0}][tt::tt_metal::AsicID{100}] = MeshHostRankId{0};
-    asic_id_to_mesh_rank[MeshId{0}][tt::tt_metal::AsicID{101}] = MeshHostRankId{0};
-    asic_id_to_mesh_rank[MeshId{1}][tt::tt_metal::AsicID{102}] = MeshHostRankId{0};
-    asic_id_to_mesh_rank[MeshId{1}][tt::tt_metal::AsicID{103}] = MeshHostRankId{0};
+    std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
+    physical_node_id_to_mesh_rank[MeshId{0}][node(100)] = MeshHostRankId{0};
+    physical_node_id_to_mesh_rank[MeshId{0}][node(101)] = MeshHostRankId{0};
+    physical_node_id_to_mesh_rank[MeshId{1}][node(102)] = MeshHostRankId{0};
+    physical_node_id_to_mesh_rank[MeshId{1}][node(103)] = MeshHostRankId{0};
 
     // Build adjacency map physical
-    auto adjacency_map = build_adjacency_graph_physical(cluster_type, physical_system_descriptor, asic_id_to_mesh_rank);
+    auto adjacency_map =
+        build_adjacency_graph_physical(cluster_type, physical_system_descriptor, physical_node_id_to_mesh_rank);
 
     // Verify that we have adjacency graphs for each mesh
     EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes";
@@ -354,12 +356,12 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     EXPECT_EQ(nodes0.size(), 2u) << "Mesh 0 should have 2 ASICs";
 
     // Check that ASIC 100 has ASIC 101 as neighbor (2 connections = 2 entries)
-    auto asic100_it = std::find(nodes0.begin(), nodes0.end(), tt::tt_metal::AsicID{100});
+    auto asic100_it = std::find(nodes0.begin(), nodes0.end(), node(100));
     ASSERT_NE(asic100_it, nodes0.end()) << "Mesh 0 should contain ASIC 100";
-    const auto& neighbors100 = graph0.get_neighbors(tt::tt_metal::AsicID{100});
+    const auto& neighbors100 = graph0.get_neighbors(node(100));
     EXPECT_EQ(neighbors100.size(), 2u) << "ASIC 100 should have 2 neighbor entries (2 eth connections)";
-    EXPECT_EQ(neighbors100[0], tt::tt_metal::AsicID{101}) << "ASIC 100 should be connected to ASIC 101";
-    EXPECT_EQ(neighbors100[1], tt::tt_metal::AsicID{101}) << "ASIC 100 should have 2 connections to ASIC 101";
+    EXPECT_EQ(neighbors100[0], node(101)) << "ASIC 100 should be connected to ASIC 101";
+    EXPECT_EQ(neighbors100[1], node(101)) << "ASIC 100 should have 2 connections to ASIC 101";
 
     // Verify mesh 1
     auto it1 = adjacency_map.find(MeshId{1});
@@ -369,12 +371,12 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     EXPECT_EQ(nodes1.size(), 2u) << "Mesh 1 should have 2 ASICs";
 
     // Check that ASIC 102 has ASIC 103 as neighbor
-    auto asic102_it = std::find(nodes1.begin(), nodes1.end(), tt::tt_metal::AsicID{102});
+    auto asic102_it = std::find(nodes1.begin(), nodes1.end(), node(102));
     ASSERT_NE(asic102_it, nodes1.end()) << "Mesh 1 should contain ASIC 102";
-    const auto& neighbors102 = graph1.get_neighbors(tt::tt_metal::AsicID{102});
+    const auto& neighbors102 = graph1.get_neighbors(node(102));
     EXPECT_EQ(neighbors102.size(), 2u) << "ASIC 102 should have 2 neighbor entries (2 eth connections)";
-    EXPECT_EQ(neighbors102[0], tt::tt_metal::AsicID{103}) << "ASIC 102 should be connected to ASIC 103";
-    EXPECT_EQ(neighbors102[1], tt::tt_metal::AsicID{103}) << "ASIC 102 should have 2 connections to ASIC 103";
+    EXPECT_EQ(neighbors102[0], node(103)) << "ASIC 102 should be connected to ASIC 103";
+    EXPECT_EQ(neighbors102[1], node(103)) << "ASIC 102 should have 2 connections to ASIC 103";
 }
 
 // AdjacencyGraph Tests with Different User Types
@@ -1561,6 +1563,174 @@ TEST_F(TopologySolverTest, DFSSearchEngineRelaxedModeChannelPreference) {
     EXPECT_GE(it->second, 1u) << "Connection should exist";
     // The preference for more channels should result in choosing 12 (2 channels) or 13 (3 channels)
     // over 11 (1 channel), though all are valid in relaxed mode
+}
+
+TEST_F(TopologySolverTest, RelaxedSolveDoesNotMutatePreferredConstraints) {
+    // RELAXED seating uses existing DFS channel-match ordering / SAT encodings. It must not write
+    // preferred mappings into the caller's MappingConstraints.
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11, 12, 13};
+    global_adj_map[11] = {10};
+    global_adj_map[12] = {10};
+    global_adj_map[13] = {10};
+    global_adj_map[20] = {21};
+    global_adj_map[21] = {20};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_preferred_constraint(1, 10);
+    auto sat_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(sat_result.success);
+    ASSERT_EQ(sat_result.target_to_global.size(), 2u);
+
+    auto dfs_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Dfs);
+    ASSERT_TRUE(dfs_result.success);
+    ASSERT_EQ(dfs_result.target_to_global.size(), 2u);
+    EXPECT_EQ(constraints.get_preferred_mappings().size(), 1u);
+    EXPECT_EQ(constraints.get_preferred_mappings(1), (std::set<TestGlobalNode>{10}));
+}
+
+// Zero-link tolerance (#56762): path a-b-c onto one linked pair plus two isolated nodes maps only with soft
+// edges, and the maximization realizes the one possible edge.
+TEST_F(TopologySolverTest, AllowUnmatchedTargetEdges_ZeroLinkMappingMaximizesRealizedEdges) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[0] = {1};
+    target_adj_map[1] = {0, 2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    global_adj_map[12] = {};
+    global_adj_map[13] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Hard edges (default): no valid mapping on either engine.
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        MappingConstraints<TestTargetNode, TestGlobalNode> hard;
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, hard, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        EXPECT_FALSE(result.success) << "hard target edges must not map onto a graph with one link";
+    }
+
+    // Soft edges (Auto routes to SAT): maps, realizing the one possible edge.
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Auto}) {
+        MappingConstraints<TestTargetNode, TestGlobalNode> soft;
+        soft.set_allow_unmatched_target_edges(true);
+        EXPECT_TRUE(soft.allow_unmatched_target_edges());
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, soft, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        ASSERT_TRUE(result.success) << result.error_message;
+        ASSERT_EQ(result.target_to_global.size(), 3u);
+        EXPECT_TRUE(result.stats.used_sat);
+        const std::set<TestGlobalNode> linked{10, 11};
+        const auto on_link = [&](TestTargetNode t) { return linked.contains(result.target_to_global.at(t)); };
+        EXPECT_TRUE(on_link(1) && (on_link(0) || on_link(2)))
+            << "maximization must realize edge 0-1 or 1-2 on the linked pair, not leave both zero-link";
+        EXPECT_FALSE(result.warnings.empty()) << "the unrealized edge must be reported as a warning";
+    }
+
+    // Explicit DFS keeps edges hard.
+    {
+        MappingConstraints<TestTargetNode, TestGlobalNode> soft;
+        soft.set_allow_unmatched_target_edges(true);
+        auto result = solve_topology_mapping(
+            target_graph,
+            global_graph,
+            soft,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Dfs);
+        EXPECT_FALSE(result.success);
+    }
+}
+
+// Zero-link tolerance (#56762): a session started with soft edges flips to hard seams and back in place, with
+// no second encoding; a session started hard cannot be made soft.
+TEST_F(TopologySolverTest, AllowUnmatchedTargetEdges_InSessionToggleKeepsOneEncoding) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[0] = {1};
+    target_adj_map[1] = {0, 2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    global_adj_map[12] = {};
+    global_adj_map[13] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+    const std::set<TestGlobalNode> linked{10, 11};
+
+    {
+        MappingConstraints<TestTargetNode, TestGlobalNode> soft;
+        soft.set_allow_unmatched_target_edges(true);
+        TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> session(
+            target_graph,
+            global_graph,
+            soft,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Sat);
+        ASSERT_TRUE(session.started());
+
+        // Hard seams on the live session: the path cannot be realized.
+        ASSERT_TRUE(session.set_allow_unmatched_target_edges(false));
+        EXPECT_FALSE(session.next().success) << "hard seams must not map a path onto one link";
+
+        // Back to soft seams: a zero-link mapping with the one realizable edge.
+        ASSERT_TRUE(session.set_allow_unmatched_target_edges(true));
+        auto result = session.next();
+        ASSERT_TRUE(result.success) << result.error_message;
+        const auto on_link = [&](TestTargetNode t) { return linked.contains(result.target_to_global.at(t)); };
+        EXPECT_TRUE(on_link(1) && (on_link(0) || on_link(2)));
+        EXPECT_FALSE(result.warnings.empty());
+
+        // Hard again after a soft model: still UNSAT, still the same encoding.
+        ASSERT_TRUE(session.set_allow_unmatched_target_edges(false));
+        EXPECT_FALSE(session.next().success);
+        EXPECT_EQ(session.sat_hard_constraint_encode_calls(), 1u) << "toggling seams must not re-encode";
+    }
+
+    {
+        // A hard-edge session on a solvable instance (path onto a path) cannot be relaxed in place.
+        AdjacencyGraph<TestGlobalNode>::AdjacencyMap path_adj_map;
+        path_adj_map[10] = {11};
+        path_adj_map[11] = {10, 12};
+        path_adj_map[12] = {11};
+        path_adj_map[13] = {};
+        AdjacencyGraph<TestGlobalNode> path_graph(path_adj_map);
+        MappingConstraints<TestTargetNode, TestGlobalNode> hard;
+        TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> session(
+            target_graph,
+            path_graph,
+            hard,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Sat);
+        ASSERT_TRUE(session.started());
+        EXPECT_TRUE(session.next().success);
+        EXPECT_FALSE(session.set_allow_unmatched_target_edges(true))
+            << "a session encoded with hard edges cannot be relaxed in place";
+    }
 }
 
 TEST_F(TopologySolverTest, MappingValidatorSavesPartialMapping) {
@@ -3486,6 +3656,402 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_SplittingTar
     ASSERT_FALSE(result.success) << "Target group {1,2,3} cannot be split across global groups {10},{11},{12}";
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Host-group occupancy: set_max_same_rank_groups_used(k) is a HARD cap (SAT at-most-k CNF, DFS candidate prune).
+// If that cap is infeasible, MultiMeshSolutionEnumerator drops it, sets SOFT minimize_same_rank_groups_used, and
+// restarts the session -- the solver does not fall back internally.
+// ---------------------------------------------------------------------------------------------------------------------
+
+// Counts how many distinct host groups (from `global_groups`) the produced mapping lands on.
+static size_t count_host_groups_used(
+    const MappingResult<TestTargetNode, TestGlobalNode>& result,
+    const std::vector<std::set<TestGlobalNode>>& global_groups) {
+    std::set<size_t> used;
+    for (const auto& [t, g] : result.target_to_global) {
+        for (size_t i = 0; i < global_groups.size(); ++i) {
+            if (global_groups[i].contains(g)) {
+                used.insert(i);
+                break;
+            }
+        }
+    }
+    return used.size();
+}
+
+// N isolated target nodes 1..N (no edges): placement is constrained only by occupancy / the host cap, isolating the
+// objective from connectivity so the assertions are deterministic.
+static AdjacencyGraph<TestTargetNode> make_disconnected_target_graph(size_t n) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap adj;
+    for (size_t i = 1; i <= n; ++i) {
+        adj[static_cast<TestTargetNode>(i)] = {};
+    }
+    return AdjacencyGraph<TestTargetNode>(adj);
+}
+
+// N isolated global nodes 100..100+N-1.
+static AdjacencyGraph<TestGlobalNode> make_disconnected_global_graph(size_t n) {
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap adj;
+    for (size_t i = 0; i < n; ++i) {
+        adj[static_cast<TestGlobalNode>(100 + i)] = {};
+    }
+    return AdjacencyGraph<TestGlobalNode>(adj);
+}
+
+// num_groups host partitions of group_size consecutive globals each, starting at 100 (matches the graph above).
+static std::vector<std::set<TestGlobalNode>> make_host_groups(size_t num_groups, size_t group_size) {
+    std::vector<std::set<TestGlobalNode>> groups;
+    TestGlobalNode g = 100;
+    for (size_t i = 0; i < num_groups; ++i) {
+        std::set<TestGlobalNode> grp;
+        for (size_t j = 0; j < group_size; ++j) {
+            grp.insert(g++);
+        }
+        groups.push_back(std::move(grp));
+    }
+    return groups;
+}
+
+// HARD cap: both backends must confine placement to at most k occupied host groups (SAT via the at-most-k occupancy
+// encoding, DFS via the candidate prune in dfs_recursive).
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_HardCapRespected) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4, kCap = 2;
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        ASSERT_TRUE(result.success) << name << ": " << result.error_message;
+        ASSERT_EQ(result.target_to_global.size(), kNumTargets) << name;
+        EXPECT_LE(count_host_groups_used(result, host_groups), kCap)
+            << name << ": set_max_same_rank_groups_used(" << kCap << ") must confine placement to <= " << kCap
+            << " host groups";
+    }
+}
+
+// Globals in NO host group (the master placement's cross-host *_hostedge seats) raise no occupancy literal, so a
+// capped solve used to satisfy "at most k groups" vacuously by choosing them: a k=1 solve on a 4-galaxy quad returned
+// two cross-host seats over three hosts. Under an armed HARD cap such globals must be unusable, for both engines, on
+// the single solve and on every enumerated mapping.
+static AdjacencyGraph<TestGlobalNode> make_disconnected_global_graph_with_unlabelled(
+    size_t n_labelled, const std::vector<TestGlobalNode>& unlabelled) {
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap adj;
+    for (size_t i = 0; i < n_labelled; ++i) {
+        adj[static_cast<TestGlobalNode>(100 + i)] = {};
+    }
+    for (TestGlobalNode g : unlabelled) {
+        adj[g] = {};
+    }
+    return AdjacencyGraph<TestGlobalNode>(adj);
+}
+
+static size_t count_unlabelled_used(
+    const MappingResult<TestTargetNode, TestGlobalNode>& result,
+    const std::vector<std::set<TestGlobalNode>>& global_groups) {
+    size_t n = 0;
+    for (const auto& [t, g] : result.target_to_global) {
+        bool labelled = false;
+        for (const auto& grp : global_groups) {
+            if (grp.contains(g)) {
+                labelled = true;
+                break;
+            }
+        }
+        if (!labelled) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_UnlabelledGlobalsExcludedUnderCap) {
+    constexpr size_t kNumTargets = 2, kNumGroups = 4, kGroupSize = 2, kCap = 1, kMaxSolutions = 50;
+    const std::vector<TestGlobalNode> unlabelled{900, 901};
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph_with_unlabelled(kNumGroups * kGroupSize, unlabelled);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto single = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        ASSERT_TRUE(single.success) << name << ": " << single.error_message;
+        EXPECT_EQ(count_unlabelled_used(single, host_groups), 0u)
+            << name << ": a global in no host group must not be chosen while the HARD cap is armed";
+        EXPECT_EQ(count_host_groups_used(single, host_groups), kCap) << name;
+
+        auto results = solve_topology_mapping_n(
+            target_graph,
+            global_graph,
+            constraints,
+            kMaxSolutions,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine);
+        ASSERT_FALSE(results.empty()) << name;
+        for (size_t i = 0; i < results.size(); ++i) {
+            ASSERT_TRUE(results[i].success) << name << " mapping " << i;
+            EXPECT_EQ(count_unlabelled_used(results[i], host_groups), 0u) << name << " mapping " << i;
+            EXPECT_EQ(count_host_groups_used(results[i], host_groups), kCap) << name << " mapping " << i;
+        }
+    }
+}
+
+// The cardinality clause is not binding when at most k labelled groups are reachable (here: ONE group, k=1), but
+// the unlabelled exclusion must still be emitted: an unlabelled global would otherwise slip past the cap exactly
+// when the cap looks trivially satisfied. Both engines must refuse it.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_CapNotBindingStillExcludesUnlabelled) {
+    constexpr size_t kNumTargets = 2, kNumGroups = 1, kGroupSize = 2, kCap = 1, kMaxSolutions = 50;
+    const std::vector<TestGlobalNode> unlabelled{900, 901};
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph_with_unlabelled(kNumGroups * kGroupSize, unlabelled);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto single = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        ASSERT_TRUE(single.success) << name << ": " << single.error_message;
+        EXPECT_EQ(count_unlabelled_used(single, host_groups), 0u)
+            << name << ": the cap is not binding with one reachable group, but unlabelled globals stay excluded";
+        EXPECT_EQ(count_host_groups_used(single, host_groups), kCap) << name;
+
+        auto results = solve_topology_mapping_n(
+            target_graph,
+            global_graph,
+            constraints,
+            kMaxSolutions,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine);
+        ASSERT_FALSE(results.empty()) << name;
+        for (size_t i = 0; i < results.size(); ++i) {
+            ASSERT_TRUE(results[i].success) << name << " mapping " << i;
+            EXPECT_EQ(count_unlabelled_used(results[i], host_groups), 0u) << name << " mapping " << i;
+        }
+    }
+}
+
+// When a target's only candidates are unlabelled, the capped solve must FAIL rather than place it: that failure is
+// the signal MultiMeshSolutionEnumerator / the SAT placement session use to drop the cap and re-admit such globals.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_OnlyUnlabelledCandidatesInfeasibleUnderCap) {
+    constexpr size_t kNumTargets = 2, kNumGroups = 4, kGroupSize = 2, kCap = 1;
+    const std::vector<TestGlobalNode> unlabelled{900, 901};
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph_with_unlabelled(kNumGroups * kGroupSize, unlabelled);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    ASSERT_TRUE(constraints.add_required_constraint(TestTargetNode(1), std::set<TestGlobalNode>{900, 901}));
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        EXPECT_FALSE(result.success)
+            << name << ": target 1 can only take an unlabelled global, which the armed HARD cap must refuse";
+    }
+
+    // Without the cap the same instance places (the drop-cap path the enumerator falls back to).
+    constraints.set_max_same_rank_groups_used(0);
+    auto uncapped = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(uncapped.success) << uncapped.error_message;
+    EXPECT_TRUE(uncapped.target_to_global.at(1) == 900 || uncapped.target_to_global.at(1) == 901)
+        << "without the cap target 1 takes one of its (unlabelled) required globals";
+    EXPECT_GE(count_unlabelled_used(uncapped, host_groups), 1u);
+}
+
+// SOFT minimize (no HARD cap) shares the at-most-k encoding, so while its packing assumption holds it must also
+// prefer labelled globals over unlabelled ones instead of scoring a cross-host seat as "zero hosts".
+TEST_F(TopologySolverTest, SolveTopologyMapping_MinimizeSameRankGroups_SoftPrefersLabelledGlobals) {
+    constexpr size_t kNumTargets = 2, kNumGroups = 4, kGroupSize = 2;
+    const std::vector<TestGlobalNode> unlabelled{900, 901};
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph_with_unlabelled(kNumGroups * kGroupSize, unlabelled);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_minimize_same_rank_groups_used(true);
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(result.success) << result.error_message;
+    EXPECT_EQ(count_unlabelled_used(result, host_groups), 0u)
+        << "SOFT minimize must pack onto labelled host groups when that is feasible";
+    EXPECT_EQ(count_host_groups_used(result, host_groups), 1u);
+}
+
+// Multi-solution enumeration must honour the HARD host-group cap on every returned mapping, for both engines.
+// Regression: the DFS enumeration loop (search_n) once lost the candidate-level cap pruning that dfs_recursive
+// applies, so solve_topology_mapping_n could hand back placements spanning more than the cap.
+TEST_F(TopologySolverTest, SolveTopologyMappingN_MaxSameRankGroups_HardCapRespectedEveryMapping) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4, kCap = 2, kMaxSolutions = 12;
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Dfs, TopologyMappingSolverEngine::Sat}) {
+        const char* name = engine == TopologyMappingSolverEngine::Dfs ? "DFS" : "SAT";
+        auto results = solve_topology_mapping_n(
+            target_graph,
+            global_graph,
+            constraints,
+            kMaxSolutions,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine,
+            /*unique_shapes=*/true);
+        ASSERT_GT(results.size(), 1u) << name << ": expected several distinct capped placements";
+        for (size_t i = 0; i < results.size(); ++i) {
+            ASSERT_TRUE(results[i].success) << name << " solution " << i << ": " << results[i].error_message;
+            ASSERT_EQ(results[i].target_to_global.size(), kNumTargets) << name << " solution " << i;
+            EXPECT_LE(count_host_groups_used(results[i], host_groups), kCap)
+                << name << " solution " << i << ": set_max_same_rank_groups_used(" << kCap
+                << ") must confine every enumerated placement to <= " << kCap << " host groups";
+        }
+    }
+}
+
+// HARD cap at the capacity lower bound: SAT/DFS must pack into ceil(n_target / host_capacity) groups.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MinimizeSameRankGroups_ReducesOccupiedGroups) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4;
+    constexpr size_t kMinGroups = (kNumTargets + kGroupSize - 1) / kGroupSize;  // 2
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_max_same_rank_groups_used(kMinGroups);
+
+    auto result = solve_topology_mapping(
+        target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(result.success) << result.error_message;
+    ASSERT_EQ(result.target_to_global.size(), kNumTargets);
+    EXPECT_LE(count_host_groups_used(result, host_groups), kMinGroups)
+        << "hard cap must not exceed the capacity lower bound of " << kMinGroups << " host groups";
+}
+
+// SOFT minimize (no hard cap): SAT should still pack into the capacity lower bound when that packing is feasible.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MinimizeSameRankGroups_SoftPacksWithoutHardCap) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4;
+    constexpr size_t kMinGroups = (kNumTargets + kGroupSize - 1) / kGroupSize;  // 2
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_minimize_same_rank_groups_used(true);
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(result.success) << result.error_message;
+    ASSERT_EQ(result.target_to_global.size(), kNumTargets);
+    EXPECT_LE(count_host_groups_used(result, host_groups), kMinGroups)
+        << "SOFT minimize must pack into the capacity lower bound of " << kMinGroups << " host groups when feasible";
+}
+
+// SOFT minimize must not fail the solve when packing at k_floor is infeasible (required pins force extra hosts).
+TEST_F(TopologySolverTest, SolveTopologyMapping_MinimizeSameRankGroups_SoftFallsThroughWhenPackingInfeasible) {
+    constexpr size_t kNumTargets = 2, kNumGroups = 4, kGroupSize = 4;
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    ASSERT_TRUE(constraints.add_required_constraint(1, TestGlobalNode(100)));  // host group 0
+    ASSERT_TRUE(constraints.add_required_constraint(2, TestGlobalNode(104)));  // host group 1
+    constraints.set_minimize_same_rank_groups_used(true);
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(result.success) << result.error_message;
+    EXPECT_EQ(count_host_groups_used(result, host_groups), 2u)
+        << "SOFT minimize must fall through to an unconstrained solve when k_floor packing is pinned-infeasible";
+}
+
+// Issue #50253 shape: a ring (cycle) embedded using whole hosts. The 4-node target cycle only closes on the 4-cycle
+// formed by hosts {10,11}+{12,13}; the third host hangs off to the side. A HARD cap of k_min = ceil(4/2) = 2 with
+// full packing (4 == 2*2) forces the all-or-nothing occupancy fast path on a cyclic (not path) embedding -- the case
+// main's weak cardinality counter could miss. Mirrors what topology_mapper_utils sets for inter-mesh alignment.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_RingFullPacking) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    target_adj[1] = {2, 4};
+    target_adj[2] = {1, 3};
+    target_adj[3] = {2, 4};
+    target_adj[4] = {3, 1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    // 4-cycle 10-11-13-12-10 across hosts {10,11},{12,13}; host {14,15} hangs off node 13.
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    global_adj[10] = {11, 12};
+    global_adj[11] = {10, 13};
+    global_adj[12] = {10, 13};
+    global_adj[13] = {11, 12, 15};
+    global_adj[15] = {13, 14};
+    global_adj[14] = {15};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    std::vector<std::set<TestGlobalNode>> global_groups{{10, 11}, {12, 13}, {14, 15}};
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{}, global_groups));
+    constraints.set_max_same_rank_groups_used(2);      // HARD cap at k_min
+    constraints.set_minimize_same_rank_groups_used(true);
+
+    auto result = solve_topology_mapping(
+        target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(result.success) << result.error_message;
+    EXPECT_EQ(count_host_groups_used(result, global_groups), 2u)
+        << "4-node ring must pack onto the minimum ceil(4/2) = 2 host groups";
+}
+
 // Cross-validation: same-rank feasibility vs required mappings (set_theory check in validate()).
 TEST_F(TopologySolverTest, MappingConstraints_SetSameRankRejected_WhenRequiredPinsDifferentPartitions) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
@@ -3874,6 +4440,113 @@ TEST_F(TopologySolverTest, CardinalityConstraint_MinCountGreaterThanOne) {
     }
 
     EXPECT_GE(satisfied_count, 2u) << "At least 2 cardinality constraint pairs should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_WeightedPairsAddValidation) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    MappingConstraints<TestTargetNode, TestGlobalNode>::CardinalityPairWeights weights;
+    EXPECT_FALSE(constraints.add_cardinality_constraint(weights, 1))
+        << "Empty weighted cardinality constraint should return false";
+
+    weights[{1, 10}] = 2;
+    weights[{2, 11}] = 2;
+    EXPECT_FALSE(constraints.add_cardinality_constraint(weights, 0)) << "min_count = 0 should return false";
+    EXPECT_FALSE(constraints.add_cardinality_constraint(weights, 5))
+        << "min_count greater than total pair weight should return false";
+
+    MappingConstraints<TestTargetNode, TestGlobalNode>::CardinalityPairWeights zero_weight = {{{1, 10}, 0}};
+    EXPECT_FALSE(constraints.add_cardinality_constraint(zero_weight, 1)) << "weight 0 should return false";
+
+    EXPECT_TRUE(constraints.add_cardinality_constraint(weights, 4))
+        << "min_count equal to total pair weight should be accepted";
+    ASSERT_EQ(constraints.get_cardinality_constraints().size(), 1u);
+    EXPECT_EQ(constraints.get_cardinality_constraints()[0].min_count, 4u);
+    const auto& stored_pairs = constraints.get_cardinality_constraints()[0].mapping_pairs;
+    EXPECT_EQ(stored_pairs.size(), 4u);
+    const std::pair<TestTargetNode, TestGlobalNode> pair_1_10{1, 10};
+    const std::pair<TestTargetNode, TestGlobalNode> pair_2_11{2, 11};
+    EXPECT_EQ(std::count(stored_pairs.begin(), stored_pairs.end(), pair_1_10), 2);
+    EXPECT_EQ(std::count(stored_pairs.begin(), stored_pairs.end(), pair_2_11), 2);
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_WeightedPairsRequiresHotChip) {
+    // 1-2 must sit on a physical edge. 10-11 each carry weight 2; 11-12 are a skinny 2+1 cut.
+    // min_count 4 is only achievable on 10-11.
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    const auto make_weights = []() {
+        MappingConstraints<TestTargetNode, TestGlobalNode>::CardinalityPairWeights weights;
+        weights[{1, 10}] = 2;
+        weights[{2, 10}] = 2;
+        weights[{1, 11}] = 2;
+        weights[{2, 11}] = 2;
+        weights[{1, 12}] = 1;
+        weights[{2, 12}] = 1;
+        weights[{1, 13}] = 1;
+        weights[{2, 13}] = 1;
+        return weights;
+    };
+
+    const auto check_mapping = [&](const MappingResult<TestTargetNode, TestGlobalNode>& result) {
+        ASSERT_TRUE(result.success) << result.error_message;
+        const TestGlobalNode g1 = result.target_to_global.at(1);
+        const TestGlobalNode g2 = result.target_to_global.at(2);
+        EXPECT_TRUE((g1 == 10 && g2 == 11) || (g1 == 11 && g2 == 10))
+            << "weighted min_count=4 should reject the skinny 11-12/12-13 edges";
+        const size_t weight = (g1 == 10 || g1 == 11 ? 2u : 1u) + (g2 == 10 || g2 == 11 ? 2u : 1u);
+        EXPECT_GE(weight, 4u);
+    };
+
+    for (auto engine : {TopologyMappingSolverEngine::Dfs, TopologyMappingSolverEngine::Sat}) {
+        MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+        ASSERT_TRUE(constraints.add_cardinality_constraint(make_weights(), 4));
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        check_mapping(result);
+    }
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_WeightedPairsIndexData) {
+    using namespace tt::tt_fabric::detail;
+
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    MappingConstraints<TestTargetNode, TestGlobalNode>::CardinalityPairWeights weights;
+    weights[{1, 10}] = 2;
+    weights[{2, 11}] = 2;
+    ASSERT_TRUE(constraints.add_cardinality_constraint(weights, 4));
+
+    ConstraintIndexData constraint_data(constraints, graph_data);
+    ASSERT_EQ(constraint_data.cardinality_constraints.size(), 1u);
+    EXPECT_EQ(constraint_data.cardinality_constraints[0].min_count, 4u);
+    const auto& indexed_pairs = constraint_data.cardinality_constraints[0].pairs;
+    EXPECT_EQ(indexed_pairs.size(), 4u);
+    EXPECT_EQ(std::count(indexed_pairs.begin(), indexed_pairs.end(), std::pair<size_t, size_t>{0, 0}), 2);
+
+    std::vector<int> mapping = {0, 1};  // 1->10, 2->11
+    EXPECT_TRUE(constraint_data.check_cardinality_constraints(mapping));
+    std::vector<int> skinny = {1, 0};  // 1->11, 2->10 are not listed
+    EXPECT_FALSE(constraint_data.check_cardinality_constraints(skinny));
 }
 
 TEST_F(TopologySolverTest, CardinalityConstraint_WithRequiredConstraints) {
@@ -4733,8 +5406,8 @@ TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_EquivalentToExplicit
     // Both should have the same cardinality constraints
     EXPECT_EQ(constraints1.get_cardinality_constraints().size(), constraints2.get_cardinality_constraints().size());
     if (!constraints1.get_cardinality_constraints().empty() && !constraints2.get_cardinality_constraints().empty()) {
-        const auto& pairs1 = constraints1.get_cardinality_constraints()[0].first;
-        const auto& pairs2 = constraints2.get_cardinality_constraints()[0].first;
+        const auto& pairs1 = constraints1.get_cardinality_constraints()[0].mapping_pairs;
+        const auto& pairs2 = constraints2.get_cardinality_constraints()[0].mapping_pairs;
         EXPECT_EQ(pairs1.size(), pairs2.size());
         EXPECT_EQ(pairs1, pairs2) << "Many-to-many should generate same pairs as explicit listing";
     }
@@ -5356,43 +6029,30 @@ TEST_F(TopologySolverTest, Benchmark_Line64_On_Mesh4x16_MultiSolve_SatDfs) {
         const char* engine_label = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
 
         using clock = std::chrono::steady_clock;
-        TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> enum_session;
-        std::vector<std::map<TestTargetNode, TestGlobalNode>> excluded;
-        excluded.reserve(kMaxSolutions);
+        TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> enum_session(
+            target_graph,
+            global_graph,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine,
+            /*unique_shapes=*/false);
 
         std::vector<MappingResult<TestTargetNode, TestGlobalNode>> results;
         results.reserve(kMaxSolutions);
 
         const auto t_first_begin = clock::now();
-        auto first_result = enum_session.next(
-            target_graph,
-            global_graph,
-            constraints,
-            excluded,
-            ConnectionValidationMode::RELAXED,
-            /*quiet_mode=*/true,
-            engine,
-            /*unique_shapes=*/false);
+        auto first_result = enum_session.next();
         const auto first_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_first_begin).count();
 
         ASSERT_TRUE(first_result.success) << engine_label << " first next()";
         results.push_back(std::move(first_result));
-        excluded.push_back(results.back().target_to_global);
 
         const auto t_incremental_begin = clock::now();
         for (size_t extra = 1; extra < kMaxSolutions; ++extra) {
-            auto next_result = enum_session.next(
-                target_graph,
-                global_graph,
-                constraints,
-                excluded,
-                ConnectionValidationMode::RELAXED,
-                /*quiet_mode=*/true,
-                engine,
-                /*unique_shapes=*/false);
+            auto next_result = enum_session.next();
             ASSERT_TRUE(next_result.success) << engine_label << " incremental next() index " << extra;
-            excluded.push_back(next_result.target_to_global);
             results.push_back(std::move(next_result));
         }
         const auto incremental_total_ms =
@@ -5500,45 +6160,32 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
 
         for (bool unique_shapes_flag : {false, true}) {
             using clock = std::chrono::steady_clock;
-            TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> enum_session;
-            std::vector<std::map<TestTargetNode, TestGlobalNode>> excluded;
-            excluded.reserve(kMaxSolutions);
+            TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> enum_session(
+                target_graph,
+                global_graph,
+                constraints,
+                ConnectionValidationMode::RELAXED,
+                /*quiet_mode=*/true,
+                engine,
+                unique_shapes_flag);
 
             std::vector<MappingResult<TestTargetNode, TestGlobalNode>> results;
             results.reserve(kMaxSolutions);
 
             const auto t_first_begin = clock::now();
-            auto first_result = enum_session.next(
-                target_graph,
-                global_graph,
-                constraints,
-                excluded,
-                ConnectionValidationMode::RELAXED,
-                /*quiet_mode=*/true,
-                engine,
-                unique_shapes_flag);
+            auto first_result = enum_session.next();
             const auto first_ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_first_begin).count();
 
             ASSERT_TRUE(first_result.success) << engine_label << " first next() unique_shapes=" << unique_shapes_flag;
             results.push_back(std::move(first_result));
-            excluded.push_back(results.back().target_to_global);
 
             const auto t_incremental_begin = clock::now();
             for (size_t extra = 1; extra < kMaxSolutions; ++extra) {
-                auto next_result = enum_session.next(
-                    target_graph,
-                    global_graph,
-                    constraints,
-                    excluded,
-                    ConnectionValidationMode::RELAXED,
-                    /*quiet_mode=*/true,
-                    engine,
-                    unique_shapes_flag);
+                auto next_result = enum_session.next();
                 if (!next_result.success) {
                     break;
                 }
-                excluded.push_back(next_result.target_to_global);
                 results.push_back(std::move(next_result));
             }
             const auto incremental_total_ms =
@@ -5839,17 +6486,16 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
         const auto first = solve_topology_mapping<int, int>(
             target, global, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
         ASSERT_TRUE(first.success);
-        std::vector<std::map<int, int>> excluded{first.target_to_global};
-        TopologyMappingEnumerationSession<int, int> enumeration_session;
-        const auto second = enumeration_session.next(
+        TopologyMappingEnumerationSession<int, int> enumeration_session(
             target,
             global,
             constraints,
-            excluded,
             ConnectionValidationMode::RELAXED,
             /*quiet_mode=*/true,
             TopologyMappingSolverEngine::Auto,
             false);
+        ASSERT_TRUE(enumeration_session.exclude_mapping(first.target_to_global));
+        const auto second = enumeration_session.next();
         EXPECT_TRUE(second.success);
         EXPECT_NE(first.target_to_global, second.target_to_global);
     }
@@ -5861,17 +6507,16 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
         const auto first = solve_topology_mapping<int, int>(
             target, global, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
         ASSERT_TRUE(first.success);
-        std::vector<std::map<int, int>> excluded{first.target_to_global};
-        TopologyMappingEnumerationSession<int, int> enumeration_session;
-        const auto next = enumeration_session.next(
+        TopologyMappingEnumerationSession<int, int> enumeration_session(
             target,
             global,
             constraints,
-            excluded,
             ConnectionValidationMode::RELAXED,
             /*quiet_mode=*/true,
             TopologyMappingSolverEngine::Auto,
             false);
+        ASSERT_TRUE(enumeration_session.exclude_mapping(first.target_to_global));
+        const auto next = enumeration_session.next();
         EXPECT_FALSE(next.success);
     }
 
@@ -5897,56 +6542,39 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     std::vector<std::map<int, int>> expected_prefix;
     expected_prefix.reserve(kRounds);
     {
-        TopologyMappingEnumerationSession<int, int> probe;
-        std::vector<std::map<int, int>> ex;
-        ex.reserve(kRounds);
-        for (size_t i = 0; i < kRounds; ++i) {
-            const auto r = probe.next(
-                target,
-                global,
-                constraints,
-                ex,
-                ConnectionValidationMode::RELAXED,
-                /*quiet_mode=*/true,
-                TopologyMappingSolverEngine::Sat,
-                false);
-            ASSERT_TRUE(r.success) << "probe round " << i;
-            expected_prefix.push_back(r.target_to_global);
-            ex.push_back(r.target_to_global);
-        }
-    }
-
-    TopologyMappingEnumerationSession<int, int> check_calls;
-    std::vector<std::map<int, int>> ex_acc;
-    ex_acc.reserve(kRounds);
-    std::set<std::map<int, int>> session_maps;
-    for (size_t i = 0; i < kRounds; ++i) {
-        const size_t excluded_at_call = ex_acc.size();
-        const bool reused_graph_context = (i > 0);
-        const auto r = check_calls.next(
+        TopologyMappingEnumerationSession<int, int> probe(
             target,
             global,
             constraints,
-            ex_acc,
             ConnectionValidationMode::RELAXED,
-            true,
+            /*quiet_mode=*/true,
             TopologyMappingSolverEngine::Sat,
             false);
+        for (size_t i = 0; i < kRounds; ++i) {
+            const auto r = probe.next();
+            ASSERT_TRUE(r.success) << "probe round " << i;
+            expected_prefix.push_back(r.target_to_global);
+        }
+    }
+
+    TopologyMappingEnumerationSession<int, int> check_calls(
+        target, global, constraints, ConnectionValidationMode::RELAXED, true, TopologyMappingSolverEngine::Sat, false);
+    std::set<std::map<int, int>> session_maps;
+    for (size_t i = 0; i < kRounds; ++i) {
+        const bool reused_graph_context = (i > 0);
+        const auto r = check_calls.next();
         ASSERT_TRUE(r.success);
         log_info(
             tt::LogFabric,
             "TopologySolver_SolveNextAndIncrementalSatSession: SAT stats reused_graph_context={} solve_out={} "
-            "solve_calls={} hard_constraint_encodes={} excluded_mappings={} blocking_clauses_encoded={}",
+            "solve_calls={} hard_constraint_encodes={}",
             reused_graph_context,
             "SAT",
             check_calls.sat_solve_calls(),
-            check_calls.sat_hard_constraint_encode_calls(),
-            excluded_at_call,
-            excluded_at_call);
+            check_calls.sat_hard_constraint_encode_calls());
         ASSERT_EQ(check_calls.sat_hard_constraint_encode_calls(), 1u);
         ASSERT_TRUE(session_maps.insert(r.target_to_global).second);
         EXPECT_EQ(r.target_to_global, expected_prefix[i]);
-        ex_acc.push_back(r.target_to_global);
     }
     EXPECT_EQ(check_calls.sat_solve_calls(), kRounds);
     EXPECT_EQ(check_calls.sat_hard_constraint_encode_calls(), 1u);
@@ -5969,42 +6597,38 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     EXPECT_EQ(session_maps, batch_maps);
 
     {
-        TopologyMappingEnumerationSession<int, int> warmup;
-        std::vector<std::map<int, int>> ex;
-        ex.reserve(kRounds);
+        TopologyMappingEnumerationSession<int, int> warmup(
+            target,
+            global,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            true,
+            TopologyMappingSolverEngine::Sat,
+            false);
         for (size_t i = 0; i < kRounds; ++i) {
-            const auto r = warmup.next(
-                target,
-                global,
-                constraints,
-                ex,
-                ConnectionValidationMode::RELAXED,
-                true,
-                TopologyMappingSolverEngine::Sat,
-                false);
+            const auto r = warmup.next();
             ASSERT_TRUE(r.success);
-            ex.push_back(r.target_to_global);
         }
     }
 
     using clock = std::chrono::steady_clock;
     const auto t_fresh_start = clock::now();
     for (size_t i = 0; i < kRounds; ++i) {
-        TopologyMappingEnumerationSession<int, int> fresh;
+        TopologyMappingEnumerationSession<int, int> fresh(
+            target,
+            global,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            true,
+            TopologyMappingSolverEngine::Sat,
+            false);
         std::vector<std::map<int, int>> ex;
         ex.reserve(i);
         for (size_t j = 0; j < i; ++j) {
             ex.push_back(expected_prefix[j]);
         }
-        const auto r = fresh.next(
-            target,
-            global,
-            constraints,
-            ex,
-            ConnectionValidationMode::RELAXED,
-            true,
-            TopologyMappingSolverEngine::Sat,
-            false);
+        ASSERT_TRUE(fresh.exclude_mappings(ex));
+        const auto r = fresh.next();
         ASSERT_TRUE(r.success);
         EXPECT_EQ(r.target_to_global, expected_prefix[i]);
         EXPECT_EQ(fresh.sat_hard_constraint_encode_calls(), 1u);
@@ -6013,22 +6637,12 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     const auto fresh_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_fresh_start).count();
 
     const auto t_reuse_start = clock::now();
-    TopologyMappingEnumerationSession<int, int> reuse_session;
+    TopologyMappingEnumerationSession<int, int> reuse_session(
+        target, global, constraints, ConnectionValidationMode::RELAXED, true, TopologyMappingSolverEngine::Sat, false);
     {
-        std::vector<std::map<int, int>> ex;
-        ex.reserve(kRounds);
         for (size_t i = 0; i < kRounds; ++i) {
-            const auto r = reuse_session.next(
-                target,
-                global,
-                constraints,
-                ex,
-                ConnectionValidationMode::RELAXED,
-                true,
-                TopologyMappingSolverEngine::Sat,
-                false);
+            const auto r = reuse_session.next();
             ASSERT_TRUE(r.success);
-            ex.push_back(r.target_to_global);
         }
     }
     EXPECT_EQ(reuse_session.sat_hard_constraint_encode_calls(), 1u);
@@ -6043,6 +6657,292 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
         EXPECT_LT(reuse_ms, fresh_ms);
         EXPECT_LT(reuse_ms * 2, fresh_ms);
     }
+}
+
+// ---------------------------------------------------------------------------
+// MappingConstraints add_forbidden / add_required: reject before mutate
+// ---------------------------------------------------------------------------
+
+TEST_F(TopologySolverTest, AddForbiddenConstraintRejectedLeavesStateUnchanged) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+
+    EXPECT_TRUE(constraints.add_forbidden_constraint(1u, TestGlobalNode{10}));
+    EXPECT_EQ(constraints.get_valid_mappings(1u), (std::set<TestGlobalNode>{11}));
+    const auto forbidden_after_ok = constraints.get_forbidden_pairs();
+
+    EXPECT_FALSE(constraints.add_forbidden_constraint(1u, TestGlobalNode{11}));
+    EXPECT_EQ(constraints.get_valid_mappings(1u), (std::set<TestGlobalNode>{11}));
+    EXPECT_EQ(constraints.get_forbidden_pairs(), forbidden_after_ok);
+}
+
+TEST_F(TopologySolverTest, AddForbiddenConstraintSetOverloadIsAtomic) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(2u, std::set<TestGlobalNode>{20}));
+
+    EXPECT_FALSE(constraints.add_forbidden_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+    EXPECT_EQ(constraints.get_valid_mappings(1u), (std::set<TestGlobalNode>{10, 11}));
+    EXPECT_EQ(constraints.get_valid_mappings(2u), (std::set<TestGlobalNode>{20}));
+    EXPECT_TRUE(constraints.get_forbidden_pairs().empty());
+}
+
+TEST_F(TopologySolverTest, AddForbiddenConstraintCartesianIsAtomic) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(2u, std::set<TestGlobalNode>{20}));
+
+    EXPECT_FALSE(
+        constraints.add_forbidden_constraint(std::set<TestTargetNode>{1u, 2u}, std::set<TestGlobalNode>{10, 20}));
+    EXPECT_EQ(constraints.get_valid_mappings(1u), (std::set<TestGlobalNode>{10, 11}));
+    EXPECT_EQ(constraints.get_valid_mappings(2u), (std::set<TestGlobalNode>{20}));
+    EXPECT_TRUE(constraints.get_forbidden_pairs().empty());
+}
+
+TEST_F(TopologySolverTest, AddForbiddenConstraintEmptyCartesianRejected) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10}));
+    EXPECT_FALSE(constraints.add_forbidden_constraint(std::set<TestTargetNode>{}, std::set<TestGlobalNode>{10}));
+    EXPECT_FALSE(constraints.add_forbidden_constraint(std::set<TestTargetNode>{1u}, std::set<TestGlobalNode>{}));
+    EXPECT_EQ(constraints.get_valid_mappings(1u), (std::set<TestGlobalNode>{10}));
+}
+
+TEST_F(TopologySolverTest, AddRequiredConstraintRejectedLeavesStateUnchanged) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10}));
+    EXPECT_FALSE(constraints.add_required_constraint(1u, TestGlobalNode{20}));
+    EXPECT_EQ(constraints.get_valid_mappings(1u), (std::set<TestGlobalNode>{10}));
+}
+
+TEST_F(TopologySolverTest, SessionAddForbiddenOverconstrainedDoesNotChangeSolve) {
+    IntAdj target(IntAdjMap{{0, {}}});
+    IntAdj global(IntAdjMap{{50, {}}, {51, {}}});
+    IntConstraints constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(0, std::set<int>{50, 51}));
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        TopologyMappingEnumerationSession<int, int> session(
+            target,
+            global,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine,
+            false);
+        ASSERT_TRUE(session.started());
+
+        ASSERT_TRUE(session.add_forbidden_constraint(0, 50));
+        ASSERT_FALSE(session.add_forbidden_constraint(0, 51));
+
+        const auto result = session.next();
+        ASSERT_TRUE(result.success);
+        ASSERT_EQ(result.target_to_global.at(0), 51);
+    }
+}
+
+TEST_F(TopologySolverTest, SessionAddRequiredRestrictsBothEngines) {
+    IntAdj target(IntAdjMap{{0, {}}});
+    IntAdj global(IntAdjMap{{50, {}}, {51, {}}});
+    IntConstraints constraints;
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        TopologyMappingEnumerationSession<int, int> session(
+            target,
+            global,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine,
+            false);
+        ASSERT_TRUE(session.started());
+        ASSERT_TRUE(session.add_required_constraint(0, std::set<int>{51}));
+
+        const auto result = session.next();
+        ASSERT_TRUE(result.success);
+        ASSERT_EQ(result.target_to_global.at(0), 51);
+    }
+}
+
+TEST_F(TopologySolverTest, ResourceConstraintOverlappingSeatsAreDisjoint) {
+    // Two targets, three seats. Seat 1 overlaps both chips, so the only disjoint seating is 0+2.
+    IntAdj target(IntAdjMap{{0, {}}, {1, {}}});
+    IntAdj global(IntAdjMap{{0, {}}, {1, {}}, {2, {}}});
+    IntConstraints constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(0, std::set<int>{0, 1}));
+    ASSERT_TRUE(constraints.add_required_constraint(1, std::set<int>{1, 2}));
+    ASSERT_TRUE(constraints.add_resource_constraint<uint32_t>({
+        {0, {0u}},
+        {1, {0u, 1u}},
+        {2, {1u}},
+    }));
+    EXPECT_EQ(constraints.resource_count(), 2u);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        TopologyMappingEnumerationSession<int, int> session(
+            target,
+            global,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine,
+            false);
+        ASSERT_TRUE(session.started());
+        const auto result = session.next();
+        ASSERT_TRUE(result.success) << (engine == TopologyMappingSolverEngine::Sat ? "sat" : "dfs");
+        EXPECT_EQ(result.target_to_global.at(0), 0);
+        EXPECT_EQ(result.target_to_global.at(1), 2);
+        EXPECT_FALSE(session.next().success);
+    }
+}
+
+TEST_F(TopologySolverTest, ResourceConstraintDisablesBijectionCompleteness) {
+    // One target and two unused-capable seats: bijection completeness would force both seats and go UNSAT.
+    IntAdj target(IntAdjMap{{0, {}}});
+    IntAdj global(IntAdjMap{{0, {}}, {1, {}}});
+    IntConstraints constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(0, std::set<int>{0, 1}));
+    ASSERT_TRUE(constraints.add_resource_constraint<uint32_t>({{0, {0u}}, {1, {1u}}}));
+
+    TopologyMappingEnumerationSession<int, int> session(
+        target,
+        global,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat,
+        false);
+    ASSERT_TRUE(session.started());
+    const auto result = session.next();
+    ASSERT_TRUE(result.success);
+    EXPECT_TRUE(result.target_to_global.at(0) == 0 || result.target_to_global.at(0) == 1);
+}
+
+TEST_F(TopologySolverTest, MergeIntersectsRequiredAndKeepsOneSidedTargets) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    ASSERT_TRUE(base.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11, 12}));
+    ASSERT_TRUE(base.add_required_constraint(2u, std::set<TestGlobalNode>{20, 21}));
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    ASSERT_TRUE(other.add_required_constraint(1u, std::set<TestGlobalNode>{11, 12, 13}));
+    ASSERT_TRUE(other.add_required_constraint(3u, std::set<TestGlobalNode>{30}));
+
+    ASSERT_TRUE(base.merge(other));
+
+    // Present on both sides: intersected.
+    EXPECT_EQ(base.get_valid_mappings(1u), (std::set<TestGlobalNode>{11, 12}));
+    // Present on one side only: that side's set survives, because an absent target is unconstrained
+    // rather than forbidden.
+    EXPECT_EQ(base.get_valid_mappings(2u), (std::set<TestGlobalNode>{20, 21}));
+    EXPECT_EQ(base.get_valid_mappings(3u), (std::set<TestGlobalNode>{30}));
+}
+
+TEST_F(TopologySolverTest, MergeIntersectsPreferred) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    base.add_preferred_constraint(1u, std::set<TestGlobalNode>{10, 11, 12});
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    other.add_preferred_constraint(1u, std::set<TestGlobalNode>{11, 12, 13});
+    other.add_preferred_constraint(2u, std::set<TestGlobalNode>{20});
+
+    ASSERT_TRUE(base.merge(other));
+
+    EXPECT_EQ(base.get_preferred_mappings(1u), (std::set<TestGlobalNode>{11, 12}));
+    EXPECT_EQ(base.get_preferred_mappings(2u), (std::set<TestGlobalNode>{20}));
+}
+
+TEST_F(TopologySolverTest, MergeUnionsForbiddenPairs) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    ASSERT_TRUE(base.add_forbidden_constraint(1u, TestGlobalNode{10}));
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    ASSERT_TRUE(other.add_forbidden_constraint(1u, TestGlobalNode{11}));
+    ASSERT_TRUE(other.add_forbidden_constraint(2u, TestGlobalNode{20}));
+
+    ASSERT_TRUE(base.merge(other));
+
+    const auto& forbidden = base.get_forbidden_pairs();
+    EXPECT_EQ(forbidden.size(), 3u);
+    EXPECT_TRUE(forbidden.count({1u, TestGlobalNode{10}}) == 1);
+    EXPECT_TRUE(forbidden.count({1u, TestGlobalNode{11}}) == 1);
+    EXPECT_TRUE(forbidden.count({2u, TestGlobalNode{20}}) == 1);
+}
+
+TEST_F(TopologySolverTest, MergeAppendsCardinalityConstraints) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    ASSERT_TRUE(base.add_cardinality_constraint(std::set<TestTargetNode>{1u}, std::set<TestGlobalNode>{10, 11}, 1));
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    ASSERT_TRUE(other.add_cardinality_constraint(std::set<TestTargetNode>{2u}, std::set<TestGlobalNode>{20, 21}, 1));
+
+    ASSERT_TRUE(base.merge(other));
+
+    // Each cardinality constraint is an independent at-least-N requirement, so they accumulate.
+    EXPECT_EQ(base.get_cardinality_constraints().size(), 2u);
+}
+
+TEST_F(TopologySolverTest, MergeAdoptsSameRankGroupsWhenAbsent) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    const std::vector<std::set<TestTargetNode>> target_groups{{1u, 2u}};
+    const std::vector<std::set<TestGlobalNode>> global_groups{{10, 11}, {20, 21}};
+    ASSERT_TRUE(other.set_same_rank_groups_constraint(target_groups, global_groups));
+
+    ASSERT_TRUE(base.merge(other));
+
+    EXPECT_EQ(base.get_same_rank_target_groups(), target_groups);
+    EXPECT_EQ(base.get_same_rank_global_groups(), global_groups);
+}
+
+TEST_F(TopologySolverTest, MergeRejectsConflictingSameRankPartitions) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    ASSERT_TRUE(base.set_same_rank_groups_constraint({{1u, 2u}}, {{10, 11}, {20, 21}}));
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    ASSERT_TRUE(other.set_same_rank_groups_constraint({{1u, 2u}}, {{30, 31}, {40, 41}}));
+
+    // The solver binds the mapping to one partition, so two different partitions have no merged form.
+    EXPECT_FALSE(base.merge(other));
+    // Rejected merges leave the object exactly as it was.
+    EXPECT_EQ(base.get_same_rank_global_groups(), (std::vector<std::set<TestGlobalNode>>{{10, 11}, {20, 21}}));
+}
+
+TEST_F(TopologySolverTest, MergeRejectsUnsatisfiableCombinationAndLeavesObjectUnchanged) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    ASSERT_TRUE(base.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    ASSERT_TRUE(other.add_required_constraint(1u, std::set<TestGlobalNode>{20, 21}));
+
+    // Disjoint required sets leave target 1 with nowhere to go.
+    EXPECT_FALSE(base.merge(other));
+    EXPECT_EQ(base.get_valid_mappings(1u), (std::set<TestGlobalNode>{10, 11}));
+}
+
+TEST_F(TopologySolverTest, MergeCombinesSameRankGroupBudgets) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    base.set_minimize_same_rank_groups_used(false);
+    base.set_max_same_rank_groups_used(4);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    other.set_minimize_same_rank_groups_used(true);
+    other.set_max_same_rank_groups_used(2);
+
+    ASSERT_TRUE(base.merge(other));
+
+    EXPECT_TRUE(base.minimize_same_rank_groups_used());
+    EXPECT_EQ(base.max_same_rank_groups_used(), 2u);
+}
+
+TEST_F(TopologySolverTest, MergeTreatsZeroGroupCapAsNoCap) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    base.set_max_same_rank_groups_used(0);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    other.set_max_same_rank_groups_used(3);
+
+    ASSERT_TRUE(base.merge(other));
+    EXPECT_EQ(base.max_same_rank_groups_used(), 3u);
 }
 
 }  // namespace tt::tt_fabric

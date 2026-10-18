@@ -8,8 +8,6 @@ BEVFormer model parameter preprocessing utilities for TTNN.
 import torch
 import ttnn
 from typing import Optional
-from pathlib import Path
-
 
 # Get default layout and dtype
 DEFAULT_LAYOUT = ttnn.TILE_LAYOUT
@@ -41,6 +39,22 @@ def convert_parameterdict_to_object(param_dict):
                 continue
 
         setattr(params_obj, layer_name, layer_obj)
+
+    return params_obj
+
+
+def _convert_sca_parameters_to_object(parameters):
+    """Convert spatial-cross-attention parameters, keeping the nested level nested.
+
+    ``convert_parameterdict_to_object`` is one level deep, which would flatten the
+    nested attention's layers into bare tensors. The nested attention needs its own
+    namespace so its ``output_proj`` is not confused with the SCA's.
+    """
+    params_obj = convert_parameterdict_to_object(parameters)
+
+    deform_parameters = parameters["deformable_attention"] if "deformable_attention" in parameters else None
+    if deform_parameters is not None:
+        params_obj.deformable_attention = convert_parameterdict_to_object(deform_parameters)
 
     return params_obj
 
@@ -103,32 +117,6 @@ def _process_linear_layer(layer, device, dtype=None, layout=None, weights_mesh_m
     return layer_params
 
 
-def _manage_cache_load(cache_file_name, device):
-    """Attempt to load parameters from cache"""
-    if cache_file_name is None:
-        return None
-
-    cache_path = Path(cache_file_name)
-    if not cache_path.exists():
-        return None
-
-    try:
-        parameters = ttnn.load_parameters(device, cache_path)
-        return parameters
-    except Exception as e:
-        return None
-
-
-def _manage_cache_save(parameters, cache_file_name, device, cache_type=""):
-    """Save parameters to cache if specified"""
-    if cache_file_name is None:
-        return
-
-    cache_path = Path(cache_file_name)
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    ttnn.save_parameters(device, parameters, cache_path)
-
-
 # Local preprocessing functions to avoid import issues
 def preprocess_linear_weight(weight, *, dtype=None, layout=None, weights_mesh_mapper=None, device=None):
     """
@@ -167,7 +155,6 @@ def preprocess_ms_deformable_attention_parameters(
     dtype=None,
     layout=None,
     weights_mesh_mapper=None,
-    cache_file_name: Optional[str] = None,
 ):
     """
     Preprocesses multi-scale deformable attention model parameters from PyTorch to ttnn format.
@@ -178,17 +165,10 @@ def preprocess_ms_deformable_attention_parameters(
         dtype: Target data type for ttnn tensors
         layout: Target layout for ttnn tensors
         weights_mesh_mapper: Optional mesh mapper for distributed weights
-        cache_file_name: Optional cache file name for parameter caching
 
     Returns:
         ParameterDict containing preprocessed ttnn tensors
     """
-
-    # Try to load from cache first
-    cached_params = _manage_cache_load(cache_file_name, device)
-    if cached_params is not None:
-        # Convert cached params to object format for dot notation access
-        return convert_parameterdict_to_object(cached_params)
 
     parameters = {}
 
@@ -204,8 +184,6 @@ def preprocess_ms_deformable_attention_parameters(
     # Convert flat dictionary to object structure for dot notation access
     params_obj = convert_parameterdict_to_object(parameters)
 
-    # Save to cache and return
-    _manage_cache_save(parameters, cache_file_name, device, "MS deformable attention ")
     return params_obj
 
 
@@ -218,7 +196,6 @@ def create_ms_deformable_attention_parameters(
     dtype=None,
     layout=None,
     weights_mesh_mapper=None,
-    cache_file_name: Optional[str] = None,
 ):
     """
     Creates preprocessed parameters for multi-scale deformable attention model.
@@ -231,7 +208,6 @@ def create_ms_deformable_attention_parameters(
         dtype: Target data type for ttnn tensors
         layout: Target layout for ttnn tensors
         weights_mesh_mapper: Optional mesh mapper for distributed weights
-        cache_file_name: Optional cache file name for parameter caching
 
     Returns:
         ParameterDict containing preprocessed ttnn tensors
@@ -242,12 +218,9 @@ def create_ms_deformable_attention_parameters(
         if torch_model_path is not None:
             torch_model = torch.load(torch_model_path, map_location="cpu")
         else:
-            # Create a fresh PyTorch model for parameter extraction
-            from ..pytorch.deformable_attention import PyTorchMultiScaleDeformableAttention
+            from ..reference.ms_deformable_attention import MSDeformableAttention
 
-            torch_model = PyTorchMultiScaleDeformableAttention(config)
-    else:
-        pass
+            torch_model = MSDeformableAttention(config)
     torch_model.eval()
 
     return preprocess_ms_deformable_attention_parameters(
@@ -256,7 +229,6 @@ def create_ms_deformable_attention_parameters(
         dtype=dtype,
         layout=layout,
         weights_mesh_mapper=weights_mesh_mapper,
-        cache_file_name=cache_file_name,
     )
 
 
@@ -267,7 +239,6 @@ def preprocess_spatial_cross_attention_parameters(
     dtype=None,
     layout=None,
     weights_mesh_mapper=None,
-    cache_file_name: Optional[str] = None,
 ):
     """
     Preprocesses spatial cross attention model parameters from PyTorch to ttnn format.
@@ -278,17 +249,10 @@ def preprocess_spatial_cross_attention_parameters(
         dtype: Target data type for ttnn tensors
         layout: Target layout for ttnn tensors
         weights_mesh_mapper: Optional mesh mapper for distributed weights
-        cache_file_name: Optional cache file name for parameter caching
 
     Returns:
         ParameterDict containing preprocessed ttnn tensors
     """
-
-    # Try to load from cache first
-    cached_params = _manage_cache_load(cache_file_name, device)
-    if cached_params is not None:
-        # Convert cached params to object format for dot notation access
-        return convert_parameterdict_to_object(cached_params)
 
     parameters = {}
 
@@ -298,30 +262,23 @@ def preprocess_spatial_cross_attention_parameters(
             torch_model.output_proj, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
         )
 
-    # Extract deformable attention parameters from the nested module
+    # The nested attention keeps its own namespace. Both modules own an
+    # ``output_proj`` and both apply it, so flattening them together drops one of
+    # the two and makes the other run twice.
     if hasattr(torch_model, "deformable_attention"):
         deform_attn = torch_model.deformable_attention
 
-        # Process deformable attention layers
-        deform_layer_names = ["value_proj", "sampling_offsets", "attention_weights"]
-        for layer_name in deform_layer_names:
+        deform_parameters = {}
+        for layer_name in ["value_proj", "sampling_offsets", "attention_weights", "output_proj"]:
             if hasattr(deform_attn, layer_name):
                 layer = getattr(deform_attn, layer_name)
-                parameters[layer_name] = _process_linear_layer(
+                deform_parameters[layer_name] = _process_linear_layer(
                     layer, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
                 )
+        parameters["deformable_attention"] = deform_parameters
 
-        # Handle deformable attention output projection (if separate from main output_proj)
-        if hasattr(deform_attn, "output_proj") and not hasattr(torch_model, "output_proj"):
-            parameters["output_proj"] = _process_linear_layer(
-                deform_attn.output_proj, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
-            )
+    params_obj = _convert_sca_parameters_to_object(parameters)
 
-    # Convert flat dictionary to object structure for dot notation access
-    params_obj = convert_parameterdict_to_object(parameters)
-
-    # Save to cache and return
-    _manage_cache_save(parameters, cache_file_name, device, "SCA ")
     return params_obj
 
 
@@ -332,7 +289,6 @@ def preprocess_temporal_self_attention_parameters(
     dtype=None,
     layout=None,
     weights_mesh_mapper=None,
-    cache_file_name: Optional[str] = None,
 ):
     """
     Preprocesses temporal self attention model parameters from PyTorch to ttnn format.
@@ -343,17 +299,10 @@ def preprocess_temporal_self_attention_parameters(
         dtype: Target data type for ttnn tensors
         layout: Target layout for ttnn tensors
         weights_mesh_mapper: Optional mesh mapper for distributed weights
-        cache_file_name: Optional cache file name for parameter caching
 
     Returns:
         ParameterDict containing preprocessed ttnn tensors
     """
-
-    # Try to load from cache first
-    cached_params = _manage_cache_load(cache_file_name, device)
-    if cached_params is not None:
-        # Convert cached params to object format for dot notation access
-        return convert_parameterdict_to_object(cached_params)
 
     parameters = {}
 
@@ -385,8 +334,6 @@ def preprocess_temporal_self_attention_parameters(
     # Convert flat dictionary to object structure for dot notation access
     params_obj = convert_parameterdict_to_object(parameters)
 
-    # Save to cache and return
-    _manage_cache_save(parameters, cache_file_name, device, "TSA ")
     return params_obj
 
 
@@ -398,7 +345,6 @@ def create_spatial_cross_attention_parameters(
     dtype=None,
     layout=None,
     weights_mesh_mapper=None,
-    cache_file_name: Optional[str] = None,
 ):
     """Creates preprocessed parameters for spatial cross attention model."""
 
@@ -418,7 +364,6 @@ def create_spatial_cross_attention_parameters(
         dtype=dtype,
         layout=layout,
         weights_mesh_mapper=weights_mesh_mapper,
-        cache_file_name=cache_file_name,
     )
 
 
@@ -430,7 +375,6 @@ def create_temporal_self_attention_parameters(
     dtype=None,
     layout=None,
     weights_mesh_mapper=None,
-    cache_file_name: Optional[str] = None,
 ):
     """Creates preprocessed parameters for temporal self attention model."""
 
@@ -450,7 +394,6 @@ def create_temporal_self_attention_parameters(
         dtype=dtype,
         layout=layout,
         weights_mesh_mapper=weights_mesh_mapper,
-        cache_file_name=cache_file_name,
     )
 
 
@@ -463,7 +406,8 @@ def preprocess_layer_norm_parameters(layer_norm, *, device, dtype=None, layout=N
     if layout is None:
         layout = DEFAULT_LAYOUT
 
-    layer_params = {}
+    # ttnn.layer_norm defaults to epsilon=1e-12; carry the module's own.
+    layer_params = {"eps": layer_norm.eps}
 
     # Weight (gamma)
     kwargs = _build_ttnn_kwargs(dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper, device=device)
@@ -491,7 +435,6 @@ def preprocess_bevformer_layer_parameters(
     dtype=None,
     layout=None,
     weights_mesh_mapper=None,
-    cache_file_name: Optional[str] = None,
 ):
     """
     Preprocesses BEVFormer layer parameters from PyTorch to ttnn format.
@@ -502,16 +445,10 @@ def preprocess_bevformer_layer_parameters(
         dtype: Target data type for ttnn tensors
         layout: Target layout for ttnn tensors
         weights_mesh_mapper: Optional mesh mapper for distributed weights
-        cache_file_name: Optional cache file name for parameter caching
 
     Returns:
         ParameterDict containing preprocessed ttnn tensors
     """
-
-    # Try to load from cache first
-    cached_params = _manage_cache_load(cache_file_name, device)
-    if cached_params is not None:
-        return convert_parameterdict_to_object(cached_params)
 
     parameters = {}
 
@@ -573,8 +510,6 @@ def preprocess_bevformer_layer_parameters(
     # Convert to object structure
     params_obj = convert_parameterdict_to_object(parameters)
 
-    # Save to cache and return
-    _manage_cache_save(parameters, cache_file_name, device, "BEVFormer layer ")
     return params_obj
 
 
@@ -585,7 +520,6 @@ def preprocess_bevformer_encoder_parameters(
     dtype=None,
     layout=None,
     weights_mesh_mapper=None,
-    cache_file_name: Optional[str] = None,
 ):
     """
     Preprocesses BEVFormer encoder parameters from PyTorch to ttnn format.
@@ -596,16 +530,10 @@ def preprocess_bevformer_encoder_parameters(
         dtype: Target data type for ttnn tensors
         layout: Target layout for ttnn tensors
         weights_mesh_mapper: Optional mesh mapper for distributed weights
-        cache_file_name: Optional cache file name for parameter caching
 
     Returns:
         ParameterDict containing preprocessed ttnn tensors
     """
-
-    # Try to load from cache first
-    cached_params = _manage_cache_load(cache_file_name, device)
-    if cached_params is not None:
-        return convert_parameterdict_to_object(cached_params)
 
     print("Preprocessing BEVFormer encoder parameters...")
     parameters = {}
@@ -613,21 +541,17 @@ def preprocess_bevformer_encoder_parameters(
     # Process each layer
     if hasattr(torch_encoder, "layers") and torch_encoder.layers is not None:
         for layer_idx, layer in enumerate(torch_encoder.layers):
-            layer_cache_name = f"{cache_file_name}_layer_{layer_idx}" if cache_file_name else None
             parameters[f"layer_{layer_idx}"] = preprocess_bevformer_layer_parameters(
                 layer,
                 device=device,
                 dtype=dtype,
                 layout=layout,
                 weights_mesh_mapper=weights_mesh_mapper,
-                cache_file_name=layer_cache_name,
             )
 
     # Convert to object structure
     params_obj = convert_parameterdict_to_object(parameters)
 
-    # Save to cache and return
-    _manage_cache_save(parameters, cache_file_name, device, "BEVFormer encoder ")
     print("BEVFormer encoder parameter preprocessing completed.")
     return params_obj
 
@@ -640,7 +564,6 @@ def create_bevformer_encoder_parameters(
     dtype=None,
     layout=None,
     weights_mesh_mapper=None,
-    cache_file_name: Optional[str] = None,
 ):
     """
     Creates preprocessed parameters for BEVFormer encoder model.
@@ -652,7 +575,6 @@ def create_bevformer_encoder_parameters(
         dtype: Target data type for ttnn tensors
         layout: Target layout for ttnn tensors
         weights_mesh_mapper: Optional mesh mapper for distributed weights
-        cache_file_name: Optional cache file name for parameter caching
 
     Returns:
         ParameterDict containing preprocessed ttnn tensors
@@ -674,5 +596,4 @@ def create_bevformer_encoder_parameters(
         dtype=dtype,
         layout=layout,
         weights_mesh_mapper=weights_mesh_mapper,
-        cache_file_name=cache_file_name,
     )

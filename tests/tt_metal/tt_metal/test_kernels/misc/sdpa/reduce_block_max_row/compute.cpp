@@ -24,7 +24,7 @@ void kernel_main() {
     // Operand tile geometry: 4 faces for a 32x32 tile, 2 faces for a 16x32 tiny tile.
     constexpr std::uint32_t num_faces = get_compile_time_arg_val(7);
     // 16x32 tiny tile (num_faces=2) is a single face-row (num_faces_r_dim=1); 32x32 (num_faces=4) is 2x2.
-    const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(num_faces);
+    const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces);
 
     // Init compute
     compute_kernel_hw_startup<SrcOrder::Reverse>(qk_im_cb, qk_im_cb, qk_im_cb);
@@ -59,7 +59,7 @@ void kernel_main() {
         reduce_block_max_row_uninit(qk_im_cb);
 
         if (do_eltwise) {
-            copy_tile_to_dst_init_short(prev_max_cb);
+            copy_init(prev_max_cb);
             copy_tile(prev_max_cb, i, prev_max_dst_idx);
             binary_max_tile_init();
             binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx);

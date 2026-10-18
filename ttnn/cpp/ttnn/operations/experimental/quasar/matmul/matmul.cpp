@@ -146,8 +146,9 @@ static bool get_post_process_bias(
         if (bias_padded_shape[-2] != tile_height) {
             post_process_bias = true;
         } else if (program_config.has_value()) {
-            // Check if the provided program config is MatmulMultiCoreProgramConfig
-            post_process_bias = std::holds_alternative<MatmulMultiCoreProgramConfig>(program_config.value());
+            // MatmulMultiCoreProgramConfig and MatmulUnifiedProgramConfig do not fuse bias
+            post_process_bias = std::holds_alternative<MatmulMultiCoreProgramConfig>(program_config.value()) ||
+                                std::holds_alternative<MatmulUnifiedProgramConfig>(program_config.value());
         } else if (!user_core_coord.has_value()) {
             // When program_config and user_core_coord are not provided, config is auto-generated
 
@@ -479,6 +480,12 @@ void addmm_validate(
     const Tensor& input_tensor, const Tensor& mat1_tensor, const Tensor& mat2_tensor, float alpha, float beta) {
     TT_FATAL(alpha != 0.0, "alpha parameter cannot be 0");
 
+    // BFLOAT8_B (block-float) is valid on WH/BH but has NO Quasar DataFormat encoding: the Quasar enum reuses
+    // codes 2/3/11 for MxInt8/4/2 (not Bfp8/4/2) and has no Bfp8_b, so the block-float last-K-tile padding in
+    // pad_tile.hpp cannot be applied there. Reject BFLOAT8_B on Quasar ONLY (otherwise the last K-tile is
+    // silently mis-padded); keep it accepted on WH/BH.
+    const bool is_quasar = mat1_tensor.device()->arch() == tt::ARCH::QUASAR;
+
     if (beta != 0.0) {
         const auto& input_shape = input_tensor.logical_shape();
         const auto& mat1_shape = mat1_tensor.logical_shape();
@@ -490,19 +497,23 @@ void addmm_validate(
 
         auto idtype = input_tensor.dtype();
         TT_FATAL(
-            idtype == DataType::BFLOAT16 || idtype == DataType::FLOAT32 || idtype == DataType::BFLOAT8_B,
-            "only ttnn.bfloat16, ttnn.float32 and ttnn.bfloat8_b types are supported for input_tensor");
+            idtype == DataType::BFLOAT16 || idtype == DataType::FLOAT32 ||
+                (!is_quasar && idtype == DataType::BFLOAT8_B),
+            "only ttnn.bfloat16, ttnn.float32 (and ttnn.bfloat8_b on WH/BH -- not Quasar) are supported for "
+            "input_tensor");
     }
 
     auto m1type = mat1_tensor.dtype();
     TT_FATAL(
-        m1type == DataType::BFLOAT16 || m1type == DataType::FLOAT32 || m1type == DataType::BFLOAT8_B,
-        "only ttnn.bfloat16, ttnn.float32 and ttnn.bfloat8_b types are supported for mat1_tensor");
+        m1type == DataType::BFLOAT16 || m1type == DataType::FLOAT32 || (!is_quasar && m1type == DataType::BFLOAT8_B),
+        "only ttnn.bfloat16, ttnn.float32 (and ttnn.bfloat8_b on WH/BH -- not Quasar) are supported for "
+        "mat1_tensor");
 
     auto m2type = mat2_tensor.dtype();
     TT_FATAL(
-        m2type == DataType::BFLOAT16 || m2type == DataType::FLOAT32 || m2type == DataType::BFLOAT8_B,
-        "only ttnn.bfloat16, ttnn.float32 and ttnn.bfloat8_b types are supported for mat2_tensor");
+        m2type == DataType::BFLOAT16 || m2type == DataType::FLOAT32 || (!is_quasar && m2type == DataType::BFLOAT8_B),
+        "only ttnn.bfloat16, ttnn.float32 (and ttnn.bfloat8_b on WH/BH -- not Quasar) are supported for "
+        "mat2_tensor");
 }
 
 Tensor addmm(

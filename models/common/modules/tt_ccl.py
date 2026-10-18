@@ -40,21 +40,6 @@ def clear_tt_ccl_cache():
     _tt_ccl_cache.clear()
 
 
-def _get_local_num_devices(mesh_device: Optional[ttnn.MeshDevice]) -> int:
-    """Return the number of devices visible to the current host process."""
-    if mesh_device is None:
-        raise ValueError("mesh_device is required to determine CCL link counts")
-
-    try:
-        local_device_ids = mesh_device.get_device_ids()
-    except Exception as exc:
-        raise ValueError("CCL link detection requires at least one host-local device") from exc
-    if not local_device_ids:
-        raise ValueError("CCL link detection requires at least one host-local device")
-
-    return len(local_device_ids)
-
-
 # =============================================================================
 # TT_CCL class
 # =============================================================================
@@ -135,52 +120,16 @@ class TT_CCL:
 def default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
     """Auto-detect CCL topology based on cluster type and device count."""
     num_devices = mesh_device.get_num_devices()
-    if num_devices == 8 and ttnn.cluster.get_cluster_type() in [
-        ttnn.cluster.ClusterType.T3K,
-        ttnn.cluster.ClusterType.GALAXY,
-    ]:
+    cluster_type = ttnn.cluster.get_cluster_type()
+    if (num_devices == 8 and cluster_type == ttnn.cluster.ClusterType.T3K) or (
+        num_devices == 4 and cluster_type == ttnn.cluster.ClusterType.P150_X4
+    ):
         # NOTE: we always want to do ring if it is available
         return ttnn.Topology.Ring
     elif num_devices > 1:
         # NOTE: this should be a fallback when the ring is not available
         return ttnn.Topology.Linear
     return None
-
-
-# =============================================================================
-# Device name / link count helpers (copied from TTTv1 ccl.py + model_config.py
-# to avoid importing from tt_transformers)
-# =============================================================================
-
-
-def _determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
-    """Determine device name for CCL based on the host-local device count."""
-    num_devices = _get_local_num_devices(mesh_device)
-    arch_name = ttnn.get_arch_name()
-    dram_grid_size = mesh_device.dram_grid_size()
-
-    if "blackhole" in arch_name:
-        dict_device_names = {
-            1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",
-            2: "P300",
-            4: "P150x4",
-            8: "P150x8",
-            32: "BHGLX",
-        }
-    elif "wormhole_b0" in arch_name:
-        dict_device_names = {
-            1: "N150",
-            2: "N300",
-            4: "N150x4",
-            8: "T3K",
-            32: "TG",
-        }
-    else:
-        raise ValueError(f"Unsupported architecture: {arch_name}")
-
-    if num_devices in dict_device_names:
-        return dict_device_names[num_devices]
-    raise ValueError(f"Unsupported number of local devices: {num_devices} for {arch_name}")
 
 
 def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None) -> int:
@@ -195,25 +144,10 @@ def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None)
             - None: minimum across all axes.
 
     Returns:
-        int: The number of available links.
+        int: The number of available links. 1 for a single-device mesh.
     """
-    device_name = _determine_device_name(mesh_device)
-    link_dict = {
-        "P100": (0, 0),
-        "P150": (0, 0),
-        "N150": (0, 0),
-        "N300": (1, 1),
-        "T3K": (1, 1),
-        "P150x4": (2, 2),
-        "P150x8": (2, 2),
-        "P300": (2, 2),
-        "BHGLX": (2, 2),
-        "TG": (4, 4),
-        "N150x4": (1, 1),
-    }
-    device_links = link_dict[device_name]
-    if cluster_axis is None:
-        return min(device_links)
-    if cluster_axis in (0, 1):
-        return device_links[cluster_axis]
-    raise ValueError(f"Unsupported cluster_axis: {cluster_axis}")
+    if cluster_axis not in (None, 0, 1):
+        raise ValueError(f"Unsupported cluster_axis: {cluster_axis}")
+    if mesh_device.get_num_devices() == 1:
+        return 1
+    return ttnn.get_num_links(mesh_device, cluster_axis)

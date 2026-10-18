@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Reader: constants (eye, tril) once, initial state S once (from s0 or zeros),
+// Reader: constants (eye, tril) once, initial state S once (from s0, a required input),
 // then per-chunk q,k,v,g,beta. Also generates the reduce scaler tile. Device 2.0 API.
 
 #include "api/dataflow/dataflow_api.h"
@@ -17,9 +17,8 @@ void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
     constexpr uint32_t Kt = get_compile_time_arg_val(1);
     constexpr uint32_t Vt = get_compile_time_arg_val(2);
-    constexpr uint32_t has_s0 = get_compile_time_arg_val(3);
 
-    constexpr auto q_a = TensorAccessorArgs<4>();
+    constexpr auto q_a = TensorAccessorArgs<3>();
     constexpr auto k_a = TensorAccessorArgs<q_a.next_compile_time_args_offset()>();
     constexpr auto v_a = TensorAccessorArgs<k_a.next_compile_time_args_offset()>();
     constexpr auto g_a = TensorAccessorArgs<v_a.next_compile_time_args_offset()>();
@@ -79,7 +78,6 @@ void kernel_main() {
     read_into(ones_acc, cb_ones, 0, cc, tb_f);
 
     // initial state S (once) — host always provides it (zeros if none).
-    (void)has_s0;
     read_into(s0_acc, cb_S, h * kv, kv, tb_f);
 
     for (uint32_t c = 0; c < NC; c++) {

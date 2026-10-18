@@ -24,6 +24,9 @@ struct RingSDPAFusedOpSignaler {
     uint32_t forward_writes_expected = 0;
     uint32_t backward_writes_expected = 0;
 
+    // Set by the program factory when the all-gather relays the diametric slice split across both links
+    bool split_forwarding_enabled = false;
+
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;
 
@@ -33,7 +36,7 @@ struct RingSDPAFusedOpSignaler {
     void init_fused_op(
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
-        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
+        const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal,
         ttnn::experimental::ccl::FusedOpSignalerMode fused_op_signaler_mode =
             ttnn::experimental::ccl::FusedOpSignalerMode::MULTI);
 

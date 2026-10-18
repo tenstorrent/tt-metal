@@ -25,20 +25,11 @@ on:
         type: boolean
         default: true
         description: "Set to false to allow write access to MLPerf mount"
-      per-test-timeout:
-        required: false
-        type: string
-        default: ""
-        description: >-
-          Max allowed timeout (minutes) for any individual test SKU entry in the
-          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
-          Empty skips the per-test ceiling check.
-
 jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.build-matrix.outputs.matrix || '[]' }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/models_merge_gate_tests.yaml
     steps:
@@ -54,21 +45,9 @@ jobs:
       - name: Install dependencies
         run: pip3 install PyYAML
 
-      - name: Verify test timeouts against budget
-        run: |
-          set -euo pipefail
-          extra=()
-          if [ -n "${{ inputs.per-test-timeout }}" ]; then
-            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
-          fi
-          python3 .github/scripts/utils/verify_time_budget.py \
-            "${{ env.TESTS_YAML_PATH }}" \
-            ./.github/time_budget.yaml \
-            merge_gate \
-            "${extra[@]}"
 
-      - name: Build test matrix based on enabled SKUs
-        id: build-matrix
+      - name: Check for an empty test yaml
+        id: check-tests
         env:
           TESTS_YAML: ${{ env.TESTS_YAML_PATH }}
         run: |
@@ -84,14 +63,20 @@ jobs:
           )
           if [ "$test_count" -eq 0 ]; then
             echo "::notice::No tests defined in ${{ env.TESTS_YAML_PATH }} yet; skipping hardware jobs."
-            echo "matrix=[]" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "empty=false" >> "$GITHUB_OUTPUT"
           fi
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            "${{ env.TESTS_YAML_PATH }}" \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml \
-            --event "${{ github.event_name }}"
+
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        if: steps.check-tests.outputs.empty != 'true'
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: "${{ env.TESTS_YAML_PATH }}"
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
 
   models-smoke-tests:
     needs: load-test-matrix

@@ -87,11 +87,54 @@ def test_publish_rejects_unknown_pipeline(tmp_path, monkeypatch):
     sub.mkdir()
     _write_csv(sub / "perf_a.csv", pd.DataFrame({"marker": ["INIT"], "tile_cnt": [4]}))
     _set_provenance(monkeypatch)
-    monkeypatch.setenv("PIPELINE", "staging")  # not PR / nightly
+    monkeypatch.setenv("PIPELINE", "staging")  # not a pipeline the warehouse knows
     with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
         ValueError, match="PIPELINE"
     ):
         publish(str(tmp_path), str(tmp_path / "x.parquet"), "wormhole")
+
+
+@pytest.mark.parametrize("pipeline", ["pr", "nightly", "baseline", "merge_baseline"])
+def test_publish_accepts_every_allowed_pipeline(tmp_path, monkeypatch, pipeline):
+    sub = tmp_path / "perf_a"
+    sub.mkdir()
+    _write_csv(
+        sub / "perf_a.csv",
+        pd.DataFrame({"marker": ["INIT"], "tile_cnt": [4], "mean(L1_TO_L1)": [900.0]}),
+    )
+    _set_provenance(monkeypatch)
+    monkeypatch.setenv("PIPELINE", pipeline)
+
+    out = tmp_path / "run.parquet"
+    publish(str(tmp_path), str(out), "wormhole")
+
+    assert set(pq.read_table(out).to_pandas()["pipeline"]) == {pipeline}
+
+
+def test_publish_quasar_uses_quasar_schema(tmp_path, monkeypatch):
+    sub = tmp_path / "perf_unpack_tilize_quasar"
+    sub.mkdir()
+    _write_csv(
+        sub / "perf_unpack_tilize_quasar.csv",
+        pd.DataFrame(
+            {
+                "marker": ["INIT"],
+                "face_c_dim": [16],
+                "unpacker_engine_sel": ["UnpackerEngine.UnpA"],
+                "tile_cnt": [8],
+            }
+        ),
+    )
+    _set_provenance(monkeypatch)
+
+    out = tmp_path / "run.parquet"
+    diag = publish(str(tmp_path), str(out), "quasar")
+
+    assert diag["unknown_columns"] == {}
+    df = pq.read_table(out).to_pandas()
+    assert set(df["arch"]) == {"quasar"}
+    assert list(df["face_c_dim"].dropna()) == [16]
+    assert "face_c_dim" in pq.read_table(out).schema.names
 
 
 def test_main_rejects_bad_arch(tmp_path, monkeypatch):

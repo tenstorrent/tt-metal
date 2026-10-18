@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
@@ -22,6 +23,7 @@ from helpers.test_variant_parameters import (
             DataFormat.Float16,
             DataFormat.Float32,
             DataFormat.Bfp8_b,
+            DataFormat.Fp8_e4m3,
         ]
     ),
     rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
@@ -33,6 +35,14 @@ def test_perf_unpack_tilize_float(
     rt_dim,
     ct_dim,
 ):
+    if (
+        formats.input_format == DataFormat.Fp8_e4m3
+        or formats.output_format == DataFormat.Fp8_e4m3
+    ) and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "Unpack Tilize does not support Fp8_e4m3 format on non-BLACKHOLE architectures"
+        )
+
     if formats.input_format == DataFormat.Bfp8_b:
         pytest.skip("Bfp8_b input not supported for unpack_tilize")
 

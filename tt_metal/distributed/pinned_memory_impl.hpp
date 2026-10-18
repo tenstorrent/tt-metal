@@ -22,6 +22,7 @@ class SysmemBuffer;
 namespace tt::tt_metal {
 
 class IDevice;
+class MetalEnvImpl;
 using ChipId = int;
 
 namespace experimental {
@@ -36,13 +37,19 @@ class PinnedMemoryImpl {
 public:
     /**
      * @brief Construct PinnedMemory implementation from devices with existing host memory
+     * @param metal_env Env owning the cluster and HAL these devices belong to.
      * @param devices Vector of devices to map buffers for
      * @param host_buffer Existing host memory to map (must not be null)
      * @param buffer_size Size of buffer to map
      * @param map_to_noc Whether to map the buffer to the NOC
      */
     PinnedMemoryImpl(
-        const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc = false);
+        MetalEnvImpl& metal_env,
+        const std::vector<IDevice*>& devices,
+        void* host_buffer,
+        size_t buffer_size,
+        bool map_to_noc = false,
+        PinnedMemoryDeviceAccess access = PinnedMemoryDeviceAccess::ReadWrite);
 
     ~PinnedMemoryImpl();
 
@@ -70,6 +77,7 @@ public:
 
     // Utility methods
     size_t get_buffer_size() const { return buffer_size_; }
+    PinnedMemoryDeviceAccess get_device_access() const { return device_access_; }
     std::vector<ChipId> get_device_ids() const;
     bool has_device(ChipId device_id) const;
     bool usable_from_noc(ChipId device_id) const;
@@ -85,10 +93,17 @@ private:
     void drain_barrier_events();
 
     void initialize_from_devices(
-        const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc);
+        const std::vector<IDevice*>& devices,
+        void* host_buffer,
+        size_t buffer_size,
+        bool map_to_noc,
+        PinnedMemoryDeviceAccess access);
 
+    // Pointer rather than reference so the move assignment operator below stays viable.
+    MetalEnvImpl* metal_env_ = nullptr;
     size_t buffer_size_;
     bool map_to_noc_;
+    PinnedMemoryDeviceAccess device_access_ = PinnedMemoryDeviceAccess::ReadWrite;
     bool use_64bit_address_space_ = false;
     // Offset from the aligned mapped base to the actual host buffer start
     size_t host_offset_ = 0;

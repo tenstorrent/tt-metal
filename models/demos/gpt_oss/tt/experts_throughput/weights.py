@@ -1040,7 +1040,14 @@ def create_fused_moe_gpt_config(
     )
 
     # --- Pre-allocate dispatch output tensors ---
-    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    # The metadata shard must land on a core the L1 allocator owns, so the coordinate has to
+    # come from the compute grid rather than being fixed: on Galaxy the grid is 7x10 when the
+    # dispatch cores take the last column and 8x9 when they take the last row, and a fixed
+    # (6, 9) is the bottom-right compute core in the first case but a dispatch core in the
+    # second. Bottom-right also keeps the shard away from the DRAM-bank cores that moe_gpt
+    # runs its matmuls on, which is where its tilize cores read this shard from.
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    dispatch_drain_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
 
     # Sparse buffer: [ring_devices, total_tokens, K] → each device gets [1, total_tokens, K]
     tt_dispatch_sparse = ttnn.from_torch(
@@ -1080,7 +1087,6 @@ def create_fused_moe_gpt_config(
     )
 
     # --- Global semaphores ---
-    compute_grid = mesh_device.compute_with_storage_grid_size()
     all_worker_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
     )

@@ -8,7 +8,6 @@
 #include <cstring>
 #include <functional>
 #include <ostream>
-#include <string>
 #include <utility>
 #include <vector>
 #include <compare>
@@ -58,6 +57,9 @@ public:
 private:
     uint16_t from_float(float val);
 };
+
+// FP32 → BF16 bits with round-to-nearest-even; NaN maps to the canonical quiet NaN (0x7FC0).
+uint16_t fp32_to_bf16_bits_round_to_nearest_even(float val);
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16);
 

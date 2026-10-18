@@ -58,6 +58,9 @@ Tensor sdpa(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<Tensor>& cu_window_seqlens = std::nullopt,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt);
+    uint32_t windowed_q_token_offset = 0,
+    const std::optional<Tensor>& windowed_q_token_offset_tensor = std::nullopt,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
+    bool output_concat_heads = false);
 
 }  // namespace ttnn::prim

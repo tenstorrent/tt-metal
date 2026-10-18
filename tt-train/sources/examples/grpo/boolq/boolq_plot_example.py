@@ -3,15 +3,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generic CSV metric plotter.
+"""Generic CSV metric plotter for the ``grpo_metrics.csv`` written by the
+built-in ``GRPOMonitor``. See ``tt-train/docs/GRPO_TRAINER.md`` for the
+full column list; the base columns are ``step``, ``reward_mean``,
+``reward_std``, ``mean_completion_len`` / ``min_completion_len`` /
+``max_completion_len``, ``lr``, ``step_time_s``, ``generation_time_s``,
+plus one ``<CallbackClassName>_time_s`` column per registered callback.
 
 Usage:
-    plot.py <csv_file> <metric> [<metric2> ...] [--x <x_col>] [--window <n>] [--out <output_png>]
+    boolq_plot_example.py <csv_file> <metric> [<metric2> ...] [--x <x_col>] [--window <n>] [--out <output_png>]
 
 Examples:
-    plot.py metrics.csv reward_mean
-    plot.py metrics.csv reward_mean reward_std
-    plot.py metrics.csv reward_mean --x batch --window 5 --out my_plot.png
+    boolq_plot_example.py grpo_metrics.csv reward_mean
+    boolq_plot_example.py grpo_metrics.csv reward_mean reward_std
+    boolq_plot_example.py grpo_metrics.csv reward_mean --window 5 --out my_plot.png
 """
 import argparse
 import os

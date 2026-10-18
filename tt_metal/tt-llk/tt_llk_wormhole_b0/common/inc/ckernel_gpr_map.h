@@ -40,7 +40,7 @@ struct p_gpr_unpack
     constexpr static std::uint32_t TILE_SIZE_A             = 36; // Holds tile size for unpacker 0
     constexpr static std::uint32_t TILE_SIZE_B             = 37; // Holds tile size for unpacker 1
     constexpr static std::uint32_t KT_DIM                  = 38; // Holds matmul kt_dim
-    constexpr static std::uint32_t FACE_DIM_16x16          = 40; // Holds face dimension (16x16)
+    // Slot 40 is free.
     constexpr static std::uint32_t FACE_DIM_8x16           = 41; // Holds face dimension (8x16)
     constexpr static std::uint32_t FACE_DIM_4x16           = 42; // Holds face dimension (4x16)
     constexpr static std::uint32_t FACE_DIM_2x16           = 43; // Holds face dimension (2x16)

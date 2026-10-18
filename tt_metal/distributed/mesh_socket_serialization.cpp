@@ -147,12 +147,14 @@ std::vector<uint8_t> serialize_to_bytes(const SocketPeerDescriptor& socket_peer_
         *socket_config.sender_mesh_id.value(),
         *socket_config.receiver_mesh_id.value());
     // Build the SocketPeerDescriptor FlatBuffer (root object)
+    auto local_chip_ids_fb = builder.CreateVector(socket_peer_desc.local_chip_ids);
     auto socket_peer_desc_fb = distributed::flatbuffer::CreateSocketPeerDescriptor(
         builder,
         socket_config_fb,
         socket_peer_desc.config_buffer_address,
         socket_peer_desc.data_buffer_address,
-        *(socket_peer_desc.exchange_tag));
+        *(socket_peer_desc.exchange_tag),
+        local_chip_ids_fb);
 
     builder.Finish(socket_peer_desc_fb);
     // Extract the FlatBuffer data as a vector of bytes
@@ -183,6 +185,10 @@ SocketPeerDescriptor deserialize_from_bytes(const std::vector<uint8_t>& data) {
     socket_peer_desc.config_buffer_address = socket_peer_desc_fb->config_buffer_address();
     socket_peer_desc.data_buffer_address = socket_peer_desc_fb->data_buffer_address();
     socket_peer_desc.exchange_tag = multihost::Tag{static_cast<int>(socket_peer_desc_fb->exchange_tag())};
+    // Optional (appended field): absent from a peer that predates it, leaving the vector empty.
+    if (const auto* chip_ids_fb = socket_peer_desc_fb->local_chip_ids()) {
+        socket_peer_desc.local_chip_ids.assign(chip_ids_fb->begin(), chip_ids_fb->end());
+    }
     return socket_peer_desc;
 }
 

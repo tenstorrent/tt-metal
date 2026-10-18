@@ -82,6 +82,9 @@ def build_v4_moe(
         experts_per_chip=experts_per_chip,
         num_routed_experts=n_experts,
         num_experts_per_tok=cfg.num_experts_per_tok,
+        # main defaults Blackhole routed-expert weights to ND-sharded DRAM; keep the interleaved placement this prefill was
+        # validated with (DRAM headroom at 1M, the measured TTFT table) until an A/B says otherwise
+        routed_expert_weights_dram_nd_sharded=False,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,

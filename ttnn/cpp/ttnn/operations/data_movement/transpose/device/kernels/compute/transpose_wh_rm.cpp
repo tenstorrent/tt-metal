@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+// A Metal 2.0 port of this kernel's non-sharded path exists alongside it as
+// transpose_wh_rm_metal2.cpp. Ops still on the legacy host API bind this copy (the sharded
+// path below is compiled only from here); ops on Metal 2.0 bind the fork. Keep the two in
+// sync when changing the shared compute logic.
+
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -135,7 +140,8 @@ void kernel_main() {
     DataflowBuffer dfb_tilize_buf(cb_tilize);
     DataflowBuffer dfb_out(cb_out_idx);
 
-    unary_op_init_common(cb_in, cb_out_idx);
+    compute_kernel_hw_startup(cb_in, cb_out_idx);
+    copy_init(cb_in);
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         // Tilize input (Ht rows × Wt tiles). Fp32Mode::Lossless keeps the full

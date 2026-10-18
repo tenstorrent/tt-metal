@@ -60,6 +60,7 @@ void loop_and_wait_with_timeout(
     const OnTimeout& on_timeout,
     std::chrono::duration<float> timeout_duration,
     const GetProgress& get_progress,
+    ContextId context_id,
     std::atomic<bool>* exit_condition = nullptr) {
     if (timeout_duration.count() > 0.0f) {
         auto last_progress_time = std::chrono::high_resolution_clock::now();
@@ -68,7 +69,7 @@ void loop_and_wait_with_timeout(
         // interval. Only long running operations will read progress value updates.
         auto last_progress_update_time = std::chrono::high_resolution_clock::now();
         auto progress_update_interval = std::chrono::milliseconds(
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_progress_update_ms());
+            tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_dispatch_progress_update_ms());
 
         while (true) {
             if (exit_condition != nullptr && exit_condition->load(std::memory_order_acquire)) {
@@ -126,7 +127,9 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     cq_to_event_locks(num_hw_cqs),
     prefetcher_cores(num_hw_cqs),
     prefetch_q_dev_ptrs(num_hw_cqs),
-    prefetch_q_dev_fences(num_hw_cqs) {
+    prefetch_q_dev_fences(num_hw_cqs),
+    // The ring starts zeroed, which reads as phase 0, so the first lap writes phase 1.
+    prefetch_q_phases(num_hw_cqs, 1) {
     this->prefetch_q_windows.reserve(num_hw_cqs);
     this->completion_q_windows.reserve(num_hw_cqs);
 
@@ -254,8 +257,17 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         auto prefetcher_virtual = ctx.get_cluster().get_virtual_coordinate_from_logical_coordinates(
             prefetcher_core.chip, CoreCoord(prefetcher_core.x, prefetcher_core.y), core_type);
         this->prefetcher_cores[cq_id] = tt_cxy_pair(prefetcher_core.chip, prefetcher_virtual.x, prefetcher_virtual.y);
-        this->prefetch_q_windows.emplace_back(
-            ctx.get_cluster().get_static_tlb_window(this->prefetcher_cores[cq_id]));
+        // Both dispatch windows are anchored at 0, so the L1 addresses below are also their offsets.
+        // Each is sized to the span it writes; the driver rounds that up to a window it can provide.
+        const tt::umd::CoreCoord prefetcher_translated =
+            ctx.get_cluster()
+                .get_soc_desc(prefetcher_core.chip)
+                .get_coord_at(this->prefetcher_cores[cq_id], tt::CoordSystem::TRANSLATED);
+        this->prefetch_q_windows.emplace_back(ctx.get_cluster().get_driver()->create_io_window(
+            prefetcher_core.chip,
+            prefetcher_translated,
+            /*addr=*/0,
+            {.size = prefetch_q_base + mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes()}));
 
         tt_cxy_pair completion_queue_writer_core =
             ctx.get_dispatch_core_manager().completion_queue_writer_core(this->device_id, channel, cq_id);
@@ -264,20 +276,18 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             CoreCoord(completion_queue_writer_core.x, completion_queue_writer_core.y),
             core_type);
 
-        const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data = ctx.get_cluster()
-                                                                                 .get_tlb_data(tt_cxy_pair(
-                                                                                     completion_queue_writer_core.chip,
-                                                                                     completion_queue_writer_virtual.x,
-                                                                                     completion_queue_writer_virtual.y))
-                                                                                 .value();
-        auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
-
-        this->completion_byte_addrs[cq_id] = completion_q_rd_ptr % completion_tlb_size;
-        this->completion_q_windows.emplace_back(
-            ctx.get_cluster().get_static_tlb_window(tt_cxy_pair(
-                completion_queue_writer_core.chip,
-                completion_queue_writer_virtual.x,
-                completion_queue_writer_virtual.y)));
+        const tt::umd::CoreCoord completion_queue_writer_translated =
+            ctx.get_cluster()
+                .get_soc_desc(completion_queue_writer_core.chip)
+                .get_coord_at(
+                    tt_xy_pair(completion_queue_writer_virtual.x, completion_queue_writer_virtual.y),
+                    tt::CoordSystem::TRANSLATED);
+        this->completion_q_windows.emplace_back(ctx.get_cluster().get_driver()->create_io_window(
+            completion_queue_writer_core.chip,
+            completion_queue_writer_translated,
+            /*addr=*/0,
+            {.size = completion_q_rd_ptr + sizeof(uint32_t)}));
+        this->completion_byte_addrs[cq_id] = completion_q_rd_ptr;
 
         const uint32_t alignment =
             is_dram_backed() ? ctx.hal().get_alignment(HalMemType::DRAM) : ctx.hal().get_alignment(HalMemType::HOST);
@@ -725,12 +735,19 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         };
 
         // Get dispatch progress for timeout detection
-        auto get_dispatch_progress = [&]() -> uint32_t { return get_cq_dispatch_progress(this->device_id, cq_id); };
+        auto get_dispatch_progress = [&]() -> uint32_t {
+            return get_cq_dispatch_progress(this->context_id, this->device_id, cq_id);
+        };
 
         auto timeout_duration = ctx.rtoptions().get_timeout_duration_for_operations();
 
         loop_and_wait_with_timeout(
-            fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration, get_dispatch_progress);
+            fetch_operation_body,
+            fetch_wait_condition,
+            fetch_on_timeout,
+            timeout_duration,
+            get_dispatch_progress,
+            this->context_id);
     };
 
     wait_for_fetch_q_space();
@@ -741,6 +758,9 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         prefetch_q_base + (mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes());
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
+        if (mem_map.prefetch_q_cached()) {
+            this->prefetch_q_phases[cq_id] ^= 1U;
+        }
         wait_for_fetch_q_space();
     }
 }
@@ -758,7 +778,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
 
     // Body of the operation to be timed out
     auto wait_operation_body = [this, cq_id, &write_ptr_and_toggle, &write_ptr, &write_toggle]() {
-        write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
+        write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->context_id, this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
         // Yield to clock the simulator when running on TTSim; no-op on real hardware.
@@ -781,15 +801,16 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
 
     // Get dispatch progress for timeout detection
     auto get_dispatch_progress = [this, cq_id]() -> uint32_t {
-        return get_cq_dispatch_progress(this->device_id, cq_id);
+        return get_cq_dispatch_progress(this->context_id, this->device_id, cq_id);
     };
 
     loop_and_wait_with_timeout(
         wait_operation_body,
         wait_condition,
         on_timeout,
-        tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations(),
+        tt::tt_metal::MetalContext::instance(this->context_id).rtoptions().get_timeout_duration_for_operations(),
         get_dispatch_progress,
+        this->context_id,
         &exit_condition);
 
     return write_ptr_and_toggle;
@@ -869,6 +890,16 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     // prefetcher is MSB of FetchQ entry.
     if (stall_prefetcher) {
         entry_val |= 1u << shift_for_msb;
+    }
+
+    if (dispatch_mem_map.prefetch_q_cached()) {
+        constexpr uint32_t phase_bit = PrefetchConstants::PREFETCH_Q_PHASE_BIT;
+        TT_ASSERT(entry_bytes == 4, "Cached fetch queue entries must be 4 bytes");
+        // The entry holds a uint32_t size shifted down by PREFETCH_Q_LOG_MINSIZE, so it never reaches the phase bit.
+        static_assert(
+            sizeof(command_size_B) * 8 - DispatchSettings::PREFETCH_Q_LOG_MINSIZE <= phase_bit,
+            "FetchQ entry size field would overlap the phase bit");
+        entry_val |= this->prefetch_q_phases[cq_id] << phase_bit;
     }
 
     if (entry_bytes == 2) {

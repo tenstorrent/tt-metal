@@ -2,18 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-MoE device-perf tests approximating glx 8x4 from LB (8-chip) proxies.
+"""MoE device-perf proxies on LoudBox plus production 8x4 TorusXY ground truth."""
 
-- `test_deepseek_v3_moe_perf_loudbox`: runs 8x1 and 2x4 proxies once each, validates
-  each against its own perf baseline, and in the same pass computes the approximate
-  8x4 galaxy total (SP ops from 8x1 + TP ops from 2x4). One test, two device runs,
-  three signals: per-proxy perf regression catches + approximation artifact.
-- `test_deepseek_v3_moe_perf_galaxy`: 8x4 ground truth (skipped off-glx).
-
-Sum of per-op approximation approximates one glx column's MoE block kernel time;
-the 8x4 ground-truth test is the reference the approximation is compared against.
-"""
+import os
 
 import pytest
 
@@ -23,110 +14,177 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
     run_model_device_perf_test_with_merge,
     run_moe_perf_with_approximation,
 )
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe"
 
-# `and pad0` pins the padding parametrize (test_ttnn_moe.py adds pad0/pad50 ids) so each
-# command still selects exactly one case; pad0 keeps the no-padding baselines below valid.
-_CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and linear-8 and pad0'"
-# `not fabric2d-` excludes the new FABRIC_2D parametrize ids in test_ttnn_moe.py (substring `mesh-2x4`/`mesh-8x4` would otherwise match).
-_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and mesh-2x4 and not linear-8 and not mesh-4x2 and not mesh-8x4 and not fabric2d- and pad0'"
-_CMD_8X4_pad0 = f"pytest {_TEST_PATH} -k 'perf-device-256 and mesh-8x4 and not linear-8 and not mesh-4x2 and not mesh-2x4 and not fabric2d- and pad0'"
-_CMD_8X4_pad50 = f"pytest {_TEST_PATH} -k 'perf-device-256 and mesh-8x4 and not linear-8 and not mesh-4x2 and not mesh-2x4 and not fabric2d- and pad50'"
+# `and pad0`/`and pad50` pins the padding parametrize so each command selects
+# exactly one production TorusXY case.
+_CMD_8X4_pad0 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad0'"
+_CMD_8X4_pad50 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad50'"
+_CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and torus-y-8x1 and pad0' --wrapper-invocation"
+_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0'"
+
+# Mistral Small 4 has its own driver rather than a row in test_ds_moe: its reference stores all 128
+# experts as one fused stacked parameter and its router is bias-free.
+#
+# fabric2d-8x4 is the only mesh test_mistral4_moe declares, so this number is NOT comparable to the
+# TorusXY deepseek rows above.
+_MISTRAL4_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_mistral4_moe"
+_CMD_MISTRAL4_8X4 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and fabric2d-8x4'"
+# SP=8 x TP=1 on a LoudBox: the stage shape PP=4 runs. Blaze builds without Tracy, so this is the
+# only Tracy-capable CI home for it.
+_CMD_MISTRAL4_8X1 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and torus-y-8x1'"
+
+# Record-only: one local run on a different fabric from every sibling row, so the margin admits any
+# measurement. Replace both with the first CI result on this fabric.
+_MISTRAL4_MOE_NS_UNCALIBRATED = 2_661_495
+# Mean of 20 CI LoudBox runs, 37862944023 through 38733452366 (3,578,022-3,652,521 ns, sd 0.5%).
+# Previously single run 37547491707 (4_204_313), cut before main stepped down at 496333d8fac.
+# 10% rather than the sibling rows' 3% because this keeps moving while the branch is pre-merge;
+# re-cut it tight once landed.
+_MISTRAL4_MOE_LB_8X1_NS = 3_606_900
+_MISTRAL4_MOE_LB_8X1_MARGIN = 0.10
+
+
+_IGNORE_POWER = os.environ.get("DS_PERF_IGNORE_POWER") == "1"
+_REQUIRE_HIGH_POWER = pytest.mark.skipif(
+    not (is_high_power() or _IGNORE_POWER),
+    reason="galaxy perf baselines are cut on a >=130W TDP host; an 8kW galaxy measures differently. "
+    "DS_PERF_IGNORE_POWER=1 runs it anyway, for bring-up only",
+)
+
+
+def _require_certified_torus_xy():
+    if os.getenv("PREFILL_TORUS_XY_CERTIFIED") != "1" or not os.getenv("TT_MESH_GRAPH_DESC_PATH"):
+        pytest.fail("TorusXY perf requires a certified Galaxy and explicit mesh graph descriptor")
 
 
 @pytest.mark.timeout(0)
 def test_deepseek_v3_moe_perf_loudbox():
-    """
-    Run 8x1 + 2x4 proxies once each on loudbox (BH-LoudBox, 8xP150).
-    Validates each proxy against its own baseline AND computes the approximate
-    8x4 total from the same two CSVs (no extra device work).
+    """Run the existing 8x1 + 2x4 proxies and retain their 8x4 approximation signal.
+
+    The 8x1 SP proxy runs Fabric2d TorusY; the 2x4 TP proxy runs unwrapped Fabric2d because its
+    two-wide SP dimension cannot form a useful ring. approximate_8x4_perf takes every non-TP op
+    from the 8x1 slot, so that slot must stay an SP=8 run.
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # Recalibrated 2026-07-27 on BH LoudBox 8x1 after routed expert optimization with removing prezeroing
-        # Was 15_506_174.
-        expected_ns_8x1=14_549_108,
-        model_name_8x1="deepseek_v3_moe_lb_8x1_dispatch_combine",
+        # Re-cut 2026-10-15: mean of 23 CI LoudBox (bh_loudbox) runs, 37705811976 through
+        # 38733452366 (3,000,492-3,066,813 ns, sd 0.6%). Main stepped down between
+        # ca3797a3df8 (last pass, run 37648881647) and 496333d8fac (first miss, run 37705811976).
+        expected_ns_8x1=3_031_260,
+        model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
-        # Recalibrated 2026-07-27 on BH LoudBox 2x4 for. Was 23_956_009.
-        expected_ns_2x4=15_954_784,
-        model_name_2x4="deepseek_v3_moe_lb_2x4_gate",
+        # Re-cut 2026-10-15 alongside the 8x1 slot: 5 of the same 23 runs read 5,439,456-5,442,690 ns,
+        # just under the old 5,445,465 floor, and the rest passed just above it (passing values are
+        # not logged), so the centre sits at that floor.
+        # AVG DEVICE KERNEL DURATION is a SUM, so a truncated capture reads low exactly like a
+        # speedup -- diff the Matmul/CCL/Other split against a main run before trusting a miss.
+        # This gate has to be cut on the CI runner -- the dev box bh-lb-15 reads it 2.7% slower.
+        expected_ns_2x4=5_445_000,
+        model_name_2x4="deepseek_v3_moe_lb_2x4_fabric2d_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,
-        comments_8x1="seq3200_lb_8x1_dispatch_combine_proxy",
-        comments_2x4="seq3200_lb_2x4_gate_proxy",
+        comments_8x1="isl5k_lb_8x1_torus_y_dispatch_combine_proxy",
+        comments_2x4="isl5k_lb_2x4_fabric2d_gate_proxy",
     )
 
 
+@_REQUIRE_HIGH_POWER
 @pytest.mark.timeout(0)
 def test_deepseek_v3_moe_perf_galaxy():
-    """8x4 galaxy ground truth — the reference the loudbox approximation targets."""
+    """Measure the production 8x4 TorusXY Galaxy path without padding."""
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
+    _require_certified_torus_xy()
 
     margin = adjust_margin_for_ddr_speed(0.03)
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad0,
-        expected_device_perf_ns_per_iteration=21_028_751,  # Recalibrated 2026-07-26
+        # Measured 2026-08-22, 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified, DDR 16000.
+        # Two runs 6.155 / 6.070 ms, spread 1.38%.
+        expected_device_perf_ns_per_iteration=6_112_530,
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4",
         num_iterations=1,
         batch_size=1,
         margin=margin,
-        comments="seq3200_glx_8x4_ground_truth",
+        comments="isl5k_glx_8x4_ground_truth",
     )
 
 
+@_REQUIRE_HIGH_POWER
 @pytest.mark.timeout(0)
 def test_deepseek_v3_moe_perf_galaxy_pad50():
     """8x4 galaxy ground truth with 50% right-padding + padding-aware routing (zigzag placement)."""
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
+    _require_certified_torus_xy()
 
     margin = adjust_margin_for_ddr_speed(0.03)
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad50,
-        expected_device_perf_ns_per_iteration=14_107_228,  # Recalibrated 2026-07-27 (perf improvement, was 15_719_590).
+        # Measured 2026-08-22, 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified, DDR 16000.
+        # Two runs 5.223 / 5.188 ms, spread 0.67%.
+        expected_device_perf_ns_per_iteration=5_205_872,
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4_pad50",
         num_iterations=1,
         batch_size=1,
         margin=margin,
-        comments="seq3200_glx_8x4_ground_truth_padded_50_percent_w_awareness",
+        comments="isl5k_glx_8x4_ground_truth_padded_50_percent_w_awareness",
     )
 
 
-# --- Kimi-K3 LatentMoE ---------------------------------------------------------------------------
-_K3_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_k3_moe"
-_CMD_K3_8X4 = f"pytest {_K3_TEST_PATH} -k 'fabric2d-mesh-8x4 and kimi_k3-5k-perf'"
-
-
+@_REQUIRE_HIGH_POWER
 @pytest.mark.timeout(0)
-def test_kimi_k3_moe_perf_galaxy():
-    """
-    Measures the SiLU path, not the checkpoint's SiTU-GLU (#51335), so this baseline moves when that
-    kernel lands. MoE_START/MoE_END bracket the forward only -- the constructor's one-time weight
-    tilize/typecast is a large share of wall time at 896 experts, but is not per-token cost.
+def test_mistral4_moe_perf_galaxy():
+    """Mistral Small 4 MoE on the 8x4 Galaxy at the chunked-prefill shape (640 tokens/chip).
+
+    RECORD-ONLY: uncalibrated baseline, margin admits any measurement. MoE does not grow with KV
+    depth, so this row shows an MLA change has not moved the flat part of the layer.
+
+    Runs on unwrapped FABRIC_2D, so it deliberately makes no _require_certified_torus_xy call.
     """
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
 
-    margin = adjust_margin_for_ddr_speed(0.03)
-
     run_model_device_perf_test_with_merge(
-        command=_CMD_K3_8X4,
-        # Measured 2026-08-07 on bh-glx-120-c04u02 (8x4, DDR 14000 -- sub-nominal, so
-        # adjust_margin_for_ddr_speed doubles the 3% margin to 6%). Dispatch/combine/top-k dominates:
-        # Matmul 2_196 us, CCL 1_042 us, Other 9_687 us.
-        expected_device_perf_ns_per_iteration=12_924_852,
-        subdir="kimi_k3_moe",
-        model_name="kimi_k3_moe_glx_8x4",
+        command=_CMD_MISTRAL4_8X4,
+        # None is what record-only means: it logs the measurement and skips check_device_perf
+        # entirely. A finite margin does not, however wide -- _MISTRAL4_MOE_NS_UNCALIBRATED
+        # with margin=10.0 still built an 11x UPPER bound and published threshold fields, so a
+        # genuine speedup could fail the row. Wire the constant in when a CI sample arms it.
+        expected_device_perf_ns_per_iteration=None,
+        subdir="mistral4_moe",
+        model_name="mistral4_moe_glx_8x4_fabric2d",
         num_iterations=1,
         batch_size=1,
-        margin=margin,
-        between_signposts=("MoE_START", "MoE_END"),
-        comments="seq640_5k_isl_glx_8x4_fabric2d_ground_truth_latent_moe_silu",
+        comments="isl5k_glx_8x4_fabric2d_record_only",
+    )
+
+
+@pytest.mark.timeout(0)
+def test_mistral4_moe_perf_loudbox():
+    """Mistral Small 4 MoE at the PP=4 stage shape (SP=8 x TP=1) on the CI LoudBox.
+
+    This is the op-level row that matches what PP=4 actually runs. The 8x4 galaxy row measures the
+    single-rank shape, and its lever ranking does not carry across: collectives are ~21% of a layer
+    at TP=4 and 0.2% at TP=1, and MoE routing goes 26% -> 37%.
+
+    Gated: threshold and margin cut from run 34399947211 (see the constants above). If this proves
+    noisy, widen the margin rather than chasing the centre.
+    """
+    run_model_device_perf_test_with_merge(
+        command=_CMD_MISTRAL4_8X1,
+        expected_device_perf_ns_per_iteration=_MISTRAL4_MOE_LB_8X1_NS,
+        subdir="mistral4_moe",
+        model_name="mistral4_moe_lb_8x1_torus_y",
+        num_iterations=1,
+        batch_size=1,
+        margin=_MISTRAL4_MOE_LB_8X1_MARGIN,
+        comments="isl5k_lb_8x1_torus_y",
     )

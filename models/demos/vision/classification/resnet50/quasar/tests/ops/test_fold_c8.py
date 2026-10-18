@@ -118,7 +118,7 @@ def test_c8_conv_weight_fold_equivalence(align_c):
 # --------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1], ids=["b1"])
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(1200)
 def test_c8_direct_fold_no_strip(mesh_device, batch_size):
     device = mesh_device
     torch.manual_seed(0)

@@ -14,6 +14,7 @@
 #include <hostdevcommon/dispatch_telemetry_types.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
@@ -90,10 +91,11 @@ public:
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const override;
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(
         const std::vector<CoreCoord>& logical_cores) const override;
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const override;
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
+    CoreCoord logical_core_from_worker_core(const CoreCoord& virtual_coord) const override;
 
     // Ethernet API
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
@@ -222,12 +224,8 @@ private:
     void initialize_smc_dispatch_telemetry_control();
     void invalidate_smc_dispatch_telemetry_control();
 
-    // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_unsafe();
-    // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_safe();
-
     CoreCoord physical_worker_core_from_logical_core(const CoreCoord& logical_core) const;
+    CoreCoord physical_eth_core_from_logical_core(const CoreCoord& logical_core) const;
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel, NOC noc = NOC::NOC_0) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
@@ -257,11 +255,14 @@ private:
 
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
-    std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
     // Cached assignment is NOC-specific (DRAM endpoints differ per NOC) and compute-grid-specific
-    // (dispatch axis / harvesting change logical worker bounds).
-    std::optional<std::uint8_t> optimal_dram_bank_to_logical_worker_assignment_noc_;
-    std::optional<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_grid_size_;
+    // (dispatch axis / harvesting change logical worker bounds). Mutable so the const getter can fill
+    // the cache. The mutex covers every read and write: callers may invoke the getter concurrently
+    // through a const Device&.
+    mutable std::mutex optimal_dram_bank_to_logical_worker_assignment_mutex_;
+    mutable std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
+    mutable std::optional<std::uint8_t> optimal_dram_bank_to_logical_worker_assignment_noc_;
+    mutable std::optional<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_grid_size_;
 
     std::vector<int32_t> dram_bank_offset_map_;
     std::vector<int32_t> l1_bank_offset_map_;
@@ -285,6 +286,9 @@ private:
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(
         IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc);
+
+    friend experimental::Device::CoreAtNocHops experimental::Device::get_closest_worker_to_eth_core(
+        const IDevice& device, const CoreCoord& logical_eth_core, NOC noc);
 
     friend class experimental::DispatchContext;
 };

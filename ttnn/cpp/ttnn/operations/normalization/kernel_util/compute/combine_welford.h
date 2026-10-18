@@ -15,7 +15,6 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/reg_api.h"
@@ -84,7 +83,7 @@ inline void combine_welford_partials(
         const float n_b_norm = static_cast<float>(n_b) / (n_a + n_b);
 
         // Copy x_b to dst1
-        copy_tile_to_dst_init_short(dfb_partials.get_id());
+        copy_init(dfb_partials.get_id());
         copy_tile(dfb_partials.get_id(), mean_dfb_idx, tmp_dst1);
 
         // Compute delta = x_b - x_a, store in dst0
@@ -116,7 +115,7 @@ inline void combine_welford_partials(
         add_binary_tile(m2_acc_dst, tmp_dst0, m2_acc_dst);
 
         // Copy var_b into dst0
-        copy_tile_to_dst_init_short(dfb_partials.get_id());
+        copy_init(dfb_partials.get_id());
         copy_tile(dfb_partials.get_id(), var_dfb_idx, tmp_dst0);
 
         // Multiply var_b by n_b to get M2_b, store in dst0

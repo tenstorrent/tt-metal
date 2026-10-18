@@ -6,7 +6,12 @@ from itertools import product
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import (
+    ChipArchitecture,
+    get_chip_architecture,
+    is_4row_arch,
+)
+from helpers.constraints import get_valid_math_fidelities
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ReduceGapoolGolden,
@@ -16,7 +21,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -24,24 +28,28 @@ from helpers.llk_params import (
     ReducePool,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import PerfConfig
+from helpers.param_config import (
+    input_output_formats,
+    parametrize,
+    quasar_mx_smoke,
+    runtime,
+    select_perf_tile_sizes,
+)
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
+    generate_input_dim,
 )
 from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
@@ -54,12 +62,6 @@ mathop_mapping = {
     ReduceDimension.Scalar: MathOperation.ReduceScalar,
 }
 
-MATH_FIDELITY_MODES = [
-    MathFidelity.LoFi,
-    MathFidelity.HiFi2,
-    MathFidelity.HiFi3,
-    MathFidelity.HiFi4,
-]
 POOL_TYPES = [ReducePool.Max, ReducePool.Sum, ReducePool.Average]
 
 
@@ -67,12 +69,8 @@ REDUCE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
-)
+) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
 
 def reduce_dest_sync_modes(*, is_perf=False):
@@ -87,19 +85,26 @@ def reduce_dest_acc_modes(*, is_perf=False):
     )
 
 
-def reduce_implied_math_formats(formats, *, is_perf=False):
-    if is_perf:
-        return [ImpliedMathFormat.Yes]
-    if formats.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
-    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+def reduce_tile_dimensions(formats, *, is_perf=False):
+    functional_tile_sizes = [
+        td
+        for td in SUPPORTED_TILE_SIZES
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, td
+        )
+    ]
+    return (
+        select_perf_tile_sizes(functional_tile_sizes)
+        if is_perf
+        else functional_tile_sizes
+    )
 
 
-def reduce_input_dimensions(*, is_perf=False):
+def reduce_input_dimensions():
     return [64, 64]
 
 
-def generate_pool_type_and_math_fidelity_combinations(*, is_perf=False):
+def generate_pool_type_and_math_fidelity_combinations(formats, *, is_perf=False):
     def is_valid_combination(pool_type, math_fidelity):
         # Max pool only supports LoFi
         if pool_type == ReducePool.Max:
@@ -107,43 +112,33 @@ def generate_pool_type_and_math_fidelity_combinations(*, is_perf=False):
         # Sum and Average support all fidelities
         return True
 
-    if is_perf:
-        return [
-            combo
-            for combo in product(POOL_TYPES, [MathFidelity.LoFi])
-            if is_valid_combination(*combo)
-        ]
+    # MX inputs decode to Float16_b in the src registers, so LoFi is already full
+    # precision for them; get_valid_math_fidelities applies that cap.
+    fidelities = [MathFidelity.LoFi] if is_perf else get_valid_math_fidelities(formats)
 
     return [
         combo
-        for combo in product(POOL_TYPES, MATH_FIDELITY_MODES)
+        for combo in product(POOL_TYPES, fidelities)
         if is_valid_combination(*combo)
     ]
 
 
-def reduce_pool_type_and_math_fidelity_combinations(*, is_perf=False):
-    return generate_pool_type_and_math_fidelity_combinations(is_perf=is_perf)
+def reduce_pool_type_and_math_fidelity_combinations(formats, *, is_perf=False):
+    return generate_pool_type_and_math_fidelity_combinations(formats, is_perf=is_perf)
 
 
 @pytest.mark.quasar
 @parametrize(
     formats=REDUCE_FORMATS,
-    tile_dimensions=lambda formats: [
-        td
-        for td in SUPPORTED_TILE_SIZES
-        if not is_mx_unsupported_tile_dims(
-            formats.input_format, formats.output_format, td
-        )
-    ],
+    tile_dimensions=runtime(
+        lambda formats: reduce_tile_dimensions(formats, is_perf=False)
+    ),
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=False),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    pool_type_and_math_fidelity=lambda: reduce_pool_type_and_math_fidelity_combinations(
-        is_perf=False
-    ),
-    dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
-    implied_math_format=lambda formats: reduce_implied_math_formats(
+    pool_type_and_math_fidelity=lambda formats: reduce_pool_type_and_math_fidelity_combinations(
         formats, is_perf=False
     ),
+    dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
@@ -154,7 +149,6 @@ def test_reduce_quasar(
     reduce_dim,
     pool_type_and_math_fidelity,
     dest_sync_mode,
-    implied_math_format,
     run_types,
     loop_factor,
     *,
@@ -165,27 +159,8 @@ def test_reduce_quasar(
     pool_type, math_fidelity = pool_type_and_math_fidelity
     tile_shape = construct_tile_shape(tile_dimensions)
 
-    if (
-        formats.input_format == DataFormat.MxInt8
-        and formats.output_format == DataFormat.MxInt2
-        and dest_acc == DestAccumulation.No
-        and reduce_dim == ReduceDimension.Column
-        and pool_type == ReducePool.Sum
-        and math_fidelity == MathFidelity.HiFi2
-        and dest_sync_mode == DestSync.Full
-        and implied_math_format == ImpliedMathFormat.Yes
-    ):
-        pytest.skip(
-            "MxInt8->MxInt2 Column Sum HiFi2 lands on an MxInt2 quantization "
-            "bin boundary. torch.matmul's fp32-internal accumulation rounds "
-            "in the opposite direction from HW for this specific value, "
-            "flipping one element into an adjacent bin. Modeling HW's exact "
-            "per-mul-add rounding schedule (FMA experiment) regressed other "
-            "Row reduce variants, so the residual is accepted as expected."
-        )
-
     input_dimensions = (
-        reduce_input_dimensions(is_perf=True)
+        reduce_input_dimensions()
         if is_perf
         else [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
     )
@@ -253,10 +228,14 @@ def test_reduce_quasar(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
+            generate_input_dim(
+                input_dimensions,
+                input_dimensions,
+                tile_dimensions=tile_dimensions,
+            ),
             TILE_COUNT(tile_cnt),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
@@ -282,24 +261,17 @@ def test_reduce_quasar(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         "dest_acc": dest_acc,
-        "disable_format_inference": (
-            implied_math_format == ImpliedMathFormat.Yes
-            and formats.input_format.is_mx_format()
-        ),
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
@@ -335,8 +307,8 @@ _ARCH = get_chip_architecture()
 # the FP4 zf mux while srca_fmt_spec is still MXFP4_2x -- producing all-zero Dest.
 @pytest.mark.quasar
 @pytest.mark.skipif(
-    _ARCH != ChipArchitecture.QUASAR,
-    reason="MxFp4_2x GAPOOL reduce is op_mmul-family-only and exists on Quasar. Architecture derivations don't support it.",
+    _ARCH != ChipArchitecture.QUASAR or is_4row_arch(),
+    reason="MxFp4_2x GAPOOL reduce is not implemented on this architecture",
 )
 @parametrize(
     register_format_hint=[DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B],
@@ -355,7 +327,7 @@ _ARCH = get_chip_architecture()
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
-    math_fidelity=MATH_FIDELITY_MODES,
+    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
@@ -374,7 +346,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
     is_perf=False,
     perf_report=None,
 ):
-    input_dimensions = reduce_input_dimensions(is_perf=is_perf)
+    input_dimensions = reduce_input_dimensions()
     tile_shape = construct_tile_shape((32, 32))
 
     src_A, tile_cnt, _, _ = generate_stimuli(
@@ -415,10 +387,10 @@ def test_reduce_quasar_mxfp4_2x_gapool(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
@@ -442,21 +414,17 @@ def test_reduce_quasar_mxfp4_2x_gapool(
         ),
         "unpack_to_dest": False,
         "dest_acc": dest_acc,
-        "disable_format_inference": False,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

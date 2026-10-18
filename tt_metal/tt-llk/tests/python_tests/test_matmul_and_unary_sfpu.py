@@ -34,8 +34,12 @@ from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
 
 
-# SFPI Issue link:
-# When some of these SPFU ops get compiled with coverage, `#pragma GCC unroll X` marked loops become invalid assembly
+# The coverage skip is not the `#pragma GCC unroll X` miscompile it used to cite
+# (tt-metal#33268 / tt-llk#883): every op below compiles cleanly under coverage on the
+# pinned sfpi -- see the exclusion table in test_eltwise_unary_sfpu.py. It stays because
+# this sweep parametrizes Reciprocal, whose coverage build returns wrong results on
+# Blackhole (tt-metal#56751), and because the test is skipped on both Blackhole and
+# Wormhole today, so there is no arch on which its coverage build has been measured.
 @skip_for_coverage
 @skip_for_blackhole
 @skip_for_wormhole

@@ -4,15 +4,14 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
-
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation_types.hpp"
 
 namespace ttnn::prim {
 
 struct ReshapeViewRMProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const ReshapeViewParams& operation_attributes,
         const ReshapeViewInputs& tensor_args,
         Tensor& tensor_return_value);

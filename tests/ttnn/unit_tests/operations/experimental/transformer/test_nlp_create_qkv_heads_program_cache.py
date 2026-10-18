@@ -85,6 +85,32 @@ def test_nlp_cqkv_interleaved_addr_change_on_hit(device, isolate_program_cache, 
     assert device.num_program_cache_entries() == 1
 
 
+@pytest.mark.parametrize("batch, seq_len", [(1, 32), (2, 64)])
+@pytest.mark.parametrize("head_dim", [64, 128])
+def test_nlp_cqkv_q_only_head_parallel_cache_hit(device, isolate_program_cache, batch, seq_len, head_dim):
+    """Distribute Q-only work unevenly across cores and reuse the program with new buffers."""
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    sequence_blocks = batch * seq_len // 32
+    if sequence_blocks >= num_cores:
+        pytest.skip("Head parallelism requires idle cores in the sequence-only split")
+    num_q_heads, num_kv_heads = num_cores + 1, 0
+    dtype, mem_config = ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG
+
+    A1, in1 = _make_interleaved_input(device, batch, seq_len, head_dim, num_q_heads, num_kv_heads, dtype, mem_config, 1)
+    outs1 = _run_interleaved(in1, num_q_heads, num_kv_heads, False, mem_config)
+    # Q-only calls have no K/V outputs; use the shared reference and checker for Q.
+    _check(outs1[:1], _refs_interleaved(A1, batch, seq_len, head_dim, num_q_heads, num_kv_heads, False)[:1], 1.0)
+
+    A2, in2 = _make_interleaved_input(device, batch, seq_len, head_dim, num_q_heads, num_kv_heads, dtype, mem_config, 2)
+    assert in1.buffer_address() != in2.buffer_address(), "inputs must land at different addresses to exercise the hit"
+    outs2 = _run_interleaved(in2, num_q_heads, num_kv_heads, False, mem_config)
+    _check(outs2[:1], _refs_interleaved(A2, batch, seq_len, head_dim, num_q_heads, num_kv_heads, False)[:1], 1.0)
+    assert outs1[0].buffer_address() != outs2[0].buffer_address(), "Q outputs must land at different addresses"
+
+    assert device.num_program_cache_entries() == 1
+
+
 def test_nlp_cqkv_interleaved_shape_change(device, isolate_program_cache):
     """Different input shape (seq_len) -> distinct entries (input TensorSpec is hashed)."""
     head_dim, num_q_heads, num_kv_heads = 64, 8, 2
@@ -126,13 +152,16 @@ def _refs_sharded(A, batch, seq_len, head_dim, num_q_heads, num_kv_heads):
 
 
 @skip_for_blackhole("L1 and Circular buffers are crashing on BH, see #12349")
-def test_nlp_cqkv_sharded_addr_change_on_hit(device, isolate_program_cache):
+@pytest.mark.parametrize("num_q_heads, num_kv_heads", [(16, 8), (8, 8)], ids=["q_gt_kv", "q_eq_kv"])
+def test_nlp_cqkv_sharded_addr_change_on_hit(device, isolate_program_cache, num_q_heads, num_kv_heads):
     """Sharded factory: same config twice with re-allocated buffers -> 1 entry, all outputs correct.
 
     The Sharded reader/writer bake q/k/v base + per-core start addresses as raw uint32 args, so this
     is the case the old get_dynamic path guarded; override_runtime_arguments must re-derive them.
+    With num_q_heads == num_kv_heads every core holds a K/V shard, so the program has a single work
+    unit and no Q-only kernel instances: that structurally different program must rebind too.
     """
-    batch, seq_len, head_dim, num_q_heads, num_kv_heads = 32, 1, 64, 16, 8
+    batch, seq_len, head_dim = 32, 1, 64
     dtype = ttnn.bfloat16
 
     A1, in1, out_cfg1 = _make_sharded_input(device, batch, seq_len, head_dim, num_q_heads, num_kv_heads, dtype, 1)
@@ -149,3 +178,29 @@ def test_nlp_cqkv_sharded_addr_change_on_hit(device, isolate_program_cache):
     _check((q2, k2, v2), _refs_sharded(A2, batch, seq_len, head_dim, num_q_heads, num_kv_heads), 1.0)
 
     assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize(
+    "batch,seq,heads,width,split", [(1, 640, 16, 256, 192), (2, 64, 17, 192, 128), (1, 4096, 2, 256, 192)]
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_nlp_cqkv_split_addr_change_on_hit(device, isolate_program_cache, batch, seq, heads, width, split, dtype):
+    keep_alive = []
+    for seed in (11, 29):
+        _, x = _make_interleaved_input(device, batch, seq, width, heads, 0, dtype, ttnn.DRAM_MEMORY_CONFIG, seed)
+        # Use the quantized device input as reference, including BFP8 tile exponents.
+        ref = ttnn.to_torch(x).reshape(batch, seq, heads, width).transpose(1, 2)
+        left, right = ttnn.experimental.nlp_create_q_heads_split(x, num_heads=heads, split_head_dim=split)
+        torch.testing.assert_close(ttnn.to_torch(left), ref[..., :split], rtol=0, atol=0)
+        torch.testing.assert_close(ttnn.to_torch(right), ref[..., split:], rtol=0, atol=0)
+        keep_alive.append((x, left, right))
+    assert keep_alive[0][1].buffer_address() != keep_alive[1][1].buffer_address()
+    assert keep_alive[0][2].buffer_address() != keep_alive[1][2].buffer_address()
+    assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize("split", [0, 17, 256, 288])
+def test_nlp_cqkv_split_invalid_width(device, split, expect_error):
+    _, x = _make_interleaved_input(device, 1, 32, 256, 1, 0, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, 0)
+    with expect_error(RuntimeError, "tile-aligned"):
+        ttnn.experimental.nlp_create_q_heads_split(x, num_heads=1, split_head_dim=split)

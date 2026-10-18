@@ -3,11 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <cstdlib>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <map>
+#include <optional>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -18,8 +22,11 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "llrt/get_platform_architecture.hpp"
+#include "llrt/rtoptions.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -68,7 +75,31 @@ bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh
 }
 }  // namespace unit_tests_common::basic::test_device_init
 
-INSTANTIATE_TEST_SUITE_P(DeviceInit, DeviceParamFixture, ::testing::Values(1, tt::tt_metal::GetNumAvailableDevices()));
+namespace {
+// gtest evaluates INSTANTIATE_TEST_SUITE_P generators at test-registration time
+// (inside InitGoogleTest), BEFORE --gtest_filter is applied. Calling
+// GetNumAvailableDevices() directly here forces full MetalContext/Cluster creation
+// at process startup, which throws on hosts without silicon and would abort the
+// whole binary — including the host-only CPU_* tests that run on the device-less
+// github_hosted_cpu CI runner.
+//
+// Probe for silicon first via PCI enumeration only (get_physical_architecture()
+// does not create a MetalContext and returns ARCH::Invalid when no devices are
+// present). Fall back to a single-device parameterization only in that genuinely
+// hardware-less case; on a device runner any discovery failure from
+// GetNumAvailableDevices() (malformed cluster descriptor, UMD errors, ...) must
+// propagate and fail loudly rather than silently shrink the parameterization.
+// The DeviceParamFixture tests themselves are device tests and are excluded on
+// the CPU-only leg by the CPU_-filter split anyway.
+unsigned int num_available_devices_or_one() {
+    if (get_physical_architecture() == tt::ARCH::Invalid) {
+        return 1;
+    }
+    return tt::tt_metal::GetNumAvailableDevices();
+}
+}  // namespace
+
+INSTANTIATE_TEST_SUITE_P(DeviceInit, DeviceParamFixture, ::testing::Values(1, num_available_devices_or_one()));
 
 TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     unsigned int num_devices = GetParam();
@@ -77,7 +108,7 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
         ids.push_back(id);
     }
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
     auto devices = distributed::MeshDevice::create_unit_meshes(
         ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
     for (auto& [id, device] : devices) {
@@ -96,7 +127,7 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
     for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
         ids.push_back(id);
     }
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
     auto devices = distributed::MeshDevice::create_unit_meshes(
         ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
     for (auto& [id, device] : devices) {
@@ -105,6 +136,109 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
     for (auto& [id, device] : devices) {
         device->close();
     }
+}
+
+namespace {
+
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
+
+// Restores DISABLED for FabricConfig even if a mesh open throws an error, so later tests in this binary are not left with fabric on
+// from another test.
+struct ScopedFabricConfig {
+    explicit ScopedFabricConfig(tt::tt_fabric::FabricConfig config) {
+        tt::tt_fabric::SetFabricConfig(config);
+    }
+    ~ScopedFabricConfig() { tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED); }
+
+    ScopedFabricConfig(const ScopedFabricConfig&) = delete;
+    ScopedFabricConfig& operator=(const ScopedFabricConfig&) = delete;
+};
+
+}  // namespace
+
+// FabricFirmwareInitializer rejects a single-host open with fewer than two chips.
+TEST(DeviceInitFabric, RejectsSingleHost1ChipMesh) {
+    if (get_physical_architecture() == tt::ARCH::Invalid) {
+        GTEST_SKIP() << "No TT hardware detected";
+    }
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.is_mock_or_emulated()) {
+        GTEST_SKIP() << "Mock/emule skips the fabric launch-size guard";
+    }
+    if (*MetalContext::instance().global_distributed_context().size() > 1) {
+        GTEST_SKIP() << "Multi-host 1-local-chip meshes are allowed to launch fabric";
+    }
+    if (cluster.is_galaxy_cluster()) {
+        GTEST_SKIP() << "Galaxy opens the full cluster when fabric is enabled, so a 1x1 mesh never hits this guard";
+    }
+    if (cluster.mmio_chip_ids().size() != cluster.all_chip_ids().size()) {
+        GTEST_SKIP() << "Clusters with remote chips fatal earlier when fabric is launched on a subset of devices";
+    }
+
+    ScopedFabricConfig fabric(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    EXPECT_THAT(
+        [] {
+            auto mesh_device =
+                distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
+            mesh_device->close();
+        },
+        ThrowsMessage<std::runtime_error>(HasSubstr("requires at least 2 participating chips")));
+}
+
+constexpr const char* kTdpLimitEnvVar = "TT_METAL_TDP_LIMIT_WATTS";
+
+// Restores TT_METAL_TDP_LIMIT_WATTS, so the tests that follow in this binary start from the
+// environment they expect. These tests only parse the variable; what the cluster then does with it
+// is covered by the TdpLimit tests in test_release_ownership.cpp, which rebuild the cluster.
+class TdpLimitEnvFixture : public ::testing::Test {
+protected:
+    void SetUp() override {
+        const char* prev = getenv(kTdpLimitEnvVar);
+        prev_ = prev != nullptr ? std::optional<std::string>(prev) : std::nullopt;
+    }
+
+    void TearDown() override {
+        if (prev_.has_value()) {
+            setenv(kTdpLimitEnvVar, prev_->c_str(), /*overwrite=*/1);
+        } else {
+            unsetenv(kTdpLimitEnvVar);
+        }
+    }
+
+private:
+    std::optional<std::string> prev_;
+};
+
+TEST_F(TdpLimitEnvFixture, CPU_ParsesEnvVar) {
+    unsetenv(kTdpLimitEnvVar);
+    EXPECT_FALSE(llrt::RunTimeOptions().get_tdp_limit_watts().has_value());
+
+    // Exporting the variable empty is how a shared profile disables the knob without unsetting it.
+    setenv(kTdpLimitEnvVar, "", /*overwrite=*/1);
+    EXPECT_FALSE(llrt::RunTimeOptions().get_tdp_limit_watts().has_value());
+
+    setenv(kTdpLimitEnvVar, "300", /*overwrite=*/1);
+    EXPECT_EQ(llrt::RunTimeOptions().get_tdp_limit_watts(), 300u);
+
+    setenv(kTdpLimitEnvVar, "0", /*overwrite=*/1);
+    EXPECT_EQ(llrt::RunTimeOptions().get_tdp_limit_watts(), llrt::TDP_LIMIT_RESTORE_DEFAULT_SENTINEL);
+
+    // rtoptions only decides whether the value is a watt count it can hold; whether firmware accepts
+    // it is UMD's call at cluster open, so 600 parses even though it is outside the accepted range.
+    setenv(kTdpLimitEnvVar, "600", /*overwrite=*/1);
+    EXPECT_EQ(llrt::RunTimeOptions().get_tdp_limit_watts(), 600u);
+}
+
+// A typo must not quietly leave the run at full power, so parsing is strict. Neither of these is
+// usable as a watt count: one is not a number, the other does not fit the uint32_t that holds it.
+TEST_F(TdpLimitEnvFixture, CPU_MalformedEnvVarThrows) {
+    setenv(kTdpLimitEnvVar, "abc", /*overwrite=*/1);
+    EXPECT_ANY_THROW(llrt::RunTimeOptions());
+
+    setenv(kTdpLimitEnvVar, "99999999999999999999", /*overwrite=*/1);
+    EXPECT_ANY_THROW(llrt::RunTimeOptions());
 }
 
 }  // namespace tt::tt_metal

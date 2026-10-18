@@ -1,162 +1,214 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from enum import Enum
-
 import pytest
+import quasar.test_eltwise_binary_sfpu_quasar as _func
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
-    DataFormat,
-    DestAccumulation,
-    ImpliedMathFormat,
+    ApproximationMode,
+    MathOperation,
 )
-from quasar.test_eltwise_binary_sfpu_quasar import (
-    _FLOAT_OPS,
-    _INT_OPS,
-    DEFAULT_SFPU_BINARY_TILE_INDICES,
-    SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
-    SFPU_BINARY_MAX_MIN_INT32_FORMATS,
-    _generate_max_min_combinations,
-    _get_valid_float_formats_dest_acc,
-    max_min_float_dest_acc_for_format,
-    max_min_int32_dest_acc_for_format,
-)
-from quasar.test_eltwise_binary_sfpu_quasar import (
-    test_eltwise_binary_sfpu_float_quasar as run_eltwise_binary_sfpu_float_quasar,
-)
-from quasar.test_eltwise_binary_sfpu_quasar import (
-    test_eltwise_binary_sfpu_int_quasar as run_eltwise_binary_sfpu_int_quasar,
-)
-from quasar.test_eltwise_binary_sfpu_quasar import (
-    test_eltwise_binary_sfpu_max_min_float_quasar as run_eltwise_binary_sfpu_max_min_float_quasar,
-)
-from quasar.test_eltwise_binary_sfpu_quasar import (
-    test_eltwise_binary_sfpu_max_min_int32_quasar as run_eltwise_binary_sfpu_max_min_int32_quasar,
+from helpers.param_config import parametrize
+
+_PERF_AXES = dict(
+    run_types=PERF_RUN_TYPES_QUASAR,
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
+    is_perf=[True],
 )
 
 
-class PerfCaseFamily(Enum):
-    INT = "int"
-    FLOAT = "float"
-    MAX_MIN_FLOAT = "max_min_float"
-    MAX_MIN_INT = "max_min_int"
-
-
-def _generate_perf_cases():
-    cases = []
-
-    for binary_op, mathop, clamp_inputs in _INT_OPS:
-        cases.append(
-            pytest.param(
-                (
-                    PerfCaseFamily.INT,
-                    (
-                        DataFormat.Int32,
-                        DestAccumulation.Yes,
-                        binary_op,
-                        mathop,
-                        clamp_inputs,
-                    ),
-                ),
-                id=f"int-{binary_op.lower()}",
-            )
-        )
-
-    for binary_op, mathop in _FLOAT_OPS:
-        for formats, dest_acc in _get_valid_float_formats_dest_acc():
-            cases.append(
-                pytest.param(
-                    (PerfCaseFamily.FLOAT, ((formats, dest_acc), binary_op, mathop)),
-                    id=(
-                        f"float-{binary_op.lower()}-"
-                        f"{formats.input_format.name}-{formats.output_format.name}-"
-                        f"{dest_acc.name}"
-                    ),
-                )
-            )
-
-    max_min_float_combinations = _generate_max_min_combinations(
-        SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
-        dest_acc_for_format=max_min_float_dest_acc_for_format,
-        implied_math_formats=(ImpliedMathFormat.Yes,),
-        input_dimensions_list=([32, 32],),
+def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
+    return dict(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
-    for combination in max_min_float_combinations:
-        formats, dest_acc, _, is_max_op, _ = combination
-        op = "max" if is_max_op else "min"
-        cases.append(
-            pytest.param(
-                (PerfCaseFamily.MAX_MIN_FLOAT, combination),
-                id=(
-                    f"float-{op}-{formats.input_format.name}-"
-                    f"{formats.output_format.name}-{dest_acc.name}"
-                ),
-            )
-        )
 
-    max_min_int_combinations = _generate_max_min_combinations(
-        SFPU_BINARY_MAX_MIN_INT32_FORMATS,
-        dest_acc_for_format=max_min_int32_dest_acc_for_format,
-        implied_math_formats=(ImpliedMathFormat.No,),
-        input_dimensions_list=([32, 32],),
-    )
-    for combination in max_min_int_combinations:
-        _, _, _, is_max_op, _ = combination
-        op = "max" if is_max_op else "min"
-        cases.append(
-            pytest.param((PerfCaseFamily.MAX_MIN_INT, combination), id=f"int-{op}")
-        )
 
-    return cases
+def _perf_approx_modes(mathop):
+    # Functional sweeps DIV Yes/No. Perf pins No, matching BH/WH, and keeps the
+    # atan2 Yes/No pair because that kernel reads APPROX_MODE.
+    if mathop == MathOperation.SfpuAtan2:
+        return [ApproximationMode.No, ApproximationMode.Yes]
+    return [ApproximationMode.No]
+
+
+_FLOAT_PERF_SWEEP = {
+    **_func.FLOAT_SWEEP,
+    "approx_mode": _perf_approx_modes,
+}
 
 
 @pytest.mark.perf
 @pytest.mark.quasar
-# The four families have heterogeneous argument shapes and hand-authored IDs;
-# plain pytest parametrization keeps them in one homogeneous perf-report module.
-@pytest.mark.parametrize("family_and_args", _generate_perf_cases())
-def test_perf_eltwise_binary_sfpu_quasar(perf_report, family_and_args):
-    family, args = family_and_args
-    perf_kwargs = {
-        "run_types": PERF_RUN_TYPES_QUASAR[0],
-        "loop_factor": PERF_LOOP_FACTOR_QUASAR,
-        "is_perf": True,
-        "perf_report": perf_report,
-    }
+@parametrize(
+    **_func.INT_SWEEP,
+    approx_mode=[ApproximationMode.No],
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_int_quasar(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    approx_mode,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_int_quasar(
+        formats,
+        dest_acc,
+        mathop,
+        _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
+        approx_mode=approx_mode,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
 
-    if family == PerfCaseFamily.INT:
-        data_format, dest_acc, binary_op, mathop, clamp_inputs = args
-        run_eltwise_binary_sfpu_int_quasar(
-            data_format,
-            dest_acc,
-            binary_op,
-            mathop,
-            clamp_inputs,
-            DEFAULT_SFPU_BINARY_TILE_INDICES,
-            **perf_kwargs,
-        )
-    elif family == PerfCaseFamily.FLOAT:
-        formats_dest_acc, binary_op, mathop = args
-        run_eltwise_binary_sfpu_float_quasar(
-            formats_dest_acc,
-            ImpliedMathFormat.Yes,
-            DEFAULT_SFPU_BINARY_TILE_INDICES,
-            binary_op,
-            mathop,
-            **perf_kwargs,
-        )
-    elif family == PerfCaseFamily.MAX_MIN_FLOAT:
-        run_eltwise_binary_sfpu_max_min_float_quasar(
-            args,
-            DEFAULT_SFPU_BINARY_TILE_INDICES,
-            **perf_kwargs,
-        )
-    elif family == PerfCaseFamily.MAX_MIN_INT:
-        run_eltwise_binary_sfpu_max_min_int32_quasar(
-            args,
-            DEFAULT_SFPU_BINARY_TILE_INDICES,
-            **perf_kwargs,
-        )
-    else:
-        raise ValueError(f"Unsupported binary SFPU perf family: {family}")
+
+@pytest.mark.perf
+@pytest.mark.quasar
+@parametrize(
+    **_FLOAT_PERF_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_float_quasar(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    approx_mode,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_float_quasar(
+        formats,
+        dest_acc,
+        mathop,
+        approx_mode,
+        _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
+
+
+@pytest.mark.perf
+@pytest.mark.quasar
+@parametrize(
+    **_func.BF16_RNE_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_bf16_rne_quasar(
+    perf_report,
+    binary_op_mathop,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_bf16_rne_quasar(
+        binary_op_mathop,
+        _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
+
+
+_BCAST_PERF_SWEEP = {
+    **_func.BCAST_SWEEP,
+}
+
+
+@pytest.mark.perf
+@pytest.mark.quasar
+@parametrize(
+    **_BCAST_PERF_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_bcast_quasar(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    broadcast_type,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_bcast_quasar(
+        formats,
+        dest_acc,
+        mathop,
+        broadcast_type,
+        _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
+
+
+_MAX_MIN_FLOAT_PERF_SWEEP = dict(
+    formats_dest_acc_is_max_input_dims=_func._generate_max_min_combinations(
+        _func.SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
+    ),
+)
+
+
+@pytest.mark.perf
+@pytest.mark.quasar
+@parametrize(
+    **_MAX_MIN_FLOAT_PERF_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_max_min_float_quasar(
+    perf_report,
+    formats_dest_acc_is_max_input_dims,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_max_min_float_quasar(
+        formats_dest_acc_is_max_input_dims,
+        _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
+
+
+@pytest.mark.perf
+@pytest.mark.quasar
+@parametrize(
+    **_func.MAX_MIN_INT32_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_max_min_int32_quasar(
+    perf_report,
+    formats_dest_acc_is_max_input_dims,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_max_min_int32_quasar(
+        formats_dest_acc_is_max_input_dims,
+        _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
+
+
+@pytest.mark.perf
+@pytest.mark.quasar
+@parametrize(
+    **_func.QUANT_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_quant_quasar(
+    perf_report,
+    binary_op,
+    sign_magnitude,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_quant_quasar(
+        binary_op,
+        sign_magnitude,
+        _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )

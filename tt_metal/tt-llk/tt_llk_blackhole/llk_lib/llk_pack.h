@@ -13,7 +13,6 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_pack_common.h"
-#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -21,8 +20,10 @@ using namespace ckernel::packer;
 /**
  * @brief Configure the packer address-modification (ADDR_MOD) slots for the selected pack mode.
  *
- * Programs ADDR_MOD_0/1/2 with the src/dest Y and Z increment/clear patterns the pack MOP relies
+ * Programs ADDR_MOD_0/1/2 with the src Y and Z increment/clear patterns the pack MOP relies
  * on to traverse the destination register and step through faces for the given layout.
+ * The dest (channel-1) counters are left alone: output placement comes from L1_Dest_addr and
+ * the packer's own write pointer, and channel-1 strides are zero outside fast-untilize.
  *
  * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
  */
@@ -31,47 +32,42 @@ inline void _llk_pack_configure_addrmod_()
 {
     if constexpr (pack_mode == PackMode::Untilize)
     {
-        /*  Y src & Y dest inc by 1 to give strided increments:
+        /*  Y src inc by 1 to give strided increments:
             Rows: 0, 16, 1, 17, 2, 18, ........ 15, 31
         */
-        addr_mod_pack_t {.y_src = {.incr = 1}, .y_dst = {.incr = 1}, .z_src = {.incr = 0}, .z_dst = {.incr = 0}}.set(ADDR_MOD_0);
+        addr_mod_pack_t {.y_src = {.incr = 1}, .z_src = {.incr = 0}}.set(ADDR_MOD_0);
 
         /* Increment Faces by 2 to give next 2 faces:
             Rows: 32, 48, 33, 49, 34, 50........47, 63
         */
-        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .y_dst = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}, .z_dst = {.incr = 0}}.set(ADDR_MOD_1);
+        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}}.set(ADDR_MOD_1);
 
-        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .y_dst = {.incr = 0, .clr = 1}, .z_src = {.incr = 0, .clr = 1}, .z_dst = {.incr = 0, .clr = 1}}.set(
-            ADDR_MOD_2);
+        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 0, .clr = 1}}.set(ADDR_MOD_2);
     }
     else if constexpr (pack_mode == PackMode::Tilize)
     {
-        addr_mod_pack_t {.y_src = {.incr = 4}, .y_dst = {.incr = 2}, .z_src = {.incr = 0}, .z_dst = {.incr = 0}}.set(ADDR_MOD_0);
+        addr_mod_pack_t {.y_src = {.incr = 4}, .z_src = {.incr = 0}}.set(ADDR_MOD_0);
 
-        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .y_dst = {.incr = 0, .clr = 1}, .z_src = {.incr = 0}, .z_dst = {.incr = 0}}.set(ADDR_MOD_1);
+        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 0}}.set(ADDR_MOD_1);
 
         // Increment faces by 2 (jump 2 dest address 32)
-        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .y_dst = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}, .z_dst = {.incr = 0}}.set(ADDR_MOD_2);
+        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}}.set(ADDR_MOD_2);
     }
     else
     {
         addr_mod_pack_t {
             .y_src = {.incr = 4},
-            .y_dst = {.incr = 4},
         }
             .set(ADDR_MOD_0);
 
         addr_mod_pack_t {
             .y_src = {.incr = 0, .clr = 1, .cr = 0},
-            .y_dst = {.incr = 0, .clr = 1, .cr = 0},
             .z_src = {.incr = 0, .clr = 1},
-            .z_dst = {.incr = 0, .clr = 0},
         }
             .set(ADDR_MOD_1);
 
         addr_mod_pack_t {
             .y_src = {.incr = 0, .clr = 1, .cr = 0},
-            .y_dst = {.incr = 4, .clr = 0, .cr = 0},
             .z_src = {.incr = 1, .clr = 0},
         }
             .set(ADDR_MOD_2);
@@ -190,7 +186,6 @@ inline void _llk_pack_mop_config_(
                     p_pacr::NO_CTXT_CTRL,
                     0,
                     1));
-            tmp.set_end_op(TT_OP_SETADCZW(p_setadc::PAC, 0, num_faces >> 1, 0, 0, 0b0100)); // ch0_z = 0, ch1_z = num_faces >> 1;
             tmp.program();
             return;
         }
@@ -298,8 +293,6 @@ inline void _llk_pack_mop_config_(
             p_pacr::NO_CTXT_CTRL,
             0,
             1));
-
-        tmp.set_end_op(TT_OP_SETADCZW(p_setadc::PAC, 0, num_faces >> 1, 0, 0, 0b0100)); // ch0_z = 0, ch1_z = num_faces >> 1;
 
         tmp.program();
     }
@@ -448,29 +441,17 @@ inline void _llk_pack_reconfig_data_format_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    llk::san::pack_operand_configure<true>(
-        is_fp32_dest_acc_en, pack_src_format, pack_dst_format, llk::san::IGNORE, tile_c_dim, num_faces, partial_face, llk::san::IGNORE);
-
     reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
-}
-
-/**
- * @brief Enable or disable reading the destination register as 32-bit data for the packer.
- *
- * @param enable: True to read dest as 32-bit (FP32) data, false otherwise.
- * @note Stalls on the pack pipe before modifying the PCK_DEST_RD_CTRL config register.
- */
-inline void _llk_pack_set_fp32_dest_acc_(bool enable)
-{
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
-    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
 }
 
 /**
  * @brief One-time hardware configuration of the packer for a given data format and tile geometry.
  *
  * Programs the packer config registers (formats, strides, relu) for the chosen pack mode. Call once
- * before the init/execute sequence.
+ * before the init/execute sequence, or again when a later op needs a different packer configuration.
+ *
+ * @note Drains the packer and blocks this RISC until it is idle before any register is rewritten, so it
+ *       is safe to call while a pack from the previous op is still in flight.
  *
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
@@ -497,9 +478,6 @@ inline void _llk_pack_hw_configure_(
     const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-
-    // sstanisic todo: partial face, narrow tile are weird (see #47440)
-    llk::san::pack_operand_configure(is_fp32_dest_acc_en, pack_src_format, pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, llk::san::IGNORE);
 
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
 }
@@ -562,9 +540,6 @@ inline void _llk_pack_init_(
         LLK_ASSERT(num_tiles <= 8, "Max supported num_tiles for FLOAT16 or FLOAT16_B is 8.");
     }
 
-    llk::san::pack_operand_check(llk::san::IGNORE, pack_src_format, llk::san::IGNORE, face_r_dim, tile_c_dim, num_faces, llk::san::IGNORE, llk::san::IGNORE);
-    llk::san::operation_init<llk::san::Operation::Pack>();
-
     // 8bit datums in the unpack src format are not affected by the blackhole issue,
     // so we can skip the workaround which involves unswizzling rows in the tile.
     if (skip_bh_tilize_workaround && pack_mode == PackMode::Tilize)
@@ -589,9 +564,6 @@ inline void _llk_pack_init_(
  */
 inline void _llk_pack_uninit_()
 {
-    // sstanisic todo: contract cannot be enforced if Pack has an uninit, without killing performance
-    // llk::san::operation_uninit<llk::san::Operation::Pack>();
-
     // No state to restore - Blackhole pack_init sets PAC X counter to FACE_C_DIM - 1 which is the default.
 }
 
@@ -617,8 +589,6 @@ inline void _llk_pack_uninit_()
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool mutex_ADC = false>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
-    llk::san::operation_check<llk::san::Operation::Pack>();
-
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Blackhole: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
     static_assert(

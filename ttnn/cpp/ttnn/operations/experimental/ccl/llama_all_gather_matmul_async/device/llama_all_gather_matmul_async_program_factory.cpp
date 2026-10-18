@@ -216,7 +216,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
             intermediate_tensor_shard_num_pages * intermediate_tensor_page_size, {{inter_cb_index, df}})
             .set_page_size(inter_cb_index, intermediate_tensor_page_size)
             .set_globally_allocated_address(*intermediate_tensor.buffer());
-    CreateCircularBuffer(program, intermediate_tensor_cores, cb_inter_config);
+    const auto cb_inter = CreateCircularBuffer(program, intermediate_tensor_cores, cb_inter_config);
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
@@ -489,6 +489,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
          sender_worker_cores,
          intermediate_cores_vec,
          ring_index,
+         cb_inter,
          matmul_shared_variables}};
 }
 
@@ -532,6 +533,11 @@ void LlamaAllGatherMatmulAsyncProgramFactory::override_runtime_arguments(
             worker_receiver_runtime_args[0] = args.semaphore.address();
             worker_receiver_runtime_args[3] = aggregated_tensor.buffer()->address();
         }
+
+        // The intermediate CB is globally allocated over the intermediate tensor's buffer. Patching the
+        // reader/writer address args above does not move the CB itself, so without this a cached program
+        // keeps pointing every intermediate access at the first call's allocation.
+        UpdateDynamicCircularBufferAddress(program, shared_vars.cb_inter, *intermediate_tensor.buffer());
 
         ttnn::operations::llama_matmul::override_agmm_fusion_program_parameters(
             shared_vars.matmul_shared_variables,

@@ -13,9 +13,9 @@ namespace experimental {
 /*
     GDDR DMA API for DRISC kernels - DRISC L1 <-> GDDR transfers.
 
-    Two independent TX streams (0 and 1). Each stream can concurrently carry:
-    - 255 outstanding reads
-    - 15 outstanding writes
+    Two independent TX streams (0 and 1). Each stream can concurrently carry kMaxOutstandingReads reads and
+    kMaxOutstandingWrites writes; issuing into a full queue is silently dropped, so the issue functions poll the
+    stream's ready flag first unless the caller opts out and keeps its own count under the limit.
 
     Typical read:
         dma_async_read(stream, src_gddr, dst_l1, size_bytes);
@@ -28,6 +28,10 @@ namespace experimental {
     All size and increment parameters are in bytes and must be multiples of 16.
     stream must be 0 or 1.
 */
+
+// Command-queue depth per TX stream; the status register's outstanding-count fields are 8 and 4 bits wide.
+constexpr uint32_t kMaxOutstandingReads = 255;
+constexpr uint32_t kMaxOutstandingWrites = 15;
 
 #ifdef COMPILE_FOR_DRISC
 
@@ -45,11 +49,11 @@ static inline __attribute__((always_inline)) void check_transfer_size_(uint32_t 
 }
 
 static inline __attribute__((always_inline)) void check_outstanding_reads_(uint32_t n) {
-    ASSERT(n <= 255, DebugAssertTripped);
+    ASSERT(n <= kMaxOutstandingReads, DebugAssertTripped);
 }
 
 static inline __attribute__((always_inline)) void check_outstanding_writes_(uint32_t n) {
-    ASSERT(n <= 15, DebugAssertTripped);
+    ASSERT(n <= kMaxOutstandingWrites, DebugAssertTripped);
 }
 
 static inline __attribute__((always_inline)) void program_dma_write_addresses_(
@@ -100,11 +104,15 @@ inline __attribute__((always_inline)) void dma_set_burst_size(uint8_t burst_size
 /**
  * @brief Non-blocking GDDR to L1 read. Pair with dma_async_read_barrier().
  *
+ * @tparam kWaitReady Poll the stream's read-ready flag before issuing. False skips the poll: the caller must then
+ *                    guarantee fewer than kMaxOutstandingReads reads are in flight on the stream when it issues
+ *                    (dma_get_reads_outstanding() is the count), since a full queue drops the issue silently.
  * @param stream      TX stream (0 or 1).
  * @param src_gddr    GDDR source address (64-bit).
  * @param dst_l1      DRISC L1 destination address (32-bit).
  * @param size_bytes  Transfer size in bytes (must be a multiple of 16).
  */
+template <bool kWaitReady = true>
 inline __attribute__((always_inline)) void dma_async_read(
     uint8_t stream, uint64_t src_gddr, uint32_t dst_l1, uint32_t size_bytes) {
     check_stream_(stream);
@@ -114,10 +122,12 @@ inline __attribute__((always_inline)) void dma_async_read(
     attrs.f.transfer_size_words = size_bytes >> 4;
     attrs.f.transfer_start_read = 1;
 
-    volatile DmaCtrlReadStatus_u status = {.val = DmaCtrlReadStatus_DEFAULT};
-    do {
-        status.val = READ_TX_CTRL_REG(TX_CTRL_TX_READ_STATUS_REG_OFFSET);
-    } while (status.f.read_ready != 1);
+    if constexpr (kWaitReady) {
+        volatile DmaCtrlReadStatus_u status = {.val = DmaCtrlReadStatus_DEFAULT};
+        do {
+            status.val = READ_TX_CTRL_REG(TX_CTRL_TX_READ_STATUS_REG_OFFSET);
+        } while (status.f.read_ready != 1);
+    }
 
     program_dma_read_addresses_(stream, src_gddr, dst_l1);
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_TRANSFER_ATTRIBUTES_REG_OFFSET, attrs.val);
@@ -126,11 +136,15 @@ inline __attribute__((always_inline)) void dma_async_read(
 /**
  * @brief Non-blocking L1 to GDDR write. Pair with dma_async_write_barrier().
  *
+ * @tparam kWaitReady Poll the stream's write-ready flag before issuing. False skips the poll: the caller must then
+ *                    guarantee fewer than kMaxOutstandingWrites writes are in flight on the stream when it issues
+ *                    (dma_get_writes_outstanding() is the count), since a full queue drops the issue silently.
  * @param stream      TX stream (0 or 1).
  * @param src_l1      DRISC L1 source address (32-bit).
  * @param dst_gddr    GDDR destination address (64-bit).
  * @param size_bytes  Transfer size in bytes (must be a multiple of 16).
  */
+template <bool kWaitReady = true>
 inline __attribute__((always_inline)) void dma_async_write(
     uint8_t stream, uint32_t src_l1, uint64_t dst_gddr, uint32_t size_bytes) {
     check_stream_(stream);
@@ -142,10 +156,12 @@ inline __attribute__((always_inline)) void dma_async_write(
     attrs.f.end_of_packet = 0;
     attrs.f.transfer_start_raw = 1;
 
-    volatile DmaCtrlWriteStatus_u status = {.val = DmaCtrlWriteStatus_DEFAULT};
-    do {
-        status.val = READ_TX_CTRL_REG(TX_CTRL_TX_WRITE_STATUS_REG_OFFSET);
-    } while (status.f.write_ready != 1);
+    if constexpr (kWaitReady) {
+        volatile DmaCtrlWriteStatus_u status = {.val = DmaCtrlWriteStatus_DEFAULT};
+        do {
+            status.val = READ_TX_CTRL_REG(TX_CTRL_TX_WRITE_STATUS_REG_OFFSET);
+        } while (status.f.write_ready != 1);
+    }
 
     program_dma_write_addresses_(stream, src_l1, dst_gddr);
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_TRANSFER_ATTRIBUTES_REG_OFFSET, attrs.val);

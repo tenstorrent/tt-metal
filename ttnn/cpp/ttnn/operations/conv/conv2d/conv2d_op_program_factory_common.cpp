@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/math.hpp>
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/hal.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
@@ -219,7 +220,8 @@ std::vector<CBInfo> get_cb_info(
     const bool depthwise_dest_reuse_scratch = is_1d_depthwise_conv &&
                                               sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
                                               !coalesce_1d_depthwise_kw_reads && num_blocks_act_h > 1;
-    const bool partials_use_output_cb = !untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv;
+    const bool partials_use_output_cb = !untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv &&
+                                        tt::tt_metal::hal::get_arch() != tt::ARCH::QUASAR;
     // This must match the compute kernel's out_block_num_tiles. Both factories pass one full per-core output-width
     // block to compute, so dedicated partials storage is exactly one output block reused through ordinary CB FIFO
     // wraparound. When formats allow output aliasing, only the final block of the existing output allocation is used.
