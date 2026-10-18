@@ -59,7 +59,8 @@ inline void llk_unpack_AB_matmul_impl(
         0,
         0,
         auto_ttsync,
-        get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()>(
+        get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
+        unpack_AB_matmul_hoist_rows<MATH_FIDELITY, DST_SYNC_MODE>()>(
         base_address_a,
         base_address_b,
         tile_index_a,
