@@ -71,20 +71,11 @@ FORCE_INLINE void generate_mask(uint32_t index_l1_addr, uint32_t chunk_id, uint3
     }
 }
 
-FORCE_INLINE void generate_zeros_cb(uint32_t input_l1_addr) {
-    constexpr bool is_output_bfloat16 = get_compile_time_arg_val(6) == 1;
+// Zeroes one output tile: 2048 bytes for bfloat16, 1088 for bfloat8_b, 4096 for float32.
+FORCE_INLINE void generate_zeros_cb(uint32_t input_l1_addr, uint32_t tile_size_bytes) {
     auto input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_l1_addr);
-
-    if constexpr (is_output_bfloat16) {
-        // 512 * 4 = 2048 bytes = single tile of bfloat16
-        for (uint32_t i = 0; i < 512; ++i) {
-            input_l1_ptr[i] = 0;
-        }
-    } else {
-        // 272 * 4 = 1088 bytes = single tile of bfloat8_b
-        for (uint32_t i = 0; i < 272; ++i) {
-            input_l1_ptr[i] = 0;
-        }
+    for (uint32_t i = 0; i < tile_size_bytes / sizeof(uint32_t); ++i) {
+        input_l1_ptr[i] = 0;
     }
 }
 
@@ -111,7 +102,7 @@ void kernel_main() {
     constexpr uint32_t grad_page_size = get_tile_size(cb_grad_idx);
     constexpr uint32_t out_page_size = get_tile_size(cb_id_out0_idx);
 
-    constexpr auto grad_args = TensorAccessorArgs<7>();
+    constexpr auto grad_args = TensorAccessorArgs<6>();
     constexpr auto index_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<index_args.next_compile_time_args_offset()>();
 
@@ -135,7 +126,7 @@ void kernel_main() {
     // ZERO out output this core is responsible for
     uint32_t out_read_ptr = cb_out_intermed.get_read_ptr();
     // Fill one tile with zeros
-    generate_zeros_cb(out_read_ptr);
+    generate_zeros_cb(out_read_ptr, out_page_size);
     // Fill all of output (for this core) to zeros
     uint32_t out_tile_idx = hidden_offset;
     for (uint32_t i = 0; i < num_embeddings; ++i) {

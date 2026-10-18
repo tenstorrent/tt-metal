@@ -29,8 +29,15 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void reshuffle_rows_tile(uint32_t idst, uint32_t idx_addr) {
+    // DST_ACCUM_MODE selects the FP32 row load/store the SFPU needs when DEST holds 32-bit entries.
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_reshuffle_rows, (APPROX), idst, VectorMode::RC_custom, idx_addr));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_reshuffle_rows,
+        (APPROX, DST_ACCUM_MODE),
+        idst,
+        VectorMode::RC_custom,
+        idx_addr));
 }
 
 /**
