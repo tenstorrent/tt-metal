@@ -345,6 +345,10 @@ PATH_A = os.environ.get("PREFILL_V41_PATH_A", "0") == "1"
 # 0300, TtCSA's prepare_chunk / forward_pre / glue_chunk / forward_attn / epilogue_chunk protocol), replayed by the block between
 # its mHC / MoE islands; chunk 0 (path B) and a ragged final chunk stay eager. Needs PATH_A and V41_PREFILL_ISLANDS.
 A3 = os.environ.get("PREFILL_V41_A3", "0") == "1"
+# DS41F-0073: chunk 0's CSA attention on its own captured A2 island (V4-Flash DS4F-0300's A2c0: the same A1, then the sparse
+# core with each index row repacked to [valid window | valid top-k | sentinels], rate-aware) instead of the eager path B; every
+# prompt shorter than one chunk is chunk 0 alone. Default off until the export / e2e A/B lands. Needs A3.
+A3_CHUNK0 = os.environ.get("PREFILL_V41_A3_CHUNK0", "0") == "1"
 # e2m1 magnitudes 0, .5, 1, 1.5, 2, 3, 4, 6 as a sum of steps at the midpoints; ties go to the even code (0.25 -> 0,
 # 0.75 -> 1, 1.25 -> 1, 1.75 -> 2, 2.5 -> 2, 3.5 -> 4, 5 -> 4): "gt" at a tie that rounds down, "ge" at one that rounds up
 _FP4_STEPS = (
@@ -539,7 +543,10 @@ def _source_forward(self, hidden_states, seq_len_actual=None, *, state, export=N
         if w == int(state.compressed_kv.shape[2])
         else ttnn.slice(state.compressed_kv, [0, 0, 0, 0], [1, 1, w, self.head_dim])
     )
-    self.shared = dict(mask_sel=self.debug_last_selection, compressed=comp, width=w, entry_count=state.entry_count)
+    # ``state``: a decoder Reindex layer scores this source's index keys (DS41F-0073)
+    self.shared = dict(
+        mask_sel=self.debug_last_selection, compressed=comp, state=state, width=w, entry_count=state.entry_count
+    )
     return out
 
 
@@ -603,7 +610,8 @@ def _a3_carry(attn, state, sliding_kv_g, next_carry, real_len: int) -> None:
 
 
 def _source_traceable(self) -> bool:
-    return A3 and self.sparse_path and self.fused_indexer
+    # DS41F-0073: layer 20 as a full decoder source (ratio 1) runs its attention eagerly for now, so its consumers do too
+    return A3 and self.sparse_path and self.fused_indexer and self.compressor.compress_rate > 1
 
 
 def _source_prepare_chunk(self, state, real_len: int) -> None:
@@ -617,13 +625,14 @@ def _source_forward_attn(
     self, hidden_states, outs, state, real_len: int, chunk0: bool = False, _t=None, kv_bucket=None
 ):
     """Island A2 (chunk-invariant): the static fused scorer + top-k over the key cache (or its first ``kv_bucket`` columns),
-    the sparse gather over the persistent slab, V's un-RoPE and the output projection -> (y, top-k)."""
-    assert not chunk0, "V4.1 runs chunk 0 eagerly (path B)"
+    the sparse gather over the persistent slab, V's un-RoPE and the output projection -> (y, top-k). ``chunk0``
+    (A3_CHUNK0, DS41F-0073): the A2c0 variant -- the index rows repacked for chunk 0 (TtCSA._chunk0_pack)."""
+    assert A3_CHUNK0 or not chunk0, "V4.1 runs chunk 0 eagerly (path B) unless PREFILL_V41_A3_CHUNK0"
     q, q_latent, sliding_kv_g, _nc, entries, keys, cos, sin = outs[:8]
     idx = self.indexer.select_indices_static(
         q_latent, hidden_states, cos, sin, state.index_k, state.score_mask, kv_bucket=kv_bucket
     )
-    attn = self._sparse_core(q, idx, cos, sin, state.slab_rm, seq_len=sliding_kv_g.shape[2])
+    attn = self._sparse_core(q, idx, cos, sin, state.slab_rm, seq_len=sliding_kv_g.shape[2], chunk0=chunk0)
     return self._o_proj(attn), idx
 
 
@@ -689,7 +698,7 @@ V41CSA.traceable = _source_traceable
 V41CSA.prepare_chunk = _source_prepare_chunk
 V41CSA.forward_attn = _source_forward_attn
 V41CSA.epilogue_chunk = _source_epilogue_chunk
-V41CSA.supports_chunk0_island = False
+V41CSA.supports_chunk0_island = A3_CHUNK0
 
 
 class V41CSAConsumer(_V41QStem, TtCSA):
@@ -719,7 +728,9 @@ class V41CSAConsumer(_V41QStem, TtCSA):
         weight_cache_path=None,
     ) -> "V41CSAConsumer":
         r = cfg.role(layer)
-        assert r.mode == "reuse" and r.kv_source == r.index_source, f"layer {layer} ({r}) is not a plain consumer"
+        # DS41F-0073: a decoder Reuse layer's ``source`` is its INDEX source (layer 20 or the latest Reindex layer), whose
+        # ``shared`` carries layer 20's entries (the KV source) with that layer's top-k
+        assert r.mode == "reuse", f"layer {layer} ({r}) is not a Reuse layer"
         kw = _common_kwargs(
             cfg,
             w,
@@ -821,7 +832,7 @@ class V41CSAConsumer(_V41QStem, TtCSA):
     # rows and of the previous carry; glue (eager): those two into the SOURCE's slab rows [0, S) and [S + cap, S + cap + 128)
     # (exactly the eager path A's _slab_write pieces); A2c: the sparse gather with the source's A2 top-k (its persistent
     # output, read in place) over the source's slab, V's un-RoPE, o-proj; epilogue (eager): counters + the carry.
-    supports_chunk0_island = False
+    supports_chunk0_island = A3_CHUNK0
 
     def traceable(self) -> bool:
         return A3 and PATH_A and self.source.traceable()
@@ -870,9 +881,13 @@ class V41CSAConsumer(_V41QStem, TtCSA):
         self._slab_write_rm(src_state, kv_rm, 0)
         self._slab_write_rm(src_state, carry_rm, int(sliding_kv_g.shape[2]) + self._slab_cap)
 
-    def forward_attn(self, hidden_states, outs, state, real_len: int, src_idx=None, src_state=None, **_kw):
+    def forward_attn(
+        self, hidden_states, outs, state, real_len: int, src_idx=None, src_state=None, chunk0: bool = False, **_kw
+    ):
         q, sliding_kv_g, _nc, cos, sin = outs[:5]
-        attn = self._sparse_core(q, src_idx, cos, sin, src_state.slab_rm, seq_len=sliding_kv_g.shape[2])
+        attn = self._sparse_core(
+            q, src_idx, cos, sin, src_state.slab_rm, seq_len=sliding_kv_g.shape[2], chunk0=chunk0
+        )  # chunk0: the source's chunk-0 top-k, repacked the same way (DS41F-0073)
         return (self._o_proj(attn),)
 
     def epilogue_chunk(self, state, outs, a2, export, real_len: int) -> None:
@@ -882,6 +897,185 @@ class V41CSAConsumer(_V41QStem, TtCSA):
         state.kv_actual += int(real_len)
         state.entry_count = sh["entry_count"]
         _a3_carry(self, state, outs[1], outs[2], real_len)
+
+
+class V41CSAReindex(_V41QStem, TtCSA):
+    """V4.1 ``Reindex`` layer (decoder 24 / 28 / 32 / 36, DS41F-0073): its own q / window KV / sinks / o-proj and its OWN
+    indexer (``indexer.wq_b`` / ``weights_proj``) scoring the KV source's (layer 20's) index keys -- model.py
+    ``Indexer.forward`` with ``owns_k`` False -- then attention over [window | its top-512 of layer 20's entries]. No
+    compressor and no key write of its own: layer 20 ran earlier in the same chunk, and its ``shared`` names the state.
+    Publishes ``shared`` the way a source does, for the Reuse layers that take its top-k.
+
+    model.py's candidate pre-filter (layer 20 keeps each query's top 2048 blocks of 8 entries, the Reindex layers score
+    inside them) is NOT applied: it is a no-op up to 16384 entries, and the decode ring does not apply it either (tt-blaze
+    L5), so the prefill matches the ring's decode."""
+
+    def __init__(self, device, *, source: V41CSA, indexer, sparse_path: bool, **kwargs):
+        super().__init__(device, compressor=source.compressor, indexer=indexer, sparse_path=sparse_path, **kwargs)
+        self.source = source
+        self._src_state = None  # the source's state of the last chunk (the islands' mask templates are sized by it)
+
+    @classmethod
+    def from_weights(
+        cls,
+        mesh_device,
+        cfg,
+        layer: int,
+        w: dict,
+        rotary_emb,
+        *,
+        source: V41CSA,
+        sp_axis=0,
+        tp_axis=1,
+        topology=ttnn.Topology.Linear,
+        weight_cache_path=None,
+    ) -> "V41CSAReindex":
+        r = cfg.role(layer)
+        assert r.mode == "reindex", f"layer {layer} ({r.mode}) is not a Reindex layer"
+        mesh = dict(sp_axis=sp_axis, tp_axis=tp_axis, topology=topology)
+        # the key provider is the source's (its CCL handles / fp32 config / rotation); this layer never calls it
+        indexer = TtCSAIndexer(
+            mesh_device,
+            compressor=source.indexer.compressor,
+            q_b_proj_weight=w["attn.indexer.wq_b.weight"],
+            weights_proj_weight=w["attn.indexer.weights_proj.weight"].float(),
+            n_heads=cfg.index_n_heads,
+            head_dim=cfg.index_head_dim,
+            rope_head_dim=cfg.rope_head_dim,
+            topk=cfg.index_topk,
+            **mesh,
+        )
+        if INDEX_FP4:
+            indexer.q_act_quant = fp4_act_fake_quant
+        kw = _common_kwargs(
+            cfg,
+            w,
+            rotary_emb,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            topology=topology,
+            weight_cache_path=weight_cache_path,
+            layer=layer,
+            name="attn",
+        )
+        return cls(mesh_device, source=source, indexer=indexer, sparse_path=PATH_A, **kw)
+
+    def alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None, slot: int = 0):
+        """The consumer's state (its own window carry) and the slab constants of the source's geometry."""
+        from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCAState, _rope_table_tokens
+
+        rate = self.compressor.compress_rate
+        chunk = chunk_tokens or max_seq_len
+        entries = -(-int(max_seq_len) // rate)
+        capacity = -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE + max(chunk // rate, chunk + 64)
+        capacity = -(-capacity // 128) * 128  # == the source's (TtCSA.alloc_state)
+        self._build_carry_index(chunk)
+        self._build_masks(chunk, capacity)
+        self._slab_rope = self._build_rope_table(_rope_table_tokens(max_seq_len, chunk), 1)
+        self._slab_index = self._rope_index_base(chunk // self.sp_factor)
+        self._slab_chunk_tokens, self._slab_cap = int(chunk), int(capacity)
+        if self.sparse_path:  # path A's constants, before any island capture (DS4F-0262)
+            heads_local = self.num_heads // self.tp_factor
+            self._window_indices(chunk // self.sp_factor)
+            self._sink_column(self.tp_factor > 1 and heads_local % ttnn.TILE_SIZE != 0)
+        state = TtHCAState(
+            compressed_kv=None,
+            sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
+            tail=None,
+            max_seq_len=max_seq_len,
+        )
+        state.entry_count = 0
+        state.slot = int(slot)
+        return state
+
+    def traceable(self) -> bool:
+        return False  # eager attention between the mHC / MoE islands (no A3 for the decoder yet)
+
+    def precreate_shared_masks(self, state) -> None:
+        assert self._src_state is not None, "run an eager chunk before enabling islands"
+        _precreate_shared_masks(self, self._src_state)
+
+    def forward(self, hidden_states, seq_len_actual=None, *, state, export=None):
+        sh = self.source.shared
+        src = sh["state"]
+        self._src_state = src
+        rate = self.compressor.compress_rate
+        seq_pad_global = hidden_states.shape[2] * self.sp_factor
+        real_len = seq_pad_global if seq_len_actual is None else int(seq_len_actual)
+        n_new = real_len // rate
+        E = int(sh["entry_count"])  # the source's entries AFTER this chunk (it already wrote this chunk's)
+        E0 = E - n_new
+        assert E0 * rate == int(state.kv_actual), (E0, rate, state.kv_actual)
+        cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
+        q, q_latent = self._q_stem(hidden_states, cos, sin, return_latent=True)
+        sliding_kv = self._kv_stem(hidden_states, cos, sin)
+        use_sparse = self.sparse_path and state.kv_actual >= max(self.sliding_window, self.indexer.topk * rate)
+        if use_sparse:
+            idx = self.indexer.select_indices_fused(
+                q_latent, hidden_states, cos, sin, src.index_k, E0, n_new, seq_pad_global // rate
+            )
+            # the source is done with its slab's chunk / carry rows: this layer's own window KV goes there (as a consumer's)
+            attn, next_carry, _slab = self._attention_sparse(
+                q, sliding_kv, None, idx, cos, sin, carry=state.sliding_carry, real_len=real_len, state=src
+            )
+            self.last_path = "A"
+            self.published = dict(path="A", idx=idx)
+            if (
+                getattr(self, "_shared_mask_bufs", None) is not None
+            ):  # islands: the consumers' replays run while it lives
+                buf = getattr(self, "_shared_idx_buf", None)
+                assert buf is not None, "path A with islands needs a path-A warm-up chunk (precreate_shared_masks)"
+                copy_into(buf, idx)
+                ttnn.deallocate(idx)
+                idx = buf
+            self.shared = dict(path="A", idx=idx, state=src, entry_count=E)
+        else:
+            w = _live_width(self, src, E)
+            mask_block = self.compressor._mask_block(int(hidden_states.shape[2]), E0 * rate, real_len, width=w)
+            keys = (
+                src.index_k
+                if w == int(src.index_k.shape[2])
+                else ttnn.slice(src.index_k, [0, 0, 0, 0], [1, 1, w, self.indexer.head_dim])
+            )
+            comp = (
+                src.compressed_kv
+                if w == int(src.compressed_kv.shape[2])
+                else ttnn.slice(src.compressed_kv, [0, 0, 0, 0], [1, 1, w, self.head_dim])
+            )
+            mask_sel = self.indexer.select(q_latent, hidden_states, cos, sin, keys, mask_block)
+            if keys is not src.index_k:
+                ttnn.deallocate(keys)
+            ttnn.deallocate(mask_block)
+            attn, next_carry, _slab = self._attention(
+                q,
+                sliding_kv,
+                comp,
+                mask_sel,
+                cos,
+                sin,
+                carry=state.sliding_carry,
+                kv_actual=state.kv_actual,
+                real_len=real_len,
+            )
+            self.last_path = "B"
+            self.published = dict(path="B", idx=None)
+            if self.sparse_path:
+                self._pb_template = mask_sel  # the path-B chunks' mask template for the islands
+            bufs = getattr(self, "_shared_mask_bufs", None)
+            if bufs is not None:
+                copy_into(bufs[w], mask_sel)
+                ttnn.deallocate(mask_sel)
+                if comp is not src.compressed_kv:
+                    ttnn.deallocate(comp)
+                self.debug_last_selection = None
+                self.shared = dict(mask_sel=bufs[w], compressed=None, state=src, width=w, entry_count=E)
+            else:
+                self.debug_last_selection = mask_sel
+                self.shared = dict(mask_sel=mask_sel, compressed=comp, state=src, width=w, entry_count=E)
+        state.kv_actual += real_len
+        state.entry_count = E
+        self._update_in_place(state.sliding_carry, next_carry)
+        return self._o_proj(attn)
 
 
 def _kv_only(self, hidden_states, seq_len_actual=None, *, state):
