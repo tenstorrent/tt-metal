@@ -14,6 +14,7 @@ import torch
 NORM_WEIGHTS = {  # step -> checkpoint norm (the other norms: their own tasks)
     "attn_norm": "input_layernorm",
     "post_attn_norm": "post_attention_layernorm",
+    "ffn_norm": "pre_feedforward_layernorm",
 }
 
 

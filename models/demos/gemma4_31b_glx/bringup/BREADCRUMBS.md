@@ -131,3 +131,10 @@
 - `bringup/hooks.py`: `device_component` returns `_ResidualStep(mesh, ResidualAdd())` for `attn_residual`.
 - Check (`bfw job check --task C.sliding.attn_residual`): PASS. pcc 0.9999963, auto_margin_min 1.936, device_ops 1,
   host_flops_frac 0. Regressions C.sliding.attn_norm, C.sliding.attention, C.sliding.post_attn_norm: PASS.
+
+## C.sliding.ffn_norm (run 20261018-003406-gemma31-glx-3, attempt 1), 2026-10-18
+
+- `bringup/hooks.py`: `NORM_WEIGHTS["ffn_norm"] = "pre_feedforward_layernorm"`. Reuses the same `RMSNorm`
+  (block-sharded, HiFi4 + fp32 acc) on the residual layout through `_ResidualStep`. No new module.
+- Check (`bfw job check --task C.sliding.ffn_norm`): PASS. pcc 0.9999957, auto_margin_min 2.83, device_ops 3,
+  host_flops_frac 0. Regressions C.sliding.attn_norm, attention, post_attn_norm, attn_residual: PASS.
