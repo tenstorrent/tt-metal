@@ -1295,6 +1295,10 @@ class MTPSpecEngine:
             # Device-to-device: scratch (B=1) -> row `slot` of the batched GDN buffers, other rows untouched (the slot-write
             # trace when captured and still valid, else TPGatedDeltaNet.write_slot(consume=False) eagerly).
             model._write_gdn_slot_from_scratch(slot)
+            if os.environ.get("QWEN36_SPEC_FAST_PREFILL_SYNC", "0") == "1":
+                # Measurement aid: wait for the slot-write replay here instead of letting its device time land in the
+                # next decode step (the join step). Default off: the device work overlaps the plugin's host sampling.
+                ttnn.synchronize_device(self.mesh)
         path = "short trace" if num_full == 0 else f"{num_full} chunk replay(s), tail {tail}"
         msg = f"[spec_engine] fast prefill: slot {slot} Tp={Tp} ({path})"
         if getattr(self, "_fast_prefill_logged", False):

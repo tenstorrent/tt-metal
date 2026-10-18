@@ -19,7 +19,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.demo.text_demo import _MESH_SHAPE, _MULTI, BLOCK_SIZE, DEVICE_PARAMS
 from models.demos.blackhole.qwen36.tests.spec_helpers import PAD, _prompt_pool
-from models.demos.blackhole.qwen36.tests.test_spec_lossless import _N_LAYERS
+from models.demos.blackhole.qwen36.tests.test_spec_lossless import _N_LAYERS, NEAR_TIE_GAP, _top2_gap
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.blackhole.qwen36.tt.spec_engine import get_spec_engine
 
@@ -370,9 +370,21 @@ def test_fast_join_vs_eager_seed(mesh_device, monkeypatch):
         got = runs["1"]["stag"][rid]
         if got != ref:
             i = next((j for j in range(min(len(got), len(ref))) if got[j] != ref[j]), min(len(got), len(ref)))
+            # Near-tie check: token i is predicted from prompt + out[:i]; prefill that sequence eagerly (the engine's
+            # eager path, QWEN36_SPEC_FAST_PREFILL numerics aside) and read the plain top-2 gap at token i.
+            p_idx = next(p for adms in _JOIN_SCHEDULE.values() for _, r, p in adms if r == rid)
+            seq = list(prompts[p_idx]) + [int(t) for t in ref[:i]]
+            was_fast = eng.fast_prefill
+            eng.fast_prefill = False
+            lg = eng.prefill(0, seq, _warm_table()[0:1])
+            eng.release(0)
+            eng.fast_prefill = was_fast
+            gap = _top2_gap(lg)
             msg = (
                 f"request {rid}: fast join diverges from the eager seed at token {i}\n fast  {got}\n eager {ref}\n"
-                f" fast: {tokenizer.decode(got)!r}\n eager: {tokenizer.decode(ref)!r}"
+                f" fast: {tokenizer.decode(got)!r}\n eager: {tokenizer.decode(ref)!r}\n"
+                f" eager top-2 gap at token {i}: {gap:.3f} ({'near-tie' if gap < NEAR_TIE_GAP else 'CONFIDENT'}), "
+                f"eager argmax {int(lg.argmax())}"
             )
             if strict:
                 raise AssertionError(msg)
