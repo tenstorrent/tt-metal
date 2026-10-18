@@ -1710,3 +1710,49 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - Re-run: `scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/
   <file>` per file (test_ds41_h_options.py is the new option tests); `scripts/run_safe_pytest.sh --run-all
   --no-precompile ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/test_flat_bench.py -s`.
+
+## P.4 perf (attempt 1): routed experts at GLM-5.3's production precision (EXPERTS_PRECISION=glm)
+- Change: setting EXPERTS_PRECISION {full (default), glm} in tt/settings.py; MAX_PRECISION gets EXPERTS_PRECISION
+  "full" (EXPERTS_IMPL "bfp8" was already there), so the frozen component / swap tests keep checking full precision.
+  `tt/experts.py`: `self.ecfg` = the expert matmuls' compute config (glm: LoFi, fp32 DEST = FP32_DEST_ACC; full: the
+  model's `compute_config`); used by the loop's w1 | w3 / w2 linears and the unified op. The routing-weight selector
+  matmuls (`_routing_rows`, `_weight_col`) stay on `self.cfg` (MATMUL_FIDELITY) in both: not expert matmuls.
+  Flat (`_load_flat` / `_flat`): glm = x_bf16 = h_bf16 = False (plan args), y_bf16 = False (bfp8 TILE y; the combine
+  fork accepts BFLOAT8_B TILE), down_fp32 = True, math_fidelity LoFi; full = unchanged (bf16 x / h / y,
+  down_fp32 = FP32_DEST_ACC, MATMUL_FIDELITY). Unified with glm: LoFi only. V4.1 numerics (routing weight on h,
+  fp8 q(h)) on in both. No kernel or fork change.
+- Note vs GLM: GLM's experts_ag calls the op with y_row_major=True (bf16 row-major y, pack-untilized); the brief asked
+  for y_bf16 = False, so y here is bfp8 TILE. x / h bfp8, down_fp32 1, LoFi (math_fidelity default 0) match GLM.
+- Plan on 2x2 with bfp8 x / h: the same nu=3, 48 gate/up + 32 down cores, mt 1 as full (log EXPERTS_FLAT).
+- Accuracy (frozen tests at defaults = full via MAX_PRECISION, gate order, each once): all 8 test_c_*_experts PASS.
+  Diagnostic only (not a gate): test_c_swa_experts with glm + bfp4 fails its full-precision limits: vs CPU rel 0.131
+  (limit 0.085), bias +0.034, layer24 rel 0.185 (limit 0.128): bfp4 weights + bfp8 packs (DS41-64).
+- Ladder last, change on (flat, bfp4, glm): PASS. pcc_layer L00 0.99964, L01 0.99922, L02 0.99800, L03 0.99524,
+  L14 0.99658, L20 0.99937, L21 0.99728, L24 0.99949; pcc_state_min 0.99710 (window_kv L03); overlap_state_min
+  0.99652. (P.1 bfp4 at HiFi4: worst L03 0.99535, state 0.99726; bfp8: L03 0.99673, 0.99801.) Off side not re-run
+  (the orchestrator runs it).
+- Plain profile, 2x2, chunk 53248-55296, 8 layers, ms per chunk: experts on (flat bfp4 glm) 128.86 vs off (flat bfp8
+  full) 149.24 (-20.4, -13.7 %; 16.1 vs 18.7 per layer; same 2624 programs); device total 631.76 vs 651.89; chunk wall
+  774 vs 795; pcc_chunk_out 0.99949 vs 0.99981; host_transfers_per_layer 0 both. Every other section unchanged.
+- Gotcha: a shell loop of the 8 frozen tests (~20 min) exceeds the 10-minute tool limit and is killed in the
+  background; run them a few at a time.
+- Re-run: on `DS41_EXPERTS_KERNEL=flat DS41_EXPERTS_IMPL=bfp4 DS41_EXPERTS_PRECISION=glm`, off `... bfp8 ... full`,
+  in front of `BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/common/bringup/tests/test_ladder.py` or the brief's profile command; frozen tests as in the gate.
+
+## P.4 perf (attempt 2): EXPERTS_PRECISION=glm with EXPERTS_IMPL=bfp8 (owner: GLM precision without bfp4; OV-17)
+- No code change: attempt 1's EXPERTS_PRECISION setting, MAX_PRECISION entries (EXPERTS_PRECISION "full",
+  EXPERTS_IMPL "bfp8") and the glm path in tt/experts.py already cover glm + bfp8.
+- Smoke (OV-17, not a gate): test_c_swa_experts with `DS41_EXPERTS_KERNEL=flat DS41_EXPERTS_PRECISION=glm
+  DS41_EXPERTS_IMPL=bfp8` (env wins over MAX_PRECISION) PASSES the full-precision limits: vs CPU rel 0.0162 (limit
+  0.0849), bias 0.0030; vs golden 0.0270 (limit 0.109); layer24 0.0208 (0.128); mixed 0.0200 (0.123). Log shows
+  `EXPERTS_FLAT ... nu=3 mt=1 gate/up=48 down=32 precision=glm` (same plan as full). Compare glm + bfp4 (attempt 1):
+  rel 0.131, so bfp4 weights, not LoFi / bfp8 packs, were what broke the limits there.
+- Timing (tt/perf_experts.py::test_kernels, impl bfp8, layer 0, chunk 2048, 2x2, glm, ms): flat whole call 16.38 /
+  op part 2.68 (second run 16.36 / 2.72); unified (LoFi only) 19.39 / 5.42; loop 296.7 / 281.9. Full at P.3 (same
+  test): flat 17.35 / 3.76, unified 20.35 / 6.37. So glm saves ~1.0 ms a layer (-5.6 % of the call, -29 % of the op);
+  over 8 layers ~7.8 ms a chunk (estimate, not profiled: experts ~141 vs 149.2 ms). glm flat vs unified-glm rel 0.021
+  (the bfp8 x / h / y packs; unified keeps bf16 tiles).
+- Not run here (orchestrator runs them, change on / off): the 8 frozen tests at defaults, the ladder, the plain profile.
+- Re-run: `DS41_EXPERTS_PRECISION=glm PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py::test_kernels" -k "bfp8 and fu" -s`.
