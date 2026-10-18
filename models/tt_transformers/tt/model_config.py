@@ -3039,7 +3039,7 @@ class ModelArgs:
             }.get(self.base_model_name, 0)
 
             # A hidden dim that is not a whole number of tiles cannot be sharded; zero padding is exact.
-            if default_padded_cores == 0 and self.hidden_dim % ttnn.TILE_SIZE:
+            if default_padded_cores == 0 and self.hidden_dim % (ttnn.TILE_SIZE * max(self.num_devices, 1)):
                 default_padded_cores = 8
 
             # Override MLP padding cores from env var
