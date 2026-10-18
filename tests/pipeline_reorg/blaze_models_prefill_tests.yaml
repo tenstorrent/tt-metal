@@ -906,7 +906,7 @@
   budget_type: demo
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 18
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
@@ -936,7 +936,50 @@
   budget_type: demo
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 27
+      tier: 1
+      release_ready: false
+  owner_id: U02LLCK5MML # Sasha Vuckovic
+  team: models
+  sp_config: sc1
+
+# Gemma4 continuous batching: one 4-lane traced step per chunk (2048 tokens per lane, prefixes to 8k, lane 0 the
+# deepest) against each request prefilled alone, every 2048-row block of every head in the early layers, and a slot no
+# step names left bit-identical; the lanes sliding ring SDPA against one call per request with lane 0 at the shortest
+# prefix (it alone drives the ring masks); and the batched serving path (step message, producer, batched runtime, host
+# layer acks) against the same prompts served unbatched. The serving test xfails only on the unbatched run's min-head
+# gate, as these prompts do on main; any batched, ack or other golden failure fails it.
+- name: "(Gemma4-31B-it) D_P continuous batching 4 lanes @2k"
+  fabric_profile: 1d
+  artifact_subdir: gemma4_mock256k  # the serving test's runner / producer logs and reports
+  cmd: |
+    export TT_METAL_HOME=/home/user/tt-metal
+    export PYTHONPATH="$TT_METAL_HOME" PYTHONUNBUFFERED=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export HF_MODEL=google/gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    export PREFILL_TRACE_DIR=/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest \
+        "models/demos/gemma4_d_p/tests/test_batched_prefill.py::test_batched_kv_matches_unbatched[blackhole-B4-8x4]" \
+        "models/demos/gemma4_d_p/tests/test_batched_prefill.py::test_lanes_sdpa_matches_per_request[blackhole-lane0_empty-8x4]" \
+        -vv --tb=short
+      # Its own process: the serving test launches a runner that opens the mesh, which the cases above keep open
+      # until their pytest exits.
+      python3 -m pytest \
+        "models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_batched_prefill_migration[mock]" \
+        -vv --tb=short
+    '
+  test_type: gemma4_d_p_batching
+  test_tags: [gemma4_d_p, batching]
+  test_group: module
+  budget_type: demo
+  skus:
+    bh_sc1:
+      timeout: 25
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
