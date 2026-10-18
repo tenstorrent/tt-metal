@@ -362,7 +362,7 @@ struct ByteSizeAddressType<Size, typename std::enable_if<Size == 4>::type> {
 // Split a logical-row transfer across shards when a BLOCK/WIDTH-sharded buffer's row
 // spans multiple cores. Falls through to a single noc_async_{read,write} for interleaved
 // buffers, HEIGHT-sharded RM (whole row stays on one core), and shards whose width covers
-// the full row.
+// the full row; on a rank-1 spec that transfer continues into the following pages.
 //
 // pages_per_row = ceil(tensor_W_pages / shard_W_pages); HEIGHT-sh collapses to 1 for any W·E.
 // Split-branch stride is exact iff shard_W_pages == 1 (RM B/W-sh: one shard-row = one page).
