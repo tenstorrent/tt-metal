@@ -1455,8 +1455,14 @@ class Orchestrator:
         return "\n".join(out)
 
     def perf_accept(self, task: dict, rec: dict) -> int:
-        """The owner applies the change: the gate (as tasks.yaml now has it) runs and commits the change on a PASS."""
+        """The owner applies the change: the gate (as tasks.yaml now has it) runs and commits the change on a PASS.
+        F104: a change behind a model setting (ab.change) ships: its default becomes the accepted value first, so the
+        gate, the commit and every later task run it (an opt-in switch left at the old default measured the old path).
+        """
         tid = task["id"]
+        shipped = model_precision.set_defaults(self.spec, (task.get("ab") or {}).get("change") or {})
+        if shipped:
+            self.echo(f"  [{tid}] accepted: default {'; '.join(shipped)} (tt/settings.py)")
         res = self.gate(tid)
         if res.verdict == "PASS":
             return self._after(task)
