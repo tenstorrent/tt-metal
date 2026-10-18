@@ -1303,3 +1303,6 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F103: a perf pick's ab switch may name a model setting (tt/settings.py): the A/B report sets its variable (prefix +
   name) and refuses a value outside its choices; other names stay plain variables the code must read. DeepSeek-V4.1
   P.1 named EXPERTS_IMPL, the code reads DS41_EXPERTS_IMPL: both sides ran bfp8 and the table was identical.
+- F104: accepting a perf pick whose ab.change is a model setting ships it: its default in tt/settings.py becomes the
+  accepted value (rewritten in place via the AST) before the accept gate, so the gate, the commit and every later task
+  run the change. DeepSeek-V4.1 P.2's opt-in EXPERTS_KERNEL stayed `loop`: the accept gate measured the old path.
