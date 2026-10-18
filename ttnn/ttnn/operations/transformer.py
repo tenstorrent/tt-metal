@@ -208,9 +208,21 @@ ttnn.attach_golden_function(
     ttnn.transformer.ring_distributed_scaled_dot_product_attention,
     golden_function=ring_distributed_scaled_dot_product_attention_golden,
 )
+
+
+def _preprocess_ring_joint_golden_inputs(function_args, function_kwargs):
+    # Lanes: each Q shard stacks every lane's local rows, so the golden needs the shard count to regroup them.
+    function_kwargs = dict(function_kwargs)
+    if function_kwargs.get("slot_id") is not None:
+        query = function_args[0] if function_args else function_kwargs["input_tensor_q"]
+        function_kwargs["_ttnn_ring_joint_q_shards"] = _sequence_shard_count(query, 2)
+    return ttnn.decorators.default_preprocess_golden_function_inputs(function_args, function_kwargs)
+
+
 ttnn.attach_golden_function(
     ttnn.transformer.ring_joint_scaled_dot_product_attention,
     golden_function=ring_joint_scaled_dot_product_attention_golden,
+    preprocess_golden_function_inputs=_preprocess_ring_joint_golden_inputs,
     output_tensor_kwarg_names=(
         "persistent_output_buffer_k",
         "persistent_output_buffer_v",
