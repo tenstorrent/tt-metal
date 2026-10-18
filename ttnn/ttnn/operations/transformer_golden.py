@@ -1290,6 +1290,7 @@ def _ring_joint_golden(
     kv_actual_isl_tensor=None,
     kv_cache_num_layers=None,
     kv_cache_layer_idx=None,
+    _ttnn_ring_joint_q_shards=1,
     **_execution_options,
 ):
     import torch
@@ -1300,6 +1301,45 @@ def _ring_joint_golden(
         raise ValueError("is_cross=True requires non-causal attention")
 
     stats = _ring_stats_scratch(input_tensor_q, joint_tensor_q)
+    num_lanes = slot_id.numel() if isinstance(slot_id, torch.Tensor) else 1
+    if num_lanes > 1:
+        # Lanes: each of the Q shards stacks num_lanes requests' local rows request-major, and comparison mode composes
+        # the shards along the rows, so Q is [shard, lane, local row]. Lane b's rows across the shards are what a
+        # one-request call gets; it reads cache slot slot_id[b] with prefix kv_actual_isl_tensor[b], and the output
+        # goes back to the same layout.
+        if joint_tensor_q is not None and joint_tensor_q.shape[-2] > 0:
+            raise ValueError("lanes do not take joint tensors")
+        if kv_actual_isl_tensor is None or kv_actual_isl_tensor.numel() != num_lanes:
+            raise ValueError("kv_actual_isl_tensor must have one element per lane like slot_id")
+        shards = int(_ttnn_ring_joint_q_shards)
+        if input_tensor_q.shape[-2] % (shards * num_lanes):
+            raise ValueError(
+                f"Q rows ({input_tensor_q.shape[-2]}) do not split into {shards} shards of {num_lanes} equal lanes"
+            )
+        local_rows = input_tensor_q.shape[-2] // (shards * num_lanes)
+        q_by_lane = input_tensor_q.unflatten(-2, (shards, num_lanes, local_rows))
+        slots, prefixes = slot_id.reshape(-1), kv_actual_isl_tensor.reshape(-1)
+        lane_outputs = [
+            _ring_joint_golden(
+                q_by_lane.select(-3, b).flatten(-3, -2),
+                input_tensor_k,
+                input_tensor_v,
+                logical_n=logical_n,
+                is_causal=is_causal,
+                scale=scale,
+                attention_sink=attention_sink,
+                sliding_window_size=sliding_window_size,
+                circular_kv_cache=circular_kv_cache,
+                slot_id=slots[b : b + 1],
+                kv_actual_isl_tensor=prefixes[b : b + 1],
+                kv_cache_num_layers=kv_cache_num_layers,
+                kv_cache_layer_idx=kv_cache_layer_idx,
+            )[0]
+            for b in range(num_lanes)
+        ]
+        output = torch.stack([out.unflatten(-2, (shards, local_rows)) for out in lane_outputs], dim=-3).flatten(-4, -2)
+        return output, output[..., :0, :], stats
+
     input_tensor_k, input_tensor_v, actual_kv_length = _ring_runtime_cache_selection(
         input_tensor_k,
         input_tensor_v,
