@@ -409,3 +409,16 @@ def test_a_pick_waiting_for_the_owner_does_not_hold_up_independent_tasks(mk, san
     assert o.run() == HUMAN, mk.lines
     assert o.led.status("X.9") == "PASS" and o.led.status("X.10") != "PASS"
     assert any("waits for a person; the run goes on" in ln for ln in mk.lines) or o.led.state()["P.1"].get("waiting")
+
+
+def test_a_waiting_pick_is_judged_by_its_own_change_not_its_neighbours(mk, sandbox):
+    """F109: a waiting pick whose own change is committed may be passed even when another task's uncommitted change
+    sits under the same paths (DeepSeek-V4.1: P.5's uncommitted tt/ files made P.4 look unsafe, the run stopped)."""
+    other = {"id": "X.9", "title": "independent", "step": "perf", "deps": [], "gate": {"cmd": record_cmd(n=1)}}
+    o = mk([pick(), other], CHANGE)
+    assert o.run() == HUMAN, mk.lines
+    sandbox.git("add", "src")
+    sandbox.git("commit", "-q", "-m", "the pick's switch, opt-in")
+    (sandbox.repo / "src/neighbour.py").write_text("x = 1\n")  # someone else's uncommitted work under src/
+    assert o.run() == HUMAN, mk.lines
+    assert o.led.status("X.9") == "PASS"
