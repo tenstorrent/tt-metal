@@ -570,7 +570,13 @@ class DSV41PrefillIndexer:
             sc = ttnn.experimental.indexer_score_dsa(
                 qu, self.slab, wu, chunk_start_idx=Lc, kv_len=Lc + 32, program_config=self.cfg, cache_batch_idx=u
             )
-            scm = ttnn.where(vis, ttnn.to_layout(sc, ttnn.TILE_LAYOUT), float("-inf"))
+            sct = ttnn.to_layout(sc, ttnn.TILE_LAYOUT)
+            if (
+                sct is not sc
+            ):  # (the score tensors are 16.8 MiB/bank blocks at a 1M context: never keep more of them alive than the op needs)
+                ttnn.deallocate(sc)
+            scm = ttnn.where(vis, sct, float("-inf"))
+            ttnn.deallocate(sct)
             _pdbg(self.md, "scm")
             ids = ttnn.experimental.topk_large_indices(
                 ttnn.to_layout(scm, ttnn.ROW_MAJOR_LAYOUT), k=TOPK, valid_length=Lc + 32
@@ -602,7 +608,7 @@ class DSV41PrefillIndexer:
             fin = ttnn.to_layout(ttnn.gather(cpe, 3, index=posu), ttnn.ROW_MAJOR_LAYOUT)
             _pdbg(self.md, "fin")
             per_user.append(fin)
-            for t_ in (sc, scm, ids, idf, valid, idc, vals, pg, cv, cp, pos, posf, posu, cpe, qu, wu):
+            for t_ in (scm, ids, idf, valid, idc, vals, pg, cv, cp, pos, posf, posu, cpe, qu, wu):
                 ttnn.deallocate(t_)
         ttnn.deallocate(qh)
         return per_user[0] if U == 1 else ttnn.concat(per_user, dim=0)

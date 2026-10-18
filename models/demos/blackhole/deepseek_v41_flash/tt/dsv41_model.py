@@ -1842,6 +1842,19 @@ class Model:
             self._dfill = f
         return f
 
+    def _hold_block(self, mib):
+        """a DRAM tensor of ``mib`` MiB per bank (kept until freed: the hole it leaves is contiguous). The largest size <= mib that fits, down to 16 MiB."""
+        while True:
+            try:
+                return ttnn.zeros(
+                    [1, 1, mib * 8 * 1024, 512], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.md
+                )
+            except Exception:
+                if mib <= 16:
+                    raise
+                self.log(f"guard hole of {mib} MiB/bank does not fit, trying {mib - 4}")
+                mib -= 4
+
     def warm_serving(self, chunk, s_pad, bucket_users=(), extra_spads=()):
         """Everything a server needs before its first request, in the order that keeps device allocation out of any captured trace: (1) allocate every persistent buffer (prefill
         per-chunk buffers, the full decode loop buffers, every decode bucket), (2) compile every program (prefill chunk, full decode step, every bucket step), (3) capture the traces
@@ -1862,11 +1875,32 @@ class Model:
             pm.post_replay_hooks.append(self._post_chunk)
             self._hooks_set = pm
         pm.timing = {}
-        compiled = pm.compile_dyn(chunk, s_pad)
-        self.warm_key_export()  # (the max-context export first: with the slice_write export its temporaries need a 32 MiB/bank hole that exists only now; the fill_cache export warms every prefix size)
+        extra = sorted({int(x) for x in extra_spads if 0 < int(x) < int(s_pad)}) if Up == U else []
+        first = []
+        if extra and os.environ.get("DSV41_PF_EXTRA_FIRST", "0") == "1":
+            # ALLOCATION ORDER: the persistent tables of the small context are allocated BEFORE the max-context ones. Allocated afterwards they land in the holes the max-context compile left
+            # (its eager temporaries are 16.8 MiB/bank blocks), the eager passes of the captures then find fewer than the 3 such blocks they need (1M, 4 users: OOM). First, they sit at the
+            # bottom and every later block stays as contiguous as in a build without the small context.
+            cur = pm.dyn
+            if not (cur is not None and cur.C == chunk and cur.S_pad == int(s_pad) and pm.dyn_trace is not None):
+                first = extra[:1]
+        if first:
+            self.log_dram(f"before the S_pad {first[0]} prefill context (allocated first)")
+            pm.teardown_dyn()
+            pm.compile_dyn(chunk, first[0])
+            self.warm_key_export(limit=first[0])
+            self.log_dram(f"after the S_pad {first[0]} prefill context")
+            pm.compile_dyn_extra(chunk, int(s_pad))  # (the small context stays the active one)
+            pm.use_dyn(int(s_pad))
+            compiled = True
+            self.warm_key_export()
+        else:
+            compiled = pm.compile_dyn(chunk, s_pad)
+            self.warm_key_export()  # (the max-context export first: with the slice_write export its temporaries need a 32 MiB/bank hole that exists only now; the fill_cache export warms every prefix size)
         # smaller S_pad contexts (DSV41_PF_SMALL_BUCKET): a short prompt replays a chunk trace whose FIFOs / masks / index scores have S_pad / ratio entries instead of max_ctx / ratio.
         # Each owns its carried tables and trace; ALL of them are allocated + compiled here, before the first capture.
-        extra = sorted({int(x) for x in extra_spads if 0 < int(x) < int(s_pad)}) if (compiled and Up == U) else []
+        extra_all = extra if compiled else []
+        extra = [x for x in extra_all if x not in first]
         for sp_ in extra:
             self.log_dram(f"before the S_pad {sp_} prefill context")
             pm.compile_dyn_extra(chunk, sp_)
@@ -1877,14 +1911,13 @@ class Model:
             pm.use_dyn(int(s_pad))
             self.log_dram(f"after the S_pad {sp_} prefill context")
         guard = None
-        if extra:
+        if extra:  # (allocated AFTER the max-context tables: DSV41_PF_EXTRA_FIRST=0)
             # the eager pass right before the max-context capture needs ~17 MiB/bank contiguous (the sharded indexer's scores): keep a hole for it until then (the small contexts' tables and
             # program buffers would otherwise split every such block)
-            gm = int(os.environ.get("DSV41_PF_GUARD_MIB", "21"))
+            gm = int(os.environ.get("DSV41_PF_GUARD_MIB", "36"))
             if gm > 0:
-                guard = ttnn.zeros(
-                    [1, 1, gm * 8 * 1024, 512], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.md
-                )
+                self.mem_report("before the guard hole of the max-context capture")
+                guard = self._hold_block(gm)
         t1 = time.perf_counter()
         from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import DecodeBucket
 
@@ -1921,21 +1954,17 @@ class Model:
                 guard = None
             pm.capture_dyn_trace(chunk)
             self.mem_report(f"after the S_pad {s_pad} chunk trace")
-            for sp_ in extra:
+            for sp_ in extra_all:
                 pm.use_dyn(sp_)
                 pm.capture_dyn_trace(chunk)
                 self.mem_report(f"after the S_pad {sp_} chunk trace")
-            if extra:
+            if extra_all:
                 pm.use_dyn(int(s_pad))
             self.__dict__.pop("pf_bucket_of", None)
-            if extra and int(os.environ.get("DSV41_PF_GUARD_MIB", "21")) > 0:
+            if extra and int(os.environ.get("DSV41_PF_GUARD_MIB", "36")) > 0:
                 # the eager decode step right before the decode capture needs a ~17 MiB/bank contiguous block (the indexer's score mask): hold one until then
-                guard = ttnn.zeros(
-                    [1, 1, int(os.environ.get("DSV41_PF_GUARD2_MIB", "24")) * 8 * 1024, 512],
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=self.md,
-                )
+                self.mem_report("before the guard hole of the decode precapture")
+                guard = self._hold_block(int(os.environ.get("DSV41_PF_GUARD2_MIB", "36")))
             self.__dict__.setdefault("pf_resume", {}).clear()
             self.__dict__.pop("pf_slot_of", None)
             self.__dict__.pop("pf_slot_owner", None)

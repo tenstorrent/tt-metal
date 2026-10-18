@@ -81,6 +81,19 @@ def mask_scores(scores, nvalid, ar):
     U, n = int(scores.shape[0]), int(scores.shape[-1])
     sc = ttnn.reshape(scores, [1, 1, U, n])
     nv = ttnn.reshape(ttnn.to_layout(nvalid, ttnn.ROW_MAJOR_LAYOUT), [1, 1, U, 1])
+    if os.environ.get("DSV41_MASK_LEAN", "0") == "1":
+        # same values with ~1/3 of the DRAM temporaries (no float32 copies; a bf16 select of bf16 scores is the typecast round trip of the float32 one): the eager decode step of a 1M build
+        # needs ~17 MiB/bank blocks for them (measured bit-identical to the float32 path, test in the commit message)
+        keep = ttnn.lt(ar, ttnn.to_layout(nv, ttnn.TILE_LAYOUT), dtype=ttnn.bfloat16)
+        sct = ttnn.to_layout(sc, ttnn.TILE_LAYOUT)
+        masked = ttnn.where(keep, sct, -1e30)
+        ttnn.deallocate(keep)
+        if sct is not sc:
+            ttnn.deallocate(sct)
+        out = ttnn.to_layout(masked, ttnn.ROW_MAJOR_LAYOUT)
+        if out is not masked:
+            ttnn.deallocate(masked)
+        return out
     keep = ttnn.lt(ar, ttnn.to_layout(nv, ttnn.TILE_LAYOUT))  # [1,1,U,n]
     masked = ttnn.where(keep, ttnn.typecast(ttnn.to_layout(sc, ttnn.TILE_LAYOUT), ttnn.float32), -1e30)
     return ttnn.to_layout(ttnn.typecast(masked, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
