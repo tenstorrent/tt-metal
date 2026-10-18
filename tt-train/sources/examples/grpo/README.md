@@ -3,9 +3,9 @@
 GRPO training with `GRPOTrainer` on Tenstorrent devices. Where rollouts are
 generated is a config choice, not a different script:
 
-- `rollout_source: "ttml"` / `rollout_mode: "in_process"` — training and
+- `rollout_backend: "ttml_in_process_sync"` — training and
   rollout generation run in one ttml process on one device mesh.
-- `rollout_source: "ttt"` / `rollout_mode: "remote_sync"` — the same script
+- `rollout_backend: "ttt_remote_sync"` — the same script
   runs on two tt-run ranks; rank 1 generates with `tt-transformers`. See
   [Remote rollout (two ranks)](#remote-rollout-two-ranks).
 
@@ -54,7 +54,7 @@ Notes:
 - The model family comes from `model_type` in the config's model yaml
   (`"llama"` or `"qwen3"`), and the runner (gradient checkpointing or not)
   from its `runner_type`. `GRPOTrainer` builds that model, and since these
-  configs set `rollout_source: "ttml"` in `grpo_config`, it generates rollouts
+  configs set `rollout_backend: "ttml_in_process_sync"` in `grpo_config`, it generates rollouts
   with it through a `TTMLRolloutSampler`; the remote config instead generates
   on a second rank (see [Remote rollout](#remote-rollout-two-ranks));
   for Qwen3 FSDP see [FSDP](../../../docs/GRPO_TRAINER.md#fsdp) in the trainer doc.
@@ -155,8 +155,8 @@ so no initial weight push is needed.
 
 | Field | Description |
 | ----- | ----------- |
-| `training_config.model_source` | HuggingFace Hub id. Both ranks load their weights from it; a local path is rejected in `remote_sync`. |
-| `grpo_config.rollout_source` / `rollout_mode` | `"ttt"` / `"remote_sync"`. |
+| `training_config.model_source` | HuggingFace Hub id. Both ranks load their weights from it; a local path is rejected in `ttt_remote_sync`. |
+| `grpo_config.rollout_backend` | `"ttt_remote_sync"`. |
 | `grpo_config.weight_sync_every` | Push the policy weights to rank 1 every *N* optimizer steps (default 1). |
 | `remote_rollout_config.mesh_shape` | Rank 1's parent mesh `[rows, cols]`, split into `rows * cols` `[1, 1]` submeshes that generate data-parallel. |
 | `remote_rollout_config.max_batch_size` | Per-submesh decode capacity. One tt-transformers call serves `max_batch_size * num_submeshes` completions; larger batches are split into several calls. |
