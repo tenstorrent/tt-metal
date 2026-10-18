@@ -283,7 +283,10 @@ class TtK3TokenSplitMoE:
         # 48 gate/up Tensix-reader layout's 2442 / 2727 / 5920. (Plan options are process-wide env; explicit ones win.)
         # Default on (K3_GU64=0: the 48 gate/up Tensix-reader layout); with it the routed experts read x twice (one
         # multicaster per rectangle: a single one for 64 gate/up cores back-pressured the whole call; block traced
-        # forward 3407 -> 3315 us, experts_combine 2446 -> 2380 us; with x read once 3453 / 2476)
+        # forward 3407 -> 3315 us, experts_combine 2446 -> 2380 us; with x read once 3453 / 2476). Two x helpers per
+        # rectangle (MIMO_FL_NH=2, on the cells the accumulators-on-ports layout frees): x delivery (~20 GB/s a relay)
+        # capped compute-bound calls - single chip M 1024 182.6 -> 165.2 us / expert, harness fused packed 5807 ->
+        # 5709 us, uniform / spread and the block's traced forward unchanged (3312 us)
         self.gu64 = os.environ.get("K3_GU64", "1") == "1"
         if self.gu64:
             for k, v in (
@@ -292,6 +295,7 @@ class TtK3TokenSplitMoE:
                 ("MIMO_FL_HG", "1"),
                 ("MIMO_FL_HG_NU", "3"),
                 ("MIMO_FL_ND", "28"),
+                ("MIMO_FL_NH", "2" if acc_on_ports else "1"),
             ):
                 os.environ.setdefault(k, v)
         self.op = FlatRoutedExpert(

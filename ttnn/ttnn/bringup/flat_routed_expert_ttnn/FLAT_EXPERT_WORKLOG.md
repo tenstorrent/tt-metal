@@ -1031,3 +1031,22 @@ A hot expert up to ~1024 tokens hides under the others' weight streaming (+7-10%
 2x the no-hot time. Past ~2k the call is ~ the hot expert's own time (one 8192 expert alone: 1.73 ms, 67% of the 90-core
 peak) + ~0.4 ms of the other 23 (alone ~1.0 ms: about 60% hidden under it). 72 gate/up: slower without a hot expert
 (-16%), even at 2048, better from 4096 (8192: -1..-10%); a lone large expert runs at 75% vs 67%.
+
+### Why more down cores (or gate/up cores) gained nothing (2026-10-18, single chip, DRISC-only, us / expert)
+Effective-core math (min(1.5 gate/up, 3 down)) predicted +14% for K3 at 32 down and more for V4.1 at 72 gate/up.
+Three ceilings sit within ~10% of each other per 64-row sub-block, so lifting one alone shows nothing:
+1. **Down column granularity**: the down output is H / 32 column tiles split over the down cores - K3 112 tiles: 28
+   cores x 4 exactly, 32 cores still have 4-column cores (the slowest sets the pace); time only steps at ceil(112 / ND)
+   = 3 (38 cores). V4.1 160 tiles: 28 -> 6, 32 -> 5 (72 gate/up: 190.6 -> 179.6 at M 1024), 40 -> 4 (181.9: no more).
+   Zones (K3, compute only, 32 down): the down cores are in SE_DOWN ~100% of the time (~14k cycles a sub-block at 4
+   columns, ~88% of the LoFi tile rate), the gate/up cores 33-49% in SE_GU_MM.
+2. **x delivery**: ~15.5k cycles a sub-block = 64 rows x 7 KB x 2 rectangles at ~80 GB/s, ~20 GB/s a relay (the
+   known relay rate). K3 M 1024: 28 down 182.6, 38 down 186.1; x reads skipped 163.4; **MIMO_FL_NH=2 (two x helpers a
+   rectangle) 165.2** (38 down 169.1, NH 3 168.4). V4.1 is not x bound (NH 2: 72/32 177.9 vs 179.6, 48/28 219.8 vs 216.5).
+3. **Gate/up compute**: with x free, ~13.7k cycles a sub-block whatever the down count = the 2 x 3-tile matmul blocks
+   at ~79% of the LoFi tile rate (64 gate/up cores, K 112).
+Compute only (no weight / x traffic): K3 28 down 171.6, 32 down 163.7 (127 us = the LoFi floor at 96 effective cores).
+In the overlap (K3 harness, accumulators on ports): NH 2 flat alone packed 5592 -> 5277, fused 5807 -> 5709 (the hot
+chip's combine links then show: fused / flat 1.039 -> 1.082); uniform / spread unchanged. K3 block: NH 2 neutral
+(traced 3312), now its default with acc_on_ports. Next levers: gate/up block shape (taller blocks: fewer weight unpacks
+per FLOP), down cores at the next granularity step, the hot chip's combine link time.
