@@ -176,6 +176,8 @@ bool bf16_dest_leaky_relu();
 template <int ITERATIONS>
 void calculate_leaky_relu_bf16();
 void init_leaky_relu_bf16();
+// The slope the generated leaky_relu kernel is fitted for, as FP32 bits; any other slope runs the stock kernel.
+inline constexpr std::uint32_t leaky_relu_bf16_slope_bits = 0x3c23d70au;
 // Whether BF16 DEST runs the generated leaky_relu kernel as one call over the whole tile.
 inline constexpr bool leaky_relu_bf16_whole_tile = true;
 // Sets up the generated BF16 leaky_relu kernel for the instance it serves.
@@ -189,7 +191,7 @@ inline void leaky_relu_bf16_tile_init() {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void calculate_lrelu(uint slope) {
     if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
-        if (bf16_dest_leaky_relu() && slope == 0x3c23d70au) {
+        if (bf16_dest_leaky_relu() && slope == ckernel::sfpu::leaky_relu_bf16_slope_bits) {
             calculate_leaky_relu_bf16<ITERATIONS>();
             return;
         }

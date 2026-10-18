@@ -206,7 +206,7 @@ ALWI void relu_tile_int32(uint32_t idst) {
 // clang-format on
 ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope = 0) {
     MATH(if constexpr (ckernel::sfpu::leaky_relu_bf16_whole_tile && !DST_ACCUM_MODE) {
-        if (slope == 0x3c23d70au) {
+        if (slope == ckernel::sfpu::leaky_relu_bf16_slope_bits) {
             SFPU_UNARY_CALL(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
