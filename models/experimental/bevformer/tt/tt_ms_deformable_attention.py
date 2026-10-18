@@ -48,6 +48,18 @@ def _spatial_shapes_list(spatial_shapes):
     return [(int(h), int(w)) for h, w in spatial_shapes.tolist()]
 
 
+def _warn_dram_fallback(value, attention_weights, spatial_shapes, reason):
+    warning_key = (tuple(value.shape), tuple(attention_weights.shape), tuple(spatial_shapes.flatten().tolist()))
+    if warning_key not in _warned_dram_fallbacks:
+        _warned_dram_fallbacks.add(warning_key)
+        logger.warning(f"fused_msda: {reason}; using interleaved DRAM for value shape {list(value.shape)}")
+
+
+def _is_allocation_oom(error):
+    """Keep the auto retry narrow: kernel and validation failures must remain visible."""
+    return "Out of Memory" in str(error)
+
+
 def multi_scale_deformable_attn_fused(
     value,
     reference_points,
@@ -75,9 +87,10 @@ def multi_scale_deformable_attn_fused(
         attention_weights: (bs, num_queries, num_heads, num_levels*num_points) ROW_MAJOR
         spatial_shapes: torch (num_levels, 2) of (H, W)
         value_memory: ``"auto"`` selects L1 only when value, output, and fused-op
-            circular buffers fit safely, and logs one warning per input shape when it
-            falls back; ``"dram"`` forces DRAM; ``"l1"`` requires L1 and raises
-            ``RuntimeError`` when it does not fit.
+            circular buffers fit safely, retries in DRAM if an L1 allocation still
+            runs out of memory, and logs one warning per input shape when it falls
+            back; ``"dram"`` forces DRAM; ``"l1"`` requires L1 and raises
+            ``RuntimeError`` when it does not fit or cannot be allocated.
 
     Returns:
         (bs, num_queries, num_heads*head_dim) ROW_MAJOR -- the heads are already
@@ -96,6 +109,9 @@ def multi_scale_deformable_attn_fused(
     if value_memory == "dram":
         target_memory_config = ttnn.DRAM_MEMORY_CONFIG
     else:
+        # TODO: Expose placement on the module config and use explicit L1/DRAM for fixed
+        # deployments. This would improve host-side performance by removing the per-call
+        # capacity query, while keeping auto placement available for dynamic environments.
         l1_is_safe = ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
             value,
             reference_points,
@@ -108,37 +124,44 @@ def multi_scale_deformable_attn_fused(
             raise RuntimeError("fused_msda value_memory='l1' is unsafe under the current L1 allocation")
         target_memory_config = ttnn.L1_MEMORY_CONFIG if l1_is_safe else ttnn.DRAM_MEMORY_CONFIG
         if value_memory == "auto" and not l1_is_safe:
-            warning_key = (tuple(value.shape), tuple(attention_weights.shape), tuple(spatial_shapes.flatten().tolist()))
-            if warning_key not in _warned_dram_fallbacks:
-                _warned_dram_fallbacks.add(warning_key)
-                logger.warning(
-                    "fused_msda: value and output do not safely fit L1; using interleaved DRAM "
-                    f"for value shape {list(value.shape)}"
-                )
+            _warn_dram_fallback(value, attention_weights, spatial_shapes, "value and output do not safely fit L1")
 
-    owns_staged_value = False
-    if value.layout != ttnn.ROW_MAJOR_LAYOUT:
-        staged_value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT, memory_config=target_memory_config)
-        owns_staged_value = True
-    elif value.memory_config() != target_memory_config:
-        staged_value = ttnn.to_memory_config(value, target_memory_config)
-        owns_staged_value = True
-    else:
+    def run_with_memory_config(memory_config):
         staged_value = value
+        owns_staged_value = False
+        try:
+            if value.layout != ttnn.ROW_MAJOR_LAYOUT:
+                staged_value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
+                owns_staged_value = True
+            elif value.memory_config() != memory_config:
+                staged_value = ttnn.to_memory_config(value, memory_config)
+                owns_staged_value = True
+
+            return ttnn.experimental.fused_msda_from_offsets(
+                staged_value,
+                reference_points,
+                sampling_offsets,
+                attention_weights,
+                _spatial_shapes_list(spatial_shapes),
+                reference_mode="pillar",
+                memory_config=memory_config,
+            )
+        finally:
+            if owns_staged_value:
+                ttnn.deallocate(staged_value)
 
     try:
-        output = ttnn.experimental.fused_msda_from_offsets(
-            staged_value,
-            reference_points,
-            sampling_offsets,
+        output = run_with_memory_config(target_memory_config)
+    except RuntimeError as error:
+        if value_memory != "auto" or target_memory_config != ttnn.L1_MEMORY_CONFIG or not _is_allocation_oom(error):
+            raise
+        _warn_dram_fallback(
+            value,
             attention_weights,
-            _spatial_shapes_list(spatial_shapes),
-            reference_mode="pillar",
-            memory_config=target_memory_config,
+            spatial_shapes,
+            "L1 allocation failed after the capacity check",
         )
-    finally:
-        if owns_staged_value:
-            ttnn.deallocate(staged_value)
+        output = run_with_memory_config(ttnn.DRAM_MEMORY_CONFIG)
 
     if use_signpost:
         signpost(header="fused_msda End")

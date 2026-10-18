@@ -5,6 +5,7 @@
 #include "fused_msda_device_operation.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <string_view>
 
 #include <tt-metalium/allocator.hpp>
@@ -310,6 +311,15 @@ namespace {
 
 using OperationType = ttnn::operations::experimental::fused_msda::FusedMSDAOperation;
 
+bool hybrid_allocator_enabled() {
+    // Allocator mode is process-wide and fixed during MetalContext initialization.
+    static const bool enabled = [] {
+        const char* value = std::getenv("TT_METAL_ALLOCATOR_MODE_HYBRID");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
 ttsl::SmallVector<uint32_t> flatten_spatial_shapes(const std::vector<std::array<uint32_t, 2>>& spatial_shapes) {
     TT_FATAL(!spatial_shapes.empty(), "fused_msda: spatial_shapes must not be empty");
     ttsl::SmallVector<uint32_t> flat;
@@ -424,6 +434,9 @@ bool can_use_fused_msda_from_offsets_l1_value(
     };
     const auto shapes = derive_shapes(attrs, args, /*require_value_row_major=*/false);
 
+    if (hybrid_allocator_enabled()) {
+        return false;
+    }
     auto* device = value.device();
     const auto& allocator = *device->allocator();
     const uint64_t num_banks = allocator.get_num_banks(BufferType::L1);

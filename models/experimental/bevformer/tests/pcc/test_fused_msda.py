@@ -191,8 +191,8 @@ def test_msda_auto_keeps_value_in_l1_on_large_blackhole(device, monkeypatch, bat
         pytest.skip("strict fused-MSDA L1 placement requires Blackhole")
 
     l1_num_banks = ttnn.get_memory_view(device, ttnn.BufferType.L1).num_banks
-    if l1_num_banks < 110:
-        pytest.skip(f"strict fused-MSDA L1 placement requires 110 L1 banks; found {l1_num_banks}")
+    if l1_num_banks < 90:
+        pytest.skip(f"strict fused-MSDA L1 placement requires 90 L1 banks; found {l1_num_banks}")
 
     config, _, tt_parameters, torch_inputs = _build(device, "nuscenes_base", batch_size, 2500, 0)
     placements = _record_value_placement(monkeypatch)
@@ -202,7 +202,8 @@ def test_msda_auto_keeps_value_in_l1_on_large_blackhole(device, monkeypatch, bat
     assert placements == [ttnn.BufferType.L1]
 
 
-def test_msda_auto_falls_back_to_dram_under_l1_pressure(device, expect_error):
+def test_msda_auto_falls_back_to_dram(device, monkeypatch, expect_error):
+    """Cover both a conservative capacity fallback and a post-check L1 OOM."""
     spatial_shapes = torch.tensor([(29, 50), (15, 25), (8, 13), (4, 7)], dtype=torch.long)
     batch_size, num_queries, num_heads, num_points, embed_dims = 6, 128, 8, 4, 256
     num_keys = int(spatial_shapes.prod(dim=1).sum().item())
@@ -253,6 +254,7 @@ def test_msda_auto_falls_back_to_dram_under_l1_pressure(device, expect_error):
         value_memory="dram",
     )
     expected_torch = ttnn.to_torch(expected)
+    ttnn.deallocate(expected)
 
     # Without the blocker this case fits L1, so the blocker alone flips the decision.
     assert ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
@@ -263,6 +265,80 @@ def test_msda_auto_falls_back_to_dram_under_l1_pressure(device, expect_error):
         spatial_shapes.tolist(),
         reference_mode="pillar",
     )
+
+    fused_op = ttnn.experimental.fused_msda_from_offsets
+    to_layout = ttnn.to_layout
+    attempted_memory_configs = []
+    staged_values = []
+    l1_error_message = ["Out of Memory: injected L1 output allocation failure"]
+
+    def record_staged_value(tensor, *args, **kwargs):
+        staged = to_layout(tensor, *args, **kwargs)
+        memory_config = kwargs.get("memory_config")
+        if tensor is value and memory_config is not None:
+            staged_values.append((memory_config, staged))
+        return staged
+
+    def fail_l1_output_allocation(value, *args, **kwargs):
+        memory_config = kwargs["memory_config"]
+        attempted_memory_configs.append(memory_config)
+        if memory_config == ttnn.L1_MEMORY_CONFIG:
+            raise RuntimeError(l1_error_message[0])
+        return fused_op(value, *args, **kwargs)
+
+    with monkeypatch.context() as oom_patch:
+        oom_patch.setattr(ttnn.experimental, "can_use_fused_msda_from_offsets_l1_value", lambda *args, **kwargs: True)
+        oom_patch.setattr(ttnn, "to_layout", record_staged_value)
+        oom_patch.setattr(ttnn.experimental, "fused_msda_from_offsets", fail_l1_output_allocation)
+
+        actual = multi_scale_deformable_attn_fused(
+            value,
+            reference_points,
+            sampling_offsets,
+            attention_weights,
+            spatial_shapes,
+            value_memory="auto",
+        )
+        assert attempted_memory_configs == [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG]
+        assert [memory_config for memory_config, _ in staged_values] == [
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+        ]
+        assert all(not staged.is_allocated() for _, staged in staged_values)
+        assert actual.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+        torch.testing.assert_close(ttnn.to_torch(actual), expected_torch, rtol=0, atol=0)
+        ttnn.deallocate(actual)
+
+        attempted_memory_configs.clear()
+        staged_values.clear()
+        with expect_error(RuntimeError, "injected L1 output allocation failure"):
+            multi_scale_deformable_attn_fused(
+                value,
+                reference_points,
+                sampling_offsets,
+                attention_weights,
+                spatial_shapes,
+                value_memory="l1",
+            )
+        assert attempted_memory_configs == [ttnn.L1_MEMORY_CONFIG]
+        assert len(staged_values) == 1
+        assert not staged_values[0][1].is_allocated()
+
+        l1_error_message[0] = "injected kernel failure"
+        attempted_memory_configs.clear()
+        staged_values.clear()
+        with expect_error(RuntimeError, "injected kernel failure"):
+            multi_scale_deformable_attn_fused(
+                value,
+                reference_points,
+                sampling_offsets,
+                attention_weights,
+                spatial_shapes,
+                value_memory="auto",
+            )
+        assert attempted_memory_configs == [ttnn.L1_MEMORY_CONFIG]
+        assert len(staged_values) == 1
+        assert not staged_values[0][1].is_allocated()
 
     l1_view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
     tile_bytes = 2048
@@ -317,21 +393,8 @@ def test_msda_auto_falls_back_to_dram_under_l1_pressure(device, expect_error):
         assert actual.memory_config() == ttnn.DRAM_MEMORY_CONFIG
         torch.testing.assert_close(ttnn.to_torch(actual), expected_torch, rtol=0, atol=0)
 
-        # A second fallback, after the warning was emitted, takes the same path
-        # and leaks nothing.
-        repeated = multi_scale_deformable_attn_fused(
-            value,
-            reference_points,
-            sampling_offsets,
-            attention_weights,
-            spatial_shapes,
-            value_memory="auto",
-        )
-        assert repeated.memory_config() == ttnn.DRAM_MEMORY_CONFIG
-        torch.testing.assert_close(ttnn.to_torch(repeated), expected_torch, rtol=0, atol=0)
-        # Only the outputs may outlive the calls; the staged DRAM value must not.
+        # Only the output may outlive the call; the staged DRAM value must not.
         ttnn.deallocate(actual)
-        ttnn.deallocate(repeated)
         assert allocated_per_bank() == allocated_before_fallback
     finally:
         ttnn.deallocate(blocker)

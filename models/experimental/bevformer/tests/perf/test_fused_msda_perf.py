@@ -14,24 +14,25 @@ time is in:
 ``test_fused_msda_module_perf``
     The whole ``TTMSDeformableAttention`` forward: value/attn/offset Linears,
     softmax, the fused op, ``output_proj`` and the residual. This is what the
-    encoder actually pays. Run once per ``value_memory``: ``auto`` is the
-    production path, ``dram`` the fallback it takes when L1 does not fit.
+    encoder actually pays. Run once per forced ``value_memory`` placement so
+    the L1 and DRAM measurements remain directly comparable.
 
 ``test_fused_msda_kernel_perf``
     Only ``ttnn.experimental.fused_msda_from_offsets``. The projections and the
     softmax run once, before the signpost, so the measured region is the op and
     nothing else. Four variants:
 
-    * ``packed_multi`` -- packed value/offsets/attn, one call covering all
-      levels. The production operand form, with ``value`` left in DRAM (the
-      ``auto`` fallback placement).
+    * ``packed_multi_dram`` -- packed value/offsets/attn, one call covering all
+      levels, with ``value`` and output in DRAM.
     * ``packed_multi_l1`` -- the same, with ``value`` moved to L1 interleaved
       before the measured region (the op's output follows it into L1). This is
       the placement ``auto`` picks when L1 fits.
-    * ``canonical_multi`` -- the rank-4 / rank-6 / rank-5 operand forms the op
-      also accepts. The delta against ``packed_multi`` is the cost of one page
-      per sample instead of a byte offset into a packed stick.
-    * ``packed_per_level`` -- L single-level calls accumulated on device.
+    * ``canonical_multi_dram`` -- the rank-4 / rank-6 / rank-5 operand forms the
+      op also accepts, with ``value`` and output in DRAM. The delta against
+      ``packed_multi_dram`` is the cost of one page per sample instead of a byte
+      offset into a packed stick.
+    * ``packed_per_level_dram`` -- L single-level DRAM calls accumulated in
+      DRAM on device.
       Operands are pre-sliced on the host outside the measured region, so this
       is a lower bound on the per-level cost: it counts L launches plus L-1
       adds, but not the slicing a per-level path would also pay.
@@ -70,7 +71,7 @@ WORKLOADS = [
     ("nuscenes_base", 1, 2500),
 ]
 
-KERNEL_VARIANTS = ["packed_multi", "packed_multi_l1", "canonical_multi", "packed_per_level"]
+KERNEL_VARIANTS = ["packed_multi_dram", "packed_multi_l1", "canonical_multi_dram", "packed_per_level_dram"]
 
 
 def _head_sha():
@@ -213,18 +214,21 @@ def _per_level_operands(device, value, offsets, attn, model, spatial_shapes):
                     device=device,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 ),
                 ttnn.from_torch(
                     offsets_t[..., level * p * 2 : (level + 1) * p * 2].contiguous(),
                     device=device,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 ),
                 ttnn.from_torch(
                     attn_t[..., level * p : (level + 1) * p].contiguous(),
                     device=device,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 ),
             )
         )
@@ -254,8 +258,9 @@ def _call_per_level(refs, per_level):
             attn_l,
             [(height, width)],
             reference_mode="pillar",
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        acc = out if acc is None else ttnn.add(acc, out)
+        acc = out if acc is None else ttnn.add(acc, out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     return acc
 
 
@@ -277,7 +282,7 @@ def _signposted(device, op_fn, iters=DEVICE_PERF_ITERS):
 @torch.no_grad()
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("config_name, batch_size, num_queries", WORKLOADS)
-@pytest.mark.parametrize("value_memory", ["auto", "dram"])
+@pytest.mark.parametrize("value_memory", ["l1", "dram"])
 @pytest.mark.parametrize("expected_pcc", [0.999])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
 def test_fused_msda_module_perf(
@@ -315,7 +320,12 @@ def test_fused_msda_module_perf(
 
     # Doubles as the warmup: this call compiles the kernels and fills the program
     # cache, so the signposted iterations already run at steady state.
-    tt_output = op_fn()
+    try:
+        tt_output = op_fn()
+    except RuntimeError as error:
+        if value_memory == "l1" and "value_memory='l1' is unsafe" in str(error):
+            pytest.skip(f"forced L1 placement is unavailable: {error}")
+        raise
     passed, message = check_with_pcc(expected, ttnn.to_torch(tt_output, dtype=torch.float32), expected_pcc)
     assert passed, f"PCC check failed: {message}"
     logger.info(f"PCC gate: {message}")
@@ -344,7 +354,7 @@ def test_fused_msda_kernel_perf(
     config, _, tt_parameters, torch_inputs = _build(device, config_name, batch_size, num_queries)
     spatial_shapes = torch_inputs[3]
 
-    if variant == "packed_per_level" and config.num_levels == 1:
+    if variant == "packed_per_level_dram" and config.num_levels == 1:
         pytest.skip("per-level is the same single call as multi-level when num_levels == 1")
 
     tt_query, tt_value, tt_refs = _to_device(device, torch_inputs)
@@ -352,15 +362,17 @@ def test_fused_msda_kernel_perf(
 
     value_p, refs, offsets_p, attn_p = _packed_operands(model, tt_query, tt_value, tt_refs)
 
-    if variant == "packed_multi":
+    if variant == "packed_multi_dram":
+        assert value_p.memory_config() == ttnn.DRAM_MEMORY_CONFIG
         op_fn = partial(_call_one, value_p, refs, offsets_p, attn_p, spatial_shapes)
     elif variant == "packed_multi_l1":
         value_l1 = ttnn.to_memory_config(value_p, ttnn.L1_MEMORY_CONFIG)
         op_fn = partial(_call_one, value_l1, refs, offsets_p, attn_p, spatial_shapes)
-    elif variant == "canonical_multi":
+    elif variant == "canonical_multi_dram":
         value_c, offsets_c, attn_c = _canonical_operands(value_p, offsets_p, attn_p, model)
+        assert value_c.memory_config() == ttnn.DRAM_MEMORY_CONFIG
         op_fn = partial(_call_one, value_c, refs, offsets_c, attn_c, spatial_shapes)
-    elif variant == "packed_per_level":
+    elif variant == "packed_per_level_dram":
         per_level = _per_level_operands(device, value_p, offsets_p, attn_p, model, spatial_shapes)
         op_fn = partial(_call_per_level, refs, per_level)
     else:
@@ -381,8 +393,8 @@ def test_fused_msda_kernel_perf(
         ttnn.to_torch(warmup, dtype=torch.float32),
         pcc=0.999,
     )
-    assert passed, f"variant {variant} diverged from packed_multi: {message}"
-    logger.info(f"variant gate vs packed_multi: {message}")
+    assert passed, f"variant {variant} diverged from packed_multi_dram: {message}"
+    logger.info(f"variant gate vs packed_multi_dram: {message}")
     ttnn.deallocate(golden)
     ttnn.deallocate(warmup)
 
