@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// BRISC of the prefill MoE combine: each item's 4 output tiles into the [T, H] bf16 tile output.
+// BRISC of the prefill MoE combine: each item's block output tiles into the [T, H] bf16 tile output.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     constexpr uint32_t nt = get_compile_time_arg_val(1);
-    constexpr uint32_t block = 4;
+    constexpr uint32_t block = get_compile_time_arg_val(2);
     constexpr uint32_t tile_bytes = 2048;
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);

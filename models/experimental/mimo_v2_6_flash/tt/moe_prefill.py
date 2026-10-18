@@ -360,10 +360,11 @@ class DevicePlan:
 
 class CombineK:
     """The k-major row-major expert output [K * T, H] -> sum over k -> [1, 1, T, H] bf16 tiles, on every core
-    (tt/kernels/prefill/combine_*.cpp): per 32 tokens x 4 tile columns, the K row blocks summed in fp32, then tilized.
+    (tt/kernels/prefill/combine_*.cpp): per 32 tokens x BLOCK tile columns, the K row blocks summed in fp32, then
+    tilized.
     """
 
-    BLOCK = 4
+    BLOCK = 16  # tile columns per item: 1 KB of each row per read
     CB_IN, CB_SUM, CB_OUT = range(3)
 
     def __init__(self, moe, cores, ranges):
@@ -384,7 +385,7 @@ class CombineK:
             )
             return ttnn.CBDescriptor(total_size=pages * page, core_ranges=self.ranges, format_descriptors=[fmt])
 
-        return [cb(self.CB_IN, 2 * self.BLOCK), cb(self.CB_SUM, self.BLOCK), cb(self.CB_OUT, 2 * self.BLOCK)]
+        return [cb(self.CB_IN, self.k * self.BLOCK), cb(self.CB_SUM, self.BLOCK), cb(self.CB_OUT, 2 * self.BLOCK)]
 
     def __call__(self, y, num_tokens, k):
         moe = self.moe
@@ -400,6 +401,7 @@ class CombineK:
             device=moe.plan.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self.k = k
         items = (num_tokens // TILE) * (nt // self.BLOCK)
         per, extra = divmod(items, len(self.cores))
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -426,18 +428,21 @@ class CombineK:
             kernels=[
                 kernel(
                     "combine_reader.cpp",
-                    [self.CB_IN, num_tokens, k, nt],
+                    [self.CB_IN, num_tokens, k, nt, self.BLOCK],
                     reader_rt,
                     dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default),
                 ),
                 kernel(
                     "combine_writer.cpp",
-                    [self.CB_OUT, nt],
+                    [self.CB_OUT, nt, self.BLOCK],
                     writer_rt,
                     dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_1_default),
                 ),
                 kernel(
-                    "combine_compute.cpp", [self.CB_IN, self.CB_SUM, self.CB_OUT, k], compute_rt, self.compute_config
+                    "combine_compute.cpp",
+                    [self.CB_IN, self.CB_SUM, self.CB_OUT, k, self.BLOCK],
+                    compute_rt,
+                    self.compute_config,
                 ),
             ],
             cbs=self._cbs(),

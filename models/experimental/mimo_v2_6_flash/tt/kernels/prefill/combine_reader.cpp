@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// NCRISC of the prefill MoE combine (CombineK in tt/moe_prefill.py). Item i is token tile i / (nt / 4) and column block
-// i % (nt / 4) (4 tile columns, 256 B of a row): for each k, the 32 tokens' rows k * T + t of the k-major row-major
-// expert output, that column block each, land as 32 rows x 256 B (4 tile-sized pages of cb_in).
+// NCRISC of the prefill MoE combine (CombineK in tt/moe_prefill.py). Item i is token tile i / (nt / block) and column
+// block i % (nt / block) (block tile columns, block * 64 B of a row): for each k, the 32 tokens' rows k * T + t of the
+// k-major row-major expert output, that column block each, land as 32 rows (block tile-sized pages of cb_in).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -12,7 +12,7 @@ void kernel_main() {
     constexpr uint32_t T = get_compile_time_arg_val(1);
     constexpr uint32_t K = get_compile_time_arg_val(2);
     constexpr uint32_t nt = get_compile_time_arg_val(3);  // hidden / 32
-    constexpr uint32_t block = 4;
+    constexpr uint32_t block = get_compile_time_arg_val(4);
     constexpr uint32_t seg_bytes = block * 64;
 
     const uint32_t y_addr = get_arg_val<uint32_t>(0);
