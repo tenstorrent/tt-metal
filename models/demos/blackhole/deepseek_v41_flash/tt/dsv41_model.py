@@ -1685,7 +1685,9 @@ class Model:
         """
         if os.environ.get("DSV41_INTRACE_SAMPLE", "1") != "1":
             return None
-        if plain and os.environ.get("DSV41_SHARED_SAMPLER", "0") == "1":
+        if (
+            plain and os.environ.get("DSV41_SHARED_SAMPLER", "0") == "1"
+        ):  # (the vLLM interface defaults it to 1 for plain launches, generator_vllm)
             # plain decode traces: the shared tt_transformers sampler (top-32 candidates, ~4x faster; tt/shared_sampler.py). The speculative verify keeps our own sampler.
             from models.demos.blackhole.deepseek_v41_flash.tt.shared_sampler import SharedSamplerAdapter
 
