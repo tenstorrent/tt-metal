@@ -29,7 +29,7 @@ from .grpo_trainer import RolloutBatch, RolloutSampler
 TILE_SIZE = 32
 
 # Chunked async d2h readback cadence for stop-token detection during decode.
-CHUNK = 32
+CHUNK = 4
 
 
 def async_read_to_host(tensors: List[Any], mesh_device: Any) -> Tuple[List[Any], Any]:
