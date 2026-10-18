@@ -623,6 +623,7 @@ class ModelArgs:
             "Qwen2.5-VL-72B-Instruct": "models/ttt_compat/model_params/Qwen2.5-VL-72B-Instruct",
             "Qwen3-VL-32B-Instruct": "models/ttt_compat/model_params/Qwen3-VL-32B-Instruct",
             "Qwen3-32B": "models/ttt_compat/model_params/Qwen3-32B",
+            "qwen3-0.6b-base-think-sft": "models/ttt_compat/model_params/qwen3-0.6b-base-think-sft",
             "EXAONE-4.5-33B": "models/ttt_compat/model_params/EXAONE-4.5-33B",
             "Qwen2.5-72B-Instruct": "models/ttt_compat/model_params/Qwen2.5-72B-Instruct",
             "Qwen2.5-32B-Instruct": "models/ttt_compat/model_params/Qwen2.5-32B-Instruct",
