@@ -70,7 +70,8 @@ Kernel (setting EXPERTS_KERNEL, bfp8 / bfp4 weights):
              x      = buf (q(x) | routing pieces, bf16 ROW_MAJOR; the op reads each row's first H values, hidden=H)
              r_rows = pieces @ SelAll as for unified, kept Float32 TILE [rows, 32]
              op(x, routing_weights=r_rows, fp8_act_quant=True, weights_nk, clamped_silu, x / h / y bf16, fp32 DEST
-                (gate/up, down_fp32), fidelity MATMUL_FIDELITY): per local expert le and routed row i,
+                (gate/up, down_fp32), fidelity MATMUL_FIDELITY; EXPERTS_PRECISION=glm: LoFi, x / h / y bfp8 tiles,
+                fp32 DEST down, P.4): per local expert le and routed row i,
                 y_i = w2 q(r_i,le silu(min(w1 x_i, 10)) clamp(w3 x_i, +-10)), w1 / w3 / w2 laid out once at load in
                 the op's bank layout from the stored [N, K] matrices (every tile the transpose of the x @ W tile, so
                 bfp8 shares its exponents along K: exact, asserted at load, DS41-35), q in-kernel per 32 (ue8m0, e4m3
@@ -206,6 +207,10 @@ class TtExperts:
         assert self.kernel in ("loop", "unified", "flat"), self.kernel
         assert self.kernel == "loop" or self.impl in BLOCK_DTYPES, f"EXPERTS_KERNEL={self.kernel} needs block weights"
         self.sum_mode = settings.get("EXPERTS_SUM")
+        # EXPERTS_PRECISION (P.4): full = MATMUL_FIDELITY + bf16 x / h / y tiles; glm = GLM-5.3's flat expert (LoFi
+        # expert matmuls, bfp8 x / h / y tiles, fp32 DEST down). The selector matmuls keep self.cfg in both.
+        self.precision = settings.get("EXPERTS_PRECISION")
+        assert self.precision in ("full", "glm"), self.precision
         self.mesh, self.layer, self.num_links = mesh, layer, num_links
         self.E, self.K, self.H, self.I = E, int(top_k), int(hidden), int(inter)
         self.lim = float(swiglu_limit)
@@ -217,6 +222,24 @@ class TtExperts:
         self.max_chunk = int(max_chunk)
         assert self.max_chunk % (rows * TILE) == 0, f"chunk {max_chunk} is not {rows} x a multiple of {TILE}"
         self.cfg = compute_config(mesh)
+        # the expert matmuls' own config (glm: LoFi). The routing-weight selector matmuls are no expert matmuls and
+        # stay on self.cfg (their exactness, DS41-16 / DS41-23, was shown at MATMUL_FIDELITY, never at LoFi)
+        self.fidelity = (
+            ttnn.MathFidelity.LoFi
+            if self.precision == "glm"
+            else getattr(ttnn.MathFidelity, settings.get("MATMUL_FIDELITY"))
+        )
+        self.ecfg = (
+            ttnn.init_device_compute_kernel_config(
+                mesh.arch(),
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=bool(settings.get("FP32_DEST_ACC")),
+                packer_l1_acc=False,
+            )
+            if self.precision == "glm"
+            else self.cfg
+        )
         self.bfp4_stats = None  # EXPERTS_IMPL=bfp4: what bfloat4_b changes in this layer's experts (_load_block)
 
         # dispatch table (groups, E + 1) sharded over columns; local -> global expert ids per chip
@@ -434,8 +457,9 @@ class TtExperts:
             wdtype={"bfp8": "bf8", "bfp4": "bf4"}[self.impl],
             act="clamped_silu",
             pin=1,
-            x_bf16=True,
-            h_bf16=True,
+            # EXPERTS_PRECISION=glm: bfp8 x / h tiles, as GLM-5.3 runs the op (GLM_AG_XBF16 / _HBF16 default 0)
+            x_bf16=self.precision == "full",
+            h_bf16=self.precision == "full",
             weights_nk=True,
             routed=True,
             # (no second exactness pass: a laid-out tile row is 32 consecutive K values of one stored row, the same
@@ -444,7 +468,8 @@ class TtExperts:
         )
         logger.info(
             f"EXPERTS_FLAT layer={self.layer} plan nu={self.fe.plan['nu']} np={self.fe.plan['np']} "
-            f"mt={self.fe.plan['mt']} gate/up={len(self.fe.plan['gu'])} down={self.fe.plan['nd']} cap={self.flat_cap}"
+            f"mt={self.fe.plan['mt']} gate/up={len(self.fe.plan['gu'])} down={self.fe.plan['nd']} cap={self.flat_cap} "
+            f"precision={self.precision}"
         )
 
     # ------------------------------------------------------------------ sizes (built once per rows-per-chip)
@@ -564,7 +589,7 @@ class TtExperts:
 
     def _ffn(self, xt: ttnn.Tensor, r: ttnn.Tensor, le: int) -> ttnn.Tensor:
         """One expert over its extracted rows: xt [cap, H] bf16 (q(x)), r [cap, 1] fp32 -> [cap, H] bf16."""
-        cfg, lim, I = self.cfg, self.lim, self.I
+        cfg, lim, I = self.ecfg, self.lim, self.I
         if self.impl in BLOCK_DTYPES:
             gu = ttnn.linear(
                 xt, self.w13[le], transpose_b=True, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM
@@ -659,7 +684,7 @@ class TtExperts:
             self.w3,
             self.w2,
             max_dispatched_tokens_per_expert=cap,
-            compute_kernel_config=self.cfg,
+            compute_kernel_config=self.ecfg,
             activation=ttnn.bringup.RoutedExpertActivation.ClampedSiluGlu,
             high_precision=True,
             routing_weights=rwr,
@@ -695,9 +720,10 @@ class TtExperts:
             buf,
             counts,
             region_offsets,
-            y_bf16=True,
-            down_fp32=bool(settings.get("FP32_DEST_ACC")),
-            math_fidelity=int(getattr(ttnn.MathFidelity, settings.get("MATMUL_FIDELITY")).value),
+            # glm: bfp8 y TILE (combine reads it), fp32 DEST down as GLM_AG_DOWN_FP32's default, LoFi
+            y_bf16=self.precision == "full",
+            down_fp32=True if self.precision == "glm" else bool(settings.get("FP32_DEST_ACC")),
+            math_fidelity=int(self.fidelity.value),
             routing_weights=rw,
             fp8_act_quant=True,
             hidden=self.H,
