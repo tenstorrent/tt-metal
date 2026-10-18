@@ -44,7 +44,7 @@ inline __attribute__((always_inline)) void elementwise(const Output output, Func
         "functor must be callable on the inputs' vector types and return something convertible to the output's");
 
     _llk_math_eltwise_sfpu_start_(0);
-    for_each_vector<Output::shape>(
+    walk_vectors<Output::shape>(
         [&]() __attribute__((always_inline))
         { sfpi::dst_reg[output.index * DEST_TILE_STRIDE] = functor(static_cast<typename Inputs::vType>(sfpi::dst_reg[inputs.index * DEST_TILE_STRIDE])...); });
     _llk_math_eltwise_sfpu_done_();
