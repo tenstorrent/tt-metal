@@ -1,0 +1,144 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Scratch: GLM-5.3-Flash routed experts, the K3 token-split block (GLM_EXPERTS_MODE=ts, tt/experts_ts.py) vs the
+all-gather path (tt/experts_ag.py) vs a CPU fp32 reference, without the checkpoint: random experts (a pool of P
+distinct ones, expert g = pool[g % P]), random tokens and top-8 routing (uniform, or one hot expert every token
+picks), the split layout's full-mesh input (each chip its own S/n rows). Per-token rel L2 against the reference on
+a token subset, and ts against ag on all tokens.
+
+    TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 BRINGUP_FABRIC_PAYLOAD=8704 \\
+    BRINGUP_SPEC=models/demos/glm53_flash_d_p_lb/bringup/spec.yaml \\
+    scripts/run_safe_pytest.sh --mesh --no-precompile models/demos/glm53_flash_d_p_lb/tests/zz_scratch_experts_ts.py -s
+
+GLM_TS_CHUNK (default 5120), GLM_TS_POOL (default 4), GLM_TS_ROUTINGS (default uniform,hot)."""
+
+import os
+
+import torch
+from loguru import logger
+
+from models.demos.common.bringup.testing.harness import device_timeout, mesh_parametrize, spec
+
+S_ = spec()
+pytestmark = device_timeout(S_)
+H, I, E, K = 4096, 2048, 288, 8
+T = int(os.environ.get("GLM_TS_CHUNK", "5120"))
+P = int(os.environ.get("GLM_TS_POOL", "4"))
+
+
+class _Pool:
+    def __init__(self, pool):
+        self.pool = pool
+
+    def __len__(self):
+        return E
+
+    def __getitem__(self, g):
+        gw, uw, dw = self.pool[g % P]
+        return {"gate_proj": gw, "up_proj": uw, "down_proj": dw}
+
+
+def _routing(name, g):
+    ids = torch.stack([torch.randperm(E, generator=g)[:K] for _ in range(T)])
+    if name == "hot":  # (expert 0 in every token's top-8)
+        has = (ids == 0).any(1)
+        ids[~has, 0] = 0
+    w = torch.rand(T, K, generator=g) + 0.1
+    w = w / w.sum(1, keepdim=True) * 2.5
+    return ids, w
+
+
+def _reference(x, ids, w, pool, rows):
+    out = torch.zeros(len(rows), H)
+    for j, t in enumerate(rows):
+        for k in range(K):
+            gw, uw, dw = pool[int(ids[t, k]) % P]
+            g_, u_ = x[t] @ gw.T, x[t] @ uw.T
+            a = torch.nn.functional.silu(g_.clamp(max=10.0)) * u_.clamp(-10.0, 10.0)
+            out[j] += float(w[t, k]) * (a @ dw.T)
+    return out
+
+
+def _rel(got, want):
+    d = (got.double() - want.double()).norm(dim=-1) / want.double().norm(dim=-1).clamp(min=1e-30)
+    return d.mean().item(), d.max().item()
+
+
+def _pcc(a, b):
+    a, b = a.double().flatten(), b.double().flatten()
+    a, b = a - a.mean(), b - b.mean()
+    return (a @ b / (a.norm() * b.norm())).item()
+
+
+@mesh_parametrize
+def test_experts_ts(mesh_device):
+    import ttnn
+    from models.demos.glm53_flash_d_p.bringup import hooks
+    from models.demos.glm53_flash_d_p.tt.common import split_from_host, split_to_host
+    from models.demos.glm53_flash_d_p.tt.experts_ag import TtExpertsAg
+    from models.demos.glm53_flash_d_p.tt.experts_ts import TtExpertsTs
+
+    hooks.apply_device_settings(S_)
+    g = torch.Generator().manual_seed(0)
+    pool = [
+        (
+            torch.randn(I, H, generator=g) * 0.02,
+            torch.randn(I, H, generator=g) * 0.02,
+            torch.randn(H, I, generator=g) * 0.02,
+        )
+        for _ in range(P)
+    ]
+    tw = _Pool(pool)
+    kw = dict(num_experts=E, emb_dim=H, hidden_dim=I, top_k=K, max_seq_len=T, weights_dtype=ttnn.bfloat4_b, cache=False)
+    ts = TtExpertsTs(mesh_device, 4, tw, num_links=2, **kw)  # (first: its plan options are process-wide)
+    ag = TtExpertsAg(mesh_device, 4, tw, num_links=2, **kw)
+    for routing in os.environ.get("GLM_TS_ROUTINGS", "uniform,hot").split(","):
+        x = (torch.randn(T, H, generator=g)).to(torch.bfloat16)
+        ids, w = _routing(routing, g)
+        outs = {}
+        for name, mod in (("ts", ts), ("ag", ag)):
+            xd = split_from_host(mesh_device, x.view(1, 1, T, H))
+            idd = split_from_host(mesh_device, ids.view(1, 1, T, K).to(torch.int32), dtype=ttnn.uint16)
+            wd = split_from_host(mesh_device, w.view(1, 1, T, K).to(torch.bfloat16))
+            y = mod(xd, idx=idd, wts=wd, split=True, full_mesh=True)
+            y = mod(xd, idx=idd, wts=wd, split=True, full_mesh=True)  # (second call: the ts block's arena check)
+            outs[name] = split_to_host(y).reshape(T, H).float()
+            for t_ in (xd, idd, wd):
+                ttnn.deallocate(t_)
+        rows = list(range(0, T, T // 256))
+        ref = _reference(x.float(), ids, w, pool, rows)
+        for name in ("ts", "ag"):
+            m, mx = _rel(outs[name][rows], ref)
+            logger.info(
+                f"TS {routing}: {name} vs CPU fp32 on {len(rows)} tokens: rel L2 mean {m:.4f} max {mx:.4f}, "
+                f"PCC {_pcc(outs[name][rows], ref):.6f}, finite {bool(torch.isfinite(outs[name]).all())}"
+            )
+        m, mx = _rel(outs["ts"], outs["ag"])
+        logger.info(
+            f"TS {routing}: ts vs ag on {T} tokens: rel L2 mean {m:.4f} max {mx:.4f}, PCC {_pcc(outs['ts'], outs['ag']):.6f}"
+        )
+        if os.environ.get("GLM_TS_PROF") == "1":  # (host time of the ts call, no syncs: where it goes)
+            import cProfile
+            import pstats
+            import time as _t
+
+            xd = split_from_host(mesh_device, x.view(1, 1, T, H))
+            idd = split_from_host(mesh_device, ids.view(1, 1, T, K).to(torch.int32), dtype=ttnn.uint16)
+            wd = split_from_host(mesh_device, w.view(1, 1, T, K).to(torch.bfloat16))
+            ttnn.deallocate(ts(xd, idx=idd, wts=wd, split=True, full_mesh=True))  # (warm: a rebuild after ag's L1)
+            ttnn.synchronize_device(mesh_device)
+            pr = cProfile.Profile()
+            t0 = _t.perf_counter()
+            pr.enable()
+            for _ in range(5):
+                ttnn.deallocate(ts(xd, idx=idd, wts=wd, split=True, full_mesh=True))
+            pr.disable()
+            t1 = _t.perf_counter()
+            ttnn.synchronize_device(mesh_device)
+            logger.info(
+                f"TS host {(t1 - t0) / 5 * 1e3:.1f} ms per call (dispatch only), {(_t.perf_counter() - t0) / 5 * 1e3:.1f} with the sync"
+            )
+            pstats.Stats(pr).sort_stats("cumulative").print_stats(30)
+        assert torch.isfinite(outs["ts"]).all()
+        assert _pcc(outs["ts"][rows], ref) > 0.98

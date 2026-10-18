@@ -884,6 +884,7 @@ def sparse_combine_rf_prepare(
     deterministic=False,
     ports_per_direction=False,
     acc_on_ports=False,
+    piece_max=None,
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
     logical (x, y) cells the combine may use (ports nearest their Ethernet cores, accumulators the rest), else the
@@ -908,6 +909,7 @@ def sparse_combine_rf_prepare(
     N, L, A0 = R * C, num_links, n_acc
     row_bytes = W * 2
     NT = (row_bytes + TILE - 1) // TILE
+    PIECE_MAX = piece_max or globals()["PIECE_MAX"]  # (piece_max: e.g. one piece a row for the L1 hand-off)
     NP = (row_bytes + PIECE_MAX - 1) // PIECE_MAX
     PD = ((row_bytes + NP - 1) // NP + 63) // 64 * 64
     PS = ((PD + 32 + 63) // 64) * 64

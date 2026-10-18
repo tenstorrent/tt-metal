@@ -658,7 +658,52 @@ def allowed_cores(mesh_device, sub_core_grid=None):
     }
 
 
+_PLAN_CACHE = {}
+
+
 def plan(
+    mesh_device,
+    *,
+    cluster_axis,
+    topology,
+    num_links,
+    placement="auto",
+    scheme="ring",
+    balance=False,
+    sub_core_grid=None,
+):
+    """Memoized _plan (the same arguments give the same rings and cores; a per-call op's host time: ~4 ms a plan).
+    The result is shared between calls: read it, do not modify it."""
+    import os
+
+    key = (
+        id(mesh_device),
+        cluster_axis,
+        str(topology),
+        num_links,
+        placement,
+        scheme,
+        balance,
+        None if sub_core_grid is None else str(sub_core_grid),
+        os.environ.get("TT_METAL_EMULE_MODE"),
+    )
+    hit = _PLAN_CACHE.get(key)
+    if hit is None or hit[0] is not mesh_device:
+        chips, ring = _plan(
+            mesh_device,
+            cluster_axis=cluster_axis,
+            topology=topology,
+            num_links=num_links,
+            placement=placement,
+            scheme=scheme,
+            balance=balance,
+            sub_core_grid=sub_core_grid,
+        )
+        hit = _PLAN_CACHE[key] = (mesh_device, chips, ring)
+    return hit[1], hit[2]
+
+
+def _plan(
     mesh_device,
     *,
     cluster_axis,

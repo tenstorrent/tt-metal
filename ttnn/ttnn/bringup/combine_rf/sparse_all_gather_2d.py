@@ -526,9 +526,31 @@ def mesh_plan(mesh_device, num_links, torus=(False, False)):
     return chips, nb, (wrap_x, wrap_y)
 
 
+_PORTS_CACHE = {}
+
+
 def place_ports(mesh_device, chips, allowed=None):
     """{(coord, dir, link index): logical core}: one port core per direction and link, next to its Ethernet core
-    (from `allowed`, logical (x, y) cells, if given: e.g. the cells another op leaves free)."""
+    (from `allowed`, logical (x, y) cells, if given: e.g. the cells another op leaves free). Memoized per mesh, chips
+    and allowed cells (a per-call op's host time: ~8 ms a placement)."""
+    key = (
+        id(mesh_device),
+        repr(
+            sorted(
+                (c, sorted((d, p["peer"], tuple(p["links"])) for d, p in ports.items())) for c, ports in chips.items()
+            )
+        ),
+        None if allowed is None else tuple(sorted(allowed)),
+    )
+    hit = _PORTS_CACHE.get(key)
+    if hit is not None and hit[0] is mesh_device:
+        return dict(hit[1])
+    out = _place_ports(mesh_device, chips, allowed)
+    _PORTS_CACHE[key] = (mesh_device, dict(out))
+    return out
+
+
+def _place_ports(mesh_device, chips, allowed=None):
     allowed = allowed_cores(mesh_device) if allowed is None else set(allowed)
     connections = {
         coord: [(p["peer"], l) for p in ports.values() for l in p["links"]] for coord, ports in chips.items()

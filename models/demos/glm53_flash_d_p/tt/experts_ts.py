@@ -1,0 +1,192 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""GLM-5.3 routed experts on the Kimi K3 token-split MoE block (GLM_EXPERTS_MODE=ts; a hack until the block has an API
+for several models): the block's routed_only mode, split layout with the full-mesh MoE input only.
+
+    x [S/n, H] and the router's top-k of this chip's own tokens
+      -> routing rows all-gathered, the combine planner (every per-call table on the device)
+      -> sparse dispatch (sparse_all_gather_2d: a token's row only to the chips holding one of its experts)
+      -> flat_routed_expert (this layer's weights) with the router-forwarded combine fused in: each y row from the down
+         cores' L1 to its home chip's fp32 accumulators -> this chip's own tokens' sum [S/n, H]
+
+One block per (mesh, chunk) serves every layer (built at the first call, after the model's other ops ran once: the
+arena's address); each layer has its own FlatRoutedExpert (the weights) of the block's plan: 64 gate/up cores with
+DRISC weight readers only (the Tensix reader cells go to the combine), 32 down cores, two x helpers. The shared expert
+keeps its TP path on the gathered x tiles (one full-mesh gather here: the dispatch is sparse).
+Needs fabric_payload_bytes >= 8224 (a 8192 B token row + the combine's 32 B trailer in one packet).
+"""
+
+from __future__ import annotations
+
+import os
+
+import ttnn
+from models.demos.glm53_flash_d_p.tt.experts import LazyExpertWeights
+from models.demos.glm53_flash_d_p.tt.experts_ag import _dram, all_gather_rows, default_gids, flat_cache_dir
+
+# the routed experts' plan: DRISC-only weight readers, 32 down cores (128 output tile columns, 4 a core), two x helpers
+FLAT_ENV = {
+    "MIMO_FL_CMB_DRISC": "1",
+    "MIMO_FL_DRISC_DUAL": "0",
+    "MIMO_FL_ND": "32",
+    "MIMO_FL_NH": "2",
+}
+_BLOCKS = {}
+_GX = {}  # (mesh, T) -> the gathered x tiles and the full-mesh topology
+
+
+def _apply_env():
+    for k, v in FLAT_ENV.items():
+        os.environ.setdefault(k, v)
+
+
+class TtExpertsTs:
+    """GLM routed experts on the K3 token-split block; the same call as TtExpertsAg (split + full_mesh only)."""
+
+    def __init__(
+        self,
+        mesh,
+        layer: int,
+        torch_weights,
+        num_experts: int,
+        emb_dim: int,
+        hidden_dim: int,
+        top_k: int = 8,
+        limit: float = 10.0,
+        max_seq_len: int = 8192,
+        weights_dtype=ttnn.bfloat4_b,
+        cache: bool = True,
+        num_links: int = 2,
+    ):
+        from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+
+        assert float(limit) == 10.0, f"clamped_silu is fixed at limit 10, got {limit}"
+        rows, cols = tuple(mesh.shape)
+        n = rows * cols
+        assert num_experts % n == 0, tuple(mesh.shape)
+        self.mesh, self.layer, self.links = mesh, layer, num_links
+        self.E, self.K, self.H, self.I = num_experts, top_k, emb_dim, hidden_dim
+        self.epc = num_experts // n
+        self.max_seq_len = max_seq_len
+        self.gids = default_gids(n, self.epc)
+        self.gathered_x = None
+        _apply_env()
+        wdtype = {ttnn.bfloat4_b: "bf4", ttnn.bfloat8_b: "bf8"}[weights_dtype]
+        fake = isinstance(torch_weights, str)
+        prefix = None
+        if cache and not fake:
+            d = flat_cache_dir(mesh)
+            d.mkdir(parents=True, exist_ok=True)
+            prefix = str(d / f"layer_{layer}")
+
+        def weights_per_dev():
+            t = lambda w: w.T.contiguous()  # noqa: E731
+            out = []
+            for gl in self.gids:
+                dev = []
+                for g in gl:
+                    w = torch_weights[g]
+                    dev.append((t(w["gate_proj"]), t(w["up_proj"]), t(w["down_proj"])))
+                out.append(dev)
+            return out
+
+        # (the per-expert token cap: the whole chunk, as the all-gather path)
+        self.flat = FlatRoutedExpert(
+            mesh,
+            torch_weights if fake else weights_per_dev,
+            m=max_seq_len,
+            H=emb_dim,
+            I=hidden_dim,
+            gids=self.gids,
+            n_global=num_experts,
+            wdtype=wdtype,
+            act="clamped_silu",
+            pin=1,
+            cache_prefix=prefix,
+        )
+
+    def _block(self, s):
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_k3_token_split_moe import K3Dims, TtK3TokenSplitMoE
+
+        key = (id(self.mesh), s, self.H, self.K, self.E)
+        hit = _BLOCKS.get(key)
+        # (built at the first call; rebuilt if L1 the model allocated since - e.g. a later op's first-call semaphores -
+        # moved the arena: its address is baked into the kernels)
+        if hit is not None and hit.mesh is self.mesh and not hit.arena_fits():
+            del _BLOCKS[key]
+            hit = None
+        if hit is None or hit.mesh is not self.mesh:
+            from loguru import logger
+
+            logger.info(f"GLM experts ts: building the token-split block (S {s} per chip, layer {self.layer})")
+            n = self.mesh.get_num_devices()
+            d = K3Dims(H=self.H, latent=self.H, I=self.I, E=self.E, K=self.K, act="clamped_silu")
+            hit = _BLOCKS[key] = TtK3TokenSplitMoE(
+                self.mesh,
+                None,
+                d,
+                s,
+                cap=self.max_seq_len,
+                rows_cap=-(-n * s * min(self.K, self.epc) // 32) * 32 + 32 * self.epc,
+                routed_only=True,
+                flat_env=FLAT_ENV,
+            )
+        return hit
+
+    def _gather_x(self, x, T):
+        """The shared expert's input: every chip's own rows as tiles [1, 1, T, H] (one full-mesh gather; the inputs'
+        topology relabelled dim-2-over-all-chips as the all-gather path's gather_full)."""
+        key = (id(self.mesh), T)
+        if key not in _GX:
+            rows, cols = tuple(self.mesh.shape)
+            dist = ttnn.MeshShape(rows, cols)
+            coords = [ttnn.MeshCoordinate([c[i] for i in range(c.dims())]) for c in ttnn.MeshCoordinateRange(dist)]
+            topo = ttnn.TensorTopology(dist, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords)
+            _GX[key] = (_dram(self.mesh, [1, 1, T, self.H], ttnn.bfloat16, ttnn.TILE_LAYOUT), topo)
+        gx, topo = _GX[key]
+        x.update_tensor_topology(topo)
+        all_gather_rows(x, gx, None, self.links)
+        return gx
+
+    def __call__(self, x, dense=None, idx=None, wts=None, split=False, full_mesh=False):
+        """x [1, 1, S/n, H] (this chip's own rows), idx / wts [1, 1, S/n, K] -> [1, 1, S/n, H] bf16 TILE, the routed
+        experts' sum for this chip's rows (the split residual layout); gathered_x: all S rows as tiles (the shared
+        expert's input, valid until the next MoE layer's call)."""
+        assert split and full_mesh and idx is not None, "GLM_EXPERTS_MODE=ts: the split layout's full-mesh MoE input"
+        s = x.shape[-2]
+        n = self.mesh.get_num_devices()
+        tmp = []
+        if x.dtype != ttnn.bfloat16:
+            x = ttnn.typecast(x, ttnn.bfloat16)
+            tmp.append(x)
+        if idx.dtype != ttnn.uint16:
+            idx = ttnn.typecast(idx, ttnn.uint16)
+            tmp.append(idx)
+        if wts.dtype != ttnn.bfloat16:
+            wts = ttnn.typecast(wts, ttnn.bfloat16)
+            tmp.append(wts)
+        self.gathered_x = self._gather_x(x, n * s)
+        blk = self._block(s)
+        x2 = ttnn.reshape(x, [s, self.H])
+        y = blk.routed(x2, ttnn.reshape(idx, [s, self.K]), ttnn.reshape(wts, [s, self.K]), self.flat)
+        for t in tmp:
+            ttnn.deallocate(t)
+        return ttnn.reshape(y, [1, 1, s, self.H])
+
+
+def build_experts_ts(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtype=ttnn.bfloat4_b) -> TtExpertsTs:
+    return TtExpertsTs(
+        mesh,
+        layer,
+        "fake" if getattr(loader, "fake", False) else LazyExpertWeights(loader, layer, cfg.n_routed_experts),
+        num_experts=cfg.n_routed_experts,
+        emb_dim=cfg.hidden_size,
+        hidden_dim=cfg.moe_intermediate_size,
+        top_k=cfg.num_experts_per_tok,
+        limit=cfg.swiglu_limit,
+        max_seq_len=max_chunk,
+        weights_dtype=weights_dtype,
+        num_links=int(os.environ.get("GLM_MOE_LINKS", "1")),
+        cache=os.environ.get("GLM_EXPERTS_CACHE", "1") != "0",
+    )

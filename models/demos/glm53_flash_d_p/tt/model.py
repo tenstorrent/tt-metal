@@ -241,8 +241,10 @@ class TtGlmBlock:
             add = build_moe_add(cfg)
 
             from models.demos.glm53_flash_d_p.tt.experts_ag import TtExpertsAg
+            from models.demos.glm53_flash_d_p.tt.experts_ts import TtExpertsTs
 
-            ag = isinstance(self.experts, TtExpertsAg)
+            # (the token-split block takes the router's top-k and gives the shared expert its gathered x, as ag)
+            ag = isinstance(self.experts, (TtExpertsAg, TtExpertsTs))
 
             def router(ctx, x):
                 if ag:  # top-k straight into the experts: the router output is idx, its weights ride along

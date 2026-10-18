@@ -1197,7 +1197,8 @@ def combine_planner_prepare(
         assert not row_pages or CH % K == 0
         assert not joint or row_pages
         HR = S if row_pages else 0  # (row pages: chunk ids + weights land in the bucket region, the home ids in the
-        assert not row_pages or (2 * K <= 64 and 64 * 2 * CH // K <= CH * 8)  # slice staging; 64 B a row)
+        # (slice staging: 64 B a token row, ids and weights staged once each, or once joint)
+        assert not row_pages or (2 * K <= 64 and 64 * (1 if joint else 2) * CH // K <= CH * 8)
 
         V2 = os.environ.get("FC_PLAN_V", "2") == "2"
         assert V2 or (CH < (1 << 13) and GS <= 8), (CH, GS)

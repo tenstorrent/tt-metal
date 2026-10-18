@@ -70,6 +70,7 @@ class K3Dims:
     linear_beta: float = 25.0
     eps: float = 1e-5  # (rms_norm_eps, reference/kimi_k3/config.json)
     route_scale: float = 1.0
+    act: str = "situ"  # (the routed experts' activation: situ (K3), clamped_silu (GLM-5.3-Flash))
 
 
 @dataclass
@@ -152,8 +153,16 @@ class TtK3TokenSplitMoE:
         torus=(False, False),
         weight_cache=None,
         acc_on_ports=True,
+        routed_only=False,
+        flat_env=None,
     ):
+        """routed_only (GLM-5.3-Flash hack): only the routed experts and their combine - no router (the caller's top-k
+        goes to routed()), no latent projections (d.latent = d.H: the dispatch rows are x), no shared expert; the
+        flat expert's weights come per call (routed(op=...): one block for every layer). flat_env: the routed
+        experts' plan options (process-wide env defaults) instead of K3's."""
         self.mesh, self.d, self.S, self.torus = mesh_device, d, S, tuple(torus)
+        self.routed_only = routed_only
+        assert not routed_only or d.latent == d.H, "routed_only: no latent projections (d.latent = d.H)"
         R, C = tuple(mesh_device.shape)
         self.R, self.C, self.N = R, C, R * C
         assert d.E % self.N == 0
@@ -163,100 +172,102 @@ class TtK3TokenSplitMoE:
         tw = lambda t, dt: ttnn.from_torch(  # noqa: E731  (a [in, out] weight, replicated)
             t.contiguous(), dtype=dt, layout=ttnn.TILE_LAYOUT, device=mesh_device, memory_config=dram, mesh_mapper=rep
         )
-        # router (bf16), latent (bf8), shared (bf8)
-        self.w_gate = tw(w.gate.T, ttnn.bfloat16)
-        self.bias = ttnn.from_torch(
-            w.bias.view(1, -1).expand(S, -1).contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=dram,
-            mesh_mapper=rep,
-        )
-        # router selection: K3_TOPK=custom (default: sigmoid + bias add in fp32, router_topk writes the joint routing
-        # rows) or ttnn (moe_grouped_topk + layout / concat ops)
-        self.topk_custom = os.environ.get("K3_TOPK", "custom") == "custom"
-        self.bias32 = ttnn.from_torch(
-            w.bias.view(1, -1).float().contiguous(),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=dram,
-            mesh_mapper=rep,
-        )
-        # (one ttnn.add with a sigmoid on its input gives the biased scores; the top-k reads only those and the bias row,
-        # each pick's score = biased - bias: one program and half the top-k's reads fewer)
-        self.topk_bias = os.environ.get("K3_TOPK_BIAS", "1") == "1"
-        self.bias_row = ttnn.from_torch(
-            w.bias.view(1, -1).float().contiguous(),
-            dtype=ttnn.float32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=dram,
-            mesh_mapper=rep,
-        )
-        self.rtopk = router_topk_prepare(
-            mesh_device, S=S, E=d.E, K=d.K, route_scale=d.route_scale, bias_mode=self.topk_bias
-        )
-        self.w_ld = tw(w.lat_down.T, ttnn.bfloat8_b)
-        self.w_lu = tw(w.lat_up.T, ttnn.bfloat8_b)
-        # latent down / up as combine_rf/lin2d (K3_LIN2D=1, default): x resident in L1, the weights streamed down each
-        # column by fixed senders (top NOC0 / bottom NOC1, after x is in), each weight piece one DRAM read; 103 / 95 us
-        # standalone vs ttnn mm2d's 117 / 122 (zz_scratch_k3_dense_mm.py::test_lin2d)
-        self.lin2d = os.environ.get("K3_LIN2D", "1") == "1"
-        if self.lin2d:
-            fid = getattr(ttnn.MathFidelity, os.environ.get("K3_LAT_FID", "HiFi2"))
-            self.ld_run, lay = lin2d_prepare(mesh_device, M=S, K=d.H, N=d.latent, fidelity=fid)
-            self.w_ld2 = lin2d_upload(mesh_device, w.lat_down.T.contiguous(), lay)
-            self.lu_run, lay = lin2d_prepare(mesh_device, M=S, K=d.latent, N=d.H, fidelity=fid)
-            self.w_lu2 = lin2d_upload(mesh_device, w.lat_up.T.contiguous(), lay)
-        self.g_ln = ttnn.from_torch(
-            w.lat_norm.view(1, 1, -1, 32),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=dram,
-            mesh_mapper=rep,
-        )
-        # shared expert: K3_SE=flat (default) runs it as the flat routed expert with one expert every own token goes
-        # to (bf8 weights in its bank layout, fused gate/up + SiTU + down); dense: three ttnn.linear + situ_glu
-        # latent norm: the combine's rows tilized straight into an 8 x 10 block-sharded L1 tensor (1 row tile x 14 tiles a
-        # core), the sharded rms_norm (7 us vs 58 interleaved), back to DRAM interleaved for the latent up
-        gx_ln = 8
-        self.ln_mc = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx_ln - 1, S // 32 - 1))]),
-                [32, d.latent // gx_ln],
-                ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-        )
-        self.ln_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(gx_ln, S // 32),
-            subblock_w=2,
-            block_h=1,
-            block_w=d.latent // gx_ln // 32,
-            inplace=False,
-        )
-        self.tilize_ln = layout_op_prepare(mesh_device, "tilize", out_memory_config=self.ln_mc)
         self.tilize = layout_op_prepare(mesh_device, "tilize")
         self.untilize = layout_op_prepare(mesh_device, "untilize")
         self.untilize7 = layout_op_prepare(mesh_device, "untilize", pages_per_row=7)
-        # lin2d (default: local, two combine_rf/lin2d calls, the down adding the latent up's output) | flat (local, the
-        # flat expert) | tp (TP over each mesh row) | dense (ttnn.linear)
-        self.se_mode = os.environ.get("K3_SE", "lin2d")
-        self.se_flat = self.se_mode in ("flat", "tp")
-        self.se_parts = int(os.environ.get("K3_SE_PARTS", "3"))
-        if self.se_mode == "tp":
-            self._build_shared_tp(mesh_device, w, d, S)
-        elif self.se_mode == "lin2d":
-            self._build_shared_lin2d(mesh_device, w, d, S)
-        elif self.se_flat:
-            self._build_shared_flat(mesh_device, w, d, S)
-        else:
-            self.w_sg, self.w_su = tw(w.sh_gate.T, ttnn.bfloat8_b), tw(w.sh_up.T, ttnn.bfloat8_b)
-            self.w_sd = tw(w.sh_down.T, ttnn.bfloat8_b)
+        self.topk_custom = os.environ.get("K3_TOPK", "custom") == "custom" and not routed_only
+        self.se_mode = "none"
+        if not routed_only:
+            # router (bf16), latent (bf8), shared (bf8)
+            self.w_gate = tw(w.gate.T, ttnn.bfloat16)
+            self.bias = ttnn.from_torch(
+                w.bias.view(1, -1).expand(S, -1).contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=dram,
+                mesh_mapper=rep,
+            )
+            # router selection: K3_TOPK=custom (default: sigmoid + bias add in fp32, router_topk writes the joint routing
+            # rows) or ttnn (moe_grouped_topk + layout / concat ops)
+            self.bias32 = ttnn.from_torch(
+                w.bias.view(1, -1).float().contiguous(),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=dram,
+                mesh_mapper=rep,
+            )
+            # (one ttnn.add with a sigmoid on its input gives the biased scores; the top-k reads only those and the bias row,
+            # each pick's score = biased - bias: one program and half the top-k's reads fewer)
+            self.topk_bias = os.environ.get("K3_TOPK_BIAS", "1") == "1"
+            self.bias_row = ttnn.from_torch(
+                w.bias.view(1, -1).float().contiguous(),
+                dtype=ttnn.float32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=dram,
+                mesh_mapper=rep,
+            )
+            self.rtopk = router_topk_prepare(
+                mesh_device, S=S, E=d.E, K=d.K, route_scale=d.route_scale, bias_mode=self.topk_bias
+            )
+            self.w_ld = tw(w.lat_down.T, ttnn.bfloat8_b)
+            self.w_lu = tw(w.lat_up.T, ttnn.bfloat8_b)
+            # latent down / up as combine_rf/lin2d (K3_LIN2D=1, default): x resident in L1, the weights streamed down each
+            # column by fixed senders (top NOC0 / bottom NOC1, after x is in), each weight piece one DRAM read; 103 / 95 us
+            # standalone vs ttnn mm2d's 117 / 122 (zz_scratch_k3_dense_mm.py::test_lin2d)
+            self.lin2d = os.environ.get("K3_LIN2D", "1") == "1"
+            if self.lin2d:
+                fid = getattr(ttnn.MathFidelity, os.environ.get("K3_LAT_FID", "HiFi2"))
+                self.ld_run, lay = lin2d_prepare(mesh_device, M=S, K=d.H, N=d.latent, fidelity=fid)
+                self.w_ld2 = lin2d_upload(mesh_device, w.lat_down.T.contiguous(), lay)
+                self.lu_run, lay = lin2d_prepare(mesh_device, M=S, K=d.latent, N=d.H, fidelity=fid)
+                self.w_lu2 = lin2d_upload(mesh_device, w.lat_up.T.contiguous(), lay)
+            self.g_ln = ttnn.from_torch(
+                w.lat_norm.view(1, 1, -1, 32),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=dram,
+                mesh_mapper=rep,
+            )
+            # shared expert: K3_SE=flat (default) runs it as the flat routed expert with one expert every own token goes
+            # to (bf8 weights in its bank layout, fused gate/up + SiTU + down); dense: three ttnn.linear + situ_glu
+            # latent norm: the combine's rows tilized straight into an 8 x 10 block-sharded L1 tensor (1 row tile x 14 tiles a
+            # core), the sharded rms_norm (7 us vs 58 interleaved), back to DRAM interleaved for the latent up
+            gx_ln = 8
+            self.ln_mc = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx_ln - 1, S // 32 - 1))]),
+                    [32, d.latent // gx_ln],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            self.ln_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(gx_ln, S // 32),
+                subblock_w=2,
+                block_h=1,
+                block_w=d.latent // gx_ln // 32,
+                inplace=False,
+            )
+            self.tilize_ln = layout_op_prepare(mesh_device, "tilize", out_memory_config=self.ln_mc)
+            # lin2d (default: local, two combine_rf/lin2d calls, the down adding the latent up's output) | flat (local, the
+            # flat expert) | tp (TP over each mesh row) | dense (ttnn.linear)
+            self.se_mode = os.environ.get("K3_SE", "lin2d")
+            self.se_flat = self.se_mode in ("flat", "tp")
+            self.se_parts = int(os.environ.get("K3_SE_PARTS", "3"))
+            if self.se_mode == "tp":
+                self._build_shared_tp(mesh_device, w, d, S)
+            elif self.se_mode == "lin2d":
+                self._build_shared_lin2d(mesh_device, w, d, S)
+            elif self.se_flat:
+                self._build_shared_flat(mesh_device, w, d, S)
+            else:
+                self.w_sg, self.w_su = tw(w.sh_gate.T, ttnn.bfloat8_b), tw(w.sh_up.T, ttnn.bfloat8_b)
+                self.w_sd = tw(w.sh_down.T, ttnn.bfloat8_b)
         self.cfg_hi = ttnn.types.BlackholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
@@ -275,7 +286,7 @@ class TtK3TokenSplitMoE:
         self.x_bf16 = os.environ.get("K3_X_BF16") == "1"
         self.h_bf16 = os.environ.get("K3_H_BF16") == "1"
         self.wdtype = os.environ.get("K3_WDTYPE", "bf4")  # routed expert weights: bf4 (default) or bf8
-        self.act = os.environ.get("K3_ROUTED_ACT", "situ")  # (silu: an accuracy probe of the device SiTU)
+        self.act = os.environ.get("K3_ROUTED_ACT", d.act)  # (silu: an accuracy probe of the device SiTU)
         E, EPC = d.E, self.EPC
         # routed experts' layout: K3_GU64=1 - 64 gate/up cores (16-column units, 3 a core) with DRISC weight readers only
         # (the 16 Tensix reader cells go to the combine) and 28 down cores (4 columns each); both DRISC tiles of a bank
@@ -287,7 +298,9 @@ class TtK3TokenSplitMoE:
         # rectangle (MIMO_FL_NH=2, on the cells the accumulators-on-ports layout frees): x delivery (~20 GB/s a relay)
         # capped compute-bound calls - single chip M 1024 182.6 -> 165.2 us / expert, harness fused packed 5807 ->
         # 5709 us, uniform / spread and the block's traced forward unchanged (3312 us)
-        self.gu64 = os.environ.get("K3_GU64", "1") == "1"
+        self.gu64 = os.environ.get("K3_GU64", "1") == "1" and flat_env is None
+        for k, v in (flat_env or {}).items():
+            os.environ.setdefault(k, v)
         if self.gu64:
             for k, v in (
                 ("MIMO_FL_CMB_DRISC", "1"),
@@ -312,7 +325,7 @@ class TtK3TokenSplitMoE:
             x_bf16=self.x_bf16,
             h_bf16=self.h_bf16,
         )
-        P = len(w.pool)
+        P = len(w.pool) if not routed_only else 1
         assert EPC % P == 0, "every chip's local expert e uses pool[e % P]: EPC must be a multiple of the pool"
         lay = dict(self.op.plan)
         wdt = W_DTYPES[self.wdtype][0]
@@ -323,14 +336,16 @@ class TtK3TokenSplitMoE:
         # weight_cache (a directory): the packed (bfp) host tensors, keyed on the plan, the dtype and a sample of the
         # pool's values - a rebuild with the same weights and layout loads them instead of packing again
         files = dict.fromkeys(names)
-        if weight_cache is not None:
+        if weight_cache is not None and not routed_only:
             sample = [(tuple(t.shape), t.reshape(-1)[::4093].float().numpy().tobytes()) for p_ in w.pool for t in p_]
             key = hashlib.sha1(repr((sorted((k, repr(v)) for k, v in lay.items()), self.wdtype, EPC, sample)).encode())
             files = {n: Path(weight_cache) / f"k3_flat.{key.hexdigest()[:16]}.{n}.tensorbin" for n in names}
         # (a loaded tensor is file-backed (mmap): its upload spins forever on KMD 2.9 unless the pinned-memory cache is
         # off - TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 before the device opens; otherwise pack again)
         no_pin = os.environ.get("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES") == "0"
-        if no_pin and all(f is not None and f.is_file() for f in files.values()):
+        if routed_only:  # (the weights come per call: routed(op=...))
+            self.op.w_gu = self.op.w_d = self.op.w_rd = None
+        elif no_pin and all(f is not None and f.is_file() for f in files.values()):
             mc = lambda t: t.memory_config()  # noqa: E731
             loaded = {n: ttnn._ttnn.tensor.load_tensor_flatbuffer(str(files[n])) for n in names}
             for n, t in loaded.items():
@@ -376,7 +391,7 @@ class TtK3TokenSplitMoE:
         # that one is zeroed); the combine's ports drain their credits, so nothing lands after the call either.
         # Allocated here once for its address (the kernels bake it: every call's arena must land there).
         self.sparse_dispatch = os.environ.get("K3_DISPATCH", "sparse") == "sparse"
-        self.rows_pt = 32 if os.environ.get("K3_TOPK", "custom") == "custom" else 1  # (routing rows per page)
+        self.rows_pt = 32 if self.topk_custom else 1  # (routing rows per page)
         # the latent down output untilized straight into this chip's rows of the dispatch buffer (layout_ops with a row
         # offset), dispatch_prep then only writes the route words: -18 us of own-row copy for +2.5 us of untilize
         self.lat_direct = self.sparse_dispatch and os.environ.get("K3_LAT_DIRECT", "1") == "1"
@@ -409,7 +424,22 @@ class TtK3TokenSplitMoE:
         if self.rgather_fabric:
             self.rcopy = own_rows_copy_prepare(mesh_device, S=S)
             self.route_all = all_chips_route_words(mesh_device, S)
-        self._warm_up()  # (the dense ops once first: what they keep in L1 across calls sits above the arena)
+        if not routed_only:  # (routed_only: built after the caller's dense ops have run once)
+            self._warm_up()  # (the dense ops once first: what they keep in L1 across calls sits above the arena)
+        else:  # (the routing gather once: its first call's allocations sit above the arena)
+            z = lambda dt: ttnn.from_torch(  # noqa: E731
+                torch.zeros(self.N * S, d.K, dtype=torch.float32),
+                dtype=dt,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=dram,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            )
+            ids0, wts0 = z(ttnn.uint16), z(ttnn.bfloat16)
+            g0, _ = self.gather_routing(ids0, wts0)
+            ttnn.synchronize_device(mesh_device)
+            for t in (ids0, wts0, g0):
+                ttnn.deallocate(t)
         a_rows = int(plan["arena_tiles"]) * 32
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self._arena_spec = (
@@ -440,7 +470,7 @@ class TtK3TokenSplitMoE:
             cores=sorted(pcores, key=lambda c: (c[1], c[0])),
             row_pages=True,
             joint=True,
-            tokens_per_page=32 if os.environ.get("K3_TOPK", "custom") == "custom" else 1,
+            tokens_per_page=32 if self.topk_custom else 1,
             torus=self.torus,
         )
         # deterministic combine: the planner rebuilds every chip's flat-expert schedule (the plan's schedule parameters,
@@ -471,6 +501,7 @@ class TtK3TokenSplitMoE:
             devplan=dict(plan=probe.outs["plan"], table=probe.outs["table"], dord=probe.outs.get("dord"), top_k=d.K),
             deterministic=deterministic,
             acc_on_ports=acc_on_ports,
+            piece_max=max(7168, 2 * d.latent),  # (the L1 hand-off: one piece a row; a fabric payload >= row + 32 B)
         )
         self.acc_on_ports = acc_on_ports
         self.A = len(self.combine.cells["accs"])
@@ -722,11 +753,21 @@ class TtK3TokenSplitMoE:
             )
             ua = self.untilize_disp.programs(x_se, x_rm)
             extra = ([x_se, x_rm], lambda coord: (list(ua[coord].cbs), list(ua[coord].kernels)))
-        sparse_all_gather_2d(xbuf, route, num_links=2, manifest=man, extra=extra, torus=self.torus)
+        # (rows wider than K3's 7 KB: a 4-row group, its CBs (2 x group rows) below the arena: GLM's 8 KB rows at 8 a group
+        # clashed with it)
+        group = 8 if 2 * self.d.latent <= 7168 else 4
+        sparse_all_gather_2d(xbuf, route, num_links=2, manifest=man, extra=extra, torus=self.torus, group=group)
         ttnn.deallocate(man)
         ttnn.deallocate(route)
         g = ttnn.reshape(xbuf, [self.N * self.S, self.d.latent])
         return (g, x_rm) if x_se is not None else g
+
+    def arena_fits(self):
+        """Would this call's arena land where the kernels expect it (no L1 allocated since the block was built)?"""
+        arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
+        ok = int(arena.buffer_address()) == self.arena_addr
+        ttnn.deallocate(arena)
+        return ok
 
     def alloc_arena(self):
         """The call's arena (uninitialized) with the combine's state zeroed."""
@@ -741,12 +782,13 @@ class TtK3TokenSplitMoE:
         ttnn.generic_op([arena, self.words], self.zero_desc)
         return arena
 
-    def experts_combine(self, xg, pl, arena):
+    def experts_combine(self, xg, pl, arena, op=None):
         # x read from DRAM once (MIMO_FL_X1, read when the program is built): routed experts 2433 -> 2372 us traced;
         # the shared expert's flat op keeps reading it twice (X1 there: 523 -> 702 us). K3_EXP_X1=0: off
         # K3_EXP_DW_BATCH=n: down-weight blocks per read barrier (MIMO_FL_DW_BATCH, 2 by default; 4: block-level noise)
         scoped = {
-            "MIMO_FL_X1": os.environ.get("K3_EXP_X1", "0" if self.gu64 else "1") == "1",
+            # (routed_only, GLM-5.3-Flash: off - 1.99 -> 1.70 ms fused at S 640)
+            "MIMO_FL_X1": os.environ.get("K3_EXP_X1", "0" if self.gu64 or self.routed_only else "1") == "1",
             "MIMO_FL_DW_BATCH": os.environ.get("K3_EXP_DW_BATCH", ""),
         }
         scoped = {k: ("1" if v is True else v) for k, v in scoped.items() if v and v != "0" and k not in os.environ}
@@ -755,23 +797,23 @@ class TtK3TokenSplitMoE:
             scoped[k] = v
         os.environ.update(scoped)
         try:
-            return self._experts_combine(xg, pl, arena)
+            return self._experts_combine(xg, pl, arena, op or self.op)
         finally:
             for k in scoped:
                 os.environ.pop(k, None)
 
-    def _experts_combine(self, xg, pl, arena):
+    def _experts_combine(self, xg, pl, arena, op):
         return ttnn.bringup.flat_routed_expert_with_program(
             xg,
             pl["counts"],
             pl["regions"],
-            self.op.gidx,
-            self.op.w_gu,
-            self.op.w_d,
-            reader_down_weights=self.op.w_rd,
-            done_words=self.op.done,
+            op.gidx,
+            op.w_gu,
+            op.w_d,
+            reader_down_weights=op.w_rd,
+            done_words=op.done,
             intermediate=self.d.I,
-            max_tokens_per_expert=self.op.m,
+            max_tokens_per_expert=op.m,
             arena=arena,
             y=self.y,
             extra=self.desc,
@@ -779,7 +821,7 @@ class TtK3TokenSplitMoE:
             collector=self.coll["core"],
             counts_addr=self.coll["counts_addr"],
             writers=self.writers,
-            activation=self.op.act,
+            activation=op.act,
             pin=1,
             token_index=pl["token_index"],
             down_fp32=True,
@@ -999,6 +1041,31 @@ class TtK3TokenSplitMoE:
         ttnn.deallocate(u)
         y = self._linear(a, self.w_sd, self.cfg)
         ttnn.deallocate(a)
+        return y
+
+    def routed(self, x, ids, wts, op, hook=None):
+        """routed_only: x [S, H] bf16 TILE (this chip's own tokens), ids uint16 / wts bf16 [S, K] (the caller's top-k;
+        weights already normalized / scaled) and op (a FlatRoutedExpert of this block's plan: the layer's weights) ->
+        the routed experts' sum [S, H] bf16 TILE (a fresh tensor)."""
+        mark = hook or (lambda _: None)
+        os.environ["MIMO_FL_Y_L1"] = "1"
+        gi, _ = self.gather_routing(ids, wts)
+        mark("routing_gather")
+        pl = self.planner(gi, gi)
+        mark("planner")
+        prep = self.dispatch_prep(x, gi)
+        mark("dispatch_prep")
+        arena = self.alloc_arena()
+        mark("arena_zero")
+        xg = self.dispatch(x, prep)  # (also the barrier: every chip zeroed its arena before any chip's experts start)
+        mark("dispatch")
+        self.experts_combine(xg, pl, arena, op)
+        ttnn.deallocate(arena)
+        ttnn.deallocate(xg)
+        ttnn.deallocate(gi)
+        mark("experts_combine")
+        y = self.tilize(ttnn.reshape(self.out, [self.S, self.d.H]))
+        mark("tilize")
         return y
 
     def __call__(self, x, keep=False, hook=None):

@@ -1320,3 +1320,25 @@ joint 69 -> 76, GLM 48 -> 59 us). Fused / flat, home order -> token order:
 | V4.1 (28 down, separate, same day) | 1180 -> 1172 | 1355 -> 1295 | 2816 -> 2722 |
 K3 block: PCC 0.99622 (unchanged), traced forward 3322 us (3312: its near-uniform routing gains nothing, the
 planner's +10 us shows), 99 CI-mode replays bit-exact. Open at GLM S 640: fused still +4-14% (ring depth 3 there).
+
+### GLM-5.3-Flash on the K3 token-split block (2026-10-18, hack: GLM_EXPERTS_MODE=ts, LoudBox 2 x 4, 12 x 10 grid)
+TtK3TokenSplitMoE(routed_only=True, flat_env=...): no router (the model's top-k goes in), no latent projections
+(dispatch rows = x), no shared expert; one block per (mesh, chunk) for every layer, each layer's FlatRoutedExpert
+passed per call (routed(op=)). glm53_flash_d_p/tt/experts_ts.py wraps it (split + full-mesh input only); the shared
+expert keeps its TP path on a full-mesh tiled gather of x (the dispatch is sparse now). Plan: DRISC-only, 64 gate/up +
+32 down, two x helpers, MIMO_FL_X1 off (fused 1.99 -> 1.70 ms). Fabric payload 8704 (BRINGUP_FABRIC_PAYLOAD; a
+8192 B row + the 32 B trailer).
+What it took: the sparse dispatch's row group 4 for rows > 7 KB (8 KB x 8 x 2 CBs clashed with the arena); the
+arena checked per call (arena_fits) and the block rebuilt once when the model's later first-call allocations moved
+it (the shared expert's); joint routing rows at top-8 (the staging check assumed 16); one combine piece a row
+(piece_max). Host: place_ports and the fabric all-gather plan memoized (45 -> 15 ms per call; K3 block untraced
+32.2 -> 6.7 ms per call); the rest is the fused op's descriptor conversion (~9 ms).
+Accuracy (zz_scratch_experts_ts.py, random bfp4 experts, 5120 tokens): ts vs ag rel L2 0.37%, PCC 0.999994; both vs
+CPU fp32 0.2005 / 0.2008 (bfp4), uniform and one hot expert. The checkpoint shards are gone from disk: no real-weight
+run.
+Layer device / traced (fake weights, chunk 5120):
+| layer | ag device / traced / eager wall | ts device / traced / eager wall | experts step ag -> ts |
+| L3 dsa_moe | 16.16 / 16.18 / 18.77 | 15.27 / 15.20 / 18.36 | 3.711 -> 2.716 |
+| L4 kda_moe | 9.63 / 9.66 / 10.71 | 8.91 / 8.76 / 15.47 | 3.450 -> 2.724 |
+ts experts step: flat + combine 1.65-1.67, routing gather / planner / dispatch prep / zero / dispatch / tilize 0.56-0.60,
+the shared expert's x gather 0.42-0.49 ms. ~-0.9 ms per MoE layer traced (~38 ms per chunk over 42 layers).
