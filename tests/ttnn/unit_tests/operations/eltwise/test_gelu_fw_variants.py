@@ -18,7 +18,6 @@ import ttnn
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import ulp_distance
-from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 
 pytestmark = pytest.mark.use_module_device
 
@@ -333,7 +332,6 @@ def test_gelu_tanh_fast_param_inf_nan_and_saturation(device):
         assert val == 0.0, f"gelu({x!r}) -> {val!r}, expected 0"
 
 
-@pytest.mark.xfail(is_wormhole_b0(), strict=True, reason="Wormhole fix in a separate PR (#60224)")
 def test_gelu_accurate_bf16_saturated_end(device):
     """#60224: below the saturation point finite inputs give +0, and a negative NaN or -inf must not come out finite
     (a BF16 Dest reads a NaN back as +inf, tenstorrent/tt-llk#675, so any non-finite output passes)."""
