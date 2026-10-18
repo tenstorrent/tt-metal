@@ -84,8 +84,10 @@ Blocking::Blocking(
     uint32_t out_tile_,
     bool enable_phase_alias_,
     bool x_is_rm_,
-    bool fuse_bias_) :
+    bool fuse_bias_,
+    bool x_fp8_) :
     fuse_bias(fuse_bias_),
+    x_fp8(x_fp8_),
     hgroups(hgroups_),
     kgroups(kgroups_),
     num_cores(hgroups_ * kgroups_),
@@ -162,19 +164,19 @@ Blocking::Blocking(
     const bool tuned_grouped_shape = (emb == 3584 && hidden == 3072) || (emb == 6144 && hidden == 2048);
     const bool enable_wd_mgroups = WD_MGROUPS || (hgroups == 12 && kgroups == 8 && tuned_grouped_shape);
     wd_mgroups = enable_wd_mgroups && wd_mrow_rounds && M_BLOCK % 2 == 0 && kgroups == M_BLOCK &&
-                 ec_group_max <= std::min(4u, DEST_LIMIT);
+                 ec_group_max <= std::min(4u, dest_limit());
     wd_ec_max = wd_mgroups ? ec_group_max : ec_max;
 
     TT_FATAL(
-        ec_max <= DEST_LIMIT,
+        ec_max <= dest_limit(),
         "moe_fused_swiglu: down output width {} tiles exceeds DEST limit {} on grid {}x{}",
         ec_max,
-        DEST_LIMIT,
+        dest_limit(),
         hgroups,
         kgroups);
     out_subblock_h_dn = 1;
     while (out_subblock_h_dn * 2 <= std::min(OUT_SUBBLOCK_H_DN_MAX, M_BLOCK) &&
-           out_subblock_h_dn * 2 * ec_max <= DEST_LIMIT) {
+           out_subblock_h_dn * 2 * ec_max <= dest_limit()) {
         out_subblock_h_dn *= 2;
     }
     TT_FATAL(
@@ -258,7 +260,7 @@ Blocking::HnChoice Blocking::choose_hn_pad() const {
             return da == db ? a < b : da < db;
         });
         for (const uint32_t chunk_count : chunks) {
-            if (candidate % chunk_count != 0 || OUT_SUBBLOCK_H_GU * (candidate / chunk_count) > DEST_LIMIT) {
+            if (candidate % chunk_count != 0 || OUT_SUBBLOCK_H_GU * (candidate / chunk_count) > dest_limit()) {
                 continue;
             }
             auto plan = scatter_plan(M_BLOCK, m_eff_min, candidate, kgroups);
@@ -353,6 +355,11 @@ std::vector<CbView> Blocking::cb_layout(
     // slice indexes it as `idx % hn_pad` and so is not a contiguous range; the down bias is the
     // core's own ec output columns, which is. bf16 is enforced by validation, so these reuse the
     // bf16 tile instead of carrying a bias format through the layout.
+    if (x_fp8) {
+        views.push_back({CB_X_Q, kr_pad, bfp8_tile, FormatKey::Bfp8});
+        views.push_back({CB_X_SCALE, 2 * (kr_pad / 4), bfp8_tile, FormatKey::Bfp8});
+        views.push_back({CB_X_SCALE_RAW, 1, TILE * x_fp8_scale_slot_bytes(kr_pad), FormatKey::U32});
+    }
     if (fuse_bias) {
         views.push_back({CB_GATE_BIAS, hn_pad, bf16_tile, FormatKey::Bf16});
         views.push_back({CB_UP_BIAS, hn_pad, bf16_tile, FormatKey::Bf16});

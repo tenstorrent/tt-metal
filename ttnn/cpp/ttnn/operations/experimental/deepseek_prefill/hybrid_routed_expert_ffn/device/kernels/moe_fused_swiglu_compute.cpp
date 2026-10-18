@@ -146,6 +146,58 @@ constexpr uint32_t GATHER_PAGES = CT(GATHER_PAGES);  // the WHOLE landing CB, in
 constexpr uint32_t cb_x_in = CT(CB_X_IN);
 constexpr uint32_t cb_x_tiles = CT(CB_X_TILES);
 constexpr uint32_t cb_tilize_done = CT(CB_X_STAGE);  // the compute->reader per-row completion edge
+
+#ifdef HYB_X_FP8
+// PROTOTYPE, an FP8_E4M3 ROW_MAJOR x: one injected tile-row's e4m3 K slice is tilized into CB_X_Q, then each
+// tile is multiplied elementwise by its 1x128 block's scale tile, whose row r is all row r's scale, and packed as bfp8
+// into the resident cb_x_tiles slot at `output_tile_offset`, exactly where the bf16 path's fast tilize packs. e4m3 has
+// 4 significant bits and the scale is a power of two, so the product is exact at LoFi, and a power-of-two scale
+// commutes with the bfp8 packing: the tiles are the ones DQ1 would hand over. The 32-bit DEST this needs (Blackhole
+// unpacks FP8_E4M3 only into it) holds four tiles, one 1x128 block.
+template <uint32_t width_tiles>
+ALWI void tilize_dequant_row(uint32_t input_pages, uint32_t output_tile_offset) {
+    constexpr uint32_t q_cb = HYB_CB_X_Q;
+    constexpr uint32_t scale_cb = HYB_CB_X_SCALE;
+    constexpr uint32_t BLOCK_TILES = 4;
+    static_assert(width_tiles % BLOCK_TILES == 0, "an fp8 x's K slice must be whole 1x128 blocks");
+    DataflowBuffer input(cb_x_in);
+    CircularBuffer q(q_cb);
+    CircularBuffer scale(scale_cb);
+
+    input.wait_front(input_pages);
+    reconfig_data_format_srca(cb_x_in);
+    PACK((pack_reconfig_data_format(q_cb)));
+    tilize_init(cb_x_in, width_tiles, q_cb);
+    q.reserve_back(width_tiles);
+    tilize_block(cb_x_in, width_tiles, q_cb);
+    q.push_back(width_tiles);
+    tilize_uninit(cb_x_in, q_cb);
+    input.pop_front(input_pages);
+
+    // CB_X_Q is bfp8 like cb_x_tiles, so the packer is already set up for the result.
+    reconfig_data_format(q_cb, scale_cb);
+    mul_init(q_cb, scale_cb);
+    q.wait_front(width_tiles);
+    scale.wait_front(width_tiles / BLOCK_TILES);
+#pragma GCC unroll 1
+    for (uint32_t j = 0; j < width_tiles; j += BLOCK_TILES) {
+        tile_regs_acquire();
+#pragma GCC unroll 1
+        for (uint32_t k = 0; k < BLOCK_TILES; ++k) {
+            mul_tiles(q_cb, scale_cb, j + k, j / BLOCK_TILES, k);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+#pragma GCC unroll 1
+        for (uint32_t k = 0; k < BLOCK_TILES; ++k) {
+            pack_tile<true>(k, cb_x_tiles, output_tile_offset + j + k);
+        }
+        tile_regs_release();
+    }
+    q.pop_front(width_tiles);
+    scale.pop_front(width_tiles / BLOCK_TILES);
+}
+#endif
 constexpr uint32_t cb_mailbox_compute = CT(CB_MAILBOX_COMPUTE);
 constexpr uint32_t cb_w_gate = CT(CB_W_GATE);
 constexpr uint32_t cb_w_up = CT(CB_W_UP);
@@ -620,7 +672,11 @@ void kernel_main() {
                     }
                     {
                         MaybeDeviceZoneScope("compute_tilize_body");
+#ifdef HYB_X_FP8
+                        tilize_dequant_row<KR_PAD>(TILE_H, x_slot_offset + t * KR_PAD);
+#else
                         tilize_row<KR_PAD, cb_x_in, cb_x_tiles>(TILE_H, x_slot_offset + t * KR_PAD);
+#endif
                     }
                     tilize_done.push_back(1);
                 }

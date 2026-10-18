@@ -183,7 +183,12 @@ constexpr uint32_t CT_XMCAST = CT_COUNT;
 constexpr uint32_t CT_HMCAST = CT_XMCAST + 5;
 
 constexpr uint32_t TILE_H = 32;
-constexpr uint32_t BF16_TILE_ROW_BYTES = TILE_H * 2;  // one 32-element tile slice of a bf16 stick
+#ifdef HYB_X_FP8
+// PROTOTYPE, an FP8_E4M3 ROW_MAJOR x of packed rows [emb e4m3 | emb / 128 fp32 scales]: one byte per element.
+constexpr uint32_t X_TILE_ROW_BYTES = TILE_H;  // one 32-element tile slice of an e4m3 stick
+#else
+constexpr uint32_t X_TILE_ROW_BYTES = TILE_H * 2;  // one 32-element tile slice of a bf16 stick
+#endif
 
 // Cross-block x prefetch uses the two highest read transaction IDs. Phase-2 reads must be tagged
 // separately because a blanket read barrier drains EVERY id and would turn the prefetch back into
@@ -356,6 +361,18 @@ void kernel_main() {
     const auto idx_acc = TensorAccessor(idx_args, idx_addr, IDX_PAGE);
     const auto start_acc = TensorAccessor(start_args, start_addr, START_PAGE);
     const uint32_t wd_base = get_write_ptr(cb_w_down);
+#ifdef HYB_X_FP8
+    // Every element of every fp8 x scale tile is mantissa 1.0; only the shared exponents change per row.
+    {
+        volatile tt_l1_ptr uint32_t* words =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(HYB_CB_X_SCALE));
+        for (uint32_t t = 0; t < 2 * (KR_PAD / 4); ++t, words += (64 + 1024) / 4) {
+            for (uint32_t w = 64 / 4; w < (64 + 1024) / 4; ++w) {
+                words[w] = 0x40404040u;
+            }
+        }
+    }
+#endif
 
     // The compute and writer mailbox CBs have independent FIFO state but alias CB_X_STAGE's 64 B
     // allocation. CB_X_STAGE itself is NOT published here — it stays the compute->reader per-row
@@ -583,6 +600,38 @@ void kernel_main() {
         // THE ONE PLACE x MEETS DRAM, which is why the fused extract is two additions and nothing else:
         // `row` is REGION-RELATIVE (callers clamp against M_T_MAX, so clamp-then-rebase composes) and
         // the base moves the read into this expert's slice.
+#ifdef HYB_X_FP8
+        // This row's scales: kstart / 4 fp32 words into the row tail, read from the 64 B line they start in into
+        // one scratch slot per stick, a window the host sized to cover kr_pad / 4 of them.
+        const uint32_t scale_first = HYB_X_FP8_EMB + kstart;
+        const uint32_t scale_window = scale_first & ~63u;
+        const uint32_t scale_skip_words = (scale_first - scale_window) / 4;
+        const uint32_t scale_read_bytes = (scale_first - scale_window + kr_rows + 63) & ~63u;
+        const uint32_t scale_raw = get_write_ptr(HYB_CB_X_SCALE_RAW);
+        constexpr uint32_t X_SCALE_TILE_BYTES = 64 + 1024;  // bfp8: 64 shared exponents, then the mantissas
+        // The scales of the row just read, one bfp8 tile per 1x128 block whose row r is all row r's scale. A
+        // power-of-two scale is mantissa 1.0 (0x40, set once at kernel start) under its row's shared exponent, which is
+        // the fp32 exponent field: row r's two face rows' exponent bytes are all a block needs.
+        auto publish_x_scales = [&]() {
+            constexpr uint32_t SCALE_TILES = KR_PAD / 4;
+            cb_reserve_back(HYB_CB_X_SCALE, SCALE_TILES);
+            volatile tt_l1_ptr uint8_t* tiles =
+                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(get_write_ptr(HYB_CB_X_SCALE));
+            invalidate_l1_cache();
+            for (uint32_t r = 0; r < TILE_H; ++r) {
+                volatile tt_l1_ptr uint32_t* row_scales =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scale_raw + r * HYB_X_FP8_SCALE_SLOT) +
+                    scale_skip_words;
+                const uint32_t exp0 = r < 16 ? r : 32 + (r - 16);  // faces 0/1, or 2/3
+                for (uint32_t b = 0; b < kr_rows / 4; ++b) {
+                    const uint8_t e = static_cast<uint8_t>(row_scales[b] >> 23);
+                    tiles[b * X_SCALE_TILE_BYTES + exp0] = e;
+                    tiles[b * X_SCALE_TILE_BYTES + exp0 + 16] = e;
+                }
+            }
+            cb_push_back(HYB_CB_X_SCALE, SCALE_TILES);
+        };
+#endif
         auto issue_x_row = [&](uint32_t row, uint32_t dst) {
             if constexpr (INPUT_FORMAT == 0) {
                 for (uint32_t i = 0; i < TILE_H; ++i) {
@@ -590,9 +639,17 @@ void kernel_main() {
                     noc.async_read(
                         x_acc,
                         CoreLocalMem<uint32_t>(dst + s * X_SLICE),
-                        kr_rows * BF16_TILE_ROW_BYTES,
-                        {.page_id = x_stick_base + row * TILE_H + s, .offset_bytes = kstart * BF16_TILE_ROW_BYTES},
+                        kr_rows * X_TILE_ROW_BYTES,
+                        {.page_id = x_stick_base + row * TILE_H + s, .offset_bytes = kstart * X_TILE_ROW_BYTES},
                         {});
+#ifdef HYB_X_FP8
+                    noc.async_read(
+                        x_acc,
+                        CoreLocalMem<uint32_t>(scale_raw + s * HYB_X_FP8_SCALE_SLOT),
+                        scale_read_bytes,
+                        {.page_id = x_stick_base + row * TILE_H + s, .offset_bytes = scale_window},
+                        {});
+#endif
                 }
             } else {
                 for (uint32_t i = 0; i < kr_rows; ++i) {
@@ -707,6 +764,9 @@ void kernel_main() {
                                 cb_reserve_back(cb_x_in, TILE_H);
                                 issue_x_row(row, get_write_ptr(cb_x_in));
                                 noc.async_read_barrier();
+#ifdef HYB_X_FP8
+                                publish_x_scales();
+#endif
                                 cb_push_back(cb_x_in, TILE_H);
                             }
                         }
@@ -1276,6 +1336,9 @@ void kernel_main() {
                 noc_async_read_barrier_with_trid(NEXT_X_TRID);
                 if constexpr (INPUT_FORMAT == 0) {
                     if (prefetch_has_local_row) {
+#ifdef HYB_X_FP8
+                        publish_x_scales();
+#endif
                         cb_push_back(cb_x_in, TILE_H);
                     }
                 }

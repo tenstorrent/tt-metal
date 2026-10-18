@@ -25,6 +25,8 @@ are run by hand, so CI never collects them.
 """
 
 import heapq
+import json
+import os
 import time
 from types import SimpleNamespace
 
@@ -462,9 +464,9 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
         activation=ttnn.RoutedExpertActivation.Silu,
     )
 
-    def routed_expert(**overlap):
+    def routed_expert(x=None, **overlap):
         return ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe(
-            tt_x,
+            tt_x if x is None else x,
             tt_region_offsets,
             tt_counts,
             tt_idx_slice,
@@ -511,7 +513,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
     # never a capture.
     overlap_semaphores = []
 
-    def overlapped():
+    def overlapped(x=None):
         if not overlap_semaphores:
             grid = mesh_device.compute_with_storage_grid_size()
             all_cores = ttnn.CoreRangeSet(
@@ -521,6 +523,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             ttnn.synchronize_device(mesh_device)
         fwd_arrived, final_arrived, expert_go, launch_credit = overlap_semaphores
         return routed_expert(
+            x,
             dispatched_metadata=tt_metadata,
             expert_offsets=tt_expert_offsets,
             replicated_global_expert_idx_table=tt_idx_full,
@@ -575,8 +578,48 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
         )
         return reference[0]
 
+    fp8_rows = []
+
+    def fp8_x():
+        """This case's dispatched buffer as the fp8 dispatch wire delivers it: Q1's packed rows, made once. Q1 takes
+        the TILE x TtMoe hands it: its ROW_MAJOR input does not pack scales into the row correctly."""
+        if not fp8_rows:
+            tile_x = ttnn.to_layout(tt_x, ttnn.TILE_LAYOUT)
+            fp8_rows.append(
+                ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+                    tile_x,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    round_scale_to_power_of_two=True,
+                    round_to_nearest_even=True,
+                    pack_scales_in_row=True,
+                    scale_block_w=128,
+                )[0]
+            )
+            ttnn.deallocate(tile_x)
+        return fp8_rows[0]
+
+    def dq1():
+        """TtMoe's DQ1 on the fp8 dispatch wire: the dispatched packed fp8 rows back to the bf8 tiles the overlapped
+        routed expert takes, valid rows only. The rows are this case's dispatched buffer through Q1, made once."""
+        return ttnn.experimental.deepseek_prefill.per_token_cast_back(
+            fp8_x(),
+            None,
+            output_dtype=ttnn.bfloat8_b,
+            tile_output=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            scales_in_row_tail=True,
+            token_count_aware=True,
+            expert_region_offsets=tt_region_offsets,
+            expert_token_counts=tt_counts,
+            global_expert_idx_table=tt_idx_slice,
+            experts_per_chip=experts_per_chip,
+            scale_block_w=128,
+        )
+
     return SimpleNamespace(
         emb_dim=emb_dim,
+        dq1=dq1,
+        fp8_x=fp8_x,
         composer=get_ep_mesh_composer(mesh_device),
         solo_routed_expert=solo_routed_expert,
         combine=combine,
@@ -739,4 +782,163 @@ def test_hybrid_routed_expert_combine_overlap_perf(
     assert traced_overlap_us < traced_sequential_us, (
         f"traced overlap {traced_overlap_us:.1f} us is not faster than traced RE then combine "
         f"({traced_re_us:.1f} + {traced_combine_us:.1f} = {traced_sequential_us:.1f} us)"
+    )
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_perf_combos)
+@pytest.mark.requires_host_iommu
+@pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
+@pytest.mark.parametrize(
+    "mesh_device, device_params, threshold_id, model_id, variant",
+    _mesh_params(),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("combine_wire", ["bf16", "fp8"])
+def test_hybrid_routed_expert_combine_overlap_timeline(
+    mesh_device, device_params, threshold_id, model_id, variant, combine_wire
+):
+    """Replays the overlapped program from a trace for the device profiler, so its per-core kernel timestamps show
+    when the routed expert ends on each chip and how long combine runs past it. Run with TT_METAL_DEVICE_PROFILER=1;
+    the timestamps land in the profiler's profile_log_device.csv and the logical-to-virtual core map, which tells
+    the routed expert's rectangle from combine's rows, in $TT_DS_TIMELINE_CORE_MAP."""
+    if variant == "8x1-submesh":
+        mesh_device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
+    case = _build_case(
+        mesh_device,
+        device_params,
+        threshold_id,
+        model_id,
+        dg0_only=variant == "dg0-only",
+        combine_fp8_scale_block=128 if combine_wire == "fp8" else 0,
+    )
+    grid = mesh_device.compute_with_storage_grid_size()
+    core_map = {
+        f"{v.x},{v.y}": [x, y]
+        for x in range(grid.x)
+        for y in range(grid.y)
+        for v in [mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))]
+    }
+    path = os.environ.get("TT_DS_TIMELINE_CORE_MAP")
+    if path:
+        with open(path, "w") as f:
+            json.dump(core_map, f)
+
+    case.overlapped()  # compiles; a capture cannot
+    ttnn.synchronize_device(mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
+    trace_id, out = _capture(mesh_device, case.overlapped)
+    try:
+        for _ in range(_PERF_ITERS):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            ttnn.ReadDeviceProfiler(mesh_device)
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+        del out
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_perf_combos)
+@pytest.mark.requires_host_iommu
+@pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
+@pytest.mark.parametrize(
+    "mesh_device, device_params, threshold_id, model_id, variant",
+    _mesh_params(),
+    indirect=["mesh_device", "device_params"],
+)
+def test_hybrid_routed_expert_dq1_perf(mesh_device, device_params, threshold_id, model_id, variant):
+    """DQ1 -- per_token_cast_back from the fp8 dispatch wire's packed rows to bf8 tiles, valid rows only -- timed
+    traced, against the overlapped routed expert + combine it feeds: what folding DQ1 into the routed expert could
+    save at most."""
+    if variant == "8x1-submesh":
+        mesh_device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
+    case = _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=variant == "dg0-only")
+
+    case.dq1()
+    dq1_trace, dq1_out = _capture(mesh_device, case.dq1)
+    try:
+        dq1_us = _replay_us(mesh_device, dq1_trace, _PERF_ITERS)
+    finally:
+        ttnn.release_trace(mesh_device, dq1_trace)
+        del dq1_out
+
+    case.overlapped()
+    overlap_trace, overlap_out = _capture(mesh_device, case.overlapped)
+    try:
+        overlap_us = _replay_us(mesh_device, overlap_trace, _PERF_ITERS)
+    finally:
+        ttnn.release_trace(mesh_device, overlap_trace)
+        del overlap_out
+    logger.info(
+        f"DQ1 {model_id} {threshold_id} traced: {dq1_us:.1f} us, overlapped RE + combine {overlap_us:.1f} us "
+        f"-> DQ1 is {dq1_us / (dq1_us + overlap_us):.1%} of the two"
+    )
+
+
+def _fp8_x_combos(**params):
+    # PROTOTYPE: only the fused half dequantizes an fp8 x, so only cases whose every expert takes the fused pass.
+    return params["is_ci_env"] or params["is_ci_v2_env"] or params["threshold_id"] != "balanced"
+
+
+@pytest.mark.uncollect_if(pred=_fp8_x_combos)
+@pytest.mark.requires_host_iommu
+@pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
+@pytest.mark.parametrize(
+    "mesh_device, device_params, threshold_id, model_id, variant",
+    _mesh_params(),
+    indirect=["mesh_device", "device_params"],
+)
+def test_hybrid_routed_expert_fp8_x(mesh_device, device_params, threshold_id, model_id, variant):
+    """PROTOTYPE (HYB_FP32_DEST=1): the overlapped routed expert + combine fed the fp8 dispatch wire's packed rows,
+    dequantized by the fused half as it tilizes, against DQ1 then the same program on its bf8 tiles. The two must
+    land the same combine output; then both are timed traced."""
+    assert os.environ.get("HYB_FP32_DEST") == "1", "an fp8 x needs the 32-bit DEST prototype: HYB_FP32_DEST=1"
+    if variant == "8x1-submesh":
+        mesh_device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
+    case = _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=variant == "dg0-only")
+
+    rows = case.fp8_x()
+    reference = ttnn.to_torch(case.overlapped(case.dq1()), mesh_composer=case.composer)
+    actual = ttnn.to_torch(case.overlapped(rows), mesh_composer=case.composer)
+    mismatched = int((reference != actual).sum())
+    logger.info(
+        f"fp8 x {model_id} {threshold_id}: {mismatched}/{actual.numel()} combine output values differ from DQ1's path"
+    )
+    assert mismatched == 0, f"{mismatched} combine output values differ from the DQ1 path"
+    # Agreeing with DQ1 is not enough on its own: two paths fed the same broken rows agree too.
+    result = validate_combine_output(
+        case.torch_reference(),
+        actual,
+        case.indices,
+        case.num_dispatch_groups,
+        case.num_routed_experts,
+        use_pcc=True,
+        verbose=False,
+        expert_dispatch_table=case.expert_dispatch_table,
+        expert_token_counts=case.expert_token_counts,
+        experts_per_chip=case.experts_per_chip,
+    )
+    logger.info(
+        f"fp8 x {model_id} {threshold_id}: {result.matches}/{result.total} combine slots match the PyTorch reference"
+    )
+    result.assert_passed("fp8 x overlapped RE + combine vs PyTorch RE + combine")
+
+    def dq1_then_overlap():
+        return case.overlapped(case.dq1())
+
+    def overlap_fp8():
+        return case.overlapped(rows)
+
+    timings = {}
+    for name, fn in (("DQ1 + overlap", dq1_then_overlap), ("fp8 x overlap", overlap_fp8)):
+        fn()
+        trace, out = _capture(mesh_device, fn)
+        try:
+            timings[name] = _replay_us(mesh_device, trace, _PERF_ITERS)
+        finally:
+            ttnn.release_trace(mesh_device, trace)
+            del out
+    saved = timings["DQ1 + overlap"] - timings["fp8 x overlap"]
+    logger.info(
+        f"fp8 x {model_id} {threshold_id} traced: DQ1 + overlap {timings['DQ1 + overlap']:.1f} us, "
+        f"fp8 x overlap {timings['fp8 x overlap']:.1f} us -> saved {saved:.1f} us"
     )

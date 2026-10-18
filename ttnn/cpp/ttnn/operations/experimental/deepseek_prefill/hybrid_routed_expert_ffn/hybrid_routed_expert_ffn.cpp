@@ -111,8 +111,11 @@ ttnn::Tensor hybrid_routed_expert_moe(
         dispatched_buffer.dtype(),
         dispatched_buffer.layout());
     if (x_is_row_major || overlap_combine) {
+        // An fp8 x's last dim is the packed row; the output is the embedding wide.
+        auto output_shape = dispatched_buffer.logical_shape();
+        output_shape[-1] = x_embedding(dispatched_buffer);
         output = ttnn::empty(
-            dispatched_buffer.logical_shape(),
+            output_shape,
             tt::tt_metal::DataType::BFLOAT8_B,
             tt::tt_metal::Layout::TILE,
             dispatched_buffer.device(),

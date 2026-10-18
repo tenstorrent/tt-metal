@@ -199,7 +199,25 @@ void reconcile_config(const KernelDescriptor& fused, const KernelDescriptor& uni
 
     auto& out = std::get<tt::tt_metal::ComputeConfigDescriptor>(merged.config);
     out.bfp8_pack_precise = f->bfp8_pack_precise || u.bfp8_pack_precise;
-    TT_FATAL(f->unpack_to_dest_mode == u.unpack_to_dest_mode, "the halves disagree on unpack_to_dest_mode");
+    // Per circular buffer, and the halves own disjoint ones: a buffer only one half sets keeps that half's mode.
+    if (f->unpack_to_dest_mode != u.unpack_to_dest_mode) {
+        const auto& a = f->unpack_to_dest_mode.empty() ? u.unpack_to_dest_mode : f->unpack_to_dest_mode;
+        const auto& b = f->unpack_to_dest_mode.empty() ? f->unpack_to_dest_mode : u.unpack_to_dest_mode;
+        out.unpack_to_dest_mode = a;
+        if (out.unpack_to_dest_mode.size() < b.size()) {
+            out.unpack_to_dest_mode.resize(b.size(), tt::tt_metal::UnpackToDestMode::Default);
+        }
+        for (size_t i = 0; i < b.size(); ++i) {
+            if (b[i] != tt::tt_metal::UnpackToDestMode::Default) {
+                TT_FATAL(
+                    out.unpack_to_dest_mode[i] == tt::tt_metal::UnpackToDestMode::Default ||
+                        out.unpack_to_dest_mode[i] == b[i],
+                    "the halves disagree on unpack_to_dest_mode for circular buffer {}",
+                    i);
+                out.unpack_to_dest_mode[i] = b[i];
+            }
+        }
+    }
 }
 
 // One merged kernel from the two halves' descriptors for the same RISC-V role.

@@ -350,8 +350,8 @@ std::vector<uint32_t> make_compute_ct(
         blocking.mgroup_rows,
         geo::WD_MGROUP_MIN_BLOCKS,
         blocking.gu_chunks,
-        geo::ELTWISE_BLK,
-        geo::DEST_LIMIT,
+        geo::eltwise_blk(),
+        geo::dest_limit(),
         blocking.gather_pages,
         blocking.depth_h,
         geo::CB_X_IN,
@@ -435,9 +435,10 @@ void append_to_descriptor(
     const uint32_t num_cores = hgroups * kgroups;
     const CoreRangeSet all_cores{CoreRange({0, OY}, {hgroups - 1, OY + kgroups - 1})};
 
-    const uint32_t emb = tensor_arguments.activations.logical_shape()[-1];
+    const uint32_t emb = x_embedding(tensor_arguments.activations);
     const uint32_t hidden = tensor_arguments.w_gates[0].logical_shape()[-1];
     const bool activations_are_row_major = tensor_arguments.activations.layout() == Layout::ROW_MAJOR;
+    const bool x_fp8 = x_is_fp8_rows(tensor_arguments.activations);
     const DataFormat weight_format = datatype_to_dataformat_converter(tensor_arguments.w_gates[0].dtype());
     const DataFormat output_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
     const DataFormat activation_format = datatype_to_dataformat_converter(tensor_arguments.activations.dtype());
@@ -472,7 +473,24 @@ void append_to_descriptor(
         output_tile,
         /*enable_phase_alias_=*/true,
         activations_are_row_major,
-        operation_arguments.fuse_bias);
+        operation_arguments.fuse_bias,
+        x_fp8);
+    if (x_fp8) {
+        // Every grid row's K slice must be whole 1x128 scale blocks, and its scales one window per stick.
+        TT_FATAL(blocking.kr_pad % 4 == 0, "moe_fused_swiglu: an fp8 x needs K slices of whole 128-column blocks");
+        for (uint32_t y = 0; y < kgroups; ++y) {
+            TT_FATAL(
+                blocking.kr_sizes[y] % 4 == 0 && blocking.kr_starts[y] % 4 == 0,
+                "moe_fused_swiglu: grid row {} owns K tiles [{}, +{}), not whole 128-column blocks",
+                y,
+                blocking.kr_starts[y],
+                blocking.kr_sizes[y]);
+        }
+        TT_FATAL(
+            geo::hybrid_fp32_dest(),
+            "moe_fused_swiglu: an fp8 x is unpacked through a 32-bit DEST; set HYB_FP32_DEST=1");
+        TT_FATAL(!operation_arguments.fuse_bias, "moe_fused_swiglu: an fp8 x's circular buffers take the bias slots");
+    }
 
     const bool direct_write = tensor_arguments.expert_region_offsets.has_value();
     const Tensor& start_tensor = direct_write ? *tensor_arguments.expert_region_offsets : tensor_arguments.counts;
@@ -624,6 +642,16 @@ void append_to_descriptor(
         dataflow_defines.emplace_back("FUSE_BIAS", "1");
     }
     KernelDescriptor::Defines compute_defines;
+    if (x_fp8) {
+        for (auto* defines : {&dataflow_defines, &compute_defines}) {
+            defines->emplace_back("HYB_X_FP8", "1");
+            defines->emplace_back("HYB_X_FP8_EMB", std::to_string(emb));
+            defines->emplace_back("HYB_X_FP8_SCALE_SLOT", std::to_string(geo::x_fp8_scale_slot_bytes(blocking.kr_pad)));
+            defines->emplace_back("HYB_CB_X_Q", std::to_string(geo::CB_X_Q));
+            defines->emplace_back("HYB_CB_X_SCALE", std::to_string(geo::CB_X_SCALE));
+            defines->emplace_back("HYB_CB_X_SCALE_RAW", std::to_string(geo::CB_X_SCALE_RAW));
+        }
+    }
     if (stage_profile_enabled()) {
         dataflow_defines.emplace_back("MOE_FUSED_SWIGLU_STAGE_PROFILE", "1");
         compute_defines.emplace_back("MOE_FUSED_SWIGLU_STAGE_PROFILE", "1");
@@ -662,6 +690,12 @@ void append_to_descriptor(
                 .math_approx_mode = compute_config.math_approx_mode,
             },
     };
+    if (x_fp8) {
+        // Blackhole unpacks an FP8_E4M3 buffer only into a 32-bit DEST.
+        auto& config = std::get<ComputeConfigDescriptor>(compute_descriptor.config);
+        config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        config.unpack_to_dest_mode[geo::CB_X_IN] = UnpackToDestMode::UnpackToDestFp32;
+    }
     // SwiGlu-OAI's SFPU helper is templated on the dst-accumulator mode, which only the host knows;
     // SiTU-GLU reads DST_ACCUM_MODE itself and ignores this.
     compute_descriptor.defines.emplace_back("FP32_DEST_ACC_EN", compute_config.fp32_dest_acc_en ? "1" : "0");
@@ -837,8 +871,9 @@ void validate(const OperationArguments& operation_arguments, const TensorArgumen
     const bool activations_are_tiled = tensor_arguments.activations.layout() == tt::tt_metal::Layout::TILE;
     TT_FATAL(
         (activations_are_row_major && tensor_arguments.activations.dtype() == tt::tt_metal::DataType::BFLOAT16) ||
+            x_is_fp8_rows(tensor_arguments.activations) ||
             (activations_are_tiled && tensor_arguments.activations.dtype() == tt::tt_metal::DataType::BFLOAT8_B),
-        "moe_fused_swiglu: activations must be BFLOAT16 ROW_MAJOR or BFLOAT8_B TILE "
+        "moe_fused_swiglu: activations must be BFLOAT16 or FP8_E4M3 ROW_MAJOR, or BFLOAT8_B TILE "
         "(got dtype {}, layout {})",
         tensor_arguments.activations.dtype(),
         tensor_arguments.activations.layout());
@@ -904,25 +939,26 @@ void validate(const OperationArguments& operation_arguments, const TensorArgumen
         "moe_fused_swiglu: gate and up shapes must match (got {} and {})",
         gate_shape,
         up_shape);
+    const uint32_t activation_emb = x_embedding(tensor_arguments.activations);
     TT_FATAL(
-        gate_shape[-2] == activation_shape[-1],
+        gate_shape[-2] == activation_emb,
         "moe_fused_swiglu: gate K ({}) must equal activation embedding ({})",
         gate_shape[-2],
-        activation_shape[-1]);
+        activation_emb);
     TT_FATAL(
         down_shape[-2] == gate_shape[-1],
         "moe_fused_swiglu: down K ({}) must equal gate/up hidden ({})",
         down_shape[-2],
         gate_shape[-1]);
     TT_FATAL(
-        down_shape[-1] == activation_shape[-1],
+        down_shape[-1] == activation_emb,
         "moe_fused_swiglu: down N ({}) must equal activation embedding ({})",
         down_shape[-1],
-        activation_shape[-1]);
+        activation_emb);
     TT_FATAL(
-        activation_shape[-1] % TILE == 0 && gate_shape[-1] % TILE == 0,
+        activation_emb % TILE == 0 && gate_shape[-1] % TILE == 0,
         "moe_fused_swiglu: embedding ({}) and hidden ({}) must be tile-aligned",
-        activation_shape[-1],
+        activation_emb,
         gate_shape[-1]);
 
     for (const auto& [name, aux] : std::initializer_list<std::pair<const char*, const Tensor&>>{
@@ -1021,7 +1057,7 @@ void validate(const OperationArguments& operation_arguments, const TensorArgumen
         "moe_fused_swiglu: compute kernel configuration must be resolved before launching the primitive");
     const auto& compute_config = *operation_arguments.compute_kernel_config;
     TT_FATAL(
-        !compute_config.fp32_dest_acc_en,
+        !compute_config.fp32_dest_acc_en || geo::hybrid_fp32_dest(),
         "moe_fused_swiglu: fp32_dest_acc_en is unsupported because the kernel blocking requires eight DEST tiles");
     TT_FATAL(
         !compute_config.packer_l1_acc,
@@ -1082,10 +1118,10 @@ void validate(const OperationArguments& operation_arguments, const TensorArgumen
                 activation_shape[1]);
         }
         TT_FATAL(
-            output.logical_shape()[-1] == activation_shape[-1],
+            output.logical_shape()[-1] == x_embedding(tensor_arguments.activations),
             "moe_fused_swiglu: output embedding {} must equal activation embedding {}",
             output.logical_shape()[-1],
-            activation_shape[-1]);
+            x_embedding(tensor_arguments.activations));
         TT_FATAL(output.logical_shape()[-2] % TILE == 0, "moe_fused_swiglu: output rows must be tile-aligned");
         if (direct_write) {
             TT_FATAL(
@@ -1244,14 +1280,13 @@ void append_to_descriptor(
     // built once against expert 0's weights; the kernels loop over experts and
     // vary only the per-expert base address.
     const uint32_t experts_per_chip = op.experts_per_chip;
-    const auto& x_shape = t.x.padded_shape();
     const auto& gate_shape = t.gate_projs[0].padded_shape();
     const auto& down_shape = t.down_projs[0].padded_shape();
 
     // This expert's M (not x's allocated M): x may be a shared buffer wider
     // than one expert's region. K still comes from x's last dim (emb).
     const uint32_t M_tiles_full = op.m_tiles;
-    const uint32_t K_gate_tiles = x_shape[-1] / TILE;          // = N_gate K = emb / TILE
+    const uint32_t K_gate_tiles = x_embedding(t.x) / TILE;     // = N_gate K = emb / TILE (fp8 x: packed rows)
     const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;  // = hidden / TILE
     const uint32_t K_down_tiles = down_shape[-2] / TILE;       // = hidden / TILE
     const uint32_t N_down_tiles_full = down_shape[-1] / TILE;  // = emb / TILE
@@ -1399,8 +1434,8 @@ void append_to_descriptor(
     // Single source of truth for the dst-accumulator mode: drives DST_CAPACITY,
     // the ComputeConfig below, and (via -DFP32_DEST_ACC_EN) the compute kernel's
     // SwiGLU-OAI dst budget + SFPU fp32-dest template, so they can't drift.
-    constexpr bool kFp32DestAccEn = false;
-    constexpr uint32_t DST_CAPACITY = kFp32DestAccEn ? 4u : 8u;
+    const bool fp32_dest_acc_en = fused::geo::hybrid_fp32_dest();
+    const uint32_t DST_CAPACITY = fp32_dest_acc_en ? 4u : 8u;
     const uint32_t gu_out_subblock_h = 1;
     uint32_t gu_sub_w = 1;
     for (uint32_t cand = DST_CAPACITY; cand >= 1; --cand) {
@@ -2259,7 +2294,7 @@ void append_to_descriptor(
     // Dst-accumulator mode -> compute kernel: the fused-binary-activation dst budget and
     // the SFPU fp32-dest template derive from this, staying in sync with
     // DST_CAPACITY / ComputeConfig.fp32_dest_acc_en (single source above).
-    compute_defines["FP32_DEST_ACC_EN"] = kFp32DestAccEn ? "1" : "0";
+    compute_defines["FP32_DEST_ACC_EN"] = fp32_dest_acc_en ? "1" : "0";
     if (op.activation == RoutedExpertActivation::SwiGluOai) {
         // SwiGLU-OAI activation (MiniMax-M3 / gpt-oss): clamp(gate,max=L),
         // clamp(up,±L), (up+1)*gate*sigmoid(alpha*gate). Bakes alpha=1.702,
@@ -2292,7 +2327,7 @@ void append_to_descriptor(
         .config =
             tt::tt_metal::ComputeConfigDescriptor{
                 .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
-                .fp32_dest_acc_en = kFp32DestAccEn,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
                 .math_approx_mode = false,
             },
     };
@@ -2573,9 +2608,11 @@ void validate(const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertF
     //     fusing the standalone to_layout. Off preserves the pre-fusion path for
     //     standalone / Wormhole callers.
     if (op.x_is_row_major) {
+        // PROTOTYPE: an fp8 x is dequantized by the fused half only. This half still reads its sticks as bf16
+        // and must not run, so the caller has to keep every expert under the fused threshold.
         TT_FATAL(
-            t.x.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "x must be BFLOAT16 when x_is_row_major, got {}",
+            t.x.dtype() == tt::tt_metal::DataType::BFLOAT16 || x_is_fp8_rows(t.x),
+            "x must be BFLOAT16 (or FP8_E4M3 rows) when x_is_row_major, got {}",
             t.x.dtype());
         TT_FATAL(
             t.x.layout() == tt::tt_metal::Layout::ROW_MAJOR,
@@ -2613,10 +2650,11 @@ void validate(const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertF
     const auto& up_shape = t.up_projs[0].padded_shape();
     const auto& down_shape = t.down_projs[0].padded_shape();
 
+    const uint32_t x_emb = x_embedding(t.x);
     TT_FATAL(
-        x_shape[-1] == gate_shape[-2] && x_shape[-1] == up_shape[-2],
-        "x's last dim {} must match gate/up's K dim ({}, {})",
-        x_shape[-1],
+        x_emb == gate_shape[-2] && x_emb == up_shape[-2],
+        "x's embedding {} must match gate/up's K dim ({}, {})",
+        x_emb,
         gate_shape[-2],
         up_shape[-2]);
     TT_FATAL(
@@ -2624,7 +2662,7 @@ void validate(const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertF
         "gate/up N ({}) must equal down K ({})",
         gate_shape[-1],
         down_shape[-2]);
-    TT_FATAL(down_shape[-1] == x_shape[-1], "down N ({}) must equal x K ({})", down_shape[-1], x_shape[-1]);
+    TT_FATAL(down_shape[-1] == x_emb, "down N ({}) must equal x K ({})", down_shape[-1], x_emb);
 
     constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
     TT_FATAL(x_shape[-2] % TILE == 0, "x M ({}) must be tile-aligned", x_shape[-2]);
@@ -2781,10 +2819,10 @@ void validate(const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertF
         // x — the writer's tile-row stride is out_shape[-1]/TILE, and leading
         // dims index the same logical (1,..,1,M,N) tensor.
         TT_FATAL(
-            out_shape[-1] == x_shape[-1],
-            "output last dim ({}) must match x last dim ({})",
+            out_shape[-1] == x_embedding(t.x),
+            "output last dim ({}) must match x's embedding ({})",
             out_shape[-1],
-            x_shape[-1]);
+            x_embedding(t.x));
         for (int i = 0; i < static_cast<int>(out_shape.rank()) - 2; ++i) {
             TT_FATAL(
                 out_shape[i] == x_shape[i],
@@ -2949,7 +2987,7 @@ std::optional<ttnn::DeviceComputeKernelConfig> fused_compute_config(
         return std::nullopt;
     }
     ttnn::DeviceComputeKernelConfig cleared = *caller;
-    cleared.fp32_dest_acc_en = false;
+    cleared.fp32_dest_acc_en = fused::geo::hybrid_fp32_dest();
     cleared.packer_l1_acc = false;
     cleared.dst_full_sync_en = false;
     return cleared;
