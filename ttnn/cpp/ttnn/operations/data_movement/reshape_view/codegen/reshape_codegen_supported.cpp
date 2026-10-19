@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
@@ -213,9 +214,12 @@ bool native_rm_fits_l1(
     const uint32_t elem = input.element_size();
     const uint64_t old_stick = static_cast<uint64_t>(input.logical_shape()[-1]) * elem;
     const uint64_t new_stick = static_cast<uint64_t>(logical_output_shape[-1]) * elem;
-    // Per instance: two source pages padded to 64 B plus 128 B, one destination slot padded to 64 B plus 80 B.
-    const uint64_t per_kernel = (2 * (((old_stick - 1) & ~uint64_t{63}) + kNativeSourceReadSlack)) +
-                                ((new_stick - 1) & ~uint64_t{63}) + kNativeDestSlotSlack;
+    // Per instance: a scratchpad of two source pages padded to 64 B plus 128 B, and one of a destination slot padded
+    // to 64 B plus 80 B. Every scratchpad starts DRAM-aligned, so each takes its size rounded up to that alignment.
+    const uint64_t alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint64_t source_scratch = 2 * (((old_stick - 1) & ~uint64_t{63}) + kNativeSourceReadSlack);
+    const uint64_t dest_scratch = ((new_stick - 1) & ~uint64_t{63}) + kNativeDestSlotSlack;
+    const uint64_t per_kernel = tt::round_up(source_scratch, alignment) + tt::round_up(dest_scratch, alignment);
     const bool divisible = old_stick % new_stick == 0 || new_stick % old_stick == 0;
     const uint64_t kernels =
         divisible && native_runs_two_kernels(static_cast<uint32_t>(new_stick), output_mem_config) ? 2 : 1;
