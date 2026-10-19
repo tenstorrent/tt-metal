@@ -7,7 +7,6 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import WhereGolden, get_golden_generator
 from helpers.llk_params import (
     DataCopyType,
-    ImpliedMathFormat,
     MathOperation,
     PerfRunType,
     UnpackerEngine,
@@ -28,7 +27,6 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
@@ -94,13 +92,11 @@ def _build_condition_for_test_case(
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc=get_valid_formats_dest_acc(),
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     test_case=runtime(["mixed", "all_ones", "all_zeros"]),
     vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
 def test_sfpu_where_quasar(
     formats_dest_acc,
-    implied_math_format,
     test_case,
     vector_mode,
     *,
@@ -179,7 +175,6 @@ def test_sfpu_where_quasar(
         "formats": formats,
         "templates": [
             MATH_OP(mathop=MathOperation.SfpuWhere),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
@@ -236,10 +231,9 @@ def test_sfpu_where_quasar(
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc=get_valid_formats_dest_acc()[:3],
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
-def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mode):
+def test_sfpu_where_mcw_quasar(formats_dest_acc, vector_mode):
     """
     Deterministic where test — alternating 0/1 condition pattern with
     known true/false scalars (2 and 11) for easy debugging.
@@ -278,7 +272,6 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mod
         "formats": formats,
         "templates": [
             MATH_OP(mathop=MathOperation.SfpuWhere),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA

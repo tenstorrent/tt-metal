@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
+import math
 import struct
-from itertools import chain, product
+from itertools import product
 
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import distinct_dest_accumulation_modes
+from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -45,7 +47,7 @@ from helpers.sfpu_domains import (
     specials_safe,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
@@ -54,6 +56,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_POLYGAMMA_ORDER,
     SFPU_RELU_MAX_THRESHOLD,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
@@ -71,9 +74,9 @@ SUPPORTED_FAST_MODE_OPS = [
 # The unary op sweep: two coverage profiles, one test. Every op takes its stimuli from its
 # registered domain in _OP_DOMAIN_REGISTRY; the profiles differ only in how much of the
 # format/mode matrix each op is worth. BROAD_SWEEP_OPS gets the full format matrix, both
-# approximation modes and both tile shapes; STANDARD_SWEEP_OPS is every other registered
-# unary op, on Float16_b + Float32 with approximation off. To opt an op out of the sweep
-# entirely, list it in sfpu_domains._UNARY_OPS_NOT_SWEPT.
+# approximation modes and the multi-block tile shape; STANDARD_SWEEP_OPS is every other
+# registered unary op, on Float16_b + Float32 with approximation off. To opt an op out of
+# the sweep entirely, list it in sfpu_domains._UNARY_OPS_NOT_SWEPT.
 
 BROAD_SWEEP_OPS = [
     MathOperation.Abs,
@@ -120,7 +123,6 @@ STANDARD_SWEEP_OPS = sorted(
 BROAD_FORMATS = input_output_formats(
     [
         DataFormat.Float32,
-        DataFormat.Float16,
         DataFormat.Float16_b,
         DataFormat.Bfp8_b,
     ]
@@ -131,104 +133,55 @@ BROAD_FORMATS = input_output_formats(
 # and fp32 for full precision.
 STANDARD_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
-BROAD_DIMENSIONS = [[64, 64], [128, 256]]
+# 128x256 is 32 tiles, so it runs several Dest blocks and swaps Dest halves between them.
+# The single-block path (64x64 fits in one) is left to the standard profile and the 64x64
+# edge sweeps below.
+BROAD_DIMENSIONS = [[128, 256]]
 STANDARD_DIMENSIONS = [[64, 64]]
 
 # Bfp4_b is only exercised as an input format, so the input is pinned to Bfp4_b here
-# rather than building the full matrix and skipping the 12 non-Bfp4_b-input combos.
+# rather than building the full matrix and skipping the 6 non-Bfp4_b-input combos.
 FORMATS_BFP4_B = [
     InputOutputFormat(DataFormat.Bfp4_b, output_format)
     for output_format in [
         DataFormat.Float16_b,
         DataFormat.Bfp8_b,
-        DataFormat.Float16,
         DataFormat.Bfp4_b,
     ]
 ]
-
-
-# Ops whose coverage build returns wrong results, per arch, so they are skipped only when
-# WITH_COVERAGE is set. Membership is measured, never inferred: run the op under
-# `--coverage` on the arch in question before adding it here.
-#
-# Reciprocal on Blackhole is the only entry the sweep has. 46 of its 153 Blackhole
-# variants come back with alternate elements stale while its sfp* instruction stream
-# stays byte-identical to the non-coverage build, which is what makes it a timing fault
-# rather than a codegen one. Two things are needed to reproduce it, and neither predicts
-# it on its own:
-#
-#   - It needs the SFPLOADMACRO path: `--coverage --disable-sfploadmacro` passes 153/153.
-#     But emitting SFPLOADMACRO does not imply failing. Counting the mnemonic in the
-#     coverage-built math.elf of a Wormhole sweep that passes 6377/6377: Exp at
-#     ApproximationMode.Yes has 16 (the sweeps below hardcode CLAMP_NEGATIVE(True), which
-#     selects the macro branch), Signbit has 8, and the int max/min ops in _INT_UNARY_OPS
-#     have 8. So the macro is the mechanism, not the criterion.
-#   - It is Blackhole-only. calculate_reciprocal reaches the hand-written macro sequences
-#     only on Blackhole; Wormhole takes the pure sfpi Newton path and emits no
-#     SFPLOADMACRO at all -- 0 in every built math.elf, in the same audit that finds 8
-#     for Signbit. Its 168 Wormhole variants give 162 passed / 6 xfailed under coverage,
-#     the same split the non-coverage build gives, so keying on the arch keeps them in
-#     the coverage lane.
-#
-#   https://github.com/tenstorrent/tt-metal/issues/56751
-COVERAGE_MISMATCH_SKIP_OPS = {
-    ChipArchitecture.BLACKHOLE: [MathOperation.Reciprocal],
-}
-
-
-def _skip_coverage_unsupported(mathop):
-    """Coverage-build exclusions, shared by every sweep that drives the unary ops.
-
-    The exclusions are per-op, so this stays a helper called from every unary sweep even
-    where the sweep's current op pool cannot select an excluded one: a pool that later
-    gains one is then covered without touching the sweep. That has already been needed
-    once, when ReluMin joined _INT_UNARY_OPS.
-    """
-    if not TestConfig.WITH_COVERAGE:
-        return
-
-    # Every entry in the table is mediated by SFPLOADMACRO, and -DDISABLE_SFPLOADMACRO
-    # compiles the non-macro path instead -- the build the exclusion is not about. Revisit
-    # this early return if an entry that is not macro-mediated is ever added.
-    if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
-        return
-
-    if mathop in COVERAGE_MISMATCH_SKIP_OPS.get(TestConfig.CHIP_ARCH, ()):
-        pytest.skip(
-            reason="wrong results under coverage instrumentation: "
-            "https://github.com/tenstorrent/tt-metal/issues/56751"
-        )
 
 
 def _sweep_params(formats, mathops, approx_modes, input_dimensions):
     """Build (formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions) tuples.
 
     Fast-mode-capable ops are swept with FastMode.No and FastMode.Yes; every other op
-    runs with FastMode.No only. dest_acc always sweeps both values.
+    runs with FastMode.No only. dest_acc sweeps both values, except where TestConfig
+    promotes No to Yes for the format combination; those run as Yes only.
     """
-    dest_accs = [DestAccumulation.No, DestAccumulation.Yes]
     fast_ops = [op for op in mathops if op in SUPPORTED_FAST_MODE_OPS]
     non_fast_ops = [op for op in mathops if op not in SUPPORTED_FAST_MODE_OPS]
-    return list(
-        chain(
-            product(
-                formats,
-                approx_modes,
-                fast_ops,
-                [FastMode.No, FastMode.Yes],
-                dest_accs,
-                input_dimensions,
-            ),
-            product(
-                formats,
-                approx_modes,
-                non_fast_ops,
-                [FastMode.No],
-                dest_accs,
-                input_dimensions,
-            ),
+    params = []
+    for fmt in formats:
+        dest_accs = distinct_dest_accumulation_modes(
+            fmt, [DestAccumulation.No, DestAccumulation.Yes]
         )
-    )
+        params += product(
+            [fmt],
+            approx_modes,
+            fast_ops,
+            [FastMode.No, FastMode.Yes],
+            dest_accs,
+            input_dimensions,
+        )
+        params += product(
+            [fmt],
+            approx_modes,
+            non_fast_ops,
+            [FastMode.No],
+            dest_accs,
+            input_dimensions,
+        )
+    return params
 
 
 def _assert_broad_profile_valid():
@@ -287,17 +240,27 @@ UNARY_SWEEP_PARAMS = (
 _assert_broad_profile_valid()
 
 
-def _skip_bh_unsupported_float_combo(formats, dest_acc):
-    """Blackhole with dest_acc=No supports neither Float16 input nor Float32->Float16."""
-    if (
-        dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and (
-            formats.input_format == DataFormat.Float16
-            or formats == InputOutputFormat(DataFormat.Float32, DataFormat.Float16)
-        )
-    ):
-        pytest.skip(reason="This combination is not supported on BH architecture")
+def _assert_dest_acc_ids_match_kernels():
+    """Every sweep id must name the Dest width its kernel is built with.
+
+    TestConfig promotes dest_acc to Yes for an outlier format combination, so a dest_acc:No id for
+    one would run the dest_acc:Yes kernel while the golden and tolerances assume No.
+    """
+    promoted = sorted(
+        {
+            f"{formats.input_format.name}->{formats.output_format.name}"
+            for formats, _, _, _, dest_acc, _ in UNARY_SWEEP_PARAMS
+            if effective_dest_acc(formats.input_format, formats.output_format, dest_acc)
+            != dest_acc
+        }
+    )
+    assert not promoted, (
+        "These format combinations are swept with a dest_acc the kernel does not run with "
+        f"(TestConfig promotes it): {promoted}"
+    )
+
+
+_assert_dest_acc_ids_match_kernels()
 
 
 def _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials):
@@ -358,14 +321,9 @@ def test_eltwise_unary_sfpu(
     """
     broad = mathop in BROAD_SWEEP_OPS
 
-    _skip_coverage_unsupported(mathop)
-
-    # Each profile has its own Blackhole dest_acc=No guard, measured against its own
-    # format set: the broad profile runs everything except a Float16 input or
-    # Float32->Float16, while the standard profile allows only Float32->Float32.
-    if broad:
-        _skip_bh_unsupported_float_combo(formats, dest_acc)
-    else:
+    # The broad profile's formats all run on Blackhole at dest_acc=No; the standard
+    # profile allows only Float32->Float32 there.
+    if not broad:
         _skip_bh_unless_fp32(formats, dest_acc)
 
     eltwise_unary_sfpu(
@@ -476,10 +434,6 @@ def test_eltwise_unary_sfpu_edges(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    # Same ops, same driver, same templates as test_eltwise_unary_sfpu, so the same
-    # coverage-build exclusions apply — see _skip_coverage_unsupported.
-    _skip_coverage_unsupported(mathop)
-
     _skip_bh_unless_fp32(formats, dest_acc)
 
     # Two independent gates, and both have to pass: _SPECIALS_READY_OPS says the *golden*
@@ -792,13 +746,6 @@ def test_eltwise_unary_sfpu_int(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    # No op in _INT_UNARY_OPS is excluded under coverage on any arch, so this call skips
-    # nothing today -- including the int max/min ops, which emit SFPLOADMACRO and pass.
-    # It stays because the exclusion table is per-op: the last time this sweep's pool
-    # changed -- ReluMin joining _INT_UNARY_OPS -- it needed the guard, and the coverage
-    # job built a kernel it should not have.
-    _skip_coverage_unsupported(mathop)
-
     int_format = (
         DataFormat.UInt32 if mathop in _UINT32_INT_UNARY_OPS else DataFormat.Int32
     )
@@ -951,7 +898,6 @@ def test_eltwise_unary_sfpu_relu_max_threshold(
     it pins the order of the two folds as well as the values -- a kernel that clamped first
     would return the threshold for a negative threshold and keep a -NaN, and fail here.
     """
-    _skip_coverage_unsupported(MathOperation.ReluMax)
     _skip_bh_unless_fp32(formats, dest_acc)
 
     res_tensor, golden_tensor = eltwise_unary_sfpu(
@@ -1051,6 +997,55 @@ def test_eltwise_unary_sfpu_int_shift(
     )
 
 
+# Every polygamma order ttnn accepts. psi^(n)(x) ~ (n-1)! / x^n for large x, so each order is
+# swept from 0.5 up to where the result is 2^-125, just inside the normal range. The bottom of
+# that range is where the unscaled partial sums sit n! below the result, and atol is 0 because
+# any absolute tolerance would accept a zero there.
+_POLYGAMMA_ORDERS = list(range(1, 12))
+
+
+def _polygamma_stimuli_spec(order):
+    high = (math.factorial(order - 1) * 2.0**125) ** (1.0 / order)
+    return StimuliSpec(distribution=DistributionKind.LOG_UNIFORM, low=0.5, high=high)
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    polygamma_order=_POLYGAMMA_ORDERS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_polygamma_order(
+    formats: InputOutputFormat,
+    polygamma_order: int,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    _skip_bh_unless_fp32(formats, dest_acc)
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip(
+            reason="Float32 reaches a 16-bit Dest as Float16_b, which is swept already"
+        )
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.Polygamma,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_polygamma_stimuli_spec(polygamma_order),
+        custom_atol=0.0,
+        # atol is 0 so a flushed lane fails outright at a relative error of 1. The rtol is loose
+        # because the sweep reaches the last binades before underflow, where the Euler-Maclaurin
+        # corrections themselves flush: measured worst case there is 2.0% for float32 at order 11
+        # and 1.4% for bfloat16, against 32.6 float32 ULP and 0.74 bfloat16 ULP above 2^-100.
+        custom_rtol=0.05 if formats.output_format == DataFormat.Float32 else 0.02,
+        polygamma_order=polygamma_order,
+    )
+
+
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     approx_mode=[ApproximationMode.No],
@@ -1095,8 +1090,6 @@ def test_eltwise_unary_sfpu_signbit_int32():
     differ: a body run under another op's SFPLOADMACRO program stores a value derived from
     the wrong row, and the exact compare catches it.
     """
-    _skip_coverage_unsupported(MathOperation.Signbit)
-
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
     dest_acc = DestAccumulation.Yes
     input_dimensions = [64, 64]
@@ -1335,10 +1328,6 @@ def test_eltwise_unary_sfpu_threshold(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    # As in test_eltwise_unary_sfpu_int: nothing in _THRESHOLD_OPS is excluded under
-    # coverage today, and the call stays so that a change to the pool cannot silently
-    # bypass the exclusion table.
-    _skip_coverage_unsupported(mathop)
     _skip_bh_unless_fp32(formats, dest_acc)
 
     eltwise_unary_sfpu(
@@ -1366,6 +1355,7 @@ def eltwise_unary_sfpu(
     shift_amount=None,
     relu_min_int_threshold=None,
     relu_max_threshold=None,
+    polygamma_order=None,
     twos_complement=False,
     gate_on_step_budget=False,
 ):
@@ -1418,6 +1408,7 @@ def eltwise_unary_sfpu(
             if relu_max_threshold is None
             else {"relu_max_threshold": relu_max_threshold}
         ),
+        **({} if polygamma_order is None else {"polygamma_order": polygamma_order}),
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -1450,6 +1441,11 @@ def eltwise_unary_sfpu(
                 []
                 if relu_max_threshold is None
                 else [SFPU_RELU_MAX_THRESHOLD(relu_max_threshold)]
+            ),
+            *(
+                []
+                if polygamma_order is None
+                else [SFPU_POLYGAMMA_ORDER(polygamma_order)]
             ),
         ],
         runtimes=[

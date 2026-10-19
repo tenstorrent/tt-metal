@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "api/dataflow/dfb_access.h"
 #include "internal/llk_metadata.h"
 
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
@@ -21,10 +22,9 @@
 //
 // Here my_dfb_name is a constexpr DFBBindingToken, auto-included in kernel_bindings_generated.h.
 //
-// This header holds only the tokens, with no dependency beyond <cstdint> minimal support headers,
-// so the generated bindings header (and anything else that just needs to name a binding)
-// does not have to pull in the whole DataflowBuffer implementation. See
-// api/dataflow/dataflow_buffer.h for the DataflowBuffer class these tokens construct.
+// This header holds only the tokens (plus the small dfb::AccessPattern enum and the LLK metadata
+// header), so naming a binding does not pull in the DataflowBuffer implementation
+// (api/dataflow/dataflow_buffer.h).
 //
 
 // Support for LLKOperandFrom.
@@ -33,6 +33,11 @@ template <const auto& Token>
 struct LLKOperandExtractor;
 }
 
+// The token's template arguments are the producer and consumer access patterns, so the
+// DataflowBuffer built from it is specialized at compile time while the kernel still writes
+// `DataflowBuffer dfb(dfb::name)`. A plain `DFBBindingToken t{id}` is <UNKNOWN, UNKNOWN>; a
+// function parameter must spell `DFBBindingToken<P, C>` (or take the id).
+template <dfb::AccessPattern Pap = dfb::AccessPattern::UNKNOWN, dfb::AccessPattern Cap = dfb::AccessPattern::UNKNOWN>
 struct DFBBindingToken {
     explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
 

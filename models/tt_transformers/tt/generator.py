@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import math
 import os
 from collections import defaultdict
@@ -128,6 +129,62 @@ def gather_batched_prefill_samples(
             output_log_probs[local_idx] = plain_log_probs_host[slot]
 
 
+def prepare_prefill_page_tables_per_layer(
+    page_tables, request_indices, device_rows, batch_size, prompt_lens, block_sizes, prefill_seq_len
+):
+    """Map request-ordered host tables to prefill rows, exposing only owned pages.
+
+    A scheduler table can retain stale block IDs beyond the request's valid
+    length. Those columns and padding rows must never reach cache-fill kernels.
+    Columns cover the padded kernel input, with -1 beyond each real prompt.
+    For a resumed prompt, prefill_seq_len includes its cached-token offset so
+    per-layer tables retain absolute page positions; the model handles chunks.
+    Layers sharing a table and block size retain one shared prepared table.
+    """
+    if page_tables is None:
+        return None
+    if len(block_sizes) != len(page_tables):
+        raise ValueError("Per-layer page tables and KV block sizes must have equal length")
+    if len(request_indices) != len(device_rows):
+        raise ValueError("Each request must have one prefill device row")
+    prepared = {}
+    result = []
+    for table, block_size in zip(page_tables, block_sizes):
+        if table is None:
+            result.append(None)
+            continue
+        if not isinstance(table, torch.Tensor) or table.ndim != 2:
+            raise ValueError("Per-layer prefill page tables must be two-dimensional host tensors")
+        if block_size <= 0:
+            raise ValueError("KV block sizes must be positive")
+        key = (id(table), block_size)
+        if key not in prepared:
+            owned_blocks = [num_blocks_in_seq(int(prompt_lens[i]), block_size) for i in request_indices]
+            width = num_blocks_in_seq(prefill_seq_len, block_size)
+            mapped = table.new_full((batch_size, width), -1)
+            for request, row, blocks in zip(request_indices, device_rows, owned_blocks):
+                if not 0 <= request < table.shape[0] or not 0 <= row < batch_size:
+                    raise ValueError("Request or prefill device row is outside the page table")
+                copied = min(width, blocks, table.shape[1])
+                mapped[row, :copied] = table[request, :copied]
+            prepared[key] = mapped
+        result.append(prepared[key])
+    return result
+
+
+def validate_compact_prefill_model(model, model_args):
+    """Reject opt-ins whose cache or sampling layout cannot preserve slots."""
+    if not getattr(model_args, "batched_prefill_compact_rows", False):
+        return
+    if getattr(model, "users_row_sharded", False):
+        raise ValueError("Compact batched prefill does not support row-sharded users")
+    if getattr(model, "_supports_on_device_sampling", False):
+        extract = getattr(model, "extract_last_tokens_batched_prefill", None)
+        slot_map = inspect.signature(extract).parameters.get("slot_map") if callable(extract) else None
+        if slot_map is None or slot_map.kind == inspect.Parameter.POSITIONAL_ONLY:
+            raise ValueError("Compact batched prefill with device sampling requires an explicit slot_map parameter")
+
+
 # Position of the page table within the decode input tuple produced by
 # Transformer.prepare_decode_inputs_host: (tokens, current_pos, rope_idxs, page_table).
 # Used to refresh only the page-table trace input when KV blocks are reallocated.
@@ -181,6 +238,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         For bringup, make this class general to any backend implementation, as long as it takes torch tensors and returns torch tensors.
 
         """
+        for instance, args in zip(model, model_args):
+            validate_compact_prefill_model(instance, args)
         self.model = model
         self.model_args = model_args
         self.mesh_device = mesh_device
@@ -949,6 +1008,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         num_cached_tokens=0,
         **kwargs,
     ):
+        if kwargs.get("page_tables_per_layer") is not None:
+            raise ValueError(
+                "Explicit per-layer page tables require untraced prefill; trace refresh is not implemented"
+            )
         global_user_id = kwargs.get("global_user_id", None)
         use_start_pos = "sp1" if num_cached_tokens > 0 else "sp0"
         trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}_{use_start_pos}"
@@ -1341,8 +1404,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # batched-prefill sampling contract is implemented.
                 use_batched_prefill = False
 
+        # Opt-in models can use request-order prefill rows, then scatter the
+        # final hidden states into physical sampler slots via ``slot_map``.
+        compact_rows = bool(getattr(self.model_args[0], "batched_prefill_compact_rows", False))
+        # This opt-in limit counts padded kernel tokens, not real prompt tokens.
+        max_batched_len = getattr(self.model_args[0], "batched_prefill_max_tokens_per_user", None)
+        if use_batched_prefill and max_batched_len is not None and prefill_seq_lens[0] > max_batched_len:
+            use_batched_prefill = False
         if use_batched_prefill:
-            padded_batch = batched_prefill_padded_batch(batch_size, empty_slots, self.model_args[0].max_batch_size)
+            padded_batch = batched_prefill_padded_batch(
+                batch_size, None if compact_rows else empty_slots, self.model_args[0].max_batch_size
+            )
             if padded_batch > self.model_args[0].max_batch_size:
                 logger.info(
                     f"Batched prefill disabled: padded_batch {padded_batch} exceeds "
@@ -1373,7 +1445,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             group_user_id = user_id % local_batch_size if page_table is None else 0
 
             if use_batched_prefill:
-                batch_user_ids = empty_slots
+                batch_user_ids = list(range(batch_size)) if compact_rows else empty_slots
                 last_token_idx = [(seq_len - 1) for seq_len in prompt_lens]
                 prefill_seq_len = prefill_seq_lens[0]
                 seq_len = prompt_lens
@@ -1385,6 +1457,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 prefill_seq_len = prefill_seq_lens[idx]
                 logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
             local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
+            if local_kwargs.get("page_tables_per_layer") is not None:
+                if kv_cache is None:
+                    raise ValueError("Per-layer prefill page tables require a KV cache")
+                local_kwargs["page_tables_per_layer"] = prepare_prefill_page_tables_per_layer(
+                    local_kwargs["page_tables_per_layer"],
+                    list(range(batch_size)) if use_batched_prefill else [idx],
+                    batch_user_ids if use_batched_prefill else [0],
+                    padded_batch if use_batched_prefill else 1,
+                    prompt_lens,
+                    [int(layer_cache[0].shape[2]) for layer_cache in kv_cache[model_id]],
+                    prefill_seq_len + (0 if use_batched_prefill else num_cached_tokens),
+                )
             if getattr(self.model[model_id], "users_row_sharded", False):
                 local_kwargs["global_user_id"] = batch_user_ids if use_batched_prefill else user_id
             sampling_enabled = (
@@ -1394,11 +1478,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
 
             if use_batched_prefill:
-                # Galaxy 70B approach: slot-based placement with shape [padded_batch, prefill_seq_len]
-                # Each request is placed at its corresponding slot index
+                # Tokens, last-token indices and page tables share the same
+                # device-row mapping, whether compact or physical-slot based.
                 prefill_ids = torch.zeros(padded_batch, prefill_seq_len, dtype=torch.long, device=tokens.device)
                 padded_last_token_idx = [0] * padded_batch  # dummy idx for padded slots
-                for local_idx, slot in enumerate(empty_slots):
+                for local_idx, slot in enumerate(batch_user_ids):
                     seq_len_local = int(seq_len[local_idx])
                     padded_tokens = torch.cat(
                         [
@@ -1551,7 +1635,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     combined_prompt_tokens = torch.zeros(sampling_batch, max_prompt_len, dtype=torch.long)
                     for local_idx, slot in enumerate(empty_slots):
                         plen = int(prompt_lens[local_idx])
-                        combined_prompt_tokens[slot, :plen] = prefill_ids[slot, :plen]
+                        combined_prompt_tokens[slot, :plen] = prefill_ids[batch_user_ids[local_idx], :plen]
 
                     # ``combined_prompt_tokens`` above and the extracted hidden states
                     # are both laid out by slot, so the params have to be as well.
@@ -1573,6 +1657,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         padded_batch,
                         prefill_seq_len,
                         target_batch=sampling_batch,
+                        **({"slot_map": list(empty_slots)} if compact_rows else {}),
                     )
 
                     sampling_input_key = f"sampling_{prefill_seq_len}_{model_id}_{sampling_batch}_{sampling_dp}"
@@ -1654,7 +1739,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     if return_hidden_states:
                         # Embedding models: trace returns hidden states; extract last-token hidden per slot
                         slot_hidden_list = []
-                        for local_idx, slot in enumerate(empty_slots):
+                        for local_idx, slot in enumerate(batch_user_ids):
                             user_hidden = logits[slot : slot + 1, :, :, :]
                             slot_hidden = self.model[model_id].process_hidden_states_after_prefill_trace(
                                 user_hidden, last_token_idx[slot]
@@ -1670,7 +1755,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                                 out = out.cpu()
                             output_tensor[local_idx] = out
                     else:
-                        for local_idx, slot in enumerate(empty_slots):
+                        for local_idx, slot in enumerate(batch_user_ids):
                             user_logits = logits[slot : slot + 1, :, :, :]
                             _logits = self.model[model_id].process_logits_after_prefill_trace(
                                 user_logits, last_token_idx[slot]
@@ -2076,6 +2161,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 get_last_token=-1 if batch_size > 1 else (last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
+                **(
+                    {"page_tables_per_layer": kwargs["page_tables_per_layer"]}
+                    if "page_tables_per_layer" in kwargs
+                    else {}
+                ),
             )
             return tt_logits
 
@@ -2700,44 +2790,33 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 "submission; restart the model runner before sampling again"
             )
 
-    def _sample_decode(
+    def _get_sampling_dp(self):
+        # Sampling groups can follow mesh rows even when data_parallel is 1.
+        sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
+        assert (
+            len(set(sampling_dp_values)) == 1
+        ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
+        # Data parallelism and row-sharded sampling are mutually exclusive.
+        return max(self.data_parallel, sampling_dp_values[0])
+
+    def _prepare_decode_sampling_state(
         self,
-        tt_logits,
         sampling_params,
         *,
         start_pos,
         prompt_tokens,
         output_tokens,
         slot_remap,
-        enable_trace,
-        skip_precompile,
         reload_inputs,
         reload_sampling_params,
         reset_sampling_state,
-        grammar_bitmask,
     ):
-        # sampling_dp may differ from data_parallel for models that internally
-        # shard users across mesh rows (users_row_sharded) — each row samples
-        # 32 users independently, so sampling params must be chunked by the
-        # number of rows even though data_parallel=1 for the forward pass.
-        sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
-        assert (
-            len(set(sampling_dp_values)) == 1
-        ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
+        """Apply decode sampling commands without sampling a token.
 
-        # NOTE: This assumes data_parallel and sampling_dp are mutually exclusive
-        # (one is always 1). If a future model needs both DP>1 and row-sharded
-        # sampling, this should become data_parallel * sampling_dp_values[0].
-        sampling_dp = max(self.data_parallel, sampling_dp_values[0])
-        if grammar_bitmask is not None and sampling_dp != self.data_parallel:
-            raise ValueError(
-                "device grammar sampling does not support row-sharded sampling: "
-                f"data_parallel={self.data_parallel}, sampling_dp={sampling_dp}"
-            )
-
-        if grammar_bitmask is not None and self._sampling_params_enable_logprobs(sampling_params):
-            raise ValueError("device grammar sampling does not support logprobs; sample these requests on host")
-
+        start_pos contains one position tensor per model. The return value
+        contains each model's active seed slots for the next actual sample.
+        """
+        sampling_dp = self._get_sampling_dp()
         sampling_params_list = chunk_sampling_params(sampling_params, sampling_dp)
         prompt_chunks = (
             torch.chunk(prompt_tokens, sampling_dp, 0) if prompt_tokens is not None else [None] * sampling_dp
@@ -2745,35 +2824,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         output_chunks = (
             torch.chunk(output_tokens, sampling_dp, 0) if output_tokens is not None else [None] * sampling_dp
         )
-        grammar_chunks: list[torch.Tensor | None] = [None] * self.data_parallel
-        if grammar_bitmask is not None:
-            if not isinstance(grammar_bitmask, torch.Tensor):
-                raise TypeError("grammar_bitmask must be a torch.Tensor, got " f"{type(grammar_bitmask).__name__}")
-            if self.data_parallel == 1:
-                grammar_chunks = [grammar_bitmask]
-            else:
-                per_model_batch = [int(self.model_args[i].max_batch_size) for i in range(self.data_parallel)]
-                expected_rows = sum(per_model_batch)
-                if grammar_bitmask.shape[0] != expected_rows:
-                    raise ValueError(
-                        "multi-model grammar_bitmask must cover every local "
-                        f"slot: got rows={grammar_bitmask.shape[0]}, "
-                        f"per_model_batch={per_model_batch}"
-                    )
-                offset = 0
-                grammar_chunks = []
-                for batch_size in per_model_batch:
-                    grammar_chunks.append(grammar_bitmask[offset : offset + batch_size])
-                    offset += batch_size
-
-        if grammar_bitmask is not None:
-            for i, grammar_chunk in enumerate(grammar_chunks):
-                sampling_module = getattr(self.model[i], "sampling", None)
-                if sampling_module is None:
-                    raise RuntimeError(f"model {i} received a grammar bitmask without a device sampler")
-                sampling_module.validate_grammar_bitmask(grammar_chunk)
 
         self._apply_sampling_slot_remap(slot_remap)
+        active_seed_slots_per_model = []
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
             assert sampling_module is not None, "Sampling module not found in model for sampling on device."
@@ -2810,20 +2863,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # remap, so retire seed state that no longer belongs to a live row.
             if active_seed_slots is not None:
                 sampling_module.seed_manager.deactivate_slots_except(active_seed_slots)
-            # Register each request's explicit seed into the seed manager and
-            # tie its RNG counter to the absolute decode position before
-            # advancing. Without registration the per-request seed never reaches
-            # the device (the seed manager stays unseeded), so sampling falls
-            # back to per-slot boot RNG and two requests sharing a seed diverge
-            # (this regressed when #45166 dropped these calls from the decode
-            # flow). Position alignment then keeps the stream reproducible even
-            # when vLLM evicts a running request and re-admits it in a different
-            # slot under async scheduling. Mirrors the llama3_70b_galaxy decode path.
-            #
-            # Align only from a trustworthy position (#51981): the counter
-            # self-advances per token, so re-anchoring to a lagging host start_pos
-            # is what breaks reproducibility. Trustworthy means the caller
-            # commanded reload_inputs, or the slot was explicitly reset/reseeded.
+            # Register request seeds so SeedManager uses the requested seeded stream instead of unseeded RNG.
+            # Host positions may realign RNG counters only when reload_inputs
+            # makes positions authoritative or a command resets the seed slot.
             if active_seed_slots is not None and (reload_inputs or reload_sampling_params or reset_sampling_state):
                 seed_bs = sampling_module.tt_sampling.max_batch_size
                 if len(model_chunks) == 1:
@@ -2845,12 +2887,83 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     )
                 else:
                     reseeded_slots = []
+                # A lagging start_pos would rewind RNG counters and make seeded output timing-dependent.
                 align_slots = active_seed_slots if reload_inputs else reseeded_slots
                 if align_slots:
                     sampling_module.seed_manager.align_seed_counters_to_positions(
                         seed_values, align_slots, start_values
                     )
-            sampling_module.seed_manager.get_new_values(active_seed_slots)
+            active_seed_slots_per_model.append(active_seed_slots)
+
+        return active_seed_slots_per_model
+
+    def _sample_decode(
+        self,
+        tt_logits,
+        sampling_params,
+        *,
+        start_pos,
+        prompt_tokens,
+        output_tokens,
+        slot_remap,
+        enable_trace,
+        skip_precompile,
+        reload_inputs,
+        reload_sampling_params,
+        reset_sampling_state,
+        grammar_bitmask,
+    ):
+        if grammar_bitmask is not None:
+            sampling_dp = self._get_sampling_dp()
+            if sampling_dp != self.data_parallel:
+                raise ValueError(
+                    "device grammar sampling does not support row-sharded sampling: "
+                    f"data_parallel={self.data_parallel}, sampling_dp={sampling_dp}"
+                )
+
+        if grammar_bitmask is not None and self._sampling_params_enable_logprobs(sampling_params):
+            raise ValueError("device grammar sampling does not support logprobs; sample these requests on host")
+
+        grammar_chunks: list[torch.Tensor | None] = [None] * self.data_parallel
+        if grammar_bitmask is not None:
+            if not isinstance(grammar_bitmask, torch.Tensor):
+                raise TypeError("grammar_bitmask must be a torch.Tensor, got " f"{type(grammar_bitmask).__name__}")
+            if self.data_parallel == 1:
+                grammar_chunks = [grammar_bitmask]
+            else:
+                per_model_batch = [int(self.model_args[i].max_batch_size) for i in range(self.data_parallel)]
+                expected_rows = sum(per_model_batch)
+                if grammar_bitmask.shape[0] != expected_rows:
+                    raise ValueError(
+                        "multi-model grammar_bitmask must cover every local "
+                        f"slot: got rows={grammar_bitmask.shape[0]}, "
+                        f"per_model_batch={per_model_batch}"
+                    )
+                offset = 0
+                grammar_chunks = []
+                for batch_size in per_model_batch:
+                    grammar_chunks.append(grammar_bitmask[offset : offset + batch_size])
+                    offset += batch_size
+
+        if grammar_bitmask is not None:
+            for i, grammar_chunk in enumerate(grammar_chunks):
+                sampling_module = getattr(self.model[i], "sampling", None)
+                if sampling_module is None:
+                    raise RuntimeError(f"model {i} received a grammar bitmask without a device sampler")
+                sampling_module.validate_grammar_bitmask(grammar_chunk)
+
+        active_seed_slots_per_model = self._prepare_decode_sampling_state(
+            sampling_params,
+            start_pos=start_pos,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            slot_remap=slot_remap,
+            reload_inputs=reload_inputs,
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
+        )
+        for model, active_seed_slots in zip(self.model, active_seed_slots_per_model):
+            model.sampling.seed_manager.get_new_values(active_seed_slots)
 
         sampled_outputs = []
         for i in range(self.data_parallel):
