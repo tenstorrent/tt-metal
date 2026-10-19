@@ -82,7 +82,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t blocks_per_unit = block_pool ? (KC / block_tiles) : KC;
     const uint32_t nblocks = block_pool ? (Tt / block_tiles) : 0;  // total block columns per output row (pool only)
 
-    // Compute knobs from the resolved config (validate guarantees fp32_dest_acc_en / dst_full_sync_en false).
+    // Compute knobs from the resolved config (validate allows fp32_dest_acc_en only for DSA scoring; dst_full_sync_en
+    // false).
     const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         ttnn::get_compute_kernel_config_args(q.device()->arch(), args.compute_kernel_config);
 

@@ -180,7 +180,8 @@ class _PreciseDecayRecurrence(KDARecurrence):
 class _ForkPrepRecurrence(KDARecurrence):
     """KDARecurrence whose chunk preparation runs the bring-up fork with precise_gate_factors: the anchored exponents
     G - G_last/2 and G_last/2 come from exact mask matmuls exponentiated in DST, so k_dec_t, q_decay, kd and intra all
-    lose the source op's TF32 bias, at the source op's cost (ttnn/ttnn/bringup/prepare_chunk_recurrence)."""
+    lose the source op's TF32 bias, and it runs faster than the source op: 0.471 vs 0.586 ms per GLM layer (LoudBox 2x4,
+    2560 rows per chip; ttnn/ttnn/bringup/prepare_chunk_recurrence/CHANGELOG.md)."""
 
     def _prepare(self, **kwargs):
         kda = ttnn.experimental.kda

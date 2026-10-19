@@ -100,7 +100,8 @@ Many `MIMO_FL_*` environment knobs change the plan (flat_expert.py, device/flat_
 - `x_bf16` / `h_bf16` must match the plan the weights were laid out with.
 - Known unit failures: 13 in tests/unit/ with options off (19 pass / 13 fail, 2026-10-18): 12 TP2 / TP4 subgrid cases
   TT_FATAL `p.nsg == 1`, and the MiMo `indexed_perf` band (runs faster than its lower bound, 1710341 ns vs 1720090)
-  (CHANGELOG.md; known_issues.md DS41-63). No file records a re-run after the e4d239c6d81 sync.
+  (CHANGELOG.md; known_issues.md DS41-63). After the e4d239c6d81 sync: 26 passed / 13 failed, the same 13; test_ds41_h_options
+  7/7; deepseek_v41 test_c_swa_experts vs CPU rel 0.00224936 (CHANGELOG.md, "Sync to e4d239c6d81").
 - flat_combine_overlap and flat_routed_expert_with_program carry none of the DeepSeek-V4.1 options.
 - With the combine_rf L1 hand-off, rows wider than SPC_PIECE (default 7168 B) hang unless SPC_PIECE >= row bytes
   and the fabric payload >= row + 32 B (FLAT_COMBINE_OVERLAP_WORKLOG.md; asserted in sparse_combine_rf.py).

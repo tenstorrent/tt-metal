@@ -101,7 +101,7 @@ Tests: `tests/test_sdpa.py` (model cases, `tests/cases.py`), `tests/unit/test_sd
   padded V); O.1.
 - glm53_flash_d_p: `tt/mla_attention.py`, sparse_sdpa `high_precision` (`GLM_MLA_SDPA=source` keeps the source op);
   C.dsa_moe.attention, O.1.
-- xing40_a4b_d_p: `tt/attention.py`, `ring_mla` at fp32 DEST (`XING_MLA_SDPA=source` keeps the source op at bf16 DEST);
+- xing40_a4b_d_p: `tt/attention.py`, `ring_mla` at HiFi2 + fp32 DEST (`XING_MLA_SDPA_FIDELITY`, default HiFi2; `XING_MLA_SDPA=source` keeps the source op at bf16 DEST);
   C.dense.attention, X.3, O.1.
 - deepseek_v41_flash_d_p: `tt/attention.py`, `tt/sparse_attention.py`, sparse_sdpa `high_precision` + sink +
   `fp32_scores` + `bf16_probs` (settings `DS41_WINDOW_SDPA`, `DS41_WINDOW_SDPA_OUT/_SCORES/_PROBS`); C.swa.attention,
