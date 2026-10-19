@@ -26,7 +26,11 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    moe_fabric_payload,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import run_model
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
@@ -102,7 +106,7 @@ def _perf_params():
             case,
             mesh_shape,
             make_device_params(
-                fabric_payload_size=case.config.FABRIC_PAYLOAD_SIZE, trace_region_size=_TRACE_REGION_SIZE
+                fabric_payload_size=moe_fabric_payload(case.config), trace_region_size=_TRACE_REGION_SIZE
             ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh_shape, topology=topology),

@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -106,6 +107,12 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     uint32_t required_memory_bytes = 2 * num_tiles_per_block * weights_single_tile_size;
     bool use_chunked_processing = required_memory_bytes > max_l1_budget_bytes;
 
+    // PADDED and BINARY serve some weight rows out of a locally cached copy instead of fetching them
+    // per token; the other embeddings types have no such rows, so the cache is absent for them.
+    const bool use_local_cache = embeddings_type == EmbeddingsType::PADDED || embeddings_type == EmbeddingsType::BINARY;
+    // PADDED caches the single pad row; BINARY caches rows 0 and 1.
+    const uint32_t cache_entries = embeddings_type == EmbeddingsType::PADDED ? 1u : 2u;
+
     // For very large embeddings, use chunked processing
     uint32_t tiles_per_chunk;
     uint32_t num_chunks;
@@ -117,7 +124,26 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     if (use_chunked_processing) {
         const uint32_t chunk_cap = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
         const uint32_t row_bytes = num_tiles_per_block * weights_single_tile_size;
-        if (row_bytes <= max_l1_budget_bytes) {
+        const uint32_t output_row_bytes = num_tiles_per_block * output_single_tile_size;
+        // A full row costs one staging buffer plus the output: an output buffer of one row when the
+        // output is interleaved, or the whole output shard when it is sharded. The shard is borrowed
+        // rather than allocated as a buffer, but it still occupies L1 that the staging buffer must not
+        // overlap. The shard size comes from the tensor spec, so the decision is stable across
+        // program-cache hits. Everything has to fit in the L1 left after the buffers that are always present.
+        const uint32_t l1_alignment = device->allocator()->get_alignment(BufferType::L1);
+        // The index scratch and weight cache are scratchpads stacked after the DFBs, each start aligned
+        // to the DRAM alignment (ProgramImpl::allocate_scratchpads).
+        const uint32_t sp_alignment = device->allocator()->get_alignment(BufferType::DRAM);
+        const uint64_t other_l1_bytes =
+            sp_alignment +  // gap from the end of the DFBs to the first scratchpad
+            round_up(TILE_HEIGHT * input_element_size_bytes, sp_alignment) +
+            (use_local_cache ? round_up(cache_entries * round_up_to_mul32(weight_page_size), sp_alignment) : 0);
+        const uint64_t l1_capacity =
+            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        const uint64_t output_bytes =
+            output_sharded ? output.buffer()->aligned_size_per_bank() : round_up(output_row_bytes, l1_alignment);
+        const uint64_t full_row_dfb_bytes = round_up(row_bytes, l1_alignment) + output_bytes;
+        if (full_row_dfb_bytes + other_l1_bytes <= l1_capacity) {
             // One buffer holds the row, so the short last chunk lands on the end.
             tiles_per_chunk = std::min(chunk_cap, num_tiles_per_block);
             num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
@@ -146,10 +172,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         buffering = num_tiles_per_block > max_double_buffer_tiles ? 1 : 2;
         dfb_num_entries = buffering * tiles_per_chunk;
     }
-
-    // PADDED and BINARY serve some weight rows out of a locally cached copy instead of fetching them
-    // per token; the other embeddings types have no such rows, so the cache is absent for them.
-    const bool use_local_cache = embeddings_type == EmbeddingsType::PADDED || embeddings_type == EmbeddingsType::BINARY;
 
     // -----------------------------------------------------------------------
     // Resource names
@@ -220,8 +242,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
 
     if (use_local_cache) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        // PADDED caches the single pad row; BINARY caches rows 0 and 1.
-        const uint32_t cache_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u;
         scratchpads.push_back(
             ScratchpadSpec{.unique_id = WEIGHT_CACHE_SP, .size_per_node = cache_entries * cache_page_size});
     }

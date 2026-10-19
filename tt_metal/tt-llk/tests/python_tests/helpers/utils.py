@@ -1274,6 +1274,22 @@ def assert_bit_exact(got: torch.Tensor, want: torch.Tensor, what: str) -> None:
     raise AssertionError(f"{what}: {differ} of {got.numel()} lanes differ")
 
 
+def fp32_bits_as_int32(tensor: torch.Tensor) -> torch.Tensor:
+    """Reinterpret a float32 tensor's bits as int32 (no numeric conversion)."""
+    return tensor.to(torch.float32).contiguous().view(torch.int32)
+
+
+def int32_to_smag32(tensor: torch.Tensor) -> torch.Tensor:
+    """Encode a 2's-complement int32 tensor as sign-magnitude 32-bit (SMAG32).
+
+    Bit 31 is the sign and bits [30:0] are the magnitude. Used to stage operands
+    for and model the SIGN_MAGNITUDE_FORMAT kernel path, which skips the
+    2's-comp<->SM casts.
+    """
+    values = tensor.to(torch.int64)
+    return (values.abs() | ((values < 0).to(torch.int64) << 31)).to(torch.int32)
+
+
 def create_directories(dirs: list[Path]):
     """Create directories with file lock to handle race conditions in parallel execution."""
 

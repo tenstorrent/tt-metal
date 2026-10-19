@@ -14,10 +14,10 @@
 namespace {
 
 // copies source stick to destination stick (first phase of scatter)
-template <typename number_type>
+template <typename number_type, typename OutputDFB>
 FORCE_INLINE void copy_input_to_output(
     const Scratchpad<volatile number_type>& input_page,
-    const DataflowBuffer& output_dfb,
+    const OutputDFB& output_dfb,
     const uint32_t& input_chunk_size) {
     const uint32_t output_l1_write_addr = output_dfb.get_write_ptr();
     volatile tt_l1_ptr number_type* output_l1_write_ptr =
@@ -53,11 +53,11 @@ perform_reduction(number_type input, number_type source_value, ScatterReductionT
 }
 
 // performs scatter on data loaded to scratchpads with load_to_scratchpad
-template <typename number_type, typename index_type>
+template <typename number_type, typename index_type, typename OutputDFB>
 FORCE_INLINE void scatter_along_chunk(
     const Scratchpad<volatile index_type>& index_page,
     const Scratchpad<volatile number_type>& source_page,
-    const DataflowBuffer& output_dfb,
+    const OutputDFB& output_dfb,
     const uint32_t& input_stick_size,
     const uint32_t& input_offset,
     const uint32_t& input_chunk_size,

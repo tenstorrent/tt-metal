@@ -694,7 +694,7 @@ tt-train/**/CMakeLists.txt @tenstorrent/tt-train @lgalasTT @abustamanteTT @tenst
 
 # Tech reports
 tech_reports/LLMs/vLLM_integration.md @viktorpusTT @tchedaTT
-tech_reports/AdvancedPerformanceOptimizationsForModels/TraceCorrectness.md @tchedaTT @uaydonat
+tech_reports/AdvancedPerformanceOptimizationsForModels/TraceCorrectness.md @tchedaTT @uaydonat @ifabijanic-tt
 tech_reports/real_time_profiler/ @mo-tenstorrent @yusufbashiTT
 
 /models/experimental/qwen_image_2_1/ @changh95 @uaydonat @mtairum
