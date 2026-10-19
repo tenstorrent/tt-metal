@@ -28,7 +28,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include "impl/program/program_impl.hpp"
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 // Internal access
 #include "llrt/hal_types.hpp"

@@ -4,7 +4,7 @@
 
 #pragma once
 #include <gtest/gtest.h>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>

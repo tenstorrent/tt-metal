@@ -22,7 +22,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"

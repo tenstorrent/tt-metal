@@ -57,7 +57,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/small_vector.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"

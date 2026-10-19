@@ -25,7 +25,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 using std::vector;
 using namespace tt;

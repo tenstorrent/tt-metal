@@ -15,7 +15,7 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
 #include "utils.hpp"
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric {
 
