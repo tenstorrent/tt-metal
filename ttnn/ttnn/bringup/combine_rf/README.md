@@ -149,6 +149,11 @@ All from ../flat_routed_expert_ttnn/FLAT_COMBINE_OVERLAP_WORKLOG.md (LoudBox 2 x
   between the zeroing and the call but a cross-chip barrier whose CBs fit under the arena (deepseek_v41 uses a
   CB-free fabric semaphore barrier, tt/weighted_combine.py `_column_barrier`; a CCL sized for 10880 B packets clashed).
 - Blackhole fabric meshes only; worklog runs are LoudBox 2 x 4 / 8 x 1 (and Galaxy prep notes).
+- sparse_combine_rf: every home token's fp32 sum stays in its accumulator's L1 for the whole call (W x 4 B a token,
+  ceil(S / A) tokens an accumulator; accumulator_bytes). With an arena that cannot hold them the op raises ValueError
+  with the largest S and the smallest A that fit. V4.1 (W 5120, 9 accumulators, <= 1356 KB) fits <= 558 home tokens a
+  call; 1024 need >= 17 accumulators. There is no 8-bit tile limit: the earlier "255-tile hang" was the local ring
+  grant deadlock fixed in P.8 (CHANGELOG).
 - sparse_combine_rf: N <= 32 chips, A <= 16 accumulators (assert); with the L1 hand-off a row must fit one piece:
   SPC_PIECE >= row bytes and fabric payload >= row + 32 B, else a hang (assert in sparse_combine_rf_prepare);
   acc_on_ports / deterministic / ports_per_direction need the L1 hand-off; the arena must not move between calls (the

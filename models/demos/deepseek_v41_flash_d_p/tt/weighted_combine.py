@@ -27,6 +27,9 @@ Why passes: the accumulators hold every home token's fp32 row in L1 (5120 x 4 B 
 the flat expert leaves (2x2 p300c, 11 x 10 grid: 10 cells, 1 port + 9 accumulators) hold ~558 tokens, a chip's
 home tokens are S = chunk / R (1024 at 2048 on 2x2, 4096 on 4x4): P = the fewest passes whose S / P fit
 (sparse_combine_rf.accumulator_bytes), each pass one flat call over its tokens' rows (the weights stream once a pass).
+One pass of 1024 tokens needs >= 17 accumulators (1322 KB each at ring depth 1), i.e. >= 18 free cells and the
+op's A <= 16 cap lifted: an L1 capacity limit, not a hang. The "255-tile" hang was the local ring's grant
+batching, fixed in combine_rf (DS41-70); one pass runs up to 558 tokens a chip (310 fp32 tiles an accumulator).
 
 Rows are one fabric packet each (10240 B + a 32 B trailer): the mesh opens with a 10880 B fabric payload under
 EXPERTS_COMBINE=weighted (bringup/hooks.py:device_params). Everything that depends only on shapes is built once
@@ -203,9 +206,10 @@ class WeightedCombine:
         x_bf16: bool,
         h_bf16: bool,
         arena_bytes: int | None = None,
+        passes: int | None = None,
     ):
         """arena_bytes: the per-core arena (None: the flat expert's, grown for the accumulators up to ARENA_MAX; a
-        test override)."""
+        test override). passes: the pass count (None: the fewest that fit; a test override, >= that)."""
         from ttnn.bringup.combine_rf.combine_plan import axis_ports, combine_planner_prepare, port_luts
         from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
         from ttnn.bringup.combine_rf.sparse_combine_rf import accumulator_bytes
@@ -239,6 +243,22 @@ class WeightedCombine:
         while accumulator_bytes(R, self.A, H, -(-S // P), depth=1, out_dtype=out_dtype) > cap_bytes:
             P += 1
             assert P <= S, "no pass size fits the arena"
+        if P > 1:  # (L1 capacity: the accumulators one pass would need)
+            a1 = next(
+                (
+                    a
+                    for a in range(self.A, 65)
+                    if accumulator_bytes(R, a, H, S, depth=1, out_dtype=out_dtype) <= cap_bytes
+                ),
+                None,
+            )
+            logger.info(
+                f"EXPERTS_WEIGHTED S={S}: {P} passes (one pass needs >= {a1} accumulators of <= {cap_bytes >> 10} KB, "
+                f"this grid leaves {self.A})"
+            )
+        if passes is not None:
+            assert passes >= P, f"passes={passes}: {-(-S // passes)} home tokens a pass do not fit (fewest {P})"
+            P = passes
         self.P = P
         self.S_pass = -(-S // P)
         # (rings: 4 slots per source; the local ring 8 slots, else what the arena leaves: >= 2)
