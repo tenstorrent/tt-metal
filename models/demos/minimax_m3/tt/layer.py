@@ -35,6 +35,7 @@ class DecoderLayer:
         ep_seq_len_per_chip=1024,
         sequence_parallel=False,
         cache_layer_idx=None,
+        overlap_shared_expert=True,
     ):
         # layer_idx is global (weights + dense/MoE/sparse selection); cache_layer_idx is the local index
         # for the KV-cache slot (None => single-rank, equal to layer_idx).
@@ -95,6 +96,7 @@ class DecoderLayer:
                 expert_weight_dtype=expert_weight_dtype,
                 use_ep_moe=use_ep_moe,
                 ep_seq_len_per_chip=ep_seq_len_per_chip,
+                overlap_shared_expert=overlap_shared_expert,
             )
 
         # MiniMax-M3 lists per-layer attention types in `attn_type_list` (all 1 =

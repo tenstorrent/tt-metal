@@ -24,6 +24,9 @@ namespace ttnn::experimental::prim {
 namespace {
 
 constexpr uint32_t kSliceWriteInterleavedAddressArgIdx = 0;
+constexpr uint32_t kSliceWriteInterleavedReaderKernelIdx = 0;
+constexpr uint32_t kSliceWriteInterleavedWriterKernelIdx = 1;
+constexpr uint32_t kSliceWriteInterleavedMaxReadSize = 4096;
 
 void emplace_slice_write_interleaved_args(
     KernelDescriptor& kernel, const CoreCoord& core, const std::vector<uint32_t>& args, Buffer* buffer) {
@@ -225,7 +228,7 @@ ProgramDescriptor SliceWriteRMInterleavedProgramFactory::create_descriptor(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    uint32_t max_read_size = 4096;
+    uint32_t max_read_size = kSliceWriteInterleavedMaxReadSize;
 
     auto src_buffer_alignment = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? hal::get_dram_alignment()
                                                                                              : hal::get_l1_alignment();
@@ -319,9 +322,76 @@ ProgramDescriptor SliceWriteRMInterleavedProgramFactory::create_descriptor(
         emplace_slice_write_interleaved_args(writer_kernel, core, all_runtime_args[i].second, dst_buffer);
     }
 
+    // The kernel indices are the GetRuntimeArgs handles in override_runtime_arguments. Capture them
+    // from the push so a reorder fails here instead of patching the wrong kernel.
+    const uint32_t reader_kernel_idx = static_cast<uint32_t>(desc.kernels.size());
     desc.kernels.push_back(std::move(reader_kernel));
+    const uint32_t writer_kernel_idx = static_cast<uint32_t>(desc.kernels.size());
     desc.kernels.push_back(std::move(writer_kernel));
+    TT_FATAL(
+        reader_kernel_idx == kSliceWriteInterleavedReaderKernelIdx &&
+            writer_kernel_idx == kSliceWriteInterleavedWriterKernelIdx,
+        "Slice-write RM interleaved reader/writer must be kernel indices {}/{}, got {}/{}",
+        kSliceWriteInterleavedReaderKernelIdx,
+        kSliceWriteInterleavedWriterKernelIdx,
+        reader_kernel_idx,
+        writer_kernel_idx);
     return desc;
+}
+
+void SliceWriteRMInterleavedProgramFactory::override_runtime_arguments(
+    Program& program,
+    const SliceWriteParams& operation_attributes,
+    const SliceWriteInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*coord*/) {
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_return_value;
+    auto* src_buffer = input.buffer();
+    TT_FATAL(src_buffer != nullptr, "Input buffer should be allocated on device");
+    auto* dst_buffer = output.buffer();
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    const auto grid = input.device()->compute_with_storage_grid_size();
+    const uint32_t num_cores_total = grid.x * grid.y;
+    const uint32_t num_unpadded_sticks = input.physical_volume() / input.padded_shape()[-1];
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(grid, num_unpadded_sticks);
+
+    const auto all_runtime_args = get_slice_write_runtime_args_rm(
+        input,
+        output,
+        operation_attributes.slice_start,
+        operation_attributes.step,
+        num_cores_total,
+        grid.y,
+        core_group_1,
+        core_group_2,
+        num_sticks_per_core_group_1,
+        num_sticks_per_core_group_2,
+        kSliceWriteInterleavedMaxReadSize);
+
+    // With this hook present the adapter skips its own address rebinding, so both kernels' buffer
+    // addresses are re-applied here along with the start-dependent writer args.
+    const auto patch =
+        [&](uint32_t kernel_idx, const CoreCoord& core, const std::vector<uint32_t>& expected, uint32_t address) {
+            auto& args = GetRuntimeArgs(program, kernel_idx, core);
+            TT_FATAL(
+                args.size() == expected.size(),
+                "Slice-write RM interleaved kernel {} has {} runtime args on core {}, expected {}",
+                kernel_idx,
+                args.size(),
+                core.str(),
+                expected.size());
+            for (uint32_t arg_idx = 0; arg_idx < expected.size(); ++arg_idx) {
+                args[arg_idx] = arg_idx == kSliceWriteInterleavedAddressArgIdx ? address : expected[arg_idx];
+            }
+        };
+    for (uint32_t i = 0; i < num_cores_total; i++) {
+        const CoreCoord core = {i / grid.y, i % grid.y};
+        patch(kSliceWriteInterleavedReaderKernelIdx, core, all_runtime_args[i].first, src_buffer->address());
+        patch(kSliceWriteInterleavedWriterKernelIdx, core, all_runtime_args[i].second, dst_buffer->address());
+    }
 }
 
 }  // namespace ttnn::experimental::prim

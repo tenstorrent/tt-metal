@@ -64,7 +64,7 @@ bool codegen_cb_plan_fits_live_l1(const Tensor& input, const tt::tt_metal::Memor
 // False means the case must go to native, or be rejected outright by untilize_force_codegen.
 // Separate from supported_by_codegen() because these are free-function attributes:
 // the codegen prim carries no such fields, so its validate has nothing to check.
-bool supported_execution_controls(bool use_multicore, const std::optional<CoreRangeSet>& sub_core_grids);
+bool supported_execution_controls(bool use_multicore, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
 // Perf-only: true for the enumerated set of in-scope cases where codegen is correct but does
 // not beat native on device. Consulted ONLY by ttnn::untilize's routing, alongside

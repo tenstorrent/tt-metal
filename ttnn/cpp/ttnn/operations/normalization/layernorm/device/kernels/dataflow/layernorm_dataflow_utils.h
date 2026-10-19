@@ -162,6 +162,7 @@ inline void compute_single_stage_noc_addrs(
  *
  * @tparam T Type of the TensorAccessor object
  * @tparam Block The block type
+ * @tparam DFB The DataflowBuffer type (deduced from `dfb`)
  * @param noc The Noc object to use for data transfer
  * @param dfb The DataflowBuffer to read into
  * @param addr TensorAccessor object for accessing tensor data
@@ -169,14 +170,9 @@ inline void compute_single_stage_noc_addrs(
  * @param offset Global offset for page ID
  * @param block Block object that defines the number of tiles to read
  */
-template <typename T, typename Block>
+template <typename T, typename Block, typename DFB>
 inline void read_block_to_dfb(
-    Noc& noc,
-    DataflowBuffer& dfb,
-    const T& addr,
-    const uint32_t tile_bytes,
-    const uint32_t offset,
-    const Block& block) {
+    Noc& noc, DFB& dfb, const T& addr, const uint32_t tile_bytes, const uint32_t offset, const Block& block) {
     // Need to reserve/push on intervals that nicely
     // divide the buffer size. The buffer and block size has been
     // configured to ensure this in the program setup
@@ -198,10 +194,10 @@ inline void read_block_to_dfb(
  * contiguously with `rm_row_stride_bytes` stride (= full block width including padding tiles).
  * A full block slot (`block.full_block_size()`) is reserved/pushed for synchronization.
  */
-template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
+template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H, typename DFB>
 inline void read_row_major_block_to_dfb(
     Noc& noc,
-    DataflowBuffer& dfb_in_rm,
+    DFB& dfb_in_rm,
     const T& src_a,
     const uint32_t curr_tile_row,
     const uint32_t num_valid_rows,
@@ -229,10 +225,10 @@ inline void read_row_major_block_to_dfb(
 /**
  * @brief Write one column block of row-major output data from a buffer to DRAM.
  */
-template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
+template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H, typename DFB>
 inline void write_row_major_block_from_dfb(
     Noc& noc,
-    DataflowBuffer& dfb_out_rm,
+    DFB& dfb_out_rm,
     const T& dst_a,
     const uint32_t abs_row_base,
     const uint32_t num_valid_rows,
@@ -267,10 +263,10 @@ inline void write_row_major_block_from_dfb(
  * into dfb_in_rm. Only `num_valid_rows` rows are read per block; padding rows are zero-filled
  * by the tilize step in the compute kernel. Handles the case where H is not tile-aligned.
  */
-template <typename T, uint32_t TILE_W, uint32_t TILE_H>
+template <typename T, uint32_t TILE_W, uint32_t TILE_H, typename DFB>
 inline void push_row_major_blocks_to_dfb(
     Noc& noc,
-    DataflowBuffer& dfb_in_rm,
+    DFB& dfb_in_rm,
     const T& src_a,
     const uint32_t Wt,
     const uint32_t block_size,
