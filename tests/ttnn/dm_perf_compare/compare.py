@@ -81,6 +81,7 @@ def measure_noise(control_before, control_after, control_ids):
         "calls": control_ids,
         "per_call_changes_pct": changes,
         "noise_pct": stats.noise_pct(changes),
+        "reliable": stats.noise_pct(changes) <= stats.MAX_NOISE_PCT,
     }
 
 

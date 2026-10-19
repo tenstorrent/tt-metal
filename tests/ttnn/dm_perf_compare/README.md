@@ -33,6 +33,9 @@ Each tree is a built tt-metal checkout; the script runs each side's processes wi
 - A call's change is the median of its per-round changes (negative is faster).
 - Noise: a second pair of processes runs the after build against itself on a few calls; the noise
   band is the largest per-call median change found there, never below 3%.
+- A noise band above 5% means the control pair was disturbed (host busy in some rounds): the
+  results file marks `noise.reliable: false` and the run should be repeated, since "no change" and
+  "default is fastest" from such a run prove nothing.
 - Verdict: `faster` / `slower` only when the median clears the noise band and at least 4 of 5 rounds
   point the same way; otherwise `no change`.
 - Output match: every run hashes its output. Runs being compared must agree, otherwise the call is

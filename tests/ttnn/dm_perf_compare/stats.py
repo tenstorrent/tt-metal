@@ -16,6 +16,9 @@ import statistics
 # calls (tens of microseconds) moved 2-3% between runs of identical builds, so below this a
 # "change" is not worth reporting whatever the control said.
 MIN_NOISE_PCT = 3.0
+# Above this the control pair itself was disturbed (the host was busy in some rounds), so a "no
+# change" or "default is fastest" answer from that run proves nothing.
+MAX_NOISE_PCT = 5.0
 # Share of rounds that must point the same way as the median for the call to count.
 AGREE_FRACTION = 0.8
 

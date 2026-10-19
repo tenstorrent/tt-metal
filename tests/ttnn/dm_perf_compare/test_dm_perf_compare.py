@@ -173,3 +173,8 @@ def test_q2_control_counts_false_flags():
     flagged = results_for(after_default=100.0, after_native=100.0, control=80.0)
     assert flagged["calls"][0]["q2_control"]["verdict"] == "faster"
     assert flagged["summary"]["q2_control"]["faster"] == 1
+
+
+def test_noisy_control_is_marked_unreliable():
+    assert results_for(after_default=100.0, after_native=100.0)["noise"]["reliable"] is True
+    assert stats.noise_pct({"c": [-12.0, -11.0, -10.0, 0.0, 0.0]}) > stats.MAX_NOISE_PCT

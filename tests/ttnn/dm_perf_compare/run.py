@@ -29,6 +29,7 @@ sys.path.insert(0, HERE)
 import calls as calls_mod  # noqa: E402
 import compare  # noqa: E402
 import profile_csv  # noqa: E402
+import stats  # noqa: E402
 from ops import CONTROL, IMPLS  # noqa: E402
 
 WORKER = os.path.join(HERE, "worker.py")
@@ -207,6 +208,11 @@ def main(argv):
         "noise %.2f%%  q1 %s  q2 %s  q2 control %s"
         % (results["noise"]["noise_pct"], summary["q1"], summary["q2"], summary["q2_control"])
     )
+    if not results["noise"]["reliable"]:
+        log(
+            "WARNING: noise %.1f%% is above %.1f%%; the control pair was disturbed, rerun"
+            % (results["noise"]["noise_pct"], stats.MAX_NOISE_PCT)
+        )
     log("skipped/failed entries: %d" % len(results["skipped"]))
 
 
