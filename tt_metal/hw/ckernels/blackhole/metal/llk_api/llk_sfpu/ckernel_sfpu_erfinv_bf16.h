@@ -16,25 +16,29 @@ struct ErfinvBf16Config {
         uint8_t inclusive;
         uint8_t return_class;
     };
-    static constexpr bool kExteriorNan = true;
 };
 }  // namespace ckernel::sfpu
 
-#include "ckernel_sfpu_bf16_log_square_factorized_odd.h"
+#include "ckernel_sfpu_erfinv_bf16_log_square_factorized_odd.h"
 
 namespace ckernel::sfpu {
 
-// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
+// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format, as BF16 for
+// Float16_b and the block formats sharing its exponent.
 inline bool bf16_dest_erfinv() {
 #if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
-    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
+    const std::uint32_t format = ckernel::math::src_zero_flag_srcb_fmt;
+    return format == static_cast<std::uint32_t>(DataFormat::Float16_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp4_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp2_b);
 #else
     return false;
 #endif
 }
 template <int ITERATIONS = 8>
 inline void calculate_erfinv_bf16() {
-    ckernel::sfpu::bf16::calculate<ckernel::sfpu::ErfinvBf16Config, ITERATIONS>();
+    ckernel::sfpu::bf16::erfinv::calculate<ckernel::sfpu::ErfinvBf16Config, ITERATIONS>();
 }
 
 }  // namespace ckernel::sfpu
