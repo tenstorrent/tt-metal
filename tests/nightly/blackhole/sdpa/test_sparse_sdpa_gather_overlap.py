@@ -11,6 +11,7 @@ neither the realtime profiler nor the Tracy device profiler reports traced sub-d
 import os
 import time
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
@@ -300,3 +301,245 @@ def test_sparse_sdpa_overlap_with_kvpe_prefetch(mesh_device, chunk_global, prefi
             torch.testing.assert_close(
                 actual[0, 0, lo : lo + rows], sources[rank], rtol=0, atol=0, equal_nan=True, msg=f"{chip} {rank}"
             )
+
+
+# ---------------------------------------------------------------------------------------------------------
+# PROTOTYPE index-driven KV fetch: owners push only the rows each chip's top-k needs, plus the current chunk's
+# slab, into the chip's compact buffer; sparse_sdpa reads it through indices rewritten to compact slots.
+# Needed-row sets are synthetic (attention sink + random clusters) so distinct rows per chip and their locality
+# can be swept until real top-k statistics exist.
+# ---------------------------------------------------------------------------------------------------------
+
+_TORUS_XY_GLM = {**_TORUS_XY}
+_GLM_ROUTER = ttnn.FabricRouterConfig()
+_GLM_ROUTER.max_packet_payload_size_bytes = int(
+    os.environ.get("SPARSE_PAYLOAD", "6144")
+)  # GLM53Config.FABRIC_PAYLOAD_SIZE
+_TORUS_XY_GLM["fabric_router_config"] = _GLM_ROUTER
+_DRAM_BANKS = 8
+
+
+def _needed_prefix_rows(rng, prefix_tokens, distinct, cluster_len, sink=64):
+    """Synthetic needed prefix rows for one chip: attention sink plus random clusters of cluster_len rows."""
+    rows = np.zeros(prefix_tokens, dtype=bool)
+    rows[: min(sink, prefix_tokens)] = True
+    target = min(distinct, prefix_tokens)
+    while rows.sum() < target:
+        starts = rng.integers(0, max(1, prefix_tokens - cluster_len), size=max(1, (target - rows.sum()) // cluster_len))
+        for s0 in starts:
+            rows[s0 : s0 + cluster_len] = True
+    return np.flatnonzero(rows)
+
+
+def _owner_local(n, stripe_chunk, n_dev):
+    blk = n // stripe_chunk
+    return blk % n_dev, (blk // n_dev) * stripe_chunk + n % stripe_chunk
+
+
+def _compact_plan(needed_by_chip, n_dev, stripe_chunk, workers, pages_per_packet, buffer_rows):
+    """Stream pages per owner/worker, plus each chip's natural-row -> compact-slot map.
+
+    Owner o's rows for dest r sit in r's buffer at base(o, r) in stream order; packet j of a stream starts at
+    base + (j % banks) + (j // banks) * P * banks with its P rows banks pages apart (one contiguous bank lane).
+    """
+    unit = pages_per_packet * _DRAM_BANKS
+    streams = [[[] for _ in range(workers)] for _ in range(n_dev)]
+    load = np.zeros((n_dev, workers), dtype=np.int64)
+    slot_maps = []
+    for dest, rows in enumerate(needed_by_chip):
+        owner, local = _owner_local(rows, stripe_chunk, n_dev)
+        slot_map = np.full(buffer_rows, -1, dtype=np.int64)
+        base = 0
+        for o in range(n_dev):
+            sel = owner == o
+            o_rows, o_local = rows[sel], local[sel]
+            order = np.argsort(o_local)
+            o_rows, o_local = o_rows[order], o_local[order]
+            k = np.arange(len(o_local))
+            j, i = k // pages_per_packet, k % pages_per_packet
+            slot_map[o_rows] = base + (j % _DRAM_BANKS) + (j // _DRAM_BANKS) * unit + i * _DRAM_BANKS
+            if len(o_local):
+                w = int(np.argmin(load[o]))
+                streams[o][w].append((dest, base, o_local))
+                load[o, w] += len(o_local)
+            base += -(-len(o_local) // unit) * unit
+        assert base <= buffer_rows, f"compact buffer overflow: {base} > {buffer_rows}"
+        slot_maps.append(slot_map)
+    words = 16 + max(sum(3 + len(l) for _, _, l in streams[o][w]) for o in range(n_dev) for w in range(workers))
+    words += -words % 16
+    host = np.zeros((n_dev, 1, workers, words), dtype=np.int64)
+    for o in range(n_dev):
+        for w in range(workers):
+            host[o, 0, w, 0] = len(streams[o][w])
+            pos = 16
+            for dest, base, local in streams[o][w]:
+                host[o, 0, w, pos : pos + 3] = (dest, base, len(local))
+                host[o, 0, w, pos + 3 : pos + 3 + len(local)] = local
+                pos += 3 + len(local)
+    return torch.from_numpy(host.astype(np.int32)), slot_maps, int(load.max())
+
+
+@run_for_blackhole()
+@_PERF
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY_GLM], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@_CHUNKS
+@pytest.mark.parametrize("prefix_slabs", [40], ids=["prefix40slabs"])
+@_KV_FMT
+def test_sparse_push_vs_full_gather(mesh_device, chunk_global, prefix_slabs, kv_fmt):
+    grid = mesh_device.compute_with_storage_grid_size()
+    if (grid.x, grid.y) != (12, 10):
+        pytest.skip(f"needs the 12x10 Galaxy grid, got {grid}")
+    gather_grid = _cols(8, 11)
+    n_dev = mesh_device.get_num_devices()
+    workers = int(os.environ.get("SPARSE_WORKERS", "2"))
+    slab_global = chunk_global
+    stripe_chunk = slab_global // n_dev
+    prefix_tokens = prefix_slabs * slab_global
+    cache_tokens = (prefix_slabs + 1) * slab_global
+    page_bytes = {"fp8": 704, "bf16": 1152}[kv_fmt]
+    pages_per_packet = int(os.environ.get("SPARSE_PAYLOAD", "6144")) // page_bytes
+    current_rows = np.arange(prefix_tokens, cache_tokens)
+
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    cache = _kv_cache(mesh_device, 2, cache_tokens, kv_fmt, ttnn.ShardTensorToMesh(mesh_device, dim=2), seed=2)
+    dense_out = _zero_kv_buffer(mesh_device, cache_tokens, kv_fmt)
+    compact_out = _zero_kv_buffer(mesh_device, cache_tokens, kv_fmt)
+
+    def scalar(v):
+        return ttnn.from_torch(
+            torch.tensor([[[[v]]]], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            **common,
+        )
+
+    slot, start = scalar(0), scalar(prefix_tokens)
+    manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([_cols(0, 7)]), ttnn.SubDevice([gather_grid])], 0)
+    sems = [ttnn.create_global_semaphore(mesh_device, gather_grid, 0, ttnn.BufferType.L1_SMALL) for _ in range(2)]
+    ttnn.synchronize_device(mesh_device)
+
+    gather_kw = dict(
+        dim=2,
+        cluster_axis=None,
+        subdevice_id=ttnn.SubDeviceId(1),
+        sub_core_grids=gather_grid,
+        num_links=workers,
+        input_batch_index_tensor=slot,
+        batch_slot_num_layers=2,
+        batch_slot_layer_idx=1,
+        ready_semaphore=sems[0],
+        data_valid_semaphore=sems[1],
+    )
+    full_gather = lambda: ttnn.experimental.high_bw_all_gather(
+        cache, output_tensor=dense_out, gathered_prefix_tensor=start, gathered_slab_global=slab_global, **gather_kw
+    )
+
+    def timed(fn, n=20):
+        fn()
+        ttnn.synchronize_device(mesh_device)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        fn()
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        us = (time.perf_counter() - t0) / n * 1e6
+        ttnn.release_trace(mesh_device, tid)
+        return us
+
+    distincts = [int(x) for x in os.environ.get("SPARSE_DISTINCT", "2048,8192,32768,65536").split(",")]
+    clusters = [int(x) for x in os.environ.get("SPARSE_CLUSTER", "1,16,128").split(",")]
+    lines, plan = [], None
+    mesh_device.load_sub_device_manager(manager)
+    try:
+        t_full = timed(full_gather)
+        lines.append(f"GLM {kv_fmt} chunk {chunk_global}, prefix {prefix_tokens} tokens: full gather {t_full:.0f}us")
+        lines.append(f"{'distinct/chip':>14}{'cluster':>8}{'rows/worker':>12}{'push':>8}{'vs full':>9}")
+        for distinct in distincts:
+            for cluster in clusters:
+                rng = np.random.default_rng(distinct * 1000 + cluster)
+                prefix_needed = [_needed_prefix_rows(rng, prefix_tokens, distinct, cluster) for _ in range(n_dev)]
+                if os.environ.get("SPARSE_NEIGHBORS_ONLY"):
+                    # Diagnostic: every row comes from a direct torus neighbour, so every packet is one hop.
+                    rows_, cols_ = tuple(mesh_device.shape)
+                    for c in range(n_dev):
+                        r0, c0 = divmod(c, cols_)
+                        nbrs = {
+                            ((r0 + dr) % rows_) * cols_ + (c0 + dc) % cols_
+                            for dr, dc in ((0, 1), (0, -1), (1, 0), (-1, 0))
+                        }
+                        cand = np.arange(prefix_tokens)
+                        cand = cand[np.isin(_owner_local(cand, stripe_chunk, n_dev)[0], list(nbrs))]
+                        prefix_needed[c] = rng.choice(cand, size=min(distinct, len(cand)), replace=False)
+                    needed = prefix_needed
+                else:
+                    needed = [np.concatenate([p, current_rows]) for p in prefix_needed]
+                host_streams, slot_maps, worker_rows = _compact_plan(
+                    needed, n_dev, stripe_chunk, workers, pages_per_packet, cache_tokens
+                )
+                streams = ttnn.from_torch(
+                    host_streams, dtype=ttnn.uint32, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0), **common
+                )
+                push = lambda: ttnn.experimental.high_bw_all_gather(
+                    cache, output_tensor=compact_out, push_runs_tensor=streams, **gather_kw
+                )
+                t_push = timed(push)
+                lines.append(
+                    f"{distinct:>14}{cluster:>8}{worker_rows:>12}{t_push:>8.0f}{100 * (t_full - t_push) / t_full:>8.1f}%"
+                )
+                plan = (prefix_needed, slot_maps)
+        logger.info("\n" + "\n".join(lines))
+    finally:
+        ttnn.synchronize_device(mesh_device)
+        mesh_device.clear_loaded_sub_device_manager()
+        mesh_device.remove_sub_device_manager(manager)
+
+    # End to end on the last configuration: sparse_sdpa over the compact buffer with rewritten indices must
+    # equal sparse_sdpa over the dense gather with natural indices.
+    prefix_needed, slot_maps = plan
+    s_local = chunk_global // n_dev
+    rng = np.random.default_rng(7)
+    natural = np.zeros((n_dev, s_local, TOPK), dtype=np.int64)
+    for c in range(n_dev):
+        for q in range(s_local):
+            t = prefix_tokens + c * s_local + q  # this chip's query rows are its own current-chunk stripe
+            recent = np.arange(max(prefix_tokens, t - 1023), t + 1)
+            older = rng.choice(prefix_needed[c], size=TOPK - len(recent), replace=False)
+            natural[c, q] = np.concatenate([recent, older])
+    compact = np.stack([slot_maps[c][natural[c]] for c in range(n_dev)])
+    assert (compact >= 0).all()
+
+    shard_seq = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    to_idx = lambda a: ttnn.from_torch(
+        torch.from_numpy(a.reshape(1, 1, n_dev * s_local, TOPK).astype(np.int32)),
+        dtype=ttnn.uint32,
+        mesh_mapper=shard_seq,
+        **common,
+    )
+    q = ttnn.from_torch(
+        torch.randn(1, H, n_dev * s_local, K_DIM).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        mesh_mapper=shard_seq,
+        **common,
+    )
+    out_dense = ttnn.to_torch(
+        _sparse_sdpa(q, dense_out, to_idx(natural), s_local * TP, kv_fmt),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
+    )
+    out_compact = ttnn.to_torch(
+        ttnn.transformer.sparse_sdpa(
+            q,
+            compact_out,
+            to_idx(compact),
+            V_DIM,
+            kv_format=_KV_FORMATS[kv_fmt][0],
+            scale=K_DIM**-0.5,
+            k_chunk_size=128,
+        ),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
+    )
+    assert torch.equal(out_dense, out_compact), "compact-buffer sparse_sdpa differs from the dense-gather path"

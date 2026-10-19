@@ -296,6 +296,18 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     validate_gathered_prefix_metadata(args, tensor_args);
     validate_slot_extent_control_mix(args, tensor_args);
     validate_window_controls(args, tensor_args);
+    if (tensor_args.has_push_runs()) {
+        const auto& runs = *tensor_args.push_runs_tensor;
+        TT_FATAL(args.linearized_mesh_ring, "sparse push (prototype) is full-mesh only (cluster_axis=None)");
+        TT_FATAL(
+            runs.dtype() == DataType::UINT32 && runs.layout() == Layout::ROW_MAJOR &&
+                runs.memory_config().buffer_type() == BufferType::DRAM,
+            "push_runs_tensor must be a UINT32 ROW_MAJOR DRAM tensor");
+        TT_FATAL(
+            !tensor_args.has_gathered_prefix_metadata() && !tensor_args.has_window_start() &&
+                !tensor_args.has_progress(),
+            "push_runs_tensor replaces the extent/window controls");
+    }
 
     // Constraints on input tensor
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must to be on device!");
@@ -520,7 +532,10 @@ HighBwAllGatherDeviceOperation::tensor_return_value_t HighBwAllGatherDeviceOpera
 }
 
 HighBwAllGatherDeviceOperation::program_factory_t HighBwAllGatherDeviceOperation::select_program_factory(
-    const HighBwAllGatherParams&, const HighBwAllGatherInputs&) {
+    const HighBwAllGatherParams&, const HighBwAllGatherInputs& tensor_args) {
+    if (tensor_args.has_push_runs()) {
+        return program_factory_t{HighBwSparsePushFactory{}};
+    }
     return program_factory_t{HighBwAllGatherUnicastFactory{}};
 }
 
@@ -544,7 +559,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const std::optional<Tensor>& window_start_tensor,
     std::optional<uint32_t> window_max_slabs,
     bool prefix_only,
-    const std::optional<Tensor>& progress_tensor) {
+    const std::optional<Tensor>& progress_tensor,
+    const std::optional<Tensor>& push_runs_tensor) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -654,7 +670,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .input_batch_index_tensor = input_batch_index_tensor,
             .gathered_prefix_tensor = gathered_prefix_tensor,
             .window_start_tensor = window_start_tensor,
-            .progress_tensor = progress_tensor}};
+            .progress_tensor = progress_tensor,
+            .push_runs_tensor = push_runs_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
@@ -681,7 +698,8 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& window_start_tensor,
     std::optional<uint32_t> window_max_slabs,
     bool prefix_only,
-    const std::optional<Tensor>& progress_tensor) {
+    const std::optional<Tensor>& progress_tensor,
+    const std::optional<Tensor>& push_runs_tensor) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -702,7 +720,8 @@ Tensor high_bw_all_gather(
         window_start_tensor,
         window_max_slabs,
         prefix_only,
-        progress_tensor);
+        progress_tensor,
+        push_runs_tensor);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }

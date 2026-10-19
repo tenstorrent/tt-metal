@@ -40,7 +40,9 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& window_start_tensor = std::nullopt,
     std::optional<uint32_t> window_max_slabs = std::nullopt,
     bool prefix_only = false,
-    const std::optional<Tensor>& progress_tensor = std::nullopt);
+    const std::optional<Tensor>& progress_tensor = std::nullopt,
+    // PROTOTYPE: index-driven sparse push instead of the dense gather (see HighBwSparsePushFactory).
+    const std::optional<Tensor>& push_runs_tensor = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 

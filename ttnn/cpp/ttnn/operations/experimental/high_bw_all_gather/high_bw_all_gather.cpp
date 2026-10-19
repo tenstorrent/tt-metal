@@ -28,7 +28,8 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& window_start_tensor,
     std::optional<uint32_t> window_max_slabs,
     bool prefix_only,
-    const std::optional<Tensor>& progress_tensor) {
+    const std::optional<Tensor>& progress_tensor,
+    const std::optional<Tensor>& push_runs_tensor) {
     return ttnn::prim::high_bw_all_gather(
         input_tensor,
         output_tensor,
@@ -49,7 +50,8 @@ Tensor high_bw_all_gather(
         window_start_tensor,
         window_max_slabs,
         prefix_only,
-        progress_tensor);
+        progress_tensor,
+        push_runs_tensor);
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather

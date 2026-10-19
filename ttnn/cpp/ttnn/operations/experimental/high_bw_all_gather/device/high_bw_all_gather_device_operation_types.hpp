@@ -109,6 +109,9 @@ struct HighBwAllGatherInputs {
     std::optional<Tensor> progress_tensor{std::nullopt};
     bool has_window_start() const { return window_start_tensor.has_value(); }
     bool has_progress() const { return progress_tensor.has_value(); }
+    // PROTOTYPE sparse push: per-device uint32 [1, 1, workers, words] run lists. Selects HighBwSparsePushFactory.
+    std::optional<Tensor> push_runs_tensor{std::nullopt};
+    bool has_push_runs() const { return push_runs_tensor.has_value(); }
 };
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
