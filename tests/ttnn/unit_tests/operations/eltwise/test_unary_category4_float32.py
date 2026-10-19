@@ -365,10 +365,9 @@ def test_rpow_split_overflow(device, exponent):
 def test_fill(device, fill_value):
     """fill(x, fill_value) = fill_value everywhere; x is ignored.
 
-    | fill_value | Check               | Reason                                         |
-    |------------|---------------------|------------------------------------------------|
-    | -0.0       | +0.0                | the device drops the sign of a -0.0 fill_value |
-    | others     | exact (bit pattern) | the scalar's float32 bits are written as-is    |
+    | fill_value | Check               | Reason                                      |
+    |------------|---------------------|---------------------------------------------|
+    | all        | exact (bit pattern) | the scalar's float32 bits are written as-is |
 
     0.1 is not a dyadic rational, so both sides must use the same float32
     rounding of the Python float.
@@ -381,7 +380,6 @@ def test_fill(device, fill_value):
 
     result = ttnn.to_torch(ttnn.fill(tt_in, fill_value))
 
-    golden = torch.where(golden == 0, torch.zeros_like(golden), golden)
     assert torch.equal(result.view(torch.int32), golden.view(torch.int32)), (
         f"fill(fill_value={fill_value}) diverged for "
         f"{int((result.view(torch.int32) != golden.view(torch.int32)).sum().item())} of {result.numel()} elements"
