@@ -54,6 +54,8 @@ tests:
                               # (a gap the device cannot close at its normal settings, fixed later); reported, recorded
   component_max_precision: true  # component and swap tests run at the model's max precision (tt/settings.py
                                  # max_precision); shipped precision is judged by the ladder and contract tests
+  step_numerics: native       # F112 (owner rule): per-step checks vs the reference with its parity-only roundings off,
+                              # when the model's hooks.reference takes `numerics`; the goldens stay official
   low_precision_kinds: [moe]  # step kinds with a looser precision factor (bfp8 expert weights, F56)
   contract_tail_pad: 32       # the contract test's last chunk ends this many tokens early
   determinism_repeats: 5      # component and fork tests: A runs, A,B,A then A again, bit-identical to the first A

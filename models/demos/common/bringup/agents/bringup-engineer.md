@@ -104,8 +104,9 @@ You start with no memory of earlier steps. Everything you need is in the brief a
 14. Precision. Bring every step up at maximum precision (HiFi4, fp32 accumulation, bf16 KV). Component and swap
    tests always run at that precision (testing/model_precision.py), whatever the shipped defaults are; a later perf
    pick that lowers precision is judged end to end (ladder, contract tests), never by the component limits.
-   Maximum precision means the device's full precision for the reference's own dtypes, never more: no fp32 where the
-   reference computes in bf16, no exact or emulated paths to beat a limit. Every accuracy limit is 2 x the noise floor
+   Maximum precision means the device's full precision for the reference's own dtypes (its native numerics, rule
+   17: no parity-only rounding), never more: no fp32 where the reference computes in bf16, no exact or emulated
+   paths to beat a limit. Every accuracy limit is 2 x the noise floor
    of those dtypes (the gate prints it as `limit ... = 2.0 x the precision model's miss`). When a check fails at the
    reference's precision, find the device error that exceeds the noise floor (a truncation, a bias, a wrong dtype);
    if there is none, stop and report the check, its value and its limit (answer `disagree` on a note asking for it)
@@ -131,19 +132,30 @@ You start with no memory of earlier steps. Everything you need is in the brief a
       `ttnn/ttnn/bringup/`, never edited in place.
    3. Composing a path from smaller ops is the last resort: never for one a fork or TTNN already has (an RMS norm from
       multiply / add / rsqrt, a softmax from exp / sum / reciprocal); record in BREADCRUMBS.md why 1 and 2 did not fit.
+17. No parity-only rounding (owner rule). The goal is a fast model on our hardware, not the reference GPU's number
+   formats. Never add a step that rounds values to a format the device then neither computes nor stores in: fp8 / fp4
+   quant-dequant of activations kept in bf16 or fp32, rounding inputs to TF32, a KV cache or key rounded to an fp4 / fp8
+   grid but stored wider. A rounding is part of the model only where it is the device's own format: a block format the
+   matmul or the cache really uses (bfp8 / bfp4 tiles, LoFi operands, a KV cache stored in 4 or 8 bits). Per-step
+   checks compare against the reference's native numerics (reference role, `numerics`); the goldens keep the
+   official arithmetic and judge the model end to end. A check that fails only because the device skips such a
+   rounding is not a reason to add it: report the check, its value and its limit.
 
 ## Roles
 
 - **reference**: write the model's standalone CPU reference in `<model_dir>/reference/` against
   `models/demos/common/bringup/reference/interface.py`, and the `reference` hook in `<model_dir>/bringup/hooks.py`.
   The block forward must go through `run_block`, so the block graph is the code. Record every boundary. Load one layer's
-  weights at a time if the model does not fit in host memory.
+  weights at a time if the model does not fit in host memory. The `reference` hook takes `numerics`: "official"
+  (the default: the released code's arithmetic, for the goldens) or "native" (every rounding that only emulates the
+  reference hardware's formats is off, rule 17), one switch in the reference, not per step (reference/interface.py).
 - **plan**: write `plan.yaml` (placements for every checkpoint tensor, state, extras, activation estimate),
   `plan.md` (per layer type: a table with one row per component, what each chip holds, the collective after it, per-chip
   memory; then the per-chip total and the per-layer collectives; copy the shape of the reference plans in the repo map,
   and say in one sentence why for each departure), and `components.yaml` (every step mapped to a TTNN op, NATIVE /
-  COMPOSED / CPU / OPGEN; check the repo map before tagging anything COMPOSED, and record what you searched; OPGEN
-  means TTNN has no proper op and the step is requested from the op code generator). You may annotate
+  COMPOSED / CPU / OPGEN; no step for a parity-only rounding, rule 17; check the repo map before tagging anything
+  COMPOSED, and record what you searched; OPGEN means TTNN has no proper op and the step is requested from the op code
+  generator). You may annotate
   or split tasks in `tasks.yaml` only in this role, before approval. With a deployment box in the spec, plan for it
   and fit the plan to every box (the brief's "Boxes" section says how).
 - **test**: the orchestrator rendered the component or swap test from the template. Review it against the golden and the

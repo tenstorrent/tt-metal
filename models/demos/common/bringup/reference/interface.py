@@ -32,6 +32,12 @@ ladder tests read them.
 
 The reference's own forward should run each block through ``run_block`` so the graph is the code, not a
 description of it. The reference gate replays the graph from recorded boundaries and requires an exact match.
+
+Numerics (F112, owner rule: no parity-only rounding). ``hooks.reference`` may take ``numerics``: "official" (the
+default: the released code's arithmetic, used for the goldens) or "native" (every rounding that only emulates the
+reference hardware's formats is off: activation quant-dequant kept in a wider dtype, input rounding to the GPU's
+internal formats; weights keep their checkpoint values). Per-step checks compare the device against the native
+reference (``step_reference``); the goldens stay official.
 """
 
 from __future__ import annotations
@@ -112,3 +118,15 @@ def run_block(
 
 def boundary_names(steps: list[Step]) -> list[str]:
     return ["in"] + [s.output for s in steps]
+
+
+def step_reference(spec, layers, dtype):
+    """The CPU reference per-step checks compare against: ``tests.step_numerics`` (defaults.yaml) when the model's
+    ``hooks.reference`` takes ``numerics``, else its only (official) arithmetic (F112)."""
+    import inspect
+
+    fn = spec.hooks().reference
+    params = inspect.signature(fn).parameters
+    if "numerics" in params or any(p.kind is p.VAR_KEYWORD for p in params.values()):
+        return fn(spec, layers=layers, dtype=dtype, numerics=spec.get("tests.step_numerics") or "official")
+    return fn(spec, layers=layers, dtype=dtype)
