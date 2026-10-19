@@ -64,7 +64,7 @@ DEVICE_MS_BASELINES = {
 # FAST is reported so the baseline can be updated.
 # Device time excludes host staging, so its margins are tighter.
 WALL_MS_MARGINS = {10: 0.03, 100: 0.03, 256: 0.02}
-DEVICE_MS_MARGINS = {1: 0.02, 10: 0.02, 100: 0.02, 256: 0.02}
+DEVICE_MS_MARGINS = {1: 0.02, 10: 0.02, 100: 0.02, 256: 0.015}
 
 
 def _ranges(baselines, margins):
