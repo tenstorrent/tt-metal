@@ -3,7 +3,7 @@
 
 import pytest
 
-from models.demos.common.prefill.runners.runner_utils import compute_layer_split
+from models.demos.common.prefill.runners.runner_utils import compute_layer_split, ffn_handoff_flags
 
 
 @pytest.mark.parametrize(
@@ -27,3 +27,27 @@ def test_even_split_gives_the_remainder_to_the_last_ranks(monkeypatch, num_layer
     ranges = compute_layer_split(num_layers, num_ranks, tail_levels=tail_levels)
     assert [count for _, count in ranges] == expected
     assert [start for start, _ in ranges] == [sum(expected[:r]) for r in range(num_ranks)]
+
+
+@pytest.mark.parametrize(
+    "env, num_ranks, expected",
+    [
+        (None, 4, [False, False, False, False]),
+        ("1,0,1", 4, [True, False, True, False]),
+        ("0", 2, [False, False]),
+        ("1", 2, [True, False]),
+    ],
+)
+def test_ffn_handoff_flags(monkeypatch, env, num_ranks, expected):
+    # One flag per boundary, plus False for the last rank, which has no downstream stage.
+    if env is None:
+        monkeypatch.delenv("PREFILL_PP_FFN_HANDOFF", raising=False)
+    else:
+        monkeypatch.setenv("PREFILL_PP_FFN_HANDOFF", env)
+    assert ffn_handoff_flags(num_ranks) == expected
+
+
+def test_ffn_handoff_flags_rejects_a_wrong_boundary_count(monkeypatch):
+    monkeypatch.setenv("PREFILL_PP_FFN_HANDOFF", "1,0")
+    with pytest.raises(ValueError, match="must list 3 boundaries"):
+        ffn_handoff_flags(4)
