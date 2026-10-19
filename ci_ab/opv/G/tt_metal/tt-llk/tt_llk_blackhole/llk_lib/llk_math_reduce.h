@@ -187,10 +187,8 @@ inline void reduce_row_max_transpose_full_tile()
 }
 
 /**
- * @brief REDUCE_SCALAR: move a pooled DEST row through SrcB as a SrcA column, clear the row and pool the column into
- *        DEST row 0. Runs in the source banks of the last pool, whose SrcB row 0 holds the scaler; releases them.
- *
- * @tparam row: Scratch DEST row holding the 16 column partials.
+ * @brief REDUCE_SCALAR: transpose the partials of DEST row `row` into a SrcA column and pool it into DEST row 0, in the
+ *        banks of the last pool (its SrcB row 0 is the scaler); releases them.
  */
 template <PoolType type, MathFidelity math_fidelity, std::uint32_t row, bool clear_32b = false>
 inline void reduce_scalar_transpose_pool()
@@ -228,7 +226,7 @@ inline void reduce_scalar_transpose_pool()
 }
 
 /**
- * @brief REDUCE_SCALAR: pool one face into DEST row `row`, every fidelity phase issued directly.
+ * @brief REDUCE_SCALAR: pool one face into DEST row `row`, the fidelity phases issued without the MOP.
  */
 template <PoolType type, MathFidelity math_fidelity, std::uint32_t clear_mode, std::uint32_t row>
 inline void reduce_scalar_pool_face()
@@ -251,8 +249,7 @@ inline void reduce_scalar_pool_face()
 }
 
 /**
- * @brief REDUCE_SCALAR: pool faces [first, num_faces) of a tile into DEST row `row`; the last face keeps its banks when
- *        keep_last.
+ * @brief REDUCE_SCALAR: pool faces [first, num_faces) into DEST row `row`; the last one keeps its banks when keep_last.
  */
 template <PoolType type, MathFidelity math_fidelity, std::uint32_t row>
 inline void reduce_scalar_pool_faces(const std::uint32_t first, const std::uint32_t num_faces, const bool keep_last)
@@ -276,8 +273,7 @@ inline void reduce_scalar_pool_faces(const std::uint32_t first, const std::uint3
 }
 
 /**
- * @brief REDUCE_SCALAR: move the partials of DEST row `row` through SrcB into SrcA rows 16-31 and clear the row, leaving
- *        SrcA rows 0-15 (the bank's face) for a pool of their own.
+ * @brief REDUCE_SCALAR: transpose the partials of DEST row `row` into SrcA rows 16-31, so rows 0-15 keep the bank's face.
  */
 template <std::uint32_t row, bool clear_32b>
 inline void reduce_scalar_transpose_upper()
@@ -293,10 +289,8 @@ inline void reduce_scalar_transpose_upper()
 }
 
 /**
- * @brief REDUCE_SCALAR SUM/AVG: the phases of one face into DEST row `row` (SrcA rows 0-15) alternating with the final
- *        pool phases of the previous tile into DEST row 0 (SrcA rows 16-31): two chains on different rows, each phase
- *        in its own order. ADDR_MOD_2 steps SrcA to 16, ADDR_MOD_3 back to 0 with the next phase, ADDR_MOD_4 back to 0
- *        and phase 0. The final pool's last phase releases the banks unless keep.
+ * @brief REDUCE_SCALAR SUM/AVG: one face into DEST row `row` and the previous tile's final pool into row 0, phase by
+ *        phase: two chains on different rows, each in its own order. Releases the banks unless keep.
  */
 template <MathFidelity math_fidelity, std::uint32_t row>
 inline void reduce_scalar_face_with_final_pool(const bool keep)
@@ -318,8 +312,8 @@ inline void reduce_scalar_face_with_final_pool(const bool keep)
 }
 
 /**
- * @brief REDUCE_SCALAR SUM/AVG, one tile after the first of a block: face 0 into `row`, then in face 1's banks the
- *        previous tile's partials (`prev_row`) transposed and pooled into row 0 alongside face 1, then the other faces.
+ * @brief REDUCE_SCALAR SUM/AVG, a block's tile after the first: the previous tile (`prev_row`) is transposed and pooled
+ *        in face 1's banks alongside face 1.
  */
 template <PoolType type, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, std::uint32_t row, std::uint32_t prev_row>
 inline void reduce_scalar_block_tile(const std::uint32_t num_faces, const bool last)
@@ -331,12 +325,10 @@ inline void reduce_scalar_block_tile(const std::uint32_t num_faces, const bool l
 }
 
 /**
- * @brief REDUCE_SCALAR block of tiles accumulated into one DEST tile, faces >= 2.
- *
- * MAX pools every tile into the scratch row and transposes once. SUM/AVG keeps the tile path's sums, one transpose and
- * final pool per tile in tile order, but alternates scratch rows 8 and 16, so tile t's final pool runs in tile t+1's
- * face 1 banks alongside that face and the unpacker fills the free banks meanwhile; that pool reads face 1's scaler row
- * instead of face 3's, the same values for a scaler tile whose faces share their first row.
+ * @brief REDUCE_SCALAR block accumulated into one DEST tile, faces >= 2. MAX transposes once per block (exact in any
+ *        order). SUM/AVG keeps the tile path's order of additions, but tile t's transpose runs in tile t+1's banks, so the
+ *        unpacker fills the free banks meanwhile; its final pool reads face 1's scaler row instead of face 3's, the
+ *        same values for a scaler whose faces share their first row.
  */
 template <PoolType type, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void reduce_scalar_block_accumulate(const std::uint32_t dst_index, const std::uint32_t num_tiles, const std::uint32_t num_faces)
@@ -355,7 +347,8 @@ inline void reduce_scalar_block_accumulate(const std::uint32_t dst_index, const 
     }
     else
     {
-        // The modes of reduce_scalar_face_with_final_pool; the tile path does not use 2 to 4.
+        // SrcA to the transposed rows (16), back to the face (0) with the next phase, back to 0 and phase 0; the tile path
+        // does not use these three.
         addr_mod_t {
             .srca = {.incr = 16},
         }
