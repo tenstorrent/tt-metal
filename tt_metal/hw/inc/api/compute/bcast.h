@@ -39,8 +39,16 @@ constexpr SrcDvalid BCAST_MUL_SRC_DVALID = (ELTWISE_BINARY_PER_TILE_HANDOFF_BCAS
 #else
 constexpr SrcDvalid BCAST_MUL_SRC_DVALID = SrcDvalid::PerFace;
 #endif
-template <EltwiseBinaryType op>
-constexpr SrcDvalid bcast_src_dvalid = op == EltwiseBinaryType::ELWMUL ? BCAST_MUL_SRC_DVALID : SrcDvalid::PerFace;
+// PER_TILE_HANDOFF_COL_LOSS (set by the host): a LoFi column multiply with fp32 DEST at full sync keeps the per-face hand-off.
+#if defined(PER_TILE_HANDOFF_COL_LOSS)
+constexpr bool BCAST_COL_PER_FACE = (PER_TILE_HANDOFF_COL_LOSS);
+#else
+constexpr bool BCAST_COL_PER_FACE = false;
+#endif
+template <EltwiseBinaryType op, BroadcastType dim>
+constexpr SrcDvalid bcast_src_dvalid =
+    op == EltwiseBinaryType::ELWMUL && !(dim == BroadcastType::COL && BCAST_COL_PER_FACE) ? BCAST_MUL_SRC_DVALID
+                                                                                         : SrcDvalid::PerFace;
 // ELTWISE_BINARY_BCAST_BLOCK_UNPACK true (seen by all three threads): any_tiles_bcast_block unpacks its tile pairs with one call.
 #if defined(ELTWISE_BINARY_BCAST_BLOCK_UNPACK)
 constexpr bool BCAST_BLOCK_UNPACK = (ELTWISE_BINARY_BCAST_BLOCK_UNPACK);
@@ -57,14 +65,14 @@ constexpr bool BCAST_LOFI_HALF_SYNC = false;
 template <EltwiseBinaryType op>
 constexpr bool bcast_block_unpack =
     BCAST_BLOCK_UNPACK && DST_SYNC_MODE == DstSync::SyncHalf &&
-    (op != EltwiseBinaryType::ELWMUL || BCAST_LOFI_HALF_SYNC || bcast_src_dvalid<op> == SrcDvalid::PerTile);
+    (op != EltwiseBinaryType::ELWMUL || BCAST_LOFI_HALF_SYNC || bcast_src_dvalid<op, BroadcastType::ROW> == SrcDvalid::PerTile);
 }  // namespace detail
-#define CKERNEL_BCAST_HANDOFF(op) , detail::bcast_src_dvalid<op>
-#define CKERNEL_BCAST_INIT_HANDOFF(op) \
-    , EltwiseBinaryReuseDestType::NONE, detail::bcast_src_dvalid<op>, detail::BCAST_BLOCK_UNPACK
+#define CKERNEL_BCAST_HANDOFF(op, dim) , detail::bcast_src_dvalid<op, dim>
+#define CKERNEL_BCAST_INIT_HANDOFF(op, dim) \
+    , EltwiseBinaryReuseDestType::NONE, detail::bcast_src_dvalid<op, dim>, detail::BCAST_BLOCK_UNPACK
 #else
-#define CKERNEL_BCAST_HANDOFF(op)
-#define CKERNEL_BCAST_INIT_HANDOFF(op)
+#define CKERNEL_BCAST_HANDOFF(op, dim)
+#define CKERNEL_BCAST_INIT_HANDOFF(op, dim)
 #endif
 
 // BroadcastType::NONE is a pass through: llk_unpack_A leaves the tile in SrcA and never raises a SrcB
@@ -222,7 +230,7 @@ ALWI void mul_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
           BroadcastType::COL,
           is_fp32_dest_acc_en,
           MATH_FIDELITY,
-          EltwiseBinaryReuseDestType::NONE CKERNEL_BCAST_HANDOFF(EltwiseBinaryType::ELWMUL)>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
+          EltwiseBinaryReuseDestType::NONE CKERNEL_BCAST_HANDOFF(EltwiseBinaryType::ELWMUL, BroadcastType::COL)>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1)));
 }
 
@@ -240,7 +248,7 @@ ALWI void mul_tiles_bcast_rows(
           BroadcastType::ROW,
           is_fp32_dest_acc_en,
           MATH_FIDELITY,
-          EltwiseBinaryReuseDestType::NONE CKERNEL_BCAST_HANDOFF(EltwiseBinaryType::ELWMUL)>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
+          EltwiseBinaryReuseDestType::NONE CKERNEL_BCAST_HANDOFF(EltwiseBinaryType::ELWMUL, BroadcastType::ROW)>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, bcast_row_idx)));
 }
 
@@ -325,7 +333,7 @@ ALWI void any_tiles_bcast(
           tBcastDim,
           is_fp32_dest_acc_en,
           MATH_FIDELITY,
-          EltwiseBinaryReuseDestType::NONE CKERNEL_BCAST_HANDOFF(tBcastOp)>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
+          EltwiseBinaryReuseDestType::NONE CKERNEL_BCAST_HANDOFF(tBcastOp, tBcastDim)>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<tBcastDim>(icb0, icb1, itile0, itile1, bcast_row_idx)));
 }
 
@@ -366,7 +374,7 @@ ALWI void any_tiles_bcast_block(
                 tBcastDim,
                 is_fp32_dest_acc_en,
                 MATH_FIDELITY,
-                detail::bcast_src_dvalid<tBcastOp>,
+                detail::bcast_src_dvalid<tBcastOp, tBcastDim>,
                 true>(icb0, icb1, start_idst, ntiles);
         } else {
             for (uint32_t i = 0; i < ntiles; ++i) {
@@ -376,7 +384,7 @@ ALWI void any_tiles_bcast_block(
                     is_fp32_dest_acc_en,
                     MATH_FIDELITY,
                     EltwiseBinaryReuseDestType::NONE,
-                    detail::bcast_src_dvalid<tBcastOp>>(icb0, icb1, start_idst + i, true /* clear_fp32_dst_acc */);
+                    detail::bcast_src_dvalid<tBcastOp, tBcastDim>>(icb0, icb1, start_idst + i, true /* clear_fp32_dst_acc */);
             }
         }
 #endif
@@ -507,9 +515,9 @@ ALWI void add_bcast_scalar_init(uint32_t icb0, uint32_t icb1, uint32_t call_line
  */
 ALWI void mul_bcast_scalar_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY CKERNEL_BCAST_INIT_HANDOFF(EltwiseBinaryType::ELWMUL)>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY CKERNEL_BCAST_INIT_HANDOFF(EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR)>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
-    UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR CKERNEL_BCAST_HANDOFF(EltwiseBinaryType::ELWMUL)>(icb0, icb1)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR CKERNEL_BCAST_HANDOFF(EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR)>(icb0, icb1)));
 }
 
 /**
@@ -522,7 +530,7 @@ ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
           BroadcastType::SCALAR,
           is_fp32_dest_acc_en,
           MATH_FIDELITY,
-          EltwiseBinaryReuseDestType::NONE CKERNEL_BCAST_HANDOFF(EltwiseBinaryType::ELWMUL)>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
+          EltwiseBinaryReuseDestType::NONE CKERNEL_BCAST_HANDOFF(EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR)>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
 }
 
@@ -532,9 +540,9 @@ ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
  */
 ALWI void mul_bcast_cols_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY CKERNEL_BCAST_INIT_HANDOFF(EltwiseBinaryType::ELWMUL)>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY CKERNEL_BCAST_INIT_HANDOFF(EltwiseBinaryType::ELWMUL, BroadcastType::COL)>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
-    UNPACK((llk_unpack_AB_init<BroadcastType::COL CKERNEL_BCAST_HANDOFF(EltwiseBinaryType::ELWMUL)>(icb0, icb1)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::COL CKERNEL_BCAST_HANDOFF(EltwiseBinaryType::ELWMUL, BroadcastType::COL)>(icb0, icb1)));
 }
 
 /**
@@ -542,9 +550,9 @@ ALWI void mul_bcast_cols_init(uint32_t icb0, uint32_t icb1, uint32_t call_line =
  */
 ALWI void mul_bcast_rows_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, MATH_FIDELITY CKERNEL_BCAST_INIT_HANDOFF(EltwiseBinaryType::ELWMUL)>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, MATH_FIDELITY CKERNEL_BCAST_INIT_HANDOFF(EltwiseBinaryType::ELWMUL, BroadcastType::ROW)>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
-    UNPACK((llk_unpack_AB_init<BroadcastType::ROW CKERNEL_BCAST_HANDOFF(EltwiseBinaryType::ELWMUL)>(icb0, icb1)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::ROW CKERNEL_BCAST_HANDOFF(EltwiseBinaryType::ELWMUL, BroadcastType::ROW)>(icb0, icb1)));
 }
 
 /**
@@ -590,8 +598,8 @@ ALWI void sub_bcast_scalar_init(uint32_t icb0, uint32_t icb1, uint32_t call_line
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
 ALWI void bcast_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY CKERNEL_BCAST_INIT_HANDOFF(tBcastOp)>(icb0, icb1)));
-    UNPACK((llk_unpack_AB_init<tBcastDim CKERNEL_BCAST_HANDOFF(tBcastOp)>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY CKERNEL_BCAST_INIT_HANDOFF(tBcastOp, tBcastDim)>(icb0, icb1)));
+    UNPACK((llk_unpack_AB_init<tBcastDim CKERNEL_BCAST_HANDOFF(tBcastOp, tBcastDim)>(icb0, icb1)));
 }
 
 #undef CKERNEL_BCAST_HANDOFF

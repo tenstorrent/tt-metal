@@ -1311,7 +1311,7 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
                       bt,
                       MATH_FIDELITY,
                       ckernel::EltwiseBinaryReuseDestType::NONE,
-                      ckernel::detail::bcast_src_dvalid<et>,
+                      ckernel::detail::bcast_src_dvalid<et, bt>,
                       ckernel::detail::BCAST_BLOCK_UNPACK>(CbA, CbB, Accumulation != DestAccumulation::Disabled)));
 #else
                 MATH((llk_math_eltwise_binary_init<et, bt, MATH_FIDELITY>(
@@ -1322,7 +1322,7 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
                     CbA, CbB, Accumulation != DestAccumulation::Disabled)));
             }
 #if defined(ARCH_BLACKHOLE)
-            UNPACK((llk_unpack_AB_init<bt, ckernel::detail::bcast_src_dvalid<et>>(CbA, CbB)));
+            UNPACK((llk_unpack_AB_init<bt, ckernel::detail::bcast_src_dvalid<et, bt>>(CbA, CbB)));
 #else
             UNPACK((llk_unpack_AB_init<bt>(CbA, CbB)));
 #endif

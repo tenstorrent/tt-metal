@@ -245,7 +245,7 @@ void derive_row_weights(CircularBuffer& cb_row_obj) {
           BroadcastType::COL,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE,
-          ckernel::detail::bcast_src_dvalid<EltwiseBinaryType::ELWMUL>>(cb_partial, cb_row, 1 /*acc_to_dest*/)));
+          ckernel::detail::bcast_src_dvalid<EltwiseBinaryType::ELWMUL, BroadcastType::COL>>(cb_partial, cb_row, 1 /*acc_to_dest*/)));
 #else
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
         cb_partial, cb_row, 1 /*acc_to_dest*/)));

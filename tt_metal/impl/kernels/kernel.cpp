@@ -268,6 +268,13 @@ void ComputeKernel::process_defines(
     callback(
         "PER_TILE_HANDOFF_GAINS",
         (this->config_.math_fidelity != MathFidelity::LoFi || this->config_.dst_full_sync_en) ? "1" : "0");
+    // A LoFi column multiply with fp32 DEST at full sync reads slower per tile.
+    callback(
+        "PER_TILE_HANDOFF_COL_LOSS",
+        (this->config_.math_fidelity == MathFidelity::LoFi && this->config_.dst_full_sync_en &&
+         this->config_.fp32_dest_acc_en)
+            ? "1"
+            : "0");
     // pass default noc mode as compute does not need it, just for compile to pass
     callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
 }
