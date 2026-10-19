@@ -59,17 +59,18 @@ ALWI void copy_init(
             false,
             EltwiseBinaryReuseDestType::NONE,
             UnpackToDestEn>(transpose, transpose_within_16x16_face)));
+    // Src zero-substitution flag, chosen by the derived register format (id-free equivalent of legacy
+    // copy_init's ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))): preserve
+    // bf16 -0.0 / 16b-int residuals, but flush fp8 (e4m3/e5m2) whose zero widens to a nonzero SrcA residual
+    // and must read back as 0. MATH-only config; records no format-reconfig diff. The fn masks to 0x1F.
+    // Set before the datacopy init, which clears it again when the copy runs as ELWADD.
+    MATH((ckernel::math::_configure_copy_zero_flag_state_(
+        static_cast<std::uint32_t>(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en)))));
     MATH((llk_math_eltwise_unary_datacopy_init<
           LLKOperand<Format, Shape>::descriptor,
           DataCopyType::A2D,
           is_fp32_dest_acc_en,
           BroadcastType::NONE>()));
-    // Src zero-substitution flag, chosen by the derived register format (id-free equivalent of legacy
-    // copy_init's ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))): preserve
-    // bf16 -0.0 / 16b-int residuals, but flush fp8 (e4m3/e5m2) whose zero widens to a nonzero SrcA residual
-    // and must read back as 0. MATH-only config; records no format-reconfig diff. The fn masks to 0x1F.
-    MATH((ckernel::math::_configure_copy_zero_flag_state_(
-        static_cast<std::uint32_t>(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en)))));
 }
 
 // clang-format off
