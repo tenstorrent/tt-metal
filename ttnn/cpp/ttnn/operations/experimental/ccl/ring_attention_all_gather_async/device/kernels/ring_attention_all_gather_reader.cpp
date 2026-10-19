@@ -129,6 +129,9 @@ FORCE_INLINE void prefetch_bank_owned_slices(
 }
 
 void kernel_main() {
+#ifdef RING_SDPA_COMPUTE_ONLY
+    return;  // Perf experiment: the fused all-gather is stubbed out (ring_joint_sdpa_program_factory.cpp).
+#endif
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, kNumFixedCompileTimeArgs + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<
         num_inputs,

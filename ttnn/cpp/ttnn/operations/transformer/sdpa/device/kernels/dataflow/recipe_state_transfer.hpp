@@ -4,6 +4,14 @@
 #include "api/dataflow/circular_buffer.h"
 #include "../recipe_state_layout.hpp"
 
+// RING_SDPA_COMPUTE_ONLY (perf experiment): the O / maxima / sums planes are not moved; the small header
+// page still round-trips so compute reads back a valid processed-chunk count.
+#ifdef RING_SDPA_COMPUTE_ONLY
+constexpr bool recipe_state_compute_only = true;
+#else
+constexpr bool recipe_state_compute_only = false;
+#endif
+
 template <bool fp32, uint32_t q_tiles, uint32_t request_cb, uint32_t ack_cb, uint32_t d_tiles = 4, typename Accessor>
 void transfer_recipe_state(Noc& noc, const Accessor& backing) {
     using Transfer = sdpa::streaming::StateTransfer;
@@ -16,7 +24,7 @@ void transfer_recipe_state(Noc& noc, const Accessor& backing) {
     const bool restore = words[Transfer::Operation] == Transfer::Restore;
     const uint32_t base = words[Transfer::Slot] * (Transfer::pages<q_tiles, d_tiles, max_bytes> + 1);
     uint32_t page = base + 1;
-    for (uint32_t plane = 0; plane < 3; ++plane) {
+    for (uint32_t plane = 0; !recipe_state_compute_only && plane < 3; ++plane) {
         const uint32_t cb = words[Transfer::Numerator + plane];
         const uint32_t bytes = Transfer::plane_bytes<q_tiles, d_tiles, max_bytes>(plane);
         // These full-capacity state banks are at their allocation origin at
@@ -92,7 +100,7 @@ void stream_recipe_state(Noc& noc, const Accessor& backing) {
     uint32_t op = words[Transfer::Operation];
     // O row r of the numerator CB: d tiles of plane 0 (plane 1 is per-chunk scratch); DRAM keeps plane 0 only.
     const auto move_o_rows = [&](uint32_t base, uint32_t address, uint32_t row0, uint32_t rows, bool restore) {
-        for (uint32_t r = row0; r < row0 + rows; ++r) {
+        for (uint32_t r = row0; !recipe_state_compute_only && r < row0 + rows; ++r) {
             for (uint32_t c = 0; c < d_tiles; ++c) {
                 const uint32_t l1 = address + (r * 2 * d_tiles + c) * page;
                 const uint32_t page_id = base + 1 + r * d_tiles + c;
@@ -107,7 +115,7 @@ void stream_recipe_state(Noc& noc, const Accessor& backing) {
     // Maxima (plane 1) and sums (plane 2), page by page (an odd Q's maxima plane ends in a half page).
     const auto move_tail_planes = [&](uint32_t base, bool restore) {
         uint32_t page_id = base + 1 + o_pages;
-        for (uint32_t plane = 1; plane < 3; ++plane) {
+        for (uint32_t plane = 1; !recipe_state_compute_only && plane < 3; ++plane) {
             const uint32_t address = CircularBuffer(words[Transfer::Numerator + plane]).get_read_ptr();
             const uint32_t bytes = Transfer::plane_bytes<q_tiles, d_tiles>(plane);
             for (uint32_t offset = 0; offset < bytes; offset += page, ++page_id) {

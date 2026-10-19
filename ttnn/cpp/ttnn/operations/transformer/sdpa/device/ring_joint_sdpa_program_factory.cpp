@@ -23,10 +23,12 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <cmath>
 #include <string>
+#include <string_view>
 #include <deque>
 #include <limits>
 
@@ -1923,6 +1925,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // Local slab first (so it computes while the halo is in flight) only for a multi-hop halo, where the exchange
     // is long enough to hide; a one-hop halo keeps the oldest-first accumulation order.
     defines["SLIDING_LOCAL_FIRST"] = sliding_halo_hops > 1 ? "1" : "0";
+    // Perf experiment: RING_SDPA_COMPUTE_ONLY=1 skips every DRAM/NoC/fabric transfer in the reader, writer
+    // and fused all-gather (CB handshakes kept), leaving compute-only kernel time. Results are garbage.
+    // Shared by the legacy and recipe variants (the recipe factory appends its defines to this map).
+    if (const char* compute_only = std::getenv("RING_SDPA_COMPUTE_ONLY");
+        compute_only != nullptr && std::string_view(compute_only) == "1") {
+        defines["RING_SDPA_COMPUTE_ONLY"] = "1";
+    }
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.

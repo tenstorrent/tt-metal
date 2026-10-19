@@ -59,7 +59,7 @@ static __attribute__((noinline, noclone)) void issue_stats_column_reads(
     uint32_t tile_id = stats_tile_logical.id_of(nb, nq, row_start, 0);
     const uint32_t row_stride = stats_tile_logical.stride2();
     uint32_t addr = cb.get_write_ptr();
-    for (uint32_t r = 0; r < num_rows; ++r) {
+    for (uint32_t r = 0; !sdpa_compute_only && r < num_rows; ++r) {
         noc.async_read(stats_writer, CoreLocalMem<uint32_t>(addr), stats_tile_bytes, {.page_id = tile_id}, {});
         tile_id += row_stride;
         addr += stats_tile_bytes;
@@ -82,7 +82,7 @@ static __attribute__((noinline, noclone)) void issue_stats_column_writes(
     uint32_t tile_id = stats_tile_logical.id_of(nb, nq, row_start, 0);
     const uint32_t row_stride = stats_tile_logical.stride2();
     uint32_t addr = cb.get_read_ptr();
-    for (uint32_t r = 0; r < num_rows; ++r) {
+    for (uint32_t r = 0; !sdpa_compute_only && r < num_rows; ++r) {
         noc.async_write<NocOptions::TXN_ID>(
             CoreLocalMem<uint32_t>(addr), stats_writer, stats_tile_bytes, {}, {.page_id = tile_id}, {.trid = trid});
         tile_id += row_stride;
@@ -121,18 +121,20 @@ void issue_restore_reads(
     CircularBuffer cb_prev(cb_prev_out);
     cb_prev.reserve_back(out_num_tiles);
     uint32_t out_barrier_count = 0;
-    issue_block_reads(
-        cat_out_generator.reader,
-        cat_out_generator.tensor_shape.id_of(out_slice.d0, out_slice.d1, out_slice.d2_start, out_slice.d3_start),
-        cat_out_generator.tensor_shape.stride2(),
-        out_rows,
-        out_cols,
-        /*dst_row_origin=*/0,
-        cb_prev.get_write_ptr(),
-        /*outer_stride=*/out_cols * tile_bytes,
-        /*inner_stride=*/tile_bytes,
-        /*barrier_threshold=*/0,
-        out_barrier_count);
+    if constexpr (!sdpa_compute_only) {
+        issue_block_reads(
+            cat_out_generator.reader,
+            cat_out_generator.tensor_shape.id_of(out_slice.d0, out_slice.d1, out_slice.d2_start, out_slice.d3_start),
+            cat_out_generator.tensor_shape.stride2(),
+            out_rows,
+            out_cols,
+            /*dst_row_origin=*/0,
+            cb_prev.get_write_ptr(),
+            /*outer_stride=*/out_cols * tile_bytes,
+            /*inner_stride=*/tile_bytes,
+            /*barrier_threshold=*/0,
+            out_barrier_count);
+    }
 
     // Stats drains: single-column linear reads. Hoist id_of once per drain; advance by
     // strides[2] per row. All tiles assumed valid (no bounds clamp needed).
