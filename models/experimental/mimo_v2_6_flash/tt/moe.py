@@ -10,10 +10,9 @@ median 8th-vs-9th gap of ~1.6e-3, so a bf16 top-k flips experts: ``moe_grouped_t
 fp32 logits matched the reference top-8 set on only 80% of real layer-5 tokens, this path on 100%.
 
 Experts are TP-sharded on the intermediate dim: each chip holds every expert's 256-wide slice of
-``moe_intermediate_size`` (2048). Tokens are grouped 32 per tile row; ``sparse_matmul`` computes
-an expert for a group only if some token in the group routes to it (the union mask). Rows of
-tokens that did not pick that expert get routing weight 0. The weighted sum over experts is a
-partial sum per chip and is all-reduced across the row.
+``moe_intermediate_size`` (2048). Prefill computes the experts of T tokens in moe_prefill.py; decode
+streams the selected experts (moe_stream.py). The weighted sum over experts is a partial sum per
+chip and is all-reduced across the row.
 """
 
 import torch
@@ -30,12 +29,11 @@ from .moe_stream import (
     fabric_transport_noc,
     is_dram_interleaved,
 )
+from .moe_prefill import PrefillExperts
 from .proj_stream import RouterScoreStream
 
 
 class TtMiMoMoE:
-    PREFILL_TOKENS_PER_CALL = 128  # bounds the [groups, 256, 32, hidden] expert-output buffer
-
     def __init__(self, plan, cfg, layer_idx, router=None, experts=None, cache_dir=None, expert_dtype=ttnn.bfloat8_b):
         self.plan = plan
         self.cfg = cfg
@@ -102,6 +100,7 @@ class TtMiMoMoE:
         self.fabric_gather = False  # set by the model: the block reductions all-gather over the fabric
         self.down_stream = None
         self.ids_buf = None
+        self.prefill_experts = PrefillExperts(self)  # forward (prefill): the experts of T tokens
 
     def _zeros(self, num_tokens):
         """Cached [1, 1, T, E] zeros. ``ttnn.zeros`` writes from the host, which a trace capture cannot do,
@@ -397,74 +396,17 @@ class TtMiMoMoE:
         out.deallocate(True)
         return y
 
-    def _experts(self, x, dense):
-        """x [1, 1, T, hidden], dense [1, 1, T, E] with T a multiple of 32 -> partial [1, 1, T, hidden]."""
-        num_tokens = x.shape[-2]
-        groups = num_tokens // TILE
-        E, H, I = self.num_experts, self.hidden, self.inter_local
-
-        union = ttnn.max(ttnn.reshape(dense, (1, groups, TILE, E)), dim=2, keepdim=True)  # [1, G, 1, E]
-        sparsity = ttnn.to_layout(union, ttnn.ROW_MAJOR_LAYOUT)
-        union.deallocate(True)
-
-        x4 = ttnn.reshape(x, (1, groups, TILE, H))
-        out_tile = ttnn.Tile([TILE, TILE])
-        mm_kwargs = dict(
-            sparsity=sparsity,
-            nnz=None,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_tile=out_tile,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=self.expert_config,
-        )
-        gate_up = ttnn.sparse_matmul(x4, self.w_gate_up, program_config=self.gate_up_program, **mm_kwargs)
-        act = self._swiglu(ttnn.reshape(gate_up, (groups, E, TILE, 2 * I)))
-
-        down_sparsity = ttnn.reshape(sparsity, (1, 1, groups, E))
-        down = ttnn.sparse_matmul(
-            act,
-            self.w_down,
-            sparsity=down_sparsity,
-            nnz=None,
-            is_input_a_sparse=True,
-            is_input_b_sparse=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_tile=out_tile,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=self.expert_config,
-            program_config=self.down_program,
-        )  # [G, E, 32, H]
-        act.deallocate(True)
-        sparsity.deallocate(True)
-
-        rw = ttnn.transpose(ttnn.reshape(dense, (groups, TILE, E)), -2, -1)  # [G, E, 32]
-        rw = ttnn.reshape(rw, (groups, E, TILE, 1))
-        weighted = ttnn.mul(down, rw, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        down.deallocate(True)
-        rw.deallocate(True)
-        out = ttnn.sum(weighted, dim=1, keepdim=True)  # [G, 1, 32, H]
-        weighted.deallocate(True)
-        return ttnn.reshape(out, (1, 1, num_tokens, H))
-
     def forward(self, x, token_mask=None):
         """x [1, 1, T, hidden] replicated across the row -> [1, 1, T, hidden] replicated."""
-        num_tokens = x.shape[-2]
-        assert num_tokens % TILE == 0, "pad tokens to a multiple of 32"
-        dense = self.route(x, token_mask)
-        step = self.PREFILL_TOKENS_PER_CALL
-        if num_tokens <= step:
-            out = self._experts(x, dense)
-        else:
-            parts = []
-            for s in range(0, num_tokens, step):
-                e = min(s + step, num_tokens)
-                xs = ttnn.slice(x, (0, 0, s, 0), (1, 1, e, self.hidden))
-                ds = ttnn.slice(dense, (0, 0, s, 0), (1, 1, e, self.num_experts))
-                parts.append(self._experts(xs, ds))
-                xs.deallocate(True)
-                ds.deallocate(True)
-            out = ttnn.concat(parts, dim=2)
-            for p in parts:
-                p.deallocate(True)
-        dense.deallocate(True)
+        assert x.shape[-2] % TILE == 0, "pad tokens to a multiple of 32"
+        logits = self._router_logits(x)
+        indices, weights = self._topk(logits)
+        logits.deallocate(True)
+        if token_mask is not None:
+            masked = ttnn.mul(weights, ttnn.typecast(token_mask, weights.dtype))
+            weights.deallocate(True)
+            weights = masked
+        out = self.prefill_experts(x, indices, weights)
+        indices.deallocate(True)
+        weights.deallocate(True)
         return self.plan.all_reduce(out)
