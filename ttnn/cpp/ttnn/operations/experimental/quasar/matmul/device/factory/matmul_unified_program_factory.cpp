@@ -74,7 +74,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     const tt::DataFormat bias_format = bias_tensor.has_value()
                                            ? tt::tt_metal::datatype_to_dataformat_converter(bias_tensor->dtype())
                                            : tt::DataFormat{};
-    const UnifiedMatmulPlan plan = plan_unified_matmul(
+    const MatmulUnifiedPlan plan = plan_unified_matmul(
                                        A_tensor,
                                        B_tensor,
                                        bias_tensor.has_value() ? tt::tile_size(bias_format) : 0,
