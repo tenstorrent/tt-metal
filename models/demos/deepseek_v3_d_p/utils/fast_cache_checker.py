@@ -93,6 +93,19 @@ class FastCacheChecker:
         self.clear()
 
 
+def mesh_cache_key(mesh_shape: tuple, sp_axis: int = 0) -> str:
+    """Weight-cache directory key for a mesh: ``"{rows}x{cols}"``, plus ``"_sp1"`` when SP is on axis 1.
+
+    Tensorbin names carry only dtype and layout, and each file bakes in its per-device placement. The
+    SP-axis choice changes that placement without changing the mesh shape (a square 4x4 looks the
+    same either way), so it has to be part of the key. SP on axis 0 keeps the bare ``rows x cols``
+    key so existing caches stay valid.
+    """
+    assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
+    rows, cols = tuple(mesh_shape)
+    return f"{rows}x{cols}" + ("_sp1" if sp_axis == 1 else "")
+
+
 # Module-level singleton for backward compatibility with existing component code
 _checker: FastCacheChecker | None = None
 

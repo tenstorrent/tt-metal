@@ -43,13 +43,13 @@ class TtDistributedRmsNorm(LightweightModule):
     Architecture:
         Input: x [batch, seq_len, emb_dim / num_devices]
         1. Pre-all-gather: Each device computes local sum(x^2) statistics
-        2. All-gather: Gather statistics across cluster_axis (mesh columns)
+        2. All-gather: Gather statistics across cluster_axis (the TP axis)
         3. Post-all-gather: Normalize using gathered global statistics
 
     Weight Sharding:
-        - Weight gamma: Shard on dimension 2 across mesh columns
+        - Weight gamma: Shard on dimension 2 across cluster_axis
           Shape: [1, 1, emb_dim // 32, 32] (reshaped for optimal performance)
-          mesh_mapper dims=(None, 2)
+          mesh_mapper dims=(None, 2) for cluster_axis=1, (2, None) for cluster_axis=0
     """
 
     @staticmethod
@@ -70,6 +70,7 @@ class TtDistributedRmsNorm(LightweightModule):
         cache_path: Path | None,
         cache_name_prefix: str | None,
         device: ttnn.MeshDevice | None = None,
+        cluster_axis: int = 1,
     ):
         """
         Shared logic for converting norm weight to ttnn with caching.
@@ -81,6 +82,7 @@ class TtDistributedRmsNorm(LightweightModule):
             cache_path: Cache directory path
             cache_name_prefix: Prefix for cache file name
             device: None for cache-only (no device copy), mesh_device for cache+load
+            cluster_axis: Mesh axis the embedding dim is sharded over (the norm's gather axis)
 
         Returns:
             ttnn.Tensor if device is not None, else None
@@ -91,11 +93,11 @@ class TtDistributedRmsNorm(LightweightModule):
         else:
             torch_weight_reshaped = torch.empty(1, 1, emb_dim // 32, 32)
 
-        # Create mesh mapper: replicate across rows, shard dim 2 across cols
+        # Create mesh mapper: shard dim 2 across cluster_axis, replicate across the other axis
         mesh_mapper = ttnn.ShardTensor2dMesh(
             mesh_device,
             mesh_shape=mesh_device.shape,
-            dims=(None, 2),
+            dims=(None, 2) if cluster_axis == 1 else (2, None),
         )
 
         cache_file_name = str(cache_path / f"{cache_name_prefix}_weight") if cache_path and cache_name_prefix else None
@@ -125,6 +127,7 @@ class TtDistributedRmsNorm(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         cache_path: Path,
         cache_name_prefix: str,
+        cluster_axis: int = 1,
     ):
         """
         Build TTNN cache for norm weight without device copy.
@@ -135,9 +138,10 @@ class TtDistributedRmsNorm(LightweightModule):
             mesh_device: Mesh device reference (for mesh_mapper)
             cache_path: Cache directory path
             cache_name_prefix: Prefix for cache file name
+            cluster_axis: Mesh axis the embedding dim is sharded over; must match the norm's cluster_axis
         """
         TtDistributedRmsNorm._convert_and_cache_weight(
-            torch_weight, emb_dim, mesh_device, cache_path, cache_name_prefix, device=None
+            torch_weight, emb_dim, mesh_device, cache_path, cache_name_prefix, device=None, cluster_axis=cluster_axis
         )
 
     def __init__(
@@ -216,6 +220,7 @@ class TtDistributedRmsNorm(LightweightModule):
                 self.weight_cache_path,
                 self.cache_name_prefix,
                 device=self.mesh_device,
+                cluster_axis=self.cluster_axis,
             )
         else:
             logger.debug("Creating random sharded weight")
@@ -265,6 +270,7 @@ class TtDistributedRmsNorm(LightweightModule):
             self.weight_cache_path,
             self.cache_name_prefix,
             device=self.mesh_device,  # Cache + load to device
+            cluster_axis=self.cluster_axis,
         )
 
         logger.debug(f"Created sharded weight: {tt_weight.shape}")
