@@ -189,8 +189,21 @@ class TtPrefillTransformer(LightweightModule):
         lm_head_is_column_parallel: bool = True,
         mtp_predictor=None,
         use_fused_rmsnorm: Optional[bool] = None,
+        attn_only_last_layer: bool = False,
+        ffn_prefix_layer: bool = False,
     ):
         super().__init__()
+        # Half-layer pipeline split (see TtPrefillBlock attn_only / ffn_only): this rank's last layer stops
+        # after attention, and/or it first runs the FFN of the layer before first_layer_idx, whose attention
+        # (and KV) the upstream rank owns. KV slots, acks and the indexer chain follow attention, so they
+        # are exactly those of the whole-layer split at the same boundary.
+        assert not (attn_only_last_layer and (is_last_rank or kv_only_last_layer)), (
+            "the last rank has no downstream stage to run its last layer's FFN"
+        )
+        assert not (ffn_prefix_layer and (is_first_rank or first_layer_idx == 0)), (
+            "the first rank has no upstream stage that ran the prefix layer's attention"
+        )
+        self.attn_only_last_layer = attn_only_last_layer
         self.mesh_device = mesh_device
         self.seq_len = seq_len
         self.padding_side = padding_side
@@ -255,13 +268,21 @@ class TtPrefillTransformer(LightweightModule):
         # and mesh/config geometry, all layer-invariant (see ttMLA._llama4_scale). Per-layer dicts held
         # 36 byte-identical copies of each offset's tensor.
         self._llama4_scale_cache: dict = {}
-        for local_idx in range(num_layers):
-            layer_idx = first_layer_idx + local_idx
+        self.ffn_prefix_block = None
+        block_indices = ([first_layer_idx - 1] if ffn_prefix_layer else []) + list(
+            range(first_layer_idx, first_layer_idx + num_layers)
+        )
+        for layer_idx in block_indices:
+            local_idx = layer_idx - first_layer_idx
+            is_prefix = local_idx < 0
             is_last = local_idx == num_layers - 1
-            logger.info(f"Building layer {local_idx}/{num_layers} (global idx {layer_idx})...")
+            logger.info(
+                f"Building layer {local_idx}/{num_layers} (global idx {layer_idx})"
+                f"{' FFN only' if is_prefix else ''}{' attention only' if is_last and attn_only_last_layer else ''}..."
+            )
             # Get layer weights or empty dict if loading from cache. state_dict, when
             # provided, holds this instance's slice (local indexing).
-            layer_state = state_dict["layers"][local_idx] if state_dict.get("layers") else {}
+            layer_state = state_dict["layers"][local_idx] if (state_dict.get("layers") and not is_prefix) else {}
             layer = TtPrefillBlock(
                 mesh_device=mesh_device,
                 config=config,
@@ -292,8 +313,13 @@ class TtPrefillTransformer(LightweightModule):
                 first_layer_idx=first_layer_idx,
                 llama4_scale_cache=self._llama4_scale_cache,
                 use_fused_rmsnorm=use_fused_rmsnorm,
+                attn_only=attn_only_last_layer and is_last,
+                ffn_only=is_prefix,
             )
-            self.layers.append(layer)
+            if is_prefix:
+                self.ffn_prefix_block = layer
+            else:
+                self.layers.append(layer)
 
         build_tail = mtp_predictor is not None and is_last_rank and not kv_only_last_layer
         self.norm = (
@@ -431,7 +457,7 @@ class TtPrefillTransformer(LightweightModule):
 
     def _trace_blocks(self) -> list:
         """Every block a captured forward runs, the shared MTP block included."""
-        blocks = list(self.layers)
+        blocks = ([self.ffn_prefix_block] if self.ffn_prefix_block is not None else []) + list(self.layers)
         if self.mtp_predictor is not None:
             blocks.append(self.mtp_predictor.module.layer)
         return blocks
@@ -597,6 +623,19 @@ class TtPrefillTransformer(LightweightModule):
             )
         indexer_indices = seed_indexer_indices if reuse else None
         self.last_indexer_indices = None
+        if self.ffn_prefix_block is not None:
+            # FFN of the layer before this rank's first: h is that layer's post-attention residual.
+            h = self.ffn_prefix_block(
+                h,
+                rope_tensors,
+                kvpe_cache,
+                return_intermediates=return_intermediates,
+                actual_isl=actual_isl,
+                padding_side=self.padding_side,
+                cache_user_id=cache_user_id,
+                actual_start=actual_start,
+                metadata=metadata,
+            )[0]
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
             mode = self.indexer_types[self.first_layer_idx + i] if reuse else "full"

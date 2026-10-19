@@ -86,6 +86,10 @@ class PrefillRunParams:
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
     mtp_levels: int = 0
+    # Half-layer pipeline split: this rank's last layer runs attention only, and/or this rank first runs
+    # the FFN of the layer before first_layer_idx (the upstream rank ran its attention).
+    attn_only_last_layer: bool = False
+    ffn_prefix_layer: bool = False
 
     @property
     def sp_factor(self) -> int:

@@ -144,6 +144,8 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
             kv_only_last_layer=params.kv_only_last_layer,
+            attn_only_last_layer=params.attn_only_last_layer,
+            ffn_prefix_layer=params.ffn_prefix_layer,
             dflash_enabled=params.dflash_enabled,
             dflash_checkpoint_path=params.dflash_checkpoint_path,
             mtp_levels=params.mtp_levels,

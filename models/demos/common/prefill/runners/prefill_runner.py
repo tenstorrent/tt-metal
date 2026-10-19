@@ -29,6 +29,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
     compute_layer_split,
+    ffn_handoff_flags,
 )
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_rows as d2d_rows_for
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
@@ -1176,9 +1177,13 @@ def main() -> None:
     first_layer_idx, num_my_layers = layer_split[rank]
     is_first_rank = rank == 0
     is_last_rank = rank == num_ranks - 1
+    ffn_handoff = ffn_handoff_flags(num_ranks)
+    attn_only_last_layer = not is_last_rank and ffn_handoff[rank]
+    ffn_prefix_layer = not is_first_rank and ffn_handoff[rank - 1]
     logger.info(
         f"[pp rank {rank}/{num_ranks}] mesh={GLOBAL_MESH_SHAPE} layers=[{first_layer_idx}, "
         f"{first_layer_idx + num_my_layers}) is_first={is_first_rank} is_last={is_last_rank} "
+        f"attn_only_last={attn_only_last_layer} ffn_prefix={ffn_prefix_layer} "
         f"chunk_size={CHUNK_SIZE} max_seq_len={MAX_SEQ_LEN} num_users={NUM_USERS}"
     )
 
@@ -1206,6 +1211,8 @@ def main() -> None:
         gate_mode_name=_gate_mode_name,
         # is_last_rank, not True: TtPrefillTransformer asserts kv_only_last_layer -> is_last_rank, since a
         kv_only_last_layer=is_last_rank and not MTP_LEVELS,
+        attn_only_last_layer=attn_only_last_layer,
+        ffn_prefix_layer=ffn_prefix_layer,
         dflash_enabled=DFLASH_ENABLED,
         dflash_checkpoint_path=DFLASH_MODEL,
         mtp_levels=MTP_LEVELS,

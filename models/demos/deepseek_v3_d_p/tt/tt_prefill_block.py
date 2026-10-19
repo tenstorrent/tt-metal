@@ -277,8 +277,17 @@ class TtPrefillBlock(LightweightModule):
         first_layer_idx: Optional[int] = None,
         llama4_scale_cache: Optional[dict] = None,
         use_fused_rmsnorm: Optional[bool] = None,
+        attn_only: bool = False,
+        ffn_only: bool = False,
     ):
         super().__init__()
+        assert not (attn_only and ffn_only), "a block runs attention, FFN, or both"
+        assert not (kv_only and (attn_only or ffn_only)), "kv_only already drops the FFN"
+        # Half-layer pipeline split: a stage boundary between this layer's attention and its FFN. The
+        # upstream rank runs the block attn_only (attention + residual, KV written and acked there) and
+        # hands the post-attention residual on; the downstream rank runs the same layer ffn_only first.
+        self.attn_only = attn_only
+        self.ffn_only = ffn_only
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
         # Overlap the shared expert with dispatch via a sub-device manager (default). Must be False
         # for ttnn trace capture: load/clear_sub_device_manager resets worker state inside forward,
@@ -638,6 +647,16 @@ class TtPrefillBlock(LightweightModule):
             ttnn.synchronize_device(self.mesh_device)
             _t_start = time.perf_counter()
 
+        if self.ffn_only:
+            # The upstream rank ran this layer's attention (and wrote/acked its KV); x is its residual.
+            x = self._ffn_and_residual(
+                x, return_intermediates=return_intermediates, actual_isl=actual_isl, padding_side=padding_side,
+                actual_start=actual_start, metadata=metadata, cache_user_id=cache_user_id,
+            )
+            if return_indexer_indices:
+                return x, None, None
+            return x, None
+
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
         seq_len_local = attn_norm_out.shape[2]
@@ -699,6 +718,12 @@ class TtPrefillBlock(LightweightModule):
 
         x = ttnn.add(x, mla_out)
         ttnn.deallocate(mla_out)
+        if self.attn_only:
+            # The downstream rank runs this layer's FFN on the post-attention residual.
+            kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
+            if return_indexer_indices:
+                return x, kv_cache, mla_indices
+            return x, kv_cache
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
             _t_mla = time.perf_counter()
@@ -750,6 +775,26 @@ class TtPrefillBlock(LightweightModule):
         if return_indexer_indices:
             return x, kv_cache, mla_indices
         return x, kv_cache
+
+    def _ffn_and_residual(self, x, *, return_intermediates, actual_isl, padding_side, actual_start, metadata, cache_user_id):
+        """ffn_norm -> (MoE | dense FFN) -> residual add: the second half of forward()."""
+        ffn_norm_out = self.ffn_norm(x)
+        if self.is_moe:
+            ffn_out = self._moe_path(
+                ffn_norm_out,
+                return_intermediates=return_intermediates,
+                actual_isl=actual_isl,
+                padding_side=padding_side,
+                actual_start=actual_start,
+                metadata=metadata,
+                cache_user_id=cache_user_id,
+            )
+        else:
+            ffn_out = self._dense_ffn_path(ffn_norm_out)
+        ttnn.deallocate(ffn_norm_out)
+        out = ttnn.add(x, ffn_out)
+        ttnn.deallocate(ffn_out)
+        return out
 
     def _moe_path(
         self,
