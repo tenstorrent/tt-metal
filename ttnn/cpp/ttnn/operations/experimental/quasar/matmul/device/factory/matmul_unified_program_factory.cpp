@@ -155,7 +155,11 @@ UnifiedMatmulPlan size_dfbs(
     plan.C_partials_entries = (partials_ever_written || plan.alias_C_partials_onto_C_slice)
                                   ? plan.C_entries_per_thread * plan.num_compute_threads
                                   : plan.num_compute_threads;
-    plan.bias_entries = plan.has_bias ? plan.C_slice_N_padded_tiles * plan.num_reader_threads : 0;
+    // One C slice's bias per reader thread, and at least two when the core has several, so a single reader reads the
+    // next C slice's bias (and the A and B slices behind it) while compute uses this one.
+    const uint32_t bias_buffer_depth =
+        std::max(plan.num_reader_threads, one_C_slice_per_core ? 1u : MIN_OPERAND_BUFFER_DEPTH);
+    plan.bias_entries = plan.has_bias ? plan.C_slice_N_padded_tiles * bias_buffer_depth : 0;
 
     // Borrowed DFBs are the tensors' own memory and cost nothing here.
     plan.l1_bytes =
