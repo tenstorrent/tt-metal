@@ -126,17 +126,28 @@ FORCE_INLINE void write_summary(
     const uint32_t b_column = (PackedHead ? Kt : 0) + value_block * Vt;
 
     if constexpr (EmitOutputs) {
-        // Each chunk's base and sensitivity rows as compute publishes them; the split head's rows follow the chunk
-        // before the restart, as compute publishes them there.
-        const auto base_accessor = TensorAccessor(tensor::base);
-        const auto sensitivity_accessor = TensorAccessor(tensor::sensitivity);
-        DataflowBuffer chunk_base(dfb::chunk_base);
-        DataflowBuffer chunk_sensitivity(dfb::chunk_sensitivity);
+        // Each chunk's [F(0) | F(I)] row pair as compute publishes it; the split head's rows follow the chunk before
+        // the restart, as compute publishes them there.
+        static_assert(Ct == 1, "one tile row per chunk");
+        const auto zero_accessor = TensorAccessor(tensor::base);
+        const auto identity_accessor = TensorAccessor(tensor::sensitivity);
+        DataflowBuffer chunk_pair(dfb::chunk_base);
+        const uint32_t entry_size = chunk_pair.get_entry_size();
         for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
-            const uint32_t chunk_row = (head * num_chunks + chunk) * Ct * VtFull;
-            write_value_slice<Ct, Vt, VtFull, Ct>(base_accessor, chunk_base, noc, chunk_row, value_block * Vt);
-            write_value_slice<Ct, Vt, VtFull, Ct>(
-                sensitivity_accessor, chunk_sensitivity, noc, chunk_row, value_block * Vt);
+            const uint32_t page = (head * num_chunks + chunk) * VtFull + value_block * Vt;
+            chunk_pair.wait_front(2 * Vt);
+            for (uint32_t t = 0; t < Vt; ++t) {
+                noc.async_write(
+                    chunk_pair, zero_accessor, entry_size, {.offset_bytes = t * entry_size}, {.page_id = page + t});
+                noc.async_write(
+                    chunk_pair,
+                    identity_accessor,
+                    entry_size,
+                    {.offset_bytes = (Vt + t) * entry_size},
+                    {.page_id = page + t});
+            }
+            noc.async_write_barrier();
+            chunk_pair.pop_front(2 * Vt);
             if (straddles && reset_chunk != 0 && chunk + 1 == reset_chunk) {
                 write_value_slice<Kt, Vt, row_stride, 1>(head_a_accessor, split_head_a, noc, row_base, a_column);
                 write_value_slice<Kt, Vt, row_stride, 1>(head_b_accessor, split_head_b, noc, row_base, b_column);

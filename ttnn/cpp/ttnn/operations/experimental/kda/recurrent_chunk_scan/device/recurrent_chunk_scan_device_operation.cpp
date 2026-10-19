@@ -151,7 +151,7 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
         if (attrs.emit_outputs) {
             const auto fp32_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
             const auto emit_layout = TensorLayout(
-                output_dtype, PageConfig(Layout::TILE), attrs.emit_mem_config.value_or(attrs.output_mem_config));
+                DataType::FLOAT32, PageConfig(Layout::TILE), attrs.emit_mem_config.value_or(attrs.output_mem_config));
             specs.push_back(TensorSpec(
                 Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim}),
                 emit_layout));

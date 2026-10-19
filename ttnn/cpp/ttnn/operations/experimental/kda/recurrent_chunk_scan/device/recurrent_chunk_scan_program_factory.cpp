@@ -144,7 +144,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         make_dfb(value_new_dfb_name, paths * cv, fp32),
         make_dfb(final_decay_dfb_name, 2 * Kt, input_format(in.final_decay)),
         make_dfb(output_dfb_name, summary ? kv : 2 * cv, output_format),
-        make_dfb(output_intermediate_dfb_name, reads_queries ? paths * cv : 1, fp32),
+        make_dfb(output_intermediate_dfb_name, summary ? 1 : cv, fp32),
         // The recurrence's q_decay @ state, computed early so its latency hides behind the dependent stages.
         make_dfb(query_projection_dfb_name, reads_queries ? paths * cv : 1, fp32),
         make_dfb(k_decay_transposed_dfb_name, 2 * kc, input_format(in.k_dec_t)),
@@ -163,7 +163,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         // The packed head writer's identity tile for ranks without a head.
         make_dfb(identity_scratch_dfb_name, 1, output_format),
         // The emitted output terms: a chunk's base and sensitivity rows, and the last segment's FP32 transform.
-        make_dfb(chunk_base_dfb_name, emit ? 2 * cv : 1, output_format),
+        make_dfb(chunk_base_dfb_name, emit ? 2 * paths * cv : 1, fp32),
         make_dfb(chunk_sensitivity_dfb_name, emit ? 2 * cv : 1, output_format),
         make_dfb(final_a_dfb_name, emit ? kv : 1, fp32),
         make_dfb(final_b_dfb_name, emit ? kv : 1, fp32),

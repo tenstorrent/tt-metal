@@ -256,9 +256,9 @@ FORCE_INLINE void multiply_by_decay(
 
 // The zero-seeded B and identity-seeded A + B recurrences advance together as one [Kt, 2 * Vt] state, so every
 // operation covers both; each tile's arithmetic is the same as advancing them apart.
-// With EmitOutputs each chunk's output is evaluated on both paths too, q_decay S + intra v_new, and published as
-// F(0) (base) and F(I) - F(0) (the sensitivity to the segment's entry state); the last segment's A and B also leave
-// in FP32.
+// With EmitOutputs each chunk's output is evaluated on both paths too, q_decay S + intra v_new, and published in
+// FP32 as F(0) (base) and F(I) (whose difference with F(0) is the sensitivity to the segment's entry state); the last
+// segment's A and B also leave in FP32.
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool EmitOutputs>
 FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     DataflowBuffer state(dfb::state);
@@ -280,9 +280,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     DataflowBuffer q_decay(dfb::q_decay);
     DataflowBuffer intra(dfb::intra);
     DataflowBuffer query_projection(dfb::query_projection);
-    DataflowBuffer output_intermediate(dfb::output_intermediate);
     DataflowBuffer chunk_base(dfb::chunk_base);
-    DataflowBuffer chunk_sensitivity(dfb::chunk_sensitivity);
 
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
@@ -322,8 +320,9 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         if constexpr (EmitOutputs) {
             intra.wait_front(chunk_chunk_tiles);
             query_projection.wait_front(chunk_pair_tiles);
+            // q_decay S + intra v_new on both paths, [F(0) | F(I)], straight to the writer in FP32.
             matrix_multiply_then<EltwiseBinaryType::ELWADD, Ct, Ct, pair_columns, chunk_pair_tiles>(
-                intra, scratch, query_projection, output_intermediate);  // q_decay S + intra v_new
+                intra, scratch, query_projection, chunk_base);
             query_projection.pop_front(chunk_pair_tiles);
             intra.pop_front(chunk_chunk_tiles);
             q_decay.pop_front(chunk_key_tiles);
@@ -331,15 +330,6 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         state_temporary.pop_front(key_pair_tiles);
         scratch.pop_front(Ct * pair_columns);
         current.pop_front(key_pair_tiles);
-        if constexpr (EmitOutputs) {
-            // Issued after the next state, so the next chunk's first stage never waits on it.
-            output_intermediate.wait_front(chunk_pair_tiles);
-            pack_reconfig_data_format(chunk_base.get_id());
-            extract_paths<false, Ct, Vt, Ct>(output_intermediate, chunk_base);
-            extract_paths<true, Ct, Vt, Ct>(output_intermediate, chunk_sensitivity);
-            output_intermediate.pop_front(chunk_pair_tiles);
-            pack_reconfig_data_format(dfb::state_ring);
-        }
         if (split_chunk != 0 && chunk + 1 == split_chunk) {
             state_ring.wait_front(key_pair_tiles);
             pack_reconfig_data_format(summary_head_output.get_id());

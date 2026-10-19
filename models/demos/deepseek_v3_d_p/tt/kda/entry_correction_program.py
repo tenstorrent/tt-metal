@@ -4,16 +4,18 @@
 """The chunk outputs and the rank's final state from the summary's emitted terms, once the SP prefix is known.
 
 The recurrence is affine in its seed, so the summary (summarize_chunk_recurrence with emit_outputs) leaves, per chunk,
-its output for a zero seed (base) and its sensitivity to the segment's entry state (M), and the last segment's FP32
-transform (A, B). With the entry states from the SP prefix every chunk is independent:
+its output for a zero seed F(0) and for an identity seed F(I), and the last segment's FP32 transform (A, B). With the
+entry states from the SP prefix every chunk is independent:
 
-    output_c = base_c + M_c @ entry          final = A @ entry + B
+    output_c = F0_c + (FI_c - F0_c) @ entry          final = A @ entry + B
 
 where entry is the group's entry state before the chronological reset chunk and the tail's entry state from it on (the
 seeds recurrent_chunk_scan restarts from). This replaces the second sequential pass over the chunks.
 
-Each head's chunks are spread over `cores_per_head` cores; the head's first core also forms the final state. The
-products accumulate in the FP32 DST on top of the copied base (or B), at the scan's fidelity.
+Each head's chunks are spread over `cores_per_head` cores, which also form one tile row of the final state each. The
+emitted terms are sharded so each core's chunk rows are in its own L1; the head's first core reads the entry states
+and writes them to the head's other cores. The products accumulate in the FP32 DST on top of the copied F(0) (or B),
+at the scan's fidelity.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ import ttnn
 
 _CHRONOLOGY = '#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"\n'
 
-_CB_SEED, _CB_TAIL, _CB_M, _CB_BASE, _CB_OUT, _CB_A, _CB_B, _CB_FINAL, _CB_CTL, _CB_CTL_WRITER = range(10)
+_CB_SEED, _CB_TAIL, _CB_M, _CB_BASE, _CB_OUT, _CB_A, _CB_B, _CB_FINAL, _CB_CTL, _CB_CTL_WRITER, _CB_DIFF = range(11)
 
 _READER = (
     _CHRONOLOGY
@@ -207,6 +209,7 @@ _COMPUTE = r"""
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/cb_api.h"
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
@@ -222,6 +225,7 @@ void kernel_main() {
     constexpr uint32_t cb_final = get_compile_time_arg_val(7);
     constexpr uint32_t cb_ctl = get_compile_time_arg_val(8);
     constexpr uint32_t kt = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_diff = get_compile_time_arg_val(10);
     constexpr uint32_t state_tiles = kt * kt;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_m, cb_seed, cb_out);
@@ -240,10 +244,30 @@ void kernel_main() {
     if (need_tail) {
         cb_wait_front(cb_tail, state_tiles);
     }
-    // output_c = base_c + M_c @ seed: the base row is copied into DST and the K-sum accumulates on top of it.
+    // output_c = F0_c + (FI_c - F0_c) @ seed. The differences first, for all of this core's chunks; then per chunk
+    // F0's row is copied into DST and the K-sum accumulates on top of it.
     if (chunks != 0) {
         cb_wait_front(cb_m, chunks * kt);
         cb_wait_front(cb_base, chunks * kt);
+        cb_reserve_back(cb_diff, chunks * kt);
+        pack_reconfig_data_format(cb_diff);
+        reconfig_data_format(cb_m, cb_base);
+        sub_init(cb_m, cb_base);
+        for (uint32_t t = 0; t < chunks * kt; t += kt) {
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < kt; ++i) {
+                sub_tiles(cb_m, cb_base, t + i, t + i, i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < kt; ++i) {
+                pack_tile(i, cb_diff);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(cb_diff, chunks * kt);
+        cb_wait_front(cb_diff, chunks * kt);
+        pack_reconfig_data_format(cb_out);
     }
     for (uint32_t c = 0; c < chunks; ++c) {
         const uint32_t seed = c < group_chunks ? cb_seed : cb_tail;
@@ -254,10 +278,10 @@ void kernel_main() {
         for (uint32_t j = 0; j < kt; ++j) {
             copy_tile(cb_base, c * kt + j, j);
         }
-        reconfig_data_format<SrcOrder::Reverse>(cb_m, seed);
-        matmul_block_init(cb_m, seed, false, kt, 1, kt);
+        reconfig_data_format<SrcOrder::Reverse>(cb_diff, seed);
+        matmul_block_init(cb_diff, seed, false, kt, 1, kt);
         for (uint32_t k = 0; k < kt; ++k) {
-            matmul_block(cb_m, seed, c * kt + k, k * kt, 0, false, kt, 1, kt);
+            matmul_block(cb_diff, seed, c * kt + k, k * kt, 0, false, kt, 1, kt);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -270,6 +294,7 @@ void kernel_main() {
     if (chunks != 0) {
         cb_pop_front(cb_m, chunks * kt);
         cb_pop_front(cb_base, chunks * kt);
+        cb_pop_front(cb_diff, chunks * kt);
     }
     // This core's tile row j of final = A @ seed + B.
     if (final) {
@@ -407,11 +432,11 @@ class EntryCorrection:
         self.memory_config = ttnn.L1_MEMORY_CONFIG
         self.output_memory_config = ttnn.L1_MEMORY_CONFIG
 
-    def __call__(self, base, sensitivity, final_a, final_b, entry, tail_entry, actual_start, actual_end):
+    def __call__(self, zero_output, identity_output, final_a, final_b, entry, tail_entry, actual_start, actual_end):
         """Return (output [BH, NC, 32, V] BF16, final state [BH, K, V] FP32)."""
         mesh = self.mesh_device
         output = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(list(base.shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, self.output_memory_config
+            ttnn.Shape(list(zero_output.shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, self.output_memory_config
         )
         final = ttnn.allocate_tensor_on_device(
             ttnn.Shape(list(final_b.shape)), ttnn.float32, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
@@ -439,8 +464,8 @@ class EntryCorrection:
             first = part * per_core
             last = min(self.num_chunks, first + per_core)
             reader_args[core.x][core.y] = [
-                base.buffer_address(),
-                sensitivity.buffer_address(),
+                zero_output.buffer_address(),
+                identity_output.buffer_address(),
                 final_a.buffer_address(),
                 final_b.buffer_address(),
                 entry.buffer_address(),
@@ -466,15 +491,16 @@ class EntryCorrection:
                     cb(_CB_SEED, state_tiles, ttnn.float32, 4096),
                     cb(_CB_TAIL, state_tiles, ttnn.float32, 4096),
                     (
-                        ttnn.cb_descriptor_from_sharded_tensor(_CB_M, sensitivity)
+                        ttnn.cb_descriptor_from_sharded_tensor(_CB_M, identity_output)
                         if self.local_terms
-                        else cb(_CB_M, per_core * kt, ttnn.bfloat16, 2048)
+                        else cb(_CB_M, per_core * kt, ttnn.float32, 4096)
                     ),
                     (
-                        ttnn.cb_descriptor_from_sharded_tensor(_CB_BASE, base)
+                        ttnn.cb_descriptor_from_sharded_tensor(_CB_BASE, zero_output)
                         if self.local_terms
-                        else cb(_CB_BASE, per_core * kt, ttnn.bfloat16, 2048)
+                        else cb(_CB_BASE, per_core * kt, ttnn.float32, 4096)
                     ),
+                    cb(_CB_DIFF, per_core * kt, ttnn.float32, 4096),
                     cb(_CB_OUT, 2 * kt, ttnn.bfloat16, 2048),
                     cb(_CB_A, kt, ttnn.float32, 4096),
                     cb(_CB_B, kt, ttnn.float32, 4096),
@@ -499,7 +525,7 @@ class EntryCorrection:
                     _CB_CTL_WRITER,
                     0,
                 ]
-                for t in (base, sensitivity, final_a, final_b, entry, tail_entry, actual_start, end):
+                for t in (zero_output, identity_output, final_a, final_b, entry, tail_entry, actual_start, end):
                     reader_ct += list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
                 writer_ct = [_CB_OUT, _CB_FINAL, _CB_CTL_WRITER, self.num_chunks, kt]
                 for t in (output, final):
@@ -540,6 +566,7 @@ class EntryCorrection:
                             _CB_FINAL,
                             _CB_CTL,
                             kt,
+                            _CB_DIFF,
                         ],
                         runtime_args=ttnn.RuntimeArgs(),
                         config=self.compute_config,
@@ -547,7 +574,7 @@ class EntryCorrection:
                 ]
                 key = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))
                 desc[key] = program
-        io = [base, sensitivity, final_a, final_b, entry, tail_entry, actual_start]
+        io = [zero_output, identity_output, final_a, final_b, entry, tail_entry, actual_start]
         if actual_end is not None:
             io.append(actual_end)
         ttnn.generic_op(io + [output, final], desc)

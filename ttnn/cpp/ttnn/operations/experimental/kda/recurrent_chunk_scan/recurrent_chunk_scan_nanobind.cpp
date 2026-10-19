@@ -170,10 +170,10 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 identity ``(I, 0)``; the tail is not written.
                 Requires an interleaved ``memory_config``. Defaults to False.
             emit_outputs (bool, optional): With ``packed_head``, also return each chunk's
-                zero-seeded output ``base`` ``[B*H,N,32,V]`` and its sensitivity to the
-                segment's entry state ``M`` ``[B*H,N,32,K]`` (BFLOAT16), and the last
-                segment's ``A`` and ``B`` ``[B*H,K,V]`` in FLOAT32: a chunk's output is
-                ``base + M @ entry`` and the final state ``A @ entry + B``, where entry is
+                zero-seeded output ``F(0)`` ``[B*H,N,32,V]`` and identity-seeded output
+                ``F(I)`` ``[B*H,N,32,K]``, and the last segment's ``A`` and ``B``
+                ``[B*H,K,V]``, all FLOAT32: a chunk's output is
+                ``F(0) + (F(I) - F(0)) @ entry`` and the final state ``A @ entry + B``, where entry is
                 the group's entry state before the chronological reset chunk and the
                 tail's entry state from it on. Defaults to False.
 
