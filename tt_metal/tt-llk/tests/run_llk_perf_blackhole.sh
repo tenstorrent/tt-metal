@@ -6,16 +6,8 @@
 # tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
 #
 # Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_blackhole.sh <group> <n_groups>
-#
-# Optional, for a compile pass that runs on another (CPU-only) runner:
-#   LLK_PERF_PHASE=all|compile|run  all (default) compiles, then measures;
-#                                   compile only builds the ELFs; run only measures
-#                                   ELFs that are already in the build directory.
-#   LLK_PERF_COMPILE_WORKERS=N      producer workers (default 10).
-#   LLK_PERF_DEBUG_SYMBOLS=true|false  false builds without -g (default true).
-#   LLK_PERF_EXITFIRST=true|false   false runs the measuring pass without -x (default true).
-#   LLK_PERF_REPORT_TAG=-x          inserted into the JUnit file names, so a second
-#                                   measuring pass does not overwrite the first's reports.
+# Optional: LLK_PERF_PHASE=all|compile|run, LLK_PERF_COMPILE_WORKERS, LLK_PERF_DEBUG_SYMBOLS,
+# LLK_PERF_EXITFIRST, LLK_PERF_REPORT_TAG (JUnit name suffix). Defaults keep today's commands.
 set -euo pipefail
 
 GROUP="${1:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
@@ -46,8 +38,6 @@ case "$PHASE" in
 esac
 COMPILE_WORKERS="${LLK_PERF_COMPILE_WORKERS:-10}"
 
-# Both passes take the flag: the consumer does not compile, and the variant id
-# ignores compile flags, so the two must agree for the ELFs to be found.
 case "${LLK_PERF_DEBUG_SYMBOLS:-true}" in
   true) DEBUG_SYMBOL_ARGS=() ;;
   false) DEBUG_SYMBOL_ARGS=(--no-debug-symbols) ;;
@@ -87,7 +77,6 @@ fi
 pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 "${EXITFIRST_ARGS[@]}" -m "perf and not accuracy" --timeout=60 \
   --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
   --junitxml="$RUN_XML" .
-# A run-only phase merges the compile report that came with the ELFs, when there is one.
 if [[ -f "$COMPILE_XML" ]]; then
   junitparser merge "$COMPILE_XML" "$RUN_XML" "${REPORT}.xml"
 else

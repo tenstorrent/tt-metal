@@ -2,25 +2,9 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Compare a nightly's board-built measurements with its CPU-built shadow pass.
+"""Compare each shard's official (board-built) perf data with its shadow (CPU-built) pass.
 
-In shadow mode each board shard measures twice: first the ELFs it compiled
-itself (the official data), then the ELFs a CPU runner compiled for the same
-shard. This script reads both, shard by shard:
-
-  - build identity: the board's own build against the CPU build's checksums
-    (written on the board by llk_perf_offload.py verify-tree);
-  - measured rows: the same set of rows in both passes;
-  - cycles: the ratio shadow / official for every row and run type.
-
-It writes a Markdown report (to $GITHUB_STEP_SUMMARY when set) and a JSON file.
-It exits 1 when a shard has no shadow data, the builds differ, or the row sets
-differ. Cycle ratios are reported, not judged: two passes on one board differ
-by measurement noise only.
-
-Usage: llk_perf_shadow_compare.py --official DIR --shadow DIR --out FILE.json
-  DIR/official: perf-data-<arch>-<group>/**/*.parquet   (the nightly's artifacts)
-  DIR/shadow:   llk-shadow-<arch>-<group>/{perf/**/*.parquet,identity.json}
+Exits 1 if a shard's builds differ, its rows differ, or its shadow data is missing.
 """
 
 import argparse
@@ -42,7 +26,7 @@ META_COLUMNS = {
     "pipeline",
     "pr_number",
 }
-MIN_CYCLES = 30  # Ratios below this are dominated by a cycle or two of jitter.
+MIN_CYCLES = 30
 
 
 def shards(root: Path, prefix: str, suffix: str) -> dict[tuple[str, int], Path]:

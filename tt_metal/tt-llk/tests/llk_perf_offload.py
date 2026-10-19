@@ -2,27 +2,9 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Carry one LLK perf shard's compiled ELFs from a CPU runner to a board runner.
+"""Move a perf shard's ELFs from a CPU runner to a board: pack, unpack, verify-tree.
 
-The compile pass (--compile-producer) can run on a CPU-only runner and the
-measuring pass (--compile-consumer) on the board. This tool moves the build
-between the two jobs and checks it:
-
-  pack         after the compile pass: archive the files the measuring pass
-               reads, with a manifest and a checksum list (tar + zstd -3).
-  unpack       on the board: check the manifest against this job, extract the
-               archive into the build directory and check every file against
-               its checksum.
-  verify-tree  before unpack: compare the build tree in place (the board's own
-               build) with the archive's checksum list, file by file, and write
-               the result as JSON.
-
-The variant id ignores compile flags and the environment, so a build made with
-other flags would be found and loaded without complaint. The manifest records
-them, and unpack refuses a build that does not match this job.
-
-Both runners must use the same build path ($RUNNER_TEMP/tt-llk-build): the ELFs
-contain it. The LLK container gives /__w/_temp on every runner.
+The ELFs embed their build path, so both runners must build in $RUNNER_TEMP/tt-llk-build.
 """
 
 import argparse
@@ -41,7 +23,7 @@ PYTHON_TESTS = TESTS_DIR / "python_tests"
 GXX = TESTS_DIR / "sfpi/compiler/bin/riscv-tt-elf-g++"
 META_DIR = "_offload"
 
-# Environment the compiled ELFs depend on. The variant id does not see these.
+# The variant id ignores these, so the manifest must match on them.
 BUILD_ENV = [
     "CHIP_ARCH",
     "SPEED_OF_LIGHT",
@@ -53,7 +35,6 @@ BUILD_ENV = [
     "LLK_TEST_SEED",
     "TT_METAL_DISABLE_SFPLOADMACRO",
 ]
-# Manifest fields that must match between the compile job and the board job.
 MUST_MATCH = ["commit", "compiler", "cmd", "group", "splits", "env"]
 
 
@@ -103,7 +84,6 @@ def describe(cmd: str) -> dict:
 
 
 def shipped_files(root: Path) -> list[str]:
-    """What the measuring pass reads: every */elf/*.elf and profiler_meta/**."""
     out = []
     for dirpath, dirnames, filenames in os.walk(root):
         rel_dir = os.path.relpath(dirpath, root)
@@ -204,7 +184,6 @@ def find_archive(directory: str) -> Path:
 def cmd_unpack(args):
     archive = find_archive(args.dir)
     root = build_dir()
-    # Start from an empty build directory so no stale ELF can be measured.
     shutil.rmtree(root, ignore_errors=True)
     root.mkdir(parents=True)
 
@@ -233,9 +212,13 @@ def cmd_unpack(args):
             f"archive has {len(files)} files, manifest says {shipped['file_count']}"
         )
     sums = read_sums(meta / "SHA256SUMS")
-    mismatched = [rel for rel, digest in sums.items() if sha256(root / rel) != digest]
+    mismatched = [
+        rel
+        for rel, digest in sums.items()
+        if not (root / rel).is_file() or sha256(root / rel) != digest
+    ]
     if mismatched:
-        sys.exit(f"{len(mismatched)} files fail their checksum, e.g. {mismatched[:5]}")
+        sys.exit(f"{len(mismatched)} files missing or bad, e.g. {mismatched[:5]}")
     t2 = time.monotonic()
 
     if not args.no_junit:
@@ -255,7 +238,6 @@ def cmd_unpack(args):
 
 
 def archive_sums(archive: Path) -> dict[str, str]:
-    """The archive's checksum list, read without extracting anything else."""
     zstd = subprocess.Popen(["zstd", "-dc", str(archive)], stdout=subprocess.PIPE)
     tar = subprocess.run(
         ["tar", "-xOf", "-", f"{META_DIR}/SHA256SUMS"],
@@ -272,8 +254,7 @@ def archive_sums(archive: Path) -> dict[str, str]:
 
 
 def cmd_verify_tree(args):
-    """Compare a build tree in place with the archive's checksums: same files, same bytes."""
-    tree = Path(args.tree) if args.tree else build_dir()
+    tree = build_dir()
     t0 = time.monotonic()
     sums = archive_sums(find_archive(args.dir))
     present = set(shipped_files(tree)) if tree.exists() else set()
@@ -318,40 +299,25 @@ def cmd_verify_tree(args):
 
 
 def main():
-    ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("pack")
-    p.add_argument("--cmd", required=True, help="the matrix row's cmd")
+    p.add_argument("--cmd", required=True)
     p.add_argument("--out", required=True)
-    p.add_argument(
-        "--junit", nargs="*", default=[], help="compile JUnit report(s) to ship"
-    )
+    p.add_argument("--junit", nargs="*", default=[])
     p.set_defaults(func=cmd_pack)
 
     p = sub.add_parser("unpack")
-    p.add_argument("--cmd", required=True, help="the matrix row's cmd")
-    p.add_argument("--dir", required=True, help="where the archive was downloaded")
-    p.add_argument(
-        "--delete-archive",
-        action="store_true",
-        help="delete the archive once extracted, to free the disk",
-    )
-    p.add_argument(
-        "--no-junit",
-        action="store_true",
-        help="do not copy the shipped compile JUnit next to the board's reports",
-    )
+    p.add_argument("--cmd", required=True)
+    p.add_argument("--dir", required=True)
+    p.add_argument("--delete-archive", action="store_true")
+    p.add_argument("--no-junit", action="store_true")
     p.set_defaults(func=cmd_unpack)
 
     p = sub.add_parser("verify-tree")
-    p.add_argument("--dir", required=True, help="where the archive was downloaded")
-    p.add_argument(
-        "--tree", help="the build tree to check (default: the build directory)"
-    )
-    p.add_argument("--out", required=True, help="where to write the JSON result")
+    p.add_argument("--dir", required=True)
+    p.add_argument("--out", required=True)
     p.set_defaults(func=cmd_verify_tree)
 
     args = ap.parse_args()
