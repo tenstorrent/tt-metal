@@ -2031,6 +2031,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         use_prefix_caching = num_cached_tokens > 0
+        # kwargs are for prepare_inputs_prefill (global_user_id, multimodal inputs, serving plugin keywords);
+        # ttnn_prefill_forward takes only the per-layer page tables from them, on every path.
+        forward_kwargs = (
+            {"page_tables_per_layer": kwargs["page_tables_per_layer"]} if "page_tables_per_layer" in kwargs else {}
+        )
         if use_chunked_prefill or use_prefix_caching:
             """
             Chunked prefill requires paged attention. There are some strange constraints which we must meet:
@@ -2135,7 +2140,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     ),
                     kv_cache=kv_cache,
                     batch_size=batch_size,
-                    **kwargs,
+                    **forward_kwargs,
                 )
 
                 if is_last_chunk:
@@ -2161,11 +2166,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 get_last_token=-1 if batch_size > 1 else (last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
-                **(
-                    {"page_tables_per_layer": kwargs["page_tables_per_layer"]}
-                    if "page_tables_per_layer" in kwargs
-                    else {}
-                ),
+                **forward_kwargs,
             )
             return tt_logits
 
