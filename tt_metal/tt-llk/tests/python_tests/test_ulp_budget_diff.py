@@ -718,7 +718,8 @@ def test_the_tool_runs_by_path_with_its_sibling(tmp_path, monkeypatch):
     with _refuses(SystemExit) as done:
         runpy.run_path(str(helpers / "ulp_budget_diff.py"), run_name="__main__")
     assert done.value.code == 0
-    assert "ulp_provenance" in sys.modules  # imported by its bare name, as on the runner
+    # Imported by its bare name, as on the runner.
+    assert "ulp_provenance" in sys.modules
 
 
 def test_the_key_dimensions_are_the_registrys():

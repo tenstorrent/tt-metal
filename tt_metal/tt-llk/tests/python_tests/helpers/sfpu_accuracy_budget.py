@@ -39,7 +39,6 @@ from itertools import product
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Type, TypeVar
 
-
 from .chip_architecture import ChipArchitecture
 from .format_config import DataFormat, InputOutputFormat
 from .llk_params import ApproximationMode, DestAccumulation, MathOperation
