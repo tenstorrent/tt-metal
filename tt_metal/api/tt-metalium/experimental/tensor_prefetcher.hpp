@@ -62,16 +62,32 @@ struct BlackholeTensorPrefetcherConfig {
     // this config and the resolved policy is logged.
 };
 
+struct QuasarTensorPrefetcherConfig {
+    // DRAM banks whose CCE runs a prefetch sender; empty provisions every bank. A CCE runs one
+    // launch at a time, so receiver Programs need CCEs outside this set.
+    std::vector<uint32_t> dram_sender_banks;
+
+    // Cycles a sender waits on credits, a drain or a command-queue signal before it writes a
+    // timeout status and exits. 0 waits forever.
+    uint64_t wait_budget_cycles = 0;
+
+    // Caps the sender's TL1 staging ring. A multiple of 384 B keeps each third of the ring on
+    // whole 64 B lines.
+    uint32_t stage_ring_bytes = 4608;
+};
+
 // Architectures apply their default config when arch specific configs are unset.
 struct TensorPrefetcherConfig {
     std::optional<BlackholeTensorPrefetcherConfig> blackhole = std::nullopt;
+    std::optional<QuasarTensorPrefetcherConfig> quasar = std::nullopt;
 };
 
-// Returns true if the Tensor prefetcher is supported on `mesh_device`. Both must hold:
+// Returns true if the Tensor prefetcher is supported on `mesh_device`. On Blackhole both must hold:
 //   - programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0), and
 //   - the streaming profiler is off. TT_METAL_STREAMING_PROFILER=1 parks a resident relay
 //     on the same free DRAM subchannel a bank's first prefetch sender uses, with both of
 //     that DRISC's NIUs in stream mode, so the two cannot coexist.
+// On Quasar it is false until the CCE port is complete.
 // When this returns false, StartTensorPrefetcher TT_FATALs, so callers (e.g. tests) can
 // use this to skip rather than fail.
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
@@ -131,7 +147,8 @@ struct TensorPrefetcherInput {
 // Preconditions (TT_FATAL):
 //   - No other prefetcher is currently active on this mesh device.
 //   - DRAM programmable cores are available on this mesh (Blackhole with firmware
-//     >= 19.12.0.0).
+//     >= 19.12.0.0, or Quasar with programmable DRAM views).
+//   - On Quasar, slow dispatch and initialized firmware on every sender CCE.
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config);
 
 // Queue one prefetch request. Non-blocking.

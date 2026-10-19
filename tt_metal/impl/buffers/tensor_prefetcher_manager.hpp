@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -40,6 +41,18 @@ namespace distributed {
 
 class MeshCommandQueue;
 class MeshDevice;
+
+struct TensorPrefetcherPreconditions {
+    bool ok = false;
+    // Empty when ok; otherwise the first precondition that failed.
+    std::string reason;
+};
+
+// What StartTensorPrefetcher requires of `mesh_device`. IsTensorPrefetcherSupported is this, and on
+// Quasar also that the CCE port is complete. On Quasar the firmware term requires every sender CCE's
+// GO_MSG to hold RUN_MSG_DONE or RUN_MSG_GO: it checks that firmware is present, not that the CCE is
+// idle, so it holds while receiver Programs and prefetcher sessions run.
+TensorPrefetcherPreconditions tensor_prefetcher_preconditions(const MeshDevice& mesh_device);
 
 // Long-lived Tensor prefetcher (DRISC) for a single MeshDevice. Holds the
 // per-device Programs, the per-(device, sender) H2D sockets, and the host worker
@@ -81,6 +94,13 @@ public:
     TensorPrefetcherManager& operator=(const TensorPrefetcherManager&) = delete;
     TensorPrefetcherManager(TensorPrefetcherManager&&) = delete;
     TensorPrefetcherManager& operator=(TensorPrefetcherManager&&) = delete;
+
+    // FIFO depth — how many in-flight requests a single socket can hold before
+    // back-pressuring. kSocketFifoPages × align_up(kRequestPageBytes, pcie) per socket.
+    // Scaled inversely with kRequestPageBytes (128 × 128 B == the previous 16 × 1024 B) so
+    // shrinking the page to one-matmul granularity keeps the per-socket DRISC L1 FIFO at the
+    // same footprint while allowing 8× more small in-flight requests.
+    static constexpr uint32_t kSocketFifoPages = 128;
 
     void start(const experimental::TensorPrefetcherConfig& config);
 
@@ -134,13 +154,6 @@ private:
     // impl/buffers/tensor_prefetcher_request.hpp so the host and the kernel agree on
     // both the byte layout and the payload size. A Queue call whose tensors overflow one
     // page is split across multiple pages.
-
-    // FIFO depth — how many in-flight requests a single socket can hold before
-    // back-pressuring. kSocketFifoPages × align_up(kRequestPageBytes, pcie) per socket.
-    // Scaled inversely with kRequestPageBytes (128 × 128 B == the previous 16 × 1024 B) so
-    // shrinking the page to one-matmul granularity keeps the per-socket DRISC L1 FIFO at the
-    // same footprint while allowing 8× more small in-flight requests.
-    static constexpr uint32_t kSocketFifoPages = 128;
 
     struct Request {
         // One logical socket page. PREFETCH carries one page per entry in target_sender_indices:
@@ -198,7 +211,8 @@ private:
     // One DRAIN request per page's worth of every sender's live drain targets, for stop to send ahead
     // of STOP.
     std::vector<Request> build_drain_requests();
-    void enumerate_dram_senders();
+    // Provisions the senders of `sender_banks` (empty = every bank).
+    void enumerate_dram_senders(const std::vector<uint32_t>& sender_banks);
     RequestTarget target_for(const experimental::GlobalCircularBuffer& gcb) const;
     RequestTarget target_for(
         const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes) const;
@@ -264,8 +278,9 @@ private:
     std::array<uint32_t, kNumCqSignalSlots> cq_signal_counter_{};
 
     // sender_logical_cores_[s] is the logical DRAM core for sender slot s, a (bank,
-    // primary/secondary role) pair. Both sender cores per bank are provisioned at start; each
-    // queued GCB may map the primary only or both, and PREFETCH requests target that subset.
+    // primary/secondary role) pair. Every sender core of each provisioned bank is provisioned at
+    // start (two on Blackhole, one on Quasar); each queued GCB may map the primary only or both,
+    // and PREFETCH requests target that subset.
     // One list covers the whole mesh (see metal_SocDescriptor::dram_bank_endpoint_coords);
     // enumerate_dram_senders TT_FATALs if a device disagrees.
     std::vector<CoreCoord> sender_logical_cores_;

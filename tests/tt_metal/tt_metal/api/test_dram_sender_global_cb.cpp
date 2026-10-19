@@ -8,9 +8,11 @@
 // verify each receiver's L1 slice matches the expected stripe and that the
 // sender's pages_acked counters all caught up to pages_sent.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
@@ -32,6 +34,7 @@
 #include <tt-metalium/tt_metal.hpp>
 
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/experimental/tensor_prefetcher.hpp>
 
 #include "device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/api/dram_sender_fixture.hpp"
@@ -642,6 +645,23 @@ TEST_F(DramSenderGCBFixture, RejectsDuplicateSender) {
     std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers = {{0, recv0}, {0, recv1}};
     EXPECT_ANY_THROW(experimental::CreateGlobalCircularBufferForTensorPrefetcher(
         *mesh_device_, bank_to_receivers, 1024, BufferType::L1, /*support_multi_receiver_shards=*/true));
+}
+
+TEST_F(DramSenderGCBFixture, TensorPrefetcherGateKeepsBlackholeResultAndRejectsQuasarConfig) {
+    const bool streaming_profiler_enabled =
+        MetalContext::instance(mesh_device_->impl().get_context_id()).rtoptions().get_streaming_profiler_enabled();
+    EXPECT_EQ(experimental::IsTensorPrefetcherSupported(*mesh_device_), !streaming_profiler_enabled);
+    if (streaming_profiler_enabled) {
+        GTEST_SKIP();
+    }
+    EXPECT_THAT(
+        [this] {
+            experimental::StartTensorPrefetcher(
+                *mesh_device_,
+                experimental::TensorPrefetcherConfig{.quasar = experimental::QuasarTensorPrefetcherConfig{}});
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Quasar tensor prefetcher configuration cannot be used on architecture")));
 }
 
 }  // namespace tt::tt_metal

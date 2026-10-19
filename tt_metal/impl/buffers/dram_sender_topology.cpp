@@ -14,6 +14,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
+#include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "mesh_device.hpp"
@@ -32,6 +33,11 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
         "Cannot build a DRAM sender mapping for a mesh with no local devices (shape {}); a submesh whose slots are "
         "all owned by another host/rank has no device to resolve the senders' endpoint roles against.",
         mesh_device->shape());
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        TT_THROW(
+            "DRAM sender mappings for worker receivers are not supported on Quasar: each DRAM view has one CCE "
+            "sender and there are no worker receivers");
+    }
     const IDevice* reference_device = devices.front();
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
     const bool dual_senders_per_bank = split == DramSenderSplit::TwoPerBank;
@@ -124,6 +130,15 @@ void write_dram_sender_l1(
         metal_ctx.hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) + static_cast<uint64_t>(local_addr);
     const CoreCoord virtual_core = device->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
     metal_ctx.get_cluster().write_core(device->id(), tt_cxy_pair(device->id(), virtual_core), bytes, write_addr);
+}
+
+uint32_t package_dram_core_index(const metal_SocDescriptor& soc_desc, const CoreCoord& dram_logical) {
+    const CoreCoord translated = soc_desc.get_physical_dram_core_from_logical(dram_logical);
+    const tt::umd::CoreCoord location = soc_desc.translate_coord_to(
+        tt::umd::CoreCoord(translated.x, translated.y, tt::CoreType::DRAM, tt::CoordSystem::TRANSLATED),
+        tt::CoordSystem::LOGICAL);
+    const uint32_t cores_per_channel = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
+    return (location.x * cores_per_channel) + location.y;
 }
 
 }  // namespace tt::tt_metal

@@ -414,14 +414,16 @@ public:
     // Returns the logical DRAM core for `bank_id` on `device` whose physical NoC coord isn't
     // already claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one
     // safe for a DRISC kernel to occupy. Resolved against `device`'s harvested DRAM topology.
-    // Throws if no free subchannel exists, or TT_FATALs if bank_id is out of range.
+    // Throws if no free subchannel exists, or TT_FATALs if bank_id is out of range. Throws on Quasar,
+    // where each view's CCE is its sender.
     CoreCoord pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const;
 
     // Returns the ordered list of DRISC logical cores that drive a bank's DRAM-sender
     // prefetcher on `device`: element 0 is the free non-endpoint subchannel
     // (pick_unused_dram_logical_core), element 1 is the bank's NOC1 worker-endpoint
     // subchannel (idle for NOC0 during matmul). Both run their kernels on NOC0; the
-    // pair lets two DRISC cores share a bank's receiver set.
+    // pair lets two DRISC cores share a bank's receiver set. On Quasar the list is the view's one
+    // CCE, (bank_id, 0).
     //
     // The result names endpoint roles (see metal_SocDescriptor::dram_bank_endpoint_coords), so a
     // well-formed descriptor set returns the same coords for every `device` in a mesh; the
