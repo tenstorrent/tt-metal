@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
@@ -200,30 +201,45 @@ bool staged_native_faster(
            (!merge && paired_l1_split_native_faster(ratio, num_old_sticks, num_cores, output_mem_config));
 }
 
-// Slack native's row-major factory adds to each source read and destination slot.
+// Slack native's row-major factory adds to each source read and destination slot, and the cap on its destination ring.
 constexpr uint64_t kNativeSourceReadSlack = 128;
 constexpr uint64_t kNativeDestSlotSlack = 80;
+constexpr uint64_t kNativeMaxDestSlots = 8;
 
-// Native's row-major kernel fits its minimum scratch in `budget`. Native sizes that scratch from live L1 and fails
-// when it does not fit.
+// Native's row-major kernel fits its minimum scratch in `budget` and the ring it selects in `native_l1`, the L1 it
+// sees once the output is allocated. Native picks its ring from unaligned sizes but places every scratchpad
+// DRAM-aligned, so the ring it picks can overrun `native_l1`; native then fails where a row-major program still fits.
 bool native_rm_fits_l1(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    uint64_t budget) {
+    uint64_t budget,
+    uint64_t native_l1) {
     const uint32_t elem = input.element_size();
     const uint64_t old_stick = static_cast<uint64_t>(input.logical_shape()[-1]) * elem;
     const uint64_t new_stick = static_cast<uint64_t>(logical_output_shape[-1]) * elem;
-    // Per instance: a scratchpad of two source pages padded to 64 B plus 128 B, and one of a destination slot padded
-    // to 64 B plus 80 B. Every scratchpad starts DRAM-aligned, so each takes its size rounded up to that alignment.
+    // Per instance: a scratchpad of two source pages padded to 64 B plus 128 B, and one of `slots` destination slots
+    // each padded to 64 B plus 80 B. Every scratchpad starts DRAM-aligned, so each takes its size rounded up to that
+    // alignment.
     const uint64_t alignment = tt::tt_metal::hal::get_dram_alignment();
     const uint64_t source_scratch = 2 * (((old_stick - 1) & ~uint64_t{63}) + kNativeSourceReadSlack);
-    const uint64_t dest_scratch = ((new_stick - 1) & ~uint64_t{63}) + kNativeDestSlotSlack;
-    const uint64_t per_kernel = tt::round_up(source_scratch, alignment) + tt::round_up(dest_scratch, alignment);
+    const uint64_t dest_slot = ((new_stick - 1) & ~uint64_t{63}) + kNativeDestSlotSlack;
     const bool divisible = old_stick % new_stick == 0 || new_stick % old_stick == 0;
     const uint64_t kernels =
         divisible && native_runs_two_kernels(static_cast<uint32_t>(new_stick), output_mem_config) ? 2 : 1;
-    return kernels * per_kernel <= budget;
+    const auto footprint = [&](uint64_t slots) {
+        return kernels * (tt::round_up(source_scratch, alignment) + tt::round_up(dest_slot * slots, alignment));
+    };
+    if (footprint(1) > budget || kernels * (source_scratch + dest_slot) > native_l1) {
+        return false;
+    }
+    const bool pages_noc_aligned = old_stick % kNativeNocAlignment == 0 && new_stick % kNativeNocAlignment == 0;
+    const uint64_t slots =
+        pages_noc_aligned
+            ? 1
+            : std::clamp(
+                  (native_l1 - kernels * source_scratch) / (kernels * dest_slot), uint64_t{1}, kNativeMaxDestSlots);
+    return footprint(slots) <= native_l1;
 }
 
 // Wormhole thresholds, fitted from the same forced sweeps run on Wormhole. Its DRAM reads stay transaction-bound up to
@@ -236,15 +252,18 @@ constexpr uint32_t kWhMinUnderfilledSplitPiece = 20;
 constexpr uint32_t kBhMinDramMergePiece = 256;
 
 // Whether an rm_native_faster verdict may be taken once the static fit is known. Native's scratch must fit
-// `native_budget`, and the stick program rm_native_faster was measured against must fit the static L1 window. When
-// only the slab program fits, it reads a batch of windows behind one barrier, as for widths that do not divide.
+// `native_budget` and `native_l1` (see native_rm_fits_l1), and the stick program rm_native_faster was measured against
+// must fit the static L1 window. When only the slab program fits, it reads a batch of windows behind one barrier, as
+// for widths that do not divide.
 bool demotion_applies(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     uint64_t native_budget,
+    uint64_t native_l1,
     bool stick_program_fits) {
-    return stick_program_fits && native_rm_fits_l1(input, logical_output_shape, output_mem_config, native_budget);
+    return stick_program_fits &&
+           native_rm_fits_l1(input, logical_output_shape, output_mem_config, native_budget, native_l1);
 }
 
 // Whether native's kernel measures faster than the ROW_MAJOR program the gate admits. Thresholds fitted on Blackhole
@@ -426,11 +445,19 @@ bool is_demoted(
         const uint64_t reserved = pending_output_l1_bytes(input, geometry.output_spec());
         const uint64_t max_l1 = get_max_l1_space(input);
         const uint64_t live_budget = max_l1 > reserved ? max_l1 - reserved : 0;
+        // Native measures its own L1 from the lowest occupied address, without the bank-size cap of get_max_l1_space.
+        const auto* device = input.device();
+        const uint64_t native_ceiling =
+            device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
+        const uint64_t native_floor =
+            device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1) + reserved;
+        const uint64_t native_l1 = native_ceiling > native_floor ? native_ceiling - native_floor : 0;
         return demotion_applies(
             input,
             logical_output_shape,
             output_mem_config,
             std::min(static_budget, live_budget),
+            native_l1,
             geometry.fit_stick(static_budget).has_value());
     }
     const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
