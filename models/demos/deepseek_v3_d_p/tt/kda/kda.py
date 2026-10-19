@@ -221,6 +221,11 @@ class ttKDA:
         self.decay_logits_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * decay_width * 4, KDA_DECAY_LOGITS_L1_BYTES_PER_CORE
         )
+        # The offset add reads the FP32 gate offset row for every output tile; an L1 copy (one tile row, a few KiB per
+        # core) spares those reads their DRAM round trip.
+        self.decay_offset = (
+            ttnn.to_memory_config(self.weights.decay_bias_flat, ttnn.L1_MEMORY_CONFIG) if self._bounded_gate else None
+        )
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
         self.kda_compute_config = ttnn.init_device_compute_kernel_config(
@@ -417,7 +422,7 @@ class ttKDA:
         )
         gate = ttnn.add(
             logits,
-            weights.decay_bias_flat,
+            self.decay_offset,
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)],
             dtype=ttnn.bfloat16,
             memory_config=self.decay_memory_config,
