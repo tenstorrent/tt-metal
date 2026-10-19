@@ -13,7 +13,7 @@
 #undef TT_TARGET_BH_BF16_SPECIAL_COMPARE_COUNT
 namespace ckernel::sfpu::MultigammalnBf16Config_source {
 using namespace sfpi;
-using namespace ::ckernel::sfpu::ttpoly;
+using namespace ::ckernel::sfpu::ttpoly::multigammaln;
 constexpr uint32_t NUM_DEGREE = 6, DEN_DEGREE = 4;
 constexpr uint32_t NUM_SEGMENTS = 1, LUT_SIZE = 14;
 constexpr std::array<float, LUT_SIZE> LUT_DATA = {
@@ -128,12 +128,13 @@ struct MultigammalnBf16Config {
 
 namespace ckernel::sfpu {
 
-template <int ITERATIONS = 8>
+template <int ITERATIONS = 32>
 inline void calculate_multigammaln_bf16() {
-    ckernel::sfpu::bf16::calculate_core_bridge_rational<ckernel::sfpu::MultigammalnBf16Config, ITERATIONS>();
+    ckernel::sfpu::bf16::multigammaln::
+        calculate_core_bridge_rational<ckernel::sfpu::MultigammalnBf16Config, ITERATIONS>();
 }
 inline void init_multigammaln_bf16() {
-    ckernel::sfpu::bf16::init_core_bridge_rational<ckernel::sfpu::MultigammalnBf16Config>();
+    ckernel::sfpu::bf16::multigammaln::init_core_bridge_rational<ckernel::sfpu::MultigammalnBf16Config>();
 }
 
 }  // namespace ckernel::sfpu

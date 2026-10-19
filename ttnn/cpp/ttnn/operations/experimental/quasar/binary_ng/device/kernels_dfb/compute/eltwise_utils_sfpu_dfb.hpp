@@ -15,10 +15,10 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "eltwise_format_reference_dfb.hpp"
 
-template <typename ActivationFn>
+template <typename ActivationFn, typename DFBPre, typename DFBPost>
 ALWI void preprocess_sfpu_impl_dfb(
-    DataflowBuffer& dfb_pre,
-    DataflowBuffer& dfb_post,
+    DFBPre& dfb_pre,
+    DFBPost& dfb_post,
     uint32_t dfb_out_id,
     uint32_t per_core_block_size,
     ActivationFn&& process_activations) {

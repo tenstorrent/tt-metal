@@ -4,7 +4,7 @@
 
 #pragma once
 
-namespace ckernel::sfpu::ttpoly {
+namespace ckernel::sfpu::ttpoly::multigammaln {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
 inline vFloat raw_daz_action_coordinate(vFloat x_raw) {
@@ -16,4 +16,4 @@ inline vFloat raw_daz_action_coordinate(vFloat x_raw) {
     v_endif;
     return effective;
 }
-}  // namespace ckernel::sfpu::ttpoly
+}  // namespace ckernel::sfpu::ttpoly::multigammaln

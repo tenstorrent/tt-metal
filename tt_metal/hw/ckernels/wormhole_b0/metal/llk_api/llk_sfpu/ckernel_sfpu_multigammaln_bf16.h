@@ -118,12 +118,13 @@ struct MultigammalnBf16Config {
 
 namespace ckernel::sfpu {
 
-template <int ITERATIONS = 8>
+template <int ITERATIONS = 32>
 inline void calculate_multigammaln_bf16() {
-    ckernel::sfpu::bf16::calculate_core_bridge_rational<ckernel::sfpu::MultigammalnBf16Config, ITERATIONS>();
+    ckernel::sfpu::bf16::multigammaln::
+        calculate_core_bridge_rational<ckernel::sfpu::MultigammalnBf16Config, ITERATIONS>();
 }
 inline void init_multigammaln_bf16() {
-    ckernel::sfpu::bf16::init_core_bridge_rational<ckernel::sfpu::MultigammalnBf16Config>();
+    ckernel::sfpu::bf16::multigammaln::init_core_bridge_rational<ckernel::sfpu::MultigammalnBf16Config>();
 }
 
 }  // namespace ckernel::sfpu

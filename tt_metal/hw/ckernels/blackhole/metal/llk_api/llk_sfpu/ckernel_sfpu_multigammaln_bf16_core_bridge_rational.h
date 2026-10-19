@@ -10,7 +10,7 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
-namespace ckernel::sfpu::bf16 {
+namespace ckernel::sfpu::bf16::multigammaln {
 template <typename Config>
 inline void init_core_bridge_rational() {
     ckernel::sfpu::sfpu_reciprocal_init<false>();
@@ -20,4 +20,4 @@ inline void calculate_core_bridge_rational() {
     static_assert(Iterations == 32, "selected rational program owns a complete tile");
     Config::tile();
 }
-}  // namespace ckernel::sfpu::bf16
+}  // namespace ckernel::sfpu::bf16::multigammaln

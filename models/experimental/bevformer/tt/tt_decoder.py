@@ -8,6 +8,8 @@ The layers run batch-first, the layout the cross-attention and reg branches need
 default the decoder takes and returns the reference's sequence-first
 ``(num_query, bs, embed_dims)`` tensors, permuting ``query``, ``query_pos`` and ``value`` on
 entry and the stacked layer outputs on exit; ``batch_first=True`` skips those permutes.
+Unlike the reference, it also returns each layer's box codes, the reg branches' raw output,
+so ``TtBEVFormerHead`` builds its box predictions without running the branches again.
 Parameters come from ``model_preprocessing_decoder.create_decoder_parameters``. Forward runs
 on device only.
 
@@ -117,8 +119,7 @@ class TtDetectionTransformerDecoder:
     def _reg_branch(x, branch):
         x = ttnn.linear(x, branch[0].weight, bias=branch[0].bias, activation="relu")
         x = ttnn.linear(x, branch[1].weight, bias=branch[1].bias, activation="relu")
-        # (x, y, z) logit updates (see create_reg_branch_parameters), in GRID_DTYPE as they
-        # are added to the reference points' logits.
+        # GRID_DTYPE, as the center channels are added to the reference points' logits.
         return ttnn.linear(x, branch[2].weight, bias=branch[2].bias, dtype=GRID_DTYPE)
 
     def __call__(self, query, value, query_pos, reference_points, reg_branches):
@@ -126,8 +127,11 @@ class TtDetectionTransformerDecoder:
         ``(bs, nq, C)`` and ``(bs, bev_h * bev_w, C)`` with ``batch_first``; ``reference_points``
         ``(bs, nq, 3)`` ``GRID_DTYPE`` in [0, 1] either way.
 
-        Returns every layer's output ``(L, nq, bs, C)`` (``(L, bs, nq, C)`` with ``batch_first``)
-        and refined reference points ``(L, bs, nq, 3)``.
+        Returns every layer's output ``(L, nq, bs, C)`` (``(L, bs, nq, C)`` with ``batch_first``),
+        refined reference points ``(L, bs, nq, 3)`` and the reg branches' raw box codes
+        ``(L, bs, nq, code_size)`` in ``config/decoder_config.py``'s ``CENTERS_FIRST`` order
+        (batch-first either way), both ``GRID_DTYPE``. The codes' center channels are logit
+        offsets; the refined points are their outcome.
         """
         if reference_points.dtype != GRID_DTYPE:
             raise ValueError(f"reference_points must be {GRID_DTYPE}, got {reference_points.dtype}")
@@ -142,18 +146,22 @@ class TtDetectionTransformerDecoder:
         logits = ttnn.logit(reference_points, eps=INVERSE_SIGMOID_EPS)
         intermediate = []
         intermediate_reference_points = []
+        box_codes = []
         for layer, branch in zip(self.layers, reg_branches, strict=True):
             # Axis 2 is the fused op's pillar axis: R = 1, one point per query for every sample.
             output = layer(output, value, query_pos, ttnn.unsqueeze(reference_points[..., :2], 2))
 
-            # The clamp (a no-op on the first layer's logit output) runs inside the add.
-            logits = ttnn.add(self._reg_branch(output, branch), logits, input_tensor_b_activations=CLAMP_LOGITS)
+            box_code = self._reg_branch(output, branch)
+            # The codes come centers first (CENTERS_FIRST). The clamp (a no-op on the first
+            # layer's logit output) runs inside the add.
+            logits = ttnn.add(box_code[..., 0:3], logits, input_tensor_b_activations=CLAMP_LOGITS)
             reference_points = ttnn.sigmoid(logits)
 
             intermediate.append(output)
             intermediate_reference_points.append(reference_points)
+            box_codes.append(box_code)
 
         outputs = ttnn.stack(intermediate, dim=0)
         if not self.batch_first:
             outputs = ttnn.permute(outputs, (0, 2, 1, 3))
-        return outputs, ttnn.stack(intermediate_reference_points, dim=0)
+        return outputs, ttnn.stack(intermediate_reference_points, dim=0), ttnn.stack(box_codes, dim=0)
