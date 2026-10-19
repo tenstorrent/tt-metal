@@ -253,12 +253,12 @@ class ExpertMapping:
         Get global expert index for a given (group, chip, local_expert) position.
 
         Args:
-            group: Dispatch group index (corresponds to mesh column)
-            chip: Chip index within dispatch group (corresponds to mesh row)
+            group: Dispatch group index (the mesh coordinate off the SP axis)
+            chip: Chip index within dispatch group (the mesh coordinate along the SP axis)
             local_expert: Local expert index on the chip
             experts_per_chip: Number of experts per chip
-            dispatch_group_size: Number of chips per dispatch group (mesh rows)
-            num_dispatch_groups: Number of dispatch groups (mesh columns)
+            dispatch_group_size: Number of chips per dispatch group (mesh extent along the SP axis)
+            num_dispatch_groups: Number of dispatch groups (mesh extent off the SP axis)
             is_col_major: If True, column-major (group-first): experts 0-N in group 0
                          If False, row-major (chip-first): experts interleaved across groups
 
@@ -305,6 +305,7 @@ class ExpertMapping:
         mesh_cols: int,
         experts_per_chip: int,
         is_col_major: bool = True,
+        sp_axis: int = 0,
     ) -> tuple[list, list, list]:
         """
         Gather gate/up/down weights for a local expert, ordered for mesh distribution.
@@ -317,28 +318,33 @@ class ExpertMapping:
         Args:
             torch_weights: List of weight dicts indexed by global expert ID
             local_expert_idx: Local expert index on each chip (0 to experts_per_chip-1)
-            mesh_rows: Number of mesh rows (= dispatch_group_size = chips per group)
-            mesh_cols: Number of mesh cols (= num_dispatch_groups)
+            mesh_rows: Number of mesh rows
+            mesh_cols: Number of mesh cols
             experts_per_chip: Number of experts per chip
             is_col_major: Expert ordering (True=column-major, False=row-major)
+            sp_axis: Mesh axis the dispatch groups run along. At 0 the chip within a group is the
+                mesh row and the group is the column; at 1 they swap.
 
         Returns:
             (gate_weights, up_weights, down_weights) - each a list of tensors in mesh order
         """
+        assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
         gate_weights = []
         up_weights = []
         down_weights = []
 
+        dispatch_group_size, num_dispatch_groups = (mesh_rows, mesh_cols) if sp_axis == 0 else (mesh_cols, mesh_rows)
         # Row-major iteration matches mesh mapper dims=(0, 1)
         for row in range(mesh_rows):
             for col in range(mesh_cols):
+                group, chip = (col, row) if sp_axis == 0 else (row, col)
                 global_idx = ExpertMapping.get_global_expert_idx(
-                    group=col,
-                    chip=row,
+                    group=group,
+                    chip=chip,
                     local_expert=local_expert_idx,
                     experts_per_chip=experts_per_chip,
-                    dispatch_group_size=mesh_rows,
-                    num_dispatch_groups=mesh_cols,
+                    dispatch_group_size=dispatch_group_size,
+                    num_dispatch_groups=num_dispatch_groups,
                     is_col_major=is_col_major,
                 )
                 gate_weights.append(torch_weights[global_idx]["gate_proj"])
