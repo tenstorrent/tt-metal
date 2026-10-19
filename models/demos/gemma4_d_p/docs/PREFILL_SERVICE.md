@@ -58,6 +58,20 @@ This loads all 60 layers and allocates six 256k slots. It checks 17 mixed reques
 
 The test also extends one prompt to 256k in 6144-token pieces, batching 512- and 1536-token requests alongside it. Its final output is compared with legacy 8192-token chunked prefill using the same checkpoint and token history, requiring PCC ≥ 0.98 and relative RMSE < 0.21. Results are written to `packed_prefill.json` in the pytest temporary directory. The test allows two hours for cold weight loading and kernel compilation. The short synthetic test provides the separate Hugging Face comparison.
 
+Compare full-model steady-state prefill performance, using the same environment above:
+
+```bash
+pytest 'models/demos/gemma4_d_p/demo/prefill_perf.py::test_prefill_packed_perf[blackhole-8x4]' -sv
+```
+
+This measures one 8192-token request, one 1600-token request, four 1600-token requests, and six requests of 256/512/768/1024/1536/2048 tokens. Legacy processes each request separately with 8192-token padding; packed processes the whole batch with one shared 8192-row projection/MLP pass. Both use all 60 layers, CP8/TP4, the same checkpoint, and six resident KV slots. This baseline represents the existing fixed-8192 path, without tuning legacy to smaller chunks.
+
+Each case runs at cached-prefix lengths 0 and 253952. Prefixes are identical across requests and paths and aligned to legacy cache ownership. Real token histories are populated separately for each layout before measuring continuations. Weight loading, compilation, trace capture, cache priming, and output checks are excluded. Seven wall-time samples include token packing/upload, metadata and RoPE staging, trace replay, and synchronization, but exclude producer/socket overhead. Replay-only host timings are also recorded.
+
+Three device samples use real-time profiler timestamps: the maximum per-chip span from the first program's start to the last program's end, including gaps between operations. Legacy batch device time sums its separate request spans. Per-token metrics divide by real tokens, excluding padding. The real-time device profiler must be enabled; the benchmark rejects dropped records or incomplete per-chip program counts. It checks finite outputs; use the packed sanity test above for numerical comparisons.
+
+Results, individual samples, and per-chip timestamps are saved after each case to `investigations/gemma4_varlen_perf/results.json`. The [initial comparison](../../../../investigations/gemma4_varlen_perf/baseline_2026-10-19.csv) and [sample distributions](../../../../investigations/gemma4_varlen_perf/baseline_2026-10-19.json) are checked in. Set `GEMMA4_PERF_OUTPUT` to retain separate runs, `GEMMA4_PERF_PREFIXES=0` for a short initial-prefix comparison, or `GEMMA4_PERF_REPEATS` / `GEMMA4_PERF_DEVICE_REPEATS` to change sample counts. The default run also primes six long histories in each layout; this setup time is not part of the reported latency.
+
 Run the end-to-end hardware check, which starts both the runner and producer:
 
 ```bash
