@@ -32,10 +32,23 @@ constexpr bool bmm_reload_every_block = false;
 #else
 constexpr bool bmm_reload_every_block = get_arg(args::num_blocks_inner_dim) > 1;
 #endif
+#if defined(UCK_CHLKC_PACK)
+constexpr bool bmm_main_form = false;
+#else
+// HiFi2 on one-tile sub blocks of 16-bit operands reads slower on the row MOP and the unpack forms than on main's
+// per-row path; with 8-bit operands the forms gain
+constexpr bool bmm_main_form =
+    MATH_FIDELITY == ckernel::MathFidelity::HiFi2 &&
+    get_arg(args::out_subblock_w) * get_arg(args::out_subblock_h) == 1 &&
+    unpack_src_format[dfb::in0] != (uint8_t)DataFormat::Bfp8_b &&
+    unpack_src_format[dfb::in1] != (uint8_t)DataFormat::Bfp8_b &&
+    unpack_src_format[dfb::in0] != (uint8_t)DataFormat::Bfp4_b &&
+    unpack_src_format[dfb::in1] != (uint8_t)DataFormat::Bfp4_b;
+#endif
 // not when the partials are reloaded every block: the matmul init after each reload drains the unpack thread; not for
 // one tile row of in0 either (decode), which reads slower with it
-constexpr bool bmm_unpack_auto_ttsync = get_arg(args::out_subblock_w) <= 2 && get_arg(args::out_subblock_h) <= 2 &&
-                                        !bmm_reload_every_block &&
+constexpr bool bmm_unpack_auto_ttsync = !bmm_main_form && get_arg(args::out_subblock_w) <= 2 &&
+                                        get_arg(args::out_subblock_h) <= 2 && !bmm_reload_every_block &&
                                         get_arg(args::in0_block_num_tiles) > get_arg(args::in0_block_w);
 #endif
 
@@ -259,7 +272,8 @@ void kernel_main() {
     constexpr bool row_mop_tail = true;
 #endif
     constexpr bool row_mop =
-        row_mop_tail && (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
+        !bmm_main_form && row_mop_tail &&
+        (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
         (DST_ACCUM_MODE || (unpack_src_format[out_dfb_id] != (uint8_t)DataFormat::Float32 &&
                             unpack_src_format[mm_partials_dfb_id] != (uint8_t)DataFormat::Float32));
     constexpr bool unpack_auto_ttsync = bmm_unpack_auto_ttsync;
@@ -311,7 +325,9 @@ void kernel_main() {
 #ifdef ARCH_BLACKHOLE
     // the format each DEST section is packed to: the partials until the last inner block
     constexpr DataFormat mm_pack_format =
-        static_cast<DataFormat>(unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : mm_out_dfb_id]);
+        bmm_main_form ? DataFormat::Invalid
+                      : static_cast<DataFormat>(
+                            unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : mm_out_dfb_id]);
 #else
     constexpr DataFormat mm_pack_format = DataFormat::Invalid;
 #endif
