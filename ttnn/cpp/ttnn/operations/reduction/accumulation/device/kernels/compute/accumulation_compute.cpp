@@ -18,6 +18,31 @@
 #include "experimental/kernel_args.h"
 #include "../accumulation_common.hpp"
 
+#if defined(COMPENSATED_SUM) && defined(TRISC_MATH)
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+
+namespace ckernel::sfpu {
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void zero_nonfinite_compensation() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat c = sfpi::dst_reg[0];
+        // Any non-finite running total t (±inf from input or overflow, or NaN) produces a
+        // non-finite compensation term c = (t - acc) - y (either NaN from ±inf - ±inf or ±inf on
+        // the step that overflows). Resetting non-finite c to +0.0f prevents y = in - c from
+        // turning subsequent finite inputs after ±inf into NaN (#58986), while leaving DST_T = NaN
+        // untouched when the sum itself is NaN (e.g. +inf + -inf or NaN input).
+        // Tested via biased exponent >= 255 so the predicate works identically on Wormhole B0,
+        // Blackhole, and Quasar (where sfpi::is_finite's CC-only LREG8 compare is a no-op).
+        v_if(sfpi::exexp(c, sfpi::ExponentMode::Biased) >= 255) { sfpi::dst_reg[0] = 0.0f; }
+        v_endif;
+        sfpi::dst_reg++;
+    }
+}
+
+}  // namespace ckernel::sfpu
+#endif
+
 void kernel_main() {
     constexpr auto default_acc_value = get_arg(args::default_acc_value);
 
@@ -130,6 +155,13 @@ void kernel_main() {
             add_binary_tile(DST_ACC, DST_IN, DST_T);      // t = acc + y
             sub_binary_tile(DST_T, DST_ACC, DST_COMP);    // (t - acc)
             sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = (t - acc) - y
+            MATH(SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                zero_nonfinite_compensation,
+                (APPROX, 8 /*ITERATIONS*/),
+                DST_COMP,
+                VectorMode::RC));
             constexpr uint32_t DST_RESULT = DST_T;
             dfb_comp_obj.pop_front(ONE_TILE);
 #else

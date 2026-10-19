@@ -494,3 +494,59 @@ def test_cumsum_tile_axis_fallback_permutes(torch_dtype, reverse_order, device):
     else:
         expected = torch.cumsum(torch_input, dim)
     assert_cumsum_quality(expected, ttnn.to_torch(output_tensor, dtype=torch_dtype))
+
+
+@pytest.mark.parametrize(
+    "values, expected_values",
+    [
+        (
+            [1.0, float("inf"), 2.0, 3.0],
+            [1.0, float("inf"), float("inf"), float("inf")],
+        ),
+        (
+            [1.0, float("-inf"), 2.0, 3.0],
+            [1.0, float("-inf"), float("-inf"), float("-inf")],
+        ),
+        (
+            [2e38, 2e38, 1.0, 1.0],
+            [2e38, float("inf"), float("inf"), float("inf")],
+        ),
+        (
+            [float("inf"), float("-inf"), 1.0, 2.0],
+            [float("inf"), float("nan"), float("nan"), float("nan")],
+        ),
+        (
+            [1.0, float("nan"), 2.0, 3.0],
+            [1.0, float("nan"), float("nan"), float("nan")],
+        ),
+    ],
+)
+@pytest.mark.parametrize("dim", [0, 1])
+def test_cumsum_fp32_nonfinite(values, expected_values, dim, device):
+    """Regression test for #58986: fp32 compensated cumsum must not turn finite values after
+    +-inf (or finite overflow to +-inf) into NaN via the Kahan compensation term c = (t - acc) - y,
+    while still propagating NaN from inf + (-inf) or NaN inputs.
+
+    Checks both a tile-strided axis (dim=0 on [4, 32], one element per tile along the scan) and an
+    intra-tile axis (dim=1 on [32, 128], across four tiles along the scan).
+    """
+    if dim == 0:
+        torch_input = torch.tensor(values, dtype=torch.float32).unsqueeze(1).expand(4, 32).contiguous()
+        expected = torch.tensor(expected_values, dtype=torch.float32).unsqueeze(1).expand(4, 32).contiguous()
+    else:
+        # Place each step at tile boundaries (0, 32, 64, 96) with zeros in between so every tile
+        # step exercises the Kahan recurrence across tiles.
+        row = torch.zeros(128, dtype=torch.float32)
+        for idx, val in enumerate(values):
+            row[idx * 32] = val
+        torch_input = row.unsqueeze(0).expand(32, 128).contiguous()
+        expected = torch.cumsum(torch_input, dim=1)
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim))
+
+    assert output.dtype == torch.float32
+    assert torch.equal(torch.isnan(output), torch.isnan(expected)), f"NaN mask mismatch: got {output}, expected {expected}"
+    non_nan = ~torch.isnan(expected)
+    assert torch.equal(output[non_nan], expected[non_nan]), f"Value mismatch: got {output}, expected {expected}"
+
