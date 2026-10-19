@@ -16,9 +16,6 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#ifdef ROUND_FP32_TO_BF16
-#include "api/compute/eltwise_unary/typecast.h"
-#endif
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
@@ -28,10 +25,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
     copy_init(dfb::in);
-#ifdef ROUND_FP32_TO_BF16
-    // Round to nearest even like ttnn.typecast; the input was unpacked to a 32-bit DEST.
-    typecast_tile_init<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Float16_b>();
-#endif
 
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
@@ -43,9 +36,6 @@ void kernel_main() {
         dfb_in.wait_front(onetile);
         dfb_out.reserve_back(onetile);
         copy_tile(dfb::in, 0, 0);
-#ifdef ROUND_FP32_TO_BF16
-        typecast_tile<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Float16_b>(0);
-#endif
 
         tile_regs_commit();
         tile_regs_wait();

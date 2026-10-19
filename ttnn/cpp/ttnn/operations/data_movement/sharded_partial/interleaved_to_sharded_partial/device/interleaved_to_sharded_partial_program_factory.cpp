@@ -241,9 +241,6 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
         if (ttnn::operations::data_movement::datacopy_rounds_fp32_to_bf16(
                 input.device()->arch(), input_cb_data_format, output_cb_data_format)) {
             compute_config.fp32_dest_acc_en = true;
-            compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-            compute_config.unpack_to_dest_mode[input_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-            compute_desc.defines.emplace_back("ROUND_FP32_TO_BF16", "1");
         }
         compute_desc.config = compute_config;
     }

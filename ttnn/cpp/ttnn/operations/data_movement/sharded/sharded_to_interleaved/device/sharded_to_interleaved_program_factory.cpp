@@ -198,23 +198,21 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
         // false; dst_full_sync_en false = double_buffer_dest true), so an all-default config
         // reproduces the legacy settings exactly.
         ComputeHardwareConfig compute_hw = ComputeHardwareConfig{};
-        KernelSpec::CompilerOptions::Defines compute_defines;
         if (input.device()->arch() == tt::ARCH::QUASAR) {
             // The WH/BH config sets no fields, so the Quasar config copies none.
             // TODO(#52269): Quasar unpack_modes are copied from WH/BH and not yet optimized for Quasar.
             compute_hw = ComputeHardwareConfig{};
         } else if (ttnn::operations::data_movement::datacopy_rounds_fp32_to_bf16(
                        input.device()->arch(), input_data_format, output_data_format)) {
-            compute_defines.emplace("ROUND_FP32_TO_BF16", "1");
             compute_hw.enable_32_bit_dest = true;
-            compute_hw.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{IN_DFB, UnpackMode::UnpackToDest}};
+            compute_hw.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{IN_DFB, UnpackMode::UnpackToSrc}};
         }
         kernels.push_back(KernelSpec{
             .unique_id = COMPUTE,
             .source = "ttnn/cpp/ttnn/kernel/compute/eltwise_copy_metal2.cpp",
             // The legacy ComputeConfigDescriptor set no opt_level, which resolves to O3 for a compute
             // kernel; Metal 2.0's CompilerOptions defaults to O2, so O3 has to be stated here.
-            .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{
                      .dfb_spec_name = IN_DFB,

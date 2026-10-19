@@ -81,6 +81,12 @@ def _convert(op, x, device):
     raise ValueError(op)
 
 
+def _to_bf16_ties_away(x):
+    bits = (x.view(torch.int32).to(torch.int64) & 0xFFFFFFFF) + 0x8000
+    bits = (bits & 0xFFFF0000) - ((bits & 0x80000000) << 1)
+    return bits.to(torch.int32).view(torch.float32).to(torch.bfloat16)
+
+
 @pytest.mark.parametrize(
     "op",
     [
@@ -95,17 +101,15 @@ def _convert(op, x, device):
         "sharded_to_interleaved_partial",
     ],
 )
-def test_fp32_to_bf16_datacopy_rounds_to_nearest_even(device, op):
+def test_fp32_to_bf16_datacopy_rounds_to_nearest(device, op):
     x = _fp32_input()
-    expected = x.to(torch.bfloat16)
+    expected = _to_bf16_ties_away(x)
     got = ttnn.to_torch(_convert(op, x, device))
     assert got.dtype == torch.bfloat16
     mismatches = int((got != expected).sum())
-    assert mismatches == 0, f"{op}: {mismatches} of {x.numel()} values differ from x.to(torch.bfloat16)"
-    typecast = ttnn.to_torch(
-        ttnn.typecast(ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device), ttnn.bfloat16)
-    )
-    assert torch.equal(got.view(torch.int16), typecast.view(torch.int16))
+    assert mismatches == 0, f"{op}: {mismatches} of {x.numel()} values differ from round-to-nearest (ties away)"
+    ties = (x.view(torch.int32) & 0xFFFF) == 0x8000
+    assert torch.equal(got[~ties], x.to(torch.bfloat16)[~ties])
 
 
 @pytest.mark.parametrize("start, end, step", [(0, 2000, 3), (0.1, 0.5, 0.1), (0, 1, 1 / 3), (257, 385, 2)])

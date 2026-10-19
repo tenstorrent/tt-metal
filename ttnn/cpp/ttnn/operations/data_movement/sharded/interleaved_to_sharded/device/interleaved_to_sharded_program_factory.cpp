@@ -298,19 +298,17 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     // fit.
     if (convert_df) {
         ComputeHardwareConfig compute_hw{};
-        KernelSpec::CompilerOptions::Defines compute_defines;
         if (ttnn::operations::data_movement::datacopy_rounds_fp32_to_bf16(
                 input.device()->arch(), input_data_format, output_data_format)) {
-            compute_defines.emplace("ROUND_FP32_TO_BF16", "1");
             compute_hw.enable_32_bit_dest = true;
-            compute_hw.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{IN_DFB, UnpackMode::UnpackToDest}};
+            compute_hw.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{IN_DFB, UnpackMode::UnpackToSrc}};
         }
         kernels.push_back(KernelSpec{
             .unique_id = COMPUTE,
             .source = "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/compute/eltwise_copy_metal2.cpp",
             // The legacy ComputeConfigDescriptor set no opt_level, which resolves to O3 for a compute
             // kernel; Metal 2.0's CompilerOptions defaults to O2, so O3 has to be stated here.
-            .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{
                      .dfb_spec_name = IN_DFB,
