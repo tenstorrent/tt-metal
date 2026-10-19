@@ -154,6 +154,9 @@ class TtMiMoModel:
         self.norm_buffers = None
         self.swa_table = None
         self.swa_qkv = None
+        # vLLM-owned KV (setup_vllm_kv_cache): each layer's KV cache group, and the host copy of every group's table.
+        self.layer_groups = None
+        self.vllm_tables = None
         # Chip c's vocab shard starts at c * vocab_local: added to its local top-k ids for the device greedy.
         offsets = (torch.arange(plan.tp, dtype=torch.int32) * self.vocab_local).reshape(plan.tp, 1, 1, 1)
         self.vocab_offset = ttnn.from_torch(
@@ -216,6 +219,82 @@ class TtMiMoModel:
         if self.swa_table is not None:
             self.swa_table.dirty = False
         self._setup_fused_norms()
+
+    def setup_vllm_kv_cache(self, num_users, kv_caches, layer_groups, table_width):
+        """Adopt KV caches and page tables that vLLM owns, for ``num_users`` users in decode slots [0, num_users).
+
+        ``kv_caches``: [K, V] per layer, allocated by the caller. ``layer_groups``: each layer's vLLM KV cache group;
+        the layers of a group share one page table [max_batch, table_width] (``set_vllm_page_tables``), indexed by
+        absolute position. A SWA group's table is vLLM's SlidingWindowSpec table: the blocks no window can read are
+        vLLM's null block 0, where this model's own tables point at their scratch block (kv.SwaBlockTable).
+
+        Every chip gets the same tables. vLLM can hand one block to requests in slots of either parity (prefix
+        caching), so a global layer's chip pair keeps both copies of its KV head: decode writes every slot's K / V on
+        both chips (``pos_update``) and still splits the attention by slot."""
+        assert num_users <= self.max_batch
+        assert self.decode_users in (None, num_users), f"decode users already set to {self.decode_users}"
+        assert self.decode_trace is None and self.kv_caches is None, "the KV cache is already set up"
+        assert len(kv_caches) == len(layer_groups) == len(self.layers)
+        self.decode_users = num_users
+        for layer in self.layers:
+            if layer.is_moe:
+                layer.mlp.set_decode_users(num_users)
+        self.kv_caches = kv_caches
+        self.layer_groups = list(layer_groups)
+        empty = torch.zeros(self.max_batch, table_width, dtype=torch.int32)
+        self.vllm_tables = {g: empty.clone() for g in sorted(set(self.layer_groups))}
+        self.page_table_tt = {
+            g: ttnn.from_torch(
+                empty,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self.plan.replicate(),
+            )
+            for g in self.vllm_tables
+        }
+        self._setup_fused_norms()
+
+    def set_vllm_page_tables(self, rows):
+        """rows: {slot: {group: int32 [<= table_width] block ids}} (vLLM's table row of the user in that slot).
+        Copies every group table that changed to the device, in queue order with the work already enqueued."""
+        changed = set()
+        for slot, tables in rows.items():
+            for g, row in tables.items():
+                host = self.vllm_tables[g]
+                assert row.numel() <= host.shape[1], f"group {g}: table row of {row.numel()} > {host.shape[1]}"
+                new = torch.zeros(host.shape[1], dtype=torch.int32)
+                new[: row.numel()] = row.to(torch.int32)
+                if not torch.equal(new, host[slot]):
+                    host[slot] = new
+                    changed.add(g)
+        for g in sorted(changed):
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    self.vllm_tables[g],
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=self.plan.replicate(),
+                ),
+                self.page_table_tt[g],
+            )
+
+    def _layer_page_table(self, i):
+        """Layer ``i``'s page table: {is_swa: table} for the model's own tables, else its vLLM group's table."""
+        return self.page_table_tt if self.layer_groups is None else self.page_table_tt[self.layer_groups[i]]
+
+    def _vllm_window_blocks(self, slot, start_pos):
+        """{SWA group: physical blocks of positions [window start, start_pos) of ``slot``} from vLLM's tables (the
+        keys a later SWA chunk reads, as kv.SwaBlockTable.window_blocks)."""
+        swa_groups = {self.layer_groups[i] for i, layer in enumerate(self.layers) if layer.is_swa}
+        window = next(layer.attn.sliding_window for layer in self.layers if layer.is_swa)
+        first, end = max(0, start_pos - window) // self.block_size, start_pos // self.block_size
+        out = {}
+        for g in swa_groups:
+            blocks = [int(b) for b in self.vllm_tables[g][slot, first:end]]
+            assert 0 not in blocks, f"slot {slot}: the SWA window before {start_pos} is not in group {g}'s table"
+            out[g] = blocks
+        return out
 
     def _sync_swa_table(self):
         """Copy the SWA block table to its device tensor in place if it changed (ordered with the queued work, so
@@ -324,16 +403,20 @@ class TtMiMoModel:
             self._sync_swa_table()
             if start_pos > 0:
                 window_blocks = self.swa_table.window_blocks(slot, start_pos)
+        elif self.layer_groups is not None and start_pos > 0:
+            window_blocks = self._vllm_window_blocks(slot, start_pos)
         x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)))
         for i, layer in enumerate(self.layers):
             y = layer.forward_prefill(
                 x,
                 slot,
-                self.page_table_tt,
+                self._layer_page_table(i),
                 self.kv_caches[i],
                 real_len=n,
                 start_pos=start_pos,
-                window_blocks=window_blocks,
+                window_blocks=window_blocks.get(self.layer_groups[i])
+                if isinstance(window_blocks, dict)
+                else window_blocks,
             )
             x.deallocate(True)
             x = y
@@ -433,10 +516,12 @@ class TtMiMoModel:
             False: self.rope_setups["full"].decode_rot_mats(cos_full, sin_full),
         }
         positions = {"pos": cur_pos_tt, "pos_owned": pos_owned_tt, "owner_mask": owner_mask_tt}
+        if self.layer_groups is not None:
+            positions["pos_update"] = cur_pos_tt  # vLLM's blocks: both chips of a pair keep every slot's K / V
         h = None
         for i, layer in enumerate(self.layers):
             y, h = layer.forward_decode(
-                x, rot_mats, positions, self.page_table_tt, self.kv_caches[i], mask_tt, h=h, return_norm=True
+                x, rot_mats, positions, self._layer_page_table(i), self.kv_caches[i], mask_tt, h=h, return_norm=True
             )
             x.deallocate(True)
             x = y

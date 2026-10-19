@@ -848,13 +848,20 @@ class TtMiMoAttention:
     def forward_decode(self, x, rot_mats, cur_pos, page_table, kv_cache, compact=False):
         """x [1, 1, B, hidden] (B users padded to a tile).
 
-        cur_pos: int32 [B] on device (-1 skips a slot), or a dict {"pos", "pos_owned", "owner_mask"}; global
-        layers with split users read the per-chip owned view (see kv.py).
+        cur_pos: int32 [B] on device (-1 skips a slot), or a dict {"pos", "pos_owned", "owner_mask"} and optionally
+        "pos_update"; global layers with split users read the per-chip owned view (see kv.py).
         ``compact``: users only in rows 0-3; returns the gathered compact rows (see ``_decode_o``)."""
         if isinstance(cur_pos, dict):
             if self.split_users:
                 return self._forward_decode_split(
-                    x, rot_mats, cur_pos["pos_owned"], cur_pos["owner_mask"], page_table, kv_cache, compact
+                    x,
+                    rot_mats,
+                    cur_pos["pos_owned"],
+                    cur_pos["owner_mask"],
+                    page_table,
+                    kv_cache,
+                    compact,
+                    pos_update=cur_pos.get("pos_update"),
                 )
             cur_pos = cur_pos["pos"]
         assert not self.split_users, "global layers on TP=8 need the per-chip owned positions"
@@ -905,8 +912,13 @@ class TtMiMoAttention:
         attn.deallocate(True)
         return self._decode_o(attn_cat, compact)
 
-    def _forward_decode_split(self, x, rot_mats, pos_owned, owner_mask, page_table, kv_cache, compact=False):
-        """Global-layer decode: all 16 Q heads of this chip's KV group, for the slots this chip owns."""
+    def _forward_decode_split(
+        self, x, rot_mats, pos_owned, owner_mask, page_table, kv_cache, compact=False, pos_update=None
+    ):
+        """Global-layer decode: all 16 Q heads of this chip's KV group, for the slots this chip owns.
+
+        ``pos_update``: the positions whose K / V this chip writes (default ``pos_owned``). With vLLM's page tables
+        both chips of the pair keep every slot's K / V, so the caller passes every slot's position."""
         batch = x.shape[-2]
         xqkv = self._decode_qkv(x, self.wqkv_decode, self.decode_qkv_program)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -931,7 +943,7 @@ class TtMiMoAttention:
         v_real.deallocate(True)
 
         k_cache, v_cache = kv_cache
-        update = dict(update_idxs_tensor=pos_owned, page_table=page_table)
+        update = dict(update_idxs_tensor=pos_owned if pos_update is None else pos_update, page_table=page_table)
         ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
         ttnn.experimental.paged_update_cache(v_cache, v_shard, **update)
         k_rot.deallocate(True)
