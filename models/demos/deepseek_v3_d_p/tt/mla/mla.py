@@ -1657,6 +1657,8 @@ class ttMLA:
         # GLM-5.3 reuse: a shared layer receives a prior full layer's top-k indices and skips its own
         # indexer (its ReuseIndexer.forward would raise). Absent injection -> compute as usual.
         selection_state = None
+        if indexer_indices is None and self.tt_ccl.sparse_kv_push is not None:
+            self.tt_ccl.sparse_kv_push[0].invalidate()  # this layer refills the shared indices buffer
         if indexer_indices is not None:
             indices = indexer_indices
         elif self._sparse_mla_overlap is not None:
