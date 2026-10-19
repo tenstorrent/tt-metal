@@ -1359,3 +1359,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   them as the report's 'on' side (its switch, environment and results dirs). The perf brief tells the agent to run its
   frozen tests that way after its last edit. F105's accept reuse reads the per-run stamps. DeepSeek-V4.1 P.8: the
   agent's ~1 h of frozen tests and the report's on side were the same runs, twice.
+
+- F117 (owner rule, 2026-10-19): weights at the checkpoint's own width (agents' rule 7): fp4 -> bfp4, fp8 -> bfp8,
+  16-bit -> bf16 in the shipped defaults; the exact wider format (bfp8 / bf16) in max_precision where the narrow one
+  is lossy. DeepSeek-V4.1 had widened every fp8 weight to bf16 at load (2x memory and DRAM traffic).
