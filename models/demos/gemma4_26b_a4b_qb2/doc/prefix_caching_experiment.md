@@ -404,6 +404,22 @@ causal seed/runtime comparisons. The focused synthetic timing controls
 used identical token inputs and are unaffected. No prompt was changed
 mid-study to conceal or remove this difference.
 
+### Unseeded, cache off
+
+Run39247602550 submitted normally but failed the official verifier
+(reward0.0), with no terminal agent exception. The target subclass-property
+test and29 other cases failed. Agent2428.358s, client wall2489s,
+trial2478.611s. All77 requests stopped normally: input/computed2,098,765,
+cached0, output36,459; TTFT1699.761s, decode718.462s. The final context
+was51,758 tokens. This is a real task-quality failure, not infrastructure.
+
+Its uname is Linux7.0.0-34, matching the unseeded cached arm. Canonical
+initial system/user messages in this pair have identical SHA256
+`e609e00bf27fdef5e0686097b43b80a60d3bdd3334878400b1b44d27877d1213`.
+The uname confound is therefore between seed groups, not this cache pair.
+Random sampling and divergent trajectories still prevent attributing the
+full wall-time/quality difference to caching from one sample per arm.
+
 Remote runs 39238204679 (qb2-120-p03t09) and 39238201191
 (qb2-120-p01t03) passed concurrently on distinct machines, using Metal
 7d5c3e5cb8438989e36a6a35c704f1154f9a4584 and workflow 38d4d6f.
