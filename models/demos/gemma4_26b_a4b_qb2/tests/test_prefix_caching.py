@@ -126,6 +126,8 @@ def _metric_totals(url):
         "prefix_cache_hits_total",
         "time_to_first_token_seconds_sum",
         "request_prefill_kv_computed_tokens_sum",
+        "generation_tokens_total",
+        "request_decode_time_seconds_sum",
     ):
         values = [float(line.rsplit(" ", 1)[1]) for line in response.text.splitlines() if line.startswith(f"vllm:{metric}{{")]
         assert values, f"Metric missing: {metric}"

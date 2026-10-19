@@ -133,6 +133,34 @@ storage; the experiment did not issue broad cleanup or reset commands.
 
 ## Independent suffix variants
 
+### Variant results and next scope
+
+Shared run `39235780379` and traced run `39235783153` both passed 16 host
+tests and all six full-logit decode-contract cases. Median wall seconds for
+the two 31-token suffix cases:
+
+| Mode | Prompt 63 cached / cold | Prompt 1023 cached / cold |
+|---|---:|---:|
+| Serial | 2.686 / 0.111 | 2.691 / 0.444 |
+| Shared MLP | 2.269 / 0.112 | 2.291 / 0.446 |
+| Traced suffix | 0.890 / 0.117 | 0.898 / 0.453 |
+
+Each row has three warmed repetitions and its own cold control. Runners are
+distinct as recorded below; do not interpret small cross-machine differences
+as causal effects. Both variants preserve exact tested decode logits, but
+even the traced path loses to cold prefill at these short contexts. The
+one-token suffix cases remain approximately 0.12 s.
+
+Next checks use the traced candidate: (1) fresh growing conversations with
+4096/8192/16384 cached-prefix tokens and exactly 127 newly computed tokens,
+with the first diagnostic/compile conversation excluded; (2) a separate
+4096-context server to force eviction with 12 distinct conversations, test
+divergent partial-block suffixes, and verify repeated device-sampled outputs
+at physical B1. The latter retains seed9472 solely as a deterministic
+sampling-state check, not evidence that the seed is necessary or removable.
+No standard-Harbor accuracy or final Shield release has been dispatched for
+the caching candidate yet.
+
 ### Serial control result
 
 [39235204816](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39235204816)

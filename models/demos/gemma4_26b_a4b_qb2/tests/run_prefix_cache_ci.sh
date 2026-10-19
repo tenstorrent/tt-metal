@@ -37,13 +37,22 @@ export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
 export TT_MESH_GRAPH_DESC_PATH="$PWD/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto"
 export TT_METAL_CACHE="$results/kernel-cache"
 tt_config='{"tt":{"fabric_config":"FABRIC_1D","trace_region_size":1000000000,"sample_on_device_mode":"all","trace_mode":"decode_only","enable_model_warmup":false}}'
+max_context=262144
+test_file="$model_dir/tests/test_prefix_caching.py"
+test_selection=live_decode_contract
+case "${GEMMA4_PREFIX_SUITE:-boundary}" in
+    boundary) ;;
+    lifetime) max_context=4096; test_file="$model_dir/tests/test_prefix_cache_lifetime.py"; test_selection=live_lifetime ;;
+    growing) test_file="$model_dir/tests/test_prefix_cache_lifetime.py"; test_selection=live_growing ;;
+    *) echo 'Unsupported prefix experiment suite'; exit 2 ;;
+esac
 setsid python -u -m vllm.entrypoints.openai.api_server \
     --model google/gemma-4-26B-A4B-it --seed 9472 \
     --revision 4d7ae4984b7db7de8f8457170b3f1a419ee76d52 \
     --tokenizer-revision 4d7ae4984b7db7de8f8457170b3f1a419ee76d52 \
     --hf-overrides '{"architectures":["TTGemma4A4BForCausalLM"]}' \
     --host 127.0.0.1 --port 8000 --block-size 32 --max-num-seqs 1 \
-    --max-model-len 262144 --max-num-batched-tokens 262144 --max-logprobs -1 \
+    --max-model-len "$max_context" --max-num-batched-tokens "$max_context" --max-logprobs -1 \
     --async-scheduling --enable-prefix-caching --no-enable-chunked-prefill \
     --no-enable-log-requests --no-enable-log-outputs \
     --additional-config "$tt_config" > "$results/server.log" 2>&1 &
@@ -62,7 +71,7 @@ while ! curl --max-time 2 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; do
     sleep 5
 done
 status=0
-timeout 1800 python -m pytest "$model_dir/tests/test_prefix_caching.py" -k live_decode_contract \
+timeout 1800 python -m pytest "$test_file" -k "$test_selection" \
     --gemma-server-url http://127.0.0.1:8000 --junitxml "$results/live.xml" -x -v || status=$?
 if [ "$status" -eq 124 ]; then
     timeout 120 python tools/tt-triage.py --llm-output \
