@@ -33,6 +33,7 @@ class SparseKvPushPlan:
     streams: ttnn.Tensor  # host plan: per-device [1, 1, links, words] push lists; device plan: all-gathered tables
     compact_indices: ttnn.Tensor  # indices rewritten to compact slots, same distribution as `indices`
     push_kwargs: dict  # extra high_bw_all_gather arguments selecting the push variant
+    split_prefix: bool = False  # built with the chunk start: push_part 1 / 2 split the push around it
 
 
 def _shard_over_mesh(tensor, mesh_device):
@@ -119,10 +120,41 @@ class SparseKvPushPlanner:
         self.generation = 0
         self.on_device = os.getenv("TT_SPARSE_KV_PUSH_PLAN", "device") != "host"
         self._tables = None  # all-gathered plan tables, allocated once
+        self._buffers = {}  # (parity, rows, width, dtype) -> compact buffer; consecutive layers alternate parity
+        self._starts = {}  # chunk start -> 1-element device tensor
+        # layer index -> plan whose prefix part an earlier layer already pushed into that layer's buffer
+        self.prefetched = {}
+
+    def push_buffer(self, parity, rows, like):
+        """Compact buffer for layers of this parity; the previous layer's buffer stays readable while it fills."""
+        key = (parity, rows, like.shape[-1], like.dtype)
+        if key not in self._buffers:
+            self._buffers[key] = ttnn.from_torch(
+                torch.zeros(1, 1, rows, like.shape[-1]),
+                dtype=like.dtype,
+                layout=like.layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self._buffers[key]
+
+    def chunk_start(self, start: int):
+        if start not in self._starts:
+            self._starts[start] = ttnn.from_torch(
+                torch.tensor([[[[start]]]], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self._starts[start]
 
     def invalidate(self):
         self._last = None
         self.generation += 1
+        self.prefetched.clear()
 
     def buffer_rows(self, rows: int, page_bytes: int) -> int:
         """Compact buffer rows for up to `rows` distinct rows: each owner's stream pads to whole bank-lane units."""
@@ -134,13 +166,21 @@ class SparseKvPushPlanner:
         return max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
 
     def plan(
-        self, indices: ttnn.Tensor, *, stripe_chunk: int, buffer_rows: int, page_bytes: int, max_rows: int
+        self,
+        indices: ttnn.Tensor,
+        *,
+        stripe_chunk: int,
+        buffer_rows: int,
+        page_bytes: int,
+        max_rows: int,
+        chunk_start: int | None = None,
     ) -> SparseKvPushPlan:
-        key = (indices.buffer_address(), stripe_chunk, buffer_rows, page_bytes)
+        key = (indices.buffer_address(), stripe_chunk, buffer_rows, page_bytes, chunk_start)
         if self._last is not None and self._key == key:
             return self._last
         if self.on_device:
-            self._key, self._last = key, self._plan_device(indices, stripe_chunk, page_bytes, max_rows)
+            start = None if chunk_start is None else self.chunk_start(chunk_start)
+            self._key, self._last = key, self._plan_device(indices, stripe_chunk, page_bytes, max_rows, start)
             return self._last
         memo_key = (self.memo_tag, self.generation, key[1:])
         if self.memo is not None and memo_key in self.memo:
@@ -210,4 +250,5 @@ class SparseKvPushPlanner:
             streams=self._tables,
             compact_indices=compact,
             push_kwargs=dict(push_stripe_chunk=stripe_chunk, push_max_rows=max_rows),
+            split_prefix=chunk_start is not None,
         )
