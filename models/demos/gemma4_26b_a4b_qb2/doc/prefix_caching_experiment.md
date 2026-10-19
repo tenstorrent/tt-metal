@@ -314,6 +314,23 @@ These four concurrent jobs have distinct physical workers. The baseline
 Shield worker qb2-120-p05t09 is not used. Runs are pending measurement;
 dispatch/reaching the client step is not evidence of task completion.
 
+Run 39241180817 completed with workflow exit0 but an invalid task result:
+Harbor `1da0bfd8c71cadbff17413fac984b8e391d2afc2`, mini-swe-agent2.2.8
+raised `ModuleNotFoundError: No module named 'mcp'` in the LiteLLM tools
+path before any HTTP inference request. Prompt, generation and successful
+request counters were all zero. Agent execution spent 251.46 seconds
+retrying the import; total Harbor runtime was 303.51 seconds. Reward0 and
+`NonZeroAgentExitCodeError` are infrastructure evidence, not model accuracy.
+The client nevertheless printed `Acceptance: PASS`; green CI must not be
+used as the functional gate. The other three arms were cancelled when this
+shared dependency failure became known, to avoid duplicate retries.
+
+Source inspection finds Harbor installs the isolated agent tool with
+`--with litellm --with orjson --with fastapi`, omitting mcp. Installing a
+host dependency would not repair that task-container tool environment.
+Any dependency repair must preserve the standard agent and be identical
+across all four arms; no accuracy or seed-removal conclusion is available.
+
 Remote runs 39238204679 (qb2-120-p03t09) and 39238201191
 (qb2-120-p01t03) passed concurrently on distinct machines, using Metal
 7d5c3e5cb8438989e36a6a35c704f1154f9a4584 and workflow 38d4d6f.
