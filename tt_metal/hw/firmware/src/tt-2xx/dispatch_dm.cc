@@ -65,7 +65,8 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
-inline void invalidate_kernel_binary_l2_cache(uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {
+inline void invalidate_kernel_binary_l2_cache(
+    uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {
     uint32_t kernel_size = launch_msg->kernel_config.kernel_text_size[processor_index];
     if (kernel_size == 0) {
         return;
@@ -186,8 +187,7 @@ extern "C" uint32_t _start1() {
                 DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
                 DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
                 uint32_t enables = launch_msg_address->kernel_config.enables;
-                uintptr_t kernel_config_base =
-                    firmware_config_init(mailboxes, ProgrammableCoreType::DISPATCH, hartid);
+                uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::DISPATCH, hartid);
 
                 for (uint32_t i = 0; i < MaxNumKernels; i++) {
                     mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
@@ -210,6 +210,7 @@ extern "C" uint32_t _start1() {
                     uintptr_t kernel_lma = launch_msg_address->kernel_config.kernel_text_offset[index];
                     invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg_address, index);
                     invalidate_l1_icache();
+                    reset_cmd_buf_trids();
                     auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                     record_stack_usage(stack_free);
                 } else {
@@ -266,6 +267,7 @@ extern "C" uint32_t _start1() {
         }
         invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg, index);
         invalidate_l1_icache();
+        reset_cmd_buf_trids();
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
 
         record_stack_usage(stack_free);

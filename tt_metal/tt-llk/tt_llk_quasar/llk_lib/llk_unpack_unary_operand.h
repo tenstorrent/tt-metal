@@ -126,10 +126,25 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
         // tag. If the cleared register was last written in a packed format (e.g. MxFp4_2x_B by a 2x matmul), ELWADD
         // reads it through the packed path and adds non-zero garbage. Unpack one row into the cleared register first
         // (no dvalid, no index increment) so its bank takes that unpacker's output format, then clear it.
-        constexpr bool retag_srcb = (UNP_SEL == p_unpacr::UNP_A);
-        const std::uint32_t retag_instrn =
-            retag_srcb ? TT_OP_UNPACR1_ROW(0 /*Dst_Row_Idx*/, 0 /*Src_Row_Idx*/, 0 /*Dst_Face_Idx*/, 0 /*Src_Face_Idx*/, 0, 0, buf_desc_id, 0 /*SetDatValid*/)
-                       : TT_OP_UNPACR0_ROW(0 /*Dst_Row_Idx*/, 0 /*Src_Row_Idx*/, 0 /*Dst_Face_Idx*/, 0 /*Src_Face_Idx*/, 0, 0, buf_desc_id, 0 /*SetDatValid*/);
+        constexpr bool retag_srcb        = (UNP_SEL == p_unpacr::UNP_A);
+        const std::uint32_t retag_instrn = retag_srcb ? TT_OP_UNPACR1_ROW(
+                                                            0 /*Dst_Row_Idx*/,
+                                                            0 /*Src_Row_Idx*/,
+                                                            0 /*Dst_Face_Idx*/,
+                                                            0 /*Src_Face_Idx*/,
+                                                            0 /*Dst_Tile_Offset_Idx_Inc*/,
+                                                            0 /*Src_Tile_Offset_Idx_Inc*/,
+                                                            buf_desc_id,
+                                                            0 /*SetDatValid*/)
+                                                      : TT_OP_UNPACR0_ROW(
+                                                            0 /*Dst_Row_Idx*/,
+                                                            0 /*Src_Row_Idx*/,
+                                                            0 /*Dst_Face_Idx*/,
+                                                            0 /*Src_Face_Idx*/,
+                                                            0 /*Dst_Tile_Offset_Idx_Inc*/,
+                                                            0 /*Src_Tile_Offset_Idx_Inc*/,
+                                                            buf_desc_id,
+                                                            0 /*SetDatValid*/);
         temp.set_end_ops(retag_instrn, clr_unused_unpacr_engine);
     }
 
