@@ -9,6 +9,8 @@ TRISC3: UNP_S -> SrcS -> exp -> PACK1 -> buffer_Res.
 Both outputs verified after a single configuration.run().
 """
 
+import os
+
 import pytest
 import torch
 from helpers.data_format_inference import data_formats
@@ -21,10 +23,10 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     PerfRunType,
+    SfpuSrcsImpl,
     Transpose,
     format_dict,
 )
@@ -44,10 +46,10 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     ENABLE_2X_FORMAT,
     ENABLE_DIRECT_INDEXING,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
+    SFPU_SRCS_IMPL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -65,6 +67,13 @@ DIMENSION_PROFILES = (
 )
 
 
+# ttsim has no SFPLOADMACRO, so under --disable-sfploadmacro only the SFPI implementation is built.
+LOADMACRO_AVAILABLE = os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") != "1"
+ALL_SFPU_SRCS_IMPLS = (
+    tuple(SfpuSrcsImpl) if LOADMACRO_AVAILABLE else (SfpuSrcsImpl.Sfpi,)
+)
+
+
 def _matmul_output_fits_dest(
     input_A_dimensions: list[int],
     input_B_dimensions: list[int],
@@ -78,39 +87,37 @@ def _matmul_output_fits_dest(
 
 
 def generate_parallel_matmul_exp_combinations(
-    formats_list: list[FormatConfig], *, is_perf: bool = False
+    formats_list: list[FormatConfig],
+    *,
+    is_perf: bool = False,
+    impls: tuple[SfpuSrcsImpl, ...] = (SfpuSrcsImpl.Sfpi,),
 ):
     combinations = []
     for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
         formats_list
     ):
         dest_sync_modes = (DestSync.Half, DestSync.Full)
-        implied_math_modes = (
-            (ImpliedMathFormat.Yes,)
-            if is_perf
-            else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
-        )
         dimension_profiles = (DIMENSION_PROFILES[1],) if is_perf else DIMENSION_PROFILES
         for dest_sync in dest_sync_modes:
-            for implied_math_format in implied_math_modes:
-                for (
-                    exp_input_dimensions,
+            for (
+                exp_input_dimensions,
+                input_A_dimensions,
+                input_B_dimensions,
+            ) in dimension_profiles:
+                if not _matmul_output_fits_dest(
                     input_A_dimensions,
                     input_B_dimensions,
-                ) in dimension_profiles:
-                    if not _matmul_output_fits_dest(
-                        input_A_dimensions,
-                        input_B_dimensions,
-                        dest_acc,
-                        dest_sync,
-                    ):
-                        continue
+                    dest_acc,
+                    dest_sync,
+                ):
+                    continue
+                for sfpu_srcs_impl in impls:
                     combinations.append(
                         (
                             fmt,
                             dest_acc,
                             dest_sync,
-                            implied_math_format,
+                            sfpu_srcs_impl,
                             runtime(exp_input_dimensions),
                             runtime(input_A_dimensions),
                             runtime(input_B_dimensions),
@@ -119,17 +126,22 @@ def generate_parallel_matmul_exp_combinations(
     return combinations
 
 
+# Regular run: SFPI implementation only. The SFPLOADMACRO implementation runs in the nightly
+# function below, so a nightly session covers both.
 PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
-    SFPU_UNARY_FORMATS
+    SFPU_UNARY_FORMATS, impls=(SfpuSrcsImpl.Sfpi,)
+)
+PARALLEL_MATMUL_EXP_LOADMACRO_COMBINATIONS = generate_parallel_matmul_exp_combinations(
+    SFPU_UNARY_FORMATS, impls=(SfpuSrcsImpl.LoadMacro,)
 )
 
 
 @pytest.mark.quasar
 @parametrize(
-    format_dest_acc_sync_implied_math=PARALLEL_MATMUL_EXP_COMBINATIONS,
+    format_dest_acc_sync=PARALLEL_MATMUL_EXP_COMBINATIONS,
 )
 def test_sfpu_exp_parallel_matmul_quasar(
-    format_dest_acc_sync_implied_math,
+    format_dest_acc_sync,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
     is_perf=False,
@@ -139,11 +151,11 @@ def test_sfpu_exp_parallel_matmul_quasar(
         formats,
         dest_acc,
         dest_sync,
-        implied_math_format,
+        sfpu_srcs_impl,
         exp_input_dimensions,
         input_A_dimensions,
         input_B_dimensions,
-    ) = format_dest_acc_sync_implied_math[0]
+    ) = format_dest_acc_sync[0]
 
     matmul_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -248,11 +260,11 @@ def test_sfpu_exp_parallel_matmul_quasar(
         "formats": formats,
         "templates": [
             MATH_FIDELITY(MathFidelity.LoFi),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             ENABLE_2X_FORMAT(False),
             ENABLE_DIRECT_INDEXING(False),
             DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(Transpose.No),
+            SFPU_SRCS_IMPL(sfpu_srcs_impl),
         ],
         "runtimes": [
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
@@ -286,3 +298,16 @@ def test_sfpu_exp_parallel_matmul_quasar(
     assert len(res_matmul) == len(golden_matmul), "matmul"
     assert passed_test(golden_exp, res_exp, formats.output_format), "exp"
     assert passed_test(golden_matmul, res_matmul, formats.output_format), "matmul"
+
+
+@pytest.mark.nightly
+@pytest.mark.quasar
+@pytest.mark.skipif(
+    not LOADMACRO_AVAILABLE,
+    reason="ttsim has no SFPLOADMACRO; only the SFPI implementation is built",
+)
+@parametrize(
+    format_dest_acc_sync=PARALLEL_MATMUL_EXP_LOADMACRO_COMBINATIONS,
+)
+def test_sfpu_exp_parallel_matmul_loadmacro_quasar(format_dest_acc_sync):
+    test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync)
