@@ -585,23 +585,25 @@ class Qwen38ForCausalLM:
         request takes the slot-zero path, whose programs and persistent buffers are its own.
         """
         generator = self.generator
+        buckets = sorted((bucket for bucket in self.prefill_warmup_buckets if bucket <= cache.capacity), reverse=True)
+        # A bucket holds two programs: a prompt that fills it bakes its slice offset in, a shorter
+        # one masks its tail and selects through a selector. Warming only the exact shape leaves
+        # every prompt that is not a whole number of pages -- nearly all of them -- to compile on
+        # first sight. Exact first, so the recordings the residency keeps are the padded ones.
+        # Largest first within each shape, because a chat turn alternates among the small ones.
         warmed = []
-        # Largest first, because only the last few buckets keep their trace and a chat turn
-        # alternates among the small ones.
-        for bucket in sorted(self.prefill_warmup_buckets, reverse=True):
-            if bucket > cache.capacity:
-                continue
+        for valid in buckets + [bucket - 1 for bucket in buckets]:
             generator.reset_recurrent_slots([0])
             generator.serving_prefill_tokens(
-                torch.zeros(1, bucket, dtype=torch.int64),
+                torch.zeros(1, valid, dtype=torch.int64),
                 page_table=generator.page_host,
                 kv_cache=cache,
-                prompt_lens=[bucket],
+                prompt_lens=[valid],
                 start_pos=[0],
                 slots=[0],
             )
-            warmed.append(bucket)
-        warmed.reverse()
+            warmed.append(valid)
+        warmed.sort()
         if warmed:
             # Warmup must leave no request behind it: the sampler, the positions and both caches
             # are what the first real request reads.

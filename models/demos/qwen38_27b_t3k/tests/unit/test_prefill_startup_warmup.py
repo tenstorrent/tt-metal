@@ -42,7 +42,9 @@ class StartupWarmupTests(unittest.TestCase):
         adapter.warmup_model_prefill(kv_cache=adapter.cache)
         self.assertEqual(adapter.generator.prefill_forward.call_count, 0)
         warmed = [call.kwargs["prompt_lens"][0] for call in adapter.generator.serving_prefill_tokens.call_args_list]
-        self.assertEqual(warmed, [128, 96, 64, 32])
+        # Both shapes of every bucket: a prompt that fills it and one that does not are separate
+        # programs, and a real prompt is rarely a whole number of pages.
+        self.assertEqual(warmed, [128, 96, 64, 32, 127, 95, 63, 31])
         self.assertTrue(adapter._prefill_startup_warmed)
 
     @patch("models.demos.qwen38_27b_t3k.tt.generator_vllm.ttnn.synchronize_device")
@@ -62,9 +64,10 @@ class StartupWarmupTests(unittest.TestCase):
         # A lone request takes the slot-zero serving path, whose programs the occupancy sweep
         # above never builds, so each bucket is compiled through the call that will replay it.
         warmed = [call.kwargs["prompt_lens"][0] for call in adapter.generator.serving_prefill_tokens.call_args_list]
-        # Largest first: only the last few buckets keep a trace, and a chat turn alternates
-        # among the small ones.
-        self.assertEqual(warmed, [128, 96, 64, 32])
+        # Largest first within each shape: only the last few buckets keep a trace, and a chat turn
+        # alternates among the small ones. The padded pass runs last because that is the shape
+        # nearly every real prompt takes.
+        self.assertEqual(warmed, [128, 96, 64, 32, 127, 95, 63, 31])
         for call in adapter.generator.serving_prefill_tokens.call_args_list:
             self.assertEqual(call.kwargs["slots"], [0])
             self.assertEqual(call.kwargs["start_pos"], [0])
@@ -106,9 +109,11 @@ class StartupWarmupTests(unittest.TestCase):
         adapter.generator.cache = adapter.cache
         self.assertEqual(adapter._warm_bucket_widths(adapter.cache), [32, 64, 96])
 
-    def test_the_smallest_buckets_are_warmed_last_so_they_stay_resident(self):
+    def test_the_smallest_padded_buckets_are_warmed_last_so_they_stay_resident(self):
         # Only MAX_RESIDENT_PREFILL buckets keep their buffers and trace; the rest are evicted as
-        # the ladder runs, so warm order decides which survive into serving.
+        # the ladder runs, so warm order decides which survive into serving. Warming both shapes
+        # doubles the ladder, which makes that order worth more, not less: the survivors must be
+        # the small padded buckets, because that is what a chat turn actually sends.
         from models.demos.qwen38_27b_t3k.tt.generator import MAX_RESIDENT_PREFILL
 
         adapter = self.make_adapter(1)
@@ -117,8 +122,25 @@ class StartupWarmupTests(unittest.TestCase):
         adapter.generator.cache = adapter.cache
         adapter.warmup_model_prefill(kv_cache=adapter.cache)
         warmed = [call.kwargs["prompt_lens"][0] for call in adapter.generator.serving_prefill_tokens.call_args_list]
-        self.assertEqual(warmed, sorted(warmed, reverse=True))
-        self.assertEqual(sorted(warmed[-MAX_RESIDENT_PREFILL:]), [32, 64, 96, 128])
+        exact, padded = warmed[: len(warmed) // 2], warmed[len(warmed) // 2 :]
+        self.assertEqual(exact, sorted(exact, reverse=True))
+        self.assertEqual(padded, sorted(padded, reverse=True))
+        self.assertEqual(sorted(padded[-MAX_RESIDENT_PREFILL:]), [31, 63, 95, 127])
+
+    def test_every_warmed_length_lands_in_the_bucket_it_was_meant_for(self):
+        # The padded shape is warmed as bucket - 1, which only represents that bucket while a page
+        # is 32 tokens. A page-size change would silently warm the wrong bucket, or the same one
+        # twice, and leave real prompts compiling on first sight again.
+        from models.demos.qwen38_27b_t3k.tt.generator import prefill_bucket
+
+        adapter = self.make_adapter(1)
+        adapter.warmup_model_prefill(kv_cache=adapter.cache)
+        warmed = [call.kwargs["prompt_lens"][0] for call in adapter.generator.serving_prefill_tokens.call_args_list]
+        shapes = {(prefill_bucket(valid, adapter.cache.capacity), valid) for valid in warmed}
+        buckets = {bucket for bucket, _ in shapes}
+        for bucket in buckets:
+            got = {valid != bucket for found, valid in shapes if found == bucket}
+            self.assertEqual(got, {False, True}, f"bucket {bucket} is missing one of its two programs")
 
     def test_failure_restores_state_without_marking_ready(self):
         adapter = self.make_adapter()
