@@ -564,6 +564,61 @@
   budget_type: demo
   sp_config: sc1
 
+- name: "(Kimi-K3-2.8T) DSpark drafter accuracy 5k + 55k vs GPU trace, and K3 taps L25"
+  # The DFlash drafter tests of the Kimi-K2.7 components suite, on RadixArk's Kimi-K3-DSpark checkpoint,
+  # plus the golden check that feeds the drafter the GPU taps, and the K3 side of those taps.
+  cmd: |
+    # Stops at the first failure, as the suites above.
+    k3_dspark_drafter() (
+      export MESH_DEVICE=TG
+      export TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+      export PREFILL_TORUS_XY_CERTIFIED=1
+      export DFLASH_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-DSpark
+      export PREFILL_DFLASH_GOLDEN_KV_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/structured_kv
+      export PREFILL_DFLASH_GOLDEN_TAPS_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/taps
+      timeout -k 2m 30m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc -k "torus-xy-8x4 and pretrained and ctx5k-1chunk" -vvv --tb=short --timeout=1200
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_multiturn_pcc -k "torus-xy-8x4 and pretrained and (aligned_min or midchip_straddle or lastchip or rot_partial)" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash_trace.py -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_golden_pcc -vvv --tb=short
+      '
+    )
+
+    k3_dspark_taps() (
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
+      export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
+      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      export PREFILL_DFLASH_GOLDEN_TAPS_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/taps
+      timeout -k 2m 60m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_dspark_taps.py -k "L25" -vvv --tb=short
+      '
+    )
+
+    echo "===== [1/2] (Kimi-K3-2.8T) DSpark drafter accuracy 5k + 55k vs GPU trace ====="
+    k3_dspark_drafter || exit $?
+    echo "===== [2/2] (Kimi-K3-2.8T) DSpark taps L25 vs GPU trace ====="
+    k3_dspark_taps || exit $?
+    echo "===== both sections passed ====="
+  test_type: k3_dspark_suite
+  test_tags: [kimi_k3, dflash, dspark]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 90
+      tier: 2
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
 # ===== GLM-5.3-744B ====================================================================================
 
 - name: "(GLM-5.3-744B) sparse MLA, prefill block, MTP and MoE accuracy 5k"
