@@ -79,7 +79,7 @@ def _offset_scale(extent: int, align_corners: bool) -> float:
 def _locations_from_offsets(reference_points, sampling_offsets, spatial_shapes, reference_mode, align_corners=False):
     """The V2 frontend, in PyTorch. (B, Q, R, 2) + (B, Q, H, L, P, 2) -> (B, Q, H, L, P, 2).
 
-    Offsets are feature-map pixels; align_corners selects the same spacing as the reader.
+    Offsets are feature-map pixels; align_corners selects the same spacing the SFPU applies.
     """
     B, Q, H, L, P, _ = sampling_offsets.shape
     R = reference_points.shape[2]
@@ -152,6 +152,23 @@ def _random_case(B, Q, H, L, P, D, spatial_shapes, seed=0, loc_range=(0.0, 1.0))
     loc = _bf16(torch.rand(B, Q, H, L, P, 2) * (hi - lo) + lo)
     attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
     return value, loc, attn
+
+
+def _oob_corner_fraction(loc, spatial_shapes):
+    """Fraction of the 4 * L * P bilinear corners that fall outside their level."""
+    total = 0
+    outside = 0
+    for lvl, (h_, w_) in enumerate(spatial_shapes):
+        px = loc[:, :, :, lvl, :, 0] * w_ - 0.5
+        py = loc[:, :, :, lvl, :, 1] * h_ - 0.5
+        x0, y0 = torch.floor(px), torch.floor(py)
+        for dx in (0, 1):
+            for dy in (0, 1):
+                cx, cy = x0 + dx, y0 + dy
+                inside = (cx >= 0) & (cx < w_) & (cy >= 0) & (cy < h_)
+                outside += int((~inside).sum())
+                total += inside.numel()
+    return outside / total
 
 
 def _assert_close(ref: torch.Tensor, got: torch.Tensor, pcc=0.99, atol=None):
@@ -320,26 +337,42 @@ def test_fused_msda_v1_packed_value_equivalence(device, B, Q, H, L, P, D):
     _assert_close(_msda_reference(value, loc, attn, spatial_shapes), packed)
 
 
-def test_fused_msda_v1_grid_space(device):
-    """locations_in_grid_space=True on 2*loc-1 must equal the [0, 1] path on loc."""
+@pytest.mark.parametrize("align_corners", [False, True])
+def test_fused_msda_v1_grid_space(device, align_corners):
+    """locations_in_grid_space=True on 2*loc-1 must equal the [0, 1] path on loc.
+
+    Both align_corners settings are exercised: the two grid-space rows of the
+    coordinate table are separate host-side constants, so one can be wrong
+    while the other is right.
+    """
     spatial_shapes = [(12, 9), (6, 5)]
     B, Q, H, L, P, D = 1, 40, 2, 2, 4, 32
     value, loc, attn = _random_case(B, Q, H, L, P, D, spatial_shapes)
     grid = _bf16(2.0 * loc - 1.0)
 
     value_t, attn_t = _to_device(value, device), _to_device(attn, device)
-    unit = ttnn.to_torch(ttnn.experimental.fused_msda(value_t, _to_device(loc, device), attn_t, spatial_shapes)).to(
-        torch.float32
-    )
+    unit = ttnn.to_torch(
+        ttnn.experimental.fused_msda(
+            value_t, _to_device(loc, device), attn_t, spatial_shapes, align_corners=align_corners
+        )
+    ).to(torch.float32)
     grid_space = ttnn.to_torch(
         ttnn.experimental.fused_msda(
-            value_t, _to_device(grid, device), attn_t, spatial_shapes, locations_in_grid_space=True
+            value_t,
+            _to_device(grid, device),
+            attn_t,
+            spatial_shapes,
+            align_corners=align_corners,
+            locations_in_grid_space=True,
         )
     ).to(torch.float32)
 
     # 2*loc-1 is not exact in bf16, so this is close-but-not-equal by construction.
     _assert_close(unit, grid_space, pcc=0.999)
-    _assert_close(_msda_reference(value, grid, attn, spatial_shapes, locations_in_grid_space=True), grid_space)
+    _assert_close(
+        _msda_reference(value, grid, attn, spatial_shapes, align_corners=align_corners, locations_in_grid_space=True),
+        grid_space,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +489,53 @@ def test_fused_msda_v1_partially_out_of_bounds(device):
     _assert_close(ref, out)
 
 
+def test_fused_msda_v1_masks_out_of_bounds_corners(device):
+    """An out-of-bounds corner must contribute nothing, element by element.
+
+    Regression gate for the input-tile mask. The compute kernel builds the
+    reduction's scalar from the fractions the SFPU produced and has no bounds
+    information, so the zeroing of un-gathered input rows in
+    `fused_msda_reader_common.hpp` is the only thing standing between a stale
+    circular-buffer row and a live weight.
+
+    It asserts a per-element error ratio on top of `_assert_close` because a
+    stale row is itself a plausible sampled value: correlation degrades more
+    slowly than the individual elements do, so the ratio is what stays
+    meaningful as shapes shrink and the output magnitude falls.
+
+    The case is built so that both halves matter: enough corners are outside
+    the map to exercise the mask, and enough are inside that a slot the reader
+    skips has just been written with a real value stick by an earlier point.
+    `Q = 129` also gives every (batch, head) a partial trailing block, so the
+    `r >= v_rows` half of the zeroing predicate is taken as well.
+    """
+    spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
+    B, Q, H, L, P, D = 1, 129, 4, 4, 4, 32
+    value, loc, attn = _random_case(B, Q, H, L, P, D, spatial_shapes, loc_range=(-0.25, 1.25))
+
+    oob = _oob_corner_fraction(loc, spatial_shapes)
+    assert 0.25 < oob < 0.75, f"test no longer exercises the mask: {oob:.2%} of corners are out of bounds"
+
+    ref = _msda_reference(value, loc, attn, spatial_shapes)
+    out = ttnn.to_torch(
+        ttnn.experimental.fused_msda(
+            _to_device(value, device),
+            _to_device(_pack_locations(loc), device),
+            _to_device(_pack_weights(attn), device),
+            spatial_shapes,
+        )
+    ).to(torch.float32)
+
+    _assert_close(ref, out)
+
+    abs_tol = max(2e-2, 6e-2 * ref.abs().max().item())
+    high_error_ratio = ((ref - out).abs() > abs_tol).float().mean().item()
+    assert high_error_ratio <= 0.01, (
+        f"{high_error_ratio:.2%} of output elements are off by more than {abs_tol:.4f}. "
+        "An unmasked out-of-bounds corner reads a stale input row and multiplies it by a live weight"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Realistic shapes
 # ---------------------------------------------------------------------------
@@ -490,7 +570,8 @@ def test_fused_msda_v1_realistic_shapes(device, name, B, Q, H, L, P, D, spatial_
 @pytest.mark.parametrize("reference_mode,R", [("level", 4), ("pillar", 4), ("pillar", 2), ("pillar", 1)])
 @pytest.mark.parametrize("Q", [32, 33])
 @pytest.mark.parametrize("packed", [False, True])
-def test_fused_msda_v1_v2_equivalence(device, reference_mode, R, Q, packed):
+@pytest.mark.parametrize("align_corners", [False, True])
+def test_fused_msda_v1_v2_equivalence(device, reference_mode, R, Q, packed, align_corners):
     spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
     B, H, L, P, D = 2, 4, 4, 4, 32
     S = sum(h * w for h, w in spatial_shapes)
@@ -502,14 +583,26 @@ def test_fused_msda_v1_v2_equivalence(device, reference_mode, R, Q, packed):
     offsets = _bf16(torch.randn(B, Q, H, L, P, 2) * 2.0)
     attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
 
-    loc = _bf16(_locations_from_offsets(ref_pts, offsets, spatial_shapes, reference_mode))
+    loc = _bf16(
+        _locations_from_offsets(
+            ref_pts,
+            offsets,
+            spatial_shapes,
+            reference_mode,
+            align_corners=align_corners,
+        )
+    )
 
     value_t = _to_device(value, device)
     attn_t = _to_device(_pack_weights(attn) if packed else attn, device)
 
     v1 = ttnn.to_torch(
         ttnn.experimental.fused_msda(
-            value_t, _to_device(_pack_locations(loc) if packed else loc, device), attn_t, spatial_shapes
+            value_t,
+            _to_device(_pack_locations(loc) if packed else loc, device),
+            attn_t,
+            spatial_shapes,
+            align_corners=align_corners,
         )
     ).to(torch.float32)
     v2 = ttnn.to_torch(
@@ -520,13 +613,15 @@ def test_fused_msda_v1_v2_equivalence(device, reference_mode, R, Q, packed):
             attn_t,
             spatial_shapes,
             reference_mode=reference_mode,
+            align_corners=align_corners,
         )
     ).to(torch.float32)
 
-    # V1 sees locations already rounded to bf16; V2 forms them in fp32 inside the
-    # reader, so the two differ by the rounding of the intermediate location only.
+    # V1 sees locations already rounded to bf16; V2 forms the position on the
+    # SFPU from the unrounded reference point and offset, so the two differ by
+    # the rounding of the intermediate location only.
     _assert_close(v1, v2, pcc=0.999)
-    _assert_close(_msda_reference(value, loc, attn, spatial_shapes), v2, pcc=0.99)
+    _assert_close(_msda_reference(value, loc, attn, spatial_shapes, align_corners=align_corners), v2, pcc=0.99)
 
 
 def test_fused_msda_v2_bevformer_pillar_shape(device):
@@ -540,8 +635,8 @@ def test_fused_msda_v2_bevformer_pillar_shape(device):
     ref_pts = _bf16(torch.rand(B, Q, Z, 2))
     offsets = _bf16(torch.randn(B, Q, H, L, P, 2) * 2.0)
     attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
-    # NOT _bf16(): the V2 reader reads bf16 reference points and offsets but forms
-    # the location in fp32 and samples at that unrounded position, so rounding it
+    # NOT _bf16(): the V2 op reads bf16 reference points and offsets but forms the
+    # location on the SFPU without rounding it and samples at that position, so rounding it
     # here would compare the kernel against a coarser sampler than it is. The
     # difference is not cosmetic at these shapes -- bf16 quantization of a
     # reference point near 0.5 is ~0.002, and W=50 turns that into ~0.1 px of
@@ -560,6 +655,57 @@ def test_fused_msda_v2_bevformer_pillar_shape(device):
         )
     ).to(torch.float32)
     _assert_close(_msda_reference(value, loc, attn, spatial_shapes), out)
+
+
+@pytest.mark.parametrize(
+    "reference_mode, spatial_shapes, Q, P, R",
+    [
+        # BEVFormer's decoder: L = R = 1, where level and pillar mode coincide.
+        ("level", [(200, 200)], 256, 4, 1),
+        # The encoder's spatial cross-attention: four z-anchors, a partial query tile.
+        ("pillar", [(29, 50), (15, 25), (8, 13), (4, 7)], 33, 8, 4),
+    ],
+    ids=["decoder-200x200", "pillar-R4"],
+)
+def test_fused_msda_v2_float32_reference_points(device, reference_mode, spatial_shapes, Q, P, R):
+    """float32 reference points, forwarded to the SFPU unrounded, next to the same points in
+    bf16. Each run is checked against a reference sampling at its own points, so a program built
+    for one reference dtype and reused for the other fails."""
+    B, H, D = 1, 8, 32
+    L = len(spatial_shapes)
+    S = sum(h * w for h, w in spatial_shapes)
+
+    torch.manual_seed(0)
+    value = _bf16(torch.randn(B, S, H, D))
+    ref_pts = torch.rand(B, Q, R, 2)
+    offsets = _bf16(torch.randn(B, Q, H, L, P, 2) * 2.0)
+    attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
+
+    def expected(points):
+        return _msda_reference(
+            value, _locations_from_offsets(points, offsets, spatial_shapes, reference_mode), attn, spatial_shapes
+        )
+
+    def run(ref_dtype):
+        return ttnn.to_torch(
+            ttnn.experimental.fused_msda_from_offsets(
+                _to_device(_pack_value(value), device),
+                ttnn.from_torch(ref_pts, dtype=ref_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT),
+                _to_device(_pack_locations(offsets), device),
+                _to_device(_pack_weights(attn), device),
+                spatial_shapes,
+                reference_mode=reference_mode,
+            )
+        ).to(torch.float32)
+
+    fp32_out = run(ttnn.float32)
+    bf16_out = run(ttnn.bfloat16)
+    _assert_close(expected(ref_pts), fp32_out, pcc=0.9999)
+    _assert_close(expected(_bf16(ref_pts)), bf16_out, pcc=0.9999)
+    # Against the unrounded points, the bf16 run carries the points' rounding as well.
+    fp32_error = (fp32_out - expected(ref_pts)).abs().mean()
+    bf16_error = (bf16_out - expected(ref_pts)).abs().mean()
+    assert fp32_error < 0.5 * bf16_error, f"float32 points {fp32_error:.5f}, bf16 points {bf16_error:.5f}"
 
 
 def test_fused_msda_v2_one_pixel_offset(device):
@@ -645,70 +791,6 @@ def test_fused_msda_program_cache_hit_readdresses(device):
     assert out1.buffer_address() != out2.buffer_address()
 
 
-def test_compute_kernel_zero_scalar_annihilates_nonfinite_input(device):
-    """Skipped input-tile rows hold stale bytes and rely on a 0 scalar to cancel them.
-
-    Drives compute_msda.cpp with the op's compute config and a hand-built NaN/+Inf/-Inf
-    input tile, so the result does not depend on whatever a CB slot happens to hold.
-    """
-    nonfinite = torch.tensor([0x7FC0, 0x7F80, 0xFF80]).to(torch.int16)  # NaN, +Inf, -Inf
-    input_bits = nonfinite[torch.arange(32 * 32) % 3].reshape(32, 32)
-    input_host = input_bits.view(torch.bfloat16)
-    input_t = ttnn.from_torch(input_host, layout=ttnn.TILE_LAYOUT, device=device)
-    # Host tilization must keep the NaN/Inf bit patterns, or the kernel never sees them.
-    assert torch.equal(ttnn.to_torch(input_t).view(torch.int16), input_bits)
-    scalar_t = ttnn.from_torch(torch.zeros(32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    out_t = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
-    )
-
-    core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-    in_cb, scalar_cb, out_cb = 0, 1, 16  # reader_binary_interleaved_start_id hardcodes c_0 / c_1
-
-    def cb(index):
-        fmt = ttnn.CBFormatDescriptor(buffer_index=index, data_format=ttnn.bfloat16, page_size=2048)
-        return ttnn.CBDescriptor(total_size=2 * 2048, core_ranges=core, format_descriptors=[fmt])
-
-    def rt(args):
-        r = ttnn.RuntimeArgs()
-        r[0][0] = args
-        return r
-
-    def accessor(t):
-        return ttnn.TensorAccessorArgs(t).get_compile_time_args()
-
-    reader = ttnn.KernelDescriptor(
-        kernel_source="ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
-        core_ranges=core,
-        compile_time_args=[0, *accessor(input_t), *accessor(scalar_t)],
-        runtime_args=rt([input_t.buffer_address(), scalar_t.buffer_address(), 1, 0, 0, 0, 0]),
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-    writer = ttnn.KernelDescriptor(
-        kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        core_ranges=core,
-        compile_time_args=[out_cb, *accessor(out_t)],
-        runtime_args=rt([out_t.buffer_address(), 1, 0]),
-        config=ttnn.WriterConfigDescriptor(),
-    )
-    compute = ttnn.KernelDescriptor(
-        kernel_source="ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/compute/compute_msda.cpp",
-        core_ranges=core,
-        # input_cb, scalar_cb, output_cb, reduction_size, n_d_tiles
-        compile_time_args=[in_cb, scalar_cb, out_cb, 1, 1],
-        runtime_args=rt([1]),
-        # The program factory's config: HiFi4, fp32_dest_acc_en=False.
-        config=ttnn.ComputeConfigDescriptor(),
-    )
-    program = ttnn.ProgramDescriptor(
-        kernels=[reader, writer, compute], semaphores=[], cbs=[cb(in_cb), cb(scalar_cb), cb(out_cb)]
-    )
-    out_bits = ttnn.to_torch(ttnn.generic_op([input_t, scalar_t, out_t], program)).view(torch.int16)
-
-    # The sign of zero is not part of the contract.
-    assert torch.all((out_bits & 0x7FFF) == 0), "0 * NaN/Inf is nonzero; skipped input rows must be zero-filled"
-
-
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
@@ -752,6 +834,44 @@ def test_fused_msda_rejects_too_many_levels(device, expect_error):
     value_t, loc_t, attn_t, _ = _valid_inputs(device, L=9, spatial_shapes=shapes)
     with expect_error(RuntimeError, "feature levels"):
         ttnn.experimental.fused_msda(value_t, loc_t, attn_t, shapes)
+
+
+@pytest.mark.parametrize("shapes", [[(257, 4)], [(4, 257)]], ids=["h", "w"])
+def test_fused_msda_rejects_spatial_shape_beyond_bf16_exact_integers(device, expect_error, shapes):
+    """A feature map larger than bf16 counts exactly must be refused, not mis-sampled.
+
+    The SFPU geometry hands the reader floor(px) as bf16, which represents every
+    integer up to 256 and only some beyond it. At 257 the decoded corner would
+    round to a *different, still in-bounds* pixel -- a silently wrong sample
+    rather than a failure -- so the op rejects the shape instead.
+
+    Both axes are parametrized because one `TT_FATAL` tests both, so a refactor
+    that drops the `w` half would otherwise go unnoticed.
+    """
+    value_t, loc_t, attn_t, _ = _valid_inputs(device, L=1, spatial_shapes=shapes)
+    with expect_error(RuntimeError, "per-axis limit"):
+        ttnn.experimental.fused_msda(value_t, loc_t, attn_t, shapes)
+
+
+def test_fused_msda_accepts_spatial_shape_at_the_bf16_exact_limit(device):
+    """256 is the largest exactly-representable corner index, so it must be accepted.
+
+    The companion to the rejection test above: it pins the boundary itself, so a
+    `<` where the code means `<=` fails here rather than silently narrowing the
+    op. It is also the only case that exercises the bf16 corner decode at its
+    stated limit.
+    """
+    spatial_shapes = [(256, 4)]
+    B, Q, H, L, P, D = 1, 8, 1, 1, 4, 32
+    value, loc, attn = _random_case(B, Q, H, L, P, D, spatial_shapes)
+    ref = _msda_reference(value, loc, attn, spatial_shapes)
+
+    out = ttnn.to_torch(
+        ttnn.experimental.fused_msda(
+            _to_device(value, device), _to_device(loc, device), _to_device(attn, device), spatial_shapes
+        )
+    ).to(torch.float32)
+    _assert_close(ref, out)
 
 
 def test_fused_msda_rejects_level_count_mismatch(device, expect_error):
@@ -803,6 +923,27 @@ def test_fused_msda_from_offsets_rejects_pillar_mode_indivisible_points(device, 
     ref_t = _to_device(torch.rand(1, 8, 3, 2), device)  # P=4 is not divisible by R=3
     with expect_error(RuntimeError, "divisible"):
         ttnn.experimental.fused_msda_from_offsets(value_t, ref_t, off_t, attn_t, shapes, reference_mode="pillar")
+
+
+@pytest.mark.parametrize("tensor", ["value", "sampling_offsets", "attention_weights"])
+def test_fused_msda_from_offsets_rejects_float32_inputs(device, expect_error, tensor):
+    """Only reference_points may be float32; the readers read value, sampling_offsets and
+    attention_weights as bf16."""
+    value_t, off_t, attn_t, shapes = _valid_inputs(device)
+    ref_t = _to_device(torch.rand(1, 8, 2, 2), device)
+    inputs = {"value": value_t, "sampling_offsets": off_t, "attention_weights": attn_t}
+    inputs[tensor] = ttnn.from_torch(
+        ttnn.to_torch(inputs[tensor]).float(), dtype=ttnn.float32, device=device, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    with expect_error(RuntimeError, "must be BFLOAT16,"):
+        ttnn.experimental.fused_msda_from_offsets(
+            inputs["value"],
+            ref_t,
+            inputs["sampling_offsets"],
+            inputs["attention_weights"],
+            shapes,
+            reference_mode="level",
+        )
 
 
 def test_fused_msda_from_offsets_rejects_unknown_reference_mode(device, expect_error):

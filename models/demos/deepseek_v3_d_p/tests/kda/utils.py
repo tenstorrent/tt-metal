@@ -184,16 +184,26 @@ def reconstruct_convolution_at_sp_rank(
     )
 
 
+@dataclass(frozen=True)
+class LayerNrmseThresholds:
+    """NRMSE thresholds for a KDA layer's three results: output, recurrent state, convolution state."""
+
+    output: float
+    recurrent: float
+    convolution: float
+
+
 def compare_cpu_device(
     name: str,
     expected: torch.Tensor,
     actual: torch.Tensor,
     *,
     pcc_threshold: float,
+    nrmse_threshold: float | None,
 ) -> tuple[float, list[str]]:
     """Run the shared accuracy contract without hiding later tensor results."""
     try:
-        pcc = assert_accurate(expected, actual, name=name, pcc_threshold=pcc_threshold)
+        pcc = assert_accurate(expected, actual, name=name, pcc_threshold=pcc_threshold, nrmse_threshold=nrmse_threshold)
     except AssertionError as error:
         return float("nan"), [str(error)]
     return pcc, []
@@ -210,6 +220,7 @@ def check_kimi_k3_accuracy(
     tensor_parallel_axis: int,
     *,
     pcc_threshold: float,
+    nrmse: LayerNrmseThresholds,
     valid_length: int | None = None,
 ) -> dict[str, float]:
     """Reconstruct an SP/TP K3 result and run the shared accuracy contract on every endpoint.
@@ -237,7 +248,7 @@ def check_kimi_k3_accuracy(
     ).to(torch.bfloat16)
     local_width = case.config.num_heads // tp_size * case.config.head_k_dim
     output_pcc, failures = compare_cpu_device(
-        f"{name} output", golden_output, actual_output, pcc_threshold=pcc_threshold
+        f"{name} output", golden_output, actual_output, pcc_threshold=pcc_threshold, nrmse_threshold=nrmse.output
     )
     pcc = {"output": output_pcc}
     for sp_rank in range(sp_size):
@@ -257,6 +268,7 @@ def check_kimi_k3_accuracy(
             golden_state.recurrent,
             actual_recurrent,
             pcc_threshold=pcc_threshold,
+            nrmse_threshold=nrmse.recurrent,
         )
         pcc[f"sp_rank_{sp_rank}_recurrent"] = recurrent_pcc
         failures.extend(recurrent_failures)
@@ -265,6 +277,7 @@ def check_kimi_k3_accuracy(
             golden_convolution,
             actual_convolution,
             pcc_threshold=pcc_threshold,
+            nrmse_threshold=nrmse.convolution,
         )
         pcc[f"sp_rank_{sp_rank}_convolution"] = convolution_pcc
         failures.extend(convolution_failures)
@@ -534,6 +547,7 @@ def assert_matches_reference(
     tp_axis: int,
     config: KDAConfig,
     label: str,
+    nrmse: LayerNrmseThresholds,
     state_linf_threshold: float | None = 0.6,
     pcc_threshold: float = 0.999,
 ) -> None:
@@ -547,7 +561,7 @@ def assert_matches_reference(
         natural_output[:, : expected_output.shape[1]],
         name=f"{label} output",
         pcc_threshold=pcc_threshold,
-        rmse_threshold=0.05,
+        nrmse_threshold=nrmse.output,
         linf_threshold=0.25,
     )
 
@@ -563,7 +577,7 @@ def assert_matches_reference(
             reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tp_axis, sp_rank),
             name=f"{label} sp_rank={sp_rank} recurrent",
             pcc_threshold=pcc_threshold,
-            rmse_threshold=0.05,
+            nrmse_threshold=nrmse.recurrent,
             linf_threshold=state_linf_threshold,
         )
         assert_accurate(
@@ -571,6 +585,6 @@ def assert_matches_reference(
             reconstruct_convolution_at_sp_rank(state.convolution, mesh_device, sp_axis, tp_axis, sp_rank, local_width),
             name=f"{label} sp_rank={sp_rank} convolution",
             pcc_threshold=pcc_threshold,
-            rmse_threshold=0.05,
+            nrmse_threshold=nrmse.convolution,
             linf_threshold=0.1,
         )

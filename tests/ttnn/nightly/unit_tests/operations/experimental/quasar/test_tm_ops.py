@@ -8,7 +8,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 from tests.ttnn.utils_for_testing import assert_reshape as _assert_reshape
 
 _LAYOUTS = [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]
@@ -16,6 +16,22 @@ _LAYOUT_IDS = ["TILE", "RM"]
 
 
 L1_INTERLEAVED = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+
+_PAD_DTYPES = [ttnn.bfloat16, ttnn.int32]
+_TORCH_DTYPE = {ttnn.bfloat16: torch.bfloat16, ttnn.int32: torch.int32}
+
+
+def _holed_grid(device):
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 7 or compute_grid.y < 8:
+        pytest.skip(f"needs a 7x8 compute grid, device has {compute_grid.x}x{compute_grid.y}")
+    return ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 7)),
+        }
+    )
 
 
 def _explicit_height_shard_config(device, ncores, sh, sw, buffer_type=ttnn.BufferType.L1):
@@ -473,3 +489,267 @@ def test_quasar_tilize_l1_output_reserved_in_budget(device):
     result = ttnn.experimental.quasar.tilize(ttnn_in, memory_config=ttnn.L1_MEMORY_CONFIG)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
     assert_with_ulp(expected_result=x, actual_result=got, ulp_threshold=0)
+
+
+@pytest.mark.parametrize("dtype", _PAD_DTYPES, ids=["bf16", "int32"])
+@pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_quasar_pad_rm_sharded_height_only_non_contiguous_grid(device, shard_orient, dtype):
+    """[1, 8, 8, 128] -> [1, 8, 32, 128] on a 40-core grid with column 4 missing. Deriving cores from the
+    bounding box addressed the hole core (4, 0), where no kernel runs."""
+    torch.manual_seed(0)
+    shard_grid = _holed_grid(device)
+    n, c, h, w, shard_h = 1, 8, 8, 128, 32
+    x = torch.randint(-100, 100, (n, c, h, w), dtype=torch.int32).to(_TORCH_DTYPE[dtype])
+    ref = torch.nn.functional.pad(x, (0, 0, 0, shard_h - h), value=0)
+
+    mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient),
+    )
+    tt_in = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mc)
+    out = ttnn.experimental.quasar.pad(tt_in, padding=((0, 0), (0, shard_h - h), (0, 0)), value=0, memory_config=mc)
+    got = ttnn.to_torch(ttnn.from_device(out))
+    assert got.shape == ref.shape
+    assert torch.equal(ref, got)
+
+
+@pytest.mark.parametrize("dtype", _PAD_DTYPES, ids=["bf16", "int32"])
+@pytest.mark.parametrize(
+    "in_orient, out_orient",
+    [
+        (ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.ROW_MAJOR),
+        (ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.COL_MAJOR),
+        (ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR),
+        (ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR),
+    ],
+    ids=["row_row", "col_col", "in_row_out_col", "in_col_out_row"],
+)
+def test_quasar_pad_rm_sharded_height_only_non_contiguous_grid_straddles_hole(device, in_orient, out_orient, dtype):
+    torch.manual_seed(0)
+    shard_grid = _holed_grid(device)
+    n, c, h, w = 1, 1, 1280, 128
+    in_shard_h, out_shard_h = 32, 40
+    h_padded = out_shard_h * 40
+    x = torch.randint(-100, 100, (n, c, h, w), dtype=torch.int32).to(_TORCH_DTYPE[dtype])
+    ref = torch.nn.functional.pad(x, (0, 0, 0, h_padded - h), value=0)
+
+    in_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (in_shard_h, w), in_orient),
+    )
+    out_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (out_shard_h, w), out_orient),
+    )
+    tt_in = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mc)
+    out = ttnn.experimental.quasar.pad(
+        tt_in, padding=((0, 0), (0, h_padded - h), (0, 0)), value=0, memory_config=out_mc
+    )
+    got = ttnn.to_torch(ttnn.from_device(out))
+    assert got.shape == ref.shape
+    bad = torch.nonzero(~torch.all(ref[0, 0] == got[0, 0], dim=-1)).flatten()
+    assert bad.numel() == 0, f"rows differ: {bad[:16].tolist()} (of {bad.numel()})"
+
+
+@pytest.mark.parametrize(
+    "memory_layout, layout, shape, shard_shape, grid, orientation",
+    [
+        # [1,1,64,90] bf16 RM: 2x3 shards of (32,32) on a 6x2 grid -> 3 padding-only columns.
+        (
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.ROW_MAJOR_LAYOUT,
+            [1, 1, 64, 90],
+            (32, 32),
+            (6, 2),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        # Same data on a column-major grid with spare rows.
+        (
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.ROW_MAJOR_LAYOUT,
+            [1, 1, 64, 90],
+            (32, 32),
+            (2, 6),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ),
+        # Tile layout, 2x3 tile-shards on an oversized grid.
+        (
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.TILE_LAYOUT,
+            [1, 1, 64, 96],
+            (32, 32),
+            (6, 2),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        # Exactly provisioned grid: no spare cores, the normal path must be unchanged.
+        (
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.ROW_MAJOR_LAYOUT,
+            [1, 1, 64, 96],
+            (32, 32),
+            (3, 2),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        # HEIGHT_SHARDED RM: 3 data shards (32,32,16 rows, partial last) on a 4-core grid -> 1 spare core.
+        (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ROW_MAJOR_LAYOUT,
+            [1, 1, 80, 64],
+            (32, 64),
+            (4, 1),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        # WIDTH_SHARDED RM: 3 data shards (64,64,32 bytes-wide partial last) on a 4-core grid -> 1 spare core.
+        (
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.ROW_MAJOR_LAYOUT,
+            [1, 1, 64, 80],
+            (64, 32),
+            (4, 1),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        # HEIGHT_SHARDED TILE with a partial last shard on an oversized grid.
+        (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.TILE_LAYOUT,
+            [1, 1, 96, 64],
+            (64, 64),
+            (4, 1),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        # WIDTH_SHARDED TILE with a partial last shard on an oversized grid.
+        (
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.TILE_LAYOUT,
+            [1, 1, 64, 96],
+            (64, 64),
+            (4, 1),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    ],
+    ids=[
+        "block_rm_spare_columns",
+        "block_rm_col_major_spare_rows",
+        "block_tile_spare_columns",
+        "block_rm_exact_grid",
+        "height_rm_partial_last",
+        "width_rm_partial_last",
+        "height_tile_partial_last",
+        "width_tile_partial_last",
+    ],
+)
+def test_quasar_s2i_oversized_grid(device, memory_layout, layout, shape, shard_shape, grid, orientation):
+    compute_grid = device.compute_with_storage_grid_size()
+    if grid[0] > compute_grid.x or grid[1] > compute_grid.y:
+        pytest.skip(f"Device grid {compute_grid.x}x{compute_grid.y} too small for {grid}")
+
+    torch.manual_seed(0)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid[0] - 1, grid[1] - 1))})
+    shard_spec = ttnn.ShardSpec(core_grid, shard_shape, orientation)
+    in_mem_config = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=layout, memory_config=in_mem_config)
+
+    # The output inherits the input's *padded* shape, which can exceed the logical shape on partial
+    # shards. Run once to learn the real output footprint, then free it so the hole matches exactly.
+    warmup = ttnn.experimental.quasar.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    out_shape = list(warmup.padded_shape)
+    ttnn.deallocate(warmup)
+
+    # Hole of exactly the output size with a guard tensor right behind it, so an out-of-bounds
+    # write lands in the guard.
+    hole = ttnn.allocate_tensor_on_device(out_shape, ttnn.bfloat16, layout, device, ttnn.DRAM_MEMORY_CONFIG)
+    hole_address = hole.buffer_address()
+    torch_guard = torch.full(shape, -1.0, dtype=torch.bfloat16)
+    guard = ttnn.from_torch(torch_guard, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(hole)
+
+    output = ttnn.experimental.quasar.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+
+    # Fail loudly if the guard is not directly behind the output, which would make the OOB check vacuous.
+    assert output.buffer_address() == hole_address, "output must reuse the freed hole"
+    assert guard.buffer_address() > output.buffer_address(), "guard must sit behind the output"
+
+    assert_equal(torch_input, ttnn.to_torch(output))
+    assert_equal(torch_guard, ttnn.to_torch(guard))
+
+
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8_b"])
+def test_quasar_untilize_with_unpadding_l1_output_reserved_in_budget(device, input_dtype):
+    """The L1 budget must reserve the op's own interleaved-L1 output and size it (and the output DFB)
+    by the output dtype. The prim emits BFLOAT16 for a BFLOAT8_B input.
+
+    A resident interleaved-L1 tensor leaves the free window between two thresholds for the full-row
+    factory's DFBs: the one the check computes without the fix, and the correct one that also holds the
+    pending L1 output.
+      bf16:  the unfixed check ignores the pending output (reservation 0 B).
+      bf8_b: additionally sized by the input dtype, so the output DFB estimate is a 1088 B tile and the
+             reservation is 0 B (a BFLOAT8_B ROW_MAJOR spec cannot be built).
+    Without the fix the window picks the full-row factory, whose DFBs clash with the L1 output; with it
+    the op takes the fallback.
+
+    Wt is fixed at 32 (and Ht at 32) so select_program_factory's independent wide-row heuristic
+    (num_tiles_per_row > 32) cannot pick the block factory regardless of the budget check.
+    """
+    tile_dim, bf16_tile_bytes, bf8_tile_bytes, bf16_bytes = 32, 2048, 1088, 2
+    in_tile_bytes = bf16_tile_bytes if input_dtype == ttnn.bfloat16 else bf8_tile_bytes
+    info = ttnn._ttnn.reports.get_device_info(device)
+    num_banks = info.l1_num_banks
+    l1_alignment, dram_alignment = ttnn.get_l1_alignment(), ttnn.get_dram_alignment()
+
+    def align(value, alignment):
+        return -(-value // alignment) * alignment
+
+    Wt, Ht = 32, 32
+    H, W = Ht * tile_dim, Wt * tile_dim
+    out_w = W - 1  # non-tile-aligned
+
+    # Mirrors get_pending_l1_output_reservation: busiest bank's alignment-padded pages, rounded up to
+    # the allocator's granule.
+    pages_on_fullest_bank = -(-H // num_banks)
+    row_bytes = align(out_w * bf16_bytes, l1_alignment)
+    pending = align(max(pages_on_fullest_bank * row_bytes, dram_alignment), dram_alignment)
+
+    # Full-row factory DFBs: one input tile plus one output tile per Wt.
+    correct_threshold = pending + Wt * (in_tile_bytes + bf16_tile_bytes)
+    unfixed_threshold = Wt * 2 * in_tile_bytes
+    assert unfixed_threshold < correct_threshold, "this shape does not separate the two checks"
+
+    headroom_target = (unfixed_threshold + correct_threshold) // 2
+    if info.cb_limit <= headroom_target:
+        pytest.skip(f"needs more than {headroom_target} B of CB space, device offers {info.cb_limit} B")
+    tiles_per_bank = (info.cb_limit - headroom_target) // bf16_tile_bytes
+    if tiles_per_bank <= 0:
+        pytest.skip("device L1 is too small to leave a meaningful headroom window")
+
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, H, W), dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=input_dtype, device=device)
+    # bfloat8_b rounds the values and untilize only relayouts them, so the host read-back is the golden.
+    golden = ttnn.to_torch(ttnn_in)[..., :out_w]
+
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, tile_dim * tiles_per_bank, tile_dim * num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    try:
+        headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
+        assert (
+            unfixed_threshold <= headroom < correct_threshold
+        ), f"resident L1 buffer left {headroom} B; need [{unfixed_threshold}, {correct_threshold})"
+
+        result = ttnn.experimental.quasar.untilize_with_unpadding(
+            ttnn_in, (0, 0, H - 1, out_w - 1), memory_config=ttnn.L1_MEMORY_CONFIG, use_multicore=True
+        )
+        assert result.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert list(result.shape) == [1, 1, H, out_w]
+        assert_with_ulp(expected_result=golden, actual_result=ttnn.to_torch(result.cpu()), ulp_threshold=0)
+    finally:
+        ttnn.deallocate(resident)
