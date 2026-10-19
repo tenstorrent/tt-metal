@@ -644,6 +644,7 @@ ALWI void exp2_tile(uint32_t idst) {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp2_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::exp2_init, (true /*APPROXIMATE*/, is_fp32_dest_acc_en)));
+    MATH(ckernel::sfpu::exp2_bf16_tile_init<!is_fp32_dest_acc_en>());
 }
 
 // heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
