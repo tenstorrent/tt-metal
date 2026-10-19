@@ -320,33 +320,53 @@ inline void decay_state_sfpu(
     hd32_dfb.push_back(n);
 }
 
-// FP32_STATE: hn = hnew = hn32 = hd32 + outer with an exact fp32 SFPU add (hd32 and outer are UnpackToDest DFBs;
-// gdn_decode_step_conv_fast.cpp's add_state_sfpu with a third pack of the same DST tile into hn32, the next
-// token's UnpackToDest decay operand).
-inline void add_state_sfpu(DataflowBuffer& hn_dfb, DataflowBuffer& hnew_dfb, DataflowBuffer& hn32_dfb, uint32_t n) {
-    hn_dfb.reserve_back(n);
-    hnew_dfb.reserve_back(n);
-    hn32_dfb.reserve_back(n);
-    pack_reconfig_data_format(dfb::hn);
-    reconfig_data_format_srca(dfb::hd32);
-    for (uint32_t i = 0; i < n; ++i) {
-        tile_regs_acquire();
-        copy_init(dfb::hd32);
-        copy_tile(dfb::hd32, i, 0);
-        copy_init(dfb::outer);
-        copy_tile(dfb::outer, i, 1);
-        add_binary_tile_init();
-        add_binary_tile(0, 1, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::hn, i);
-        pack_tile(0, dfb::hnew, i);
-        pack_tile(0, dfb::hn32, i);
-        tile_regs_release();
+// FP32_STATE: hn = hnew = hn32 = hd32 + kt @ delta, the outer product and the exact fp32 SFPU state add fused in DST
+// (was: outer_product -> `outer` DFB -> add_state_sfpu, 16 packs + 16 unpacks + 16 acquires per token more). Per
+// acquire, 2 state tiles (fp32 DST under the half-DST sync holds 4 tiles): DST[jj] <- kt[i] @ delta[j0 + jj] (a K = 1
+// tile matmul onto the freshly cleared DST tile, as outer_product did), DST[2 + jj] <- hd32 tile (UnpackToDest,
+// exact), DST[jj] <- DST[jj] + DST[2 + jj] (SFPU fp32), then the sum is packed into hn, hnew and hn32. The values the
+// add reads are the very fp32 values the old path round-tripped through the `outer` DFB (fp32 pack and
+// UnpackToDest unpack are exact), and the add is commutative, so every output bit is unchanged. The `outer` DFB stays
+// declared (the factory is not touched) but is not used.
+inline void outer_add_state_sfpu(
+    DataflowBuffer& hn_dfb, DataflowBuffer& hnew_dfb, DataflowBuffer& hn32_dfb, uint32_t Kt, uint32_t Vt) {
+    constexpr uint32_t kPair = 2;
+    hn_dfb.reserve_back(Kt * Vt);
+    hnew_dfb.reserve_back(Kt * Vt);
+    hn32_dfb.reserve_back(Kt * Vt);
+    pack_reconfig_data_format(dfb::hn);  // hn, hnew, hn32 share the fp32 format
+    for (uint32_t i = 0; i < Kt; ++i) {
+        for (uint32_t j0 = 0; j0 < Vt; j0 += kPair) {
+            const uint32_t n = (Vt - j0) < kPair ? (Vt - j0) : kPair;
+            const uint32_t base = i * Vt + j0;
+            tile_regs_acquire();
+            reconfig_data_format<SrcOrder::Reverse>(dfb::kt, dfb::delta);
+            matmul_init(dfb::kt, dfb::delta);
+            for (uint32_t jj = 0; jj < n; ++jj) {
+                matmul_tiles(dfb::kt, dfb::delta, i, j0 + jj, jj);
+            }
+            reconfig_data_format_srca(dfb::hd32);
+            copy_init(dfb::hd32);
+            for (uint32_t jj = 0; jj < n; ++jj) {
+                copy_tile(dfb::hd32, base + jj, kPair + jj);
+            }
+            add_binary_tile_init();
+            for (uint32_t jj = 0; jj < n; ++jj) {
+                add_binary_tile(jj, kPair + jj, jj);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t jj = 0; jj < n; ++jj) {
+                pack_tile(jj, dfb::hn, base + jj);
+                pack_tile(jj, dfb::hnew, base + jj);
+                pack_tile(jj, dfb::hn32, base + jj);
+            }
+            tile_regs_release();
+        }
     }
-    hn_dfb.push_back(n);
-    hnew_dfb.push_back(n);
-    hn32_dfb.push_back(n);
+    hn_dfb.push_back(Kt * Vt);
+    hnew_dfb.push_back(Kt * Vt);
+    hn32_dfb.push_back(Kt * Vt);
 }
 #endif  // GDN_FP32_STATE
 
@@ -668,16 +688,18 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
         eb.pop_front(1);
         delta.wait_front(Vt);
         // S_next = hd + kt @ delta ; hnew for the writer's ring write
-        outer_product(dfb::kt, dfb::delta, dfb::outer, outer, Kt, Vt);
-        delta.pop_front(Vt);
-        outer.wait_front(KV);
 #if GDN_FP32_STATE
         hd.pop_front(KV);  // the FPU copy served vread only; the add reads the exact hd32
         hd32.wait_front(KV);
-        add_state_sfpu(hn, hnew, hn32, KV);  // hn (o operand), hnew (writer), hn32 (next token's S_cur) = hd32 + outer
+        // hn (o operand), hnew (writer), hn32 (next token's S_cur) = hd32 + kt @ delta, outer product fused in DST
+        outer_add_state_sfpu(hn, hnew, hn32, Kt, Vt);
         hd32.pop_front(KV);
-        outer.pop_front(KV);
-#elif GDN_FAST
+        delta.pop_front(Vt);
+#else
+        outer_product(dfb::kt, dfb::delta, dfb::outer, outer, Kt, Vt);
+        delta.pop_front(Vt);
+        outer.wait_front(KV);
+#if GDN_FAST
         add_tiles_n_dual(dfb::hd, dfb::outer, hn_id, hn, dfb::hnew, hnew, KV);  // hn and hnew from one DST tile
         hd.pop_front(KV);
         outer.pop_front(KV);
@@ -687,6 +709,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
         outer.pop_front(KV);
         hn.wait_front(KV);
         copy_tiles(hn_id, dfb::hnew, hnew, KV);
+#endif
 #endif
         hn.wait_front(KV);
         // acc[row r0 + t] = qn_t @ S_next: token 0 is the plain kernel's row_times_matrix; later tokens accumulate
