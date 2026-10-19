@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -1408,7 +1409,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) && !has_operand_activations &&
         !has_post_activations && num_tiles_per_cycle > 1 &&
         compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast && bf16_or_bfp8(a_data_format) &&
-        bf16_or_bfp8(b_data_format) && bf16_or_bfp8(c_data_format) && block_tiles >= 4;
+        bf16_or_bfp8(b_data_format) && bf16_or_bfp8(c_data_format) && block_tiles >= 4 &&
+        (std::getenv("EB_HEADRULE") == nullptr ||  // scratch toggle: the head's rule
+         (a_data_format == tt::DataFormat::Bfp8_b &&
+          std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) != OpConfig::FpuBinaryOp::MUL));
     if (block_pack || block_unpack) {
         compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
     }
