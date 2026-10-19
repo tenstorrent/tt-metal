@@ -28,6 +28,14 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
+
+// Rows of broadcast multiplies into consecutive DST slots run as one any_tiles_bcast_block call in kernels that define
+// ELTWISE_BINARY_BCAST_BLOCK_UNPACK true.
+#if defined(ARCH_BLACKHOLE)
+constexpr bool SDPA_BCAST_BLOCK = ckernel::detail::BCAST_BLOCK_UNPACK;
+#else
+constexpr bool SDPA_BCAST_BLOCK = false;
+#endif
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
@@ -516,9 +524,15 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
         for (uint32_t i = 0; i < rows; ++i) {
             for (uint32_t u = 0; u < granularity; ++u) {
                 tile_regs_acquire();
-                for (uint32_t j = 0; j < dst_tiles; ++j) {
-                    mul_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
-                    in0_index++;
+                if constexpr (SDPA_BCAST_BLOCK && dst_tiles > 1) {
+                    any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(
+                        in0_cb, in1_cb, in0_index, i, 0, dst_tiles);
+                    in0_index += dst_tiles;
+                } else {
+                    for (uint32_t j = 0; j < dst_tiles; ++j) {
+                        mul_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
+                        in0_index++;
+                    }
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -571,8 +585,12 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; ++u) {
             tile_regs_acquire();
-            for (uint32_t j = 0; j < dst_tiles; ++j) {
-                mul_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+            if constexpr (SDPA_BCAST_BLOCK && dst_tiles > 1) {
+                any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(in0_cb, in1_cb, 0, i, 0, dst_tiles);
+            } else {
+                for (uint32_t j = 0; j < dst_tiles; ++j) {
+                    mul_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+                }
             }
             tile_regs_commit();
             cb_in0.pop_front(dst_tiles);
@@ -613,9 +631,15 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
     uint32_t in0_index = 0;
     for (uint32_t g = 0; g < granularity; ++g) {
         tile_regs_acquire();
-        for (uint32_t i = 0; i < dst_tiles; ++i) {
-            mul_tiles_bcast_scalar(in0_cb, in1_scalar_cb, in0_index, 0, i);
-            in0_index++;
+        if constexpr (SDPA_BCAST_BLOCK && dst_tiles > 1) {
+            any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR>(
+                in0_cb, in1_scalar_cb, in0_index, 0, 0, dst_tiles);
+            in0_index += dst_tiles;
+        } else {
+            for (uint32_t i = 0; i < dst_tiles; ++i) {
+                mul_tiles_bcast_scalar(in0_cb, in1_scalar_cb, in0_index, 0, i);
+                in0_index++;
+            }
         }
         tile_regs_commit();
         tile_regs_wait();

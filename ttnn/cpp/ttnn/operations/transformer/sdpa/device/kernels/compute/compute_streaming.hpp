@@ -756,14 +756,34 @@ void salad_correct_fused(
         tile_regs_acquire();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
+            if constexpr (SDPA_BCAST_BLOCK) {
+                if (cur_cols > 1) {
+                    any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(
+                        out_in_cb,
+                        bcast_cb,
+                        (ob_row_base + i) * tiles_per_column + col_base,
+                        ob_row_base + i,
+                        dst_index,
+                        cur_cols);
+                    dst_index += cur_cols;
+                    continue;
+                }
+            }
             for (uint32_t j = 0; j < cur_cols; j++) {
                 uint32_t in0_tile_index = (ob_row_base + i) * tiles_per_column + col_base + j;
                 mul_tiles_bcast_cols(out_in_cb, bcast_cb, in0_tile_index, ob_row_base + i, dst_index++);
             }
         }
         if (fuse_sum_here) {
-            for (uint32_t i = 0; i < tiles_per_row; i++) {
-                mul_tiles_bcast_cols(sum_in_cb, bcast_cb, sum_row_base + i, ob_row_base + i, dst_index++);
+            if constexpr (SDPA_BCAST_BLOCK && tiles_per_row > 1) {
+                // Each sum tile takes its own row's 1/sum tile, so B advances with A
+                any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::COL, false>(
+                    sum_in_cb, bcast_cb, sum_row_base, ob_row_base, dst_index, tiles_per_row);
+                dst_index += tiles_per_row;
+            } else {
+                for (uint32_t i = 0; i < tiles_per_row; i++) {
+                    mul_tiles_bcast_cols(sum_in_cb, bcast_cb, sum_row_base + i, ob_row_base + i, dst_index++);
+                }
             }
         }
         tile_regs_commit();
@@ -781,8 +801,13 @@ void salad_correct_fused(
 
     if constexpr (!can_fuse_last) {
         tile_regs_acquire();
-        for (uint32_t i = 0; i < tiles_per_row; i++) {
-            mul_tiles_bcast_cols(sum_in_cb, bcast_cb, sum_row_base + i, ob_row_base + i, i);
+        if constexpr (SDPA_BCAST_BLOCK && tiles_per_row > 1) {
+            any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::COL, false>(
+                sum_in_cb, bcast_cb, sum_row_base, ob_row_base, 0, tiles_per_row);
+        } else {
+            for (uint32_t i = 0; i < tiles_per_row; i++) {
+                mul_tiles_bcast_cols(sum_in_cb, bcast_cb, sum_row_base + i, ob_row_base + i, i);
+            }
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -894,8 +919,17 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 constexpr uint32_t last_batch = head_dim_t_ % batch;
                 const uint32_t cur_batch = (base + batch <= head_dim_t_) ? batch : last_batch;
                 tile_regs_acquire();
-                for (uint32_t j = 0; j < cur_batch; ++j) {
-                    mul_tiles_bcast_cols(cur_out_cb, scratch_cb, base + j, 0, j);
+                if constexpr (SDPA_BCAST_BLOCK) {
+                    if (cur_batch > 1) {
+                        any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(
+                            cur_out_cb, scratch_cb, base, 0, 0, cur_batch);
+                    } else {
+                        mul_tiles_bcast_cols(cur_out_cb, scratch_cb, base, 0, 0);
+                    }
+                } else {
+                    for (uint32_t j = 0; j < cur_batch; ++j) {
+                        mul_tiles_bcast_cols(cur_out_cb, scratch_cb, base + j, 0, j);
+                    }
                 }
                 tile_regs_commit();
                 tile_regs_wait();
