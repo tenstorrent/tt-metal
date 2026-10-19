@@ -160,9 +160,8 @@ void kernel_main() {
         // - Iteration 1: Merge (0,2), (4,6), (8,10), ... across core boundaries
         // - Final iteration: Global TopK across all cores' contributions
         for (std::uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
-            process_iteration<network_stable, fused_keys, tie_order>(
+            process_iteration<network_stable, fused_keys, tie_order, K, logk>(
                 m_iter,                      // Current merge iteration
-                K,                           // TopK value
                 Wt,                          // Total width tiles (from all cores)
                 num_k_sequences,             // K-sequences in aggregated data
                 tiles_per_seq,               // Tiles per sequence (ceil(K/32))
@@ -174,7 +173,6 @@ void kernel_main() {
                 index_dest_end,              // Destination register 3
                 largest,                     // Sort direction
                 switch_dir,                  // Direction switching strategy
-                logk,                        // log2(K) for bitonic depth
                 seq_per_2tiles,              // Sequences per tile pair
                 largest);                    // Find largest vs smallest
         }
