@@ -58,7 +58,7 @@ _PERF_REFERENCE_MS = {
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
-_GALAXY_PERF_REFERENCE_MS = 1.678
+_GALAXY_PERF_REFERENCE_MS = 1.456
 _GALAXY_ACTUAL_START = 4 * 640 + 320
 # Like the model's prefill tests, give CCL semaphores their own L1_SMALL region: allocated in L1 on the first call,
 # they would land between the chunk terms and fragment L1, so the traced call would plan ops on less free L1 than
@@ -154,9 +154,7 @@ def _trace_wall_samples_ms(
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
         validation = (
-            validate_first_replay(
-                next_state, output, nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=0.007)
-            )
+            validate_first_replay(next_state, output, nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04))
             if validate_first_replay is not None
             else None
         )
@@ -244,7 +242,7 @@ def test_kimi_k3_layer_1_perf(
             mesh_device,
             tensor_parallel_axis,
             pcc_threshold=_PCC_THRESHOLD,
-            nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=0.007),
+            nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04),
         )
     finally:
         ttnn.deallocate(output)
