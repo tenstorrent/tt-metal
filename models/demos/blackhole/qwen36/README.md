@@ -115,6 +115,12 @@ Optional flags:
 ```bash
 # Run SDPA in BF8 (faster; slightly lower precision).
 export QWEN_SDPA_BF8=1
+# Exact profile (default off): bf16 weights everywhere instead of the shipped bfp8 / bfp4 profile (text MLP / GDN /
+# attention projections, lm_head, vision tower; no bfp8 typecasts around the vision SDPA) and HiFi2 instead of LoFi
+# for the text MLP / GDN / attention projection matmuls and the lm_head (bf16 operands keep their mantissa; fp32
+# accumulation as before). The tensor cache lands in tensor_cache_bf16 next to the bfp8 one. Slower (double the
+# weight traffic, two FPU passes per matmul); used by models/tt_dit's FLUX 3 Klein pup.
+export QWEN36_EXACT_PROFILE=1
 ```
 
 

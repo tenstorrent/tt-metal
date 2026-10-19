@@ -48,6 +48,13 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
     )
 
 
+def exact_profile_fidelity(args_or_config):
+    """``ttnn.MathFidelity.LoFi`` as shipped; ``HiFi2`` when ``args_or_config.exact_profile`` is set
+    (``QWEN36_EXACT_PROFILE=1``: bf16 weights, so the matmul must keep the bf16 mantissa of both operands)."""
+    exact = args_or_config is not None and bool(getattr(args_or_config, "exact_profile", False))
+    return ttnn.MathFidelity.HiFi2 if exact else ttnn.MathFidelity.LoFi
+
+
 def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None, use_gateup_agmm=True) -> MLPWeights:
     """Per-layer MLP state: gate_proj, down_proj, up_proj weights."""
     tp = getattr(args, "num_devices", 1) if args is not None else 1
@@ -152,11 +159,13 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
             cache_file_name=(tensor_cache_path / f"mlp.{name}.weight") if tensor_cache_path else None,
         )
 
-    # gate/up: bfloat4_b (bandwidth); down: bfloat8_b (accuracy).
+    # gate/up: bfloat4_b (bandwidth); down: bfloat8_b (accuracy). QWEN36_EXACT_PROFILE=1: args.weight_dtype (bf16).
+    exact = args is not None and getattr(args, "exact_profile", False)
+    w_dtype = (lambda default: args.weight_dtype) if exact else (lambda default: default)
     return MLPWeights(
-        w1=load("gate_proj", ttnn.bfloat4_b),
-        w2=load("down_proj", ttnn.bfloat8_b),
-        w3=load("up_proj", ttnn.bfloat4_b),
+        w1=load("gate_proj", w_dtype(ttnn.bfloat4_b)),
+        w2=load("down_proj", w_dtype(ttnn.bfloat8_b)),
+        w3=load("up_proj", w_dtype(ttnn.bfloat4_b)),
     )
 
 
@@ -185,15 +194,18 @@ class Qwen36MLP:
         self.weights = load_mlp_weights(
             mesh_device, state_dict, tensor_cache_path, args=args, use_gateup_agmm=use_gateup_agmm
         )
+        # LoFi as shipped (bfp8 / bfp4 weights). QWEN36_EXACT_PROFILE=1 (args.exact_profile): HiFi2, the
+        # bf16-operand fidelity of the exact profile (LoFi drops the low mantissa bits of the bf16 weights).
+        fidelity = exact_profile_fidelity(args)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
+            math_fidelity=fidelity, fp32_dest_acc_en=True, packer_l1_acc=False
         )
         # fuse_swiglu AGMM: fp32 acc (subblock_w=4) to match GDN/attn in-proj.
         self.compute_kernel_config_agmm = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
+            math_fidelity=fidelity, fp32_dest_acc_en=True, packer_l1_acc=False
         )
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
+            math_fidelity=fidelity, fp32_dest_acc_en=True, packer_l1_acc=True
         )
 
     def forward(self, x, mode=None):

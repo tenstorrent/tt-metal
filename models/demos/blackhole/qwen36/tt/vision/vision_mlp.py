@@ -68,9 +68,11 @@ class MLP(LightweightModule):
         # output dim up to args.hidden_dim, then shard along the output dim.
         fc1_w = pad_hidden_dim(torch_weight("linear_fc1"), dim=-1).unsqueeze(0).unsqueeze(0)
         # Shape: [1, 1, dim, hidden_dim]; shard dim=-1 across cluster axis 1.
+        # QWEN36_EXACT_PROFILE=1 (args.exact_profile): bf16 fc1 / fc2 instead of the bfp4 / bfp8 literals.
+        exact = bool(getattr(args, "exact_profile", False))
         self.linear_fc1_weight = ttnn.as_tensor(
             fc1_w,
-            dtype=ttnn.bfloat4_b if args.optimizations.bfp4_mlp else ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16 if exact else (ttnn.bfloat4_b if args.optimizations.bfp4_mlp else ttnn.bfloat8_b),
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
@@ -97,7 +99,7 @@ class MLP(LightweightModule):
         # Shape: [1, 1, hidden_dim, dim]; shard dim=-2 across cluster axis 1.
         self.linear_fc2_weight = ttnn.as_tensor(
             fc2_w,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16 if exact else ttnn.bfloat8_b,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -2), mesh_shape=self.cluster_shape),
             layout=ttnn.TILE_LAYOUT,

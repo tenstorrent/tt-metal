@@ -244,6 +244,79 @@ def sampling_oracle_cache() -> Path | None:
     return Path(value) if value else None
 
 
+# --- prompt upsampler (M9) -------------------------------------------------------------------------------------------------
+
+PUP_ORACLE_CACHE_ENV = "FLUX3_KLEIN_PUP_ORACLE_CACHE"
+
+
+def pup_oracle_cache() -> Path | None:
+    """``$FLUX3_KLEIN_PUP_ORACLE_CACHE`` (else ``$FLUX3_KLEIN_OUT/pup_oracle``): where ``pup_oracle.py`` keeps the CPU
+    bf16 captions of the upsampler (the proper reference of a device caption that misses the record, design
+    ``docs/M9_DESIGN.md`` section 8; minutes per caption on a node CPU); ``None`` = no oracle on disk (the device rows
+    that need one FAIL with "run the oracle", never skip). Never inside the tree."""
+    value = os.environ.get(PUP_ORACLE_CACHE_ENV)
+    if value:
+        return Path(value)
+    renders = os.environ.get(RENDERS_ENV)
+    return Path(renders) / "pup_oracle" if renders else None
+
+
+# (set, case) -> the prompt token count of the upsampler input built from the record (``build_pup_inputs``), measured
+# with transformers 5.12.1 on the pup snapshot's tokenizer / processor (logs/m9_designer_host_facts.log:10-17);
+# ``None`` = not pinned (logged by the test). Task keys per record: t2i (no references, no boxes), t2i_bbox
+# (balloons), i2i (one or two references), i2i_bbox (cactus).
+PUP_CASES: dict[tuple[str, str], int | None] = {
+    ("distilled", "man_dog"): 737,
+    ("upsampling", "double_exposure_s1"): 763,
+    ("inputs", "2"): None,
+    ("inputs", "3"): None,
+    ("base_vs_distilled", "church_distilled"): None,
+    ("typography", "gig_poster"): None,
+    ("distilled", "balloons"): 915,
+    ("distilled", "3_bandana"): 1626,
+    ("distilled", "2_coffee"): 1629,
+    ("distilled", "1_figurine"): 1581,
+    ("distilled", "2_3_mugprint"): 1572,
+    ("distilled", "cactus"): 1914,
+}
+PUP_T2I_CASES = [
+    ("distilled", "man_dog"),
+    ("upsampling", "double_exposure_s1"),
+    ("inputs", "2"),
+    ("inputs", "3"),
+    ("base_vs_distilled", "church_distilled"),
+    ("typography", "gig_poster"),
+]
+PUP_BBOX_CASES = [("distilled", "balloons")]
+PUP_I2I_CASES = [
+    ("distilled", "3_bandana"),
+    ("distilled", "2_coffee"),
+    ("distilled", "1_figurine"),
+    ("distilled", "2_3_mugprint"),
+    ("distilled", "cactus"),
+]
+
+
+def pup_case_id(case: tuple[str, str]) -> str:
+    return f"{case[0]}-{case[1]}"
+
+
+def load_boxes(name: str) -> list[dict]:
+    """A vendored ``examples/inputs/<name>`` box file (``balloons_boxes.json``, ``cactus_boxes.json``)."""
+    return json.loads((EXAMPLE_INPUTS_DIR / name).read_text())
+
+
+def pup_request_of(record: dict) -> tuple[str, list, list[dict] | None]:
+    """``(input_prompt, reference images, boxes)`` of a record for the upsampler: the raw ``input_prompt``, the
+    references opened from ``examples/inputs`` (``require_example_input`` skips when a PNG is missing) and the
+    record's 0-1 boxes."""
+    from PIL import Image
+
+    images = [Image.open(require_example_input(Path(entry).name)) for entry in record.get("references") or []]
+    boxes = record.get("boxes") or None
+    return record["input_prompt"], images, boxes
+
+
 def renders_dir() -> Path | None:
     """``$FLUX3_KLEIN_OUT``: where the pipeline tests save their PNGs (never inside the tree); ``None`` saves nothing."""
     value = os.environ.get(RENDERS_ENV)

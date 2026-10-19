@@ -103,6 +103,8 @@ class VisionAttention(LightweightModule):
         self.local_qkv_size = (self.n_local_heads + 2 * self.n_local_kv_heads) * self.padded_head_dim
 
         self.dtype = dtype
+        # QWEN36_EXACT_PROFILE=1: weights at `dtype` (bf16), bf16 q / k / v into the SDPA and a bf16 wo output.
+        self.exact_profile = bool(getattr(configuration, "exact_profile", False))
         self.grid_size = configuration.max_grid_size
 
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
@@ -184,7 +186,7 @@ class VisionAttention(LightweightModule):
         # qkv_cat shape: [1, 1, dim, tp * local_qkv_size]; shard dim=-1 across cluster axis 1.
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
-            dtype=ttnn.bfloat8_b,
+            dtype=self.dtype if self.exact_profile else ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -210,7 +212,7 @@ class VisionAttention(LightweightModule):
                 qkv_bias,
                 device=self.mesh_device,
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
-                dtype=ttnn.bfloat8_b,
+                dtype=self.dtype if self.exact_profile else ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=cache_name("wqkv_bias_col"),
@@ -367,14 +369,18 @@ class VisionAttention(LightweightModule):
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(q_heads_1QSD)
+        if self.exact_profile:
+            # bf16 operands into the SDPA (no bfp8 typecasts); the names are kept for the shared code below.
+            q_heads_1QSD_8b, k_heads_1KSD_8b, v_heads_1VSD_8b = q_heads_1QSD, k_heads_1KSD, v_heads_1VSD
+        else:
+            q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(q_heads_1QSD)
 
-        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.kv_cache_dtype)
-        ttnn.deallocate(k_heads_1KSD)
+            k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.kv_cache_dtype)
+            ttnn.deallocate(k_heads_1KSD)
 
-        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(v_heads_1VSD)
+            v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(v_heads_1VSD)
 
         # ---- SDPA (purely local; each device runs its own n_local_heads) ----------
         attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
@@ -409,7 +415,7 @@ class VisionAttention(LightweightModule):
             attn_output_11SH,
             self.wo,
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
-            dtype=self.activation_dtype or ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16 if self.exact_profile else (self.activation_dtype or ttnn.bfloat8_b),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["VISION_WO_PREFILL_PROGCFG"](seq_len),
         )

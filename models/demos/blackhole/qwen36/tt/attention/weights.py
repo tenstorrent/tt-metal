@@ -15,11 +15,14 @@ class AttentionWeights:
     k_norm: ttnn.Tensor
 
 
-def load_attention_weights(mesh_device, state_dict, tensor_cache_path=None) -> AttentionWeights:
+def load_attention_weights(mesh_device, state_dict, tensor_cache_path=None, weight_dtype=None) -> AttentionWeights:
+    # weight_dtype None = the shipped bfloat8_b projections; QWEN36_EXACT_PROFILE=1 passes bf16 (AttentionConfig).
+    proj_dtype = ttnn.bfloat8_b if weight_dtype is None else weight_dtype
+
     def load_2d(name):
         return ttnn.as_tensor(
             state_dict[f"{name}.weight"],
-            dtype=ttnn.bfloat8_b,
+            dtype=proj_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

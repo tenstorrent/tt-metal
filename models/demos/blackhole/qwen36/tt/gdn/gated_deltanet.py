@@ -9,6 +9,7 @@ import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.config import GDNConfig
 from models.demos.blackhole.qwen36.tt.gdn.decode import recurrent_forward
 from models.demos.blackhole.qwen36.tt.gdn.weights import load_gdn_weights
+from models.demos.blackhole.qwen36.tt.mlp import exact_profile_fidelity
 
 
 class Qwen36GatedDeltaNet:
@@ -34,13 +35,17 @@ class Qwen36GatedDeltaNet:
         self.norm_eps = config.norm_eps
         self.long_prefill_chunk_size = config.long_prefill_chunk_size
 
+        # LoFi as shipped; HiFi2 under QWEN36_EXACT_PROFILE=1 (config.exact_profile: bf16 projections). The delta
+        # rule kernels keep their own HiFi2 / HiFi4 configs; the depthwise conv1d of the experimental prefill
+        # kernel keeps its LoFi config (outside this package).
+        fidelity = exact_profile_fidelity(config)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=fidelity,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=fidelity,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
