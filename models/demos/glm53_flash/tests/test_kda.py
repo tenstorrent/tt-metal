@@ -16,7 +16,11 @@ from loguru import logger
 
 import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
-from models.demos.glm53_flash.reference.hf_layer_reference import STRICT_FP32, convert_to_hf_module_keys, load_config
+from models.demos.glm53_flash.reference.hf_layer_reference import (
+    cast_like_from_pretrained,
+    convert_to_hf_module_keys,
+    load_config,
+)
 from models.demos.glm53_flash.tests.utils import pcc
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.kda import TtKDA, device_scalar_u32
@@ -33,11 +37,8 @@ def _hf_linear_attention(snapshot, text_config, raw_attn_prefixed):
     hf = hf.to_empty(device="cpu")
     missing, unexpected = hf.load_state_dict(sd, strict=False)
     assert not missing and not unexpected, (missing, unexpected)
-    hf = hf.to(torch.bfloat16)
-    for name, p in list(hf.named_parameters()) + list(hf.named_buffers()):
-        if any(s in name for s in STRICT_FP32):
-            p.data = p.data.to(torch.float32)
-    return hf.eval()
+    cast_like_from_pretrained(hf)
+    return hf
 
 
 @pytest.fixture(scope="module")

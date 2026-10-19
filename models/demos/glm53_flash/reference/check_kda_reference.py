@@ -19,7 +19,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from checkpoint import default_snapshot_dir, load_layer_raw, shard_headers  # noqa: E402
-from hf_layer_reference import STRICT_FP32, convert_to_hf_module_keys, load_config  # noqa: E402
+from hf_layer_reference import cast_like_from_pretrained, convert_to_hf_module_keys, load_config  # noqa: E402
 
 from models.demos.deepseek_v3_d_p.reference.kda import KDAConfig, kda_forward_reference
 
@@ -50,11 +50,8 @@ def main():
     hf = hf.to_empty(device="cpu")
     missing, unexpected = hf.load_state_dict(sd, strict=False)
     assert not missing and not unexpected, (missing, unexpected)
-    hf = hf.to(torch.bfloat16)
-    for name, p in list(hf.named_parameters()) + list(hf.named_buffers()):
-        if any(s in name for s in STRICT_FP32):
-            p.data = p.data.to(torch.float32)
-    hf.eval()
+    cast_like_from_pretrained(hf)
+    hf
 
     # --- in-tree Kimi KDA reference
     import json

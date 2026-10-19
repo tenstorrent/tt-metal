@@ -24,3 +24,14 @@ Stage: tt-model-bringup stage 1 (functional decoder, 1x1 mesh) = design Phase 1.
 - Note: the config.json names DSA layers `deepseek_sparse_attention`; the modeling code keys its mask mapping
   on `indexed_attention`, so the layer-level harness normalizes `layer_types` (same as from_pretrained).
 - `tt/config.py`: frozen config dataclass loaded from config.json (45 layers: 34 KDA, DSA at 3+4k, 42 MoE).
+- Build done (10m12s); `create_venv.sh` (uv) + `transformers==5.20.2` + `tt-perf-report` added with
+  `uv pip install --python python_env/bin/python`. Single-chip smoke (TT_VISIBLE_DEVICES=0, MeshShape(1,1)): OK.
+- `reference/check_kda_reference.py`: the in-tree Kimi-K3 KDA torch reference == HF GLM KDA with real layer-0
+  weights (prefill PCC 0.99999, state 0.99999, decode 0.99999) -> ttKDA prefill kernels + state contract reused.
+- `tt/kda.py` + `tests/test_kda.py` (1x1 mesh, layer 0, real weights): prefill T=96 PCC 0.99994 / T=1000 0.99995,
+  recurrent state 0.9999, conv history 0.99999; 3 decode steps from the device state PCC 0.9999 each. Commit f9ed9df261e.
+- `tt/moe.py` (router = moe_grouped_topk single-group; experts = sparse_matmul per 32-token block with a per-expert
+  union mask; shared expert = clamped SwiGLU). sparse_matmul needs a rectangular grid whose core count divides the
+  output tile count (TT_FATAL "num_cores_with_work must equal in0_mcast_receiver_num_cores"): `pick_sparse_grid`.
+  First run (layer 4, T=32, realistic MLP input from the T256 dump): output PCC 0.9964, but top-8 sets identical to
+  HF on only 16/32 tokens (dense routing-weight PCC 0.985) -> quantifying whether that is near-tie noise.

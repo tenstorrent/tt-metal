@@ -38,6 +38,19 @@ from checkpoint import EMBED_KEY, default_snapshot_dir, load_layer_raw, load_ten
 STRICT_FP32 = ("e_score_correction_bias", "conv1d", "dt_bias", "A_log")
 
 
+def cast_like_from_pretrained(module):
+    """bf16 for every parameter/buffer except the strict-fp32 groups, which keep their checkpoint
+    precision. (Casting the whole module to bf16 and re-casting those tensors to fp32 afterwards
+    would already have rounded them: the router bias at ~5.5 only resolves 0.03 in bf16, which
+    flips the top-8 on ~half of real tokens.)"""
+    for name, p in list(module.named_parameters()) + list(module.named_buffers()):
+        if any(s in name for s in STRICT_FP32):
+            p.data = p.data.to(torch.float32)
+        else:
+            p.data = p.data.to(torch.bfloat16)
+    return module.eval()
+
+
 def convert_to_hf_module_keys(raw: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     """Checkpoint naming -> Glm5NextTextDecoderLayer state_dict naming (transformers glm5_next mapping)."""
     sd: dict[str, torch.Tensor] = {}
@@ -107,11 +120,7 @@ def build_layer(snapshot: Path, text_config, layer_idx: int, headers=None):
     missing = [k for k in missing]
     if missing or unexpected:
         raise RuntimeError(f"layer {layer_idx}: missing={missing} unexpected={unexpected}")
-    layer = layer.to(torch.bfloat16)
-    for name, p in list(layer.named_parameters()) + list(layer.named_buffers()):
-        if any(s in name for s in STRICT_FP32):
-            p.data = p.data.to(torch.float32)
-    layer.eval()
+    cast_like_from_pretrained(layer)
     return layer, sd
 
 
