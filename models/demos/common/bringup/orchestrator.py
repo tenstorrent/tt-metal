@@ -102,7 +102,7 @@ from models.demos.common.bringup.knowledge import check as kcheck
 from models.demos.common.bringup.knowledge import usage as kusage
 from models.demos.common.bringup.plan import approvals
 from models.demos.common.bringup.plan import op_request as OR
-from models.demos.common.bringup.testing import accuracy_guard, model_precision
+from models.demos.common.bringup.testing import accuracy_guard, model_precision, ops_lint
 from models.demos.common.bringup.testing import serving as SV
 from models.demos.common.bringup.testing import settings_lint
 from models.demos.common.bringup.testing.noise_floor import TAPS_FILE
@@ -774,6 +774,17 @@ class Orchestrator:
                 self.spec.repo,
                 rel(self.spec, self.spec.model_dir),
                 [p for p in self.last_changed if p.endswith((".py", ".cpp", ".hpp", ".h"))],
+            )
+        ]
+        # F113: bring-up ops before stock TTNN (a listed stock op needs a BREADCRUMBS reason); a changed op folder keeps
+        # its README.md and INDEX.md entry
+        problems += [
+            f"bring-up ops: {v}"
+            for v in ops_lint.violations(
+                self.spec.repo,
+                rel(self.spec, self.spec.model_dir),
+                list(self.last_changed),
+                self.spec.bringup_dir / "BREADCRUMBS.md",
             )
         ]
         ki, _ = kcheck.check_known_issues(kcheck.HERE / "known_issues.md")
