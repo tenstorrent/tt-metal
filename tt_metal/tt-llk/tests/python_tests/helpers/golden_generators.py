@@ -4406,6 +4406,11 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 tile_dimensions=tile_dimensions,
             ).flatten()
 
+        if float_dest and output_format != DataFormat.Float32:
+            # Only a Float32 output carries the Float32 tile to L1; any other gets the
+            # operand dtype back, which bit-exact callers compare against.
+            result = cast_to_dest_dtype(result.float(), format_dict[data_format])
+
         if model_dest and not nan_survives_to_l1(data_format, output_format, dest_acc):
             # The packer cannot write a NaN through this pipeline, so it substitutes an infinity
             # of the NaN's own sign (SFPSTORE: "NaN is also converted to infinity"). Asked of

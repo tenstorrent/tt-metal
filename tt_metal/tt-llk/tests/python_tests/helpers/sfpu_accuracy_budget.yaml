@@ -1015,7 +1015,7 @@ Erfinv:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Flo
   - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 14705 ULP, block-quantized
   - {in: Float32, out: Float16, dest: "No", metric: tolerance}  # max 2941 ULP, budget 3236 > ceiling 51
   - {in: Float32, out: Float16, dest: "Yes", metric: tolerance}  # max 2942 ULP, budget 3237 > ceiling 51
-  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # max 36608 ULP, budget 40269 > ceiling 6
+  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # max 36608 ULP, budget 40269 > ceiling 6; the pre-sweep floor of 5.37e-04 was restored here and re-measured -- it does not rescue this cell, unlike its dest: "Yes" sibling
   - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 3, near_zero_atol: 0.000537}  # max 2 ULP outside the floor, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-23; the whole-format worst lane is 14706 steps, in the near-zero tail near_zero_atol holds. write_table cannot regenerate a floor, so it keeps this op's block verbatim and the row is hand-maintained; without the floor the cell demotes to tolerance on that tail alone. Budget is the 2 plus the emitter's 1.1x headroom
   - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 3, near_zero_atol: 0.000537}  # max 2 ULP outside the floor, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-23; the whole-format worst lane is 14704 steps, in the near-zero tail near_zero_atol holds. write_table cannot regenerate a floor, so it keeps this op's block verbatim and the row is hand-maintained; without the floor the cell demotes to tolerance on that tail alone. Budget is the 2 plus the emitter's 1.1x headroom
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 3, near_zero_atol: 0.000537}  # max 2 ULP outside the floor, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-23; the whole-format worst lane is 14704 steps, in the near-zero tail near_zero_atol holds. write_table cannot regenerate a floor, so it keeps this op's block verbatim and the row is hand-maintained; without the floor the cell demotes to tolerance on that tail alone. Budget is the 2 plus the emitter's 1.1x headroom
@@ -1025,7 +1025,7 @@ Erfinv:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Flo
   - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 2, near_zero_atol: 0.000537}  # max 1 ULP, p99.9 1.0, 96% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 14690 steps and are held by the atol floor instead; floor measured at dynamic range 1.82; holds while the judged tile's range stays above 0.301 (6.1x narrower)
   - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 81920, near_zero_atol: 0.000537}  # max 65536 ULP, p99.9 65536.0, 56% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962658305 steps and are held by the atol floor instead; floor measured at dynamic range 1.78; holds while the judged tile's range stays above 0.386 (4.6x narrower)
   - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 62735, near_zero_atol: 0.000537}  # max 50188 ULP, p99.9 50188.0, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962658305 steps and are held by the atol floor instead; floor measured at dynamic range 1.78; holds while the judged tile's range stays above 0.386 (4.6x narrower)
-  - {in: Float16, out: Float32, approx: "No", dest: "No", metric: tolerance}  # max 2399125506 ULP, budget 2639038057 > ceiling 419430
+  - {in: Float16, out: Float32, approx: "No", dest: "No", metric: tolerance}  # max 2399125506 ULP, budget 2639038057 > ceiling 419430; the floor cannot hold it -- the worst lane is an out-of-domain input where the kernel answers -131008 against the golden's clamp to +131008, a sign disagreement, not near zero
   - {in: Float16, out: Float32, approx: "No", dest: "Yes", max_ulp: 30522, near_zero_atol: 0.000536}  # max 27027 ULP, p99.9 24417.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962641921 steps and are held by the atol floor instead; floor measured at dynamic range 1.83; holds while the judged tile's range stays above 0.729 (2.5x narrower)
   - {in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", metric: tolerance}  # max 963594243 ULP, budget 1059953668 > ceiling 419430
   - {in: Float16_b, out: Float32, approx: "Yes", dest: "No", metric: tolerance}  # max 963575809 ULP, budget 1059933390 > ceiling 419430
@@ -1978,6 +1978,9 @@ I0:  # tracked: #50465 (no large-|x| branch; closed unfixed, fix in #52126); mea
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 678 lane(s) disagreeing with the golden about being finite (golden -> result: x=-552.06: inf -> 3.1658e+38; x=-549.588: inf -> 2.8682e+38); max 476812063 ULP over the 64346 measurable lanes
 
 
+# The kernel rounds its result to bf16 unless the input is Float32 (calculate_i1,
+# `#ifndef INP_FLOAT32`), whatever dest_acc is: a 16-bit input's Float16 and Float32
+# rows measure that rounding against the fp32 golden, not kernel drift.
 I1:  # tracked: #52174 (input clamped at 88.5); measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # not measurable: 31104 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 27393 ULP over the 33920 measurable lanes
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # not measurable: 31104 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.16307e+37; x=-3.37624e+38: -inf -> -1.16307e+37); max 27393 ULP over the 33920 measurable lanes
@@ -4163,10 +4166,10 @@ SqrtCustom:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided
 # One multiply, and one open question. x*x has rounding slack the sign-bit ops do not:
 # the golden rounds in float64, the hardware in the datapath, and ties can differ.
 # Its Float32 outputs measure 0 almost everywhere since UnarySFPUGolden stopped rounding
-# its reference to the input format (65536 and 32768 steps, one bf16 step and half of
-# one in fp32 units, were that cast). What is left is dest_acc=No: a 16-bit Dest holds
-# the product at bf16 or fp16 precision, so a Bfp8_b input reads one bf16 step there,
-# and a Float16 input the fp16 Dest's subnormal flush. The op-wide Float32 row keeps the
+# its reference to the input format (the dest_acc=Yes rows' 32768 steps, half a bf16
+# step in fp32 units, were that cast). What is left is dest_acc=No: a 16-bit Dest holds
+# the product at bf16 or fp16 precision, so a Bfp8_b input reads one bf16 step (65536)
+# there, and a Float16 input the fp16 Dest's subnormal flush. The op-wide Float32 row keeps the
 # 2026-09-16 sample only for the cells the sweep does not drive.
 Square:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-16, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32401 ULP, block-quantized

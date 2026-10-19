@@ -1966,7 +1966,7 @@ def test_only_a_note_the_emitter_writes_is_credited_to_the_key_lines_run(tmp_pat
 #: handful of inputs does not belong here: name the inputs in
 #: ``ulp_sweep._KNOWN_NONFINITE_LANES`` instead, and the rest of the cell stays gated.
 _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
-    # -- the approximation's own shortfall at the fp16 overflow edge ----------------
+    # -- the approximation's own shortfall at the fp16 and fp32 overflow edges -----
     (
         MathOperation.Exp,
         DataFormat.Float16,
