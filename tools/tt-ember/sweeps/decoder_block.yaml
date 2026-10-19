@@ -7,6 +7,9 @@
 # torch as --tt-venv-activate; --app-exe defaults to the workload script.
 name: decoder_block
 workload: ttnn_ops
+# legacy measures the 12 ops of the published Table 4; drop it (or set updated) for the full
+# 14-op block (see op_power_breakdown/README.md).
+mode: legacy
 app_args:
   - --seq
   - 1024

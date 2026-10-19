@@ -2,9 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# The original run_all.py prefill sweep: three matmul shapes, POWER_CASE=0, split mode. One
-# config per shape keeps the <op>/<case> layout; run this file three times with a different
-# --output-root, or edit app_args. Kept for parity with the earlier Wormhole runs.
+# One shape of the former run_all.py prefill sweep (POWER_CASE=0, split mode), at the paper's
+# telemetry rate and trim rather than run_all.py's 50 Hz / 6 ms. For its other shapes, edit
+# app_args and use another --output-root. run_all.py's fixed_tpc group and its multi-shape
+# compare_runs overlay have no config any more.
 name: prefill_1024_2048_2048_160
 workload: long_matmul
 # legacy reproduces how the earlier prefill runs were measured; drop it (or set updated) for new data.

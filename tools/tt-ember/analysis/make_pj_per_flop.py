@@ -17,19 +17,18 @@ Examples
 --------
 One run, e.g. the matmul cases of a run_sweep.py output root:
 
-    ./make_pj_per_flop.py out_fig1/matmul --label "Wormhole n150" \\
+    python3 analysis/make_pj_per_flop.py out_fig1/matmul --label "Wormhole n150" \\
         --seq 1024 --hidden 2048 --k 2048 --iters 160
 
 Two boards on one shared y-axis, for comparison:
 
-    ./make_pj_per_flop.py out_fig1/matmul --label "Wormhole n150" \\
+    python3 analysis/make_pj_per_flop.py out_fig1/matmul --label "Wormhole n150" \\
         --compare /path/to/blackhole_run --compare-label "Blackhole p100a" \\
         --seq 1024 --hidden 2048 --k 2048 --iters 160
 """
 import argparse
 import csv
 import math
-import os
 import sys
 from pathlib import Path
 
@@ -41,7 +40,7 @@ import matplotlib.pyplot as plt
 
 # common.py lives one directory up.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from common import whole_run_value  # noqa: E402
+from common import PJ_PER_J, add_mode_argument, find_case_csv, save_figure, whole_run_value  # noqa: E402
 
 # Only cases that actually execute the matmuls. POWER_CASE 2 and 3 skip matmul_tiles, so no
 # FLOPs are performed and energy-per-FLOP is undefined for them; case 4 runs them on stale data.
@@ -51,21 +50,12 @@ DEFAULT_CASES = [
 ]
 
 
-def find_csv(root: Path, case: str) -> Path | None:
-    """Accept either a tt-ember output root (<root>/<case>/program_intervals.csv) or a
-    directory of flat per-case CSVs (<root>/<case>.csv)."""
-    for cand in (root / case / "program_intervals.csv", root / f"{case}.csv"):
-        if cand.exists():
-            return cand
-    return None
-
-
 def pj_per_flop(path: Path, flops: float, legacy: bool) -> dict:
     out = {}
     for r in csv.DictReader(open(path)):
         energy_j = whole_run_value(r, "energy_j_vi", legacy)
         if "grid" in r and math.isfinite(energy_j):
-            out[r["grid"]] = energy_j / flops * 1e12
+            out[r["grid"]] = energy_j / flops * PJ_PER_J
     return out
 
 
@@ -82,7 +72,7 @@ def grid_order(per_case: dict) -> list:
 def collect(root: Path, cases, flops, skip_first, legacy):
     per_case = {}
     for name, _ in cases:
-        p = find_csv(root, name)
+        p = find_case_csv(root, name)
         if p is None:
             print(f"  note: no CSV for case '{name}' under {root}, skipping")
             continue
@@ -99,7 +89,7 @@ def collect(root: Path, cases, flops, skip_first, legacy):
 
 def chart(datasets, cases, ylim, out_path, subtitle, dpi=150):
     n = len(datasets)
-    fig, axes = plt.subplots(n, 1, figsize=(max(10, 14), 6 * n), squeeze=False)
+    fig, axes = plt.subplots(n, 1, figsize=(14, 6 * n), squeeze=False)
     for ax, (label, per_case, grids) in zip(axes[:, 0], datasets):
         x = np.arange(len(grids))
         width = 0.8 / max(len(cases), 1)
@@ -116,9 +106,7 @@ def chart(datasets, cases, ylim, out_path, subtitle, dpi=150):
         ax.set_ylim(0, ylim)
         ax.legend()
         ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
+    save_figure(fig, out_path, dpi)
     print(f"Wrote: {out_path}")
 
 
@@ -137,13 +125,7 @@ def main():
         action="store_true",
         help="Include the first interval; its baseline is one-sided and unreliable.",
     )
-    ap.add_argument(
-        "--mode",
-        choices=("updated", "legacy"),
-        default=os.environ.get("LONG_MATMUL_MODE") or "updated",
-        help="updated scales energy from the trimmed window to the whole run, as the FLOP count is; "
-        "legacy uses the window value, as the published figures did. Default: $LONG_MATMUL_MODE, else updated",
-    )
+    add_mode_argument(ap)
     ap.add_argument("--dpi", type=int, default=150)
     ap.add_argument("--out", type=Path, default=Path("pj_per_flop.png"))
     args = ap.parse_args()

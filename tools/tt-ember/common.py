@@ -24,6 +24,9 @@ RESET_COOLDOWN_S = 10
 # run as done only if this file exists and records the same settings it is about to use.
 RUN_COMPLETE_FILE = "run_complete.json"
 
+# Joules to picojoules, for energy per FLOP.
+PJ_PER_J = 1e12
+
 # Default --trim-ms. run_sweep.py uses 1 ms instead: the published POWER_CASE results were
 # made with it, and changing it would change them.
 DEFAULT_TRIM_MS = 6.0
@@ -103,6 +106,8 @@ WORKLOAD_ENV_VARS = (
     "TT_METAL_NULL_KERNELS",
     "TT_METAL_KERNELS_EARLY_RETURN",
     "TT_METAL_SLOW_DISPATCH_MODE",
+    # The AICLK run_sweep.py pins after every reset (Blackhole).
+    "TT_EMBER_AICLK_MHZ",
 )
 
 
@@ -290,6 +295,26 @@ def whole_run_value(row: Mapping[str, str], column: str, legacy: bool) -> float:
     except (KeyError, ValueError):
         return float("nan")
     return value * run_s / window_s if window_s > 0 else float("nan")
+
+
+def add_mode_argument(parser: argparse.ArgumentParser) -> None:
+    """--mode for the analysis scripts: how energy is scaled to the FLOP count (whole_run_value)."""
+    parser.add_argument(
+        "--mode",
+        choices=("updated", "legacy"),
+        default=os.environ.get("LONG_MATMUL_MODE") or "updated",
+        help="updated scales energy from the trimmed window to the whole run, as the FLOP count is; "
+        "legacy uses the window value, as the published figures did. Default: $LONG_MATMUL_MODE, else updated",
+    )
+
+
+def find_case_csv(root: Path, case: str) -> Optional[Path]:
+    """A case's program_intervals.csv, from a tt-ember output root (<root>/<case>/...) or a
+    directory of flat per-case CSVs (<root>/<case>.csv)."""
+    for cand in (root / case / "program_intervals.csv", root / f"{case}.csv"):
+        if cand.exists():
+            return cand
+    return None
 
 
 def environ_with(overrides: Mapping[str, str]) -> Dict[str, str]:

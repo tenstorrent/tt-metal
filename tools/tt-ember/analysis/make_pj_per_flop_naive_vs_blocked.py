@@ -5,13 +5,12 @@
 
 """Energy per FLOP: naive vs blocked access pattern (paper Fig. 2).
 
-Same chart format as compare_cases.py. Both series are POWER_CASE=0 on the same
-board with the same shape and iteration count; the only difference is whether the
-kernel reuses tiles.
+Same chart format as compare_cases.py. Both series are the same POWER_CASE (0 in the paper)
+on the same board with the same shape and iteration count; the only difference is whether the
+kernel reuses tiles. --block and --case label the chart; run_sweep.py passes the ones it ran.
 """
 import argparse
 import csv
-import os
 import sys
 from pathlib import Path
 
@@ -23,12 +22,12 @@ import matplotlib.pyplot as plt
 
 # common.py lives one directory up.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from common import whole_run_value  # noqa: E402
+from common import PJ_PER_J, add_mode_argument, save_figure, whole_run_value  # noqa: E402
 
-LABELS = (
-    "Naive, no tile reuse (2.00 tile reads per multiply)",
-    "Blocked 2x4, tile reuse (0.75 tile reads per multiply)",
-)
+
+def reads_per_multiply(bm: int, bn: int) -> float:
+    """DRAM tile reads per tile multiply with BM x BN output blocking (2.00 at 1x1)."""
+    return (bm + bn) / (bm * bn)
 
 
 def load(path):
@@ -38,7 +37,11 @@ def load(path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("naive_csv", type=Path, help="program_intervals.csv of the naive POWER_CASE=0 run")
-    ap.add_argument("blocked_csv", type=Path, help="program_intervals.csv of the LONG_MATMUL_BLOCK_M=2 N=4 run")
+    ap.add_argument("blocked_csv", type=Path, help="program_intervals.csv of the blocked run")
+    ap.add_argument(
+        "--block", nargs=2, type=int, default=(2, 4), metavar=("M", "N"), help="Block of the blocked run. Default: 2 4"
+    )
+    ap.add_argument("--case", default="regular", help="Case subdir both runs used, for the title. Default: regular")
     ap.add_argument(
         "--app-args",
         nargs=4,
@@ -53,20 +56,19 @@ def main():
         action="store_true",
         help="Include the first interval; its baseline is one-sided and unreliable.",
     )
-    ap.add_argument(
-        "--mode",
-        choices=("updated", "legacy"),
-        default=os.environ.get("LONG_MATMUL_MODE") or "updated",
-        help="updated scales energy from the trimmed window to the whole run, as the FLOP count is; "
-        "legacy uses the window value, as the published figures did. Default: $LONG_MATMUL_MODE, else updated",
-    )
+    add_mode_argument(ap)
     ap.add_argument("--dpi", type=int, default=150)
     ap.add_argument("--out", type=Path, default=Path("pj_per_flop_naive_vs_blocked.png"))
     args = ap.parse_args()
 
     m, n, k, iters = args.app_args
     flops = 2 * m * n * k * iters
-    shape = f"M={m} N={n} K={k} x{iters} iterations, HiFi4 bfloat16, split mode, POWER_CASE=0"
+    shape = f"M={m} N={n} K={k} x{iters} iterations, HiFi4 bfloat16, split mode, case {args.case}"
+    bm, bn = args.block
+    labels = (
+        f"Naive, no tile reuse ({reads_per_multiply(1, 1):.2f} tile reads per multiply)",
+        f"Blocked {bm}x{bn}, tile reuse ({reads_per_multiply(bm, bn):.2f} tile reads per multiply)",
+    )
 
     runs = [load(args.naive_csv), load(args.blocked_csv)]
     # Grid order comes from the naive run, so the chart follows whatever the device swept.
@@ -74,8 +76,8 @@ def main():
     if not args.keep_first_grid:
         grids = grids[1:]
     series = [
-        (label, {g: whole_run_value(run[g], "energy_j_vi", args.mode == "legacy") / flops * 1e12 for g in grids})
-        for run, label in zip(runs, LABELS)
+        (label, {g: whole_run_value(run[g], "energy_j_vi", args.mode == "legacy") / flops * PJ_PER_J for g in grids})
+        for run, label in zip(runs, labels)
     ]
     x = np.arange(len(grids))
     width = 0.8 / len(series)
@@ -93,9 +95,7 @@ def main():
     ax.set_title(f"Energy per FLOP per grid{board}, naive vs blocked\n{shape}")
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(args.out, dpi=args.dpi)
-    plt.close(fig)
+    save_figure(fig, args.out, args.dpi)
     print(f"Wrote: {args.out}")
 
 
