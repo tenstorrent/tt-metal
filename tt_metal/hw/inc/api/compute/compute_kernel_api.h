@@ -120,12 +120,12 @@ namespace ckernel {
  * Please refer to documentation for any_init.
  */
 // clang-format on
-template <bool fast_and_approx = false>
+template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sigmoid_tile_init() {
 #ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT(sigmoid));
 #else
-    MATH(SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (fast_and_approx, DST_ACCUM_MODE)));
+    MATH(SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (fast_and_approx, is_fp32_dest_acc_en)));
 #endif
 }
 

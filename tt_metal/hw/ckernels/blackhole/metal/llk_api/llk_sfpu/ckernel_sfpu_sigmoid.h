@@ -75,17 +75,14 @@ void init_sigmoid_bf16();
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 inline void sigmoid_init() {
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
-        if (bf16_dest_sigmoid()) {
-            init_sigmoid_bf16();
-            return;
-        }
-    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!APPROXIMATION_MODE) {
         sfpu_reciprocal_init<false>();
     } else {
         sigmoid_appx_init();
+    }
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        init_sigmoid_bf16();
     }
 }
 
