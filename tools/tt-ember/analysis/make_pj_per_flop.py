@@ -28,6 +28,9 @@ Two boards on one shared y-axis, for comparison:
 """
 import argparse
 import csv
+import math
+import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +38,10 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+# common.py lives one directory up.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from common import whole_run_value  # noqa: E402
 
 # Only cases that actually execute the matmuls. POWER_CASE 2 and 3 skip matmul_tiles, so no
 # FLOPs are performed and energy-per-FLOP is undefined for them; case 4 runs them on stale data.
@@ -53,13 +60,12 @@ def find_csv(root: Path, case: str) -> Path | None:
     return None
 
 
-def pj_per_flop(path: Path, flops: float) -> dict:
+def pj_per_flop(path: Path, flops: float, legacy: bool) -> dict:
     out = {}
     for r in csv.DictReader(open(path)):
-        try:
-            out[r["grid"]] = float(r["energy_j_vi"]) / flops * 1e12
-        except (KeyError, ValueError):
-            continue
+        energy_j = whole_run_value(r, "energy_j_vi", legacy)
+        if "grid" in r and math.isfinite(energy_j):
+            out[r["grid"]] = energy_j / flops * 1e12
     return out
 
 
@@ -73,14 +79,14 @@ def grid_order(per_case: dict) -> list:
     return seen
 
 
-def collect(root: Path, cases, flops, skip_first):
+def collect(root: Path, cases, flops, skip_first, legacy):
     per_case = {}
     for name, _ in cases:
         p = find_csv(root, name)
         if p is None:
             print(f"  note: no CSV for case '{name}' under {root}, skipping")
             continue
-        per_case[name] = pj_per_flop(p, flops)
+        per_case[name] = pj_per_flop(p, flops, legacy)
     if not per_case:
         raise SystemExit(f"no case CSVs found under {root}")
     grids = grid_order(per_case)
@@ -131,6 +137,13 @@ def main():
         action="store_true",
         help="Include the first interval; its baseline is one-sided and unreliable.",
     )
+    ap.add_argument(
+        "--mode",
+        choices=("updated", "legacy"),
+        default=os.environ.get("LONG_MATMUL_MODE") or "updated",
+        help="updated scales energy from the trimmed window to the whole run, as the FLOP count is; "
+        "legacy uses the window value, as the published figures did. Default: $LONG_MATMUL_MODE, else updated",
+    )
     ap.add_argument("--dpi", type=int, default=150)
     ap.add_argument("--out", type=Path, default=Path("pj_per_flop.png"))
     args = ap.parse_args()
@@ -144,7 +157,7 @@ def main():
 
     datasets = []
     for root, label in [(args.run, args.label)] + ([(args.compare, args.compare_label)] if args.compare else []):
-        per_case, grids = collect(root, DEFAULT_CASES, flops, not args.keep_first_grid)
+        per_case, grids = collect(root, DEFAULT_CASES, flops, not args.keep_first_grid, args.mode == "legacy")
         datasets.append((label, per_case, grids))
         print(f"\n{label}:")
         for name, _ in DEFAULT_CASES:

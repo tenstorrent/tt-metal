@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Helpers shared by auto.py and the sweep scripts (run_all.py, run_power_cases.py)."""
+"""Helpers shared by auto.py, run_sweep.py and the analysis scripts."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ RESET_COOLDOWN_S = 10
 # run as done only if this file exists and records the same settings it is about to use.
 RUN_COMPLETE_FILE = "run_complete.json"
 
-# Default --trim-ms. run_power_cases.py uses 1 ms instead: the published POWER_CASE results were
+# Default --trim-ms. run_sweep.py uses 1 ms instead: the published POWER_CASE results were
 # made with it, and changing it would change them.
 DEFAULT_TRIM_MS = 6.0
 POWER_CASES_TRIM_MS = 1.0
@@ -222,9 +222,12 @@ def auto_py_command(
     slot_ms: int,
     device_id: Optional[int],
     trim_ms: float,
+    python_exe: Optional[str] = None,
 ) -> List[str]:
+    """python_exe, if given, runs auto.py and is passed on for the parser; otherwise both use
+    the Python running this script."""
     cmd: List[str] = [
-        sys.executable,
+        python_exe or sys.executable,
         str(auto_script),
         "--telemetry-exe",
         str(telemetry_exe),
@@ -249,6 +252,8 @@ def auto_py_command(
     ]
     if device_id is not None:
         cmd += ["--device-id", str(device_id)]
+    if python_exe:
+        cmd += ["--python-exe", python_exe]
     # --app-args must be last: auto.py passes everything after it to the app.
     return cmd + ["--app-args"] + [str(a) for a in app_args]
 
