@@ -90,6 +90,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::LOG2:
         case UnaryOpType::LOG1P:
         case UnaryOpType::TANH:
+        case UnaryOpType::SOFTSIGN:
         case UnaryOpType::SOFTSHRINK:
         case UnaryOpType::HARDSHRINK:
         case UnaryOpType::WHERE_TSS:

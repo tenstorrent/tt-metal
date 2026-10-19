@@ -187,6 +187,21 @@ DEFINE_UNARY_OP(erfc, ERFC)
 
 #undef DEFINE_UNARY_OP
 
+Tensor softsign(
+    const Tensor& input_tensor,
+    tt::tt_metal::SfpuMode sfpu_mode,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    using namespace operations::unary;
+    return operations::unary::detail::unary_impl(
+        input_tensor,
+        {UnaryWithParam{UnaryOpType::SOFTSIGN, static_cast<float>(sfpu_mode)}},
+        memory_config,
+        optional_output_tensor,
+        sub_core_grids);
+}
+
 #define DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(op_name, OP_TYPE)                           \
     Tensor op_name(                                                                                \
         const Tensor& input_tensor,                                                                \

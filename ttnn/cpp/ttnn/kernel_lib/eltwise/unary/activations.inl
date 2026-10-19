@@ -87,6 +87,14 @@ struct Softsign : UnaryOp<Softsign<Slot>, Slot> {
     static ALWI void exec_impl(uint32_t slot_offset) { softsign_tile(to_u32(Slot) + slot_offset); }
 };
 
+#ifndef ARCH_QUASAR
+template <ckernel::SfpuMode MODE, Dst Slot>
+struct SoftsignMode : UnaryOp<SoftsignMode<MODE, Slot>, Slot> {
+    static ALWI void init() { softsign_tile_init<MODE>(); }
+    static ALWI void exec_impl(uint32_t slot_offset) { softsign_tile<MODE>(to_u32(Slot) + slot_offset); }
+};
+#endif
+
 template <Dst Slot>
 struct Hardmish : UnaryOp<Hardmish<Slot>, Slot> {
     static ALWI void init() { hardmish_tile_init(); }

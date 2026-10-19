@@ -5,6 +5,9 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
+#ifndef ARCH_QUASAR
+#include "sfpu_mode.h"
+#endif
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_softsign.h"
 #include "ckernel_sfpu_softshrink.h"
@@ -78,6 +81,45 @@ ALWI void softsign_tile(uint32_t idst) {
  * Please refer to documentation for any_init.
  */
 ALWI void softsign_tile_init() { MATH(SFPU_UNARY_INIT_FN(softsign, sfpu::init_softsign, (APPROX))); }
+
+#ifndef ARCH_QUASAR
+// clang-format off
+/**
+* Performs element-wise softsign, x / (1 + |x|), with the instruction sequence selected by *MODE*. Must follow
+* *softsign_tile_init* with the same *MODE*. The DST register buffer must be in acquired state via *acquire_dst* call.
+* This call is blocking and is only available on the compute engine.
+*
+* | MODE                         | Reciprocal                      | Special values                                       |
+* |------------------------------|---------------------------------|------------------------------------------------------|
+* | SfpuMode::PreciseStrict      | 2 Newton steps                  | +-0 -> +-0, NaN -> NaN, +-inf -> NaN, finite |x| >= 2^126 -> +-1 |
+* | SfpuMode::ApproximateStrict  | BH: none, WH: 1 Newton step     | as PreciseStrict                                     |
+* | SfpuMode::PreciseRelaxed     | 2 Newton steps                  | unspecified; inputs must satisfy |x| < 2^126         |
+* | SfpuMode::ApproximateRelaxed | BH: none, WH: 1 Newton step     | unspecified; inputs must satisfy |x| < 2^126         |
+*
+* The non-templated *softsign_tile* runs the Relaxed sequence chosen by the kernel-wide APPROX setting.
+*
+* Return value: None
+*
+* | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+* |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+* | MODE            | Instruction sequence to run (template argument)                            | SfpuMode | Any SfpuMode value                                    | True     |
+* | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+*/
+// clang-format on
+template <SfpuMode MODE>
+ALWI void softsign_tile(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (MODE, 8 /* ITERATIONS */), idst, VectorMode::RC));
+}
+
+/**
+ * Please refer to documentation for any_init. *MODE* must match the paired *softsign_tile* call.
+ */
+template <SfpuMode MODE>
+ALWI void softsign_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(softsign, sfpu::init_softsign, (MODE)));
+}
+#endif
 
 // clang-format off
 /**
