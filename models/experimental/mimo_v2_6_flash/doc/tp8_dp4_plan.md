@@ -24,15 +24,15 @@ DP path. The cost is that experts must be BFP4 to fit.
 |---|---|---|---|
 | Embedding | 152576 x 4096 bf16 | replicated | 1.25 GB |
 | `qkv_proj` (SWA) | 4096 -> 64x192 + 8x192 + 8x128 | 4096 x (8x192 + 192 + 192) | 8 Q heads + 1 KV head; V padded 128 -> 192 |
-| `qkv_proj` (global), prefill | 4096 -> 64x192 + 4x192 + 4x128 | same as SWA | 8 Q heads + KV head `c // 2` on chip `c` |
-| `qkv_proj` (global), decode | | 4096 x (16x192 + 192 + 192) | all 16 Q heads of KV group `c // 2`; the chip pair splits the users (`tt/kv.py`) |
+| `qkv_proj` (global), first prefill chunk | 4096 -> 64x192 + 4x192 + 4x128 | same as SWA | 8 Q heads + KV head `c // 2` on chip `c`, fresh K/V |
+| `qkv_proj` (global), decode and later prefill chunks | | 4096 x (16x192 + 192 + 192) | all 16 Q heads of KV group `c // 2`; the chip pair splits the users (`tt/kv.py`) |
 | `o_proj` | 8192 -> 4096 | (8x192) x 4096; global decode (16x128) x 4096 | padded rows are zero; row-parallel + all-reduce |
 | Attention sink (SWA) | 64 | 8 | pre-divided by the softmax scale |
 | Dense MLP (layer 0) | 4096 -> 16384 -> 4096 | 4096 x 2048, 2048 x 4096 | column / row parallel + all-reduce |
 | Router | 4096 x 256 bf16, bias fp32 | replicated | fp32 sigmoid / topk / gather |
-| Routed experts | 256 x (3 x 4096 x 2048) | 256 x (3 x 4096 x 256) | intermediate dim TP-sharded; `sparse_matmul` on the union of selected experts per 32-token group; all-reduce |
+| Routed experts | 256 x (3 x 4096 x 2048) | 256 x (3 x 4096 x 256) | intermediate dim TP-sharded, BFP4; decode streams the selected experts bank-locally (`tt/moe_stream.py`), prefill runs them expert-major (`tt/moe_prefill.py`); all-reduce |
 | LM head | 4096 x 152576 | 4096 x 19072 | vocab-parallel, host concatenates |
-| KV cache, SWA layer | | K, V `[blocks, 1, 64, 192]` | 512-token ring per user (`cache_position_modulo`), BFP8 |
+| KV cache, SWA layer | | K, V `[blocks, 1, 64, 192]` | paged by absolute position, only the in-window blocks backed: 10 blocks per user (`kv.SwaBlockTable`), BFP8 |
 | KV cache, global layer | | K `[blocks, 1, 64, 192]`, V `[blocks, 1, 64, 128]` | full context, only the users this chip owns, BFP8; decode via `paged_flash_multi_latent_attention_decode` |
 
 RoPE: HF rotates the first 64 of 192 dims with `rotate_half`. The Q/K rows of each head are
@@ -50,19 +50,21 @@ max_seq_len tables on device).
 | Embedding (bf16, replicated) | 1.25 GB |
 | Router, dense MLP, LM head, norms | ~0.2 GB |
 | KV cache, 4 users x 1M, BFP8: global layers (2 owned users x 1M x 9 layers x 320) | 6.4 GB |
-| KV cache, SWA rings (39 layers x 4 users x 512 x 384) | 0.03 GB |
+| KV cache, SWA blocks (39 layers x 4 users x 10 blocks x 64 x 384) | 0.04 GB |
 | **Measured** (`test_capacity_1m_tp8_dp4.py` on `mimo-v2.6/tp8-dp4`, every replica) | weights 23.69 GB; with 4 x 1M KV 30.14 GB of 34.03 GB (3.89 GB free) |
 
 How B=4 @ 1M fits, with existing ops only (no new kernel):
 
-1. SWA layers only attend to 128 tokens, so their cache is a 512-token ring per user
-   (`cache_position_modulo` on fill, update and decode SDPA). A full-length SWA cache would be
-   66.8 GB per chip.
+1. SWA layers only attend to 128 tokens. Their page tables are indexed by absolute position (the vLLM
+   SlidingWindowSpec layout), but only the blocks a window can still read are backed: 10 per user, which
+   covers the window before a prefill chunk plus the window and padding after it (`kv.SwaBlockTable`). A
+   full-length SWA cache would be 66.8 GB per chip.
 2. Global layers have 4 KV heads on 8 chips. Rather than store each head on both chips of a pair,
    the pair splits the users: chip `c` keeps the KV of slots with `slot % 2 == c % 2` and decodes all
    16 Q heads of its group for them (decode reads the minimum bytes; no cross-chip softmax merge).
-   Prefill still uses 8 heads per chip on fresh K/V, so long-prompt prefill is balanced too, until
-   chunked prefill needs the cached KV, which only the owner holds.
+   The first prefill chunk still uses 8 heads per chip on fresh K/V; a later chunk needs the cached KV,
+   which only the owner holds, so both chips of the pair run the 16 heads through `chunked_flash_mla_prefill`
+   and the non-owner's result is zeroed.
 3. The global V cache is 128 wide, read with `paged_flash_multi_latent_attention_decode`
    (`head_dim_v`), so V is not padded to 192 in the cache.
 
@@ -104,7 +106,8 @@ Notes:
 This document covers the TP=8 x DP=4 mesh plan and its validation. The remaining Phase 0 items are
 tracked separately and do not change the plan above:
 
-- Chunked prefill (`start_pos > 0`) and prefix caching: #60808.
+- Chunked prefill (`start_pos > 0`) and prefix-cache continuation: #60808, done on `mimo-v2.6/decode-perf-chunked`
+  (below).
 - Device sampling, speculative decoding, performance tuning: #60809.
 - vLLM data-parallel serving over the four rows: vllm-tt-plugin#216.
 
@@ -132,7 +135,7 @@ token feedback and position update inside the trace; its tokens match the host l
 |---|---|---|---|
 | Start (MoE layer 479 us) | | | 38.6 ms, 18.0 % |
 | Device-resident greedy loop | 33.3 ms, 20.9 % | 35.4 ms, 19.7 % | 38.8 ms |
-| Routing after the sigmoid in one program (`tt/moe_route.py`: exact fp32 top-8, normalize, mask; replaces top-k, gather and ~20 glue ops); CCL on 2 links (all-reduce 37.7 -> 29.7 us) | 26.8 ms, 26.0 % | 28.9 ms, 24.1 % | 31.8 ms |
+| Routing after the sigmoid in one program (exact fp32 top-8, normalize, mask; replaces top-k, gather and ~20 glue ops; later folded into the streaming gate\|up); CCL on 2 links (all-reduce 37.7 -> 29.7 us) | 26.8 ms, 26.0 % | 28.9 ms, 24.1 % | 31.8 ms |
 | tt-kernel-agent `mimo_moe_stream` round 2: bank-local streaming gate|up with the routing selection inside the program (MoE layer 283 us) | 23.7 ms, 29.5 % | 25.8 ms, 27.1 % | 28.7 ms |
 | tt-kernel-agent final (4 rounds): bank-local streaming down with the pair sum in dest (MoE layer 204 us) | 20.1 ms, 34.7 % | 24.1 ms, 29.0 % | 24.6 ms |
 | Bank-reader cores from the 4x8 parent: row 2's own answer (x = 6 for banks 4-7) slowed six of its chips | 20.1 ms, 34.7 % | 21.95 ms, 31.8 % | 24.8 ms |
@@ -188,9 +191,9 @@ match the host loop.
 SWA KV is now paged by absolute position (`kv.SwaBlockTable`, the vLLM SlidingWindowSpec layout) instead of a
 512-token ring; 300 greedy tokens are identical with the sparse table and with every block backed.
 
-Measured but not kept: qkv prefetch into L1 during the reductions (`MIMO_QKV_PREFETCH=1`: qkv 23 -> 14.5 us, but
-the reductions stretch, net flat); the o projection inside the attention-side reduce launch (`MIMO_MERGE_O=1`: its
-~10 us dispatch is not hidden); `all_gather_async` (slower than `ttnn.all_gather` for 32 KB).
+Measured but not kept (the code is removed): qkv prefetch into L1 during the reductions (qkv 23 -> 14.5 us, but
+the reductions stretch, net flat); the o projection inside the attention-side reduce launch (its ~10 us dispatch is
+not hidden); `all_gather_async` (slower than `ttnn.all_gather` for 32 KB).
 
 Next steps toward 55% (12.7 ms/step), largest first:
 - GateUp waits ~9 us per layer for user 0's routing before it streams. The routing normalization runs in soft float
@@ -200,3 +203,60 @@ Next steps toward 55% (12.7 ms/step), largest first:
   per layer, ~0.6 ms/step).
 - Router inside the post-attention reduce launch; GreedyHead scan / merge (~50 us/step); the 20 us single-core
   embedding; layer 0's dense MLP.
+
+## Chunked prefill and MoE prefill, 2026-10-17 / 18 (branch `mimo-v2.6/decode-perf-chunked`, MOPD)
+
+Prefill takes one user's chunk at `start_pos` (a multiple of the 64-token block; `model.prefill_enqueue(...,
+start_pos, chunk_size)`, default chunk 4096) on the decode cache layout above:
+
+- SWA layers read only the window before the chunk (two blocks) from the cache, put it in front of the chunk's
+  fresh K/V and run the windowed SDPA with sinks over 128 + S rows (zero queries for the window rows). The cache
+  never has to hold a whole chunk, so a SWA user keeps 10 blocks whatever the chunk size.
+- Global layers attend to the whole cached context on the owner chip: `chunked_flash_mla_prefill` with a separate
+  128-wide V cache (`input_tensor_v`, added to ttnn on this branch; the kernels already supported it). V stays
+  unpadded in the cache and decode keeps the MLA kernel.
+
+MoE prefill (`tt/moe_prefill.py`) replaced the per-32-token `sparse_matmul`, which re-read ~40% of the expert
+weights for every 32 tokens (~37 GB per 4K-token layer per chip):
+
+- `DevicePlan` (16 cores, split by expert) sorts the T x 8 (token, k) pairs by expert and pads each expert to
+  32-row groups, entirely on device; it is bitwise identical to the host version of the plan.
+- `GroupedExperts` runs every group in one program on 30 teams of 4 cores. A team core keeps its slice of the
+  job's expert (442 KB of BFP4, from two DRAM banks) in L1 for all of the job's groups, reads its quarter of the
+  group's token rows straight from x and shares the tilized quarter with the team, computes two intermediate
+  columns (gate|up, SwiGLU x routing weight), swaps h tiles with the team, and writes its 32 down columns of every
+  row straight to row k * T + t of a k-major output. `CombineK` sums the 8 rows of every token and tilizes.
+
+One MoE layer, 4096-token chunk, one row (`tests/perf/kagent_moe_prefill_bench.py`):
+
+| Change | ms |
+|---|---|
+| Per-32-token `sparse_matmul` | 337.9 |
+| Expert-major with ttnn ops (host plan, embedding gathers, indexed `sparse_matmul` per group) | 34.7 |
+| Grouped expert kernel (each expert slice read once per job) | 20.3 |
+| Plan on device (no routing read back) | 17.6 |
+| Team cores read their token rows directly (no gathered copy of x) | 13.2 |
+| Rows written straight to the k-major output + `CombineK` | 11.8 -> 10.8 (1 KB reads) |
+| Plan on 16 cores | 9.7 |
+
+Output vs the original `sparse_matmul` path: PCC 0.999993, worst token 0.99998, bitwise repeatable. Two
+tt-kernel-agent runs on this layer (5 rounds each, from 338 ms and from 34.7 ms) found only small glue changes;
+the expert-major rewrite and the grouped kernel were written by hand.
+
+Full model on one row (`tests/perf/prefill_time.py`): 4096 tokens 13.9 s -> 0.734 s (5580 tokens/s); 32K tokens in
+4K chunks 112 s -> 6.55 s. Device time per decoder layer is ~11.7 ms (grouped expert kernel ~4.0, plan 1.6,
+combine 0.8, two all-reduces 1.5, attention ~3.5). Four rows at once reach only ~8.3k tokens/s per Galaxy: the
+host dispatches every op of all four rows from one Python thread (~0.5 s per row per 4K chunk).
+
+## Validation on `mimo-v2.6/decode-perf-chunked` (MOPD, 2026-10-18 / 19)
+
+| Test | Result |
+|---|---|
+| `test_kv_tables.py` | 7 passed |
+| `test_decoder_tp8_dp4.py` (layers 0, 1, 5) | passed; worst PCC prefill 0.9987, decode 0.9965 |
+| `test_chunked_prefill_tp8_dp4.py` (layers 0, 1, 5; chunks 64-512) | passed; chunked vs reference >= 0.9989, vs one shot >= 0.9993, cached K/V >= 0.99993 |
+| `test_moe_decode_tp8.py` | passed |
+| `test_model_tp8_dp4.py` (48 layers) | top-1 0.950, logits PCC min 0.9581 / mean 0.9921 vs the fp32 golden |
+| `test_model_chunked_tp8_dp4.py` | one shot / chunks of 128-1024 / prefix hit agree (logits PCC >= 0.997, same 8 greedy tokens) |
+| `tests/perf/decode_bandwidth.py --repeats 5` | device loop 1 row 14.1 ms/step (49.6%), 4 rows 15.6 ms (44.6%); tokens match the host loop |
+| `tests/ttnn/.../test_mla_prefill.py -k separate_v` | 4 passed |
