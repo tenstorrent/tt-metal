@@ -21,6 +21,7 @@ import struct
 from dataclasses import dataclass
 
 import ttnn
+from models.demos.llama3_70b_galaxy.tt.custom_ops.cache_key import tensor_key
 
 KERNEL_ROOT = "models/demos/llama3_70b_galaxy/tt/custom_ops/qwen_cp_sdpa/kernels"
 STOCK_ROOT = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels"
@@ -400,7 +401,7 @@ def chunked_sdpa_port(
         str(compute_kernel_config.math_fidelity),
         bool(compute_kernel_config.math_approx_mode),
         bool(compute_kernel_config.dst_full_sync_en),
-        tuple(_addr(t) for t in (q, k, v, page_table, chunk_start_idx_tensor, out)),
+        tuple(tensor_key(t) for t in (q, k, v, page_table, chunk_start_idx_tensor, out)),
     )
     mesh_program = _DESCRIPTOR_CACHE.get(key)
     if mesh_program is None:
@@ -687,7 +688,7 @@ def qwen_cp_sdpa(
         str(compute_kernel_config.math_fidelity),
         bool(compute_kernel_config.math_approx_mode),
         bool(compute_kernel_config.dst_full_sync_en),
-        tuple(_addr(t) for t in (q0, q1, k, v, page_table, out)),
+        tuple(tensor_key(t) for t in (q0, q1, k, v, page_table, out)),
     )
     mesh_program = _DESCRIPTOR_CACHE.get(key)
     if mesh_program is None:

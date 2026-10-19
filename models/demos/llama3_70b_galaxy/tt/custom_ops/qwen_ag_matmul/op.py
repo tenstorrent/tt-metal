@@ -36,6 +36,7 @@ import functools
 from dataclasses import dataclass
 
 import ttnn
+from models.demos.llama3_70b_galaxy.tt.custom_ops.cache_key import tensor_key
 
 KERNEL_ROOT = "models/demos/llama3_70b_galaxy/tt/custom_ops/qwen_ag_matmul/kernels"
 KERNELS = {k: f"{KERNEL_ROOT}/{k}.cpp" for k in ("mm_in0", "mm_in1_out", "mm_compute", "ag_sender", "ag_hub")}
@@ -583,7 +584,8 @@ def matmul_port(
             ttnn.Shape([1, 1, int(a.shape[-2]), N]), dtype, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
         )
     key = ("port", gx, cfg, p, str(compute_kernel_config.math_fidelity), bool(compute_kernel_config.fp32_dest_acc_en))
-    key += (bool(compute_kernel_config.math_approx_mode), a.buffer_address(), w.buffer_address(), out.buffer_address())
+    key += (bool(compute_kernel_config.math_approx_mode), tuple(mesh.shape))
+    key += tuple(tensor_key(t) for t in (a, w, out))
     mp = _DESCRIPTOR_CACHE.get(key)
     if mp is None:
         k, c, s = _matmul_kernels(
@@ -646,7 +648,7 @@ def qwen_ag_matmul(
     gs = _sems(mesh)
     ckc = compute_kernel_config
     key = ("fused", probe, cfg, p, bool(copy_local), str(ckc.math_fidelity), bool(ckc.fp32_dest_acc_en))
-    key += (bool(ckc.math_approx_mode), tuple(t.buffer_address() for t in (x_local, w, gathered, out)), gs.key)
+    key += (bool(ckc.math_approx_mode), tuple(tensor_key(t) for t in (x_local, w, gathered, out)), gs.key)
     mp = _DESCRIPTOR_CACHE.get(key)
     if mp is None:
         mp = ttnn.MeshProgramDescriptor()
@@ -934,7 +936,7 @@ def qwen_ag_matmul_v2(
         str(ckc.math_fidelity),
         bool(ckc.fp32_dest_acc_en),
     )
-    key += (bool(ckc.math_approx_mode), tuple(t.buffer_address() for t in (x_local, w, gathered, out)), words.addr)
+    key += (bool(ckc.math_approx_mode), tuple(tensor_key(t) for t in (x_local, w, gathered, out)), words.addr)
     mp = _DESCRIPTOR_CACHE.get(key)
     if mp is None:
         mp = ttnn.MeshProgramDescriptor()
