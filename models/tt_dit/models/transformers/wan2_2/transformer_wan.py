@@ -181,11 +181,15 @@ class WanTransformerBlock(Module):
         rope_sin_BANH: fractured N on SP, A (num_heads) on TP
         trans_mat: replicated on SP, replicated D on TP
 
+        With CFG batching, prompt_1BLP is a (cond, uncond) pair and spatial_1BND holds the rows of both passes
+        stacked per device ([1, 1, 2n, D]); the passes share the timestep embedding and the RoPE features.
+
         Outputs:
         spatial_1BND: fractured N on SP, fractured D on TP
         """
 
         assert temb_1BTD.shape[2] == 6, "wan2.2 14b expects 6 chunks in timestep embedding"
+        cfg_batch = 2 if isinstance(prompt_1BLP, tuple) else 1
 
         shifted_temb_1BTD = self.scale_shift_table.data + temb_1BTD
         shift_msa_1B1D, scale_msa_1B1D, gate_msa_1B1D, c_shift_msa_1B1D, c_scale_msa_1B1D, c_gate_msa_1B1D = ttnn.chunk(
@@ -210,6 +214,7 @@ class WanTransformerBlock(Module):
             trans_mat=trans_mat,
             addcmul_residual=spatial_1BND,
             addcmul_gate=gate_msa_1B1D,
+            cfg_batch=cfg_batch,
         )
 
         # Cross attention on prompt
@@ -220,6 +225,7 @@ class WanTransformerBlock(Module):
             N=N,
             prompt_1BLP=prompt_1BLP,
             cross_attn_mask=cross_attn_mask,
+            cfg_batch=cfg_batch,
         )
         spatial_1BND = spatial_1BND + attn_output_1BND
 
@@ -292,6 +298,7 @@ class WanTransformer3DModel(Module):
         model_type: str = "t2v",
         output_dtype: ttnn.DataType = ttnn.float32,
         lora_enabled: bool = False,
+        cfg_batch: bool = False,
     ) -> None:
         super().__init__()
 
@@ -300,6 +307,10 @@ class WanTransformer3DModel(Module):
         self.parallel_config = parallel_config
         self.is_fsdp = is_fsdp
         self.lora_enabled = lora_enabled
+        # Run the cond and uncond passes of classifier-free guidance as one forward (see inner_step_cfg).
+        # cfg_batch_requested keeps the built setting; a quant config may turn cfg_batch off (apply_quant_config).
+        self.cfg_batch_requested = cfg_batch
+        self.cfg_batch = cfg_batch
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
         self.model_type = model_type
         self.cached_rope_features = {}
@@ -672,6 +683,70 @@ class WanTransformer3DModel(Module):
 
         return spatial_1BNI
 
+    def inner_step_cfg(
+        self,
+        spatial_1BNI,
+        prompt_1BLP,
+        negative_prompt_1BLP,
+        rope_cos_1HND,
+        rope_sin_1HND,
+        trans_mat,
+        N,
+        timestep,
+        gather_output=True,
+    ):
+        """inner_step for the cond and uncond passes of classifier-free guidance at once.
+
+        Both passes share the latent and the timestep and differ only in the text, so the per-device spatial
+        rows of the two passes are stacked into one [1, 1, 2n, D] tensor: every row-wise op (norms, projections,
+        FFN) runs once on 2n rows, with one FSDP weight gather instead of two. The blocks get the prompts as a
+        (cond, uncond) pair; the attention splits the passes where it needs to. Returns (cond, uncond), each laid
+        out like the output of inner_step.
+        """
+        temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
+
+        spatial_1BND = self.patch_embedding(spatial_1BNI)
+        spatial_1BND = ttnn.concat([spatial_1BND, spatial_1BND], dim=2)
+
+        for block in self.blocks:
+            spatial_1BND = block(
+                spatial_1BND=spatial_1BND,
+                prompt_1BLP=(prompt_1BLP, negative_prompt_1BLP),
+                temb_1BTD=timestep_proj_1BTD,
+                N=N,
+                rope_cos=rope_cos_1HND,
+                rope_sin=rope_sin_1HND,
+                trans_mat=trans_mat,
+            )
+        scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
+        shift_11BD, scale_11BD = ttnn.chunk(scale_shift_1BSD, 2, -2)
+
+        spatial_norm_1BND = self.norm_out(
+            spatial_1BND, dynamic_weight=(1 + scale_11BD), dynamic_bias=shift_11BD, dtype=ttnn.float32
+        )
+
+        if self.parallel_config.tensor_parallel.factor > 1:
+            spatial_norm_1BND = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_norm_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
+
+        spatial_1BNI = self.proj_out(
+            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=self.output_dtype
+        )
+
+        n, c = spatial_1BNI.shape[2] // 2, spatial_1BNI.shape[3]
+        outputs = []
+        for start in (0, n):
+            output = ttnn.slice(spatial_1BNI, [0, 0, start, 0], [1, 1, start + n, c])
+            # Gather fp32 spatial output across sequence parallel devices (remains on device)
+            if gather_output:
+                output = self.ccl_manager.all_gather_persistent_buffer(
+                    output, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
+                )
+            outputs.append(output)
+
+        return outputs[0], outputs[1]
+
     # Prep run is False because we warmup the entire pipeline first. Remove if this is not desired.
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def combined_step(
@@ -689,6 +764,20 @@ class WanTransformer3DModel(Module):
         *,
         gather_output: bool = True,
     ) -> ttnn.Tensor:
+        if do_classifier_free_guidance and self.cfg_batch:
+            cond, uncond = self.inner_step_cfg(
+                spatial_1BNI,
+                prompt_1BLP,
+                negative_prompt_1BLP,
+                rope_cos_1HND,
+                rope_sin_1HND,
+                trans_mat,
+                N,
+                timestep,
+                gather_output=gather_output,
+            )
+            return ttnn.lerp(uncond, cond, guidance_scale)
+
         cond = self.inner_step(
             spatial_1BNI,
             prompt_1BLP,
@@ -748,6 +837,7 @@ class WanCheckpoint:
         is_fsdp: bool,
         model_type: str,
         lora_enabled: bool = False,
+        cfg_batch: bool = False,
     ) -> WanTransformer3DModel:
         """Construct a ``WanTransformer3DModel`` for this checkpoint (weights NOT loaded).
 
@@ -772,6 +862,7 @@ class WanCheckpoint:
             is_fsdp=is_fsdp,
             model_type=model_type,
             lora_enabled=lora_enabled,
+            cfg_batch=cfg_batch,
         )
 
     def load(
