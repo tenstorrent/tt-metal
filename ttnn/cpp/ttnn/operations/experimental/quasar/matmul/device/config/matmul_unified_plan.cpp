@@ -736,7 +736,8 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
     const std::optional<tt::tt_metal::ShardSpec>& C_shard = C_memory.shard_spec();
 
     // ---- 1. Candidates: each natural placement with its plan ----
-    // A placement is cores, an orientation and the C slice shapes to try in order (0 x 0: the plan picks the C slice).
+    // A placement is cores, an orientation and the C slice shapes to try in order (by default 0 x 0: the plan picks the
+    // C slice).
     // Its plan is the first that fits L1; a placement whose plan does not tile a requested sharded output layout is
     // dropped.
     struct Candidate {
@@ -748,7 +749,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
     const auto add_candidate = [&](const std::string& name,
                                    const CoreRangeSet& cores,
                                    tt::tt_metal::ShardOrientation orientation,
-                                   const std::vector<std::pair<uint32_t, uint32_t>>& C_slice_shapes) {
+                                   const std::vector<std::pair<uint32_t, uint32_t>>& C_slice_shapes = {{0, 0}}) {
         const CoreCoord device_grid = device.compute_with_storage_grid_size();
         if (cores.bounding_box().end_coord.x >= device_grid.x || cores.bounding_box().end_coord.y >= device_grid.y) {
             return;
@@ -772,7 +773,6 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
             return;
         }
     };
-    const std::vector<std::pair<uint32_t, uint32_t>> plan_picks_C_slice = {{0, 0}};
     // C slices of a fixed width (fixed_is_N) or height, the other dimension all of C's, then split into 2, 3, ...
     // pieces. The last piece may be shorter (13 tiles in 4 pieces: 4, 4, 4, 1).
     const auto shrinking_C_slices = [&](uint32_t fixed_tiles, bool fixed_is_N) {
@@ -796,13 +796,11 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
 
     if (C_memory.is_sharded() && C_shard.has_value()) {
         // The output shard fixes the cores and the C slice.
-        add_candidate("output_shard", C_shard->grid, C_shard->orientation, plan_picks_C_slice);
+        add_candidate("output_shard", C_shard->grid, C_shard->orientation);
     } else {
         const uint32_t rows = std::min<uint32_t>(grid.y, M_tiles);
         const uint32_t columns = std::min<uint32_t>(grid.x, N_tiles);
-        add_candidate("2D", rectangle(columns, rows), ROW_MAJOR, plan_picks_C_slice);
-        add_candidate("1D_row", rectangle(columns, 1), ROW_MAJOR, plan_picks_C_slice);
-        add_candidate("1D_column", rectangle(1, rows), ROW_MAJOR, plan_picks_C_slice);
+        add_candidate("2D", rectangle(columns, rows), ROW_MAJOR);
         // 1D over whole rows of the grid, one C slice per core: when the C slices span all of C's other dimension
         // every core needs the same A (B), which is multicast to all of them.
         const auto whole_rows = [&](uint32_t num_C_slices) {
