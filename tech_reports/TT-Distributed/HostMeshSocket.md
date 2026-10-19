@@ -298,12 +298,24 @@ verifies every byte, across ring laps, one page at a time, and under credit back
 sbatch -p <any-partition> --nodes=1 run_host_socket_tests.sh transport   # both, no device
 ```
 
-`HostSocketLatencyTest` needs two ranks and real devices, and reports the table in S.4:
+`HostSocketLatencyTest` needs two ranks and real devices, and reports the tables in §4 and §7:
 `RoundTrip` runs a one-page ping-pong against an echo kernel on the peer, timed on the
 initiator's Tensix clock; `StreamingAckLatency` samples the relay's forward-to-credit time
 under load and, given the round trip from the first test, also reports the forward path with
-the return transit removed. The `latency` launcher mode runs them in that order and threads
-the first result into the second.
+the return transit removed; `BurstToLastCredit` sends a burst of pages back to back and times
+how long the credit for the *last* one takes to come back, both the local D2H credit (what a
+sender kernel blocks on) and the receiver's end-to-end ack over a reverse socket. The
+`latency` launcher mode runs the host-only `HostTransportTest.PingPongLatency` first (the
+host-to-host hop on its own), then `RoundTrip` per page size, then `StreamingAckLatency` with
+the idle round trip threaded in. The `burst` mode runs `BurstToLastCredit` once per page size
+(`HOST_SOCKET_BURST_PAGE_SIZES`), each run sweeping `TT_HOST_SOCKET_BURSTS` on one kernel
+launch; rows go to `results/burst_<jobid>.csv`.
+
+Every socket can also stamp its relay hops (`HostMeshSocket::set_latency_sampling` /
+`take_hop_samples`): on the sender host, transport send → source slot released (the NIC is done
+reading it) and send → peer credit; on the receiver host, page published to the device → device
+acked it. Each is on one host's clock, so they decompose the end-to-end figure without any
+cross-host clock sync. The latency and burst tests report them as `*_hop_*` rows.
 
 `HostSocketTest` needs two ranks and real devices: `SingleCoreCorrectness`,
 `MultiCoreCorrectness` (8 core pairs), `PageSizeSweepCorrectness` (including non-power-of-two
@@ -325,3 +337,118 @@ and aborts), it sets a distinct `TT_MESH_ID` per rank against a two-mesh graph d
 (the control plane requires a mesh binding once the world is larger than one rank), and it
 tries each x8 chip in turn because another tenant's process can hold a chip's
 `CHIP_IN_USE_<n>_PCIe` lock for its lifetime, which makes device open block rather than fail.
+
+## 7. Exabox measurements, October 2026
+
+Re-measured after rebasing onto main (branch `snijjar/d2h2h2d-rebased`), on two Blackhole
+Galaxy hosts of the `bh_rev_c_sp4_A2A9` partition (`bh-glx-120-a07u08` + `bh-glx-120-a08u02`),
+x8 chip 5 on each, through the in-tree ULFM OpenMPI 5.0.7 whose only inter-host BTL is `tcp`
+(`ens5f0np0`, 100 GbE). Every number below is therefore a **TCP** number; the verbs figures in §4
+are not reproduced here because that transport is not in this tree. SLURM jobs 138149 and
+138158; CSVs under `tests/tt_metal/multihost/host_socket/results/`.
+
+### Host-to-host alone (`HostTransportTest.PingPongLatency`)
+
+One page out, wait for the peer's consumed credit back, no device on either end. Microseconds,
+200 samples per row; two separate jobs shown because the TCP path is bimodal from run to run.
+
+| page | job 138149 p50 (min / p99) | job 138158 p50 (min / p99) |
+|---|---|---|
+| 64 B | 201.8 (132.2 / 223.7) | 255.5 (191.0 / 327.4) |
+| 1 KiB | 203.1 (135.9 / 271.9) | 323.6 (249.8 / 331.2) |
+| 4 KiB | 200.2 (132.6 / 269.9) | 126.5 (59.0 / 334.4) |
+| 14336 B | 155.5 (87.0 / 213.5) | 72.2 (68.2 / 79.6) |
+| 64 KiB | 165.2 (143.7 / 232.0) | 295.5 (179.8 / 430.3) |
+
+The smoke run of the same test in job 138149 (first thing after `MPI_Init`, before any device
+was opened) sat at **69 µs p50 for every size up to 14 KiB** (65 – 87 µs min – p99) and 318 µs
+at 64 KiB. So the host hop is ~70 µs when the TCP path is behaving and 200 – 320 µs when it is
+not; the two modes are stable within a run and switch between runs, which points at interrupt
+coalescing / CPU placement of the MPI progress loop (`--bind-to none`) rather than at the
+socket. This hop is the floor under everything below.
+
+### Device-to-device round trip, idle (`RoundTrip`)
+
+Ping-pong through D2H → TCP → H2D and back, timed on the initiator's Tensix clock. One core,
+16-page ring, `max_batch_pages = 1`. Microseconds, 200 samples.
+
+| page | job 138149 p50 (min / p99) | job 138158 p50 (min / p99) | one-way estimate (p50/2) |
+|---|---|---|---|
+| 64 B | 213.0 (99.6 / 292.4) | 277.0 (262.7 / 291.8) | 107 – 139 |
+| 1 KiB | 240.7 (105.3 / 322.4) | 303.4 (212.7 / 374.1) | 120 – 152 |
+| 4 KiB | 189.6 (85.1 / 364.4) | 317.3 (227.6 / 380.5) | 95 – 159 |
+| 14336 B | 318.5 (183.8 / 399.7) | 178.0 (123.6 / 244.1) | 89 – 159 |
+| 64 KiB | 343.6 (308.6 / 447.7) | 719.4 (393.8 / 960.9) | 172 – 360 |
+
+Subtracting the host-to-host row from the same job leaves **10 – 40 µs for both device legs
+plus the two relays**, which is consistent with §4's 20.5 µs idle round trip over verbs: the
+device side has not regressed; the transport is what moved.
+
+### Per-hop stamps under a saturating stream (`StreamingAckLatency`, job 138158)
+
+14336 B pages, one core, 64-page ring, warm kernel cache. Microseconds.
+
+| hop (clock) | batches | min | p50 | avg | p99 |
+|---|---|---|---|---|---|
+| sender: send → source slot released | 1245 | 0.47 | 0.66 | 3.1 | 22.5 |
+| sender: send → peer credit (ack round trip) | 1245 | 201 | 448 | 501 | 575 |
+| receiver: published → device drained | 340 | 2.6 | 28.2 | 172 | 7336 |
+| forward path under load (ack − idle RTT/2 = 89 µs) | 1229 | 112 | 358 | 359 | 470 |
+
+Throughput during this run: **1.18 GB/s** (1.70 GB/s in the dedicated `Throughput` test, 16 ×
+56 MB). The ring is 917 KB, so an ack round trip of ~450 µs at ~1.5 GB/s is the full-pipeline
+queueing §4 describes, now ~3.4x longer because the pipe is ~4x narrower. `send → released`
+at 0.66 µs says MPI hands the page to the kernel socket buffer immediately; the NIC is never
+what the sender waits on. The receiver's 7 ms p99 drain is the kernel relaunch at the start of
+the run (one long iteration; see the caveat in §4), not steady state.
+
+(Job 138149's streaming row is omitted: it was the first launch of those kernels on a fresh
+build, so the timed window included the JIT compile on both ranks and reported 0.11 GB/s.)
+
+### Burst latency to the last credit (`BurstToLastCredit`, job 138149)
+
+For each page size, `burst` pages are sent back to back (each one reserved, written, pushed and
+notified on its own) and two times are taken on the initiator's clock: **local** = the local D2H
+credit covers the last page (the relay released its slot: what a sender kernel actually blocks
+on), **remote** = the receiver consumed the last page and its 64 B ack arrived over the reverse
+socket. Ring = 64 pages (16 at 64 KiB: the receiver mirrors D2D and lands the ring in L1, so the
+ring is capped at 1 MiB). 100 iterations per cell, `max_batch_pages = 8`. Microseconds (p50).
+
+| page | burst 1 local / remote | 2 | 4 | 8 | 16 | 32 | 64 |
+|---|---|---|---|---|---|---|---|
+| 64 B | 38 / 121 | 41 / 114 | 49 / 141 | 51 / 180 | 47 / 149 | 84 / 219 | 189 / 335 |
+| 256 B | 37 / 351 | 19 / 355 | 22 / 356 | 32 / 337 | 50 / 223 | 98 / 238 | 215 / 362 |
+| 1 KiB | 38 / 284 | 29 / 287 | 26 / 284 | 40 / 180 | 59 / 197 | 158 / 300 | 284 / 448 |
+| 4 KiB | 45 / 218 | 40 / 135 | 45 / 201 | 44 / 194 | 70 / 227 | 138 / 312 | 222 / 439 |
+| 14336 B | 46 / 138 | 53 / 183 | 57 / 165 | 54 / 181 | 101 / 256 | 182 / 393 | 353 / 686 |
+| 16 KiB | 40 / 347 | 24 / 397 | 37 / 401 | 55 / 353 | 97 / 295 | 211 / 406 | 408 / 693 |
+| 64 KiB | 155 / 275 | 222 / 403 | 190 / 318 | 280 / 482 | 435 / 680 | — | — |
+
+Reading it:
+
+- **Local credit is flat at ~40 – 55 µs up to 8 – 16 pages** regardless of page size below
+  64 KiB: that is the D2H leg plus the relay noticing the page and MPI accepting it, i.e. the
+  sender is never back-pressured by the ring until the burst exceeds what the relay drains per
+  poll. Past 16 pages it grows ~3 µs per page at 14 KiB (the chunked PCIe write issue rate of one
+  core), and at 64 KiB pages the PCIe write itself dominates (155 µs for one page).
+- **Remote credit is 120 – 350 µs for a single message** and is the TCP hop's bimodality again
+  (compare 64 B at 121 µs with 256 B at 351 µs: same code path, different run). On top of that
+  it grows ~5 µs per page at 14 KiB.
+- **Amortised cost per message at burst 64** is 5 – 11 µs across all page sizes, and the implied
+  bandwidth at 14336 B × 64 is 1.34 GB/s, i.e. the burst test reproduces the streaming number
+  once the burst is a ring's worth. The knee — where remote time stops being flat and starts
+  growing with the burst — sits at 8 – 16 pages at every size, which is the same ~115 – 230 KB
+  bandwidth-delay product §4 found for the ring, now measured from the kernel's side.
+
+### Throughput (`Throughput`, 14336 B, 64-page ring, 16 × 56 MB)
+
+| cores | GB/s | job |
+|---|---|---|
+| 1 | 1.67 | 138149 |
+| 1 | 1.70 | 138158 |
+| 2 | 2.23 | 138160 |
+| 4 | 1.81 | 138161 (different node pair: a08u08 + a09u02) |
+| 8 | 2.63 | 138162 |
+
+Same shape as §4's TCP result (~2.2 GB/s, flat from 2 cores): the host hop is the limit and the
+target of 7 – 11 GB/s needs the RDMA-capable transport, not more sender cores.
