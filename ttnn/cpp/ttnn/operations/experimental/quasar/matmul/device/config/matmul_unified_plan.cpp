@@ -707,6 +707,15 @@ std::pair<double, double> estimate_plan_cycles(
     return {slowest_cycles + C_slices_on_busiest_core * model.C_slice_cycles, compute_cycles + dm_cycles + dram_cycles};
 }
 
+// The cores next to the DRAM banks, in bank order, which the C slice walk follows: each reads its own bank's shard.
+CoreRangeSet dram_bank_cores(const tt::tt_metal::IDevice& device) {
+    std::vector<CoreRange> cores;
+    for (const CoreCoord& core : device.get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0)) {
+        cores.emplace_back(core);
+    }
+    return CoreRangeSet(std::move(cores));
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -773,26 +782,23 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
             return;
         }
     };
-    // A 1D placement gives each core a strip of C: strip_width_tiles columns (strip_is_columns) or rows, over all of
-    // C's other dimension. The C slice shapes to try for it, largest first: the whole strip as one C slice, then the
-    // strip cut into 2, 3, ... C slices along its length, the last possibly shorter (13 tiles in 4: 4, 4, 4, 1).
-    const auto C_slice_shapes_for_strip = [&](uint32_t strip_width_tiles, bool strip_is_columns) {
+    // A 1D placement gives each core a share of C: share_width_tiles columns (share_is_columns) or rows, over all of
+    // C's other dimension. The C slice shapes to try for it, largest first: the whole share as one C slice, then the
+    // share cut into 2, 3, ... C slices along its length, the last possibly shorter (13 tiles in 4: 4, 4, 4, 1).
+    const auto C_slice_shapes_for_share = [&](uint32_t share_width_tiles, bool share_is_columns) {
         std::vector<std::pair<uint32_t, uint32_t>> shapes;
-        const uint32_t strip_length_tiles = strip_is_columns ? M_tiles : N_tiles;
+        const uint32_t share_length_tiles = share_is_columns ? M_tiles : N_tiles;
         uint32_t previous_C_slice_length_tiles = 0;
-        for (uint32_t C_slices_per_strip = 1; C_slices_per_strip <= strip_length_tiles; ++C_slices_per_strip) {
-            const uint32_t C_slice_length_tiles = tt::div_up(strip_length_tiles, C_slices_per_strip);
+        for (uint32_t C_slices_per_share = 1; C_slices_per_share <= share_length_tiles; ++C_slices_per_share) {
+            const uint32_t C_slice_length_tiles = tt::div_up(share_length_tiles, C_slices_per_share);
             if (C_slice_length_tiles != previous_C_slice_length_tiles) {
                 shapes.push_back(
-                    strip_is_columns ? std::pair(C_slice_length_tiles, strip_width_tiles)
-                                     : std::pair(strip_width_tiles, C_slice_length_tiles));
+                    share_is_columns ? std::pair(C_slice_length_tiles, share_width_tiles)
+                                     : std::pair(share_width_tiles, C_slice_length_tiles));
                 previous_C_slice_length_tiles = C_slice_length_tiles;
             }
         }
         return shapes;
-    };
-    const auto rectangle = [](uint32_t columns, uint32_t rows) {
-        return CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(columns - 1, rows - 1)));
     };
     constexpr tt::tt_metal::ShardOrientation ROW_MAJOR = tt::tt_metal::ShardOrientation::ROW_MAJOR;
 
@@ -800,52 +806,45 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
         // The output shard fixes the cores and the C slice.
         add_candidate("output_shard", C_shard->grid, C_shard->orientation);
     } else {
-        const uint32_t rows = std::min<uint32_t>(grid.y, M_tiles);
-        const uint32_t columns = std::min<uint32_t>(grid.x, N_tiles);
-        add_candidate("2D", rectangle(columns, rows), ROW_MAJOR);
-        // 1D over whole rows of the grid, one C slice per core: when the C slices span all of C's other dimension
-        // every core needs the same A (B), which is multicast to all of them.
-        const auto whole_rows = [&](uint32_t num_C_slices) {
-            return num_C_slices < grid.x ? rectangle(num_C_slices, 1)
-                                         : rectangle(grid.x, std::min<uint32_t>(grid.y, num_C_slices / grid.x));
-        };
-        const CoreRangeSet across_N_cores = whole_rows(N_tiles);
-        const CoreRangeSet across_M_cores = whole_rows(M_tiles);
+        const uint32_t grid_columns = grid.x;
+        const uint32_t grid_rows = grid.y;
+        add_candidate(
+            "2D",
+            CoreRangeSet(CoreRange({0, 0}, {std::min(grid_columns, N_tiles) - 1, std::min(grid_rows, M_tiles) - 1})),
+            ROW_MAJOR);
+        // 1D over whole rows of the grid (part of one row for a short dimension), one C slice per core: when the C
+        // slices span all of C's other dimension every core needs the same A (B), which is multicast to all of them.
+        const CoreRangeSet across_N_cores(CoreRange(
+            {0, 0}, {std::min(grid_columns, N_tiles) - 1, std::clamp(N_tiles / grid_columns, 1u, grid_rows) - 1}));
+        const CoreRangeSet across_M_cores(CoreRange(
+            {0, 0}, {std::min(grid_columns, M_tiles) - 1, std::clamp(M_tiles / grid_columns, 1u, grid_rows) - 1}));
         add_candidate(
             "1D_across_N",
             across_N_cores,
             ROW_MAJOR,
-            C_slice_shapes_for_strip(tt::div_up(N_tiles, across_N_cores.num_cores()), /*strip_is_columns=*/true));
+            C_slice_shapes_for_share(tt::div_up(N_tiles, across_N_cores.num_cores()), /*share_is_columns=*/true));
         add_candidate(
             "1D_across_M",
             across_M_cores,
             ROW_MAJOR,
-            C_slice_shapes_for_strip(tt::div_up(M_tiles, across_M_cores.num_cores()), /*strip_is_columns=*/false));
+            C_slice_shapes_for_share(tt::div_up(M_tiles, across_M_cores.num_cores()), /*share_is_columns=*/false));
         // Keep a sharded operand where it is: an L1 shard can then be bound in place, and a DRAM shard is read by
-        // the core next to its bank (the cores listed in bank order, which the C slice walk follows).
-        const auto dram_bank_cores = [&]() {
-            std::vector<CoreRange> cores;
-            for (const CoreCoord& core :
-                 device.get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0)) {
-                cores.emplace_back(core);
-            }
-            return CoreRangeSet(std::move(cores));
-        };
+        // the core next to its bank.
         if (A.is_sharded() && A.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
             const uint32_t A_shard_M_tiles = A.shard_spec()->shape[0] / TILE_HEIGHT;
             add_candidate(
                 "A_shard_rows",
-                A.memory_config().is_dram() ? dram_bank_cores() : A.shard_spec()->grid,
+                A.memory_config().is_dram() ? dram_bank_cores(device) : A.shard_spec()->grid,
                 A.shard_spec()->orientation,
-                C_slice_shapes_for_strip(A_shard_M_tiles, /*strip_is_columns=*/false));
+                C_slice_shapes_for_share(A_shard_M_tiles, /*share_is_columns=*/false));
         }
         if (B.is_sharded() && B.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
             const uint32_t B_shard_N_tiles = B.shard_spec()->shape[1] / TILE_WIDTH;
             add_candidate(
                 "B_shard_columns",
-                B.memory_config().is_dram() ? dram_bank_cores() : B.shard_spec()->grid,
+                B.memory_config().is_dram() ? dram_bank_cores(device) : B.shard_spec()->grid,
                 B.shard_spec()->orientation,
-                C_slice_shapes_for_strip(B_shard_N_tiles, /*strip_is_columns=*/true));
+                C_slice_shapes_for_share(B_shard_N_tiles, /*share_is_columns=*/true));
         }
     }
 
