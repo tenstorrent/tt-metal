@@ -537,7 +537,18 @@ class BatchedVerify:
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        self.sdpa_pc = {flag: sdpa_decode_program_config(flag) for flag in (False, True)}
+        # full-attention layers: SDPA on the whole grid (11 x 10; the decode's 8 x 8 holds one user per core), Q read
+        # from DRAM (a sharded Q must sit on the SDPA grid's cores): at 4K context attention 22.2 -> 20.9 ms per pass,
+        # same output; the 128-token sliding-window layers keep the decode's 8 x 8 config and sharded Q
+        self.sdpa_pc = {
+            False: ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
+                q_chunk_size=0,
+                k_chunk_size=sdpa_decode_program_config(False).k_chunk_size,
+                exp_approx_mode=False,
+            ),
+            True: sdpa_decode_program_config(True),
+        }
         # the unpadded decode o_proj (batched_decode.BatchedOProj) is DRAM width-sharded: interleaved copies
         self.oproj_w = [
             ttnn.to_memory_config(layer.self_attn.batched_oproj.weight, ttnn.DRAM_MEMORY_CONFIG)
@@ -676,6 +687,10 @@ class BatchedVerify:
             )
             k2.deallocate(True)
             v.deallocate(True)
+            if not cfg.sliding_window:
+                q3 = ttnn.to_memory_config(q2, ttnn.DRAM_MEMORY_CONFIG)
+                q2.deallocate(True)
+                q2 = q3
             outs.append(
                 ttnn.transformer.paged_scaled_dot_product_attention_decode(
                     q2,
