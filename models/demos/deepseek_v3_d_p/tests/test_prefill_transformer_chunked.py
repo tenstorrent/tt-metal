@@ -229,10 +229,10 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Recentered to CI run 38480868957 / job 115586663804: the traced MoE runs the routed expert
-    # overlapped with combine_fabric2d, ~54-61 ms less on every chunk than main's centre (CI run
-    # 37809088320 / job 113425373669).
-    (78, 11, 10): [0.430, 0.428, 0.436, 0.434, 0.445, 0.449, 0.448, 0.452, 0.463, 0.469, 0.478],
+    # Recentered to CI run 39299643259 / job 118226334152: high_bw_all_gather's fabric program (the default since
+    # legacy=False) takes chunks 0-5 1.6-2.9% and chunks 6-10 3.6-4.8% under the previous centre (CI run
+    # 38480868957 / job 115586663804); the saving grows with the gathered KV prefix (7 ms -> 23 ms per chunk).
+    (78, 11, 10): [0.423, 0.421, 0.429, 0.426, 0.434, 0.436, 0.432, 0.435, 0.443, 0.448, 0.455],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
