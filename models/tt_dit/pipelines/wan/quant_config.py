@@ -337,7 +337,28 @@ def _all_bf8_lofi_act8_out8_ff8_sdpamm() -> QuantConfig:
     return base
 
 
+def _all_bf8_lofi_act8_out8_ff8_n16() -> QuantConfig:
+    """The 5B default with norm_out emitting bf16 (A7), which the default never picked up.
+
+    Under the default norm_out emits fp32, so the TP all-gather into proj_out and proj_out itself
+    move fp32 [2336, 3072] per CFG pass: 0.105 s + 0.052 s of a 720p run (S05 Tracy, 6-block x5).
+    The diffusers reference casts to bf16 before proj_out as well. Measured option (S06).
+    """
+    base = _all_bf8_lofi_act8_out8_ff8()
+    base.norm_out_output_dtype = ttnn.bfloat16
+    return base
+
+
+def _all_bf8_lofi_act8_out8_ff8_n16_sdpamm() -> QuantConfig:
+    """`_n16` and `_sdpamm` stacked (S06)."""
+    base = _all_bf8_lofi_act8_out8_ff8_n16()
+    base.ring_sdpa = replace(base.ring_sdpa, matmul_math_fidelity=ttnn.MathFidelity.LoFi)
+    return base
+
+
 QuantConfig.all_bf8_lofi_act8 = staticmethod(_all_bf8_lofi_act8)
+QuantConfig.all_bf8_lofi_act8_out8_ff8_n16 = staticmethod(_all_bf8_lofi_act8_out8_ff8_n16)
+QuantConfig.all_bf8_lofi_act8_out8_ff8_n16_sdpamm = staticmethod(_all_bf8_lofi_act8_out8_ff8_n16_sdpamm)
 QuantConfig.all_bf8_lofi_act8_out8_ff8_sdpamm = staticmethod(_all_bf8_lofi_act8_out8_ff8_sdpamm)
 QuantConfig.all_bf8_lofi_act8_out8_ff8 = staticmethod(_all_bf8_lofi_act8_out8_ff8)
 QuantConfig.all_bf8_lofi_act8_mod16_ff8 = staticmethod(_all_bf8_lofi_act8_mod16_ff8)
@@ -604,6 +625,8 @@ def quant_config_from_env(var: str = QUANT_CONFIG_ENV) -> tuple[str, QuantConfig
             "all_bf8_lofi_act8_mod16_ff8",
             "all_bf8_lofi_act8_out8_ff8",
             "all_bf8_lofi_act8_out8_ff8_sdpamm",
+            "all_bf8_lofi_act8_out8_ff8_n16",
+            "all_bf8_lofi_act8_out8_ff8_n16_sdpamm",
         ]
         msg = f"{var}={name!r} is not a QuantConfig preset; expected one of {presets}"
         raise ValueError(msg)
