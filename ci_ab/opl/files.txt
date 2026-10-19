@@ -1,2 +1,2 @@
 tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_reduce.h
-tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_reduce.h
+tt_metal/hw/inc/api/compute/reduce.h

@@ -30,7 +30,8 @@ using namespace ckernel;
 static constexpr DstSync DST_SYNC                = CI_SYNC_FULL ? DstSync::SyncFull : DstSync::SyncHalf;
 static constexpr std::uint32_t MAX_TILES_DEST    = (is_fp32_dest_acc_en ? 4 : 8) * (CI_SYNC_FULL ? 2 : 1);
 static constexpr std::uint32_t CT                = CI_CT == 0 ? 1 : CI_CT;
-static constexpr bool BLOCK_CALL                 = CI_CT != 0 && CI_REDUCE_HEAD;
+// Side 3 models the compute API, which sends BFP blocks tile by tile
+static constexpr bool BLOCK_CALL                 = CI_CT != 0 && CI_REDUCE_HEAD && !(CI_REDUCE_HEAD == 3 && CI_BFP);
 static constexpr std::uint32_t TILES_PER_OUTPUT  = CI_K;
 static constexpr std::uint32_t TILES_PER_SECTION = MAX_TILES_DEST * TILES_PER_OUTPUT;
 static constexpr std::uint32_t DST_STRIDE        = CI_K > 1 ? 0 : 1;
@@ -62,7 +63,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     [[maybe_unused]] const std::uint32_t TILE_STRIDE = params.TILE_SIZE_UNPACK_A;
 #if CI_REDUCE_HEAD
-#if CI_REDUCE_HEAD >= 2
+#if CI_REDUCE_HEAD == 2
     const bool holds_scaler = BLOCK_CALL && reduce_block_holds_scaler<POOL_TYPE, REDUCE_DIM>(CI_SHAPE, formats.unpack_A_src);
 #else
     constexpr bool holds_scaler = BLOCK_CALL && reduce_block_holds_scaler<POOL_TYPE, REDUCE_DIM>(CI_SHAPE);
@@ -145,7 +146,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #if CI_REDUCE_HEAD
-#if CI_REDUCE_HEAD >= 2
+#if CI_REDUCE_HEAD == 2
     const bool holds_scaler = BLOCK_CALL && reduce_block_holds_scaler<POOL_TYPE, REDUCE_DIM>(CI_SHAPE, formats.unpack_A_src);
 #else
     constexpr bool holds_scaler = BLOCK_CALL && reduce_block_holds_scaler<POOL_TYPE, REDUCE_DIM>(CI_SHAPE);
@@ -200,7 +201,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             _llk_math_reduce_block_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
                                 CI_K > 1 ? out_dst(call, section) : call - section, n, DST_STRIDE, CI_SHAPE
-#if CI_REDUCE_HEAD >= 2
+#if CI_REDUCE_HEAD == 2
                                 , formats.unpack_A_src
 #endif
                             );

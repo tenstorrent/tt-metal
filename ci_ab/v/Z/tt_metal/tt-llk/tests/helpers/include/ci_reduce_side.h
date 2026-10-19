@@ -1,2 +1,2 @@
 #pragma once
-#define CI_REDUCE_HEAD 2
+#define CI_REDUCE_HEAD 3

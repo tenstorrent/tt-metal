@@ -205,7 +205,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
         if (tensor_shape.total_num_faces() == 4)
         {
             constexpr std::uint32_t replay_buf_len = 8;
-            constexpr std::uint32_t last_clr       = high_fidelity ? p_setrwc::CLR_NONE : p_setrwc::CLR_B;
+            constexpr std::uint32_t last_clr       = high_fidelity ? p_setrwc::CLR_NONE : p_setrwc::CLR_AB;
             constexpr std::uint32_t inner_loops    = high_fidelity ? to_underlying(math_fidelity) : 1;
             const std::uint32_t replay_start       = ckernel::math::replay_buf_offset;
 
@@ -227,7 +227,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
             ckernel_template tmp(1, inner_loops, lltt::replay_insn(replay_start, replay_buf_len));
             if constexpr (high_fidelity)
             {
-                tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F));
+                tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD_F));
             }
             tmp.program();
         }
@@ -371,15 +371,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         else
         {
             ckernel_template::run();
-            // The full-tile MOP keeps the scaler in SrcA for the block call; a tile call releases it here
-            if (tensor_shape.total_num_faces() == 4)
-            {
-                TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
-            }
-            else
-            {
-                TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
-            }
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
         }
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
@@ -455,30 +447,48 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 // A dst_stride of 0 accumulates the block into one tile.
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_block_(
-    const std::uint32_t dst_index,
-    std::uint32_t num_tiles,
-    const std::uint32_t dst_stride,
-    const ckernel::TensorShape tensor_shape,
-    const std::uint32_t data_format)
+    const std::uint32_t dst_index, std::uint32_t num_tiles, const std::uint32_t dst_stride, const ckernel::TensorShape tensor_shape)
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_block_", tensor_shape);
 
     if constexpr (dim == ReduceDim::REDUCE_ROW && type != PoolType::MAX)
     {
-        if (num_tiles > 1 && reduce_block_holds_scaler<type, dim>(tensor_shape, data_format))
+        if (num_tiles > 1 && reduce_block_holds_scaler<type, dim>(tensor_shape))
         {
-            std::uint32_t dst = dst_index;
+            constexpr bool high_fidelity     = is_high_fidelity(math_fidelity);
+            const std::uint32_t replay_start = ckernel::math::replay_buf_offset;
+            std::uint32_t dst                = dst_index;
+
             while (num_tiles > 0)
             {
                 const std::uint32_t chunk = num_tiles < REDUCE_BLOCK_MAX_TILES ? num_tiles : REDUCE_BLOCK_MAX_TILES;
-                for (std::uint32_t tile = 0; tile < chunk; tile++)
+                const auto pool_tile = [&]()
                 {
                     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst);
-                    ckernel_template::run();
-                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                    // The init's MVMUL record, with the source release narrowed to the data bank (SrcB)
+                    if constexpr (high_fidelity)
+                    {
+                        for (std::uint32_t phase = 0; phase < to_underlying(math_fidelity); phase++)
+                        {
+                            lltt::replay(replay_start, 8);
+                        }
+                        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+                    }
+                    else
+                    {
+                        lltt::replay(replay_start, 7);
+                        TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_3, 0);
+                    }
                     dst += dst_stride;
+                };
+                for (std::uint32_t tile = 1; tile < chunk; tile++)
+                {
+                    pool_tile();
+                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
                 }
-                TTI_CLEARDVALID(p_setrwc::CLR_A, 0);
+                // The last counter reset also releases the scaler: a separate CLEARDVALID costs the math-bound HiFi path a cycle a call
+                pool_tile();
+                TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
                 num_tiles -= chunk;
             }
             return;

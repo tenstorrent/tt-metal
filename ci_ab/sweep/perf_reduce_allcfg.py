@@ -10,7 +10,7 @@ Configuration sets (CI_RED_SET selects one or more, comma separated; default all
   block  call form (tile, block of 1/2/4/8) x inputs per output (1, 8 accumulated)
 """
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -48,6 +48,7 @@ class CI_RED(TemplateParameter):
     sync_full: int = 0
     call_ct: int = 0
     k_per_out: int = 1
+    bfp: int = 0
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
@@ -59,6 +60,7 @@ class CI_RED(TemplateParameter):
                 ("SYNC_FULL", self.sync_full),
                 ("CT", self.call_ct),
                 ("K", self.k_per_out),
+                ("BFP", self.bfp),
             )
         )
 
@@ -75,7 +77,8 @@ def _cfgs():
     out = []
 
     def add(s, fi, fo, dacc, dim, pool, fid, ci=None):
-        out.append((s, fi, fo, dacc, dim, pool, fid, ci or CI_RED()))
+        ci = replace(ci or CI_RED(), bfp=int(fi in (B8, B4)))
+        out.append((s, fi, fo, dacc, dim, pool, fid, ci))
 
     pairs = [(a, b) for a in (B16, F16, F32, B8) for b in (B16, F16, F32, B8)]
     pairs += [(B4, B16), (B16, B4), (B4, B4)]
@@ -116,6 +119,11 @@ def _cfgs():
                                (ReduceDimension.Row, ReducePool.Max, FID.HiFi4), (ReduceDimension.Scalar, ReducePool.Sum, FID.LoFi)):
             for ct, k in ((3, 1), (4, 1), (5, 1), (6, 1), (4, 8)):
                 add("bfpn", fi, fo, dacc, dim, pool, fid, CI_RED(call_ct=ct, k_per_out=k))
+    for fi, fo, dacc in ((B16, B16, NO), (B16, B16, YES), (F32, F32, YES)):
+        for fid in (FID.HiFi2, FID.HiFi3):
+            for ct in (2, 4, 8):
+                for k in (1, 8):
+                    add("blkfid", fi, fo, dacc, ReduceDimension.Row, ReducePool.Sum, fid, CI_RED(call_ct=ct, k_per_out=k))
     want = os.environ.get("CI_RED_SET", "")
     if want:
         keep = set(want.split(","))

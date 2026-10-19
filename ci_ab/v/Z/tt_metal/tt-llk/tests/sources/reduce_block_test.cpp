@@ -89,7 +89,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
         for (std::uint32_t start = 0; start < tile_cnt; start += block)
         {
-            _llk_math_reduce_block_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(0, std::min(block, tile_cnt - start), 0, tensor_shape, formats.unpack_A_src);
+            _llk_math_reduce_block_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(0, std::min(block, tile_cnt - start), 0, tensor_shape);
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }
@@ -99,7 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
             _llk_math_reduce_block_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
-                0, std::min(params.NUM_TILES_IN_BLOCK, tile_cnt - start), 1, tensor_shape, formats.unpack_A_src);
+                0, std::min(params.NUM_TILES_IN_BLOCK, tile_cnt - start), 1, tensor_shape);
             _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         }
     }
