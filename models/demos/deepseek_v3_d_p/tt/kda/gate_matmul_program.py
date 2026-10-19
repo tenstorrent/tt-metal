@@ -341,6 +341,7 @@ class GateMatmulProgram:
         rect_set = ttnn.CoreRangeSet([rect])
         a_tile = 2048 if a.dtype == ttnn.bfloat16 else 4096
         w_tile = 1088 if w.dtype == ttnn.bfloat8_b else (2048 if w.dtype == ttnn.bfloat16 else 4096)
+        out_tile = 1088 if output.dtype == ttnn.bfloat8_b else 2048
         desc = ttnn.MeshProgramDescriptor()
         mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
         for mr in range(mesh_rows):
@@ -369,10 +370,10 @@ class GateMatmulProgram:
                         ],
                     ),
                     ttnn.CBDescriptor(
-                        total_size=m_block * n_block * 2048,
+                        total_size=m_block * n_block * out_tile,
                         core_ranges=rect_set,
                         format_descriptors=[
-                            ttnn.CBFormatDescriptor(buffer_index=_CB_OUT, data_format=ttnn.bfloat16, page_size=2048)
+                            ttnn.CBFormatDescriptor(buffer_index=_CB_OUT, data_format=output.dtype, page_size=out_tile)
                         ],
                     ),
                 ]

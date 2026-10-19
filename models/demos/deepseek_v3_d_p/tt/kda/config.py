@@ -120,6 +120,9 @@ class KDAProgramConfig:
     # Blackhole di/dt: at most this many cores run projection matmuls at once. The projections take the widest
     # full-height block of worker columns within it (11 x 10 of the 12 x 10 grid at 110).
     max_matmul_cores: int = 110
+    # Dtype of the output projection's partial sums on the TP reduce-scatter (with the deferred final carry). The
+    # reduce-scatter is bound by link bandwidth, so bfloat8_b halves it; the layer output is cast back to BF16.
+    reduce_scatter_dtype: ttnn.DataType = ttnn.bfloat16
     # K-block tiles of the matmul-program projections (GateMatmulProgram).
     input_projection_k_block: int = 4
     output_projection_k_block: int = 4
@@ -244,6 +247,8 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         input_projection_k_block=8,
         output_projection_k_block=8,
         input_projection_extra_gate_tiles=5,
+        # Galaxy SP8xTP4 T=5120: 1.206 -> 1.182 ms; synthetic output NRMSE 1.87e-2 -> 2.15e-2.
+        reduce_scatter_dtype=ttnn.bfloat8_b,
         # The output gate beside the relay (and the projections on the matmul program) also at T=1024, 2048 and
         # 2560: 0.752 -> 0.740 ms, 0.913 -> 0.839 ms and 1.021 -> 0.871 ms.
         overlap_output_gate=active_seq_len_local in (128, 256, 320, _TUNED_PROJECTION_ROWS),

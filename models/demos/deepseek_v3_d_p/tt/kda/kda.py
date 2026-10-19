@@ -226,6 +226,10 @@ class ttKDA:
             if self.tensor_parallel_size > 1
             else ttnn.DRAM_MEMORY_CONFIG
         )
+        # The partial sums cross the TP links in the reduce-scatter's dtype.
+        self.partial_output_dtype = (
+            program_config.reduce_scatter_dtype if self.tensor_parallel_size > 1 else ttnn.bfloat16
+        )
         if self.tensor_parallel_size > 1 and tt_ccl is None:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
         self.tt_ccl = tt_ccl
@@ -746,7 +750,7 @@ class ttKDA:
             normed = output
             output = ttnn.allocate_tensor_on_device(
                 ttnn.Shape(list(normed.shape)[:-1] + [self.weights.output_projection.shape[-1]]),
-                normed.dtype,
+                self.partial_output_dtype,
                 ttnn.TILE_LAYOUT,
                 self.device,
                 self.partial_output_memory_config,
@@ -754,6 +758,8 @@ class ttKDA:
             final_state = result.final_state.run(lambda: self._output_projection(normed, output))
             ttnn.deallocate(normed)
             output = self._reduce_scatter(output)
+            if output.dtype != ttnn.bfloat16:
+                output = ttnn.typecast(output, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             output, final_state = self._project_output(output), result.final_state
         return output, KdaState(recurrent=final_state, convolution=new_convolution)
