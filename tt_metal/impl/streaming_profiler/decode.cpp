@@ -15,6 +15,12 @@ namespace tt::tt_metal::streaming_profiler {
 
 namespace {
 
+using experimental::streaming_profiler::detail::code_bytes;
+using experimental::streaming_profiler::detail::TimeForm;
+static_assert(
+    uint32_t(TimeForm::Short) == 0 && uint32_t(TimeForm::Medium) == 1 && uint32_t(TimeForm::Full) == 2,
+    "a form's value is its packets' count of time words");
+
 profiler::SpscLaneConsts lane_consts(const experimental::streaming_profiler::Core& core, int64_t clock_offset) {
     const uint64_t coords_lo = static_cast<uint32_t>(core.logical.x) | (static_cast<uint32_t>(core.logical.y) << 8) |
                                (static_cast<uint32_t>(core.physical.x) << 16) |
@@ -24,123 +30,203 @@ profiler::SpscLaneConsts lane_consts(const experimental::streaming_profiler::Cor
     const auto offset = static_cast<long long>(clock_offset);
     profiler::SpscLaneConsts consts{};
     consts.tail = simde_mm256_setr_epi64x(coords, offset, coords, offset);
-    consts.shared = simde_mm256_setr_epi64x(0, 0, coords, offset);
+    consts.shared = simde_mm256_setr_epi64x(0, coords, 0, offset);
     return consts;
 }
 
-constexpr uint64_t kEpoch = 1ull << 32;
 // How close below the low word's wrap, in ticks, a lane's last timestamp must be to count as possibly torn. A torn read
 // takes its low word just before the low word wraps, and this window is far wider than that, so a lane resuming after
 // an idle gap of 2^32 ticks or more is mistaken for torn once in 65,536.
 constexpr uint64_t kTornLowWindow = 1ull << 16;
 
-// Repairs the previous record when the next record's timestamp is lower, and returns whether it did. A wall-clock read
-// is either correct or exactly 2^32 too high, because another RISC's read of the low word can land between the
-// producer's low and high reads as the low word wraps. A step back therefore means the previous record's high word was
-// one too high. A ZONE_L, the only zone with a duration of 2^32 or more, reads its start separately, so only its
-// duration is corrected. Any other zone derives its start from its end, and a point is just its timestamp, so those are
-// moved down by kEpoch whole. It is noinline because inlining the repair code into the decode loop raises the loop's
-// register pressure.
-__attribute__((noinline)) bool repair_prev_record(uint8_t* rec_start, bool zone, uint64_t prev_ts, uint64_t next_ts) {
-    if (prev_ts < kEpoch || prev_ts - next_ts > kEpoch || rec_start == nullptr) {
-        return false;
-    }
-    uint64_t* rec = reinterpret_cast<uint64_t*>(rec_start);
-    if (zone && rec[profiler::kSpscQwDuration] >= kEpoch) {
-        rec[profiler::kSpscQwDuration] -= kEpoch;
-    } else if (rec[profiler::kSpscQwTimestamp] >= kEpoch) {
-        rec[profiler::kSpscQwTimestamp] -= kEpoch;
-    } else {
-        return false;
-    }
-    return true;
-}
-
-// Repairs torn wall-clock reads in a run of n F records starting at `first`. Each record is checked against the one
-// before it, and the first against the lane's last record. Returns the number of records it could not repair.
-template <profiler::PacketFormat F>
-__attribute__((noinline)) uint64_t
-repair_run(const uint32_t* src, uint32_t n, uint8_t* first, uint64_t th_hi, uint64_t first_ts, const SpscLane& lane) {
-    constexpr uint32_t kRecBytes = profiler::spsc_rec_bytes<F>;
-    uint64_t order_regressions = 0;
-    if constexpr (F.has_dur_hi()) {
-        for (uint32_t k = 0; k < n; k++) {
-            const uint32_t* packet = src + F.words * k;
-            if (packet[F.dur_hi] != profiler::kSpscBorrowedDurHi) {
-                continue;
-            }
-            const uint64_t end = profiler::spsc_ts_at<F>(src, k, th_hi);
-            const uint64_t duration = (static_cast<uint64_t>(packet[F.dur_hi]) << 32) | packet[F.dur_lo];
-            if (end >= duration + kEpoch) {
-                uint64_t* rec = reinterpret_cast<uint64_t*>(first + kRecBytes * k);
-                rec[profiler::kSpscQwDuration] = duration + kEpoch;
-                rec[profiler::kSpscQwTimestamp] = end - rec[profiler::kSpscQwDuration];
-            } else {
-                order_regressions++;
-            }
-        }
-    }
-    const auto step = [&](uint64_t prev_ts, uint64_t next_ts, uint8_t* prev_rec, bool prev_zone) {
-        if (next_ts < prev_ts) {
-            order_regressions += !repair_prev_record(prev_rec, prev_zone, prev_ts, next_ts);
-        }
-    };
-    step(lane.last_ts, first_ts, lane.last_rec, lane.last_rec_zone);
-    if constexpr (!F.delta16) {  // delta16 ends are cursor + positive deltas
-        for (uint32_t k = 1; k < n; k++) {
-            step(
-                profiler::spsc_ts_at<F>(src, k - 1, th_hi),
-                profiler::spsc_ts_at<F>(src, k, th_hi),
-                first + kRecBytes * (k - 1),
-                F.kind == profiler::Kind::Zone);
-        }
-    }
-    return order_regressions;
-}
-
-template <profiler::PacketFormat F>
-constexpr uint32_t sticky_value(const uint32_t* src) {
-    static_assert(F.kind == profiler::Kind::Sticky);
-    return F.value_word == 0 ? src[0] & PP_LOW27_MASK : src[F.value_word];
-}
-
 }  // namespace
 
-StreamDecoder::StreamDecoder(const CaptureContext::Device& dev, uint32_t types) :
-    lanes_(dev.lanes.size()), heads_(dev.lanes.size() / profiler::kSpscNRiscDecode), dev_(dev) {
-    using experimental::streaming_profiler::Event;
-    using experimental::streaming_profiler::TimestampedData;
-    using experimental::streaming_profiler::Zone;
-    using experimental::streaming_profiler::detail::record_bit;
-    using profiler::Kind;
-    for (const profiler::PacketFormat& format : profiler::kFormats) {
-        const bool skipped = (format.kind == Kind::Zone && (types & record_bit<Zone>) == 0) ||
-                             (format.kind == Kind::Point && (types & record_bit<Event>) == 0) ||
-                             (format.kind == Kind::Data && (types & record_bit<TimestampedData>) == 0);
-        skipped_types_ |= skipped ? 1u << format.type : 0u;
-    }
+StreamDecoder::StreamDecoder(const CaptureContext::Device& dev, RecordRoutes& routes) :
+    lanes_(dev.lanes.size()),
+    copies_(dev.lanes.size()),
+    heads_(dev.lanes.size() / profiler::kSpscNRiscDecode),
+    dev_(dev),
+    routes_(routes),
+    site_routes_(routes.routes_.data()),
+    short_run_types_(routes.short_run_types_.data()),
+    direct_types_(routes.direct_types_),
+    strides_(routes.strides_),
+    writes_order_(routes.type_count() > 1) {
     for (size_t lane = 0; lane < dev.lanes.size(); lane++) {
         lanes_[lane].consts = lane_consts(dev.lanes[lane], dev.clock_offsets[lane / profiler::kSpscNRiscDecode]);
     }
 }
 
+namespace {
+
+void write_direct(
+    const DirectForm& form,
+    const uint32_t* src,
+    uint32_t payload_at,
+    uint64_t time,
+    const profiler::SpscLaneConsts& consts,
+    uint8_t* dst) {
+    simde_mm256_storeu_si256(
+        reinterpret_cast<simde__m256i*>(dst), profiler::spsc_record_head(profiler::spsc_load_words(src, 2), consts));
+    uint8_t* const record_time = dst + profiler::kSpscTimeAt;
+    std::memcpy(record_time, &time, sizeof(time));
+    const auto* payload = reinterpret_cast<const std::byte*>(src + payload_at);
+    for (const DirectForm::Field& field : form.fields) {
+        uint8_t* const out = dst + field.to;
+        if (field.op == DirectForm::Op::Copy) {
+            const uint64_t value = field_value(payload, field.bit, field.width, field.code);
+            std::memcpy(out, &value, code_bytes(field.code));
+            continue;
+        }
+        const uint64_t sent =
+            field.op == DirectForm::Op::Published ? 0 : field_value(payload, field.bit, field.width, field.code);
+        const uint64_t ticks = timestamp_ticks(field.op, time, sent);
+        std::memcpy(out, &ticks, sizeof(ticks));
+        std::memcpy(out + sizeof(ticks), record_time + sizeof(ticks), sizeof(uint64_t));
+    }
+}
+
+}  // namespace
+
+[[gnu::always_inline]] inline StreamDecoder::Written StreamDecoder::write_record_to(
+    uint32_t type, const Packet& packet, const profiler::SpscLaneConsts& consts, uint64_t* values) {
+    uint8_t* const dst = types_out_[type] + type_bytes_[type];
+    type_bytes_[type] += strides_[type];
+    Written written{.time_slot = dst + profiler::kSpscTimeAt, .value_count = 0};
+    const uint32_t* const src = packet.src;
+    const uint32_t payload_words = profiler::spsc_length(src[0]) + 1 - packet.payload_at;
+    if (!has_type(direct_types_, type)) {
+        written.value_count = profiler::spsc_published(src, packet.payload_at, payload_words, consts, dst, values);
+        std::memcpy(written.time_slot, &packet.time, sizeof(packet.time));
+    } else if (packet.form != nullptr) {
+        write_direct(*packet.form, src, packet.payload_at, packet.time, consts, dst);
+    } else {
+        profiler::spsc_record(src, payload_words, consts, dst);
+    }
+    return written;
+}
+
+// The first type of each kind, direct or built, is written from the packet and the others copy it: a call site's
+// struct data can be a type of its own and also one value of a built type. Direct types go first, so the record's time
+// slot is a direct record's when there is one. `copies` notes the other copies' time slots, the direct ones first.
+[[gnu::noinline]] StreamDecoder::Written StreamDecoder::write_record_routed(
+    uint64_t types, const Packet& packet, const profiler::SpscLaneConsts& consts, uint64_t* values, SpscLane& lane) {
+    Written written{.time_slot = nullptr, .value_count = 0};
+    const uint8_t* first[2] = {nullptr, nullptr};  // by whether the type is direct
+    RecordCopies& copies = copies_[&lane - lanes_.data()];
+    copies.count = 0;
+    copies.direct_count = 0;
+    for (const uint64_t group : {types & direct_types_, types & ~direct_types_}) {
+        for (uint64_t rest = group; rest != 0; rest &= rest - 1) {
+            const uint32_t type = static_cast<uint32_t>(std::countr_zero(rest));
+            const bool direct = has_type(direct_types_, type);
+            uint8_t* const record = types_out_[type] + type_bytes_[type];
+            if (first[direct] == nullptr) {
+                written.value_count += write_record_to(type, packet, consts, values).value_count;
+                first[direct] = record;
+            } else {
+                std::memcpy(record, first[direct], strides_[type]);
+                type_bytes_[type] += strides_[type];
+            }
+            uint8_t* const time_slot = record + profiler::kSpscTimeAt;
+            if (written.time_slot == nullptr) {
+                written.time_slot = time_slot;
+            } else {
+                copies.direct_count += direct ? 1 : 0;
+                copies.time_slots[copies.count++] = time_slot;
+            }
+        }
+    }
+    copies.copied_time = written.time_slot;
+    copies.seq = decoded_seq_;
+    return written;
+}
+
+// A wall-clock read is either correct or exactly 2^32 too high, because another RISC's read of the low word can land
+// between the producer's low and high reads as the low word wraps. A step back therefore means the last record's high
+// word was one too high, so its time moves down by kEpoch, and so do a direct record's Timestamps computed from its
+// time, in each direct copy too. noinline, because the repair code inlined into the decode loop raises the loop's
+// register pressure.
+[[gnu::noinline]] bool StreamDecoder::repair_last(const SpscLane& lane, uint64_t next_ts) {
+    if (lane.last_ts < kEpoch || lane.last_ts - next_ts > kEpoch || lane.last_time == nullptr) {
+        return false;
+    }
+    reinterpret_cast<uint64_t*>(lane.last_time)[0] -= kEpoch;
+    uint8_t* const record = lane.last_time - profiler::kSpscTimeAt;
+    const std::span<const uint32_t> follows_time =
+        lane.last_form != nullptr ? std::span(lane.last_form->follows_time) : std::span<const uint32_t>();
+    for (const uint32_t at : follows_time) {
+        uint64_t ticks = 0;
+        std::memcpy(&ticks, record + at, sizeof(ticks));
+        ticks -= kEpoch;
+        std::memcpy(record + at, &ticks, sizeof(ticks));
+    }
+    const RecordCopies& copies = copies_[&lane - lanes_.data()];
+    if (copies.copied_time == lane.last_time && copies.seq > delivered_seq_) {
+        for (uint32_t k = 0; k < copies.count; k++) {
+            uint8_t* const copy_time = copies.time_slots[k];
+            std::memcpy(copy_time, lane.last_time, sizeof(uint64_t));
+            if (k < copies.direct_count) {
+                for (const uint32_t at : follows_time) {
+                    std::memcpy(copy_time - profiler::kSpscTimeAt + at, record + at, sizeof(uint64_t));
+                }
+            }
+        }
+    }
+    return true;
+}
+
 StreamDecoder::Produced StreamDecoder::decode_frames(
+    size_t undelivered, const uint32_t* frames, std::span<const uint32_t> frame_words, Out out) {
+    return writes_order_ ? decode<true>(undelivered, frames, frame_words, out)
+                         : decode<false>(undelivered, frames, frame_words, out);
+}
+
+namespace {
+
+// The control block holds the lane's timer high word and runtime id as of the run's end. Words before a sticky packet
+// in the run used an older value that the frame doesn't carry, so decoding starts just past the run's last sticky
+// packet, whose end this returns.
+[[gnu::always_inline]] inline uint32_t resume(
+    SpscLane& lane, const uint32_t* ctrl, uint32_t risc, const uint32_t* words, uint32_t run) {
+    using namespace profiler;
+    uint32_t timer_hi = ctrl[kernel_profiler::SPSC_WIRE_TIMER_0 + risc];
+    uint32_t runtime_id = ctrl[kernel_profiler::spsc_wire_prog_word(risc)];
+    uint32_t pos = 0;
+    for (uint32_t k = 0; k < run;) {
+        const uint32_t packet_words = spsc_packet_words(words[k]);
+        if (packet_words == 0) {
+            break;
+        }
+        if (pp_type(words[k]) != PP_RECORD) {
+            (pp_type(words[k]) == PP_STICKY_TIMER ? timer_hi : runtime_id) = spsc_sticky_value(words + k);
+            pos = k + packet_words;
+        }
+        k += packet_words;
+    }
+    lane.need_state = false;
+    lane.cursor = SpscLane::kNoCursor;
+    spsc_lane_consts_th(lane.consts, timer_hi);
+    spsc_lane_consts_prog(lane.consts, runtime_id);
+    return pos;
+}
+
+}  // namespace
+
+template <bool kWritesOrder>
+StreamDecoder::Produced StreamDecoder::decode(
     size_t undelivered, const uint32_t* frames, std::span<const uint32_t> frame_words, Out out) {
     using namespace profiler;
     // Locals rather than members, because the kernels store through byte pointers, so anything reached through `this`
     // would be reloaded after every store.
     const uint64_t delivered_seq = decoded_seq_ - undelivered;
+    delivered_seq_ = delivered_seq;
     const uint64_t seq = ++decoded_seq_;
-    uint8_t* const zones_out = out.zones;
-    uint8_t* const events_out = out.events;
-    uint8_t* const data_out = out.data;
     uint64_t* const values_out = out.values;
-    const uint32_t skipped_types = skipped_types_;
-    uint64_t zone_bytes = 0;
     uint64_t value_count_out = 0;
-    // The event and data output offsets share one 64-bit variable, with data's in the high half, so both stay in one
-    // register. An array indexed by packet kind would live in memory and put every update on a store-to-load chain.
-    uint64_t point_offsets = 0;
+    std::ranges::copy(out.types, types_out_.begin());
+    type_bytes_ = {};
+    uint32_t* order_out = out.order;
     uint64_t stalls = 0;
     uint64_t order_regressions = 0;
     int64_t newest_ticks = std::numeric_limits<int64_t>::min();
@@ -204,8 +290,6 @@ StreamDecoder::Produced StreamDecoder::decode_frames(
                 continue;
             }
             SpscLaneConsts& consts = lane.consts;
-            // Uses the lane's state in place, because copying it into locals and back costs sparse streams 7%.
-            uint64_t& cursor = lane.cursor;
             uint32_t linear[kSpscRingCap];
             if (ring_ordered) {
                 const uint32_t ring_head = head & kSpscRingMask;
@@ -219,204 +303,109 @@ StreamDecoder::Produced StreamDecoder::decode_frames(
                 words += extent - run;
             }
             const uint32_t* const readable_end = ring_ordered ? words + run : frame + frame_len;
-            uint32_t pos = 0;
-            if (lane.need_state) {
-                // The control block holds the lane's timer high word and runtime id as of the run's end. Words before a
-                // sticky packet in the run used an older value that the frame doesn't carry, so decoding starts just
-                // past the run's last sticky packet.
-                uint32_t timer_hi = ctrl[kernel_profiler::SPSC_WIRE_TIMER_0 + risc];
-                uint32_t runtime_id = ctrl[kernel_profiler::spsc_wire_prog_word(risc)];
-                uint32_t k = 0;
-                while (k < run) {
-                    const uint32_t type = pp_type(words[k]);
-                    uint32_t packet_words = kSpscWordsOfType[type];
-                    if (packet_words == 0) {
-                        break;
-                    }
-                    if (kSpscDataMaskOfType[type] != 0) {
-                        if (k + kSpscDataFormat.size_word >= run) {
-                            break;
-                        }
-                        packet_words += (words[k + kSpscDataFormat.size_word] >> kSpscDataFormat.size_shift) &
-                                        kSpscDataFormat.size_mask;
-                    }
-                    spsc_for_format<spsc_is_sticky>(type, [&]<PacketFormat F>() __attribute__((always_inline)) {
-                        if (k + F.words <= run) {
-                            (F.sets == PacketFormat::Sets::TimerHi ? timer_hi : runtime_id) =
-                                sticky_value<F>(words + k);
-                        }
-                        pos = k + packet_words;
-                    });
-                    k += packet_words;
-                }
-                lane.need_state = false;
-                lane.need_anchor = true;
-                spsc_lane_consts_th(consts, timer_hi);
-                spsc_lane_consts_prog(consts, runtime_id);
+            uint32_t pos = lane.need_state ? resume(lane, ctrl, risc, words, run) : 0;
+            if (lane.last_time_seq <= delivered_seq) {
+                lane.last_time = nullptr;
             }
-            if (lane.last_rec_seq <= delivered_seq) {
-                lane.last_rec = nullptr;
-            }
-            uint8_t* const entry_rec = lane.last_rec;
+            uint8_t* const entry_time = lane.last_time;
             const uint64_t entry_ts = lane.last_ts;
-            const auto zones_emitted = [&](uint32_t n) {
-                zone_bytes += kSpscZoneBytes * n;
-                lane.last_rec = zones_out + zone_bytes - kSpscZoneBytes;
-                lane.last_rec_zone = true;
-            };
             while (pos < run) {
                 const uint32_t* const src = words + pos;
-                const uint32_t type = pp_type(src[0]);
-                const uint32_t readable = static_cast<uint32_t>(readable_end - src);
-                const uint32_t left = run - pos;
-                if (((skipped_types >> type) & 1u) != 0) {
-                    const uint32_t type_words = kSpscWordsOfType[type];
-                    if (kSpscDataMaskOfType[type] != 0) {
-                        const uint32_t size_word = std::min<uint32_t>(kSpscDataFormat.size_word, readable - 1u);
-                        const uint32_t packet_words =
-                            type_words + ((src[size_word] >> kSpscDataFormat.size_shift) & kSpscDataFormat.size_mask);
-                        if (left >= packet_words) {
-                            pos += packet_words;
-                            continue;
-                        }
-                    } else if (left >= type_words) {
-                        // The packets of a fixed-length type sit at a fixed stride, so the run's loads don't wait on
-                        // one another.
-                        uint32_t run_words = type_words;
-                        uint32_t stall_zones = (src[0] & PP_LOW27_MASK) == kSpscStallZoneId ? 1u : 0u;
-                        while (run_words + type_words <= left && pp_type(src[run_words]) == type) {
-                            stall_zones += (src[run_words] & PP_LOW27_MASK) == kSpscStallZoneId ? 1u : 0u;
-                            run_words += type_words;
-                        }
-                        stalls += ((kSpscZoneTypes >> type) & 1u) != 0 ? stall_zones : 0u;
-                        pos += run_words;
-                        continue;
-                    }
-                }
-                uint32_t consumed = 0;
-                if ((kSpscPointTypes >> type) & 1u) {
-                    // Events and data records go through one code path, so a random mix of them doesn't cause branch
-                    // mispredictions.
-                    bool blocked = false;
-                    spsc_for_each_format<spsc_is_point>([&]<PacketFormat F>() __attribute__((always_inline)) {
-                        if (!blocked && left >= 4u * F.words && spsc_run4<F>(src)) {
-                            blocked = true;
-                            uint8_t* const first = events_out + static_cast<uint32_t>(point_offsets);
-                            const auto block = spsc_block<F>(src, readable, left / F.words, cursor, consts, first);
-                            point_offsets += kSpscEventBytes * block.n;
-                            if (block.n != 0) {
-                                const uint64_t first_ts = spsc_ts_at<F>(src, 0, consts.th_hi);
-                                if (__builtin_expect(first_ts < lane.last_ts || block.regress != 0, 0)) {
-                                    order_regressions +=
-                                        repair_run<F>(src, block.n, first, consts.th_hi, first_ts, lane);
-                                }
-                                lane.last_ts = block.ts_last;
-                                lane.last_rec = events_out + static_cast<uint32_t>(point_offsets) - kSpscEventBytes;
-                                lane.last_rec_zone = false;
-                                consumed = F.words * block.n;
-                            }
-                        }
-                    });
-                    if (!blocked) {
-                        const uint32_t data_mask = kSpscDataMaskOfType[type];
-                        const uint32_t size_word = std::min<uint32_t>(kSpscDataFormat.size_word, readable - 1u);
-                        const uint32_t payload_words =
-                            ((src[size_word] >> kSpscDataFormat.size_shift) & kSpscDataFormat.size_mask) & data_mask;
-                        const uint32_t packet_words = kSpscWordsOfType[type] + payload_words;
-                        if (left >= packet_words) {
-                            const uint64_t timestamp = consts.th_hi | src[kSpscDataFormat.ts_lo];
-                            const uint32_t half_shift = data_mask & 32u;
-                            uint8_t* const dst = (data_mask ? data_out : events_out) +
-                                                 static_cast<uint32_t>(point_offsets >> half_shift);
-                            if (__builtin_expect(timestamp < lane.last_ts, 0)) {
-                                order_regressions +=
-                                    !repair_prev_record(lane.last_rec, lane.last_rec_zone, lane.last_ts, timestamp);
-                            }
-                            lane.last_ts = timestamp;
-                            value_count_out +=
-                                spsc_point(src, readable, payload_words, consts, dst, values_out + value_count_out);
-                            point_offsets += static_cast<uint64_t>(
-                                                 kSpscEventBytes + ((kSpscDataBytes - kSpscEventBytes) & data_mask))
-                                             << half_shift;
-                            lane.last_rec = dst;
-                            lane.last_rec_zone = false;
-                            consumed = packet_words;
-                        }
-                    }
-                } else {
-                    spsc_for_format<spsc_is_zone_or_sticky>(type, [&]<PacketFormat F>() __attribute__((always_inline)) {
-                        if (left < F.words) {
-                            return;
-                        }
-                        if constexpr (F.kind == Kind::Sticky) {
-                            const uint32_t value = sticky_value<F>(src);
-                            if constexpr (F.sets == PacketFormat::Sets::TimerHi) {
-                                spsc_lane_consts_th(consts, value);
-                            } else {
-                                spsc_lane_consts_prog(consts, value);
-                            }
-                            consumed = F.words;
-                        } else if constexpr (F.delta16) {
-                            const bool long_run = left >= kSpscDelta16BlockRun * F.words &&
-                                                  pp_type(src[(kSpscDelta16BlockRun - 1) * F.words]) == F.type;
-                            const auto block =
-                                long_run ? spsc_block<F>(
-                                               src, readable, left / F.words, cursor, consts, zones_out + zone_bytes)
-                                         : spsc_delta16_short<F>(
-                                               src, left / F.words, cursor, consts, zones_out + zone_bytes);
-                            if (block.n != 0) {
-                                // Until the lane has a ZONE_ATOMIC to count from, the run's ends are unknown. It is
-                                // still decoded, into output space the next record overwrites, but not counted.
-                                if (!lane.need_anchor) {
-                                    const uint64_t first_ts = cursor + (src[1] >> 16);
-                                    if (__builtin_expect(first_ts < lane.last_ts, 0)) {
-                                        order_regressions += repair_run<F>(
-                                            src, block.n, zones_out + zone_bytes, consts.th_hi, first_ts, lane);
-                                    }
-                                    lane.last_ts = block.ts_last;
-                                    zones_emitted(block.n);
-                                }
-                                cursor = block.ts_last;
-                                consumed = F.words * block.n;
-                            }
-                        } else {
-                            uint8_t* const first = zones_out + zone_bytes;
-                            const bool same_type_follows = left > F.words && pp_type(src[F.words]) == F.type;
-                            const SpscBlockResult block =
-                                same_type_follows ? spsc_block<F>(src, readable, left / F.words, cursor, consts, first)
-                                                  : spsc_one<F>(src, readable, consts, first);
-                            if (block.n == 0) {
-                                return;
-                            }
-                            stalls += block.stalls;
-                            const uint64_t first_ts = spsc_ts_at<F>(src, 0, consts.th_hi);
-                            if (__builtin_expect(
-                                    (F.has_dur_hi() && block.wrapped != 0) || first_ts < lane.last_ts ||
-                                        block.regress != 0,
-                                    0)) {
-                                order_regressions += repair_run<F>(src, block.n, first, consts.th_hi, first_ts, lane);
-                            }
-                            lane.last_ts = block.ts_last;
-                            zones_emitted(block.n);
-                            if constexpr (F.reanchor) {
-                                cursor = block.ts_last;
-                                lane.need_anchor = false;
-                            }
-                            consumed = F.words * block.n;
-                        }
-                    });
-                }
+                // The producer publishes its tail only on packet boundaries, so a run holds whole packets. A record,
+                // the common packet, has its length in word 0, which spares it spsc_packet_words' switch.
+                const bool is_record = pp_type(src[0]) == PP_RECORD;
+                const uint32_t packet_words = is_record ? 1 + spsc_length(src[0]) : spsc_packet_words(src[0]);
                 TT_FATAL(
-                    consumed != 0,
+                    packet_words != 0 && packet_words <= run - pos,
                     "streaming profiler: undecodable word {:#010x} at offset {} of lane {}'s run of {}",
                     src[0],
                     pos,
                     lane_index,
                     run);
+                uint32_t consumed = packet_words;
+                if (is_record) {
+                    const uint32_t length = packet_words - 1;
+                    const uint32_t id = src[0] & PP_ID_MASK;
+                    RecordRoutes::Route route = site_routes_[id];
+                    if (!route.resolved) [[unlikely]] {
+                        route = routes_.resolve(id);
+                    }
+                    // Until a medium record sets the cursor, a short record has no time and makes no record.
+                    const bool short_form = length == route.short_length;
+                    const bool full_form = length == route.full_length;
+                    const uint64_t short_run_type = short_form ? short_run_types_[id] : 0;
+                    if (short_run_type != 0 && lane.cursor != SpscLane::kNoCursor) {
+                        const uint32_t type = static_cast<uint32_t>(std::countr_zero(short_run_type));
+                        const RecordRoutes::ShortRun& short_run = *routes_.short_runs_[type];
+                        uint8_t* const dst = types_out_[type] + type_bytes_[type];
+                        const SpscBlockResult block = spsc_short_records(
+                            src,
+                            static_cast<uint32_t>(readable_end - src),
+                            (run - pos) / 2,
+                            lane.cursor,
+                            consts,
+                            short_run.layout,
+                            short_run_types_,
+                            short_run_type,
+                            dst);
+                        consumed = 2 * block.count;
+                        const uint64_t first = lane.cursor + (src[1] >> 16);
+                        if (first < lane.last_ts) [[unlikely]] {
+                            order_regressions += !repair_last(lane, first);
+                        }
+                        type_bytes_[type] += block.count * short_run.layout.stride;
+                        lane.cursor = block.last_time;
+                        lane.last_ts = block.last_time;
+                        lane.last_time = dst + (block.count - 1) * short_run.layout.stride + kSpscTimeAt;
+                        lane.last_form = short_run.form;
+                        if constexpr (kWritesOrder) {
+                            order_out = std::fill_n(order_out, block.count, type);
+                        }
+                    } else if (!short_form || lane.cursor != SpscLane::kNoCursor) {
+                        const uint64_t timestamp = short_form  ? lane.cursor + (src[1] >> 16)
+                                                   : full_form ? uint64_t{src[2]} << 32 | src[1]
+                                                               : consts.th_hi | src[1];
+                        const TimeForm form = short_form  ? TimeForm::Short
+                                              : full_form ? TimeForm::Full
+                                                          : TimeForm::Medium;
+                        if (route.short_length != 0 && !full_form) {
+                            lane.cursor = timestamp;
+                        }
+                        stalls += id == kSpscStallZoneId ? 1u : 0u;
+                        if (timestamp < lane.last_ts) [[unlikely]] {
+                            order_regressions += !repair_last(lane, timestamp);
+                        }
+                        lane.last_ts = timestamp;
+                        const Packet packet{
+                            .src = src,
+                            .payload_at = 1 + uint32_t(form),  // word 0, then the form's time words
+                            .time = timestamp,
+                            .form = route.forms != nullptr ? &(*route.forms)[uint32_t(form)] : nullptr};
+                        uint64_t* const values = values_out + value_count_out;
+                        Written written{.time_slot = reinterpret_cast<uint8_t*>(&lane.unrouted_time), .value_count = 0};
+                        if (std::has_single_bit(route.types)) {
+                            written = write_record_to(std::countr_zero(route.types), packet, consts, values);
+                        } else if (route.types != 0) {
+                            written = write_record_routed(route.types, packet, consts, values, lane);
+                        }
+                        value_count_out += written.value_count;
+                        lane.last_time = written.time_slot;
+                        lane.last_form = (route.types & direct_types_) != 0 ? packet.form : nullptr;
+                        if constexpr (kWritesOrder) {
+                            for (uint64_t types = route.types; types != 0; types &= types - 1) {
+                                *order_out++ = std::countr_zero(types);
+                            }
+                        }
+                    }
+                } else if (pp_type(src[0]) == PP_STICKY_TIMER) {
+                    spsc_lane_consts_th(consts, spsc_sticky_value(src));
+                } else {
+                    spsc_lane_consts_prog(consts, spsc_sticky_value(src));
+                }
                 pos += consumed;
             }
-            if (lane.last_rec != entry_rec) {
-                lane.last_rec_seq = seq;
+            if (lane.last_time != entry_time) {
+                lane.last_time_seq = seq;
             }
             // A last record 2^32 or more ticks past the lane's previous last record, with a low word just below the
             // wrap, may be torn, so it counts toward newest_ticks 2^32 ticks earlier, where its repair would put it.
@@ -430,13 +419,161 @@ StreamDecoder::Produced StreamDecoder::decode_frames(
         frame += frame_len;
     }
     return Produced{
-        .zones = static_cast<uint32_t>(zone_bytes / kSpscZoneBytes),
-        .events = static_cast<uint32_t>(point_offsets) / kSpscEventBytes,
-        .data = static_cast<uint32_t>((point_offsets >> 32) / kSpscDataBytes),
         .values = static_cast<uint32_t>(value_count_out),
+        .type_bytes = type_bytes_,
+        .order_entries = static_cast<uint32_t>(order_out - out.order),
         .newest_ticks = newest_ticks,
         .stalls = stalls,
         .order_regressions = order_regressions};
+}
+
+namespace {
+
+constexpr size_t kArenaBytes = size_t{256} << 10;
+
+// A batch decodes into one buffer holding its values, then a region per DevicePublish record type of its consumer's,
+// then, for a consumer of more than one type, the order of its records across types, each sized for a full batch. Each
+// value comes from two payload words, plus 32 bytes per frame for what spsc_published() stores past its last value. A
+// DevicePublish record takes at most 32 bytes per word of its packet, which a short record reaches with a 16-byte
+// Timestamp per 16-bit distance. A packet that becomes a record is at least two words, and each record of each type is
+// at most one entry of the order.
+constexpr size_t kBatchWords = profiler::kSpscBatchBytes / sizeof(uint32_t);
+constexpr size_t kTypesAt = (kBatchWords * 4 + size_t{32} * profiler::kSpscBatchFrames + 63) / 64 * 64;
+constexpr size_t kTypeBytes = (kBatchWords * 32 + profiler::kSpscRecordSlackBytes + 63) / 64 * 64;
+constexpr size_t kOrderBytes = kBatchWords / 2 * sizeof(uint32_t);
+
+}  // namespace
+
+ConsumerBatches::ConsumerBatches(std::vector<experimental::streaming_profiler::detail::Kind> kinds) :
+    routes_(std::move(kinds)),
+    records_(routes_.type_count()),
+    counts_(routes_.type_count()),
+    arena_buf_(std::make_unique_for_overwrite<std::byte[]>(kArenaBytes)),
+    arena_(arena_buf_.get(), kArenaBytes) {
+    batch_.records = records_;
+    batch_.counts = counts_;
+}
+
+DecodedFrames ConsumerBatches::decode(
+    StreamDecoder& decoder, size_t undelivered, const uint32_t* frames, std::span<const uint32_t> frame_words) {
+    DecodedFrames decoded;
+    if (free_buffers_.empty()) {
+        decoded.buffer =
+            std::make_unique_for_overwrite<uint8_t[]>(kTypesAt + routes_.type_count() * (kTypeBytes + kOrderBytes));
+    } else {
+        decoded.buffer = std::move(free_buffers_.back());
+        free_buffers_.pop_back();
+    }
+    decoded.produced = decoder.decode_frames(undelivered, frames, frame_words, out_in(decoded.buffer.get()));
+    return decoded;
+}
+
+const experimental::streaming_profiler::detail::BatchData& ConsumerBatches::build_batch(
+    DecodedFrames& frames, const ClockMap& map, ClockMap::Reader& reader, uint32_t dev, uint64_t dropped_bytes) {
+    const StreamDecoder::Out out = out_in(frames.buffer.get());
+    const StreamDecoder::Produced& produced = frames.produced;
+    place(out, produced, map, reader, dev);
+    arena_.release();
+    for (uint32_t type = 0; type < routes_.type_count(); type++) {
+        counts_[type] = produced.type_bytes[type] / routes_.stride(type);
+        records_[type] = reinterpret_cast<const std::byte*>(out.types[type]);
+        if (routes_.built(type)) {
+            const auto* published = std::launder(reinterpret_cast<const PublishedRecord*>(out.types[type]));
+            records_[type] =
+                build_records(std::span(published, counts_[type]), type, routes_, arena_, map, reader, dev);
+        }
+    }
+    batch_.order = std::span(out.order, produced.order_entries);
+    batch_.dropped_bytes = dropped_bytes;
+    batch_.stall_count = produced.stalls;
+    return batch_;
+}
+
+namespace {
+
+// Puts the time at byte `at` of four records on host time: a time is a device timestamp and then its tile's clock
+// offset, which becomes its host time.
+[[gnu::always_inline]] inline void place_four(
+    const ClockMap& map, ClockMap::Reader& reader, uint32_t dev, const std::array<uint8_t*, 4>& records, uint32_t at) {
+    const auto slot = [&](uint32_t k) { return reinterpret_cast<uint64_t*>(records[k] + at); };
+    alignas(32) int64_t hosts[4];
+    simde_mm256_store_si256(
+        reinterpret_cast<simde__m256i*>(hosts),
+        map.place_host4(
+            reader,
+            dev,
+            simde_mm256_setr_epi64x(
+                static_cast<int64_t>(slot(0)[0] + slot(0)[1]),
+                static_cast<int64_t>(slot(1)[0] + slot(1)[1]),
+                static_cast<int64_t>(slot(2)[0] + slot(2)[1]),
+                static_cast<int64_t>(slot(3)[0] + slot(3)[1]))));
+    for (uint32_t k = 0; k < 4; k++) {
+        slot(k)[1] = static_cast<uint64_t>(hosts[k]);
+    }
+}
+
+// Whether the Timestamp at byte `field` of each of four records is its record's own time, from the same tile, so it
+// takes the time's host time.
+[[gnu::always_inline]] inline bool at_record_time(const std::array<uint8_t*, 4>& records, uint32_t field) {
+    return std::ranges::all_of(records, [&](const uint8_t* record) {
+        return reinterpret_cast<const uint64_t*>(record + field)[0] ==
+               reinterpret_cast<const uint64_t*>(record + profiler::kSpscTimeAt)[0];
+    });
+}
+
+}  // namespace
+
+void ConsumerBatches::place(
+    const StreamDecoder::Out& out,
+    const StreamDecoder::Produced& produced,
+    const ClockMap& map,
+    ClockMap::Reader& reader,
+    uint32_t dev) {
+    using namespace profiler;
+    // A memmove onto itself compiles to nothing and implicitly creates the DevicePublish records and payload values
+    // already in these bytes.
+    std::memmove(out.values, out.values, size_t{produced.values} * sizeof(uint64_t));
+    for (uint32_t type = 0; type < routes_.type_count(); type++) {
+        std::memmove(out.types[type], out.types[type], produced.type_bytes[type]);
+    }
+    // Each place a record holds a time, the record's own time first, is placed four records at a time; the last four
+    // repeat the type's last record as needed, which places it more than once to the same result.
+    for (uint32_t type = 0; type < routes_.type_count(); type++) {
+        if (routes_.built(type)) {
+            continue;
+        }
+        const std::span<const uint32_t> times = routes_.time_offsets(type);
+        const uint32_t stride = routes_.stride(type), count = produced.type_bytes[type] / stride;
+        for (uint32_t first = 0; first < count; first += 4) {
+            std::array<uint8_t*, 4> records;
+            for (uint32_t k = 0; k < 4; k++) {
+                records[k] = out.types[type] + std::min(first + k, count - 1) * stride;
+            }
+            place_four(map, reader, dev, records, kSpscTimeAt);
+            for (const uint32_t field : times) {
+                if (at_record_time(records, field)) {
+                    for (uint8_t* const record : records) {
+                        reinterpret_cast<uint64_t*>(record + field)[1] =
+                            reinterpret_cast<const uint64_t*>(record + kSpscTimeAt)[1];
+                    }
+                } else {
+                    place_four(map, reader, dev, records, field);
+                }
+            }
+        }
+    }
+}
+
+StreamDecoder::Out ConsumerBatches::out_in(uint8_t* buffer) {
+    for (size_t type = 0; type < routes_.type_count(); type++) {
+        type_out_[type] = buffer + kTypesAt + type * kTypeBytes;
+    }
+    return {
+        .values = reinterpret_cast<uint64_t*>(buffer),
+        .types = std::span(type_out_.data(), routes_.type_count()),
+        .order = routes_.type_count() > 1
+                     ? reinterpret_cast<uint32_t*>(buffer + kTypesAt + routes_.type_count() * kTypeBytes)
+                     : nullptr};
 }
 
 }  // namespace tt::tt_metal::streaming_profiler

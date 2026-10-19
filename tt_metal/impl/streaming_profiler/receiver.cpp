@@ -31,6 +31,7 @@
 #include <umd/device/types/io_window_config.hpp>
 
 #include "context/metal_context.hpp"
+#include "impl/streaming_profiler/service.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "impl/streaming_profiler/spsc_packet.h"
 
@@ -341,11 +342,11 @@ void Receiver::ingest_thread(std::vector<Stream*> streams) {
         }
         std::erase_if(streams, [this](Stream* s) { return settle(*s); });
         // A wake goes out once a batch of frames is ready, or once a pass finds nothing new so none are held back.
-        if (unwoken != 0 && (unwoken >= kBatchFrames || !any)) {
+        if (unwoken != 0 && (unwoken >= profiler::kSpscBatchFrames || !any)) {
             service().wake_consumers();
             unwoken = 0;
         }
-        if (unwoken_sync != 0 && (unwoken_sync >= kBatchFrames || !any)) {
+        if (unwoken_sync != 0 && (unwoken_sync >= profiler::kSpscBatchFrames || !any)) {
             wake_sync_thread();
             unwoken_sync = 0;
         }
@@ -382,8 +383,8 @@ void Receiver::sync_thread(const std::stop_token& stop) {
             sync_streams.push_back({.index = index});
         }
     }
-    std::array<uint32_t, kBatchFrames> frame_words{};
-    const auto frames = std::make_unique_for_overwrite<std::byte[]>(kBatchBytes);
+    std::array<uint32_t, profiler::kSpscBatchFrames> frame_words{};
+    const auto frames = std::make_unique_for_overwrite<std::byte[]>(profiler::kSpscBatchBytes);
     const auto take_batch = [&](SyncStream& sync) {
         const Stream& s = *streams_[sync.index];
         const Walked walked = walk_frames(
@@ -391,7 +392,7 @@ void Receiver::sync_thread(const std::stop_token& stop) {
             sync.cursor,
             s.walked_bytes.load(std::memory_order_acquire),
             s.marks,
-            std::span<std::byte>(frames.get(), kBatchBytes),
+            std::span<std::byte>(frames.get(), profiler::kSpscBatchBytes),
             frame_words,
             [&] { return live_head(sync.index); });
         if (walked.cursor == sync.cursor) {

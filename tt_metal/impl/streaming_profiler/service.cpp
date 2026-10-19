@@ -7,11 +7,9 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
-#include <cstring>
 #include <deque>
 #include <limits>
 #include <memory>
-#include <new>
 #include <thread>
 #include <utility>
 #include <pthread.h>
@@ -45,17 +43,13 @@ void set_thread_name(const std::string& name) {
 
 namespace {
 
-// A decoded batch that waits until the receiver's clock map has final host times up to its newest record.
-struct Parked {
-    std::unique_ptr<uint8_t[]> buffer;
-    StreamDecoder::Produced produced;
-};
 struct AttachedStream {
     StreamDecoder decoder;
     uint64_t cursor = 0;
     uint32_t dev = 0;
     uint32_t index = 0;
-    std::deque<Parked> pending;
+    // Decoded frames held back until the receiver's clock map has final host times up to their newest record.
+    std::deque<DecodedFrames> pending;
     int64_t final_through = std::numeric_limits<int64_t>::min();
 };
 struct Attached {
@@ -66,26 +60,11 @@ struct Attached {
     uint64_t order_regressions = 0;
 };
 
-// The most output a single batch can produce.
-constexpr StreamDecoder::Capacity kFullBatch =
-    StreamDecoder::out_capacity(kBatchBytes / sizeof(uint32_t), kBatchFrames);
-
-// A batch decodes into one buffer holding its zones, events, data records and values in that order, each region sized
-// for a full batch. These are the regions' offsets and the buffer's size.
-constexpr size_t kEventsAt = kFullBatch.zone_bytes;
-constexpr size_t kDataAt = kEventsAt + kFullBatch.event_bytes;
-constexpr size_t kValuesAt = kDataAt + kFullBatch.data_bytes;
-constexpr size_t kOutBufferBytes = kValuesAt + kFullBatch.value_bytes;
-
-StreamDecoder::Out out_in(uint8_t* buffer) {
-    return {buffer, buffer + kEventsAt, buffer + kDataAt, reinterpret_cast<uint64_t*>(buffer + kValuesAt)};
-}
-
 }  // namespace
 
 struct Service::Consumer {
     std::string name;
-    uint32_t types = 0;
+    std::vector<experimental::streaming_profiler::detail::Kind> kinds;
     BatchCallback callback;
     experimental::streaming_profiler::detail::CallbackId id;
     std::thread thread;
@@ -95,14 +74,9 @@ struct Service::Consumer {
     std::vector<std::pair<Receiver*, bool>> control;  // (receiver, attach), in order
 };
 
-Service::Service() : steady_(new SteadyClock) { init_site_registry(); }
+Service::Service() : steady_(new SteadyClock) {}
 
 SteadyClock& Service::steady() { return *steady_; }
-
-const char* Service::plot_name(const std::string& name) {
-    std::lock_guard<std::mutex> lk(plot_names_mu_);
-    return plot_names_.insert(name).first->c_str();
-}
 
 Service& service() {
     static ttsl::Indestructible<Service> instance;
@@ -124,14 +98,14 @@ void Service::wait_acks(std::unique_lock<std::mutex>& lk) {
 }
 
 experimental::streaming_profiler::detail::CallbackId Service::add_consumer(
-    std::string name, uint32_t types, BatchCallback callback) {
+    std::string name, std::vector<experimental::streaming_profiler::detail::Kind> kinds, BatchCallback callback) {
     TT_FATAL(
         t_consumer_id == experimental::streaming_profiler::detail::CallbackId{},
         "streaming profiler: add_consumer must not be called from a consumer callback");
     std::lock_guard<std::mutex> topo(topology_mu_);
     auto owned = std::make_unique<Consumer>();
     owned->name = std::move(name);
-    owned->types = types;
+    owned->kinds = std::move(kinds);
     owned->callback = std::move(callback);
     Consumer& consumer = *owned;
     std::unique_lock<std::mutex> lk(mu_);
@@ -231,7 +205,10 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
 class Service::ConsumerLoop {
 public:
     ConsumerLoop(Service& service, Consumer& consumer) :
-        service_(service), consumer_(consumer), frames_buf_(std::make_unique_for_overwrite<std::byte[]>(kBatchBytes)) {}
+        service_(service),
+        consumer_(consumer),
+        batches_(consumer.kinds),
+        frames_buf_(std::make_unique_for_overwrite<std::byte[]>(profiler::kSpscBatchBytes)) {}
 
     void run() {
         set_thread_name("sp-con:" + consumer_.name);
@@ -292,7 +269,7 @@ private:
         for (uint32_t index = 0; index < sources.size(); index++) {
             const ReceiverStream& source = sources[index];
             attached->streams.push_back(AttachedStream{
-                .decoder = StreamDecoder(ctx.devices[source.dev], consumer_.types),
+                .decoder = StreamDecoder(ctx.devices[source.dev], batches_.routes()),
                 .cursor = source.walked->load(std::memory_order_acquire),
                 .dev = source.dev,
                 .index = index});
@@ -311,8 +288,8 @@ private:
         while (more) {
             more = pass(attached);
             for (AttachedStream& stream : attached.streams) {
-                for (Parked& parked : stream.pending) {
-                    deliver(attached, stream.dev, parked);
+                for (DecodedFrames& frames : stream.pending) {
+                    deliver(attached, stream.dev, frames);
                 }
                 stream.pending.clear();
             }
@@ -338,7 +315,7 @@ private:
             stream.cursor,
             source.walked->load(std::memory_order_acquire),
             source.marks,
-            std::span<std::byte>(frames_buf_.get(), kBatchBytes),
+            std::span<std::byte>(frames_buf_.get(), profiler::kSpscBatchBytes),
             frame_words_,
             [&] { return attached.receiver->live_head(stream.index); });
         if (walked.cursor == stream.cursor) {
@@ -347,14 +324,13 @@ private:
         stream.cursor = walked.cursor;
         attached.dropped += walked.dropped;
         dropped_since_callback_ += walked.dropped;
-        std::unique_ptr<uint8_t[]> buffer = take_buffer();
-        const StreamDecoder::Produced produced = stream.decoder.decode_frames(
+        DecodedFrames frames = batches_.decode(
+            stream.decoder,
             stream.pending.size(),
             reinterpret_cast<const uint32_t*>(frames_buf_.get()),
-            std::span<const uint32_t>(frame_words_.data(), walked.frames),
-            out_in(buffer.get()));
-        attached.order_regressions += produced.order_regressions;
-        stream.pending.push_back(Parked{.buffer = std::move(buffer), .produced = produced});
+            std::span<const uint32_t>(frame_words_.data(), walked.frames));
+        attached.order_regressions += frames.produced.order_regressions;
+        stream.pending.push_back(std::move(frames));
         return true;
     }
 
@@ -381,15 +357,15 @@ private:
             const ClockMap& map = attached->receiver->clock_map();
             for (AttachedStream& stream : attached->streams) {
                 while (!stream.pending.empty()) {
-                    Parked& parked = stream.pending.front();
-                    const int64_t newest = parked.produced.newest_ticks;
+                    DecodedFrames& frames = stream.pending.front();
+                    const int64_t newest = frames.produced.newest_ticks;
                     if (newest > stream.final_through) {
                         if (!map.is_final(attached->reader, stream.dev, newest)) {
                             break;
                         }
                         stream.final_through = newest;
                     }
-                    deliver(*attached, stream.dev, parked);
+                    deliver(*attached, stream.dev, frames);
                     stream.pending.pop_front();
                     any = true;
                 }
@@ -398,84 +374,28 @@ private:
         return any;
     }
 
-    void deliver(Attached& attached, uint32_t dev, Parked& parked) {
-        const StreamDecoder::Out out = out_in(parked.buffer.get());
-        const StreamDecoder::Produced& produced = parked.produced;
-        place(attached, dev, out, produced);
-        using experimental::streaming_profiler::Event;
-        using experimental::streaming_profiler::TimestampedData;
-        using experimental::streaming_profiler::Zone;
-        const experimental::streaming_profiler::detail::BatchData batch{
-            .records =
-                {std::span(std::launder(reinterpret_cast<const Zone*>(out.zones)), produced.zones),
-                 std::span(std::launder(reinterpret_cast<const TimestampedData*>(out.data)), produced.data),
-                 std::span(std::launder(reinterpret_cast<const Event*>(out.events)), produced.events)},
-            .dropped_bytes = std::exchange(dropped_since_callback_, 0),
-            .stall_count = produced.stalls};
+    void deliver(Attached& attached, uint32_t dev, DecodedFrames& frames) {
         try {
             if (!consumer_.stop.load(std::memory_order_relaxed)) {
-                consumer_.callback(batch);
+                consumer_.callback(batches_.build_batch(
+                    frames,
+                    attached.receiver->clock_map(),
+                    attached.reader,
+                    dev,
+                    std::exchange(dropped_since_callback_, 0)));
             }
         } catch (const std::exception& ex) {
             log_warning(tt::LogMetal, "[streaming profiler] consumer \"{}\" threw: {}", consumer_.name, ex.what());
         }
-        free_buffers_.push_back(std::move(parked.buffer));
-    }
-
-    // Puts the batch's records on host time through the clock map. The decoder leaves each record's clock offset in its
-    // tsc_ slot, and this overwrites it with the host time.
-    void place(
-        Attached& attached, uint32_t dev, const StreamDecoder::Out& out, const StreamDecoder::Produced& produced) {
-        const ClockMap& map = attached.receiver->clock_map();
-        ClockMap::Reader& reader = attached.reader;
-        using namespace profiler;
-        // A memmove onto itself compiles to nothing and implicitly creates the zones, events, data-record array and
-        // payload values already in these bytes.
-        std::memmove(out.zones, out.zones, size_t{produced.zones} * kSpscZoneBytes);
-        std::memmove(out.events, out.events, size_t{produced.events} * kSpscEventBytes);
-        std::memmove(out.data, out.data, size_t{produced.data} * kSpscDataBytes);
-        std::memmove(out.values, out.values, size_t{produced.values} * sizeof(uint64_t));
-        const auto wall_of = [](const uint64_t* record) {
-            return static_cast<int64_t>(record[kSpscQwTimestamp] + record[kSpscQwTsc]);
-        };
-        const auto host_tsc = [&](const uint8_t* record) {
-            return map.place_host(reader, dev, wall_of(reinterpret_cast<const uint64_t*>(record)));
-        };
-        for (uint32_t i = 0; i < produced.zones; i++) {
-            uint64_t* const zone = reinterpret_cast<uint64_t*>(out.zones + size_t{i} * kSpscZoneBytes);
-            const int64_t wall = wall_of(zone);
-            const int64_t start = map.place_host(reader, dev, wall);
-            const int64_t end = map.place_host(reader, dev, wall + static_cast<int64_t>(zone[kSpscQwDuration]));
-            zone[kSpscQwTsc] = static_cast<uint64_t>(start);
-            zone[kSpscQwEndTsc] = static_cast<uint64_t>(end);
-        }
-        for (uint32_t i = 0; i < produced.events; i++) {
-            uint8_t* const event = out.events + size_t{i} * kSpscEventBytes;
-            reinterpret_cast<uint64_t*>(event)[kSpscQwTsc] = static_cast<uint64_t>(host_tsc(event));
-        }
-        for (uint32_t i = 0; i < produced.data; i++) {
-            uint8_t* const record = out.data + size_t{i} * kSpscDataBytes;
-            construct_timestamped_data(record);
-            reinterpret_cast<uint64_t*>(record)[kSpscQwTsc] = static_cast<uint64_t>(host_tsc(record));
-        }
-    }
-
-    // Returns an output buffer, reusing the most recently freed one, which is still in cache and already faulted in.
-    std::unique_ptr<uint8_t[]> take_buffer() {
-        if (free_buffers_.empty()) {
-            return std::make_unique_for_overwrite<uint8_t[]>(kOutBufferBytes);
-        }
-        std::unique_ptr<uint8_t[]> buffer = std::move(free_buffers_.back());
-        free_buffers_.pop_back();
-        return buffer;
+        batches_.release(std::move(frames));
     }
 
     Service& service_;
     Consumer& consumer_;
+    ConsumerBatches batches_;
     std::vector<std::unique_ptr<Attached>> attached_;
-    std::array<uint32_t, kBatchFrames> frame_words_{};
+    std::array<uint32_t, profiler::kSpscBatchFrames> frame_words_{};
     std::unique_ptr<std::byte[]> frames_buf_;
-    std::vector<std::unique_ptr<uint8_t[]>> free_buffers_;
     uint64_t dropped_since_callback_ = 0;
 };
 
