@@ -89,3 +89,7 @@ Stage: tt-model-bringup stage 1 (functional decoder, 1x1 mesh) = design Phase 1.
   throws at device close (tt-metal profiler bug, not model code; worth an upstream issue). Per-phase runs do not
   help for DSA layers (the warm-up prefill compiles the kernel). Evidence plan: tt-perf-report tables from
   layer 4 (KDA+MoE, no SDPA) for both phases; layer 3 keeps wall-clock numbers.
+- tt-perf-report (layer 4 KDA+MoE, one chip, `Device Time` column in us from the signposted windows; files in
+  `doc/functional_decoder/tracy/layer4_kda_moe/`):
+  - prefill: 1002 ops, 293.4 ms device per pass (wall 297.8 ms, S=1024); top op classes: SparseMatmulDeviceOperation 183.29 ms x64, UnaryDeviceOperation 45.46 ms x167, BinaryNgDeviceOperation 17.32 ms x152, SliceDeviceOperation 14.10 ms x194, PermuteDeviceOperation 9.96 ms x16, FastReduceNCDeviceOperation 6.91 ms x32
+  - decode: 1250 ops, 9.6 ms device per step (3 traced steps summed 28.7 ms; wall 11.08 ms/step); top op classes: AccumulationDeviceOperation 1.76 ms x5, UnaryDeviceOperation 1.47 ms x17, BinaryNgDeviceOperation 1.26 ms x110, SparseMatmulDeviceOperation 1.11 ms x2, MatmulDeviceOperation 0.99 ms x11, TernaryDeviceOperation 0.61 ms x38

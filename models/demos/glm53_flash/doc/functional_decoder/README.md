@@ -42,10 +42,13 @@ Residual convention: HF `[B, S, 4, 4096]` <-> packed `[1, 1, B*S, 16384]` (`host
 | `test_decoder_layer.py` | full layers 0 / 3 / 4 vs HF dump, T=256 + 4 decode; T=200 non-aligned live HF | 0.99984 / 0.99992 / 0.99997 prefill, 0.9999 decode; 0.99980 / 0.99993 |
 | `test_decode_trace.py` | traced decode replay (layers 0/3/4); two users (100 + 37 tokens, slots) | replay == eager (0.9999); per-user 0.9998-0.99998 |
 | `test_dsa_sparse.py` | layer 3 at 4097 tokens (sparse path) + decode 4097..4100 | prefill 0.99977 (selected rows 0.99990), decode 0.9999 |
-| `test_determinism.py` | repeated prefill / traced decode bit-identical, fallback guard raised | see work_log.md |
-| `test_perf_layer.py` | warmed prefill S=1024, traced decode B=1, layer 3 | 314 ms prefill (3.3k tok/s), 10.95 ms/step decode (wall) |
+| `test_determinism.py` | layers 0, 3: repeated prefill and traced-decode replay, `throw_exception_on_fallback` raised | bit-identical outputs, no host fallback |
+| watcher | `TT_METAL_WATCHER=10` on the layer-3 dump test (`~/ashai/glm53/_logs/watcher_layer3`) | PASSED, 10 dumps, no watcher exceptions |
+| `test_perf_layer.py` | warmed prefill S=1024, traced decode B=1 (wall clock) | layer 3: 314 ms prefill, 10.95 ms/step; layer 4: 300 ms, 10.96 ms/step |
 
 Context contract: `doc/context_contract.json`. Full log: `doc/functional_decoder/work_log.md`.
+Profiler note: Tracy device zones of the dense SDPA prefill kernel collide (`compute_streaming.hpp:632` vs `:1769`,
+hash 0x6835) on main 8cfcaf754d3, so tt-perf-report tables come from layer 4 (no SDPA); layer 3 keeps wall-clock numbers.
 
 ## Running
 
