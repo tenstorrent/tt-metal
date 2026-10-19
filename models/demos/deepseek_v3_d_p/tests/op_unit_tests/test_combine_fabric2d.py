@@ -20,8 +20,9 @@ routed token.
 Cases default to the production chunk: 5120 tokens over an 8-chip dispatch group, so
 seq_len_per_chip is 640. `test_combine_fabric2d_partial_last_tile` varies it on purpose.
 
-H is the dispatch group size (mesh rows), G the number of groups (mesh columns). Routing tensors are
-indexed (G, H, ...), device tensors (H, G, ...) to match the mesh.
+H is the dispatch group size (the mesh extent along the SP axis), G the number of groups (the extent
+along the other axis). Routing tensors are indexed (G, H, ...), device tensors (H, G, ...); `sp_axis`
+says which mesh axis H runs along (1 for the 4x4-stage layout).
 """
 
 import functools
@@ -45,6 +46,7 @@ SEQ_LEN_PER_CHIP = CHUNK // DISPATCH_GROUP_SIZE
 _MESH_IDS = (
     "fabric2d-torus-xy-8x4-2link",
     "fabric2d-torus-y-8x1-2link",
+    "fabric2d-torus-x-1x8-2link",
 )
 _MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id in _MESH_IDS]
 assert len(_MESH_CONFIGS) == len(_MESH_IDS), "combine_fabric2d mesh configs missing from ALL_MESH_CONFIGS"
@@ -223,8 +225,15 @@ class _Fixture:
         routing=None,
         capacity=None,
         payload_shift=0,
+        sp_axis=0,
     ):
         self.mesh_device = mesh_device
+        self.sp_axis = sp_axis
+        # (H, G, ...) device tensors: H along the SP axis, G along the other one.
+        hg_dims = (0, 1) if sp_axis == 0 else (1, 0)
+        # Per-group tensors (G, ...), replicated along the SP axis.
+        self._group_dims = (None, 0) if sp_axis == 0 else (0, None)
+        self._hg_dims = hg_dims
         self.seq_len_per_chip, self.emb_dim, self.H, self.G = seq_len_per_chip, emb_dim, H, G
         self.num_routed_experts, self.topk = num_routed_experts, topk
         self.experts_per_chip = num_routed_experts // G // H
@@ -250,18 +259,19 @@ class _Fixture:
         # A metadata row is (origin chip's linear mesh index, token, top-k slot), as dispatch writes it.
         meta = torch.full((H, G, capacity, 3), -1, dtype=torch.int32)
         g_idx, s_idx, t_idx, k_idx = self.kept.nonzero(as_tuple=True)
-        meta[r.holder_pos[self.kept], g_idx, r.page[self.kept]] = torch.stack(
-            [s_idx * G + g_idx, t_idx, k_idx], dim=-1
-        ).to(torch.int32)
+        origin_linear = s_idx * G + g_idx if sp_axis == 0 else g_idx * H + s_idx
+        meta[r.holder_pos[self.kept], g_idx, r.page[self.kept]] = torch.stack([origin_linear, t_idx, k_idx], dim=-1).to(
+            torch.int32
+        )
 
         self._tt_payload = {}
-        self.tt_meta = self._shard(meta, (0, 1), ttnn.int32)
+        self.tt_meta = self._shard(meta, hg_dims, ttnn.int32)
         # expert_offsets holds every origin chip's row, replicated along the dispatch axis: a forwarding
         # chip needs them to size what it forwards. Counts and region offsets are the same on every
         # chip of a group, so each device takes one row.
-        self.tt_offs = self._shard(r.offs, (None, 0), ttnn.int32)
-        self.tt_counts = self._shard(r.counts[:, 0:1, :], (None, 0), ttnn.int32)
-        self.tt_region = self._shard(r.region[:, 0:1, :], (None, 0), ttnn.int32)
+        self.tt_offs = self._shard(r.offs, self._group_dims, ttnn.int32)
+        self.tt_counts = self._shard(r.counts[:, 0:1, :], self._group_dims, ttnn.int32)
+        self.tt_region = self._shard(r.region[:, 0:1, :], self._group_dims, ttnn.int32)
 
     def _shard(self, t, dims, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
         return ttnn.from_torch(
@@ -276,7 +286,7 @@ class _Fixture:
     def tt_payload(self, layout):
         """The payload on device in `layout`, uploaded once. A TILE upload runs a tilize program."""
         if layout not in self._tt_payload:
-            self._tt_payload[layout] = self._shard(self.payload, (0, 1), ttnn.bfloat16, layout=layout)
+            self._tt_payload[layout] = self._shard(self.payload, self._hg_dims, ttnn.bfloat16, layout=layout)
         return self._tt_payload[layout]
 
     def run(self, cluster_axis, num_links, layout=ttnn.ROW_MAJOR_LAYOUT):
@@ -309,12 +319,12 @@ class _Fixture:
         initialise its output.
         """
         r = self.routing
-        got_all = ttnn.get_device_tensors(output)  # row-major over the (H, G) mesh
+        got_all = ttnn.get_device_tensors(output)  # row-major over the mesh
         assert len(got_all) == self.H * self.G, f"{label}: {len(got_all)} device tensors for {self.H * self.G} chips"
         checked = 0
         bad = 0
         for dev in range(self.H * self.G):
-            s, g = dev // self.G, dev % self.G
+            s, g = (dev // self.G, dev % self.G) if self.sp_axis == 0 else (dev % self.H, dev // self.H)
             mask = self.kept[g, s]
             if not mask.any():
                 continue
@@ -348,10 +358,13 @@ class _Fixture:
 @pytest.mark.parametrize(
     "input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=lambda ly: "tile" if ly == ttnn.TILE_LAYOUT else "rm"
 )
+# sp1 runs the ring along mesh axis 1, as in the 4x4 stages.
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp0", "sp1"])
 @pytest.mark.timeout(900)
-def test_combine_fabric2d(mesh_device, device_params, num_links, routing, input_layout):
-    cfg = extract_mesh_config(mesh_device)
-    assert cfg.sp_axis == 0, "this op runs on the dispatch axis, which extract_mesh_config puts at 0"
+def test_combine_fabric2d(mesh_device, device_params, num_links, routing, input_layout, sp_axis):
+    if mesh_device.shape[sp_axis] == 1:
+        pytest.skip(f"mesh {tuple(mesh_device.shape)} has no extent along sp_axis={sp_axis}")
+    cfg = extract_mesh_config(mesh_device, sp_axis)
     H, G = cfg.dispatch_group_size, cfg.num_dispatch_groups
     if routing == "production" and G == 1:
         pytest.skip("production routing sends most picks to other dispatch groups; this mesh has only one")
@@ -364,9 +377,10 @@ def test_combine_fabric2d(mesh_device, device_params, num_links, routing, input_
         seed=7,
         routing=routing,
         payload_shift=int(input_layout == ttnn.TILE_LAYOUT),
+        sp_axis=sp_axis,
     )
     logger.info(
-        f"combine_fabric2d: mesh={tuple(mesh_device.shape)} H={H} G={G} experts_per_chip={fx.experts_per_chip} "
+        f"combine_fabric2d: mesh={tuple(mesh_device.shape)} sp_axis={sp_axis} H={H} G={G} experts_per_chip={fx.experts_per_chip} "
         f"seq={fx.seq_len_per_chip} topk={fx.topk} capacity={fx.capacity}"
     )
 
