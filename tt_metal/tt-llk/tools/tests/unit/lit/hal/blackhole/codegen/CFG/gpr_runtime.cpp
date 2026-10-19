@@ -108,10 +108,12 @@ extern "C" void write_runtime_gpr_out_of_range()
 extern "C" void write_runtime_gpr_misaligned()
 {
     cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr(5)));
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr(6)));
 }
 
 // ASSERT-LABEL: <write_runtime_gpr_misaligned>:
 // ASSERT-NOT: sw
+// ASSERT: ebreak
 // ASSERT: ebreak
 // ASSERT: ret
 
