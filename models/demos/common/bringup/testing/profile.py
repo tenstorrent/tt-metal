@@ -30,8 +30,8 @@ from models.demos.common.bringup.testing import accuracy_guard, cpu_bridge, prof
 from models.demos.common.bringup.testing.harness import begin_chunk
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
 
-WALL_RUNS = 12  # F114: timed runs of the clean wall measurement
-WALL_WARM = 4  # F114b: the first runs still meet new buffer-address combinations (program-cache misses): not counted
+WALL_RUNS = 20  # F114: timed runs of the clean wall measurement
+WALL_WARM = 10  # F114b: warm-up runs not counted (new buffer-address combinations miss the program cache; ~10 here)
 
 
 def profile_rung(s) -> str:

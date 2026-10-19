@@ -339,6 +339,25 @@ def command_violations(commands: list[str], repo: Path) -> list[str]:
     return sorted(set(out))
 
 
+# F120: files that cannot change what a run measures (the orchestration, its docs and selftests, any markdown): a commit
+# to them between an A/B report and its accept keeps the report's measurements valid
+NO_MEASURE = tuple(
+    f"models/demos/common/bringup/{p}"
+    for p in (
+        "orchestrator.py",
+        "watch.py",
+        "overseer.py",
+        "agents/*",
+        "briefs/*",
+        "skill/*",
+        "selftest/*",
+        "dev/*",
+        "dashboard/*",
+        "knowledge/*",
+    )
+) + ("*.md",)
+
+
 def ab_switch_text(task: dict) -> str:
     """A perf pick's switch as the brief names it: tasks.yaml ab.change (the change) and ab.env (the old path)."""
     ab = task.get("ab") or {}
@@ -1174,7 +1193,7 @@ class Orchestrator:
         def git(*a):
             return subprocess.run(["git", *a], cwd=self.spec.repo, capture_output=True, text=True).stdout
 
-        skip = ("*state.json", "*/results/*", "*BREADCRUMBS.md", "*supervision.md", "*/bringup/tasks.yaml")
+        skip = ("*state.json", "*/results/*", "*BREADCRUMBS.md", "*supervision.md", "*/bringup/tasks.yaml") + NO_MEASURE
         files = [
             ln
             for ln in git("ls-tree", "-r", "HEAD").splitlines()
@@ -1514,6 +1533,17 @@ class Orchestrator:
             return None
         kept = json.loads(stamp_file.read_text())
         code = self.ab_code_key(task)
+        tests_side = self.gate_tests_side(task)  # F120: the side whose switch values the gate's frozen tests run at
+        if tests_side == "old" and kept.get("version") == 2:
+            old_f = self.run_dir / "ab" / tid / "old" / "side.json"
+            old = json.loads(old_f.read_text()) if old_f.exists() else {}
+            if old.get("version") != 2:
+                return None
+            for n, it in old.get("items", {}).items():
+                if it.get("kind") == "test":
+                    kept.setdefault("items", {})[n] = dict(it, side="old")
+        elif tests_side is None or (tests_side == "old" and kept.get("version") != 2):
+            return None
         if kept.get("version") == 2:  # F116: per-run stamps; every run of the report's 'on' side, on this code
             items = kept.get("items", {})
             want = [n for n, _, _, _ in self.ab_items(task)]
@@ -1542,11 +1572,30 @@ class Orchestrator:
             if d.is_dir() and (d.name in kept["tests"] or d.name in kept["ladder"] or d.name == "profile")
         ]
         ladder = set(kept.get("ladder", {}))
+        tests_from = side.parent / ("old" if tests_side == "old" else "new")
+        names = sorted(set(names) | ({n for n in kept["tests"]} if tests_side == "old" else set()))
         for name in sorted(names, key=lambda n: (n in ladder, n == "profile")):  # tests, then the gate's rung, profile
             if name in ladder and name != rung:
                 continue
-            metrics.update({k: v["value"] for k, v in M.load(tid, side / name).items()})
-        return {"metrics": metrics, "source": str(side)}
+            src = tests_from if name in kept["tests"] else side
+            metrics.update({k: v["value"] for k, v in M.load(tid, src / name).items()})
+        how = f"frozen tests from {tests_from}, ladder and profile from {side}" if tests_side == "old" else str(side)
+        return {"metrics": metrics, "source": how}
+
+    def gate_tests_side(self, task: dict) -> str | None:
+        """F120: the gate's frozen tests run at the model's max precision, and after the accept the switch's 'on' values
+        are the defaults: per switch the max-precision value if it has one, else the 'on' value. 'old' or 'new' when
+        that is exactly one side's switch, else None (no side measured the gate's tests)."""
+        ab = task.get("ab") or {}
+        off, _ = model_precision.switch_env(self.spec, ab.get("env") or {})
+        on, _ = model_precision.switch_env(self.spec, ab.get("change") or {})
+        mp = dict(model_precision.overrides(self.spec)) if self.spec.get("tests.component_max_precision") else {}
+        want = {k: mp.get(k, on.get(k)) for k in set(off) | set(on)}
+        if want == on:
+            return "new"
+        if want == off:
+            return "old"
+        return None
 
     def perf_reject(self, task: dict, rec: dict) -> int:
         """The owner declines the change: the agent's files under the task's paths go back to HEAD, the task is

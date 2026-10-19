@@ -457,3 +457,35 @@ def test_a_code_edit_after_measure_measures_again(mk, sandbox):
     assert o.run() == HUMAN, mk.lines  # the agent's last edit differs from what was measured
     d = o.run_dir / "ab" / "P.1"
     assert [c["dir"].relative_to(d).as_posix() for c in mk.calls].count("new/test_c_x") == 2
+
+
+def test_the_accept_takes_the_frozen_tests_from_the_side_that_ran_them_at_max_precision(mk, sandbox, monkeypatch):
+    """F120: the gate's frozen tests run at max precision. When max precision is the 'off' value of every switch, the
+    off side measured exactly them: the accept reuses them from there (the on side's test failed by design), and the
+    ladder and profile from the on side. A framework doc commit in between does not void the measurement."""
+    from models.demos.common.bringup.testing import model_precision
+
+    monkeypatch.setattr(model_precision, "overrides", lambda spec: {"TOY_FIDELITY": "hifi4"})
+    o = mk([pick()], CHANGE)  # the toy change fails its component test on the on side (rc 1)
+    assert o.run() == HUMAN, mk.lines
+    n = len(mk.calls)
+    doc = sandbox.repo / "models/demos/common/bringup/agents/x.md"
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    doc.write_text("framework doc\n")
+    sandbox.git("add", str(doc))
+    sandbox.git("commit", "-q", "-m", "a framework doc commit in between")
+    assert decide(o, "P.1", "accept") == 0
+    assert o.run() == DONE, mk.lines
+    assert len(mk.calls) == n  # nothing measured again
+    assert any("frozen tests from" in ln and "/old" in ln for ln in mk.lines)
+    got = M.load("P.1", o.led.results_dir)
+    assert got["device_ms_experts"]["value"] == 8.0  # the on side's profile
+
+
+def test_no_side_ran_the_gate_tests_then_the_gate_runs(mk, monkeypatch):
+    from models.demos.common.bringup.testing import model_precision
+
+    monkeypatch.setattr(model_precision, "overrides", lambda spec: {"TOY_FIDELITY": "hifi3"})  # neither side's value
+    o = mk([pick()], CHANGE)
+    assert o.run() == HUMAN
+    assert o.gate_tests_side(o.led.task("P.1")) is None
