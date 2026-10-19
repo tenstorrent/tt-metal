@@ -586,7 +586,8 @@ FORCE_INLINE void issue_go_signal_mcast_noc_write() {
 // follows so a repeat of the same group is seen as a new go. The wire holds the last released value
 // until the next release. DM0 receives the go through a machine-external interrupt before writing
 // the worker mailbox signal byte. All other go commands use the NOC path.
-FORCE_INLINE void wait_for_workers_and_send_go_signal(
+// Returns true if a NOC multicast was issued, whose source is in the current CB page.
+FORCE_INLINE bool wait_for_workers_and_send_go_signal(
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage,
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached,
     uint32_t go_signal_value,
@@ -610,12 +611,15 @@ FORCE_INLINE void wait_for_workers_and_send_go_signal(
         ASSERT((go_signal_value >> 24) != RUN_MSG_GO);
         ASSERT((tracked_sub_device_mask & (1U << multicast_go_offset)) == 0);
         issue_go_signal_mcast_noc_write();
+        return true;
     } else {
         DPRINT("DISPATCH_S: go NOC\n");
     }
+    return false;
 }
 #else
-FORCE_INLINE void wait_for_workers_and_send_go_signal(
+// Returns true if a NOC multicast was issued, whose source is in the current CB page.
+FORCE_INLINE bool wait_for_workers_and_send_go_signal(
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage,
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached,
     uint32_t go_signal_value,
@@ -642,9 +646,10 @@ FORCE_INLINE void wait_for_workers_and_send_go_signal(
         wait_for_workers(wait_count, wait_stream);
 #endif
         issue_go_signal_mcast_noc_write();
-    } else {
-        wait_for_workers(wait_count, wait_stream);
+        return true;
     }
+    wait_for_workers(wait_count, wait_stream);
+    return false;
 }
 #endif
 
@@ -686,7 +691,7 @@ void process_go_signal_mcast_cmd() {
     uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
     uint32_t wait_stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
 
-    wait_for_workers_and_send_go_signal(
+    const bool go_signal_noc_write_issued = wait_for_workers_and_send_go_signal(
         aligned_go_signal_storage,
         aligned_go_signal_storage_uncached,
         go_signal_value,
@@ -718,6 +723,12 @@ void process_go_signal_mcast_cmd() {
 
     collect_worker_completions();
     update_worker_completion_count_on_dispatch_d();
+    if (go_signal_noc_write_issued) {
+        // The multicast reads its source from this CB page, which is returned to the prefetcher once this command
+        // completes. Wait for the NIU to read it. NIU_MST_NONPOSTED_WR_REQ_SENT can advance before the source is
+        // read, but the per-trid outgoing count does not drop until after. Dispatch writes use transaction ID 0.
+        noc_async_write_flushed_with_trid(0, noc_index);
+    }
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
