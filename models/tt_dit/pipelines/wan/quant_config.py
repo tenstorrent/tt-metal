@@ -42,6 +42,9 @@ class SDPAQuantConfig:
     input_dtype: ttnn.DataType | None = None  # None = no cast
     math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     fp32_dest_acc: bool = False
+    # Fidelity of the QK^T and PV matmuls alone (`SDPAProgramConfig.matmul_math_fidelity`); max, exp
+    # and rescale keep `math_fidelity`. None = the compute config's fidelity for everything.
+    matmul_math_fidelity: ttnn.MathFidelity | None = None
 
 
 @dataclass
@@ -320,7 +323,22 @@ def _all_bf8_lofi_act8_out8_ff8() -> QuantConfig:
     return base
 
 
+def _all_bf8_lofi_act8_out8_ff8_sdpamm() -> QuantConfig:
+    """The 5B default (`all_bf8_lofi_act8_out8_ff8`) with the ring SDPA's QK^T and PV matmuls at LoFi.
+
+    Uses main's per-matmul knob (a819297d50b): max, exp and rescale stay HiFi2 on the streaming
+    path, unlike `all_bf8_lofi_sdpa_lofi`, which put the whole SDPA compute config at LoFi and hung
+    in sprint 5. Q / K / V are bfloat8_b as in the default. Ring SDPA is ~30 % of a 720p step
+    (S05 Tracy). Measured option (S06, step8): gate it in the 20 s PCC test under
+    `WAN5B_WATCHDOG_SECS` before any longer run.
+    """
+    base = _all_bf8_lofi_act8_out8_ff8()
+    base.ring_sdpa = replace(base.ring_sdpa, matmul_math_fidelity=ttnn.MathFidelity.LoFi)
+    return base
+
+
 QuantConfig.all_bf8_lofi_act8 = staticmethod(_all_bf8_lofi_act8)
+QuantConfig.all_bf8_lofi_act8_out8_ff8_sdpamm = staticmethod(_all_bf8_lofi_act8_out8_ff8_sdpamm)
 QuantConfig.all_bf8_lofi_act8_out8_ff8 = staticmethod(_all_bf8_lofi_act8_out8_ff8)
 QuantConfig.all_bf8_lofi_act8_mod16_ff8 = staticmethod(_all_bf8_lofi_act8_mod16_ff8)
 QuantConfig.all_bf8_lofi_act8_out8 = staticmethod(_all_bf8_lofi_act8_out8)
@@ -454,6 +472,8 @@ def apply_quant_config(model, config: QuantConfig) -> None:
 
         # Ring SDPA config (self-attention only)
         block.attn1.sdpa_compute_kernel_config = _make_sdpa_compute_config(arch, config.ring_sdpa)
+        if config.ring_sdpa.matmul_math_fidelity is not None:
+            block.attn1.ring_sdpa_program_config.matmul_math_fidelity = config.ring_sdpa.matmul_math_fidelity
         if config.ring_sdpa.input_dtype is not None:
             block.attn1._sdpa_input_dtype = config.ring_sdpa.input_dtype
             # Materialise the typed empty joint input now, outside any trace capture.
@@ -496,7 +516,8 @@ def apply_quant_config(model, config: QuantConfig) -> None:
     )
     logger.info(
         f"  Ring SDPA: input_dtype={config.ring_sdpa.input_dtype}, "
-        f"fidelity={config.ring_sdpa.math_fidelity}, fp32_acc={config.ring_sdpa.fp32_dest_acc}"
+        f"fidelity={config.ring_sdpa.math_fidelity}, matmul_fidelity={config.ring_sdpa.matmul_math_fidelity}, "
+        f"fp32_acc={config.ring_sdpa.fp32_dest_acc}"
     )
 
 
@@ -582,6 +603,7 @@ def quant_config_from_env(var: str = QUANT_CONFIG_ENV) -> tuple[str, QuantConfig
             "all_bf8_lofi_act8_mod16",
             "all_bf8_lofi_act8_mod16_ff8",
             "all_bf8_lofi_act8_out8_ff8",
+            "all_bf8_lofi_act8_out8_ff8_sdpamm",
         ]
         msg = f"{var}={name!r} is not a QuantConfig preset; expected one of {presets}"
         raise ValueError(msg)

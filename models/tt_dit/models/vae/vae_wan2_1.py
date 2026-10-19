@@ -136,7 +136,9 @@ class WanAttentionBlock(Module):
             compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=32,
             k_chunk_size=128,
-            exp_approx_mode=False,  # NOTE: False is more correct
+            # NOTE: False is more correct. Before 90272bb3ffe this fp32-accumulate SDPA ran the
+            # approximate exp regardless; WAN5B_VAE_SDPA_EXP_APPROX=1 restores that (measurement knob).
+            exp_approx_mode=os.environ.get("WAN5B_VAE_SDPA_EXP_APPROX") == "1",
         )
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),

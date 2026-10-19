@@ -33,14 +33,27 @@ def ring_sdpa_env_knobs() -> dict:
     WAN5B_SDPA_EXP_APPROX=1   softmax exp on the SFPU approximation (program config exp_approx_mode)
     WAN5B_SDPA_MATH_APPROX=1  math_approx_mode in the SDPA compute config
     WAN5B_SDPA_CHUNKS=q,k     ring SDPA chunk sizes, overriding the table and the per-variant overrides
+    WAN5B_SDPA_MM_FIDELITY=lofi|hifi2|hifi4  fidelity of the QK^T / PV matmuls only (program config
+                              matmul_math_fidelity; needs the streaming path, fp32_dest_acc_en=False)
+    WAN5B_CROSS_SDPA_CONCAT_HEADS=1  cross-attention SDPA writes the concatenated-heads layout itself
     Unset means the production values; nothing in the default path changes. Test plumbing only.
     """
     chunks = os.environ.get("WAN5B_SDPA_CHUNKS")
+    mm_fidelity = os.environ.get("WAN5B_SDPA_MM_FIDELITY", "").strip().lower()
     return {
         "exp_approx_mode": os.environ.get("WAN5B_SDPA_EXP_APPROX") == "1",
         "math_approx_mode": os.environ.get("WAN5B_SDPA_MATH_APPROX") == "1",
         "chunks": tuple(int(v) for v in chunks.split(",")) if chunks else None,
+        "matmul_math_fidelity": _SDPA_MM_FIDELITIES[mm_fidelity] if mm_fidelity else None,
+        "cross_concat_heads": os.environ.get("WAN5B_CROSS_SDPA_CONCAT_HEADS") == "1",
     }
+
+
+_SDPA_MM_FIDELITIES = {
+    "lofi": ttnn.MathFidelity.LoFi,
+    "hifi2": ttnn.MathFidelity.HiFi2,
+    "hifi4": ttnn.MathFidelity.HiFi4,
+}
 
 
 class WanAttention(Module):
@@ -203,7 +216,9 @@ class WanAttention(Module):
             q_chunk_size=ring_sdpa_chunk_size[0],
             k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=knobs["exp_approx_mode"],  # NOTE: False (default) is more correct
+            matmul_math_fidelity=knobs["matmul_math_fidelity"],
         )
+        self.cross_sdpa_concat_heads = knobs["cross_concat_heads"]
 
         self.use_exp_ring_sdpa = (
             self.parallel_config.tensor_parallel.factor == 4 and self.parallel_config.sequence_parallel.factor == 32
@@ -628,10 +643,15 @@ class WanAttention(Module):
                 attn_mask=cross_attn_mask,
                 program_config=self.sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
+                output_concat_heads=self.cross_sdpa_concat_heads,
             )
 
-        spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
-        spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
+        if self.is_self or not self.cross_sdpa_concat_heads:
+            spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
+            spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
+        else:
+            # [B, 1, N, H*E] straight from the SDPA writer; B == 1, so this is the [1, B, N, D] above.
+            spatial_1BND = spatial_BHNE
 
         if use_nonfused_agmm:
             # Gather spatial on TP axis before projection
