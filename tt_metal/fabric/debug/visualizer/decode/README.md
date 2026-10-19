@@ -50,6 +50,7 @@ with it. A fabric change falls into one of three cases:
 | [`routes.py`](routes.py) | The route rules. Reads 1D route words, 2D route maps, the routing tables, multicast trees and scatter writes from raw bytes, the way the fabric's routers and route setters do. In depth: [ROUTES.md](ROUTES.md) |
 | [`tests/test_routes.py`](tests/test_routes.py) | Hand-written cases for each rule |
 | [`tests/check_manifest_routes.py`](tests/check_manifest_routes.py) | Checks that `routes.py` can read the manifests CI writes |
+| [`tests/test_check_manifest_routes.py`](tests/test_check_manifest_routes.py) | Cases for the check's `--expect-z-peers` |
 
 ## Running the tests
 
@@ -63,7 +64,7 @@ The tests import `tt_metal.fabric...`, so `-t .` makes the repo root the top lev
 
 `tests/scripts/run_fabric_manifest_tests.sh` runs the same command, then runs `tests/check_manifest_routes.py` on every manifest it writes.
 The check runs `get_encodings_from_manifest`, then `get_mesh_view` on each mesh, and fails, naming the manifest and the
-key, when a fabric change renames or removes a key or name `routes.py` reads, changes a value's type, or adds a value it doesn't know. To run it on other manifests, pass their files or directories:
+key, when a fabric change renames or removes a key or name `routes.py` reads, changes a value's type, or adds a value it doesn't know. The script then checks the express mock's manifests again with `--expect-z-peers`, which fails a manifest in which `get_mesh_view` finds no Z peer. To run it on other manifests, pass their files or directories:
 
 ```bash
 python3 -m tt_metal.fabric.debug.visualizer.decode.tests.check_manifest_routes generated/fabric
