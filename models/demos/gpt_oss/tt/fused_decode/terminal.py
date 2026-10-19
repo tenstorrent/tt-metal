@@ -462,6 +462,7 @@ class _ExchangeCall:
                 if hops > 0:
                     dst = ttnn.MeshCoordinate(coord[0], (coord[1] + step) % ex.ring)
                     fabric_args += ttnn.setup_fabric_connection(
+                        mesh_device=mesh,
                         src_fabric_node_id=src,
                         dst_fabric_node_id=mesh.get_fabric_node_id(dst),
                         link_idx=0,

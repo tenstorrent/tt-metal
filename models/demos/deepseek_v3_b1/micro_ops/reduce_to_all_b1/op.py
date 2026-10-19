@@ -468,6 +468,7 @@ class ReduceToAllB1:
                     link_idx = link_info["link_idx"]
 
                     fwd_conn_args = ttnn.setup_fabric_connection(
+                        mesh_device,
                         fabric_node_id,
                         fwd_fabric_node_id,
                         link_idx,
@@ -477,6 +478,7 @@ class ReduceToAllB1:
                     program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(fwd_conn_args)
 
                     r3_conn_args = ttnn.setup_fabric_connection(
+                        mesh_device,
                         fabric_node_id,
                         r3_fabric_node_id,
                         link_idx,
@@ -486,6 +488,7 @@ class ReduceToAllB1:
                     program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(r3_conn_args)
 
                     bwd_conn_args = ttnn.setup_fabric_connection(
+                        mesh_device,
                         fabric_node_id,
                         bwd_fabric_node_id,
                         link_idx,
