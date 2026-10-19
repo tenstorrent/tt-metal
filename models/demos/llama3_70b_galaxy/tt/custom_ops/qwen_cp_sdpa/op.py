@@ -35,9 +35,15 @@ LOCAL_STOCK_KERNELS = {
     "writer": f"{KERNEL_ROOT}/stock_writer.cpp",
     "compute": f"{KERNEL_ROOT}/stock_compute.cpp",
 }
+# tt-metal resolves kernel_source paths against its root dir, but compiler_include_paths only against the current
+# working directory (tt_metal/impl/kernels/kernel.cpp, resolve_compiler_include_dir), and a vLLM server does not run
+# from the repo root. Anchor the include dirs at the same root as the kernel sources: TT_METAL_HOME, else this checkout.
+_TT_METAL_ROOT = os.environ.get("TT_METAL_HOME") or os.path.abspath(
+    os.path.join(os.path.dirname(__file__), *[".."] * 6)
+)
 # The local copies include the unchanged stock headers (dataflow_common.hpp, compute_common.hpp, ...) from here.
-DATAFLOW_INCLUDES = [f"{STOCK_ROOT}/dataflow"]
-COMPUTE_INCLUDES = [f"{STOCK_ROOT}/compute"]
+DATAFLOW_INCLUDES = [os.path.join(_TT_METAL_ROOT, STOCK_ROOT, "dataflow")]
+COMPUTE_INCLUDES = [os.path.join(_TT_METAL_ROOT, STOCK_ROOT, "compute")]
 
 TILE = 32
 INACTIVE = 0xFFFFFFFF
