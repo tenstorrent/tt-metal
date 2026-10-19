@@ -3,9 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "permute.hpp"
+#include "permute_force.hpp"
 
+#include <algorithm>
+#include <numeric>
+
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
+#include "ttnn/operations/data_movement/permute/codegen/permute_codegen_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/codegen/permute_codegen_supported.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
 #include <tt-metalium/hal.hpp>
@@ -203,15 +210,10 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttsl::SmallVector<uint32_t>& di
     return true;
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+namespace {
 
-namespace ttnn {
-
-ttnn::Tensor permute(
-    const ttnn::Tensor& input_tensor,
-    const ttsl::SmallVector<int64_t>& dims,
-    const std::optional<MemoryConfig>& memory_config,
-    float pad_value) {
+ttsl::SmallVector<uint32_t> normalize_permute_dims(
+    const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int64_t>& dims) {
     const auto input_rank = input_tensor.logical_shape().rank();
     TT_FATAL(
         input_rank == dims.size(),
@@ -219,10 +221,35 @@ ttnn::Tensor permute(
     TT_FATAL(is_device_tensor(input_tensor), "Tensor must already be on device");
 
     ttsl::SmallVector<uint32_t> normalized_dims(dims.size());
-    std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {
+    std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [&input_tensor](std::int64_t idx) {
         return input_tensor.logical_shape().get_normalized_index(idx);
     });
-    if (operations::data_movement::detail::is_permute_nop(input_tensor, normalized_dims)) {
+    return normalized_dims;
+}
+
+ttnn::Tensor permute_via_codegen(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<uint32_t>& normalized_dims,
+    const MemoryConfig& mem_config) {
+    ttnn::prim::PermuteCodegenParams params;
+    TT_FATAL(
+        normalized_dims.size() <= ttnn::prim::kPermuteCodegenMaxDims,
+        "Permute codegen supports rank up to {}, got {}",
+        ttnn::prim::kPermuteCodegenMaxDims,
+        normalized_dims.size());
+    std::copy(normalized_dims.cbegin(), normalized_dims.cend(), params.dims.begin());
+    params.output_mem_config = mem_config;
+    return ttnn::prim::permute_codegen(input_tensor, params);
+}
+
+ttnn::Tensor permute_native(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<int64_t>& dims,
+    const std::optional<MemoryConfig>& memory_config,
+    float pad_value) {
+    const auto input_rank = input_tensor.logical_shape().rank();
+    const auto normalized_dims = normalize_permute_dims(input_tensor, dims);
+    if (is_permute_nop(input_tensor, normalized_dims)) {
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     }
 
@@ -251,7 +278,7 @@ ttnn::Tensor permute(
             "Shard page size must be aligned to {}B for L1 Tensor",
             l1_alignment);
     }
-    auto output_tensor = operations::data_movement::detail::permute_launch(itensor, iorder, memory_config, pad_value);
+    auto output_tensor = permute_launch(itensor, iorder, memory_config, pad_value);
     output_tensor = ttnn::to_layout(output_tensor, input_layout);
 
     if (input_rank < 4) {
@@ -259,6 +286,49 @@ ttnn::Tensor permute(
     }
 
     return output_tensor;
+}
+
+}  // namespace
+
+ttnn::Tensor permute_force_native(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<int64_t>& dims,
+    const std::optional<MemoryConfig>& memory_config) {
+    return permute_native(input_tensor, dims, memory_config, 0.0f);
+}
+
+ttnn::Tensor permute_force_codegen(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<int64_t>& dims,
+    const std::optional<MemoryConfig>& memory_config) {
+    const auto normalized_dims = normalize_permute_dims(input_tensor, dims);
+    const MemoryConfig output_mem_config = memory_config.value_or(input_tensor.memory_config());
+    TT_FATAL(
+        permute_codegen::supported_by_codegen(input_tensor, normalized_dims, output_mem_config),
+        "permute_force_codegen: case is outside the codegen support scope; this entry never falls back");
+    return permute_via_codegen(input_tensor, normalized_dims, output_mem_config);
+}
+
+}  // namespace ttnn::operations::data_movement::detail
+
+namespace ttnn {
+
+ttnn::Tensor permute(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<int64_t>& dims,
+    const std::optional<MemoryConfig>& memory_config,
+    float pad_value) {
+    namespace detail = operations::data_movement::detail;
+    namespace permute_codegen = operations::data_movement::permute_codegen;
+
+    const auto normalized_dims = detail::normalize_permute_dims(input_tensor, dims);
+    const MemoryConfig output_mem_config = memory_config.value_or(input_tensor.memory_config());
+    if (operations::data_movement::codegen_supported_on_arch(input_tensor) &&
+        permute_codegen::supported_by_codegen(input_tensor, normalized_dims, output_mem_config) &&
+        !permute_codegen::is_demoted(input_tensor, normalized_dims)) {
+        return detail::permute_via_codegen(input_tensor, normalized_dims, output_mem_config);
+    }
+    return detail::permute_native(input_tensor, dims, memory_config, pad_value);
 }
 
 ttnn::Tensor permute(const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int64_t>& dims, float pad_value) {

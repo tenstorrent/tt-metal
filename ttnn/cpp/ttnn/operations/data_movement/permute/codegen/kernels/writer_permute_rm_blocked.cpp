@@ -2,24 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Writer for the single-pass blocked-generic RM permute (W-changing class).
-//
-// Consumes the compute kernel's transposed [w_block_size x x_block_size] blocks
-// from cb_2 and scatters each of the w_block_size output rows (x_read_size bytes)
-// to its permuted output page. The compute transposed input axes x_dim <-> W, so
-// input_shape and perm are swapped on those two axes here before addressing.
-//
-// Named CT: N, output_page_size(=x_block_size*elem), num_rows, X, x_dim,
-//           x_blocks, w_blocks, x_block_size, w_block_size, W, element_size,
-//           out_page_size(=aligned output row bytes)
-// Positional CT: TensorAccessorArgs (index 0)
-// RT: [dst_addr, start_block, end_block, input_shape[N], perm[N], dest_strides[N]]
+// Scatters the transposed [w_block_size x x_block_size] blocks from the compute kernel to their output
+// rows. Compute swapped x_dim and W, so the shape and permutation are swapped on them before addressing.
+// Common RT: dst_addr, input_shape[N], perm[N], dest_strides[N]. RT: start_block, end_block.
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "rm_shard_split.h"
-#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("N");
@@ -34,24 +23,22 @@ void kernel_main() {
     constexpr uint32_t num_rows = get_named_compile_time_arg_val("num_rows");
     constexpr uint32_t element_size = get_named_compile_time_arg_val("element_size");
     constexpr uint32_t out_page_size = get_named_compile_time_arg_val("out_page_size");
-    constexpr bool reference_io = get_named_compile_time_arg_val("reference_io") != 0;
     constexpr auto dst_args = TensorAccessorArgs<0>();
-    constexpr uint32_t DST_PAGES_PER_ROW = get_compile_time_arg_val(dst_args.next_compile_time_args_offset());
-    constexpr uint32_t DST_LOGICAL_PAGE_SIZE = get_compile_time_arg_val(dst_args.next_compile_time_args_offset() + 1);
 
     constexpr uint32_t cb_id = 2;  // compute output CB (c_2)
     constexpr uint32_t w_dim = N - 1;
+    constexpr uint32_t h_dim = N - 2;
     constexpr uint32_t non_x_rows = num_rows / X;
 
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_block = get_arg_val<uint32_t>(1);
-    const uint32_t end_block = get_arg_val<uint32_t>(2);
+    const uint32_t dst_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t start_block = get_arg_val<uint32_t>(0);
+    const uint32_t end_block = get_arg_val<uint32_t>(1);
 
     uint32_t input_shape[N], perm[N], dest_strides[N];
     for (uint32_t i = 0; i < N; i++) {
-        input_shape[i] = get_arg_val<uint32_t>(3 + i);
-        perm[i] = get_arg_val<uint32_t>(3 + N + i);
-        dest_strides[i] = get_arg_val<uint32_t>(3 + 2 * N + i);
+        input_shape[i] = get_common_arg_val<uint32_t>(1 + i);
+        perm[i] = get_common_arg_val<uint32_t>(1 + N + i);
+        dest_strides[i] = get_common_arg_val<uint32_t>(1 + 2 * N + i);
     }
 
     // The compute kernel transposed x_dim <-> W. Reflect that in shape + perm.
@@ -77,7 +64,6 @@ void kernel_main() {
     }
 
     const auto s = TensorAccessor(dst_args, dst_addr, out_page_size);
-    const auto s_reference = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
     CircularBuffer cb_out(cb_id);
@@ -102,7 +88,7 @@ void kernel_main() {
         const uint32_t x_offset = x_start * element_size;
 
         uint32_t remainder = xw_block;
-        for (int32_t d = (int32_t)N - 2; d >= 0; --d) {
+        for (int32_t d = (int32_t)h_dim; d >= 0; --d) {
             if (d == (int32_t)x_dim) {
                 continue;
             }
@@ -122,7 +108,6 @@ void kernel_main() {
         }
 
         cb_out.wait_front(w_block_size);
-        uint32_t cb_read_addr = cb_out.get_read_ptr();
 
         for (uint32_t w = w_start; w < w_end; ++w) {
             uint32_t dest_linear_idx = dest_linear_idx_base;
@@ -130,15 +115,15 @@ void kernel_main() {
                 dest_linear_idx += w * dest_strides[x_dim_in_dest];
             }
             uint32_t l1_offset = (w - w_start) * output_page_size;
-            if constexpr (reference_io) {
-                tt::data_movement::common::noc_async_write_sharded(
-                    noc, cb_read_addr + l1_offset, s_reference, dest_linear_idx, x_offset, x_read_size_bytes);
-            } else {
-                ttdm::noc_write_row_split<DST_PAGES_PER_ROW, DST_LOGICAL_PAGE_SIZE>(
-                    noc, cb_out, l1_offset, s, dest_linear_idx, x_offset, x_read_size_bytes);
-            }
+            noc.async_write(
+                cb_out,
+                s,
+                x_read_size_bytes,
+                {.offset_bytes = l1_offset},
+                {.page_id = dest_linear_idx, .offset_bytes = x_offset});
         }
-        noc.async_write_barrier();
+        noc.async_writes_flushed();
         cb_out.pop_front(w_block_size);
     }
+    noc.async_write_barrier();
 }

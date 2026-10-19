@@ -13,6 +13,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 
 #include "permute.hpp"
+#include "permute_force.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -51,6 +52,58 @@ void bind_permute(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::arg("dims"),
             nb::arg("pad_value") = 0.0f));
+
+    // Plain def rather than ttnn::bind_function: the latter would republish these as ttnn.*
+    // operations. They are meant to stay reachable only via this private module.
+    mod.def(
+        "permute_force_native",
+        &permute_force_native,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("dims"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs the native permute implementation unconditionally. Not part of the
+            ttnn API; use ttnn.permute, which selects an implementation on its own.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                dims (SmallVector): the permutation of the dimensions of the input tensor.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+        )doc");
+
+    mod.def(
+        "permute_force_codegen",
+        &permute_force_codegen,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("dims"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs the codegen permute implementation unconditionally, raising for a
+            case outside its support scope rather than falling back to native. Not part of the ttnn
+            API; use ttnn.permute, which selects an implementation on its own.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                dims (SmallVector): the permutation of the dimensions of the input tensor.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Raises:
+                RuntimeError: the codegen path does not support this case.
+        )doc");
 }
 
 }  // namespace ttnn::operations::data_movement::detail

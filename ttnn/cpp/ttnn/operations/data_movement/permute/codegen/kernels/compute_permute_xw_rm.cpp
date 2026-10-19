@@ -4,8 +4,7 @@
 
 // Compute for the single-pass blocked-generic RM permute (W-changing class).
 // Per 32x32 block: tilize x_block_size input rows -> transpose_tile -> pack_untilize
-// into w_block_size output rows. Ported from tt-metal
-// transpose_xw_rm_single_tile_size.cpp (byte-identical algorithm).
+// into w_block_size output rows.
 //
 // Named CT: x_block_size, w_block_size
 // RT: [num_blocks, 0, 0]
