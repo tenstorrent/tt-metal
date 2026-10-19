@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -376,12 +377,13 @@ public:
         D2DStreamConfig cfg,
         const D2DEndpointConfig& endpoints);
 
-    // Collective over `ctx` (default: world): every rank calls it with its inbound receiver
-    // (null if it has none). `root` gathers them and writes them to
-    // d2d_pipeline_descriptor_path(service_id). Returns that path on `root`, nullopt elsewhere.
+    // Collective over `ctx` (default: world): every rank calls it with the receivers it owns,
+    // one per pipeline stage it receives into (empty if none). `root` gathers them and writes
+    // them to d2d_pipeline_descriptor_path(service_id). Returns that path on `root`, nullopt
+    // elsewhere.
     static std::optional<std::string> export_pipeline_descriptor(
         const std::string& service_id,
-        const D2DStreamServiceReceiver* inbound,
+        const std::vector<const D2DStreamServiceReceiver*>& receivers,
         tt::tt_metal::distributed::multihost::Rank root = tt::tt_metal::distributed::multihost::Rank{0},
         std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> ctx = nullptr);
 

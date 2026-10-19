@@ -440,9 +440,12 @@ def _d2d_send_indices(
     _d2d_send(idx_out, staged, rank, meta, deallocate=staged is not indices, metadata_msg=metadata_msg)
 
 
-def export_d2d_pipeline_descriptor(d2d_in, rank: int, service_id: str, master_rank: int) -> None:
-    """Collective: the master writes every rank's D2D receiver to one file for the engine."""
-    path = ttnn.D2DStreamService.export_pipeline_descriptor(service_id, d2d_in, root=master_rank)
+def export_d2d_pipeline_descriptor(receivers, rank: int, service_id: str, master_rank: int) -> None:
+    """Collective: the master writes every rank's D2D receivers to one file for the engine.
+
+    `receivers` lists this rank's receivers, one per pipeline stage it receives into.
+    """
+    path = ttnn.D2DStreamService.export_pipeline_descriptor(service_id, receivers, root=master_rank)
     if path is not None:
         logger.info(f"[pp rank {rank}] [d2d] pipeline descriptor service_id={service_id!r} -> {path}")
 
@@ -1250,8 +1253,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     ack_shm_name = scheduler_shm_name(service_id)
     master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
-    if num_ranks > 1 and HYBRID_PAGE_POOL_V2:
-        export_d2d_pipeline_descriptor(d2d_in, rank, service_id, master_rank)
+    if HYBRID_PAGE_POOL_V2:
+        # Published even on a single rank: the engine reads this host's stages from the file.
+        receivers = [d2d_in] if d2d_in is not None else []
+        export_d2d_pipeline_descriptor(receivers, rank, service_id, master_rank)
     router = None
     d2h_service = None
     layer_ack_service = None

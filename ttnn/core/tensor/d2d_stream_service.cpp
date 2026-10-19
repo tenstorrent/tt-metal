@@ -778,6 +778,9 @@ struct D2DStreamServiceReceiver::Impl {
     // Receiver endpoint of the MeshSocket pair (owns the data FIFO + config
     // buffer). std::optional because MeshSocket has no default ctor.
     std::optional<tt::tt_metal::distributed::MeshSocket> socket;
+    // Rank of the sender feeding this receiver. create_pair sets it to the local rank, since
+    // its socket keeps the default ranks.
+    int sender_rank = 0;
 
     // Chunk plan + worker-sync resources.
     uint32_t socket_page_size = 0;
@@ -1197,7 +1200,7 @@ bool D2DStreamServiceReceiver::is_stage_gate_open(
 
 D2DReceiverDescriptor D2DStreamServiceReceiver::describe() const {
     return D2DReceiverDescriptor{
-        .sender_rank = *impl_->socket->get_config().sender_rank,
+        .sender_rank = impl_->sender_rank,
         .metadata_size_bytes = impl_->metadata_size_bytes,
         .stage_gate = impl_->stage_gate.value_or(D2DStageGateConfig{}),
         .coords = CMAKE_UNIQUE_NAMESPACE::describe_receiver_coords(
@@ -1907,6 +1910,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
     CMAKE_UNIQUE_NAMESPACE::FabricLinkClaims link_claims;
     auto res = CMAKE_UNIQUE_NAMESPACE::build_receiver_side(
         mesh, socket, service_cores, backing, coords, common, cfg, sender_lanes, link_claims);
+    const int sender_rank = *socket.get_config().sender_rank;
 
     auto impl = std::make_unique<D2DStreamServiceReceiver::Impl>(D2DStreamServiceReceiver::Impl{
         .mesh_device = mesh,
@@ -1915,6 +1919,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
         .worker_cores = cfg.receiver_worker_cores,
         .service_cores = std::move(service_cores),
         .socket = std::move(socket),
+        .sender_rank = sender_rank,
         .socket_page_size = common.plan.socket_page_size,
         .num_socket_pages = common.plan.num_socket_pages,
         .pages_per_chunk = common.plan.pages_per_chunk,
@@ -2012,6 +2017,8 @@ D2DStreamService::create_pair(
         receiver_backing,
         cfg,
         CMAKE_UNIQUE_NAMESPACE::lane_counts(sender_handle->impl_->lane_links));
+    receiver_handle->impl_->sender_rank =
+        *tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->rank();
 
     // Launch the persistent kernels (non-blocking). Receiver first so it's parked
     // on its socket wait before the sender starts pushing pages.
@@ -2184,7 +2191,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
 
 std::optional<std::string> D2DStreamService::export_pipeline_descriptor(
     const std::string& service_id,
-    const D2DStreamServiceReceiver* inbound,
+    const std::vector<const D2DStreamServiceReceiver*>& receivers,
     tt::tt_metal::distributed::multihost::Rank root,
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> ctx) {
     using tt::tt_metal::distributed::multihost::Rank;
@@ -2203,8 +2210,9 @@ std::optional<std::string> D2DStreamService::export_pipeline_descriptor(
     std::array<char, 256> host{};
     gethostname(host.data(), host.size() - 1);
     D2DRankDescriptor local{.rank = rank, .host_name = host.data()};
-    if (inbound != nullptr) {
-        local.inbound = inbound->describe();
+    for (const auto* receiver : receivers) {
+        TT_FATAL(receiver != nullptr, "D2DStreamService::export_pipeline_descriptor: null receiver");
+        local.receivers.push_back(receiver->describe());
     }
 
     // Every rank sends its one-rank descriptor to the root, which merges them in rank order.

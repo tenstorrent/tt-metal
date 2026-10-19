@@ -34,7 +34,7 @@ table D2DReceiver {
 table D2DRank {
   rank: int32;
   host_name: string;
-  inbound: D2DReceiver;  // absent on a rank with no inbound socket
+  receivers: [D2DReceiver];  // one per pipeline stage this rank receives into
 }
 
 table D2DPipelineDescriptor {

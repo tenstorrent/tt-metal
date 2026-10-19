@@ -1301,8 +1301,12 @@ TEST_F(CrossProcessD2DFixture, ExportPipelineDescriptor) {
             D2DEndpointConfig{.sender_rank = Rank{rank}, .receiver_rank = Rank{rank + 1}, .distributed_context = ctx});
     }
 
+    std::vector<const D2DStreamServiceReceiver*> receivers;
+    if (inbound) {
+        receivers.push_back(inbound.get());
+    }
     const auto path =
-        D2DStreamService::export_pipeline_descriptor("gtest_cross_process_export", inbound.get(), Rank{0}, ctx);
+        D2DStreamService::export_pipeline_descriptor("gtest_cross_process_export", receivers, Rank{0}, ctx);
     EXPECT_EQ(path.has_value(), rank == 0);
     if (rank == 0) {
         const auto desc = ttnn::D2DPipelineDescriptor::wait_and_read(*path);
@@ -1312,11 +1316,11 @@ TEST_F(CrossProcessD2DFixture, ExportPipelineDescriptor) {
             const auto& rd = desc.ranks[r];
             EXPECT_EQ(rd.rank, r);
             EXPECT_FALSE(rd.host_name.empty());
-            ASSERT_EQ(rd.inbound.has_value(), r > 0);
-            if (!rd.inbound) {
+            ASSERT_EQ(rd.receivers.size(), r > 0 ? 1u : 0u);
+            if (rd.receivers.empty()) {
                 continue;
             }
-            const auto& rx = *rd.inbound;
+            const auto& rx = rd.receivers[0];
             EXPECT_EQ(rx.sender_rank, r - 1);
             EXPECT_EQ(rx.metadata_size_bytes, kMetadataBytes);
             EXPECT_EQ(rx.stage_gate, gate_cfg);

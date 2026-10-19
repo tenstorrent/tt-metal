@@ -2858,26 +2858,29 @@ TEST(D2DPipelineDescriptorTest, RoundTrip) {
     using tt::tt_metal::distributed::MeshCoreCoord;
     using tt::tt_metal::distributed::PCIeCoreLocation;
     ttnn::D2DPipelineDescriptor desc;
-    // Rank 0 has no inbound socket; rank 1 receives from rank 0.
-    desc.ranks.push_back(ttnn::D2DRankDescriptor{.rank = 0, .host_name = "host0"});
-    desc.ranks.push_back(ttnn::D2DRankDescriptor{
-        .rank = 1,
-        .host_name = "host1",
-        .inbound = ttnn::D2DReceiverDescriptor{
-            .sender_rank = 0,
+    const auto receiver = [](int sender_rank, uint32_t pcie_device_id, uint32_t mesh_id) {
+        return ttnn::D2DReceiverDescriptor{
+            .sender_rank = sender_rank,
             .metadata_size_bytes = 20,
             .stage_gate =
                 ttnn::D2DStageGateConfig{.num_gates = 4, .slot_id_offset_bytes = 0, .gate_mode_offset_bytes = 16},
             .coords = {ttnn::D2DReceiverCoordDescriptor{
                 .service_core =
                     PCIeCoreLocation{
-                        .pcie_device_id = 7,
+                        .pcie_device_id = pcie_device_id,
                         .core = MeshCoreCoord(MeshCoordinate(0, 1), CoreCoord(2, 3)),
                         .virtual_core = CoreCoord(18, 19)},
-                .fabric_node_id = tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{1}, 3),
-                .sender_fabric_node_id = tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 3),
+                .fabric_node_id = tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{mesh_id}, 3),
+                .sender_fabric_node_id = tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{mesh_id - 1}, 3),
                 .backing_tensor_addr = 0x1'0000'0040ull,
-                .stage_gate_base_addr = 0x2000u}}}});
+                .stage_gate_base_addr = 0x2000u}}};
+    };
+    // Rank 0 receives nothing, rank 1 receives from rank 0, and rank 2 hosts two stages, so it
+    // has two receivers.
+    desc.ranks.push_back(ttnn::D2DRankDescriptor{.rank = 0, .host_name = "host0"});
+    desc.ranks.push_back(ttnn::D2DRankDescriptor{.rank = 1, .host_name = "host1", .receivers = {receiver(0, 7, 1)}});
+    desc.ranks.push_back(
+        ttnn::D2DRankDescriptor{.rank = 2, .host_name = "host2", .receivers = {receiver(1, 2, 2), receiver(2, 3, 3)}});
     EXPECT_EQ(ttnn::D2DPipelineDescriptor::deserialize(desc.serialize()), desc);
 
     const auto path = ttnn::d2d_pipeline_descriptor_path("gtest_round_trip_" + std::to_string(getpid()));
@@ -2888,8 +2891,13 @@ TEST(D2DPipelineDescriptorTest, RoundTrip) {
 }
 
 // describe() reports the receiver's own addresses, and a single-rank export round-trips through the file.
+// With `second_sender_mesh`/`second_receiver_mesh` set, a second pair on those chips stands in for a
+// second pipeline stage on this rank.
 void verify_pipeline_descriptor_export(
-    const std::shared_ptr<MeshDevice>& sender_mesh, const std::shared_ptr<MeshDevice>& receiver_mesh) {
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const std::shared_ptr<MeshDevice>& second_sender_mesh = nullptr,
+    const std::shared_ptr<MeshDevice>& second_receiver_mesh = nullptr) {
     auto [sender, receiver] =
         D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_stage_gate_config(sender_mesh));
     const auto rd = receiver->describe();
@@ -2915,20 +2923,39 @@ void verify_pipeline_descriptor_export(
             rc.backing_tensor_addr, receiver->get_backing_tensor().mesh_buffer().get_device_buffer(coord)->address());
     }
 
+    std::vector<const D2DStreamServiceReceiver*> receivers = {receiver.get()};
+    std::vector<ttnn::D2DReceiverDescriptor> expected = {rd};
+    std::unique_ptr<D2DStreamServiceSender> second_sender;
+    std::unique_ptr<D2DStreamServiceReceiver> second_receiver;
+    if (second_sender_mesh) {
+        std::tie(second_sender, second_receiver) = D2DStreamService::create_pair(
+            second_sender_mesh, second_receiver_mesh, make_stage_gate_config(second_sender_mesh));
+        receivers.push_back(second_receiver.get());
+        expected.push_back(second_receiver->describe());
+    }
+
     const auto path =
-        D2DStreamService::export_pipeline_descriptor("gtest_export_" + std::to_string(getpid()), receiver.get());
+        D2DStreamService::export_pipeline_descriptor("gtest_export_" + std::to_string(getpid()), receivers);
     ASSERT_TRUE(path.has_value());
     const auto desc = ttnn::D2DPipelineDescriptor::wait_and_read(*path);
     std::filesystem::remove(*path);
     ASSERT_EQ(desc.ranks.size(), 1u);
     EXPECT_FALSE(desc.ranks[0].host_name.empty());
-    ASSERT_TRUE(desc.ranks[0].inbound.has_value());
-    EXPECT_EQ(*desc.ranks[0].inbound, rd);
+    EXPECT_EQ(desc.ranks[0].receivers, expected);
 }
 
 TEST_F(D2DStreamServiceTest, PipelineDescriptorExportSingleChipPair) {
     D2D_SINGLE_CHIP_PAIR_GUARD();
-    verify_pipeline_descriptor_export(sender_mesh, receiver_mesh);
+    if (shape[0] < 2 || shape[1] < 2) {
+        verify_pipeline_descriptor_export(sender_mesh, receiver_mesh);
+        return;
+    }
+    // The other row of the mesh carries a second stage.
+    verify_pipeline_descriptor_export(
+        sender_mesh,
+        receiver_mesh,
+        this->mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0)),
+        this->mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 1)));
 }
 
 TEST_F(D2DStreamServiceTest, PipelineDescriptorExportRowPair) {
