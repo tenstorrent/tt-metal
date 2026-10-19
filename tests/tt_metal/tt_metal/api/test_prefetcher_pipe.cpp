@@ -507,14 +507,16 @@ struct PrefetcherPipeRelayParams {
     uint32_t num_consumers = 1;
     m2::DFBAccessPattern pap = m2::DFBAccessPattern::STRIDED;
     m2::DFBAccessPattern cap = m2::DFBAccessPattern::STRIDED;
-    // Block of the BLOCKED side in relay entries (a BLOCKED producer's block is one pipe entry, i.e.
-    // relay_pages_per_entry). The TRISC batch and the pipe batch are derived from it.
+    // Block size of the BLOCKED side, in relay entries. A BLOCKED producer's block is one pipe entry.
     uint32_t block_size = 0;
-    // Resuming BLOCKED consumers in a later program: index of this run's first block in the relay's
-    // block sequence (block b of the run belongs to consumer (first_block + b) % C), and the pattern
-    // value of the run's first pipe entry, so a resumed run stages different bytes.
+    // For resuming BLOCKED consumers in a later program: how many blocks came before this run (block b
+    // of the run goes to consumer (first_block + b) % C) and the pattern value of its first pipe entry,
+    // so a resumed run stages different bytes.
     uint32_t first_block = 0;
     uint32_t counter_base = 0;
+    // After everything is consumed, the receiver re-pages its bound relay in place to this pipe entry
+    // size and reports the relay's layout before and after, checked against the pipe's ring.
+    uint32_t repage_entry_size = 0;
     std::optional<uint32_t> receiver_entry_size_override = std::nullopt;
     uint32_t trisc_delay_iterations = 0;
     // Relay entries per pipe entry: the relay pages each pipe entry this much finer (1 = like the
@@ -549,10 +551,14 @@ struct RelayConsumerParams {
     m2::DFBAccessPattern cap = m2::DFBAccessPattern::STRIDED;
     uint32_t block_size = 0;             // block of the BLOCKED side, in relay entries
     uint32_t relay_pages_per_entry = 1;  // relay entries per pipe entry
-    // BLOCKED consumers: blocks in this run (0 = every consumer pops entries_per_consumer) and the
-    // index of the run's first block in the relay's block sequence.
+    // BLOCKED consumers: blocks in this run (0 = every consumer pops entries_per_consumer) and how many
+    // blocks came before it.
     uint32_t total_blocks = 0;
     uint32_t first_block = 0;
+    // Receiver: after the run, re-page the bound relay to this pipe entry size (0 = never) and record
+    // its layout at probe_addr.
+    uint32_t repage_entry_size = 0;
+    uint32_t probe_addr = 0;
 };
 
 RelayConsumerSpecs make_relay_consumer(std::vector<m2::PrefetcherPipeParamName> pipes, const RelayConsumerParams& p) {
@@ -576,7 +582,9 @@ RelayConsumerSpecs make_relay_consumer(std::vector<m2::PrefetcherPipeParamName> 
     c.receiver.compile_time_args = {
         {"total_entries", p.pipe_total_entries},
         {"batch_size", p.pipe_batch_size},
-        {"relay_pages_per_entry", p.relay_pages_per_entry}};
+        {"relay_pages_per_entry", p.relay_pages_per_entry},
+        {"repage_entry_size", p.repage_entry_size},
+        {"probe_addr", p.probe_addr}};
     c.compute.dfb_bindings.push_back(
         p.cap == m2::DFBAccessPattern::ALL       ? m2::AllConsumerOf(relay_name, "relay")
         : p.cap == m2::DFBAccessPattern::BLOCKED ? m2::BlockedConsumerOf(relay_name, "relay", p.block_size)
@@ -614,8 +622,8 @@ uint32_t verify_relay_results(
     uint32_t total_entries,
     uint32_t relay_pages_per_entry = 1,
     uint32_t counter_base = 0,
-    // Per-consumer expectations when the consumers' shares differ, or when each consumer's entries
-    // are known (empty: every consumer pops entries_per_consumer; no per-consumer checksum).
+    // Per-consumer expectations, used when consumers get different shares or each consumer's bytes are
+    // known (empty: every consumer pops entries_per_consumer, no per-consumer checksum).
     std::span<const uint32_t> expected_entries_per_consumer = {},
     std::span<const uint32_t> expected_checksum_per_consumer = {}) {
     const uint32_t expected_checksum = relay_pages_per_entry * prefetcher_pipe_relay_expected_checksum(
@@ -674,6 +682,52 @@ uint32_t verify_relay_results(
         }
     }
     return pass_count;
+}
+
+// Expected layout of a single-lane BLOCKED relay producer around an in-place re-page, derived from the
+// pipe's ring: the relay entry is the pipe entry divided by relay_pages, the stride is one relay entry
+// (a block is contiguous), the counter window is the ring's whole pipe entries, and the cursor is the
+// pipe's rd pointer rounded up to the next block of the new page grid.
+void verify_relay_repage_probe(
+    distributed::MeshDevice& device,
+    const m2::PrefetcherPipe& pipe,
+    const CoreRangeSet& receiver_cores,
+    uint32_t probe_addr,
+    const PrefetcherPipeRelayParams& params,
+    uint32_t consumed_pipe_entries,
+    uint32_t relay_pages) {
+    const uint32_t ring_start = pipe.buffer_address();
+    const uint32_t ring_size = pipe.ring_size();
+    auto expected_at = [&](uint32_t pipe_entry, uint32_t cursor_bytes) {
+        const uint32_t usable = ring_size - ring_size % pipe_entry;
+        const uint32_t relay_entry = pipe_entry / relay_pages;
+        return std::vector<uint32_t>{ring_start + cursor_bytes, relay_entry, relay_entry, usable, usable};
+    };
+    const uint32_t e1 = params.entry_size;
+    const uint32_t e2 = params.repage_entry_size;
+    const uint32_t usable_e1 = ring_size - ring_size % e1;
+    const uint32_t usable_e2 = ring_size - ring_size % e2;
+    const uint32_t cursor_e1 = (consumed_pipe_entries * e1) % usable_e1;
+    // set_receiver_entry_size rounds the rd pointer up to the new entry size (wrapping at the new
+    // usable limit); the producer's next block starts there, since one block is one pipe entry.
+    uint32_t cursor_e2 = ((cursor_e1 + e2 - 1) / e2) * e2;
+    if (cursor_e2 >= usable_e2) {
+        cursor_e2 = 0;
+    }
+    std::vector<uint32_t> expected = expected_at(e1, cursor_e1);
+    const std::vector<uint32_t> after = expected_at(e2, cursor_e2);
+    expected.insert(expected.end(), after.begin(), after.end());
+    for (const CoreCoord& core : corerange_to_cores(receiver_cores)) {
+        std::vector<uint32_t> probe(10, 0);
+        slow_dispatch::ReadFromL1(
+            device,
+            core,
+            probe_addr,
+            std::span<uint8_t>(reinterpret_cast<uint8_t*>(probe.data()), probe.size() * sizeof(uint32_t)),
+            CoreType::WORKER);
+        EXPECT_EQ(probe, expected) << "relay geometry around the re-page on " << core.str()
+                                   << " ([write_ptr, stride, entry, window, span] before, then after)";
+    }
 }
 
 // Prog A (or same-program): sender push. Prog B: receiver DM bind_relay + TRISC consume.
@@ -752,10 +806,10 @@ uint32_t run_prefetcher_pipe_relay(
             "STRIDED relay: num_consumers must be a multiple of num_producers");
         pipe_batch_size *= params.num_consumers / params.num_producers;
     }
-    // BLOCKED relays move whole shares per op. The TRISC batch is the consumer share. A BLOCKED
-    // consumer needs every block of a round published before the DM pops (pop_front waits for all
-    // of this hart's acks), so the pipe batch covers one round of consumer blocks; a BLOCKED
-    // producer's block is one pipe entry, so the pipe batch stays as given.
+    // BLOCKED relays move whole shares per op, so the TRISC batch is the consumer share. A BLOCKED
+    // consumer needs every block of a round published before the DM pops (pop_front waits for all of
+    // this thread's acks), so the pipe batch covers one round of consumer blocks. A BLOCKED producer's
+    // block is one pipe entry, so its pipe batch stays as given.
     const uint32_t bs = params.block_size;
     std::vector<uint32_t> expected_entries;    // per consumer, when the shares differ
     std::vector<uint32_t> expected_checksums;  // per consumer, when each one's entries are known
@@ -765,15 +819,15 @@ uint32_t run_prefetcher_pipe_relay(
         TT_FATAL(relay_total_entries % bs == 0, "BLOCKED consumer: the run must be whole blocks");
         trisc_batch_size = bs;
         total_blocks = relay_total_entries / bs;
-        // Block b of the run belongs to consumer (first_block + b) % C, so a run that is not a whole
-        // number of consumer rounds gives the consumers different shares.
+        // Block b of the run goes to consumer (first_block + b) % C, so a run that is not a whole
+        // number of rounds gives the consumers different shares.
         expected_entries.assign(params.num_consumers, 0);
         for (uint32_t b = 0; b < total_blocks; ++b) {
             expected_entries[(params.first_block + b) % params.num_consumers] += bs;
         }
         if (params.pap != m2::DFBAccessPattern::BLOCKED) {
-            // STRIDED lanes publish relay entry e of the run into block e / bs, so each consumer's bytes
-            // are known: relay entry e carries the pattern word of pipe entry e / relay_pages.
+            // With STRIDED lanes, relay entry e of the run lands in block e / bs and carries the pattern
+            // word of pipe entry e / relay_pages, so each consumer's bytes are known.
             expected_checksums.assign(params.num_consumers, 0);
             for (uint32_t e = 0; e < relay_total_entries; ++e) {
                 expected_checksums[(params.first_block + e / bs) % params.num_consumers] +=
@@ -819,6 +873,15 @@ uint32_t run_prefetcher_pipe_relay(
     const uint32_t result_page_size = std::max(32u, result_words * static_cast<uint32_t>(sizeof(uint32_t)));
     auto result_buffer = cross_node_dfb_test::make_cross_node_data_buffer(device, receiver_cores, result_page_size, 1);
     const uint32_t result_addr = static_cast<uint32_t>(result_buffer->address());
+    // Re-page probe: 10 words per receiver thread (layout before and after set_receiver_entry_size).
+    decltype(result_buffer) probe_buffer;
+    uint32_t probe_addr = 0;
+    if (params.repage_entry_size != 0) {
+        TT_FATAL(params.num_producers == 1, "the re-page probe expects a single-lane receiver");
+        TT_FATAL(params.same_program, "the re-page probe runs the receiver and sender in one program");
+        probe_buffer = cross_node_dfb_test::make_cross_node_data_buffer(device, receiver_cores, 64, 1);
+        probe_addr = static_cast<uint32_t>(probe_buffer->address());
+    }
 
     const SenderKernelParams sender_params{
         .entry_size = params.entry_size,
@@ -844,6 +907,8 @@ uint32_t run_prefetcher_pipe_relay(
             .relay_pages_per_entry = relay_pages,
             .total_blocks = total_blocks,
             .first_block = params.first_block,
+            .repage_entry_size = params.repage_entry_size,
+            .probe_addr = probe_addr,
         });
 
     if (params.same_program) {
@@ -897,7 +962,7 @@ uint32_t run_prefetcher_pipe_relay(
         persistent_run_overlapping_programs(mesh_device, std::move(program_sender), std::move(program_consumer));
     }
 
-    return verify_relay_results(
+    const uint32_t verified = verify_relay_results(
         device,
         receiver_cores,
         result_addr,
@@ -909,6 +974,10 @@ uint32_t run_prefetcher_pipe_relay(
         params.counter_base,
         expected_entries,
         expected_checksums);
+    if (params.repage_entry_size != 0) {
+        verify_relay_repage_probe(device, pipe, receiver_cores, probe_addr, params, recv_total_entries, relay_pages);
+    }
+    return verified;
 }
 
 // 1P1C relay with an optional receiver-side entry size that differs from the sender's.
@@ -2742,9 +2811,9 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Backpressure_NoOverwrite) 
 }
 
 // --- BLOCKED relays -------------------------------------------------------------------------
-// A relay DFB is a normal local DFB, so either side may be BLOCKED. On the producer side a
-// block is one pipe entry (relay_pages_per_entry relay entries), which is exactly what a credit
-// lane already owns, so the pipe protocol is unchanged.
+// A relay DFB is a normal local DFB, so either side may be BLOCKED. A producer-side block is one
+// pipe entry (relay_pages_per_entry relay entries), which is what a credit lane already owns, so
+// the pipe protocol does not change.
 
 // STRIDED pipe lanes feeding a BLOCKED compute consumer: one consumer takes whole blocks of 4.
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Blocked_SB_1P1C) {
@@ -2801,10 +2870,10 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Blocked_SB_1P2C_Backpressu
         1u);
 }
 
-// A second program resumes the relay at the durable checkpoint, which sits on block 2: each
-// BLOCKED consumer must snap to its own next block (consumer 0 to block 2, consumer 1 to block 3).
-// The second run stages different bytes and each consumer's sum is checked, so a consumer that did
-// not snap cannot pass on the stale bytes of the first run.
+// A second program resumes the relay at the saved checkpoint, which is on block 2, so each BLOCKED
+// consumer must jump to its own next block (consumer 0 to block 2, consumer 1 to block 3). The second
+// run stages different bytes and each consumer's sum is checked, so a consumer that did not jump
+// cannot pass on the first run's stale bytes.
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Blocked_SB_1P2C_CrossProgram_Resume) {
     if (!is_quasar_arch()) {
         GTEST_SKIP() << "BLOCKED relay DFBs require Quasar";
@@ -2830,10 +2899,9 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Blocked_SB_1P2C_CrossProgr
     EXPECT_EQ(run_prefetcher_pipe_relay(mesh_device, pipe, params), 1u);
 }
 
-// A resumed program that does not start on a whole round of consumers: the first run hands block 0
-// to consumer 0 only, so the second run must put consumer 1 on block 1 (its first block, two entries
-// into the ring) and consumer 0 on block 2. Different bytes per run and per-consumer sums catch a
-// consumer that resumes a period too far.
+// A resumed program that does not start on a whole round, the first run gives block 0 to consumer 0
+// only, so the second run must put consumer 1 on block 1 (two entries into the ring) and consumer 0
+// on block 2. Different bytes per run and per-consumer sums catch a consumer that resumes too far.
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Blocked_SB_1P2C_CrossProgram_Resume_PartialRound) {
     if (!is_quasar_arch()) {
         GTEST_SKIP() << "BLOCKED relay DFBs require Quasar";
@@ -2858,6 +2926,39 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Blocked_SB_1P2C_CrossProgr
     params.first_block = 1;
     params.counter_base = 2;
     EXPECT_EQ(run_prefetcher_pipe_relay(mesh_device, pipe, params), 1u);
+}
+
+// A bound BLOCKED relay re-paged in place, once its blocks are consumed, the receiver switches the
+// pipe entry from 512 to 1024 bytes with set_receiver_entry_size. The relay keeps two pages per pipe
+// entry, so its entry and stride double, its counter window stays one ring, and its cursor lands on
+// the next block of the new grid (the pipe's rd pointer, already on a 1024-byte boundary).
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Blocked_Repage_KeepsBlockLayout) {
+    if (!is_quasar_arch()) {
+        GTEST_SKIP() << "BLOCKED relay DFBs require Quasar";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 512;  // two relay entries of 256
+    constexpr uint32_t ring_depth = 4;
+    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    EXPECT_EQ(
+        run_prefetcher_pipe_relay(
+            mesh_device,
+            pipe,
+            PrefetcherPipeRelayParams{
+                .entry_size = entry_size,
+                .ring_depth = ring_depth,
+                .total_entries = 2,
+                .pap = m2::DFBAccessPattern::BLOCKED,
+                .cap = m2::DFBAccessPattern::ALL,
+                .block_size = 2,
+                .repage_entry_size = 1024,
+                .relay_pages_per_entry = 2,
+                .same_program = true,
+            }),
+        1u);
 }
 
 // BLOCKED producer lanes (one pipe entry = one block of 2 relay entries) feeding BLOCKED consumers.
@@ -2891,7 +2992,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_RelayProducers2_Blocked_BB_
         1u);
 }
 
-// BLOCKED producer lanes feeding STRIDED consumers: each consumer takes one entry of every block.
+// BLOCKED producer lanes feeding STRIDED consumers, each consumer takes one entry of every block.
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_RelayProducers2_Blocked_BS_2P2C) {
     if (!is_quasar_arch()) {
         GTEST_SKIP() << "BLOCKED relay DFBs require Quasar";
