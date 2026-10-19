@@ -188,8 +188,8 @@ inline constexpr auto k_router_fields = [] {
             .source = "VC2_RECEIVER_FREE_SLOTS_STREAM_ID",
             .category = FLOW_CONTROL,
             .content = stream<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
-            .description = "The register reserved for the VC2 receiver's free slots, or the unused id when the router "
-                           "has no VC2. The router kernel declares it but does not read it.",
+            .description = "The register reserved for the VC2 receiver's free slots. Null when the router has no VC2. "
+                           "The router kernel declares it but does not read it.",
         },
         RouterField{
             .key = "notify_worker_src",
