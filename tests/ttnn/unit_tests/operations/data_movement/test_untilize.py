@@ -534,6 +534,50 @@ def test_untilize_multi_core_interleaved_to_interleaved(device, dtype, tensor_sh
     assert_quality(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), dtype)
 
 
+def _untilize_falls_back_to_single_core(grid_area, height_tiles, width_tiles):
+    # True when an interleaved row of tiles over get_pf_type's CB budget is not taken by the block rule
+    # (compute_ncores / compute_ncores_wh) and the tensor is taller than one tile, i.e. it reaches pf_option == 1.
+    def ncores(nblocks):
+        return math.ceil(nblocks / math.ceil(nblocks / grid_area))
+
+    def ncores_wh(nblocks):
+        nblocks_per_core = math.ceil(nblocks / grid_area)
+        num_blocks = lambda size: math.ceil(width_tiles / size) * math.ceil(height_tiles / size)
+        size = math.isqrt(nblocks_per_core)
+        if size * size != nblocks_per_core or num_blocks(size) >= grid_area:
+            size = next((c for c in range(size + 1, width_tiles * height_tiles + 1) if num_blocks(c) < grid_area), 1)
+        return num_blocks(size)
+
+    if width_tiles > 32 and (height_tiles > 32 or width_tiles > height_tiles):
+        if ncores(height_tiles) < ncores_wh(width_tiles * height_tiles):
+            return False
+    return height_tiles > 1
+
+
+@pytest.mark.parametrize("dtype, width", [(ttnn.bfloat16, 7168), (ttnn.float32, 4096)])
+def test_untilize_multi_core_interleaved_wide_rows(device, dtype, width):
+    # These rows don't fit get_pf_type's CB budget on Wormhole or Blackhole: untilize the row counts that reach
+    # pf_option == 1 on this device's grid, and one that the block rule takes.
+    grid = device.compute_with_storage_grid_size()
+    heights = range(2048, 8192 + 1, 64)
+    fallback = [h for h in heights if _untilize_falls_back_to_single_core(grid.x * grid.y, h // 32, width // 32)]
+    block = [h for h in heights if h not in fallback]
+    assert fallback, f"no row count in {heights} falls back to a single core on a {grid.x}x{grid.y} grid"
+
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    for height in fallback[:3] + block[:1]:
+        input_torch_tensor = torch.randn([height, width], dtype=torch_dtype)
+        input_ttnn_tensor = ttnn.from_torch(
+            input_torch_tensor,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=True)
+        assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
     "tensor_shape",
