@@ -1191,16 +1191,15 @@ std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
         return std::nullopt;
     }
     const auto& op = op_chain[0];
+    // Each case names its op where its kernel serves the call: on the boards it installs on, with the
+    // parameters it is fitted for.
     std::string op_name;
     switch (op.type()) {
-        case UnaryOpType::LGAMMA:
-            // The generated kernel is faster than the op's own path on Blackhole only.
-            if (arch != tt::ARCH::BLACKHOLE) {
-                return std::nullopt;
-            }
-            op_name = "lgamma";
-            break;
+        case UnaryOpType::LGAMMA: op_name = arch == tt::ARCH::BLACKHOLE ? "lgamma" : ""; break;
         default: return std::nullopt;
+    }
+    if (op_name.empty()) {
+        return std::nullopt;
     }
     return std::map<std::string, std::string>{
         {"SFPU_OP_CHAIN_0", "SFPU_OP_CHAIN_0_INIT_0 SFPU_OP_CHAIN_0_FUNC_0"},
