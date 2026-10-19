@@ -4,7 +4,6 @@
 ///
 #include <algorithm>
 #include <array>
-#include <bitset>
 #include <type_traits>
 #include <variant>
 
@@ -397,37 +396,7 @@ uint32_t add_semaphore(
                 [](const tt::tt_metal::CoreRangeSet& core_range_set) { return core_range_set.merge_ranges(); },
             },
             core_spec);
-        TT_FATAL(!cores.ranges().empty(), "Expecting a non-empty CoreRangeSet");
-        // Mirrors tt::tt_metal::NUM_SEMAPHORES (tt_metal/impl/buffers/semaphore.hpp).
-        constexpr uint32_t kSemaphoresPerCore = 16;
-        std::bitset<kSemaphoresPerCore> used_semaphore_ids;
-        for (const auto& core_range : cores.ranges()) {
-            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
-                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
-                    const tt::tt_metal::CoreCoord core(x, y);
-                    for (const auto& semaphore : target.semaphores) {
-                        if (semaphore.core_type == tt::CoreType::WORKER && semaphore.core_ranges.contains(core)) {
-                            used_semaphore_ids.set(semaphore.id);
-                        }
-                    }
-                }
-            }
-        }
-        std::optional<uint32_t> semaphore_id;
-        for (uint32_t candidate = 0; candidate < kSemaphoresPerCore; ++candidate) {
-            if (!used_semaphore_ids.test(candidate)) {
-                semaphore_id = candidate;
-                break;
-            }
-        }
-        TT_FATAL(semaphore_id.has_value(), "No available semaphore ID");
-        target.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = semaphore_id.value(),
-            .core_type = tt::CoreType::WORKER,
-            .core_ranges = cores,
-            .initial_value = initial_value,
-        });
-        return semaphore_id.value();
+        return ttnn::experimental::ccl::add_semaphore_descriptor(target, cores, initial_value);
     }
 }
 
