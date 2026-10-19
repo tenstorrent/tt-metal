@@ -56,6 +56,11 @@ _RELOAD_COMMAND_DEFAULTS = {
 }
 
 
+def _spec_prefix_cache_enabled():
+    """QWEN36_SPEC_PREFIX_CACHE (default 1): prefix caching on the MTP spec class; 0 = refuse it as before."""
+    return os.environ.get("QWEN36_SPEC_PREFIX_CACHE", "1") == "1"
+
+
 def _live_rows(start_pos, n):
     """Rows holding a live request (vLLM pads idle decode rows with position -1), or None if unknown / disabled."""
     if os.environ.get("QWEN36_GDN_REMAP_LIVE_ONLY", "1") != "1" or start_pos is None:
@@ -927,7 +932,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     # (no device-resident async decode) and the first token is host-sampled.
     model_capabilities = {
         **_build_model_capabilities(),
-        "supports_prefix_caching": False,
+        # QWEN36_SPEC_PREFIX_CACHE=1 (default): APC via the model's GDN snapshot cache (tt/prefix_cache.py); the spec
+        # prefill resumes from a snapshot at or below start_pos (B > 1 eager path; B == 1 recomputes from 0).
+        "supports_prefix_caching": _spec_prefix_cache_enabled(),
         "supports_chunked_prefill": False,
         "supports_spec_decode": True,
         "spec_requirements": ("device_propose", "hidden_feed"),
@@ -944,7 +951,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         prefill needs whole prompts from position 0), else None. ``vc`` None (no vLLM config) -> None."""
         if vc is None:
             return None
-        if bool(getattr(getattr(vc, "cache_config", None), "enable_prefix_caching", False)):
+        if not _spec_prefix_cache_enabled() and bool(
+            getattr(getattr(vc, "cache_config", None), "enable_prefix_caching", False)
+        ):
             return "prefix caching is enabled; the spec engine's prefill needs start_pos == 0 (use --no-enable-prefix-caching)"
         sc = getattr(vc, "scheduler_config", None)
         if sc is not None and getattr(sc, "enable_chunked_prefill", False):
@@ -1059,7 +1068,24 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         out[:, : pt.shape[1]] = pt
         return out
 
+    def _maybe_build_spec_prefix_cache(self):
+        """GDN prefix-state cache for spec prefill hits, built like the base warmup does: before ANY spec buffer / trace
+        exists (its first scratch bind can free spec buffers). Needs the batched B=1 scratch (max_batch_size > 1, TP).
+        """
+        model = self.model[0]
+        if not _spec_prefix_cache_enabled() or os.environ.get("QWEN36_PREFIX_CACHE", "1") != "1":
+            return
+        if not getattr(self, "_vllm_prefix_caching", True):
+            return
+        if model._prefix_cache is not None or model.num_devices <= 1 or model.args.max_batch_size <= 1:
+            return
+        from models.demos.blackhole.qwen36.tt.prefix_cache import GdnPrefixStateCache
+
+        model._prefix_cache = GdnPrefixStateCache(model)
+
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
+        if not enable_trace:
+            self._maybe_build_spec_prefix_cache()
         eng = self._engine()
         if enable_trace:
             if not eng.prefill_recorded:
@@ -1109,7 +1135,10 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         N = tokens.shape[0]
         start_pos = kwargs.get("start_pos")
-        assert start_pos is None or all(int(s) == 0 for s in start_pos), "no chunked prefill / prefix caching"
+        use_pc = _spec_prefix_cache_enabled()
+        if not use_pc:
+            assert start_pos is None or all(int(s) == 0 for s in start_pos), "no chunked prefill / prefix caching"
+        starts = [int(x) for x in start_pos] if use_pc and start_pos is not None else None
         if self._has_visual(kwargs, "pixel_values") or self._has_visual(kwargs, "pixel_values_videos"):
             raise ValueError("Qwen36MTPContractForCausalLM is text-only; image/video requests are not supported")
         eng = self._ensure_ready(kv_cache)
@@ -1118,7 +1147,11 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         rows = []
         for i in range(N):
             L = int(prompt_lens[i]) if prompt_lens is not None else tokens.shape[1]
-            rows.append(eng.prefill(slots[i], tokens[i, :L], table[i : i + 1]).float().reshape(-1))
+            if starts is None:
+                out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1])
+            else:  # start_pos = num_computed_tokens (cached prefix, or a preemption resume)
+                out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i])
+            rows.append(out.float().reshape(-1))
         return torch.stack(rows).reshape(N, 1, -1), torch.zeros(N, dtype=torch.long)
 
     def decode_forward(self, *args, **kwargs):

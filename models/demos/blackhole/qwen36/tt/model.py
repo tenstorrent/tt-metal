@@ -1599,7 +1599,41 @@ class Qwen36Model:
             if t is not None:
                 ttnn.deallocate(t)
 
-    def prefill_for_spec(self, token_ids, page_table, actual_len, on_chunk, slot=0):
+    def plan_spec_prefix(self, tokens_row, L, start_pos):
+        """Prefix-cache plan for ONE spec prefill (None = the unchanged from-0 path): (s, (cache, slot) | None, points).
+
+        start_pos is vLLM's num_computed_tokens (None: caller does not take part in prefix caching). s = the largest
+        snapshot position <= spec_resume_cap(start_pos, L) (0 = recompute everything; always correct): the snapshot is
+        restored into the B=1 scratch and [s, L) is recomputed (main KV rewritten, drafter KV rewritten). `points`
+        are the positions to snapshot while prefilling (see prefix_cache.spec_save_points)."""
+        cache = self._prefix_cache
+        if cache is None or start_pos is None or self.args.max_batch_size <= 1:
+            return None
+        from models.demos.blackhole.qwen36.tt.prefix_cache import (
+            spec_learn_positions,
+            spec_resume_cap,
+            spec_save_points,
+        )
+
+        cap = spec_resume_cap(start_pos, L)
+        s, src = 0, None
+        if cap > 0:
+            p, slot = cache.lookup(tokens_row, cap)
+            if slot is not None:
+                s, src = p, (cache, slot)
+        points = spec_save_points(
+            L,
+            s,
+            spec_learn_positions(start_pos, L),
+            chunk=self._chunked_chunk_size or 2048,
+            min_len=int(os.environ.get("QWEN36_PREFIX_SNAPSHOT_MIN_LEN", "8192")),
+            stride=int(os.environ.get("QWEN36_PREFIX_SNAPSHOT_STRIDE", "8192")),
+        )
+        if s == 0 and not points:
+            return None
+        return s, src, points
+
+    def prefill_for_spec(self, token_ids, page_table, actual_len, on_chunk, slot=0, plan=None):
         """Chunked prompt prefill for speculative decode; hands each chunk's hidden to ``on_chunk``.
 
         Uses the same 2048-token chunking as the demo. Prefilling the whole prompt as one masked
@@ -1622,7 +1656,10 @@ class Qwen36Model:
             dram = ttnn.DRAM_MEMORY_CONFIG
             prev = self._bind_gdn_prefill_scratch()
             try:
-                logits = self._prefill_for_spec_b1(token_ids, page_table, actual_len, on_chunk)
+                if plan is None:
+                    logits = self._prefill_for_spec_b1(token_ids, page_table, actual_len, on_chunk)
+                else:
+                    logits = self._prefill_for_spec_resumable(token_ids, page_table, actual_len, on_chunk, plan)
                 snap = [
                     (
                         ttnn.clone(dn.rec_state, memory_config=dram),
@@ -1636,6 +1673,75 @@ class Qwen36Model:
                 dn.write_slot(slot, rec, convs)  # consumes the clones
             return logits
         return self._prefill_for_spec_b1(token_ids, page_table, actual_len, on_chunk)
+
+    def _prefill_for_spec_resumable(self, token_ids, page_table, L, on_chunk, plan):
+        """Prefix-cached spec prefill on the BOUND B=1 scratch (plan from plan_spec_prefix): restore the snapshot at s
+        (or zero the state when s == 0), prefill [s, p1), [p1, p2) ... [pk, L) at absolute positions with the same
+        2048-chunk eager loop as _prefill_for_spec_b1 (``on_chunk`` gets every chunk, so the drafter KV is warmed over
+        [s, L)), and snapshot the scratch after the segments that end at a save point. Returns device logits at L-1."""
+        cache = self._prefix_cache
+        s, src, points = plan
+        tokens = token_ids[:, :L].to(torch.int32)
+        self._build_request_rope(tokens, None)
+        if s > 0:
+            src[0].restore(src[1])
+        else:
+            self._reset_gdn_state_for_new_sequence()
+        saved = []
+        logits, seg_start = None, s
+        bounds = list(points) + [L]
+        for i, seg_end in enumerate(bounds):
+            last = i == len(bounds) - 1
+            logits = self._spec_prefill_segment(tokens, page_table, seg_start, seg_end, on_chunk, want_logits=last)
+            if not last:
+                cache.save(tokens[0], seg_end)
+                saved.append(seg_end)
+            seg_start = seg_end
+        cache.log(L, -1, s, saved)
+        return logits
+
+    def _spec_prefill_segment(self, token_ids, page_table, start, end, on_chunk, want_logits):
+        """tokens[start:end] (start % 128 == 0, GDN state carried from `start`) in 2048-token eager chunks + a masked
+        tail; hands every chunk's hidden to on_chunk. Device logits at end-1 when want_logits, else None."""
+        chunk_size = self._chunked_chunk_size or 2048
+        n = end - start
+        num_full, tail_real = n // chunk_size, n % chunk_size
+        last_hidden = None
+        logits = None
+        for c in range(num_full):
+            cs = start + c * chunk_size
+            if last_hidden is not None:
+                ttnn.deallocate(last_hidden)
+            last_hidden = self._forward_prefill_chunk_masked_tp(
+                token_ids[:, cs : cs + chunk_size],
+                chunk_size,
+                cs,
+                page_table,
+                chunk_size,
+                flex_sdpa=True,
+                full_chunk=True,
+            )
+            ttnn.synchronize_device(self.device)
+            if c < num_full - 1 or tail_real > 0:
+                on_chunk(last_hidden, cs, chunk_size)
+        if tail_real > 0:
+            if last_hidden is not None:
+                ttnn.deallocate(last_hidden)
+            cs = start + num_full * chunk_size
+            logits, hidden = self.prefill_masked_bucket(
+                token_ids[:, cs:end], page_table, actual_len=tail_real, chunk_start=cs, return_hidden=True
+            )
+            on_chunk(hidden, cs, tail_real)
+            ttnn.deallocate(hidden)
+        else:
+            if want_logits:
+                logits = self._masked_bucket_logits_tp(last_hidden, chunk_size, chunk_size)
+            on_chunk(last_hidden, start + (num_full - 1) * chunk_size, chunk_size)
+            ttnn.deallocate(last_hidden)
+        if not want_logits and logits is not None:
+            ttnn.deallocate(logits)
+            logits = None
+        return logits
 
     def _prefill_for_spec_b1(self, token_ids, page_table, actual_len, on_chunk):
         """prefill_for_spec's body: one B=1 prompt into whatever GDN state is currently bound."""

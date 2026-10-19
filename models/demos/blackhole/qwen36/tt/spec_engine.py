@@ -1242,14 +1242,17 @@ class MTPSpecEngine:
     # --------------------------------------------------------------------- #
     # Prefill
     # --------------------------------------------------------------------- #
-    def prefill(self, slot, prompt_ids, page_table_row, _cap_blocks=None):
+    def prefill(self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None):
         """Eager prefill of runner slot ``slot`` (engine row _phys[slot]), warming its MTP KV; returns host float
         logits [vocab]. Replays the recorded chunk trace when B == 1 and record_prefill ran, else the eager path.
-        The GDN seed and the MTP KV of slot Tp-1 are written by the first ``verify``."""
+        The GDN seed and the MTP KV of slot Tp-1 are written by the first ``verify``.
+        ``start_pos`` (vLLM num_computed_tokens; None = not part of prefix caching, the unchanged path): with a GDN
+        prefix-state cache on the model (B > 1) the prefill resumes from a snapshot <= start_pos (see
+        Qwen36Model.plan_spec_prefix) on the traced fast path and on the eager path; B == 1 recomputes from 0."""
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
-        return self._prefill_row(self._phys[int(slot)], prompt_ids, page_table_row, _cap_blocks)
+        return self._prefill_row(self._phys[int(slot)], prompt_ids, page_table_row, _cap_blocks, start_pos)
 
-    def _prefill_row(self, slot, prompt_ids, page_table_row, _cap_blocks=None):
+    def _prefill_row(self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None):
         """``prefill`` of engine row ``slot``."""
         reset_draft_skip(self, slot)
         self._parked.pop(slot, None)
@@ -1259,7 +1262,9 @@ class MTPSpecEngine:
         assert self._last_hidden, "prefill before prepare"
         prompt_list = [int(t) for t in torch.as_tensor(prompt_ids).reshape(-1)]
         Tp = len(prompt_list)
-        self._prompts[slot] = (prompt_list, torch.as_tensor(page_table_row).clone())
+        self._prompts[slot] = (prompt_list, torch.as_tensor(page_table_row).clone()) + (
+            () if start_pos is None else (int(start_pos),)
+        )
         cap_blocks = int(torch.as_tensor(page_table_row).shape[-1]) if _cap_blocks is None else _cap_blocks
         assert Tp + self.T <= table_capacity(
             cap_blocks, self.block_size
@@ -1269,11 +1274,16 @@ class MTPSpecEngine:
         self._check_scratch(pt_row)
         prompt = torch.tensor([prompt_list], dtype=torch.int32)
         captured_row = [False]
+        # Prefix cache (B > 1, start_pos given, cache built): (s, (cache, slot) | None, save points) or None.
+        plan = model.plan_spec_prefix(prompt[0], Tp, start_pos) if start_pos is not None and self.B > 1 else None
+        # The prompt the drafter fuses its next-token column from. A non-final fast-prefill segment [a, b) narrows it
+        # to prompt[:b+1] so padded bucket rows never fuse (and write drafter KV for) tokens past b.
+        mtp_prompt = [prompt_list]
 
         def _on_chunk(hidden, chunk_start, valid_len):
             # Never frees `hidden` (the caller does, or it is the trace's persistent output).
             feed = model.spec_feed_rows(hidden)
-            self._warm_mtp_chunk(feed, chunk_start, valid_len, prompt_list, pt_row)
+            self._warm_mtp_chunk(feed, chunk_start, valid_len, mtp_prompt[0], pt_row)
             if chunk_start + valid_len >= Tp:  # the chunk holding slot Tp-1
                 self._capture_last_row(feed, Tp - 1 - chunk_start, slot)
                 captured_row[0] = True
@@ -1282,12 +1292,16 @@ class MTPSpecEngine:
 
         logits_dev = None
         if self.fast_prefill and self.prefill_recorded and self.recorded_prefill:
-            logits_dev = self._prefill_fast(slot, prompt_list, prompt, pt_row, Tp, _on_chunk, captured_row)
+            fast_kw = {} if plan is None else dict(plan=plan, mtp_prompt=mtp_prompt)
+            logits_dev = self._prefill_fast(slot, prompt_list, prompt, pt_row, Tp, _on_chunk, captured_row, **fast_kw)
         if logits_dev is None and self.B == 1 and self.prefill_recorded and self.recorded_prefill:
             pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)  # MTP chunk fill keeps the nb-wide pt_row
             logits_dev = model.prefill_traced_chunked(prompt, pt_rec, Tp, on_chunk=_on_chunk)
         if logits_dev is None:
-            logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot)
+            if plan is None:
+                logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot)
+            else:
+                logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, plan=plan)
         assert captured_row[0], f"prefill never delivered the chunk holding slot {Tp - 1}"
         if isinstance(logits_dev, torch.Tensor):
             lt = logits_dev
@@ -1298,55 +1312,64 @@ class MTPSpecEngine:
         self._active.add(slot)
         return lt.reshape(-1)[: self.vocab].float()
 
-    def _prefill_fast(self, slot, prompt_list, prompt, pt_row, Tp, on_chunk, captured_row):
+    def _prefill_fast(self, slot, prompt_list, prompt, pt_row, Tp, on_chunk, captured_row, plan=None, mtp_prompt=None):
         """QWEN36_SPEC_FAST_PREFILL=1 body of _prefill_row: traced prefill of one prompt on the GDN binding the traces
         were captured against (the B=1 scratch at B > 1, the decode buffers at B == 1), then the scratch -> slot write.
         Returns host float logits [vocab], or None when no trace serves the prompt (the caller runs the eager path;
-        nothing has been staged or written then)."""
+        nothing has been staged or written then).
+
+        ``plan`` (Qwen36Model.plan_spec_prefix: (s, (cache, snapshot slot) | None, save points); B > 1 only): the
+        prefix-cached prefill. The GDN snapshot at s is restored into the scratch (s == 0: the first segment zeroes it)
+        and the prompt runs as segments [s, p1), [p1, p2), ..., [pk, Tp) at absolute positions, each through the same
+        traced chunk replays + short-trace tail as an uncached prompt (chunk_start = the segment's absolute start,
+        GDN state carried). The scratch is snapshotted after every segment that ends at a save point pi. The drafter
+        KV of [s, Tp) is warmed in the same replays (on_chunk / the spec short trace); [0, s) is already in the
+        request's cached blocks (see doc 40)."""
         model = self.model
-        chunk = model._chunked_chunk_size or 2048
-        num_full, tail = Tp // chunk, Tp % chunk
         batched = self.B > 1
+        if plan is None:
+            s0, src, points = 0, None, []
+        else:
+            s0, src, points = plan
+        bounds = list(points) + [Tp]
         # The traces' GDN binding check (_short_trace_for) needs the binding the requests run on, so bind first.
         prev = model._bind_gdn_prefill_scratch() if batched else None
         try:
-            if num_full == 0:
-                host = self._replay_spec_short(slot, prompt_list, prompt, pt_row, Tp, 0, False, captured_row)
+            if plan is not None:
+                model._build_request_rope(prompt, None)  # one table for the whole prompt: every segment slices it
+                if s0 > 0:
+                    src[0].restore(src[1])
+            host, saved, a = None, [], s0
+            for i, b in enumerate(bounds):
+                final = i == len(bounds) - 1
+                if mtp_prompt is not None:
+                    mtp_prompt[0] = prompt_list if final else prompt_list[: b + 1]
+                if final:
+                    captured_row[0] = False  # only the segment holding slot Tp-1 may satisfy the capture assert
+                host = self._fast_segment(
+                    slot,
+                    prompt_list if final else prompt_list[: b + 1],
+                    prompt,
+                    pt_row,
+                    a,
+                    b,
+                    final,
+                    carry=a > 0,
+                    on_chunk=on_chunk,
+                    captured_row=captured_row,
+                    decline_ok=(i == 0 and s0 == 0),
+                )
                 if host is None:
-                    return None  # no spec short trace for this length / trash-block collision: nothing staged, eager
-            else:
-                model._build_request_rope(prompt, None)  # text: 1D RoPE, rope_delta 0 (the chunk loop slices it)
-                pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)
-                cs = num_full * chunk
-                tail_tr = model._short_trace_for(tail) if tail >= 3 else None
-                if tail > 0 and tail_tr is None:
-                    # No short trace for the tail (< 3 tokens, or an uncaptured bucket): the chunk trace replays every full
-                    # chunk and the tail runs the eager masked bucket, both with on_chunk (the existing long-prompt path).
-                    logits = model._prefill_traced_chunked_tp(
-                        prompt, pt_rec, Tp, num_full, chunk, tail, on_chunk=on_chunk, run_tail=True
-                    )
-                    host = self._read_replicated_logits(logits)
-                else:
-                    model._prefill_traced_chunked_tp(
-                        prompt, pt_rec, Tp, num_full, chunk, tail, on_chunk=on_chunk, run_tail=False
-                    )
-                    if tail == 0:
-                        # Exact multiple: the last chunk's output gives the logits and the slot Tp-1 feed row.
-                        logits = model._masked_bucket_logits_tp(model._chunked_trace_output, chunk, chunk)
-                        on_chunk(model._chunked_trace_output, cs - chunk, chunk)
-                        host = self._read_replicated_logits(logits)
-                    else:
-                        host = self._replay_spec_short(
-                            slot, prompt_list, prompt[:, cs:Tp], pt_row, tail, cs, True, captured_row
-                        )
-                        if host is None:  # trash-block collision: the eager masked-bucket tail, as the chunk path does
-                            logits, hidden = model.prefill_masked_bucket(
-                                prompt[:, cs:Tp], pt_rec, actual_len=tail, chunk_start=cs, return_hidden=True
-                            )
-                            on_chunk(hidden, cs, tail)
-                            ttnn.deallocate(hidden)
-                            host = self._read_replicated_logits(logits)
+                    return None  # only the first from-0 segment may decline, before any side effect
+                if not final:
+                    model._prefix_cache.save(prompt[0], b)  # the bound scratch = the state after tokens[:b]
+                    saved.append(b)
+                a = b
+            if plan is not None:
+                model._prefix_cache.log(Tp, -1, s0, saved)
         finally:
+            if mtp_prompt is not None:
+                mtp_prompt[0] = prompt_list
             if prev is not None:
                 model._unbind_gdn_prefill_scratch(prev)
         if batched:
@@ -1358,13 +1381,80 @@ class MTPSpecEngine:
                 # Galaxy: ~1.5 ms of device time at ISL 1600, and no effect on the first decode step after the prefill
                 # (test_spec_continuous join step: 88.6 ms without vs 89.7 / 91.2 ms with the wait, eager prefill 61 ms).
                 ttnn.synchronize_device(self.mesh)
-        path = "short trace" if num_full == 0 else f"{num_full} chunk replay(s), tail {tail}"
-        msg = f"[spec_engine] fast prefill: slot {slot} Tp={Tp} ({path})"
+        chunk = model._chunked_chunk_size or 2048
+        num_full, tail = (Tp - s0) // chunk, (Tp - s0) % chunk
+        path = "short trace" if num_full == 0 and s0 == 0 else f"{num_full} chunk replay(s), tail {tail}"
+        msg = f"[spec_engine] fast prefill: slot {slot} Tp={Tp} ({path})" + (
+            "" if plan is None else f" prefix resume s={s0} segments={len(bounds)}"
+        )
         if getattr(self, "_fast_prefill_logged", False):
             logger.debug(msg)
         else:
             self._fast_prefill_logged = True
             logger.info(msg)
+        return host
+
+    def _fast_segment(self, slot, mtp_list, prompt, pt_row, a, b, final, carry, on_chunk, captured_row, decline_ok):
+        """Traced prefill of the prompt segment [a, b) (a % 128 == 0) on the bound B=1 GDN scratch: full chunks by the
+        chunk trace, the tail by the spec short trace (drafter warm-up fused) or the eager masked bucket. carry: continue
+        the bound GDN state (a > 0 or a restored snapshot) instead of zeroing it. ``mtp_list`` = the token list the
+        drafter fuses from (the whole prompt for the final segment, prompt[:b+1] otherwise). Returns host float logits
+        [vocab] (meaningful for the final segment only), or None when decline_ok and no trace serves a short segment."""
+        model = self.model
+        chunk = model._chunked_chunk_size or 2048
+        n = b - a
+        num_full, tail = n // chunk, n % chunk
+        if num_full == 0:
+            # `prompt[:, a:]` (not [:, a:b]): the replay slices the first n tokens, and at a == 0 builds the request RoPE
+            # from what it gets, which must be the whole prompt when later segments follow.
+            host = self._replay_spec_short(slot, mtp_list, prompt[:, a:], pt_row, n, a, carry, captured_row)
+            if host is None:
+                if decline_ok:
+                    return None  # no spec short trace for this length / trash-block collision: nothing staged, eager
+                pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)
+                logits, hidden = model.prefill_masked_bucket(
+                    prompt[:, a:b], pt_rec, actual_len=n, chunk_start=a, return_hidden=True
+                )
+                on_chunk(hidden, a, n)
+                ttnn.deallocate(hidden)
+                host = self._read_replicated_logits(logits)
+            return host
+        if a == 0 and not carry:
+            model._build_request_rope(prompt, None)  # text: 1D RoPE, rope_delta 0 (the chunk loop slices it)
+        pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)
+        cs = a + num_full * chunk
+        tail_tr = model._short_trace_for(tail) if tail >= 3 else None
+        # Full chunks by replay (with on_chunk). For a > 0 the tail is run here, never by run_tail=True (its tail slice
+        # ignores `start`).
+        if a == 0 and tail > 0 and tail_tr is None:
+            # The uncached long-prompt path: the chunk trace replays every full chunk and the eager masked-bucket tail
+            # runs inside it (its tail slice is right for start == 0).
+            logits = model._prefill_traced_chunked_tp(
+                prompt, pt_rec, b, num_full, chunk, tail, on_chunk=on_chunk, run_tail=True
+            )
+            return self._read_replicated_logits(logits)
+        model._prefill_traced_chunked_tp(
+            prompt, pt_rec, b, num_full, chunk, tail, on_chunk=on_chunk, run_tail=False, start=a, reset_gdn=not carry
+        )
+        if tail == 0:
+            if (
+                not final
+            ):  # on_chunk already saw the last chunk in the replay loop; a mid-prompt segment has no logits use
+                return torch.zeros(0)
+            # Exact multiple: the last chunk's output gives the logits and the slot b-1 feed row.
+            logits = model._masked_bucket_logits_tp(model._chunked_trace_output, chunk, chunk)
+            on_chunk(model._chunked_trace_output, cs - chunk, chunk)
+            return self._read_replicated_logits(logits)
+        host = None
+        if tail_tr is not None:
+            host = self._replay_spec_short(slot, mtp_list, prompt[:, cs:b], pt_row, tail, cs, True, captured_row)
+        if host is None:  # no short trace for the tail (< 3 tokens / uncaptured bucket) or a trash-block collision
+            logits, hidden = model.prefill_masked_bucket(
+                prompt[:, cs:b], pt_rec, actual_len=tail, chunk_start=cs, return_hidden=True
+            )
+            on_chunk(hidden, cs, tail)
+            ttnn.deallocate(hidden)
+            host = self._read_replicated_logits(logits)
         return host
 
     def _replay_spec_short(self, slot, prompt_list, tokens, pt_row, L, chunk_start, carry, captured_row):
@@ -1413,9 +1503,13 @@ class MTPSpecEngine:
 
     def _reprefill(self, slot):
         """Re-run a fresh slot's prefill (a seed overwrote its prefill GDN state while it was left out)."""
-        prompt, row = self._prompts[slot]
+        prompt, row, *rest = self._prompts[slot]
         logger.info(f"[spec_engine] re-prefill engine row {slot} ({len(prompt)} tokens)")
-        self._prefill_row(slot, prompt, row)
+        # Same vLLM start_pos as the original prefill (its cached blocks are still the request's).
+        if rest:
+            self._prefill_row(slot, prompt, row, start_pos=rest[0])
+        else:
+            self._prefill_row(slot, prompt, row)
 
     def _capture_last_row(self, feed, i, slot):
         """feed row i -> self._last_hidden[slot], fixed-shape programs only (a per-length slice would
