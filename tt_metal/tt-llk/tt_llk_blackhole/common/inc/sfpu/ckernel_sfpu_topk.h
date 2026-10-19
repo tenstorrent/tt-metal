@@ -1862,6 +1862,51 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
         _sfpu_load_config32_(p_sfpu::LREG13, rank_span >> 16, rank_span & 0xFFFF); // right-run complement (2K-1)
     }
 
+    // The counter walk below pays only when every m_iter of this K takes it (dist a multiple of 8, more than 16 group
+    // words a quadrant); for smaller K each group is addressed on its own, which costs the RISC less.
+    if (const int kq = k > 32 ? 32 : k; ((kq & 7) != 0) || (2 * kq * (FUSED ? 4 : 8) <= 128))
+    {
+        std::uint32_t dst_addr_offset = 0;
+        for (int face = 0; face < 2; face++)
+        {
+            for (int col = 0; col < 2; col++)
+            {
+                TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+                int k_max             = k > 32 ? 32 : k;
+                std::uint32_t inner_d = k_max >> 2; // inner loop comparisons to sort len=K sequence;
+                std::uint32_t total_datums_to_compare =
+                    ((64 >> m_iter) < 2 * k_max) ? 2 * k_max
+                                                 : (64 >> m_iter); // max(2, max(64, 64/(2^m))) total datums to compare; there's always at least 2*K datums
+                std::uint32_t dist            = (k_max << m_iter) > 32 ? 32 : (k_max << m_iter); // min(32, k*2^k)
+                std::uint32_t ld_dist         = (dist < 16) ? dist : 2 * dist;                   // Accounts for face offsets within a tile
+                std::uint32_t datums_compared = 0;
+                std::uint32_t dst_offset      = 0;
+                std::uint32_t dst_cr          = 0;
+                while (datums_compared < total_datums_to_compare)
+                {
+                    for (std::uint32_t ii = 0; ii < inner_d; ii++)
+                    {
+                        bitonic_topk_merge_group<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>(dst_offset, ld_dist, ii == 0);
+                        datums_compared += 8;
+                        if (ii == (inner_d - 1))
+                        {
+                            dst_cr += 2 * dist;
+                            dst_offset = dst_cr;
+                        }
+                        else
+                        {
+                            dst_offset += 4;
+                        }
+                    }
+                }
+                dst_addr_offset += 2;
+                set_dst_write_addr(dst_addr_offset);
+            }
+            dst_addr_offset = 16;
+            set_dst_write_addr(dst_addr_offset);
+        }
+        return;
+    }
     constexpr bool merge_macros = TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED;
     if constexpr (merge_macros)
     {
@@ -1909,58 +1954,30 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
             std::uint32_t dist            = (k_max << m_iter) > 32 ? 32 : (k_max << m_iter); // min(32, k*2^k)
             std::uint32_t ld_dist         = (dist < 16) ? dist : 2 * dist;                   // Accounts for face offsets within a tile
             std::uint32_t datums_compared = 0;
-            constexpr std::uint32_t group_words = FUSED ? 4 : 8;
-
-            // With 16 group words or fewer per quadrant (a group per 8 datums), the counter walk's increments cost more than they save.
-            if (((dist & 7) == 0) && (total_datums_to_compare * group_words > 128))
+            // Blocks start on a face row: the dest counter walks a block's fixed group words, 4 rows on (20 into the next face).
+            std::uint32_t blk_offset = 0;
+            while (datums_compared < total_datums_to_compare)
             {
-                // Blocks start on a face row: the dest counter walks a block's fixed group words, 4 rows on (20 into the next face).
-                std::uint32_t blk_offset = 0;
-                while (datums_compared < total_datums_to_compare)
+                if (blk_offset > 0)
                 {
-                    if (blk_offset > 0)
-                    {
-                        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-                    }
+                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+                }
 #pragma GCC unroll 8
-                    for (std::uint32_t ii = 0; ii < inner_d; ii++)
-                    {
-                        if ((ii & 3) == 0 && ii > 0)
-                        {
-                            TTI_INCRWC(0, 10, 0, 0);
-                            TTI_INCRWC(0, 10, 0, 0);
-                        }
-                        else if (ii > 0)
-                        {
-                            TTI_INCRWC(0, 4, 0, 0);
-                        }
-                        merge_group(blk_offset, ld_dist, ii == 0);
-                        datums_compared += 8;
-                    }
-                    blk_offset += 2 * dist;
-                }
-            }
-            else
-            {
-                std::uint32_t dst_offset = 0;
-                std::uint32_t dst_cr     = 0;
-                while (datums_compared < total_datums_to_compare)
+                for (std::uint32_t ii = 0; ii < inner_d; ii++)
                 {
-                    for (std::uint32_t ii = 0; ii < inner_d; ii++)
+                    if ((ii & 3) == 0 && ii > 0)
                     {
-                        merge_group(dst_offset, ld_dist, ii == 0);
-                        datums_compared += 8;
-                        if (ii == (inner_d - 1))
-                        {
-                            dst_cr += 2 * dist;
-                            dst_offset = dst_cr;
-                        }
-                        else
-                        {
-                            dst_offset += 4;
-                        }
+                        TTI_INCRWC(0, 10, 0, 0);
+                        TTI_INCRWC(0, 10, 0, 0);
                     }
+                    else if (ii > 0)
+                    {
+                        TTI_INCRWC(0, 4, 0, 0);
+                    }
+                    merge_group(blk_offset, ld_dist, ii == 0);
+                    datums_compared += 8;
                 }
+                blk_offset += 2 * dist;
             }
             dst_addr_offset += 2;
             set_dst_write_addr(dst_addr_offset);
