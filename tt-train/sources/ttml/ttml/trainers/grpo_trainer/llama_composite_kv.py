@@ -6,35 +6,10 @@ import ttnn
 import ttml
 
 from ttml.models.llama.gqattn import GroupedQueryAttention
-from ttml.models.llama.transformer import LlamaBlock
 from ttml.models.llama import Llama
-from ttml.modules import RunMode
 
 
 class GroupedQueryAttentionCompositeKV(GroupedQueryAttention):
-    def forward_no_kv(self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        q = self.q_linear(input)
-        kv = self.kv_linear(input)
-
-        q_heads, k_heads, v_heads = ttml.ops.multi_head_utils.grouped_heads_creation(
-            q, kv, self.num_heads, self.num_groups
-        )
-
-        q_heads = ttml.ops.rope.rope(q_heads, self.rope_params)
-        k_heads = ttml.ops.rope.rope(k_heads, self.rope_params)
-
-        # Composite SDPA supports non-broadcast masks like (B, 1, S, S)
-        attention = ttml.ops.attention.scaled_dot_product_attention_composite(q_heads, k_heads, v_heads, mask)
-        attention = ttml.ops.multi_head_utils.heads_fusion(attention)
-
-        out = self.out_linear(attention)
-
-        # Match base behavior in training mode
-        if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
-
-        return out
-
     def forward_kv(
         self,
         input: ttml.autograd.Tensor,
@@ -74,21 +49,6 @@ class GroupedQueryAttentionCompositeKV(GroupedQueryAttention):
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
         out = self.out_linear(attention)
         return out
-
-
-class LlamaBlockCompositeKV(LlamaBlock):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # preserve existing config values
-        self.attention = GroupedQueryAttentionCompositeKV(
-            embedding_size=self.attention.embedding_size,
-            num_heads=self.attention.num_heads,
-            num_groups=self.attention.num_groups,
-            dropout=self.attention.dropout_prob,
-            rope_params=self.attention.rope_params,
-            bias_linears=False,  # match your model config if needed
-        )
 
 
 class LlamaCompositeKV(Llama):
