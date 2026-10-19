@@ -3,6 +3,7 @@
 #   - the device-free unit tests
 #   - the manifest fixtures on mock clusters
 #   - the schema check on every manifest the above runs write
+#   - the route decoder's check on the same manifests
 # CI runs it on a CPU runner, as fabric-cpu-manifest in tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml. The
 # manifest fixtures also run on hardware, through run_cpp_fabric_tests.sh's Fabric1D/2D fixture filters.
 #
@@ -19,6 +20,8 @@ T3K_ON_TWO_RANKS=$CLUSTER_DESCS/wormhole/t3k_cluster_desc/t3k_2x4_big_mesh_clust
 BH_4XP150=tt_metal/third_party/umd/tests/cluster_descriptor_examples/blackhole_4xP150.yaml
 SPLIT_T3K_RANK_BINDINGS=tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml
 CHECK_SCHEMA=tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py
+# A module, run with python3 -m: it imports the route decoder by its package path.
+CHECK_ROUTES=tt_metal.fabric.debug.visualizer.decode.tests.check_manifest_routes
 # tt-run, without needing it installed.
 TT_RUN=ttnn/ttnn/distributed/ttrun.py
 
@@ -64,3 +67,6 @@ expect_manifests split_t3k 2
 
 echo "== Schema check"
 python3 "$CHECK_SCHEMA" "$OUT_DIR"
+
+echo "== Route decoder check"
+python3 -m "$CHECK_ROUTES" "$OUT_DIR"
