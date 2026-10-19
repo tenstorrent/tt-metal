@@ -8,9 +8,10 @@
 //   qd=q*exp(G), kl=k*exp(G), kr=k*exp(-G)
 //   Akk=strictly_lower((beta*kl)@kr^T), Aqk=tril(qd@kr^T)
 //   kd=beta*kl, k_dec_t=(k*exp(G_last-G))^T, dl=expm1(G_last)=exp(G_last)-1 (complement-form decay).
-// The suffix sum G_last-G = strict_upper@g is formed and exponentiated in DST (FP32), so k_dec_t's exponent never
-// passes through a TF32 source register and is exactly 0 at the chunk end. Formed from the anchored factors as
-// k*exp(a-G)*exp(a), it came out biased low by about one TF32 ulp of |G_last|/2 (tt_metal_tracker-g1b.4.18).
+// The centered exponent G-a = (gate_tril - gate_ones/2)@g is formed and exponentiated in DST (FP32), so it never
+// passes through a TF32 source register; k_dec = k*exp(a-G)*exp(a) then reuses the anchored factors. Formed from a
+// G-a rounded in a source register, k_dec came out biased low by about one TF32 ulp of |G_last|/2
+// (tt_metal_tracker-g1b.4.18).
 // dl is logically [K,1]: only its column 0 is defined, and consumers broadcast that column.
 // T_inv uses a face-blocked polynomial inverse so large gate magnitudes remain stable.
 
@@ -563,50 +564,36 @@ template <
     typename DFB4,
     typename DFB5,
     typename DFB6,
-    typename DFB7,
-    typename DFB8,
-    typename DFB9>
+    typename DFB7>
 void prepare_gate_factors(
     DFB0& g,
-    DFB1& prefix_sum_mask,
+    DFB1& centered_mask,
     DFB2& sum_broadcast_matrix,
-    DFB3& strict_upper_mask,
-    DFB4& centered_decay,
-    DFB5& centered_inverse_decay,
-    DFB6& g_last,
-    DFB7& anchor_decay,
-    DFB8& key_suffix_decay,
+    DFB3& centered_decay,
+    DFB4& centered_inverse_decay,
+    DFB5& g_last,
+    DFB6& anchor_decay,
 
     // intermediate
-    DFB9& anchor_g) {
+    DFB7& anchor_g) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
     // G = cumsum(g). Anchor the separable pairwise factors at G_last/2 so neither
     // exp(G-anchor) nor exp(anchor-G) spans the full chunk range. Their products are
-    // unchanged, while realistic KDA gates no longer overflow exp(-G).
-    matmul_blocks<Ct, Ct, Kt, false>(prefix_sum_mask, g, centered_decay);
+    // unchanged, while realistic KDA gates no longer overflow exp(-G). G - anchor = centered_mask @ g is formed and
+    // exponentiated in DST (FP32), so the exponent never passes through a source register.
+    exponential_of_mask_products<Kt>(centered_mask, g, centered_decay);  // exp(G - anchor)
     centered_decay.wait_front(chunk_key_tiles);
 
     matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, g, g_last);  // replicated G_last
     g_last.wait_front(chunk_key_tiles);
-    exponential_of_mask_products<Kt>(strict_upper_mask, g, key_suffix_decay);  // exp(G_last - G)
-    key_suffix_decay.wait_front(chunk_key_tiles);
     g.pop_front(chunk_key_tiles);
 
     multiply_by_half(g_last, anchor_g, chunk_key_tiles);  // anchor = G_last/2
     anchor_g.wait_front(chunk_key_tiles);
 
-    {
-        auto& centered_g = anchor_decay;
-        elementwise_binary<ElementwiseBinaryOp::Subtract>(centered_decay, anchor_g, centered_g, chunk_key_tiles);
-        centered_g.wait_front(chunk_key_tiles);
-        centered_decay.pop_front(chunk_key_tiles);
-        exponential_tiles(centered_g, centered_decay, chunk_key_tiles);
-        centered_decay.wait_front(chunk_key_tiles);
-        reciprocal_tiles(centered_decay, centered_inverse_decay, chunk_key_tiles);  // exp(anchor-G)
-        centered_inverse_decay.wait_front(chunk_key_tiles);
-        centered_g.pop_front(chunk_key_tiles);
-    }
+    reciprocal_tiles(centered_decay, centered_inverse_decay, chunk_key_tiles);  // exp(anchor-G)
+    centered_inverse_decay.wait_front(chunk_key_tiles);
 
     // exp(G_last/2) is row-replicated and the broadcasts read only row 0, so only the face rows holding it are
     // computed. That takes two SFPU iterations: one leaves part of row 0 unwritten, and kd, q_decay, k_dec_t and
@@ -670,23 +657,22 @@ void prepare_final_decay_rows(DFB0& g_last, DFB1& anchor_decay, DFB2& final_deca
     expm1_tiles<VectorMode::R, 2>(g_last, final_decay_rows, chunk_key_tiles);
     final_decay_rows.wait_front(chunk_key_tiles);
     g_last.pop_front(chunk_key_tiles);
-    anchor_decay.pop_front(chunk_key_tiles);  // its last consumer
 }
 
 // k_dec = k * exp(G_last - G) (scan-facing) and the anchored k_pairwise = k * exp(anchor - G).
 template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2, typename DFB3, typename DFB4>
 void prepare_key_decays(
-    DFB0& normalized_k, DFB1& key_suffix_decay, DFB2& centered_inverse_decay, DFB3& k_dec, DFB4& k_pairwise) {
+    DFB0& normalized_k, DFB1& anchor_decay, DFB2& centered_inverse_decay, DFB3& k_dec, DFB4& k_pairwise) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
-    elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_k, key_suffix_decay, k_dec, chunk_key_tiles);
-    k_dec.wait_front(chunk_key_tiles);
-    key_suffix_decay.pop_front(chunk_key_tiles);
     elementwise_binary<ElementwiseBinaryOp::Multiply>(
         normalized_k, centered_inverse_decay, k_pairwise, chunk_key_tiles);
     k_pairwise.wait_front(chunk_key_tiles);  // k*exp(anchor-G)
     normalized_k.pop_front(chunk_key_tiles);
     centered_inverse_decay.pop_front(chunk_key_tiles);
+    multiply_by_row(k_pairwise, anchor_decay, k_dec, chunk_key_tiles);  // k*exp(G_last-G) = k*exp(anchor-G)*exp(anchor)
+    k_dec.wait_front(chunk_key_tiles);
+    anchor_decay.pop_front(chunk_key_tiles);  // its last consumer
 }
 
 template <
@@ -821,8 +807,8 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     // Semantic intermediates.
     DataflowBuffer centered_inverse_decay(dfb::centered_inverse_decay);
     DataflowBuffer anchor_decay(dfb::anchor_decay);
-    DataflowBuffer key_suffix_decay(dfb::key_suffix_decay);
-    DataflowBuffer gate_strict_upper(dfb::gate_strict_upper);
+    DataflowBuffer key_decay(dfb::key_decay);
+    DataflowBuffer gate_centered(dfb::gate_centered);
     DataflowBuffer normalized_q(dfb::normalized_q);
     DataflowBuffer normalized_k(dfb::normalized_k);
     DataflowBuffer tile_workspace_0(dfb::tile_workspace_0);
@@ -844,10 +830,13 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     ones.wait_front(chunk_matrix_tiles);
     gate_tril.wait_front(chunk_matrix_tiles);
     gate_ones.wait_front(chunk_matrix_tiles);
-    // The gate-scaled strictly upper mask (gate_ones - gate_tril, exact in FP32) forms the suffix sum G_last - G;
-    // held for the whole kernel. PACK is in the FP32 workspace format from the startup.
-    elementwise_binary<ElementwiseBinaryOp::Subtract>(gate_ones, gate_tril, gate_strict_upper, chunk_matrix_tiles);
-    gate_strict_upper.wait_front(chunk_matrix_tiles);
+    // The gate-scaled centered mask (gate_tril - gate_ones / 2, exact in FP32) forms G - G_last/2; held for the whole
+    // kernel. PACK is in the FP32 workspace format from the startup.
+    multiply_by_half(gate_ones, tile_workspace_0, chunk_matrix_tiles);
+    tile_workspace_0.wait_front(chunk_matrix_tiles);
+    elementwise_binary<ElementwiseBinaryOp::Subtract>(gate_tril, tile_workspace_0, gate_centered, chunk_matrix_tiles);
+    gate_centered.wait_front(chunk_matrix_tiles);
+    tile_workspace_0.pop_front(chunk_matrix_tiles);
 
     for (uint32_t work_item = 0; work_item < work_item_count; ++work_item) {
         if ((work_item_start + work_item) % num_chunks >= valid_chunks) {
@@ -886,14 +875,12 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         auto& g_last = workspace_3;
         prepare_gate_factors<Ct, Kt>(
             g,
-            gate_tril,
+            gate_centered,
             gate_ones,
-            gate_strict_upper,
             centered_decay,
             centered_inverse_decay,
             g_last,
             anchor_decay,
-            key_suffix_decay,
             /*anchor_g=*/workspace_2);
 
         auto& k_beta_pairwise = workspace_1;
@@ -904,10 +891,9 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         auto& final_decay_rows = workspace_0;
         prepare_final_decay_rows<Ct, Kt>(g_last, anchor_decay, final_decay_rows);
 
-        // anchor_decay's storage is free once final_decay_rows has consumed it; k_dec holds there until k_dec_t.
-        auto& k_dec = anchor_decay;
+        auto& k_dec = key_decay;  // until k_dec_t
         auto& k_pairwise = workspace_3;
-        prepare_key_decays<Ct, Kt>(normalized_k, key_suffix_decay, centered_inverse_decay, k_dec, k_pairwise);
+        prepare_key_decays<Ct, Kt>(normalized_k, anchor_decay, centered_inverse_decay, k_dec, k_pairwise);
 
         prepare_pairwise_matrices<Ct, Kt>(k_beta_pairwise, q_pairwise, k_pairwise, tril, akk, intra, tile_workspace_0);
         k_pairwise.pop_front(chunk_key_tiles);
