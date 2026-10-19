@@ -269,29 +269,13 @@ class TestTP:
     @pytest.mark.parametrize("param_label", ["nd", "collapsed_1d"])
     @pytest.mark.parametrize("opt_name", ALL_OPTIMIZERS)
     def test_step_keeps_parameter_topology_despite_mislabelled_grad(self, tp_mesh, opt_name, param_label):
-        """An optimizer step writes the parameter back through the op output (fused kernels: in place; composites:
-        ``set_value`` of a ``ttnn.add``/``subtract`` result), and ttnn derives an output's topology from the union
-        of the op's inputs. A gradient carrying a wrong label -- a CCL output that kept a stale ``Shard`` on the
-        axis it reduced, say -- must not be able to relabel the parameter or its state, because the checkpointer
-        gathers by that label. Every parameter here is replicated; every gradient holds the SAME values on every
-        device (what a reduced CCL output holds) but is labelled ``Shard(3)`` on the tp axis with the N-D
-        distribution shape ``[1, 2]``, so the label is the only thing wrong with it. After each step every device
-        must hold the same parameter and the same state tensors, read without trusting any label.
-
-        ``nd``: the parameter carries the N-D label ``[1, 2] / (Replicate, Replicate)``; the union overlays the
-        gradient's ``Shard(3)`` on it. ``collapsed_1d``: the parameter carries the default mappers' 1-D label
-        ``[2] / (Replicate,)``; the union ignores a fully replicated input of lower rank whenever a higher-rank
-        sharded input is present (``compute_output_placements_and_shape`` in
-        ``ttnn/core/device_operation_detail.cpp`` folds in only the sharded inputs of maximum rank), so the
-        parameter would take the gradient's ``[1, 2] / (Replicate, Shard(3))`` label outright -- a rank change plus
-        a wrong ``Shard``, not a fallback to a default. Two steps, re-setting the mislabelled gradient each time, so
-        the SGD momentum "first update" branch and the Muon step-0 buffer seeding are followed by a regular step.
-        The step must not relabel the caller's gradient either.
-
-        Negative control: without the composites restoring the parameter's topology, ``MorehAdamW``,
-        ``AdamWComposite`` (all variants), ``SGDComposite`` and ``MuonComposite`` hand back the parameter (and the
-        state, which is computed from the gradient) labelled ``[1, 2] / (Replicate, Shard(3))`` after the first step
-        in both cases; the fused kernels pass either way through their device op's ``compute_output_topologies``."""
+        """Replicated parameters (``nd``: the N-D ``[1, 2] / (Replicate, Replicate)``; ``collapsed_1d``: the default
+        mappers' ``[2] / (Replicate,)``) stepped twice with a gradient that holds the same values on every device but
+        is labelled ``Shard(3)`` on the tp axis with distribution shape ``[1, 2]`` -- what a CCL output that kept a
+        stale ``Shard`` holds. After each step the parameter, every state tensor and the caller's gradient keep their
+        labels, and every device holds the same parameter and state bytes, read without trusting any label. Two
+        steps, so the SGD momentum "first update" branch and the Muon step-0 buffer seeding are followed by a regular
+        step."""
         tp_axis = tp_mesh.axis_index("tp")
         device = ttml.autograd.AutoContext.get_instance().get_device()
         if param_label == "nd":
