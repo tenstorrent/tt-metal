@@ -31,7 +31,7 @@ walk.delivers, walk.exits, walk.odd
 - **The rules mirror the router, not the API.** Where the code that builds a route and the router that reads it
   disagree, the rules follow the router. For example, a plain scatter write marks all four chunk types as writes,
   whatever its `chunk_count`. The router goes by `chunk_count`, and so does the rule.
-- **Odd routes are reported; unreadable input raises.** `walk_2d` returns what it can't follow as `Odd2D` entries next to the route, since a hung fabric is where odd routes show up. A function raises `ValueError` only for input it can't read at all, such as a buffer too short for the mesh, a 1D route with no last hop, or a scatter the router can't carry out.
+- **Odd routes are reported; routes the router asserts on raise.** `walk_2d` returns what it can't follow as `Odd2D` entries next to the route, since a hung fabric is where odd routes show up. A function raises `ValueError` for input it can't read, such as a buffer too short for the mesh, and for a route the router asserts on: a 1D route that reaches a `noop` hop, or a scatter the router can't carry out.
 - **One function per rule.** Names start with a verb. A function for one routing mode ends in `_1d` or `_2d`: the 1D routing path table and the 2D route table share one slot of the routing table, so a build has only one of them.
 
 ## The rules
@@ -60,10 +60,12 @@ bit 31            bit 0
 The router reads the lowest field of the first word. Its name in `routing_encodings.1d.hop` says what to do:
 `write_only` and `write_and_forward` deliver at this chip, and `forward_only` and `write_and_forward` send the packet on. Before sending it on, the router shifts the first word down by one field; when the first word is then 0, the next word moves up into its place. The route ends at the first hop that doesn't forward.
 
+The router has no case for `noop`, and asserts on it. With the watcher off, the assert compiles away (`assert.h`) and the packet is neither written nor forwarded. In today's manifest an all-zero field is `noop`, so a route that forwards past its last word reaches one, as does an all-zero route.
+
 - **Function:** `walk_1d`. Hop 0 is what the next router to read the header does: a router shifts its own hop out
-  before it sends the packet on.
-- **Mirrors:** `receiver_forward_packet` (`fabric_erisc_router.cpp`) reads the field, and
-  `update_packet_header_for_next_hop` (`fabric_edm_packet_transmission.hpp`) shifts and refills.
+  before it sends the packet on. It raises `ValueError` at a `noop` hop.
+- **Mirrors:** `receiver_forward_packet` (`fabric_erisc_router.cpp`) reads the field, with `ASSERT(false)` as its
+  `default` case, and `update_packet_header_for_next_hop` (`fabric_edm_packet_transmission.hpp`) shifts and refills.
 
 ### 1D: the routing path table
 
@@ -228,6 +230,7 @@ what makes the second and third rows fail in CI. What it can't reach is the path
 | `fabric_common.h` | `tt_metal/hostdevcommon/api/hostdevcommon/` |
 | `fabric_direction_table_interface.h`, `fabric_routing_path_interface.h`, `fabric_edm_packet_header.hpp` | `tt_metal/hw/inc/hostdev/` |
 | `fabric_erisc_router.cpp` | `tt_metal/fabric/impl/kernels/edm_fabric/` |
+| `assert.h` | `tt_metal/hw/inc/api/debug/` |
 | `fabric_edm_packet_transmission.hpp` | `tt_metal/fabric/hw/inc/edm_fabric/` |
 | `fabric_2d_route_interface.h`, `tt_fabric_api.h` | `tt_metal/fabric/hw/inc/` |
 | `compressed_routing_path.cpp`, `mcast_reverse_tree.cpp` | `tt_metal/fabric/` |

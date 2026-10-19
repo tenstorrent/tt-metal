@@ -269,6 +269,8 @@ def walk_1d(words: Sequence[int], enc: Encodings1D) -> list[Hop]:
     `words` are the route words, word 0 first: a header's routing_fields.value, then its route_buffer. Hop 0 is what
     the next router to read the route does (this router's hop has already been consumed), hop 1 the router one chip
     further on, and so on. The last hop is the first one that doesn't forward.
+    Raises ValueError at a hop that neither writes nor forwards (noop), which the router asserts on. A route that
+    forwards past its last word reaches one, as does an all-zero route.
     """
     live = list(words)
     mask = (1 << enc.bits_per_hop) - 1
@@ -278,6 +280,10 @@ def walk_1d(words: Sequence[int], enc: Encodings1D) -> list[Hop]:
         # Add the next hop
         hop = enc.hops[live[0] & mask]
         hops.append(hop)
+
+        # The router only acts on hops that write or forward
+        if not (hop.writes or hop.forwards):
+            raise ValueError(f"hop {len(hops) - 1} is {hop.name}, which the router asserts on")
 
         # Terminal hop, so we can early return
         if not hop.forwards:

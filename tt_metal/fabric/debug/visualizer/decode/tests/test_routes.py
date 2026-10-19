@@ -152,9 +152,15 @@ class Walk1DTest(unittest.TestCase):
         # Setting a sparse multicast writes only word 0, so the other words can hold an earlier route.
         self.assertEqual(hop_names([0x6E, 0xDEADBEEF]), hop_names([0x6E]))
 
-    def test_route_to_self(self):
-        # encode_1d_unicast's self-route: 0 hops leaves every word 0.
-        self.assertEqual(hop_names([0, 0]), ["noop"])
+    def test_a_route_to_self_is_refused(self):
+        # encode_1d_unicast's self-route: 0 hops leaves every word 0, so hop 0 is noop.
+        with self.assertRaisesRegex(ValueError, "hop 0 is noop"):
+            hop_names([0, 0])
+
+    def test_forwarding_past_the_last_word_is_refused(self):
+        # 16 forwards use every field of the only word, so hop 16 reads the all-zero word after it.
+        with self.assertRaisesRegex(ValueError, "hop 16 is noop"):
+            hop_names([0xAAAAAAAA])
 
 
 class GetPathTableEntry1DTest(unittest.TestCase):
