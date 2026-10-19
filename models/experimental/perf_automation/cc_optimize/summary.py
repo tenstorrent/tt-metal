@@ -2066,7 +2066,8 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # same checkpoint section -- one is gathered, one is streamed by the vocab matmul, and
         # nothing in the file separates them. The profiler could (EmbeddingsDeviceOperation against
         # MatmulDeviceOperation) but its buckets carry no byte counts. The pipeline holds both
-        # tensors and knows, so it says, exactly as it states its per-stage item counts.
+        # tensors and knows, so it declares its tables once (stage_seams.GATHERED_TABLES_ATTR); the
+        # census credits their bytes to the subtrees they sit in, and that is what comes off here.
         #
         # Subtracted in full. What is actually read is items x row, which is 6 KB for a decode step
         # and 25 MB across a 4096-token prefill -- under half a percent of either read set, against

@@ -333,6 +333,36 @@ def pipeline_sp(pipe) -> int:
     return _pipeline_degree(pipe, _seams.SP_ATTR)
 
 
+def _leaves(v, depth=0) -> list:
+    """Every non-container inside `v` (lists, tuples, sets and dict values opened, to a bounded depth),
+    or `v` itself when it is one. None is nothing, not a leaf."""
+    if v is None or depth > 3:
+        return []
+    if isinstance(v, dict):
+        v = list(v.values())
+    if isinstance(v, (list, tuple, set, frozenset)):
+        out: list = []
+        for _i in v:
+            out.extend(_leaves(_i, depth + 1))
+        return out
+    return [v]
+
+
+def pipeline_gathered_tables(pipe) -> list:
+    """The tensors the pipeline says it reads by index (stage_seams.GATHERED_TABLES_ATTR), as a flat list.
+
+    A method is called, an attribute is read; one tensor, or any nesting of lists, tuples and dicts of
+    them, comes back flat. A pipeline that states nothing, or whose statement raises, declares no
+    table -- and every table it holds is then charged in full, which is the old behaviour."""
+    try:
+        v = getattr(pipe, _seams.GATHERED_TABLES_ATTR, None)
+        if callable(v):
+            v = v()
+        return _leaves(v)
+    except Exception:  # noqa: BLE001 -- an unstated or failed declaration charges every table in full
+        return []
+
+
 class ProfileWindowReached(Exception):
     """The profiled forward asked a recurring stage for more passes than the profile window holds.
 

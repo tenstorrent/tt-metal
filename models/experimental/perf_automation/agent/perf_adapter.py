@@ -22,6 +22,13 @@ DECODE CONTRACT (duck-typed on the built pipeline object):
                                           The purity rule above is waived.
     trace_path() -> str                   OPTIONAL, only meaningful with self_traced. Returns the real replay
                                           path ("trace+1cq") the pipeline actually took.
+    gathered_tables() -> tensors          OPTIONAL (method or attr; stage_seams.GATHERED_TABLES_ATTR). The
+                                          device tensors a step reads BY INDEX -- token embeddings, position
+                                          tables, anything a row is selected from -- in any nesting of
+                                          lists / tuples / dicts. The read-set hook charges an op reading
+                                          one beside an integer index for the rows that came out, not the
+                                          table; the census credits their bytes to their subtree for the
+                                          estimate. Undeclared, every table is charged in full.
 
 A pipeline WITHOUT decode_step (repeat-prefill / host-argmax decode) raises AttributeError in setup;
 the perf test's guard then falls back to FORWARD_WALL_MS and the detector reports 'repeat_prefill'.

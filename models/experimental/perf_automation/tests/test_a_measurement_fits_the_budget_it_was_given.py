@@ -144,7 +144,7 @@ def test_the_stage_loop_hands_each_stage_its_share(monkeypatch):
     TR = _tr(monkeypatch)
     body = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(TR.measure_adapter))).body[0])
     assert "_measurement_budget_s(len(stages))" in body
-    assert "_measure_stage(device, st, _stage_budget)" in body
+    assert "_measure_stage(device, st, _stage_budget, tables=_tables)" in body
 
 
 def test_existing_callers_of_the_stage_measurement_still_work(monkeypatch):

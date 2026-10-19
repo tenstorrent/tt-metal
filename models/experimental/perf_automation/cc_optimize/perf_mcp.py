@@ -3006,13 +3006,14 @@ def _read_stage_doc(state_dir_path=None, model="", task="") -> dict:
 
 
 def _parse_gathered_weights(out: str) -> dict:
-    """{subtree: resident bytes read PER ITEM} from the pipeline's marker, or {} when it printed none.
+    """{subtree: bytes of the pipeline's declared lookup tables} from the census marker, or {} for none.
 
     Resident is not the same as streamed. The ceiling assumes one unit of work reads every weight in
     its subtree once, which is true of a matmul weight and false of a lookup table -- voxtral's
     embed_tokens is 805 MB and a decode step reads one 6 KB row of it. Nothing in the checkpoint
     separates the two: embed_tokens and lm_head are both [131072, 3072], same size, same section.
-    The pipeline holds them and says which is which.
+    The pipeline holds them and declares its tables once (stage_seams.GATHERED_TABLES_ATTR); the
+    census credits their bytes per subtree and trace_replay prints that (weight_census.gathered_marker).
     """
     out_map: dict = {}
     try:

@@ -159,6 +159,29 @@ def _tensor_entry(t):
         return None
 
 
+def tensor_key(t, entry):
+    """A device tensor's identity, for telling two references to one buffer from two buffers.
+
+    `id()` is not one: CPython reuses the address of a collected object, and 2000 short-lived objects
+    measured in one decode step produced 161 distinct ids -- two activations that did not overlap in
+    life counted as one, and the working set came out too small, which is the direction that matters
+    when the number becomes a write-once ceiling divisor.
+
+    The device buffer address is the real identity of a resident tensor, and a weight holds its own
+    for the whole step. Paired with the (numel, dtype) `entry` _tensor_entry gave it, so a buffer
+    reused between two differently-shaped tensors cannot silently merge them. id() remains the
+    fallback for a tensor exposing no address. ONE definition, here: the read-set hook keys every
+    buffer an op is handed by it, and the census keys the tables the pipeline declared by it, so the
+    same table reached under another name still matches."""
+    try:
+        _addr = getattr(t, "buffer_address", None)
+        if callable(_addr):
+            return ("buf", int(_addr()), int(entry[0]), str(entry[1]))
+    except Exception:  # noqa: BLE001
+        pass
+    return ("id", id(t), int(entry[0]), str(entry[1]))
+
+
 # A device tensor cannot live inside any of these, so walking them is pure cost. This is the whole
 # fix for a walk that reached 99 tensors: on gemma-3 it exhausted a 200k node budget with 450k
 # objects still queued, and 94% of what it spent was the TOKENIZER -- 116,892 strings, 64,441 tuples
@@ -361,11 +384,32 @@ def checkpoint_numels(model_id_or_dir) -> set:
     return out
 
 
-def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=None) -> dict:
+def _merged_sections(by_attr: dict, by_ckpt: dict) -> dict:
+    """One {name: bytes} from the two vocabularies the walk credits in. CHECKPOINT SECTIONS WIN on a
+    name collision: they are the vocabulary every consumer asks in, and an attribute that happens to
+    share the name is the weaker claim."""
+    return {
+        k: int(round(v))
+        for k, v in {
+            **{a: b for a, b in by_attr.items() if b > 0},
+            **{a: b for a, b in by_ckpt.items() if b > 0},
+        }.items()
+    }
+
+
+def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=None, gathered=None) -> dict:
     """Walk `root` and record every device tensor reachable from it.
 
     Returns {"weight_tensors": [{numel, dtype}], "weight_bytes": int, "scope": str,
-             "unknown_dtype_tensors": int, "complete": bool}.
+             "unknown_dtype_tensors": int, "complete": bool, "sections": {name: bytes},
+             "gathered_sections": {name: bytes}}.
+
+    `gathered` is the pipeline's one declaration of the tensors it reads by index
+    (stage_seams.GATHERED_TABLES_ATTR, flat). Their bytes are credited under the SAME section names
+    the weights are, in `gathered_sections`, so a stage's estimate can take its tables off its share
+    by the very root it resolves to. Keyed by buffer identity (tensor_key), not by the Python object:
+    the same table reached under another attribute still matches. None declared: an empty map, and
+    no number changes.
 
     `complete` is False when any tensor carried a dtype this module does not know a width for. A
     caller must not treat an incomplete census as the model's byte count -- it is a LOWER bound, and
@@ -390,6 +434,13 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
     # attribution on the map skipped it entirely in the second case, so a model whose sizes all
     # collide reported no unmatched bytes at all, which reads as "fully attributed".
     _have_ckpt = bool(ckpt)
+    _gkeys: set = set()
+    for _t in gathered or ():
+        _e = _tensor_entry(_t)
+        if _e is not None:
+            _gkeys.add(tensor_key(_t, _e))
+    gathered_sections: dict = {}
+    gathered_ckpt: dict = {}
     seen: set = set()
     tensors: list = []
     scratch: list = []
@@ -431,10 +482,15 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
                     # noise -- and noise that would rank near the top by bytes, displacing a real
                     # tower from the bounded marker.
                     _b = int(n) * bytes_per_elem(name)
+                    # A DECLARED TABLE IS CREDITED TWICE OVER: to the weight groups, as every weight
+                    # is, and to the gathered groups beside them under the same names.
+                    _is_table = bool(_gkeys) and tensor_key(obj, (n, name)) in _gkeys
                     for seg in set(path[:-1]):
                         if not _is_section_name(seg):
                             continue
                         sections[seg] = sections.get(seg, 0.0) + _b
+                        if _is_table:
+                            gathered_sections[seg] = gathered_sections.get(seg, 0.0) + _b
                     if _have_ckpt:
                         # KEPT APART, because the two vocabularies can collide -- a checkpoint
                         # section and an attribute can both be called `layers`, and adding both
@@ -445,6 +501,8 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
                         # stage's bytes against the total deserves to know how much is unaccounted.
                         _sec = _ckpt_sec.get(int(n)) or "unmatched"
                         ckpt_sections[_sec] = ckpt_sections.get(_sec, 0.0) + _b
+                        if _is_table:
+                            gathered_ckpt[_sec] = gathered_ckpt.get(_sec, 0.0) + _b
                 else:
                     scratch.append(entry)
             else:
@@ -486,15 +544,10 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
     return {
         "weight_tensors": tensors,
         "weight_bytes": int(round(total)),
-        # CHECKPOINT SECTIONS WIN on a name collision: they are the vocabulary every consumer asks
-        # in, and an attribute that happens to share the name is the weaker claim.
-        "sections": {
-            k: int(round(v))
-            for k, v in {
-                **{a: b for a, b in sections.items() if b > 0},
-                **{a: b for a, b in ckpt_sections.items() if b > 0},
-            }.items()
-        },
+        "sections": _merged_sections(sections, ckpt_sections),
+        # THE TABLES AMONG THEM, by the same names: what a stage's estimate subtracts from its
+        # share, since a unit of work reads rows of a table and never the table.
+        "gathered_sections": _merged_sections(gathered_sections, gathered_ckpt),
         "scope": scope,
         "bytes_per_param": round(per_param, 6),
         "resident_elems": int(elems),
@@ -542,18 +595,13 @@ def _is_section_name(seg) -> bool:
     return bool(t) and not t.startswith("_") and not t.isdigit()
 
 
-def sections_marker(c: dict) -> str:
-    """The per-subtree bytes, as its own line. Empty string when the walk recorded none.
-
-    SEPARATE FROM `marker` because the two are consumed by different questions -- the total feeds the
-    width, these feed a stage's share -- and because an older harness parsing the census line must
-    not have to cope with a field that did not exist when it was written.
+def _pairs_line(prefix: str, secs: dict) -> str:
+    """`PREFIX=name:bytes,...` over the biggest entries of `secs`; empty string when there are none.
 
     Bounded: a deep model has hundreds of distinct attribute names and the tail of that list is
     LayerNorm weights. Sorted by bytes and truncated, so what survives is every name big enough for a
     stage to be made of. A name that falls off the end could not have been a tower.
     """
-    secs = c.get("sections") or {}
     if not secs:
         return ""
     top = sorted(secs.items(), key=lambda kv: -int(kv[1]))[:_SECTIONS_IN_MARKER]
@@ -562,7 +610,27 @@ def sections_marker(c: dict) -> str:
     safe = [(k, v) for k, v in top if "," not in str(k) and ":" not in str(k) and str(k).strip()]
     if not safe:
         return ""
-    return "TRACE_WEIGHT_SECTIONS=%s" % ",".join("%s:%d" % (k, int(v)) for k, v in safe)
+    return "%s=%s" % (prefix, ",".join("%s:%d" % (k, int(v)) for k, v in safe))
+
+
+def sections_marker(c: dict) -> str:
+    """The per-subtree bytes, as its own line. Empty string when the walk recorded none.
+
+    SEPARATE FROM `marker` because the two are consumed by different questions -- the total feeds the
+    width, these feed a stage's share -- and because an older harness parsing the census line must
+    not have to cope with a field that did not exist when it was written.
+    """
+    return _pairs_line("TRACE_WEIGHT_SECTIONS", c.get("sections") or {})
+
+
+def gathered_marker(c: dict) -> str:
+    """The bytes of the pipeline's declared lookup tables, per subtree, as its own line; "" when none.
+
+    perf_mcp reads it back as the model's gathered_weight_bytes and summary takes it off a stage's
+    ESTIMATED share. It used to be printed from a second declaration -- a pipeline method returning
+    bytes per subtree, which no pipeline ever wrote -- and is now derived from the one declaration of
+    the table tensors (stage_seams.GATHERED_TABLES_ATTR) the census was handed."""
+    return _pairs_line("TRACE_GATHERED_WEIGHTS", c.get("gathered_sections") or {})
 
 
 def _model_root_of(root):

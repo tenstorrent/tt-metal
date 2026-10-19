@@ -40,13 +40,6 @@ _WARMUP_ITERS = max(1, int(os.environ.get("TT_TRACE_WARMUP_ITERS", "3")))
 # How far into a container the read-set walk looks for tensors. Op arguments nest a level or two
 # (a list of tensors, a dict of them); anything deeper is structure, not a read set.
 _NOTE_MAX_DEPTH = 3
-# THE OPS WHOSE CONTRACT IS "READ WHAT AN INDEX TENSOR SELECTS". The table they are handed is not
-# streamed; the rows that come out of it are. Named by the ttnn API's own fully qualified op name
-# (FastOperation.python_fully_qualified_name) -- a property of the library, not of any model.
-# ttnn.embedding: "input_tensor is a list of indices, and the embedding matrix, and the output is the
-# corresponding word embeddings"; ttnn.gather: "extracts values from the input tensor based on indices
-# provided in the index tensor". An op not listed here reads what it is handed, in full.
-_GATHER_OPS = frozenset({"ttnn.embedding", "ttnn.gather"})
 # The replay count an operator may ask for (emit-e2e / optimize --trace-replays set it); this is its
 # one spelling, which the CLI and the gate server forward by name.
 REPLAY_ITERS_ENV = "TT_TRACE_REPLAY_ITERS"
@@ -325,7 +318,7 @@ def _replay(device, tid, iters, budget_s=0.0):
 _TRACED_OP_DISPATCH_MAX = int(os.environ.get("TT_TRACE_DISPATCH_MAX", "32"))
 
 
-def _count_op_dispatches(fn, detail=None):
+def _count_op_dispatches(fn, detail=None, tables=None):
     """Run `fn` once; return (dispatches, streamed_bytes) or (None, 0) if the hook did not install.
 
     WHAT A STAGE ACTUALLY READS, MEASURED. The roofline needs the bytes one unit of work streams, and
@@ -374,12 +367,20 @@ def _count_op_dispatches(fn, detail=None):
         count and the weights are flat in it.
       * A buffer returned by an op that was handed ONLY that buffer is a view (reshape, a no-op
         relayout): nothing was written, and a weight seen through one stays streamed.
-      * A table handed to a GATHER op (_GATHER_OPS: the ops whose contract is to read the elements
-        an index tensor selects) is charged what came out of it, not what it holds. A table some
-        other op streams in full stays in full.
+      * A table the PIPELINE DECLARED it reads by index (`tables`, from
+        stage_seams.GATHERED_TABLES_ATTR), handed to an op beside an integer tensor -- the index it
+        is selected from by -- is charged what came out of that op, not what it holds. Handed
+        without an index, or to an op that returned nothing, it is streamed: nothing was selected
+        from it (a tied embedding table multiplied by the vocabulary matmul is the real cost). A
+        table nobody declared is streamed in full whatever the op is called. The first version
+        keyed this rule on the op's ttnn API name (ttnn.embedding, ttnn.gather) and went blind the
+        moment a model wrote its own gather as a generic_op program -- Devstral run 4 (2026-10-18)
+        did, in its first round, and the 1.34 GB table was back in decode's floor.
 
-    `detail`, when a dict is passed, receives the breakdown beside the figure: in_step_bytes (what
-    the step wrote, so did not stream), gathered_saved_bytes (table bytes no op read) and buffers.
+    `tables` is the flat list stage_marks.pipeline_gathered_tables returns; a nested one is walked
+    the same way every op argument is. `detail`, when a dict is passed, receives the breakdown beside
+    the figure: in_step_bytes (what the step wrote, so did not stream), gathered_saved_bytes (table
+    bytes no op read) and buffers.
     """
     # WHICHEVER CLASS THE BUILD REGISTERED. This patched `Operation` because that is the class
     # decorators.py defines first and it has the __call__ a dispatch hook wants. But ttnn chooses at
@@ -411,33 +412,15 @@ def _count_op_dispatches(fn, detail=None):
     # Two definitions of one quantity is how the ceiling's divisor came to disagree with itself
     # before; this calls the census's.
     try:
-        from .weight_census import _tensor_entry as _entry, bytes_per_elem as _bpe
+        from .weight_census import _tensor_entry as _entry, bytes_per_elem as _bpe, tensor_key as _tkey
     except Exception:  # noqa: BLE001
         _entry = None
     n = [0]
-    # Keyed by the buffer identity _key gives, over the whole step:
+    # Keyed by the buffer identity weight_census.tensor_key gives, over the whole step:
     inputs: dict = {}  # every device tensor some op was handed -> its bytes
     written: set = set()  # buffers some op produced, or updated in place
     streamed: set = set()  # buffers read by an op that reads what it is handed
     gathered: dict = {}  # table -> bytes the gather ops that read it produced from it
-
-    def _key(x, ent):
-        """A tensor's identity. `id()` is not one: CPython reuses the address of a collected object,
-        and 2000 short-lived objects measured here produced 161 distinct ids. Two activations that do
-        not overlap in life therefore counted as one, and the working set came out too small -- which
-        is the direction that matters, because this number becomes a write-once ceiling divisor.
-
-        The device buffer address is the real identity of a resident tensor, and the weights this is
-        trying to measure hold theirs for the whole step. Paired with size and dtype so that a buffer
-        reused between two differently-shaped tensors cannot silently merge them. id() remains the
-        fallback for anything that does not expose an address."""
-        try:
-            _addr = getattr(x, "buffer_address", None)
-            if callable(_addr):
-                return ("buf", int(_addr()), int(ent[0]), str(ent[1]))
-        except Exception:  # noqa: BLE001
-            pass
-        return ("id", id(x), int(ent[0]), str(ent[1]))
 
     def _note(x, depth=0):
         """Every device tensor in `x` -- bare, or inside a list, tuple or dict -- as a list of
@@ -455,7 +438,7 @@ def _count_op_dispatches(fn, detail=None):
         try:
             ent = _entry(x)  # (numel, dtype_name) for a DEVICE tensor, None otherwise
             if ent:
-                found.append((_key(x, ent), ent[0] * _bpe(ent[1]), str(ent[1])))
+                found.append((_tkey(x, ent), ent[0] * _bpe(ent[1]), str(ent[1])))
                 return found
             if isinstance(x, (list, tuple, set, frozenset)):
                 for _i in x:
@@ -468,8 +451,12 @@ def _count_op_dispatches(fn, detail=None):
         return found
 
     def _is_index(dtype_name) -> bool:
-        """An integer tensor handed to a gather op is the index, not the table."""
+        """An integer tensor beside a declared table is the index it is read by."""
         return str(dtype_name or "").startswith(("uint", "int"))
+
+    # THE DECLARED TABLES, by the same identity the walk gives every buffer an op is handed, so a
+    # table reached under another name still matches. Empty when the pipeline declared none.
+    table_keys = {_k for _k, _b, _dt in _note(tables)} if tables is not None else set()
 
     def _make_counting(orig):
         def counting(self, *a, **kw):
@@ -491,18 +478,18 @@ def _count_op_dispatches(fn, detail=None):
                 if _k in in_keys and len(in_keys) == 1:
                     continue  # one tensor in, the same buffer out: a view, nothing written
                 written.add(_k)
-            # WHAT THE OP READ OF WHAT IT WAS HANDED.
-            if str(getattr(self, "python_fully_qualified_name", "") or "") in _GATHER_OPS and outs:
-                _rows = sum(_b for _k, _b, _dt in outs)
-                for _k, _b, _dt in ins:
-                    if _k in out_keys:
-                        continue
-                    if _is_index(_dt):
-                        streamed.add(_k)  # the index itself is read whole
-                    else:
-                        gathered[_k] = gathered.get(_k, 0) + _rows
-            else:
-                streamed.update(_k for _k in in_keys if _k not in out_keys)
+            # WHAT THE OP READ OF WHAT IT WAS HANDED. A declared table beside an index -- an integer tensor
+            # the op READ, not one it wrote into -- with something out of the op to price it by, is read at
+            # what came out; everything else is read whole, the index itself included.
+            _rows = sum(_b for _k, _b, _dt in outs)
+            _indexed = bool(outs) and any(_is_index(_dt) for _k, _b, _dt in ins if _k not in out_keys)
+            for _k, _b, _dt in ins:
+                if _k in out_keys:
+                    continue
+                if _indexed and _k in table_keys:
+                    gathered[_k] = gathered.get(_k, 0) + _rows
+                else:
+                    streamed.add(_k)
             return out
 
         return counting
@@ -561,7 +548,7 @@ def _report_read_set(stage_name, dispatches, ws_bytes, detail=None):
     print("TRACE_STAGE_BYTES_NONE[%s] reason=%s" % (stage_name, _why), flush=True)
 
 
-def _measure_native(device, stage, budget_s=0.0):
+def _measure_native(device, stage, budget_s=0.0, tables=None):
     """Time a SELF-TRACED stage: the pipeline owns its trace capture (persistent-buffer / vLLM-style
     decode, e.g. GLM's decode(enable_trace=True)), so we must NOT begin_trace_capture around it --
     doing so raises "Writes/Reads are not supported during trace capture" because the step does
@@ -580,7 +567,7 @@ def _measure_native(device, stage, budget_s=0.0):
     pipeline reports its own path; the count is what decides when nothing does."""
     _check_advance(_warm(stage.step, _WARMUP_ITERS - 1))
     _det: dict = {}
-    dispatched, _ws_bytes = _count_op_dispatches(stage.step, _det)
+    dispatched, _ws_bytes = _count_op_dispatches(stage.step, _det, tables)
     _report_read_set(stage.name, dispatched, _ws_bytes, _det)
     ttnn.synchronize_device(device)
     t0 = time.perf_counter()
@@ -617,7 +604,7 @@ def _measure_native(device, stage, budget_s=0.0):
     return per_s * 1000.0, path
 
 
-def _measure_stage(device, stage, budget_s=0.0):
+def _measure_stage(device, stage, budget_s=0.0, tables=None):
     """Capture stage.step as a trace, replay it on a single command queue, return (ms, path).
 
     THE READ SET IS OBSERVED HERE, for every stage. It was measured inside _measure_native, which
@@ -632,10 +619,10 @@ def _measure_stage(device, stage, budget_s=0.0):
     params x width is trying to approximate.
     """
     if getattr(stage, "self_traced", False):
-        return _measure_native(device, stage, budget_s)
+        return _measure_native(device, stage, budget_s, tables=tables)
     _ws_bytes, _n, _det = 0, None, {}
     try:
-        _n, _ws_bytes = _count_op_dispatches(stage.step, _det)
+        _n, _ws_bytes = _count_op_dispatches(stage.step, _det, tables)
     except Exception as _he:  # noqa: BLE001 -- instrumentation must never cost the measurement
         print("TRACE_STAGE_BYTES_NONE[%s] reason=hook raised %s" % (stage.name, type(_he).__name__), flush=True)
         _ws_bytes, _n = 0, None
@@ -750,15 +737,33 @@ def measure_adapter(adapter, device) -> float:
         from .perf_adapter import NotTraceCapable
     except Exception:  # pragma: no cover - perf_adapter always importable alongside this module
         NotTraceCapable = ()
+    # THE PIPELINE'S LOOKUP TABLES (stage_marks.pipeline_gathered_tables; stage_seams.GATHERED_TABLES_ATTR),
+    # read ONCE after setup() -- before it the tensors do not exist -- and handed to both readers: the
+    # census, which credits their bytes to the subtree they sit in for the estimate's marker, and the
+    # per-stage hook, which charges an op reading one beside an integer index for the rows that came
+    # out. One declaration, because nothing else tells a table from a weight of the same shape.
+    # Unstated, every table is charged in full.
+    _tables: list = []
     try:
         adapter.setup(device)
+        try:
+            from .stage_marks import pipeline_gathered_tables as _pipeline_gathered_tables
+
+            _tables = _pipeline_gathered_tables(getattr(adapter, "_pipe", None) or adapter)
+        except Exception:  # noqa: BLE001 -- an unstated declaration charges every table in full
+            _tables = []
         # THE ONLY MOMENT THE SERVED WIDTH EXISTS. setup() has built the model and the loader has
         # decided each tensor's dtype; the checkpoint records what was on disk, and every byte rule
         # downstream is a PREDICTION of what happened here. Walk it once and state it. Best-effort:
         # a census that cannot run leaves the ceiling on its existing fallbacks rather than failing
         # a measurement run.
         try:
-            from .weight_census import census as _census, marker as _cmarker, sections_marker as _smarker
+            from .weight_census import (
+                census as _census,
+                gathered_marker as _gmarker,
+                marker as _cmarker,
+                sections_marker as _smarker,
+            )
 
             # WITH THE CHECKPOINT, so the split is recorded in the vocabulary stage_roots speaks.
             #
@@ -774,30 +779,21 @@ def measure_adapter(adapter, device) -> float:
                 getattr(adapter, "_pipe", None) or adapter,
                 scope="pipeline",
                 checkpoint=_checkpoint_for_census(getattr(adapter, "_pipe", None)),
+                gathered=_tables,
             )
             if _c.get("weight_bytes"):
                 print(_cmarker(_c), flush=True)
                 # The split, measured in the same walk. Printed beside the total rather than derived
                 # later from the checkpoint, which is the only other place a split was available and
                 # states disk precision, not served precision.
-                # WHICH RESIDENT WEIGHTS ARE GATHERED, from the only thing that knows. The census
-                # sums every weight and the ceiling assumes each is streamed once per unit -- true
-                # of a matmul weight, false of a lookup table, and nothing in the checkpoint tells
-                # them apart (voxtral's embed_tokens and lm_head are both [131072, 3072]). Optional:
-                # a pipeline that returns nothing changes no number.
-                try:
-                    _gw = getattr(getattr(adapter, "_pipe", None) or adapter, "gathered_weight_bytes", None)
-                    _g = _gw() if callable(_gw) else None
-                    if isinstance(_g, dict) and _g:
-                        _pairs = ",".join(
-                            "%s:%d" % (k, int(v))
-                            for k, v in _g.items()
-                            if str(k).strip() and "," not in str(k) and ":" not in str(k) and int(v) > 0
-                        )
-                        if _pairs:
-                            print("TRACE_GATHERED_WEIGHTS=%s" % _pairs, flush=True)
-                except Exception:  # noqa: BLE001 -- an unstated split is the old behaviour
-                    pass
+                # WHICH RESIDENT WEIGHTS ARE TABLES, from the one declaration the census was handed. The
+                # census sums every weight and the ceiling assumes each is streamed once per unit --
+                # true of a matmul weight, false of a lookup table, and nothing in the checkpoint
+                # tells them apart (voxtral's embed_tokens and lm_head are both [131072, 3072]).
+                # Silent when the pipeline declared none: no number changes.
+                _gm = _gmarker(_c)
+                if _gm:
+                    print(_gm, flush=True)
                 _sm = _smarker(_c)
                 if _sm:
                     print(_sm, flush=True)
@@ -911,7 +907,7 @@ def measure_adapter(adapter, device) -> float:
             # had no such guard, so a raise here lost every stage rather than one -- the whole replay,
             # and with it every roofline row, for a fault in a single tower. Same rule, one step later.
             try:
-                ms, path = _measure_stage(device, st, _stage_budget)
+                ms, path = _measure_stage(device, st, _stage_budget, tables=_tables)
             except Exception as exc:  # noqa: BLE001
                 print(
                     "  [trace-replay] stage %r could not be measured (%s: %s); it gets no row, the "

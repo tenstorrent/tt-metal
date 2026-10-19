@@ -56,6 +56,16 @@ TP_ATTR = "tp"
 # The sequence-parallel degree a pipeline runs at, when it states one -- the same rule: the mesh rows
 # carry replicas as well as token groups, and only the pipeline knows how many of each.
 SP_ATTR = "sp"
+# The tensors a pipeline reads BY INDEX -- its lookup tables: token embeddings, position tables, any
+# tensor a row is selected from -- as a method or attribute returning them, in any nesting of lists,
+# tuples or dicts. A unit of work reads the ROWS an index selects from such a table, not the table,
+# and nothing else can tell a table from a weight of the same shape: voxtral's embed_tokens and
+# lm_head are both [131072, 3072], and an op the model wrote itself (a generic_op gather) carries no
+# API name to key on. Only the pipeline knows, so it says, ONCE; every reader -- the dispatch hook
+# that measures a stage's streamed bytes, the census that credits resident bytes to a subtree -- asks
+# here. Unstated, every table is charged in full: the floor reads too high and the stack too short,
+# the direction that keeps a run working rather than stopping it early.
+GATHERED_TABLES_ATTR = "gathered_tables"
 
 
 # A DECLARED STAGE THE MEASUREMENT COULD NOT TIME SAYS SO, on a line of its own:

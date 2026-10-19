@@ -13,7 +13,8 @@ The hook now reports what the step STREAMS:
 
     * a buffer an op produced or updated during the step is state the step writes -- not streamed;
     * a buffer an op returns when it was handed only that buffer is a view -- still streamed;
-    * a table handed to a gather op (ttnn.embedding, ttnn.gather) is charged the rows that came out.
+    * a table the pipeline DECLARED it reads by index (stage_seams.GATHERED_TABLES_ATTR), handed to an
+      op beside an integer index, is charged the rows that came out -- whatever the op is called.
 
 What the step writes is priced on top by the byte model's per-item term, which summary now adds to
 the measured figure exactly as it always added it to the estimate.
@@ -27,7 +28,7 @@ from pathlib import Path
 _PA = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PA))
 
-_BPE = {"bfloat16": 2, "bfloat8_b": 1.0625, "uint32": 4, "int32": 4}
+_BPE = {"bfloat16": 2, "bfloat8_b": 1.0625, "float32": 4, "uint32": 4, "int32": 4}
 
 
 class _T:
@@ -78,9 +79,9 @@ def _load(monkeypatch):
     return tr, FastOperation
 
 
-def _streamed(tr, fn):
+def _streamed(tr, fn, tables=None):
     detail = {}
-    n, b = tr._count_op_dispatches(fn, detail)
+    n, b = tr._count_op_dispatches(fn, detail, tables)
     return n, b, detail
 
 
@@ -163,10 +164,10 @@ def test_an_op_that_returns_one_of_several_inputs_wrote_into_it(monkeypatch):
     assert d["in_step_bytes"] == dst.nbytes
 
 
-# ---- a gathered table is charged what came out of it --------------------------------------------
+# ---- a declared table is charged what came out of it ----------------------------------------------
 
 
-def test_a_gather_charges_its_table_the_rows_that_came_out(monkeypatch):
+def test_a_declared_table_is_charged_the_rows_that_came_out(monkeypatch):
     """A 131072 x 5120 bf16 embedding table is 1.34 GB; a step with 32 users reads 32 rows of it.
     The index tensor is read whole, and is tiny."""
     tr, Op = _load(monkeypatch)
@@ -174,34 +175,104 @@ def test_a_gather_charges_its_table_the_rows_that_came_out(monkeypatch):
     ids = _T(32, 0x20, "uint32")
     rows = _T(32 * 5120, 0x30)
     embed = Op("ttnn.embedding", returns=rows)
-    _n, b, d = _streamed(tr, lambda: embed(ids, table))
+    _n, b, d = _streamed(tr, lambda: embed(ids, table), tables=[table])
     assert b == rows.nbytes + ids.nbytes, b
     assert d["gathered_saved_bytes"] == table.nbytes - rows.nbytes
 
 
-def test_a_table_another_op_streams_in_full_counts_in_full(monkeypatch):
-    """Tied embeddings: the same table is gathered for the input and multiplied for the logits.
-    Streaming it once is the real cost, and the gather does not discount it."""
+def test_the_rule_does_not_care_what_the_op_is_called(monkeypatch):
+    """Devstral run 4 (2026-10-18), round 1: the agent replaced ttnn.embedding with its own generic_op
+    program -- io list [ids, table, out], out preallocated -- and a rule keyed on the op's API name
+    charged the whole 1.34 GB table again. The declaration names the TENSOR; the op's name is nothing."""
     tr, Op = _load(monkeypatch)
     table = _T(131072 * 5120, 0x10)
     ids = _T(32, 0x20, "uint32")
+    out = _T(32 * 5120, 0x30, "float32")
+    gather = Op("ttnn.generic_op", returns=lambda io, *a, **k: io[-1])
+    _n, b, d = _streamed(tr, lambda: gather([ids, table, out]), tables=[table])
+    assert b == out.nbytes + ids.nbytes, b  # the table at what came out of it; the index whole
+    assert d["in_step_bytes"] == out.nbytes, "the preallocated output is what the step wrote"
+    assert d["gathered_saved_bytes"] == table.nbytes - out.nbytes
+
+
+def test_a_declared_table_without_an_index_beside_it_is_streamed(monkeypatch):
+    """Tied embeddings: the same table is gathered for the input and multiplied for the logits. The
+    matmul is handed no index, so it streams the table, and streaming it once is the real cost."""
+    tr, Op = _load(monkeypatch)
+    table = _T(131072 * 5120, 0x10)
+    ids = _T(32, 0x20, "uint32")
+    h = _T(32 * 5120, 0x50)
     embed = Op("ttnn.embedding", returns=_T(32 * 5120, 0x30))
     head = Op("ttnn.matmul", returns=_T(32 * 131072, 0x40))
-    h = _T(32 * 5120, 0x50)
-    _n, b, d = _streamed(tr, lambda: (embed(ids, table), head(h, table)))
+    _n, b, d = _streamed(tr, lambda: (embed(ids, table), head(h, table)), tables=[table])
     assert b == table.nbytes + ids.nbytes + h.nbytes, b
     assert d["gathered_saved_bytes"] == 0
 
 
-def test_the_gather_rule_is_keyed_on_the_api_name_the_op_object_carries(monkeypatch):
-    """An op of any other name handed an integer tensor beside a table streams the table: MoE
-    routing hands expert indices beside expert weights and reads the experts, not rows of them."""
+def test_an_undeclared_table_is_charged_in_full_whatever_the_op_is_called(monkeypatch):
+    """The trade-off, stated: a pipeline that declares nothing has its tables counted whole. The floor
+    then reads too high and the stack too short, which keeps the run working rather than stopping
+    it; the marker carries gathered_saved=0, so the omission is visible, not silent."""
+    tr, Op = _load(monkeypatch)
+    table = _T(131072 * 5120, 0x10)
+    ids = _T(32, 0x20, "uint32")
+    embed = Op("ttnn.embedding", returns=_T(32 * 5120, 0x30))
+    _n, b, d = _streamed(tr, lambda: embed(ids, table))
+    assert b == table.nbytes + ids.nbytes, b
+    assert d["gathered_saved_bytes"] == 0
+
+
+def test_a_declared_table_handed_to_an_op_that_returned_nothing_is_streamed(monkeypatch):
+    """Nothing came out to price the read by, so nothing is assumed: the table is read whole."""
+    tr, Op = _load(monkeypatch)
+    table = _T(131072 * 5120, 0x10)
+    ids = _T(32, 0x20, "uint32")
+    op = Op("ttnn.generic_op", returns=None)
+    _n, b, d = _streamed(tr, lambda: op([ids, table]), tables=[table])
+    assert b == table.nbytes + ids.nbytes, b
+    assert d["gathered_saved_bytes"] == 0
+
+
+def test_an_integer_the_op_wrote_is_not_its_index(monkeypatch):
+    """A sampler handed a declared table and a preallocated uint32 output selects nothing from the
+    table by that output: the integer tensor an op WRITES is not the index it reads by, so the table
+    is streamed in full."""
+    tr, Op = _load(monkeypatch)
+    table = _T(131072 * 5120, 0x10)
+    drawn = _T(32, 0x20, "uint32")
+    op = Op("ttnn.generic_op", returns=lambda io, *a, **k: io[-1])
+    _n, b, d = _streamed(tr, lambda: op([table, drawn]), tables=[table])
+    assert b == table.nbytes, b
+    assert d["in_step_bytes"] == drawn.nbytes and d["gathered_saved_bytes"] == 0
+
+
+def test_an_integer_beside_an_undeclared_weight_does_not_make_a_gather(monkeypatch):
+    """MoE routing hands expert indices beside expert weights and reads the experts, not rows of
+    them. An index alone proves nothing; the declaration is what names a table."""
     tr, Op = _load(monkeypatch)
     experts = _T(8 * 4096 * 14336, 0x10, "bfloat8_b")
     routes = _T(32 * 2, 0x20, "uint32")
     moe = Op("ttnn.experimental.moe", returns=_T(32 * 4096, 0x30))
     _n, b, _d = _streamed(tr, lambda: moe(_T(32 * 4096, 0x40), experts, routes))
     assert b == experts.nbytes + routes.nbytes + _T(32 * 4096, 0x40).nbytes, b
+
+
+def test_the_declaration_is_matched_by_buffer_not_by_object_and_may_nest(monkeypatch):
+    """The pipeline declares its tables however it holds them -- a dict of lists is fine -- and an op
+    handed the same buffer through another Tensor object (a view) still reads rows of it."""
+    tr, Op = _load(monkeypatch)
+    table = _T(131072 * 5120, 0x10)
+    pos = _T(4096 * 128, 0x60)
+    ids = _T(32, 0x20, "uint32")
+    rows = _T(32 * 5120, 0x30)
+    prow = _T(32 * 128, 0x70)
+    embed = Op("ttnn.embedding", returns=rows)
+    rope = Op("ttnn.generic_op", returns=prow)
+    _n, b, d = _streamed(
+        tr, lambda: (embed(ids, table.view()), rope([ids, pos])), tables={"embed": [table], "rope": (pos,)}
+    )
+    assert b == rows.nbytes + prow.nbytes + ids.nbytes, b
+    assert d["gathered_saved_bytes"] == (table.nbytes - rows.nbytes) + (pos.nbytes - prow.nbytes)
 
 
 # ---- the figure still means what its consumers expect -------------------------------------------

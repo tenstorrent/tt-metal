@@ -565,7 +565,7 @@ def test_a_heat_exit_ends_the_samples_and_is_flagged_for_a_rerun(monkeypatch):
 
 
 def test_a_heartbeat_said_during_a_stage_is_not_kept(trace_replay, monkeypatch):
-    def _stage(device, st, budget_s=0.0):
+    def _stage(device, st, budget_s=0.0, tables=None):
         print("%s[replay x2] 30s on device" % trace_replay._HEARTBEAT_MARK, flush=True)
         print("TRACE_STAGE_REPLAYS=2 of 2 requested (1.0s each)", flush=True)
         return 1.0, "trace+1cq"
