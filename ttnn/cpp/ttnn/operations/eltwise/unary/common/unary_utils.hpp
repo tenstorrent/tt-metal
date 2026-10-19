@@ -74,7 +74,9 @@ DramReadPlan get_dram_read_plan(
     const tt::tt_metal::TensorSpec& output_spec,
     const tt::tt_metal::CoreRangeSet& worker_grid);
 
+// The cores an op runs on: sub_core_grids, a shard grid, or the device's workers, fewer for small DRAM tensors.
 tt::tt_metal::CoreRangeSet get_worker_grid(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
