@@ -125,34 +125,24 @@ FORCE_INLINE void fabric_write_bytes(
     }
 }
 
-// Largest power of 2 <= n (n >= 1). Rounds the read-ring depth down to a power of 2 so
-// the ring slot index is a bitmask rather than a modulo.
-// Following uses Hacker's Delight formula
-constexpr uint32_t floor_pow2(uint32_t n) {
-    if (n == 0) {
-        return 0;
-    }
-    return 1u << (31 - __builtin_clz(n));
-}
-
-// Thin compile-time transaction-id ring. Depth is a power of 2 (asserted), so a page
-// index maps to its ring slot with a bitmask and to its trid with slot + Base. Page k
+// Thin compile-time transaction-id ring: a page index maps to its ring slot modulo Depth and
+// to its trid with slot + Base. Page k
 // and page k + Depth share a slot/trid — exactly the "ship slot for page k, then
 // prefetch the page Depth ahead into it" reuse the streaming loop relies on.
 template <uint32_t Depth, uint32_t Base>
 struct TridRing {
-    static_assert(Depth > 0 && (Depth & (Depth - 1)) == 0, "TridRing Depth must be a power of 2");
+    static_assert(Depth > 0, "TridRing Depth must be positive");
     static constexpr uint32_t depth = Depth;
-    static constexpr uint32_t slot(uint32_t page) { return page & (Depth - 1); }
-    static constexpr uint32_t trid(uint32_t page) { return Base + (page & (Depth - 1)); }
+    static constexpr uint32_t slot(uint32_t page) { return page % Depth; }
+    static constexpr uint32_t trid(uint32_t page) { return Base + (page % Depth); }
 };
 
 // Read pipelining: stream pages through a trid ring over the scratch CB so DRAM reads
 // overlap the fabric writes. Ring depth = the scratch CB's slot capacity
-// (num_read_slots, host-sized), rounded DOWN to a power of 2 (TridRing's bitmask) —
+// (num_read_slots, host-sized: 6, so groups of three pages tile it) —
 // independent of pages_per_chunk, so a large tensor page (small pages_per_chunk) still
 // pipelines at full depth.
-constexpr uint32_t kRingDepth = floor_pow2(num_read_slots);
+constexpr uint32_t kRingDepth = num_read_slots;
 // Each lane (RISC) gets a DISJOINT trid range so the two RISCs on this core never
 // share a NoC transaction id — the trid-barrier counters are not assumed independent
 // across the two RISCs. Lane 0 -> [1, 1+depth), lane 1 -> [1+depth, 1+2*depth).
@@ -160,9 +150,13 @@ constexpr uint32_t kLaneId = is_master ? 0u : 1u;
 constexpr uint32_t kTridBase = 1u + kLaneId * kRingDepth;
 static_assert(2u * kRingDepth <= 15u, "two lanes of trids must fit in the 0..15 transaction-id space");
 using ReadRing = TridRing<kRingDepth, kTridBase>;
-// Ship pages in pairs when a pair fits one packet. Pairs start on even pages, and an even ring depth keeps
-// a pair in two adjacent slots that never wrap.
-constexpr bool kPairPages = (2 * tensor_page_size <= fabric_max_payload_size) && (kRingDepth % 2 == 0);
+// Ship up to kPagesPerPacket pages per fabric packet (a scatter write lands each at its own DRAM page). A
+// group never crosses the end of the ring, so its slots are adjacent in L1 and the payload is contiguous.
+constexpr uint32_t kPagesPerPacket = []() constexpr {
+    uint32_t p = fabric_max_payload_size / tensor_page_size;
+    p = p > NOC_SCATTER_WRITE_MAX_CHUNKS ? NOC_SCATTER_WRITE_MAX_CHUNKS : p;
+    return p > kRingDepth ? kRingDepth : p;
+}();
 
 // Stream this lane's contiguous page range [page_start_, page_end_) DIRECTLY into the
 // receiver DRAM tensor over `conn`, pipelining the DRAM reads (in_acc) with the fabric
@@ -194,25 +188,71 @@ FORCE_INLINE void stream_half(
             NocOptVals{.trid = ReadRing::trid(i)});
     }
     uint32_t k = 0;
-    if constexpr (kPairPages) {
-        // Two pages per fabric packet. Adjacent ring slots are adjacent in L1, so a page pair is one
-        // contiguous payload; a two-chunk scatter write lands each page at its own (interleaved) DRAM page.
-        // Half the packets, and half the blocking header flushes, for the same bytes.
-        for (; k + 1 < n; k += 2) {
+    if constexpr (kPagesPerPacket >= 2) {
+        // Fewer packets, and fewer blocking header flushes, for the same bytes.
+        while (k + 1 < n) {
             const uint32_t slot = ReadRing::slot(k);
-            noc.async_read_barrier<NocOptions::TXN_ID>(NocOptVals{.trid = ReadRing::trid(k)});
-            noc.async_read_barrier<NocOptions::TXN_ID>(NocOptVals{.trid = ReadRing::trid(k + 1)});
+            uint32_t g = kPagesPerPacket;
+            if (g > n - k) {
+                g = n - k;
+            }
+            if (g > ReadRing::depth - slot) {
+                g = ReadRing::depth - slot;
+            }
+            if (g < 2) {
+                // A lone page at the ring end: ship it alone and keep grouping from slot 0.
+                noc.async_read_barrier<NocOptions::TXN_ID>(NocOptVals{.trid = ReadRing::trid(k)});
+                fabric_write_bytes(
+                    conn,
+                    out_acc.get_noc_addr(page_start_ + k),
+                    cb_l1_addr + slot * tensor_page_size,
+                    tensor_page_size,
+                    data_packet_header_addr);
+                if (k + ReadRing::depth < n) {
+                    noc.async_read<NocOptions::TXN_ID>(
+                        in_acc,
+                        scratch,
+                        tensor_page_size,
+                        {.page_id = page_start_ + k + ReadRing::depth},
+                        {.offset_bytes = slot * tensor_page_size},
+                        NocOptVals{.trid = ReadRing::trid(k)});
+                }
+                ++k;
+                continue;
+            }
+            for (uint32_t j = k; j < k + g; ++j) {
+                noc.async_read_barrier<NocOptions::TXN_ID>(NocOptVals{.trid = ReadRing::trid(j)});
+            }
             const uint32_t src = cb_l1_addr + slot * tensor_page_size;
-            data_packet_header_addr->to_noc_unicast_scatter_write(
-                NocUnicastScatterCommandHeader(
-                    {out_acc.get_noc_addr(page_start_ + k), out_acc.get_noc_addr(page_start_ + k + 1)},
-                    {static_cast<uint16_t>(tensor_page_size)}),
-                2 * tensor_page_size);
+            const uint16_t ps = static_cast<uint16_t>(tensor_page_size);
+            if (g == 2) {
+                data_packet_header_addr->to_noc_unicast_scatter_write(
+                    NocUnicastScatterCommandHeader(
+                        {out_acc.get_noc_addr(page_start_ + k), out_acc.get_noc_addr(page_start_ + k + 1)}, {ps}),
+                    2 * tensor_page_size);
+            } else if (g == 3) {
+                data_packet_header_addr->to_noc_unicast_scatter_write(
+                    NocUnicastScatterCommandHeader(
+                        {out_acc.get_noc_addr(page_start_ + k),
+                         out_acc.get_noc_addr(page_start_ + k + 1),
+                         out_acc.get_noc_addr(page_start_ + k + 2)},
+                        {ps, ps}),
+                    3 * tensor_page_size);
+            } else {
+                data_packet_header_addr->to_noc_unicast_scatter_write(
+                    NocUnicastScatterCommandHeader(
+                        {out_acc.get_noc_addr(page_start_ + k),
+                         out_acc.get_noc_addr(page_start_ + k + 1),
+                         out_acc.get_noc_addr(page_start_ + k + 2),
+                         out_acc.get_noc_addr(page_start_ + k + 3)},
+                        {ps, ps, ps}),
+                    4 * tensor_page_size);
+            }
             conn.wait_for_empty_write_slot();
-            conn.send_payload_without_header_non_blocking_from_address(src, 2 * tensor_page_size);
+            conn.send_payload_without_header_non_blocking_from_address(src, g * tensor_page_size);
             conn.send_payload_flush_blocking_from_address(
                 (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
-            for (uint32_t j = k; j < k + 2; ++j) {
+            for (uint32_t j = k; j < k + g; ++j) {
                 const uint32_t next = j + ReadRing::depth;
                 if (next < n) {
                     noc.async_read<NocOptions::TXN_ID>(
@@ -224,6 +264,7 @@ FORCE_INLINE void stream_half(
                         NocOptVals{.trid = ReadRing::trid(j)});
                 }
             }
+            k += g;
         }
     }
     for (; k < n; ++k) {
