@@ -267,9 +267,16 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
     # the arena: every worker core, zero at creation, kept for the test (the combine's state lives in it)
     grid = mesh_device.compute_with_storage_grid_size()
     all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    # the arena takes all the L1 the allocator has left (the combine sizes its rings from it), less a reserve for the
+    # programs' static CBs (the flat expert's few non-arena CBs, below the arena) and the L1 tensors allocated after
+    # it (the writers' words); FC_ARENA_KB: a fixed size instead
     a_rows = int(plan["arena_tiles"]) * 32
-    # (FC_ARENA_KB: a larger arena than the flat expert needs - room for the combine's accumulators / ring depth)
-    a_rows = max(a_rows, int(os.environ.get("FC_ARENA_KB", "0")) * 1024 // 64 // 32 * 32)
+    if os.environ.get("FC_ARENA_KB"):
+        a_rows = max(a_rows, int(os.environ["FC_ARENA_KB"]) * 1024 // 64 // 32 * 32)
+    else:
+        mv = ttnn.device.get_memory_view(mesh_device, ttnn.BufferType.L1)
+        reserve = int(os.environ.get("FC_ARENA_RESERVE_KB", "48")) * 1024
+        a_rows = max(a_rows, (int(mv.largest_contiguous_bytes_free_per_bank) - reserve) // 64 // 32 * 32)
     arena = ttnn.from_torch(  # (raw words, row-major: readable back core by core)
         torch.zeros(grid.x * grid.y * a_rows, 16, dtype=torch.int32),
         dtype=ttnn.uint32,
@@ -502,7 +509,8 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
                 logger.info(
                     f"TPROF {routing} {name} chip {ci} sender {r[0] & 0xFF}: end {us(r[2]):.0f} slot {r[3] / 1350:.0f} "
                     f"idle {r[4] / 1350:.0f} cred {r[5] / 1350:.0f} send {r[8] / 1350:.0f} flush {r[10] / 1350:.0f} us | rows "
-                    f"{r[7]} blocked {r[6]} empty {r[9]} credit packets {r[11]}"
+                    f"{r[7]} blocked {r[6]} empty {r[9]} credit packets {r[11]} | book {r[12] / 1350:.0f} blk {r[13] / 1350:.0f} us "
+                    f"passes {r[14]}"
                 )
             ae = sorted((us(r[3]), r[5], r[4]) for r in adp)  # (accumulators: end, rows, local rows)
             logger.info(

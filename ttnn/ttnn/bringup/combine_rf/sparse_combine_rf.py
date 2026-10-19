@@ -462,6 +462,7 @@ void kernel_main() {
     uint32_t returned = ret0;
     uint32_t inj_done = 0, sent = 0, pend_inj = 0, unflushed = 0;
     uint32_t p_idle = 0, p_cred = 0, p_slot = 0, p_flush = 0, n_credpk = 0, n_blocked = 0, n_empty = 0, p_send = 0;
+    uint32_t p_book = 0, p_blk = 0, n_iter = 0;  // (TPROF: bookkeeping per pass, passes spent blocked on a full ring)
     const uint32_t p0 = get_timestamp_32b();
 
     auto flush = [&]() {
@@ -508,14 +509,17 @@ void kernel_main() {
     const uint32_t tstart = get_timestamp_32b();
 
     while (inj_done < n_inj || returned - ret0 < n_ret || fused_more()) {
-        bool did = false;
+        bool did = false, blk = false, sent_row = false;
         const uint32_t it0 = get_timestamp_32b();
+        const uint32_t c0 = p_cred;
+        ++n_iter;
         invalidate_l1_cache();
         hand_off();
         write_out();
         const uint32_t tot = any_ret();
         const bool pending = tot != returned;
         if (pending && unflushed < NH) give_back(false);
+        p_book += get_timestamp_32b() - it0 - (p_cred - c0);
         while (unflushed + P <= NH && inj_done < n_inj && cb_pages_available_at_front(cb_inj, pend_inj + 1)) {
             if (PACE && get_timestamp_32b() - tstart < inj_done * pace) break;
             uint32_t src = get_read_ptr(cb_inj) + pend_inj * ISLOT;
@@ -526,6 +530,7 @@ void kernel_main() {
             const uint32_t u = used[ci];
             if (D + cred[ci] - u < 1) {
                 ++n_blocked;
+                blk = true;
                 break;
             }
             const uint32_t ts0 = get_timestamp_32b();
@@ -545,7 +550,7 @@ void kernel_main() {
             used[ci] = u + 1;
             ++pend_inj;
             ++inj_done;
-            did = true;
+            did = sent_row = true;
             p_send += get_timestamp_32b() - ts0;
         }
         if (unflushed >= NH || (!did && unflushed)) {
@@ -556,6 +561,7 @@ void kernel_main() {
             give_back(true);
             did = true;
         }
+        if (blk && !sent_row) p_blk += get_timestamp_32b() - it0;
         if (!did) {
             p_idle += get_timestamp_32b() - it0;
             ++n_empty;
@@ -579,7 +585,7 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* d = misc + 192;
         d[0] = 0x7E100000 | tpage; d[1] = p0; d[2] = get_timestamp_32b(); d[3] = p_slot; d[4] = p_idle; d[5] = p_cred;
         d[6] = n_blocked; d[7] = n_inj; d[8] = p_send; d[9] = n_empty; d[10] = p_flush; d[11] = n_credpk;
-        d[12] = d[13] = d[14] = d[15] = 0;
+        d[12] = p_book; d[13] = p_blk; d[14] = n_iter; d[15] = 0;
         const InterleavedAddrGen<true> dg = {.bank_base_address = tdbg, .page_size = 512};
         noc_async_write(area + MISC + 192 * 4, get_noc_addr(tpage, dg), 64);
         noc_async_write_barrier();

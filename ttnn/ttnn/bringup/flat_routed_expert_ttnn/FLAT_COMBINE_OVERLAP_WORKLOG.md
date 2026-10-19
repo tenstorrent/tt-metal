@@ -1380,3 +1380,31 @@ Whole model, warm 56k prefill: ag 5.85 s; ts 8.51 -> 6.54-6.70 s (8406-8608 tok/
 of host per chunk): ~5 ms of host per MoE call, 2.2 of it the fused op's enqueue (a flat + combine program per chip),
 the rest seven small ops. Last-chunk top1 / top5 ts 0.6482-0.6831 / 0.8650-0.8849 (run-to-run). K3 block: untraced back to
 back 6.7 -> 4.8 ms per call, traced 3320 us, PCC 0.99622, CI replays bit-exact.
+
+### Combine: where the senders' time goes, and ring depth (2026-10-19, 2 x 4, pure DRISC flat, unicast x)
+Per-sender timelines (SPC_TPROF; new counters: bookkeeping per pass, passes spent blocked on a full home ring, passes),
+GLM-5.3-Flash S 640, separate layout (7 ports + 12 accumulators), the 16 busiest senders (~1280 rows each):
+- Combine alone, uniform: end ~1230 us, ~960 ns a row against ~350 ns of wire time. Real work only ~300 us sending
+  (router backpressure ~130) + ~200 us credit packets; the rest is waiting: ~570 us of passes blocked on a full home
+  ring, ~170 us with no row ready, the stall passes' bookkeeping (~300 us). The earlier "unaccounted 530 us" was those
+  stall passes, not sender work.
+- Lean loop (bookkeeping every k = 4 / 8 / 16 rows, else only on a stall): no change (1206-1237 us) - nearly every pass
+  is a stall pass. Reverted.
+- Not the accumulators: SPC_ABL=1 (no accumulation) 1277 us, SPC_ABL=3 (no ring read either) 1259 vs 1269.
+- Eager credits (SPC_CREDTHR 4 / 2 / 1 vs 8): 1202-1241 us - blocked time falls, credit packet time rises.
+- Ring depth (rows in flight per source ring; the credit round trip needs more than 3), combine alone, S 256:
+  depth 3 / 6 / 8 uniform 516 / 428 / 416 us (66 / 80 / 82% of the 342 us link floor), spread 556 / 414 / 407 (69 / 93 /
+  95% of 385). At S 640 the depth was capped at 3 by L1 (each accumulator's fp32 rows ~880 KB).
+- Arena = all free L1 (harness: the allocator's largest free block less 48 KB for the flat's few static CBs and later
+  L1 tensors; was the flat plan's arena): 1376 KB / core -> depth 7 at S 640, 8 elsewhere. The old ~1.29 MB "cap" was the
+  harness's own determinism check (ttnn.sum / ne between calls: static CBs to 225 KB) - perf runs: FC_DET_REPEAT=0.
+| combine alone, us (u / s / p) | depth 3 | full-L1 arena | fused before -> after |
+| GLM-Flash S 640 | 1269 / 1445 / 2855 | 1113 / 1270 / 2713 | 1359 / 1700 / 4743 -> 1359 / 1714 / 4741 |
+| GLM-Flash S 256 | 517 / 580 / 1154 | 452 / 499 / 1098 | 1228 / 1350 / 2217 -> 1228 / 1351 / 2216 |
+| K3 | 1083 / 1121 / 2476 | 966 / 1026 / 2330 | 2306 / 2515 / 5334 -> 2303 / 2512 / 5330 |
+| V4.1-Flash | 642 / 657 / 1290 | 589 / 664 / 1248 | 1099 / 1249 / 2513 -> 1100 / 1246 / 2513 |
+  The combine is 5-14% faster (S 640 uniform 66 -> 76% of link rate; the busy senders now mostly wait on the router),
+  fused unchanged: uniform was already hidden, and the skewed routings' remaining fused cost is the hot chip - its own
+  flat finishes ~630 us later fused than alone (packed S 640: rows landed by 4729 vs flat alone 4096). Next: why.
+- Model: the block allocates its arena per call; the ops between that and the fused op (planner, dispatch prep,
+  dispatch) must fit their static CBs below it - allocate the arena right before the fused op, then size it to all of L1.
