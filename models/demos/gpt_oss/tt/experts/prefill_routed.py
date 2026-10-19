@@ -234,6 +234,9 @@ class RoutedPrefillExperts:
         self.num_dispatch_groups = self.num_devices
         self.experts_per_chip = self.num_experts // self.num_devices
         self.chunk_size = routed_prefill_chunk()
+        # L1 address the expert op's circular buffers must end below (0: the whole L1); set by Model.set_prefill_l1_end
+        # when buffers stay resident in L1 (DFlash), so the op fits its blocking around them.
+        self.l1_end = 0
         self.min_seq = routed_prefill_min_seq()
         self.num_links = 1
         self.weights_dtype = routed_weights_dtype(layer_idx)
@@ -790,6 +793,7 @@ class RoutedPrefillExperts:
             gate_biases=self.gate_biases,
             up_biases=self.up_biases,
             down_biases=self.down_biases,
+            l1_end=self.l1_end,
         )
         ttnn.deallocate(dispatched)
         ttnn.deallocate(counts)

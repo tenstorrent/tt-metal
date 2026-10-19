@@ -537,6 +537,15 @@ class Model:
 
         return logits
 
+    def set_prefill_l1_end(self, l1_end):
+        """Prefill ops whose circular buffers would otherwise claim nearly all of L1 (the routed-expert MoE, the 2D
+        QKV / o_proj configs) fit them below l1_end instead (0: the whole L1). Called by a caller that keeps buffers
+        resident in L1 across prefills (DFlash: dflash/runner.py) with the lowest resident address."""
+        for layer in self.layers:
+            layer.self_attn.program_config.prefill_l1_end = l1_end
+            if layer.mlp.routed_prefill is not None:
+                layer.mlp.routed_prefill.l1_end = l1_end
+
     @staticmethod
     def _gather_prefill_rows(rows, get_last_token, cluster_axis):
         """End of a sequence-parallel prefill: rows is this device's [1, 1, S / N, H] share of the final residual

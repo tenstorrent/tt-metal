@@ -64,6 +64,10 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
                 SituGlu (tanh-capped, Kimi K3; Blackhole only), or ClampedSiluGlu
                 (silu(min(gate,10)) * clamp(up,+/-10), DeepSeek V4; Blackhole only).
 
+            l1_end (int, optional): L1 address the op's circular buffers must end below; 0 (default)
+                uses the whole L1. Pass the lowest address of buffers kept resident in L1
+                (MeshDevice.lowest_occupied_compute_l1_address()) to fit the blocking around them.
+
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token
         argument — the work scales to each expert's actual load automatically.
@@ -87,7 +91,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("up_biases") = nb::none(),
         nb::arg("down_biases") = nb::none(),
         nb::arg("min_active_tokens") = 0,
-        nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max());
+        nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max(),
+        nb::arg("l1_end") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

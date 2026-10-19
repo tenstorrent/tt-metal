@@ -70,7 +70,8 @@ ttnn::Tensor unified_routed_expert_moe(
     // dropped like a zero count. Wide open by default; a hybrid dispatch narrows it so this
     // op and moe_fused_swiglu split the experts by load over ONE shared counts vector.
     uint32_t min_active_tokens = 0,
-    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max());
+    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max(),
+    uint32_t l1_end = 0);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 

@@ -446,7 +446,16 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         l1_device->l1_size_per_core(),
         l1_reserved,
         L1_SCRATCH_MARGIN);
-    const uint64_t l1_budget = static_cast<uint64_t>(l1_device->l1_size_per_core()) - l1_reserved - L1_SCRATCH_MARGIN;
+    // op.l1_end (nonzero): the caller's resident L1 buffers start there, so the CBs end below it.
+    const uint64_t l1_end = op.l1_end != 0 ? std::min<uint64_t>(op.l1_end, l1_device->l1_size_per_core())
+                                           : static_cast<uint64_t>(l1_device->l1_size_per_core());
+    TT_FATAL(
+        l1_end > l1_reserved + L1_SCRATCH_MARGIN,
+        "unified_routed_expert_ffn: l1_end ({}) leaves no L1 above the reserved base ({}) + margin ({})",
+        l1_end,
+        l1_reserved,
+        L1_SCRATCH_MARGIN);
+    const uint64_t l1_budget = l1_end - l1_reserved - L1_SCRATCH_MARGIN;
 
     // Fit (per_core_M, in0_block_w_gu) to the real L1 budget. Candidate widths are
     // divisors of K_gate_tiles no wider than the request, largest first; candidate

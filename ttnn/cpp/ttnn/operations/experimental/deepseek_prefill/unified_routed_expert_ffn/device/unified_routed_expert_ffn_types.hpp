@@ -100,6 +100,12 @@ struct UnifiedRoutedExpertFfnParams {
     uint32_t min_active_tokens = 0;
     uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max();
 
+    // L1 address the circular buffers must end below (0: the whole L1). A caller that keeps
+    // buffers resident in L1 passes the lowest such address so the CB blocking is fitted to the
+    // L1 left free instead of clashing with them. It sizes the CBs, so it is part of the
+    // program-cache key: a program fitted under one L1 layout is never replayed under another.
+    uint32_t l1_end = 0;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -107,10 +113,18 @@ struct UnifiedRoutedExpertFfnParams {
         "activation",
         "fuse_bias",
         "min_active_tokens",
-        "max_active_tokens");
+        "max_active_tokens",
+        "l1_end");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias, min_active_tokens, max_active_tokens);
+            m_tiles,
+            experts_per_chip,
+            x_is_row_major,
+            activation,
+            fuse_bias,
+            min_active_tokens,
+            max_active_tokens,
+            l1_end);
     }
 };
 

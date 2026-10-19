@@ -36,11 +36,12 @@ PREFILL_PROJ_2D = {
     "o": (9, 10, 8),  # [S, 1024] x [1024, 2880]: N = 90 tiles over 9 columns, K = 32 tiles
 }
 PREFILL_PROJ_L1_BYTES = 1_100_000
+PREFILL_PROJ_L1_MARGIN = 32 * 1024
 # Tensor parallelism the geometries above were measured at (1x4); any other TP keeps the ttnn default.
 PREFILL_PROJ_TP = 4
 
 
-def prefill_proj_program_config(grid, m_tiles, k_tiles, n_tiles, role, tp, in0_dtype, weight_dtype):
+def prefill_proj_program_config(grid, m_tiles, k_tiles, n_tiles, role, tp, in0_dtype, weight_dtype, l1_bytes=None):
     """2D multicast program config for a prefill projection of m_tiles x k_tiles x n_tiles, or None (ttnn default)
     when the role's geometry does not fit (other shapes or a smaller grid), at a TP other than PREFILL_PROJ_TP, or when
     in0 or the weight is not bfloat8_b (the L1 model below sizes their tiles as bf8: a bf16 in0 doubles the in0
@@ -49,7 +50,9 @@ def prefill_proj_program_config(grid, m_tiles, k_tiles, n_tiles, role, tp, in0_d
     M splits over at most grid.y rows. out_block_h is the largest divisor of per_core_M (at most 32) whose circular
     buffers (in0 + in1 double-buffered, output + bf16 intermediate block) fit PREFILL_PROJ_L1_BYTES; when that leaves
     fewer than 12 rows, per_core_M is rounded up (up to 8 tiles) to a value with a larger such divisor
-    (out_block_h = 1 measured 2-3x slower, and in0_block_w 8 with the whole 26-tile block overflows L1 at S = 8192)."""
+    (out_block_h = 1 measured 2-3x slower, and in0_block_w 8 with the whole 26-tile block overflows L1 at S = 8192).
+    l1_bytes: the circular-buffer budget instead of PREFILL_PROJ_L1_BYTES when lower (L1 held by resident buffers)."""
+    budget = PREFILL_PROJ_L1_BYTES if l1_bytes is None else min(l1_bytes, PREFILL_PROJ_L1_BYTES)
     if tp != PREFILL_PROJ_TP or in0_dtype != ttnn.bfloat8_b or weight_dtype != ttnn.bfloat8_b:
         return None
     gx, pcn, kb = PREFILL_PROJ_2D[role]
@@ -60,7 +63,7 @@ def prefill_proj_program_config(grid, m_tiles, k_tiles, n_tiles, role, tp, in0_d
     def block_h(pcm):
         for obh in range(min(pcm, 32), 0, -1):
             l1 = obh * kb * 2 * 1088 + kb * pcn * 2 * 1088 + obh * pcn * (out_tile + 2048)
-            if pcm % obh == 0 and l1 <= PREFILL_PROJ_L1_BYTES:
+            if pcm % obh == 0 and l1 <= budget:
                 return obh
         return 1
 
@@ -148,6 +151,9 @@ class ProgramConfig:
     # Prefill QKV / o_proj on Blackhole: 2D multicast program configs from prefill_proj_program_config instead of the
     # ttnn default (False keeps the default everywhere).
     prefill_proj_2d: bool = False
+    # L1 address the prefill projections' circular buffers must end below (0: the whole L1); set by
+    # Model.set_prefill_l1_end when buffers stay resident in L1 (DFlash).
+    prefill_l1_end: int = 0
 
     def __post_init__(self):
         """Validate configuration on creation"""
@@ -236,6 +242,10 @@ class ProgramConfig:
         shape = x.padded_shape
         if any(shape[i] != 1 for i in range(len(shape) - 2)):
             return None
+        l1_bytes = None
+        if self.prefill_l1_end:
+            # (the 2D configs' L1 model counts its circular buffers only: keep the matmul's small extras clear)
+            l1_bytes = self.prefill_l1_end - mesh_device.l1_allocator_base() - PREFILL_PROJ_L1_MARGIN
         return prefill_proj_program_config(
             mesh_device.compute_with_storage_grid_size(),
             shape[-2] // ttnn.TILE_SIZE,
@@ -245,6 +255,7 @@ class ProgramConfig:
             tp=tp,
             in0_dtype=x.dtype if in0_dtype is None else in0_dtype,
             weight_dtype=weight.dtype,
+            l1_bytes=l1_bytes,
         )
 
     def get_compute_kernel_config(self, math_fidelity: str | None = None) -> ttnn.WormholeComputeKernelConfig:
