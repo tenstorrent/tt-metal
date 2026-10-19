@@ -19,7 +19,7 @@ import torch
 import ttnn
 from models.experimental.trellis2.reference import slat_flow_host as slat
 from models.experimental.trellis2.reference import structure_flow_host as host
-from models.experimental.trellis2.tt.structure_flow import Block, DeviceTables, Precision, _norm_in
+from models.experimental.trellis2.tt.structure_flow import Block, DeviceTables, Precision, _hifi4, _norm_in
 from models.tt_dit.layers.linear import Linear
 from models.tt_dit.layers.module import Module, ModuleList
 from models.tt_dit.layers.normalization import LayerNorm
@@ -32,12 +32,13 @@ class TtSLatFlow(Module):
         self.mesh_device = mesh_device
         self.precision = precision
         d = host.MODEL_CHANNELS
-        self.input_layer = Linear(in_channels, d, mesh_device=mesh_device)
+        io = _hifi4(mesh_device) if precision.io_hifi4 else None
+        self.input_layer = Linear(in_channels, d, mesh_device=mesh_device, compute_kernel_config=io)
         self.blocks = ModuleList(Block(mesh_device=mesh_device, precision=precision) for _ in range(host.NUM_BLOCKS))
         self.final_norm = LayerNorm(
             d, norm_eps=host.FINAL_NORM_EPS, norm_elementwise_affine=False, mesh_device=mesh_device
         )
-        self.out_layer = Linear(d, slat.OUT_CHANNELS, mesh_device=mesh_device)
+        self.out_layer = Linear(d, slat.OUT_CHANNELS, mesh_device=mesh_device, compute_kernel_config=io)
         self._host_state: dict[str, torch.Tensor] = {}
         self._mods: dict[float, list[list[ttnn.Tensor]]] = {}
 
@@ -90,7 +91,8 @@ class TtSLatFlow(Module):
         for block, mod in zip(self.blocks, self.modulation(t)):
             h = block(h, mod, context, tables)
         out_dtype = ttnn.float32 if self.precision.fp32_output else None
-        return self.out_layer(_norm_in(self.final_norm(h)), dtype=out_dtype)
+        h = self.final_norm(h)
+        return self.out_layer(h if self.precision.fp32_out_input else _norm_in(h), dtype=out_dtype)
 
     def forward(self, feats: torch.Tensor, t: torch.Tensor, cond: torch.Tensor, tables: DeviceTables) -> torch.Tensor:
         """Torch in, torch out (for tests): feats [N, C_in], t [1], cond [1, L, 1024] -> [N, 32]."""

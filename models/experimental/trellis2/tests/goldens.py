@@ -62,6 +62,26 @@ def shape_call_inputs(i: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor,
     return x["feats"], x["coords"], c["args"][1], cond, c["out"]["feats"], c["branch"]
 
 
+@lru_cache(maxsize=None)
+def tex_stage() -> dict:
+    """tex.pt: calls (args[0], kwargs concat_cond and out are {feats [N, 32], coords [N, 4]}), steps, final slat."""
+    return torch.load(f"{golden_dir()}/tex.pt", weights_only=False)
+
+
+def tex_concat() -> torch.Tensor:
+    """The normalized shape latent the texture DiT gets as concat_cond (the same for every call) [N, 32]."""
+    return tex_stage()["calls"][0]["kwargs"]["concat_cond"]["feats"]
+
+
+def tex_call_inputs(i: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str]:
+    """feats (noise latent and concat_cond concatenated, [N, 64]), coords, t, cond, golden output feats, branch."""
+    c = tex_stage()["calls"][i]
+    cond = conditions()["cond" if c["branch"] == "pos" else "neg_cond"]
+    x = c["args"][0]
+    feats = torch.cat([x["feats"], c["kwargs"]["concat_cond"]["feats"]], dim=-1)
+    return feats, x["coords"], c["args"][1], cond, c["out"]["feats"], c["branch"]
+
+
 def call_inputs(i: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str]:
     """x_t, t, cond (cond or neg_cond by the recorded CFG branch), golden output, branch."""
     c = structure_calls()[i]
