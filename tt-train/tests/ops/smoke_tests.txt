@@ -1,0 +1,74 @@
+# Fast smoke subset of ttml_tests: representative coverage of ttml ops, including fused-vs-composite parity checks.
+# One fully qualified test name per line; blank lines and lines starting with '#' are ignored.
+# Usage (checks that every entry exists, then runs them):
+#   tt-train/tests/ops/run_smoke_tests.sh [extra gtest args]
+
+# Binary ops (autograd forward + backward)
+BinaryOpsBackwardTest.AddSameShape
+BinaryOpsBackwardTest.SubSameShape
+BinaryOpsBackwardTest.MulSameShape
+BinaryOpsBackwardTest.DivSameShape
+BinaryOpsBackwardTest.MinSameShape
+BinaryOpsBackwardTest.MaxSameShape
+
+# Unary ops
+UnaryOpsTest.GlobalMean
+UnaryOpsTest.LogSoftmax
+UnaryOpsTest.Exp
+UnaryOpsTest.Clip
+UnaryOpsTest.Gelu
+UnaryOpsTest.GeluTanh
+UnaryOpsTest.Silu
+SiLUOpTest.SiLU_Compare_Small
+AutogradTest.BroadCastBatchTest
+
+# Losses
+CrossEntropyForwardTest.CrossEntropyForward_Small_Forward
+CrossEntropyBackwardTest.CrossEntropyBackward_Small_Backward
+CrossEntropyBackwardTest.CrossEntropyForwardBackward_ReduceMeanVsNone
+SelectTargetLogitTest.SmallFullVocab
+SubtractAtTargetTest.SmallFullVocab
+
+# Normalization
+RMSNormOpTest.RMSNorm_Compare_Basic_Small
+PolyNormOpTest.PolyNorm_Compare_BasicSmall
+PolyNormOpTest.PolyNorm_Compare_FusedVsCompositeForward_Small
+LayerNormForwardOpTest.MetalLayerNormFw_OneTile
+LayerNormBackwardOpTest.MetalLayerNormBw_OneTile
+LayerNormOpTest.CompositeLayerNormOp_backward
+All/FrobeniusNormalizeTest.MatchesCpuReference/SingleTile
+
+# Attention and softmax
+SDPAForwardTest.SDPAForwardTest_CausalMask_SingleTile
+SDPABackwardTest.DiffVDim_SingleTile
+SoftmaxTest.SoftmaxTest_Large_Values
+SoftmaxBackward/SoftmaxBackwardOpTypedTest.SoftmaxBackward_LastDim_1Tile/bf16
+MLA_QRopeCacheTest.AutogradWrapperBackwardMatchesReference
+MLAKVAssembleTest.AutogradWrapperBackwardMatchesReference
+RoPETest.BackwardTest
+SplitHeadsTest.RoundTripsThroughHeadsFusion
+
+# Embedding, linear, and convolution
+EmbeddingOpTest.EmbeddingForwardBackward
+PositionalEmbeddingTest.NonTrainableEmbedding
+LinearOpTest.TTNNLargeLinearOpWithBias
+Conv3dOpTest.ForwardBackwardNoBias
+
+# MLP and MoE
+SwiGLUBackwardTest.BackwardAccuracy_1x1x32x32
+MoeFfnSwigluForwardTest.Small_E2_H64_I128
+MoeGroupTest.BasicShape
+MoeUngroupTest.Basic
+VariableMatmulTest.MinimalParity_OnDeviceInputAndWeightK_TransposeA
+VariableMatmulTest.MinimalParity_OnDeviceInputAndOutputRow
+
+# Matmul, optimizer math, sampling, profiling
+MatmulsTest.MatMulBackwardTransposeBoth
+KSplitGramMatmulTest.VerificationMirror
+NewtonSchulzOpTest.MuonCoeff
+NewtonSchulzOpTest.OrthogonalityCheck
+SGDMomentumParity/SGDParityTest.UpdateParity/Mom_B1H2S32C64
+AdamWBasicComparison/AdamWComparisonTest.CompareImplementations/Standard_lr1e2_B1H1S128C512
+GumbelSampleOpTest.TestSamplingZeroTemperatureNoMask
+GumbelSampleOpTest.TestSamplingNoisyMatchesCompositeDistribution
+ProfilerNoOpTest.ProfilerNoOpTest_Batch
