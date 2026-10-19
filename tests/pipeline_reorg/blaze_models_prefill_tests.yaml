@@ -1737,7 +1737,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27 sc1
   test_type: prefill_runner_kv_pcc
-  test_tags: [kimi_k2_7, runner, kv_cache]
+  test_tags: [kimi_k2_7, runner, kv_cache, kimi27_sc1_only]
   test_group: disagg_prefill
   skus:
     # 8 kW like the SC4 quad, so the SC4-vs-SC1 scaling table compares one power class. Kimi runs
