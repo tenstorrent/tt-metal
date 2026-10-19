@@ -9,9 +9,23 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
 #include <tt-metalium/sub_device_types.hpp>
+#include "ttnn/global_semaphore.hpp"
 #include <optional>
 
 namespace ttnn::prim {
+
+// PROTOTYPE: a sparse KV push (high_bw_all_gather push_part 1, the next layer's prefix rows) fused into this op. Its
+// reader/writer/mux kernels run on push_core_grid (disjoint from worker_core_grid); every attention core tells the
+// push senders to stop when it finishes, and the senders record how far they got for the next layer's resume.
+struct SparseSDPAFusedPush {
+    uint32_t stripe_chunk = 0;
+    uint32_t max_rows = 0;
+    uint32_t num_links = 2;
+    uint32_t input_batch_index = 0;  // cache slot pushed; a runtime arg (not hashed)
+    std::optional<GlobalSemaphore> ready_semaphore;
+    std::optional<GlobalSemaphore> data_valid_semaphore;
+    tt::tt_metal::CoreRangeSet push_core_grid;
+};
 
 // Sparse MLA prefill (DeepSeek DSA).
 struct SparseSDPAParams {
@@ -32,6 +46,7 @@ struct SparseSDPAParams {
     // Worker cores, resolved from subdevice_id / sub_core_grids (default: all cores of the first subdevice).
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt;
     tt::tt_metal::CoreRangeSet worker_core_grid;
+    std::optional<SparseSDPAFusedPush> fused_push = std::nullopt;
 };
 
 struct SparseSDPAInputs {
@@ -40,6 +55,12 @@ struct SparseSDPAInputs {
     Tensor indices;  // [1, 1, S, TOPK] uint32 ROW_MAJOR  (0xFFFFFFFF = masked)
     // [1, 1, 1, H] ROW_MAJOR BF16; scaled like QK.
     std::optional<Tensor> attention_sink;
+    // Fused push (see SparseSDPAFusedPush): KVPE cache pushed from, all-gathered plan tables, the requester's compact
+    // buffer, and the per-sender progress tensor ([1, 1, workers, 16] uint32).
+    std::optional<Tensor> push_input;
+    std::optional<Tensor> push_table;
+    std::optional<Tensor> push_output;
+    std::optional<Tensor> push_progress;
 };
 
 }  // namespace ttnn::prim

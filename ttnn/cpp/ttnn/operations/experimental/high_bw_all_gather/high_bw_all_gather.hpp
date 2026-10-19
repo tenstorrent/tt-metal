@@ -49,7 +49,10 @@ Tensor high_bw_all_gather(
     uint32_t push_stripe_chunk = 0,
     uint32_t push_max_rows = 0,
     // 0 = every needed row, 1 = only rows before the chunk start (prefix), 2 = only the rest (remainder).
-    uint32_t push_part = 0);
+    uint32_t push_part = 0,
+    // Per-device uint32 [1, 1, workers, 16]: packets each sender sent in an earlier part-1 call that stopped early
+    // (read by push_part 3).
+    const std::optional<Tensor>& push_progress_tensor = std::nullopt);
 
 // PROTOTYPE on-device plan for the sparse push: returns {plan table, indices rewritten to compact slots}
 // (see device/sparse_push_plan_device_operation.hpp).

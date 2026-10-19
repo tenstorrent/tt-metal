@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include "ttnn/global_semaphore.hpp"
 #include <cstdint>
 #include <optional>
 
@@ -74,6 +75,18 @@ ttnn::Tensor sparse_sdpa(
     bool block_cyclic_cache_tp_sharded = false,
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
+    // PROTOTYPE fused next-layer sparse KV push (see SparseSDPAFusedPush); enabled when push_table is set.
+    const std::optional<ttnn::Tensor>& push_input = std::nullopt,
+    const std::optional<ttnn::Tensor>& push_table = std::nullopt,
+    const std::optional<ttnn::Tensor>& push_output = std::nullopt,
+    const std::optional<ttnn::Tensor>& push_progress = std::nullopt,
+    uint32_t push_stripe_chunk = 0,
+    uint32_t push_max_rows = 0,
+    uint32_t push_batch_index = 0,
+    uint32_t push_num_links = 2,
+    const std::optional<GlobalSemaphore>& push_ready_semaphore = std::nullopt,
+    const std::optional<GlobalSemaphore>& push_data_valid_semaphore = std::nullopt,
+    const std::optional<tt::tt_metal::CoreRangeSet>& push_core_grid = std::nullopt);
 
 }  // namespace ttnn::transformer

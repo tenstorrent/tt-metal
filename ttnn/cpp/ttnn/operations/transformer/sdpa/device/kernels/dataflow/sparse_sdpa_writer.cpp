@@ -189,4 +189,16 @@ void kernel_main() {
         noc.async_write_barrier();
         out_cb.pop_front(block_tiles);
     }
+#ifdef SPARSE_PUSH_QUIT_SEM
+    // Fused push: this core is done, so the push senders may stop (they quit once every attention core has said so).
+    {
+        const uint32_t senders = get_arg_val<uint32_t>(2);
+        const uint32_t quit_sem = get_semaphore(SPARSE_PUSH_QUIT_SEM);
+        for (uint32_t i = 0; i < senders; ++i) {
+            noc_semaphore_inc(
+                get_noc_addr(get_arg_val<uint32_t>(3 + 2 * i), get_arg_val<uint32_t>(4 + 2 * i), quit_sem), 1);
+        }
+        noc_async_atomic_barrier();
+    }
+#endif
 }

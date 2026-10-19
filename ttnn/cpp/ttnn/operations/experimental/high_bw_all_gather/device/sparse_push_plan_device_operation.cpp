@@ -37,16 +37,6 @@ uint32_t round_up(uint32_t x, uint32_t m) { return (x + m - 1) / m * m; }
 
 using namespace plan_detail;
 
-SparsePushPlanLayout SparsePushPlanLayout::make(uint32_t max_rows, uint32_t stripe_chunk) {
-    SparsePushPlanLayout l;
-    l.bitmap_words = max_rows / 32;
-    l.num_blocks = max_rows / stripe_chunk;
-    l.prefix_off = round_up(kBitmapOff + l.bitmap_words, 16);
-    l.counts_off = round_up(l.prefix_off + (l.bitmap_words + 3) / 4, 16);
-    l.pages = round_up(l.counts_off + l.num_blocks, kPageWords) / kPageWords;
-    return l;
-}
-
 void SparsePushPlanDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     const auto& idx = args.indices;

@@ -278,7 +278,24 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.indices.logical_shape(),
         t.indices.dtype(),
         t.attention_sink,
-        attrs.worker_core_grid);
+        attrs.worker_core_grid,
+        // Fused push: structure only; the pushed slot and semaphore addresses are runtime args.
+        attrs.fused_push.has_value(),
+        attrs.fused_push.has_value() ? attrs.fused_push->stripe_chunk : 0u,
+        attrs.fused_push.has_value() ? attrs.fused_push->max_rows : 0u,
+        attrs.fused_push.has_value() ? attrs.fused_push->num_links : 0u,
+        attrs.fused_push.has_value() ? attrs.fused_push->push_core_grid : tt::tt_metal::CoreRangeSet{},
+        t.push_input.has_value() ? t.push_input->tensor_spec() : t.q.tensor_spec(),
+        t.push_table.has_value() ? t.push_table->logical_shape() : ttnn::Shape{},
+        t.push_output.has_value() ? t.push_output->tensor_spec() : t.q.tensor_spec());
+}
+
+SparseSDPAOperation::program_factory_t SparseSDPAOperation::select_program_factory(
+    const operation_attributes_t& attrs, const tensor_args_t&) {
+    if (attrs.fused_push.has_value()) {
+        return SparseSDPAPushFusedFactory{};
+    }
+    return SparseSDPAProgramFactory{};
 }
 
 Tensor sparse_sdpa(
@@ -294,8 +311,21 @@ Tensor sparse_sdpa(
     std::optional<BlockCyclicLayout> block_cyclic,
     const std::optional<Tensor>& attention_sink,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    const std::optional<SparseSDPAFusedPush>& fused_push,
+    const std::optional<Tensor>& push_input,
+    const std::optional<Tensor>& push_table,
+    const std::optional<Tensor>& push_output,
+    const std::optional<Tensor>& push_progress) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
+    if (fused_push.has_value()) {
+        TT_FATAL(
+            push_input.has_value() && push_table.has_value() && push_output.has_value() && push_progress.has_value(),
+            "sparse_sdpa fused push needs push_input, push_table, push_output and push_progress");
+        TT_FATAL(
+            sub_core_grids.has_value() && !sub_core_grids->intersects(fused_push->push_core_grid),
+            "sparse_sdpa fused push needs sub_core_grids disjoint from the push core grid");
+    }
     auto* device = q.device();
     const auto selected_subdevice_id = subdevice_id.value_or(device->get_sub_device_ids().at(0));
     const auto subdevice_cores =
@@ -319,12 +349,17 @@ Tensor sparse_sdpa(
             .block_cyclic = block_cyclic,
             .subdevice_id = subdevice_id,
             .worker_core_grid = worker_core_grid,
+            .fused_push = fused_push,
         },
         OperationType::tensor_args_t{
             .q = q,
             .kv = kv,
             .indices = indices,
             .attention_sink = attention_sink,
+            .push_input = push_input,
+            .push_table = push_table,
+            .push_output = push_output,
+            .push_progress = push_progress,
         });
 }
 

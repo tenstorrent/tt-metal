@@ -416,6 +416,11 @@ void bind_sdpa(nb::module_& mod) {
             subdevice_id (ttnn.SubDeviceId, optional): active TENSIX subdevice to run on (default: the first).
             sub_core_grids (ttnn.CoreRangeSet, optional): restrict work to these cores within the subdevice
                 (default: all of its cores). Part of the program-cache key.
+            push_* (PROTOTYPE): when push_table is set, the next layer's sparse KV push (high_bw_all_gather
+                push_part 1) runs in the same program on push_core_grid (disjoint from sub_core_grids). Senders
+                stop once every attention core is done and record packets sent in push_progress
+                ([1, 1, workers, 16] uint32) for the resume (push_part 3). push_input is the KVPE cache,
+                push_batch_index its slot, push_table the all-gathered plan tables, push_output the compact buffer.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -435,7 +440,18 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_cyclic_cache_tp_sharded") = false,
         nb::arg("attention_sink") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("push_input") = nb::none(),
+        nb::arg("push_table") = nb::none(),
+        nb::arg("push_output") = nb::none(),
+        nb::arg("push_progress") = nb::none(),
+        nb::arg("push_stripe_chunk") = 0,
+        nb::arg("push_max_rows") = 0,
+        nb::arg("push_batch_index") = 0,
+        nb::arg("push_num_links") = 2,
+        nb::arg("push_ready_semaphore") = nb::none(),
+        nb::arg("push_data_valid_semaphore") = nb::none(),
+        nb::arg("push_core_grid") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,

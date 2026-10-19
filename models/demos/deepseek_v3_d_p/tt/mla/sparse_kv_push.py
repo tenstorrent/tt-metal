@@ -124,6 +124,20 @@ class SparseKvPushPlanner:
         self._starts = {}  # chunk start -> 1-element device tensor
         # layer index -> plan whose prefix part an earlier layer already pushed into that layer's buffer
         self.prefetched = {}
+        self._progress = None
+
+    def progress(self):
+        """Per-sender [packets sent, finished, turn] pages written by a fused prefix push, read by the resume."""
+        if self._progress is None:
+            self._progress = ttnn.from_torch(
+                torch.zeros(1, 1, 4 * self.links * 2, 16, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self._progress
 
     def push_buffer(self, parity, rows, like):
         """Compact buffer for layers of this parity; the previous layer's buffer stays readable while it fills."""
