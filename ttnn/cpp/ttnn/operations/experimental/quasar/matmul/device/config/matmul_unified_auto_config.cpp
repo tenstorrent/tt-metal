@@ -120,9 +120,12 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_matmul_program_config(
     // With a 32-bit DST ttnn.linear adds the bias separately (see the plan), so it takes no L1 here.
     const uint32_t bias_tile_bytes = fp32_dest_acc_en ? 0 : bias_single_tile_size;
     const bool B_has_one_batch = attributes.bcast_batch.value_or(false);
-    const uint32_t M_tiles =
-        A.padded_shape()[-2] / TILE_HEIGHT * (B_has_one_batch ? (uint32_t)get_batch_size(A.padded_shape()) : 1);
-    const uint32_t N_tiles = B.padded_shape()[-1] / TILE_WIDTH;
+    const uint32_t M_per_batch = A.padded_shape()[-2];
+    const uint32_t N = B.padded_shape()[-1];
+    // Batches of A that share one B are stacked into one [batch * M, N] matmul, as the plan does.
+    const uint32_t stacked_batches = B_has_one_batch ? (uint32_t)get_batch_size(A.padded_shape()) : 1;
+    const uint32_t M_tiles = stacked_batches * M_per_batch / TILE_HEIGHT;
+    const uint32_t N_tiles = N / TILE_WIDTH;
     const tt::tt_metal::MemoryConfig& C_memory = attributes.output_mem_config;
 
     const auto make_config = [&](CoreRangeSet cores,
@@ -211,20 +214,17 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_matmul_program_config(
         const tt::tt_metal::TensorMemoryLayout B_layout = B.memory_config().memory_layout();
         if (A.is_sharded() && A_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
             const CoreRangeSet cores = A.memory_config().is_dram() ? dram_bank_cores() : A.shard_spec()->grid;
+            const uint32_t A_shard_M_tiles = A.shard_spec()->shape[0] / TILE_HEIGHT;
             candidates.push_back(
                 {"A_shard_rows",
-                 shrinking_C_slices(
-                     cores,
-                     A.shard_spec()->shape[0] / TILE_HEIGHT,
-                     /*fixed_is_N=*/false,
-                     A.shard_spec()->orientation)});
+                 shrinking_C_slices(cores, A_shard_M_tiles, /*fixed_is_N=*/false, A.shard_spec()->orientation)});
         }
         if (B.is_sharded() && B_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
             const CoreRangeSet cores = B.memory_config().is_dram() ? dram_bank_cores() : B.shard_spec()->grid;
+            const uint32_t B_shard_N_tiles = B.shard_spec()->shape[1] / TILE_WIDTH;
             candidates.push_back(
                 {"B_shard_columns",
-                 shrinking_C_slices(
-                     cores, B.shard_spec()->shape[1] / TILE_WIDTH, /*fixed_is_N=*/true, B.shard_spec()->orientation)});
+                 shrinking_C_slices(cores, B_shard_N_tiles, /*fixed_is_N=*/true, B.shard_spec()->orientation)});
         }
     }
 

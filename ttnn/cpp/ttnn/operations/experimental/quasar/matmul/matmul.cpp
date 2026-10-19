@@ -114,10 +114,12 @@ static bool get_post_process_bias(
         std::holds_alternative<MatmulUnifiedProgramConfig>(program_config.value())) {
         // The unified kernels add a single tile row of bias (broadcast down M) to every batch, through a row
         // broadcast into a 16-bit DST (the Wormhole LLK misplaces its rows in a 32-bit one).
-        const auto& tile_shape = input_tensor_a_adjusted.tensor_spec().tile().get_tile_shape();
-        const uint32_t tile_height = transpose_a ? tile_shape[1] : tile_shape[0];
-        return bias.value().padded_shape()[-2] != tile_height ||
-               detail::is_input_batched(bias.value().logical_shape()) || fp32_dest_acc_en;
+        const tt::tt_metal::Tile A_tile = input_tensor_a_adjusted.tensor_spec().tile();
+        const uint32_t A_tile_height = transpose_a ? A_tile.get_width() : A_tile.get_height();
+        const uint32_t bias_padded_height = bias.value().padded_shape()[-2];
+        const bool bias_is_one_tile_row = bias_padded_height == A_tile_height;
+        const bool bias_is_batched = detail::is_input_batched(bias.value().logical_shape());
+        return !bias_is_one_tile_row || bias_is_batched || fp32_dest_acc_en;
     }
     if (bias.has_value()) {
         // Quasar: the fused matmul+bias path was historically avoided (bmm_large..._fused_bias TILE_COUNTERS

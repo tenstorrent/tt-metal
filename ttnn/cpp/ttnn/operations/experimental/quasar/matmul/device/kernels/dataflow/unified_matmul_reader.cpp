@@ -129,15 +129,17 @@ TT_KERNEL void reader(
             const uint32_t C_slice_first_N_tile = ((first_C_slice + MN_chunk) % C_slices_across_N) * C_slice_N_tiles;
 #ifdef FUSE_BIAS
             // The compute's bias waits take the reader threads' parts of the DFB in turn, one per C slice.
-            if ((batch * num_C_slices + MN_chunk) % num_reader_threads == thread) {
+            const uint32_t C_slice_on_core = batch * num_C_slices + MN_chunk;  // counted over all batches
+            if (C_slice_on_core % num_reader_threads == thread) {
                 bias_row.reserve_back(C_slice_N_padded_tiles);
                 for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles && C_slice_first_N_tile + n_tile < N_tiles;
                      ++n_tile) {
+                    const uint32_t bias_N_tile = C_slice_first_N_tile + n_tile;  // bias is one tile row: page = N tile
                     noc.async_read(
                         bias,
                         bias_row,
                         bias_tile_bytes,
-                        {.page_id = C_slice_first_N_tile + n_tile},
+                        {.page_id = bias_N_tile},
                         {.offset_bytes = n_tile * bias_tile_bytes});
                 }
                 noc.async_read_barrier();
