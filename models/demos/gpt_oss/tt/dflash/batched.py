@@ -46,11 +46,75 @@ def _copy(mesh, dst, t, dtype):
     ttnn.copy_host_to_device_tensor(_replicate(mesh, t, dtype, device=False), dst)
 
 
-def _all_reduce(x):
-    """TP all-reduce over the mesh row (2 fabric links: [256, 2880] in 0.054 ms, 1 link 0.062; same sums)."""
-    return ttnn.all_reduce(
-        x, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+class _TPAllReduce:
+    """TP all-reduce of [rows, hidden] partial sums over the mesh row with all_reduce_async: persistent scratch and a
+    global semaphore per slot, two slots used alternately (each call is an all-rank synchronization, so no device reuses
+    a slot before every device is done with it). ttnn.all_reduce, run back to back with other ops, now and then left a
+    wrong tile on one device (verify outputs differed between identical runs); this one is repeatable. Inputs go in as
+    BF8 (the batched decode's all-reduce precision) on 90 cores, so the [rows, 4 x hidden] scratch fits L1."""
+
+    CORES, LINKS = 90, 2
+    _instances = {}
+
+    def __init__(self, mesh, rows, hidden):
+        from ..fused_decode.config import width_sharded_memory_config
+
+        D = mesh.shape[1]
+        self.mesh = mesh
+        self.memory_config = width_sharded_memory_config(mesh, hidden, self.CORES, rows=rows)
+        scratch = width_sharded_memory_config(mesh, hidden * D, self.CORES, rows=rows)
+        grid = mesh.compute_with_storage_grid_size()
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        self.slots = [
+            (
+                ttnn.empty([1, 1, rows, hidden * D], dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=scratch),
+                ttnn.create_global_semaphore(mesh, cores, 0),
+            )
+            for _ in range(2)
+        ]  # fmt: skip
+        self.calls = 0
+
+    @classmethod
+    def get(cls, x):
+        mesh, rows, hidden = x.device(), x.shape[-2], x.shape[-1]
+        key = (id(mesh), rows, hidden)
+        if key not in cls._instances:
+            cls._instances[key] = cls(mesh, rows, hidden)
+        return cls._instances[key]
+
+    @classmethod
+    def reset(cls):
+        """Start every pass on slot 0 (each pass makes an even number of calls: the slot order is the same in every
+        captured trace and replay)."""
+        for inst in cls._instances.values():
+            inst.calls = 0
+
+    def __call__(self, x, memory_config):
+        xs = ttnn.to_memory_config(x, self.memory_config, dtype=ttnn.bfloat8_b)
+        scratch, semaphore = self.slots[self.calls % 2]
+        self.calls += 1
+        out = ttnn.experimental.all_reduce_async(
+            xs,
+            scratch,
+            cluster_axis=1,
+            mesh_device=self.mesh,
+            multi_device_global_semaphore=semaphore,
+            memory_config=self.memory_config,
+            dtype=ttnn.bfloat16,
+            topology=ttnn.Topology.Ring,
+            num_links=self.LINKS,
+        )
+        xs.deallocate(True)
+        if memory_config is None:
+            return out
+        moved = ttnn.to_memory_config(out, memory_config)
+        out.deallocate(True)
+        return moved
+
+
+def _all_reduce(x, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """TP all-reduce over the mesh row of a [1, 1, rows, hidden] partial (any layout); the BF16 sum in memory_config."""
+    return _TPAllReduce.get(x)(x, memory_config)
 
 
 class _Argmax:
@@ -62,6 +126,48 @@ class _Argmax:
 
     def device(self, logits):
         return ttnn.topk(logits, k=1, dim=-1, sorted=True)
+
+    def combine(self, out, mesh):
+        """The devices' (value, index) combined on device: [1, 1, rows, 1] FLOAT32 global token ids, the same on every
+        device (the host combine's choice: padded vocabulary columns excluded, ties to the first device)."""
+        D = mesh.get_num_devices()
+        if not hasattr(self, "offsets"):
+            rep = ttnn.ReplicateTensorToMesh(mesh)
+            put = lambda t: ttnn.from_torch(
+                t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
+            )
+            self.offsets = put((torch.arange(D) * self.per_dev).float().reshape(1, 1, 1, D))
+        vals, idxs = out
+        g = []
+        for t in (vals, idxs):
+            f = ttnn.typecast(t, ttnn.float32)
+            g.append(
+                ttnn.all_gather(
+                    f, dim=3, cluster_axis=1, num_links=1, topology=ttnn.Topology.Linear,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )  # fmt: skip
+            f.deallocate(True)
+        v, gi = g
+        gi = ttnn.add(gi, self.offsets, output_tensor=gi)
+        pad = ttnn.ge(gi, float(self.vocab))
+        v = ttnn.where(pad, -1e30, v, output_tensor=v)
+        pad.deallocate(True)
+        best = ttnn.max(v, dim=-1, keepdim=True)
+        hit = ttnn.eq(v, best)
+        v.deallocate(True)
+        best.deallocate(True)
+        cand = ttnn.where(hit, gi, 1e9)
+        hit.deallocate(True)
+        gi.deallocate(True)
+        tok = ttnn.min(cand, dim=-1, keepdim=True)
+        cand.deallocate(True)
+        return tok
+
+    @staticmethod
+    def read(tok):
+        """Host copy of combine()'s token ids (device 0's)."""
+        return ttnn.to_torch(ttnn.get_device_tensors(tok)[0]).reshape(-1).long().tolist()
 
     def host(self, out):
         vals, idxs = out
@@ -327,6 +433,7 @@ class BatchedDraft:
     def draft(self, tokens, pos, rot, bound):
         """tokens: device [1, rows] UINT32 noise block (row 32 i + u: user u's last token for i = 0, else the mask).
         Returns the per-device argmax of every row (rows 32 i + u, i >= 1: the draft of position start_u + i)."""
+        _TPAllReduce.reset()
         emb = ttnn.embedding(tokens, self.target.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         h = ttnn.typecast(ttnn.reshape(emb, [1, 1, self.rows, self.hidden]), ttnn.float32)
         for li in range(self.layers):
@@ -723,12 +830,8 @@ class BatchedVerify:
         # the decode's BF8 partial sum (the bias inside the matmul with a BF8 output: top-1 vs HF 0.08)
         partial = ttnn.add(o, op.bias, dtype=ttnn.bfloat8_b)
         o.deallocate(True)
-        partial16 = ttnn.typecast(partial, ttnn.bfloat16)
+        summed_s = _all_reduce(partial, self.residual_mc)
         partial.deallocate(True)
-        summed = _all_reduce(partial16)
-        partial16.deallocate(True)
-        summed_s = ttnn.to_memory_config(summed, self.residual_mc)
-        summed.deallocate(True)
         out = ttnn.add(res, summed_s, memory_config=self.residual_mc, dtype=ttnn.bfloat16)
         summed_s.deallocate(True)
         return out
@@ -753,6 +856,7 @@ class BatchedVerify:
         """tokens: device [1, rows] UINT32 (row 32 i + u). pos[i] / rot_idx[i]: step i's [32] INT32 positions and
         [1, 32] UINT32 RoPE indices. Returns (per-device argmax of every row, device features [1, 1, rows, 5 hidden]).
         """
+        _TPAllReduce.reset()
         model = self.model
         emb = ttnn.embedding(tokens, model.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(emb, [1, 1, self.rows, self.hidden])
@@ -833,6 +937,14 @@ class BatchedDFlashRunner:
         self.rot = [_replicate(mesh, z.reshape(1, users), ttnn.uint32) for _ in range(B)]
         self.bound = _replicate(mesh, z, ttnn.int32)
         self.pos_rows = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)
+        self.one_trace = True
+        self.first_step = ttnn.from_torch(
+            (torch.arange(self.rows) < users).float().reshape(1, 1, 1, self.rows),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
         self.traces = None
 
     def prefill(self, prompts):
@@ -840,7 +952,9 @@ class BatchedDFlashRunner:
         for u, p in enumerate(prompts):
             logits = self.generator.prefill_forward_text(
                 torch.tensor([p]),
-                page_table=self.page_table_host,
+                # the generator takes the page table rows of the prompts it is given (row 0 for a one-prompt call):
+                # this user's row (the whole table wrote every user's K/V into user 0's blocks)
+                page_table=self.page_table_host[u : u + 1],
                 kv_cache=self.kv_cache,
                 prompt_lens=[len(p)],
                 empty_slots=[u],
@@ -864,11 +978,35 @@ class BatchedDFlashRunner:
         features.deallocate(True)
         return out
 
+    def _round_pass(self):
+        """A whole round on the device: draft, the devices' argmax combined, the verify block [last token, 7 drafts]
+        built from it, verify + context. Returns the draft and verify token ids ([1, 1, rows, 1] FLOAT32)."""
+        d_out = self._draft_pass()
+        d_tok = self.draft.argmax.combine(d_out, self.mesh)
+        for t in d_out:
+            t.deallocate(True)
+        row = ttnn.transpose(d_tok, -2, -1)  # [1, 1, 1, rows]
+        lasts = ttnn.typecast(ttnn.to_layout(self.d_tokens, ttnn.TILE_LAYOUT), ttnn.float32)  # rows 0-31: last tokens
+        vt = ttnn.where(self.first_step, ttnn.reshape(lasts, [1, 1, 1, self.rows]), row)
+        row.deallocate(True)
+        lasts.deallocate(True)
+        v_tokens = ttnn.reshape(ttnn.to_layout(ttnn.typecast(vt, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, self.rows])
+        vt.deallocate(True)
+        out, features = self.verify.forward(v_tokens, self.pos, self.rot)
+        v_tokens.deallocate(True)
+        self.draft.context(features, self.pos, self._rot_mats())
+        features.deallocate(True)
+        v_tok = self.verify.argmax.combine(out, self.mesh)
+        for t in out:
+            t.deallocate(True)
+        return d_tok, v_tok
+
     def capture_traces(self):
-        """One trace for the draft pass, one for verify + context (after one eager run of each)."""
+        """One trace for the draft pass, one for verify + context (the step-by-step passes), and one for the whole
+        round (generate; one trace per round: no host round trip between draft and verify, b1 row 41)."""
         mesh = self.mesh
         self.release_traces()
-        for t in list(self._draft_pass()) + list(self._verify_pass()):
+        for t in list(self._draft_pass()) + list(self._verify_pass()) + list(self._round_pass()):
             t.deallocate(True)
         tid = ttnn.begin_trace_capture(mesh, cq_id=0)
         self.draft_out = self._draft_pass()
@@ -876,7 +1014,10 @@ class BatchedDFlashRunner:
         tid2 = ttnn.begin_trace_capture(mesh, cq_id=0)
         self.verify_out = self._verify_pass()
         ttnn.end_trace_capture(mesh, tid2, cq_id=0)
-        self.traces = (tid, tid2)
+        tid3 = ttnn.begin_trace_capture(mesh, cq_id=0)
+        self.round_out = self._round_pass()
+        ttnn.end_trace_capture(mesh, tid3, cq_id=0)
+        self.traces = (tid, tid2, tid3)
 
     def release_traces(self):
         if self.traces is not None:
@@ -903,6 +1044,19 @@ class BatchedDFlashRunner:
         ttnn.execute_trace(self.mesh, self.traces[which], cq_id=0, blocking=False)
         return (self.draft_out if which == 0 else self.verify_out), False
 
+    def _accept(self, ids, accept, done, dr, post):
+        """Each user's drafts up to the first mismatch with the target's tokens, plus the target's next token."""
+        U, B = self.users, self.block
+        for u in range(U):
+            d = [dr[i * U + u] for i in range(1, B)]
+            p = [post[i * U + u] for i in range(B)]
+            k = 0
+            while k < B - 1 and d[k] == p[k]:
+                k += 1
+            if not done(u):
+                ids[u] += d[:k] + [p[k]]
+                accept[u].append(k + 1)
+
     def generate(self, prompts, max_new_tokens, firsts):
         """Returns (per-user new tokens, per-user accepted counts, per-round seconds)."""
         mesh = self.mesh
@@ -921,6 +1075,14 @@ class BatchedDFlashRunner:
             lasts = [ids[u][-1] for u in range(U)]
             self._set_inputs(starts, lasts)
             t1 = time.perf_counter()
+            if self.traces is not None and self.one_trace:  # one trace per round
+                ttnn.execute_trace(mesh, self.traces[2], cq_id=0, blocking=False)
+                dr, post = (_Argmax.read(t) for t in self.round_out)
+                t2 = t3 = t4 = time.perf_counter()
+                self._accept(ids, accept, done, dr, post)
+                t5 = time.perf_counter()
+                times.append((t5 - t0, t2 - t1, 0.0, (t1 - t0) + (t5 - t4)))  # round, device (draft + verify), -, host
+                continue
             d_out, owned = self._run(0)
             dr = self.draft.argmax.host(d_out)
             t2 = time.perf_counter()
@@ -936,15 +1098,7 @@ class BatchedDFlashRunner:
             if owned:
                 for t in v_out:
                     t.deallocate(True)
-            for u in range(U):
-                d = [dr[i * U + u] for i in range(1, B)]
-                p = [post[i * U + u] for i in range(B)]
-                k = 0
-                while k < B - 1 and d[k] == p[k]:
-                    k += 1
-                if not done(u):
-                    ids[u] += d[:k] + [p[k]]
-                    accept[u].append(k + 1)
+            self._accept(ids, accept, done, dr, post)
             t5 = time.perf_counter()
             times.append((t5 - t0, t2 - t1, t4 - t3, (t1 - t0) + (t3 - t2) + (t5 - t4)))  # round, draft, verify, host
         return [ids[u][lens[u] : lens[u] + max_new_tokens] for u in range(U)], accept, times
