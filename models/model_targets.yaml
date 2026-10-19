@@ -408,8 +408,8 @@ targets:
             perf:
               decode_t/s/u: 11.43
               decode_t/s: 11.43
-              prefill_t/s: 367.3639
-              prefill_time_to_token: 0.2259
+              prefill_t/s: 449.7
+              prefill_time_to_token: 0.1846
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
@@ -469,7 +469,7 @@ targets:
               prefill_t/s: 45.9117
               prefill_time_to_token: 1.8949
               compile_decode: 48.0716
-              compile_prefill: 59.2525
+              compile_prefill: 49.38
             accuracy: {}
       p300x2:
         entries:
@@ -921,7 +921,7 @@ targets:
               decode_t/s: 206.9905
               prefill_t/s: 6642.8391
               prefill_time_to_token: 0.0173
-              compile_prefill: 82.3386
+              compile_prefill: 68.64
             accuracy: {}
       wh_galaxy_perf:
         entries:
@@ -1311,8 +1311,8 @@ targets:
               decode_t/s: 3.84
               prefill_t/s: 12.8039
               prefill_time_to_token: 1.4058
-              compile_decode: 43.0013
-              compile_prefill: 51.7425
+              compile_decode: 35.88
+              compile_prefill: 40.83
             accuracy: {}
   mamba-2.8b:
     aliases: ["mamba-2.8b-slimpj", "state-spaces/mamba-2.8b-slimpj"]
@@ -2375,7 +2375,7 @@ targets:
             perf:
               decode_t/s/u: 23.3354
               decode_t/s: 23.3354
-              prefill_t/s: 749.5988
+              prefill_t/s: 876.3
               prefill_time_to_token: 0.1708
               compile_decode: 0.0452
             accuracy: {}
