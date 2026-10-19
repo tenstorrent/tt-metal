@@ -42,10 +42,8 @@ their link (`tt_fabric::get_forwarding_eth_core`).
   way.
 
 ## Tests
-- `tests/ttnn/unit_tests/operations/ccl/test_fabric_all_gather_op.py`: every GLM prefill call pattern, bit-exact against
-  a torch reference and against `high_bw_all_gather` (hardware); trace-safe metadata replayed with changing cache slots and
-  lengths; a sub-device strip with external semaphores; pages larger than the fabric payload; host dispatch cost. Runs
-  under tt-emule (32-chip Galaxy) for correctness, except trace and sub-devices (fast dispatch only).
-- `tests/ttnn/unit_tests/operations/ccl/test_fabric_all_gather_device_time.py`: device time against
-  `high_bw_all_gather`, reported as GB/s received per chip and busiest-link utilisation (GLM KV-cache gather, the
-  sparse-MLA overlap window, 18 MiB tile gather). The Galaxy set runs in the `high_bw_all_gather` CI job.
+`tests/ttnn/unit_tests/operations/ccl/test_fabric_all_gather_op.py`, bit-exact against a torch reference on every chip,
+into preallocated outputs pre-filled with random bytes: TILE and ROW_MAJOR, interleaved and ND-sharded input, every
+`cluster_axis`, program-cache hits on new buffers, slot select and partial extents, the trace-safe metadata forms,
+caller-owned L1_SMALL semaphores (with and without a sub-device), worker-core restrictions, link counts, and pages
+larger than the fabric payload. Runs under tt-emule (32-chip Galaxy) too, except trace and sub-devices.
