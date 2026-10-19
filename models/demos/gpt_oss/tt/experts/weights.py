@@ -3,7 +3,6 @@
 
 """Generic expert weight loading and management."""
 
-import glob
 from dataclasses import dataclass
 
 import torch
@@ -307,6 +306,7 @@ def load_decode_expert_weights(
         NBIAS,
         as_stream_tensor,
         columns_per_bank,
+        stream_cache_exists,
         stream_down_layout,
         stream_gate_up_layout,
     )
@@ -363,7 +363,7 @@ def load_decode_expert_weights(
 
     def stream(name, layouts):
         cache = get_cache_file_name(tensor_cache_path, f"{name}_{suffix}")
-        if layouts is None and cache is not None and not glob.glob(glob.escape(cache) + "*"):
+        if layouts is None and cache is not None and not stream_cache_exists(cache, weight_dtype):
             # no rotated cache and no state dict (a cache built before the bank rotation): rotate the unrotated
             # cache's bank shards on the host (exact: the BFP4 blocks stay within a bank's tiles)
             base = as_stream_tensor(
@@ -396,6 +396,7 @@ def load_decode_down_bal(
         bank_workers,
         columns_per_bank,
         down_bal_plan,
+        stream_cache_exists,
         stream_down_bal_layout,
     )
 
@@ -420,7 +421,7 @@ def load_decode_down_bal(
         tensor_cache_path, f"down_bal_{suffix}_s{seg_inter}_" + "_".join(str(n) for _, n in bank_cols)
     )
     layouts = None
-    if cache is None or not glob.glob(glob.escape(cache) + "*"):
+    if not stream_cache_exists(cache, weight_dtype):
         Cs = columns_per_bank(H, banks)
         seg = inter_pad // tile + 1
         hosts = ttnn.to_torch(dw.down_stream, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[0]

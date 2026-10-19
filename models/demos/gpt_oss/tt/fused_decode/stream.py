@@ -24,7 +24,6 @@ scaled by the routing score) and ExpertDownStream (routed down + bias, summed ov
 partial sum).
 """
 
-import glob
 import os
 import struct
 from pathlib import Path
@@ -236,12 +235,18 @@ def stream_weight_memory_config(mesh_device, rows):
     )
 
 
+def stream_cache_exists(cache_file_name, dtype):
+    """Whether ttnn.as_tensor would load cache_file_name (dtype, tile layout) from the cache: the exact file it reads.
+    A prefix match would also see the partial `.tmp` file of another process that is writing the cache right now."""
+    return cache_file_name is not None and os.path.isfile(f"{cache_file_name}_dtype_{dtype.name}_layout_TILE.tensorbin")
+
+
 def as_stream_tensor(mesh_device, layouts, rows, dtype, cache_file_name):
     """Per-device streamed layouts ([rows, banks * 32] each, one per mesh column / TP shard, or None to load from the
     cache) -> one DRAM width-sharded tensor per device. The cached file keeps the shard layout, so cache names carry
     the layout parameters."""
     t = torch.stack(layouts).unsqueeze(0) if layouts is not None else None
-    if t is not None and cache_file_name is not None and not glob.glob(glob.escape(cache_file_name) + "*"):
+    if t is not None and cache_file_name is not None and not stream_cache_exists(cache_file_name, dtype):
         # a new cache file in a read-only cache (CI's shared weight cache): build the tensor without writing it
         d = os.path.dirname(os.path.abspath(cache_file_name))
         while not os.path.exists(d):
