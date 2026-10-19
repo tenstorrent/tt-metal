@@ -15,6 +15,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -40,7 +41,7 @@ struct RandConfig {
 };
 
 constexpr uint32_t num_tiles = 4;
-constexpr uint32_t tile_elements = 1024;
+constexpr uint32_t tile_elements = constants::TILE_HW;
 constexpr uint32_t seed = 0x12345678;
 
 size_t bf16_values_in(float low, float high) {
@@ -61,7 +62,7 @@ std::vector<bfloat16> run_rand(const std::shared_ptr<distributed::MeshDevice>& m
     auto& program = workload.get_programs().at(device_range);
 
     constexpr CoreCoord core = {0, 0};
-    constexpr uint32_t single_tile_size = 2 * tile_elements;
+    constexpr uint32_t single_tile_size = tile_elements * sizeof(bfloat16);
     constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
     distributed::ReplicatedBufferConfig global_config{.size = dram_buffer_size};
@@ -69,8 +70,9 @@ std::vector<bfloat16> run_rand(const std::shared_ptr<distributed::MeshDevice>& m
     auto dst_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, mesh_device.get());
 
     constexpr uint32_t output_cb_index = CBIndex::c_16;
+    constexpr uint32_t num_cb_tiles = 2;
     CircularBufferConfig cb_output_config =
-        CircularBufferConfig(2 * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
+        CircularBufferConfig(num_cb_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(output_cb_index, single_tile_size);
     CreateCircularBuffer(program, core, cb_output_config);
 

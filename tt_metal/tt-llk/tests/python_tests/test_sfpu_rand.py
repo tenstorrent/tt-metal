@@ -15,7 +15,7 @@ import torch
 from conftest import skip_for_quasar
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
-from helpers.golden_generators import ELEMENTS_PER_TILE
+from helpers.golden_generators import ELEMENTS_PER_TILE, FACES_PER_TILE
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -31,7 +31,7 @@ RANGES = [(2.0, 1.0), (-3.0, 2.0)]
 SEED = 0x12345678
 # Outside every range, so an element the kernel never wrote fails the range check.
 SENTINEL = 100.0
-FACE_ELEMENTS = ELEMENTS_PER_TILE // 4
+FACE_ELEMENTS = ELEMENTS_PER_TILE // FACES_PER_TILE
 # Draws must reach this fraction of the values the grid can represent in the range.
 MIN_COVERAGE = 0.8
 # A face has only 256 draws, so collisions on a small grid leave fewer distinct values.
@@ -120,9 +120,9 @@ def test_sfpu_rand(formats, dest_acc, rand_range):
         f"values in [{low}, {high}]"
     )
 
-    faces = res.view(4, FACE_ELEMENTS)
+    faces = res.view(FACES_PER_TILE, FACE_ELEMENTS)
     face_expected = _expected_distinct(formats, dest_acc, low, high, FACE_ELEMENTS)
-    for face in range(4):
+    for face in range(FACES_PER_TILE):
         face_distinct = int(torch.unique(faces[face]).numel())
         assert face_distinct >= MIN_FACE_COVERAGE * face_expected, (
             f"face {face} holds only {face_distinct} distinct draws "
