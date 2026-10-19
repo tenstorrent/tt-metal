@@ -16,7 +16,9 @@ while read -r rel; do PK[$rel]=$(find "$SP" -path "*/$(suffix $rel)" -type f 2>/
 echo "== package copies found: $(for r in "${!PK[@]}"; do echo ${PK[$r]}; done | wc -w) for $(wc -l < $S/files.txt) files"
 ls /work/ci_ab/ol/test_tz_ol.py > /dev/null && cp /work/ci_ab/ol/test_tz_ol.py /work/tests/ttnn/test_tz_ol.py
 grep -h "def test_tz\|^    \"" /work/tests/ttnn/test_tz_ol.py | sed -n 's/^    "\([^"]*\)".*/tests\/ttnn\/test_tz_ol.py::test_tz[\1]/p' > /work/ci_ab/ol/nodes.txt
-echo "== nodes $(wc -l < /work/ci_ab/ol/nodes.txt)"
+echo "== nodes $(wc -l < /work/ci_ab/ol/nodes.txt): $(head -1 /work/ci_ab/ol/nodes.txt)"
+python3 -c "import ttnn, tracy; print('== imports ok')" 2>&1 | tail -2
+use M; timeout 900 python3 -m pytest -q -p no:cacheprovider -o addopts= "$(head -1 /work/ci_ab/ol/nodes.txt)" > /tmp/dry.txt 2>&1; echo "== dry run rc=$?"; tail -25 /tmp/dry.txt | cut -c1-250
 use() {  # use <arm>
   local v=${1%b}
   while read -r rel; do
@@ -33,6 +35,7 @@ for blk in 1 2; do for a in $1 $RV; do
   timeout -s INT -k 60 1500 python3 -m tracy -r -p --no-web-server -o $o $S/ol/run_nodes.py > $o.log 2>&1
   echo "== run $r $a rc=$? $(( $(date +%s) - t0 )) s: $(grep -aE '[0-9]+ (passed|failed)' $o.log | tail -1)"
   grep -a -m3 -E '^(FAILED|ERROR)' $o.log | cut -c1-200
+  grep -aqE '[0-9]+ passed' $o.log || { echo "== log tail $a r$r"; tail -20 $o.log | cut -c1-250; }
   python3 $S/ol/sum_op19.py $o $a $r
   echo "RAB ELF $a r$r $(elfsum $TT_METAL_CACHE) $(ls -d $TT_METAL_CACHE/*/kernels/*/* 2>/dev/null | grep -ci tiliz) tilize builds"
 done; done
