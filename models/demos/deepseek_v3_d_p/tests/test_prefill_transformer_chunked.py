@@ -1666,7 +1666,7 @@ def run_chunked_transformer_updated(
     seq_cache=None,
     sparse_cache_format=None,
     push_ab_chunks=(),
-    push_ab_reps=2,
+    push_ab_reps=3,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
     full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
@@ -2246,18 +2246,21 @@ def run_chunked_transformer_updated(
 
     # Sparse KV push A/B (PROTOTYPE): at the chunks in push_ab_chunks, re-run that chunk with every layer's dense
     # KVPE gather and then with the sparse push (shared layers only), alternating. Re-running a chunk rewrites the
-    # same KV and indexer keys, so the prefill itself is unaffected.
+    # same KV and indexer keys, so the prefill itself is unaffected. The first push re-run plans on the host (timed
+    # separately); later ones reuse those plans, standing in for on-device planning.
     push_ab_rows = []
 
     def _push_ab(c, kv_actual):
         mlas = [layer.mla for layer in transformer.layers]
+        planner = mlas[0].tt_ccl.get_sparse_kv_push(mlas[0].ccl_num_links)[0]
+        planner.memo, planner.memo_tag = {}, c
         samples = {False: [], True: []}
         plan_s = []
         for push in (False, True) * push_ab_reps:
             for m in mlas:
                 m._sparse_kv_push = push
-            planner = mlas[0].tt_ccl.sparse_kv_push
-            plan0 = planner[0].host_seconds if planner else 0.0
+            planner.generation = 0
+            plan0 = planner.host_seconds
             tokens = ttnn.from_torch(
                 chunk_tok_host[c],
                 device=mesh_device,
@@ -2281,17 +2284,20 @@ def run_chunked_transformer_updated(
             ttnn.synchronize_device(mesh_device)
             samples[push].append(time.time() - t0)
             if push:
-                plan_s.append(mlas[0].tt_ccl.sparse_kv_push[0].host_seconds - plan0)
+                plan_s.append(planner.host_seconds - plan0)
             ttnn.deallocate(tokens)
         for m in mlas:
             m._sparse_kv_push = False
-        gather_s, push_s = min(samples[False]), min(samples[True])
-        plan = min(plan_s)
-        push_ab_rows.append((c, kv_actual, gather_s, push_s, plan))
+        planner.memo, planner.memo_tag = None, None
+        planner.invalidate()
+        assert plan_s[0] > 0 and not any(plan_s[1:]), f"expected only the first push re-run to plan, got {plan_s}"
+        gather_s, cold_s, push_s = min(samples[False]), samples[True][0], min(samples[True][1:])
+        plan = plan_s[0]
+        push_ab_rows.append((c, kv_actual, gather_s, push_s, cold_s, plan))
         logger.info(
             f"[push A/B] chunk={c} prefix={kv_actual} gather={gather_s * 1000:.1f} ms push={push_s * 1000:.1f} ms "
-            f"(host plan {plan * 1000:.1f} ms) samples gather={[round(x * 1000) for x in samples[False]]} "
-            f"push={[round(x * 1000) for x in samples[True]]}"
+            f"(first push {cold_s * 1000:.1f} ms incl. host plan {plan * 1000:.1f} ms) "
+            f"samples gather={[round(x * 1000) for x in samples[False]]} push={[round(x * 1000) for x in samples[True]]}"
         )
 
     profiler.start("tt_forward")
@@ -2395,13 +2401,16 @@ def run_chunked_transformer_updated(
         iteration_chunk_times.append(chunk_times)
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
         if push_ab_rows and it == 0:
-            lines = ["prefix    gather_ms  push_ms  host_plan_ms  push-plan_ms  saved_ms(excl plan)"]
-            for _, pre, g, pu, pl in push_ab_rows:
+            lines = ["prefix    gather_ms  push_ms  saved_ms  first_push_ms  host_plan_ms"]
+            for _, pre, g, pu, cold, pl in push_ab_rows:
                 lines.append(
-                    f"{pre:>8}  {g * 1000:9.1f}  {pu * 1000:7.1f}  {pl * 1000:12.1f}  {(pu - pl) * 1000:12.1f}  "
-                    f"{(g - pu + pl) * 1000:9.1f}"
+                    f"{pre:>8}  {g * 1000:9.1f}  {pu * 1000:7.1f}  {(g - pu) * 1000:8.1f}  {cold * 1000:13.1f}  "
+                    f"{pl * 1000:12.1f}"
                 )
-            logger.info("[push A/B] per-chunk wall time, all 78 layers (min of reps):\n" + "\n".join(lines))
+            logger.info(
+                "[push A/B] per-chunk wall time, all layers (push = planned plans reused; first_push plans on host):\n"
+                + "\n".join(lines)
+            )
         if determinism_check:
             # Compare the whole cache the iteration just wrote, bit-exactly. PCC rounds away a single
             # flipped element in num_layers x seq x kvpe; torch.equal does not. The cache is the right
