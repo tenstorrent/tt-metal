@@ -179,6 +179,47 @@ TABLE = {
         "layer L03 0.99524, state min 0.99710 (bfp4 at full, P.1: 0.99535 / 0.99726); layer-0 experts vs CPU rel "
         "0.131, bias +3.4 % (DS41-64)",
     ),
+    "EXPERTS_COMBINE": Setting(
+        "weighted",
+        ("separate", "weighted"),
+        "EXPERTS_KERNEL=flat only (P.8, owner comparison 2026-10-19): separate = today's chain (q(x) | routing-weight "
+        "pieces in the dispatched row, ttnn.bringup.dispatch along axis 0, the flat expert with routing_weights + "
+        "fp8_act_quant (q(r h) before w2), ttnn.bringup.combine, the K-slot permute / slices / fp32 adds); weighted = "
+        "the flat expert and combine_rf's router-forwarded weighted combine (sparse_combine_rf) in ONE program per chip "
+        "(ttnn.bringup.flat_routed_expert_with_program, Marko Staletovic's wiring), the model's layout kept: q(x) "
+        "gathered along the mesh column (axis 0; the flat expert reads its rows by token index: the column's "
+        "dispatch), the device planner (combine_plan, column axis) builds counts / regions / token index and the "
+        "combine's tables from the column's top-k ids and bf16 weights, each expert row goes to its token's home chip "
+        "in the column and is multiplied there by its routing weight (bf16) and summed in fp32 per token (packer L1 "
+        "accumulation), then the column partials are added across the row by the same reduce-scatter (tt/ccl.py "
+        "sum_cols). No routing-weight pieces, no fp8 q(h) (the weight moves from h to the combine; w2 is linear), no "
+        "separate combine and no K-slot adds. The combine's fp32 accumulators hold the home tokens in L1, so the chunk "
+        "runs in passes of as many tokens as the free cells hold (tt/weighted_combine.py; 2x2: 2 passes of 512, DS41-69), "
+        "each token's rows summed in a fixed order (the det order table: bit-identical calls). Output bf16 under "
+        "CCL_IMPL=fabric_bf16 (the reduce-scatter's input, DS41-67), else fp32. Needs a 10880 B fabric payload "
+        "(bringup/hooks.py:device_params). P.8, layer 0, 2x2, chunk 2048, synced experts call: glm 5.3-5.4 ms vs separate "
+        "8.0 ms (arrival order), full precision 6.05 ms (det) vs 8.5 ms; vs float64 rel 0.0029 vs 0.0023 (full, fp32 out)",
+    ),
+    "NUMERICS": Setting(
+        "native",
+        ("official", "native"),
+        "P.8 (owner comparison 2026-10-19, agent rule 17): official = the released code's arithmetic, bit-exact: the fp8 "
+        "act quant-dequant of every fp8 linear's input (q_a, kv, attention wq_b / wo_a / wo_b, indexer wq_b, shared and "
+        "routed experts x and h, engram wkv), the fp8 q-dq of the window KV, the fp4 q-dq of the compressed KV, the "
+        "index key and the index query, the TF32 rounding of the compressor's / indexer gates' fp32 matmul inputs "
+        "(COMPRESSOR_X) and of q (WINDOW_SDPA_PROBS=fp32); native = none of them (tt/quant.py:act_q / fp4_q / tf32_q): "
+        "a matmul input is cast to the dtype the matmul reads (bf16), a cache row written in bf16 is cast, the expert "
+        "op runs without fp8_act_quant; ENGRAM_KV_QDQ and COMPRESSOR_X are ignored. Component and swap tests stay on the "
+        "official arithmetic (MAX_PRECISION; the reference hook has no numerics switch for this model)",
+    ),
+    "FFN_NORM_DTYPE": Setting(
+        "bf16",
+        ("fp32", "bf16"),
+        "P.8 (owner comparison 2026-10-19): the dtype ffn_norm writes (tt/norm.py, gather=True): fp32 = today's; bf16 = "
+        "the normalized row rounded once to bf16 by the last multiply's packer, so the row all-gather moves half the "
+        "bytes; the router (bf16 x @ bf16 gate) and the experts / shared expert read it as is (no conversion op; "
+        "NUMERICS=official casts it to fp32 for the fp8 q-dq)",
+    ),
     "EXPERTS_DECODE": Setting(
         "gather",
         ("gather", "arith"),
@@ -264,6 +305,11 @@ MAX_PRECISION = {
     "EXPERTS_IMPL": "bfp8",  # exact fp4 values (DS41-10); bfp4 is the owner's lossy memory pick (P.1)
     "CCL_IMPL": "fabric",  # exact fp32 sums (P.5); fabric_bf16 (P.6) is judged end to end only
     "EXPERTS_PRECISION": "full",  # P.4: glm (LoFi, bfp8 x / h / y) is judged end to end only
+    "NUMERICS": "official",  # P.8: the component / swap tests check the official arithmetic (rule 17's native: end to end)
+    "FFN_NORM_DTYPE": "fp32",  # P.8: bf16 is judged end to end only
+    # P.8: weighted cannot run the official arithmetic (q(r h) needs the weight before w2; it moves to the combine)
+    # and multiplies by bf16 routing weights (the planner's / combine's format), so the max-precision path is separate
+    "EXPERTS_COMBINE": "separate",
 }
 
 settings = Settings("DS41_", TABLE, max_precision=MAX_PRECISION)

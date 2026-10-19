@@ -26,6 +26,7 @@ from __future__ import annotations
 import ttnn
 
 from .common import DRAM
+from .settings import settings
 
 FP8_MAX = 448.0
 GROUP = 32
@@ -236,3 +237,41 @@ def fp4_qdq(x: ttnn.Tensor, block: int, e4m3_scale: bool = False, dtype=ttnn.flo
         _free(res)
         res = res2
     return res
+
+
+# ------------------------------------------------------------------------------------------------- NUMERICS (P.8)
+def native() -> bool:
+    """NUMERICS=native (P.8, agent rule 17): every parity-only rounding of the model is off. The fp8 / fp4
+    quant-dequant of activations the device keeps in bf16 / fp32 (fp8_qdq, fp4_qdq) and the TF32 rounding of fp32
+    matmul inputs (round_tf32) emulate the reference GPU's formats; natively a matmul input is just cast to the dtype
+    the matmul reads (bf16), a cache row written in bf16 is just cast. official (default): the released code's
+    arithmetic, bit-exact."""
+    return settings.get("NUMERICS") == "native"
+
+
+def act_q(x: ttnn.Tensor, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+    """The fp8 act quant a matmul input (or a bf16 cache row) gets. official: fp8_qdq (an fp32 x; a bf16 x is cast to
+    fp32 first, exactly); native: x in ``dtype`` (a typecast, or x itself when it already is ``dtype``). Does not
+    consume x; the caller frees the result only when it is not x."""
+    if native():
+        return x if x.dtype == dtype else ttnn.typecast(x, dtype, memory_config=DRAM)
+    if x.dtype == ttnn.float32:
+        return fp8_qdq(x, dtype=dtype)
+    xf = ttnn.typecast(x, ttnn.float32, memory_config=DRAM)
+    out = fp8_qdq(xf, dtype=dtype)
+    ttnn.deallocate(xf)
+    return out
+
+
+def fp4_q(x: ttnn.Tensor, block: int, e4m3_scale: bool = False, dtype=ttnn.float32) -> ttnn.Tensor:
+    """fp4_qdq (official) or x in ``dtype`` (native: a typecast, or x itself). Does not consume x; the caller frees
+    the result only when it is not x."""
+    if native():
+        return x if x.dtype == dtype else ttnn.typecast(x, dtype, memory_config=DRAM)
+    return fp4_qdq(x, block, e4m3_scale=e4m3_scale, dtype=dtype)
+
+
+def tf32_q(x: ttnn.Tensor) -> ttnn.Tensor:
+    """round_tf32 (official) or x itself (native). Does not consume x; the caller frees the result only when it is
+    not x."""
+    return x if native() else round_tf32(x)

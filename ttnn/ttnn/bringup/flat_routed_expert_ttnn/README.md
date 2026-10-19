@@ -57,7 +57,7 @@ New op (Marko Staletovic's, no TTNN source on this tree). Blackhole only.
 
 `flat_combine_overlap(<flat args as above>, dispatched_metadata, expert_offsets, replicated_global_expert_idx_table, *, num_experts_per_tok, seq_len_per_chip, combine_axis=0, combine_num_links=2, fwd_arrived_semaphore, final_arrived_semaphore, expert_go_semaphore, activation=0, pin=1, down_fp32=False, x_bf16=False, h_bf16=False, y_row_major=True, y_out=None)` -> combine output [1, 1, seq_len_per_chip, num_experts_per_tok, H] bf16 RM. No routing_weights / fp8_act_quant / weights_nk / hidden.
 
-`flat_routed_expert_with_program(<flat args>, *, arena, y, extra, extra_key, collector, counts_addr, writers, activation=0, pin=1, token_index=None, down_fp32=False, x_bf16=False, h_bf16=False, l1_args=[], relay_words=None)` -> y. `extra`: the other op's MeshProgramDescriptor (empty = "cache hit expected"); `l1_args`: per appended program, the L1 hand-off args (`sparse_combine_rf` `run.l1_args`). No DeepSeek-V4.1 h options.
+`flat_routed_expert_with_program(<flat args>, *, arena, y, extra, extra_key, collector, counts_addr, writers, activation=0, pin=1, token_index=None, down_fp32=False, x_bf16=False, h_bf16=False, l1_args=[], relay_words=None, math_fidelity=0, weights_nk=False)` -> y. `extra`: the other op's MeshProgramDescriptor (empty = "cache hit expected"); `l1_args`: per appended program, the L1 hand-off args (`sparse_combine_rf` `run.l1_args`). `math_fidelity` / `weights_nk` (P.8; defaults LoFi / [K, N]): as for flat_routed_expert. No routing_weights / fp8_act_quant / hidden.
 
 `FlatRoutedExpert(device, weights, *, m, H, I, gids, n_global, wdtype="bf4", act="silu", pin=1, cache_prefix=None, x_bf16=False, h_bf16=False, weights_nk=False, routed=False, check_exact=False)`; `weights="fake"` = uninitialised weights (perf only). `__call__(x, counts, regions, token_index=None, x_pages_per_row=1, y_row_major=False, down_fp32=False, pack_stochastic_rounding=False, y_bf16=False, math_fidelity=0, routing_weights=None, fp8_act_quant=False, hidden=0)`.
 
@@ -89,6 +89,9 @@ Many `MIMO_FL_*` environment knobs change the plan (flat_expert.py, device/flat_
 - flat_routed_expert_with_program + combine_rf, 2 x 4 LoudBox, V4.1 dims, uniform routing: flat alone 1089 us, fused
   1238 us, serial 1735 us; worst per-token rel err 2.4e-3 (FLAT_COMBINE_OVERLAP_WORKLOG.md "DeepSeek V4.1-Flash: flat +
   combine overlap").
+- deepseek_v41_flash_d_p P.8, 2x2 QuietBox, layer 0, chunk 2048 (column combine, 2 passes of 512 home tokens): the
+  fused call ~2.05 ms a pass (EXPERTS_PRECISION=glm) / ~2.14 ms (full: HiFi4, bf16 x / h) vs the plain flat op over
+  every row 2.2 ms: weight-stream bound, so a pass costs about a whole call (../combine_rf/README.md "Measured").
 
 ## Limits
 - Blackhole only; plan needs the BH DRAM-reader layout (TT_FATALs in device/flat_routed_expert_plan.cpp).
@@ -102,7 +105,8 @@ Many `MIMO_FL_*` environment knobs change the plan (flat_expert.py, device/flat_
   TT_FATAL `p.nsg == 1`, and the MiMo `indexed_perf` band (runs faster than its lower bound, 1710341 ns vs 1720090)
   (CHANGELOG.md; known_issues.md DS41-63). After the e4d239c6d81 sync: 26 passed / 13 failed, the same 13; test_ds41_h_options
   7/7; deepseek_v41 test_c_swa_experts vs CPU rel 0.00224936 (CHANGELOG.md, "Sync to e4d239c6d81").
-- flat_combine_overlap and flat_routed_expert_with_program carry none of the DeepSeek-V4.1 options.
+- flat_combine_overlap carries none of the DeepSeek-V4.1 options; flat_routed_expert_with_program has math_fidelity and
+  weights_nk only (no routing_weights / fp8_act_quant / hidden: the weighted combine applies the routing weight).
 - With the combine_rf L1 hand-off, rows wider than SPC_PIECE (default 7168 B) hang unless SPC_PIECE >= row bytes
   and the fabric payload >= row + 32 B (FLAT_COMBINE_OVERLAP_WORKLOG.md; asserted in sparse_combine_rf.py).
 - GLM's experts_ag path only builds at <= 64 experts per chip; it was never run on a 2x2 (known_issues.md DS41-63).
@@ -118,12 +122,15 @@ y = fe(x_rm_bf16, counts, regions, down_fp32=True)          # y [rows, H] bfp8 T
 Tests: tests/unit/ (test_flat_routed_expert_op.py, test_flat_expert_indexed_shapes.py, test_flat_expert_mesh.py,
 test_flat_expert_yrm.py, test_flat_uneven_split.py, test_ds41_h_options.py), tests/test_flat_bench.py (perf, fake
 weights); tests/source.yaml is empty. flat_combine_overlap:
-models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_flat_combine_overlap.py. flat_routed_expert_with_program: no
-test or caller in this tree.
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_flat_combine_overlap.py. flat_routed_expert_with_program: deepseek_v41_flash_d_p tt/perf_experts.py::test_weighted_vs_separate /
+test_weighted_combine_routes.
 
 ## Used by
 - deepseek_v41_flash_d_p P.3 / P.4: tt/experts.py `_flat` (EXPERTS_KERNEL=flat, tt/settings.py default): clamped_silu,
   routing_weights, fp8_act_quant, weights_nk, hidden, routed plan, HiFi4, bfp8 / bfp4.
+- deepseek_v41_flash_d_p P.8: tt/weighted_combine.py (EXPERTS_COMBINE=weighted): flat_routed_expert_with_program with
+  combine_rf's sparse_combine_rf appended, token_index x (the column's gathered q(x)), math_fidelity, weights_nk,
+  down_fp32, the plan without the h options (routed=False).
 - glm53_flash_d_p (via glm53_flash_d_p_lb): tt/experts_ag.py (GLM_EXPERTS_MODE=ag): indexed x, y_row_major,
   down_fp32 (GLM_AG_DOWN_FP32=1 default), clamped_silu.
 - glm53_flash_d_p_lb tests (test_flat_*.py); deepseek_v3_d_p test_flat_combine_overlap.py (flat_combine_overlap).
