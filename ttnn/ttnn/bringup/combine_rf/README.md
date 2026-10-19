@@ -126,6 +126,7 @@ All from ../flat_routed_expert_ttnn/FLAT_COMBINE_OVERLAP_WORKLOG.md (LoudBox 2 x
 - sparse_all_gather_2d: output RM DRAM interleaved, own rows already in place.
 
 ## How to call
+Wiring examples (flat expert + this combine in one program; Kimi K3's MoE block): `examples/` (reference only).
 ```python
 from ttnn.bringup.combine_rf.sparse_combine_rf import sparse_combine_rf_prepare
 run = sparse_combine_rf_prepare(mesh, S, W, rows_by_chip, num_links=2, n_acc=16)
