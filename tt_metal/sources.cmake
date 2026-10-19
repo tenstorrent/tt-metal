@@ -114,6 +114,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/sockets/h2d_socket.hpp
     api/tt-metalium/experimental/sockets/h2d_stream_service_descriptor.hpp
     api/tt-metalium/experimental/sockets/hd_socket_descriptor.hpp
+    api/tt-metalium/experimental/sockets/host_mesh_socket.hpp
     api/tt-metalium/experimental/sockets/mesh_socket.hpp
     api/tt-metalium/experimental/sockets/named_shm.hpp
     api/tt-metalium/experimental/sockets/shm_resource_tracker.hpp
