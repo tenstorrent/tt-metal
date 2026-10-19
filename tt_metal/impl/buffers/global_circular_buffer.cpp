@@ -39,7 +39,7 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 namespace tt::tt_metal::experimental {
 

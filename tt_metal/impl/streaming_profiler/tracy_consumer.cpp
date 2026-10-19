@@ -7,7 +7,7 @@
 #include <cstring>
 #include <limits>
 
-#include <umd/device/driver_atomics.hpp>
+#include <tt-umd/driver_atomics.hpp>
 
 #include <fmt/format.h>
 #if defined(TRACY_ENABLE)

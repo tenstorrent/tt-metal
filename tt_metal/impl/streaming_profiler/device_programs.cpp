@@ -25,7 +25,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>  // MeshCoreCoord
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
