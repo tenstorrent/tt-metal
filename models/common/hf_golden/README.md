@@ -23,6 +23,7 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_glm_5_2.py` | zai-org/GLM-5.2 | transformers `glm_moe_dsa` |
 | `generate_golden_xing4_0_29b_a4b.py` | XingChen-AGI/Xing4.0-29B-A4B | repo remote code (MLA + mHC + MoE) |
 | `generate_golden_mimo_v2_6_flash_rl.py` | XiaomiMiMo/MiMo-V2.6-Flash-RL | repo remote code, FP8/MXFP4 dequantized (see below) |
+| `generate_golden_mimo_v2_6_pro_rl.py` | XiaomiMiMo/MiMo-V2.6-Pro-RL | Flash-RL's class on the Pro repo (8 qkv TP shards) |
 | `generate_golden_glm_5_3_flash.py` | zai-org/GLM-5.3-Flash-BF16 | transformers `glm5_next` (KDA + DSA + mHC), needs transformers >= 5.17 |
 | `generate_golden_muse_glimmer_30b.py` | meta-models/Muse-Glimmer-30B | transformers `muse_glimmer` (text backbone), needs transformers >= 5.17 |
 | `generate_golden_hy3.py` | tencent/Hy3 | transformers `hy_v3` (GQA + MoE) |
@@ -56,6 +57,13 @@ cached weights, 107 GB GPU peak, 36 GB on disk. Runs are deterministic, but NOT 
 router's fp32 logit matmul rounds differently by row count (max 1.6e-5 at layer 1), which flips a few top-8 picks
 and grows with depth (at isl 10240 vs the first 10240 rows of isl 56320: 96-99.8% of expert picks agree, last-layer
 hidden PCC 0.974). Compare routing as sets, with a tolerance.
+
+**MiMo-V2.6-Pro-RL:** same remote code and formats as Flash-RL; qkv_proj is stored as 8 TP shards (Flash: 4).
+Prefix: the chat template up to a no-think assistant turn (wikitext ppl at isl 5120 over the same 5000 tokens: 2.087
+chat, 2.114 `<|endoftext|>`, 2.125 raw). isl 56320 with `--prefill-chunk 5120 --attn-chunk 512`: 11.4 min, 141.7 GB
+GPU peak (use `--attn-chunk 256` for headroom), 54 GB trimmed to 38 layers; its first 10240 rows equal an isl 10240
+run with the same flags bit for bit (419/419 tensors). The early sliding layers send almost all attention to the
+sink, so their attention output is near 0: compare those with an absolute tolerance, not PCC alone.
 
 **Kimi-K2.7-Code:** `[BOS]` prefix (wikitext ppl at isl 10240 over the same 10100 tokens: 2.897 `[BOS]`, 2.937 raw,
 3.200 chat). The tokenizer is remote code on tiktoken, which reads even local files through `blobfile`: add

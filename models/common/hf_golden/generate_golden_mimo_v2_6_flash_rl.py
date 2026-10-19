@@ -121,9 +121,6 @@ NOTES = {
     "logits": "Last position only: lm_head (not tied to embed_tokens) over the final norm output, fp32.",
 }
 
-QKV_TP = 4  # tensor-parallel shards in the stored qkv_proj; checked against every scale grid in _dequant_qkv
-
-
 def _dequant_blocks(weight: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
     """fp8 * per-128x128-block scale_inv, or MXFP4 (uint8 pairs of e2m1 codes, int8 view) * 2**(E8M0 - 127):
     transformers' FP8/MXFP4 dequantizer, which takes the block shape from the scale grid. fp32 out."""
@@ -134,10 +131,11 @@ def _dequant_blocks(weight: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
     return Fp8Dequantize(None)._dequantize_one(weight, scale, output_dtype=torch.float32)
 
 
-def _dequant_qkv(weight: torch.Tensor, scale: torch.Tensor, q: int, k: int, v: int, block: int = 128) -> torch.Tensor:
-    """qkv_proj is stored as QKV_TP shards, each [q/tp | k/tp | v/tp] rows with its own 128-row block grid. Pad each
+def _dequant_qkv(
+    weight: torch.Tensor, scale: torch.Tensor, q: int, k: int, v: int, tp: int, block: int = 128
+) -> torch.Tensor:
+    """qkv_proj is stored as ``tp`` shards, each [q/tp | k/tp | v/tp] rows with its own 128-row block grid. Pad each
     shard to whole blocks, dequantize it with its scales, then regroup the rows into the unsharded [q | k | v]."""
-    tp = QKV_TP
     rows = (q + k + v) // tp
     blocks = -(-rows // block)
     assert weight.shape[0] == tp * rows and scale.shape[0] == tp * blocks, (weight.shape, scale.shape, tp)
@@ -176,6 +174,7 @@ class MiMoV2Golden(LayerwiseGolden):
     # The remote MiMoV2 model declares no sdpa support (from_pretrained refuses it). Forced through the config, sink
     # layers fall back to the remote eager attention, which adds the boolean sdpa mask to the scores instead of masking.
     attn, attn_choices = "eager", ("eager",)
+    qkv_tp = 4  # tensor-parallel shards in the stored qkv_proj; checked against every scale grid in _dequant_qkv
     recipe = Recipe(
         sublayers=("self_attn.qkv_proj", "self_attn.o_proj", "mlp"),
         # Routing is a top-k: bf16 rounding of the logits alone can flip an expert at the cut, so they stay exact.
@@ -262,7 +261,7 @@ class MiMoV2Golden(LayerwiseGolden):
             weight = sd[weight_name]
             if weight_name.endswith("self_attn.qkv_proj.weight"):
                 attn = module.get_submodule(weight_name.removesuffix(".qkv_proj.weight"))
-                sd[weight_name] = _dequant_qkv(weight, scale, attn.q_size, attn.k_size, attn.v_size)
+                sd[weight_name] = _dequant_qkv(weight, scale, attn.q_size, attn.k_size, attn.v_size, self.qkv_tp)
             else:
                 sd[weight_name] = _dequant_blocks(weight, scale)
         return sd
