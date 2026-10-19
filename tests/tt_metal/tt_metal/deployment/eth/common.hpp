@@ -6,6 +6,7 @@
 #define ETH_COMMON_HPP
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 
 #include "tt_metal/tt_metal/deployment/deployment_common.hpp"
@@ -165,8 +166,9 @@ static void prepare_bidir(
     tt_metal::SetRuntimeArgs(*send_program, send_kernel, send_core, {});
 }
 
+// Returns true/false instead of exiting directly; this runs on a worker thread.
 [[maybe_unused]]
-static void track_eth_progress_timeout(
+static bool track_eth_progress_timeout(
     tt::tt_metal::IDevice* const send_device,
     tt::tt_metal::IDevice* const recv_device,
     const CoreCoord& send_core,
@@ -188,19 +190,19 @@ static void track_eth_progress_timeout(
         }
 
         if ((curr_send == expected_count) && (curr_recv == expected_count)) {
-            break;
+            return true;
         }
 
         // log_info(tt::LogTest, "Read {} {}, waiting until {}", curr_send, curr_recv, expected_count);
 
         if ((curr_send == prev_send) && (curr_send != expected_count)) {
             log_critical(tt::LogTest, "Timed out! You probably need to reset the device (tt-smi -r)");
-            exit(1);
+            return false;
         }
 
         if ((curr_recv == prev_recv) && (curr_recv != expected_count)) {
             log_critical(tt::LogTest, "Timed out! You probably need to reset the device (tt-smi -r)");
-            exit(1);
+            return false;
         }
 
         prev_send = curr_send;
@@ -225,6 +227,7 @@ struct core_setup {
 [[maybe_unused]]
 static void track_eth_progress_timeout_cores(std::span<struct core_setup> cores) {
     std::vector<std::thread> threads;
+    std::atomic<bool> any_timed_out{false};
 
     for (const auto& c : cores) {
         if (!c.iter_l1_addr) {
@@ -232,12 +235,19 @@ static void track_eth_progress_timeout_cores(std::span<struct core_setup> cores)
         }
         threads.emplace_back([&] {
             auto* const device = c.mesh_device->get_devices()[0];
-            track_eth_progress_timeout(device, nullptr, c.core, c.core, c.iter_l1_addr, c.expected_count);
+            if (!track_eth_progress_timeout(device, nullptr, c.core, c.core, c.iter_l1_addr, c.expected_count)) {
+                any_timed_out = true;
+            }
         });
     }
 
+    // Join before exiting so no other thread is still running when we do.
     for (auto& t : threads) {
         t.join();
+    }
+
+    if (any_timed_out) {
+        exit(1);
     }
 }
 
