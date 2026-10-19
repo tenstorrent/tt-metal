@@ -34,7 +34,7 @@
 #include <cstring>
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
-#include <umd/device/io_window/io_window.hpp>
+#include <tt-umd/io_window/io_window.hpp>
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
 namespace tt::tt_metal::distributed {
