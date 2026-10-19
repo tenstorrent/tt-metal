@@ -886,6 +886,53 @@ class Decoder:
         # owner is retained by the descriptor or outside this invocation.
         return queries, keys, values
 
+    def prepare_ragged_rope(self, descriptor):
+        """Per-call tables, shared by layers with the same original table owners."""
+        cos_parts, sin_parts = [], []
+        for start, span in zip(descriptor.starts, descriptor.spans):
+            shape = ttnn.Shape([1, 1, span, self.head_dim])
+            if start == 0:
+                cos = ttnn.reshape(self.cos, shape, shape)
+                sin = ttnn.reshape(self.sin, shape, shape)
+            else:
+                available = min(span, self.max_context - start)
+                cos_rows = self.cos[start : start + available, :]
+                sin_rows = self.sin[start : start + available, :]
+                if available < span:
+                    cos_rows = ttnn.concat([cos_rows, self.cos[: span - available, :]], dim=0)
+                    sin_rows = ttnn.concat([sin_rows, self.sin[: span - available, :]], dim=0)
+                cos = ttnn.reshape(cos_rows, shape)
+                sin = ttnn.reshape(sin_rows, shape)
+            cos_parts.append(cos)
+            sin_parts.append(sin)
+        return tuple(parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=2)
+                     for parts in (cos_parts, sin_parts))
+
+    def _prefill_ragged_qkv_packed(self, x, descriptor, rope_tables):
+        tied = not self.sliding
+        fused = self._pref_linear(
+            self._input_norm(x, "input_layernorm", False),
+            "qk" if tied else "qkv", sequence_hint=descriptor.family,
+        )
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            fused, num_heads=8, num_kv_heads=self.kv_heads, transpose_k_heads=False,
+            kv_tied=tied, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        del fused
+        if tied:
+            del k
+        cos, sin = rope_tables
+        expected = (1, 1, descriptor.total, self.head_dim)
+        if tuple(cos.shape) != expected or tuple(sin.shape) != expected:
+            raise ValueError("Packed RoPE tables must match exact packed rows/head width")
+        q = ttnn.experimental.rotary_embedding(self._norm(q, "self_attn.q_norm"), cos, sin)
+        v = self._norm(v)
+        k = (ttnn.multiply(v, self.norms["self_attn.k_norm"]) if tied else
+             self._norm(k, "self_attn.k_norm"))
+        k = ttnn.experimental.rotary_embedding(k, cos, sin)
+        return tuple([value[:, :, offset : offset + span, :]
+                      for offset, span in zip(descriptor.offsets, descriptor.spans)] for value in (q, k, v))
+
     def _reduce_ragged(self, x, descriptor, residual_width):
         """Preserve request-local BF16 ring phase with256 blocks and128 tails."""
         if x.shape[2] != descriptor.total or x.shape[-1] != self.hidden_size:
@@ -929,7 +976,7 @@ class Decoder:
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)],
         )
 
-    def prefill_ragged(self, x, *, descriptor, page_table, kv_cache, histories=None, return_history=False):
+    def prefill_ragged(self, x, *, descriptor, page_table, kv_cache, histories=None, return_history=False, rope_tables=None):
         """One shared same-family matrix row sum, with native attention islands."""
         count = len(descriptor.lengths)
         if (tuple(x.shape)[:3] != (1, 1, descriptor.total) or
@@ -941,7 +988,8 @@ class Decoder:
             raise ValueError("Expected one native history/table row per request")
         if self.sliding and any(start and history is None for start, history in zip(descriptor.starts, histories)):
             raise ValueError("Sliding continuation requires original preceding history")
-        q, k, v = self._prefill_ragged_qkv(x, descriptor)
+        q, k, v = (self._prefill_ragged_qkv(x, descriptor) if rope_tables is None else
+                   self._prefill_ragged_qkv_packed(x, descriptor, rope_tables))
         if not self.sliding:
             q = [ttnn.typecast(value, ttnn.bfloat8_b) for value in q]
         for row, (start, span) in enumerate(zip(descriptor.starts, descriptor.spans)):

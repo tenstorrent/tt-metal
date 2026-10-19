@@ -238,12 +238,22 @@ class Gemma4Model:
         x = self.embed(tokens, sequence_length=descriptor.total)
         if descriptor.family == 128:
             x = self.gather_hidden(x)
+        # These owners exist only for this eager call. Never retain a lazy
+        # per-request device table cache across calls or trace captures.
+        packed_tables = {}
+        use_packed_rope = os.environ.get("GEMMA_RAGGED_PACKED_ROPE", "0") == "1"
         for i, (layer, cache) in enumerate(zip(self.layers, kv_cache)):
+            rope_tables = None
+            if use_packed_rope:
+                key = (layer.kind, layer.head_dim, layer.cos.buffer_unique_id(), layer.sin.buffer_unique_id())
+                if key not in packed_tables:
+                    packed_tables[key] = layer.prepare_ragged_rope(descriptor)
+                rope_tables = packed_tables[key]
             result = layer.prefill_ragged(
                 x, descriptor=descriptor,
                 page_table=page_tables[i] if i in page_tables else page_tables[layer.kind], kv_cache=cache,
                 histories=[history[i] for history in histories] if histories is not None else None,
-                return_history=keep,
+                return_history=keep, rope_tables=rope_tables,
             )
             if keep:
                 x, tails = result
