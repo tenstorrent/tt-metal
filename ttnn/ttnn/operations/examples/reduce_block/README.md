@@ -2,6 +2,7 @@
 
 **Problem type:** compute-bound: reduction  ·  **Concept(s):** an accumulate (FPU `add_tiles`) + within-tile SFPU-finalize reduce, applied per output tile over a full 2-D tile block (many output tiles), vs the matmul-reduce library — with a per-dim, per-width dispatch
 **First profiled on:** `bh-50-special-mstaletovic-for-reservation-44580` · BH · single core · 2026-07-14 · `d52e6bc64b8` (working tree, `mstaletovic/agent_eval`)
+**Measured on:** WH B0 n150 (regimes, 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19)
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -76,6 +77,11 @@ Single core, bf16 input, fp32 output/accumulation, HiFi4.*
 - **Accuracy: equal in fp32, better in bf16.** The SFPU collapses the 32 columns in fp32 internally before one output rounding, so the fast path's bf16 error is lower (e.g. `row` 3.3e-3 vs 5.8e-3, ~0.8 ULP vs 1.6 ULP @ `2×8`). Both are near-exact in fp32.
 - **Takeaway:** for reducing a wide 2-D block, the per-output accumulate+SFPU-finalize loop is a strong fast path *and* sidesteps the `REDUCE_COL` DST/chunk limit — but it is a **dispatched fast path, not a replacement**: it loses below the (dim-dependent) crossover, wins least on col, and this microbench is compute-bound and single-core (most real reductions are data-movement-bound, where the compute delta won't show).
 
+*Board scope (added 2026-10-19):* the table above is bh-50 on an older library. On BH p150b with the current
+library the dim ordering is reversed — **col wins the most** (3.64× @32 reduced tiles) and row the least (1.98×),
+because the library's REDUCE_COL is now the dearer datapath (~65 vs ~40 ns per input tile) — and the crossovers are
+col 4, scalar 4, row > 8 reduced tiles. On WH B0 n150 row (2.09×) still beats col (1.88×). See *When it helps* below.
+
 ## Beyond the bake-off — other `AccumulateViaAdd` capabilities (correctness-validated)
 The same `accumulate + SFPU-finalize` datapath handles three further cases the test bench exercises. They are
 **correctness** tests (matched against torch), not part of the perf table:
@@ -105,18 +111,43 @@ Writes [`report.md`](report.md) (the 2-D block comparison) and [`report_reduced_
 `program_descriptor_with_inline_kernels.py` — the inline fast kernel (per-output-tile accumulate with the per-dim input-subset map + SFPU finalize), the library kernel (`algo` selects `ReduceTile` vs `AccumulateViaAdd`), and the AVG scaler dataflow kernel; `dispatch` routes between the library paths per `(dim, reduced-tile-count)`.
 
 ## When it helps / when it does not
-*Board: **Wormhole B0 n150** (the table above was measured on **Blackhole**; kept as is), single Tensix core, sharded L1, bf16 input, fp32 accumulation, HiFi4, 200 in-kernel iters. Numbers come from `test_reduce_block_regimes` (11 interleaved trials per variant, median (min-max); baseline = `reduce_tile`, lever = `accumulate_via_add` (the library opt-in); speedup = baseline_ns / lever_ns).*
+**Rule:** `accumulate_via_add` beats the library `reduce_tile` once each output tile has enough reduced tiles to
+amortize its fixed accumulate/finalize; count reduced tiles **per output tile**, not block size. Crossover on
+WH B0 n150: row 8, col 8, scalar ~4–8 (flat at 4); on BH p150b: **col 4, scalar 4, row > 8** (0.94× at 8, 1.98× at 32;
+16 not measured).
 
-| condition | dim, block `(Ht, Wt, NC)` (reduced tiles / output tiles) | `reduce_tile` ns | `accumulate_via_add` ns | speedup | trials | board |
-|---|---|---:|---:|---:|---:|---|
-| helps: 32 reduced tiles | row `(2, 32, 1)` (32 / 2) | 6977 (6971-6982) | 3343 (3334-3354) | 2.09x | 11 | WH B0 n150 |
-| helps: 32 reduced tiles | col `(32, 2, 1)` (32 / 2) | 5766 (5763-5770) | 3070 (3059-3087) | 1.88x | 11 | WH B0 n150 |
-| helps: 32 reduced tiles | scalar `(4, 8, 1)` (32 / 1) | 5868 (5868-5869) | 1930 (1930-1935) | 3.04x | 11 | WH B0 n150 |
-| does not help: 2 reduced tiles, many outputs | row `(4, 2, 1)` (2 / 4) | 1307 (1294-1328) | 2569 (2559-2586) | 0.51x | 11 | WH B0 n150 |
-| does not help: 4 reduced tiles | row `(2, 4, 1)` (4 / 2) | 1240 (1234-1247) | 1523 (1508-1535) | 0.81x | 11 | WH B0 n150 |
-| does not help: 4 reduced tiles | col `(4, 2, 1)` (4 / 2) | 1111 (1109-1133) | 1233 (1225-1249) | 0.90x | 11 | WH B0 n150 |
-| does not help: 4 reduced tiles | scalar `(2, 2, 1)` (4 / 1) | 1021 (1018-1039) | 1003 (993-1008) | 1.02x | 11 | WH B0 n150 |
+| Regime (same definition on every board; 1 Tensix core, sharded L1, bf16 in, fp32 accumulation, HiFi4) | WH B0 n150 · 8×8 = 64 Tensix cores | BH p150b · 12×10 = 120 Tensix cores |
+|---|---|---|
+| **Helps:** 32 reduced tiles, row `(2, 32, 1)` (32 / 2 output tiles) | 6 977 → 3 343 ns **2.09×** | 2 565 → 1 296 ns **1.98×** |
+| **Helps:** 32 reduced tiles, col `(32, 2, 1)` (32 / 2) | 5 766 → 3 070 ns **1.88×** | 4 180 → 1 147 ns **3.64×** |
+| **Helps:** 32 reduced tiles, scalar `(4, 8, 1)` (32 / 1) | 5 868 → 1 930 ns **3.04×** | 3 286 → 798 ns **4.12×** |
+| 16 reduced tiles, row `(2, 16, 1)` | 3 694 → 2 303 ns **1.60×** (probe) | not measured |
+| 8 reduced tiles, col `(8, 2, 1)` | 1 792 → 1 499 ns **1.20×** (probe) | 1 232 → 726 ns **1.70×** (sweep) |
+| **Does not help:** 8 reduced tiles, row `(2, 8, 1)` (8 / 2) | 2 060 → 1 775 ns **1.16× — helps on WH** (probe) | 825 → 876 ns **0.94×** |
+| **Helps (BH):** 4 reduced tiles, col `(4, 2, 1)` (4 / 2) | 1 111 → 1 233 ns **0.90× — loses on WH** | 738 → 663 ns **1.11×** |
+| **Does not help:** 4 reduced tiles, scalar `(2, 2, 1)` (4 / 1) | 1 021 → 1 003 ns **1.02×** | 593 → 550 ns **1.08× — small gain on BH** (`measure` regime: verdict differs by arch) |
+| **Does not help:** 4 reduced tiles, row `(2, 4, 1)` (4 / 2) | 1 240 → 1 523 ns **0.81×** | 535 → 814 ns **0.66×** |
+| **Does not help:** 2 reduced tiles, many outputs, row `(4, 2, 1)` (2 / 4) | 1 307 → 2 569 ns **0.51×** | 549 → 1 398 ns **0.39×** |
+| **Does not help:** 2 reduced tiles, col `(2, 2, 1)` (2 / 2) | not measured | 487 → 623 ns **0.78×** |
+| **Does not help:** 2 reduced tiles, scalar `(2, 1, 1)` (2 / 1) | not measured | 396 → 524 ns **0.76×** |
+| **Boundary** (reduced tiles per output tile) | row 8 · col 8 · scalar ~4–8 | **row > 8** (≤ 32) · **col 4** · **scalar 4** |
 
-- **Helps (>= ~8 reduced tiles per output tile):** the library pays its matmul-reduce datapath for every input tile while `accumulate_via_add` pays a cheap `add_tiles` per tile plus one SFPU finalize per output tile, so the gap scales with reduced tiles (row 8 tiles 1.16x, 16 tiles 1.60x, 32 tiles 2.09x; col 8 tiles 1.20x).
-- **Does not help (< ~8 reduced tiles):** each output tile pays the fixed accumulate/finalize cost (~600-700 ns per output tile for row), which with several output tiles and only 2-4 reduced tiles each is far above the library's cost. The count that matters is reduced tiles per output tile, not the total block size: `(4, 2, 1)` has 8 input tiles but only 2 reduced per output and is 0.51x.
-- **Matches the Blackhole table:** WH B0 crossovers agree with the existing dispatch thresholds (row 4-8, col 8, scalar ~4-8), e.g. row at 4 reduced tiles is still 0.81x on WH, so the README's "row wins >= 4t" is the dispatch-with-init threshold, not a measured win at exactly 4 tiles on WH. `accumulate_via_add_inline` is within ~2-4% of `accumulate_via_add` in all cases (2.11x / 1.90x / 3.12x at 32 tiles).
+**Why the boards differ:** the library's cost per input tile is ~109 ns (row) / ~90 ns (col) on WH B0 n150 but
+~40 ns / ~65 ns on BH p150b (`reduce_tile` ns at 32 reduced tiles ÷ 64 input tiles) — BH's REDUCE_ROW is the cheap
+datapath, the reverse of WH. With `accumulate_via_add`'s `add_tiles` path also much cheaper on BH p150b (the same
+FPU add-into-DEST speed-up seen in `reduce_accumulate` and `row_reduce_accumulate`), col and scalar pay from 4
+reduced tiles while row needs more than 8.
+
+- **Helps (>= ~8 reduced tiles per output tile on WH B0 n150; col/scalar >= 4 on BH p150b):** the library pays its matmul-reduce datapath for every input tile while `accumulate_via_add` pays a cheap `add_tiles` per tile plus one SFPU finalize per output tile, so the gap scales with reduced tiles (WH B0 n150: row 8 tiles 1.16x, 16 tiles 1.60x, 32 tiles 2.09x; col 8 tiles 1.20x).
+- **Does not help (< ~8 reduced tiles):** each output tile pays the fixed accumulate/finalize cost (~600-700 ns per output tile for row on WH B0 n150, ~350 ns on BH p150b), which with several output tiles and only 2-4 reduced tiles each is far above the library's cost. The count that matters is reduced tiles per output tile, not the total block size: `(4, 2, 1)` has 8 input tiles but only 2 reduced per output and is 0.51x (0.39x on BH p150b).
+- **Matches the Blackhole table (WH B0 n150 vs the bh-50 table only):** WH B0 crossovers agree with the existing dispatch thresholds (row 4-8, col 8, scalar ~4-8), e.g. row at 4 reduced tiles is still 0.81x on WH, so the README's "row wins >= 4t" is the dispatch-with-init threshold, not a measured win at exactly 4 tiles on WH. `accumulate_via_add_inline` is within ~2-4% of `accumulate_via_add` in all cases (2.11x / 1.90x / 3.12x at 32 tiles).
+- **BH p150b does not match those thresholds:** row 8 is still a loss (0.94x) and col 4 already pays (1.11x), so a per-arch dispatch would use row > 8, col 4, scalar 4 on BH p150b. `inline` is again ~3-5 % faster than `accumulate_via_add` (2.04x / 3.80x / 4.30x at 32 tiles).
+
+*How measured:* WH B0 n150 rows — `test_reduce_block_regimes` (single Tensix core, sharded L1, bf16 input, fp32
+accumulation, HiFi4, 200 in-kernel iters, 11 interleaved trials per variant, median (min-max in `report.md`);
+baseline = `reduce_tile`, lever = `accumulate_via_add` (the library opt-in); speedup = baseline_ns / lever_ns), 2026-10-12;
+`(probe)` rows are single exploratory runs. BH p150b rows — the same regimes test and
+the device_perf sweep on that board, `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19 (details in `report.md`).
+Other boards: bh-50 (older library) — the *Measured result* table above.
+Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_reduce_block.py::test_reduce_block_regimes`
+(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).

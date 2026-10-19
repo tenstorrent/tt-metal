@@ -2,6 +2,7 @@
 
 **Problem type:** compute-bound: wasted SFPU work  ·  **Concept:** SFPU work-scoping
 **First profiled on:** `bh-50-special` · BH · 1350 MHz · 2026-07-22 · `59de133afc4`
+**Measured on:** WH B0 n150 (regimes, 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19)
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -99,13 +100,19 @@ a different algorithm** — it is not a clean apples-to-apples skip. The honest 
 **1.94× over `c`** (same body, half the vectors). `r_iter2` is clean for both ops (it's the stock body via the
 wrapper).
 
+*Board scope (added 2026-10-19):* the recip numbers above are bh-50 on `59de133afc4`. On BH p150b with the current
+kernel library stock recip costs **6.5 ns/vector** (rc 206.8 ns) and the Newton `c_skip` body 11.0 ns/vector, so recip
+`c_skip` is 2.34× vs `rc` — the Newton body is now the *more* expensive one per vector. The conclusion stands (only
+`rsqrt`'s `c_skip` is a clean skip number); the "cheaper per vector" direction does not. rsqrt reproduces within 7 %
+(24.9 vs 23.4 ns/vector).
+
 **What this is and isn't:** the SFPU cost **in isolation**. In a full op the surrounding copy/pack/DRAM dilute
 the whole-kernel win, and on a data-movement-bound op the SFPU isn't the bottleneck at all. Reach for scoping
 when the SFPU *is* the bottleneck and your data sits on one axis.
 
 ## Run the predefined sweep (regenerates `report.md`)
 ```bash
-scripts/run_safe_pytest.sh ttnn/ttnn/operations/examples/sfpu_tile_scope/test_sfpu_tile_scope.py
+scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/examples/test_sfpu_tile_scope.py
 ```
 
 ## Code
@@ -115,18 +122,39 @@ through the stock call (covers `rc`/`r`/`c`/`r_iter2`/`face`/`face_iter1`); `csk
 even-parity stride loops for `c_skip`. The test reads the zone's TRISC_1 (math) duration from the profiler CSV.
 
 ## When it helps / when it does not
-*Board: **Wormhole B0 n150** (1 Tensix core; the existing result above was measured on **Blackhole**, kept as is). Numbers come from `test_sfpu_tile_scope_regimes` (11 interleaved trials per variant, median (min-max)). Metric `math zone` = MATH-thread (TRISC_1) ns per SFPU call from the `DeviceZoneScopedN` loop (`reps=2000`); `whole op` = `DEVICE KERNEL DURATION [ns]` of a launch with `reps=1` (one SFPU call on one tile, with unpack/copy/pack/CB handshake). Speedup = baseline_ns / lever_ns.*
+**Rule:** the SFPU cost is flat per 32-lane vector op, so a scope pays exactly by how many vector ops it removes
+(32 → 4 for a row-0 result with `r_iter2`), on both boards; swapping between scopes with the same vector count gains
+nothing. In a whole kernel the win is diluted by the non-SFPU floor (~690–740 ns per launch on WH B0 n150,
+~440–460 ns on BH p150b) and tends to 1.0× as that floor dominates.
 
-| condition | func, metric | baseline | lever | speedup | trials | board |
-|---|---|---:|---:|---:|---:|---|
-| helps: row-0 result, SFPU time isolated | rsqrt, math zone | `rc` (32 vectors) 1139.1 ns | `r_iter2` (4 vectors) 156.1 ns (156.1-156.2) | 7.30x | 11 | WH B0 n150 |
-| helps: row-0 result, SFPU time isolated | recip, math zone | `rc` 563.1 ns | `r_iter2` 84.2 ns | 6.69x | 11 | WH B0 n150 |
-| helps but diluted: same op, whole kernel, 1 tile, 1 call | rsqrt, whole op | `rc` 1642 ns (1634-1656) | `r_iter2` 739 ns (738-749) | 2.22x | 11 | WH B0 n150 |
-| helps but diluted: same op, whole kernel, 1 tile, 1 call | recip, whole op | `rc` 1106 ns (1089-1124) | `r_iter2` 688 ns (685-708) | 1.61x | 11 | WH B0 n150 |
-| does not help: change of scope with the same vector count | rsqrt, math zone | `c` (16 vectors) 576.1 ns | `r` (16 vectors) 576.1 ns | 1.00x | 11 | WH B0 n150 |
-| does not help: change of scope with the same vector count | recip, math zone | `c` 288.1 ns | `r` 288.1 ns | 1.00x | 11 | WH B0 n150 |
+| Regime (same definition on every board; 1 Tensix core, bf16 tile in sharded L1) | WH B0 n150 · 8×8 = 64 Tensix cores | BH p150b · 12×10 = 120 Tensix cores |
+|---|---|---|
+| **Helps:** row-0 result, SFPU time isolated — rsqrt, math zone, `rc` (32 vectors) → `r_iter2` (4 vectors) | 1 139.1 → 156.1 ns **7.30×** | 795.6 → 109.0 ns **7.30×** |
+| **Helps:** same, recip, math zone | 563.1 → 84.2 ns **6.69×** | 206.8 → 37.9 ns **5.46×** |
+| **Helps but diluted:** whole kernel, 1 tile, 1 call — rsqrt, whole op | 1 642 → 739 ns **2.22×** | 1 042 → 459 ns **2.27×** |
+| **Helps but diluted:** same, recip, whole op | 1 106 → 688 ns **1.61×** | 606 → 438 ns **1.38×** |
+| **Does not help:** change of scope with the same vector count — rsqrt, math zone, `c` (16) → `r` (16) | 576.1 → 576.1 ns **1.00×** | 402.2 → 402.2 ns **1.00×** |
+| **Does not help:** same, recip, math zone | 288.1 → 288.1 ns **1.00×** | 109.0 → 109.0 ns **1.00×** |
+| Cost per vector op (`rc` / 32) | rsqrt 35.6 ns, recip 17.6 ns | rsqrt 24.9 ns, recip 6.5 ns |
+| **Boundary** | vector count only; whole-op speedup = (floor + SFPU_rc) / (floor + SFPU_r_iter2) | same |
 
-- **Helps:** cost is flat per 32-lane vector op on WH too (rsqrt 35.6 ns, recip 17.6 ns per vector), so a scope that runs 4 vectors instead of 32 is 6.7-7.3x cheaper in the SFPU; a result that lives on row 0 never needs the other 28.
+**Why the boards differ:**
+- rsqrt costs about the same number of cycles per vector op on both (35.6 ns at 1000 MHz ≈ 36 cycles vs 24.9 ns at
+  1350 MHz ≈ 34 cycles), so its ratios match exactly (7.30×).
+- recip is 2.7× cheaper per vector on BH p150b (6.5 vs 17.6 ns ≈ 9 vs 18 cycles) — more than the AICLK ratio, so
+  the Blackhole recip path is cheaper per vector (inferred from the cycle count; the per-arch implementation was not
+  inspected). With so little work per vector, the fixed per-call cost is a larger share of the 4-vector `r_iter2`
+  call (9.5 ns/vector vs 6.5 for `rc`), so recip's gain drops to 5.46× in the math zone and 1.38× whole-op.
+
+- **Helps:** cost is flat per 32-lane vector op on both boards (WH B0 n150: rsqrt 35.6 ns, recip 17.6 ns per vector; BH p150b: 24.9 / 6.5 ns), so a scope that runs 4 vectors instead of 32 is 5.5-7.3x cheaper in the SFPU; a result that lives on row 0 never needs the other 28.
 - **Does not help:** only the vector count matters, not which half of the tile: `VectorMode::R` and `VectorMode::C` both run 16 vectors and cost the same to the nanosecond, so swapping one for the other (or using either when a row-0 / col-0 scope is possible) gains nothing; the gain comes from reducing vectors (`r_iter2` 4, `c_skip` 8, `face_iter1` 1).
-- **Dilution (whole op):** the win shrinks as the non-SFPU part of the op grows: with a single SFPU call per tile it is 2.22x (rsqrt) / 1.61x (recip) instead of 7.3x / 6.7x, because the ~740-690 ns of unpack/copy/pack/handshake and launch floor does not shrink. The example kernel handles only one tile per launch, so a regime where the win vanishes entirely (data-movement-bound op) cannot be expressed with the existing API; per the formula, whole-op speedup = (floor + SFPU_rc) / (floor + SFPU_r_iter2), so it approaches 1.0x as floor >> SFPU time.
-- **WH B0 vs Blackhole:** per-vector cost is ~1.5x (rsqrt 35.6 ns vs 23.4 ns) / ~0.6x (recip 17.6 vs 28) of the Blackhole numbers above, so absolute ns differ; vector-count ratios (r_iter2 7.3x, `r`/`c` 2.0x) reproduce.
+- **Dilution (whole op):** the win shrinks as the non-SFPU part of the op grows: with a single SFPU call per tile it is 2.22x (rsqrt) / 1.61x (recip) on WH B0 n150 and 2.27x / 1.38x on BH p150b instead of the math-zone ratios, because the ~740-690 ns (WH B0 n150) / ~460-440 ns (BH p150b) of unpack/copy/pack/handshake and launch floor does not shrink. The example kernel handles only one tile per launch, so a regime where the win vanishes entirely (data-movement-bound op) cannot be expressed with the existing API; per the formula, whole-op speedup = (floor + SFPU_rc) / (floor + SFPU_r_iter2), so it approaches 1.0x as floor >> SFPU time.
+- **WH B0 vs Blackhole:** rsqrt per-vector cost on WH B0 n150 is ~1.4-1.5x the Blackhole numbers (35.6 ns vs 24.9 ns on BH p150b, 23.4 ns on bh-50). For recip the older bh-50 run (28 ns/vector, commit `59de133afc4`) made WH B0 look cheaper (~0.6x); with the current library BH p150b is 6.5 ns/vector, so WH B0 n150 recip is ~2.7x the BH p150b cost. Vector-count ratios (r_iter2 7.3x for rsqrt, `r`/`c` 2.0x) reproduce on all three.
+
+*How measured:* WH B0 n150 rows — `test_sfpu_tile_scope_regimes` (1 Tensix core, 11 interleaved trials per variant,
+median; `math zone` = MATH-thread (TRISC_1) ns per SFPU call from the `DeviceZoneScopedN` loop, `reps=2000`;
+`whole op` = `DEVICE KERNEL DURATION [ns]` of a launch with `reps=1`, i.e. one SFPU call on one tile with
+unpack/copy/pack/CB handshake; speedup = baseline_ns / lever_ns; min-max in `report.md`), 2026-10-12. BH p150b rows —
+the same regimes test on that board, `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19 (details in `report.md`).
+Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_sfpu_tile_scope.py::test_sfpu_tile_scope_regimes`
+(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).

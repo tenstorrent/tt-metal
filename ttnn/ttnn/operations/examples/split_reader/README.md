@@ -1,5 +1,7 @@
 # split_reader
 
+**Measured on:** WH B0 n150 (`bgd-lab-08-special-astancov-for-reservation-44672`, 2026-07-16; regimes 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19)
+
 ![One consumer core gathers an L1 tensor sharded across a source row and writes the identical tensor to DRAM.](split_reader.svg)
 
 **Trick:** when a *single* data-movement RISC-V is the bottleneck because it is saturated **issuing**
@@ -59,7 +61,7 @@ Both modes read the same tensor and perform the same original-order DRAM writes.
 
 ## Measured result
 
-Wormhole B0, 8 source cores, 8 tiles/source, 8 tiles/block, 5 warmup + 20 timed launches per point:
+Wormhole B0 (2026-07-16; BH p150b sweep in [`report.md`](report.md)), 8 source cores, 8 tiles/source, 8 tiles/block, 5 warmup + 20 timed launches per point:
 
 ```text
  transaction  NoC reads   off NCRISC   on NCRISC   on BRISC  off device  on device   speedup
@@ -81,32 +83,54 @@ barriers and CB waits rather than representing instruction-level utilization.
 See [`report.md`](report.md) for the measurement stamp.
 
 ## When it helps / when it does not
-Board: **Wormhole B0 n150**. 8 source Tensix cores × 8 tiles (64 tiles = 128 KiB bf16), 8-tile
-blocks; only the NoC read size changes. Baseline = `split_reader=False`; lever = `split_reader=True`.
-Numbers from `test_split_reader_regimes` — median of 12 trials per variant (a trial = mean device
-kernel duration of 5 launches), baseline/lever trials interleaved; min–max in parentheses.
+**Rule:** split the reads between NCRISC and BRISC when one data-movement RISC-V is **issue-bound** — its kernel
+lifetime grows with the NoC read count at fixed bytes (≤ 256 B per read here). The gain shrinks but **never goes
+flat** in this example on either board: with ≥ 1 KiB per read it is ~1.3–1.4× on WH B0 n150 and ~1.6× on BH p150b.
+8 source Tensix cores × 8 tiles (64 tiles = 128 KiB bf16), height-sharded L1 source, 8-tile blocks; only the NoC
+read size changes. Baseline = `split_reader=False`; lever = `split_reader=True`.
 
-| Condition | Shape | off (ns) | on (ns) | Speedup | Trials | Board |
-|---|---|--:|--:|--:|--:|---|
-| **Helps:** NCRISC issue-bound — 32 B per NoC read, 64 reads per tile, 4,096 reads/launch | `[2048, 32]`, 8 sources × 8 tiles | 147274 (147236–147332) | 79968 (79838–81451) | **1.84×** (runs: 1.84 / 1.84 / 1.84 / 1.84) | 12 | WH B0 n150 |
-| **Gain shrinks (no flat regime reachable):** 2,048 B per NoC read, 1 read per tile, 64 reads/launch | `[2048, 32]`, 8 sources × 8 tiles | 25041 (25026–25077) | 18182 (18175–18252) | **1.38×** (runs: 1.38 / 1.38 / 1.38 / 1.38) | 12 | WH B0 n150 |
+| Regime (same definition on every board) | WH B0 n150 · 8×8 = 64 Tensix cores | BH p150b · 12×10 = 120 Tensix cores |
+|---|---|---|
+| **Helps:** NCRISC issue-bound — 32 B per NoC read, 4,096 reads/launch | 147 274 → 79 968 ns **1.84×** | 111 870 → 58 811 ns **1.90×** |
+| Sweep: 64 B per read, 2,048 reads | 83 489 → 50 926 ns **1.64×** † | 64 439 → 34 796 ns **1.85×** |
+| Sweep: 128 B per read, 1,024 reads | **1.48×** † | **1.78×** |
+| Sweep: 256 B per read, 512 reads | **1.50×** | **1.70×** |
+| Sweep: 512 B per read, 256 reads | **1.26×** † | **1.64×** |
+| Sweep: 1,024 B per read, 128 reads | **1.36×** | **1.60×** |
+| **Gain shrinks (no flat regime reachable):** 2,048 B per NoC read, 64 reads/launch | 25 041 → 18 182 ns **1.38×** | 19 432 → 12 070 ns **1.61×** |
+| Issue-bound signal: baseline NCRISC lifetime, 32 B → 2,048 B per read | 146.3 → 24.1 µs (6.1×) | 111.4 → 19.0 µs (5.9×) |
+| **Boundary** | issue-bound component gone from ~1 KiB per read; floor ~1.3–1.4× | same transition; floor ~1.6× |
 
-- **Helps:** at 32 B the baseline NCRISC lifetime (146.3 µs) is ~the whole device time and is 6× its
-  2,048 B value for the same bytes — it is spending its time issuing commands, so giving half the reads
-  to BRISC nearly halves it (on: NCRISC 73.7 µs, BRISC 79.9 µs).
-- **Gain shrinks:** from ≥1 KiB per read the baseline NCRISC lifetime is flat in read size (24.4 µs at
-  1,024 B, 24.1 µs at 2,048 B), so NCRISC is no longer issue-bound; what is left (~1.3–1.4×) comes from
-  the reader's `noc_async_read_barrier()` after every tile — one tile in flight per RISC-V, so a second
-  issuing RISC-V doubles the tiles in flight — and BRISC (half the reads + all DRAM writes) becomes
-  the critical RISC-V (on: BRISC 18.1 µs ≈ device time). Batching reads before the barrier on one
-  RISC-V (see `double_buffer`) addresses that latency case without splitting.
-- **Limitation / correction:** no configuration reachable through `row_gather_copy`'s arguments is
-  flat (≤ 1.05×) on WH B0 n150. Swept: 2–8 source Tensix cores, 1–32 tiles per source, 4/8/32-tile
-  blocks, 16–2,048 B per read — the lowest gain seen was **1.29×** (8 × 8 tiles, 4-tile blocks,
-  2,048 B). The table above (2026-07-16, another WH B0 box) shows 1.20× at 1–2 KiB; on this board and
-  commit the same configuration measures 1.36–1.38×.
+† from the 2026-07-16 sweep on another WH B0 box (that box measured 1.20× at 1–2 KiB where the 2026-10-12 board
+measures 1.36–1.38×); other WH cells are from 2026-10-12.
+
+**Why the boards differ:** only the floor. At 2,048 B per read the baseline NCRISC lifetime is 19.0 µs on BH p150b
+vs 24.1 µs on WH B0 n150, while the split's critical RISC-V (BRISC: half the reads + all DRAM writes) finishes in
+12.0 µs vs 18.1 µs — BRISC's writer share costs relatively less on BH p150b, so more of the doubled reads-in-flight
+gain survives (1.61× vs 1.38×). The issue-bound part of the curve has the same shape on both boards.
+
+- **Helps:** at 32 B the baseline NCRISC lifetime is ~the whole device time and ~6× its 2,048 B value for the same
+  bytes — it is spending its time issuing commands, so giving half the reads to BRISC nearly halves it (WH B0
+  n150 on: NCRISC 73.7 µs, BRISC 79.9 µs; BH p150b on: NCRISC 55.9 µs, BRISC 58.8 µs).
+- **Gain shrinks:** from ≥ 1 KiB per read the baseline NCRISC lifetime is flat in read size, so NCRISC is no
+  longer issue-bound; what is left comes from the reader's `noc_async_read_barrier()` after every tile — one tile
+  in flight per RISC-V, so a second issuing RISC-V doubles the tiles in flight — and BRISC becomes the critical
+  RISC-V (on: BRISC ≈ device time on both boards). Batching reads before the barrier on one RISC-V (see
+  `double_buffer`) addresses that latency case without splitting.
+- **Limitation / correction:** no configuration reachable through `row_gather_copy`'s arguments is flat
+  (≤ 1.05×) on WH B0 n150. Swept: 2–8 source Tensix cores, 1–32 tiles per source, 4/8/32-tile blocks, 16–2,048 B
+  per read — the lowest gain seen was **1.29×** (8 × 8 tiles, 4-tile blocks, 2,048 B). BH p150b's lowest in its
+  sweep is 1.60× (1,024 B); the off-grid search was not repeated there.
+
+*How measured:* `test_split_reader_regimes`, `DEVICE KERNEL DURATION [ns]` (plus per-RISC-V kernel lifetimes),
+median of 12 trials per variant (a trial = mean of 5 launches), baseline/lever interleaved.
+- **WH B0 n150:** branch `adamjanovic/perf-example-improvements`, 2026-10-12; sweep cells from that day's
+  `test_split_reader_device_perf` search (mean of 20 launches) or, marked †, the 2026-07-16 sweep ([`report.md`](report.md)).
+- **BH p150b:** the same regimes test; sweep from `test_split_reader_device_perf` and probes of the same A/B.
+  `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19, commit `f74ee7aad64`.
 
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_split_reader.py::test_split_reader_regimes`
+(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
 
 ## Run it
 

@@ -166,3 +166,55 @@ mean of 20 launches; trap vs `block=4, double_buffered`):
 Confirms the existing "no gain once DRAM-bandwidth-bound" claim on WH B0 n150 and locates the
 crossover: the lever pays while `active Tensix cores × ~6.5 GB/s (trap rate per core)` is well below
 the ~190 GB/s DRAM peak, and is flat from ≈32 Tensix cores up (bf16).
+
+## Blackhole p150b — bh-qb-15-special-adamjanovic-for-reservation-139410 (2026-10-19)
+
+| stamp | value |
+|---|---|
+| arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| metric / method | same as the WH blocks above: `test_double_buffer_device_perf` (mean of 20 launches per cell) and `test_double_buffer_regimes` (5 warmup launches; 12 trials per variant interleaved, a trial = mean `DEVICE KERNEL DURATION [ns]` over 5 launches; medians compared). GB/s = read+write DRAM traffic ÷ device time |
+
+### Config A — 1 Tensix core, `shape=(512,512)`, bfloat16 (256 tiles, 2048 B per tile, 1.05 MB traffic) — `test_double_buffer_device_perf`
+
+```
+    block  variant                 ns/op     GB/s   vs trap
+        1  single_buffered      118855.4      8.8  (trap)
+        1  double_buffered      104176.1     10.1   1.14x
+        2  single_buffered       83734.8     12.5   1.42x
+        2  double_buffered       58921.2     17.8   2.02x
+        4  single_buffered       65706.7     16.0   1.81x
+        4  double_buffered       40314.8     26.0   2.95x   <- best
+        8  single_buffered       56278.2     18.6   2.11x
+        8  double_buffered       40530.1     25.9   2.93x
+       16  single_buffered       51657.2     20.3   2.30x
+       16  double_buffered       40946.1     25.6   2.90x
+       32  single_buffered       49659.4     21.1   2.39x
+       32  double_buffered       41787.4     25.1   2.84x
+```
+
+### Regimes (`test_double_buffer_regimes` on BH p150b) and core-count sweep — trap vs `block=4, double_buffered`
+
+| regime / source | shape | Tensix cores | tiles per Tensix core | trap median ns (GB/s) | lever median ns (GB/s) | speedup | current test asserts |
+|---|---|--:|--:|---|---|--:|---|
+| helps_1core_256tiles | 512×512 | 1 | 256 | 118883.4 (118455.8–118975.2), 8.8 | 40360.5 (40346.4–40451.0), 26.0 | 2.95× | ≥ 1.8× |
+| helps_8cores_512tiles_per_core | 2048×2048 | 8 | 512 | 238574.5 (238003.2–238816.2), 70.3 | 86107.6 (85914.2–86713.0), 194.8 | 2.77× | ≥ 1.85× |
+| probe | 2048×2048 | 16 | 256 | 121075 (138.6) | 49568 (338.5) | 2.44× | — |
+| probe | 2048×2048 | 32 | 128 | 66587 (252.0) | 43079 (389.5) | 1.55× | — |
+| small_64cores_64tiles_per_core | 2048×2048 | 64 | 64 | 44142.8 (43793.0–44766.4), 380.1 | 40994.4 (40815.6–41233.2), 409.3 | 1.08× | ≤ 1.15× (WH 0.98×) |
+| small_120cores_34tiles_per_core | 2048×2048 | 120 | ~34 | 43554 (385.2) | 40519 (414.1) | 1.07× | sweep / probe — not asserted |
+| probe | 4096×4096 | 120 | ~137 | 169144 (396.8) | 155676 (431.1) | 1.09× | — |
+
+### Reading it
+- **Single Tensix core: same curve, higher ceiling.** The trap is 8.8 GB/s (WH B0 n150: 6.5); `block=4,
+  double_buffered` is the best cell again at 26.0 GB/s, **2.95×** (WH B0: 17.9 GB/s, 2.78×). Batching past
+  `block=4` plateaus at ~25–26 GB/s, as on WH B0.
+- **No clean flat on BH p150b.** The achievable read+write DRAM bandwidth is ~415–430 GB/s, ~2.2× the WH B0
+  n150 ceiling (~190 GB/s). The trap reaches ~380 GB/s only at 64 Tensix cores and ~385–397 GB/s on the full
+  120-Tensix-core grid, so the lever still recovers **1.07–1.09×** there. On WH B0 n150 the trap hits the
+  ceiling at ~32 Tensix cores and the lever is flat (0.98× at 64).
+- **Where it shrinks:** 16 Tensix cores 2.44×, 32 → 1.55×, 64 → 1.08×, 120 → 1.07× (WH B0: 1.97×, 1.11×,
+  0.98×). The crossover moves from ≈32 Tensix cores (WH B0) to ≈64 (BH p150b) because the ceiling roughly
+  doubles while the trap rate per Tensix core grows only ~1.35×.
+- **Agent rule for BH p150b:** keep `block≈4` + CB depth 2 at any Tensix-core count; it costs only L1, and the
+  "enough Tensix cores make it moot" shortcut from WH B0 does not hold on this board.

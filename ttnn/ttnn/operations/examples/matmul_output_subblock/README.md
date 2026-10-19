@@ -8,6 +8,7 @@
 
 **Problem type:** compute-bound: SRC operand reload  ·  **Concept(s):** matmul output-subblock shape → SRC-register operand reuse
 **First profiled on:** `bh-qb-11-special-dnijemcevic-for-reservation-42432` · BH · Blackhole · 2026-07-13
+**Measured on:** WH B0 n150 (regimes + Kt sweep, 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19)
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -83,6 +84,11 @@ subblock at 4 (e.g. `2×2`, `1×4`) and take the ~1.40× rather than the full 1.
 for short-K matmuls (small contraction depth, K≈2–4) where the contraction can't hide the per-tile
 operand-load overhead.
 
+*Board scope (added 2026-10-19):* the size-not-shape reading holds on Blackhole (bh-qb-11 above and BH p150b) but
+not on WH B0 n150, where tall `8×1` is the weakest 8-tile subblock; and the "short-K" remark does not match either
+board as measured since — on WH B0 n150 the gain stays ~1.7× from Kt = 1 to Kt = 12, on BH p150b it is largest at
+Kt = 1 and falls to 1.10× by Kt = 4. See *When it helps* below.
+
 ## Run the predefined sweep (regenerates `report.md`)
 ```bash
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_matmul_output_subblock.py::test_matmul_output_subblock_device_perf
@@ -93,21 +99,49 @@ scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/t
 ```
 
 ## When it helps / when it does not
-Board: **Wormhole B0 n150** (1 Tensix core, sharded L1, bf16, kernel-iters 20, DEVICE KERNEL DURATION per matmul, interleaved trials, median).
-The numbers in the tables above were measured on Blackhole and are kept; the Wormhole B0 numbers below come from `test_matmul_output_subblock_regimes`.
+**Rule:** an 8-tile output subblock instead of `1×1` pays when the matmul has many output tiles (≥ 16 output
+tiles on WH B0 n150, ≥ 64 on BH p150b) — and on BH p150b essentially only at a single K-tile: WH B0 n150 keeps
+~1.7× from Kt = 1 to Kt = 12, BH p150b falls from 1.46× (Kt = 1) to 1.17× (Kt = 2) and 1.10× (Kt = 4).
+Subblock orientation (tall `8×1` vs wide `1×8`) matters on WH B0 n150 only.
 
-| Condition | Output tiles (Mt x Nt), Kt | Baseline ns | Lever ns | Speedup | Trials | Board |
-|---|---|---:|---:|---:|---:|---|
-| **Helps:** many output tiles per pass to share operand loads | 16x16, Kt=1 | 24312 (`sb_1x1`) | 13905 (`sb_2x4`) | 1.75x | 11 | WH B0 n150 |
-| **Helps (shape):** same 8-tile subblock, wide instead of tall | 16x16, Kt=1 | 19167 (`sb_8x1`) | 13662 (`sb_1x8`) | 1.40x | 11 | WH B0 n150 |
-| **Does not help:** only 4 output tiles in the whole matmul | 2x2, Kt=1 | 670 (`sb_1x1`) | 656 (`sb_2x2`) | 1.02x | 11 | WH B0 n150 |
+| Regime (same definition on every board; 1 Tensix core, sharded L1, bf16) | WH B0 n150 · 8×8 = 64 Tensix cores | BH p150b · 12×10 = 120 Tensix cores |
+|---|---|---|
+| **Helps:** many output tiles, one K-tile — `sb_1x1 → sb_2x4`, 16×16 output tiles, Kt = 1 | 24 312 → 13 905 ns **1.75×** | 10 429 → 7 161 ns **1.46×** |
+| **Helps (shape):** same 8-tile subblock, tall `sb_8x1` → wide `sb_1x8`, 16×16, Kt = 1 | 19 167 → 13 662 ns **1.40×** | 7 129 → 7 128 ns **1.00× — flat on BH (tall == wide)** |
+| **Helps (deeper K):** `sb_1x1 → sb_2x4`, 16×16, Kt = 4 | **1.69×** (Kt sweep; `sb_1x1` 7 018 784 ns per 100 iterations) | 29 238 → 26 654 ns **1.10× — small on BH** |
+| K sweep, 16×16 output tiles, best 8-tile subblock vs `sb_1x1` | Kt 1 / 2 / 4 / 8 / 12: 1.77× / 1.66× / 1.69× / 1.68× / 1.69× | Kt 1 / 2 / 4: 1.46× / 1.17× / 1.10×; Kt ≥ 8 does not fit L1 at 16×16 |
+| Output-size sweep, Kt = 1, `sb_1x1` → largest legal subblock | 4×4 (16 output tiles): 1.27× (`2×4`); 2×4: 1.06×; 1×8: 1.07× | 8×8 (64 output tiles): 1.34×; 4×4: 1.08× |
+| **Helps on WH only:** few output tiles but deep K — 2×2 output tiles, Kt = 8, `sb_1x1 → sb_2x2` | **1.34×** | **0.98× — flat on BH** |
+| **Does not help:** only 4 output tiles in the whole matmul — 2×2, Kt = 1, `sb_1x1 → sb_2x2` | 670 → 656 ns **1.02×** | 372 → 382 ns **0.97×** |
+| **Boundary** | ≥ 16 output tiles (4×4); independent of Kt up to 12 | ≥ 64 output tiles (8×8) and Kt = 1; at Kt ≥ 2 expect 1.1–1.2× |
 
-Spread: 24273..24325 / 13886..13915; 19151..19179 / 13647..13676; 666..675 / 654..659 ns.
+**Agent rule:** on WH B0 n150 use a wide `1×8` or `2×4`/`4×2` subblock, never tall `8×1`, at any K. On BH p150b
+any 8-tile subblock is equivalent; take it, but expect ~1.1–1.2× (not 1.7×) once Kt ≥ 2.
+
+**Why the boards differ:**
+- BH p150b runs the `sb_1x1` baseline 2.3× faster than WH B0 n150 at 16×16, Kt = 1 (10 429 vs 24 312 ns), more
+  than its 1.35× AICLK ratio (1350 vs 1000 MHz) — the per-output-tile SRC operand reload is relatively cheaper on
+  BH. What a bigger subblock still saves there is mostly the per-subblock fixed cost (init + DEST handshake per
+  `matmul_block` call), which K inner steps amortize anyway — so the gain falls with Kt on BH and not on WH.
+  (Mechanism inferred from the K and output-size sweeps; not isolated with a per-zone profile.)
+- Tall `8×1` and wide `1×8` measure within 0.1 % of each other on both Blackhole boards (bh-qb-11: 710 255 vs
+  710 027 ns per 100 iterations; BH p150b: 7 129 vs 7 128 ns), so the WH B0 n150 orientation penalty is a WH
+  effect, not a property of the reuse scheme.
 
 - **Helps** because a bigger subblock holds one operand in the SRC registers across the subblock (A across `sb_w` B-tiles for wide) instead of reloading both per output tile.
-- **Does not help** when there is almost nothing to share: with 4 output tiles per matmul the per-matmul cost is ~670 ns either way (the operand-load saving is smaller than the fixed start-up cost).
-  At 2x2 output tiles with Kt=8 the same 1x1 -> 2x2 change is 1.34x, so small output only kills the win when K is also short; 4x4 output tiles at Kt=1 is already 1.26x.
+- **Does not help** when there is almost nothing to share: with 4 output tiles per matmul the per-matmul cost is
+  ~670 ns on WH B0 n150 (~375 ns on BH p150b) either way (the operand-load saving is smaller than the fixed
+  start-up cost). On WH B0 n150 only, deep K rescues small outputs (2×2 at Kt = 8: 1.34×; 4×4 at Kt = 1 is already
+  1.26–1.27×); on BH p150b neither does (0.98× and 1.08×).
 
-Corrections to the Blackhole text above (measured on WH B0, `test_matmul_output_subblock_device_perf`, 16x16 output tiles):
-- **Wide and tall are not symmetric on Wormhole B0.** At Kt=1: `sb_1x8` 1.77x, `sb_2x4` 1.74x, `sb_4x2` 1.58x, `sb_2x2` 1.56x, `sb_8x1` only 1.26x vs `sb_1x1`. At Kt>=2 `sb_2x4` and `sb_4x2` tie at ~1.65-1.69x, `sb_1x8` is ~1.6x and `sb_8x1` is the weakest (1.22-1.42x). Prefer a wide or 2x4/4x2 subblock over a tall 8x1.
-- **A large Kt does not cancel the win.** Kt=1/2/4/8/12: best subblock 1.77x/1.66x/1.69x/1.68x/1.69x. Kt=16 does not fit in L1 at 16x16 output tiles (allocator failure).
+WH B0 n150 only (`test_matmul_output_subblock_device_perf`, 16×16 output tiles) — neither point holds on BH p150b:
+- **Wide and tall are not symmetric on Wormhole B0.** At Kt=1: `sb_1x8` 1.77x, `sb_2x4` 1.74x, `sb_4x2` 1.58x, `sb_2x2` 1.56x, `sb_8x1` only 1.26x vs `sb_1x1`. At Kt>=2 `sb_2x4` and `sb_4x2` tie at ~1.65-1.69x, `sb_1x8` is ~1.6x and `sb_8x1` is the weakest (1.22-1.42x). Prefer a wide or 2x4/4x2 subblock over a tall 8x1. On BH p150b every 8-tile shape is 1.46× at Kt = 1 (`test_matmul_output_subblock_device_perf`, 2026-10-19).
+- **A large Kt does not cancel the win on Wormhole B0.** Kt=1/2/4/8/12: best subblock 1.77x/1.66x/1.69x/1.68x/1.69x. Kt=16 does not fit in L1 at 16x16 output tiles (allocator failure). On BH p150b it does cancel most of it: Kt 1/2/4 = 1.46× / 1.17× / 1.10×, and Kt ≥ 8 already does not fit L1 at 16×16 output tiles on this build.
+
+*How measured:* WH B0 n150 rows — `test_matmul_output_subblock_regimes` (1 Tensix core, sharded L1, bf16,
+kernel-iters 20, DEVICE KERNEL DURATION per matmul, 11 interleaved trials, median; spread 24273..24325 / 13886..13915,
+19151..19179 / 13647..13676, 666..675 / 654..659 ns), 2026-10-12; K and output-size sweeps from
+`test_matmul_output_subblock_device_perf` on the same board. BH p150b rows — the same regimes test plus K /
+output-size sweep runs on that board, `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19 (details in `report.md`).
+Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_matmul_output_subblock.py::test_matmul_output_subblock_regimes`
+(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).

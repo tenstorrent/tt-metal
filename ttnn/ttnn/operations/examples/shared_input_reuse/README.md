@@ -2,6 +2,7 @@
 
 **Problem type:** redundant reads  ·  **Concept(s):** redundant-DRAM-read elimination via NoC multicast (the `mcast_pipe` helper)
 **First profiled on:** `bh-qb-11-special-dnijemcevic-for-reservation-42432` · BH P150 · 2026-07-13
+**Measured on:** WH B0 n150 (regimes + chunk sweep, 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19)
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -96,20 +97,58 @@ scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/t
 ```
 
 ## When it helps / when it does not
+**Rule:** multicast the shared stream only when each chunk (one multicast, one handshake) is large enough to
+amortize the per-chunk ack-and-broadcast round trip; crossover **~32 tiles per chunk on WH B0 n150**
+(16 Tensix cores), **between 8 and 16 tiles per chunk on BH p150b** (24 Tensix cores).
 
-Board: **Wormhole B0 n150** (8x8 compute grid, so the worker rectangle is 2 x 8 = 16 Tensix cores, injector at (0,0)); numbers from `test_shared_input_reuse_regimes` (bf16 tiles, 2048 B each; median of 10 interleaved windows of 5 launches; range = min-max of the 10 windows). The Blackhole numbers above (22 Tensix cores) are kept unchanged and are a different board.
+Same 1216-tile bf16 stream (d_cols = 4 tiles) in every row unless noted; a page is one 2048-byte tile; only
+the chunk size changes. The worker rectangle is 2 × grid_x Tensix cores on every board, injector at (0,0).
 
-| Condition | Shape (chunk_rows x d_cols x chunks) | Chunk size | per_core_dram ns | mcast ns | Speedup | Trials | Board |
-|---|---|---|---|---|---|---|---|
-| **Helps:** few large chunks | 16 x 4 x 19 = 1216 tiles | 64 tiles (131072 B) | 255592 (251866-258115) | 191246 (190730-191830) | 1.34x | 10 | WH B0 n150 |
-| **Does not help:** many small chunks, same stream | 2 x 4 x 152 = 1216 tiles | 8 tiles (16384 B) | 214339 (213654-215695) | 262332 (262167-262390) | 0.82x (slower) | 10 | WH B0 n150 |
+| Regime (chunk size · `chunk_rows × d_cols × chunks`) | WH B0 n150 · 2×8 = 16 Tensix cores | BH p150b · 2×12 = 24 Tensix cores | BH P150 · 2×11 = 22 Tensix cores | BH P100a · 2×11 = 22 Tensix cores, 7 DRAM banks |
+|---|---|---|---|---|
+| **Does not help:** 4 tiles (8 192 B) · `1 × 4 × 304` | 253 944 → 353 620 ns **0.72×** | 169 285 → 247 015 ns **0.69×** | not measured | not measured |
+| **Does not help:** 8 tiles (16 384 B) · `2 × 4 × 152` | 214 339 (213 654–215 695) → 262 332 (262 167–262 390) ns **0.82×** | 148 567 (148 167–148 897) → 154 494 (154 410–154 698) ns **0.96×** | not measured | not measured |
+| **Does not help:** 16 tiles (32 768 B) · `4 × 4 × 76` | 205 610 → 221 500 ns **0.93×** | 149 415 → 113 451 ns **1.32× — helps on BH** | not measured | not measured |
+| **Boundary (WH):** 32 tiles (65 536 B) · `8 × 4 × 38` | 208 500 → 200 334 ns **1.04×** (flat) | 150 358 → 90 532 ns **1.66× — helps on BH** | not measured | not measured |
+| **Helps:** 64 tiles (131 072 B) · `16 × 4 × 19` (CLI default) | 255 592 (251 866–258 115) → 191 246 (190 730–191 830) ns **1.34×** | 150 228 (149 554–150 601) → 77 777 (77 707–77 864) ns **1.93×** | 135 415 → 78 987 ns **1.71×** | 161 936 → 88 861 ns **1.82×** |
+| **Helps:** 128 tiles (262 144 B) · `32 × 4 × 10` = 1280 tiles | 287 511 → 198 901 ns **1.45×** | 164 538 → 76 613 ns **2.15×** | not measured | not measured |
+| **Boundary** (smallest chunk where `mcast` wins) | ~32 tiles per chunk | between 8 and 16 tiles per chunk | not measured | not measured |
 
-Same total stream (1216 tiles), 16 Tensix cores; only the chunk size changes. Further points from the sweep (same stream): chunk 4 tiles 0.72x, 16 tiles 0.93x, 32 tiles 1.04x, 64 tiles 1.34x; 128-tile chunks (1280 tiles) 1.45x. Total stream size matters much less once chunks are large (64-tile chunks: 1 chunk 1.17x, 4 chunks 1.23x, 19 chunks 1.34x, 40 chunks 1.33x).
+Cells are `per_core_dram → mcast` DEVICE KERNEL DURATION (parentheses: min–max over the 10 windows). Stream length matters much less than chunk size
+once chunks are large (WH B0 n150, 64-tile chunks: 1 chunk 1.17×, 4 chunks 1.23×, 19 chunks 1.34×,
+40 chunks 1.33×; not measured on BH).
 
-- **Helps** when each chunk is large (>= ~64 tiles, >= ~128 KB per multicast): the per-chunk handshake (injector waits for all 15 receiver acks, then broadcasts) is amortized, and DRAM sees 1/16 of the reads.
-- **Does not help** when chunks are small (<= ~16 tiles, <= ~32 KB; crossover near 32 tiles / 64 KB on this 16-Tensix-core rectangle): the fixed per-chunk ack-and-broadcast round trip is paid once per chunk and exceeds the DRAM time saved, so `mcast` is slower than every core reading for itself (DRAM has not saturated at 16 readers of small chunks). If you control the chunk size, enlarge it (CB permitting) before choosing between the variants.
-- Wormhole B0 gain at the default shape (1.34x) is smaller than the Blackhole 1.71-1.82x: only 16 Tensix cores share the stream here instead of 22.
+**Why the boards differ:**
+- The per-chunk handshake costs the same on both boards: the `mcast` time grows by ~0.5–0.65 µs per extra
+  chunk between 4- and 64-tile chunks on WH B0 n150 and on BH p150b alike (slope of the sweep).
+- The `per_core_dram` baseline is DRAM-bound on both boards, but BH p150b's DRAM ceiling is ~2× higher:
+  24 readers × 2.49 MB (1216 tiles × 2048 B = 2 490 368 B) = 59.8 MB in ~150 µs ≈ 400 GB/s
+  (BH p150b ceiling ~415–430 GB/s, 8 DRAM banks) vs 16 × 2.49 MB = 39.8 MB in 205–256 µs ≈ 155–195 GB/s (WH B0 ceiling ~190 GB/s, 12 DRAM banks).
+- The single injector's stream is ~2.7× faster on BH p150b (estimated from the sweep after subtracting the
+  handshake: ~65 µs vs ~180 µs for the 2.49 MB stream, ~38 vs ~14 GB/s; 64-byte vs 32-byte NoC flit,
+  1350 vs 1000 MHz AICLK). So BH has ~85 µs of handshake budget under the baseline (~150 chunks → 8-tile
+  chunks), WH ~25 µs (~45 chunks → ~27-tile chunks): the crossover moves from ~32 tiles to 8–16 tiles.
 
+- **Helps** when each chunk is large: the per-chunk handshake (injector waits for all N − 1 receiver acks,
+  then broadcasts) is amortized, and DRAM sees 1/N of the reads (N = Tensix cores in the rectangle).
+- **Does not help** when chunks are small: the fixed per-chunk round trip is paid once per chunk and exceeds
+  the DRAM time saved, so `mcast` is slower than every Tensix core reading for itself. If you control the
+  chunk size, enlarge it (CB depth and L1 permitting) before choosing between the variants.
+- The gain grows with the number of Tensix cores sharing the stream (and with the board's single-injector
+  stream rate): at 64-tile chunks 1.34× with 16 (WH B0 n150), 1.71–1.82× with 22 (BH P150 / P100a), 1.93×
+  with 24 (BH p150b).
+
+*How measured:*
+- WH B0 n150: `test_shared_input_reuse_regimes` (helps 64-tile / does-not-help 8-tile rows) plus a
+  same-stream chunk sweep with the same code; bf16; median of 10 interleaved windows × 5 launches; 2026-10-12.
+  Ranges in [`report.md`](report.md).
+- BH p150b: the same regimes test (64-tile helps, 16-tile `measure`, 8-tile does-not-help) plus the 4-, 32- and
+  128-tile points from a probe with the same measurement code (10 × 5 launches);
+  `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19.
+- BH P150 / P100a: `test_shared_input_reuse_device_perf` (64-tile chunks only), boxes and dates under
+  *Measured result* above.
+
+Reproduce (same regimes on any board; asserts only what held on every measured board, `measure` regimes only log):
 ```bash
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_shared_input_reuse.py::test_shared_input_reuse_regimes
 ```

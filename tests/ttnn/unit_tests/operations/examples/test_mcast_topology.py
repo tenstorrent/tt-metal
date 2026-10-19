@@ -209,13 +209,15 @@ def _measure_interleaved_ns(device, run_fns, trials=10):
 
 
 # (Mt, Nt, Kt, regime, threshold). bf16 tiles. Gr x Gc = largest divisors of Mt / Nt fitting the grid.
-#   helps:          Mt=8, Nt=32, Kt=4 -> 8x8 = 64 Tensix cores, lines of 8 -> measured 1.89x on WH B0
-#   does_not_help:  Mt=4, Nt=4,  Kt=4 -> 4x4 = 16 Tensix cores, lines of 4 -> measured 1.01x
-#                   Mt=2, Nt=2,  Kt=4 -> 2x2 =  4 Tensix cores, lines of 2 -> measured 0.72x
+#   helps:          Mt=8, Nt=32, Kt=4 -> 8x8 = 64 Tensix cores, lines of 8
+#   does_not_help:  Mt=4, Nt=4,  Kt=4 -> 4x4 = 16 Tensix cores, lines of 4
+#                   Mt=2, Nt=2,  Kt=4 -> 2x2 =  4 Tensix cores, lines of 2
+# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
+# -- numbers per board in README.md.
 _REGIME_CASES = [
-    pytest.param(8, 32, 4, "helps", 1.45, id="helps_8x8_64cores"),
-    pytest.param(4, 4, 4, "does_not_help", 1.08, id="does_not_help_4x4_16cores"),
-    pytest.param(2, 2, 4, "does_not_help", 1.0, id="does_not_help_2x2_4cores"),
+    pytest.param(8, 32, 4, "helps", 1.45, id="helps_8x8_64cores"),  # WH 1.87x, BH 2.01x
+    pytest.param(4, 4, 4, "does_not_help", 1.08, id="does_not_help_4x4_16cores"),  # WH 1.03x, BH 0.80x
+    pytest.param(2, 2, 4, "does_not_help", 1.0, id="does_not_help_2x2_4cores"),  # WH 0.73x, BH 0.65x
 ]
 
 
@@ -227,11 +229,6 @@ def test_mcast_topology_regimes(device, mt, nt, kt, regime, threshold):
     handshake and the sender's serial read. With short lines (few cores per row/column) the saving is
     small and the fixed handshake cost is not amortized.
     """
-    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
-    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
-    # another arch re-measure the regimes and add its own thresholds before enabling this test.
-    if not ttnn.device.is_wormhole_b0(device):
-        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
     lay = layout(device, mt, nt)
     tt_a, tt_b, a, b = _operands(device, mt, nt, kt)
 
@@ -247,8 +244,9 @@ def test_mcast_topology_regimes(device, mt, nt, kt, regime, threshold):
     res = _measure_interleaved_ns(device, fns)
     base, mc = res["per_core_dram"][0], res["mcast_1d_pair"][0]
     speedup = base / mc
+    arch = {"WORMHOLE_B0": "WH_B0", "BLACKHOLE": "BH"}.get(str(device.arch()).rsplit(".", 1)[-1], str(device.arch()))
     logger.info(
-        f"[mcast_topology regimes] {regime}: Mt={mt} Nt={nt} Kt={kt} split={lay['rows']}x{lay['cols']} "
+        f"[{arch}] [mcast_topology regimes] {regime}: Mt={mt} Nt={nt} Kt={kt} split={lay['rows']}x{lay['cols']} "
         f"({lay['cores']} Tensix cores) | per_core_dram {base:.0f} ns "
         f"[{res['per_core_dram'][1]:.0f}-{res['per_core_dram'][2]:.0f}]  mcast_1d_pair {mc:.0f} ns "
         f"[{res['mcast_1d_pair'][1]:.0f}-{res['mcast_1d_pair'][2]:.0f}]  speedup {speedup:.2f}x  "

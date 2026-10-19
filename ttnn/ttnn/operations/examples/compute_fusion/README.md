@@ -3,6 +3,7 @@
 **Problem type:** compute-bound: L1 round-trips  ·  **Concept(s):** compute fusion (keeping intermediates in DEST) vs.
 per-op L1 round-trips; secondary: DEST-lane block size.
 **First profiled on:** `bgd-lab-t3003-special-mstaletovic-for-reservation-40918` · WH B0 · 1000 MHz · 2026-07-10
+**Measured on:** WH B0 n150 (sweep 2026-07-10, regimes 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19; whole-kernel sweep and regimes only — the per-phase micro-benchmark is WH-only)
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -193,17 +194,34 @@ CSV-based per-zone reader live in
 `report.md` (whole-kernel A/B) and `microbench_report.md` (per-phase zone breakdown).
 
 ## When it helps / when it does not
-Board: **Wormhole B0 n150** (1 Tensix core, sharded L1, kernel-iters 100, DEVICE KERNEL DURATION per expression evaluation,
-interleaved trials, median). Numbers come from `test_compute_fusion_regimes`.
+**Rule:** fuse through DEST only when the consumer of the intermediate is an SFPU op; with an FPU consumer keep the
+L1 round-trip. The verdict is the same on WH B0 n150 and BH p150b; the fused gain is largest at few tiles per call
+(~1.1× at 4 tiles) and fades to ~1.04–1.05× by 64 tiles on both boards.
 
-| Condition | Scenario, shape | Baseline ns | Lever ns | Speedup | Trials | Board |
-|---|---|---:|---:|---:|---:|---|
-| **Helps:** every intermediate feeds an SFPU op (consumer reads DEST natively); small work per call | `sfpu_chain` n=4 tiles, blk=4 | 9674 (`unfused`) | 8632 (`fused`) | 1.12x | 11 | WH B0 n150 |
-| **Does not help (loses):** the consumer of the intermediate is an FPU op | `fpu_sfpu` n=64 tiles, blk=1 | 77734 (`unfused`) | 84105 (`dstreuse`) | 0.92x | 11 | WH B0 n150 |
+| Regime (same definition on every board; 1 Tensix core, sharded L1, kernel-iters 100) | WH B0 n150 · 8×8 = 64 Tensix cores | BH p150b · 12×10 = 120 Tensix cores |
+|---|---|---|
+| **Helps:** every intermediate feeds an SFPU op, small work per call — `sfpu_chain` n = 4 tiles, blk = 4, `unfused → fused` | 9 674 → 8 632 ns **1.12×** | 6 386 → 5 745 ns **1.11×** |
+| Same chain, more tiles per call — `sfpu_chain` blk = 4, n = 16 / 64 tiles (device_perf) | 1.06× / 1.05× | 1.05× / 1.04× |
+| SFPU reciprocal on a reduced tile — `reduce_recip` n = 4 / 16 / 64 tiles, `unfused → fused` (device_perf) | 1.07× / 1.04× / 1.01× (2026-07-10); n = 64: 1.04× (2026-10-12) | 1.16× / 1.09× / 1.03× |
+| **Does not help (loses):** the consumer of the intermediate is an FPU op — `fpu_sfpu` n = 64 tiles, blk = 1, `unfused → dstreuse` | 77 734 → 84 105 ns **0.92×** | 54 023 → 58 328 ns **0.93×** |
+| `fpu_sfpu` `dstreuse` across n = 4 / 16 / 64, blk = 1 / 4 (device_perf) | 0.94×–1.02× | 0.93×–0.99× |
+| The multiply moved onto the SFPU — `fpu_sfpu` `sfpu` variant (device_perf) | 0.58×–0.65× | 0.62×–0.67× |
+| **Boundary** | consumer engine: SFPU → fuse, FPU → round-trip | same |
 
-Spread: 9671..9679 / 8631..8634 and 77708..77746 / 83856..84816 ns.
+**Why the boards differ:** they do not, in verdict. BH p150b runs every variant faster (e.g. `fpu_sfpu` n = 64
+unfused 54 023 vs 77 734 ns) but the fused/unfused ratios stay within ~0.02× of WH B0 n150; the one larger gap,
+`reduce_recip` at 4 tiles (1.16× vs 1.07×), is against the older 2026-07-10 WH B0 n150 sweep, which predates the current
+kernel library (see `report.md`), so it is not a clean cross-board comparison.
 
 - **Helps** because pack -> L1 -> unpack of an intermediate that an SFPU op consumes is pure overhead, and removing it
-  saves a roughly fixed ~1 us per call at 4 tiles. The same fusion gives only ~1.05x at 64 tiles (the saving per tile is small, see the table above).
+  saves a roughly fixed ~1 us per call at 4 tiles on WH B0 n150 (~0.64 µs on BH p150b). The same fusion gives only ~1.05x at 64 tiles (the saving per tile is small, see the table above).
 - **Does not help** when the next op is an FPU op: the FPU reads source registers, not DEST, so reusing DEST adds a per-tile DEST-to-source transfer
   that costs more than the pack+unpack it replaces; keep the L1 round-trip and the FPU op reading from L1.
+
+*How measured:* WH B0 n150 rows — `test_compute_fusion_regimes` (1 Tensix core, sharded L1, kernel-iters 100,
+DEVICE KERNEL DURATION per expression evaluation, 11 interleaved trials, median; spread 9671..9679 / 8631..8634 and
+77708..77746 / 83856..84816 ns), 2026-10-12; sweep rows from the 2026-07-10 `test_compute_fusion_device_perf` table.
+BH p150b rows — the same regimes test and device_perf sweep on that board, `bh-qb-15-special-adamjanovic-for-reservation-139410`,
+2026-10-19 (details in `report.md`).
+Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_compute_fusion.py::test_compute_fusion_regimes`
+(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).

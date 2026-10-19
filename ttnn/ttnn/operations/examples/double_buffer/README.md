@@ -2,6 +2,7 @@
 
 **Problem type:** data movement below the ceiling: latency  ·  **Concept(s):** outstanding NoC reads per barrier (latency vs bandwidth) · double-buffered CBs (stage overlap) · transfer size (bytes per tile)
 **First profiled on:** `bgd-lab-t3003-special-mstaletovic-for-reservation-40918` · Wormhole B0 · 1000 MHz · 2026-07-09 · `bf5ebe7aacb`
+**Measured on:** WH B0 n150 (`bgd-lab-t3003-special-mstaletovic-for-reservation-40918`, 2026-07-09; regimes 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19)
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -62,7 +63,7 @@ python -m ttnn.operations.examples.double_buffer [options]
 python -m ttnn.operations.examples.double_buffer --cores 1 --blocks 1,2,4,8,16,32
 # transfer size: bigger tiles reach higher bandwidth
 python -m ttnn.operations.examples.double_buffer --cores 1 --dtype float32 --blocks 1,4,8
-# many cores: already DRAM-bandwidth-bound, so the levers stop mattering
+# many cores: on WH B0 n150 already DRAM-bandwidth-bound, so the levers stop mattering (BH p150b: still ~1.08x)
 python -m ttnn.operations.examples.double_buffer --cores 64 --shape 2048,2048 --blocks 1,8
 ```
 
@@ -103,36 +104,62 @@ double_buffer   box=bgd-lab-t3003...  arch=WH-B0   N=20 (avg)   passes=1   kerne
   core by cranking `block` — that needs bigger NoC transactions (coalescing multiple bank-contiguous
   tiles per read); fp32 gets there for free because its tile is already 4 KB. A smaller dtype moves
   less data (wins wall time); a bigger dtype moves more per transaction (wins GB/s).
-- **Once DRAM-bandwidth-bound, none of the levers matter.** At 64 cores even the `block=1`
-  single-buffered trap hits **190.8 GB/s** (≈ DRAM peak); every richer setting is within noise or
-  slightly worse. When the memory system is saturated the only lever left is moving less data.
+- **Once DRAM-bandwidth-bound, none of the levers matter.** On WH B0 n150, at 64 Tensix cores even the
+  `block=1` single-buffered trap hits **190.8 GB/s** (≈ DRAM peak); every richer setting is within noise or
+  slightly worse. When the memory system is saturated the only lever left is moving less data. On BH p150b
+  the DRAM ceiling is ~2.2× higher and the trap does not reach it even on the full 120-Tensix-core grid, so
+  the lever keeps a small ~1.07–1.09× gain there (see below).
 - Scope: this measures data movement, so compute is held light. If **compute** is your bottleneck,
   the compute engine's independent unpack/math/pack threads already hide the DRAM traffic and none of
   these levers help.
 
 ## When it helps / when it does not
-Board: **Wormhole B0 n150** (8×8 = 64-Tensix-core grid, 12 DRAM banks), bf16 (2048 B per tile =
-per NoC read). Baseline = the trap (`block=1`, `single_buffered`); lever = `block=4`,
-`double_buffered` (4 reads per barrier, CB = 2 × 4 tiles). Numbers from `test_double_buffer_regimes`
-— median of 12 trials per variant (a trial = mean device kernel duration of 5 launches), baseline/lever
-trials interleaved; min–max in parentheses.
+**Rule:** the lever pays while `active Tensix cores × trap rate per Tensix core` is well below the board's DRAM
+ceiling — it is flat from **≈32 Tensix cores on WH B0 n150** (~6.5 GB/s per Tensix core vs ~190 GB/s), while on
+**BH p150b** (~8.8 GB/s per Tensix core vs ~415–430 GB/s) the gain shrinks to ~1.07–1.09× from 64 Tensix cores up
+and **never reaches a clean flat**, even on the full grid. bf16 (2048 B per tile = per NoC read), interleaved DRAM
+(`TensorMemoryLayout::INTERLEAVED`); baseline = the trap (`block=1`, `single_buffered`), lever = `block=4`,
+`double_buffered` (4 reads per barrier, CB depth 2 × 4 tiles). GB/s = read+write DRAM traffic ÷ device time.
 
-| Condition | Shape | Trap (ns) | block=4 + double (ns) | Speedup | Trials | Board |
-|---|---|--:|--:|--:|--:|---|
-| **Helps:** 1 Tensix core, latency-bound (6.7 GB/s) | `[512, 512]`, 256 tiles/core | 155933 (155409–156387) | 59156 (59111–59187) | **2.64×** (runs: 2.64 / 2.63 / 2.63 / 2.64) | 12 | WH B0 n150 |
-| **Helps:** 8 Tensix cores, aggregate trap BW 52 GB/s ≪ DRAM peak | `[2048, 2048]`, 512 tiles/core | 322468 (321182–324683) | 118236 (118000–118480) | **2.73×** (runs: 2.73 / 2.73 / 2.73 / 2.73) | 12 | WH B0 n150 |
-| **Does not help:** 64 Tensix cores, trap already at DRAM peak (190.9 GB/s) | `[2048, 2048]`, 64 tiles/core | 87884 (87113–88587) | 89425 (88530–91177) | **0.98×** (runs: 0.98 / 0.98 / 0.97 / 0.97) | 12 | WH B0 n150 |
+| Regime (same definition on every board) | WH B0 n150 · 8×8 = 64 Tensix cores | BH p150b · 12×10 = 120 Tensix cores |
+|---|---|---|
+| **Helps:** 1 Tensix core, latency-bound, 256 tiles `[512, 512]` | 155 933 → 59 156 ns **2.64×** (6.7 → 17.7 GB/s) | 118 883 → 40 361 ns **2.95×** (8.8 → 26.0 GB/s) |
+| **Helps:** 8 Tensix cores, 512 tiles per Tensix core `[2048, 2048]` | 322 468 → 118 236 ns **2.73×** (52 → 142 GB/s) | 238 575 → 86 108 ns **2.77×** (70 → 195 GB/s) |
+| Sweep: 16 Tensix cores, 256 tiles per Tensix core `[2048, 2048]` | 181 924 → 92 193 ns **1.97×** | 121 075 → 49 568 ns **2.44×** |
+| Sweep: 32 Tensix cores, 128 tiles per Tensix core `[2048, 2048]` | 101 087 → 90 876 ns **1.11×** | 66 587 → 43 079 ns **1.55×** (252 → 390 GB/s) |
+| **Does not help:** 64 Tensix cores, 64 tiles per Tensix core `[2048, 2048]` | 87 884 → 89 425 ns **0.98×** (trap 190.9 GB/s) | 44 143 → 40 994 ns **1.08× — small gain on BH** (380 → 409 GB/s) |
+| **Small:** full grid, `[2048, 2048]` | — (64 Tensix cores is the full grid, row above) | 120 Tensix cores, ~34 tiles each: 43 554 → 40 519 ns **1.07×** (385 → 414 GB/s) |
+| Full grid, 4× the tiles `[4096, 4096]` | not measured | 120 Tensix cores: 169 144 → 155 676 ns **1.09×** (397 → 431 GB/s) |
+| **Boundary** | flat from ≈32 Tensix cores | shrinks to ~1.07–1.09× from 64 Tensix cores; no flat regime on BH p150b |
 
-- **Helps:** while each Tensix core's NoC is idle between one-tile round trips, batching 4 reads per
-  barrier and letting the reader prefetch the next block (depth 2) overlaps reads with writes and lifts
-  each Tensix core from ~6.7 to ~17.7 GB/s — the gain is per core, so it holds unchanged at 8 cores.
-- **Does not help:** the trap moves ~6.5 GB/s per Tensix core, so with enough cores the aggregate
-  reaches the DRAM ceiling (~190 GB/s on this board) and there is no idle NoC time left to recover;
-  the lever is flat to ~3% slower. Core-count sweep at 4096 tiles (bf16): 1 → 2.82×, 8 → 2.77×,
-  16 → 1.97×, **32 → 1.11×**, 64 → 0.98× — i.e. it stops paying once
-  `active Tensix cores × ~6.5 GB/s` approaches DRAM peak (≈30 cores for bf16).
+**Why the boards differ:**
+- **DRAM ceiling.** The achievable read+write DRAM bandwidth is ~190 GB/s on WH B0 n150 (12 DRAM banks) and
+  ~415–430 GB/s on BH p150b (8 DRAM banks, faster GDDR6). The trap saturates WH B0 at ~30 Tensix cores; on BH
+  p150b even 120 Tensix cores of trap reach only ~385 GB/s, so there is still idle NoC time for the lever to
+  recover.
+- **Per-Tensix-core rate.** One Tensix core moves 26.0 GB/s with the lever on BH p150b vs 17.7 GB/s on WH B0
+  (consistent with the 64 B vs 32 B NoC flit and 1350 vs 1000 MHz AICLK; not isolated here); the single-Tensix-core
+  gain is a little larger (2.95× vs 2.64×).
+
+- **Helps:** while each Tensix core's NoC is idle between one-tile round trips, batching 4 reads per barrier and
+  letting the reader prefetch the next block (CB depth 2) overlaps reads with writes; the gain is per Tensix
+  core, so it holds unchanged at 8 Tensix cores on both boards.
+- **Does not help (WH B0 n150):** with enough Tensix cores the trap's aggregate reaches the DRAM ceiling and there
+  is no idle NoC time left to recover; the lever is flat to ~3% slower. On BH p150b the same condition is never
+  reached on the 120-Tensix-core grid, so expect ~1.07–1.09× there — keep the lever, it costs only L1.
+
+*How measured:* `DEVICE KERNEL DURATION [ns]`, baseline → lever.
+- **WH B0 n150:** 1, 8 and 64 Tensix cores from `test_double_buffer_regimes` (median of 12 trials
+  per variant, a trial = mean of 5 launches, variants interleaved; speedups stable over 4 runs), branch
+  `adamjanovic/perf-example-improvements`, 2026-10-12; 16 and 32 Tensix cores from that day's
+  `test_double_buffer_device_perf` core-count sweep (mean of 20 launches; [`report.md`](report.md)).
+- **BH p150b:** 1, 8 and 64 Tensix cores from `test_double_buffer_regimes`; 120 Tensix cores from a BH-only
+  regime of the same A/B that the arch-agnostic test no longer runs (`small_120cores_34tiles_per_core`, same
+  method); 16, 32 Tensix cores and `[4096, 4096]` from probes of the same interleaved A/B.
+  `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19, commit `f74ee7aad64`.
 
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_double_buffer.py::test_double_buffer_regimes`
+(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
 
 ## Run the predefined sweep (regenerates the report numbers)
 ```bash

@@ -2,6 +2,7 @@
 
 **Problem type:** cross-core communication  ·  **Concept(s):** Tensix-to-Tensix transfer topology and reduction work distribution
 **First profiled on:** `bgd-lab-t3003-special-mstaletovic-for-reservation-40918` · Wormhole B0 · 1000 MHz · 2026-07-10 · `5f0ad060667`
+**Measured on:** WH B0 n150 (regimes, 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19)
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -316,23 +317,59 @@ The complete host descriptor and inline dataflow/compute kernels are in
 `program_descriptor_with_inline_kernels.py`; `__main__.py` provides the CLI.
 
 ## When it helps / when it does not
+**Rule:** `reduce_scatter_mcast` beats `reduce_root_mcast` when the group has ≥ 8 Tensix cores **and** each
+Tensix core contributes ≥ ~4 tiles (enough serial tile-adds on the root to split across workers); groups of
+4–6 Tensix cores and 1-tile payloads lose on both boards. Payload crossover on a `1x8` line: between 1 and
+6 tiles per core on WH B0 n150 (no points in between), 2–4 tiles per core on BH (`bh-49` sweep).
+BH p150b gains less where it helps (1.43× vs 1.68×) and loses more where it does not.
 
-Board: **Wormhole B0 n150**; numbers from `test_tensix_all_reduce_regimes` (baseline `reduce_root_mcast`,
-lever `reduce_scatter_mcast`; bf16, 10 in-kernel all-reduces per launch, interleaved A/B, median of 11
-retained trials, 2026-10-12). All shapes use 64 Tensix cores in total (one group per row/column slice).
-Earlier tables above that name Blackhole were measured on Blackhole; this section is Wormhole only.
+Baseline `reduce_root_mcast` → lever `reduce_scatter_mcast`; bf16; "6 tiles" = tiles per Tensix core;
+parentheses = min–max over the retained trials.
 
-| Condition | Shape(s) | Baseline ns | Lever ns | Speedup | Trials | Board |
-|---|---|---:|---:|---:|---:|---|
-| **Helps:** 8-Tensix-core group, 6 tiles per core (>= 6 workers busy) | `1x8` x 8 groups | 6145 (6133-6153) | 3646 (3600-3708) | **1.68x** | 11 | WH B0 n150 |
-| **Does not help:** 4-Tensix-core group, 6 tiles per core | `1x4` x 16 groups | 3976 (3950-4254) | 4663-5120 (4349-5557) | **0.78-0.85x** (slower) | 11 | WH B0 n150 |
-| **Does not help:** 8-Tensix-core group, 1 tile per core (only 1 worker) | `1x8` x 8 groups | 1614 (1603-1623) | 1994 (1990-2000) | **0.81x** (slower) | 11 | WH B0 n150 |
+| Regime (group × groups, tiles per Tensix core) | WH B0 n150 · 8×8 = 64 Tensix cores | BH p150b · 12×10 = 120 Tensix cores | BH P150b `bh-49` · 1-D sweep ([`report_bh_p150b_1d.md`](report_bh_p150b_1d.md)) |
+|---|---|---|---|
+| **Helps:** 8-Tensix-core line `1x8` × 8, 6 tiles | 6 145 (6 133–6 153) → 3 646 (3 600–3 708) ns **1.68×** | 2 592 (2 584–2 598) → 1 817 (1 798–1 844) ns **1.43×** | 4 tiles: 1 928 → 1 550 ns **1.24×**; 8 tiles: 3 190 → 2 300 ns **1.39×** |
+| **Helps:** 8-Tensix-core line `1x8` × 8, 16 tiles | not measured | not measured | 5 682 → 3 527 ns **1.61×** (best ratio measured) |
+| **Does not help:** `1x8` × 8, 1 tile (one worker) | 1 614 (1 603–1 623) → 1 994 (1 990–2 000) ns **0.81×** | 990 (988–992) → 1 326 (1 324–1 327) ns **0.75×** | 991 → 1 330 ns **0.75×**; 2 tiles **0.94×** |
+| **Does not help:** `1x8` × 8, 32 tiles (bandwidth-bound) | not measured | not measured | 10 689 vs 10 691 ns **1.00×** (all reducers converge) |
+| **Does not help:** 4-Tensix-core line `1x4` × 16, 6 tiles | 3 976 (3 950–4 254) → 4 663–5 120 (4 349–5 557) ns **0.78–0.85×** (lever noisy) | 2 086 (1 991–2 739) → 3 812 (3 158–4 390) ns **0.55×** (lever noisy) | not measured |
+| **Helps:** full grid, whole rows, 6 tiles | `1x8` × 8: 6 179 → 3 647 ns **1.69×** | `1x12` × 10: 3 684 → 3 087 ns **1.19×** | not measured |
+| **Helps:** full grid, whole columns, 6 tiles | `8x1` × 8: 6 230 → 3 664 ns **1.70×** | `10x1` × 12: 3 198 → 2 548 ns **1.26×** | not measured |
+| **Does not help:** full grid, half rows, 6 tiles | `1x4` × 16: 4 005 → 5 505 ns **0.73×** (lever noisy) | `1x6` × 20: 2 816 → 2 936 ns **0.96×** | not measured |
+| **Helps (vs root):** full grid, two rows, 6 tiles | `2x8` × 4: 12 325 → 8 364 ns **1.47×** (lever noisy) | `2x12` × 5: 9 401 → 6 599 ns **1.42×** (both noisy); `tree_reduce_mcast` 5 171 ns is fastest | not measured |
+| **Boundary** | group: 4 → 8 Tensix cores; payload: 1 → 6 tiles | group: 6 → 8 Tensix cores (`1x6` 0.96×); payload: 1 → 6 tiles | payload: 2–4 tiles; gone by 32 tiles |
 
-Reduce-scatter pays for an extra worker-to-root handoff and a second synchronization round, and only
-earns that back when the root's serial reduction (`group_size - 1` blocks times tiles per core) is long
-enough to split across `min(tiles per core, group_size)` workers: at 8 cores and 6 tiles the root does
-7 x 6 tile-adds serially and reduce-scatter wins 1.68x; at 4 cores (3 x 6) or at 1 tile per core (one
-worker, so no parallelism to gain) the handoff is pure overhead and root reduction is 1.2-1.3x faster.
-The 4-core reduce-scatter times are noisy (spread up to ~25%); the root times are stable. This confirms
-the existing claim that root reduction wins 4-core groups on Wormhole B0, and adds the 1-tile boundary
-(the Blackhole 1-tile table above shows the same reduce-scatter loss).
+**Why the boards differ:**
+- The root's serial reduction shrinks more on BH p150b than reduce-scatter's fixed worker-to-root handoff
+  and second synchronization round: at `1x8`, 6 tiles, `reduce_root_mcast` is 2.4× faster than on WH B0
+  n150 (2 592 vs 6 145 ns; AICLK 1350 vs 1000 MHz, 64-byte vs 32-byte NoC flit) but `reduce_scatter_mcast`
+  only 2.0× (1 817 vs 3 646 ns). Less serial work left to split → smaller gain, and bigger relative loss
+  where there is nothing to split (`1x4`: 0.55× vs 0.78–0.85×).
+- Longer lines on the full BH p150b grid (`1x12`, `10x1`) still win, but only 1.19–1.26× (at
+  kernel-iters 1, i.e. latency, vs 10 on WH B0).
+
+Reduce-scatter pays for an extra worker-to-root handoff and a second synchronization round, and only earns
+that back when the root's serial reduction (`group_size - 1` blocks × tiles per Tensix core) is long enough
+to split across `min(tiles per core, group_size)` workers: at 8 Tensix cores and 6 tiles the root does
+7 × 6 tile-adds serially and reduce-scatter wins (1.68× WH B0, 1.43× BH p150b); at 4 Tensix cores (3 × 6)
+or at 1 tile per core (one worker, so no parallelism to gain) the handoff is pure overhead and root
+reduction is 1.2–1.3× faster on WH B0, 1.3–1.8× on BH p150b. The 4-core reduce-scatter times are noisy on
+both boards (spread up to ~25% on WH B0, ~30% on BH p150b); the root times are stable. Root reduction wins
+4-core groups on both boards; on a busy 2-D grid prefer `tree_reduce_mcast` (see *Measured result - the
+2-D reducers depend on the regime* above, and the BH p150b `2x12` row).
+
+*How measured:*
+- WH B0 n150: `test_tensix_all_reduce_regimes` (kernel-iters 10, interleaved A/B, median of 11 retained
+  trials; three runs, ranges in [`report.md`](report.md)), 2026-10-12. Full-grid rows from the 2026-07-10
+  `test_tensix_all_reduce_device_perf` sweep (`bgd-lab-t3003`, kernel-iters 10, N=5).
+- BH p150b: the same regimes test (kernel-iters 10, 11 trials) for the first five rows; full-grid
+  rows from `test_tensix_all_reduce_device_perf` (kernel-iters 1, N=5);
+  `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19.
+- BH P150b `bh-49`: 1-D payload sweep, kernel-iters 10, N=5 (N=2–3 for 24/32 tiles).
+- Other boards: `bh-50` 2-D groups (isolated and grid-filling, with `tree_reduce_mcast`) — see *Measured
+  result - the 2-D reducers depend on the regime* above.
+
+Reproduce (same regimes on any board; asserts only what held on every measured board, `measure` regimes only log):
+```bash
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_tensix_all_reduce.py::test_tensix_all_reduce_regimes
+```

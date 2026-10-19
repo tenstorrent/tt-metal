@@ -238,10 +238,12 @@ def test_tensix_all_reduce_device_perf(device):
 
 # (id, group_shape, num_groups, num_tiles, kind, threshold). Baseline = reduce_root_mcast, lever = reduce_scatter_mcast.
 # Thresholds: helps -> T_help = max(1.05, 1 + 0.5 * (measured - 1)); does_not_help -> measured loss, <= 1.0.
+# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
+# - numbers per board in README.md.
 _REGIMES = [
-    ("helps_1x8_x8groups_6tiles", (1, 8), 8, 6, "helps", 1.34),
-    ("does_not_help_1x4_x16groups_6tiles", (1, 4), 16, 6, "does_not_help", 1.0),
-    ("does_not_help_1x8_x8groups_1tile", (1, 8), 8, 1, "does_not_help", 1.0),
+    ("helps_1x8_x8groups_6tiles", (1, 8), 8, 6, "helps", 1.21),  # WH 1.68x, BH 1.43x
+    ("does_not_help_1x4_x16groups_6tiles", (1, 4), 16, 6, "does_not_help", 1.0),  # WH 0.78-0.85x, BH 0.55x
+    ("does_not_help_1x8_x8groups_1tile", (1, 8), 8, 1, "does_not_help", 1.0),  # WH 0.81x, BH 0.75x
 ]
 
 
@@ -252,11 +254,6 @@ _REGIMES = [
 )
 def test_tensix_all_reduce_regimes(device, group_shape, num_groups, num_tiles, kind, threshold):
     """Interleaved A/B of root reduction (baseline) vs reduce-scatter (lever); median of 11 retained trials."""
-    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
-    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
-    # another arch re-measure the regimes and add its own thresholds before enabling this test.
-    if not ttnn.device.is_wormhole_b0(device):
-        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
     baseline, lever = "reduce_root_mcast", "reduce_scatter_mcast"
     trials, kernel_iters = 11, 10
     tt_input, expected = _make_input(device, group_shape, num_groups, num_tiles)

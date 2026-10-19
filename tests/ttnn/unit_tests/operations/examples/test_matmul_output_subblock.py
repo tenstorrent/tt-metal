@@ -226,24 +226,27 @@ def _regime_inputs(device, mt, nt, kt):
 
 # (Mt, Nt, Kt tiles, baseline, lever, verdict, measured speedup)
 #   helps:          16x16 output tiles, Kt=1: sb_1x1 -> sb_2x4 (8-tile subblock, A reused across 4 B-tiles).
-#   helps (shape):  same problem, tall sb_8x1 -> wide sb_1x8 -- on Wormhole B0 the two 8-tile shapes are NOT
-#                   equivalent (the Blackhole README claimed they are).
+#   measure:        tall sb_8x1 -> wide sb_1x8 (same problem), and Kt=4 sb_1x1 -> sb_2x4: the verdict flips between boards.
 #   does_not_help:  2x2 output tiles, Kt=1: sb_1x1 -> sb_2x2. Only 4 output tiles per pass, so there is no
-#                   operand reload left to amortize (~1.01x). Large Kt does NOT cancel the win (still ~1.7x at Kt=12).
+#                   operand reload left to amortize.
+# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
+# -- numbers per board in README.md.
 _REGIMES = [
-    pytest.param(16, 16, 1, "sb_1x1", "sb_2x4", "helps", 1.74, id="helps_16x16t_Kt1_1x1_to_2x4"),
-    pytest.param(16, 16, 1, "sb_8x1", "sb_1x8", "helps", 1.40, id="helps_16x16t_Kt1_tall8x1_to_wide1x8"),
-    pytest.param(2, 2, 1, "sb_1x1", "sb_2x2", "does_not_help", 1.01, id="flat_2x2t_Kt1_1x1_to_2x2"),
+    pytest.param(16, 16, 1, "sb_1x1", "sb_2x4", "helps", 1.46, id="helps_16x16t_Kt1_1x1_to_2x4"),  # WH 1.75x, BH 1.46x
+    pytest.param(
+        16, 16, 1, "sb_8x1", "sb_1x8", "measure", None, id="measure_16x16t_Kt1_tall8x1_to_wide1x8"
+    ),  # WH 1.40x, BH 1.00x
+    pytest.param(
+        16, 16, 4, "sb_1x1", "sb_2x4", "measure", None, id="measure_16x16t_Kt4_1x1_to_2x4"
+    ),  # WH ~1.69x, BH 1.10x
+    pytest.param(
+        2, 2, 1, "sb_1x1", "sb_2x2", "does_not_help", 1.01, id="flat_2x2t_Kt1_1x1_to_2x2"
+    ),  # WH 1.02x, BH 0.97x
 ]
 
 
 @pytest.mark.parametrize("mt,nt,kt,base_variant,lever_variant,verdict,measured", _REGIMES)
 def test_matmul_output_subblock_regimes(device, mt, nt, kt, base_variant, lever_variant, verdict, measured):
-    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
-    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
-    # another arch re-measure the regimes and add its own thresholds before enabling this test.
-    if not ttnn.device.is_wormhole_b0(device):
-        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
     tt_a, tt_b, tt_c, expected = _regime_inputs(device, mt, nt, kt)
     for variant in (base_variant, lever_variant):  # correctness gate
         out = ttnn.to_torch(matmul_output_subblock(tt_a, tt_b, variant=variant, kernel_iters=1)).to(torch.float32)
@@ -276,5 +279,5 @@ def test_matmul_output_subblock_regimes(device, mt, nt, kt, base_variant, lever_
     )
     if verdict == "helps":
         assert speedup >= max(1.05, 1 + 0.5 * (measured - 1)), f"expected a clear win, got {speedup:.2f}x"
-    else:
+    elif verdict == "does_not_help":
         assert speedup <= 1.05, f"expected no meaningful gain (<= 1.05x), got {speedup:.2f}x"

@@ -313,7 +313,7 @@ def _format_report(perf, funcs, variants, *, box, arch, clock, reps, trials):
 
 
 # =============================================================================
-# Regimes: where scoping the SFPU to row 0 (r_iter2) helps vs does not, vs the whole tile (rc)  (Wormhole B0 n150)
+# Regimes: where scoping the SFPU to row 0 (r_iter2) helps vs does not, vs the whole tile (rc)
 # =============================================================================
 # The lever only removes SFPU math cycles. It shows in the MATH-thread zone (reps SFPU calls per launch) but
 # is DILUTED in whole-op `DEVICE KERNEL DURATION [ns]` (reps=1: one SFPU call per tile, unpack/copy/pack/CB handshake
@@ -369,23 +369,26 @@ def _interleaved_kernel_ns(device, runners, trials):
 
 
 # (id, func, metric, reps, baseline variant, lever variant, kind, threshold). speedup = baseline_ns / lever_ns.
+# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only
+# log -- numbers per board in README.md.
 _REGIMES = [
+    # WH 7.30x, BH 7.30x
     ("helps_rsqrt_math_zone_rc_to_r_iter2", "rsqrt", "math_zone", 2000, "rc", "r_iter2", "helps", 4.1),
-    ("helps_recip_math_zone_rc_to_r_iter2", "recip", "math_zone", 2000, "rc", "r_iter2", "helps", 3.8),
+    # WH 6.69x, BH 5.46x
+    ("helps_recip_math_zone_rc_to_r_iter2", "recip", "math_zone", 2000, "rc", "r_iter2", "helps", 3.23),
+    # WH 2.22x, BH 2.27x
     ("diluted_rsqrt_whole_op_reps1_rc_to_r_iter2", "rsqrt", "whole_op", 1, "rc", "r_iter2", "helps", 1.6),
-    ("diluted_recip_whole_op_reps1_rc_to_r_iter2", "recip", "whole_op", 1, "rc", "r_iter2", "helps", 1.3),
+    # WH 1.61x, BH 1.38x
+    ("diluted_recip_whole_op_reps1_rc_to_r_iter2", "recip", "whole_op", 1, "rc", "r_iter2", "helps", 1.19),
+    # WH 1.00x, BH 1.00x
     ("not_rsqrt_math_zone_c_to_r_same_16_vectors", "rsqrt", "math_zone", 2000, "c", "r", "does_not_help", 1.05),
+    # WH 1.00x, BH 1.00x
     ("not_recip_math_zone_c_to_r_same_16_vectors", "recip", "math_zone", 2000, "c", "r", "does_not_help", 1.05),
 ]
 
 
 @pytest.mark.parametrize("regime", _REGIMES, ids=[r[0] for r in _REGIMES])
 def test_sfpu_tile_scope_regimes(device, regime):
-    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
-    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
-    # another arch re-measure the regimes and add its own thresholds before enabling this test.
-    if not ttnn.device.is_wormhole_b0(device):
-        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
     name, func, metric, reps, base_v, lever_v, kind, threshold = regime
     x_dev, golden_in = _make_input(device)
     for variant in (base_v, lever_v):
@@ -402,12 +405,13 @@ def test_sfpu_tile_scope_regimes(device, regime):
     base, lever = statistics.median(samples[base_v]), statistics.median(samples[lever_v])
     speedup = base / lever
     logger.info(
-        f"[WH_B0] {name}: func={func} reps={reps} metric={unit} {base_v}={base:.1f} "
+        f"[{_arch_label(device)}] {name}: func={func} reps={reps} metric={unit} {base_v}={base:.1f} "
         f"(min {min(samples[base_v]):.1f}, max {max(samples[base_v]):.1f}) {lever_v}={lever:.1f} "
         f"(min {min(samples[lever_v]):.1f}, max {max(samples[lever_v]):.1f}) speedup={speedup:.2f}x "
         f"trials={_REGIME_TRIALS}"
     )
     if kind == "helps":
         assert speedup >= threshold, f"{name}: speedup {speedup:.2f}x < {threshold}"
-    else:
+    elif kind == "does_not_help":
         assert speedup <= threshold, f"{name}: speedup {speedup:.2f}x > {threshold}"
+    # kind == "measure": correctness is checked above, the speedup is only logged

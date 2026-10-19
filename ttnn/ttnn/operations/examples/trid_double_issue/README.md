@@ -2,6 +2,7 @@
 
 **Problem type:** data movement below the ceiling: latency  ·  **Concept(s):** barrier **granularity** on a DRAM read stream — a drain-everything `noc_async_read_barrier()` vs. a per-transaction-id wait · how that trades off against block size
 **First profiled on:** `bh-50-special-dstoiljkovic-for-reservation-88042` · Blackhole · 2026-09-10 · `dfc0dae18e4`
+**Measured on:** BH `bh-50` (`bh-50-special-dstoiljkovic-for-reservation-88042`, 2026-09-10) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19) · WH B0 n150 not measured
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -173,32 +174,50 @@ not the ids, it is keeping N blocks in flight in a circular buffer at all, and b
 trid-specific part is four lines — so once you are already batching, adding ids is nearly free.
 
 ## When it helps / when it does not
-Board: **Blackhole** (`bh-50-…`, see the stamp above), 1 Tensix core unless stated, bf16 identity
-copy of an interleaved-DRAM `[512, 512]` tensor (256 tiles, 2048 B per tile = per NoC read).
-Baseline = the best `full_barrier` reader (`ahead` tuned, optimum `ahead=3` at `cb_blocks=6`);
-lever = the best `trid_double_issue` depth. Numbers are the measurements above, in GB/s (same
-bytes in every cell, so the GB/s ratio is the device-time ratio); each is the mean of 20 profiled
-launches ([`report.md`](report.md)). There is no `test_trid_double_issue_regimes` yet — these are
-Blackhole numbers and have not been re-measured on Wormhole B0.
+**Rule:** once the baseline's blocks per barrier are tuned (`ahead=3` at `cb_blocks=6`), a transaction-id ring of
+depth 3–4 adds **~1.5–1.6× at 1–2 tiles per block and ~1.1× at 16 tiles per block** on one Tensix core, and
+nothing once L1 lets you widen the block. Measured on two Blackhole boards (same verdict on both); **not measured
+on WH B0 n150**. bf16 identity copy of an interleaved-DRAM (`TensorMemoryLayout::INTERLEAVED`) `[512, 512]` tensor
+(256 tiles, 2048 B per tile = per NoC read), 1 Tensix core unless stated; baseline = the best `full_barrier`
+reader, lever = the best `trid_double_issue` depth. Cells are GB/s (same bytes in every cell, so the GB/s ratio is
+the device-time ratio).
 
-| Condition | Config | Best baseline (GB/s) | Best trid (GB/s) | Speedup | Launches | Board |
-|---|---|--:|--:|--:|--:|---|
-| **Helps:** small block, CB fixed at `cb_blocks=6` | block=2, `ahead=3` vs `trid ×4` | 39.4 | 64.3 | **1.63×** | 20 | BH |
-| **Helps:** one page per block | block=1, `ahead=3` vs `trid ×4` | 24.2 | 37.3 | **1.54×** | 20 | BH |
-| **Gain shrinks:** larger block | block=16, `ahead=3` vs `trid ×2` | 97.8 | 108.8 | **1.11×** | 20 | BH |
-| **Helps:** L1-capped CB | 96 KB CB | 89.8 | 107.1 | **1.19×** | 20 | BH |
-| **Does not help:** L1 free to widen the block | 768 KB CB | 120.9 | 122.2 | **1.01×** (trivial one-block loop 118.7, within 3%) | 20 | BH |
-| **Does not help:** shallow ring vs tuned baseline | block=4, `ahead=3` vs `trid ×2` | 62.2 | 62.1 | **1.00×** | 20 | BH |
+| Regime (same definition on every board) | WH B0 n150 · 8×8 = 64 Tensix cores | BH `bh-50` · 11×10 = 110 Tensix cores | BH p150b · 12×10 = 120 Tensix cores |
+|---|---|---|---|
+| **Helps:** 2 tiles per block, CB fixed at `cb_blocks=6` (`ahead=3` vs best trid) | not measured | 39.4 → 64.3 GB/s **1.63×** (trid ×4) | 26 438 → 16 114 ns, 39.7 → 65.1 GB/s **1.64×** (trid ×4) |
+| **Helps:** 1 tile per block | not measured | 24.2 → 37.3 GB/s **1.54×** (trid ×4) | 43 375 → 28 088 ns, 24.2 → 37.3 GB/s **1.54×** (trid ×4) |
+| **Helps:** 4 tiles per block | not measured | 62.2 → 84.9 GB/s **1.36×** (trid ×3) | 16 717 → 12 171 ns, 62.7 → 86.2 GB/s **1.37×** (trid ×3) |
+| **Gain shrinks:** 8 tiles per block | not measured | 85.1 → 99.4 GB/s **1.17×** (trid ×3) | 12 251 → 10 347 ns, 85.6 → 101.3 GB/s **1.18×** (trid ×3) |
+| **Gain shrinks:** 16 tiles per block | not measured | 97.8 → 108.8 GB/s **1.11×** (trid ×2) | 10 615 → 9 433 ns, 98.8 → 111.2 GB/s **1.13×** (trid ×2) |
+| **Does not help:** shallow ring vs tuned baseline, 4 tiles per block (`ahead=3` vs `trid ×2`) | not measured | 62.2 → 62.1 GB/s **1.00×** | 16 717 → 16 842 ns **0.99×** |
+| **Helps:** L1-capped CB, 96 KB (1024-tile tensor) | not measured | 89.8 → 107.1 GB/s **1.19×** | not measured |
+| **Does not help:** L1 free to widen the block, 768 KB CB | not measured | 120.9 → 122.2 GB/s **1.01×** (trivial one-block loop 118.7, within 3%) | not measured |
+| Per Tensix core: 6 Tensix cores, 1 tile per block | not measured | 132.7 → 195.8 GB/s **1.48×** | not measured |
+| **Boundary** | — | gain ≤ 1.2× from 8 tiles per block; ~1.0× once the CB reaches ~768 KB | same as `bh-50` (≤ 1.2× from 8 tiles per block) |
 
-- **Helps** when the block cannot be widened (a shard size, a wide tensor or co-resident buffers
-  cap L1): a ring of depth 3–4 keeps reads on the wire across each wait, and reaches a given GB/s
-  with ~1.5–2× less L1 (trid at 192 KB, 119.5 GB/s, matches the baseline at 384 KB). It is a
-  latency effect (1.54–1.59× at block=1 from bfp8 to fp32) and per core (1.48× at block=1 on 6
-  Tensix cores, 346 GB/s).
-- **Does not help** once L1 is free: every reader converges on the ~122 GB/s single-core ceiling,
-  so widen the block and write the trivial loop. Tune `ahead` before adding ids — batching blocks
-  per barrier is the bigger win (block=8: `ahead=1` 52.1 → `ahead=3` 85.1 GB/s) — and a depth-2
-  ring only ties a tuned baseline. The DRAM-saturated full grid was not measured.
+**Why the boards differ:** the two Blackhole boards agree within ~1–2% on every shared row (the single-Tensix-core
+copy does not depend on grid size). WH B0 n150 is untested: the mechanism is available there (16 NoC transaction
+ids on both arches), but its 32 B NoC flit, 12 DRAM banks and lower single-Tensix-core ceiling (~18 GB/s bf16 in
+`double_buffer` vs ~26 GB/s on BH p150b) mean the BH ratios should not be assumed.
+
+- **Helps** when the block cannot be widened (a shard size, a wide tensor or co-resident buffers cap L1): a ring
+  of depth 3–4 keeps reads on the wire across each wait, and reaches a given GB/s with ~1.5–2× less L1 (on
+  `bh-50`, trid at 192 KB, 119.5 GB/s, matches the baseline at 384 KB). It is a latency effect (1.54–1.59× at
+  block=1 from bfp8 to fp32) and per Tensix core (1.48× at block=1 on 6 Tensix cores, 346 GB/s).
+- **Does not help** once L1 is free: every reader converges on the ~122 GB/s single-Tensix-core ceiling, so widen
+  the block and write the trivial loop. Tune `ahead` before adding ids — batching blocks per barrier is the bigger
+  win (block=8: `ahead=1` 52.1 → `ahead=3` 85.1 GB/s on `bh-50`, 52.0 → 85.6 on BH p150b) — and a depth-2 ring
+  only ties a tuned baseline. The DRAM-saturated full grid was not measured on either board.
+
+*How measured:* `DEVICE KERNEL DURATION [ns]` → GB/s, `test_trid_double_issue_device_perf` (no regimes test yet).
+- **BH `bh-50`:** `bh-50-special-dstoiljkovic-for-reservation-88042`, 2026-09-10, commit `dfc0dae18e4`, mean of 20
+  profiled launches per cell ([`report.md`](report.md) §2–§6; the 96 KB / 768 KB and 6-Tensix-core rows are its
+  own sweeps).
+- **BH p150b:** `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19, commit `f74ee7aad64`, mean of
+  10 profiled launches per cell (the test's default), `cb_blocks=6`.
+- **WH B0 n150:** not measured.
+
+Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_trid_double_issue.py::test_trid_double_issue_device_perf`
 
 ## Run the predefined sweep
 ```bash

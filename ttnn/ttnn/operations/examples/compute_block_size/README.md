@@ -6,6 +6,7 @@ fill and drain), attacked two ways — (1) **block granularity**: amortize it ov
 call; (2) **skip redundant reconfigs**: when the data format never changes, the per-phase reconfig
 is pure waste, so turn it off (keeping the inits).
 **First profiled on:** `bgd-lab-t3003-special-mstaletovic-for-reservation-40918` · WH B0 · 1000 MHz · 2026-07-13 · `d2cf2381bea`
+**Measured on:** WH B0 n150 (sweeps 2026-07-13, regimes 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19; block-size sweep and regimes only — the reconfig ablation is WH-only)
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -174,15 +175,25 @@ harness, the correctness gate, and both perf tests live in
 reports: `report.md` (block size) and `report_reconfig_ablation.md` (reconfig on/off).
 
 ## When it helps / when it does not
-Board: **Wormhole B0 n150** (1 Tensix core, sharded L1, kernel-iters 20, DEVICE KERNEL DURATION per `(A+B)@C` evaluation,
-interleaved baseline/lever trials, median). Numbers come from `test_compute_block_size_regimes`.
+**Rule:** collapsing P passes (helper-call rounds over a `block_rows`-tile-row block) into one saves (P − 1) × the
+per-pass fixed cost — ~1.5–1.7 µs on WH B0 n150, ~1.3–1.4 µs on BH p150b — so it pays when that is a visible share of the
+total. On WH B0 n150 the win falls under 5 % once total ns / passes removed exceeds ~25–30 µs; on BH p150b no
+single-core shape that fits L1 gets there (smallest gain 1.07×).
 
-| Condition | Shape (M,K,N tiles) | Baseline ns | Lever ns | Speedup | Trials | Board |
-|---|---|---:|---:|---:|---:|---|
-| **Helps:** 8 passes collapsed into 1, per-pass payload ~3.6 us | 8,4,4 | 29064 (`per_tile_row`, 8 passes) | 17271 (`one_block`, 1 pass) | 1.68x | 11 | WH B0 n150 |
-| **Does not help:** only 2 passes collapsed into 1, per-pass payload ~18.6 us | 2,16,16 | 37202 (`per_tile_row`, 2 passes) | 35634 (`one_block`, 1 pass) | 1.04x | 11 | WH B0 n150 |
+| Regime (same definition on every board; 1 Tensix core, sharded L1, bf16) | WH B0 n150 · 8×8 = 64 Tensix cores | BH p150b · 12×10 = 120 Tensix cores |
+|---|---|---|
+| **Helps:** 8 passes collapsed into 1, small per-pass payload — `per_tile_row → one_block`, M,K,N = 8,4,4 tiles | 29 064 → 17 271 ns **1.68×** | 18 623 → 9 096 ns **2.05×** |
+| **Does not help:** only 2 passes collapsed into 1, large per-pass payload — M,K,N = 2,16,16 tiles | 37 202 → 35 634 ns **1.04×** | 19 976 → 18 693 ns **1.07× — small gain on BH** |
+| Block sweep at 8,4,4 (`test_compute_block_size_device_perf`, kernel-iters 100): `block2` / `block4` / `one_block` vs `per_tile_row` | 1.27× / 1.50× / 1.64× | 1.42× / 1.81× / 2.06× |
+| Other shapes, `per_tile_row → one_block` | 8,2,16 1.39×; 8,8,8 1.25×; 4,4,16 1.21×; 2,4,4 1.29×; 2,8,16 1.08×; 2,8,24 1.06×; 2,16,12 1.05× | 2,32,16 · 2,16,32 · 2,32,32 · 4,16,16 do not fit L1 |
+| **Boundary** | ~5 % at total ns / passes removed ≈ 25–30 µs (2,16,16) | not reached — 2,16,16 is the largest shape that fits L1 and still gains 1.07× |
 
-Spread (min..max over 11 trials): 29019..29108 / 17231..17284 and 37178..37215 / 35624..35637 ns.
+**Why the boards differ:** the per-pass fixed cost (five helper calls of reconfig + init/uninit + pipeline
+fill/drain) shrinks only a little on BH p150b — (29 064 − 17 271) / 7 ≈ 1.7 µs per removed pass on WH B0 n150 vs
+(18 623 − 9 096) / 7 ≈ 1.4 µs on BH p150b — while the payload roughly halves (1350 vs 1000 MHz AICLK and a faster
+matmul: the 2,16,16 single pass is ~18.7 µs on BH p150b vs ~35.6 µs on WH B0 n150). The fixed cost is therefore a
+bigger share of every pass on BH, so the same block-size change gains more, and the "too much payload to notice"
+regime would need a shape larger than one Tensix core's L1 holds.
 
 - **Helps** when many passes are removed and each pass carries little payload: each pass removed saves about
   1.5 us of fixed cost (five helper calls of reconfig + init/uninit + pipeline fill/drain), so 7 removed passes recover ~12 us.
@@ -190,3 +201,13 @@ Spread (min..max over 11 trials): 29019..29108 / 17231..17284 and 37178..37215 /
   real work (here a 16x16-tile `C` with K=16 tiles: ~37 us total): the same ~1.5 us is ~4 percent. Rule of thumb on
   WH B0: expect the win to fall under ~5 percent once total time divided by passes removed exceeds ~25-30 us
   (matmul tiles per pass: M_block x K x N around 500+ MACs-in-tiles). Intermediate points on WH B0: M=8,K=8,N=8 is still 1.25x; M=4,K=4,N=16 is 1.21x.
+  On BH p150b the same 2,16,16 shape is ~19 µs total with ~1.3 µs saved (1.07×), and every larger K or N shape
+  runs out of L1 first — treat block size as always worth taking on BH p150b.
+
+*How measured:* WH B0 n150 rows — `test_compute_block_size_regimes` (1 Tensix core, sharded L1, kernel-iters 20,
+DEVICE KERNEL DURATION per `(A+B)@C` evaluation, 11 interleaved trials, median; spread 29019..29108 / 17231..17284 and
+37178..37215 / 35624..35637 ns), 2026-10-12; block and shape sweeps from `test_compute_block_size_device_perf`.
+BH p150b rows — the same regimes test and device_perf sweep on that board, `bh-qb-15-special-adamjanovic-for-reservation-139410`,
+2026-10-19 (details in `report.md`).
+Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_compute_block_size.py::test_compute_block_size_regimes`
+(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).

@@ -85,3 +85,50 @@ Crossover sweep (`test_width_split_device_perf`, `WS_WIDTHS=32,64,96,128,256,204
 **Correction:** the earlier "only `Wt ≤ 1` does not benefit" is too optimistic — `Wt = 2` is also flat
 or slower (one 8-tile read block on one Tensix core is already at the ~1.8 µs launch floor). The split
 pays from `Wt = 3`.
+
+## Blackhole p150b — bh-qb-15-special-adamjanovic-for-reservation-139410 (2026-10-19)
+
+| stamp | value |
+|---|---|
+| arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| metric / method | `DEVICE KERNEL DURATION [ns]`, same as the blocks above: `test_width_split_device_perf` (mean of 20 launches per cell) and `test_width_split_regimes` (5 warmup launches; 12 trials per variant interleaved, a trial = mean of 5 launches; medians compared) |
+
+### Sweep (`test_width_split_device_perf`) — bfloat16, H=32 (one tile-row), interleaved DRAM, iters=1, trials=20
+
+|   W  | Wt (tiles) | variant | Tensix cores | ns/op | speedup vs single_core |
+|-----:|---:|---|---:|---:|---:|
+|   32 |   1 | single_core | 1 | 1025.4 | (base) |
+|   32 |   1 | width_split | 1 | 1010.2 | 1.02× |
+|  256 |   8 | single_core | 1 | 2480.2 | (base) |
+|  256 |   8 | width_split | 8 | 1144.9 | **2.17×** |
+| 1024 |  32 | single_core | 1 | 6159.8 | (base) |
+| 1024 |  32 | width_split | 32 | 1239.5 | **4.97×** |
+| 2048 |  64 | single_core | 1 | 11074.0 | (base) |
+| 2048 |  64 | width_split | 64 | 1533.5 | **7.22×** |
+| 4096 | 128 | single_core | 1 | 20885.5 | (base) |
+| 4096 | 128 | width_split | 120 | 1866.8 | **11.19×** |
+| 8192 | 256 | single_core | 1 | 40518.2 | (base) |
+| 8192 | 256 | width_split | 120 | 2961.2 | **13.68×** |
+
+Boundary probe (same interleaved A/B as the regimes test, ratios only): Wt = 2 tiles 1.17×, Wt = 3 tiles 1.36×,
+Wt = 4 tiles 1.54×.
+
+### Regimes (`test_width_split_regimes` on BH p150b)
+
+| regime | W | Wt (tiles) | width_split Tensix cores | single_core median ns | width_split median ns | speedup | current test asserts |
+|---|--:|--:|--:|---|---|--:|---|
+| helps_wt64 | 2048 | 64 | 64 | 11092.4 (11078.4–11112.2) | 1536.4 (1513.6–1548.8) | 7.22× | ≥ 3.5× |
+| measure_wt2 | 64 | 2 | 2 | 1217.1 (1206.0–1237.8) | 1031.2 (1023.2–1039.6) | 1.18× | measure (logged only — verdict differs by arch) — WH 0.99× |
+| does_not_help_wt1 | 32 | 1 | 1 | 1025.4 | 1010.2 | 1.02× (device_perf sweep) | ≤ 1.05× |
+
+### Reading it
+- **Wt = 2 tiles already pays on BH p150b (1.17–1.18×)**, where WH B0 n150 is flat (0.89–0.99×). The launch
+  floor is ~1.0 µs (Wt = 1 tile: 1025 ns) versus ~1.8 µs on WH B0, and the second tile adds ~190 ns to
+  `single_core`; that saving survives the second Tensix core's startup on BH p150b and does not on WH B0.
+  Only Wt = 1 tile (nothing to split) is flat on BH p150b.
+- **The grid keeps scaling past 64 Tensix cores.** WH B0 n150 saturates at 64 Tensix cores (7.35× at
+  Wt = 128 tiles); BH p150b uses 120 Tensix cores and reaches 11.19× at Wt = 128 tiles and 13.68× at 256 tiles.
+- **Per-tile cost** on `single_core` is ~160 ns on BH p150b vs ~235 ns on WH B0 n150, so the absolute times
+  are ~1.5× lower on BH p150b at every width; at equal Tensix-core count (Wt = 8–64 tiles) the speedups are
+  similar (BH p150b 2.17–7.22× vs WH B0 n150 2.24–6.25×).

@@ -52,3 +52,64 @@ Source: `test_sfpu_tile_scope_regimes`, 1 Tensix core, bf16 tile in sharded L1, 
 | recip | math zone ns/call, reps=2000 | c 288.1 | r 288.1 | 1.00x |
 
 Three runs: rsqrt zone 7.30x x3, recip zone 6.69x x3, rsqrt whole-op 2.21/2.22/2.22x, recip whole-op 1.59/1.61/1.60x, c-vs-r 1.00x x3 for both.
+
+## Blackhole p150b — bh-qb-15-special-adamjanovic-for-reservation-139410 (2026-10-19)
+
+| stamp | value |
+|---|---|
+| arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz (this test uses 1 Tensix core) |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| metric / method | same as the blocks above: `test_sfpu_tile_scope_device_perf` (MATH-thread (TRISC_1) ns per SFPU call, N=5 median, reps=2000) and `test_sfpu_tile_scope_regimes` (11 interleaved trials, median (min-max); math zone reps=2000, whole op = DEVICE KERNEL DURATION with reps=1) |
+
+### Sweep (`test_sfpu_tile_scope_device_perf`)
+
+#### func = rsqrt — MATH ns per SFPU call; (speedup vs rc); ns per vector op
+
+| scope | how | vec ops | math ns/call | speedup vs rc | ns / vector |
+|---|---|---|---|---|---|
+| none | empty loop (no SFPU) | — | 0.0±18% | — | — |
+| rc | VectorMode::RC (4 faces) | 32 | 795.6±0% | 1.00x | 24.9 |
+| r | VectorMode::R (2 faces, top) | 16 | 402.1±0% | 1.98x | 25.1 |
+| c | VectorMode::C (2 faces, left) | 16 | 402.2±0% | 1.98x | 25.1 |
+| r_iter2 | VectorMode::R + ITERATIONS=2 | 4 | 109.0±0% | 7.30x | 27.2 |
+| c_skip | VectorMode::C, even-parity stride (dst_reg+=2) | 8 | 206.8±0% | 3.85x | 25.8 |
+| face | VectorMode::None (face 0) | 8 | 200.8±0% | 3.96x | 25.1 |
+| face_iter1 | VectorMode::None + ITERATIONS=1 | 1 | 29.7±0% | 26.75x | 29.7 |
+
+isolation check: max unpack=0.007 ns/call, max pack=0.007 ns/call inside the zone (≈0 → the SFPU is alone on the math thread).
+
+#### func = recip — MATH ns per SFPU call; (speedup vs rc); ns per vector op
+
+| scope | how | vec ops | math ns/call | speedup vs rc | ns / vector |
+|---|---|---|---|---|---|
+| none | empty loop (no SFPU) | — | 0.0±0% | — | — |
+| rc | VectorMode::RC (4 faces) | 32 | 206.8±0% | 1.00x | 6.5 |
+| r | VectorMode::R (2 faces, top) | 16 | 109.0±0% | 1.90x | 6.8 |
+| c | VectorMode::C (2 faces, left) | 16 | 109.0±0% | 1.90x | 6.8 |
+| r_iter2 | VectorMode::R + ITERATIONS=2 | 4 | 37.9±0% | 5.46x | 9.5 |
+| c_skip | VectorMode::C, even-parity stride (dst_reg+=2) | 8 | 88.2±0% | 2.34x | 11.0 |
+| face | VectorMode::None (face 0) | 8 | 54.2±0% | 3.82x | 6.8 |
+| face_iter1 | VectorMode::None + ITERATIONS=1 | 1 | 12.7±0% | 16.28x | 12.7 |
+
+isolation check: max unpack=0.007 ns/call, max pack=0.007 ns/call inside the zone (≈0 → the SFPU is alone on the math thread).
+
+### Regimes (`test_sfpu_tile_scope_regimes` on BH p150b)
+
+| func | metric | baseline | lever | speedup | verdict |
+|---|---|---:|---:|---:|---|
+| rsqrt | math zone ns/call, reps=2000 | rc 795.6 (795.6-795.6) | r_iter2 109.0 (109.0-109.0) | 7.30x | helps (assert ≥ 4.1) |
+| recip | math zone ns/call, reps=2000 | rc 206.8 (206.7-206.8) | r_iter2 37.9 (37.9-37.9) | 5.46x | helps (assert ≥ 3.23) — WH 6.69x |
+| rsqrt | whole op kernel ns, reps=1 | rc 1042 (1029-1053) | r_iter2 459 (444-490) | 2.27x | helps (assert ≥ 1.6) |
+| recip | whole op kernel ns, reps=1 | rc 606 (583-619) | r_iter2 438 (425-449) | 1.38x | helps (assert ≥ 1.19) — WH 1.61x |
+| rsqrt | math zone ns/call, reps=2000 | c 402.2 (402.1-402.2) | r 402.2 (402.2-402.2) | 1.00x | does_not_help (≤ 1.05) |
+| recip | math zone ns/call, reps=2000 | c 109.0 (109.0-109.0) | r 109.0 (109.0-109.0) | 1.00x | does_not_help (≤ 1.05) |
+
+### Reading it
+- rsqrt reproduces the bh-50 run within 7 % (24.9 vs 23.4 ns per vector op) and matches WH B0 n150's ratios exactly
+  (7.30x math zone); it costs about the same cycles per vector op on both arches (~34 vs ~36).
+- recip is much cheaper than on the older bh-50 run (rc 206.8 vs 890.4 ns; 6.5 vs 27.8 ns per vector op) and than
+  on WH B0 n150 (17.6 ns per vector op). Per-call fixed cost is then a larger share of the short `r_iter2` call
+  (9.5 ns per vector op), so recip's scope gain is lower here: 5.46x math zone, 1.38x whole op (WH 6.69x / 1.61x).
+- recip `c_skip` (Newton body, 11.0 ns per vector op) is now slower per vector than stock recip, so its 2.34x vs rc is
+  less than the 3.82x of `face` at the same 8 vectors — the opposite of the bh-50 table above (10.09x).
+- The c → r null holds to the nanosecond for both functions.

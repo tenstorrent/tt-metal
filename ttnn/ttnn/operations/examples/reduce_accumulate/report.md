@@ -96,3 +96,99 @@ Source: `test_reduce_accumulate_regimes` and a `test_reduce_accumulate_device_pe
 
 Three runs of the regime test gave identical speedups to +-0.01x: row32 1.96/1.96/1.96, col32 1.72/1.72/1.72, scalar32 2.93/2.93/2.93, row1 0.50/0.50/0.50, row4 0.83/0.83/0.83, col4 0.81/0.81/0.81, scalar4 0.95/0.95/0.95.
 Differences from the 2026-07-13 table above: the `helper` row numbers are ~30% lower now (row 32t 3650 vs 5328 ns), so the row win is 1.96x not 2.87x and the row crossover is 8 tiles, not 4. `dispatch` row at 4 tiles is 0.83x (threshold row=4 is stale on this build). col and scalar match the old table.
+
+## Blackhole p150b — bh-qb-15-special-adamjanovic-for-reservation-139410 (2026-10-19)
+
+| stamp | value |
+|---|---|
+| arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz (this test uses 1 Tensix core) |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| metric / method | same as the blocks above: `test_reduce_accumulate_device_perf` (N=5 median, kernel-iters 200, bf16 in, fp32 out, HiFi4; perf at accum=fp32) and `test_reduce_accumulate_regimes` (11 interleaved trials, median, min-max) |
+
+### Sweep (`test_reduce_accumulate_device_perf`) — median ns per reduce; speedup vs helper; `dispatch` uses the code's thresholds row=4, col=8, scalar=8
+
+#### dim = row
+
+| variant | 1t | 2t | 4t | 8t | 16t | 32t |
+|---|---|---|---|---|---|---|
+| helper | 254±0% | 294±0% | 368±0% | 514±0% | 806±0% | 1385±0% |
+| fast | 535±0%  (0.47x) | 527±0%  (0.56x) | 536±0%  (0.69x) | 578±0%  (0.89x) | 649±0%  (1.24x) | 800±0%  (1.73x) |
+| dispatch | 254±1%  (1.00x) | 295±0%  (1.00x) | 536±0%  (0.69x) | 578±0%  (0.89x) | 649±0%  (1.24x) | 800±0%  (1.73x) |
+
+#### dim = col
+
+| variant | 1t | 2t | 4t | 8t | 16t | 32t |
+|---|---|---|---|---|---|---|
+| helper | 250±0% | 315±0% | 440±0% | 679±0% | 1174±0% | 2157±0% |
+| fast | 462±0%  (0.54x) | 454±0%  (0.69x) | 458±0%  (0.96x) | 505±0%  (1.35x) | 576±0%  (2.04x) | 727±0%  (2.97x) |
+| dispatch | 250±0%  (1.00x) | 315±0%  (1.00x) | 438±0%  (1.00x) | 504±0%  (1.35x) | 576±0%  (2.04x) | 727±0%  (2.97x) |
+
+#### dim = scalar
+
+| variant | 1t | 2t | 4t | 8t | 16t | 32t |
+|---|---|---|---|---|---|---|
+| helper | 294±0% | 400±1% | 588±0% | 974±0% | 1745±0% | 3286±0% |
+| fast | 615±0%  (0.48x) | 607±0%  (0.66x) | 609±0%  (0.97x) | 658±0%  (1.48x) | 729±0%  (2.39x) | 880±0%  (3.73x) |
+| dispatch | 294±0%  (1.00x) | 396±0%  (1.01x) | 589±0%  (1.00x) | 658±0%  (1.48x) | 729±0%  (2.39x) | 880±0%  (3.73x) |
+
+### Accuracy — error vs fp64 mean  (cell = max_abs \| max ULP_bf16)
+
+#### dim = row
+
+| variant.accum | 1t | 2t | 4t | 8t | 16t | 32t |
+|---|---|---|---|---|---|---|
+| helper.fp32 | 3.2e-04 \| 0.2u | 2.8e-04 \| 0.1u | 2.2e-04 \| 0.1u | 1.3e-04 \| 0.0u | 9.3e-05 \| 0.0u | 5.9e-05 \| 0.0u |
+| fast.fp32 | 3.2e-04 \| 0.2u | 2.8e-04 \| 0.1u | 2.1e-04 \| 0.1u | 1.4e-04 \| 0.1u | 9.5e-05 \| 0.0u | 5.9e-05 \| 0.0u |
+| dispatch.fp32 | 3.2e-04 \| 0.2u | 2.8e-04 \| 0.1u | 2.1e-04 \| 0.1u | 1.4e-04 \| 0.1u | 9.5e-05 \| 0.0u | 5.9e-05 \| 0.0u |
+| helper.bf16 | 3.8e-03 \| 1.2u | 2.7e-03 \| 0.9u | 3.0e-03 \| 1.0u | 5.6e-03 \| 1.6u | 7.9e-03 \| 2.7u | 1.1e-02 \| 5.8u |
+| fast.bf16 | 3.7e-03 \| 1.0u | 3.0e-03 \| 0.8u | 3.3e-03 \| 0.8u | 2.5e-03 \| 0.6u | 2.6e-03 \| 0.7u | 2.0e-03 \| 0.8u |
+| dispatch.bf16 | 3.8e-03 \| 1.2u | 2.7e-03 \| 0.9u | 3.3e-03 \| 0.8u | 2.5e-03 \| 0.6u | 2.6e-03 \| 0.7u | 2.0e-03 \| 0.8u |
+
+#### dim = col
+
+| variant.accum | 1t | 2t | 4t | 8t | 16t | 32t |
+|---|---|---|---|---|---|---|
+| helper.fp32 | 4.7e-04 \| 0.1u | 2.3e-04 \| 0.1u | 1.7e-04 \| 0.1u | 1.4e-04 \| 0.1u | 8.5e-05 \| 0.0u | 6.1e-05 \| 0.0u |
+| fast.fp32 | 4.7e-04 \| 0.1u | 2.4e-04 \| 0.1u | 1.7e-04 \| 0.1u | 1.4e-04 \| 0.1u | 8.7e-05 \| 0.0u | 6.4e-05 \| 0.0u |
+| dispatch.fp32 | 4.7e-04 \| 0.1u | 2.3e-04 \| 0.1u | 1.7e-04 \| 0.1u | 1.4e-04 \| 0.1u | 8.7e-05 \| 0.0u | 6.4e-05 \| 0.0u |
+| helper.bf16 | 3.2e-03 \| 1.0u | 3.4e-03 \| 1.0u | 5.6e-03 \| 2.9u | 5.6e-03 \| 2.1u | 8.6e-03 \| 4.4u | 8.6e-03 \| 4.4u |
+| fast.bf16 | 3.4e-03 \| 1.0u | 3.7e-03 \| 1.0u | 3.2e-03 \| 0.8u | 3.1e-03 \| 0.8u | 2.7e-03 \| 0.8u | 2.6e-03 \| 0.8u |
+| dispatch.bf16 | 3.2e-03 \| 1.0u | 3.4e-03 \| 1.0u | 5.6e-03 \| 2.9u | 3.1e-03 \| 0.8u | 2.7e-03 \| 0.8u | 2.6e-03 \| 0.8u |
+
+#### dim = scalar
+
+| variant.accum | 1t | 2t | 4t | 8t | 16t | 32t |
+|---|---|---|---|---|---|---|
+| helper.fp32 | 3.5e-04 \| 0.1u | 4.1e-04 \| 0.1u | 3.7e-04 \| 0.1u | 4.1e-04 \| 0.1u | 3.8e-04 \| 0.1u | 4.3e-04 \| 0.1u |
+| fast.fp32 | 7.7e-06 \| 0.0u | 1.5e-05 \| 0.0u | 6.3e-06 \| 0.0u | 7.1e-06 \| 0.0u | 7.0e-06 \| 0.0u | 8.3e-06 \| 0.0u |
+| dispatch.fp32 | 3.5e-04 \| 0.1u | 4.1e-04 \| 0.1u | 3.7e-04 \| 0.1u | 7.1e-06 \| 0.0u | 7.0e-06 \| 0.0u | 8.3e-06 \| 0.0u |
+| helper.bf16 | 4.3e-03 \| 1.1u | 2.5e-03 \| 0.6u | 2.6e-03 \| 0.7u | 3.7e-04 \| 0.1u | 8.1e-04 \| 0.2u | 2.4e-03 \| 0.6u |
+| fast.bf16 | 3.5e-03 \| 0.9u | 1.4e-03 \| 0.4u | 1.3e-03 \| 0.3u | 3.7e-04 \| 0.1u | 8.1e-04 \| 0.2u | 4.4e-04 \| 0.1u |
+| dispatch.bf16 | 4.3e-03 \| 1.1u | 2.5e-03 \| 0.6u | 2.6e-03 \| 0.7u | 3.7e-04 \| 0.1u | 8.1e-04 \| 0.2u | 4.4e-04 \| 0.1u |
+
+### Regimes (`test_reduce_accumulate_regimes` on BH p150b)
+
+| regime | dim | tiles | helper ns (min-max) | fast ns (min-max) | speedup | verdict |
+|---|---|---:|---:|---:|---:|---|
+| helps_row_32t | row | 32 | 1385 (1385-1388) | 800 (800-825) | 1.73x | helps (assert ≥ 1.36) |
+| helps_col_32t | col | 32 | 2157 (2155-2160) | 727 (727-730) | 2.97x | helps (assert ≥ 1.35) |
+| helps_scalar_32t | scalar | 32 | 3286 (3285-3286) | 880 (880-880) | 3.73x | helps (assert ≥ 1.9) |
+| helps_col_8t | col | 8 | 679 | 505 | 1.35x | sweep / probe — not asserted — WH 1.05x |
+| not_row_1t | row | 1 | 254 (254-254) | 535 (535-535) | 0.47x | does_not_help (≤ 1.0) |
+| not_row_4t | row | 4 | 368 (368-369) | 536 (535-537) | 0.69x | does_not_help (≤ 1.0) |
+| not_row_8t | row | 8 | 514 | 578 | 0.89x | sweep / probe — not asserted — WH 1.10x |
+| not_col_4t | col | 4 | 438 (438-438) | 458 (458-458) | 0.96x | does_not_help (≤ 1.0) |
+| not_scalar_4t | scalar | 4 | 589 (588-592) | 609 (609-610) | 0.97x | does_not_help (≤ 1.05) |
+
+(helps_col_8t and not_row_8t ns are the device_perf sweep medians; the regime run's per-trial spread for those two was not captured.)
+
+### Reading it
+- Crossovers move per dim: row needs 16 tiles on BH p150b (1.24x; 0.89x at 8) vs 8 on WH B0 n150; col and scalar
+  pay from 8 tiles on both, but col much more strongly on BH p150b (1.35x at 8, 2.97x at 32 vs WH 1.05x / 1.71x).
+- The WH ordering "REDUCE_COL is the cheaper library datapath" is reversed on BH p150b: library ~36 ns per reduced tile
+  for row vs ~62 for col vs ~97 for scalar; `fast` is ~8.5 ns per tile for every dim with a ~530 ns fixed finalize.
+- The code's `dispatch` row threshold (4) is wrong on BH p150b as well as on WH B0 n150: `dispatch` row is 0.69x at
+  4 tiles and 0.89x at 8; a correct BH row threshold is 16. col=8 and scalar=8 are right on BH p150b.
+- Accuracy matches the WH B0 n150 tables in fp32 for row/col; scalar helper fp32 error is ~4x lower on BH p150b
+  (3.5e-04 – 4.3e-04 vs 1.4e-03 – 1.7e-03), so the scalar fp32 advantage of `fast` is ~50x here, not ~100x. bf16
+  accumulation: `fast` still beats `helper` at ≥ 8 tiles (row 32t 2.0e-03 vs 1.1e-02).
