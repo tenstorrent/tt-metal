@@ -162,7 +162,7 @@ constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;
 constexpr uint8_t tiled_input_cb = tt::CBIndex::c_17;
 
 uint32_t page_size_for_cb(const MSDACircularBufferPlan& plan, uint8_t index) {
-    const auto it = std::find_if(plan.begin(), plan.end(), [index](const auto& spec) { return spec.index == index; });
+    const auto *const it = std::find_if(plan.begin(), plan.end(), [index](const auto& spec) { return spec.index == index; });
     TT_FATAL(it != plan.end(), "fused_msda: internal error, missing circular buffer {}", index);
     return it->page_size;
 }
