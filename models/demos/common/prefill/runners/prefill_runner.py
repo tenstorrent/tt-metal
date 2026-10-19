@@ -21,6 +21,7 @@ from models.demos.common.prefill.forward_entries import WARMUP_WORD as WARMUP_ME
 from models.demos.common.prefill.forward_entries import (
     check_packed_forward_support,
     decode_forward_metadata,
+    forward_metadata_words,
     metadata_size_bytes,
     sentinel_words,
     validate_forward_entries,
@@ -113,7 +114,7 @@ _tp = int(os.environ.get("PREFILL_TP", 4))
 GLOBAL_MESH_SHAPE = (_sp, _tp)
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-# Chunk entries per forward; the H2D / D2D payload is FORWARD_TOKENS rows and the metadata 12 B per entry.
+# Chunk entries per forward; the H2D / D2D payload is FORWARD_TOKENS rows (metadata layout: forward_entries).
 FORWARD_CHUNKS = int(os.environ.get("PREFILL_FORWARD_CHUNKS", 1))
 FORWARD_TOKENS = FORWARD_CHUNKS * CHUNK_SIZE
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
@@ -411,7 +412,7 @@ def _d2d_recv(inbound, sockets) -> tuple:
 
 
 def _metadata_record_words(meta: dict) -> torch.Tensor:
-    words = [w for e in meta["entries"] for w in (e.slot, e.start, e.end)]
+    words = forward_metadata_words(meta["entries"])
     if MTP_LEVELS:
         words.append(int(meta["provided_levels"]))
     return torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1)
