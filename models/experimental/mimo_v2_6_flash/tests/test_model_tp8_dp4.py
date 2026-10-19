@@ -13,7 +13,6 @@ Golden activations come from ``reference/make_golden.py`` (MIMO_GOLDEN, default
 Then every user keeps generating greedily, and the text is logged.
 """
 
-import os
 
 import pytest
 import torch
@@ -21,6 +20,7 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 from models.experimental.mimo_v2_6_flash.tests.common import (
+    golden_path,
     DP,
     GALAXY_DEVICE_PARAMS,
     cache_dir,
@@ -33,14 +33,6 @@ from models.experimental.mimo_v2_6_flash.tt.generator import MiMoGalaxyGenerator
 TEACHER_FORCED = 4
 GREEDY_TOKENS = 16
 SHARED_PROMPT = "Tenstorrent Blackhole is a"
-
-
-def golden_path():
-    ckpt_name = os.path.basename(os.path.normpath(model_path()))
-    path = os.environ.get("MIMO_GOLDEN", os.path.join("/home/zni/models/mimo-golden", ckpt_name, "golden_48l.pt"))
-    if not os.path.exists(path):
-        pytest.skip(f"golden file {path} not found; run reference/make_golden.py")
-    return path
 
 
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)

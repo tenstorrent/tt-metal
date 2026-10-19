@@ -10,6 +10,7 @@ import torch
 import ttnn
 from models.experimental.mimo_v2_6_flash.reference.checkpoint import MiMoCheckpoint, default_model_path
 from models.experimental.mimo_v2_6_flash.reference.config import MiMoConfig
+from models.experimental.mimo_v2_6_flash.tt.generator import create_dp_submeshes
 
 # CCL ops keep their semaphores for the program's lifetime. Without an L1_SMALL region they go in the
 # main L1 pool, and after enough distinct prefill shapes they fragment it badly enough to clash with
@@ -43,6 +44,15 @@ def cache_dir(tag):
     return os.path.join(root, os.path.basename(os.path.normpath(model_path())), tag)
 
 
+def golden_path():
+    """Golden hidden states / logits of reference/make_golden.py, kept per checkpoint (MIMO_GOLDEN overrides)."""
+    ckpt_name = os.path.basename(os.path.normpath(model_path()))
+    path = os.environ.get("MIMO_GOLDEN", os.path.join("/home/zni/models/mimo-golden", ckpt_name, "golden_48l.pt"))
+    if not os.path.exists(path):
+        pytest.skip(f"golden file {path} not found; run reference/make_golden.py")
+    return path
+
+
 def pcc(a, b):
     """Pearson correlation. Raises on NaN: callers take min() over scores, and min() would skip a NaN score."""
     a = a.flatten().double()
@@ -55,7 +65,7 @@ def pcc(a, b):
 def dp_submeshes(mesh_device):
     """The 4x8 Galaxy split into its four 1x8 rows: one TP=8 replica per row."""
     assert tuple(mesh_device.shape) == (DP, TP), f"expected a {DP}x{TP} mesh, got {tuple(mesh_device.shape)}"
-    subs = mesh_device.create_submeshes(ttnn.MeshShape(1, TP))
+    subs = create_dp_submeshes(mesh_device, DP)  # also registers the streaming kernels' bank cores per row
     assert len(subs) == DP
     return subs
 

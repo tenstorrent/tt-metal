@@ -5,26 +5,20 @@
 
 Every replica prefills the same four prompts (200 to 1333 tokens), each in chunks of a different size:
 64, 128, 256 and 512 tokens on rows 0-3, so chunks are both shorter and longer than the 128-token window.
-Every chunk after the first reads the earlier ones from the paged KV cache. The test checks:
+Every chunk after the first reads the earlier ones from the paged KV cache: a SWA layer only the window
+before the chunk (kv.SwaBlockTable keeps kv.swa_blocks_per_user blocks per user), a global layer the whole
+context on the chip that owns the user (chunked MLA prefill over the K and 128-wide V caches). The test checks:
 
 * the chunked output against the fp32 reference (which sees the whole prompt at once) and against a
   one-shot prefill of the same prompt on the same row;
-* the K/V the chunks wrote, position by position, against the reference K/V;
+* the K/V the chunks left in the cache against the reference K/V: every position on a global layer's
+  owner chip, the last window on a SWA layer;
 * a few decode steps that read that cache, against the reference.
 
-The caches start out full of random values instead of zeros, so a kernel that reads a block the user
-never wrote, or a key outside the window, shows up as an error. SWA layers get vLLM ``SlidingWindowSpec``
-tables: before each chunk and decode step, every block wholly behind the window points at a shared null
-block (block 0), and blocks past the chunk are not mapped yet.
-
-SWA layers also run a third time, on the tables ``TtMiMoModel`` itself uses (``kv.layer_page_tables``):
-each user gets only the blocks for the window plus one of that row's chunks, and reuses them as the window
-moves, and no fewer than its share of the table width (the pool must be at least as wide as the table).
-On rows 0-2 that is 8 blocks (512 tokens), so the 1333-token prompt cycles through them 2-3 times. That
-run must match the reference, and the no-reuse run, in prefill and decode.
+The caches start out full of random values instead of zeros, so reading a block the user never wrote, or a
+key outside the window, shows up as an error.
 """
 
-import math
 import os
 
 import pytest
@@ -57,7 +51,7 @@ PROMPT_LENS = (200, 517, 960, 1333)
 CHUNKS = (64, 128, 256, 512)  # chunk size on replica rows 0..3
 DECODE_STEPS = 3
 HIDDEN_STD = 0.5
-NULL_BLOCK = 0
+MODES = ("oneshot", "chunked")
 KV_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[os.environ.get("MIMO_KV_DTYPE", "bfp8")]
 
 
@@ -75,38 +69,23 @@ def replicated(plan, t, dtype, layout):
     return ttnn.from_torch(t, device=plan.mesh_device, dtype=dtype, layout=layout, mesh_mapper=plan.replicate())
 
 
-def garbage_cache(plan, num_blocks, head_dim, seed):
+def garbage_cache(plan, num_blocks, dims, seed):
     """[K, V] caches filled with random values: reading a block nobody wrote gives a visible error."""
     g = torch.Generator().manual_seed(seed)
     return [
         ttnn.from_torch(
-            torch.randn(num_blocks, 1, BLOCK, head_dim, generator=g) * 4,
+            torch.randn(num_blocks, 1, BLOCK, dim, generator=g) * 4,
             device=plan.mesh_device,
             dtype=KV_DTYPE,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=plan.replicate(),
         )
-        for _ in range(2)
+        for dim in dims
     ]
 
 
-def swa_physical(slot, block):
-    """Physical block of a SWA slot's logical block: no reuse, so every written position stays readable."""
-    return 1 + slot * LOGICAL_BLOCKS + block
-
-
-def set_swa_row(table, slot, lo, hi, window):
-    """vLLM SlidingWindowSpec row: blocks overlapping [lo - window + 1, hi) are mapped, the rest are null."""
-    first = max(0, lo - window + 1) // BLOCK
-    last = math.ceil(hi / BLOCK)
-    table[:, slot] = NULL_BLOCK
-    for b in range(first, last):
-        table[:, slot, b] = swa_physical(slot, b)
-
-
 class Row:
-    """One replica (Galaxy row) with its layer and one cache + page table per mode: "oneshot", "chunked",
-    and on SWA layers "cyclic" (the model's own reused blocks)."""
+    """One replica (Galaxy row) with its layer and a one-shot and a chunked cache with their page tables."""
 
     def __init__(self, sm, cfg, layer_idx, weights, dims, r):
         self.plan = plan = MeshPlan(sm)
@@ -116,68 +95,91 @@ class Row:
         }
         # Replica 0 converts the weights and fills the cache; the other rows load the cached tensors.
         self.layer = TtMiMoDecoderLayer(plan, cfg, layer_idx, weights, self.ropes, cache_dir=cache_dir("layer_bfp8"))
-        self.window = dims.sliding_window
+        attn = self.layer.attn
         self.chunk = CHUNKS[r]
         n = len(PROMPT_LENS)
-        if self.window is None:
-            tables, num_blocks = kv_lib.page_tables(n, MAX_BATCH, LOGICAL_BLOCKS, TP, self.layer.attn.rep, seed=r)
-            self.tables = {"oneshot": tables, "chunked": tables}
-            num_blocks = {"oneshot": num_blocks, "chunked": num_blocks}
-        else:
-            full = torch.full((TP, MAX_BATCH, LOGICAL_BLOCKS), NULL_BLOCK, dtype=torch.int32)
-            for u in range(n):
-                set_swa_row(full, u, MAX_SEQ, MAX_SEQ, MAX_SEQ)
-            cyclic, cyclic_blocks = kv_lib.layer_page_tables(
-                n, MAX_BATCH, MAX_SEQ, BLOCK, TP, 1, sliding_window=self.window, max_chunk=self.chunk, seed=r
-            )
-            self.tables = {"oneshot": full, "chunked": full.clone().fill_(NULL_BLOCK), "cyclic": cyclic}
-            num_blocks = {"oneshot": 1 + n * LOGICAL_BLOCKS, "chunked": 1 + n * LOGICAL_BLOCKS, "cyclic": cyclic_blocks}
+        self.swa, self.tables = {}, {}
+        for mode in MODES:
+            if attn.is_swa:
+                self.swa[mode] = kv_lib.SwaBlockTable(
+                    n,
+                    MAX_BATCH,
+                    LOGICAL_BLOCKS,
+                    BLOCK,
+                    attn.sliding_window,
+                    kv_lib.swa_blocks_per_user(attn.sliding_window, BLOCK),
+                    min_blocks=LOGICAL_BLOCKS,  # decode here runs paged_update_cache (no SwaDecodeQkv)
+                )
+                self.tables[mode], num_blocks = self.swa[mode].host_table(TP), self.swa[mode].num_blocks
+            else:
+                self.swa[mode] = None
+                self.tables[mode], num_blocks = kv_lib.page_tables(n, MAX_BATCH, LOGICAL_BLOCKS, TP, attn.rep, seed=r)
+        v_dim = attn.v_head_dim if attn.split_users else attn.head_dim
         self.kv = {
-            mode: garbage_cache(plan, num_blocks[mode], dims.head_dim, seed=100 * r + i)
-            for i, mode in enumerate(self.tables)
+            mode: garbage_cache(plan, num_blocks, (attn.head_dim, v_dim), seed=100 * r + i)
+            for i, mode in enumerate(MODES)
         }
-        self.tables_tt = {}
-        for mode in self.tables:
-            self.upload(mode)
+        self.tables_tt = {mode: self._device_table(mode) for mode in MODES}
+        if self.layer.is_moe:
+            self.layer.mlp.set_decode_users(n)
 
-    def upload(self, mode):
-        if mode in self.tables_tt:
-            self.tables_tt[mode].deallocate(True)
-        self.tables_tt[mode] = kv_lib.per_chip(self.plan, self.tables[mode], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+    def _device_table(self, mode):
+        return kv_lib.per_chip(self.plan, self.tables[mode], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+
+    def sync(self, mode):
+        """Copy a SWA block table to its device page table if it changed (ordered with the queued work)."""
+        tbl = self.swa[mode]
+        if tbl is not None and tbl.dirty:
+            self.tables[mode] = tbl.host_table(TP)
+            host = kv_lib.per_chip(self.plan, self.tables[mode], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, False)
+            ttnn.copy_host_to_device_tensor(host, self.tables_tt[mode])
+            tbl.dirty = False
 
     def prefill(self, mode, x, slot, start_pos):
         n = x.shape[0]
         padded = prefill_padded_len(n)
-        if mode == "chunked" and self.window is not None:
-            set_swa_row(self.tables[mode], slot, start_pos, start_pos + padded, self.window)
-            self.upload(mode)
+        window_blocks = None
+        tbl = self.swa[mode]
+        if tbl is not None:
+            tbl.prefill(slot, start_pos, start_pos + n, start_pos + padded)
+            self.sync(mode)
+            if start_pos > 0:
+                window_blocks = tbl.window_blocks(slot, start_pos)
         x_tt = to_tt(torch.nn.functional.pad(x, (0, 0, 0, padded - n)), self.plan)
         out = self.layer.forward_prefill(
-            x_tt, slot, self.tables_tt[mode], self.kv[mode], real_len=n, start_pos=start_pos
+            x_tt,
+            slot,
+            self.tables_tt[mode],
+            self.kv[mode],
+            real_len=n,
+            start_pos=start_pos,
+            window_blocks=window_blocks,
         )
         x_tt.deallocate(True)
         return out, n
 
     def read_kv(self, slot, length, ref_k, ref_v, num_kv_heads):
-        """Worst PCC of the chunked cache's K and V vs the reference over the chips that hold this slot."""
-        perm = meta_rope_permutation(ref_k.shape[-1], self.layer.attn.dims.rope_dim)
+        """Worst PCC of the chunked cache's K and V vs the reference, over the chips that hold this slot and the
+        positions a later step can read (all of them on a global layer, the last window on a SWA layer)."""
+        attn = self.layer.attn
+        perm = meta_rope_permutation(ref_k.shape[-1], attn.dims.rope_dim)
         caches = [[ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(c)] for c in self.kv["chunked"]]
+        first = 0 if attn.sliding_window is None else max(0, length - attn.sliding_window + 1)
+        positions = torch.arange(first, length)
         worst_k, worst_v, pad_max = 1.0, 1.0, 0.0
-        rep = self.layer.attn.rep
+        vd = ref_v.shape[-1]
         for chip in range(TP):
-            if slot % rep != chip % rep:
+            if slot % attn.rep != chip % attn.rep:
                 continue  # the other chip of the pair does not hold this user
-            if self.window is None:
-                blocks = self.tables["chunked"][chip, slot]
-            else:
-                blocks = torch.tensor([swa_physical(slot, b) for b in range(LOGICAL_BLOCKS)])
+            blocks = self.tables["chunked"][chip, slot, positions // BLOCK]
+            assert (blocks != 0).all() or attn.rep > 1, "a readable SWA position sits in the scratch block"
             head = kv_heads_for_chip(chip, TP, num_kv_heads)[0]
-            k = caches[0][chip][blocks, 0].reshape(-1, caches[0][chip].shape[-1])[:length]
-            v = caches[1][chip][blocks, 0].reshape(-1, caches[1][chip].shape[-1])[:length]
-            vd = ref_v.shape[-1]
-            worst_k = min(worst_k, pcc(k, ref_k[head][:, perm]))
-            worst_v = min(worst_v, pcc(v[:, :vd], ref_v[head]))
-            pad_max = max(pad_max, v[:, vd:].abs().max().item())
+            k = caches[0][chip][blocks, 0, positions % BLOCK]
+            v = caches[1][chip][blocks, 0, positions % BLOCK]
+            worst_k = min(worst_k, pcc(k, ref_k[head][positions][:, perm]))
+            worst_v = min(worst_v, pcc(v[:, :vd], ref_v[head][positions]))
+            if v.shape[-1] > vd:
+                pad_max = max(pad_max, v[:, vd:].abs().max().item())
         return worst_k, worst_v, pad_max
 
 
@@ -206,27 +208,21 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
         users.append(dict(x=x, ref=y, hist=hist, ref_k=hist.k.clone(), ref_v=hist.v.clone()))
 
     # ---- prefill: one shot and in chunks, every row enqueued before anything is read
-    chunk_modes = [m for m in rows[0].tables if m != "oneshot"]
     pending = []
     for u, usr in enumerate(users):
         for r, row in enumerate(rows):
-            outs = {"oneshot": [row.prefill("oneshot", usr["x"], u, 0)]}
-            for mode in chunk_modes:
-                outs[mode] = [
-                    row.prefill(mode, usr["x"][s : s + row.chunk], u, s) for s in range(0, usr["x"].shape[0], row.chunk)
-                ]
+            outs = [row.prefill("oneshot", usr["x"], u, 0)]
+            for s in range(0, usr["x"].shape[0], row.chunk):
+                outs.append(row.prefill("chunked", usr["x"][s : s + row.chunk], u, s))
             pending.append((r, u, outs))
 
     worst = dict(chunked=1.0, chunked_delta=1.0, vs_oneshot=1.0, vs_oneshot_delta=1.0, decode=1.0, decode_delta=1.0)
-    worst.update(cyclic=1.0, cyclic_delta=1.0, cyclic_vs_chunked=1.0)  # stay 1.0 on global layers
     for r, u, outs in pending:
         plan, usr = rows[r].plan, users[u]
-        host = {}
-        for mode, chunk_outs in outs.items():
-            host[mode] = torch.cat([plan.to_torch_replicated(o).float()[0, 0, :n] for o, n in chunk_outs])
-            for o, _ in chunk_outs:
-                o.deallocate(True)
-        oneshot, chunked = host["oneshot"], host["chunked"]
+        host = [plan.to_torch_replicated(o).float()[0, 0, :n] for o, n in outs]
+        for o, _ in outs:
+            o.deallocate(True)
+        oneshot, chunked = host[0], torch.cat(host[1:])
         x, y = usr["x"], usr["ref"]
         result = dict(
             chunked=pcc(chunked, y),
@@ -234,13 +230,6 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
             vs_oneshot=pcc(chunked, oneshot),
             vs_oneshot_delta=pcc(chunked - x, oneshot - x),
         )
-        if "cyclic" in host:
-            cyclic = host["cyclic"]
-            result.update(
-                cyclic=pcc(cyclic, y),
-                cyclic_delta=pcc(cyclic - x, y - x),
-                cyclic_vs_chunked=pcc(cyclic - x, chunked - x),
-            )
         for key, value in result.items():
             worst[key] = min(worst[key], value)
         logger.info(
@@ -249,17 +238,17 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
             + f" (one-shot vs ref {pcc(oneshot, y):.5f})"
         )
 
-    # ---- the K/V the chunks wrote
+    # ---- the K/V the chunks left in the cache
     worst_kv = dict(k=1.0, v=1.0, v_pad=0.0)
-    for r, row in enumerate(rows):
+    for row in rows:
         for u, usr in enumerate(users):
             k, v, pad = row.read_kv(u, usr["x"].shape[0], usr["ref_k"], usr["ref_v"], dims.num_kv_heads)
             worst_kv["k"], worst_kv["v"] = min(worst_kv["k"], k), min(worst_kv["v"], v)
             worst_kv["v_pad"] = max(worst_kv["v_pad"], pad)
     logger.info(f"chunked KV vs reference, worst over rows/users/chips: {worst_kv}")
 
-    # ---- decode from each chunked cache; the same inputs on every row, so one reference serves all four
-    decode_pool = {(r, mode): ([], []) for r in range(DP) for mode in chunk_modes}
+    # ---- decode from the chunked cache; the same inputs on every row, so one reference serves all four
+    decode_pool = {r: ([], []) for r in range(DP)}
     for step in range(DECODE_STEPS):
         pos = torch.full((MAX_BATCH,), -1, dtype=torch.int32)
         x = torch.zeros(MAX_BATCH, cfg.hidden_size)
@@ -273,10 +262,11 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
         outs = []
         for row in rows:
             plan = row.plan
-            if row.window is not None:
+            tbl = row.swa["chunked"]
+            if tbl is not None:
                 for u in range(len(users)):
-                    set_swa_row(row.tables["chunked"], u, int(pos[u]), int(pos[u]) + 1, row.window)
-                row.upload("chunked")
+                    tbl.advance(u, int(pos[u]))
+                row.sync("chunked")
             rot = {
                 True: row.ropes["swa"].get_rot_mats(pos.clamp(min=0)),
                 False: row.ropes["full"].get_rot_mats(pos.clamp(min=0)),
@@ -290,27 +280,24 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
                 "owner_mask": kv_lib.per_chip(plan, kv_lib.owner_mask(pos, TP, rep), ttnn.bfloat16, ttnn.TILE_LAYOUT),
             }
             mask = replicated(plan, (pos >= 0).bfloat16().reshape(1, 1, -1, 1), ttnn.bfloat16, ttnn.TILE_LAYOUT)
-            for mode in chunk_modes:
-                outs.append(
-                    (
-                        mode,
-                        row.layer.forward_decode(to_tt(x, plan), rot, cur_pos, row.tables_tt[mode], row.kv[mode], mask),
-                    )
+            outs.append(
+                row.layer.forward_decode(
+                    to_tt(x, plan), rot, cur_pos, row.tables_tt["chunked"], row.kv["chunked"], mask
                 )
-        for i, (mode, out) in enumerate(outs):
-            r = i // len(chunk_modes)
+            )
+        for r, out in enumerate(outs):
             got = rows[r].plan.to_torch_replicated(out).float()[0, 0]
             for u, usr in enumerate(users):
                 xd, rd = usr["x_decode"], usr["ref_decode"]
                 p, pd = pcc(got[u], rd), pcc(got[u] - xd, rd - xd)
                 worst["decode"] = min(worst["decode"], p)
-                decode_pool[(r, mode)][0].append(got[u] - xd)
-                decode_pool[(r, mode)][1].append(rd - xd)
-                logger.info(f"decode step {step} row {r} {mode} slot {u} pos {int(pos[u])}: pcc {p:.5f} delta {pd:.5f}")
+                decode_pool[r][0].append(got[u] - xd)
+                decode_pool[r][1].append(rd - xd)
+                logger.info(f"decode step {step} row {r} slot {u} pos {int(pos[u])}: pcc {p:.5f} delta {pd:.5f}")
     # One decode token's delta is dominated by its MoE output, and a token whose 8th and 9th expert scores
     # are within the router matmul's error (~2^-12 relative) picks a different expert on device. As in
     # test_decoder_tp8_dp4.py, the delta is checked over all of a row's decode tokens together.
-    for got_d, ref_d in decode_pool.values():
+    for r, (got_d, ref_d) in decode_pool.items():
         worst["decode_delta"] = min(worst["decode_delta"], pcc(torch.stack(got_d), torch.stack(ref_d)))
 
     logger.info(f"layer {layer_idx} worst over 4 rows x {len(users)} prompts: {worst}")
@@ -318,8 +305,5 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
     assert worst["chunked"] > 0.995 and worst["decode"] > 0.995, worst
     assert worst["chunked_delta"] > 0.99 and worst["decode_delta"] > 0.99, worst
     assert worst["vs_oneshot"] > 0.995 and worst["vs_oneshot_delta"] > 0.99, worst
-    assert worst["cyclic"] > 0.995 and worst["cyclic_delta"] > 0.99, worst
-    # Same math as the no-reuse run, only other physical blocks: the results should agree to the last bit.
-    assert worst["cyclic_vs_chunked"] > 0.9999, worst
     assert worst_kv["k"] > 0.999 and worst_kv["v"] > 0.999, worst_kv
     assert worst_kv["v_pad"] == 0.0, "V padding columns must stay zero"

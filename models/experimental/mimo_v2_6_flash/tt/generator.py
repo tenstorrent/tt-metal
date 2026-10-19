@@ -19,6 +19,7 @@ from loguru import logger
 import ttnn
 
 from .model import TtMiMoModel
+from .moe_stream import set_dram_bank_cores
 
 
 def create_dp_submeshes(mesh_device, dp):
@@ -26,7 +27,12 @@ def create_dp_submeshes(mesh_device, dp):
     assert rows * cols % dp == 0
     if (rows, cols) != (dp, rows * cols // dp):
         mesh_device.reshape(ttnn.MeshShape(dp, rows * cols // dp))
-    return mesh_device.create_submeshes(ttnn.MeshShape(1, rows * cols // dp))
+    # Bank-reader cores of the streaming MoE kernels: the parent's assignment fits every chip (moe_stream.py).
+    bank_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    submeshes = mesh_device.create_submeshes(ttnn.MeshShape(1, rows * cols // dp))
+    for sm in submeshes:
+        set_dram_bank_cores(sm, bank_cores)
+    return submeshes
 
 
 class MiMoGalaxyGenerator:
@@ -77,7 +83,6 @@ class MiMoGalaxyGenerator:
 
     def prefill(self, prompts, chunk_size=None):
         """prompts: dict user -> 1D token tensor (or a list indexed by user). Returns last-token logits, same keys.
-
         Each prompt runs in chunks of ``chunk_size`` tokens (default: the model's ``max_prefill_chunk``)."""
         as_list = not isinstance(prompts, dict)
         if as_list:
@@ -96,16 +101,20 @@ class MiMoGalaxyGenerator:
             logits[user] = self.models[r].prefill_read(handle)[0]
         return [logits[u] for u in range(len(prompts))] if as_list else logits
 
-    def capture_decode_traces(self):
-        """Capture one decode trace per replica (each on its own row). Decode then replays them."""
+    def capture_decode_traces(self, greedy_only=False):
+        """Capture one decode trace per replica (each on its own row). Decode then replays them.
+        ``greedy_only``: the device-greedy step (decode_steps); decode(mode="topk"/"logits") needs the default."""
         for r, model in enumerate(self.models):
             t0 = time.time()
-            model.capture_decode_trace()
+            model.release_decode_trace()
+            model.capture_decode_trace(greedy_only=greedy_only)
             logger.info(f"replica {r}: decode trace captured in {time.time() - t0:.1f}s")
 
-    def decode(self, tokens, positions, replicas=None):
-        """tokens, positions: dict user -> int. Users not listed stay idle. Returns dict user -> logits.
+    def decode(self, tokens, positions, replicas=None, mode="logits"):
+        """tokens, positions: dict user -> int. Users not listed stay idle.
 
+        mode "logits": returns dict user -> logits [vocab]. mode "topk": dict user -> (values, vocab ids) of
+        the 8 x 32 per-chip candidates, which is all greedy or top-k sampling needs and reads ~1000x less.
         ``replicas`` restricts the step to those rows (default: all four)."""
         replicas = range(self.dp) if replicas is None else replicas
         pending = []
@@ -120,12 +129,54 @@ class MiMoGalaxyGenerator:
             pending.append((r, model.decode_enqueue(tok, pos)))
         out = {}
         for r, handle in pending:
-            logits = self.models[r].decode_read(handle)
+            if mode == "topk":
+                values, ids = self.models[r].decode_read_topk(handle)
+                rows = [(v, i) for v, i in zip(values, ids)]
+            else:
+                rows = self.models[r].decode_read(handle)
             for slot in range(self.users_per_replica):
                 user = r * self.users_per_replica + slot
                 if user in tokens:
-                    out[user] = logits[slot]
+                    out[user] = rows[slot]
         return out
+
+    def decode_steps(self, tokens, positions, steps, replicas=None):
+        """Greedy decode ``steps`` tokens per user with the loop resident on device: each step's argmax feeds
+        the next step's input and positions advance on device, so the host only enqueues trace replays (and
+        the step's cos/sin) and reads the tokens every DECODE_HISTORY steps.
+
+        tokens, positions: dict user -> int (the last token and its position). Returns dict user -> list of
+        ``steps`` generated tokens."""
+        replicas = range(self.dp) if replicas is None else replicas
+        hist = self.models[0].DECODE_HISTORY
+        host = {}
+        for r in replicas:
+            tok = torch.zeros(self.max_batch, dtype=torch.int32)
+            pos = torch.full((self.max_batch,), -1, dtype=torch.int32)
+            for slot in range(self.users_per_replica):
+                user = r * self.users_per_replica + slot
+                if user in tokens:
+                    tok[slot], pos[slot] = tokens[user], positions[user]
+            host[r] = self.models[r].decode_steps_host_inputs(tok, pos, steps)
+        out = {u: [] for u in tokens}
+        for first in range(0, steps, hist):
+            count = min(hist, steps - first)
+            for s in range(first, first + count):
+                for r in replicas:  # all rows have a step in flight
+                    self.models[r].decode_steps_enqueue(host[r], s)
+            for r in replicas:
+                got = self.models[r].decode_steps_read(first, count)
+                for slot in range(self.users_per_replica):
+                    user = r * self.users_per_replica + slot
+                    if user in tokens:
+                        out[user].extend(got[:, slot].tolist())
+        return out
+
+    @staticmethod
+    def greedy_token(candidate):
+        """Argmax token from a ``mode="topk"`` entry."""
+        values, ids = candidate
+        return int(ids[int(values.argmax())])
 
     def generate_greedy(self, prompts, max_new_tokens):
         """Greedy decode for every user; returns (generated token lists, seconds per decode step)."""
