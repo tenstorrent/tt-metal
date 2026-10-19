@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Scratch op-level A/B (not for merge): ttnn.tilize cases of ol/test_tz_ol.py under the device profiler, arms swapped as
+# device files into /work and the installed package (ci_ab/files.txt, ci_ab/v/<arm>), fresh JIT cache per arm, order
+# <arms> forward then backward, twice. The last arm is the A/A copy of the one before it. Prints RAB OPC lines and ELF hashes.
+# usage: run_ol.sh "<arms>"  (e.g. "M B X3 X3b"; an arm ending in b uses the files of the arm without it)
+set +e +o pipefail
+cd /work; export TT_METAL_HOME=/work TRACY_NO_WEB_SERVER=1 R3_REPS=${R3_REPS:-6} AB_NODES_FILE=/work/ci_ab/ol/nodes.txt
+S=/work/ci_ab; OUT=/work/generated/tz; rm -rf $OUT; mkdir -p $OUT
+python3 -c "import tracy" 2>/dev/null || export PYTHONPATH=/work:/work/tools
+SP=$(cd /tmp && env -u PYTHONPATH python3 -c "import ttnn, os; print(os.path.dirname(os.path.dirname(os.path.abspath(ttnn.__file__))))")
+echo "== $(date -u +%FT%TZ) $(git log -1 --format='%h %s' | cut -c1-60) package root $SP $(hostname)"
+OBJ=$(find /work/runtime /opt -name riscv-tt-elf-objcopy -type f 2>/dev/null | head -1)
+suffix() { echo "$1" | awk -F/ '{n=NF; print $(n-3)"/"$(n-2)"/"$(n-1)"/"$n}'; }
+declare -A PK
+while read -r rel; do PK[$rel]=$(find "$SP" -path "*/$(suffix $rel)" -type f 2>/dev/null); done < $S/files.txt
+echo "== package copies found: $(for r in "${!PK[@]}"; do echo ${PK[$r]}; done | wc -w) for $(wc -l < $S/files.txt) files"
+ls /work/ci_ab/ol/test_tz_ol.py > /dev/null && cp /work/ci_ab/ol/test_tz_ol.py /work/tests/ttnn/test_tz_ol.py
+grep -h "def test_tz\|^    \"" /work/tests/ttnn/test_tz_ol.py | sed -n 's/^    "\([^"]*\)".*/tests\/ttnn\/test_tz_ol.py::test_tz[\1]/p' > /work/ci_ab/ol/nodes.txt
+echo "== nodes $(wc -l < /work/ci_ab/ol/nodes.txt)"
+use() {  # use <arm>
+  local v=${1%b}
+  while read -r rel; do
+    [[ -f $S/v/$v/$rel ]] || continue
+    cp "$S/v/$v/$rel" "/work/$rel"; for p in ${PK[$rel]}; do cp "$S/v/$v/$rel" "$p"; done
+  done < $S/files.txt
+  export TT_METAL_CACHE=$OUT/cache_$1; mkdir -p $TT_METAL_CACHE
+}
+elfsum() { for e in $(ls $1/*/kernels/*/*/trisc*/*.elf 2>/dev/null | grep -i tiliz); do $OBJ -O binary -j .text "$e" /tmp/e.bin 2>/dev/null && md5sum < /tmp/e.bin | cut -c1-10; done | sort | md5sum | cut -c1-10; }
+RV=$(echo $1 | tr ' ' '\n' | tac | tr '\n' ' ')
+r=0
+for blk in 1 2; do for a in $1 $RV; do
+  r=$((r+1)); use $a; o=$OUT/${a}_r$r; mkdir -p $o; t0=$(date +%s)
+  timeout -s INT -k 60 1500 python3 -m tracy -r -p --no-web-server -o $o $S/ol/run_nodes.py > $o.log 2>&1
+  echo "== run $r $a rc=$? $(( $(date +%s) - t0 )) s: $(grep -aE '[0-9]+ (passed|failed)' $o.log | tail -1)"
+  grep -a -m3 -E '^(FAILED|ERROR)' $o.log | cut -c1-200
+  python3 $S/ol/sum_op19.py $o $a $r
+  echo "RAB ELF $a r$r $(elfsum $TT_METAL_CACHE) $(ls -d $TT_METAL_CACHE/*/kernels/*/* 2>/dev/null | grep -ci tiliz) tilize builds"
+done; done
+echo "== DONE $(date -u +%T)"
