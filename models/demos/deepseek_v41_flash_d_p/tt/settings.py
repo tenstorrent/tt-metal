@@ -165,7 +165,7 @@ TABLE = {
         "read in place (hidden=H, no x copy)",
     ),
     "EXPERTS_PRECISION": Setting(
-        "full",
+        "glm",
         ("full", "glm"),
         "the routed experts' own precision (tt/experts.py; MATMUL_FIDELITY stays the rest of the model's): full = the "
         "expert matmuls at MATMUL_FIDELITY with FP32_DEST_ACC, the flat op's x / h / y as bf16 tiles; glm (P.4, owner "
