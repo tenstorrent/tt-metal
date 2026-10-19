@@ -1,5 +1,6 @@
 # flat_routed_expert_ttnn (ttnn.bringup.flat_routed_expert, ttnn.bringup.flat_routed_expert_plan)
 
+- Current source: `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/flat_routed_expert` on `mstaletovic/galaxy-unified-k3-v41-combine` @ `f080c8df021` (imported 2026-10-17 in 9003c0fd2ca for deepseek_v41_flash_d_p P.3), synced to `e4d239c6d81` in dc556fa6726 (with combine_rf); was `mstaletovic/mimo-v2-dp` @ `b45a923d73c` (below).
 - Source: `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/flat_routed_expert` on `mstaletovic/mimo-v2-dp` @ `b45a923d73c`. New op: it exists on that branch only, not in ttnn/cpp on this tree (no source op to keep in sync,
   no upstream tests to carry: `tests/source.yaml` is empty).
 - Python: `ttnn.bringup.*` (was `ttnn.experimental.*` on the source branch)
