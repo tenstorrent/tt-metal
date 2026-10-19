@@ -294,6 +294,7 @@ struct Transfer<SrcB, Dst>
  * @brief Describe a MOVD2A transfer.
  *
  * @note MOVD2A does not wait for SrcA bank ownership; stall on SrcAValid | MathIdle before issuing.
+ * @note On Blackhole, disable implied SrcA-format inference (DISABLE_IMPLIED_SRCA_FMT) while using Dst-to-SrcA extraction.
  */
 template <>
 struct Transfer<Dst, SrcA>
