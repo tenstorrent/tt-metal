@@ -19,6 +19,11 @@
 
 #ifdef SDPA_RECIPE_FP32
 constexpr uint32_t sdpa_out_stride = 1;
+#ifndef SDPA_RECIPE_ACCURATE
+// BALANCED's QK fidelity (its PV fidelity is the compute config's). On BF16 Q and K, HiFi3 measures the same
+// error as HiFi4; HiFi2 drops Q's eighth significant bit.
+constexpr auto kBalancedQkFidelity = MathFidelity::HiFi3;
+#endif
 #else
 // Each query-tile row holds the Float32 numerator (plane 0), then a changed group's chunk PV (plane 1).
 constexpr uint32_t sdpa_out_stride = 2;
@@ -299,7 +304,7 @@ void blocked_matmul_and_pack(
 #ifndef SDPA_RECIPE_ACCURATE
         if constexpr (transpose) {
             UNPACK((llk_unpack_AB_matmul(in0_cb, in1_cb, in0_index, in1_index, subblock_w, subblock_h, matmul_stride)));
-            MATH((llk_math_matmul_no_mop<MathFidelity::HiFi4, MM_THROTTLE>(
+            MATH((llk_math_matmul_no_mop<kBalancedQkFidelity, MM_THROTTLE>(
                 in0_cb, in1_cb, dst_index, subblock_w, subblock_h)));
         } else
 #endif
@@ -1295,7 +1300,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         recipe_mm_init(cb_q_in, cb_kt_in, true, actual_sbw, cur_qk_h, in0_block_w);
 #ifdef SDPA_RECIPE_FP32
 #ifndef SDPA_RECIPE_ACCURATE
-        MATH((llk_math_matmul_init_no_mop<MathFidelity::HiFi4, MM_THROTTLE>(
+        MATH((llk_math_matmul_init_no_mop<kBalancedQkFidelity, MM_THROTTLE>(
             cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h)));
 #endif
 #endif
@@ -1343,7 +1348,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                     recipe_mm_reinit(cb_q_in, cb_kt_in, true, actual_sbw, cur_qk_h, in0_block_w);
 #ifdef SDPA_RECIPE_FP32
 #ifndef SDPA_RECIPE_ACCURATE
-                    MATH((llk_math_matmul_reinit_no_mop<MathFidelity::HiFi4, MM_THROTTLE>(
+                    MATH((llk_math_matmul_reinit_no_mop<kBalancedQkFidelity, MM_THROTTLE>(
                         cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h)));
 #endif
 #endif
