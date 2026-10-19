@@ -107,7 +107,7 @@ inline void rand_row() {
     // LREG1 and writes LREG0, independently of SFPMAD's LREG6 result. The
     // speculative prime after the final row is harmless.
     begin_mix_uint32_fast();
-    // DEFAULT follows the configured Dest width; a fixed FP32 store corrupts a 16-bit Dest.
+    // DEFAULT stores FP32 with 32-bit Dest, else the 16-bit format implied by SrcB.
     TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
 }
 

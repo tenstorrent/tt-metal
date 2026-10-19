@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-rand SFPU test. Covers llk_sfpu/ckernel_sfpu_rand.h on Wormhole.
+rand SFPU test. Covers llk_sfpu/ckernel_sfpu_rand.h on Wormhole and Blackhole.
 
 rand has no element-wise golden, so the test checks properties: every element of the
 tile is a draw inside [from, from + scale], and the draws cover the value grid that the
@@ -12,7 +12,7 @@ mode leaves elements outside the range (issue #14213).
 import struct
 
 import torch
-from conftest import skip_for_blackhole, skip_for_quasar
+from conftest import skip_for_quasar
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE
@@ -34,6 +34,8 @@ SENTINEL = 100.0
 FACE_ELEMENTS = ELEMENTS_PER_TILE // 4
 # Draws must reach this fraction of the values the grid can represent in the range.
 MIN_COVERAGE = 0.8
+# A face has only 256 draws, so collisions on a small grid leave fewer distinct values.
+MIN_FACE_COVERAGE = MIN_COVERAGE / 2
 
 
 def _bits(value: float) -> int:
@@ -60,7 +62,6 @@ def _expected_distinct(formats, dest_acc, low, high, count):
     return min(representable, count)
 
 
-@skip_for_blackhole
 @skip_for_quasar
 @parametrize(
     formats=FORMATS,
@@ -123,7 +124,7 @@ def test_sfpu_rand(formats, dest_acc, rand_range):
     face_expected = _expected_distinct(formats, dest_acc, low, high, FACE_ELEMENTS)
     for face in range(4):
         face_distinct = int(torch.unique(faces[face]).numel())
-        assert face_distinct >= MIN_COVERAGE * face_expected / 2, (
+        assert face_distinct >= MIN_FACE_COVERAGE * face_expected, (
             f"face {face} holds only {face_distinct} distinct draws "
             f"(grid admits {face_expected})"
         )

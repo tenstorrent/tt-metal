@@ -131,8 +131,8 @@ void test_rand(const std::shared_ptr<distributed::MeshDevice>& mesh_device, cons
 }  // namespace unit_tests::compute::sfpu::rand_tile
 
 TEST_F(LLKMeshDeviceFixture, TensixComputeRand) {
-    if (this->arch_ != ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Covers the Wormhole rand kernel";
+    if (this->arch_ != ARCH::WORMHOLE_B0 && this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Covers the Wormhole and Blackhole rand kernels";
     }
     for (const bool fp32_dest_acc_en : {false, true}) {
         for (const auto& [from, scale] : {std::pair{2.0f, 1.0f}, std::pair{-3.0f, 2.0f}}) {
