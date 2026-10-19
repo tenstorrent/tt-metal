@@ -1289,7 +1289,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "in0_face_r_dim",
             "in1_face_c_dim",
             "in1_face_r_dim",
-            "implied_math_format",
             "k_dimm",
             "loop_factor",
             "marker",

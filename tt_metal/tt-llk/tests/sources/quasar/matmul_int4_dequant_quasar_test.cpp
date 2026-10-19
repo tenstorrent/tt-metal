@@ -136,8 +136,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         const DataFormat math_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
-        _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM, tensor_shape_A, tensor_shape_B);
+        _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(
+            math_format, math_format, CT_DIM, RT_DIM, tensor_shape_A, tensor_shape_B);
         PROFILER_SYNC();
     }
     {
@@ -323,7 +324,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack1>(srcs_shape, L1_ADDRESS(buffer_S[0]), ckernel::to_underlying(fp32));
             _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(fp32, ckernel::ReluConfig::none());
 
-            cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
+            cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = true;
 
             // UNPACR2 is issued explicitly below, so the auto-loop must not replay it.
             _llk_unpack_srcs_config_<1 /*INSTRN_COUNT*/, 1 /*INSTRN_LOOP_COUNT*/>();

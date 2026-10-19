@@ -14,7 +14,6 @@ from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     PerfRunType,
     Transpose,
@@ -30,7 +29,6 @@ from helpers.test_variant_parameters import (
     ENABLE_2X_FORMAT,
     ENABLE_DIRECT_INDEXING,
     GROUP_KT_DIM,
-    IMPLIED_MATH_FORMAT,
     IN_FACE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
@@ -222,7 +220,6 @@ def test_matmul_int4_dequant_quasar(
         "formats": format,
         "templates": [
             MATH_FIDELITY(MathFidelity.LoFi),
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             ENABLE_2X_FORMAT(format.register_format_hint is not None),
             ENABLE_DIRECT_INDEXING(False),
             DEST_SYNC(DEST_SYNC_MODE),

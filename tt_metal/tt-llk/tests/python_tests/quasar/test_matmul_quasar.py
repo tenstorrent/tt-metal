@@ -665,13 +665,6 @@ def matmul_int4_register_format_hints():
     return [None, DataFormat.Int8_2x] if is_4row_arch() else [None]
 
 
-def matmul_int4_implied_math_formats(register_format_hint):
-    # The 2x attribute is only wired through the implied math format path.
-    if register_format_hint is not None:
-        return [ImpliedMathFormat.Yes]
-    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-
-
 # Int8 activations (A) x Int4 weights (B): the integer core of a wint4_aint8 linear. The
 # unpacker widens the sign-magnitude Int4 weights to Int8, so the FPU runs a plain int8 matmul.
 MATMUL_INT4_FORMAT = InputOutputFormat(
@@ -690,7 +683,6 @@ MATMUL_INT4_FORMAT = InputOutputFormat(
         )
     ),
     register_format_hint=matmul_int4_register_format_hints(),
-    implied_math_format=matmul_int4_implied_math_formats,
     enable_direct_indexing=matmul_enable_direct_indexing,
 )
 def test_matmul_int4(
@@ -699,7 +691,6 @@ def test_matmul_int4(
     dest_sync_mode,
     dest_acc,
     register_format_hint,
-    implied_math_format,
     enable_direct_indexing,
 ):
     test_matmul(
@@ -709,7 +700,6 @@ def test_matmul_int4(
         dest_sync_mode,
         dest_acc,
         MATMUL_INT4_FORMAT,
-        implied_math_format,
         register_format_hint,
         enable_direct_indexing,
         Transpose.No,
