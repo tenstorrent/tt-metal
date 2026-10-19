@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr uint32_t out_page_size = get_named_compile_time_arg_val("out_page_size");
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
-    constexpr uint32_t cb_id = 2;  // compute output CB (c_2)
+    constexpr uint32_t cb_id = 2;
     constexpr uint32_t w_dim = N - 1;
     constexpr uint32_t h_dim = N - 2;
     constexpr uint32_t non_x_rows = num_rows / X;
@@ -41,7 +41,6 @@ void kernel_main() {
         dest_strides[i] = get_common_arg_val<uint32_t>(1 + 2 * N + i);
     }
 
-    // The compute kernel transposed x_dim <-> W. Reflect that in shape + perm.
     {
         uint32_t t = input_shape[x_dim];
         input_shape[x_dim] = input_shape[w_dim];

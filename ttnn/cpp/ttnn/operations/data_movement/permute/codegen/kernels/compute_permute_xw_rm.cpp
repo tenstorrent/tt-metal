@@ -2,12 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute for the single-pass blocked-generic RM permute (W-changing class).
-// Per 32x32 block: tilize x_block_size input rows -> transpose_tile -> pack_untilize
-// into w_block_size output rows.
-//
-// Named CT: x_block_size, w_block_size
-// RT: [num_blocks, 0, 0]
+// Swaps the x_dim and W axes of each 32x32 block; the writer addresses the output with them swapped.
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -34,7 +29,6 @@ void kernel_main() {
     unary_op_init_common(cb_in, cb_out);
 
     for (uint32_t n = 0; n < num_blocks; n++) {
-        // Tilize input via unpack and then pack (asymmetric: x_block_size rows -> 1 tile)
         compute_kernel_lib::tilize<
             1,
             cb_in,
@@ -43,7 +37,6 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1, x_block_size);
 
-        // transpose input
         cb_tilize_exp.wait_front(1);
         transpose_init(cb_tilize);
         pack_untilize_dest_init<1>(cb_out);

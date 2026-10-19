@@ -104,11 +104,7 @@ bool supported_by_codegen(
     return geometry_fits(input, dims, output_mem_config);
 }
 
-bool is_demoted(const Tensor& /*input*/, const ttsl::SmallVector<uint32_t>& /*dims*/) {
-    // No shape is perf-demoted. The gate stays as the routing extension point for a
-    // genuine device regression on a shape the correctness gate admits.
-    return false;
-}
+bool is_demoted(const Tensor& /*input*/, const ttsl::SmallVector<uint32_t>& /*dims*/) { return false; }
 
 tt::tt_metal::TensorSpec permute_output_spec(
     const Tensor& input, const ttsl::SmallVector<uint32_t>& dims, const tt::tt_metal::MemoryConfig& output_mem_config) {

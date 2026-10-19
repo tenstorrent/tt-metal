@@ -31,7 +31,6 @@ void kernel_main() {
     const uint32_t start_block = get_arg_val<uint32_t>(0);
     const uint32_t end_block = get_arg_val<uint32_t>(1);
 
-    // input_shape[N] (rows, W excluded conceptually) and src_strides[N] (in rows).
     uint32_t input_shape[N], src_strides[N];
     for (uint32_t i = 0; i < N; i++) {
         input_shape[i] = get_common_arg_val<uint32_t>(1 + i);
@@ -66,7 +65,6 @@ void kernel_main() {
         const uint32_t w_offset = w_start * element_size;
         const uint32_t w_read_size_bytes = (w_end - w_start) * element_size;
 
-        // Decompose xw_block into multi-dim indices, skipping x_dim and W.
         uint32_t remainder = xw_block;
         for (int32_t d = (int32_t)h_dim; d >= 0; --d) {
             if (d == (int32_t)x_dim) {
