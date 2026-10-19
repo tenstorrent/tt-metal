@@ -440,8 +440,16 @@ ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_old_operand, c
  * operand changes, call pack_init(new_cb_id) before pack_tile.
  *
  * NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense
- * that they are called before the call to the packer function that uses the new configuration. It is
- * recommended to call this function right after other op-specific initialization functions.
+ * that they are called before the call to the packer function that uses the new configuration. With
+ * is_tile_dim_reconfig_en = false: between tilize_init and its execute this call is fine (the packer strides
+ * are re-derived for the layout that init armed); pack_untilize_init / pack_untilize_dest_init,
+ * fast_tilize_init and fast_untilize_init derive their packer strides, X (datum) counter end and L1 offsets
+ * from the output format they are given and this call keeps them as they are (no assert), so when the output
+ * format changes call it before such an init, not between it and its execute; with fp32 dest accumulation do
+ * not call it between fast_tilize_init and its execute even for an unchanged format (it re-enables the 32-bit
+ * DEST reads that init disables). With is_tile_dim_reconfig_en = true this call also re-initialises the
+ * Default pack state after the reconfig (Default MOP, one-face strides, X counter end), so it must come
+ * before any op-specific init, tilize_init included, never between an init and its execute.
  *
  * Return value: None
  *
@@ -479,8 +487,15 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
  * when switching pack output operand.
  *
  * NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense
- * that they are called before the call to the packer function that uses the new configuration. It is
- * recommended to call this function right after other op-specific initialization functions.
+ * that they are called before the call to the packer function that uses the new configuration. With
+ * is_tile_dim_reconfig_en = false: between tilize_init and its execute this call is fine (the packer strides
+ * are re-derived for the layout that init armed); pack_untilize_init / pack_untilize_dest_init,
+ * fast_tilize_init and fast_untilize_init derive their packer strides, X (datum) counter end and L1 offsets
+ * from the output format they are given and this call keeps them as they are (no assert), so when the output
+ * format changes call it before such an init, not between it and its execute (with equal formats the
+ * reconfig itself is skipped). With is_tile_dim_reconfig_en = true the Default pack state is re-initialised
+ * after the reconfig regardless of the formats (Default MOP, one-face strides, X counter end), so that form
+ * must come before any op-specific init, tilize_init included, never between an init and its execute.
  *
  * Return value: None
  *

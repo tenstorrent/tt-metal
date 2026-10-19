@@ -116,6 +116,12 @@ ALWI void reconfig_data_format_srcb(LLKOperand<Format, Shape> /*new_b*/) {
  * Reprograms the packer output data format for a new output operand. Updates src/dst format registers and
  * tile geometry; does not reconfigure tile-dimension addrmod state (is_tile_dim_reconfig_en is not ported).
  *
+ * NOTE: Between experimental::tilize_init and tilize_block this call is fine: the packer strides are
+ * re-derived for the layout that init armed. experimental::pack_untilize_init / pack_untilize_dest_init
+ * derive their packer strides, X (datum) counter end and L1 offsets from the output operand they are given
+ * and this call keeps them as they are (no assert), so when the output format changes call it before such
+ * an init, not between it and its execute.
+ *
  * | Param Type | Name    | Description                                    | Type       | Valid Range | Required |
  * |------------|---------|-------------------------------------------------|------------|-------------|----------|
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                    | bool       |             | False    |

@@ -223,14 +223,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Start of second pack kernel to perform final pack after executing matmul on tilized data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
-        formats_array[run].pack_src,
-        formats_array[run].pack_dst,
-        tile_size); // need to reconfigure data formats_array for next pack, also calls set_packer_strides to readjust strides after pack tilizing
+    // Reconfigure the data formats for the next pack. On Wormhole this also re-derives the (mode-less)
+    // packer strides after the tilize pack; on Blackhole it keeps the armed (Tilize) stride layout.
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(formats_array[run].pack_src, formats_array[run].pack_dst, tile_size);
 
 #ifdef ARCH_BLACKHOLE
-    // Strides + X counter were re-established by the reconfig above, so skip strides here.
-    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+    // The reconfig above kept the Tilize stride layout, so this Default-mode init must program the
+    // Default strides itself.
+    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, false /* skip_packer_strides */>(
         formats_array[run].pack_src, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 #endif
 

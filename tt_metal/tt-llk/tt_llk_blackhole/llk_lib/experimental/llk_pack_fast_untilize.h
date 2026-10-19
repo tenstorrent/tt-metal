@@ -252,6 +252,12 @@ inline void _llk_pack_fast_untilize_init_(const std::uint32_t pack_src_format, c
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
+    // These strides (and the channel-1 Y stride below) are the op's own; a data-format reconfig must
+    // leave them (uninit restores Default). The two full-word writes above program every channel-0
+    // stride (X/Y/Z/W); the only channel-1 stride read, the strided path's Y, is programmed below, and the
+    // contiguous path never steps a channel-1 counter, so this init depends on no stride left by an
+    // earlier init.
+    armed_packer_strides = PackerStrides::OpInit;
 
     constexpr bool is_strided_row = full_ct_dim > block_ct_dim;
     _llk_pack_fast_untilize_configure_addrmod_<is_strided_row>();
@@ -414,7 +420,8 @@ inline void _llk_pack_fast_untilize_block_strided_(
 
 inline void _llk_pack_fast_untilize_uninit_(const std::uint32_t pack_src_format)
 {
-    // set_packer_strides also zeroes the channel-1 Y stride the strided path programs.
+    // set_packer_strides also zeroes the channel-1 Y stride the strided path programs, and records the
+    // Default layout the skip-strides init below asserts.
     set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
     // init owns the X counter and sets it itself; strides are restored just above, so skip them in init.
     _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
