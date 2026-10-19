@@ -133,21 +133,13 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
     }
 
     // ---- constants and per-head scalars (each scalar is a small read with its own barrier)
-#if GDN_FAST
-    uint32_t dtb_bits, nea_bits;
-#endif
     {
         DeviceZoneScopedN("rd_const");
         dataflow_kernel_lib::
             calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
         generate_bcast_col_scalar(eps_l2, l2_eps_bits);
         generate_bcast_col_scalar(eps_norm, norm_eps_bits);
-#if GDN_FAST
-        // FAST: dt_bias / -exp(A) as fp32 bits for the reader's gate math (dtb_s / nea_s are staging only, never
-        // pushed)
-        dtb_bits = read_head_scalar_bits < dtb_fp32 != 0 > (dtb_acc, dtb_s, noc, h);
-        nea_bits = read_head_scalar_bits < nea_fp32 != 0 > (nea_acc, nea_s, noc, h);
-#else
+#if !GDN_FAST
         load_head_scalar<dtb_fp32 != 0>(dtb_acc, dtb_s, noc, h);
         load_head_scalar<nea_fp32 != 0>(nea_acc, nea_s, noc, h);
 #endif
@@ -171,31 +163,6 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
 #if GDN_FAST
     noc.async_read_barrier();
     z_in.push_back(Vt);
-    // FAST: the T gate pairs of user u from rows r0 .. r0+T-1 of the a|b tile(s): a[h] at column h & 31 of entry 0,
-    // b[h] at column (Nv + h) & 31 of entry b_idx (AB2) / entry 0. bf16 -> fp32 bits is exact (<< 16); the gate math
-    // is reader_gdn_decode_step_conv_fast.cpp's, bit for bit. The ab_in slot stays reserved (staging, never pushed).
-    {
-        DeviceZoneScopedN("rd_gates");
-        uint32_t beta_bits[T];
-        uint32_t dec_bits[T];
-        {
-            auto lock = ab_in.scoped_write_lock(1 + AB2);
-            auto p16 = lock.template get_ptr<volatile uint16_t>();
-            const uint32_t b_tile = (AB2 != 0) ? b_idx : 0u;
-            for (uint32_t t = 0; t < T; ++t) {
-                const uint32_t a_bits = static_cast<uint32_t>(p16[tile_elem_index(r0 + t, h & 31u)]) << 16;
-                const uint32_t b_bits =
-                    static_cast<uint32_t>(p16[b_tile * 1024 + tile_elem_index(r0 + t, (Nv + h) & 31u)]) << 16;
-                gate_beta_decay_bits(a_bits, b_bits, dtb_bits, nea_bits, beta_bits[t], dec_bits[t]);
-            }
-        }
-        beta_t.reserve_back(T);
-        fill_scalar_tiles_fast(beta_t, beta_bits, T);
-        beta_t.push_back(T);
-        dec.reserve_back(T);
-        fill_scalar_tiles_fast(dec, dec_bits, T);
-        dec.push_back(T);
-    }
 #else
     // csel[0]: row h & 31 all ones (column extractor of a within its tile), csel[1]: row (Nv + h) & 31 (of b within
     // its)
@@ -319,6 +286,50 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
         w_in.push_back(Vt);
     }
 
+#if GDN_FAST
+    // ---- FAST tail: the compute is busy with phase A / B (about 25 us), so the reader's serial software gate math
+    // runs now instead of ahead of the bulk reads. dt_bias / -exp(A) first (small, own barriers), then the 64 KiB
+    // initial state read is issued, then the T gate pairs of user u are computed while that read is in flight; the
+    // compute needs dec / beta_t only inside the token loop.
+    uint32_t dtb_bits, nea_bits;
+    {
+        DeviceZoneScopedN("rd_scalars");
+        dtb_bits = read_head_scalar_bits < dtb_fp32 != 0 > (dtb_acc, dtb_s, noc, h);
+        nea_bits = read_head_scalar_bits < nea_fp32 != 0 > (nea_acc, nea_s, noc, h);
+    }
+    state_in.reserve_back(KV);
+    read_tiles_at(ring_acc, state_in, noc, blk * KV, KV, 0);
+    // The T gate pairs of user u from rows r0 .. r0+T-1 of the a|b tile(s): a[h] at column h & 31 of entry 0,
+    // b[h] at column (Nv + h) & 31 of entry b_idx (AB2) / entry 0. bf16 -> fp32 bits is exact (<< 16); the gate math
+    // is reader_gdn_decode_step_conv_fast.cpp's, bit for bit. The ab_in slot stays reserved (staging, never pushed).
+    {
+        DeviceZoneScopedN("rd_gates");
+        uint32_t beta_bits[T];
+        uint32_t dec_bits[T];
+        {
+            auto lock = ab_in.scoped_write_lock(1 + AB2);
+            auto p16 = lock.template get_ptr<volatile uint16_t>();
+            const uint32_t b_tile = (AB2 != 0) ? b_idx : 0u;
+            for (uint32_t t = 0; t < T; ++t) {
+                const uint32_t a_bits = static_cast<uint32_t>(p16[tile_elem_index(r0 + t, h & 31u)]) << 16;
+                const uint32_t b_bits =
+                    static_cast<uint32_t>(p16[b_tile * 1024 + tile_elem_index(r0 + t, (Nv + h) & 31u)]) << 16;
+                gate_beta_decay_bits(a_bits, b_bits, dtb_bits, nea_bits, beta_bits[t], dec_bits[t]);
+            }
+        }
+        beta_t.reserve_back(T);
+        fill_scalar_tiles_fast(beta_t, beta_bits, T);
+        beta_t.push_back(T);
+        dec.reserve_back(T);
+        fill_scalar_tiles_fast(dec, dec_bits, T);
+        dec.push_back(T);
+    }
+    {
+        DeviceZoneScopedN("rd_state");
+        noc.async_read_barrier();
+        state_in.push_back(KV);
+    }
+#else
     // ---- the initial state, last: 16 tiles from ring block blk (the writer's block-0 write of this core is ordered
     // after this read completes, since compute cannot produce a state before it is pushed)
     {
@@ -328,4 +339,5 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
         noc.async_read_barrier();
         state_in.push_back(KV);
     }
+#endif
 }

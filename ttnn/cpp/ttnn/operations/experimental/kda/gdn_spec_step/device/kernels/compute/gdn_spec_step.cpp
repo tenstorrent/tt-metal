@@ -427,7 +427,6 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
     scaler.wait_front(1);
     eps_l2.wait_front(1);
     eps_norm.wait_front(1);
-    w_in.wait_front(Vt);
 
     // zs = silu(z) first: it needs only the small early reads, so it overlaps the reader's bulk window / projection /
     // tap reads
@@ -722,6 +721,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
 
     // ---- D. row-batched post: out = rmsnorm(acc) * w * silu(z)
     DeviceZoneScopedN("c_D");
+    w_in.wait_front(Vt);  // only the final gate needs the norm weight (the reader pushes it with the bulk reads)
     DataflowBuffer& acc_fin = ((T - 1) & 1u) ? acc_b : acc_a;
     const uint32_t acc_fin_id = ((T - 1) & 1u) ? acc_b_id : acc_a_id;
     acc_fin.wait_front(Vt);
