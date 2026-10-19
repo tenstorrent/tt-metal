@@ -10,6 +10,7 @@ tests/test_kv_cache_table.py and tests/sparse_mla/test_sparse_mla.py.
 import math
 import os
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -43,7 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reverse_reorder_tensor_chunks,
     rotated_chip_positions,
 )
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     cpu_mla_reference,
@@ -559,6 +560,68 @@ def _rt_profile_forward_ns(mesh_device, run_fn):
     return result, sum(duration_ns for duration_ns, _ in per_program.values())
 
 
+def _poison_tp_latent_slot(mesh_device, tt_ccl, *, seq_len, kvpe_dim, sp_axis, tp_axis, seed):
+    """Overwrite the shared TP latent slot with seeded finite garbage, so a gather that skips a live block (or a
+    captured gather that does nothing) shows up as a mismatch instead of reading earlier, still-correct data. The slot
+    must already exist under this key, i.e. be the one the forward uses."""
+    key = ("tp_latent_slot", seq_len, kvpe_dim, sp_axis, tp_axis, ttnn.bfloat8_b)
+    assert key in tt_ccl.mla_chunked_kv_buffers, f"no TP latent slot under {key}: the poison would miss the forward's"
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    gen = torch.Generator().manual_seed(seed)
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(
+            torch.randn(1, 1, seq_len, kvpe_dim, generator=gen, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        ),
+        tt_ccl.mla_chunked_kv_buffers[key],
+    )
+
+
+def _meta_scalar(mesh_device, value):
+    """A replicated 1-element uint32 [1, 1, 1, 1] DRAM tensor: one field of the chunk metadata."""
+    return ttnn.from_torch(
+        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _new_chunk_metadata(mesh_device, chunk, scale_buf):
+    """Persistent chunk metadata (slot 0, start 0, end chunk) that write_chunk_metadata rewrites in place per step."""
+    return ChunkMetadata(
+        _meta_scalar(mesh_device, 0), _meta_scalar(mesh_device, 0), _meta_scalar(mesh_device, chunk), scale_buf
+    )
+
+
+def _new_layered_kv_cache(config, mesh_device, seq_len, num_layers, num_users, sp_axis, tp_axis, tp_sharded=True):
+    """A num_users x num_layers BFP8 KVPE cache over the whole mesh, TP-deduped when tp_sharded."""
+    return init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=tuple(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_layers,
+        num_users=num_users,
+        tp_axis=tp_axis if tp_sharded else None,
+    )
+
+
+def _natural_cache(mesh_device, cache, tp_sharded, chunk, seq_len):
+    """Every (user, layer) slot of the cache, un-striped to natural token order."""
+    flat, stripes = gather_cache_natural(cache.storage, mesh_device, tp_sharded)
+    nat = torch.empty_like(flat)
+    nat[:, blockcyclic_positions(stripes, chunk, seq_len)] = flat
+    return nat
+
+
 def _run_chunked_prefill(
     request,
     mesh_device,
@@ -575,6 +638,9 @@ def _run_chunked_prefill(
     profile=False,
     tight_cache=False,
     tp_shard_kv=False,
+    return_outputs=False,
+    trace_time=False,
+    poison_tp_latent_slot=False,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
 
@@ -804,6 +870,7 @@ def _run_chunked_prefill(
     # ---- iterate: interleave users by local iter index (exercises cross-user isolation) ----
     det_failures = []
     profiled_ns = 0.0
+    traced_ns = 0.0
     n_iters = max(len(u["group"]) for u in users)
     logger.info(f"Starting DEVICE chunked prefill: up to {n_iters} iters x {num_users} user(s)")
     for i in range(n_iters):
@@ -884,10 +951,75 @@ def _run_chunked_prefill(
                         metadata=kv_pad_metadata,
                     )
 
+                if poison_tp_latent_slot and tp_shard_kv:
+                    _poison_tp_latent_slot(
+                        mesh_device,
+                        mla_tt.tt_ccl,
+                        seq_len=seq_len_cache,
+                        kvpe_dim=kvpe_dim,
+                        sp_axis=sp_axis,
+                        tp_axis=tp_axis,
+                        seed=1000 * u + i,
+                    )
                 if profile:
                     tt_out, fwd_ns = _rt_profile_forward_ns(mesh_device, _forward)
                     profiled_ns += fwd_ns
                     logger.info(f"  user {u} iter {i}: forward {fwd_ns / 1e6:.3f} ms (realtime profiler)")
+                elif trace_time:
+                    # Host wall-clock of traced replays: the eager forward compiles, the capture records it, and each
+                    # replay rewrites the same cache rows with the same data.
+                    tt_out = _forward()
+                    ttnn.synchronize_device(mesh_device)
+                    eager_flat = ttnn.to_torch(
+                        tt_out,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(
+                            mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape
+                        ),
+                    )
+                    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                    tt_replayed = _forward()
+                    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+                    if tp_shard_kv:
+                        # The eager forward left the right latent in the shared slot; poison it so the replay has
+                        # to gather it again for the output check below to pass.
+                        _poison_tp_latent_slot(
+                            mesh_device,
+                            mla_tt.tt_ccl,
+                            seq_len=seq_len_cache,
+                            kvpe_dim=kvpe_dim,
+                            sp_axis=sp_axis,
+                            tp_axis=tp_axis,
+                            seed=7 + i,
+                        )
+                    ttnn.synchronize_device(mesh_device)
+                    # One untimed warm-up replay, then the median of 5 replays 2 s apart; the middle three must agree
+                    # within 2% (a lone spike, e.g. 27.7 vs 22.4 ms, is tolerated at either end). The first replay
+                    # after a capture runs ~2% fast at short prefixes, and back-to-back replays slow down under
+                    # sustained load (K3 512k: 61.7 -> 70.5 ms over 7 with no gap).
+                    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+                    ttnn.synchronize_device(mesh_device)
+                    replay_ns = []
+                    for _ in range(5):
+                        time.sleep(2)
+                        start_ns = time.perf_counter_ns()
+                        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+                        ttnn.synchronize_device(mesh_device)
+                        replay_ns.append(time.perf_counter_ns() - start_ns)
+                    # 2%: at 50k (7.5 ms) the middle three replays have measured up to 1.02% apart.
+                    middle = sorted(replay_ns)[1:-1]
+                    spread = middle[-1] / middle[0] - 1
+                    assert spread <= 0.02, f"traced replays disagree by {spread * 100:.2f}% (> 2%): {replay_ns}"
+                    fwd_ns = middle[len(middle) // 2]
+                    replayed_flat = ttnn.to_torch(
+                        tt_replayed,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(
+                            mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape
+                        ),
+                    )
+                    assert torch.equal(replayed_flat, eager_flat), "traced replay output differs from the eager forward"
+                    ttnn.release_trace(mesh_device, tid)
+                    traced_ns += fwd_ns
+                    logger.info(f"  user {u} iter {i}: forward {fwd_ns / 1e6:.3f} ms (traced replay)")
                 else:
                     tt_out = _forward()
                 out_flat = ttnn.to_torch(
@@ -933,6 +1065,10 @@ def _run_chunked_prefill(
 
     if profile:
         return profiled_ns
+    if trace_time:
+        return traced_ns
+    if return_outputs:
+        return out_accum
 
     if determinism_check:
         if det_failures:
@@ -1539,4 +1675,409 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     assert lower <= total_ns <= upper, (
         f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
         f"(expected {K3_CHUNKED_RT_PERF_NS:,} ns, margin +/- {K3_CHUNKED_RT_PERF_MARGIN * 100:.1f}%)"
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "reference,kwargs",
+    [pytest.param(None, kw, id=f"func-{sid}") for sid, kw in _CHUNKED_SCENARIOS]
+    # CPU-reference inputs (its prefix is the reference KV, not random) on every scenario short enough for the CPU MLA.
+    + [
+        pytest.param("cpu", kw, id=f"cpu-{sid}")
+        for sid, kw in _CHUNKED_SCENARIOS
+        if not sid.startswith(("deep", "prod"))
+    ]
+    + [pytest.param("trace", dict(iters_isl=[5120] * 11), id="trace-production-50k+5k")],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
+@pytest.mark.timeout(0)
+def test_mla_chunked_prefill_tp_sharded_matches_sp_only(
+    request, mesh_device, device_params, reference, kwargs, variant, use_metadata_tensor
+):
+    """The TP-sharded cache is read back through a TP latent gather into the TP-replicated layout, and everything
+    downstream is unchanged, so the output must equal the TP-replicated (sp_only) run bit for bit, on the same inputs.
+    """
+    if reference == "trace" and not variant.mla_trace_defaults and not MLA_CHUNKED_TRACE_PATH:
+        pytest.skip(f"no golden MLA trace recorded for {variant.name}")
+    topology = per_axis_topology(device_params["fabric_config"])
+    outs = {}
+    for tp_shard_kv in (False, True):
+        outs[tp_shard_kv] = _run_chunked_prefill(
+            request,
+            mesh_device,
+            reference=reference,
+            topology=topology,
+            use_metadata_tensor=use_metadata_tensor,
+            tp_shard_kv=tp_shard_kv,
+            return_outputs=True,
+            poison_tp_latent_slot=True,
+            **kwargs,
+        )
+    assert len(outs[False]) == len(outs[True]), "the two layouts returned different user counts"
+    for u, (sp_only, tp_sharded) in enumerate(zip(outs[False], outs[True])):
+        mismatched = (sp_only != tp_sharded).sum().item()
+        assert (
+            mismatched == 0
+        ), f"user {u}: {mismatched} of {sp_only.numel()} output elements differ (tp_sharded vs sp_only)"
+    logger.success(f"✓ tp_sharded output bitwise equal to sp_only ({len(outs[True])} user(s))")
+
+
+# Gates for the TP-sharded cache on a Galaxy 8x4: traced forward overhead vs sp_only of a steady-state layer, with the
+# TP latent gathered serially ahead of the expansion (~0.1 ms at 50k, mostly fixed latency; 0.3-0.6 ms at 256k-512k).
+# Each gate is the worst measured sample plus about 1 pp of run-to-run noise.
+_TP_SHARDED_PERF_POINTS = [
+    pytest.param("kimi_k3", 50 * 1024, 0.025, id="k3-50k"),
+    pytest.param("kimi_k3", 512 * 1024, 0.022, id="k3-512k"),
+    pytest.param("kimi_k2_7", 50 * 1024, 0.030, id="k2_7-50k"),
+    pytest.param("kimi_k2_7", 256 * 1024, 0.030, id="k2_7-256k"),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(l1_small_size=1152, trace_region_size=64 * 1024 * 1024),
+            id="torus-xy-8x4",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant,prefill_len,max_overhead", _TP_SHARDED_PERF_POINTS, indirect=["variant"])
+@pytest.mark.parametrize("use_metadata_tensor", [True], ids=["metadata"])
+@pytest.mark.skipif(not is_blackhole(), reason="Galaxy perf gate")
+@pytest.mark.skipif(
+    not is_high_power(),
+    reason="perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
+)
+@pytest.mark.timeout(0)
+def test_mla_chunked_tp_sharded_traced_perf(
+    request, mesh_device, device_params, variant, prefill_len, max_overhead, use_metadata_tensor
+):
+    """Traced-replay time of one 5k-chunk MLA forward at a long prefix, TP-sharded cache vs TP-replicated (sp_only),
+    on the same build and machine. The TP-sharded path adds one TP latent gather ahead of the expansion."""
+    topology = per_axis_topology(device_params["fabric_config"])
+    # One run per layout; each is the median of 5 traced replays after a warm-up replay, 2 s apart (see trace_time).
+    mean = {
+        tp_shard_kv: _run_chunked_prefill(
+            request,
+            mesh_device,
+            reference=None,
+            topology=topology,
+            iters_isl=[5120],
+            prefill_len=prefill_len,
+            use_metadata_tensor=use_metadata_tensor,
+            tp_shard_kv=tp_shard_kv,
+            trace_time=True,
+        )
+        for tp_shard_kv in (False, True)
+    }
+    overhead = mean[True] / mean[False] - 1
+    logger.info(
+        f"{variant.name} {prefill_len} + 5120 traced forward: sp_only {mean[False] / 1e6:.3f} ms, "
+        f"tp_sharded {mean[True] / 1e6:.3f} ms ({overhead * 100:+.2f}%, gate +{max_overhead * 100:.1f}%)"
+    )
+    assert overhead <= max_overhead, f"tp_sharded overhead {overhead * 100:+.2f}% above +{max_overhead * 100:.1f}%"
+
+
+# Per-chip DRAM saving of the TP-deduped cache, net of the shared TP latent slot, scaled to the model's MLA layers.
+_TP_SHARDED_DRAM_POINTS = [
+    pytest.param("kimi_k3", 512 * 1024, 24, 0.60e9, id="k3-512k"),
+    pytest.param("kimi_k2_7", 256 * 1024, 61, 0.85e9, id="k2_7-256k"),
+]
+
+
+def _dram_allocated_bytes(mesh_device):
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    return view.total_bytes_allocated_per_bank * view.num_banks
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant,seq_len,mla_layers,min_saving", _TP_SHARDED_DRAM_POINTS, indirect=["variant"])
+def test_mla_tp_sharded_dram_saving(mesh_device, device_params, config_only, variant, seq_len, mla_layers, min_saving):
+    """Measured per-chip allocation of one layer's cache slot, TP-replicated vs TP-deduped, and of the shared TP latent
+    slot; the model saves mla_layers * (replicated - deduped) - slot per user slot."""
+    seq_len = -(-seq_len // 5120) * 5120  # whole chunks, as the runner allocates
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = tuple(mesh_device.shape)
+
+    def cache_bytes(tp):
+        before = _dram_allocated_bytes(mesh_device)
+        cache = init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BFP8_TILE,
+            hf_config=config_only,
+            mesh_device=mesh_device,
+            seq_len=seq_len,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=1,
+            num_users=1,
+            tp_axis=tp,
+        )
+        ttnn.synchronize_device(mesh_device)
+        used = _dram_allocated_bytes(mesh_device) - before
+        ttnn.deallocate(cache.storage)
+        return used
+
+    replicated, deduped = cache_bytes(None), cache_bytes(tp_axis)
+    kvpe_dim = config_only.kv_lora_rank + config_only.qk_rope_head_dim
+    before = _dram_allocated_bytes(mesh_device)
+    get_tt_ccl(mesh_device).get_mla_tp_latent_slot(seq_len=seq_len, kvpe_dim=kvpe_dim, sp_axis=sp_axis, tp_axis=tp_axis)
+    ttnn.synchronize_device(mesh_device)
+    slot = _dram_allocated_bytes(mesh_device) - before
+    assert slot > 0, "the TP latent slot was already allocated under this key; its size was not measured"
+    saving = mla_layers * (replicated - deduped) - slot
+    logger.info(
+        f"{variant.name} seq {seq_len}: per-chip cache slot replicated {replicated / 1e6:.1f} MB, deduped "
+        f"{deduped / 1e6:.1f} MB, TP latent slot {slot / 1e6:.1f} MB -> {mla_layers}-layer saving {saving / 1e9:.3f} GB "
+        f"per user slot (gate >= {min_saving / 1e9:.2f} GB)"
+    )
+    assert deduped * 3 < replicated, "the deduped cache is not ~1/4 of the replicated one"
+    assert saving >= min_saving, f"saving {saving / 1e9:.3f} GB below {min_saving / 1e9:.2f} GB"
+
+
+# A captured multi-layer forward replayed with the user and prefix changed between replays, on the TP-sharded
+# cache, must equal the eager forwards bit for bit, and those must equal the TP-replicated (sp_only) eager forwards. Two
+# layers share the TP latent slot, two users share each layer's cache, the user order makes the prefix go long -> short
+# -> long, and user 1's starts are rotated (not chunk-aligned).
+_REPLAY_STEPS = [(0, 0), (1, 0), (0, 5120), (0, 10240), (1, 2560), (0, 15360), (1, 7680)]
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(l1_small_size=1152, trace_region_size=64 * 1024 * 1024),
+            id="torus-xy-8x4",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.timeout(0)
+def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_params, variant):
+    config, weights = request.getfixturevalue("random_weights")
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = tuple(mesh_device.shape)
+    chunk = 5120
+    seq_len_cache = 4 * chunk
+    config.max_seq_len = seq_len_cache
+    num_layers, num_users = 2, 2
+    hidden_size = config.hidden_size
+    kvpe_dim = config.kv_lora_rank + config.qk_rope_head_dim
+    topology = per_axis_topology(device_params["fabric_config"])
+
+    layers = [
+        ttMLA(
+            config,
+            weights,
+            mesh_device,
+            layer_idx=layer,
+            seq_len=seq_len_cache,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            is_balanced=False,
+            topology=topology,
+            is_chunked=True,
+            active_seq_len=chunk,
+            slot_num=num_users,
+            layer_num=num_layers,
+            tp_shard_kv=True,
+        )
+        for layer in range(num_layers)
+    ]
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len_cache, chunk_size_global=chunk)
+    scale_buf = rope_setup.make_llama4_scale_buffer(chunk)
+
+    hidden_dims = [None, None]
+    hidden_dims[tp_axis] = -1
+    hidden_dims[sp_axis] = -2
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=hidden_dims)
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=hidden_dims, mesh_shape=mesh_device.shape)
+
+    def host_hidden(step, layer):
+        gen = torch.Generator().manual_seed(10_000 * step + layer)
+        return torch.randn(1, 1, chunk, hidden_size, generator=gen, dtype=torch.bfloat16)
+
+    def to_device(x):
+        return ttnn.from_torch(
+            x,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+
+    metadata = _new_chunk_metadata(mesh_device, chunk, scale_buf)
+
+    def set_step(user, start):
+        write_chunk_metadata(
+            metadata,
+            (user, start, start + chunk),
+            hf_config=config,
+            mesh_device=mesh_device,
+            chunk_size_global=chunk,
+            sp_axis=sp_axis,
+        )
+
+    def forward_all(cache, hiddens):
+        return [
+            layers[layer].forward(
+                hidden_states=hiddens[layer],
+                rope_tensors=rope,
+                kvpe_cache=cache,
+                actual_start=None,
+                actual_end=None,
+                cache_layer_idx=layer,
+                cache_user_id=0,
+                metadata=metadata,
+            )
+            for layer in range(num_layers)
+        ]
+
+    def poison(seed):
+        _poison_tp_latent_slot(
+            mesh_device,
+            layers[0].tt_ccl,
+            seq_len=seq_len_cache,
+            kvpe_dim=kvpe_dim,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            seed=seed,
+        )
+
+    # Eager reference on a fresh cache.
+    eager = []
+    cache_eager = _new_layered_kv_cache(config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis)
+    for step, (user, start) in enumerate(_REPLAY_STEPS):
+        set_step(user, start)
+        poison(step)
+        outs = forward_all(cache_eager, [to_device(host_hidden(step, layer)) for layer in range(num_layers)])
+        eager.append([ttnn.to_torch(o, mesh_composer=composer) for o in outs])
+
+    # Traced: one capture, replayed once per step with the inputs and metadata rewritten in place.
+    cache_traced = _new_layered_kv_cache(config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis)
+    # Allocated before the capture: anything persistent allocated while the trace is alive could land on the trace's
+    # intermediate buffers and be overwritten by a later replay.
+    cache_sp = _new_layered_kv_cache(
+        config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis, tp_sharded=False
+    )
+    tt_hidden = [to_device(host_hidden(0, layer)) for layer in range(num_layers)]
+    set_step(*_REPLAY_STEPS[0])
+    # Compile the sp_only programs now too (writing step 0's rows of the replicated cache, as its pass will again), so
+    # nothing is compiled -- kernel binaries are allocated -- while the trace is alive.
+    for mla_layer in layers:
+        mla_layer.set_tp_shard_kv(False)
+    forward_all(cache_sp, tt_hidden)
+    for mla_layer in layers:
+        mla_layer.set_tp_shard_kv(True)
+    forward_all(cache_traced, tt_hidden)  # compile; rewrites step 0's rows with step 0's data, as the replay will
+    ttnn.synchronize_device(mesh_device)
+    # Every program is compiled before the capture, and nothing compiles while the trace is alive (a new kernel binary
+    # could land on the trace's buffers). The live-buffer half of that rule is enforced only when run with
+    # TT_METAL_TRACE_ALLOC_TRACKING=1.
+    program_entries = mesh_device.num_program_cache_entries()
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    traced_outs = forward_all(cache_traced, tt_hidden)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+
+    def replay(steps, poison_base):
+        for step in steps:
+            user, start = _REPLAY_STEPS[step]
+            set_step(user, start)
+            for layer in range(num_layers):
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(
+                        host_hidden(step, layer), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper
+                    ),
+                    tt_hidden[layer],
+                )
+            poison(poison_base + step)
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+            for layer in range(num_layers):
+                got = ttnn.to_torch(traced_outs[layer], mesh_composer=composer)
+                mismatched = (got != eager[step][layer]).sum().item()
+                assert mismatched == 0, (
+                    f"step {step} (user {user}, start {start}) layer {layer}: {mismatched} elements of the traced "
+                    "replay differ from the eager forward"
+                )
+
+    try:
+        replay(range(len(_REPLAY_STEPS)), poison_base=100)
+
+        # The same steps eagerly on the TP-replicated cache: the TP-sharded layer and cache indexing must give the same
+        # output.
+        for mla_layer in layers:
+            mla_layer.set_tp_shard_kv(False)
+        for step, (user, start) in enumerate(_REPLAY_STEPS):
+            set_step(user, start)
+            outs = forward_all(cache_sp, [to_device(host_hidden(step, layer)) for layer in range(num_layers)])
+            for layer in range(num_layers):
+                got = ttnn.to_torch(outs[layer], mesh_composer=composer)
+                mismatched = (got != eager[step][layer]).sum().item()
+                assert mismatched == 0, (
+                    f"step {step} (user {user}, start {start}) layer {layer}: {mismatched} elements of the TP-sharded "
+                    "output differ from the TP-replicated (sp_only) output"
+                )
+            # Allocated while the trace is alive: free before any replay (allocation tracking rejects live ones).
+            for out in outs:
+                ttnn.deallocate(out)
+
+        # Back to TP-sharded after the replicated forwards: eager sharded forwards (program-cache hits with patched
+        # runtime arguments) and then the same capture replayed again must still match.
+        for mla_layer in layers:
+            mla_layer.set_tp_shard_kv(True)
+        for step, (user, start) in enumerate(_REPLAY_STEPS):
+            set_step(user, start)
+            poison(300 + step)
+            outs = forward_all(cache_eager, [to_device(host_hidden(step, layer)) for layer in range(num_layers)])
+            for layer in range(num_layers):
+                got = ttnn.to_torch(outs[layer], mesh_composer=composer)
+                assert torch.equal(
+                    got, eager[step][layer]
+                ), f"eager tp_sharded after sp_only: step {step} layer {layer}"
+            for out in outs:
+                ttnn.deallocate(out)
+        replay(range(len(_REPLAY_STEPS)), poison_base=200)
+        assert (
+            mesh_device.num_program_cache_entries() == program_entries
+        ), "a program compiled while the trace was alive"
+    finally:
+        ttnn.release_trace(mesh_device, tid)
+
+    # The caches themselves, un-striped to natural order: the traced, TP-sharded eager and TP-replicated eager runs must
+    # have written identical bytes into every (user, layer) slot, and every slot must hold data. Equal outputs alone
+    # would miss a cache write that ignores the layer, since every layout would read the same wrong slot.
+    nat_eager, nat_traced, nat_sp = (
+        _natural_cache(mesh_device, cache, tp_sharded, chunk, seq_len_cache)
+        for cache, tp_sharded in ((cache_eager, True), (cache_traced, True), (cache_sp, False))
+    )
+    assert torch.equal(nat_traced, nat_eager), "traced and eager TP-sharded caches differ"
+    assert torch.equal(nat_sp, nat_eager), "TP-replicated and TP-sharded caches differ"
+    # Every slot is written, and rows past user 1's extent (12800) are written only in user 0's slots (user 0 writes to
+    # 20480): a transposed (layer, user) slot mapping would put user 0's rows into a user-1 slot.
+    user1_end = max(start for user, start in _REPLAY_STEPS if user == 1) + chunk
+    for user in range(num_users):
+        for layer in range(num_layers):
+            slot = user * num_layers + layer
+            assert nat_eager[slot].abs().sum() > 0, f"cache slot of user {user} layer {layer} was never written"
+            tail = nat_eager[slot, user1_end:].abs().sum()
+            assert (tail == 0) == (user == 1), f"user {user} layer {layer}: rows past {user1_end} in the wrong slot"
+    logger.success(
+        f"✓ traced replay == eager (tp_sharded) == eager (sp_only), outputs and caches bitwise, over {len(_REPLAY_STEPS)} "
+        f"steps x {num_layers} layers, replayed again after the sp_only pass"
     )
