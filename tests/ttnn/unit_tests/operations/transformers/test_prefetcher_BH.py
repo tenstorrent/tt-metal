@@ -612,6 +612,14 @@ def test_tensor_prefetcher_multichip_dram_harvesting(mesh_device):
     k_block_w_tiles = (K_padded // ttnn.TILE_SIZE) // ring_size
     push_page_size = k_block_w_tiles * n_tiles_per_receiver * bytes_per_tile(dtype)
 
+    # Pipes before the weight: replicating it across the mesh runs a Program on the receivers, and pipe
+    # rings cannot be placed on a core a live Program holds.
+    bank_to_receivers = [
+        (bank, bank_receivers_contiguous(bank, recv_per_bank=1, ring_cols=ring_grid_cols(num_dram_banks, ring_size)))
+        for bank in range(num_dram_banks)
+    ]
+    _pipe_space, pipes = make_tensor_prefetcher_pipes(mesh_device, bank_to_receivers, 4 * push_page_size)
+
     torch.manual_seed(0xC0FFEE)
     pt_weight = torch.zeros(1, 1, K_padded, N)
     pt_weight[:, :, :K, :] = torch.randn(1, 1, K, N)
@@ -633,12 +641,6 @@ def test_tensor_prefetcher_multichip_dram_harvesting(mesh_device):
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-
-    bank_to_receivers = [
-        (bank, bank_receivers_contiguous(bank, recv_per_bank=1, ring_cols=ring_grid_cols(num_dram_banks, ring_size)))
-        for bank in range(num_dram_banks)
-    ]
-    _pipe_space, pipes = make_tensor_prefetcher_pipes(mesh_device, bank_to_receivers, 4 * push_page_size)
 
     with tensor_prefetcher_session(mesh_device):
         ttnn.experimental.queue_tensor_prefetcher_request(mesh_device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)

@@ -66,6 +66,11 @@ def prefetch_and_linear(
     Returns:
         The ``ttnn.linear`` output tensor.
     """
+    # Rejected before the prefetch is queued: ttnn.linear would reject a global_cb beside the pipes,
+    # but only after the request went out, and with no matmul to consume it, stopping the prefetcher
+    # waits forever for its acks.
+    if linear_kwargs.get("global_cb") is not None:
+        raise ValueError("prefetch_and_linear delivers through prefetcher_pipes only; it does not take a global_cb")
     device = input_tensor_a.device()
     block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(
         program_config, weight, prefetcher_pipes=prefetcher_pipes

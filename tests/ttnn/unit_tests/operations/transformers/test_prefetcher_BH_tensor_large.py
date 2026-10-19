@@ -1549,6 +1549,57 @@ def test_tensor_prefetcher_gather_in0_pipes_rejects_unpadded_slab(device, expect
         _linear_over_pipes(setup, pipes, weight=unpadded_weight)
 
 
+def test_tensor_prefetcher_gather_in0_pipes_rejects_krow_major_weight_on_padded_ring(device, expect_error):
+    """A legacy K-row-major weight's bank shard holds exactly its K, so it cannot be padded to match a ring
+    whose last in0 shards are padded. K is one tile per ring position, so K still divides into ring_size
+    K-blocks, but they are one tile deep and the matmul reads two-tile in0 shards."""
+    k_tiles_per_shard, recv_per_bank = 2, 2
+    num_dram_banks = device.dram_grid_size().x
+    ring_size = num_dram_banks * recv_per_bank
+    setup = _streaming_gather_in0_setup(
+        device,
+        "qkv_small_bf16",
+        k_tiles_per_shard,
+        1,
+        recv_per_bank,
+        ttnn.bfloat16,
+        ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+        stream_in1=False,
+        k_tiles=ring_size,
+    )
+    krow_major_weight = _make_krow_major_weight(device, setup["pt_weight"], num_dram_banks, ttnn.bfloat16)
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device, setup["bank_to_receivers"], ring_size * setup["entry_size"], single_sender=True
+    )
+    with expect_error(RuntimeError, "cannot be padded to fill the ring"):
+        _linear_over_pipes(setup, pipes, weight=krow_major_weight)
+
+
+def test_prefetch_and_linear_rejects_global_cb_before_queuing(device, expect_error):
+    """ttnn.linear rejects a global_cb beside prefetcher_pipes, but a request queued ahead of it would never
+    be consumed and Stop would wait on its acks, so prefetch_and_linear rejects the global_cb first."""
+    recv_per_bank = 2
+    setup = _streaming_gather_in0_setup(
+        device, "qkv_small_bf16", 1, 1, recv_per_bank, ttnn.bfloat16, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 2 * setup["entry_size"])
+    # A worker sender in the row below the ring, feeding the ring's cores.
+    ring = setup["tt_act"].memory_config().shard_spec.grid
+    gcb = ttnn.create_global_circular_buffer(
+        device, [(ttnn.CoreCoord(0, recv_per_bank), ring)], 2 * setup["entry_size"]
+    )
+    with tensor_prefetcher_session(device):
+        with expect_error(ValueError, "does not take a global_cb"):
+            ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+                setup["tt_act"],
+                setup["tt_weight"],
+                prefetcher_pipes=pipes,
+                program_config=setup["program_config"],
+                memory_config=setup["output_mem_config"],
+                global_cb=gcb,
+            )
+
+
 def test_tensor_prefetcher_gather_in0_pipes_rejects_ring_without_lookahead(device, expect_error):
     """The reader publishes one K-block while the previous one drains, so one block of ring deadlocks."""
     setup = _streaming_gather_in0_setup(
