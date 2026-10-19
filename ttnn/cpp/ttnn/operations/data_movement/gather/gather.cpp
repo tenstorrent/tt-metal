@@ -150,9 +150,7 @@ Tensor post_gather_transform_tensor(
     const auto orig_rank = input_shape.rank();
 
     if (orig_rank == 1) {
-        // A rank-1 tensor in tile layout is padded to (1, 1, 32, W), and squeeze_from_4D cannot drop the padded
-        // height, so reshape straight to the logical shape (as sort, topk and scatter do). A rank-1 tensor's only
-        // dim is its last, so no transpose back is needed.
+        // squeeze_from_4D cannot drop the tile-padded height of (1, 1, 32, W); the only dim is the last one.
         output_tensor = ttnn::reshape(output_tensor, input_shape);
     } else if (orig_rank <= 4) {
         // For tensors of rank 4 and below: first transform back to original representation,

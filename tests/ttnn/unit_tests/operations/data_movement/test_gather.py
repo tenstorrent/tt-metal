@@ -118,14 +118,14 @@ def test_gather_rank1(input_shape, index_shape, dim, device):
     assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
-def test_gather_rank_mismatch_raises(device):
+def test_gather_rank_mismatch_raises(device, expect_error):
     input = torch.randn([64, 4], dtype=torch.bfloat16)
     index = torch.randint(0, 64, [32], dtype=torch.int64)
 
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
 
-    with pytest.raises(RuntimeError, match="same number of dimensions"):
+    with expect_error(RuntimeError, "same number of dimensions"):
         ttnn.gather(ttnn_input, 0, index=ttnn_index)
 
 
