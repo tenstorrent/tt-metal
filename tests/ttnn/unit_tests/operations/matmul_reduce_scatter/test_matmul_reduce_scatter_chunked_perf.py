@@ -98,6 +98,10 @@ SWEEPS = {
         lambda: [None, (9, 1, 2), (8, 1, 2), (10, 1, 2), (12, 1, 2)],
     ),
     "synth_auto": (((1, 1, 8192, 4096), (4096, 8192)), BF16, True, lambda: [None]),
+    # the three LOOSE perf cases unchunked (regression check against the pre-chunk op: run this sweep on both)
+    "loose_kimi": (((1, 1, 640, 2048), (2048, 7168)), BF8, False, lambda: [None]),
+    "loose_glm": (((1, 1, 640, 4096), (4096, 6144)), BF8, False, lambda: [None]),
+    "loose_mimo": (((1, 1, 2048, 2048), (2048, 4096)), BF8, True, lambda: [None], -2),
     # stage peel (MRS_ABLATE; outputs are wrong by design): full, no DRAM, + no multicast, + no compute (transport)
     "kimi_ablate": (((1, 1, 640, 2048), (2048, 7168)), BF8, False, lambda: _ablate_configs(_KIMI_ABL)),
 }
@@ -176,21 +180,23 @@ def _traced_durations(mesh, run):
 
 @pytest.mark.parametrize("sweep", SELECTED)
 def test_chunk_sweep(mesh, sweep):
-    (a_shape, w_shape), wdt, fp32_acc, configs = SWEEPS[sweep]
+    (a_shape, w_shape), wdt, fp32_acc, configs, *rest = SWEEPS[sweep]
+    sd = rest[0] if rest else -1
     a = random_stacked(mesh, a_shape, torch.bfloat16, seed=0)
     w = quantize_like_device(random_stacked(mesh, w_shape, torch.bfloat16, seed=1, scale=w_shape[0] ** -0.5), wdt)
     ta = create_ttnn_input_tensor(a, mesh, dtype=BF16, layout=ttnn.TILE_LAYOUT)
     tw = create_ttnn_input_tensor(w, mesh, dtype=wdt, layout=ttnn.TILE_LAYOUT)
-    expected = pytorch_matmul_reduce_scatter(a, w, 1, -1).double()
+    expected = pytorch_matmul_reduce_scatter(a, w, 1, sd).double()
     ref_norm = [expected[0, d].pow(2).mean().sqrt().item() for d in range(4)]
     ckc = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=fp32_acc)
     run = lambda: matmul_reduce_scatter(
-        ta, tw, cluster_axis=1, scatter_dim=-1, topology=ttnn.Topology.Ring, num_links=2, compute_kernel_config=ckc
+        ta, tw, cluster_axis=1, scatter_dim=sd, topology=ttnn.Topology.Ring, num_links=2, compute_kernel_config=ckc
     )
     os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
-    old_sets, old_kb, old_kbc = desc.ZONE_SETS, desc.KB_MAX, desc.KB_MAX_CHUNKED
+    # getattr: the sweep also runs on the pre-chunk op (no chunk knobs) for the regression baseline
+    old_sets, old_kb, old_kbc = getattr(desc, "ZONE_SETS", 2), desc.KB_MAX, getattr(desc, "KB_MAX_CHUNKED", 32)
     for cfg in configs():
-        rec = dict(sweep=sweep, M=a_shape[-2], K=a_shape[-1], N=w_shape[-1], forced=cfg)
+        rec = dict(sweep=sweep, M=a_shape[-2], K=a_shape[-1], N=w_shape[-1], scatter_dim=sd, forced=cfg)
         pkg._FORCE_CHUNKS = None if cfg is None else cfg[:2]
         desc.ZONE_SETS = old_sets if cfg is None else cfg[2]
         desc.KB_MAX = old_kb if cfg is None or len(cfg) < 4 else cfg[3]

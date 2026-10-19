@@ -390,3 +390,13 @@ Considered but not tested (cap): half-sync DEST / bf16 matmul DEST. These touch 
 | no helper (CB / TRISC sync family) | capability | No API offers a non-blocking "have N pages landed?" check on a CB from UNPACK, or a broadcast of a run-time decision from UNPACK to MATH/PACK. Without it, all three TRISCs cannot take the same data-dependent branch, and that branch is what lets the fusion skip late arrivals instead of stalling the FPU. Fusing every entry unconditionally measured 123.2–125.3 µs, a regression. | 123200 (always fuse, blocking) | 116600–117200 | `matmul_reduce_scatter_compute.cpp:119` (`arrivals_landed`) |
 
 All ideas measured: 1 graduated (`fused_finish`), 1 null (`entry0_ramp`). Focus is 2.3 µs faster (118.9–119.2 → 116.7–116.9 µs), GLM is 3.3 µs faster, and no guard cell regressed.
+
+## Post-run — output chunks for shapes that miss L1 (branch `malimpic/2026_10_15_1521_run1_mmrs_chunked`)
+- **What**: the per-chip block is cut into `n_m × n_n` chunks; every kernel walks chunk × (G entries) in the one program, with grid, P and zones sized per chunk. Zones are reused across chunks (`ZONE_SETS = 2`): a port sends chunk c only after the downstream consumed chunk c − 2. Each matmul reader reports consumed chunks to its chip's port that sends back upstream, which forwards a fabric credit and polls while it waits for its own. The resident operand's axis is the outer chunk loop.
+- **Planner**: 1 chunk first (unchanged plans). Otherwise a fitted cost model (`chunk_cost_us`) ranks every candidate ≤ 256 chunks; chunked plans cap the K-block at 32. The staging tensor is sized exactly per call (`MRS_STAGING=grow` keeps the old cache).
+- **Correctness**: `test_matmul_reduce_scatter_chunked.py` 17/17 (Kimi forced splits incl. ragged / 1 zone set / Linear, MiMo scatter −2, Wan2.2 FF2 720p auto and forced). Acceptance 65/65 (per placement group). Golden 1041/1041 (EVAL_CAPTURE_L1=0).
+- **Perf** (QB2 1x4 ring, traced, `perf_experiments/chunks/`):
+  - Fitting shapes unchanged: focus 116.8 → 117.0 µs (median of 4 interleaved A/B runs), GLM 182.9 → 182.7, MiMo 206.1 → 206.9 (noise).
+  - Wan2.2 FF2 720p (9472×3456×5120 bf16, did not fit): auto 9×1, 2.04 ms, rel-RMS 0.0051.
+  - 8192×4096×8192 bf16: auto 8×4, 3.19 ms (first-fit 1×4: 11.5 ms).
+  - Chunk overhead is linear: Kimi split n, 98 + 17.6·C µs (1–8 chunks). Each chunk re-walks Kt/kb K-steps (~1.4 µs each) and re-does every per-core port handoff (~0.29 µs each); transport alone grows 60 → 213 µs from 1 to 8 chunks.
