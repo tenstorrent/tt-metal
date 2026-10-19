@@ -20,6 +20,7 @@ Requires QWEN36_SPEC_PREFIX_CACHE=1 (default) and QWEN36_PREFIX_CACHE_DEBUG=1 to
 
 import math
 import os
+from collections import OrderedDict
 
 import pytest
 import torch
@@ -162,7 +163,7 @@ def test_spec_prefix_cache_state(mesh_device, reset_seeds, ensure_gc):
     assert cache is not None, "spec warmup did not build the GdnPrefixStateCache (QWEN36_SPEC_PREFIX_CACHE=1?)"
 
     tok = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
-    h = Harness(cls, kv, _prompt_pool(tok, 30000))
+    h = Harness(cls, kv, _prompt_pool(tok, 16384))  # 16384 is a mapped Frankenstein length; needs ~10.2k tokens
     failures = []
 
     def reference(toks):
@@ -172,7 +173,20 @@ def test_spec_prefix_cache_state(mesh_device, reset_seeds, ensure_gc):
         finally:
             model._prefix_cache = cache
 
-    def scenario(tag, a_toks, a_blocks, b_toks, shared_blocks, start_pos, expect_hit):
+    def snapshot_state():
+        by_pos = {k: set(v) for k, v in cache._by_pos.items()}
+        return OrderedDict(cache._lru), by_pos, list(cache._positions), list(cache._free)
+
+    def restore_state(st):
+        # Bookkeeping only: snapshot slots of kept entries are never overwritten (free slots are reused, kept ones are not).
+        cache._lru = OrderedDict(st[0])
+        cache._by_pos = {k: set(v) for k, v in st[1].items()}
+        cache._positions = list(st[2])
+        cache._free = list(st[3])
+
+    def scenario(tag, a_toks, a_blocks, b_toks, shared_blocks, start_pos, expect_hit, chain=False):
+        if not chain:  # independent scenarios: start from exactly the snapshot table left by request A
+            restore_state(after_a)
         hits0, skipped0 = cache.stats["hits"], cache.stats["tokens_skipped"]
         hit = h.prefill(b_toks, h.blocks_for(len(b_toks), shared_blocks), start_pos, 0)
         got_hit = cache.stats["hits"] > hits0
@@ -190,6 +204,7 @@ def test_spec_prefix_cache_state(mesh_device, reset_seeds, ensure_gc):
     a_blocks = h.blocks_for(len(A))
     h.prefill(A, a_blocks, 0, 0)  # request A: saves the last full-chunk snapshot (4096)
     logger.info(f"snapshots after A: {sorted(cache._positions)}")
+    after_a = snapshot_state()
 
     # divergence exactly on a 128 boundary (4352 = 34 * 128): resume must be <= 4224, here the 4096 snapshot
     B = shared + h.text(600)
@@ -206,6 +221,6 @@ def test_spec_prefix_cache_state(mesh_device, reset_seeds, ensure_gc):
     # second request with the same start: the learn snapshot taken by the first one at <= cap now exists
     E = shared[:2560] + h.text(1200)
     scenario("learn-1st", A, a_blocks, E, a_blocks[:40], 2560, False)
-    scenario("learn-2nd", A, a_blocks, shared[:2560] + h.text(900), a_blocks[:40], 2560, True)
+    scenario("learn-2nd", A, a_blocks, shared[:2560] + h.text(900), a_blocks[:40], 2560, True, chain=True)
     logger.info(f"cache stats: {cache.stats}")
     assert not failures, "; ".join(failures)
