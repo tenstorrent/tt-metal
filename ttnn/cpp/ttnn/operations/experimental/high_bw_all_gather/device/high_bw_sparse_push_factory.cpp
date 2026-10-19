@@ -25,7 +25,7 @@ constexpr uint32_t kDirections = 4;  // E, W, N, S: one fabric channel per (link
 constexpr uint32_t kMaxChannels = 8;
 // Senders per channel. 0 = one sender owns the router connection directly; K >= 1 = K senders feed a fabric mux
 // core that owns it. Prototype knob: SPARSE_PUSH_MUX_K.
-constexpr uint32_t kDefaultSendersPerChannel = 4;
+constexpr uint32_t kDefaultSendersPerChannel = 2;
 constexpr uint32_t kPacketSlots = 8;
 constexpr uint32_t kMetaEntryBytes = 16;
 constexpr uint32_t kBlockWords = 256;  // stream words per refill
