@@ -30,6 +30,7 @@
 #include <deque>
 #include <limits>
 
+#include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
@@ -1266,6 +1267,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
+    // ring_mla's BALANCED recipe keeps its running O and row sums in fp32 CBs that unpack straight to DEST
+    // (SDPA_FP32_STATE in compute_streaming.hpp); STANDARD and FAST keep them in bf16 with fp32 dest.
+    const bool fp32_running_state = fp32_dest_acc_en && tensor_args.v_shares_k_buffer() &&
+                                    !variant.resident_ring_state() &&
+                                    args.precision == ttnn::transformer::SDPAPrecision::BALANCED;
 
     CoreCoord grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                           : mesh_device->compute_with_storage_grid_size();
@@ -1361,7 +1367,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // build the next V while compute consumed the current one; with in-place latent V (kt_inplace_v)
     // there is no V entry, but the 3rd K^T slot still buys prefetch slack that hides the reader's
     // NoC latency tail — measured ~+3pt math util on the dv512 q32 shape vs double-buffering.
-    uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : 2);
+    // Latent V holds a K slot until its P.V is done, so it triple-buffers; the fp32 running state needs that L1.
+    uint32_t k_tiles = Sk_chunk_t * DHt * ((v_shares_k_buffer && !fp32_running_state) ? 3 : 2);
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -1402,7 +1409,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    TT_ASSERT(variant.resident_ring_state() || !fp32_dest_acc_en);  // validate_on_program_cache_miss rejects it
+    // The streaming kernel is the only non-recipe compute path on this stack. ring_mla's precision recipes (latent V)
+    // run it with fp32 dest accumulation; other fp32-dest calls are routed to the ACCURATE ring recipe before here.
+    const bool use_streaming_compute = true;
+    TT_ASSERT(variant.resident_ring_state() || !fp32_dest_acc_en || v_shares_k_buffer);  // validated on cache miss
 
     // K split: when the (head, Q chunk) units leave the grid idle, the rows are divided into bands that each hold
     // every unit once and attend to a slice of every ring iteration's K chunks; the last band merges. Bands are whole
@@ -1934,9 +1944,17 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     tt::DataFormat stats_df = im_df;
     // Use fp32 precision for cb_sum_A/B when fp32 accumulation is enabled so
     // the running softmax denominator doesn't lose precision with K-iter rounding.
-    tt::DataFormat sum_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat sum_df = ((fp32_dest_acc_en && !use_streaming_compute) || fp32_running_state)
+                                ? tt::DataFormat::Float32
+                                : tt::DataFormat::Float16_b;
+    const tt::DataFormat out_im_df = fp32_running_state ? tt::DataFormat::Float32 : im_df;
+    const uint32_t out_im_tile_size = tt::tile_size(out_im_df);
+    if (fp32_running_state) {
+        defines["SDPA_FP32_STATE"] = "1";
+    }
     // Use fp32 precision for cb_qk_im when fp32 accumulation is enabled so operations on QK retain precision.
-    tt::DataFormat qk_im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat qk_im_df =
+        (fp32_dest_acc_en && !use_streaming_compute) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
@@ -2015,12 +2033,18 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df, ComputeCb::ColumnIdentity);
 
     const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df, ComputeCb::QkIm);
-    const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df, ComputeCb::OutImA);
-    const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df, ComputeCb::OutImB);
+    const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, out_im_tile_size, out_im_df, ComputeCb::OutImA);
+    const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, out_im_tile_size, out_im_df, ComputeCb::OutImB);
     const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df, ComputeCb::MaxA);
     const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df, ComputeCb::MaxB);
     const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df, ComputeCb::SumA);
     const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df, ComputeCb::SumB);
+    // fp32 running state: one fp32 tile holding the current row's broadcast correction (compute_streaming.hpp).
+    const uint32_t cb_fp32_state_col =
+        fp32_running_state ? allocate_tile_cb(1, tt::tile_size(tt::DataFormat::Float32), tt::DataFormat::Float32) : 0;
+    if (fp32_running_state) {
+        defines["SDPA_FP32_STATE_COL_CB"] = std::to_string(cb_fp32_state_col);
+    }
     const uint32_t cb_exp_max_diff =
         allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df, ComputeCb::ExpMaxDiff);
 
@@ -3117,11 +3141,19 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
     compute_kernel.defines = kernel_defines;
-    compute_kernel.config = ComputeConfigDescriptor{
+    ComputeConfigDescriptor compute_config{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .math_approx_mode = math_approx_mode,
     };
+    if (fp32_running_state) {
+        // The state is only ever copied to DEST (exact fp32); the FPU source registers would truncate it to 19 bits.
+        compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        for (const uint32_t cb : {cb_out_im_A, cb_out_im_B, cb_sum_A, cb_sum_B, cb_fp32_state_col}) {
+            compute_config.unpack_to_dest_mode[cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
+    compute_kernel.config = std::move(compute_config);
     if (ksplit_count > 1) {
         // Code size, not correctness: at O3 the merge epilogue grows the q128 compute binaries past the 70,656 B
         // kernel config buffer ("Program size too large"). O2 cuts the three TRISC binaries by ~30%.

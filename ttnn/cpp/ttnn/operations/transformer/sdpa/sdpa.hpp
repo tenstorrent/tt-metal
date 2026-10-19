@@ -177,7 +177,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
-    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    // STANDARD, BALANCED or FAST fix the kernel's numerics (no compute_kernel_config); FAST expects prepare_sdpa_input.
+    std::optional<SDPAPrecision> precision = std::nullopt);
 
 struct ExecuteExpRingJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(

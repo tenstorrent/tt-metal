@@ -23,6 +23,9 @@
 #include "api/compute/experimental/sdpa_sub_custom.h"
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/debug/kernel_profiler.hpp"
 
@@ -574,6 +577,9 @@ void sub_exp_block_bcast_cols(
         } else {
             pack_contiguous_rows(inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
         }
+#ifdef SDPA_FP32_STATE
+        PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(reduce_cb)));
+#endif
         configure_single_tile_pack(reduce_cb);
         {
             uint32_t dst_index = 0;
@@ -593,6 +599,9 @@ void sub_exp_block_bcast_cols(
                 }
             }
         }
+#ifdef SDPA_FP32_STATE
+        PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(inout_cb)));
+#endif
     }
 
     tile_regs_release();
@@ -651,6 +660,132 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
  * ob_q_subblock controls read offset for out_in_cb and bcast_cb (0 when popped row-by-row).
  * sum_q_subblock controls read offset for sum_in_cb (cumulative when not popped per-row).
  */
+#ifdef SDPA_FP32_STATE
+// ---------------------------------------------------------------------------------------------------------------
+// fp32 running state (ring_mla precision recipes): O and the row sums live in fp32 CBs that unpack straight to DEST
+// (UnpackToDestFp32). Every read of them goes copy -> DEST and multiplies on the SFPU, so the state never passes
+// through the 19-bit source registers; P.V and the corrections are added onto it by packer L1 accumulation in fp32.
+// The ring checkpoint CBs stay bf16 (their copies take the source-register path, which is exact for bf16).
+// ---------------------------------------------------------------------------------------------------------------
+#ifndef SDPA_FP32_STATE_COL_CB
+#define SDPA_FP32_STATE_COL_CB 0
+#endif
+// One fp32 tile CB (unpack-to-DEST) that holds the current row's column factor broadcast across the tile, so the
+// state tiles and the factor load through the same unpacker configuration with no per-batch format switches.
+constexpr uint32_t fp32_state_col_cb = SDPA_FP32_STATE_COL_CB;
+
+ALWI void fp32_state_stage_col(uint32_t col_cb, uint32_t col_index) {
+    CircularBuffer(fp32_state_col_cb).reserve_back(1);
+    tile_regs_acquire();
+    reconfig_data_format(col_cb, col_cb);
+    unary_bcast_init<BroadcastType::COL>(col_cb);
+    unary_bcast<BroadcastType::COL>(col_cb, col_index, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(fp32_state_col_cb)));
+    PACK((llk_pack_reconfig_l1_acc(0)));
+    configure_single_tile_pack(fp32_state_col_cb);
+    pack_tile(0, fp32_state_col_cb);
+    tile_regs_release();
+    CircularBuffer(fp32_state_col_cb).push_back(1);
+    CircularBuffer(fp32_state_col_cb).wait_front(1);
+}
+
+template <uint32_t dst_size>
+ALWI void fp32_state_scale_tiles(
+    uint32_t in_cb,
+    uint32_t in_base,
+    uint32_t count,
+    uint32_t col_cb,
+    uint32_t col_index,
+    uint32_t out_cb,
+    uint32_t out_base,
+    bool l1_acc) {
+    // out[out_base + t] (+)= in[in_base + t] * bcast_cols(col[col_index]) for t < count, in fp32 DEST on the SFPU.
+    static_assert(dst_size >= 2);
+    constexpr uint32_t batch = dst_size - 1;
+    fp32_state_stage_col(col_cb, col_index);
+    // The ring checkpoint CBs are bf16 (source-register path); the state CBs and the factor are fp32 (to DEST).
+    const bool in_is_fp32 = true UNPACK(&&(unpack_dst_format[in_cb] == (uint32_t)DataFormat::Float32))
+        MATH(&&(unpack_dst_format[in_cb] == (uint32_t)DataFormat::Float32));
+    reconfig_data_format_srca(fp32_state_col_cb);
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(out_cb)));
+    configure_single_tile_pack(out_cb);
+    PACK((llk_pack_reconfig_l1_acc(l1_acc ? 1 : 0)));
+    for (uint32_t base = 0; base < count; base += batch) {
+        const uint32_t n = (base + batch <= count) ? batch : count - base;
+        tile_regs_acquire();
+        copy_init(fp32_state_col_cb);
+        copy_tile(fp32_state_col_cb, 0, 0);
+        if (!in_is_fp32) {
+            reconfig_data_format_srca(in_cb);
+            copy_init(in_cb);
+        }
+        for (uint32_t j = 0; j < n; ++j) {
+            copy_tile(in_cb, in_base + base + j, 1 + j);
+        }
+        if (!in_is_fp32) {
+            reconfig_data_format_srca(fp32_state_col_cb);
+        }
+        mul_binary_tile_init();
+        for (uint32_t j = 0; j < n; ++j) {
+            mul_binary_tile(1 + j, 0, 1 + j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < n; ++j) {
+            pack_tile<true>(1 + j, out_cb, out_base + base + j);
+        }
+        tile_regs_release();
+    }
+    PACK((llk_pack_reconfig_l1_acc(0)));
+    CircularBuffer(fp32_state_col_cb).pop_front(1);
+}
+
+template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size>
+void salad_correct_fp32(
+    uint32_t out_in_cb,
+    uint32_t sum_in_cb,
+    uint32_t bcast_cb,
+    uint32_t out_out_cb,
+    uint32_t sum_out_cb,
+    uint32_t ob_q_subblock,
+    uint32_t sum_q_subblock,
+    uint32_t write_q_subblock) {
+    const uint32_t ob_row_base = ob_q_subblock * sbh_t;
+    const uint32_t sum_row_base = sum_q_subblock * sbh_t;
+    const uint32_t write_row_base = write_q_subblock * sbh_t;
+    CircularBuffer(out_in_cb).wait_front((ob_q_subblock + 1) * sbh_t * sbw_t);
+    CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * sbh_t);
+    CircularBuffer(bcast_cb).wait_front((ob_q_subblock + 1) * sbh_t);
+    for (uint32_t i = 0; i < sbh_t; ++i) {
+        fp32_state_scale_tiles<dst_size>(
+            out_in_cb,
+            (ob_row_base + i) * sbw_t,
+            sbw_t,
+            bcast_cb,
+            ob_row_base + i,
+            out_out_cb,
+            (write_row_base + i) * sbw_t,
+            /*l1_acc=*/true);
+    }
+    for (uint32_t i = 0; i < sbh_t; ++i) {
+        fp32_state_scale_tiles<dst_size>(
+            sum_in_cb,
+            sum_row_base + i,
+            1,
+            bcast_cb,
+            ob_row_base + i,
+            sum_out_cb,
+            write_row_base + i,
+            /*l1_acc=*/true);
+    }
+    // Back to the bf16 intermediates the rest of the step assumes (bcast_cb is a bf16 stats CB).
+    reconfig_data_format(bcast_cb, bcast_cb);
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(bcast_cb)));
+}
+#endif
+
 template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size>
 void salad_correct_fused(
     uint32_t out_in_cb,
@@ -661,6 +796,11 @@ void salad_correct_fused(
     uint32_t ob_q_subblock,
     uint32_t sum_q_subblock,
     uint32_t write_q_subblock) {
+#ifdef SDPA_FP32_STATE
+    salad_correct_fp32<sbh_t, sbw_t, dst_size>(
+        out_in_cb, sum_in_cb, bcast_cb, out_out_cb, sum_out_cb, ob_q_subblock, sum_q_subblock, write_q_subblock);
+    return;
+#endif
     constexpr uint32_t tiles_per_row = sbh_t;
     constexpr uint32_t tiles_per_column = sbw_t;
     constexpr uint32_t col_batch = (dst_size / sbh_t < sbw_t) ? dst_size / sbh_t : sbw_t;
@@ -755,6 +895,56 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         CircularBuffer(cb_attention_sink).wait_front(sink_per_row ? sink_row_offset + sbh : 1);
         CircularBuffer(cur_max_cb_rt).wait_front(sink_row_offset + sbh);
     }
+#ifdef SDPA_FP32_STATE
+    static_assert(!use_attention_sink, "the fp32 state path has no attention sink");
+    for (uint32_t s = 0; s < sbh; s++) {
+        // The fp32 row sums cannot feed the FPU column reduce directly (they unpack to DEST): stage the tile through
+        // scratch (one bf16 rounding of l, as the bf16 path has), then reduce and invert as below.
+        CircularBuffer(cur_sum_cb).wait_front(1);
+        CircularBuffer(scratch_cb).reserve_back(1);
+        tile_regs_acquire();
+        reconfig_data_format_srca(cur_sum_cb);
+        copy_init(cur_sum_cb);
+        copy_tile(cur_sum_cb, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(scratch_cb)));
+        configure_single_tile_pack(scratch_cb);
+        pack_tile(0, scratch_cb);
+        tile_regs_release();
+        CircularBuffer(scratch_cb).push_back(1);
+        CircularBuffer(cur_sum_cb).pop_front(1);
+
+        constexpr uint32_t N = 1;
+        matmul_block_init(scratch_cb, col_identity_cb, 0, N, 1, N);
+        reconfig_data_format(col_identity_cb, scratch_cb);
+        CircularBuffer(col_identity_cb).wait_front(N);
+        CircularBuffer(scratch_cb).wait_front(1);
+        tile_regs_acquire();
+        matmul_block(scratch_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
+        recip_tile_init();
+        MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
+        tile_regs_commit();
+        CircularBuffer(scratch_cb).pop_front(1);
+        CircularBuffer(scratch_cb).reserve_back(1);
+        tile_regs_wait();
+        pack_tile(0, scratch_cb);
+        tile_regs_release();
+        CircularBuffer(scratch_cb).push_back(1);
+
+        CircularBuffer(cur_out_cb).wait_front(head_dim_t_);
+        CircularBuffer(scratch_cb).wait_front(1);
+        CircularBuffer(normalized_out_cb).reserve_back(head_dim_t_);
+        fp32_state_scale_tiles<dst_size>(
+            cur_out_cb, 0, head_dim_t_, scratch_cb, 0, normalized_out_cb, 0, /*l1_acc=*/false);
+        CircularBuffer(normalized_out_cb).push_back(head_dim_t_);
+        CircularBuffer(scratch_cb).pop_front(1);
+        CircularBuffer(cur_out_cb).pop_front(head_dim_t_);
+    }
+    reconfig_data_format(scratch_cb, scratch_cb);
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(scratch_cb)));
+    return;
+#endif
     configure_single_tile_pack(scratch_cb);
     for (uint32_t s = 0; s < sbh; s++) {
         // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
@@ -1730,6 +1920,9 @@ static void sdpa_inner_loop_step(
                         CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
                         CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
                     }
+#ifdef SDPA_FP32_STATE
+                    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(out_cb)));
+#endif
                     if (kt_sub > 0) {
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
@@ -1772,6 +1965,9 @@ static void sdpa_inner_loop_step(
                     if (kt_sub > 0) {
                         PACK((llk_pack_reconfig_l1_acc(0)));
                     }
+#ifdef SDPA_FP32_STATE
+                    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(cb_qkt_im)));
+#endif
                 }
             } else {
                 // In-place latent-V: software-pipelined split drain. The exp of column block kt+1
@@ -1805,6 +2001,9 @@ static void sdpa_inner_loop_step(
                     // Block kt's in-place exp must be committed before its V matmul unpacks it.
                     UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
                     UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+#ifdef SDPA_FP32_STATE
+                    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(out_cb)));
+#endif
                     if (accumulate_in_l1) {
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
@@ -1825,6 +2024,9 @@ static void sdpa_inner_loop_step(
                     if (accumulate_in_l1) {
                         PACK((llk_pack_reconfig_l1_acc(0)));
                     }
+#ifdef SDPA_FP32_STATE
+                    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(cb_qkt_im)));
+#endif
                 }
             }
             qktv_in0_index_offset += qktv_h * KT_stride;
@@ -1930,6 +2132,9 @@ static void sdpa_inner_loop_step(
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
                 sdpa_pv_mm_setup(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
                 // Configure once before v_subblock loop; skip inside.
+#ifdef SDPA_FP32_STATE
+                PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(out_cb)));
+#endif
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     // Same in-place-vs-materialized V addressing as the q_subblock-0 drain above.
@@ -1954,6 +2159,9 @@ static void sdpa_inner_loop_step(
                     v_index_offset += qktv_subblock_w;
                 }
                 sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+#ifdef SDPA_FP32_STATE
+                PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(cb_qkt_im)));
+#endif
             }
 
             // SALAD corrections for previous group (always full, h=qktv_h) + row-by-row push

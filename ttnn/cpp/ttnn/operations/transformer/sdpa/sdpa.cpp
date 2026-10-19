@@ -904,8 +904,36 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    std::optional<SDPAPrecision> precision) {
     reject_decode_settings(program_config);
+    if (precision.has_value()) {
+        // ring_mla recipes are fixed configurations of the ring_mla (latent-V streaming) kernel: the named recipe
+        // kernels have no latent V, causal, chunked or K-multicast support. All run the softmax arithmetic in fp32
+        // DEST. STANDARD (HiFi2) and FAST (LoFi) keep the running O and row sums in bf16 CBs; BALANCED (HiFi2) keeps
+        // them in fp32 CBs updated exactly in DEST, so long prefixes do not drift. FAST callers round Q and the
+        // latent with prepare_sdpa_input first so LoFi's operand truncation loses nothing further.
+        TT_FATAL(
+            *precision == SDPAPrecision::STANDARD || *precision == SDPAPrecision::BALANCED ||
+                *precision == SDPAPrecision::FAST,
+            "ring_mla supports the STANDARD, BALANCED and FAST precision recipes");
+        TT_FATAL(
+            !compute_kernel_config.has_value(),
+            "Specify either an SDPA precision recipe or a compute kernel config, not both");
+        TT_FATAL(
+            !program_config.matmul_math_fidelity.has_value(),
+            "An SDPA precision recipe sets the matmul fidelity; leave program_config.matmul_math_fidelity unset");
+        compute_kernel_config = ttnn::init_device_compute_kernel_config(
+            input_tensor_q.device()->arch(),
+            std::nullopt,
+            tt::tt_metal::MathFidelity::HiFi2,
+            /*default_approx_mode=*/false,
+            /*default_fp32_acc=*/true,
+            /*default_l1_acc=*/false);
+        if (*precision == SDPAPrecision::FAST) {
+            program_config.matmul_math_fidelity = tt::tt_metal::MathFidelity::LoFi;
+        }
+    }
     auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
@@ -944,7 +972,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         kv_actual_isl_tensor,
         kv_cache_num_layers.value_or(1),
         kv_cache_layer_idx.value_or(0),
-        std::nullopt);  // sliding_window_size
+        std::nullopt,  // sliding_window_size
+        /*circular_kv_cache=*/false,
+        /*logical_n_tensor=*/std::nullopt,
+        /*logical_l_tensor=*/std::nullopt,
+        precision);
     return {output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
 

@@ -615,7 +615,14 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const bool is_chunked = tensor_args.is_chunked(args.kv_stripe_split);
 
     const auto dtype = input_tensor_q.dtype();
-    if (args.precision) {
+    if (args.precision && tensor_args.has_latent_v()) {
+        // ring_mla recipes run the ring_mla kernel itself; ring_mla() resolved the compute config.
+        using ttnn::transformer::SDPAPrecision;
+        TT_FATAL(
+            *args.precision == SDPAPrecision::STANDARD || *args.precision == SDPAPrecision::BALANCED ||
+                *args.precision == SDPAPrecision::FAST,
+            "ring_mla supports the STANDARD, BALANCED and FAST precision recipes");
+    } else if (args.precision) {
         TT_FATAL(!tensor_args.has_latent_v(), "Named ring recipes require explicit K and V");
         // Split KV (ring_mla with Q sharded on fewer devices than K/V) packs several sources into one K chunk; the
         // recipe kernels run one source per ring iteration.
@@ -1162,6 +1169,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
     validate_runtime_patched_scalars(args, tensor_args);
 }
 
+// A precision recipe runs the named recipe kernels, except on ring_mla (latent V), whose recipes are fixed
+// configurations of the ring_mla kernel (sdpa.cpp ring_mla).
+static bool uses_named_recipe_kernels(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    return args.precision.has_value() && !tensor_args.has_latent_v();
+}
+
 RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const auto& input = tensor_args.input_q;
@@ -1194,7 +1207,7 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
             joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         tt::tt_metal::TensorSpec(
             stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
-    if (args.precision.has_value()) {
+    if (uses_named_recipe_kernels(args, tensor_args)) {
         using State = sdpa::streaming::StateTransfer;
         const uint32_t q_chunk = args.get_q_chunk_size();
         // BALANCED and ACCURATE checkpoint FP32 maxima.
@@ -1223,8 +1236,8 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
 }
 
 RingJointSDPADeviceOperation::program_factory_t RingJointSDPADeviceOperation::select_program_factory(
-    const RingJointSDPAParams& args, const RingJointSDPAInputs& /*tensor_args*/) {
-    if (args.precision.has_value()) {
+    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    if (uses_named_recipe_kernels(args, tensor_args)) {
         return RingJointSDPARecipeMeshWorkloadFactory{};
     }
     return RingJointSDPAMeshWorkloadFactory{};

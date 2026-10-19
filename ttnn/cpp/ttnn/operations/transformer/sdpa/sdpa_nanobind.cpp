@@ -133,7 +133,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    std::optional<ttnn::transformer::SDPAPrecision> precision) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     return ttnn::transformer::ring_mla(
@@ -160,7 +161,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
         slot_id,
         kv_actual_isl_tensor,
         kv_cache_num_layers,
-        kv_cache_layer_idx);
+        kv_cache_layer_idx,
+        precision);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -890,6 +892,12 @@ void bind_sdpa(nb::module_& mod) {
                 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
+            precision (ttnn.SDPAPrecision, optional): STANDARD, BALANCED or FAST, fixed configurations of the
+                ring_mla kernel with its softmax arithmetic in fp32 DEST. STANDARD (HiFi2) and FAST (LoFi matmuls)
+                keep the running output and row sums in bf16; BALANCED (HiFi2) keeps them in fp32, exactly, so long
+                prefixes do not drift, at about 0.8x STANDARD's speed. Cannot be combined with compute_kernel_config
+                or program_config.matmul_math_fidelity. FAST expects Q and the latent K/V rounded by
+                prepare_sdpa_input. Omit for the configuration the caller passes.
 
         Metadata path and cache fold: as ring_joint_scaled_dot_product_attention (see its docstring).
 
@@ -940,7 +948,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("slot_id").noconvert() = nb::none(),
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
-        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
+        nb::arg("precision") = nb::none());
 
     const auto* exp_ring_joint_doc = R"doc(
         ExpRingJointAttention operation that efficiently performs non-causal attention over two
