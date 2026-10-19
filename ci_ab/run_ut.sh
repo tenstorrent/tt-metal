@@ -23,16 +23,19 @@ src() { [[ $1 == M2 ]] && echo M || echo $1; }
 slice() { [[ $1 == M2 ]] && echo "$K/$((N * AA_N))" || echo "$UT_SLICE"; }
 build() {  # side dir flags...
   local s=$1 d=$2; shift 2; place $(src $s); rm -rf $d; mkdir -p $d
+  cd $L/tests/python_tests
   RUNNER_TEMP=$d TMPDIR=$d UT_SLICE=$(slice $s) timeout -s INT -k 60 2400 python -m pytest --compile-producer -n $NP -p no:cacheprovider -q "$@" $MODS > /tmp/b_$s.txt 2>&1
   echo "== build $s rc=$? $(date -u +%T) $(grep -aE '[0-9]+ (passed|failed|error)' /tmp/b_$s.txt | tail -1)"
-  grep -a -m3 "error:" /tmp/b_$s.txt | cut -c1-240
+  grep -a -m3 "error:" /tmp/b_$s.txt | cut -c1-240; grep -qaE '[0-9]+ passed' /tmp/b_$s.txt || tail -5 /tmp/b_$s.txt | cut -c1-240; cd $R
 }
 run() {  # kind side dir tag flags...
   local k=$1 s=$2 d=$3 tag=$4; shift 4; place $(src $s)
+  cd $L/tests/python_tests
   RUNNER_TEMP=$d TMPDIR=$d UT_SLICE=$(slice $s) PERF_RUN_TAG=$tag timeout -s INT -k 60 3000 \
     python -m pytest --compile-consumer -p no:cacheprovider -q -rfE "$@" $MODS > /tmp/r_$tag.txt 2>&1
   echo "== run $tag rc=$? $(date -u +%T) $(grep -aE '[0-9]+ (passed|failed)' /tmp/r_$tag.txt | tail -1)"
   grep -a -m4 -E "^FAILED|TIMED OUT|Timeout" /tmp/r_$tag.txt | cut -c1-240
+  grep -qaE '[0-9]+ passed' /tmp/r_$tag.txt || tail -5 /tmp/r_$tag.txt | cut -c1-240; cd $R
   python $S/ut_dump.py $k $tag $s $L/perf_data/runs/$tag
 }
 for s in M H1 H2 M2; do build $s $HOME/ut_$s; done
