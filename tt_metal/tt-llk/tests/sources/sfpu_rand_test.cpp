@@ -47,7 +47,9 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS)
 {
-    const bool is_int_fpu_en = false;
+    const bool is_int_fpu_en          = false;
+    constexpr std::uint32_t dst_index = 0;
+    constexpr bool APPROX             = false;
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -55,12 +57,11 @@ void run_kernel(RUNTIME_PARAMETERS)
         TILE_NUM_FACES, formats.math);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        0 /* dst_index */, formats.math, formats.math);
+        dst_index, formats.math, formats.math);
     _llk_math_eltwise_unary_datacopy_uninit_<BroadcastType::NONE, unpack_to_dest>();
 
-    SFPU_UNARY_INIT_FN_ARGS(unused, sfpu::rand_init, (false /* APPROXIMATION_MODE */), RAND_SEED);
-    SFPU_UNARY_CALL(
-        DstSync::SyncHalf, is_fp32_dest_acc_en, rand, (false /* APPROXIMATION_MODE */), 0 /* dst_index */, VectorMode::RC, RAND_FROM_BITS, RAND_SCALE_BITS);
+    SFPU_UNARY_INIT_FN_ARGS(unused, sfpu::rand_init, (APPROX), RAND_SEED);
+    SFPU_UNARY_CALL(DstSync::SyncHalf, is_fp32_dest_acc_en, rand, (APPROX), dst_index, VectorMode::RC, RAND_FROM_BITS, RAND_SCALE_BITS);
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

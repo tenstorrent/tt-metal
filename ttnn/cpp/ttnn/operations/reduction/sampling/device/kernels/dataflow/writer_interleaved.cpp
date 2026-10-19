@@ -114,10 +114,8 @@ void kernel_main() {
     // SFPU; exact in BF16). A draw of exactly 256 (the inclusive upper endpoint, probability ~0)
     // is clamped to 255 so both digits are 8-bit. The threshold is the lattice point
     // (hi * 256 + lo) / 65536 in [0, 1 - 2^-16], uniform over 65536 equiprobable values.
-    // The low digit is read from element 2, not 1: on Wormhole only the even columns of face 0
-    // of this kernel's random tile carry draws (element 1 reads back as 0 in 63969 of 64000
-    // draws, which would collapse the threshold to hi / 256 and bring the 1/256 tail cutoff
-    // back); element 2 is the next lane's draw on every arch (Blackhole fills every element).
+    // The digits are read from elements 0 and 2, two separate draws; every element of the
+    // random tile holds a draw.
     constexpr uint32_t RAND_HI_ELEMENT = 0;
     constexpr uint32_t RAND_LO_ELEMENT = 2;
     constexpr float RAND_DIGIT_MAX = 255.0f;

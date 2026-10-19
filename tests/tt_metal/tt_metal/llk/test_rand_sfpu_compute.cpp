@@ -43,6 +43,8 @@ struct RandConfig {
 constexpr uint32_t num_tiles = 4;
 constexpr uint32_t tile_elements = constants::TILE_HW;
 constexpr uint32_t seed = 0x12345678;
+// Draws must reach this fraction of the BF16 values in the range (MIN_COVERAGE in test_sfpu_rand.py).
+constexpr double min_coverage = 0.8;
 
 size_t bf16_values_in(float low, float high) {
     size_t count = 0;
@@ -109,8 +111,7 @@ void test_rand(const std::shared_ptr<distributed::MeshDevice>& mesh_device, cons
     ASSERT_EQ(result.size(), num_tiles * tile_elements);
 
     const size_t expected_distinct = std::min<size_t>(bf16_values_in(low, high), tile_elements);
-    // Draws must reach 80% of the BF16 values in the range.
-    const size_t min_distinct = expected_distinct * 4 / 5;
+    const double min_distinct = min_coverage * static_cast<double>(expected_distinct);
     for (uint32_t tile = 0; tile < num_tiles; ++tile) {
         std::set<float> distinct;
         uint32_t outside = 0;
@@ -125,8 +126,9 @@ void test_rand(const std::shared_ptr<distributed::MeshDevice>& mesh_device, cons
             distinct.insert(value);
         }
         EXPECT_EQ(outside, 0u) << "tile " << tile << " fp32_dest_acc_en=" << config.fp32_dest_acc_en;
-        EXPECT_GE(distinct.size(), min_distinct) << "tile " << tile << " fp32_dest_acc_en=" << config.fp32_dest_acc_en
-                                                 << " grid admits " << expected_distinct;
+        EXPECT_GE(static_cast<double>(distinct.size()), min_distinct)
+            << "tile " << tile << " fp32_dest_acc_en=" << config.fp32_dest_acc_en << " grid admits "
+            << expected_distinct;
     }
 }
 
