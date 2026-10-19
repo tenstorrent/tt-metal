@@ -167,7 +167,7 @@ inline void run_datacopy_transpose_loop(
             {
                 // Datacopy and transpose both use bank0's instruction buffer, so
                 // each operation must program its MOP immediately before execution.
-                _configure_default_alu_data_format_state_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
+                _configure_default_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
                 _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * face_r_dim /*num_rows_per_matrix*/, 1 /*num_matrices*/);
 
                 for (std::uint32_t i = 0; i < tiles_in_block; ++i)
@@ -176,8 +176,7 @@ inline void run_datacopy_transpose_loop(
                 }
             }
 
-            // Int32/Float32 transpose dest requires non-default SrcA/SrcB format
-            // settings and disables implied math format.
+            // Int32/Float32 transpose dest requires non-default SrcA/SrcB format settings
             _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
             _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
             for (std::uint32_t i = 0; i < tiles_in_block; ++i)
@@ -229,7 +228,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        _llk_math_srcAB_hw_configure_<false, is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
         PROFILER_SYNC();
     }
     {
