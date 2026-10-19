@@ -29,6 +29,20 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transfor
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
 
+class _TtKimiK3TransformerHostNorm(TtKimiK3Transformer):
+    """The last rank's stack without the device final norm: forward returns what `model.norm` would see.
+
+    For `return_last_hidden`, whose reader applies the norm and the LM head on the host
+    (`KimiK3Adapter.first_token_from_hidden`). The production runtime gets `state_dict={}`, so a
+    device norm would take its weight from the TTNN cache, and nothing checks that the cache holds
+    one: `check_cache_complete` reads per-layer markers only, and a missing file makes
+    `TtDistributedRmsNorm` convert `torch.empty` (#54841).
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, build_tail=False, **kwargs)
+
+
 class TtKimiK3Runtime(TtPrefillRuntime):
     MODEL_CLS = TtKimiK3Transformer
 
@@ -36,6 +50,8 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         # The shared build starts GLM-5.3's MTP predictor before MODEL_CLS runs, so reject here.
         if self.config.mtp_levels:
             raise ValueError(f"Kimi-K3 has no MTP predictor; got mtp_levels={self.config.mtp_levels}")
+        if self.config.return_last_hidden and self.config.is_last_rank:
+            self.MODEL_CLS = _TtKimiK3TransformerHostNorm
         super()._build_model(state_dict)
 
     @property

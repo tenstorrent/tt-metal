@@ -76,6 +76,10 @@ class TtPrefillRuntimeConfig:
     # The KV cache is the prefill output either way; this only trims the last layer.
     # The pipeline sets it on the last rank.
     kv_only_last_layer: bool = False
+    # Last rank only: return the model's final hidden state from prefill_chunk instead of None, so the
+    # runner can read the row the request's first token is computed from (`tail_hidden_row`). Needs the
+    # whole last layer, so it excludes kv_only_last_layer, MTP and DFlash.
+    return_last_hidden: bool = False
     # The same trim for the last MTP level: it only has to fill its KV slot.
     kv_only_last_mtp_level: bool = True
     # Build the DFlash drafter context-KV cache during this prefill (opt-in). Every rank builds its owned fc
@@ -206,6 +210,14 @@ class TtPrefillRuntime:
         self._build_model(state_dict)
 
     def _build_model(self, state_dict: dict) -> None:
+        if self.config.return_last_hidden and (
+            self.config.kv_only_last_layer or self.config.mtp_levels or self.config.dflash_enabled
+        ):
+            raise ValueError(
+                "return_last_hidden needs the whole last layer and the plain forward: it excludes "
+                f"kv_only_last_layer={self.config.kv_only_last_layer}, mtp_levels={self.config.mtp_levels} "
+                f"and dflash_enabled={self.config.dflash_enabled}"
+            )
         logger.info(
             f"Building TtPrefillRuntime model: "
             f"num_layers={self.config.num_layers}, first_layer_idx={self.config.first_layer_idx}, "
@@ -687,8 +699,9 @@ class TtPrefillRuntime:
         ttnn.synchronize_device(self.mesh_device)
         # Allocated inside the capture: the trace owns that address.
         get_tt_ccl(self.mesh_device).set_shared_rs_input_keepalive(None)
-        # Non-last rank: the persistent output activation the replay refreshes each chunk.
-        self._trace_output = out if not self.config.is_last_rank else None
+        # Non-last rank: the persistent output activation the replay refreshes each chunk. Last rank: the
+        # final hidden state, kept only when return_last_hidden asks for it.
+        self._trace_output = out if self._returns_output else None
         self._trace_captured = True
         logger.info(
             f"[trace] captured {self.config.num_layers}-layer chunk forward = {controller.num_segments} segments, "
@@ -1123,8 +1136,9 @@ class TtPrefillRuntime:
             self._controller.replay(variant=mtp_variant)
 
             # Non-last rank: return the persistent output activation (replay just refreshed it) for the
-            # driver to forward downstream over D2D. Last/single rank: the populated KV cache is the output.
-            return None if self.config.is_last_rank else self._trace_output
+            # driver to forward downstream over D2D. Last/single rank: the populated KV cache is the output,
+            # plus the final hidden state under return_last_hidden.
+            return self._trace_output if self._returns_output else None
 
         on_layer_complete = self._layer_complete_cb(request_id)
 
@@ -1192,8 +1206,37 @@ class TtPrefillRuntime:
             return packed
 
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
-        # Last/single rank: forward returns None (no intermediates requested); the KV cache is the output.
-        return out if not self.config.is_last_rank else None
+        # Last/single rank: the KV cache is the output; the final hidden state is returned only under
+        # return_last_hidden (the caller then owns it).
+        return out if self._returns_output else None
+
+    @property
+    def _returns_output(self) -> bool:
+        return not self.config.is_last_rank or self.config.return_last_hidden
+
+    def tail_hidden_row(self, tail_out: ttnn.Tensor, row: int) -> Tuple[torch.Tensor, float]:
+        """Row ``row`` (0-based within the chunk) of the last rank's output as a host fp32 ``[hidden]``
+        vector, plus the host ms it took. ``tail_out`` is what prefill_chunk returned under
+        return_last_hidden: per chip ``[1, 1, S_l, D_l]``, SP-sharded on rows and TP-sharded on the hidden
+        dim. One tile-aligned 32-row slice is pulled from every chip and the row's SP shard picked on the
+        host. Whether the row is before or after the final norm is the model's choice; the adapter's
+        ``first_token_from_hidden`` applies the rest."""
+        c = self.config
+        t0 = time.perf_counter()
+        s_l = c.chunk_size // c.sp_factor
+        sp_idx, local = divmod(int(row), s_l)
+        tile0 = (local // 32) * 32
+        d_l = int(tail_out.shape[-1])
+        sl = ttnn.slice(tail_out, [0, 0, tile0, 0], [1, 1, tile0 + 32, d_l])
+        dims = [0, 0]
+        dims[c.sp_axis], dims[c.tp_axis] = 2, 3
+        host = ttnn.to_torch(
+            sl,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, mesh_shape=tuple(c.mesh_shape), dims=tuple(dims)),
+        )
+        ttnn.deallocate(sl)
+        hidden = host[0, 0, sp_idx * 32 + (local - tile0)].float().clone()
+        return hidden, (time.perf_counter() - t0) * 1e3
 
     @property
     def activation_planes(self) -> int:

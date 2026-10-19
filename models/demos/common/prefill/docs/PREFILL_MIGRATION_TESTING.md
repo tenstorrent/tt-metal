@@ -542,6 +542,7 @@ gates you intend to run require.
 | 2 | `kv_migration_stages` | one `KvCacheStage` per migratable cache, for the cross-stage table merge |
 | 1, 2 | `cache_kind` (adapter) | what each table config holds (`kvpe` / `index` / other); the producer's index check and the driver's cache plan key on it instead of the config count. Kimi-K3 declares its KDA state configs here (`tt/kda/KDA_STATE_MIGRATION.md`) |
 | 2 | `layer_position_range` (adapter) | positions one /migrate of a layer covers; default `[0, real_len)`. Kimi-K3 returns the KDA version window `[v * 36864, (v + 1) * 36864)`, `v = (real_len - 1) % 8`, for its KDA layers, so MLA and KDA layers go in separate calls and the byte verify walks that window |
+| 2, P→D | `first_token_from_hidden` (adapter) | only with `PREFILL_FIRST_TOKEN_DIR`: the greedy first token from the last rank's output row (`TtPrefillRuntime.tail_hidden_row`), on the host. Kimi-K3 applies `model.norm` and `lm_head` from `PREFILL_HF_MODEL` (else `KIMI_K3_HF_MODEL`); its runtime leaves the final norm off the device in that mode |
 | 2 `dst-bytes` | **none** | nothing is decoded — the byte compare is model-agnostic |
 | 2 `dst-golden` | none beyond Gate 1 | reuses the producer's own read-back, not a runtime hook |
 
@@ -561,6 +562,7 @@ gets a branch there, and both gates work.
 | KV table | `PREFILL_MIGRATION_TABLE_PATH` | `migration.table_path` | — |
 | device map | `PREFILL_MIGRATION_DEVICE_MAP_PATH` | `migration.device_map_path` | — |
 | sentinel | — (driver-side only) | `migration.done_file` | — |
+| first-token rows | `PREFILL_FIRST_TOKEN_DIR` | same var, exported | — |
 | queues | `PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE` | `migration.{cmd,table,resp}_queue` | `--prefill-{cmd,table,resp}-queue` |
 | client `.so` | `PREFILL_MIGRATION_CLIENT_DIR` | exported (not in the manifest) | — |
 | host list | the `--host` list given to `run_pipeline_prefill.sh` | `run_migration_driver.sh`'s 2nd arg, same order | `--prefill_hosts`, same order |
@@ -570,6 +572,14 @@ gets a branch there, and both gates work.
 The two path rows pull in opposite directions once more than one host is involved: the **table** must be on
 shared storage (rank 0 writes it, every driver rank reads it) and the **device map** must not be (each rank
 publishes its own host's chips under that name, which is what scopes each driver rank to its own layers).
+
+`PREFILL_FIRST_TOKEN_DIR` puts `first_token` in every handoff entry: the token prefill samples after the
+prompt, which a decode side resuming migrated recurrent state (Kimi-K3's KDA) requires, since deriving it
+there re-runs position `prompt_len - 1` and overwrites that state. The runner's last rank then runs the
+whole last layer instead of the KV-only one and writes, per chunk, its output row at the last valid
+position as `slot<s>_end<actual_end>.pt`. The driver waits up to `PREFILL_FIRST_TOKEN_TIMEOUT_S` (120)
+for the request's file, turns it into a token with the adapter's `first_token_from_hidden` and deletes
+it. Put the directory on shared storage when the last rank and driver rank 0 are on different hosts.
 
 The sentinel has no runner-side counterpart: the driver writes it for an external P→D consumer, and
 nothing in the runner reads it. It also means "copied", not "verified" — the destination read-back runs

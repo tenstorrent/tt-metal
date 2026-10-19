@@ -123,6 +123,16 @@ _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 
 
 assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
 
+# When set, the last rank runs the whole last layer and publishes, for every chunk, the output row at its
+# last valid position as <dir>/slot<s>_end<actual_end>.pt ({"hidden": fp32 [hidden], ...}). The migration
+# driver reads the one at the request's real length, turns it into the first token with
+# ADAPTER.first_token_from_hidden and puts it in the handoff, so the decode side starts at prompt_len
+# without re-running prompt_len-1. Must be storage the driver's host can read.
+FIRST_TOKEN_DIR = os.environ.get("PREFILL_FIRST_TOKEN_DIR", "")
+if FIRST_TOKEN_DIR and not ADAPTER.supports_host_first_token:
+    raise ValueError(f"PREFILL_FIRST_TOKEN_DIR is set but {type(ADAPTER).__name__} cannot compute a first token")
+assert not (FIRST_TOKEN_DIR and (MTP_LEVELS or DFLASH_ENABLED)), "PREFILL_FIRST_TOKEN_DIR excludes MTP and DFlash"
+
 # DFlash runs traced, and only traced. The eager drafter path is no longer a supported configuration:
 # the tap fires from inside the verifier forward, so trace capture is what the wiring is built and
 # validated against, and an untraced drafter is a second path nothing gates. The manifests pin
@@ -442,6 +452,10 @@ def _compute_and_send(
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
         _record_chunk_timing(rank, c, t_start, compute_ms)
+    if runtime.config.is_last_rank and out is not None:
+        _emit_first_token_row(runtime, out, meta, rank)
+        if not runtime.config.use_trace:  # traced: the replay's persistent output, not ours to free
+            ttnn.deallocate(out)
     if not runtime.config.is_last_rank:
         forward_md = None
         if runtime.config.use_trace and not (MTP_LEVELS and runtime.config.is_first_rank):
@@ -458,6 +472,39 @@ def _compute_and_send(
     if d2d_out is not None:
         d2d_out.release_fabric_links()
     return t_start
+
+
+def _emit_first_token_row(runtime, out, meta: dict, rank: int) -> None:
+    """Publish the chunk's output row at its last valid position under PREFILL_FIRST_TOKEN_DIR (see there).
+    Every chunk publishes, since the runner does not know which chunk ends a request; the file of a
+    request's last chunk is the one the driver reads. Written atomically, so the driver never reads half a
+    file. Never fatal here: the KV is what the request is for, and the driver reports a missing row."""
+    try:
+        n_valid = int(meta["actual_end"]) - int(meta["actual_start"])
+        if n_valid <= 0:
+            return
+        hidden, host_ms = runtime.tail_hidden_row(out, n_valid - 1)
+        os.makedirs(FIRST_TOKEN_DIR, exist_ok=True)
+        path = os.path.join(FIRST_TOKEN_DIR, f"slot{int(meta['slot_id'])}_end{int(meta['actual_end'])}.pt")
+        tmp = path + ".tmp"
+        torch.save(
+            {
+                "slot_id": int(meta["slot_id"]),
+                "actual_start": int(meta["actual_start"]),
+                "actual_end": int(meta["actual_end"]),
+                "hidden": hidden,
+                "host_ms": host_ms,
+                "t_epoch": time.time(),
+            },
+            tmp,
+        )
+        os.replace(tmp, path)
+        logger.info(
+            f"[pp rank {rank}] TAIL_ROW slot={meta['slot_id']} end={meta['actual_end']} |h|={float(hidden.norm()):.3f} "
+            f"({host_ms:.1f} ms host) -> {path}"
+        )
+    except Exception as e:  # noqa: BLE001 -- see the docstring
+        logger.error(f"[pp rank {rank}] first-token row emission failed: {type(e).__name__}: {e}")
 
 
 def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float) -> None:
@@ -647,6 +694,12 @@ def main() -> None:
     hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = MAX_SEQ_LEN
 
+    if FIRST_TOKEN_DIR and is_last_rank and os.path.isdir(FIRST_TOKEN_DIR):
+        # A row left by an earlier run would pass for this run's request of the same slot and length.
+        for name in os.listdir(FIRST_TOKEN_DIR):
+            if name.startswith("slot") and (name.endswith(".pt") or name.endswith(".pt.tmp")):
+                os.remove(os.path.join(FIRST_TOKEN_DIR, name))
+
     params = PrefillRunParams(
         mesh_shape=GLOBAL_MESH_SHAPE,
         num_layers=num_my_layers,
@@ -660,7 +713,8 @@ def main() -> None:
         num_links=2 if is_blackhole() else 1,
         gate_mode_name=_gate_mode_name,
         # is_last_rank, not True: TtPrefillTransformer asserts kv_only_last_layer -> is_last_rank, since a
-        kv_only_last_layer=is_last_rank and not MTP_LEVELS,
+        kv_only_last_layer=is_last_rank and not MTP_LEVELS and not FIRST_TOKEN_DIR,
+        return_last_hidden=is_last_rank and bool(FIRST_TOKEN_DIR),
         dflash_enabled=DFLASH_ENABLED,
         dflash_checkpoint_path=DFLASH_MODEL,
         mtp_levels=MTP_LEVELS,

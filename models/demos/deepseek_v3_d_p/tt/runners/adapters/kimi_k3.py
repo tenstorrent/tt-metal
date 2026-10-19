@@ -283,6 +283,39 @@ class KimiK3Adapter(MLAPrefillAdapter):
         version = (real_len - 1) % KDA_VERSIONS
         return version * window, (version + 1) * window
 
+    # The runtime leaves the final norm off the device under return_last_hidden
+    # (`_TtKimiK3TransformerHostNorm`), so the row is the output AttnRes read and the host applies
+    # `model.norm` and `lm_head` from the checkpoint at PREFILL_HF_MODEL (the runner's own), else KIMI_K3_HF_MODEL.
+    supports_host_first_token = True
+
+    def first_token_from_hidden(self, hidden) -> int:
+        norm_weight, lm_head = self._host_head()
+        return host_norm_head_argmax(hidden, norm_weight, lm_head, eps=KimiK3Config.RMS_NORM_EPS)
+
+    def _host_head(self):
+        """``(model.norm.weight, lm_head.weight)`` read once from the dequantized checkpoint (~2.3 GB)."""
+        head = getattr(self, "_host_head_weights", None)
+        if head is None:
+            import os
+
+            from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
+            from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import load_tensors
+
+            checkpoint = os.environ.get("PREFILL_HF_MODEL") or os.environ.get(self.env_var)
+            if not checkpoint:
+                raise RuntimeError(
+                    f"PREFILL_HF_MODEL or {self.env_var} must name the Kimi-K3 checkpoint to compute the first token"
+                )
+            root = resolve_model_root(Path(checkpoint))
+            # `lm_head` sits beside `model.`, not under it: `lm_head.weight` or `language_model.lm_head.weight`.
+            tensors = load_tensors(
+                Path(checkpoint),
+                {"norm": f"{root}norm.weight", "lm_head": f"{root[: -len('model.')]}lm_head.weight"},
+            )
+            head = (tensors["norm"], tensors["lm_head"])
+            self._host_head_weights = head
+        return head
+
     def load_hf_config(self):
         """The Kimi-K3 config, hand-built rather than loaded through `AutoConfig`.
 
@@ -331,6 +364,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
             kv_only_last_layer=params.kv_only_last_layer,
+            return_last_hidden=params.return_last_hidden,
             dflash_enabled=params.dflash_enabled,
             routing_use_l1_small_for_semaphores=self.routing_use_l1_small_for_semaphores,
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
@@ -343,3 +377,21 @@ class KimiK3Adapter(MLAPrefillAdapter):
             state_dict={},
             config=runtime_config,
         )
+
+
+def host_norm_head_argmax(hidden, norm_weight, lm_head, *, eps: float, vocab_block: int = 16384) -> int:
+    """Greedy next token from a pre-norm hidden row: `KimiRMSNorm` (normalize in fp32, cast back to the
+    checkpoint dtype, scale), then `lm_head`, then argmax. The logits are accumulated in fp32 one
+    ``vocab_block`` of rows at a time, so the bf16 head is never copied whole to fp32 (4.7 GB)."""
+    import torch
+
+    x = hidden.float()
+    x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+    x = (norm_weight * x.to(norm_weight.dtype)).float()
+    best_value, best_token = None, -1
+    for start in range(0, lm_head.shape[0], vocab_block):
+        logits = lm_head[start : start + vocab_block].float() @ x
+        value, index = logits.max(dim=0)
+        if best_value is None or value > best_value:
+            best_value, best_token = value, start + int(index)
+    return best_token
