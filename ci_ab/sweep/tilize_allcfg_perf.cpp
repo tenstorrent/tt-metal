@@ -36,6 +36,14 @@
 #ifndef TA_SECT
 #define TA_SECT 0
 #endif
+// 1 where the tree's llk_unpack_tilize_block unpacks 8-bit and unpack-to-DEST rows one call per tile (the X3 fix)
+#ifndef TA_BLOCK_U2D_PER_TILE
+#if __has_include("llk_tilize_block_per_tile_32b.h")
+#define TA_BLOCK_U2D_PER_TILE 1
+#else
+#define TA_BLOCK_U2D_PER_TILE 0
+#endif
+#endif
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -84,8 +92,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     const std::uint32_t tile_row_addr = L1_ADDRESS(src + (i % 8) * 0x1000);
 #if UNPACK_BLOCK
-                    _llk_unpack_tilize_block_wrapper_(
-                        tile_row_addr, 0, BLOCK_CT_DIM, formats.unpack_A_src, formats.unpack_A_dst, 0, TA_FACE_R, TA_NF, false);
+                    if (!TA_BLOCK_U2D_PER_TILE || !(unpack_to_dest || IS_8BIT_FORMAT(formats.unpack_A_src)))
+                    {
+                        _llk_unpack_tilize_block_wrapper_(
+                            tile_row_addr, 0, BLOCK_CT_DIM, formats.unpack_A_src, formats.unpack_A_dst, 0, TA_FACE_R, TA_NF, false);
+                    }
+                    else
+                    {
+                        for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
+                        {
+                            _llk_unpack_tilize_wrapper_(tile_row_addr, j, formats.unpack_A_src, formats.unpack_A_dst, 0, TA_FACE_R, TA_NF, false);
+                        }
+                    }
 #else
                     for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
                     {

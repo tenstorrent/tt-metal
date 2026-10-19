@@ -95,6 +95,11 @@ for form in ("tile", "block"):  # Float32 lossless: the unpacker writes a 32-bit
 for ct in (1, 4, 8):
     CASES.append(("u2d", FP32, YES, 1, ct, TA(ta_sect=1)))
 
+for form in ("tile", "block"):  # 8-bit source: per-face unpack, default pack
+    for nf in (4, 2):
+        for ct in (1, 2, 4, 8):
+            CASES.append(("f8", io(F.Fp8_e4m3, F.Float16_b), NO, 1, ct, TA(ta_form=form, ta_nf=nf)))
+
 
 def _id(c):
     n, fmt, acc, rt, ct, ta = c
