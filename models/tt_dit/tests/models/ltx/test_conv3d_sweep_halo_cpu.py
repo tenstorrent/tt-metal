@@ -5,10 +5,22 @@
 
 import pytest
 
-from models.tt_dit.utils.conv3d import _BLOCKINGS
+from models.tt_dit.utils.conv3d import _BLOCKINGS, aligned_channels
 
-from ..wan2_2.bruteforce_conv3d_sweep import HaloSpec, build_all_blockings, halo_masks, halo_sticks, prefetch_shard_fits
-from .bruteforce_conv3d_sweep_ltx import _SWEEP_LAYERS_LTX25_544P_145F_HALO, _SWEEP_LAYERS_LTX_PORTRAIT_121F_HALO
+from ..wan2_2.bruteforce_conv3d_sweep import (
+    HaloSpec,
+    build_all_blockings,
+    halo_masks,
+    halo_sticks,
+    prefetch_shard_fits,
+    valid_cin,
+    valid_cout,
+)
+from .bruteforce_conv3d_sweep_ltx import (
+    _SWEEP_LAYERS_LTX25_544P_145F_HALO,
+    _SWEEP_LAYERS_LTX_PORTRAIT_121F_HALO,
+    _SWEEP_LAYERS_LTX_PORTRAIT_UPS_ENC,
+)
 
 
 @pytest.mark.parametrize(
@@ -92,3 +104,19 @@ def test_ltx_portrait_decoder_layers_key_into_table(name, C_in, C_out, T, H, W, 
     assert blk is not None, f"{name}: no _BLOCKINGS entry for {key}"
     _, _, T_out_block, H_out_block, W_out_block = blk
     assert H_out_block * W_out_block == 32 and T_out_block <= 8
+
+
+@pytest.mark.parametrize(
+    "name, C_in, C_out, kernel, T, H, W, hw_product",
+    _SWEEP_LAYERS_LTX_PORTRAIT_UPS_ENC,
+    ids=[l[0] for l in _SWEEP_LAYERS_LTX_PORTRAIT_UPS_ENC],
+)
+def test_ltx_portrait_upsampler_encoder_layers_key_into_table(name, C_in, C_out, kernel, T, H, W, hw_product):
+    # Without these entries 21 upsampler/encoder convs per 576x1088 run on the 4x8 took the channel fallback.
+    kT, kH, kW = kernel
+    blk = _BLOCKINGS.get((4, 8, C_in, C_out, kernel, T, H - (kH - 1), W - (kW - 1)))
+    assert blk is not None, f"{name}: no _BLOCKINGS entry"
+    C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blk
+    assert valid_cin(C_in_block, aligned_channels(C_in), kernel) and valid_cout(C_out_block, C_out)
+    assert H_out_block * W_out_block in ((hw_product,) if isinstance(hw_product, int) else hw_product)
+    assert T_out_block <= max(1, T - (kT - 1))

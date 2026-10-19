@@ -568,6 +568,16 @@ _BLOCKINGS = {
     (4, 8, 512, 128, (3, 3, 3), 4, 34, 9): (64, 128, 1, 8, 4),  # chunk head
     (4, 8, 128, 128, (3, 3, 3), 123, 68, 18): (128, 64, 7, 8, 4),  # s4_res — 1765us was 5782 (sweep 137127)
     (4, 8, 128, 48, (3, 3, 3), 123, 68, 18): (128, 64, 6, 8, 4),  # s4_out
+    # LTX 576x1088 (1080p-portrait) latent upsampler (per-device 10x4 and 5x2) and VAE encoder (68x18),
+    # BH Galaxy 4x8. Without entries these 21 convs per run took the channel fallback. Swept on 1x1
+    # (jobs 137315/137344); ups_pre_res copies the ups_post_res winner narrowed to W_out_block=2.
+    (4, 8, 1024, 1024, (3, 3, 3), 18, 10, 4): (128, 64, 6, 4, 4),  # ups_post_res — 1064us was 16593 (15.6x)
+    (4, 8, 1024, 1024, (3, 3, 3), 18, 5, 2): (128, 64, 6, 4, 2),  # ups_pre_res — untimed copy
+    (4, 8, 1024, 4096, (1, 3, 3), 16, 5, 2): (256, 64, 1, 4, 2),  # ups_ups — 1150us was 5033 (4.4x)
+    (4, 8, 1024, 128, (3, 3, 3), 18, 10, 4): (128, 64, 6, 8, 4),  # ups_final — 168us was 1647 (9.8x); 161us winner has no prefetch shard
+    (4, 8, 128, 1024, (3, 3, 3), 18, 5, 2): (128, 128, 1, 4, 2),  # ups_initial — 110us was 190 (1.7x)
+    (4, 8, 64, 128, (3, 3, 3), 3, 68, 18): (64, 128, 1, 2, 16),  # enc_conv_in — 36us was 52 (1.4x)
+    (4, 8, 128, 64, (3, 3, 3), 3, 68, 18): (128, 64, 1, 2, 16),  # enc_down — 37us was 54 (1.5x)
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.
