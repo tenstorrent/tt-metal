@@ -673,3 +673,12 @@ the model step was skipped. It provides no numerical result. No blind
 infrastructure retry or shared runner mutation was performed; a healthy
 worker route was requested before repeating this gate.
 
+Independent targeted review of the persistent variant and raw artifacts
+found no new acceptance-blocking defect in the inspected cached
+device-sampling reuse path. It reproduced the timing properties and
+confirmed the seed-placement and persistent-logits changes had no definite
+additional source defect. This is not final stage acceptance: the boundary
+rerun, full cohort and exact-image Shield qualification remain pending.
+Inherited shared-sampler allocation exemptions, cold-request retirement and
+host-sampling retirement remain outside the narrow reuse claim.
+
