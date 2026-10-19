@@ -239,6 +239,9 @@ inline void calculate_gelu_appx() {
         sfpi::vFloat half_in = in * half;
         sfpi::vFloat result = sfpi::lut(in, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Update);
         result = half_in + result;
+        constexpr std::int32_t negative_infinity_bits = static_cast<std::int32_t>(0xFF800000);
+        v_if(sfpi::as<sfpi::vInt>(in) == negative_infinity_bits) { result = 0.0f; }
+        v_endif;
 
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
