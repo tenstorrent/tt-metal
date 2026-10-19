@@ -146,7 +146,7 @@ Default decode settings (TP paths, 27B), each with an env var that reverts it:
 | BF8 paged KV cache (demo and vLLM; prefill Q stays BF16) | `QWEN36_KV_BF8=0` (BF16 cache) |
 
 With all of the defaults above, Qwen3.8-27B served through vLLM on a P150x8 ring (`max_num_seqs` 32, thinking on,
-temperature 1.0 / top_p 0.95 / top_k 20, `qwen38_handoff/eval/task_eval.py`) passes the task evals (reference score
+temperature 1.0 / top_p 0.95 / top_k 20) passes the task evals (reference score
 inside the question-clustered 95% CI):
 
 | Eval | Score [95% CI] | Reference |

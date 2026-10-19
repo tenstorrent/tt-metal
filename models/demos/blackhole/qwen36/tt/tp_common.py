@@ -119,8 +119,8 @@ _BFP4_ATTN_LOGGED = False
 
 def bfp4_attn_enabled():
     """QWEN36_BFP4_ATTN (default 0, opt-in pending task evals): attention QKV and wo weights in bfloat4_b
-    (+ LoFi in decode only). +2.0% decode; accuracy_512 top-1 -0.19 on Qwen3.6, larger on Qwen3.8 (see
-    QWEN38_HANDOFF.md). Logs the choice once per process."""
+    (+ LoFi in decode only). +2.0% decode; accuracy_512 top-1 -0.19 on Qwen3.6, larger on Qwen3.8.
+    Logs the choice once per process."""
     global _BFP4_ATTN_LOGGED
     on = os.environ.get(BFP4_ATTN_ENV, "0") == "1"
     if not _BFP4_ATTN_LOGGED:
@@ -135,7 +135,7 @@ _BFP4_MLP_DOWN_LOGGED = False
 
 def bfp4_mlp_down_enabled():
     """QWEN36_BFP4_MLP_DOWN (default 0, opt-in pending task evals): dense-MLP down_proj (w2) weights in bfloat4_b
-    instead of bfloat8_b. +4.4% decode; accuracy-neutral on Qwen3.6, not on Qwen3.8 (see QWEN38_HANDOFF.md)."""
+    instead of bfloat8_b. +4.4% decode; accuracy-neutral on Qwen3.6, not on Qwen3.8."""
     return os.environ.get(BFP4_MLP_DOWN_ENV, "0") == "1"
 
 
