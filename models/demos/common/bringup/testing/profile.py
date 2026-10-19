@@ -6,7 +6,8 @@
 Runs the last chunk of the profile rung (spec ``perf.rung``, default the last rung with ``prefix_from_golden``) after
 loading the golden state prefix: once to compile, once unsynced for the real wall time, once with section profiling.
 F114: the gate first runs it with the device profiler off and BRINGUP_PROFILE_WALL=1 (compile, then WALL_RUNS timed
-runs: chunk_wall_ms = their median, chunk_wall_clean = 1); the profiled run then keeps that chunk_wall_ms and records
+runs: chunk_wall_ms = the median after WALL_WARM warm-up runs (F114b), chunk_wall_clean = 1; F119: the harness's
+golden-input uploads at layer gaps are timed apart, chunk_wall_gap_ms, and not counted); the profiled run then keeps that chunk_wall_ms and records
 its own as chunk_wall_ms_profiled (instrumented kernels and buffer dumps make it slower and noisier).
 Writes ``<results>/<task>_profile.json`` (read by the dashboard and by the opportunity list) and records
 chunk_wall_ms, host_transfers_per_layer, pcc_chunk_out (last layer's output vs the golden), prefill_ms_full (opt-in), prefill_tok_s,
@@ -29,7 +30,8 @@ from models.demos.common.bringup.testing import accuracy_guard, cpu_bridge, prof
 from models.demos.common.bringup.testing.harness import begin_chunk
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
 
-WALL_RUNS = 3  # F114: timed runs of the clean wall measurement (the median counts)
+WALL_RUNS = 12  # F114: timed runs of the clean wall measurement
+WALL_WARM = 4  # F114b: the first runs still meet new buffer-address combinations (program-cache misses): not counted
 
 
 def profile_rung(s) -> str:
@@ -239,6 +241,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     starts = {i for k, i in enumerate(layers) if k == 0 or layers[k - 1] != i - 1}
 
     host = []
+    gap = [0.0]  # F119: seconds spent uploading golden inputs at layer gaps in the current run
 
     def run(count=False, only=None):
         run_layers = layers if only is None else only
@@ -249,7 +252,12 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
             if i in run_starts:
                 if h is not None:
                     model.free(h)
-                h = model.embed(tokens) if i == 0 else model.from_host(g.layer(g.n_chunks - 1, i)["in"].float())
+                if i == 0:
+                    h = model.embed(tokens)
+                else:  # F119: the golden input at a layer gap is the harness's upload, not the model's time
+                    tg = time.time()
+                    h = model.from_host(g.layer(g.n_chunks - 1, i)["in"].float())
+                    gap[0] += time.time() - tg
             profiler.set_layer(i)
             if count:
                 with HostTransfers() as ht:
@@ -272,22 +280,32 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         assert not os.environ.get(
             "TT_METAL_DEVICE_PROFILER"
         ), "BRINGUP_PROFILE_WALL=1 runs with the device profiler off"
-        walls = []
+        walls, gaps = [], []
         for _ in range(WALL_RUNS):
             reload()
+            gap[0] = 0.0
             t0 = time.time()
             run()
-            walls.append(round((time.time() - t0) * 1e3, 1))
-        metrics.record("chunk_wall_ms", sorted(walls)[len(walls) // 2])
+            walls.append(round((time.time() - t0 - gap[0]) * 1e3, 1))
+            gaps.append(round(gap[0] * 1e3, 1))
+        kept = sorted(walls[WALL_WARM:] or walls)
+        med = kept[len(kept) // 2]
+        metrics.record("chunk_wall_ms", med)
         metrics.record("chunk_wall_ms_runs", walls)
+        metrics.record("chunk_wall_ms_spread", round(kept[-1] - kept[0], 1))
+        metrics.record("chunk_wall_gap_ms", sorted(gaps)[len(gaps) // 2])
         metrics.record("chunk_wall_clean", 1)
-        print(f"PROFILE wall (device profiler off): {walls} ms, median {sorted(walls)[len(walls) // 2]}")
-        return {"wall_ms": sorted(walls)[len(walls) // 2], "wall_runs_ms": walls}
+        print(
+            f"PROFILE wall (device profiler off, gap uploads excluded): {walls} ms, median of the last "
+            f"{len(kept)} {med}; gap uploads {sorted(gaps)[len(gaps) // 2]} ms"
+        )
+        return {"wall_ms": med, "wall_runs_ms": walls}
     reload()
     cpu_bridge.STATS.reset()
+    gap[0] = 0.0
     t0 = time.time()
     run()
-    wall = time.time() - t0
+    wall = time.time() - t0 - gap[0]  # F119
     cpu_bridge.record(metrics)
     bridged = {"steps": cpu_bridge.STATS.step_names, "ms": round(cpu_bridge.STATS.ms, 1)}
     reload()
