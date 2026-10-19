@@ -91,7 +91,7 @@ inline void llk_math_reduce_block(
         StateDiscard<bool>(is_int_fpu_en)));
 
     _llk_math_reduce_block_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(
-        dst_index, num_tiles, dst_stride, tensor_shape, unpack_src_format[operand_id]);
+        dst_index, num_tiles, dst_stride, tensor_shape);
 }
 
 // Unified init core (explicit shape), shared by the CB-id API and the LLKOperand API (experimental/2_0/).

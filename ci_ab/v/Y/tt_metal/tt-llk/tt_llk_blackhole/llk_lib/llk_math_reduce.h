@@ -455,17 +455,13 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 // A dst_stride of 0 accumulates the block into one tile.
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_block_(
-    const std::uint32_t dst_index,
-    std::uint32_t num_tiles,
-    const std::uint32_t dst_stride,
-    const ckernel::TensorShape tensor_shape,
-    const std::uint32_t data_format)
+    const std::uint32_t dst_index, std::uint32_t num_tiles, const std::uint32_t dst_stride, const ckernel::TensorShape tensor_shape)
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_block_", tensor_shape);
 
     if constexpr (dim == ReduceDim::REDUCE_ROW && type != PoolType::MAX)
     {
-        if (num_tiles > 1 && reduce_block_holds_scaler<type, dim>(tensor_shape, data_format))
+        if (num_tiles > 1 && reduce_block_holds_scaler<type, dim>(tensor_shape))
         {
             std::uint32_t dst = dst_index;
             while (num_tiles > 0)
