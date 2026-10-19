@@ -12,9 +12,11 @@ ported back to the original, and then deletes the fork.
 
 ## 1. Reuse before you fork
 
-Read `ttnn/ttnn/bringup/INDEX.md`. If the op is listed:
+Read `ttnn/ttnn/bringup/INDEX.md` (one entry per op, with the stock ops to consider it instead of). If the op is
+listed:
 - call the fork (`ttnn.bringup.<op>`, and `ttnn.bringup.<Enum>` for its enums);
-- read its `CHANGELOG.md`: the change you need may already be there;
+- read its `README.md` (what it does, options, measured, limits) and `CHANGELOG.md`: the change you need may already
+  be there;
 - extend it if not.
 
 Forks are shared by every model that uses them. A new behaviour must sit behind an argument or enum value whose
@@ -38,7 +40,8 @@ and makes it a separate op:
   that the source had compiled from ttnn's central `sources.cmake` go into this target.
 - Paths: kernel paths and fork-internal `#include`s point at the copy.
 - Python: the op binds under `ttnn.bringup.`, registered in `bringup_nanobind.cpp`.
-- Records: it writes `CHANGELOG.md` (source path and SHA) and adds an `INDEX.md` row.
+- Records: it writes `CHANGELOG.md` (source path and SHA), a `README.md` skeleton and an `INDEX.md` entry; fill in
+  both before you finish.
 
 It prints any line still pointing at the source's sibling ops. Those are dependencies the fork shares with the
 original; leave them unless your change needs them.
@@ -121,7 +124,7 @@ existing fork, whether it is a new feature, a new argument, a new output or a bu
    The results must match the baseline, and `fork_source` must report no regressions. Where the fork has a
    program-level check (a parity or descriptor test), it must show the option-off program is unchanged. If step 5
    finds a regression, fix it, go back to step 3 for the fix, then repeat step 5.
-6. **Record it.** Add a `CHANGELOG.md` entry (below) and update the `INDEX.md` row.
+6. **Record it.** Add a `CHANGELOG.md` entry (below), and update the `README.md` and the `INDEX.md` entry.
 
 A bug fix that has to change the default behaviour is the one exception to step 2. Say so in the changelog, and
 rerun every model's cases in step 5: they are exactly the models the fix changes.
@@ -138,7 +141,16 @@ Record the change in the fork's `CHANGELOG.md` under `## Changes`, one entry per
 - Files: <paths inside the fork>
 ```
 
-Update the `INDEX.md` row: the Changes column (a few words per change) and Used by.
+Then the fork's `README.md` (the current contract; the changelog is the history), with these sections, which
+`models/demos/common/bringup/testing/ops_lint.py` checks: `## What it does` (for a fork: only what it adds or fixes
+over the stock op), `## Consider it instead of`, `## Options` (each with its default), `## Measured` (numbers with
+box, shapes and the file they come from; "not measured" otherwise), `## Limits`, `## How to call`, `## Used by`. And
+its `INDEX.md` entry, one line plus the stock ops to consider it instead of:
+
+```
+- `ttnn.bringup.<op>` (<folder>): <what it does, one line>.
+  Consider instead of: <stock op>, <stock op>. -> <folder>/README.md
+```
 
 ## 4. Build
 
