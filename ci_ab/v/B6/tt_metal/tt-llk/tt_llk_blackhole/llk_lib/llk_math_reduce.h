@@ -201,12 +201,17 @@ inline void reduce_scalar_transpose_pool()
     // copy over from dest to B and do transpose
     // use rows 16 - 31 in src B as scratch
     TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, row);
+    TTI_GATESRCRST(0b1, 0b1);
     TTI_TRNSPSRCB;
+    // gate math instructions until src B has been updated
+    TTI_GATESRCRST(0b1, 0b1);
     // copy over all 16 rows from B to A
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
+    // gate math instructions until src A has been updated by MOV instructions
+    TTI_GATESRCRST(0b1, 0b1);
     // zero out scratch in dest
     TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, row);
 
@@ -284,11 +289,14 @@ inline void reduce_scalar_transpose_upper()
 {
     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
     TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, row);
+    TTI_GATESRCRST(0b1, 0b1);
     TTI_TRNSPSRCB;
+    TTI_GATESRCRST(0b1, 0b1);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 16, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 20, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 24, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 28, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
+    TTI_GATESRCRST(0b1, 0b1);
     TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, row);
 }
 
@@ -334,7 +342,7 @@ inline void reduce_scalar_block_tile(const std::uint32_t num_faces, const bool l
  * @brief REDUCE_SCALAR block of tiles accumulated into one DEST tile, faces >= 2.
  *
  * MAX pools every tile into the scratch row and transposes once. SUM/AVG keeps the tile path's sums, one transpose and
- * final pool per tile in tile order, but alternates scratch rows 4 and 5, so tile t's final pool runs in tile t+1's
+ * final pool per tile in tile order, but alternates scratch rows 8 and 16, so tile t's final pool runs in tile t+1's
  * face 1 banks alongside that face and the unpacker fills the free banks meanwhile; that pool reads face 1's scaler row
  * instead of face 3's, the same values for a scaler tile whose faces share their first row.
  */
@@ -371,26 +379,27 @@ inline void reduce_scalar_block_accumulate(const std::uint32_t dst_index, const 
         }
             .set(ADDR_MOD_4);
 
-        reduce_scalar_pool_faces<type, math_fidelity, 4>(0, num_faces, false);
+        // Scratch rows in other 8-row DEST blocks than row 0, so the alternating pools do not wait on each other.
+        reduce_scalar_pool_faces<type, math_fidelity, 8>(0, num_faces, false);
         for (std::uint32_t tile = 1; tile < num_tiles; tile++)
         {
             const bool last = tile == num_tiles - 1;
             if (tile & 1)
             {
-                reduce_scalar_block_tile<type, math_fidelity, 5, 4>(num_faces, last);
+                reduce_scalar_block_tile<type, math_fidelity, 16, 8>(num_faces, last);
             }
             else
             {
-                reduce_scalar_block_tile<type, math_fidelity, 4, 5>(num_faces, last);
+                reduce_scalar_block_tile<type, math_fidelity, 8, 16>(num_faces, last);
             }
         }
         if ((num_tiles - 1) & 1)
         {
-            reduce_scalar_transpose_pool<type, math_fidelity, 5>();
+            reduce_scalar_transpose_pool<type, math_fidelity, 16>();
         }
         else
         {
-            reduce_scalar_transpose_pool<type, math_fidelity, 4>();
+            reduce_scalar_transpose_pool<type, math_fidelity, 8>();
         }
     }
 }

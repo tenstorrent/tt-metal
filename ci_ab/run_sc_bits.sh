@@ -3,7 +3,7 @@
 # test_reduce_block.py, Scalar only. Each side builds once in a fresh dir; runs <first side> <others> <first side> with
 # bitdump.py, which hashes every result; the first side twice is the A/A of the stimuli.
 set +e +o pipefail
-SIDES=${SIDES:-head B4 B5}
+SIDES=${SIDES:-head B6 B7}
 R=$(git rev-parse --show-toplevel); S=$R/ci_ab; cd $R
 echo "== checkout $(git log --oneline -1 | cut -c1-60), $(hostname), $(date -u +%T), sides $SIDES"
 place() { while read -r rel; do [[ -n $rel ]] && cp "$S/v/$1/$rel" "$R/$rel"; done < $S/v/files.txt; }
