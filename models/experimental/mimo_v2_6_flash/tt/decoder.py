@@ -21,6 +21,11 @@ class TtRMSNorm:
         if weight is not None:
             w = weight.float().reshape(1, 1, -1, TILE).bfloat16()
         self.weight = as_weight(w, plan, plan.replicate(), ttnn.bfloat16, cache_file, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # Prefill (many tile rows) reads a tiled copy: with a row-major weight the interleaved rms_norm cannot fall back
+        # to its streaming large-tensor kernel, so once decode's persistent L1 buffers exist (a prefill after decode)
+        # its whole-row circular buffers clash with them.
+        hidden = self.weight.shape[-2] * self.weight.shape[-1]
+        self.weight_tiled = ttnn.to_layout(ttnn.reshape(self.weight, (1, 1, 1, hidden)), ttnn.TILE_LAYOUT)
         self.eps = eps
         self.config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True, packer_l1_acc=False)
         # Decode (one tile row): an interleaved rms_norm runs on a single core (67 us); width-shard the
@@ -71,7 +76,7 @@ class TtRMSNorm:
         return ttnn.rms_norm(
             x,
             epsilon=self.eps,
-            weight=self.weight,
+            weight=self.weight_tiled,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.config,
         )

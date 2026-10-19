@@ -74,9 +74,11 @@ class MiMoV2ForCausalLM:
     }
     # Emits SlidingWindowSpec groups: the plugin's KV budget adds its sliding-window headroom.
     _HYBRID_KV_CACHE_GROUPS_ENABLED = True
-    # vLLM's KV cache group of each layer, set by get_kv_cache_spec. The plugin calls it in the worker process that
-    # later allocates the KV cache, before allocate_kv_cache_per_layer, and the engine groups the same specs with the
-    # same function and config.
+    # (vllm_config, specs) recorded by get_kv_cache_spec, which the plugin calls in the worker process that later
+    # allocates the KV cache. allocate_kv_cache_per_layer groups the specs with vLLM's own function, as the engine
+    # did: vLLM resolves the KV cache layout the grouping reads only after collecting the specs.
+    _kv_cache_spec_source = None
+    # vLLM's KV cache group of each layer, when set directly (tests driving the adapter without vLLM).
     _layer_groups = None
 
     def __init__(self, generator, max_seq_len):
@@ -139,7 +141,6 @@ class MiMoV2ForCausalLM:
 
     @classmethod
     def get_kv_cache_spec(cls, vllm_config):
-        from vllm.v1.core.kv_cache_utils import get_kv_cache_groups
         from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
         hf = vllm_config.model_config.hf_config
@@ -163,21 +164,34 @@ class MiMoV2ForCausalLM:
                 )
             else:
                 specs[name] = FullAttentionSpec(block_size=block_size, dtype=dtype, page_size_padded=page, **full)
-        groups = [None] * hf.num_hidden_layers
+        cls._kv_cache_spec_source = (vllm_config, specs)
+        return specs
+
+    @classmethod
+    def _vllm_layer_groups(cls):
+        """vLLM's KV cache group of each layer, from the specs get_kv_cache_spec returned."""
+        if cls._layer_groups is not None:
+            return cls._layer_groups
+        if cls._kv_cache_spec_source is None:
+            raise RuntimeError("allocate_kv_cache_per_layer before get_kv_cache_spec: no KV cache groups")
+        from vllm.v1.core.kv_cache_utils import get_kv_cache_groups
+
+        vllm_config, specs = cls._kv_cache_spec_source
+        groups = [None] * len(specs)
         for g, group in enumerate(get_kv_cache_groups(vllm_config, dict(specs))):
             for name in group.layer_names:
                 groups[int(name.split(".")[2])] = g
-        assert None not in groups, f"layers without a KV cache group: {groups}"
-        cls._layer_groups = groups
+        if None in groups:
+            raise RuntimeError(f"layers without a KV cache group: {groups}")
         logger.info(f"MiMo vLLM KV cache groups per layer: {groups}")
-        return specs
+        return groups
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
         """per_layer_specs: (shape, dtype, tensor_idx) per layer, shape[0] the lane's block count. Returns, per lane,
         [K, V] per layer, with buffers shared as in the module docstring."""
-        groups = type(self)._layer_groups
-        if groups is None or len(groups) != len(per_layer_specs):
-            raise RuntimeError(f"get_kv_cache_spec did not record a KV cache group per layer (got {groups})")
+        groups = self._vllm_layer_groups()
+        if len(groups) != len(per_layer_specs):
+            raise RuntimeError(f"{len(per_layer_specs)} layer KV specs but {len(groups)} layer groups")
         num_blocks, block_size = per_layer_specs[0][0][0], per_layer_specs[0][0][2]
         assert block_size == BLOCK_SIZE and all(s[0][0] == num_blocks for s in per_layer_specs)
         # Layers sharing a buffer must come from different groups: their block ids never overlap.
