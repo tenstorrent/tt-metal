@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """DeepSeek-V4.1-Flash decode model: V4's traced TP pipeline around V4.1 layers.
 
-The deployment is TP4 across 8 stages (a 32-chip mesh opened as ``(8, 4)``). Each stage is a
-1x4 submesh; with the profile's pipeline group size of 1 it owns one contiguous run of layers.
+The deployment is TP4 across ``DEEPSEEK_V4_NUM_STAGES`` stages (default 8: a 32-chip mesh opened
+as ``(8, 4)``). Each stage is a 1x4 submesh; with the profile's pipeline group size of 1 it owns
+one contiguous run of layers.
 What V4 already does is reused: the H2D packet, on-device RoPE, D2D sockets, trace variants, the
 replay thread and the DRISC prefetch rings. This file only replaces the parts V4.1 changed.
 
@@ -49,6 +50,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     decoder_layer_weights,
     dequantized,
     expert_provider,
+    pipeline_stage_count,
 )
 from models.experimental.deepseek_v41_flash.tt.decode.attention import (
     _SELECT_KV_RATE,
@@ -134,8 +136,9 @@ def _device_zeros(shape, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) -
 class DeepSeekV41Model(DeepSeekV4Model):
     """V4.1 decode stack on V4's traced pipeline.
 
-    ``tp_size`` defaults to 4 and ``num_stages`` to 8, so a 32-chip mesh runs one 1x4 stage per
-    row. ``use_submeshes`` stays on: traced decode sends the packet and the residual over sockets.
+    ``tp_size`` defaults to 4 and ``num_stages`` to :func:`pipeline_stage_count`
+    (``DEEPSEEK_V4_NUM_STAGES``, default 8), so a 32-chip mesh runs one 1x4 stage per row.
+    ``use_submeshes`` stays on: traced decode sends the packet and the residual over sockets.
     ``weight_dtype`` is the attention and routed-expert dtype (bfloat4_b in the demo); the shared
     expert stays bfloat8_b and the Engram, norms and hyper-connections stay at their own defaults.
     ``layer_submesh_ids`` (one non-decreasing stage index per built layer) overrides V4's even
@@ -160,7 +163,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         num_prefetch_pages: Optional[int] = None,
         system_config=None,
         tp_size: int = 4,
-        num_stages: int = 8,
+        num_stages: Optional[int] = None,
         submeshes: Optional[Sequence[ttnn.MeshDevice]] = None,
         use_prefetcher: Optional[bool] = None,
         layer_submesh_ids: Optional[Sequence[int]] = None,
@@ -206,6 +209,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self.use_submeshes = True
         self.mesh_devices = full_device.get_num_devices()
         pipeline_devices = system_config.pipeline.resolve_num_devices(self.mesh_devices)
+        if num_stages is None:
+            num_stages = pipeline_stage_count()
         if num_stages < 1 or num_stages * tp_size > pipeline_devices:
             raise ValueError(
                 f"num_stages={num_stages} x TP{tp_size} does not fit the {pipeline_devices} pipeline devices"

@@ -10,7 +10,7 @@ ring and the shared compressed KV in place, then generation continues one token
 per step (``S = 1``) against that cache. The RoPE tables are produced once for
 the maximum length; each decode step rebuilds its row on device from the position.
 
-The deployment is eight 1x4 tensor-parallel stages, one per row of a 32-chip mesh.
+The deployment opens the full 8x4 mesh and carves ``DEEPSEEK_V4_NUM_STAGES`` (default eight) 1x4 stages from it.
 
 Attention uses q_a/kv, replicated full-width on every rank of a stage; head-sharded
 SDPA, batched local-group O_A and row-parallel O_B. MoE shards the intermediate
@@ -60,6 +60,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     DEFAULT_MODEL_DIR,
     dequantized,
     load_config,
+    pipeline_stage_count,
 )
 from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import ENGRAM_WKV_GCB, O_B_GCB, SHARED_DOWN_GCB
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_table_nbytes
@@ -79,6 +80,8 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import (
     resolve_snapshot_dir,
 )
 
+# The mesh stays (8, 4). DEEPSEEK_V4_NUM_STAGES (default 8) is how many 1x4 submeshes the model creates.
+_NUM_STAGES = pipeline_stage_count()
 # Chat-templated this is exactly 128 tokens (= the sliding window), so the same prompt can be
 # fed through a prefill model or replayed through decode.
 _DEFAULT_TEXT = (
@@ -150,7 +153,7 @@ def _construct_model(
     system_config=None,
     loader=None,
     config=None,
-    num_stages: int = 8,
+    num_stages: int | None = None,
     submeshes=None,
     use_prefetcher=None,
     layer_submesh_ids=None,
@@ -201,8 +204,10 @@ def _construct_model(
     return model, lm_head, loader, config
 
 
-def _assert_decode_parallelism(model: DeepSeekV41Model, tp_size: int, num_stages: int = 8) -> None:
+def _assert_decode_parallelism(model: DeepSeekV41Model, tp_size: int, num_stages: int | None = None) -> None:
     """The TP / pipeline layout this demo pins."""
+    if num_stages is None:
+        num_stages = pipeline_stage_count()
     assert model.tp_size == tp_size
     assert model.num_submeshes == num_stages
     assert model.pipeline_devices == model.num_submeshes * tp_size
@@ -275,7 +280,7 @@ def _build_and_prefill(
     system_config=None,
     *,
     tp_size: int = 4,
-    num_stages: int = 8,
+    num_stages: int | None = None,
 ):
     """Build the full ttnn model, prepare the static traced-decode buffers, and
     prefill ``text`` one token at a time."""
@@ -425,9 +430,9 @@ class _InterruptFlag:
 @pytest.mark.parametrize(
     "mesh_device,tp_size,num_stages",
     [
-        # TP4 opens the mesh directly as (8, 4) so no reshape changes the per-device grid.
-        # Eight 1x4 stages, one per Galaxy row.
-        pytest.param((8, 4), 4, 8, id="tp4_8stage"),
+        # TP4 opens the full Galaxy as (8, 4) so no reshape changes the per-device grid.
+        # DEEPSEEK_V4_NUM_STAGES (default 8) submeshes are created; the other rows stay idle.
+        pytest.param((8, 4), 4, _NUM_STAGES, id=f"tp4_{_NUM_STAGES}stage"),
     ],
     indirect=["mesh_device"],
 )
