@@ -17,6 +17,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_trids.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
@@ -156,6 +157,40 @@ constexpr bool dispatch_s_enabled = dispatch_d_shutdown_sem_id != 0;
 #ifndef ARCH_QUASAR
 constexpr bool publish_noc_count = !distributed_dispatcher && dispatch_s_enabled;
 #endif
+
+// Trids dispatch_d issues its NoC writes on. With Quasar's RoCC NoC API the plain write barrier and flush only see
+// trid 0, which every DM on the tile shares, so dispatch waits on its own trids instead. Elsewhere the plain barrier
+// and flush count writes on every trid (and per-trid acks aren't reliable for multicast on WH/BH), so they're used
+// as is.
+#if defined(ARCH_QUASAR) && !defined(NOC_API_V1)
+#define DISPATCH_PER_TRID_WRITE_BARRIERS
+#endif
+constexpr uint32_t dispatch_write_trids[] = {cq_trids::DEFAULT};
+
+// Wait for all of dispatch_d's writes to be acked.
+FORCE_INLINE void dispatch_write_barrier() {
+#ifdef TRACE_WRITE_BARRIERS
+    DeviceZoneScopedN("noc_async_write_barrier");
+#endif
+#ifdef DISPATCH_PER_TRID_WRITE_BARRIERS
+    for (uint32_t trid : dispatch_write_trids) {
+        noc_async_write_barrier_with_trid(trid, noc_index);
+    }
+#else
+    noc_async_write_barrier();
+#endif
+}
+
+// Wait for all of dispatch_d's writes to be sent, i.e. to have read their source data.
+FORCE_INLINE void dispatch_writes_flushed() {
+#ifdef DISPATCH_PER_TRID_WRITE_BARRIERS
+    for (uint32_t trid : dispatch_write_trids) {
+        noc_async_write_flushed_with_trid(trid, noc_index);
+    }
+#else
+    noc_async_writes_flushed();
+#endif
+}
 
 // Break buffer into blocks, 1/n of the total (dividing equally)
 // Do bookkeeping (release, etc) based on blocks
@@ -405,7 +440,7 @@ void process_write_host_h() {
 
             length -= xfer_size;
             data_ptr += xfer_size;
-            noc_async_writes_flushed();
+            dispatch_writes_flushed();
         }
     }
     cmd_ptr = data_ptr;
@@ -763,10 +798,7 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
         mcasts = 0;
         // Workaround mcast path reservation hangs by always waiting for a write
         // barrier before doing an mcast that isn't linked to a previous mcast.
-#ifdef TRACE_WRITE_BARRIERS
-        DeviceZoneScopedN("noc_async_write_barrier");
-#endif
-        noc_async_write_barrier();
+        dispatch_write_barrier();
     };
     WritePackedSubCmd* sub_cmd_ptr = (WritePackedSubCmd*)l1_cache;
     while (count != 0) {
@@ -896,10 +928,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
             writes = 0;
             // Workaround mcast path reservation hangs by always waiting for a write
             // barrier before doing an mcast that isn't linked to a previous mcast.
-#ifdef TRACE_WRITE_BARRIERS
-            DeviceZoneScopedN("noc_async_write_barrier");
-#endif
-            noc_async_write_barrier();
+            dispatch_write_barrier();
         };
 
         // Only re-init state after we have unlinked the last transaction
@@ -1102,10 +1131,7 @@ static void process_wait() {
 
     if (barrier) {
         // DPRINT("dispatch barrier\n");
-#ifdef TRACE_WRITE_BARRIERS
-        DeviceZoneScopedN("noc_async_write_barrier");
-#endif
-        noc_async_write_barrier();
+        dispatch_write_barrier();
     }
 
     WAYPOINT("PWW");
@@ -1250,10 +1276,7 @@ void process_notify_dispatch_s_go_signal_cmd() {
     // write barrier to wait before sending the go signal
     if (wait) {
         // DPRINT("dispatch_s_notify barrier\n");
-#ifdef TRACE_WRITE_BARRIERS
-        DeviceZoneScopedN("noc_async_write_barrier");
-#endif
-        noc_async_write_barrier();
+        dispatch_write_barrier();
     }
     uint16_t index_bitmask = load_aligned<uint16_t>(&cmd->notify_dispatch_s_go_signal.index_bitmask);
 
@@ -1547,8 +1570,7 @@ FORCE_INLINE NocCounterSnapshot snapshot_dispatch_d_noc_counters() {
         .nonposted_writes_num_issued = noc_nonposted_writes_num_issued[noc_index],
         .nonposted_writes_acked = noc_nonposted_writes_acked[noc_index],
         .nonposted_atomics_acked = noc_nonposted_atomics_acked[noc_index],
-        .posted_writes_num_issued = noc_posted_writes_num_issued[noc_index]
-    };
+        .posted_writes_num_issued = noc_posted_writes_num_issued[noc_index]};
 }
 
 // dispatch_d writes to the NOC1 core, but dispatch_s holds dedicated noc status on it. L1 noc counters
@@ -1579,8 +1601,7 @@ void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
         upstream_noc_index, nonposted_writes_acked_delta);
     set_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
         upstream_noc_index, nonposted_atomics_acked_delta);
-    set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(
-        upstream_noc_index, posted_writes_delta);
+    set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(upstream_noc_index, posted_writes_delta);
 
     Semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id).set(1);
 }
@@ -1706,7 +1727,7 @@ void kernel_main() {
 
     dispatch_cb_reader.release_all_pages(cmd_ptr);
 
-    noc_async_write_barrier();
+    dispatch_write_barrier();
 
     // Confirm expected number of pages, spinning here is a leak
     dispatch_cb_reader.wait_all_pages();
