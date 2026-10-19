@@ -4,6 +4,7 @@
 
 """Host-only tests of the comparison logic: no device, no ttnn."""
 
+import importlib
 import os
 import sys
 
@@ -205,3 +206,12 @@ def test_committed_sweep_samples_parse():
     for name in names:
         doc = calls.load_calls(os.path.join(sweeps, name))
         assert doc["op"] == name[: -len(".json")]
+
+
+def test_loaded_from_tree_detects_a_side_running_the_other_build():
+    run = importlib.import_module("run")
+    mine = {"loaded": ["/a/build/lib/libtt_metal.so", "/a/ttnn/ttnn/_ttnn.so"]}
+    other = {"loaded": ["/b/build/lib/libtt_metal.so", "/a/ttnn/ttnn/_ttnn.so"]}
+    assert run.loaded_from_tree("/a", [mine, None])
+    assert not run.loaded_from_tree("/a", [mine, other])
+    assert not run.loaded_from_tree("/a", [{}])

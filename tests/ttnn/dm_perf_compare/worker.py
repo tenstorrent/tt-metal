@@ -34,6 +34,14 @@ def first_line(exc):
     return (lines[0] if lines else type(exc).__name__)[:MAX_ERROR_CHARS]
 
 
+def loaded_paths(ttnn):
+    """Where the extension and the runtime library were loaded from: a stale LD_LIBRARY_PATH can make
+    one side silently run the other side's build, which would read as "no change"."""
+    with open("/proc/self/maps") as f:
+        libs = {os.path.realpath(line.split()[-1]) for line in f if "libtt_metal" in line or "_ttnn" in line}
+    return sorted(libs | {os.path.realpath(ttnn.__file__)})
+
+
 def digest(ttnn, torch, out):
     host = ttnn.to_torch(out).contiguous()
     return hashlib.sha256(host.view(torch.uint8).numpy().tobytes()).hexdigest()[:16]
@@ -141,6 +149,7 @@ def main(argv):
     out = {"mode": args.mode, "op": doc["op"], "impls": impls, "calls": {}}
     try:
         out["device_arch"] = str(device.arch())
+        out["loaded"] = loaded_paths(ttnn)
         adapter = OpAdapter(doc["op"], ttnn)
         out["entries"] = {impl: adapter.available(impl) for impl in IMPLS}
         signpost = None

@@ -45,7 +45,15 @@ def tree_env(tree, cache_dir):
     env["TT_METAL_HOME"] = tree
     env["PYTHONPATH"] = os.pathsep.join([f"{tree}/ttnn", f"{tree}/tools", tree])
     env["TT_METAL_CACHE"] = cache_dir
+    env["LD_LIBRARY_PATH"] = os.pathsep.join(filter(None, [f"{tree}/build/lib", os.environ.get("LD_LIBRARY_PATH")]))
     return env
+
+
+def loaded_from_tree(tree, runs):
+    """True when every process of this side loaded its libraries from the tree it was given."""
+    root = os.path.realpath(tree) + os.sep
+    paths = [p for run in runs if run for p in run.get("loaded", [])]
+    return bool(paths) and all(p.startswith(root) for p in paths)
 
 
 def git_sha(tree):
@@ -188,12 +196,20 @@ def main(argv):
             log("device round %d" % (rnd + 1))
             raw["device"].append(runner.device_pass(f"device-r{rnd}"))
 
+    side_runs = {
+        "before": raw["time"]["before"],
+        "after": [r for label in ("after_default", "after", "ctl_before", "ctl_after") for r in raw["time"][label]],
+    }
+    tree_ok = {name: loaded_from_tree(path, side_runs[name]) for name, path in runner.trees.items()}
     boards = {r["device_arch"] for runs in raw["time"].values() for r in runs if r and "device_arch" in r}
     meta = {
         "op": doc["op"],
         "created": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "device_arch": sorted(boards),
-        "trees": {name: {"path": path, "sha": git_sha(path)} for name, path in runner.trees.items()},
+        "trees": {
+            name: {"path": path, "sha": git_sha(path), "loaded_from_tree": tree_ok[name]}
+            for name, path in runner.trees.items()
+        },
         "params": {
             "rounds": args.rounds,
             "warmup": args.warmup,
@@ -216,7 +232,11 @@ def main(argv):
             % (results["noise"]["noise_pct"], stats.MAX_NOISE_PCT)
         )
     log("skipped/failed entries: %d" % len(results["skipped"]))
+    if not all(tree_ok.values()):
+        log("ERROR: a side loaded libraries from outside its tree (%s); the comparison is void" % tree_ok)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    sys.exit(main(sys.argv[1:]))
