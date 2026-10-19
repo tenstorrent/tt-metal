@@ -14,6 +14,8 @@ namespace ckernel::sfpu {
 
 inline void elu_init() { math::_reset_counters_<p_setrwc::SET_ABD_F>(); }
 
+// The slope the generated elu kernel is fitted for, as FP32 bits; any other slope runs the stock kernel.
+inline constexpr std::uint32_t elu_bf16_slope_bits = 0x3f800000u;
 // Whether BF16 DEST runs the generated elu kernel as one call over the whole tile.
 inline constexpr bool elu_bf16_whole_tile = false;
 

@@ -18,7 +18,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 _t = ttnn._ttnn.operations.transformer  # the prims are not registered as ttnn.transformer operations
 
@@ -63,19 +63,19 @@ def _const_tiles(device, chunk_size=CHUNK):
     return (_up(eye), _up(tril), _up(ones), _up(masks))
 
 
-def _make_inputs(bh, nc, seed, scale):
+def _make_inputs(bh, nc, seed, scale, chunk=CHUNK):
     """Head-major prim inputs in the op's numeric regime: q/k L2-normalized over the last dim
     (unnormalized keys NaN the recurrence on every path), q pre-scaled on host (the prim applies
     NO scale when qk_norm=False — mirroring the public op, which folds scale into q before prep),
     beta in (0,1), g <= 0."""
     torch.manual_seed(seed)
-    q = F.normalize(torch.randn(bh, nc, CHUNK, KDIM), dim=-1)
-    k = F.normalize(torch.randn(bh, nc, CHUNK, KDIM), dim=-1)
+    q = F.normalize(torch.randn(bh, nc, chunk, KDIM), dim=-1)
+    k = F.normalize(torch.randn(bh, nc, chunk, KDIM), dim=-1)
     q = (q * scale).to(torch.bfloat16)
     k = k.to(torch.bfloat16)
-    v = (0.5 * torch.randn(bh, nc, CHUNK, VDIM)).to(torch.bfloat16)
-    beta = torch.sigmoid(torch.randn(bh, nc, CHUNK))
-    g = -F.softplus(torch.randn(bh, nc, CHUNK)) * 0.5
+    v = (0.5 * torch.randn(bh, nc, chunk, VDIM)).to(torch.bfloat16)
+    beta = torch.sigmoid(torch.randn(bh, nc, chunk))
+    g = -F.softplus(torch.randn(bh, nc, chunk)) * 0.5
     s0 = 0.05 * torch.randn(bh, KDIM, VDIM)
     return q, k, v, g, beta, s0
 
@@ -142,11 +142,13 @@ def _dev(device, t, dtype):
 
 
 # (16, 8) = 128 (head, chunk) work-items: exercises the multi-core fan-out of distribute_prep
-# (fills a full 8x8+ grid); (4, 4) is the small-shape smoke.
-@pytest.mark.parametrize("bh, nc", [(4, 4), (16, 8)])
-def test_prep_outputs_vs_torch(device, bh, nc):
+# (fills a full 8x8+ grid); (4, 4) is the small-shape smoke. The chunk-64 case (Ct = 2, two tile rows per
+# chunk) is the only place the per-tile-row outputs are held to the math rather than to another device path:
+# the second tile row's decay factor (k_dec_t's upper half of C) and the dl tile.
+@pytest.mark.parametrize("bh, nc, chunk", [(4, 4, CHUNK), (16, 8, CHUNK), (4, 2, 64)], ids=["4-4", "16-8", "chunk64"])
+def test_prep_outputs_vs_torch(device, bh, nc, chunk):
     scale = KDIM**-0.5
-    q, k, v, g, beta, _ = _make_inputs(bh, nc, seed=20260820, scale=scale)
+    q, k, v, g, beta, _ = _make_inputs(bh, nc, seed=20260820, scale=scale, chunk=chunk)
 
     outs = _t.chunk_gdn_prep(
         _dev(device, q, ttnn.bfloat16),
@@ -154,8 +156,8 @@ def test_prep_outputs_vs_torch(device, bh, nc):
         _dev(device, v, ttnn.bfloat16),
         _dev(device, g.unsqueeze(-1), ttnn.float32),
         _dev(device, beta.unsqueeze(-1), ttnn.float32),
-        *_const_tiles(device),
-        chunk_size=CHUNK,
+        *_const_tiles(device, chunk),
+        chunk_size=chunk,
     )
     refs = _prep_reference(q.float(), k.float(), v.float(), g, beta)
 

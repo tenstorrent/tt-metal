@@ -551,14 +551,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
     uint32_t go_signal,
     uint32_t wait_stream,
     uint8_t multicast_go_offset,
-    uint8_t num_unicast_txns,
-    uint8_t noc_data_start_index,
     DispatcherSelect dispatcher_type) {
-    TT_ASSERT(
-        num_unicast_txns <= std::numeric_limits<uint8_t>::max(),
-        "Number of unicast destinations {} exceeds maximum {}",
-        num_unicast_txns,
-        std::numeric_limits<uint8_t>::max());
     uint32_t lengthB = sizeof(CQDispatchCmd);
     TT_ASSERT(
         lengthB <= (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE),
@@ -570,8 +563,6 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         mcast_cmd->mcast.go_signal = go_signal;
         mcast_cmd->mcast.wait_count = wait_count;
         mcast_cmd->mcast.multicast_go_offset = multicast_go_offset;
-        mcast_cmd->mcast.num_unicast_txns = num_unicast_txns;
-        mcast_cmd->mcast.noc_data_start_index = noc_data_start_index;
         mcast_cmd->mcast.wait_stream = wait_stream;
     };
     CQDispatchCmd* mcast_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
@@ -810,44 +801,6 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_sub_device_worker_counts(
     uint32_t* workers_per_sub_device_dst = this->reserve_space<uint32_t*>(data_sizeB);
     if (data_sizeB > 0) {
         this->memcpy(workers_per_sub_device_dst, workers_per_sub_device.data(), data_sizeB);
-    }
-    this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
-}
-
-template <bool hugepage_write>
-void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_data(
-    const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type) {
-    TT_ASSERT(
-        noc_mcast_unicast_data.size() <= DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
-        "Number of words {} exceeds maximum {}",
-        noc_mcast_unicast_data.size(),
-        DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
-    auto data_sizeB = noc_mcast_unicast_data.size() * sizeof(uint32_t);
-    uint32_t lengthB = sizeof(CQDispatchCmd) + data_sizeB;
-    if (dispatcher_type == DispatcherSelect::DISPATCH_SUBORDINATE) {
-        constexpr uint32_t dispatch_page_size = 1 << DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
-        TT_FATAL(
-            lengthB <= dispatch_page_size,
-            "Data to set go signal noc data {} must fit within one dispatch page {} when sending to dispatch_s",
-            lengthB,
-            dispatch_page_size);
-    }
-    this->add_prefetch_relay_inline(true, lengthB, dispatcher_type);
-    auto initialize_set_go_signal_noc_data_cmd = [&](CQDispatchCmd* set_go_signal_noc_data_cmd) {
-        set_go_signal_noc_data_cmd->base.cmd_id = CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA;
-        set_go_signal_noc_data_cmd->set_go_signal_noc_data.num_words = noc_mcast_unicast_data.size();
-    };
-    CQDispatchCmd* set_go_signal_noc_data_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
-    if constexpr (hugepage_write) {
-        alignas(MEMCPY_ALIGNMENT) CQDispatchCmd set_go_signal_noc_data_cmd{};
-        initialize_set_go_signal_noc_data_cmd(&set_go_signal_noc_data_cmd);
-        this->memcpy(set_go_signal_noc_data_cmd_dst, &set_go_signal_noc_data_cmd, sizeof(CQDispatchCmd));
-    } else {
-        initialize_set_go_signal_noc_data_cmd(set_go_signal_noc_data_cmd_dst);
-    }
-    uint32_t* noc_mcast_unicast_data_dst = this->reserve_space<uint32_t*>(data_sizeB);
-    if (data_sizeB > 0) {
-        this->memcpy(noc_mcast_unicast_data_dst, noc_mcast_unicast_data.data(), data_sizeB);
     }
     this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
 }

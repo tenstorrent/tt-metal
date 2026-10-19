@@ -34,6 +34,8 @@
 #include "llk_sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h"
 #include "llk_sfpu/ckernel_sfpu_cbrt.h"
 #include "llk_sfpu/ckernel_sfpu_clamp.h"
+#include "llk_sfpu/ckernel_sfpu_copy_dest_values.h"
+#include "llk_sfpu/ckernel_sfpu_quant.h"
 // Metal comparison-to-zero / unary-int-compare kernels (calculate_comp,
 // calculate_comp_int, calculate_comp_uint16, calculate_eqz_uint32,
 // calculate_nez_uint32, calculate_comp_unary_int + their *_init). Distinct from
@@ -125,6 +127,17 @@
 
 namespace ckernel::sfpu
 {
+
+// exp_with_base's scale, 0.5 (base b = e^0.5). bf16 for the calculate call's SFPMULI
+// immediate; the same bits shifted into fp32 for exp_init, which bakes the scale into the
+// approximate clamp path's constants. Mirrored as EXP_WITH_BASE_SCALE in
+// sfpu_dispatch_constants.py, which the golden reads.
+constexpr std::uint32_t EXP_WITH_BASE_SCALE_BF16 = 0x3F00u;
+constexpr std::uint32_t EXP_WITH_BASE_SCALE_FP32 = EXP_WITH_BASE_SCALE_BF16 << 16;
+
+// The approximate clamp path of calculate_exponential is hand-unrolled for 8 rows and
+// ignores ITERATIONS (tt-llk#1486), so its callers run it per face over all four faces.
+constexpr int EXP_APPROX_CLAMP_ITERATIONS = 8;
 
 template <bool APPROXIMATION_MODE, bool IS_FP32_DEST_ACC_EN, int ITERATIONS, bool CLAMP_NEGATIVE, std::uint32_t EXP_BASE_SCALE_FACTOR>
 inline __attribute__((always_inline)) void calculate_exponential_const_scale()
@@ -465,8 +478,11 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     {
         // "exp with base b" = b^x = exp(x * ln b); implemented as the SCALE_EN path
         // of calculate_exponential (multiplies the input by a bf16 scale before exp).
-        // Init is identical to exponential; the scale is applied in the calculate call.
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp_init<APPROX_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE, is_fp32_dest_acc_en>);
+        // The accurate paths apply the scale in the calculate call. The approximate
+        // clamp path does not read it there: it bakes the scale into the constants this
+        // init programs, so the init carries the same 0.5 -- with 1.0 here it computed
+        // exp(x) against an exp(0.5 * x) golden.
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp_init<APPROX_MODE, EXP_WITH_BASE_SCALE_FP32, CLAMP_NEGATIVE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::erfinv)
     {
@@ -622,7 +638,12 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
+#ifdef ARCH_WORMHOLE
+        constexpr bool round_to_bf16 = !APPROX_MODE && !is_fp32_dest_acc_en;
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en, round_to_bf16>);
+#else
         llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en>);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
@@ -766,6 +787,17 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
 #else
     constexpr std::uint32_t SHIFT_AMOUNT = 3u;
 #endif
+    // Polygamma order n and its scale (-1)^(n+1) * n!, as the fp32 bit patterns ttnn passes to
+    // polygamma_tile. Overridable via the SFPU_POLYGAMMA_ORDER template parameter so the Python
+    // side can sweep n = 1..11; a test that does not set it keeps trigamma (n = 1, scale = 1).
+    // The golden reads the same order through UnarySFPUGolden's polygamma_order argument.
+#ifdef SFPU_POLYGAMMA_N_BITS
+    constexpr std::uint32_t POLYGAMMA_N_BITS     = SFPU_POLYGAMMA_N_BITS;
+    constexpr std::uint32_t POLYGAMMA_SCALE_BITS = SFPU_POLYGAMMA_SCALE_BITS;
+#else
+    constexpr std::uint32_t POLYGAMMA_N_BITS     = 0x3f800000u; // n = 1.0f
+    constexpr std::uint32_t POLYGAMMA_SCALE_BITS = 0x3f800000u; // scale = 1.0f
+#endif
     // Integer threshold for relu_min's vInt branch, as a two's-complement uint32 (_relu_min_
     // declares the parameter std::uint32_t and immediately static_casts it to int). Overridable
     // via the SFPU_RELU_MIN_INT_THRESHOLD template parameter, on the same #ifdef arrangement as
@@ -878,7 +910,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_exponential,
-            (APPROX_MODE, is_fp32_dest_acc_en, false /* scale_en */, 8, CLAMP_NEGATIVE),
+            (APPROX_MODE, is_fp32_dest_acc_en, false /* scale_en */, EXP_APPROX_CLAMP_ITERATIONS, CLAMP_NEGATIVE),
             dst_index,
             VectorMode::RC,
             p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
@@ -895,9 +927,25 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             vector_mode,
             p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
     }
+    // exp_with_base, approximate clamp path: run as Exp's is, EXP_APPROX_CLAMP_ITERATIONS
+    // per face over all four faces. Through one ITERATIONS call it processed 8 of a
+    // tile's 32 rows and left the other 24 holding their input. This path takes its scale
+    // from exp_init's constants (above), not from the call; the call's is passed only
+    // because the adapter's signature carries it.
+    else if constexpr (OPERATION == SfpuType::exp_with_base && APPROX_MODE && CLAMP_NEGATIVE)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_exponential_const_scale,
+            (APPROX_MODE, is_fp32_dest_acc_en, EXP_APPROX_CLAMP_ITERATIONS, CLAMP_NEGATIVE, EXP_WITH_BASE_SCALE_BF16),
+            dst_index,
+            VectorMode::RC);
+    }
     // exp_with_base = b^x = exp(x * ln b): the only op that drives calculate_exponential
-    // with SCALE_EN=true. The bf16 scale 0x3F00 == 0.5 selects base b = e^0.5, so the
-    // golden is exp(0.5*x); 0.5 is exact in bf16 so no scale-rounding error is added.
+    // with SCALE_EN=true. The bf16 scale EXP_WITH_BASE_SCALE_BF16 == 0.5 selects base
+    // b = e^0.5, so the golden is exp(0.5*x); 0.5 is exact in bf16 so no scale-rounding
+    // error is added.
     //
     // The bf16-accurate path (_sfpu_exp_21f_bf16_tti_) lowers the scale via TTI_SFPMULI,
     // whose immediate operand must be a compile-time constant. Pass the scale through the
@@ -908,7 +956,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_exponential_const_scale,
-            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, CLAMP_NEGATIVE, 0x3F00u /* bf16(0.5) exp base scale */),
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, CLAMP_NEGATIVE, EXP_WITH_BASE_SCALE_BF16),
             dst_index,
             vector_mode);
     }
@@ -1059,13 +1107,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_square,
-            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
-            dst_index,
-            vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::signbit)
     {
@@ -1176,13 +1218,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         constexpr std::uint32_t RELU_MAX_THRESHOLD_BITS = 0x40A00000u; // 5.0f
 #endif
         SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _relu_max_,
-            (sfpi::vFloat, APPROX_MODE, ITERATIONS, std::uint32_t),
-            dst_index,
-            vector_mode,
-            RELU_MAX_THRESHOLD_BITS);
+            DST_SYNC_MODE, DST_ACCUM_MODE, _relu_max_, (sfpi::vFloat, APPROX_MODE, ITERATIONS, std::uint32_t), dst_index, vector_mode, RELU_MAX_THRESHOLD_BITS);
     }
     else if constexpr (OPERATION == SfpuType::relu_min)
     {
@@ -1565,7 +1601,6 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::polygamma)
     {
-        // order n = 1 (trigamma); scale = (-1)^(n+1) * n! = 1.0f.
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -1573,8 +1608,8 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
             dst_index,
             vector_mode,
-            0x3f800000u /* n = 1.0f */,
-            0x3f800000u /* scale = 1.0f */);
+            POLYGAMMA_N_BITS,
+            POLYGAMMA_SCALE_BITS);
     }
     else if constexpr (OPERATION == SfpuType::xielu)
     {
@@ -1637,9 +1672,14 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
  * DST_ACCUM_MODE (is_fp32_dest_acc_en) must match the value passed to the paired
  * call_binary_sfpu_operation(): ops such as atan2 load an fp32- vs bf16-specific
  * reciprocal polynomial at init time that the calculate step then relies on.
+ *
+ * SIGN_MAGNITUDE_FORMAT and zero_point are quant-family only (QUANT, REQUANT,
+ * DEQUANT). SIGN_MAGNITUDE_FORMAT must match the paired calculate call. zero_point
+ * is the fp32 bit pattern of the zero point: +zp for QUANT and REQUANT, -zp for
+ * DEQUANT.
  */
-template <bool APPROXIMATION_MODE, bool DST_ACCUM_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
-void call_binary_sfpu_operation_init()
+template <bool APPROXIMATION_MODE, bool DST_ACCUM_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0, bool SIGN_MAGNITUDE_FORMAT = false>
+void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point = 0)
 {
     if constexpr (
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB ||
@@ -1787,6 +1827,27 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT_FN(fmod_int32, fmod_int32_init, (APPROXIMATION_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::QUANT)
+    {
+        // quant_tile_init. On Blackhole, SIGN_MAGNITUDE_FORMAT selects the SMAG32 replay
+        // body. On Wormhole the init takes the flag as unused; it only changes the
+        // SFPLOAD/SFPSTORE mode inside calculate_quant_int32.
+        SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT), zero_point);
+    }
+    else if constexpr (BINOP == BinaryOp::REQUANT)
+    {
+        SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT), zero_point);
+    }
+    else if constexpr (BINOP == BinaryOp::DEQUANT)
+    {
+        // dequant_tile_init. The caller passes the bits of -zero_point.
+        SFPU_BINARY_INIT_FN_ARGS(dequant_int32, sfpu::dequant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT), zero_point);
+    }
+    else if constexpr (BINOP == BinaryOp::COPY_DEST)
+    {
+        // copy_dest_value_init is empty. The baseline addrmod setup is enough.
+        SFPU_BINARY_INIT(add1);
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
@@ -1839,8 +1900,25 @@ constexpr SfpuType get_binary_comp_sfpu_type()
  * DST_SYNC_MODE and DST_ACCUM_MODE are the first two template parameters (matching
  * the SFPU_BINARY_CALL / _sfpu_binary_check_ convention) so the dst-bound
  * LLK_ASSERTs run against the kernel's actual sync/accumulation mode.
+ *
+ * DST_ROUNDING is forwarded only on the generic float arm (ADD, SUB, RSUB,
+ * XLOGY, POW). The ckernel applies NearestEven only for ADD, SUB, and RSUB
+ * with a 16-bit Dest. DIV, MUL, the integer arms, and fp32 Dest drop it.
+ * MUL uses calculate_sfpu_binary_mul, which applies its own RNE and then
+ * stores +0 when either input is 0 on a 16-bit Dest.
+ * SIGN_MAGNITUDE_FORMAT selects SMAG32. Int32 ADD/SUB default to true, the path
+ * those kernels had before this was a parameter. The quant family passes it
+ * explicitly and it must match the paired init. zero_point goes to init.
  */
-template <DstSync DST_SYNC_MODE, bool DST_ACCUM_MODE, bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
+template <
+    DstSync DST_SYNC_MODE,
+    bool DST_ACCUM_MODE,
+    bool APPROXIMATION_MODE,
+    BinaryOp BINOP,
+    int ITERATIONS                        = 32,
+    std::uint32_t MATH_FORMAT             = 0,
+    bool SIGN_MAGNITUDE_FORMAT            = true,
+    ckernel::DstRoundingMode DST_ROUNDING = ckernel::DstRoundingMode::Default>
 void call_binary_sfpu_operation(
     const std::uint32_t dst_index_in0 = 0,
     const std::uint32_t dst_index_in1 = 1,
@@ -1855,6 +1933,9 @@ void call_binary_sfpu_operation(
     // matching how every production llk_math_eltwise_binary_sfpu_* wrapper
     // dispatches into _calculate_sfpu_binary_ / _calculate_*_shift_.
     static_assert(ITERATIONS == 8 || ITERATIONS == 32, "Binary SFPU tests support legacy 8/32 iteration values; execution uses 8 rows per face.");
+    static_assert(
+        DST_ROUNDING == ckernel::DstRoundingMode::Default || ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !DST_ACCUM_MODE),
+        "A non-Default DST_ROUNDING is applied only for ADD/SUB/RSUB with a 16-bit Dest");
     constexpr int PER_FACE_ITERATIONS = 8;
     if constexpr (BINOP == BinaryOp::DIV)
     {
@@ -1905,9 +1986,19 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
-    else if constexpr (
-        BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY ||
-        BINOP == BinaryOp::POW)
+    else if constexpr (BINOP == BinaryOp::MUL)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_binary_mul,
+            (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY || BINOP == BinaryOp::POW)
     {
         if constexpr (BINOP == BinaryOp::ADD && MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
         {
@@ -1915,7 +2006,7 @@ void call_binary_sfpu_operation(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 _add_int_,
-                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, true /* SIGN_MAGNITUDE_FORMAT */),
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, SIGN_MAGNITUDE_FORMAT),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,
@@ -1930,7 +2021,7 @@ void call_binary_sfpu_operation(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 _sub_int_,
-                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, true /* SIGN_MAGNITUDE_FORMAT */),
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, SIGN_MAGNITUDE_FORMAT),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,
@@ -1942,7 +2033,7 @@ void call_binary_sfpu_operation(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 calculate_sfpu_binary,
-                (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+                (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE, DST_ROUNDING),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,
@@ -2279,6 +2370,67 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
+    else if constexpr (BINOP == BinaryOp::QUANT)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_quant_int32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SIGN_MAGNITUDE_FORMAT),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::REQUANT)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_requant_int32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SIGN_MAGNITUDE_FORMAT),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::DEQUANT)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_dequant_int32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SIGN_MAGNITUDE_FORMAT),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::COPY_DEST)
+    {
+        // Copy in1 to out; in0 would copy a tile onto itself. A 32-bit dest uses
+        // Float32 unless the math format is Int32.
+        constexpr bool copy_full_word = DST_ACCUM_MODE && MATH_FORMAT != static_cast<std::uint32_t>(DataFormat::Int32);
+        constexpr bool copy_fp16      = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Float16);
+        constexpr bool copy_bf16      = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Float16_b) ||
+                                   MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
+                                   MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Bfp4_b);
+        constexpr bool copy_int32        = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32);
+        constexpr DataFormat copy_format = copy_full_word ? DataFormat::Float32
+                                           : copy_fp16    ? DataFormat::Float16
+                                           : copy_bf16    ? DataFormat::Float16_b
+                                           : copy_int32   ? DataFormat::Int32
+                                                          : DataFormat::Float32;
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            copy_dest_value,
+            (copy_format, APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in1,
+            dst_index_out,
+            0 /*unused*/,
+            vector_mode);
+    }
     else
     {
         LLK_ASSERT(false, "Unsupported operation");
@@ -2311,7 +2463,7 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::addcdiv)
     {
-        // addcdiv uses sfpu_reciprocal internally; init_addcdiv forwards to sfpu_reciprocal_init.
+        // addcdiv uses sfpu_reciprocal_iter internally; init_addcdiv programs its Newton constant in every mode.
         SFPU_TERNARY_INIT_FN(addcdiv, sfpu::init_addcdiv, (APPROX_MODE));
     }
     else if constexpr (OPERATION == SfpuType::lerp)
@@ -2321,7 +2473,7 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::snake_beta)
     {
-        // snake_beta uses sfpu_reciprocal internally; snake_beta_init forwards to sfpu_reciprocal_init.
+        // snake_beta uses sfpu_reciprocal_iter internally; snake_beta_init programs its Newton constant in every mode.
         SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROX_MODE));
     }
     else
@@ -2352,6 +2504,20 @@ void call_ternary_sfpu_operation(
     const std::uint32_t value         = 0x40000000u /* 2.0f */,
     ckernel::VectorMode vector_mode   = ckernel::VectorMode::RC)
 {
+#if defined(ARCH_BLACKHOLE)
+    // Blackhole's where, addcmul, addcdiv and lerp entry points issue a full tile as one 32-row call.
+    constexpr bool one_call =
+        ITERATIONS == 8 && (OPERATION == SfpuType::where || OPERATION == SfpuType::addcmul || OPERATION == SfpuType::addcdiv || OPERATION == SfpuType::lerp);
+    if constexpr (one_call)
+    {
+        if (vector_mode == ckernel::VectorMode::RC)
+        {
+            call_ternary_sfpu_operation<DST_SYNC_MODE, DST_ACCUM_MODE, OPERATION, APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, 32>(
+                dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, value, ckernel::VectorMode::None);
+            return;
+        }
+    }
+#endif
     if constexpr (OPERATION == SfpuType::where)
     {
         SFPU_TERNARY_CALL(
