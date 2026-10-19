@@ -803,11 +803,10 @@ size_t fabric_connection_rt_args_size(const tt::tt_fabric::FabricContext& fabric
 
 }  // namespace
 
-size_t fabric_connection_rt_args_size(size_t num_connections) {
-    // TODO(#52020): resolves the default context, because this tt-blaze API has no device or env
-    // parameter to resolve from.
+size_t fabric_connection_rt_args_size(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t num_connections) {
     return fabric_connection_rt_args_size(
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context(), num_connections);
+        mesh_device.impl().metal_env().get_control_plane().get_fabric_context(), num_connections);
 }
 
 // Compute fabric connection RT args without any PD mutation.
