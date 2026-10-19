@@ -416,8 +416,7 @@ class EulerTraceContract(unittest.TestCase):
         pipeline = SimpleNamespace(
             _trace_state=states,
             transformer=transformer,
-            tt_vocoder_with_bwe=None,
-            tt_mel_decoder=None,
+            _audio_adapter=None,
             vae_decoder=None,
         )
         ns["release_traces"](pipeline)

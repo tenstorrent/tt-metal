@@ -172,6 +172,8 @@ class Tracer:
         self._kwargs: dict[str, Any] = {}
         self._outputs: Any = None
         self._trace_ids: tuple[ttnn.MeshTraceId, ...] | None = None
+        self.capture_count = 0
+        self.replay_count = 0
 
     def __call__(
         self,
@@ -295,6 +297,7 @@ class Tracer:
             Tracer._traces_live[d.id()] += 1
         self._trace_ids = trace_ids
         self._outputs = outputs
+        self.capture_count += 1
 
         if execute:
             # Trace capture records commands but does not execute them. Execute the trace to
@@ -328,6 +331,8 @@ class Tracer:
         for d, trace_id in zip(self._devices, trace_ids, strict=True):
             ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking)
 
+        self.replay_count += 1
+
     @property
     def trace_captured(self) -> bool:
         """Whether a trace has been captured and is ready for execution."""
@@ -348,13 +353,13 @@ class Tracer:
     def release_trace(self) -> None:
         """Release the captured trace and clear inputs and outputs."""
         trace_ids = self._trace_ids
-        if trace_ids is None:
-            return
-
+        # Failed capture and kernel-prewarm calls also retain input/output buffers.
         self._trace_ids = None
         self._args = ()
         self._kwargs = {}
         self._outputs = None
+        if trace_ids is None:
+            return
         for d, trace_id in zip(self._devices, trace_ids, strict=True):
             Tracer._traces_live[d.id()] -= 1
             ttnn.release_trace(d, trace_id)

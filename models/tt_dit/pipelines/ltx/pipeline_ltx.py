@@ -30,7 +30,7 @@ from safetensors.torch import load_file
 import ttnn
 
 from ...encoders.gemma3.encoder_pair import GemmaTokenizerEncoderPair
-from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
+from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter, resolve_audio_traced
 from ...models.transformers.ltx.attention_ltx import LTX_FUSE_GATE_ON_DEVICE
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
@@ -293,6 +293,7 @@ class LTXPipeline:
         traced: bool = False,
         audio_only: bool = False,
         vae_traced: bool | None = None,
+        audio_traced: bool | None = None,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
     ):
         # Host affinity, explicit (not an import side effect): in a process re-execed by
@@ -309,6 +310,7 @@ class LTXPipeline:
         # (one per fixed shape "s1"/"s2") live in the @traced_function cache on
         # LTXTransformerModel.inner_step, keyed per (transformer, trace_key); release_traces frees them.
         self._traced = traced
+        self._audio_traced = resolve_audio_traced(traced, audio_traced)
         # FPS is pipeline-level state, not a per-request argument: it sets the audio latent
         # length (audio_frames = round(num_frames / fps * 25)) and scales the A/V cross-PE's
         # temporal axis into seconds. Both are baked into the captured traces, so changing it
@@ -463,7 +465,7 @@ class LTXPipeline:
                     # state on dispatch, which capture-only corrupts -- capturing it produces wrong
                     # audio). The audio path compiles op-by-op in the warm real warmup; the DiT/VAE bulk
                     # is what the off-device batch buys back.
-                    set_kernel_prewarm_capturing(self._traced)
+                    set_kernel_prewarm_capturing(self._traced or self._audio_traced)
                     try:
                         self.warmup_buffers(
                             num_frames=num_frames,
@@ -511,10 +513,8 @@ class LTXPipeline:
         if self.transformer is not None:
             for tracer in LTXTransformerModel.inner_step._tracers_keyed.get(self.transformer, {}).values():
                 tracer.release_trace()
-        if self.tt_vocoder_with_bwe is not None:
-            self.tt_vocoder_with_bwe.release_trace()
-        if self.tt_mel_decoder is not None:
-            self.tt_mel_decoder.release_trace()
+        if self._audio_adapter is not None:
+            self._audio_adapter.release_traces()
         if self.vae_decoder is not None:
             self.vae_decoder.release_trace()
         self._trace_state.clear()
@@ -1024,6 +1024,14 @@ class LTXPipeline:
         """All transformer variants exclude each other AND the VAE. LTX-22B +
         LTX-VAE don't both fit on BH LB; VAE must evict the active transformer
         before decode. LTX needs the eviction on both WH and BH."""
+        # Subclasses may replace the video decoder after the audio adapter is built.
+        # Check final residency before any weights or traces can be loaded.
+        if (
+            self._audio_traced
+            and not self._traced
+            and (self.dynamic_load or getattr(self.vae_decoder, "requires_exclusive_residency", False))
+        ):
+            raise ValueError("Independent audio tracing requires resident weights (no dynamic load or exclusive VAE)")
         models = [s.model for s in self.transformer_states]
         if not self.dynamic_load:
             # Static loading deliberately keeps everything resident, but a decoder that cannot fit
@@ -2035,12 +2043,14 @@ class LTXPipeline:
         placement (the adapter derives its parallel config from that mesh's shape). No weights are
         loaded here — ``_prepare_audio_decoder`` handles that via the adapter's disk cache.
         """
+        independent_trace = self._audio_traced and not self._traced
         self._audio_adapter = LTXAudioDecoderAdapter(
             self._audio_checkpoint_path(),
             mesh_device=self.audio_mesh_device,
             vae_ccl_manager=self.audio_ccl_manager,
             dit_parallel_config=self.parallel_config,
-            traced=self._traced,
+            traced=self._audio_traced,
+            independent_trace=independent_trace,
         )
 
     def _prepare_audio_decoder(self) -> None:
@@ -2071,7 +2081,7 @@ class LTXPipeline:
             mel_d.use_trace, voc.use_trace, voc.use_trace_bwe = saved
 
     def _decode_mel(self, audio_spatial: torch.Tensor) -> torch.Tensor:
-        """Run the mel-VAE decoder, traced (capture-once/replay) when the pipeline is traced."""
+        """Run the mel-VAE decoder according to its independent audio trace policy."""
         if self.tt_mel_decoder.use_trace:
             return self.tt_mel_decoder.forward_traced(audio_spatial)
         return self.tt_mel_decoder(audio_spatial)
@@ -2107,30 +2117,31 @@ class LTXPipeline:
         z = self.tt_mel_decoder.z_channels
         audio_spatial = audio_latent.reshape(1, audio_N, z, audio_latent.shape[2] // z).permute(0, 2, 1, 3).float()
 
-        # Optional stage-wall split (LTX_TIME_STAGES=1): mel-VAE vs vocoder+BWE, to find
-        # the dominant decode stage. Syncs are host-wall, so this is a coarse stage timer,
-        # not a per-op device profile.
-        _time_stages = os.environ.get("LTX_TIME_STAGES") in ("1", "true", "True")
-        if _time_stages:
-            import time as _t
+        with Watchdog("audio decode (mel-VAE + vocoder)"), self._audio_adapter.decode_scope(audio_spatial):
+            # Optional stage-wall split (LTX_TIME_STAGES=1): mel-VAE vs vocoder+BWE, to find
+            # the dominant decode stage. Syncs are host-wall, so this is a coarse stage timer,
+            # not a per-op device profile.
+            _time_stages = os.environ.get("LTX_TIME_STAGES") in ("1", "true", "True")
+            if _time_stages:
+                import time as _t
 
-            ttnn.synchronize_device(self.audio_mesh_device)
-            _t0 = _t.perf_counter()
-            mel = self._decode_mel(audio_spatial)
-            ttnn.synchronize_device(self.audio_mesh_device)
-            _t_vae = _t.perf_counter()
-            waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
-            ttnn.synchronize_device(self.audio_mesh_device)
-            _t_voc = _t.perf_counter()
-            logger.info(
-                f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms " f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"
-            )
-            # The vocoder+BWE first touch is a cold build (~3 min); record both audio stages
-            # so this large, otherwise-untracked cost is visible in the wall-time ledger.
-            walltime.record("audio", "mel_vae", _t_vae - _t0)
-            walltime.record("audio", "vocoder+bwe", _t_voc - _t_vae)
-        else:
-            with Watchdog("audio decode (mel-VAE + vocoder)"):
+                ttnn.synchronize_device(self.audio_mesh_device)
+                _t0 = _t.perf_counter()
+                mel = self._decode_mel(audio_spatial)
+                ttnn.synchronize_device(self.audio_mesh_device)
+                _t_vae = _t.perf_counter()
+                waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
+                ttnn.synchronize_device(self.audio_mesh_device)
+                _t_voc = _t.perf_counter()
+                logger.info(
+                    f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms "
+                    f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"
+                )
+                # The vocoder+BWE first touch is a cold build (~3 min); record both audio stages
+                # so this large, otherwise-untracked cost is visible in the wall-time ledger.
+                walltime.record("audio", "mel_vae", _t_vae - _t0)
+                walltime.record("audio", "vocoder+bwe", _t_voc - _t_vae)
+            else:
                 mel = self._decode_mel(audio_spatial)
                 waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
         sampling_rate = self.tt_vocoder_with_bwe.output_sampling_rate
@@ -2145,4 +2156,5 @@ class LTXPipeline:
             f"Audio decoded on device: {tuple(waveform.shape)} "
             f"({waveform.shape[-1] / sampling_rate:.2f}s @ {sampling_rate}Hz)"
         )
+        logger.info(f"Audio trace status: {self._audio_adapter.trace_status()}")
         return Audio(waveform=waveform, sampling_rate=sampling_rate)
