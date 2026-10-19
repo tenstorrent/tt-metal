@@ -199,7 +199,26 @@ def gate_command(task: dict) -> str:
     cmd = task["gate"]["cmd"]
     if task.get("step") in FULL_MODEL_STEPS and "precompile" not in cmd:
         cmd = re.sub(r"(run_safe_pytest\.sh)(?=\s)", r"\1 --no-precompile", cmd)
-    return cmd
+    return with_clean_wall(cmd)
+
+
+PROFILER_VARS = re.compile(
+    r"\b(TT_METAL_(DEVICE_PROFILER|PROFILER_\w+)|BRINGUP_PROFILE_OPS|BRINGUP_FULL_PREFILL)=\S+\s*"
+)
+
+
+def with_clean_wall(cmd: str) -> str:
+    """F114: a profiled test_profile.py run is preceded by the same run with the device profiler off
+    (BRINGUP_PROFILE_WALL=1: warm wall time only), so chunk_wall_ms never includes the profiler's instrumentation or
+    buffer dumps; the profiled run then reports its own wall as chunk_wall_ms_profiled (BRINGUP_WALL_CLEAN=1)."""
+    out = []
+    for seg in cmd.split("&&"):
+        s = seg.strip()
+        if "test_profile.py" in s and "TT_METAL_DEVICE_PROFILER=1" in s and "BRINGUP_WALL_CLEAN" not in s:
+            out += [f"BRINGUP_PROFILE_WALL=1 {PROFILER_VARS.sub('', s)}", f"BRINGUP_WALL_CLEAN=1 {s}"]
+        else:
+            out.append(s)
+    return " && ".join(out) if len(out) != len(cmd.split("&&")) else cmd
 
 
 def gate_outputs(ledger: Ledger, task: dict) -> list[Path]:
