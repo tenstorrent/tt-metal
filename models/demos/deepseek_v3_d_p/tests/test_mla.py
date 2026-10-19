@@ -527,7 +527,8 @@ DETERMINISM_REPS = 3
 # Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
 # subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build. Not comparable to
 # the Tracy path's number -- Tracy averages collectives across chips, this takes the max.
-K3_CHUNKED_RT_PERF_NS = 10_319_000
+# TorusXY Galaxy (DDR 14000), median of 3 runs.
+K3_CHUNKED_RT_PERF_NS = 6_368_000
 K3_CHUNKED_RT_PERF_MARGIN = 0.03
 
 
@@ -1714,7 +1715,7 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k cached prefix + one fresh 5k chunk,
     timed with the realtime (lightweight) profiler instead of Tracy.
 
-    NOT comparable to test_kimi_k3_mla_chunked_perf_galaxy's 11_562_468: that number comes from the
+    NOT comparable to test_kimi_k3_mla_chunked_perf_galaxy's target: that number comes from the
     Tracy merge path, which averages collectives across chips, while this takes the max for every
     program. K3's forward is ~7% CCL, so the two disagree by construction."""
     topology = per_axis_topology(device_params["fabric_config"])
@@ -2459,8 +2460,8 @@ def test_tp_latent_prefetch_chain_stop_layer(monkeypatch, kv_only_last_layer):
 
 class _SdpaRecorder:
     """Wraps ttnn.transformer.ring_joint_scaled_dot_product_attention (eager tests only) and keeps, per call, whether K
-    was expanded, the Q chunk size, the scale, and per-device host copies of the output (and, with keep_inputs, of Q, the
-    latent K, V and W_UK). Device lists are in mesh order: index sp * tp_size + tp."""
+    was expanded, the Q chunk size, the matmul fidelity, the scale, and per-device host copies of the output (and, with
+    keep_inputs, of Q, the latent K, V and W_UK). Device lists are in mesh order: index sp * tp_size + tp."""
 
     def __init__(self, monkeypatch, keep_inputs=False, keep_device_rows=None):
         self.calls = []
