@@ -20,6 +20,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    DEST_SYNC_TILE_LIMITS,
     generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
@@ -55,6 +56,10 @@ UNPACK_TILIZE_TILE_SIZES = [
     (2, 32),
 ]
 
+# Rows that are not a multiple of the run length, so the SrcA tilize ends every row with the
+# bank-1 tail run: full_ct_dim -> block_ct_dim, each giving at least one full run and a tail.
+TAIL_BLOCK_CT_DIM = {3: 2, 4: 3, 5: 2, 6: 4, 7: 3, 8: 3, 16: 6}
+
 
 def generate_unpack_tilize_combinations(
     formats_list: List[FormatConfig],
@@ -70,7 +75,8 @@ def generate_unpack_tilize_combinations(
     Args: List of input-output format pairs
 
     Returns: List of (format, dest_acc, dest_sync, unpacker_sel, input_dimensions,
-             tile_dimensions) tuples
+             tile_dimensions, block_ct_dim) tuples; block_ct_dim is None for a run per row,
+             otherwise the SrcA run length, with the row ending in the bank-1 tail run
     """
     combinations = []
 
@@ -140,8 +146,31 @@ def generate_unpack_tilize_combinations(
                                     unpacker_sel,
                                     dimensions,
                                     tile_dims,
+                                    None,
                                 )
                             )
+                        # Tail runs: one row of the DEST capacity and two half rows, Float16_b 32x32 only.
+                        if (
+                            not is_perf
+                            and in_fmt == DataFormat.Float16_b
+                            and tile_dims == (32, 32)
+                        ):
+                            capacity = DEST_SYNC_TILE_LIMITS[dest_sync] // (
+                                2 if dest_acc == DestAccumulation.Yes else 1
+                            )
+                            for rows, cols in ((1, capacity), (2, capacity // 2)):
+                                if cols in TAIL_BLOCK_CT_DIM:
+                                    combinations.append(
+                                        (
+                                            fmt,
+                                            dest_acc,
+                                            dest_sync,
+                                            unpacker_sel,
+                                            [rows * 32, cols * 32],
+                                            tile_dims,
+                                            TAIL_BLOCK_CT_DIM[cols],
+                                        )
+                                    )
 
     return combinations
 
@@ -196,6 +225,7 @@ def test_unpack_tilize_quasar(
         unpacker_sel,
         input_dimensions,
         tile_dimensions,
+        block_ct_dim,
     ) = combination
 
     tile_shape = construct_tile_shape(tile_dimensions)
@@ -233,7 +263,10 @@ def test_unpack_tilize_quasar(
         "formats": formats,
         "templates": [
             generate_input_dim(
-                input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
+                input_dimensions,
+                input_dimensions,
+                block_ct_dim=block_ct_dim,
+                tile_dimensions=tile_dimensions,
             ),
             UNPACKER_ENGINE_SEL(unpacker_sel),
             DATA_COPY_TYPE(

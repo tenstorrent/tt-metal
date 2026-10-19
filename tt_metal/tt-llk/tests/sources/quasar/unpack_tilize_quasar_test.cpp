@@ -108,10 +108,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
         std::uint32_t y_stride_external         = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
-        // Quasar fused tilize emits one SrcA dvalid per tile: BLOCK_CT_DIM dvalids per
-        // `_llk_unpack_tilize_` call and BLOCK_RT_DIM calls per outer loop. With
+        // Quasar fused tilize emits one SrcA dvalid per tile: FULL_CT_DIM per row, in
+        // `_llk_unpack_tilize_` runs of BLOCK_CT_DIM, and BLOCK_RT_DIM rows per outer loop. With
         // is_fp32_dest_acc_en it also pulses SrcB because FP32 datacopy uses ELWADD.
-        const std::uint32_t src_handshake_iters = LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM;
+        const std::uint32_t src_handshake_iters = LOOP_FACTOR * BLOCK_RT_DIM * FULL_CT_DIM;
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -162,7 +162,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
                         _llk_unpack_tilize_set_src_offset_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external);
-                        _llk_unpack_tilize_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/);
+                        // A row of FULL_CT_DIM tiles in runs of BLOCK_CT_DIM; a row that is not a multiple ends with the bank-1 tail run.
+                        for (std::uint32_t x = 0; x < FULL_CT_DIM; x += BLOCK_CT_DIM)
+                        {
+                            if (FULL_CT_DIM - x >= BLOCK_CT_DIM)
+                            {
+                                _llk_unpack_tilize_<UNPACKER_ENGINE_SEL>(x /*l1_tile_idx*/);
+                            }
+                            else
+                            {
+                                _llk_unpack_tilize_tail_<UNPACKER_ENGINE_SEL>(x /*l1_tile_idx*/);
+                            }
+                        }
                     }
                 }
             }
