@@ -7,9 +7,54 @@ from time import perf_counter
 from uuid import uuid4
 
 import pytest
+import httpx
 
 from models.demos.gemma4_26b_a4b_qb2.tests.test_api import completions, sampled_ids
 from models.demos.gemma4_26b_a4b_qb2.tests.test_prefix_caching import _metric_totals
+
+
+@pytest.mark.timeout(600)
+def test_live_trace_chat_transitions(gemma_server_url, record_property):
+    messages = [{"role": "user", "content": (
+        "I am learning about compilers. A compiler reads source code, recognizes names, "
+        "checks types, and produces executable instructions. It needs to remember information "
+        "about each variable and function while processing many references to those names. "
+        "In one short sentence, explain why a dictionary or hash table is useful here."
+    )}]
+    salt = f"trace-chat-{uuid4()}"
+
+    def chat(history, cache_salt):
+        response = httpx.post(
+            f"{gemma_server_url}/v1/chat/completions",
+            json={
+                "model": "google/gemma-4-26B-A4B-it", "messages": history,
+                "max_tokens": 64, "temperature": 1.0, "top_k": 20, "top_p": 0.95,
+                "seed": 9472, "cache_salt": cache_salt,
+                "chat_template_kwargs": {"enable_thinking": False},
+            }, timeout=600,
+        )
+        response.raise_for_status()
+        result = response.json()
+        content = result["choices"][0]["message"]["content"]
+        assert content and any(c.isalpha() for c in content), result
+        return result
+
+    cold = chat(messages, salt)
+    cached = chat(messages, salt)
+    record_property("cold_chat", json.dumps(cold))
+    record_property("cached_chat", json.dumps(cached))
+    before = _metric_totals(gemma_server_url)
+    for repeat in range(3):
+        response = chat(messages, salt)
+        assert response["choices"][0]["message"]["content"] == cached["choices"][0]["message"]["content"]
+        record_property(f"cached_repeat_{repeat}", json.dumps(response))
+    after = _metric_totals(gemma_server_url)
+    assert after["prefix_cache_hits_total"] > before["prefix_cache_hits_total"]
+    growing = messages + [cached["choices"][0]["message"], {
+        "role": "user", "content": "Give one specific example of a variable name and the information stored for it."
+    }]
+    record_property("growing_chat", json.dumps(chat(growing, salt)))
+    record_property("independent_cold_chat", json.dumps(chat(messages, salt + "-cold")))
 
 
 def _request(url, request):

@@ -48,6 +48,14 @@ case "${GEMMA4_PREFIX_SUITE:-boundary}" in
     boundary) ;;
     lifetime) max_context=4096; test_file="$model_dir/tests/test_prefix_cache_lifetime.py"; test_selection=live_lifetime ;;
     growing) test_file="$model_dir/tests/test_prefix_cache_lifetime.py"; test_selection=live_growing ;;
+    tracecheck)
+        max_context=4096
+        export GEMMA4_PREFIX_DIAGNOSE=0
+        export TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_TRACEBACKS=1
+        export TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0
+        test_file="$model_dir/tests/test_prefix_cache_lifetime.py"
+        test_selection=live_trace_chat_transitions
+        ;;
     agentic)
         server_host=0.0.0.0
         export GEMMA4_PREFIX_DIAGNOSE=0
