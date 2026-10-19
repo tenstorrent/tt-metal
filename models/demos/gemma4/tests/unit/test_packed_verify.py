@@ -36,6 +36,14 @@ def test_device_pli_rejects_non_pli_target(expect_error):
         model.init_pli_device_weights()
 
 
+def test_device_pli_requires_uploaded_weights(expect_error):
+    from models.demos.gemma4.tt.model import Gemma4Model
+
+    model = Gemma4Model.__new__(Gemma4Model)
+    with expect_error(RuntimeError, "must be initialized before compute_pli_device"):
+        model.compute_pli_device(None, None)
+
+
 def _load_pli_target(mesh_device):
     """Load a PLI checkpoint only after checking its config cheaply."""
     model_path = os.getenv("HF_MODEL")
@@ -107,6 +115,7 @@ def test_pli_device_matches_host_scaled_embedding(mesh_device, reset_seeds):
 def test_pli_device_row_count_invariant(mesh_device, reset_seeds):
     model = _load_pli_target(mesh_device)
     ids = torch.tensor([[1408, 22202, 529, 107182]], dtype=torch.int64)
+    model.init_pli_device_weights()
     one = _device_pli_for_ids(model, mesh_device, ids[:, :1])
     four = _device_pli_for_ids(model, mesh_device, ids)
     assert torch.equal(one[:, :, 0, :], four[:, :, 0, :])
@@ -480,6 +489,8 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     # PLI targets need a PLI source on these direct model calls; mirror the
     # mechanism SpeculativeDecoder._verify selects.
     device_pli = spec.target_has_pli and spec._pli_dev_host
+    if device_pli:
+        target.init_pli_device_weights()
 
     def _pli(token_ids):
         return {"pli_on_device": device_pli, "token_ids_host": None if device_pli else token_ids}

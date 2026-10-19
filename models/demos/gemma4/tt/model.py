@@ -881,10 +881,11 @@ class Gemma4Model:
         ``embeds_tt`` must be the already scaled main embedding returned by
         ``embed_tokens``. This follows the host embedding/projection/norm/merge
         order; BF16 device weights can still differ by a rounding unit from the
-        FP32 host projection.
+        FP32 host projection. Call ``init_pli_device_weights`` first, outside any
+        trace capture.
         """
         if not getattr(self, "_pli_dev_ready", False):
-            self.init_pli_device_weights()
+            raise RuntimeError("device PLI weights must be initialized before compute_pli_device")
         pli_size = self.hidden_size_per_layer_input
         full_layers = self._pli_full_layers
         rows = int(embeds_tt.shape[-2])
