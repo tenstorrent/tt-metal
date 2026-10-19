@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Greedy speculative decode on the full ``DeepSeekV41Model`` (eight 1x4 stages) with DSpark.
+"""Greedy speculative decode on the full ``DeepSeekV41Model``.
+
+Runs on ``DEEPSEEK_V4_NUM_STAGES`` 1x4 stages (default eight), with DSpark.
 
 One model serves three runs of the demo prompt, each from position 0:
 
