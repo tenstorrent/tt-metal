@@ -147,7 +147,9 @@ class Row:
             tbl.prefill(slot, start_pos, start_pos + n, start_pos + padded)
             self.sync(mode)
         later = start_pos > 0
-        start = replicated(self.plan, torch.tensor([start_pos], dtype=torch.int32), ttnn.int32) if later else None
+        start = (
+            kv_lib.replicated(self.plan, torch.tensor([start_pos], dtype=torch.int32), ttnn.int32) if later else None
+        )
         tables = kv_lib.PrefillTables(
             self.plan,
             self.tables[mode],
