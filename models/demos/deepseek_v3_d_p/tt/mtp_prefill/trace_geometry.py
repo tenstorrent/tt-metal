@@ -19,7 +19,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     global_to_local_token_id,
     mtp_lookahead_positions,
-    rotated_chip_positions,
+    rotated_chip_row,
     rotated_row_of_position,
 )
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPSplitChipLookahead, MTPUnionEmbedding
@@ -44,7 +44,8 @@ class MTPTraceGeometry:
     - ``keep``: zero on the rows generation writes, applied once before level 0. Clearing them that early
       matches the eager clear at level ``provided_levels``: a level below it never reads those rows.
     - ``selects[k]``: level ``k``'s one-hot patch selector, all zero for a provided level.
-    - ``lm_rows``: one-hot ``[32, W]`` picking the tile that holds the chunk's last real row.
+    - ``lm_rows``: one-hot ``[32, W]`` copying the chunk's last real (chip-local) row into all 32 rows, so the
+      LM head's argmax reads one row instead of a tile.
     - ``win_keep[k]`` / ``win_place[k]``: the window at shift ``k + 1`` is ``plain * win_keep + win_place @ L``,
       which on the split chip swaps the rows before ``split_row`` for its lookahead ``L``. Identity elsewhere.
     - ``next_select``, ``take_tail``, ``take_next``: ``L`` is the union's tile at row W (the split chip's own
@@ -77,6 +78,8 @@ class MTPTraceGeometry:
             f"{self.num_mtp_tokens} lookahead rows"
         )
         self._tensors: dict = {}
+        # The split-chip lookahead of the chunk last written (None: no chip holds two position runs).
+        self.split = None
         # The plan key each device tensor was last written for, so write() skips an unchanged one.
         self._keys: dict = {}
         plan = self._plan(0, self.chunk_size, self.num_levels)
@@ -142,6 +145,7 @@ class MTPTraceGeometry:
         tensors and the selects stale.
         """
         plan = self._plan(actual_start, actual_end, provided_levels)
+        self.split = plan["split"]
         generates = provided_levels < self.num_levels
         built, written = {}, set()
         for name in self._names():
@@ -207,27 +211,27 @@ class MTPTraceGeometry:
         if name == "col":
             return (tuple(sorted(plan["landing"])), plan["source_row"])
         if name == "lm_rows":
-            return plan["tile_start"]
+            return plan["last_local_row"]
         return plan["split"]
 
     def _generation_rows(self, actual_start: int, actual_end: int, levels) -> dict:
         """Per level, the (chips, union rows) that position ``actual_end + level`` lands on.
 
-        Same answer as ``mtp_generation_union_rows``, with the chip positions built once per chunk
-        instead of twice per level: list ``index`` keeps its first-occurrence rule, trunk before slots.
+        Same answer as ``mtp_generation_union_rows``, trunk before slots on each chip, from closed forms: one
+        chip's trunk can carry the position, and each chip's lookahead slots are consecutive positions.
         """
         w = self.window_len
-        trunks = rotated_chip_positions(actual_start, self.sp_factor, w)
         slots = mtp_lookahead_positions(actual_start, self.sp_factor, w, actual_end, self.num_levels)
         assert all(len(s) <= self.num_mtp_tokens for s in slots), f"lookahead slots do not fit in {self.num_mtp_tokens}"
         out = {}
         for level in levels:
             pos, chips, rows = actual_end + level, [], []
-            for c, (trunk, chip_slots) in enumerate(zip(trunks, slots)):
-                if pos in trunk:
-                    chips.append(c), rows.append(trunk.index(pos))
-                elif pos in chip_slots:
-                    chips.append(c), rows.append(w + chip_slots.index(pos))
+            for c, chip_slots in enumerate(slots):
+                row = rotated_chip_row(actual_start, self.sp_factor, w, c, pos)
+                if row is not None:
+                    chips.append(c), rows.append(row)
+                elif chip_slots[0] <= pos < chip_slots[0] + len(chip_slots):
+                    chips.append(c), rows.append(w + pos - chip_slots[0])
             assert chips, f"no chip holds global position {pos}: chunk_start={actual_start} level={level}"
             out[level] = (torch.tensor(chips), torch.tensor(rows))
         return out
@@ -240,14 +244,14 @@ class MTPTraceGeometry:
         generated = range(provided_levels, k_levels)
         # A provided chunk reads only the split-chip windows, so it skips the per-chip position lists.
         landing = self._generation_rows(actual_start, actual_end, generated) if generated else {}
-        tile_start, source_row = 0, 0
+        last_local_row, source_row = 0, 0
         if generated:
             last_row = rotated_row_of_position(actual_start, self.sp_factor, w, actual_end - 1)
             assert (
                 last_row is not None
             ), f"the chunk at {actual_start} does not carry its own last real position {actual_end - 1}"
             device_id, local = global_to_local_token_id(last_row, self.sp_factor, self.chunk_size, is_balanced=False)
-            tile_start = (local // tile) * tile
+            last_local_row = local
             source_row = device_id * tile + local % tile
         split = MTPSplitChipLookahead.geometry(
             actual_start, w, self.sp_factor, chunk_end=actual_end, num_levels=k_levels
@@ -255,7 +259,7 @@ class MTPTraceGeometry:
         return dict(
             landing=landing,
             landing_key=tuple((k, tuple(c.tolist()), tuple(r.tolist())) for k, (c, r) in sorted(landing.items())),
-            tile_start=tile_start,
+            last_local_row=last_local_row,
             source_row=source_row,
             split=split,
         )
@@ -280,7 +284,7 @@ class MTPTraceGeometry:
             return col
         if name == "lm_rows":
             lm_rows = torch.zeros(sp, 1, tile, w)
-            lm_rows[:, 0, torch.arange(tile), plan["tile_start"] + torch.arange(tile)] = 1.0
+            lm_rows[:, 0, :, plan["last_local_row"]] = 1.0
             return lm_rows
         if not built:
             built.update(self._build_window(plan["split"]))
@@ -333,10 +337,13 @@ class MTPTraceEmbedSource:
     provided level, so the eager result is reproduced with one program for every chunk.
 
     With ``embed_fn=None`` it serves chunks whose levels are all provided: generation and the patch are
-    skipped, which is what the masks would reduce them to.
+    skipped, which is what the masks would reduce them to. ``blend=False`` also skips the split-chip
+    blend, which is the identity on a chunk where no chip holds two position runs.
     """
 
-    def __init__(self, union: MTPUnionEmbedding, geometry: MTPTraceGeometry, embed_fn, all_gather_sp=None):
+    def __init__(
+        self, union: MTPUnionEmbedding, geometry: MTPTraceGeometry, embed_fn, all_gather_sp=None, blend: bool = True
+    ):
         assert union.num_levels == geometry.num_levels, (
             f"union carries {union.num_levels} levels, geometry {geometry.num_levels}; "
             "the runner and the runtime disagree on PREFILL_MTP_LEVELS"
@@ -346,6 +353,7 @@ class MTPTraceEmbedSource:
         self.geometry = geometry
         self.embed_fn = embed_fn
         self.all_gather_sp = all_gather_sp
+        self.blend = blend
         self._next_level = 0
 
     @property
@@ -362,6 +370,8 @@ class MTPTraceEmbedSource:
             gathered = self.embed_fn(prev_normed)
             self.union.add_patch(self.geometry.selects[k], gathered)
             ttnn.deallocate(gathered)
+        if not self.blend:
+            return self.union.window(k + 1)
         return self.union.blended_window(k + 1, self.geometry, self.all_gather_sp, ONE_HOT_COMPUTE_CONFIG)
 
 

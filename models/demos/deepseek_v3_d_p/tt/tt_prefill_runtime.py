@@ -14,9 +14,9 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.common.prefill.runners.runner_utils import (
+    MTP_ID_ROWS,
     d2d_activation_rows,
     d2d_activation_width,
-    mtp_union_rows,
     num_mtp_tokens,
 )
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata, _llama4_scal
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.id_transport import pack_ids, unpack_ids
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.trace_geometry import MTPTraceGeometry
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
@@ -483,38 +484,56 @@ class TtPrefillRuntime:
         partial = ttnn.slice(packed, [0, 0, 0, half], [s0, s1, s2, s3])
         return hidden, partial
 
-    def _mtp_pack_activation(self, hidden: ttnn.Tensor, union_parts: list) -> ttnn.Tensor:
-        """Fuse this rank's output hidden and the chunk's union embedding into one D2D activation,
-        stacking them on the row axis. Consumes the hidden, not the union's blocks.
+    def _mtp_pack_activation(self, hidden: ttnn.Tensor, ids_block: ttnn.Tensor) -> ttnn.Tensor:
+        """Fuse this rank's output hidden and the chunk's MTP id block into one D2D activation, stacking
+        them on the row axis. Consumes the hidden, not the block.
+
+        The ids, not their embeddings: the last rank gathers the union embedding itself, so each hop carries
+        32 rows per chip below the hidden instead of the union's ``window_len + num_mtp_tokens``.
         """
-        packed = ttnn.concat([hidden, *union_parts], dim=2)
+        packed = ttnn.concat([hidden, ids_block], dim=2)
         ttnn.deallocate(hidden)
         return packed
 
     def _mtp_unpack_activation(self, packed: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Inverse of :meth:`_mtp_pack_activation`. Does not free ``packed`` -- the caller does.
-
-        The split point comes from the config rather than from halving the height.
-        """
+        """Inverse of :meth:`_mtp_pack_activation`: ``(hidden, id block)``. Does not free ``packed``."""
         rows = self.config.chunk_size // self.config.sp_factor
-        union_rows = mtp_union_rows(self.config.chunk_size, self.config.sp_factor, self.config.mtp_levels)
         s0, s1, s2, s3 = packed.shape
-        assert s2 == rows + union_rows, (
-            f"D2D activation is {s2} rows per chip, expected L + (L + num_mtp_tokens) = {rows} + {union_rows}. "
+        assert s2 == rows + MTP_ID_ROWS, (
+            f"D2D activation is {s2} rows per chip, expected L + {MTP_ID_ROWS} id rows = {rows + MTP_ID_ROWS}. "
             "The sending rank and this one disagree on PREFILL_MTP_LEVELS, or the socket was built "
             "without it."
         )
         hidden = ttnn.slice(packed, [0, 0, 0, 0], [s0, s1, rows, s3])
-        union = ttnn.slice(packed, [0, 0, rows, 0], [s0, s1, s2, s3])
-        return hidden, union
+        ids_block = ttnn.slice(packed, [0, 0, rows, 0], [s0, s1, s2, s3])
+        return hidden, ids_block
 
-    def _mtp_prepare_input(
-        self, input_tensor: ttnn.Tensor, mtp_tokens: Optional[ttnn.Tensor]
-    ) -> Tuple[MTPUnionEmbedding, ttnn.Tensor]:
-        """Turn what arrived into ``(union embedding, model input)``.
+    def _mtp_ids_block(self, chunk_ids: ttnn.Tensor, mtp_ids: ttnn.Tensor) -> ttnn.Tensor:
+        """The first rank's id block for the next rank, from the two id tensors the H2D row was cut into."""
+        width = d2d_activation_width(self.hf_config.hidden_size) // self.config.tp_factor
+        return pack_ids(chunk_ids, mtp_ids, vocab_size=self.hf_config.vocab_size, width=width)
 
-        First rank: gather the two id tensors the H2D row was cut into, and hand the trunk gather back
-        as the model input so the transformer skips its own. Downstream: unpack it off the hidden.
+    def _mtp_union_from_ids_block(self, ids_block: ttnn.Tensor) -> MTPUnionEmbedding:
+        """The last rank's union embedding, gathered from the received id block. Does not free the block."""
+        chunk_ids, mtp_ids = unpack_ids(
+            ids_block,
+            num_chunk_ids=self.config.chunk_size // self.config.sp_factor,
+            num_mtp_ids=self._num_mtp_tokens(),
+        )
+        union = MTPUnionEmbedding.from_ids(
+            chunk_ids, mtp_ids, self.model.mtp_embed_ids, num_levels=self.config.mtp_levels
+        )
+        ttnn.deallocate(chunk_ids)
+        ttnn.deallocate(mtp_ids)
+        return union
+
+    def _mtp_prepare_input(self, input_tensor: ttnn.Tensor, mtp_tokens: Optional[ttnn.Tensor]) -> tuple:
+        """Turn what arrived into ``(union embedding or None, model input, id block to forward or None)``.
+
+        First rank: gather the union from the two id tensors the H2D row was cut into and hand its trunk
+        back as the model input, so the transformer skips its own gather; a non-last first rank also packs
+        the ids for downstream. Downstream: unpack the id block off the hidden; the last rank gathers the
+        union from it, the ranks between only forward it.
         """
         k = self.config.mtp_levels
         if self.config.is_first_rank:
@@ -523,14 +542,18 @@ class TtPrefillRuntime:
                 "both out of one H2D row (see runner_utils.make_h2d_spec)"
             )
             union = MTPUnionEmbedding.from_ids(input_tensor, mtp_tokens, self.model.mtp_embed_ids, num_levels=k)
+            ids_block = None if self.config.is_last_rank else self._mtp_ids_block(input_tensor, mtp_tokens)
             ttnn.deallocate(input_tensor)
             ttnn.deallocate(mtp_tokens)
-            return union, union.trunk
+            return union, union.trunk, ids_block
         assert mtp_tokens is None, "only the first rank receives H2D MTP ids"
-        hidden, union = self._mtp_unpack_activation(input_tensor)
+        hidden, ids_block = self._mtp_unpack_activation(input_tensor)
         ttnn.deallocate(input_tensor)
-        window_len = self.config.chunk_size // self.config.sp_factor
-        return MTPUnionEmbedding.from_embedding(union, k, window_len), hidden
+        if not self.config.is_last_rank:
+            return None, hidden, ids_block
+        union = self._mtp_union_from_ids_block(ids_block)
+        ttnn.deallocate(ids_block)
+        return union, hidden, None
 
     def make_placeholder_activation(self, dflash_packed: bool = True) -> ttnn.Tensor:
         """Allocate a zero activation matching what the D2D socket delivers, per chip.
@@ -793,17 +816,23 @@ class TtPrefillRuntime:
             if not self.config.is_first_rank:
                 self.drafter.import_partial(self._trace_partial_in, owned=False)
         model_input = self._trace_input
-        union = None
-        if self.config.mtp_levels:
+        union = ids_block = None
+        mtp = bool(self.config.mtp_levels)
+        if mtp:
             k = self.config.mtp_levels
             if self.config.is_first_rank:
                 union = MTPUnionEmbedding.from_ids(
                     self._trace_input, self._trace_mtp_tokens, self.model.mtp_embed_ids, num_levels=k
                 )
                 model_input = union.trunk
+                if not self.config.is_last_rank:
+                    ids_block = self._mtp_ids_block(self._trace_input, self._trace_mtp_tokens)
             else:
-                model_input, received = self._mtp_unpack_activation(self._trace_input)
-                union = MTPUnionEmbedding.from_embedding(received, k, self.config.chunk_size // self.config.sp_factor)
+                model_input, ids_block = self._mtp_unpack_activation(self._trace_input)
+                if self.config.is_last_rank:
+                    union = self._mtp_union_from_ids_block(ids_block)
+                    ttnn.deallocate(ids_block)
+                    ids_block = None
         out = self.model.forward(
             model_input,
             kv_caches.kvpe,  # unwrap the engine-owned container to the primary MLA cache (mirrors prefill_chunk)
@@ -826,14 +855,15 @@ class TtPrefillRuntime:
             mtp_geometry=self._trace_mtp_geometry,
             input_is_embedded=union is not None and self.config.is_first_rank,
         )
-        if union is not None:
+        if mtp:
             if not self.config.is_first_rank:
                 ttnn.deallocate(model_input)
-            if self.config.is_last_rank:
+            if union is not None:
                 union.deallocate()
+            if self.config.is_last_rank:
                 return None
-            packed = self._mtp_pack_activation(out, union.parts)
-            union.deallocate()
+            packed = self._mtp_pack_activation(out, ids_block)
+            ttnn.deallocate(ids_block)
             return packed
         if not dflash:
             return out
@@ -1089,7 +1119,12 @@ class TtPrefillRuntime:
                     actual_end,
                 ), "traced MTP needs actual_start/actual_end on host to build the level geometry"
                 self._trace_mtp_geometry.write(actual_start, actual_end, provided_levels)
-                mtp_variant = "provided" if provided_levels == self.config.mtp_levels else "generate"
+                if provided_levels < self.config.mtp_levels:
+                    mtp_variant = "generate"
+                elif self._trace_mtp_geometry.has_split_chip and self._trace_mtp_geometry.split is None:
+                    mtp_variant = "provided_aligned"
+                else:
+                    mtp_variant = "provided"
             else:
                 mtp_variant = None
             # The scalars are consumed on-device from metadata_msg; the host ints are not read for
@@ -1129,7 +1164,7 @@ class TtPrefillRuntime:
         on_layer_complete = self._layer_complete_cb(request_id)
 
         model_input = input_tensor
-        mtp_union = None
+        mtp_union = mtp_ids_block = None
         mtp_owns_input = False
         if self.config.dflash_enabled:
             self.drafter.reset()
@@ -1138,7 +1173,7 @@ class TtPrefillRuntime:
                 ttnn.deallocate(input_tensor)
                 self.drafter.import_partial(partial)
         elif self.config.mtp_levels:
-            mtp_union, model_input = self._mtp_prepare_input(input_tensor, mtp_tokens)
+            mtp_union, model_input, mtp_ids_block = self._mtp_prepare_input(input_tensor, mtp_tokens)
             mtp_owns_input = self.config.is_first_rank
 
         out = self.model.forward(
@@ -1183,12 +1218,13 @@ class TtPrefillRuntime:
             # Non-last rank: pack this rank's finalized FC partial alongside the hidden for the next rank.
             return self._pack_activation(out, self.drafter.export_partial())
 
-        if mtp_union is not None:
-            if self.config.is_last_rank:
+        if self.config.mtp_levels:
+            if mtp_union is not None:
                 mtp_union.deallocate()
+            if self.config.is_last_rank:
                 return None
-            packed = self._mtp_pack_activation(out, mtp_union.parts)
-            mtp_union.deallocate()
+            packed = self._mtp_pack_activation(out, mtp_ids_block)
+            ttnn.deallocate(mtp_ids_block)
             return packed
 
         # Non-last rank: forward returns the hidden-state activation to forward downstream.

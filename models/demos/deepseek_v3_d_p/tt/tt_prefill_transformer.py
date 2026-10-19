@@ -21,6 +21,7 @@ from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -49,6 +50,15 @@ from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbe
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
+
+
+def _row_fold_width(n: int, max_cols: int = 2048) -> int:
+    """Widest divisor of ``n`` that is at most ``max_cols`` and a multiple of 16 (32-byte bf16 pages): the
+    row length a 1 x ``n`` row-major vector folds into so a gather moves it in small pages."""
+    for cols in range(min(n, max_cols) // 16 * 16, 0, -16):
+        if n % cols == 0:
+            return cols
+    raise ValueError(f"no 16-aligned divisor of {n} up to {max_cols} to fold a row-major gather into")
 
 
 def rank_loads_embedding(is_first_rank: bool, is_last_rank: bool, mtp_levels: int) -> bool:
@@ -306,6 +316,11 @@ class TtPrefillTransformer(LightweightModule):
                 topology=tp_topology,
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix="norm",
+                use_fused=(
+                    use_fused_rmsnorm
+                    if use_fused_rmsnorm is not None
+                    else getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole() and is_chunked
+                ),
             )
             if build_tail
             else None
@@ -726,12 +741,49 @@ class TtPrefillTransformer(LightweightModule):
         return gathered
 
     def mtp_generate_embedding_selected(self, h_normed: ttnn.Tensor, lm_rows: ttnn.Tensor) -> ttnn.Tensor:
-        """:meth:`mtp_generate_embedding` with the LM head's tile picked on device by the one-hot ``lm_rows``."""
+        """:meth:`mtp_generate_embedding` with the LM head's input picked on device by the one-hot ``lm_rows``.
+
+        ``lm_rows`` copies the chunk's last real row into every row of the tile, so the logits rows are
+        identical and the argmax reads row 0 alone: a 32x smaller gather and argmax than the tile's, and
+        the same token, since the row's logits are the same dot products. The id is repeated back to 32
+        rows so the embedding feeds the SP gather and the one-hot patch exactly as before.
+        """
+        assert self.lm_head is not None, "MTP generation needs the LM head (last rank, build_tail)"
         tile = select_rows(lm_rows, h_normed)
-        try:
-            return self._mtp_embed_greedy(tile, None)
-        finally:
-            ttnn.deallocate(tile)
+        logits, _ = self.lm_head(tile, None)
+        ttnn.deallocate(tile)
+        rm_logits = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(logits)
+        s = list(rm_logits.shape)
+        row = ttnn.slice(rm_logits, [0, 0, 0, 0], [s[0], s[1], 1, s[3]])
+        ttnn.deallocate(rm_logits)
+        if self.lm_head.is_column_parallel and self.tp_factor > 1:
+            # A row-major gather along W caps its page at 64 KiB, which one vocab shard exceeds. Fold the
+            # shard into rows, gather along H and unfold: shards concatenate in TP order either way, so
+            # the flattened row is the vocab in order.
+            shard = s[3]
+            cols = _row_fold_width(shard)
+            folded = ttnn.reshape(row, [s[0], s[1], shard // cols, cols])
+            full = ttnn.all_gather(
+                folded,
+                dim=-2,
+                cluster_axis=self.tp_axis,
+                num_links=self.lm_head.num_links,
+                topology=self.lm_head.topology,
+            )
+            ttnn.deallocate(folded)
+            row = ttnn.reshape(full, [s[0], s[1], 1, shard * self.tp_factor])
+        ids = ttnn.argmax(row, dim=-1, keepdim=False)
+        ttnn.deallocate(row)
+        tile_ids = ttnn.repeat(ids, ttnn.Shape([1] * (len(ids.shape) - 1) + [ttnn.TILE_SIZE]))
+        ttnn.deallocate(ids)
+        emb = self.mtp_embed_ids(tile_ids)
+        ttnn.deallocate(tile_ids)
+        if self.sp_factor == 1:
+            return emb
+        gathered = self._mtp_all_gather_sp(emb)
+        ttnn.deallocate(emb)
+        return gathered
 
     def _mtp_all_gather_sp(self, rows: ttnn.Tensor) -> ttnn.Tensor:
         """``[1, 1, 32, H/tp]`` per chip -> ``[1, 1, 32*sp, H/tp]`` on every chip, in SP order."""
@@ -858,8 +910,8 @@ class TtPrefillTransformer(LightweightModule):
         fwd_kwargs["actual_isl"] = actual_isl
         all_gather_sp = self._mtp_all_gather_sp if self.sp_factor > 1 else None
 
-        def run(embed_fn):
-            source = MTPTraceEmbedSource(union, geometry, embed_fn=embed_fn, all_gather_sp=all_gather_sp)
+        def run(embed_fn, blend=True):
+            source = MTPTraceEmbedSource(union, geometry, embed_fn=embed_fn, all_gather_sp=all_gather_sp, blend=blend)
             out = self.mtp_predictor.forward(source, h_normed, rope_tensors, kvpe_cache, **fwd_kwargs)
             if on_mtp_complete is not None:
                 on_mtp_complete(out, source.generated_tokens)
@@ -874,4 +926,10 @@ class TtPrefillTransformer(LightweightModule):
             generate()
             return
         assert not union.has_derived, "the variants share the union's row blocks only"
-        self._trace_controller.capture_variants({"generate": generate, "provided": lambda: run(None)})
+        variants = {"generate": generate, "provided": lambda: run(None)}
+        if geometry.has_split_chip:
+            # Most chunks start on a chip boundary, where the split-chip blend is the identity: a gather
+            # over SP, two one-hot matmuls and four eltwise per level that change nothing. The idle pass
+            # runs only "generate", whose programs cover this variant's.
+            variants["provided_aligned"] = lambda: run(None, blend=False)
+        self._trace_controller.capture_variants(variants)
