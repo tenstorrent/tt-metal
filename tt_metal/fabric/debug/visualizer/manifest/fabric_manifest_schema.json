@@ -404,7 +404,9 @@
     "serviced_by": { "type": "array", "items": { "type": "string", "pattern": "^erisc[0-9]+$" }, "uniqueItems": true },
 
     "credit_ref": {
+      "description": "A stream register, null when the builder did not allocate one, or an element of a credit counter array.",
       "oneOf": [
+        { "type": "null" },
         { "$ref": "#/$defs/stream" },
         {
           "type": "object",
@@ -477,7 +479,7 @@
     },
 
     "fields": {
-      "description": "Keyed by the field's key (FIELDS.md lists them). Null for a buffer the builder did not allocate.",
+      "description": "Keyed by the field's key (FIELDS.md lists them). Null for a buffer or stream register the builder did not allocate.",
       "type": "object",
       "propertyNames": { "$ref": "#/$defs/name" },
       "additionalProperties": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/field" }] }
