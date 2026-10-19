@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -46,7 +47,12 @@ struct KdaPrepWorkDist {
     tt::tt_metal::CoreRangeSet core_set;
 };
 
-KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, uint32_t core_cap);
+// Row-major over the grid, skipping `excluded` (a core another kernel of the program occupies).
+KdaPrepWorkDist distribute_prep(
+    tt::tt_metal::CoreCoord grid,
+    uint32_t total,
+    uint32_t core_cap,
+    std::optional<tt::tt_metal::CoreCoord> excluded = std::nullopt);
 
 // One core per (head, value block). A head's state columns evolve independently, so its value tiles are split
 // across as many cores as fit. A head's blocks share one grid column (or, when no column split fits, one grid row) so
