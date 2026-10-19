@@ -17,7 +17,6 @@ import pytest
 import torch
 from loguru import logger
 
-import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
 from models.demos.glm53_flash.tests.utils import pcc
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
@@ -57,12 +56,8 @@ def test_layer3_sparse_prefill_decode_vs_dump(mesh_device):
     for step in range(4):
         d = torch.load(DUMP / f"layer{LAYER}_decode{step}.pt")
         pos = d["position"]
-        pos_t = ttnn.from_torch(
-            torch.tensor([pos], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
-        )
-        yd = dec.decode_forward(
-            host_streams_to_device(d["x_in"], mesh_device, pad_to=1), positions=pos_t, host_positions=[pos]
-        )
+        dp = dec.make_decode_positions([pos])
+        yd = dec.decode_forward(host_streams_to_device(d["x_in"], mesh_device, pad_to=1), positions=dp)
         p_d = pcc(d["x_out"], device_streams_to_host(yd, 4, 1))
         logger.info(f"  sparse decode step {step} (pos {pos}): pcc {p_d:.6f}")
         assert p_d > 0.995

@@ -49,6 +49,9 @@ DECODE_STEPS = int(os.environ.get("GLM53_PERF_DECODE_STEPS", "3"))
 # "both" | "prefill" | "decode": the Tracy device-zone hash table collides for the full prefill+decode kernel
 # set of a MoE layer ("Source location hashes are colliding"), so each phase can be profiled in its own run
 PHASE = os.environ.get("GLM53_PERF_PHASE", "both")
+# 1: seed the DSA latent cache through the sparse prefill path (indexer + sparse_sdpa) so a decode-only
+# profile never compiles the dense SDPA prefill kernel whose Tracy zones collide on this commit
+FORCE_SPARSE_PREFILL = os.environ.get("GLM53_PERF_FORCE_SPARSE_PREFILL", "0") == "1"
 DUMP = Path("bringup/references/glm53_flash/T4097")
 
 
@@ -64,6 +67,8 @@ def test_layer_perf(mesh_device):
         raw, hf_config=cfg, layer_idx=LAYER, mesh_device=mesh_device, max_batch=1, max_seq_len=S + 64
     )
     kind = f"{'KDA' if dec.layer.is_kda else 'DSA'}+{'MoE' if dec.layer.is_moe else 'dense'}"
+    if FORCE_SPARSE_PREFILL and not dec.layer.is_kda:
+        dec.layer.attn.sparse_from = 0  # every prefill through the sparse path (exact below 2048 anyway)
 
     # ---- prefill: compile pass, then the measured warmed pass
     x_dev = host_streams_to_device(x_in, mesh_device)
@@ -98,10 +103,8 @@ def test_layer_perf(mesh_device):
         ),
         streams_dev,
     )
-    pos_dev = ttnn.from_torch(
-        torch.tensor([S], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
-    )
-    trace_id, out_dev, _ = dec.capture_decode_trace(streams_dev, pos_dev)
+    dp = dec.make_decode_positions([S])
+    trace_id, out_dev, _ = dec.capture_decode_trace(streams_dev, dp)
     dec.replay_decode(trace_id)  # one warm replay
     ttnn.synchronize_device(mesh_device)
     _read_profiler(mesh_device)

@@ -96,8 +96,9 @@ class TtRouter(LightweightModule):
         self.w_gate = ttnn.from_torch(
             gate_weight.float().t().contiguous(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
         )  # [H, E] fp32
-        self.bias_row = correction_bias.float().reshape(1, 1, 1, self.E)
-        self._bias: dict[int, ttnn.Tensor] = {}
+        self.bias = ttnn.from_torch(
+            correction_bias.float().reshape(1, 1, 1, self.E), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        )  # [1,1,1,E], broadcast over the token rows
         self.iota = ttnn.from_torch(
             torch.arange(self.E, dtype=torch.float32).reshape(1, 1, 1, self.E),
             dtype=ttnn.float32,
@@ -105,17 +106,6 @@ class TtRouter(LightweightModule):
             device=device,
         )
         self.fp32 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
-
-    def _bias_for(self, rows: int) -> ttnn.Tensor:
-        # moe_grouped_topk wants bias with the scores' shape
-        if rows not in self._bias:
-            self._bias[rows] = ttnn.from_torch(
-                self.bias_row.expand(1, 1, rows, self.E).contiguous(),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-        return self._bias[rows]
 
     def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """x [1,1,T,H] bf16 -> (weights [1,1,T,8] fp32, indices [1,1,T,8] fp32 (integral), dense [1,1,T,E] fp32).
@@ -129,7 +119,7 @@ class TtRouter(LightweightModule):
         logits = ttnn.linear(x, self.w_gate, dtype=ttnn.float32, compute_kernel_config=self.fp32)
         scores = ttnn.sigmoid(logits)  # fp32 [1,1,T,E]
         ttnn.deallocate(logits)
-        choice = ttnn.add(scores, self._bias_for(T))
+        choice = ttnn.add(scores, self.bias)
         dense = None  # selected unbiased scores at their expert columns, else 0
         idx_cols, w_cols = [], []
         for _ in range(self.k):

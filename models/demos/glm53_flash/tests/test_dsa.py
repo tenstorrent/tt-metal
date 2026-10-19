@@ -23,7 +23,7 @@ from models.demos.glm53_flash.reference.hf_layer_reference import (
 )
 from models.demos.glm53_flash.tests.utils import pcc
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
-from models.demos.glm53_flash.tt.dsa import TtDSA, TtLatentCache
+from models.demos.glm53_flash.tt.dsa import TtDSA, TtLatentCache, decode_position_tensors
 
 LAYER = int(os.environ.get("GLM53_DSA_LAYER", "3"))
 
@@ -92,13 +92,8 @@ def test_dsa_prefill_then_decode(mesh_device, weights, seq_len):
         xt_tt = ttnn.from_torch(
             xt.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device
         )
-        pos = ttnn.from_torch(
-            torch.tensor([T + step], dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-        )
-        y_tt_d = tt.decode_forward(xt_tt, tt_cache, pos)
+        pos, pool_ids, ring_slots = decode_position_tensors(mesh_device, [T + step], cfg.index_kpool)
+        y_tt_d = tt.decode_forward(xt_tt, tt_cache, pos, pool_ids, ring_slots)
         y_d = ttnn.to_torch(y_tt_d).reshape(1, 1, -1)
         p_d = pcc(y_hf_d, y_d)
         logger.info(f"  decode step {step} (pos {T + step}): pcc {p_d:.6f}")

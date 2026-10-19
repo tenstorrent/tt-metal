@@ -6,10 +6,11 @@ One ``FunctionalDecoder`` is one decoder layer (``layer_idx``) of any of the thr
 (KDA + dense MLP: layers 0-2; DSA + MoE: 3+4k; KDA + MoE: the rest) with its device-owned
 autoregressive state:
 
-* KDA layers: a ``KdaState`` per user (recurrent ``[1,H,K,V]`` fp32 + conv history
-  ``[1,3,3*8192]`` bf16) written by prefill, stacked into a ``[B,...]`` state for decode;
-* DSA layers: a paged latent cache ``[max_blocks, 1, 32, 512]`` bf16 shared by ``max_batch``
-  users with a ``[max_batch, blocks_per_seq]`` page table.
+* KDA layers: a persistent ``[max_batch, ...]`` ``KdaState`` (recurrent ``[B,64,128,128]`` fp32 +
+  conv history ``[B,3,3*8192]`` bf16); prefill writes slot ``user``, decode updates all slots in place;
+* DSA layers: a paged latent cache ``[max_blocks, 1, 32, 512]`` bf16 shared by ``max_batch`` users
+  (``[max_batch, blocks_per_seq]`` page table, any unique block mapping) and the pooled-key index
+  (``TtIndexCache``), both maintained on every prefill/decode call.
 
 Tensor contract (the HF residual is the mHC stream tensor ``[B, S, 4, 4096]``):
 * ``prefill_forward(streams, user, seq_len)``: one user; ``streams`` is the packed fp32 device
@@ -17,13 +18,22 @@ Tensor contract (the HF residual is the mHC stream tensor ``[B, S, 4, 4096]``):
   rows past ``seq_len`` are padding and come back unspecified). Fills that user's cache/state
   from position 0. Returns the packed output streams.
 * ``decode_forward(streams, positions)``: ``streams`` ``[1, 1, B, 4*4096]`` fp32, one token for
-  each of the B prefetched users (user b = row b), ``positions`` ``[B]`` int32 row-major device
-  tensor holding each user's current context length. Returns ``[1, 1, B, 4*4096]``.
+  each of the B == max_batch user slots (user b = row b); ``positions`` is a ``DecodePositions``
+  built by ``make_decode_positions(host_positions)`` and refreshed in place by
+  ``update_decode_positions`` (persistent ``[B]`` int32 device tensors: the position, position // 4
+  and position % 4, plus the host values). Returns ``[1, 1, B, 4*4096]``.
+  DSA layers attend densely while every user's position is < index_topk (2048) and switch to the
+  indexer + sparse_sdpa path (host chunk geometry, not traced) as soon as one user is beyond.
+* ``capture_decode_trace`` / ``replay_decode``: the dense decode graph is capturable; the captured
+  graph reads the persistent position tensors and updates the state in place. Capturing a DSA
+  layer whose ``max_seq_len`` exceeds index_topk is refused unless the caller opts in, because
+  replays past position 2047 would run the dense attention outside HF semantics.
 Use ``host_streams_to_device`` / ``device_streams_to_host`` at the test boundary only.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -33,7 +43,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.decoder_layer import LayerState, TtDecoderLayer
-from models.demos.glm53_flash.tt.dsa import TtLatentCache
+from models.demos.glm53_flash.tt.dsa import TtLatentCache, decode_position_tensors
 
 TILE = 32
 
@@ -53,6 +63,16 @@ def device_streams_to_host(packed: ttnn.Tensor, n: int, seq_len: int | None = No
     T, nC = t.shape
     S = T if seq_len is None else seq_len
     return t[:S].reshape(1, S, n, nC // n)
+
+
+@dataclass
+class DecodePositions:
+    """Persistent decode-step position inputs (one entry per user slot)."""
+
+    positions: ttnn.Tensor  # [B] int32: position of the token being decoded (= context length)
+    pool_ids: ttnn.Tensor  # [B] int32: position // index_kpool
+    ring_slots: ttnn.Tensor  # [B] int32: position % index_kpool
+    host: list[int]  # the same values on the host (chunk geometry for the sparse path)
 
 
 class FunctionalDecoder(LightweightModule):
@@ -133,11 +153,35 @@ class FunctionalDecoder(LightweightModule):
         ttnn.deallocate(new.convolution)
 
     def _state_for_decode(self, batch: int) -> LayerState:
-        if not self.layer.is_kda:
-            return LayerState(cache=self.cache)
         if batch != self.max_batch:
             raise ValueError(f"decode batch {batch} must equal max_batch {self.max_batch} (fixed user slots)")
+        if not self.layer.is_kda:
+            return LayerState(cache=self.cache)
         return LayerState(kda=self.kda_batched)
+
+    # -------------------------------------------------------------- positions
+    def make_decode_positions(self, host_positions: list[int]) -> DecodePositions:
+        """Upload the three persistent [B] int32 tensors for ``host_positions`` (one per user slot)."""
+        if len(host_positions) != self.max_batch:
+            raise ValueError(f"{len(host_positions)} positions for max_batch {self.max_batch}")
+        pos, pool_ids, ring_slots = decode_position_tensors(self.device, host_positions, self.cfg.index_kpool)
+        return DecodePositions(pos, pool_ids, ring_slots, list(host_positions))
+
+    def update_decode_positions(self, dp: DecodePositions, host_positions: list[int]):
+        """Refresh the persistent position tensors in place (trace-replay safe)."""
+        if len(host_positions) != self.max_batch:
+            raise ValueError(f"{len(host_positions)} positions for max_batch {self.max_batch}")
+        P = self.cfg.index_kpool
+        for t, vals in (
+            (dp.positions, host_positions),
+            (dp.pool_ids, [p // P for p in host_positions]),
+            (dp.ring_slots, [p % P for p in host_positions]),
+        ):
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(torch.tensor(vals, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT),
+                t,
+            )
+        dp.host = list(host_positions)
 
     # ---------------------------------------------------------------- forwards
     def prefill_forward(self, streams: ttnn.Tensor, *, user: int = 0, seq_len: int | None = None) -> ttnn.Tensor:
@@ -154,25 +198,33 @@ class FunctionalDecoder(LightweightModule):
             self._write_user_kda_state(user, new_state.kda)
         return out
 
-    def decode_forward(
-        self, streams: ttnn.Tensor, *, positions: ttnn.Tensor, host_positions: list[int] | None = None
-    ) -> ttnn.Tensor:
-        """``host_positions`` (same values as ``positions``) enables the DSA sparse path for users whose
-        position is >= index_topk; it is host-side chunk geometry, so that path is not traced."""
+    def decode_forward(self, streams: ttnn.Tensor, *, positions: DecodePositions) -> ttnn.Tensor:
+        """One token per user slot. DSA layers pick the dense (traceable) or sparse path from the
+        host positions carried by ``positions``."""
         B = streams.shape[-2]
-        out, new_state = self.layer.decode_forward(
-            streams, self._state_for_decode(B), positions=positions, host_positions=host_positions
-        )
+        if any(p >= self.max_seq_len for p in positions.host):
+            raise ValueError(f"positions {positions.host} exceed max_seq_len {self.max_seq_len}")
+        out, new_state = self.layer.decode_forward(streams, self._state_for_decode(B), positions=positions)
         if self.layer.is_kda:
             assert new_state.kda is self.kda_batched, "KDA decode must update the persistent state in place"
         return out
 
     # ------------------------------------------------------------------- trace
-    def capture_decode_trace(self, streams: ttnn.Tensor, positions: ttnn.Tensor, *, cq_id: int = 0):
+    def capture_decode_trace(
+        self, streams: ttnn.Tensor, positions: DecodePositions, *, cq_id: int = 0, allow_sparse_range: bool = False
+    ):
         """Warm up (compile) one decode step on the persistent inputs, then capture the next one.
-        Returns (trace_id, output tensor). Replay with ``replay_decode``; the state tensors are
-        updated in place by the captured graph. The warm-up step consumes one real token: call
-        this with the first decode token's inputs and treat its output as that step's result."""
+        Returns ``(trace_id, output tensor, warm-up output)``. Replay with ``replay_decode``; the
+        state tensors are updated in place by the captured graph. The warm-up and the capture both
+        consume the token at ``positions`` (the state advances twice), so capture on a throw-away
+        token or re-prefill afterwards. Refused for a DSA layer whose ``max_seq_len`` reaches the
+        sparse threshold unless ``allow_sparse_range`` (replays past position 2047 would run the dense
+        attention, which is not HF semantics there)."""
+        if not self.layer.is_kda and self.max_seq_len > self.cfg.index_topk and not allow_sparse_range:
+            raise ValueError(
+                f"traced decode is valid only below position {self.cfg.index_topk}; this decoder allows "
+                f"max_seq_len={self.max_seq_len}. Use eager decode_forward beyond, or pass allow_sparse_range=True"
+            )
         warm = self.decode_forward(streams, positions=positions)
         ttnn.synchronize_device(self.device)
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=cq_id)
