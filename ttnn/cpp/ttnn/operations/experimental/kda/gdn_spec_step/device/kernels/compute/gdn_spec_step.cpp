@@ -261,6 +261,34 @@ inline void gates_token(
 }
 #endif  // !GDN_FAST
 
+#if !GDN_FP32_STATE
+// out[i*Nt + j] = a[i] @ b[j] like gdn_step::outer_product, but up to 4 tiles per DST acquire (fp32 DST under the
+// half-DST sync holds 4; bf16 DST holds 8) with one matmul init: each DST tile still receives exactly one K = 1 tile
+// matmul, so the values are unchanged. The FP32_STATE path fuses the outer product into the state add instead.
+inline void outer_product4(uint32_t a, uint32_t b, uint32_t out, DataflowBuffer& out_dfb, uint32_t Kt, uint32_t Nt) {
+    out_dfb.reserve_back(Kt * Nt);
+    pack_reconfig_data_format(out);
+    reconfig_data_format<SrcOrder::Reverse>(a, b);
+    matmul_init(a, b);
+    const uint32_t total = Kt * Nt;
+    for (uint32_t k0 = 0; k0 < total; k0 += 4) {
+        const uint32_t n = (total - k0) < 4 ? (total - k0) : 4;
+        tile_regs_acquire();
+        for (uint32_t q = 0; q < n; ++q) {
+            const uint32_t k = k0 + q;
+            matmul_tiles(a, b, k / Nt, k % Nt, q);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t q = 0; q < n; ++q) {
+            pack_tile(q, out, k0 + q);
+        }
+        tile_regs_release();
+    }
+    out_dfb.push_back(total);
+}
+#endif  // !GDN_FP32_STATE
+
 #if GDN_FAST && !GDN_FP32_STATE
 // FAST: out[i] = a[i] + b[i], packed into two DFBs (hn for o = qn @ hn, hnew for the writer) from the same DST tile
 // (gdn_decode_step_conv_fast.cpp's add_tiles_n_dual: the stored state is the full fp32 sum)
@@ -707,7 +735,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
         hd32.pop_front(KV);
         delta.pop_front(Vt);
 #else
-        outer_product(dfb::kt, dfb::delta, dfb::outer, outer, Kt, Vt);
+        outer_product4(dfb::kt, dfb::delta, dfb::outer, outer, Kt, Vt);
         delta.pop_front(Vt);
         outer.wait_front(KV);
 #if GDN_FAST
