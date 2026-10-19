@@ -6,6 +6,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/debug/assert.h"
 
 void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in0);
@@ -36,8 +37,16 @@ void kernel_main() {
 
     // signal the packer
     tile_regs_commit();  // Math
-    // Intentional hang for triage testing; test_triage.py asserts this `ebreak` is on line 40.
+#if LIGHTWEIGHT_ASSERT_ENABLED
+    // With lightweight asserts on, hang on an ASSERT instead: the core halts inside lightweight_assert_trap(), a
+    // frame above this ASSERT (tt-exalens#1164). volatile keeps the compiler from deciding the ASSERT up front. The
+    // name n is a letter of "[info]", to test triage's Rich markup. test_triage.py expects this ASSERT on line 45.
+    volatile uint32_t magic = 0, n = 0xDEADBEEF;
+    ASSERT(magic == n);
+#else
+    // Intentional hang for triage testing; test_triage.py asserts this `ebreak` is on line 48.
     asm volatile("ebreak");
+#endif
 
     // packer waits here
     tile_regs_wait();  // Pack

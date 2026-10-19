@@ -180,7 +180,7 @@ def serialize_variables(variables: list[CallstackEntryVariable], highlight: str 
         var_type = _declared_type(var)
         type_prefix = f"{escape(var_type)} " if var_type else ""
         var_value = format_variable_value(var)
-        if var_name in highlight:
+        if var_name in re.findall(r"\w+", highlight):
             serialized = f"- {type_prefix}[info]{escape(var_name)}[/] = [command]{escape(var_value)}[/]\n"
         else:
             serialized = f"- {type_prefix}{escape(var_name)} = {escape(var_value)}\n"

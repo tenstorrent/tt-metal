@@ -19,6 +19,7 @@ import threading
 import time
 
 import pytest
+from rich.text import Text
 
 
 metal_home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -48,6 +49,8 @@ def logged_errors() -> list[str]:
 
 # Mapping of hang application paths to their expected test results
 HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
+# Not an app of its own: the HANG_APP_EXPECTED_RESULTS key for HANG_APP_ADD_2_INTEGERS run with lightweight asserts.
+HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT = f"{HANG_APP_ADD_2_INTEGERS} with lightweight asserts"
 HANG_APP_TTNN_ADD_INTEGERS = (
     "tools/tests/triage/hang_apps/ttnn_add_integers_hang/triage_hang_app_ttnn_add_integers_hang"
 )
@@ -65,7 +68,8 @@ HANG_APP_EXPECTED_RESULTS = {
             "kernel_name": "add_2_tiles_hang",
             "compute_cores_hang": True,
             "first_callstack_file": "add_2_tiles_hang.cpp",
-            "first_callstack_line": 40,
+            "first_callstack_line": 48,
+            "first_callstack_local": "dfb_in0",
         },
         "callstacks": {
             "device_to_check": 0,
@@ -73,15 +77,15 @@ HANG_APP_EXPECTED_RESULTS = {
             "cores_to_check": {
                 "trisc0": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 48,
                 },
                 "trisc1": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 48,
                 },
                 "trisc2": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 48,
                 },
             },
         },
@@ -91,7 +95,8 @@ HANG_APP_EXPECTED_RESULTS = {
             "kernel_name": "add_2_tiles_hang",
             "compute_cores_hang": True,
             "first_callstack_file": "add_2_tiles_hang.cpp",
-            "first_callstack_line": 40,
+            "first_callstack_line": 48,
+            "first_callstack_local": "dfb_in0",
         },
         "callstacks": {
             "device_to_check": 0,
@@ -99,21 +104,55 @@ HANG_APP_EXPECTED_RESULTS = {
             "cores_to_check": {
                 "trisc0": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 48,
                 },
                 "trisc1": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 48,
                 },
                 "trisc2": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 48,
                 },
             },
         },
         "running_operations": {
             "expected_op_name_contains": "AddIntegersHang",
             "assert_no_na": True,
+        },
+    },
+    # add_2_integers_hang with lightweight asserts on: the compute kernel hangs on an ASSERT instead of its ebreak.
+    # Every TRISC stops inside lightweight_assert_trap(), so the ASSERT is the frame below the top one
+    # (tt-exalens#1164).
+    HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT: {
+        "lightweight_asserts": {
+            "kernel_name": "add_2_tiles_hang",
+            "compute_cores_hang": True,
+            "assert": {
+                "trap_function": "lightweight_assert_trap",
+                "file": "add_2_tiles_hang.cpp",
+                "line": 45,
+                "code": "ASSERT(magic == n)",
+                "local": "magic",
+            },
+        },
+        "callstacks": {
+            "device_to_check": 0,
+            "location_to_check": "0,0",
+            "cores_to_check": {
+                "trisc0": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 45,
+                },
+                "trisc1": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 45,
+                },
+                "trisc2": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 45,
+                },
+            },
         },
     },
 }
@@ -229,11 +268,15 @@ def cause_hang_with_app(request):
         cmd = [sys.executable, os.path.join(metal_home, app)]
     else:
         cmd = [os.path.join(metal_home, "build", app)]
+    # TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS from outside (e.g. "(Debug) Triage Tests") would make add_2_tiles_hang hang
+    # on its ASSERT instead of its ebreak in every configuration, so only a configuration that sets it in its own env
+    # gets lightweight asserts.
+    env = {key: value for key, value in os.environ.items() if key != "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS"}
     proc = subprocess.Popen(
         cmd + args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={**os.environ, **app_configuration.get("env", {})},
+        env={**env, **app_configuration.get("env", {})},
     )
 
     output = AppOutput(proc)
@@ -292,7 +335,8 @@ def cause_hang_with_app(request):
             10,
         ),
         (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, fast dispatch
+            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, fast dispatch.
+            # Lightweight asserts are on, so the compute kernel hangs on an ASSERT inside lightweight_assert_trap().
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
@@ -300,8 +344,10 @@ def cause_hang_with_app(request):
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
                     "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test",
+                    "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS": "1",
+                    "TT_METAL_WATCHER_DISABLE_ASSERT": "1",
                 },
-                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
+                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT],
             },
             60,
         ),
@@ -564,6 +610,7 @@ class TestTriage:
             assert risc_names == expected_risc_names, f"Expected {expected_risc_names}, got {risc_names}"
             assert len(result) == len(reported), f"Expected one result per core, got {len(result)} for {reported}"
 
+        expected_assert = expected.get("assert")
         for check in result:
             assert check.result is not None, f"Expected non-None result for {check.risc_name}"
 
@@ -596,6 +643,39 @@ class TestTriage:
                 assert (
                     first_entry.file_info.line == expected_line
                 ), f"{check.risc_name}: Expected line {expected_line}, got {first_entry.file_info.line}"
+
+            # The report lists the locals of the frame it quotes. With no trap helper on top that is frame #0, so a local
+            # of the kernel has to show up: this catches a fix that skips the top frame even when it is not a trap.
+            expected_local = expected.get("first_callstack_local")
+            if expected_local:
+                assert expected_local in (
+                    check.result.arguments_and_locals or ""
+                ), f"{check.risc_name}: Expected {expected_local!r} among the locals, got {check.result.arguments_and_locals!r}"
+
+            if expected_assert:
+                # ASSERT halts the core inside its trap helper, one frame above the ASSERT line: the layout
+                # tt-exalens#1164 is about.
+                assert len(callstack) > 1 and callstack[0].function_name == expected_assert["trap_function"], (
+                    f"{check.risc_name}: Expected {expected_assert['trap_function']} on top of the callstack, "
+                    f"got {[frame.function_name for frame in callstack]}. If ASSERT now traps through another helper, "
+                    "update trap_function here and ASSERT_TRAP_FUNCTIONS in tools/triage/dump_lightweight_asserts.py."
+                )
+                fi = callstack[1].file_info
+                where = f"{fi.file}:{fi.line}" if fi is not None else "no file info"
+                assert (
+                    fi is not None and fi.file.endswith(expected_assert["file"]) and fi.line == expected_assert["line"]
+                ), f"{check.risc_name}: Expected the ASSERT at {expected_assert['file']}:{expected_assert['line']}, got {where}"
+
+                # The report has to quote that ASSERT and list its locals, neither of which the trap's own frame has.
+                # If it quotes nothing, ASSERT may now trap through a helper missing from ASSERT_TRAP_FUNCTIONS.
+                code = Text.from_markup(check.result.kernel_callstack_with_message.code_line).plain  # drops [info]..[/]
+                assert (
+                    code == expected_assert["code"]
+                ), f"{check.risc_name}: Expected {expected_assert['code']!r}, got {code!r}"
+                assert expected_assert["local"] in (check.result.arguments_and_locals or ""), (
+                    f"{check.risc_name}: Expected {expected_assert['local']!r} among the locals, "
+                    f"got {check.result.arguments_and_locals!r}"
+                )
 
     def test_dump_configuration(self):
         result = self.run_triage_script("dump_configuration.py")
