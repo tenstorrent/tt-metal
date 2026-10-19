@@ -114,6 +114,7 @@ Chunked prefill (#60808), measured 2026-10-16 on one BH Galaxy with the MOPD che
 | `test_decoder_tp8_dp4.py` layers 0, 1, 5 | as above (one-shot prefill + decode) | output >= 0.9987 / 0.9965; delta >= 0.9925 / 0.9933 |
 | `test_model_tp8_dp4.py` | 48 layers, MOPD golden | top-1 95.0%, PCC mean 0.9925 (min 0.9604); shared prompt identical on all 4 rows |
 | `test_model_chunked_tp8_dp4.py` | 48 layers, 1500-token prompt: one shot vs chunks of 128-1024 vs prefix hit at 512 | same next token everywhere; logits PCC vs one shot >= 0.9948 (chunks), 0.9982 (prefix hit); greedy text identical across the three |
+| `test_chunked_prefill_tp8_dp4.py -k 32k` (#61416), measured 2026-10-19 | one 32768-token prompt on every row, chunks of 1024 / 2048 / 4096 / 8192 per row, vs the fp32 reference (attention in query blocks); 32 decode steps, scored per row | layer 0: chunked PCC 0.99999, delta 0.9990, vs one shot 0.99999. Layer 1: 0.99995, delta 0.9976, vs one shot 0.99998; cyclic SWA blocks (132 per user, ~4 cycles) identical to no reuse. Layer 5: 0.9986, delta 0.9972, vs one shot 0.9999. Written K/V >= 0.99994 on all three. Decode passes; on layer 5 one token (position 32769) has its 8th and 9th expert scores 1.0e-4 apart and picks a different expert on device (output PCC 0.94 on its own) |
 
 Notes:
 
