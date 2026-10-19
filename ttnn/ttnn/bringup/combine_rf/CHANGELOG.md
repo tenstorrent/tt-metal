@@ -7,6 +7,27 @@
 
 imported, unchanged.
 
+### Clear refusal when the accumulators' fp32 sums do not fit the arena (2026-10-19, deepseek_v41_flash_d_p P.8 follow-up)
+- What: `sparse_combine_rf_prepare` with an arena raises ValueError when the arena cannot hold the accumulators' state,
+  one ring slot per source, the CBs (the fp32 sums of ceil(S / A) home tokens) and the local ring. The message gives
+  the sums per accumulator, the largest S per call at this A and the smallest A for this S. Before, the same case
+  failed with "no room for one ring slot per source chip", which blamed the rings. Default behaviour unchanged: every
+  configuration that built before builds the same program.
+- Why: the "255-tile hang" (an accumulator holding more than ~255 fp32 tiles, S = 512 home tokens on 9 accumulators)
+  was not an 8-bit limit. It was the local hand-off ring's grant batching, fixed in the entry below: grants went out
+  in batches of 4, and a ring of fewer than 4 slots deadlocked. At S = 512 with a 1252 KB arena the ring had 2 slots;
+  at S = 468 it had 9. With that fix reverted, S = 512 hangs at 2 slots (writers in se_yrm issue(), accumulators
+  waiting on their local ring) and passes at 8 slots with the same 285 tiles. With the fix in place it passes at 2
+  slots. The port readers' grants (batches of 8) also fire when the whole ring is granted, so they progress at any
+  ring size (SPC_QP=4 passes). The real limit is L1 capacity: a home token's fp32 row stays in L1 for the whole
+  call. At W 5120 that is 20 KB a token; with 9 accumulators of <= 1356 KB, one call takes <= 558 home tokens
+  (310 tiles an accumulator). 1024 home tokens need >= 17 accumulators (1322 KB each), which is above the op's
+  A <= 16.
+- Results: deepseek_v41_flash_d_p/tt/perf_experts.py: test_weighted_combine_routes 30 / 30 (64-512 tokens, one pass,
+  arenas auto / 1252 KB), test_weighted_refuses_small_arena (512 tokens in a 1156 KB arena: refused with "<= 468 home
+  tokens or >= 10 accumulators"), test_weighted_passes_cost.
+- Files: sparse_combine_rf.py
+
 ### Column-axis combine, fp32 output, passes, deterministic one-core planner (2026-10-19, deepseek_v41_flash_d_p P.8)
 - What (every option off by default: the programs before, unchanged; one bug fix, identical for rings >= 4 slots):
   - `sparse_combine_rf_prepare(axis=0)`: the combine along each mesh column only (a model whose tokens are replicated
