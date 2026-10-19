@@ -110,3 +110,46 @@ TEST(DataFormatFp8ArchGuard, Fp8E4m3PackSrcFormatPerArch) {
 
     EXPECT_ANY_THROW(tt::get_pack_src_formats(fp8_formats, unpack_dst, true, false, false, tt::ARCH::WORMHOLE_B0));
 }
+
+TEST(BlockfloatCommonTests, CPU_Bfp2Bfp4Bfp8SubnormalAndLargeExpDiff) {
+    // Large shared_exp - exp (>= 32) must flush cleanly to +0 without UB shifts or negative zero sign bits
+    uint32_t neg_one_bits = std::bit_cast<uint32_t>(-1.0f);  // exp = 127
+    EXPECT_EQ((convert_u32_to_bfp<tt::DataFormat::Bfp8_b, false>(neg_one_bits, 200, false)), 0u);
+    EXPECT_EQ((convert_u32_to_bfp<tt::DataFormat::Bfp4_b, false>(neg_one_bits, 200, false)), 0u);
+    EXPECT_EQ((convert_u32_to_bfp<tt::DataFormat::Bfp2_b, false>(neg_one_bits, 200, false)), 0u);
+
+    // Subnormal mantissa shifts in convert_bfp_to_u32 (leading zeros in BFP8 / BFP4 mantissa)
+    for (uint32_t shared_exp : {127u, 135u}) {
+        for (uint8_t bfp8_code = 0; bfp8_code < 255; ++bfp8_code) {
+            uint32_t u32 = convert_bfp_to_u32(tt::DataFormat::Bfp8_b, bfp8_code, shared_exp, false);
+            uint8_t repacked = convert_u32_to_bfp<tt::DataFormat::Bfp8_b, false>(u32, shared_exp, false);
+            if ((bfp8_code & 0x7f) == 0) {
+                EXPECT_EQ(u32, 0u);
+                EXPECT_EQ(repacked, 0u);
+            } else {
+                EXPECT_EQ(repacked, bfp8_code);
+            }
+        }
+        for (uint8_t bfp4_code = 0; bfp4_code < 16; ++bfp4_code) {
+            uint32_t u32 = convert_bfp_to_u32(tt::DataFormat::Bfp4_b, bfp4_code, shared_exp, false);
+            uint8_t repacked = convert_u32_to_bfp<tt::DataFormat::Bfp4_b, false>(u32, shared_exp, false);
+            if ((bfp4_code & 0x7) == 0) {
+                EXPECT_EQ(u32, 0u);
+                EXPECT_EQ(repacked, 0u);
+            } else {
+                EXPECT_EQ(repacked, bfp4_code);
+            }
+        }
+        for (uint8_t bfp2_code = 0; bfp2_code < 4; ++bfp2_code) {
+            uint32_t u32 = convert_bfp_to_u32(tt::DataFormat::Bfp2_b, bfp2_code, shared_exp, false);
+            uint8_t repacked = convert_u32_to_bfp<tt::DataFormat::Bfp2_b, false>(u32, shared_exp, false);
+            if ((bfp2_code & 0x1) == 0) {
+                EXPECT_EQ(u32, 0u);
+                EXPECT_EQ(repacked, 0u);
+            } else {
+                EXPECT_EQ(repacked, bfp2_code);
+            }
+        }
+    }
+}
+

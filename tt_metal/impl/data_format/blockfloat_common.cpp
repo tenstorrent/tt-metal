@@ -24,11 +24,11 @@
 
 namespace {
 
-uint8_t get_max_exp(const std::vector<uint32_t>& vec, bool is_exp_a) {
-    TT_ASSERT(vec.size() == 16);
+uint8_t get_max_exp(const uint32_t* vec, size_t count, bool is_exp_a) {
+    TT_ASSERT(count == 16);
     uint32_t max = 0;
 
-    for (int i = 0; i < 16; ++i) {
+    for (size_t i = 0; i < count; ++i) {
         // mask & shift out exp
         uint32_t exp = (vec[i] & 0x7f800000) >> 23;
 
@@ -84,7 +84,7 @@ std::vector<uint32_t> pack_exponents(const std::vector<uint8_t>& exponents, size
 }
 
 template <tt::DataFormat BfpFormat>
-uint32_t create_packed_bfp_packed_as_u32(const std::vector<uint32_t>& u32_vec, uint32_t shared_exp, bool is_exp_a) {
+uint32_t create_packed_bfp_packed_as_u32(const uint32_t* u32_vec, uint32_t shared_exp, bool is_exp_a) {
     TT_ASSERT(
         BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp8 ||
         BfpFormat == tt::DataFormat::Bfp2_b || BfpFormat == tt::DataFormat::Bfp4_b ||
@@ -111,17 +111,17 @@ uint32_t create_packed_bfp_packed_as_u32(const std::vector<uint32_t>& u32_vec, u
 }
 
 template uint32_t create_packed_bfp_packed_as_u32<tt::DataFormat::Bfp2>(
-    const std::vector<uint32_t>& u32_vec, uint32_t shared_exp, bool is_exp_a);
+    const uint32_t* u32_vec, uint32_t shared_exp, bool is_exp_a);
 template uint32_t create_packed_bfp_packed_as_u32<tt::DataFormat::Bfp4>(
-    const std::vector<uint32_t>& u32_vec, uint32_t shared_exp, bool is_exp_a);
+    const uint32_t* u32_vec, uint32_t shared_exp, bool is_exp_a);
 template uint32_t create_packed_bfp_packed_as_u32<tt::DataFormat::Bfp8>(
-    const std::vector<uint32_t>& u32_vec, uint32_t shared_exp, bool is_exp_a);
+    const uint32_t* u32_vec, uint32_t shared_exp, bool is_exp_a);
 template uint32_t create_packed_bfp_packed_as_u32<tt::DataFormat::Bfp2_b>(
-    const std::vector<uint32_t>& u32_vec, uint32_t shared_exp, bool is_exp_a);
+    const uint32_t* u32_vec, uint32_t shared_exp, bool is_exp_a);
 template uint32_t create_packed_bfp_packed_as_u32<tt::DataFormat::Bfp4_b>(
-    const std::vector<uint32_t>& u32_vec, uint32_t shared_exp, bool is_exp_a);
+    const uint32_t* u32_vec, uint32_t shared_exp, bool is_exp_a);
 template uint32_t create_packed_bfp_packed_as_u32<tt::DataFormat::Bfp8_b>(
-    const std::vector<uint32_t>& u32_vec, uint32_t shared_exp, bool is_exp_a);
+    const uint32_t* u32_vec, uint32_t shared_exp, bool is_exp_a);
 
 }  // namespace
 
@@ -168,21 +168,13 @@ uint32_t convert_bfp_to_u32(tt::DataFormat bfp_format, uint8_t data, uint8_t sha
         uint32_t man = data & 0x7;
 
         // Shift mantissa up until there is a 1 in bit 3
-        int shift_cnt = 0;
         if (man == 0) {
             man = 0;
             exp = 0;
         } else {
-            while ((man & 0x04) == 0) {
-                man = man << 1;
-                shift_cnt++;
-            }
-            // shift one more time and zero the
-            // hidden top mantissa bit
-            // shift again to put first non-hidden mantissa
-            // bit in bit 3
-            man = man << 1;
-            man = man & 0x7;
+            int shift_cnt = static_cast<int>(std::countl_zero(man)) - 29;
+            // Shift one more time and zero the hidden top mantissa bit
+            man = (man << (shift_cnt + 1)) & 0x7;
 
             // adjust exponent
             TT_ASSERT(exp >= (uint32_t)shift_cnt, "incorrect shift_cnt");
@@ -201,23 +193,13 @@ uint32_t convert_bfp_to_u32(tt::DataFormat bfp_format, uint8_t data, uint8_t sha
         uint32_t man = data & 0x7f;
 
         // Shift mantissa up until there is a 1 in bit 6
-        int shift_cnt = 0;
         if (man == 0) {
             man = 0;
             exp = 0;
         } else {
-            // shift_cnt = 6 - (31 - __builtin_clz(man));
-            // man = (man << (shift_cnt + 1)) & 0x7f;
-            while ((man & 0x40) == 0) {
-                man = man << 1;
-                shift_cnt++;
-            }
-            // shift one more time and zero the
-            // hidden top mantissa bit
-            // shift again to put first non-hidden mantissa
-            // bit in bit 7
-            man = man << 1;
-            man = man & 0x7f;
+            int shift_cnt = static_cast<int>(std::countl_zero(man)) - 25;
+            // Shift one more time and zero the hidden top mantissa bit
+            man = (man << (shift_cnt + 1)) & 0x7f;
 
             // adjust exponent
             TT_ASSERT(exp >= (uint32_t)shift_cnt, "incorrect shift_cnt");
@@ -286,15 +268,9 @@ uint8_t convert_u32_to_bfp(uint32_t input, uint32_t shared_exp, bool is_exp_a) {
     mantissa = (1 << 23) | mantissa;
 
     if (shared_exp > exp) {
-        int exp_diff = shared_exp - exp;
-        // shift mantissa further down by exp diff
-        // In bit-shift operation (A >> B), the result is undefined if B is greater than or equal to the number of bits
-        // in A
-        while (exp_diff > 31) {
-            mantissa = mantissa >> 31;
-            exp_diff -= 31;
-        }
-        mantissa = mantissa >> exp_diff;
+        uint32_t exp_diff = shared_exp - exp;
+        // Guard shift count >= 32 (mantissa only has 24 bits set, so any shift >= 24 is 0).
+        mantissa = (exp_diff >= 32) ? 0 : (mantissa >> exp_diff);
     }
 
     // this needs to become 3 bits so shift 21 times
@@ -396,23 +372,23 @@ std::vector<uint32_t> pack_as_bfp_tiles(
             static_cast<size_t>(end_tile - start_tile) * (exp_dwords_per_tile + mantissa_dwords_per_tile));
         std::vector<uint8_t> exponents;
         exponents.reserve(num_exponents_in_dword);
-        std::vector<uint32_t> data;
-        data.reserve(num_mantissas_in_dword);
+        std::vector<uint32_t> packed_data;
+        packed_data.reserve(mantissa_dwords_per_tile);
+        std::vector<uint8_t> exponents_with_padding;
+        exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
+        std::array<uint32_t, 64> single_row{};
+        TT_ASSERT(static_cast<size_t>(subtile_cols) <= single_row.size());
 
         for (int tile_index = start_tile; tile_index < end_tile; ++tile_index) {
-            std::vector<uint32_t> packed_data;
-            packed_data.reserve(mantissa_dwords_per_tile);
-            std::vector<uint8_t> exponents_with_padding;
-            exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
+            packed_data.clear();
+            exponents_with_padding.clear();
 
             size_t fp32_element_base = row_major_input ? 0 : (tile_index * num_float_in_tile);
 
             for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
                 for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
                     for (int i = 0; i < subtile_rows; ++i) {
-                        std::vector<uint32_t> single_row;
-                        single_row.reserve(subtile_cols);
-                        // populate a single row
+                        // populate a single row on the stack without heap allocation
                         for (int j = 0; j < subtile_cols; ++j) {
                             size_t data_index;
                             if (row_major_input) {
@@ -424,11 +400,12 @@ std::vector<uint32_t> pack_as_bfp_tiles(
                                              i * subtile_cols + j;
                             }
                             float float_num = static_cast<float>(input_data[data_index]);
-                            uint32_t uint32_num = *reinterpret_cast<uint32_t*>(&float_num);
-                            single_row.push_back(uint32_num);
+                            uint32_t uint32_num;
+                            std::memcpy(&uint32_num, &float_num, sizeof(uint32_t));
+                            single_row[j] = uint32_num;
                         }
 
-                        uint8_t exp = get_max_exp(single_row, is_exp_a);
+                        uint8_t exp = get_max_exp(single_row.data(), subtile_cols, is_exp_a);
 
                         // check if it satisfies the 16B alignment
                         if (exponent_padding) {
@@ -441,32 +418,17 @@ std::vector<uint32_t> pack_as_bfp_tiles(
                             }
                         }
 
-                        for (uint32_t u32_datum : single_row) {
-                            data.push_back(u32_datum);
-                            if (data.size() % num_mantissas_in_dword == 0) {
-                                uint32_t datum = create_packed_bfp_packed_as_u32<BfpFormat>(data, exp, is_exp_a);
-                                packed_data.push_back(datum);
-                                data.clear();
-                            }
+                        for (int j = 0; j < subtile_cols; j += num_mantissas_in_dword) {
+                            uint32_t datum =
+                                create_packed_bfp_packed_as_u32<BfpFormat>(&single_row[j], exp, is_exp_a);
+                            packed_data.push_back(datum);
                         }
                     }
                 }
             }
-            // prepend exponents to follow data packing order:
-            //  16 exponents for sub-tile 0​
-            //      exp_row0, exp_row1, … exp_row15​
-            //  16 exponents for sub-tile 1​
-            //  16 exponents for sub-tile 2​
-            //  16 exponents for sub-tile 3​
-            //  entire sub-tile 0 (RM layout)​
-            //  entire sub-tile 1 (RM layout)​
-            //  entire sub-tile 2 (RM layout)​
-            //  entire sub-tile 3 (RM layout)
-            // align the exponent section to 16B
             if (exponent_padding) {
-                std::vector<uint8_t> pads(
-                    tt::round_up(exponents_with_padding.size(), l1_alignment) - exponents_with_padding.size(), 0);
-                exponents_with_padding.insert(exponents_with_padding.end(), pads.begin(), pads.end());
+                size_t padded_size = tt::round_up(exponents_with_padding.size(), l1_alignment);
+                exponents_with_padding.resize(padded_size, 0);
                 std::vector<uint32_t> packed = pack_exponents(exponents_with_padding, num_exponents_in_dword);
                 local_result.insert(local_result.end(), packed.begin(), packed.end());
             }

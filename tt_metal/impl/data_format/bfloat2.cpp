@@ -146,8 +146,6 @@ std::vector<float> unpack_bfp2_tiles_into_float_vec(
                 for (int i = 0; i < subtile_rows; ++i) {
                     subtile_r = tr * subtile_rows + i;
                     for (int j = 0; j < subtile_cols; j += num_elements_in_dword) {
-                        simde__m256i mask_denormal0 = simde_mm256_setzero_si256();
-                        simde__m256i mask_denormal1 = simde_mm256_setzero_si256();
                         subtile_c = tc * subtile_cols + j;
                         data_index =
                             (tr * (subtiles_in_tile_col * face_HW / num_elements_in_dword) +
@@ -186,58 +184,25 @@ std::vector<float> unpack_bfp2_tiles_into_float_vec(
                         simde__m256i sign1 = simde_mm256_srl_epi32(combined1, simde_mm_set_epi64x(0, 1));
                         simde__m256i man1 = simde_mm256_and_si256(combined1, simde_mm256_set1_epi32(0x1));
 
-                        for (int ii = 0; ii < 2; ii++) {
-                            simde__m256i shift_cnt = simde_mm256_setzero_si256();
-                            simde__m256i man_shifted = ii == 0 ? man0 : man1;
-                            simde__m256i select_mask = simde_mm256_cmpeq_epi32(man_shifted, shift_cnt);
-                            for (int shift_val = 0; shift_val < 1; shift_val++) {
-                                simde__m256i shift_mask = simde_mm256_or_si256(
-                                    simde_mm256_cmpgt_epi32(man_shifted, simde_mm256_set1_epi32(0x1)),
-                                    simde_mm256_cmpeq_epi32(man_shifted, simde_mm256_set1_epi32(0x1)));
-                                man_shifted = simde_mm256_blendv_epi8(
-                                    simde_mm256_sll_epi32(man_shifted, simde_mm_set_epi64x(0, 1)),
-                                    man_shifted,
-                                    shift_mask);
-                                shift_cnt = simde_mm256_blendv_epi8(
-                                    simde_mm256_set1_epi32(shift_val + 1), shift_cnt, shift_mask);
-                            }
-                            man_shifted = simde_mm256_and_si256(
-                                simde_mm256_sll_epi32(man_shifted, simde_mm_set_epi64x(0, 1)),
-                                simde_mm256_set1_epi32(0x1));
-                            if (ii == 0) {
-                                man0 = simde_mm256_blendv_epi8(man_shifted, man0, select_mask);
-                                simde__m256i mask_shift_gt_exp = simde_mm256_cmpgt_epi32(shift_cnt, exp_vector0);
-                                simde__m256i mask_nonzero_mantissa =
-                                    simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
-                                mask_denormal0 = simde_mm256_and_si256(mask_shift_gt_exp, mask_nonzero_mantissa);
-                                exp_vector0 = simde_mm256_blendv_epi8(
-                                    simde_mm256_sub_epi32(exp_vector0, simde_mm256_add_epi32(rebias_offset, shift_cnt)),
-                                    simde_mm256_setzero_si256(),
-                                    select_mask);
-                            } else {
-                                man1 = simde_mm256_blendv_epi8(man_shifted, man1, select_mask);
-                                simde__m256i mask_shift_gt_exp = simde_mm256_cmpgt_epi32(shift_cnt, exp_vector1);
-                                simde__m256i mask_nonzero_mantissa =
-                                    simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
-                                mask_denormal1 = simde_mm256_and_si256(mask_shift_gt_exp, mask_nonzero_mantissa);
-                                exp_vector1 = simde_mm256_blendv_epi8(
-                                    simde_mm256_sub_epi32(exp_vector1, simde_mm256_add_epi32(rebias_offset, shift_cnt)),
-                                    simde_mm256_setzero_si256(),
-                                    select_mask);
-                            }
-                        }
+                        // For 2-bit BFP2, mantissa is 1 bit (0 or 1): shift_cnt is always 0 and the
+                        // hidden-bit-stripped mantissa is always 0. Zero mantissa zeroes the biased
+                        // exponent while preserving the sign bit; non-zero mantissa uses
+                        // (shared_exp - rebias_offset) << 23.
+                        simde__m256i zero = simde_mm256_setzero_si256();
+                        simde__m256i select_mask0 = simde_mm256_cmpeq_epi32(man0, zero);
+                        simde__m256i select_mask1 = simde_mm256_cmpeq_epi32(man1, zero);
+
+                        exp_vector0 = simde_mm256_andnot_si256(
+                            select_mask0, simde_mm256_sub_epi32(exp_vector0, rebias_offset));
+                        exp_vector1 = simde_mm256_andnot_si256(
+                            select_mask1, simde_mm256_sub_epi32(exp_vector1, rebias_offset));
 
                         sign0 = simde_mm256_sll_epi32(sign0, simde_mm_set_epi64x(0, 31));
                         sign1 = simde_mm256_sll_epi32(sign1, simde_mm_set_epi64x(0, 31));
                         exp_vector0 = simde_mm256_sll_epi32(exp_vector0, simde_mm_set_epi64x(0, 23));
                         exp_vector1 = simde_mm256_sll_epi32(exp_vector1, simde_mm_set_epi64x(0, 23));
-                        man0 = simde_mm256_sll_epi32(man0, simde_mm_set_epi64x(0, 22));
-                        man0 = simde_mm256_or_si256(sign0, simde_mm256_or_si256(exp_vector0, man0));
-                        man1 = simde_mm256_sll_epi32(man1, simde_mm_set_epi64x(0, 22));
-                        man1 = simde_mm256_or_si256(sign1, simde_mm256_or_si256(exp_vector1, man1));
-
-                        man0 = simde_mm256_blendv_epi8(man0, simde_mm256_setzero_si256(), mask_denormal0);
-                        man1 = simde_mm256_blendv_epi8(man1, simde_mm256_setzero_si256(), mask_denormal1);
+                        man0 = simde_mm256_or_si256(sign0, exp_vector0);
+                        man1 = simde_mm256_or_si256(sign1, exp_vector1);
                         uint32_t float_data_index;
                         if (row_major_output) {
                             float_data_index = subtile_c + (tile_W * subtile_r) + (tile_index * num_float_in_tile);
