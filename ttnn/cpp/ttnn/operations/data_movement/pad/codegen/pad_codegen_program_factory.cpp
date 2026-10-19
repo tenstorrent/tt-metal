@@ -168,9 +168,8 @@ ProgramDescriptor build_pad_tiled(
     };
     reader_desc.config = ReaderConfigDescriptor{};
 
-    std::vector<uint32_t> writer_ct_args = {kCbOut, tile_bytes};
+    std::vector<uint32_t> writer_ct_args = {kCbOut, tile_bytes, batches.write_batch};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-    writer_ct_args.push_back(batches.write_batch);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = std::string(kSharedKernelDir) + "/writer_interleaved.cpp";
