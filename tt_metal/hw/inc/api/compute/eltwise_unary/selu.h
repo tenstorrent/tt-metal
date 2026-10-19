@@ -31,7 +31,7 @@ namespace ckernel {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void selu_tile(uint32_t idst, uint32_t scale, uint32_t alpha) {
     MATH(if constexpr (ckernel::sfpu::selu_bf16_whole_tile && !is_fp32_dest_acc_en) {
-        if (scale == 0x3f867d5fu && alpha == 0x3fd62d7du) {
+        if (scale == ckernel::sfpu::selu_bf16_scale_bits && alpha == ckernel::sfpu::selu_bf16_alpha_bits) {
             SFPU_UNARY_CALL(
                 DST_SYNC_MODE,
                 is_fp32_dest_acc_en,

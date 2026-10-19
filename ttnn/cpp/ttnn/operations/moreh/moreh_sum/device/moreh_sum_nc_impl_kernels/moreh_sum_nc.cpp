@@ -16,6 +16,10 @@ void kernel_main() {
     constexpr uint32_t num_output_tiles = get_arg(args::num_output_tiles);
     constexpr uint32_t num_input_tiles = get_arg(args::num_input_tiles);
 
+    DataflowBuffer dfb_input_obj(dfb::input);
+    DataflowBuffer dfb_zero_obj(dfb::zero);
+    DataflowBuffer dfb_out_obj(dfb::out);
+
     compute_kernel_hw_startup(dfb::input, dfb::zero, dfb::out);
 
     ckl::eltwise_chain(
@@ -26,12 +30,12 @@ void kernel_main() {
                 dfb::input, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
             ckl::input(dfb::zero, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Scalar),
             ckl::Dst::D0,
-            ckl::DestAccumulation::PerRow>{},
+            ckl::DestAccumulation::PerRow>{dfb_input_obj, dfb_zero_obj},
         ckl::PackTile<ckl::output(
             dfb::out,
             ckl::ReservePolicy::PerOuter,
             ckl::PushPolicy::PerOuter,
             ckl::DataFormatReconfig::Enabled,
             ckl::TileAddressing::Direct,
-            ckl::DestAccumulation::PerRow)>{});
+            ckl::DestAccumulation::PerRow)>{dfb_out_obj});
 }

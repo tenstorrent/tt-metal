@@ -13,6 +13,7 @@
 // Optional resource families are gated on preprocessor defines rather than on compile-time argument
 // values, because a Metal 2.0 binding token only exists when the host actually binds it:
 //   FUSE_BIAS / BIAS_SHARDED  -- dfb::bias, and tensor::bias on the non-sharded bias path
+//   BIAS_PER_GROUP            -- (with FUSE_BIAS, indexed sparse mode) bias tile row indices[bB] per group
 //   IN1_SHARDED               -- in1 arrives in the resident dfb::in1 shard; no tensor binding
 //   IN1_DRAM_WIDTH_SHARDED    -- in1 is read bank-by-bank from DRAM using tensor::in1's base address
 //   IN1_DRAM_HEIGHT_SHARDED   -- ditto, one complete [K, N] matrix per bank
@@ -61,10 +62,12 @@
 #include "experimental/kernel_args.h"
 
 #ifdef ENABLE_PREFETCHER_PIPE
-#ifdef ARCH_QUASAR
-#error "PrefetcherPipe weight delivery into this matmul has not been brought up on Quasar"
+// Pipe delivery reaches every worker directly, so in1 is never multicast; publish_in1_block_from_pipe
+// relies on that, publishing each K-block to compute in the same step that waits for it.
+#ifndef SKIP_MCAST
+#error "PrefetcherPipe in1 lands on every worker directly, so this kernel never multicasts it"
 #endif
-#include "api/dataflow/prefetcher_pipe.h"
+#include "ttnn/operations/matmul/device/kernels/dataflow/prefetcher_pipe_in1_window.hpp"
 #endif
 
 void kernel_main() {
@@ -168,6 +171,11 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     // in3 mcast args
     const uint32_t in3_tensor_start_tile_id = get_arg(args::in3_tensor_start_tile_id);
+#ifdef BIAS_PER_GROUP
+    constexpr bool bias_per_group = true;
+#else
+    constexpr bool bias_per_group = false;
+#endif
 
     constexpr auto in3_tensor_stride_w = get_arg(args::in3_tensor_stride_w);
 
@@ -341,11 +349,19 @@ void kernel_main() {
         [[maybe_unused]] const uint32_t out_base_tile_id = out_tensor_start_tile_id;
 
         for (uint32_t bB = 0; bB < batch_loop_lim; ++bB) {
+#ifdef BIAS_PER_GROUP
+            // Per-group fused bias (sparse matmul, indexed mode): tile row `group_id` of the bias tensor,
+            // i.e. out_tensor_stride_h (= Nt) tiles per group.
+            uint32_t in3_group_tile_offset = 0;
+#endif
 #ifdef SPARSITY
             if constexpr (use_indices) {
                 // Gather: jump straight to group indices[bB]'s weight block, scatter its result to
                 // compact output slot bB. Every iterated group is active, so nothing is skipped.
                 const uint32_t group_id = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB];
+#ifdef BIAS_PER_GROUP
+                in3_group_tile_offset = group_id * out_tensor_stride_h;
+#endif
                 // The ids are device-resident, so the host can only bound their count, not their
                 // values. An out-of-range id would silently read an unrelated weight block; assert
                 // loudly (under watcher) instead, as the in0 sender does for the exact-nnz contract.
@@ -369,7 +385,11 @@ void kernel_main() {
                 uint32_t in1_tensor_current_w_dim_block_tile_id = in1_tensor_current_h_dim_block_tile_id;
                 uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
 #ifdef FUSE_BIAS
+#ifdef BIAS_PER_GROUP
+                uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id + in3_group_tile_offset;
+#else
                 uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id;
+#endif  // BIAS_PER_GROUP
 #endif  // FUSE_BIAS
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                     uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
@@ -386,11 +406,7 @@ void kernel_main() {
                             block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
 #endif  // FUSE_OP_ALL_GATHER
 #if defined(ENABLE_PREFETCHER_PIPE)
-                        // One K-block of lookahead over the pipe: publish this block to compute, then
-                        // hand the previous block's entry back to the sender once compute has drained
-                        // it. One pipe entry is one K-block, published as its in1_block_num_tiles tiles.
-                        in1_relay.reserve_back(in1_block_num_tiles);
-                        pipe.wait_front(block == 0 ? 1u : 2u);
+                        publish_in1_block_from_pipe(pipe, in1_relay, noc, block, in1_block_num_tiles);
 #elif defined(ENABLE_GLOBAL_CB)
                         // The tensor prefetcher pushes this receiver's K-blocks in natural order.
                         // Keep one block of lookahead: publish the current block to compute, then
@@ -558,17 +574,9 @@ void kernel_main() {
                             in1_mcast_num_cores);
 #endif  // SKIP_MCAST
 
-#if defined(ENABLE_PREFETCHER_PIPE)
-                        // pop_front waits for compute to have popped that block's tiles out of in1
-                        // before acking it, so no free-space spin is needed. Publish only through the relay
-                        // view: pushing dfb_in1 as well would double the credit compute sees.
-                        in1_relay.push_back(in1_block_num_tiles);
-                        if (block >= 1) {
-                            pipe.pop_front(1, noc);
-                        }
-#elif !defined(IN1_SHARDED)
+#if !defined(ENABLE_PREFETCHER_PIPE) && !defined(IN1_SHARDED)
                         dfb_in1.push_back(in1_block_num_tiles);
-#endif  // ENABLE_PREFETCHER_PIPE / IN1_SHARDED
+#endif  // !ENABLE_PREFETCHER_PIPE && !IN1_SHARDED
 #ifdef ENABLE_GLOBAL_CB
                         if (block >= 1) {
                             while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles - in1_block_num_tiles)) {
@@ -579,9 +587,7 @@ void kernel_main() {
 #endif
                     }
 #if defined(ENABLE_PREFETCHER_PIPE)
-                    if (num_blocks_inner_dim > 0) {
-                        pipe.pop_front(1, noc);
-                    }
+                    drain_in1_pipe_window(pipe, noc, num_blocks_inner_dim);
 #elif defined(ENABLE_GLOBAL_CB)
                     if (num_blocks_inner_dim > 0) {
                         while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles)) {
@@ -591,8 +597,9 @@ void kernel_main() {
                     }
 #endif  // ENABLE_PREFETCHER_PIPE / ENABLE_GLOBAL_CB
 #ifdef FUSE_BIAS
-                    // Only read bias on first batch, or we have multiple output blocks
-                    if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                    // Only read bias on first batch, or we have multiple output blocks; a per-group bias
+                    // is re-read for every group (the compute kernel pops it after each group).
+                    if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                         // Operand 1
 #ifndef BIAS_SHARDED
                         dfb_in3.reserve_back(in1_block_w);
@@ -815,8 +822,11 @@ void kernel_main() {
     }
 
 #ifdef OUT_SHARDED
-    dfb_out.wait_front(static_cast<uint16_t>(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h));
+    const uint16_t out_num_tiles = static_cast<uint16_t>(
+        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    dfb_out.wait_front(out_num_tiles);
+    // Pop the same number of tiles that were waited for.
+    dfb_out.pop_front(out_num_tiles);
 #endif
 #ifdef ENABLE_GLOBAL_CB
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
@@ -827,4 +837,21 @@ void kernel_main() {
     // Barrier both, unconditionally, mirroring the CCL reader fix in #53595.
     noc.async_atomic_barrier();
     noc.async_write_barrier();
+
+#ifdef IN1_DRAM_WIDTH_SHARDED
+    // Restore only NCRISC read_cmd_buf NOC_CTRL VC to firmware default; a full set_async_read_state
+    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
+    const uint32_t noc_rd_cmd_field =
+        NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+#endif
+
+    // The sparsity slot is reserved once to take its base address and is re-read by this kernel
+    // alone; it is never handed to a consumer, so complete the handshake here rather than leaving
+    // the reserve dangling. The guards match the ones on the reserve.
+#ifdef SPARSITY
+    if constexpr (batchB > 0) {
+        dfb_sparsity.push_back(1);
+    }
+#endif  // SPARSITY
 }

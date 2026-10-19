@@ -12,7 +12,7 @@ struct SeluBf16Config {
     static constexpr uint32_t kDegree[] = {8, 1};
     static constexpr uint32_t kLutBits[] = {
         0xc0c20000u, 0x00000000u, 0x41200000u, 0x00000000u, 0x3fe10966u, 0x3f6118f6u, 0x3e95c291u,
-        0x3d927a57u, 0x3c54e4eau, 0x3ad80000u, 0x3905727fu, 0x36940000u, 0x00000000u, 0x3f867d5eu,
+        0x3d927a57u, 0x3c54e4eau, 0x3ad80000u, 0x3905727fu, 0x36940000u, 0x00000000u, 0x3f867d5fu,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u};
     static constexpr int kParkRows[] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
                                         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
@@ -27,21 +27,26 @@ struct SeluBf16Config {
     static constexpr float lut(uint32_t index) { return __builtin_bit_cast(float, kLutBits[index]); }
 };
 }  // namespace ckernel::sfpu
-#include "ckernel_sfpu_bf16_cascade_dense.h"
+#include "ckernel_sfpu_selu_bf16_cascade_dense.h"
 
 namespace ckernel::sfpu {
 
-// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
+// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format, as BF16 for
+// Float16_b and the block formats sharing its exponent.
 inline bool bf16_dest_selu() {
 #if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
-    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
+    const std::uint32_t format = ckernel::math::src_zero_flag_srcb_fmt;
+    return format == static_cast<std::uint32_t>(DataFormat::Float16_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp4_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp2_b);
 #else
     return false;
 #endif
 }
-template <int ITERATIONS = 8>
+template <int ITERATIONS = 32>
 inline void calculate_selu_bf16() {
-    ckernel::sfpu::bf16::calculate_dense_polynomial<ckernel::sfpu::SeluBf16Config, ITERATIONS>();
+    ckernel::sfpu::bf16::selu::calculate_dense_polynomial<ckernel::sfpu::SeluBf16Config, ITERATIONS>();
 }
 
 }  // namespace ckernel::sfpu
