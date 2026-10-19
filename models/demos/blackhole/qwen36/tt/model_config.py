@@ -266,6 +266,39 @@ class Qwen36ModelArgs(ModelArgs):
             M, self.hidden_dim // tp, self.dim, num_cores=84 if tp8 else 33, grid_w=self.decode_grid_w
         )
 
+        # DRAM-sharded decode gate/up (QWEN36_MLP_DECODE_DSHARD=1, dense TP layers): 3 reader cores per DRAM bank,
+        # 40 compute cores, in0_block_w=4; N padded to a multiple of banks*readers*32 (4352 -> 4608 at TP=4). Measured
+        # on one BH chip (bf8, HiFi2): gate 76.6 -> 66.5 us, up 71.5 -> 59.9 us vs the 1D mcast configs above.
+        # Output stays L1 width-sharded (padded width); the MLP crops it back to hidden_dim//tp after the mul.
+        _dsh_banks = mesh_device.dram_grid_size().x
+        self.mlp_dsh_readers = 3
+        self.mlp_dsh_cores = 40
+        self.mlp_dsh_in0_block_w = 4
+        self.mlp_dsh_n = self.hidden_dim // tp
+        self.mlp_dsh_n_padded = tpc._roundup(self.mlp_dsh_n, _dsh_banks * self.mlp_dsh_readers * tpc.TILE_SIZE)
+        _dsh_width = self.mlp_dsh_n_padded // _dsh_banks  # padded columns per DRAM bank
+        self.mlp_dsh_w_memcfg = tpc.dram_width_sharded_config(mesh_device, self.dim, _dsh_width)
+        self.mlp_dsh_act_memcfg = tpc.l1_width_sharded_config(
+            mesh_device,
+            self.mlp_dsh_cores,
+            -(-(self.dim // tpc.TILE_SIZE) // self.mlp_dsh_cores) * tpc.TILE_SIZE,
+        )
+        _dsh_per_core_n = -(-(self.mlp_dsh_n_padded // tpc.TILE_SIZE) // self.mlp_dsh_cores)
+        self.mlp_w1_dsh_progcfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=self.mlp_dsh_in0_block_w,
+            per_core_M=1,
+            per_core_N=_dsh_per_core_n,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            num_workers_per_dram_bank=self.mlp_dsh_readers,
+        )
+        self.mlp_w3_dsh_progcfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=self.mlp_dsh_in0_block_w,
+            per_core_M=1,
+            per_core_N=_dsh_per_core_n,
+            fused_activation=None,
+            num_workers_per_dram_bank=self.mlp_dsh_readers,
+        )
+
         # Input-projection 1D decode (DEFAULT): same idea for attn QKV+gate and GDN QKVZAB in-projections.
         # Weights load interleaved (prefill AGMM verified bit-identical); tuned grids per test_mlp_matmul_sweep.
         self.proj_1d_decode = True

@@ -142,6 +142,7 @@ Default decode settings (TP paths, 27B), each with an env var that reverts it:
 | exact-fp32 recurrent-state update in that op | `QWEN36_GDN_STEP_FP32_STATE=0` (FPU path) |
 | dense-MLP gate/up weights in BFP8 | `QWEN36_MLP_GATEUP_BFP8=0` (BFP4) |
 | dense-MLP matmuls at HiFi2 | `QWEN36_MLP_FIDELITY=lofi\|hifi3\|hifi4` |
+| dense-MLP decode gate/up weights DRAM width-sharded (3 readers per bank; TP=4 only, measured on QB2: decode +3.5%, +~0.18 GB DRAM) | `QWEN36_MLP_DECODE_DSHARD=0` (interleaved 1D-mcast gate/up) |
 | 8 KB fabric packet payload on multi-device meshes (demo and vLLM) | `QWEN36_FABRIC_PAYLOAD_BYTES=0` (fabric default, 4352 B) or another size |
 | BF8 paged KV cache (demo and vLLM; prefill Q stays BF16) | `QWEN36_KV_BF8=0` (BF16 cache) |
 

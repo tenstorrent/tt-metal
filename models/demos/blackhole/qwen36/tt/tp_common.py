@@ -94,6 +94,67 @@ def lm_head_kwargs():
     return {} if cfg is None else {"compute_kernel_config": cfg}
 
 
+MLP_DECODE_DSHARD_ENV = "QWEN36_MLP_DECODE_DSHARD"
+_DSHARD_LOGGED = set()
+
+
+def _flag_logged(env, desc, default="0"):
+    on = os.environ.get(env, default) == "1"
+    if env not in _DSHARD_LOGGED:
+        _DSHARD_LOGGED.add(env)
+        logger.info(f"{desc}: {'on' if on else 'off'} ({env}={int(on)})")
+    return on
+
+
+def mlp_decode_dshard_enabled():
+    """QWEN36_MLP_DECODE_DSHARD (default 1; "0" disables): dense-MLP w1/w3 (TP=4 only) stored DRAM-WIDTH_SHARDED (N padded 4352 -> 4608) and run
+    with the 3-readers-per-bank DRAM-sharded matmul in decode (~-10 us per matmul). Dense TP layers only; prefill uses
+    the packed w_gate_up AGMM weight and never touches w1/w3.
+    Decode +3.5% at batch 1 and 32 on QB2; "0" restores the interleaved 1D-mcast gate/up."""
+    return _flag_logged(MLP_DECODE_DSHARD_ENV, "Dense-MLP decode DRAM-sharded gate/up", default="1")
+
+
+def ensure_memory_config(t, memory_config):
+    """as_tensor may hand back a cached tensor in a different memory layout than requested; re-shard if so."""
+    mc = t.memory_config()
+    if mc.memory_layout == memory_config.memory_layout and mc.buffer_type == memory_config.buffer_type:
+        return t
+    logger.warning(f"re-sharding cached weight {mc} -> {memory_config}")
+    new = ttnn.to_memory_config(t, memory_config)
+    ttnn.deallocate(t)
+    return new
+
+
+def l1_width_sharded_config(device, cores, width, height=TILE_SIZE):
+    """L1 WIDTH_SHARDED config: `cores` row-wise worker cores, [height, width] shard each."""
+    grid = ttnn.num_cores_to_corerangeset(cores, device.compute_with_storage_grid_size(), row_wise=True)
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [height, width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def dram_width_sharded_config(device, k, width_per_bank):
+    """DRAM WIDTH_SHARDED config over the first row of DRAM banks: [k, width_per_bank] shard per bank."""
+    banks = device.dram_grid_size().x
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(grid, [k, width_per_bank], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def pad_cols_per_device(t, tp, n_padded):
+    """[K, tp*n] -> [K, tp*n_padded]: zero-pad EACH device's column block (so a dim=-1 mesh shard gets n_padded cols)."""
+    k, total = t.shape
+    n = total // tp
+    if n == n_padded:
+        return t.contiguous()
+    return torch.nn.functional.pad(t.reshape(k, tp, n), (0, n_padded - n)).reshape(k, tp * n_padded).contiguous()
+
+
 BFP4_GDN_IN_ENV = "QWEN36_BFP4_GDN_IN"
 _BFP4_GDN_IN_LOGGED = False
 

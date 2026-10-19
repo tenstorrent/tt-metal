@@ -9,6 +9,8 @@ reduce-scatters on meshes with a dim-1 shape (e.g. P150x4), fracturing hidden.
 import os
 from dataclasses import dataclass
 
+import torch
+
 import ttnn
 
 
@@ -44,6 +46,24 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_file_name=cache_path,
+    )
+
+
+def mlp_decode_dshard_active(args, num_devices, use_gateup_agmm=True):
+    """QWEN36_MLP_DECODE_DSHARD applies to the dense TP MLP at TP=4 only (measured on QB2; TP=8 decode grids are tuned separately). Requires the packed w_gate_up prefill weight
+    (use_gateup_agmm: MoE shared experts, which run w1/w3 in prefill, are excluded) and the DRAM-sharded decode
+    configs in args. A non-qualifying MLP (single device, MoE shared expert) silently keeps the interleaved layout."""
+    from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+    if not tpc.mlp_decode_dshard_enabled():
+        return False
+    return (
+        num_devices == 4
+        and use_gateup_agmm
+        and tpc.mlp_gateup_agmm_enabled(num_devices)
+        and args is not None
+        and getattr(args, "num_devices", None) == 4
+        and getattr(args, "mlp_w1_dsh_progcfg", None) is not None
     )
 
 
@@ -91,6 +111,42 @@ def load_mlp_weights(
             if tpc.mlp_gateup_agmm_enabled(tp) and use_gateup_agmm
             else None
         )
+
+        if mlp_decode_dshard_active(args, tp, use_gateup_agmm):
+            # Decode-only DRAM-sharded gate/up, padded per device to args.mlp_dsh_n_padded (zero columns: the padded
+            # outputs are silu(0)*0 = 0 and cropped before w2). REPLACES the interleaved w1/w3 (single copy): prefill
+            # runs the packed w_gate_up AGMM above and never reads w1/w3. Distinct cache name (.dsh3).
+            def dsh_w(key, name):
+                w = state_dict[key]
+                return tpc.ensure_memory_config(
+                    ttnn.as_tensor(
+                        w,
+                        preprocess=lambda t: tpc.pad_cols_per_device(
+                            t.to(torch.bfloat16).T.contiguous(), tp, args.mlp_dsh_n_padded
+                        ),
+                        dtype=gateup_dtype,
+                        device=mesh_device,
+                        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=args.mlp_dsh_w_memcfg,
+                        cache_file_name=cache(name, ".dsh3"),
+                    ),
+                    args.mlp_dsh_w_memcfg,
+                )
+
+            return MLPWeights(
+                w1=dsh_w("gate_proj.weight", "gate_proj"),
+                w3=dsh_w("up_proj.weight", "up_proj"),
+                w2=tpc.shard_w(
+                    state_dict["down_proj.weight"],
+                    mesh_device,
+                    dim=0,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    cache_path=cache("down_proj"),
+                    dtype=down_dtype,
+                ),
+                w_gate_up=wgu,
+            )
 
         if dram_sharded:
             return MLPWeights(
@@ -190,12 +246,14 @@ class Qwen36MLP:
         # 1D-decode (default): small-grid 1D matmuls beat the ~80-core DRAM-sharded grid on the
         # bandwidth-bound skinny decode MLP matmuls (see test_mlp_matmul_sweep). Forces interleaved weights.
         self._mlp_1d_decode = args is not None and getattr(args, "mlp_1d_decode", False)
+        self._dsh_decode = mlp_decode_dshard_active(args, self.num_devices, use_gateup_agmm)
         # Match load_mlp_weights dram_sharded condition for layout consistency.
         self._dram_sharded = (
             self.num_devices > 1
             and args is not None
             and getattr(args, "mlp_w1_weight_memcfg", None) is not None
             and not self._mlp_1d_decode
+            and not self._dsh_decode
         )
         # Prefill fused-swiglu AGMM (ff_norm skips its AG; layer.py sets _fuse_ff_agmm to match).
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
@@ -262,6 +320,7 @@ class Qwen36MLP:
 
         mc = ttnn.DRAM_MEMORY_CONFIG
         _silu_fused = False
+        _hidden_done = False
         # Prefill: x is K-sharded (ff_norm skipped AG); fused AG + [gate|up] + SwiGLU
         _fused_gu = self._fuse_gateup_agmm and x.shape[-2] > ttnn.TILE_SIZE and w.w_gate_up is not None
         if _fused_gu:
@@ -290,6 +349,38 @@ class Qwen36MLP:
             # Keep gate/up in L1 for mul → w2 (avoid L1→DRAM→L1).
             w1_out = ttnn.to_memory_config(w1_out, ttnn.L1_MEMORY_CONFIG)
             w3_out = ttnn.to_memory_config(w3_out, ttnn.L1_MEMORY_CONFIG)
+        elif self._dsh_decode and x.shape[-2] <= ttnn.TILE_SIZE:
+            # QWEN36_MLP_DECODE_DSHARD: DRAM-sharded gate/up (3 readers/bank, 40 cores), padded N. Input: the
+            # ff_norm layout (act_shard_hidden, 32 cores) -> 40-core width shard (one L1->L1 reshard; no-op if the
+            # input already has that layout). gate keeps the fused SiLU; the mul runs on the padded L1-sharded
+            # outputs (pad columns are 0), then one L1-interleaved move + crop to the true width feeds w2.
+            x_sh = ttnn.to_memory_config(x, args.mlp_dsh_act_memcfg)
+            w1_out = ttnn.linear(
+                x_sh,
+                w.w1,
+                compute_kernel_config=ckc,
+                program_config=args.mlp_w1_dsh_progcfg,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            )
+            w3_out = ttnn.linear(
+                x_sh,
+                w.w3,
+                compute_kernel_config=ckc,
+                program_config=args.mlp_w3_dsh_progcfg,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            )
+            if not tpc.aliases(x_sh, x):
+                ttnn.deallocate(x_sh)
+            hidden = ttnn.mul(w1_out, w3_out, memory_config=w1_out.memory_config())
+            ttnn.deallocate(w1_out)
+            ttnn.deallocate(w3_out)
+            hidden = ttnn.to_memory_config(hidden, ttnn.L1_MEMORY_CONFIG)
+            if hidden.shape[-1] != args.mlp_dsh_n:
+                _h = hidden
+                hidden = ttnn.slice(_h, [0, 0, 0, 0], [*list(_h.shape)[:-1], args.mlp_dsh_n])
+                ttnn.deallocate(_h)
+            _silu_fused = True
+            _hidden_done = True
         elif self._mlp_1d_decode and x.shape[-2] <= ttnn.TILE_SIZE:
             # 1D mcast decode matmuls on a small explicit grid, silu fused in the w1 progcfg.
             # mcast_in0 needs interleaved in0, but ff-norm hands us a width-shard -> interleave first.
@@ -311,6 +402,7 @@ class Qwen36MLP:
             ttnn.deallocate(x_il)
             _silu_fused = True
         elif x.shape[-2] > ttnn.TILE_SIZE:
+            assert not self._dsh_decode, "QWEN36_MLP_DECODE_DSHARD: w1/w3 are decode-only; prefill needs w_gate_up AGMM"
             # Prefill (M>1 tile, compute-bound): FPU-tuned 2D config (grid width -> 1x4 subblock,
             # in0_block_w=4) beats ttnn-auto's 1x1 stall ~2.7x (test_mlp_matmul_sweep_prefill). SILU fused.
             seq = x.shape[-2]
@@ -343,7 +435,7 @@ class Qwen36MLP:
         # keeping both down input (hidden) and output (partial) in L1 at seq 2048 overflows L1.
         _prefill_tuned = x.shape[-2] > ttnn.TILE_SIZE and _silu_fused
         # gate * up (skipped when _fused_gu already produced `hidden` with SwiGLU in-kernel).
-        if not _fused_gu:
+        if not _fused_gu and not _hidden_done:
             mc_out = ttnn.L1_MEMORY_CONFIG if x.shape[-2] <= ttnn.TILE_SIZE else mc
             # Standalone silu only on DRAM-sharded decode path (SILU not fused there).
             if _silu_fused:
