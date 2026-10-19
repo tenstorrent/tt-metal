@@ -32,7 +32,7 @@ import torch
 import ttnn
 
 from .common import DRAM, TP_AXIS, compute_config, sum_cols
-from .quant import GROUP, fp8_qdq
+from .quant import GROUP, act_q
 from .settings import settings
 
 TILE = 32
@@ -84,9 +84,9 @@ class TtSharedExpert:
         cfg, lim, ip = self.cfg, self.lim, self.ip
         own = xq is None
         if own:
-            xq = fp8_qdq(x, dtype=ttnn.bfloat16)
+            xq = act_q(x, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (x itself when ffn_norm wrote bf16)
         gu = ttnn.linear(xq, self.w13, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM)
-        if own:
+        if own and xq is not x:
             ttnn.deallocate(xq)
         s = gu.shape[-2]
         g = ttnn.slice(gu, [0, 0, 0, 0], [1, 1, s, ip], memory_config=DRAM)
@@ -103,7 +103,7 @@ class TtSharedExpert:
         h = ttnn.multiply(sg, u, dtype=ttnn.float32, memory_config=DRAM)
         ttnn.deallocate(sg)
         ttnn.deallocate(u)
-        hq = fp8_qdq(h, dtype=ttnn.bfloat16)
+        hq = act_q(h, dtype=ttnn.bfloat16)
         ttnn.deallocate(h)
         y = ttnn.linear(hq, self.w2, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM)
         ttnn.deallocate(hq)

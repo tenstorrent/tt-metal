@@ -1862,3 +1862,102 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - Not run (orchestrator does): the ladder at either setting.
 - Re-run: on `DS41_ATTN_FIDELITY=HiFi2`, off `DS41_ATTN_FIDELITY=HiFi4`, in front of each frozen test / the ladder /
   the brief's profile command.
+
+## P.8 perf (attempt 1): experts + weighted combine_rf in one program, NUMERICS, FFN_NORM_DTYPE (owner comparison)
+- Settings (tt/settings.py, defaults = today's path): EXPERTS_COMBINE {separate, weighted}, NUMERICS {official,
+  native}, FFN_NORM_DTYPE {fp32, bf16}. MAX_PRECISION: NUMERICS official, FFN_NORM_DTYPE fp32, EXPERTS_COMBINE
+  separate (weighted cannot run the official q(r h): the weight moves to the combine; and its weights are bf16).
+- NUMERICS=native: tt/quant.py `act_q` / `fp4_q` / `tf32_q` = a cast (or the tensor itself) at every fp8_qdq /
+  fp4_qdq / round_tf32 call site (q_a, kv, attention wq_b / o / wo_b q, indexer q / fp4 q / weights_proj TF32,
+  compressor ckv / k fp4 and TF32 input, shared x / h, experts x and loop h, engram_kv); the expert ops' fp8_act_quant
+  off (flat / unified). Reference hook unchanged (official).
+- FFN_NORM_DTYPE=bf16: tt/norm.py ffn_norm's last multiply writes bf16 (the row all-gather moves bf16); router /
+  experts / shared expert read it as is; act_q casts it to fp32 for the official fp8 q-dq. bringup/hooks.py: the
+  harness boundary hands router / experts / shared expert x in that dtype (`_ffn_norm_dtype`).
+- EXPERTS_COMBINE=weighted (tt/weighted_combine.py, tt/experts.py `_weighted`; EXPERTS_KERNEL=flat): q(x) of the mesh
+  row -> ROW_MAJOR -> fabric all_gather over axis 0 (the column's tokens: the flat expert's token_index x); top-k ids
+  (uint32) / bf16 weights gathered as TILE over axis 0; every pass's one-core planner (combine_plan axis=0, column-
+  local expert ids, tile_in, det order) in one program on two cores; per-call arena (all cores, at the top of L1),
+  writers' / relays' words below it, combine state zeroed (l1_zero), a CB-free fabric semaphore barrier over the
+  column (`_column_barrier`), then per pass flat_routed_expert_with_program (column-local gids, n_global Eg, plan
+  routed=False, HiFi4 / glm LoFi, weights_nk, down_fp32) + sparse_combine_rf(axis=0, L1 hand-off, device plan,
+  deterministic, ports_per_direction, out fp32 / bf16 under fabric_bf16, out_row0, acc_unpack_fp32, zero_unseen);
+  out [S, H] RM -> TILE -> moe_add -> the same sum_cols. 2x2: 1024 home tokens per chip need 2 passes of 512 (1 port
+  + 9 accumulators of 10 free cells, arena up to 1356 KB; DS41-69). Fabric payload 10880 B under weighted only
+  (bringup/hooks.py device_params; one 10240 B row + trailer a packet).
+- Forks: combine_rf (axis=0, out_dtype, out_row0, acc_unpack_fp32, zero_unseen, accumulator_bytes; planner column /
+  pass options, ids_uint32, tile_in, det on the one-core planner; the < 4-slot local-ring grant deadlock fixed) and
+  flat_routed_expert_with_program (math_fidelity, weights_nk). CHANGELOGs, READMEs, INDEX updated; ops_lint 0
+  problems; combine_rf tests/unit/test_column_planner.py 4/4 (planner == plan_reference bit for bit, det lists).
+- Gotchas: (1) ttnn.reshape refuses uint16 RM and took ~1 ms per [2048, 6] RM reshape to one page (DS41-71): the
+  planner reads the gathered tiles. (2) A local hand-off ring of 2 slots (a near-full arena) deadlocked: grants were
+  batched by 4 (fixed in the fork; the arena now leaves 8 slots). (3) A stock / fabric all_gather as the post-zeroing
+  barrier: its CBs (10880 B packets) clashed with the arena on layer 14 (DS41-70). (4) Arrival-order fp32 sums are not
+  bit-identical across calls (149 / 10.5M values at 1e-8): the frozen component tests' determinism check failed until
+  the det order (every column chip's flat schedule, se_dyn) was ported to the one-core planner. (5) The planner's
+  scalar loops: 616 µs (arrival) / 807 µs (det) a layer for both passes on two cores.
+- A/B, tt/perf_experts.py::test_weighted_vs_separate (layer 0, chunk 2048, synced wall per experts call, random
+  inputs): glm (shipped EXPERTS_PRECISION) native: separate 8.0 ms, weighted 5.3-5.4 ms (arrival order); full
+  precision fabric (fp32 out) native: separate 8.5, weighted 6.05 ms (det). vs float64 on 128 tokens (full, fp32 out):
+  separate rel 0.0023 bias +2e-5, weighted rel 0.0029 bias +2e-5; glm: separate rel 0.0228 bias +1.56 % (bfp8 y tiles),
+  weighted 0.0202 / +1.33 % (bf16 y rows). Determinism (det): 0 of 10.5M values differ. Per-op device µs (glm,
+  arrival): fused 2 x 2052, planners 616, x cast 72 + untilize 57 + gather 105, out tilize 113, RS 79 + 47, rest < 40:
+  what remains of the experts path is the two weight-stream-bound passes (76 %) and the planner (12 %).
+- Accuracy, frozen tests in gate order with the change on (DS41_EXPERTS_COMBINE=weighted DS41_NUMERICS=native
+  DS41_FFN_NORM_DTYPE=bf16; the rest at MAX_PRECISION): test_c_{swa, swa_engram, enc_source, enc_source_engram,
+  enc_reuse, dec_candidate, dec_reindex, dec_reuse}_experts all PASS (swa: vs CPU rel 0.0298 <= 0.0849, row slope
+  0.59-0.95, determinism bit-identical). Swap tests FAIL (the official per-step checks of the steps NUMERICS=native
+  changes, DS41-72):
+    S.swa.12: FAIL swap_q_a vs the CPU step on the same inputs: rel=0.011596 (<= 0.01040, component error 0.00726);
+              FAIL swap_ffn_hc vs the CPU step on the same inputs: rel=0.000197 (<= 0.00015, component error 0.00230;
+              median row norm ratio off by +0.00008, limit 0.00007)
+    S.swa_engram.15: FAIL swap_q_a vs the CPU step on the same inputs: rel=0.013907 (<= 0.01191, component error 0.00863)
+    S.enc_source.14: FAIL swap_q_a vs the CPU step on the same inputs: rel=0.012939 (<= 0.01114, component error 0.00806);
+              FAIL swap_compressor vs the CPU step on the same inputs: rel=0.101759 (<= 0.07459, component error 0.01587);
+              FAIL swap_indexer near ties: flips=2048 unexplained=170 recall=0.963845 recall_tie=0.968086 worst_row=0.9238
+  Per the brief: stopped there (no profile; the remaining five swap tests not run). EXPERTS_COMBINE / FFN_NORM_DTYPE
+  change none of the failing steps (q_a, compressor, indexer, ffn_hc sit before ffn_norm).
+- Smoke, information only (not gates): the 8 test_c_*_router with DS41_FFN_NORM_DTYPE=bf16 (bf16 x in): all PASS;
+  vs the CPU step recall_tie 1 on every layer (every flip a near tie), recall 0.99919-0.99984 (L00 0.99976, L01
+  0.99935, L02 0.99984, L03 0.99967, L14 0.99951, L20 0.99967, L21 0.99967, L24 0.99976), flips_unexplained 0.
+  test_c_swa_experts with DS41_NUMERICS=native (together with the other two): PASS, vs CPU rel 0.0298 (limit 0.0849).
+- Change off (defaults) unchanged: test_c_swa_experts vs CPU rel 0.00224936 (the recorded value), deterministic.
+  Not run: the whole model with the change on (ladder / test_positions / profile: the brief stops at the failing
+  swap checks).
+- Fork regressions (options off): flat_routed_expert_ttnn tests/unit the baseline's 26 / 13 (one K-52 precompile
+  artifact, CHANGELOG); combine_rf has no source tests (new tests/unit/test_column_planner.py 4/4).
+- stock ttnn.all_gather instead of ttnn.bringup.fabric_all_gather: the weighted path's top-k ids (uint32) / weights
+  (bf16) tiles [1024, 6] gathered over the column once a layer, 12 µs each (profile); the fork is untested on uint32
+  TILE here, and q(x) itself (the 20 MB gather) goes through tt/ccl.py's fork.
+- Re-run: change on `DS41_EXPERTS_COMBINE=weighted DS41_NUMERICS=native DS41_FFN_NORM_DTYPE=bf16`, off
+  `DS41_EXPERTS_COMBINE=separate DS41_NUMERICS=official DS41_FFN_NORM_DTYPE=fp32`, in front of each gate command;
+  A/B: `DS41_NUMERICS=native scripts/run_safe_pytest.sh --run-all --no-precompile
+  "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py::test_weighted_vs_separate[blackhole-ops-ab-2x2-box_payload]"`
+  (ops: with the profiler env of testing/profiler.py).
+
+## P.8 perf (attempt 2): re-verified accuracy with the change on; stopped at the first failing swap test
+- Attempt 1 failed only on a process rule (a direct `pytest --collect-only`); its code (settings EXPERTS_COMBINE /
+  NUMERICS / FFN_NORM_DTYPE, tt/weighted_combine.py, tt/quant.py act_q / fp4_q / tf32_q, the combine_rf and
+  flat_routed_expert_with_program options) is unchanged in this attempt. The fork build was current (_ttnn.so newer
+  than the fork sources). No pytest outside scripts/run_safe_pytest.sh / scripts/tt-probe.sh.
+- Frozen tests in gate order, once each, change on (DS41_EXPERTS_COMBINE=weighted DS41_NUMERICS=native
+  DS41_FFN_NORM_DTYPE=bf16; the rest at MAX_PRECISION): test_c_{swa, swa_engram, enc_source, enc_source_engram,
+  enc_reuse, dec_candidate, dec_reindex, dec_reuse}_experts all PASS (vs CPU rel L00 0.0298, L01 0.0345,
+  L02 0.0361, L14 0.0390, L03 0.0358, L20 0.0409, L24 0.0410, L21 0.0408; limits 0.085-0.120; determinism
+  bit-identical every time; the weighted path ran: "EXPERTS_WEIGHTED S=1024 passes=2 x 512"). Then
+  test_swap_swa_12_experts FAILED:
+    FAIL swap_q_a vs the CPU step on the same inputs: rel=0.011596 (<= 0.01040, component error 0.00726)
+    FAIL swap_ffn_hc vs the CPU step on the same inputs: rel=0.000197 (<= 0.00015, component error 0.00230;
+         median row norm ratio off by +0.00008 (limit 0.00007))  [WAIVED by the owner's hc_fn waiver, DS41-43]
+  Stopped there per the brief (no profile, the other 7 swap tests not run; attempt 1's swa_engram_15 / enc_source_14
+  failures are in its section above).
+- Why (DS41-72, detail in known_issues_detail.md): a tt-probe on the golden q_a input: CPU native (bf16 x, no fp8
+  q-dq) vs CPU official rel 0.011637 (L0) / 0.013901 (L1); device native vs CPU native 0.000143 / 0.000160, the same
+  size as device official vs CPU official 0.000101 / 0.000105. The failure is exactly the official fp8 rounding the
+  device skips under NUMERICS=native (rule 17: reported, not added back); no device error. The per-step checks stay on
+  the official arithmetic (the brief: no numerics switch in the reference hook).
+- MAX_PRECISION keeps EXPERTS_COMBINE=separate: the combine's sums are fp32 there (CCL_IMPL=fabric), but weighted
+  cannot run the official q(r h) before w2 (the weight moves to the combine; q(r h) != r q(h) with ue8m0 scales) and
+  multiplies by bf16 routing weights (the planner's format), below the reference's fp32 weight (DS41-23).
+- Re-run: change on `DS41_EXPERTS_COMBINE=weighted DS41_NUMERICS=native DS41_FFN_NORM_DTYPE=bf16`, off
+  `DS41_EXPERTS_COMBINE=separate DS41_NUMERICS=official DS41_FFN_NORM_DTYPE=fp32`, in front of each gate command.

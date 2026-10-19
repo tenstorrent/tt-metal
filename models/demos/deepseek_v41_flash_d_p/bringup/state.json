@@ -8035,6 +8035,255 @@
   "status": "PASS",
   "waiting": null
  },
+ "P.8": {
+  "ab": {
+   "at": "2026-10-19T12:36:01",
+   "by": "dnijemcevic",
+   "changed": [
+    "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+    "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.8.perf.1.json",
+    "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.8.perf.2.json",
+    "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/engram_kv.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/kv.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/quant.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/shared_expert.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/weighted_combine.py",
+    "ttnn/ttnn/bringup/INDEX.md",
+    "ttnn/ttnn/bringup/combine_rf/CHANGELOG.md",
+    "ttnn/ttnn/bringup/combine_rf/README.md",
+    "ttnn/ttnn/bringup/combine_rf/combine_plan.py",
+    "ttnn/ttnn/bringup/combine_rf/sparse_combine_rf.py",
+    "ttnn/ttnn/bringup/combine_rf/tests/__init__.py",
+    "ttnn/ttnn/bringup/combine_rf/tests/unit/__init__.py",
+    "ttnn/ttnn/bringup/combine_rf/tests/unit/test_column_planner.py",
+    "ttnn/ttnn/bringup/flat_routed_expert_ttnn/CHANGELOG.md",
+    "ttnn/ttnn/bringup/flat_routed_expert_ttnn/README.md",
+    "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_routed_expert.cpp",
+    "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_routed_expert.hpp",
+    "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_routed_expert_nanobind.cpp"
+   ],
+   "decided": "2026-10-19T20:31:01",
+   "decision": "accept",
+   "env": {
+    "DS41_EXPERTS_COMBINE": "separate",
+    "DS41_FFN_NORM_DTYPE": "fp32",
+    "DS41_NUMERICS": "official"
+   },
+   "gate_on": {
+    "failing": [
+     "test_swap_${t}_experts: exit code 1"
+    ],
+    "ok": false
+   },
+   "key": "6467c37621b6eb46",
+   "ladder": {
+    "last": {
+     "new": {
+      "min layer": "L03",
+      "min layer PCC": 0.996810850474721,
+      "rc": 0
+     },
+     "old": {
+      "min layer": "L03",
+      "min layer PCC": 0.9965066629306931,
+      "rc": 0
+     }
+    },
+    "s55296": {
+     "new": {
+      "min layer": "L03",
+      "min layer PCC": 0.9963596386218164,
+      "rc": 1
+     },
+     "old": {
+      "min layer": "L03",
+      "min layer PCC": 0.9963229291894408,
+      "rc": 0
+     }
+    }
+   },
+   "note": "owner 2026-10-19: accept",
+   "on": {
+    "DS41_EXPERTS_COMBINE": "weighted",
+    "DS41_FFN_NORM_DTYPE": "bf16",
+    "DS41_NUMERICS": "native"
+   },
+   "profile": {
+    "new": {
+     "chunk_wall_ms": 860.6,
+     "device_ms_experts": 45.32,
+     "device_ms_total": 258.15,
+     "pcc_chunk_out": 0.9997683096727958,
+     "profiled_programs": 11804,
+     "rc": 0
+    },
+    "old": {
+     "chunk_wall_ms": 785.4,
+     "device_ms_experts": 134.47,
+     "device_ms_total": 618.73,
+     "pcc_chunk_out": 0.9997889322339085,
+     "profiled_programs": 25224,
+     "rc": 0
+    }
+   },
+   "rungs": [
+    "last",
+    "s55296"
+   ],
+   "table": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/ab/P.8/table.md",
+   "tests": {
+    "test_c_${t}_experts": {
+     "new": {
+      "checks": [],
+      "rc": 0
+     },
+     "old": {
+      "checks": [],
+      "rc": 0
+     }
+    },
+    "test_swap_${t}_experts": {
+     "new": {
+      "checks": [
+       "FAIL swap_q_a vs the CPU step on the same inputs: rel=0.011596 (<= 0.01040, component error 0.00726) row=0.015077 ratio=[0.99895, 1.00087] bias=+0.000037 own-floor row=3.45 col=2.82 bias=9.65 (rel 0.01160 > 0.01040)",
+       "FAIL swap_ffn_hc vs the CPU step on the same inputs: rel=0.000197 (<= 0.00015, component error 0.00230) row=0.000367 ratio=[1.00002, 1.00014] bias=+0.000077 own-floor row=8.4 col=3.63 bias=60.6 (rel 0.00020 > 0.00015; median row norm ratio off by +0.00008 (limit 0.00007))"
+      ],
+      "rc": 1
+     },
+     "old": {
+      "checks": [
+       "FAIL swap_ffn_hc vs the CPU step on the same inputs: rel=0.000195 (<= 0.00015, component error 0.00230) row=0.000354 ratio=[1.00002, 1.00015] bias=+0.000077 own-floor row=9.21 col=3.6 bias=60.1 (rel 0.00020 > 0.00015; median row norm ratio off by +0.00008 (limit 0.00007))"
+      ],
+      "rc": 0
+     }
+    }
+   },
+   "why": "apply P.8 or not? A/B table at /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/ab/P.8/table.md; the gate with the change on would FAIL; then: python -m models.demos.common.bringup.orchestrator decide --task P.8 --accept|--reject --spec /localdev/dnijemcevic/tt-metal2/models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml, and resume"
+  },
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "0c63ace1bab08fc026248d951aaef5ad780f493b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "017ee34082ef63614ec88eaf407a57c1d26fec70",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "c8cdf7a5-6962-40eb-85a6-b80cd90dcf2b"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/P.8.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "0c63ace1bab08fc026248d951aaef5ad780f493b",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "017ee34082ef63614ec88eaf407a57c1d26fec70",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/P.8.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [
+     "direct pytest: 'cd /localdev/dnijemcevic/tt-metal2; export PYTHONPATH=$PWD; source python_env/bin/activate; pytest --collect-only -q mod'"
+    ],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 8589.3,
+    "session_id": "d9b7da70-6399-43df-af18-f7903185ba3b",
+    "t": "2026-10-19T12:06:48"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 2,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/P.8.perf.2.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "0c63ace1bab08fc026248d951aaef5ad780f493b",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "017ee34082ef63614ec88eaf407a57c1d26fec70",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/P.8.perf.2.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 1750.6,
+    "session_id": "c8cdf7a5-6962-40eb-85a6-b80cd90dcf2b",
+    "t": "2026-10-19T12:36:01"
+   }
+  ],
+  "attempt": 2,
+  "attempts": 0,
+  "duration_s": 0.0,
+  "history": [
+   {
+    "s": 0.0,
+    "status": "PASS",
+    "t": "2026-10-19T20:31:17"
+   }
+  ],
+  "last_run": "2026-10-19T20:31:17",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/P.8.log",
+  "metrics": {
+   "device_ms_experts": 45.32,
+   "host_transfers_per_layer": 0,
+   "pcc_layer_L00": 0.9995505486874275,
+   "pcc_layer_L01": 0.9993237326899284,
+   "pcc_layer_L02": 0.9985124628634163,
+   "pcc_layer_L03": 0.996810850474721,
+   "pcc_layer_L14": 0.9973612099145389,
+   "pcc_layer_L20": 0.999653134149201,
+   "pcc_layer_L21": 0.9977594717179111,
+   "pcc_layer_L24": 0.9997683096727958,
+   "pcc_state_min": 0.9979567789327414
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "started": "2026-10-19T20:31:17",
+  "status": "PASS",
+  "waiting": null
+ },
  "PL.0": {
   "attempts": 0,
   "duration_s": 10.5,
@@ -12822,6 +13071,127 @@
   "reason": [],
   "started": "2026-10-17T21:32:59",
   "status": "PASS"
+ },
+ "X.3": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "f7a0752de548f2dc735d5fbb6ce21b8225c9d575",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "017ee34082ef63614ec88eaf407a57c1d26fec70",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "eb8f0c90-3aea-4c4f-8364-935e82a211c6"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/X.3.fix.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "f7a0752de548f2dc735d5fbb6ce21b8225c9d575",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "017ee34082ef63614ec88eaf407a57c1d26fec70",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": [
+     "no knowledge report X.3.fix.1.json"
+    ],
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/X.3.fix.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [
+     "aborted by the overseer: X.3's timeline check failed because the profiler buffer is too small (device 4906 programs per chip vs 6312 in op mode, TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 in the gate command); a gate-command setting, not the model; the overseer raises it"
+    ],
+    "rc": 143,
+    "role": "fix",
+    "seconds": 52.8,
+    "session_id": "eb8f0c90-3aea-4c4f-8364-935e82a211c6",
+    "t": "2026-10-19T07:24:34"
+   }
+  ],
+  "attempt": 2,
+  "attempts": 1,
+  "duration_s": 3110.1,
+  "history": [
+   {
+    "s": 3110.1,
+    "status": "FAIL",
+    "t": "2026-10-19T07:23:39"
+   },
+   {
+    "status": "ABORTED",
+    "t": "2026-10-19T07:24:34",
+    "why": "X.3's timeline check failed because the profiler buffer is too small (device 4906 programs per chip vs 6312 in op mode, TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 in the gate command); a gate-command setting, not the model; the overseer raises it"
+   },
+   {
+    "attempt": 2,
+    "from": "RUNNING",
+    "role": "fix",
+    "status": "RESUMED",
+    "t": "2026-10-19T07:25:05"
+   },
+   {
+    "attempt": 2,
+    "from": "RUNNING",
+    "role": "fix",
+    "status": "RESUMED",
+    "t": "2026-10-19T09:43:35"
+   }
+  ],
+  "last_run": "2026-10-19T07:23:39",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/X.3.log",
+  "metrics": {
+   "op_rows": 5809,
+   "pcc_layer_L00": 0.999684590097604,
+   "pcc_layer_L01": 0.9994191600670335,
+   "pcc_layer_L02": 0.9984561611003685,
+   "pcc_layer_L03": 0.9963229291894408,
+   "pcc_layer_L14": 0.9974989649584117,
+   "pcc_layer_L20": 0.9996672366794064,
+   "pcc_layer_L21": 0.9978916187941266,
+   "pcc_layer_L24": 0.9997845196854674,
+   "pcc_state_min": 0.9952262118144406,
+   "pos_chunk": 2048,
+   "timeline_ok": 0
+  },
+  "rc": 0,
+  "reason": [
+   "  cmd rc=0 (3110s), log: /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/X.3.log",
+   "  ok       pcc_layer_L00 = 0.999684590097604 (need >= 0.97)",
+   "  ok       pcc_layer_L01 = 0.9994191600670335 (need >= 0.97)",
+   "  ok       pcc_layer_L02 = 0.9984561611003685 (need >= 0.97)",
+   "  ok       pcc_layer_L03 = 0.9963229291894408 (need >= 0.97)",
+   "  ok       pcc_layer_L14 = 0.9974989649584117 (need >= 0.97)",
+   "  ok       pcc_layer_L20 = 0.9996672366794064 (need >= 0.97)",
+   "  ok       pcc_layer_L21 = 0.9978916187941266 (need >= 0.97)",
+   "  ok       pcc_layer_L24 = 0.9997845196854674 (need >= 0.97)",
+   "  ok       pcc_state_min = 0.9952262118144406 (need >= 0.97)",
+   "  MISSING  prefill_ms_full (need > 0)",
+   "  ok       pos_chunk = 2048 (need >= 1)",
+   "  ok       op_rows = 5809 (need >= 1)",
+   "  FAIL     timeline_ok = 0 (need == 1)"
+  ],
+  "role": "fix",
+  "started": "2026-10-19T07:25:08",
+  "status": "TODO",
+  "waiting": null
  },
  "_run": {
   "branch": "dnijemcevic/model_bringup",

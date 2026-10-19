@@ -35,7 +35,7 @@ from . import ccl
 from .common import DRAM, TP_AXIS, attn_compute_config, compute_config, tp_sum
 from .exact_mm import ExactMatmul
 from .norm import TtDistributedRmsNorm
-from .quant import fp8_qdq
+from .quant import act_q
 from .settings import settings
 
 
@@ -104,9 +104,10 @@ class TtQa:
         """(q_resid, the fused projection's output p [1, 1, S/SP, proj.width] fp32): the assembled model's q_a step
         keeps p for the kv step (tt/kv.py:TtWindowKv.from_proj), one matmul and one exchange for both. The caller
         frees p."""
-        xq = fp8_qdq(x, dtype=ttnn.bfloat16)
+        xq = act_q(x, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (tt/quant.py)
         p = self.proj(xq)
-        ttnn.deallocate(xq)
+        if xq is not x:
+            ttnn.deallocate(xq)
         rows = p.shape[-2]
         q = ttnn.slice(p, [0, 0, 0, self.q0], [1, 1, rows, self.q1], memory_config=DRAM)
         y = self.norm(q)

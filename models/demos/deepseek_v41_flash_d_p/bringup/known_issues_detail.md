@@ -356,3 +356,17 @@ RoPE, float64 statistics):
 - Raising the output to fp32 (WINDOW_SDPA_OUT=fp32) would be above the reference (FIX.2), so not done. The check needs
   an owner waiver (spec tests.waivers: `enc_source.attention`) or a framework floor for second inputs that includes
   the official arithmetic's excess (as the golden's official_floor does: 0.0808).
+
+## NUMERICS=native fails the official per-step swap checks upstream of the experts
+P.8 (attempts 1 and 2), change on (EXPERTS_COMBINE=weighted NUMERICS=native FFN_NORM_DTYPE=bf16), frozen tests in gate
+order: the 8 test_c_*_experts pass (vs CPU rel 0.0298 L0 .. 0.0410 L24, limits 0.085 .. 0.120; deterministic);
+test_swap_swa_12_experts fails swap_q_a (rel 0.011596 <= 0.01040) and swap_ffn_hc (0.000197 <= 0.00015, covered by the
+owner's hc_fn waiver, DS41-43). Attempt 1 also ran swa_engram_15 (q_a 0.013907 <= 0.01191) and enc_source_14 (q_a
+0.012939 <= 0.01114, compressor 0.101759 <= 0.07459, indexer unexplained flips 170).
+
+Probe (attempt 2, golden q_a input, chunk of the component rung, 2x2): CPU native q_a = rms_norm(mm(bf16(x), wq_a),
+q_norm) vs the official CPU (fp8 q-dq of x first): rel 0.011637 (L0), 0.013901 (L1). Device NUMERICS=native vs CPU
+native 0.000143 / 0.000160; device official vs CPU official 0.000101 / 0.000105. Bias device native - CPU native
+-6.7e-7 / +5.9e-7 of the rms. So the swap failure is exactly the official fp8 rounding the device skips (rule 17), no
+device error: the per-step limits are 2 x the official arithmetic's noise floor and the reference hook stays official
+(owner, P.8 brief). The compressor's fp4 q-dq (rel ~0.1) is the same kind.

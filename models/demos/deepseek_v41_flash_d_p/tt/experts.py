@@ -94,8 +94,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v41_flash_d_p.reference.weights import fp4_dequant
 
+from . import ccl
 from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, sum_cols
-from .quant import fp8_qdq
+from .quant import act_q, native
 from .settings import settings
 
 TILE = 32
@@ -193,9 +194,10 @@ class TtExperts:
         max_chunk: int,
         num_links: int = 1,
         impl: str | None = None,
+        combine: str | None = None,
     ):
         """ck: reference/weights.Checkpoint (experts read one at a time, packed). max_chunk: the largest chunk (all
-        mesh rows together). impl: EXPERTS_IMPL value (None: the setting)."""
+        mesh rows together). impl: EXPERTS_IMPL value, combine: EXPERTS_COMBINE value (None: the setting)."""
         rows, cols = tuple(mesh.shape)
         n = rows * cols
         E = int(num_experts)
@@ -211,6 +213,16 @@ class TtExperts:
         # expert matmuls, bfp8 x / h / y tiles, fp32 DEST down). The selector matmuls keep self.cfg in both.
         self.precision = settings.get("EXPERTS_PRECISION")
         assert self.precision in ("full", "glm"), self.precision
+        # EXPERTS_COMBINE (P.8): separate = dispatch / flat expert (routing weight + q(h) inside) / combine / K-slot sum;
+        # weighted = the flat expert + combine_rf's weighted fp32 combine in one program (tt/weighted_combine.py)
+        self.combine_mode = combine or settings.get("EXPERTS_COMBINE")
+        assert self.combine_mode in ("separate", "weighted"), self.combine_mode
+        assert (
+            self.combine_mode == "separate" or self.kernel == "flat"
+        ), "EXPERTS_COMBINE=weighted needs EXPERTS_KERNEL=flat"
+        self.weighted = self.combine_mode == "weighted"
+        # NUMERICS=native (P.8): no fp8 q(x) / q(h) (rule 17); the expert ops then run without fp8_act_quant
+        self.qdq = not native()
         self.mesh, self.layer, self.num_links = mesh, layer, num_links
         self.E, self.K, self.H, self.I = E, int(top_k), int(hidden), int(inter)
         self.lim = float(swiglu_limit)
@@ -296,7 +308,8 @@ class TtExperts:
                 mesh_mapper=_mapper(mesh, (0, None)),
             )
         self._seq = {}
-        self._modules(self.max_chunk // rows)  # the serving chunk's dispatch / combine sizes, built at load
+        if not self.weighted:
+            self._modules(self.max_chunk // rows)  # the serving chunk's dispatch / combine sizes, built at load
         if self.impl in BLOCK_DTYPES:
             self._load_block(ck, gtab)
         else:
@@ -444,7 +457,16 @@ class TtExperts:
 
         rows, cols = self.dgs, self.ngroups
         gids = [[int(gtab[c, r, le]) for le in range(self.epc)] for r in range(rows) for c in range(cols)]
-        _, _, cap = self._modules(self.max_chunk // rows)
+        n_global = self.E
+        if self.weighted:
+            # EXPERTS_COMBINE=weighted: the column's planner numbers the column's experts from 0 (chip r holds
+            # [r epc, (r + 1) epc) of its column's Eg; ExpertMapping column-major), counts are [1, Eg]; an expert sees at
+            # most every token of its column once (R x the chip's rows)
+            gids = [[r * self.epc + le for le in range(self.epc)] for r in range(rows) for c in range(cols)]
+            n_global = self.Eg
+            cap = self.max_chunk
+        else:
+            _, _, cap = self._modules(self.max_chunk // rows)
         self.flat_cap = max(256, _ceil(cap, TILE))  # (the op is built for >= 256 rows per expert)
         self.fe = FlatRoutedExpert(
             self.mesh,
@@ -453,7 +475,7 @@ class TtExperts:
             H=self.H,
             I=self.I,
             gids=gids,
-            n_global=self.E,
+            n_global=n_global,
             wdtype={"bfp8": "bf8", "bfp4": "bf4"}[self.impl],
             act="clamped_silu",
             pin=1,
@@ -461,7 +483,7 @@ class TtExperts:
             x_bf16=self.precision == "full",
             h_bf16=self.precision == "full",
             weights_nk=True,
-            routed=True,
+            routed=not self.weighted,  # (the h options' plan: separate; weighted runs neither h option)
             # (no second exactness pass: a laid-out tile row is 32 consecutive K values of one stored row, the same
             # 16-value groups _bfp8_exact asserted on the [N, K] matrices above)
             check_exact=False,
@@ -469,8 +491,24 @@ class TtExperts:
         logger.info(
             f"EXPERTS_FLAT layer={self.layer} plan nu={self.fe.plan['nu']} np={self.fe.plan['np']} "
             f"mt={self.fe.plan['mt']} gate/up={len(self.fe.plan['gu'])} down={self.fe.plan['nd']} cap={self.flat_cap} "
-            f"precision={self.precision}"
+            f"precision={self.precision} combine={self.combine_mode}"
         )
+        self.wc = None
+        if self.weighted:
+            from .weighted_combine import weighted_combine
+
+            self.wc = weighted_combine(
+                self.mesh,
+                dict(self.fe.plan),
+                H=self.H,
+                I=self.I,
+                epc=self.epc,
+                K=self.K,
+                S=self.max_chunk // rows,
+                out_dtype=ccl.partial_dtype(self.mesh) if self.sum_mode == "gather_add" else ttnn.float32,
+                x_bf16=self.precision == "full",
+                h_bf16=self.precision == "full",
+            )
 
     # ------------------------------------------------------------------ sizes (built once per rows-per-chip)
     def _modules(self, s: int):
@@ -619,7 +657,7 @@ class TtExperts:
         ttnn.deallocate(u)
         hr = ttnn.multiply(h, r, dtype=ttnn.float32, memory_config=DRAM)
         ttnn.deallocate(h)
-        hq = fp8_qdq(hr, dtype=ttnn.bfloat16)
+        hq = act_q(hr, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast
         ttnn.deallocate(hr)
         if self.impl in BLOCK_DTYPES:
             y = ttnn.linear(
@@ -688,7 +726,7 @@ class TtExperts:
             activation=ttnn.bringup.RoutedExpertActivation.ClampedSiluGlu,
             high_precision=True,
             routing_weights=rwr,
-            fp8_act_quant=True,
+            fp8_act_quant=self.qdq,
             weights_transposed=True,
         )
         ttnn.deallocate(xr)
@@ -725,16 +763,47 @@ class TtExperts:
             down_fp32=True if self.precision == "glm" else bool(settings.get("FP32_DEST_ACC")),
             math_fidelity=int(self.fidelity.value),
             routing_weights=rw,
-            fp8_act_quant=True,
+            fp8_act_quant=self.qdq,
             hidden=self.H,
         )
         ttnn.deallocate(rw)
+        return out
+
+    def _weighted(self, x: ttnn.Tensor, dense: ttnn.Tensor, idx: ttnn.Tensor | None) -> ttnn.Tensor:
+        """EXPERTS_COMBINE=weighted (tt/weighted_combine.py): q(x) of the mesh row gathered over the column, the
+        column's top-k ids and bf16 weights, then the flat expert + weighted fp32 combine in one program per pass.
+        Returns this column group's partial [1, 1, s, H] (fp32; bf16 under CCL_IMPL=fabric_bf16)."""
+        s, K = x.shape[-2], self.K
+        wc = self.wc
+        assert s == wc.S, f"EXPERTS_COMBINE=weighted is built for {wc.S} rows per chip, got {s}"
+        qx = act_q(x, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (x itself when ffn_norm wrote bf16)
+        xg = wc.gather_x(qx)
+        if qx is not x:
+            ttnn.deallocate(qx)
+        dk = dense if dense.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(dense, ttnn.TILE_LAYOUT, memory_config=DRAM)
+        if idx is None:  # (the routing's K nonzero weights and their ids; order is free: the combine sums them)
+            wts, ids = ttnn.topk(dk, k=K, dim=-1, largest=True, sorted=True)
+        else:
+            ids = idx
+            wts = ttnn.gather(dk, dim=-1, index=idx)
+        if dk is not dense:
+            ttnn.deallocate(dk)
+        ids16 = ids if ids.dtype == ttnn.uint16 else ttnn.typecast(ids, ttnn.uint16, memory_config=DRAM)
+        ids_g, wts_g = wc.routing(ids16, wts)
+        for t in {id(t): t for t in (ids16, wts) + ((ids,) if idx is None else ())}.values():
+            if t is not idx:
+                ttnn.deallocate(t)
+        out = wc(self.fe, xg, ids_g, wts_g, int(self.fidelity.value))
+        for t in (xg, ids_g, wts_g):
+            ttnn.deallocate(t)
         return out
 
     def partial(self, x: ttnn.Tensor, dense: ttnn.Tensor, idx: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """This column group's experts over the chip's rows. x: ffn_norm [1, 1, s, H] fp32 TILE (rows split over axis
         0, replicated over axis 1); dense: routing [1, 1, s, E] fp32 (same placement); idx: the router's top-k ids
         [1, 1, s, K] (None: top-k of dense). Returns [1, 1, s, H] fp32 TILE (the group's sum, weights applied)."""
+        if self.weighted:
+            return self._weighted(x, dense, idx)
         s, K, H = x.shape[-2], self.K, self.H
         dispatch, combine, cap = self._modules(s)
         tmp = []
@@ -754,10 +823,10 @@ class TtExperts:
         )
         ind = ttnn.reshape(ttnn.to_layout(idx2, ttnn.ROW_MAJOR_LAYOUT), (1, s, K))
         # the dispatched row: q(x) bf16 (exact) | the group's routing weights as three bf16 pieces
-        qx = fp8_qdq(x, dtype=ttnn.bfloat16)
+        qx = act_q(x, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (x itself when ffn_norm wrote bf16)
         pieces = self._pieces(dense, s)
         xa = ttnn.concat([qx] + pieces, dim=-1, memory_config=DRAM)
-        for t in [qx] + pieces:
+        for t in ([qx] if qx is not x else []) + pieces:
             ttnn.deallocate(t)
         xr = ttnn.to_layout(xa, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
         ttnn.deallocate(xa)
@@ -873,7 +942,9 @@ def _combine(m, buf, meta, counts, region_offsets, seq_len):
     )
 
 
-def build_experts(mesh, ck, cfg, layer: int, chunk: int, impl: str | None = None) -> TtExperts:
+def build_experts(
+    mesh, ck, cfg, layer: int, chunk: int, impl: str | None = None, combine: str | None = None
+) -> TtExperts:
     """The routed experts of one layer (reference Config: n_experts, topk_experts, dim, inter, swiglu_limit)."""
     return TtExperts(
         mesh,
@@ -886,4 +957,5 @@ def build_experts(mesh, ck, cfg, layer: int, chunk: int, impl: str | None = None
         swiglu_limit=cfg.swiglu_limit,
         max_chunk=chunk,
         impl=impl,
+        combine=combine,
     )

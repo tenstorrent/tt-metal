@@ -30,8 +30,16 @@ import ttnn
 
 from .fabric_all_gather_py import NOC0, NOC1, _SEM_CACHE
 from .sparse_all_gather_2d import DIRS, OPP, mesh_plan, place_ports
-from .combine_plan import link_of
+from .combine_plan import axis_ports, link_of
 from .sparse_combine_l1 import _ACC_COMPUTE, _ACC_WRITER, _PORT_READER, TILE, route
+
+# the accumulator writer with an output row offset (out_row0: a pass's first home row; 0 = the original writer's rows)
+_ACC_WRITER_RF = _ACC_WRITER.replace(
+    "const uint32_t o_addr = get_arg_val<uint32_t>(0), n_tok = get_arg_val<uint32_t>(1), me = get_arg_val<uint32_t>(2);",
+    "const uint32_t o_addr = get_arg_val<uint32_t>(0), n_tok = get_arg_val<uint32_t>(1), me = get_arg_val<uint32_t>(2);\n"
+    "    const uint32_t row0 = get_arg_val<uint32_t>(3);",
+).replace("o.get_noc_addr(i * A + me)", "o.get_noc_addr(row0 + i * A + me)")
+assert "row0 + i * A + me" in _ACC_WRITER_RF and "get_arg_val<uint32_t>(3)" in _ACC_WRITER_RF
 
 CB_INJ, CB_ROW, CB_META, CB_TAB, CB_ACC, CB_OUT, CB_W = 0, 1, 2, 3, 4, 5, 6
 PIECE_MAX = int(
@@ -259,6 +267,39 @@ _ACC_COMPUTE_W = (
 assert _ACC_COMPUTE_W.count("cb_pop_front(cb_w, 1)") == 2 and "mul_tiles_bcast_scalar" in _ACC_COMPUTE_W
 assert "end marker" in _ACC_COMPUTE_W and "__DEVPLAN__ || r < n_rows" in _ACC_COMPUTE_W
 
+# zero_unseen: a home token none of whose rows came (axis=0: every expert of the token in another column) is written
+# as zeros (its accumulator tiles were never packed: stale L1); the others as before
+_ACC_COMPUTE_WZ = (
+    _ACC_COMPUTE_W.replace(
+        '#include "api/compute/bcast.h"', '#include "api/compute/bcast.h"\n#include "api/compute/eltwise_unary/fill.h"'
+    )
+    .replace(
+        "    copy_init(cb_acc);\n    for (uint32_t t = 0; t < n_tok; ++t) {",
+        "    copy_init(cb_acc);\n    bool zmode = false;\n    for (uint32_t t = 0; t < n_tok; ++t) {",
+    )
+    .replace(
+        "            for (uint32_t j = 0; j < nj; ++j) copy_tile(cb_acc, t * NT + j0 + j, j);",
+        "            if (!seen[t]) {\n"
+        "                if (!zmode) {\n"
+        "                    fill_tile_init();\n"
+        "                    zmode = true;\n"
+        "                }\n"
+        "                for (uint32_t j = 0; j < nj; ++j) fill_tile(j, 0.f);\n"
+        "            } else {\n"
+        "                if (zmode) {\n"
+        "                    copy_init(cb_acc);\n"
+        "                    zmode = false;\n"
+        "                }\n"
+        "                for (uint32_t j = 0; j < nj; ++j) copy_tile(cb_acc, t * NT + j0 + j, j);\n"
+        "            }",
+    )
+)
+assert (
+    "fill_tile(j, 0.f)" in _ACC_COMPUTE_WZ
+    and "bool zmode" in _ACC_COMPUTE_WZ
+    and "eltwise_unary/fill.h" in _ACC_COMPUTE_WZ
+)
+
 # per-core L1 area (state_layout): credits / used / returned per (home, accumulator) (N x AP words each), the collector
 # counts (512 B), MISC (2 KB), HDRS (N x NH routed headers, then NH credit snapshots), then the rings
 NH_, HSZ_ = 8, 128
@@ -279,6 +320,22 @@ def state_layout(N, A):
     HDRS = MISC + MISC_BYTES
     RINGS = al(HDRS + N * NH_ * HSZ_ + NH_ * 4 * AP)
     return CRED, USED, RET, CNT, MISC, HDRS, RINGS
+
+
+def accumulator_bytes(N, A, W, S, *, depth=1, out_dtype=None, local_slots=2):
+    """L1 bytes per accumulator core of sparse_combine_rf_prepare with the L1 hand-off (one piece a row, no
+    deterministic order): the state block, N - 1 rings of `depth` slots, the CBs (fp32 sums of ceil(S / A) home tokens)
+    and a local ring of `local_slots`. A caller sizes S (e.g. a pass of its tokens) to fit its arena with this."""
+    al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+    row_bytes = W * 2
+    NT = (row_bytes + TILE - 1) // TILE
+    PD = (row_bytes + 63) // 64 * 64
+    slot = ((PD + 32 + 63) // 64) * 64
+    rings = state_layout(N, A)[-1]
+    maxt = (S + A - 1) // A
+    out_page = 4096 if out_dtype == ttnn.float32 else TILE
+    cbs = sum(al(v) for v in [256 * 8 + 128, 2 * NT * TILE, 2 * 32, maxt * NT * 4096, 2 * NT * out_page, 2 * TILE])
+    return al(rings + (N - 1) * depth * slot) + cbs + local_slots * slot
 
 
 _RF_SENDER = r"""
@@ -725,7 +782,9 @@ void kernel_main() {
         ++li;
         ++done;
         const uint32_t g = li + QL < n_local ? li + QL : n_local;
-        if (g > lgranted && (g - lgranted >= 4 || g == n_local)) lgrant_to(g);
+        // (grants in batches of 4 slots, or the whole ring when it is smaller: a ring of < 4 slots never reached a
+        // batch of 4 after its first grant and deadlocked with the y writers; P.8 fix, identical for QL >= 4)
+        if (g > lgranted && (g - lgranted >= (QL < 4 ? QL : 4) || g == n_local)) lgrant_to(g);
         return true;
     };
     auto peek_local = [&]() -> uint32_t {  // the next local row's token, if every writer landed it (else ~0)
@@ -885,6 +944,11 @@ def sparse_combine_rf_prepare(
     ports_per_direction=False,
     acc_on_ports=False,
     piece_max=None,
+    axis=None,
+    out_dtype=None,
+    out_row0=None,
+    acc_unpack_fp32=False,
+    zero_unseen=False,
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
     logical (x, y) cells the combine may use (ports nearest their Ethernet cores, accumulators the rest), else the
@@ -904,9 +968,29 @@ def sparse_combine_rf_prepare(
     order): half the port cells with two links. acc_on_ports (with l1): the ports sit on accumulator cells (the A
     accumulator cells are the same on every chip; each chip's ports take the ones nearest its Ethernet cores), each
     port core also an accumulator - its sender RISC also runs the hand-off grants and the output writes - so the
-    combine takes max(ports, A) cells instead of ports + A."""
+    combine takes max(ports, A) cells instead of ports + A.
+
+    Options for a model whose tokens are replicated over the mesh row (defaults: the whole-mesh combine above):
+      axis=0           combine along each mesh column only: the column's chips are the sources and homes (a row
+                       goes from its expert's chip to its token's home in the same column, Y hops only), each chip
+                       is chip r of an R-chip group (rings: R - 1 per accumulator; headers' home = r; the planner's
+                       combine_planner_prepare(axis=0)); only Y ports. Every column runs the same programs on its own
+                       chips (rows_by_chip homes must be in the source's column).
+      out_dtype        ttnn.float32: the accumulators write their fp32 sums (out is [S, W] fp32 ROW_MAJOR); default
+                       bf16 (the original output).
+      out_row0         the accumulators write home token t at out row out_row0 + t (a pass of a larger output; None:
+                       the original writer, row t).
+      acc_unpack_fp32  the final copy of the fp32 sums unpacks to DEST at fp32 (UnpackToDestFp32 on the accumulator
+                       CB; else it passes srcA at TF32: the sums are truncated to 10 mantissa bits before the output
+                       packer, K-30).
+      zero_unseen      (with l1) a home token that got no row this call is written as zeros (axis=0: all its experts
+                       in other columns); else its output row is whatever its accumulator tiles held."""
     R, C = tuple(mesh_device.shape)
-    N, L, A0 = R * C, num_links, n_acc
+    out_dtype = ttnn.bfloat16 if out_dtype is None else out_dtype
+    assert out_dtype in (ttnn.bfloat16, ttnn.float32), out_dtype
+    assert axis in (None, 0), axis
+    G = R if axis == 0 else R * C  # chips in a combine group (axis=0: a column)
+    N, L, A0 = G, num_links, n_acc
     row_bytes = W * 2
     NT = (row_bytes + TILE - 1) // TILE
     PIECE_MAX = piece_max or globals()["PIECE_MAX"]  # (piece_max: e.g. one piece a row for the L1 hand-off)
@@ -923,7 +1007,11 @@ def sparse_combine_rf_prepare(
         f"{row_bytes} and a fabric payload >= {row_bytes + 32})"
     )
     chips, nb, (wrap_x, wrap_y) = mesh_plan(mesh_device, num_links, torus)
+    if axis is not None:
+        chips = axis_ports(chips, axis)
     FUSED = bool(acc_on_ports)
+    assert not FUSED or (out_dtype == ttnn.bfloat16 and not out_row0), "acc_on_ports: bf16 output, no row offset"
+    out_bytes = W * (4 if out_dtype == ttnn.float32 else 2)
     assert not FUSED or l1 is not None, "acc_on_ports: the L1 hand-off"
     grid = mesh_device.compute_with_storage_grid_size()
     pool = cells if cells is not None else [(x, y) for y in range(grid.y) for x in range(grid.x)]
@@ -952,7 +1040,9 @@ def sparse_combine_rf_prepare(
     run_cells = dict(ports={k: (c.x, c.y) for k, c in port_core.items()}, accs=[(c.x, c.y) for c in acc_cores])
     virt = lambda c: mesh_device.worker_core_from_logical_core(c)
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
-    idx = lambda ch: ch[0] * C + ch[1]
+    idx = (lambda ch: ch[0]) if axis == 0 else (lambda ch: ch[0] * C + ch[1])  # a chip's index in its group
+    # group member i of chip ch's group (axis=0: row i of its column)
+    member = (lambda ch, i: (i, ch[1])) if axis == 0 else (lambda ch, i: (i // C, i % C))
     fh = lambda s, d: first_hop(s, d, R, C, wrap_x, wrap_y)
 
     inj = {k: [] for k in port_core}
@@ -979,6 +1069,7 @@ def sparse_combine_rf_prepare(
             n_ret[k0] += n_ret.pop(k)
     al = lambda v: (v + 63) // 64 * 64  # noqa: E731
     MAXT = (S + A - 1) // A
+    CB_OUT_PAGE = 4096 if out_dtype == ttnn.float32 else TILE
     det = bool(deterministic)
     assert not det or (
         l1 is not None and devplan is not None and "dord" in devplan
@@ -989,7 +1080,8 @@ def sparse_combine_rf_prepare(
     assert not det or MAXT * det_k <= det_pg, (MAXT, det_k, det_pg)
     tab_cb = max(256 * 8 + 128, 256 + 64 + (MAXT * det_k + 63) // 64 * 64) if det else 256 * 8 + 128
     acc_cbs = sum(
-        al(v) for v in [tab_cb, 2 * NT * TILE, 2 * 32, MAXT * NT * 4096, 2 * NT * TILE] + ([2 * TILE] if l1 else [])
+        al(v)
+        for v in [tab_cb, 2 * NT * TILE, 2 * 32, MAXT * NT * 4096, 2 * NT * CB_OUT_PAGE] + ([2 * TILE] if l1 else [])
     )
     if arena is not None:  # (the rings' depth from what the arena leaves: the accumulators' CBs and 2 local slots)
         sh_ = arena.memory_config().shard_spec
@@ -1161,8 +1253,8 @@ def sparse_combine_rf_prepare(
         ("pr1", _RF_READER_L1),
         ("ps", _RF_SENDER),
         ("ar", _RF_ACC_READER),
-        ("ac", _ACC_COMPUTE_W if l1 is not None else _ACC_COMPUTE),
-        ("aw", _ACC_WRITER),
+        ("ac", (_ACC_COMPUTE_WZ if zero_unseen else _ACC_COMPUTE_W) if l1 is not None else _ACC_COMPUTE),
+        ("aw", _ACC_WRITER if out_row0 is None else _ACC_WRITER_RF),
     ):
         for k, v in subs.items():
             ksrc = ksrc.replace(k, v)
@@ -1171,13 +1263,18 @@ def sparse_combine_rf_prepare(
         processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
     )
     st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
-    chip_ids = [int(node((i // C, i % C)).chip_id) for i in range(N)]
+    chip_ids_of = lambda ch: [int(node(member(ch, i)).chip_id) for i in range(N)]  # noqa: E731
     mesh_id = int(node((0, 0)).mesh_id)
     acc_xy = []
     for ac in acc_cores:
         v = virt(ac)
         acc_xy += [v.x, v.y]
     state = {}
+    acc_cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    if acc_unpack_fp32:  # (the fp32 sums' final copy at fp32: UnpackToDestFp32 on the accumulator CB)
+        modes = [ttnn.UnpackToDestMode.Default] * 64  # (one per CB index, NUM_CIRCULAR_BUFFERS)
+        modes[CB_ACC] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        acc_cfg.unpack_to_dest_mode = modes
 
     def arena_cbs(placed, arena_t):
         cbs = []
@@ -1228,7 +1325,7 @@ def sparse_combine_rf_prepare(
                 (CB_ROW, aset, 2 * NT * TILE, ttnn.bfloat16, TILE),
                 (CB_META, aset, 2 * 32, ttnn.uint32, 32),
                 (CB_ACC, aset, MAXT * NT * 4096, ttnn.float32, 4096),
-                (CB_OUT, aset, 2 * NT * TILE, ttnn.bfloat16, TILE),
+                (CB_OUT, aset, 2 * NT * CB_OUT_PAGE, out_dtype, CB_OUT_PAGE),
             ] + ([(CB_W, aset, 2 * TILE, ttnn.bfloat16, TILE)] if l1 is not None else [])
             cbs = []  # (assigned at the end: program.cbs is a copy through the binding, appends to it are lost)
             if arena is None:
@@ -1318,10 +1415,10 @@ def sparse_combine_rf_prepare(
                     if devplan is not None
                     else [len(inj[k]), n_ret[k]]
                 )
-                args = [area, mesh_id, idx(ch), li] + cnt_args + chip_ids + acc_xy
+                args = [area, mesh_id, idx(ch), li] + cnt_args + chip_ids_of(ch) + acc_xy
                 n_conn = len(ports[d]["links"]) if PER_DIR else 1
                 for i in range(N):
-                    s = (i // C, i % C)
+                    s = member(ch, i)
                     if s != ch and fh(ch, s) == d:
                         v = virt(port_core[(s, fh(s, ch), li)])
                         args += [v.x, v.y]
@@ -1357,7 +1454,7 @@ def sparse_combine_rf_prepare(
                     idx(ch),
                 ]
                 for kk in range(N):  # per source chip: its ring's count and the port returning its credits
-                    s = (kk // C, kk % C)
+                    s = member(ch, kk)
                     w = want[(ch, i)][kk]
                     if s != ch and (devplan is not None or w):  # (device plan: the plan decides the counts)
                         v = virt(port_core[(ch, fh(ch, s), link_of(i, kk, idx(ch), L))])
@@ -1375,7 +1472,9 @@ def sparse_combine_rf_prepare(
                 n_rows = len(loc[(ch, i)]) + sum(want[(ch, i)])
                 ac_rt[core.x][core.y] = [0 if devplan is not None else n_rows, n_tok]
                 if not FUSED or (core.x, core.y) not in p_xy:  # (fused port cores: the sender writes)
-                    aw_rt[core.x][core.y] = [int(out.buffer_address()), n_tok, i]
+                    aw_rt[core.x][core.y] = [int(out.buffer_address()), n_tok, i] + (
+                        [] if out_row0 is None else [int(out_row0)]
+                    )
             aw_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in acc_cores if not FUSED or (c.x, c.y) not in p_xy])
             program.kernels = [
                 ttnn.KernelDescriptor(
@@ -1408,13 +1507,13 @@ def sparse_combine_rf_prepare(
                     core_ranges=aset,
                     compile_time_args=[CB_ROW, CB_META, CB_ACC, CB_OUT, NT, MAXT] + ([CB_W] if l1 is not None else []),
                     runtime_args=ac_rt,
-                    config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
+                    config=acc_cfg,
                 ),
                 ttnn.KernelDescriptor(
                     kernel_source=srcs["aw"],
                     source_type=st,
                     core_ranges=aw_set,
-                    compile_time_args=[CB_OUT, row_bytes, NT, A] + o_ct,
+                    compile_time_args=[CB_OUT, out_bytes, NT, A] + o_ct,
                     runtime_args=aw_rt,
                     config=dm("RISCV_0", NOC1),
                 ),

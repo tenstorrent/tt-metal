@@ -59,7 +59,7 @@ import ttnn
 
 from . import ccl
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, compute_config, sum_cols
-from .quant import fp8_qdq, round_tf32
+from .quant import act_q, tf32_q
 from .rope import RopeTable, deinterleave_perm, deinterleave_tail, rope_heads
 from .served import CacheSlab, DeviceScalars, alloc_served
 from .settings import settings
@@ -438,9 +438,10 @@ class TtWindowAttention:
     def _q_heads(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """q_resid -> scaled, roped q of the chip's heads [1, H/TP, S/SP, 512] fp32 (rope tail [even | odd])."""
         rows = q_resid.shape[-2]
-        xq = fp8_qdq(q_resid, dtype=ttnn.bfloat16)
+        xq = act_q(q_resid, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (tt/quant.py)
         qf = ttnn.linear(xq, self.wq_b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
-        ttnn.deallocate(xq)
+        if xq is not q_resid:
+            ttnn.deallocate(xq)
         q4 = ttnn.transpose(ttnn.reshape(qf, [1, rows, self.h_l, self.d]), 1, 2, memory_config=DRAM)
         ttnn.deallocate(qf)
         qr = rope_heads(q4, cos, sin, interleave=self.INTERLEAVED)  # the table's order
@@ -454,8 +455,9 @@ class TtWindowAttention:
         reference kernel's q), fp32 only with WINDOW_SDPA_PROBS=fp32."""
         qs = self._q_heads(q_resid, cos, sin)
         if self.fp32_q:
-            qb = round_tf32(qs)  # the op's FPU reads q at TF32: rounded to nearest here, not truncated there
-            ttnn.deallocate(qs)
+            qb = tf32_q(qs)  # the op's FPU reads q at TF32: rounded to nearest here (native: as is)
+            if qb is not qs:
+                ttnn.deallocate(qs)
         else:
             qb = ttnn.typecast(qs, ttnn.bfloat16, memory_config=DRAM)
             ttnn.deallocate(qs)
@@ -518,7 +520,7 @@ class TtWindowAttention:
             of = od
         ou = rope_heads(of, cos, sin, inverse=True, interleave=True)  # the reference's order again
         ttnn.deallocate(of)
-        oq = fp8_qdq(ou, dtype=ttnn.bfloat16)  # groups of 32 inside each head (512 % 32 == 0)
+        oq = act_q(ou, dtype=ttnn.bfloat16)  # groups of 32 inside each head (512 % 32 == 0)
         ttnn.deallocate(ou)
         # heads of one wo_a group side by side: [G/TP, hpg, S/SP, 512] -> [1, G/TP, S/SP, hpg * 512]
         og = ttnn.experimental.nlp_concat_heads(
@@ -535,7 +537,7 @@ class TtWindowAttention:
         if len(parts) > 1:
             for t in parts:
                 ttnn.deallocate(t)
-        yq = fp8_qdq(yt, dtype=ttnn.bfloat16)
+        yq = act_q(yt, dtype=ttnn.bfloat16)
         ttnn.deallocate(yt)
         # CCL_IMPL=fabric_bf16 (P.6): the partial written in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
         zdt = ccl.partial_dtype(self.mesh) if self.o_sum == "gather_add" else ttnn.float32

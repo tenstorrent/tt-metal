@@ -14,6 +14,50 @@ import torch
 ORACLE_MAX_SEQ = 65536  # positions the oracle's caches hold (parity and sanity prompts are far shorter)
 
 
+class _WeightedPayloadSpec:
+    """The spec as the harness reads it for the mesh's device params, with the fabric packet payload one expert row
+    needs under EXPERTS_COMBINE=weighted (device_params below)."""
+
+    def __init__(self, spec, payload: int):
+        self._spec, self._payload = spec, payload
+
+    def hooks(self):
+        return object()  # (no device_params: the harness's own reading of the spec)
+
+    def get(self, key, default=None):
+        v = self._spec.get(key, default)
+        if key == "box.device_params":
+            v = dict(v or {})
+            v.setdefault("fabric_payload_bytes", self._payload)
+        return v
+
+
+def device_params(spec):
+    """The mesh's device params: the spec's (2D fabric, l1_small), read by the harness. EXPERTS_COMBINE=weighted (P.8)
+    also sets the fabric packet payload to 10880 B: combine_rf's L1 hand-off sends each expert row (5120 bf16 =
+    10240 B) with its 32 B trailer as one packet (the router default is 4352 B; Blackhole max 15232 B; Marko
+    Staletovic's V4.1 setting, FLAT_COMBINE_OVERLAP_WORKLOG.md)."""
+    from models.demos.common.bringup.testing import harness
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+    if settings.get("EXPERTS_COMBINE") != "weighted":
+        return _spec_params(spec)
+    from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import FABRIC_PAYLOAD
+
+    return harness.device_params(_WeightedPayloadSpec(spec, FABRIC_PAYLOAD))
+
+
+def _spec_params(spec):
+    """The harness's device params for the spec as written (no hook)."""
+    from models.demos.common.bringup.testing import harness
+
+    class _Plain(_WeightedPayloadSpec):
+        def get(self, key, default=None):
+            return self._spec.get(key, default)
+
+    return harness.device_params(_Plain(spec, None))
+
+
 def _config(spec):
     from models.demos.common.bringup.reference.golden import hf_path
     from models.demos.deepseek_v41_flash_d_p.reference.ds41_ref import Config
@@ -699,6 +743,15 @@ def _keep_candidates(mesh, ctx, st, layer, start, s, cands):
     store[layer] = (start, cands)
 
 
+def _ffn_norm_dtype():
+    """The dtype ffn_norm writes (setting FFN_NORM_DTYPE, P.8): the harness boundary hands its readers (router,
+    experts, shared expert) their input in it, as the assembled model does."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+    return ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
+
+
 def _router_host_fn(mesh, module):
     """fn(ctx, x_host [S, H]) -> dense routing host [S, E] fp32 (harness boundary: ffn_norm's gathered rows split over
     axis 0, replicated over axis 1, in; the dense [S/SP, E] fp32 ROW_MAJOR routing back from mesh column 0)."""
@@ -706,7 +759,7 @@ def _router_host_fn(mesh, module):
     from models.demos.deepseek_v41_flash_d_p.tt.layout import row_split_to_device, row_split_to_host
 
     def fn(ctx, x):
-        xd = row_split_to_device(mesh, x)
+        xd = row_split_to_device(mesh, x, dtype=_ffn_norm_dtype())
         dense, idx, wts = module(xd)
         out = row_split_to_host(mesh, dense).float()
         for t in (xd, dense, idx, wts):
@@ -725,7 +778,7 @@ def _experts_host_fn(mesh, module):
     from models.demos.deepseek_v41_flash_d_p.tt.layout import hidden_split_to_host, row_split_to_device
 
     def fn(ctx, x, routing):
-        xd = row_split_to_device(mesh, x)
+        xd = row_split_to_device(mesh, x, dtype=_ffn_norm_dtype())
         rd = row_split_to_device(mesh, routing)
         od = module(xd, rd)
         out = hidden_split_to_host(mesh, od).float()
@@ -744,7 +797,7 @@ def _rows_to_hidden_host_fn(mesh, module):
     from models.demos.deepseek_v41_flash_d_p.tt.layout import hidden_split_to_host, row_split_to_device
 
     def fn(ctx, x):
-        xd = row_split_to_device(mesh, x)
+        xd = row_split_to_device(mesh, x, dtype=_ffn_norm_dtype())  # (the shared expert: ffn_norm's output)
         od = module(xd)
         out = hidden_split_to_host(mesh, od).float()
         ttnn.deallocate(xd)

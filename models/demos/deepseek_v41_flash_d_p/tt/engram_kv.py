@@ -27,7 +27,7 @@ import ttnn
 
 from .common import DRAM, TP_AXIS, compute_config
 from .layout import streams_cols_to_chip_major
-from .quant import fp8_qdq
+from .quant import fp8_qdq, native
 from .settings import settings
 
 BLOCKS = 5  # hc_mult keys + one value
@@ -46,7 +46,8 @@ class TtEngramKv:
         self.mesh, self.hidden, self.k = mesh, hidden, k
         self.width = BLOCKS * hidden // tp
         self.ckc = compute_config(mesh)
-        self.qdq = settings.get("ENGRAM_KV_QDQ") == "qdq"
+        # NUMERICS=native (P.8): no fp8 q-dq of the rows (rule 17), whatever ENGRAM_KV_QDQ says
+        self.qdq = settings.get("ENGRAM_KV_QDQ") == "qdq" and not native()
         w_t = wkv.float().t().contiguous()  # [K, 5H], block order
         assert torch.equal(w_t.bfloat16().float(), w_t), "fp8 weights must be bf16-exact"
         w_t = streams_cols_to_chip_major(w_t, hidden, tp, BLOCKS)  # [K, tp x 5 x H/TP]: chip column c's block
