@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Focused prefix-cache contracts; execute in remote CI only."""
 
-from types import SimpleNamespace
 from time import perf_counter
+from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -105,15 +105,14 @@ def test_live_cached_suffix_matches_cold_host_logits(gemma_server_url, length, r
     assert sampled_ids(warm) == sampled_ids(cold)
     cold_probs = cold["choices"][0]["logprobs"]["top_logprobs"][0]
     warm_probs = warm["choices"][0]["logprobs"]["top_logprobs"][0]
+    assert len(cold_probs) >= 5, "Server did not return the requested top-five logprobs"
     assert warm_probs.keys() == cold_probs.keys()
     for token, logprob in cold_probs.items():
         assert warm_probs[token] == pytest.approx(logprob, abs=0.05)
 
     # Diverge within the partial final block; compare to a separately salted cold request.
     divergent = {**request, "prompt": prefix[:-1] + [999]}
-    cached_divergent = completions(
-        gemma_server_url, [{**divergent, "cache_salt": salt}], token_ids=True
-    )[0]
+    cached_divergent = completions(gemma_server_url, [{**divergent, "cache_salt": salt}], token_ids=True)[0]
     cold_divergent = completions(
         gemma_server_url, [{**divergent, "cache_salt": salt + "-divergent-control"}], token_ids=True
     )[0]

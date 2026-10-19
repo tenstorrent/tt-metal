@@ -72,6 +72,9 @@ adapter translation. Live API cases use lengths 33, 63, 65, 1023, 1025, and 1057
 unique cache salts for cold references, hit-counter assertions, greedy token and
 top-five logprob comparisons (absolute tolerance 0.05), and divergent suffixes.
 One-token response wall time and cache hit deltas are recorded in JUnit properties.
+The shared API helper now preserves an explicit `logprobs` request while enabling
+token-ID output; previously it unconditionally replaced the requested count with
+zero. The new check requires at least five entries to prevent a vacuous comparison.
 This is a focused initial gate, not full-logit, eviction, device-sampling,
 growing-conversation, or agentic accuracy proof.
 

@@ -17,7 +17,8 @@ def completions(url, requests, *, token_ids=False):
             async def send(parameters):
                 payload = {"model": MODEL, "temperature": 0, "max_tokens": 15, "ignore_eos": True, **parameters}
                 if token_ids:
-                    payload.update(logprobs=0, return_tokens_as_token_ids=True)
+                    payload.setdefault("logprobs", 0)
+                    payload["return_tokens_as_token_ids"] = True
                 response = await client.post("/v1/completions", json=payload)
                 response.raise_for_status()
                 return response.json()
