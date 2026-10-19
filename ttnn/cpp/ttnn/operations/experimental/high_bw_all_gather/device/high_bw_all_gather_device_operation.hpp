@@ -11,6 +11,7 @@
 #include "ttnn/operation.hpp"
 #include "high_bw_all_gather_device_operation_types.hpp"
 #include "high_bw_all_gather_unicast_factory.hpp"
+#include "high_bw_sparse_push_factory.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
@@ -20,7 +21,7 @@ struct HighBwAllGatherDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
-    using program_factory_t = std::variant<HighBwAllGatherUnicastFactory>;
+    using program_factory_t = std::variant<HighBwAllGatherUnicastFactory, HighBwSparsePushFactory>;
 
     // The selected batch slot and valid prefix are patched into kernel runtime arguments. Hash only
     // their presence, so a serving loop reuses one compiled program as either value changes.
@@ -66,6 +67,8 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& window_start_tensor = std::nullopt,
     std::optional<uint32_t> window_max_slabs = std::nullopt,
     bool prefix_only = false,
-    const std::optional<Tensor>& progress_tensor = std::nullopt);
+    const std::optional<Tensor>& progress_tensor = std::nullopt,
+    // PROTOTYPE: index-driven sparse push instead of the dense gather (see HighBwSparsePushFactory).
+    const std::optional<Tensor>& push_runs_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -112,6 +112,10 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     For prefetching a later layer's prefix while the current chunk is still being written.
                 progress_tensor: Optional 1-element uint32 DRAM tensor that receives the window end this
                     call reached (gathered-dim elements). Must not alias any input metadata tensor.
+                push_runs_tensor: PROTOTYPE. Per-device uint32 [1, 1, workers, words] run lists: word 0 = number
+                    of runs, then from byte 64 triples (dest_rank, local_row_start, count). Each owner pushes
+                    only the listed rows of the selected cache slot into the requester's output, at the address
+                    the dense full-mesh gather would use. Needs caller-owned semaphores and a 2D torus.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -134,7 +138,8 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("window_start_tensor") = nb::none(),
         nb::arg("window_max_slabs") = nb::none(),
         nb::arg("prefix_only") = false,
-        nb::arg("progress_tensor") = nb::none());
+        nb::arg("progress_tensor") = nb::none(),
+        nb::arg("push_runs_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail
