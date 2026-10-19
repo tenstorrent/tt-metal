@@ -71,7 +71,7 @@ def _process_prefill_chunk(
 ):
     """Process a single chunk of the sequence in prefill mode."""
     _, batch_size, seq_len, hidden_size = hidden_states.shape
-    activation_dtype = ttnn.bfloat8_b
+    activation_dtype = program_config.prefill_activation_dtype
     TILE_SIZE = 32
 
     # Reshape for prefill (group tokens into tiles)
@@ -248,7 +248,7 @@ def prefill_forward(
     Returns:
         Expert output [1, batch, seq_len, hidden_size]
     """
-    activation_dtype = ttnn.bfloat8_b
+    activation_dtype = program_config.prefill_activation_dtype
     batch_dim = 1
     seq_dim = 2
     batch_size = hidden_states.shape[batch_dim]

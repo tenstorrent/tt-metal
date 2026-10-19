@@ -246,10 +246,11 @@ void kernel_main() {
         noc_async_read(s_x.get_noc_addr(0), x_l1, kx * tiny_bytes);
     }
     for (uint32_t j = 0; x_pages > 0 && j < kx; ++j) {
-        const uint32_t row = j / gather_pages;
+        // Rows >= 32 (more than 32 heads, TP=1) live in the next row of tiles.
+        const uint32_t row = (j / gather_pages) % 32;
+        const uint32_t page = (j / gather_pages / 32) * gather_pages + j % gather_pages;
         const uint32_t off = row < 16 ? row * half_row : 2 * face_bytes + (row - 16) * half_row;  // faces 0/1, 2/3
-        const uint64_t src =
-            x_stage_pages > 0 ? get_noc_addr(x_stage + (j % gather_pages) * 2048) : s_x.get_noc_addr(j % gather_pages);
+        const uint64_t src = x_stage_pages > 0 ? get_noc_addr(x_stage + page * 2048) : s_x.get_noc_addr(page);
         noc_async_read(src + off, x_l1 + j * tiny_bytes, half_row);
         noc_async_read(src + off + face_bytes, x_l1 + j * tiny_bytes + half_row, half_row);
     }
@@ -294,11 +295,13 @@ void kernel_main() {
 #endif
             else {
                 const uint32_t m = n < q_cols ? n : (n < q_cols + k_cols ? n - q_cols : n - q_cols - k_cols);
-                const uint32_t h = m / head_tiles;
+                // Head h >= 32 (more than 32 heads, TP=1): row h % 32 of the next row of tiles.
+                const uint32_t h = (m / head_tiles) % 32;
+                const uint32_t page = (m / head_tiles / 32) * head_tiles + m % head_tiles;
                 const uint32_t off = h < 16 ? h * half_row : 2 * face_bytes + (h - 16) * half_row;
-                const uint64_t dst = n < q_cols            ? s_out.get_noc_addr(m % head_tiles, off)
-                                     : n < q_cols + k_cols ? s_k.get_noc_addr(m % head_tiles, off)
-                                                           : s_v.get_noc_addr(m % head_tiles, off);
+                const uint64_t dst = n < q_cols            ? s_out.get_noc_addr(page, off)
+                                     : n < q_cols + k_cols ? s_k.get_noc_addr(page, off)
+                                                           : s_v.get_noc_addr(page, off);
                 noc_async_write(src, dst, half_row);
                 noc_async_write(src + half_row, dst + face_bytes, half_row);
                 if constexpr (topk) {

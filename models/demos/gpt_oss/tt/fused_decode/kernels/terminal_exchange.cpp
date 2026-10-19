@@ -51,6 +51,8 @@ void kernel_main() {
     constexpr auto i_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
     constexpr auto p_args = TensorAccessorArgs<i_args.next_compile_time_args_offset()>();
     constexpr auto r_args = TensorAccessorArgs<p_args.next_compile_time_args_offset()>();
+    // candidates per gathered row (>= ring * K: TP=1 pads the row to two tiles for ttnn.sampling)
+    constexpr uint32_t ids_width = get_compile_time_arg_val(r_args.next_compile_time_args_offset());
     constexpr uint32_t payload_bytes = K * 2 + K * 4;
     static_assert(K == 32, "one tile row of candidates per device");
 
@@ -115,7 +117,7 @@ void kernel_main() {
     noc_semaphore_wait(recv_sem, ring);
     noc_semaphore_set(recv_sem, 0);
     const auto s_v = TensorAccessor(v_args, values_addr, 2048);
-    const auto s_i = TensorAccessor(i_args, ids_addr, ring * K * 4);
+    const auto s_i = TensorAccessor(i_args, ids_addr, ids_width * 4);
     const uint64_t ids_dst = s_i.get_noc_addr(0);
     for (uint32_t d = 0; d < ring; ++d) {
         const uint32_t slot = slots_addr + d * payload_bytes;

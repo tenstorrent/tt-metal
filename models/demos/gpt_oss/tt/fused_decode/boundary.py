@@ -167,7 +167,8 @@ class DecodeBoundary:
                 for name in sites
             }
         self.payload = self.tiles * PAGE
-        max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+        # TP=1 (ring of one device): no fabric; the producer's partial is already the full sum (see _parts).
+        max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes()) if self.ring > 1 else self.payload
         self.chunk = min(self.payload, max_payload // PAGE * PAGE)
         self.chunks = -(-self.payload // self.chunk)
         phys = mesh_device.worker_core_from_logical_core(self.core)
@@ -290,7 +291,10 @@ class DecodeBoundary:
     def _parts(self, residual, gamma, partial, site, entry, norm, sent):
         """The boundary-core part of a boundary: (per-device kernel list builder, CBs, io tensors, residual', x)."""
         reduced = None
-        if partial is not None and self.ccl == "ttnn":
+        # TP=1: the producer's flat partial is the full sum: the boundary reads it as its one receive slot, with no
+        # semaphore wait (expected = 0) and nothing to send; the producer op has finished before this one starts.
+        direct = partial is not None and self.ring == 1
+        if partial is not None and self.ccl == "ttnn" and not direct:
             scratch, ar_sem = self.ar_sites[site]
             reduced = ttnn.experimental.all_reduce_async(
                 partial,
@@ -304,12 +308,12 @@ class DecodeBoundary:
                 num_links=1,
             )
             partial = None
-        ccl = partial is not None
+        ccl = partial is not None and not direct
         out_res = self._empty_flat()
         out_x = self._empty_flat() if norm else None
-        recv, sem = self.sites[site] if ccl else (reduced, None)
+        recv, sem = self.sites[site] if ccl else ((partial if direct else reduced), None)
         sem_addr = ttnn.get_global_semaphore_address(sem) if ccl else 0
-        slots = self.ring if ccl else (1 if reduced is not None else 0)
+        slots = self.ring if ccl else (1 if (reduced is not None or direct) else 0)
         expected = (self.ring - 1) * self.chunks + 1 if ccl else 0
         # CB indices clear of the streamed-matmul ops' (0-4, 16), which share programs with this part (consumer_parts).
         cb_res, cb_recv, cb_gamma, cb_scaler, cb_res_out, cb_sq, cb_rs, cb_x, cb_y = 8, 9, 10, 11, 24, 25, 26, 27, 28
@@ -365,6 +369,8 @@ class DecodeBoundary:
         io = [residual, out_res] + ([out_x, gamma] if norm else [])
         if ccl:
             io += [partial, recv]
+        elif direct:
+            io.append(partial)
         elif reduced is not None:
             io.append(reduced)
         return kernels, cbs, io, out_res, out_x, (ccl and not sent), reduced, cb_x
