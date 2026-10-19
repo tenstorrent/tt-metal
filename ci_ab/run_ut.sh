@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Scratch job (untilize allcfg sweep), not for merge. tt-llk harness on one CI Blackhole runner (17_CI_AB.md).
-# Sides (ci_ab/sides/<S>.tar.gz, the tt-llk dirs of each tree with the allcfg modules, placed at the checkout's paths before
+# Sides (ci_ab/sides/<S>.tar.gz, the tt-llk and Blackhole llk_api dirs of each tree with the allcfg modules, placed at the checkout's paths before
 # every build and run): M = origin/main, H1 = #59149 head, H2 = #60646 head, M2 = M again (A/A, a sample of the slice).
 # Each side builds once into its own fresh dir. Timing: forward M H1 H2 M2, then backward M2 H2 H1 M (ABBA).
 # Counters (CTR=1): one L1_TO_L1 counter build and run per side M, H1, H2. Guard: ELF identity (elfcheck.py) or stop.
@@ -8,8 +8,8 @@
 set +e +o pipefail
 R=$(git rev-parse --show-toplevel); S=$R/ci_ab; cd $R
 echo "== checkout $R, $(git log --oneline -1 | cut -c1-80), $(hostname), $(nproc) cpus, $(date -u +%T)"
-L=$R/tt_metal/tt-llk; DIRS="tt_llk_blackhole common tests/sources tests/helpers tests/python_tests"
-place() { for d in $DIRS; do rm -rf "$L/$d"; done; tar -xzf $S/sides/$1.tar.gz -C $L; }
+L=$R/tt_metal/tt-llk; DIRS="tt-llk/tt_llk_blackhole tt-llk/common tt-llk/tests/sources tt-llk/tests/helpers tt-llk/tests/python_tests hw/ckernels/blackhole/metal/llk_api hw/inc/internal/tt-1xx/blackhole"
+place() { local x; for x in $DIRS; do rm -rf "$R/tt_metal/$x"; done; tar -xzf $S/sides/$1.tar.gz -C $R/tt_metal; }
 python -m venv $HOME/llkvenv && source $HOME/llkvenv/bin/activate
 pip install -q -r $L/tests/requirements.txt > /tmp/pip.txt 2>&1; echo "== pip rc=$? $(tail -1 /tmp/pip.txt)"
 (cd $L/tests && ./setup_testing_env.sh > /tmp/setup.txt 2>&1); echo "== setup rc=$? $(tail -1 /tmp/setup.txt)"

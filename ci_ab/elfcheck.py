@@ -1,8 +1,20 @@
 #!/usr/bin/env python3
 """ELF guard: usage elfcheck.py SIDE=<build dir> ...  Keys every variant by its build.h without the UT_HEAD_API line
-(so a config has one key on every side), hashes unpack/math/pack ELFs. Requires: M2 == M on every common key;
+(so a config has one key on every side), hashes the loadable sections of the unpack/math/pack ELFs. Requires: M2 == M on every common key;
 H1 != M and H2 != M on the pack ELF of every untilize_allcfg variant. Prints GUARD ok or GUARD FAIL."""
-import glob, hashlib, sys
+import glob, hashlib, struct, sys
+
+
+def alloc_hash(path):
+    """sha1 of the loadable sections (SHF_ALLOC, not NOBITS) of an ELF32: debug info carries build paths."""
+    b = open(path, "rb").read()
+    shoff, = struct.unpack_from("<I", b, 0x20); shentsize, shnum, shstrndx = struct.unpack_from("<HHH", b, 0x2E)
+    sec = [struct.unpack_from("<IIIIIIIIII", b, shoff + i * shentsize) for i in range(shnum)]
+    h = hashlib.sha1()
+    for name, typ, flags, addr, off, size, *_ in sec:
+        if flags & 2 and typ != 8:
+            h.update(struct.pack("<II", addr, size)); h.update(b[off:off + size])
+    return h.hexdigest()[:12]
 
 def scan(d):
     out = {}
@@ -13,7 +25,7 @@ def scan(d):
         h = {}
         for t in ("unpack", "math", "pack"):
             try:
-                h[t] = hashlib.sha1(open(f"{v}/elf/{t}.elf", "rb").read()).hexdigest()[:12]
+                h[t] = alloc_hash(f"{v}/elf/{t}.elf")
             except OSError:
                 h[t] = None
         out[k] = h
