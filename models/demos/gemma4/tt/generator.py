@@ -61,27 +61,7 @@ def _normalize_stop_token_ids(value):
 
 
 def _known_special_token_id(tokenizer, token):
-    """Resolve a named special token only when the tokenizer knows the token."""
-    if token is None:
-        return None
-    token = str(token)
-    try:
-        vocab = tokenizer.get_vocab()
-    except Exception:
-        vocab = None
-    if isinstance(vocab, dict) and token not in vocab:
-        return None
-    try:
-        token_id = tokenizer.convert_tokens_to_ids(token)
-    except Exception:
-        return None
-    if not isinstance(token_id, Integral) or isinstance(token_id, bool) or token_id < 0:
-        return None
-    unknown_id = getattr(tokenizer, "unk_token_id", None)
-    unknown_token = getattr(tokenizer, "unk_token", None)
-    if token_id == unknown_id and token != unknown_token:
-        return None
-    return int(token_id)
+    return None if token is None else tokenizer.get_vocab().get(str(token))
 
 
 def _resolve_stop_tokens(tokenizer, model_path):
@@ -89,13 +69,13 @@ def _resolve_stop_tokens(tokenizer, model_path):
     stop_tokens = set(_normalize_stop_token_ids(getattr(tokenizer, "stop_tokens", None)))
     try:
         generation_config = GenerationConfig.from_pretrained(model_path)
-        stop_tokens.update(_normalize_stop_token_ids(getattr(generation_config, "eos_token_id", None)))
+        stop_tokens.update(_normalize_stop_token_ids(generation_config.eos_token_id))
     except Exception as exc:
-        logger.debug("Could not load generation_config stop tokens from {}: {}", model_path, exc)
+        logger.warning("Could not load generation_config stop tokens from {}: {}", model_path, exc)
 
-    stop_tokens.update(_normalize_stop_token_ids(getattr(tokenizer, "eos_token_id", None)))
+    stop_tokens.update(_normalize_stop_token_ids(tokenizer.eos_token_id))
     stop_tokens.update(_normalize_stop_token_ids(getattr(tokenizer, "eot_token_id", None)))
-    named_eot = (getattr(tokenizer, "special_tokens_map", {}) or {}).get("eot_token")
+    named_eot = tokenizer.special_tokens_map.get("eot_token")
     named_eot_id = _known_special_token_id(tokenizer, named_eot)
     if named_eot_id is not None:
         stop_tokens.add(named_eot_id)

@@ -238,7 +238,7 @@ class SpeculativeDecoder:
         self._pv_traces = {}  # (P, S_k) -> persistent trace inputs/outputs
 
     def _metrics_begin(self, route):
-        if getattr(self, "_metrics_active", False):
+        if self._metrics_active:
             return
         self._metrics_active = True
         self._last_fused_setup_s = None
