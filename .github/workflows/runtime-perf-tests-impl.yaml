@@ -98,6 +98,7 @@ jobs:
           path: |
             docker-job/pgm_bench.json
             docker-job/buffer_bench.json
+            docker-job/dma_ab/
           prefix: "perf_benchmarks_json_"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
@@ -107,10 +108,5 @@ jobs:
         with:
           path: ${{ matrix.test-group.profiler_logs_path }}
           prefix: "profiler-logs-${{ join(matrix.test-group.name) }}-"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

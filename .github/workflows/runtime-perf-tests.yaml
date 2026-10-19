@@ -75,7 +75,7 @@ jobs:
             && 'wh_n300_civ2,bh_p150_perf,bh_p150b_civ2_viommu'
             || format('{0}{1}',
               inputs.wormhole && 'wh_n300_civ2' || '',
-              inputs.blackhole && format('{0}bh_p150_perf,bh_p150b_civ2_viommu',
+              inputs.blackhole && format('{0}bh_p150_perf,bh_p150b_civ2,bh_p150b_civ2_viommu,bh_p100a_civ2_viommu,bh_p300_viommu',
                 inputs.wormhole && ',' || '') || ''
             )
         }}
