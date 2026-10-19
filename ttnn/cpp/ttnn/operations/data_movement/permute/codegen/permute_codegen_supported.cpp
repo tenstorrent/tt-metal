@@ -31,8 +31,6 @@ constexpr uint32_t kHeightAxisFromEnd = ttnn::prim::kPermuteHeightAxisFromEnd;
 // whole-tile matrices; the working set is one tilized matrix held in L1.
 constexpr uint32_t kFusedMinMatrices = 6;
 constexpr uint64_t kFusedMaxMatrixBytes = 1024 * 1024;
-constexpr uint32_t kNarrowElementBytes = 2;
-constexpr uint32_t kWideElementBytes = 4;
 
 bool dtype_supported(tt::tt_metal::DataType dtype) {
     return dtype == tt::tt_metal::DataType::BFLOAT16 || dtype == tt::tt_metal::DataType::FLOAT32 ||
@@ -48,10 +46,9 @@ bool is_fused_height_width_case(
     const uint64_t height = shape[rank - kHeightAxisFromEnd];
     const uint64_t width = shape[rank - kWidthAxisFromEnd];
     const uint64_t matrices = shape.volume() / (height * width);
-    const bool element_ok = element_size == kNarrowElementBytes || element_size == kWideElementBytes;
     const bool whole_tiles = height % tt::constants::TILE_HEIGHT == 0 && width % tt::constants::TILE_WIDTH == 0;
     const uint64_t matrix_bytes = height * width * element_size;
-    return element_ok && whole_tiles && matrices >= kFusedMinMatrices && matrix_bytes <= kFusedMaxMatrixBytes;
+    return whole_tiles && matrices >= kFusedMinMatrices && matrix_bytes <= kFusedMaxMatrixBytes;
 }
 
 bool geometry_fits(

@@ -190,10 +190,11 @@ ProgramDescriptor build_row_invariant(
         {"aligned_page_size", src_page},
         {"seq_id", kSeqIdentity},
         {"batch", cb_plan.batch},
-        // The shared reader reads every mode's named args even where the branch is discarded.
+        // The shared reader reads every mode's named args even where the branch is discarded, and the
+        // discarded pad branch still instantiates a fill templated on elem_size (2 or 4 bytes only).
         {"nabatch", kSingleBatch},
         {"hoist_cb_write_ptr", kUnusedNamedArg},
-        {"elem_size", kUnusedNamedArg},
+        {"elem_size", input.element_size()},
         {"tile_height", tt::constants::TILE_HEIGHT},
         {"tile_row_shift_bits", kUnusedNamedArg},
         {"num_pages_in_row", kSingleBatch},
