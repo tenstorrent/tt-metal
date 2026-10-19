@@ -75,3 +75,11 @@ Stage: tt-model-bringup stage 1 (functional decoder, 1x1 mesh) = design Phase 1.
   sparse decode at 4097..4100: 0.99995 / 0.99996 / 0.99993 / 0.99991.
 - Pushed `origin/arg/glm-53-flash` @ bf8f2ab1d88 (squashed from the local dev branch `arg/glm53_flash`, docs
   excluded: `models/demos/glm53_flash/doc/` stays local; pre-commit green on all 24 files).
+- `tests/test_determinism.py` (layers 0, 3): two identical prefills bit-identical, two traced decode replays from
+  the same state bit-identical, `throw_exception_on_fallback=True` raised nothing (no host/torch call inside a pass).
+- Watcher run (`TT_METAL_WATCHER=10`, `TT_METAL_LOGS_PATH=~/ashai/glm53/_logs/watcher_layer3`) of the layer-3
+  dump test: PASSED, 10 dumps, watcher.log 3315 lines, no exceptions/asserts/NoC/L1/CB messages (only the normal
+  "highest stack usage" summaries).
+- Tracy (`python -m tracy -r -p`) fails at device close for the full prefill+decode run of layer 3:
+  `profiler.cpp:334 "Source location hashes are colliding"` (16-bit zone-location hash collision in the kernel
+  set), so no device CSV; `TT_METAL_DEVICE_PROFILER=1` + process_ops_logs hits the same gap. Trying per-phase runs.
