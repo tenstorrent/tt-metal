@@ -449,11 +449,17 @@ def release_semaphores(mesh):
         ttnn.deallocate(gs.buf)
 
 
+def check_k_split(K_tiles: int):
+    """Each link sends K_tiles / LINKS columns as two halves of whole TPP-tile packets (ag_sender.cpp and
+    v2_in0.cpp). The kernels floor both divisions, so any other K silently leaves columns out of the gathered buffer."""
+    if K_tiles % (LINKS * 2 * TPP):
+        raise ValueError(f"K tiles {K_tiles} must split into {LINKS} links x 2 halves of whole {TPP}-tile packets")
+
+
 def _fabric_kernels(mesh, xl, g, p: Plan, r, K_tiles, copy_local, gs: _GlobalSems, probe=None):
     """Sender (cores (6, 0..3), BRISC fwd / NCRISC bwd) and hub (6, 4) kernels of device row r."""
     page = TILE_BYTES[xl.dtype]
-    if K_tiles % (LINKS * 2 * TPP):
-        raise ValueError(f"K tiles {K_tiles} must split into {LINKS} links x 2 halves of whole packets")
+    check_k_split(K_tiles)
     link_cols = K_tiles // LINKS
     hub_phys = _phys(mesh, *HUB)
     snd = [(SND_X, l) for l in range(LINKS)]
@@ -630,8 +636,9 @@ def qwen_ag_matmul(
     check_ring(mesh)
     rows, cols = list(mesh.shape)
     S32, K = int(x_local.shape[-2]), int(x_local.shape[-1])
-    if S32 % TILE or K != int(w.shape[-2]):
+    if S32 % TILE or K % TILE or K != int(w.shape[-2]):
         raise ValueError(f"x_local {tuple(x_local.shape)} vs w {tuple(w.shape)}")
+    check_k_split(K // TILE)
     T = S32 // TILE
     N = int(w.shape[-1])
     if resident is None:
@@ -905,8 +912,9 @@ def qwen_ag_matmul_v2(
     check_ring(mesh)
     rows, cols = list(mesh.shape)
     S32, K = int(x_local.shape[-2]), int(x_local.shape[-1])
-    if S32 % TILE or K != int(w.shape[-2]):
+    if S32 % TILE or K % TILE or K != int(w.shape[-2]):
         raise ValueError(f"x_local {tuple(x_local.shape)} vs w {tuple(w.shape)}")
+    check_k_split(K // TILE)
     T = S32 // TILE
     N = int(w.shape[-1])
     if resident is None:
