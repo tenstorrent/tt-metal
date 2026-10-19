@@ -584,3 +584,27 @@ are not promoted to the clean full5 candidate. The current full5 control
 continues unchanged, and final image construction is held pending the
 safety and repeatability evidence.
 
+Control run 39258199619 passed 16 host checks and the tracked chat test
+(90.486 seconds including first-request compilation). Rendered prompt length
+was 80 tokens: 64 cached, 16 computed on repeats. The cold answer was a
+coherent 31-token explanation of compiler name lookup; the cached answer
+was a coherent 34-token explanation and matched three subsequent sampled
+repeats exactly. A 138-token growing conversation produced a sensible
+52-token example (`userAge`, integer type, local scope, memory address).
+The independent cold control matched the original cold answer. No unsafe
+allocation error occurred with tracking enabled and program-cache buffers
+included. Logs still show two captures per cached sampled request, so this
+does not close the recapture finding. Prior warning artifacts also had
+eager numerical diagnostics enabled, unlike this serving-lifetime check.
+
+Variant run 39258540816 passed all 17 host checks, then failed before model
+initialization on `qb2-120-p02t02`: physical chips 2–3 exposed one Ethernet
+channel while the existing fabric descriptor requires two (`server.log:83`,
+`:110`). This is an infrastructure failure, not a tracker or model result.
+No manual reset, topology reduction, or blind repeated retry was performed.
+The runner-admin startup hook had already run its standard reset.
+Source review found a separate diagnostic-only `table=None` issue from lazy
+upload; commit `400585ae5a90787e5135a9bb139e66cdca32dfc6` supplies the bound
+table and retires traces before eager numerical probes compile other paths.
+Production diagnostics remain disabled; the tracecheck suite is unaffected.
+
