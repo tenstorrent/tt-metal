@@ -20,8 +20,8 @@
 
 enum class ElementwiseOperation { ADD, SUBTRACT };
 
-template <uint32_t Mt, uint32_t Kt, uint32_t Nt>
-FORCE_INLINE void matrix_multiply(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& output) {
+template <uint32_t Mt, uint32_t Kt, uint32_t Nt, typename DFBA, typename DFBB, typename DFBOut>
+FORCE_INLINE void matrix_multiply(DFBA& a, DFBB& b, DFBOut& output) {
     constexpr uint32_t subblock_columns = kda::MatmulSubblock<Mt, Nt>::columns;
     constexpr uint32_t subblock_rows = kda::MatmulSubblock<Mt, Nt>::rows;
     const uint32_t a_id = a.get_id();
@@ -57,9 +57,17 @@ FORCE_INLINE void matrix_multiply(DataflowBuffer& a, DataflowBuffer& b, Dataflow
 // takes source A and the product source B, as in the two-operand op on a packed product. The carried state is
 // unchanged; the chunk output's last bits can differ.
 // The operand's tile for output tile t is t % OperandTiles (the summary's two paths share one value row).
-template <EltwiseBinaryType Op, uint32_t Mt, uint32_t Kt, uint32_t Nt, uint32_t OperandTiles>
-FORCE_INLINE void matrix_multiply_then(
-    DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& operand, DataflowBuffer& output) {
+template <
+    EltwiseBinaryType Op,
+    uint32_t Mt,
+    uint32_t Kt,
+    uint32_t Nt,
+    uint32_t OperandTiles,
+    typename DFBA,
+    typename DFBB,
+    typename DFBOperand,
+    typename DFBOut>
+FORCE_INLINE void matrix_multiply_then(DFBA& a, DFBB& b, DFBOperand& operand, DFBOut& output) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     static_assert(Nt <= dst_tiles, "one output row must fit in destination registers");
@@ -104,8 +112,14 @@ FORCE_INLINE void matrix_multiply_then(
 }
 
 // Inputs remain resident; PacketTiles specifies output publication granularity.
-template <ElementwiseOperation Operation, uint32_t Count, uint32_t PacketTiles>
-FORCE_INLINE void elementwise(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& output) {
+template <
+    ElementwiseOperation Operation,
+    uint32_t Count,
+    uint32_t PacketTiles,
+    typename DFBA,
+    typename DFBB,
+    typename DFBOut>
+FORCE_INLINE void elementwise(DFBA& a, DFBB& b, DFBOut& output) {
     static_assert(PacketTiles > 0 && Count % PacketTiles == 0);
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
@@ -140,8 +154,8 @@ FORCE_INLINE void elementwise(DataflowBuffer& a, DataflowBuffer& b, DataflowBuff
     }
 }
 
-template <uint32_t Count, uint32_t PacketTiles>
-FORCE_INLINE void copy(DataflowBuffer& input, DataflowBuffer& output) {
+template <uint32_t Count, uint32_t PacketTiles, typename DFBIn, typename DFBOut>
+FORCE_INLINE void copy(DFBIn& input, DFBOut& output) {
     static_assert(PacketTiles > 0 && Count % PacketTiles == 0);
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
@@ -170,8 +184,8 @@ FORCE_INLINE void copy(DataflowBuffer& input, DataflowBuffer& output) {
 
 // The summary carries the zero-seeded state B and the identity-seeded state A + B side by side: a [Kt, 2 * Vt]
 // state whose first Vt columns hold B. Publish (A + B) - B, or copy B, one tile row of Vt tiles per packet.
-template <bool Difference, uint32_t Kt, uint32_t Vt, uint32_t PacketRows>
-FORCE_INLINE void extract_paths(DataflowBuffer& pair, DataflowBuffer& output) {
+template <bool Difference, uint32_t Kt, uint32_t Vt, uint32_t PacketRows, typename DFBPair, typename DFBOut>
+FORCE_INLINE void extract_paths(DFBPair& pair, DFBOut& output) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     static_assert(Kt % PacketRows == 0 && PacketRows * Vt <= dst_tiles);
@@ -207,8 +221,9 @@ FORCE_INLINE void extract_paths(DataflowBuffer& pair, DataflowBuffer& output) {
     }
 }
 
+template <typename DFBState, typename DFBDecay, typename DFBOut>
 FORCE_INLINE void multiply_by_decay(
-    DataflowBuffer& state, DataflowBuffer& decay, DataflowBuffer& output, uint32_t key_tiles, uint32_t value_tiles) {
+    DFBState& state, DFBDecay& decay, DFBOut& output, uint32_t key_tiles, uint32_t value_tiles) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     const uint32_t count = key_tiles * value_tiles;
@@ -269,7 +284,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
 
     pack_reconfig_data_format(dfb::state_ring);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
-        DataflowBuffer& current = chunk == 0 ? state : state_ring;
+        auto& current = chunk == 0 ? state : state_ring;
         const bool last = chunk == num_chunks - 1;
 
         kd.wait_front(chunk_key_tiles);
@@ -354,7 +369,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         // the state, so no per-chunk term changes -- only where the carry comes
         // from. reset_chunk 0 means never, which is exact rather than a sentinel:
         // r == 0 means no group straddles, and chunk 0 always seeds from `state`.
-        DataflowBuffer& current_state = chunk == 0 ? state : state_ring;
+        auto& current_state = chunk == 0 ? state : state_ring;
         if (reset_chunk != 0 && chunk == reset_chunk) {
             state_ring.wait_front(key_value_tiles);
             tail_entry_states.wait_front(key_value_tiles);
@@ -362,7 +377,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
             state_ring.pop_front(key_value_tiles);
             tail_entry_states.pop_front(key_value_tiles);
         }
-        DataflowBuffer& destination = chunk == num_chunks - 1 ? final_state : state_ring;
+        auto& destination = chunk == num_chunks - 1 ? final_state : state_ring;
 
         // Each stage waits for the previous one's packed result. Every stage that reads only the incoming state
         // runs first, and each dependent stage is issued after independent work, so the math thread rarely waits on
