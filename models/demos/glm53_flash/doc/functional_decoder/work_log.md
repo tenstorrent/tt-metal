@@ -73,3 +73,5 @@ Stage: tt-model-bringup stage 1 (functional decoder, 1x1 mesh) = design Phase 1.
   update_padded_kv_cache only writes whole-chunk multiples (not usable as a row writer); int32->uint32 typecast
   preserves bits (-1 == sentinel). Layer 3 vs the T4097 dump: prefill PCC 0.99977 (rows >= 2048: 0.99990),
   sparse decode at 4097..4100: 0.99995 / 0.99996 / 0.99993 / 0.99991.
+- Pushed `origin/arg/glm-53-flash` @ bf8f2ab1d88 (squashed from the local dev branch `arg/glm53_flash`, docs
+  excluded: `models/demos/glm53_flash/doc/` stays local; pre-commit green on all 24 files).

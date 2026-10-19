@@ -1,0 +1,42 @@
+{
+  "model": "zai-org/GLM-5.3-Flash",
+  "checkpoint_sha": "46a050bec13002ad29ee795c16e61cf4fa3c4a9c",
+  "hf_advertised_context": 1048576,
+  "stage": "functional-decoder (single Blackhole chip, 1x1 mesh)",
+  "supported_context_single_chip": {
+    "value": 16384,
+    "basis": "Phase 1 of the design (models/demos/glm53_flash + ~/ashai/GLM_5.3_DESIGN.md): single-chip functional layers with the sparse DSA path validated at small scale (4K-16K); the advertised 1 048 576 positions are the Phase 2 multi-chip (8x4) contract with the user-partitioned paged latent cache.",
+    "hard_limit_note": "Not a hard physical limit of one chip for a single user: the 11 DSA latent caches at 1 M positions need ~11 GB bf16 plus the 32 B/token pooled-key index, which fits the 32 GB per-chip DRAM next to one layer's weights; the single-chip limit here is validation time (the v1 composite prefill runs ~3 k tok/s per layer), not capacity."
+  },
+  "largest_tested": {
+    "prefill_tokens": 4097,
+    "prefill_evidence": "tests/test_dsa_sparse.py: layer 3 (DSA+MoE) vs HF dump T4097, PCC 0.99977 (rows >= 2048: 0.99990); dense (<= 2048) path: layers 0/3/4 at 256 (PCC 0.99984 / 0.99992 / 0.99997), 1000 (DSA 0.99961, KDA 0.99995), 200 non-aligned (0.99980 / 0.99993)",
+    "decode_position": 4100,
+    "decode_evidence": "tests/test_dsa_sparse.py: sparse decode at 4097..4100, PCC 0.99995 / 0.99996 / 0.99993 / 0.99991; dense decode at 256..259 (layers 0/3/4), 1000..1002 (KDA, DSA), traced replay identical to eager"
+  },
+  "cache_and_position_semantics": {
+    "kda_state": "per user: recurrent [1,64,128,128] fp32 + conv history [1,3,24576] bf16, written by prefill into fixed user slots of a persistent [max_batch,...] state; decode updates all slots in place (trace-safe)",
+    "dsa_latent_cache": "paged [max_blocks,1,32,512] bf16 per layer, identity page table [max_batch, blocks_per_seq]; prefill fills a user's pages from position 0, decode appends at `positions[b]`",
+    "dsa_index_cache": "pooled keys [max_batch*pool_blocks,1,32,128] bf16 (one row per 4 tokens) + per-user 4-slot raw k/gate rings",
+    "positions": "int32 [B] device tensor = each user's current context length (position of the decode token); the sparse path additionally takes the same values as host ints",
+    "mode_switch": "DSA layers: dense exact attention while the query position < index_topk (2048), pooled-key indexer + top-2048 + tail selection beyond (matches HF: all visible tokens are selected below 2048)",
+    "batch": "fixed user slots: decode batch == max_batch; tested max_batch 1 and 2 (users with 100- and 37-token prompts)"
+  },
+  "layer_kinds": {
+    "kda_dense": "layers 0-2 (tested: 0)",
+    "dsa_moe": "layers 3+4k (tested: 3)",
+    "kda_moe": "all other layers (tested: 4)"
+  },
+  "capability_reductions": [
+    {
+      "item": "advertised 1 M context on one chip",
+      "status": "deferred to Phase 2 (8x4 mesh, user-partitioned cache)",
+      "risk": "topk_large_indices over 262 K pooled scores and the pooled-key cache append at 1 M are validated only up to 4 K pools here"
+    },
+    {
+      "item": "sparse DSA decode under trace",
+      "status": "not traced (chunk geometry comes from host positions; dense decode is traced)",
+      "risk": "serving at > 2048 context needs the metadata-tensor variants of indexer_score / topk (Phase 2)"
+    }
+  ]
+}
