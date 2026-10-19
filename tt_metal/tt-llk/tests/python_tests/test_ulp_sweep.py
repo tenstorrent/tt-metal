@@ -656,23 +656,15 @@ def test_the_golden_sees_the_zero_the_kernel_receives(fmt, dest_acc, keeps_sign)
     assert torch.equal(received[2:], src[2:])
 
 
-def test_the_unary_golden_still_rounds_a_float32_output_to_a_16bit_input():
-    """#58590, pinned until it lands. UnarySFPUGolden tilizes and untilizes its Dest
-    result in the *input* format, so a bfloat16 input's Float32 golden at a 32-bit Dest
-    is rounded to bfloat16 while the kernel keeps fp32: 1.0078125**2 reads 1.015625
-    against the exact 1.0156860. Every 16-bit/block input -> Float32, ``dest: "Yes"``
-    row of the table measures that rounding rather than the kernel (the YAML header
-    says so), and nothing else would tell them apart once the golden is fixed.
-
-    So when this fails, the golden has stopped rounding there: re-emit the whole table
-    (`--ulp-emit`) on the fix, which tightens those rows, drop the header paragraph, and
-    delete this test."""
+def test_the_unary_golden_keeps_a_float32_output_at_fp32_on_a_16bit_input():
+    """#58590: a bfloat16 input's Float32 golden at a 32-bit Dest was rounded to
+    bfloat16. 1/3 is inexact in both formats, so the golden must be fp32's 1/3 exactly,
+    not bf16's; x*x on a bf16 x is fp32-exact and could not tell them apart."""
     from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 
-    x = 1.0 + 2.0**-7  # bf16-exact; its square is not
-    src = torch.full((1024,), x, dtype=torch.bfloat16)
+    src = torch.full((1024,), 3.0, dtype=torch.bfloat16)
     golden = get_golden_generator(UnarySFPUGolden)(
-        MathOperation.Square,
+        MathOperation.Reciprocal,
         src,
         DataFormat.Float32,
         DestAccumulation.Yes,
@@ -680,8 +672,90 @@ def test_the_unary_golden_still_rounds_a_float32_output_to_a_16bit_input():
         [32, 32],
     )
     assert golden.dtype == torch.float32
-    rounded = float(torch.tensor(x * x, dtype=torch.bfloat16))
-    assert float(golden[0]) == rounded != x * x
+    fp32 = float(torch.tensor(1 / 3, dtype=torch.float32))
+    assert float(golden[0]) == fp32
+    assert fp32 != float(torch.tensor(1 / 3, dtype=torch.bfloat16))
+
+
+def test_the_unary_golden_does_not_overflow_a_float16_input_into_a_float32_output():
+    """cosh(-89.375) is 3.27e38: finite in fp32, past fp16. A tile held in the Float16
+    input format read inf against the kernel's finite answer."""
+    from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
+
+    src = torch.full((1024,), -89.375, dtype=torch.float16)
+    golden = get_golden_generator(UnarySFPUGolden)(
+        MathOperation.Cosh,
+        src,
+        DataFormat.Float32,
+        DestAccumulation.Yes,
+        DataFormat.Float16,
+        [32, 32],
+    )
+    assert golden.dtype == torch.float32
+    assert math.isclose(float(golden[0]), math.cosh(89.375), rel_tol=1e-6)
+
+
+def _binary_golden(a: float, b: float, output_format, dest_acc):
+    from helpers.golden_generators import BinarySFPUGolden, get_golden_generator
+
+    pair = torch.tensor([a] * 1024 + [b] * 1024, dtype=torch.bfloat16)
+    return get_golden_generator(BinarySFPUGolden)(
+        MathOperation.SfpuElwmul,
+        pair,
+        0,
+        1,
+        0,
+        32,
+        [64, 32],
+        DataFormat.Float16_b,
+        dest_acc=dest_acc,
+        output_format=output_format,
+    ).flatten()
+
+
+def test_the_binary_golden_keeps_a_float32_output_at_fp32_on_a_16bit_input():
+    """The bf16 x bf16 product is fp32-exact and not bf16-exact, so a tile held in the
+    operand format would round it."""
+    x = 1.0 + 2.0**-7
+    golden = _binary_golden(x, x, DataFormat.Float32, DestAccumulation.Yes)
+    assert golden.dtype == torch.float32
+    assert float(golden[0]) == x * x != float(torch.tensor(x * x).to(torch.bfloat16))
+
+
+def test_the_binary_golden_hands_a_16bit_output_back_in_the_operand_dtype():
+    """Bit-exact callers compare the golden to the packed result, dtype included."""
+    x = 1.0 + 2.0**-7
+    for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
+        golden = _binary_golden(x, x, DataFormat.Float16_b, dest_acc)
+        assert golden.dtype == torch.bfloat16
+        assert float(golden[0]) == float(torch.tensor(x * x).to(torch.bfloat16))
+
+
+def test_widening_an_fp16_nan_keeps_its_sign():
+    """torch's fp16 -> fp32 cast drops a NaN's sign; the goldens' permutations must not."""
+    import math
+
+    from helpers.golden_generators import widen_to_float32
+
+    half = torch.tensor([-math.nan, math.nan, -1.5], dtype=torch.float16)
+    wide = widen_to_float32(half)
+    assert torch.isnan(wide[:2]).all() and float(wide[2]) == -1.5
+    assert torch.signbit(wide).tolist() == [True, False, True]
+
+
+def test_an_fp16_dest_saturates_an_infinity_of_either_sign():
+    """An fp16 Dest has no infinity; both overflows pack out as its top magnitude."""
+    import math
+
+    from helpers.golden_generators import convert_inf_to_value
+
+    values = torch.tensor([-math.inf, math.inf, -2.0])
+    assert convert_inf_to_value(values, 130560.0).tolist() == [
+        -130560.0,
+        130560.0,
+        -2.0,
+    ]
+    assert convert_inf_to_value([-math.inf, 1.0], 130560.0) == [-130560.0, 1.0]
 
 
 def test_a_block_float_lane_is_judged_where_the_quantizer_puts_it():
