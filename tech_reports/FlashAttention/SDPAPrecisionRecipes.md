@@ -19,11 +19,11 @@ PV and row sums are added. The recipes differ in the arithmetic of each step.
 
 | | Legacy (no `precision`) | STANDARD | BALANCED | ACCURATE | FAST |
 |---|---|---|---|---|---|
-| QK matmul | HiFi2 | HiFi2 | HiFi4 | HiFi4 | LoFi |
+| QK matmul | HiFi2 | HiFi2 | HiFi3 | HiFi4 | LoFi |
 | Scores S, P | BF16 | BF16 | FP32 | FP32 | BF16 |
 | Row max m | BF16 | BF16 | FP32 | FP32 | BF16 |
 | S − m | FPU, BF16 | FPU, BF16 | FPU, TF32 operands, FP32 dest | packer FP32 L1 add | FPU, BF16 |
-| exp(P) | approximate exp | approximate exp | bit-trick exp + cubic | bit-trick exp + cubic (tighter fit) | approximate exp |
+| exp(P) | approximate exp | approximate exp | bit-trick exp + quadratic | bit-trick exp + cubic | approximate exp |
 | Correction c | approximate exp | approximate exp | accurate FP32 exp | accurate FP32 exp | approximate exp |
 | PV matmul | HiFi2 | HiFi2 | HiFi2 | HiFi4 | LoFi |
 | Row sum l | BF16 | BF16 per chunk, FP32 L1 add | P·1 matmul, LoFi | P·1 matmul, HiFi2 | BF16 per chunk, FP32 L1 add |
@@ -42,8 +42,9 @@ PV and row sums are added. The recipes differ in the arithmetic of each step.
   `streaming/recipe_streaming.hpp`, and [Fused K chunks](#fused-k-chunks-standard-fast) for how K chunks
   after the first skip the row maximum.
 - **BALANCED / ACCURATE** hold scores and state in FP32. The score exp is Schraudolph's bit trick on a 2⁻¹⁰
-  grid in log2, refined by a cubic, and carries a constant factor of about 0.970 that cancels in O / l.
-  Across the mantissa, the refined exp ripples ±0.24% (BALANCED) or ±0.10% (ACCURATE). See
+  grid in log2, refined by a quadratic (BALANCED) or a cubic (ACCURATE), and carries a constant factor of about
+  0.970 that cancels in O / l. Across the mantissa, the refined exp ripples ±0.35% (BALANCED) or ±0.10% (ACCURATE).
+  BALANCED runs QK at HiFi3, which measures the same error as HiFi4 on BF16 inputs. See
   `streaming/recipe_sfpu.hpp`. The row maxima are FP32 tiles. The max reduce reads S through srcA (19 bits), so
   m is exact on that grid and S − m and the corrections take it without rounding. A BF16 m would sit up to
   2⁻⁹·|scale·m| from the scores, beyond the grid's range once |scale·m| exceeds about 1.1·10⁴, and zero a whole
@@ -87,13 +88,13 @@ Throughput is TFLOP/s per Tensix core. It was measured on one Blackhole core wit
 traffic), D128 and a K sequence of 8192. The legacy kernel is 1.99 TFLOP/s at Q256/K512. "vs legacy" is the
 geometric mean ratio over Q chunks 128–320 and K chunks 128–512. STANDARD is at or above the legacy kernel at every
 chunk pair (lowest 1.01, at Q128/K384) and FAST at least 1.21× (Q128/K128); BALANCED and ACCURATE are furthest behind at
-K512 (0.61 and 0.45).
+K512 (0.65 and 0.45).
 
 | Recipe | K 4096 | K 32768 | K 262144 | K 262144 outliers | TFLOP/s/core (Q256/K512) | vs legacy |
 |---|---:|---:|---:|---:|---:|---:|
 | Legacy (no `precision`) | 2.54 | 2.75 | 18.2 | 5.27 | 1.99 | 1.00 |
 | STANDARD | 2.37 | 2.42 | 3.04 | 4.39 | 2.09 | 1.07 |
-| BALANCED | 0.39 | 0.39 | 0.38 | 0.59 | 1.21 | 0.64 |
+| BALANCED | 0.43 | 0.44 | 0.42 | 0.57 | 1.30 | 0.69 |
 | ACCURATE | 0.18 | 0.18 | 0.18 | 0.41 | 0.88 | 0.47 |
 | FAST, BF16 K/V | 2.92 | 2.94 | 3.44 | 13.5 | 2.86 | 1.37 |
 | FAST, BFP8 K/V | 3.00 | 3.00 | 3.51 | 13.4 | 2.86 | 1.37 |
@@ -175,7 +176,7 @@ Compile-time defines set by the host:
 | Define | Set for | Meaning |
 |---|---|---|
 | `SDPA_RECIPE_FP32` | BALANCED, ACCURATE | FP32 scores and state (DEST in FP32) |
-| `SDPA_RECIPE_ACCURATE` | ACCURATE | HiFi4 PV and the tighter exp fit |
+| `SDPA_RECIPE_ACCURATE` | ACCURATE | HiFi4 QK and PV, the cubic exp fit |
 | `SDPA_RECIPE_LOFI` | FAST | LoFi matmuls (prepared inputs) |
 | `SDPA_RECIPE_FUSED` | STANDARD, FAST with QK width ≥ 2 | fused K chunks (inactive with `SDPA_RECIPE_MASK`) |
 | `SDPA_RECIPE_MASK` | an attn_mask | additive mask on the reduce path |
