@@ -204,8 +204,7 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul(
         B_tile.get_width());
     if (attributes.output_tile.has_value()) {
         TT_FATAL(
-            attributes.output_tile->get_tile_shape()[0] == TILE_HEIGHT &&
-                attributes.output_tile->get_tile_shape()[1] == TILE_WIDTH,
+            attributes.output_tile->get_height() == TILE_HEIGHT && attributes.output_tile->get_width() == TILE_WIDTH,
             "MatmulUnifiedProgramConfig supports a 32x32 output tile only");
     }
 
@@ -505,19 +504,27 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul(
     const std::optional<tt::tt_metal::ShardSpec>& C_shard =
         output.has_value() ? output->memory_config().shard_spec() : attributes.output_mem_config.shard_spec();
     const bool C_slice_from_shard = C_shard.has_value() && (config.C_slice_M_tiles == 0 || config.C_slice_N_tiles == 0);
+    uint32_t C_shard_M_tiles = 0;
+    uint32_t C_shard_N_tiles = 0;
     if (C_slice_from_shard) {
+        const uint32_t C_shard_height = C_shard->shape[0];
+        const uint32_t C_shard_width = C_shard->shape[1];
         TT_FATAL(
-            C_shard->shape[0] % TILE_HEIGHT == 0 && C_shard->shape[1] % TILE_WIDTH == 0,
+            C_shard_height % TILE_HEIGHT == 0 && C_shard_width % TILE_WIDTH == 0,
             "A sharded C needs a tile-multiple shard shape to derive the C slice from, got {}x{}",
-            C_shard->shape[0],
-            C_shard->shape[1]);
+            C_shard_height,
+            C_shard_width);
+        C_shard_M_tiles = C_shard_height / TILE_HEIGHT;
+        C_shard_N_tiles = C_shard_width / TILE_WIDTH;
     }
+    const uint32_t core_rows = bounding_box.grid_size().y;
+    const uint32_t core_columns = bounding_box.grid_size().x;
     const uint32_t share_M_tiles = config.C_slice_M_tiles != 0 ? config.C_slice_M_tiles
-                                   : C_slice_from_shard        ? C_shard->shape[0] / TILE_HEIGHT
-                                                               : tt::div_up(base.M_tiles, bounding_box.grid_size().y);
+                                   : C_slice_from_shard        ? C_shard_M_tiles
+                                                               : tt::div_up(base.M_tiles, core_rows);
     const uint32_t share_N_tiles = config.C_slice_N_tiles != 0 ? config.C_slice_N_tiles
-                                   : C_slice_from_shard        ? C_shard->shape[1] / TILE_WIDTH
-                                                               : tt::div_up(base.N_tiles, bounding_box.grid_size().x);
+                                   : C_slice_from_shard        ? C_shard_N_tiles
+                                                               : tt::div_up(base.N_tiles, core_columns);
     const bool M_fixed = config.C_slice_M_tiles != 0 || C_slice_from_shard;
     const bool N_fixed = config.C_slice_N_tiles != 0 || C_slice_from_shard;
 
@@ -783,23 +790,6 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             });
         }
     }
-    // FUSE_BIAS / the activation defines, as in the other matmul kernels: the bias DFB and tensor exist only
-    // when there is a bias.
-    std::map<std::string, std::string> reader_defines_map;
-    std::map<std::string, std::string> compute_defines_map;  // also throttle / stagger
-    if (plan.has_bias) {
-        reader_defines_map["FUSE_BIAS"] = "1";
-        compute_defines_map["FUSE_BIAS"] = "1";
-    }
-    if (config.fused_activation.has_value()) {
-        compute_defines_map.merge(ttnn::operations::unary::utils::get_defines(
-            config.fused_activation->op_type,
-            config.fused_activation->params,
-            "ACTIVATION",
-            "i",
-            operation_attributes.output_dtype.value()));
-    }
-
     // ---- Reader ----
     std::vector<std::string> mcast_semaphores;
     for (uint32_t thread = 0; thread < QUASAR_NUM_READER_THREADS; ++thread) {
@@ -815,7 +805,6 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .unique_id = READER_KERNEL,
         .source = std::filesystem::path(std::string(KERNEL_DIR) + "dataflow/unified_matmul_reader.cpp"),
         .num_threads = plan.num_reader_threads,
-        .compiler_options = {.defines = KernelSpec::CompilerOptions::Defines(reader_defines_map)},
         .dfb_bindings = {ProducerOf(A_SLICE_DFB, "A_slice"), ProducerOf(B_SLICE_DFB, "B_slice")},
         .semaphore_bindings = std::move(reader_semaphore_bindings),
         .tensor_bindings =
@@ -889,12 +878,26 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
+    // FUSE_BIAS is a define, as in the other matmul kernels: the bias DFB and tensor exist only with a bias.
     if (plan.has_bias) {
+        reader.compiler_options.defines["FUSE_BIAS"] = "1";
         reader.dfb_bindings.push_back(ProducerOf(BIAS_DFB, "bias"));
         reader.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = BIAS_TENSOR, .accessor_name = "bias"});
     }
 
     // ---- Compute ----
+    std::map<std::string, std::string> compute_defines_map;  // also throttle / stagger
+    if (plan.has_bias) {
+        compute_defines_map["FUSE_BIAS"] = "1";
+    }
+    if (config.fused_activation.has_value()) {
+        compute_defines_map.merge(ttnn::operations::unary::utils::get_defines(
+            config.fused_activation->op_type,
+            config.fused_activation->params,
+            "ACTIVATION",
+            "i",
+            operation_attributes.output_dtype.value()));
+    }
     const ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
