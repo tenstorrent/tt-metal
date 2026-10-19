@@ -15,8 +15,16 @@ from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 
 # Kimi K2.7 chunked prefill: 50k cache + one 5k chunk. The 50k prefix is preloaded before the
 # MLA_START signpost, so only the single forward is timed.
+#
+# Every axis must be pinned: run_device_perf profiles the whole -k selection into one CSV, and the
+# merge fails unless that CSV holds exactly one MLA_START/MLA_END region.
+# sp_only isolates the SDPA from the TP latent gather; the default tp_sharded layout is gated in traced replays by
+# test_mla.py::test_mla_chunked_tp_sharded_traced_perf (overhead vs sp_only) and end to end by the Blaze prefill legs.
 _CHUNKED_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill"
-_CMD_CHUNKED_8X4 = f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and k2_7 and func and torus-xy-8x4 and sp_only'"
+_CMD_CHUNKED_8X4 = (
+    f"pytest {_CHUNKED_TEST_PATH} "
+    "-k 'deep-50k+5k and k2_7 and func and torus-xy-8x4 and scalar and no_determinism and sp_only'"
+)
 
 
 _IGNORE_POWER = os.environ.get("DS_PERF_IGNORE_POWER") == "1"
@@ -32,34 +40,22 @@ def _require_certified_torus_xy():
         pytest.fail("TorusXY perf requires a certified Galaxy and explicit mesh graph descriptor")
 
 
-# Kimi K3 (NoPE + output gate, 96 heads): same scenario/mesh as the K2.7 command above. 'k3' not
-# 'k2_7' in the -k -- the ids are disjoint so the two selectors cannot cross-match.
-#
-# 'scalar' is load-bearing, not cosmetic: run_device_perf profiles the whole -k selection into one
-# CSV and the signpost filter keeps every MLA_START/MLA_END region, so a selector matching both the
-# scalar and metadata cases sums TWO forwards. Measured 2026-08-04: K2.6 reads 13_947_233 unpinned
-# vs 6_984_119 pinned, ratio 1.997. K3 skips metadata anyway (no runtime), so this is one forward.
-#
-# Pre-existing, not from the K3 work: test_kimi_mla_chunked_perf_galaxy above is FAILING for exactly
-# this reason (13_947_233 vs a 7_118_649 baseline that matches one forward within 2%). The metadata
-# axis came in with 3d3c65f985b (#51624), predating both K3 commits. Fix is to pin 'and scalar'
-# there too and keep 7_118_649; left alone here so this change doesn't touch another CI baseline.
+# Kimi K3 (NoPE + output gate, 96 heads): same scenario/mesh as the K2.7 command above, pinned the same way. 'k3'
+# not 'k2_7' in the -k -- the ids are disjoint so the two selectors cannot cross-match.
 _CMD_K3_CHUNKED_8X4 = (
-    f"pytest {_CHUNKED_TEST_PATH} " "-k 'deep-50k+5k and k3 and func and torus-xy-8x4 and scalar and sp_only'"
+    f"pytest {_CHUNKED_TEST_PATH} "
+    "-k 'deep-50k+5k and k3 and func and torus-xy-8x4 and scalar and no_determinism and sp_only'"
 )
 
 # Same 50k+5k scenario and mesh as the two Kimi rows, so the three are comparable per forward.
 # RingJointSDPA is the only op in a Mistral4 layer that grows with KV depth, so it is the lever for
 # long context.
-#
-# Every axis must be pinned: run_device_perf profiles the whole -k selection into one CSV and the
-# signpost filter keeps every MLA_START/MLA_END region, so an unpinned axis multiplies the total.
 _CMD_MISTRAL4_CHUNKED_8X4 = (
     f"pytest {_CHUNKED_TEST_PATH} "
     "-k 'deep-50k+5k and mistral4 and func and torus-xy-8x4 and scalar and no_determinism and sp_only'"
 )
-# Record-only: one local run on DDR 14000 where the other baselines here are cut at 16000, so the
-# margin admits any measurement. Replace both with the first certified TorusXY CI result.
+# Record-only: one local run on DDR 14000, so the margin admits any measurement. Replace both with the first certified
+# TorusXY CI result.
 _MISTRAL4_MLA_CHUNKED_NS_UNCALIBRATED = 3_301_775
 
 # Measures the actual SP8/TP1 shape; approximate_mla_galaxy_perf pins TP=4 and cannot express it.
@@ -111,8 +107,8 @@ def test_kimi_mla_chunked_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_CHUNKED_8X4,
-        # Historical baseline: measured with unwrapped FABRIC_2D, not TorusXY.
-        expected_device_perf_ns_per_iteration=7_118_649,
+        # One forward, TorusXY Galaxy (DDR 14000), median of 3 runs.
+        expected_device_perf_ns_per_iteration=4_088_524,
         subdir="deepseek_v3_mla",
         model_name="kimi_mla_chunked_glx_8x4",
         num_iterations=1,
@@ -129,14 +125,7 @@ def test_kimi_mla_chunked_perf_galaxy():
 @pytest.mark.timeout(0)
 def test_kimi_k3_mla_chunked_perf_galaxy():
     """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k chunk
-    (640 tokens/chip, H_loc=24). Same scenario/mesh as test_kimi_mla_chunked_perf_galaxy, but the two
-    BASELINES are not comparable -- that one sums two forwards, this is one (see _CMD_K3_CHUNKED_8X4).
-
-    Per forward, 2026-08-04: K3 11_562_468 vs K2.6 6_984_119 (+65.5%). That delta is NOT mostly the
-    gate: RingJointSDPA accounts for +4_044_046 of the +4_576_289, with g_proj and its TP all-gather
-    only ~10%. SDPA is 86% of the forward, and its utilisation drops 67.1% -> 59.6% going H_loc
-    16 -> 24 (ideal work scales exactly 1.5x, measured 1.689x) -- 12.6% efficiency lost at identical
-    shapes/grid/fidelity. Worth a targeted look before treating this baseline as the floor.
+    (640 tokens/chip, H_loc=24). Same scenario/mesh as test_kimi_mla_chunked_perf_galaxy; both time one forward.
 
     This stays a ground-truth 8x4 measurement; a local 2x4 extrapolation would ignore g_proj and its
     all-gather and read optimistic.
@@ -149,9 +138,8 @@ def test_kimi_k3_mla_chunked_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_K3_CHUNKED_8X4,
-        # Migration starting threshold: measured 2026-08-04 on bh-glx-b06u08 with unwrapped FABRIC_2D.
-        # The first certified TorusXY result must be used to recalibrate it.
-        expected_device_perf_ns_per_iteration=11_562_468,
+        # One forward, TorusXY Galaxy (DDR 14000), median of 3 runs.
+        expected_device_perf_ns_per_iteration=5_882_912,
         subdir="kimi_k3_mla",
         model_name="kimi_k3_mla_chunked_glx_8x4",
         num_iterations=1,
