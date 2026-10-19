@@ -67,6 +67,7 @@ def test_gather_general(input_shape, index_shape, dim, device):
         ([64, 128, 256], [64, 128, 128], -1),
         ([1, 2048, 1, 64], [1, 2048, 1, 32], -1),
         ([1, 1, 1, 1], [1, 1, 1, 1], -1),
+        ([64], [32], 0),
     ],
 )
 def test_gather_preallocated_output(input_shape, index_shape, dim, device):
@@ -115,6 +116,17 @@ def test_gather_rank1(input_shape, index_shape, dim, device):
 
     assert ttnn_gather.shape == index.shape
     assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
+
+
+def test_gather_rank_mismatch_raises(device):
+    input = torch.randn([64, 4], dtype=torch.bfloat16)
+    index = torch.randint(0, 64, [32], dtype=torch.int64)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    with pytest.raises(RuntimeError, match="same number of dimensions"):
+        ttnn.gather(ttnn_input, 0, index=ttnn_index)
 
 
 @pytest.mark.parametrize(

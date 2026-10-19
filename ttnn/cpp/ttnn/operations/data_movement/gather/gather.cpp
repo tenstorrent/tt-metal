@@ -138,6 +138,7 @@ Tensor pre_gather_transform_tensor(
  *
  * @note This function modifies the output_tensor parameter in-place during transformations
  * @note The function ensures the final tensor shape matches original_lshape through assertion checking
+ * @note Rank-1 results are reshaped straight to the logical shape; squeeze_from_4D cannot drop a tile-padded height.
  */
 Tensor post_gather_transform_tensor(
     const Tensor& index_tensor,
@@ -150,7 +151,8 @@ Tensor post_gather_transform_tensor(
 
     if (orig_rank == 1) {
         // A rank-1 tensor in tile layout is padded to (1, 1, 32, W), and squeeze_from_4D cannot drop the padded
-        // height, so reshape straight to the logical shape (as sort, topk and scatter do). dim is always the last one.
+        // height, so reshape straight to the logical shape (as sort, topk and scatter do). A rank-1 tensor's only
+        // dim is its last, so no transpose back is needed.
         output_tensor = ttnn::reshape(output_tensor, input_shape);
     } else if (orig_rank <= 4) {
         // For tensors of rank 4 and below: first transform back to original representation,
@@ -252,6 +254,13 @@ Tensor gather_dispatch(
     // Index tensor
     const auto& original_index_tensor_lshape = input_index_tensor.logical_shape();
     const auto index_tensor_rank = input_index_tensor.logical_shape().rank();
+
+    // Checked before the early exits and transforms: the device op only ever sees 4D operands.
+    TT_FATAL(
+        input_tensor_rank == index_tensor_rank,
+        "Input and index tensor must have the same number of dimensions. Got input dim: {} and index dim: {}",
+        input_tensor_rank,
+        index_tensor_rank);
 
     // Check for early exit for empty tensors tensors
     if (original_input_tensor_lshape == ttnn::Shape{}) {
