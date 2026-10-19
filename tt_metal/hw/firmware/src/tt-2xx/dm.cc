@@ -171,24 +171,6 @@ inline __attribute__((always_inline)) void signal_subordinate_completion() {
     *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
 }
 
-// Kernels that use DFB implicit sync tag their NOC traffic with a DFB transaction id, and the id stays in this core's
-// command buffers after the kernel returns. Reset it so the next kernel's untagged traffic is not counted against a
-// DFB trid whose interrupt state is still armed from an earlier program (tt-metal#59923).
-inline void reset_cmd_buf_trids() {
-    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
-    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_WR_SENT_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
-    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
-    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
-    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_WR_SENT_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
-    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
-}
-
 inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
     DPRINT("DM-FW: waiting for TRISCs to complete\n");
@@ -533,9 +515,11 @@ extern "C" uint32_t _start1() {
 #endif
         {
             // Profiler FW zone for subordinate DMs (DM1-DM7).
+            // Worker DM0 never runs a kernel (it only services the DFB implicit-sync ISR), so the subordinate DMs are
+            // the only place a worker kernel can leave a DFB trid behind.
             DeviceZoneScopedMainN("DM-FW");
-            auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
             reset_cmd_buf_trids();
+            auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
 
             record_stack_usage(stack_free);
         }
