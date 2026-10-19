@@ -948,12 +948,12 @@
     # the drafter is not in the shared HF cache (read-only, offline here): download it into a job-local cache
     DFLASH_DRAFT_PATH=$(HF_HUB_OFFLINE=0 HF_HUB_CACHE=/tmp/dflash_hf python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download('z-lab/gpt-oss-20b-DFlash'))")
     export DFLASH_DRAFT_PATH
-    pytest models/demos/gpt_oss/tests/test_dflash.py -k isl_1k --timeout 1800
+    pytest models/demos/gpt_oss/tests/test_dflash.py -k isl_1k
   model: gpt-oss-20b
   model_family: GPT-OSS
   skus:
     bh_quietbox_2:
-      timeout: 30
+      timeout: 11 # measured 9.0 min (run 39215557907: drafter download, model load with in-memory stream caches, test)
       tier: 2
       release_ready: false
   owner_id: U08TJ70UFRT # Harry Andrews
