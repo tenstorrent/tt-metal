@@ -887,10 +887,14 @@ bool Cluster::supports_dma_reads(ChipId chip_id, uint32_t sz_in_bytes) const {
     return this->arch_ == tt::ARCH::WORMHOLE_B0 && this->dma_operations_allowed(chip_id, sz_in_bytes);
 }
 
-bool Cluster::supports_dma_writes(ChipId chip_id, uint32_t sz_in_bytes) const {
-    // Host-to-device DMA works on both WH and BH. UMD implements h2d_transfer for each.
-    return (this->arch_ == tt::ARCH::WORMHOLE_B0 || this->arch_ == tt::ARCH::BLACKHOLE) &&
-           this->dma_operations_allowed(chip_id, sz_in_bytes);
+bool Cluster::supports_dma_writes(ChipId chip_id, uint32_t sz_in_bytes, tt::umd::IoOrdering ordering) const {
+    if (this->arch_ == tt::ARCH::BLACKHOLE) {
+        // A BH DMA write has a fixed cost of several us, so it only beats MMIO above a size set by how fast
+        // the MMIO fallback is. Strict MMIO is much slower than Relaxed, so DMA pays off sooner.
+        const uint32_t min_dma_write_bytes = ordering == tt::umd::IoOrdering::Strict ? 4 * 1024 : 64 * 1024;
+        return sz_in_bytes >= min_dma_write_bytes && this->dma_operations_allowed(chip_id, sz_in_bytes);
+    }
+    return this->arch_ == tt::ARCH::WORMHOLE_B0 && this->dma_operations_allowed(chip_id, sz_in_bytes);
 }
 
 void Cluster::write_core(
@@ -921,11 +925,11 @@ void Cluster::write_core(
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    if (this->supports_dma_writes(chip_id, sz_in_bytes)) {
+    const tt::umd::IoOrdering resolved_ordering = ordering.value_or(
+        core_coord.core_type == CoreType::DRAM ? tt::umd::IoOrdering::Relaxed : tt::umd::IoOrdering::Strict);
+    if (this->supports_dma_writes(chip_id, sz_in_bytes, resolved_ordering)) {
         this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     } else {
-        const tt::umd::IoOrdering resolved_ordering = ordering.value_or(
-            core_coord.core_type == CoreType::DRAM ? tt::umd::IoOrdering::Relaxed : tt::umd::IoOrdering::Strict);
         this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, resolved_ordering);
     }
 
@@ -1652,9 +1656,9 @@ bool Cluster::is_external_cable(ChipId physical_chip_id, tt::tt_metal::CoreCoord
 }
 
 uint32_t Cluster::get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const {
-    // Keyed off the more permissive gate: a DMA transfer must be aligned or UMD throws,
-    // while over-aligning one that ends up on the MMIO path only costs a few padding bytes.
-    if (this->supports_dma_writes(chip_id, size_in_bytes)) {
+    // Keyed off the most permissive gate (writes with Strict, the lowest minimum): a DMA transfer must be
+    // aligned or UMD throws, while over-aligning one that ends up on the MMIO path only costs a few padding bytes.
+    if (this->supports_dma_writes(chip_id, size_in_bytes, tt::umd::IoOrdering::Strict)) {
         return this->hal_->get_dma_alignment();
     }
     return 1;

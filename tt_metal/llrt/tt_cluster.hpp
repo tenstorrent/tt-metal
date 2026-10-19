@@ -437,7 +437,8 @@ private:
     // DMA reads are only implemented for Wormhole; DMA writes
     // also work on Blackhole.
     bool supports_dma_reads(ChipId chip_id, uint32_t sz_in_bytes) const;
-    bool supports_dma_writes(ChipId chip_id, uint32_t sz_in_bytes) const;
+    // ordering is what the MMIO fallback would use, since it sets the size where DMA starts paying off.
+    bool supports_dma_writes(ChipId chip_id, uint32_t sz_in_bytes, tt::umd::IoOrdering ordering) const;
     // Shared preconditions for both directions: DMA enabled, chip reachable over PCIe,
     // and the transfer large enough to be worth (and safe for) the DMA path.
     bool dma_operations_allowed(ChipId chip_id, uint32_t sz_in_bytes) const;
