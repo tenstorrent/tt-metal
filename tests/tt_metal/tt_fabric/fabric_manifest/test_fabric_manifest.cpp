@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Checks the fabric manifest written during fabric init against the live fabric. Each check covers one part of the
-// manifest and runs under 1D and 2D.
+// manifest and runs under 1D, 2D and, for express chords, 2D torus.
 
 #include <gtest/gtest.h>
 #include <enchantum/enchantum.hpp>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <hostdevcommon/fabric_common.h>
 #include <tt_stl/overloaded.hpp>
@@ -170,6 +171,7 @@ protected:
 
 using Fabric1DManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_1D>;
 using Fabric2DManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_2D>;
+using FabricExpressManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_2D_TORUS_XY>;
 
 // ============ Checks ============
 
@@ -223,7 +225,7 @@ void check_top_level(
         << git_sha;
     EXPECT_TRUE(run.at("git_dirty").is_boolean());
 
-    const bool is_2d = fabric_config == FabricConfig::FABRIC_2D;
+    const bool is_2d = is_2d_fabric_config(fabric_config);
     const auto& block = manifest.at("fabric_context");
     EXPECT_EQ(
         keys_of(block),
@@ -1729,57 +1731,77 @@ TEST(RoutingEncodings, Values) {
 
 TEST_F(Fabric1DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); }
 TEST_F(Fabric2DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); }
+TEST_F(FabricExpressManifestFixture, TopLevel) {
+    check_top_level(manifest_, manifest_path_, fabric_config, suite_start_);
+}
 
 TEST_F(Fabric1DManifestFixture, Meshes) { check_meshes(manifest_); }
 TEST_F(Fabric2DManifestFixture, Meshes) { check_meshes(manifest_); }
+TEST_F(FabricExpressManifestFixture, Meshes) { check_meshes(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, Chips) { check_chips(manifest_); }
 TEST_F(Fabric2DManifestFixture, Chips) { check_chips(manifest_); }
+TEST_F(FabricExpressManifestFixture, Chips) { check_chips(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, RoutersMatchActiveChannels) { check_routers_match_active_channels(manifest_); }
 TEST_F(Fabric2DManifestFixture, RoutersMatchActiveChannels) { check_routers_match_active_channels(manifest_); }
+TEST_F(FabricExpressManifestFixture, RoutersMatchActiveChannels) { check_routers_match_active_channels(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, RouterBlocks) { check_router_blocks(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterBlocks) { check_router_blocks(routers_); }
+TEST_F(FabricExpressManifestFixture, RouterBlocks) { check_router_blocks(routers_); }
 
 TEST_F(Fabric1DManifestFixture, RouterIdentity) { check_router_identity(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterIdentity) { check_router_identity(routers_); }
+TEST_F(FabricExpressManifestFixture, RouterIdentity) { check_router_identity(routers_); }
 
 TEST_F(Fabric1DManifestFixture, RouterLink) { check_router_link(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, RouterLink) { check_router_link(manifest_, routers_); }
+TEST_F(FabricExpressManifestFixture, RouterLink) { check_router_link(manifest_, routers_); }
 
 TEST_F(Fabric1DManifestFixture, PeersAreSymmetric) { check_peers_are_symmetric(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, PeersAreSymmetric) { check_peers_are_symmetric(manifest_, routers_); }
+TEST_F(FabricExpressManifestFixture, PeersAreSymmetric) { check_peers_are_symmetric(manifest_, routers_); }
 
 TEST_F(Fabric1DManifestFixture, RouterShape) { check_router_shape(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterShape) { check_router_shape(routers_); }
+TEST_F(FabricExpressManifestFixture, RouterShape) { check_router_shape(routers_); }
 
 TEST_F(Fabric1DManifestFixture, CreditTransport) { check_credit_transport(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, CreditTransport) { check_credit_transport(manifest_, routers_); }
+TEST_F(FabricExpressManifestFixture, CreditTransport) { check_credit_transport(manifest_, routers_); }
 
 TEST_F(Fabric1DManifestFixture, RouterCreditCounters) { check_router_credit_counters(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterCreditCounters) { check_router_credit_counters(routers_); }
+TEST_F(FabricExpressManifestFixture, RouterCreditCounters) { check_router_credit_counters(routers_); }
 
 TEST_F(Fabric1DManifestFixture, RouterSenders) { check_router_senders(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, RouterSenders) { check_router_senders(manifest_, routers_); }
+TEST_F(FabricExpressManifestFixture, RouterSenders) { check_router_senders(manifest_, routers_); }
 
 TEST_F(Fabric1DManifestFixture, RouterReceivers) { check_router_receivers(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, RouterReceivers) { check_router_receivers(manifest_, routers_); }
+TEST_F(FabricExpressManifestFixture, RouterReceivers) { check_router_receivers(manifest_, routers_); }
 
 TEST_F(Fabric1DManifestFixture, RouterDownstreamEdges) { check_router_edges(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, RouterDownstreamEdges) { check_router_edges(manifest_, routers_); }
+TEST_F(FabricExpressManifestFixture, RouterDownstreamEdges) { check_router_edges(manifest_, routers_); }
 
 TEST_F(Fabric1DManifestFixture, RouterFields) { check_router_fields(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, RouterFields) { check_router_fields(manifest_, routers_); }
+TEST_F(FabricExpressManifestFixture, RouterFields) { check_router_fields(manifest_, routers_); }
 
 TEST_F(Fabric1DManifestFixture, LocalSync) { check_local_sync(manifest_); }
 TEST_F(Fabric2DManifestFixture, LocalSync) { check_local_sync(manifest_); }
+TEST_F(FabricExpressManifestFixture, LocalSync) { check_local_sync(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(manifest_, routers_); }
+TEST_F(FabricExpressManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(manifest_, routers_); }
 
 TEST_F(Fabric1DManifestFixture, Archs) { check_archs(manifest_); }
 TEST_F(Fabric2DManifestFixture, Archs) { check_archs(manifest_); }
+TEST_F(FabricExpressManifestFixture, Archs) { check_archs(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, ArchStreamRegisters) { check_arch_stream_registers(manifest_); }
 TEST_F(Fabric2DManifestFixture, ArchStreamRegisters) { check_arch_stream_registers(manifest_); }
@@ -1789,14 +1811,18 @@ TEST_F(Fabric2DManifestFixture, ArchCoreRegisters) { check_arch_core_registers(m
 
 TEST_F(Fabric1DManifestFixture, Enums) { check_enums(manifest_); }
 TEST_F(Fabric2DManifestFixture, Enums) { check_enums(manifest_); }
+TEST_F(FabricExpressManifestFixture, Enums) { check_enums(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }
+TEST_F(FabricExpressManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }
 
 TEST_F(Fabric1DManifestFixture, RouterHostCleared) { check_router_host_cleared(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterHostCleared) { check_router_host_cleared(routers_); }
+TEST_F(FabricExpressManifestFixture, RouterHostCleared) { check_router_host_cleared(routers_); }
 
 TEST_F(Fabric1DManifestFixture, RouterLeftoverL1) { check_router_leftover_l1(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterLeftoverL1) { check_router_leftover_l1(routers_); }
+TEST_F(FabricExpressManifestFixture, RouterLeftoverL1) { check_router_leftover_l1(routers_); }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
