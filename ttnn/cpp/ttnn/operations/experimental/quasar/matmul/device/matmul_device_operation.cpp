@@ -1872,7 +1872,8 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         : 0,
                     program_config,
                     attributes,
-                    optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
+                    optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0),
+                    /*must_fit=*/true);
             } else {
                 TT_FATAL(
                     input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -2215,13 +2216,15 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                     // core writes its own shard.
                     // Reached only when no output tensor was supplied, so C is allocated from this plan.
                     const UnifiedMatmulPlan plan = plan_unified_matmul(
-                        *input_tensor_a.device(),
-                        input_tensor_a,
-                        input_tensor_b,
-                        bias_single_tile_size,
-                        program_config,
-                        attributes,
-                        std::nullopt);
+                                                       *input_tensor_a.device(),
+                                                       input_tensor_a,
+                                                       input_tensor_b,
+                                                       bias_single_tile_size,
+                                                       program_config,
+                                                       attributes,
+                                                       std::nullopt,
+                                                       /*must_fit=*/true)
+                                                       .value();
                     const CoreRangeSet grid(ttsl::Span<const CoreCoord>(plan.cores));
                     const ShardOrientation orientation = plan.orientation;
                     ShardSpec shard_spec = ShardSpec{

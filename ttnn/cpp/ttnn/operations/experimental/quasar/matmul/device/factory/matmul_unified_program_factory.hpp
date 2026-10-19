@@ -170,24 +170,17 @@ std::pair<uint32_t, uint32_t> maximize_subblock_size(
 
 // `output` is the C tensor when the caller supplied one (or the op already created it); it decides whether
 // C can be packed in place. Without it the op allocates C from the plan, which matches by construction.
-UnifiedMatmulPlan plan_unified_matmul(
+// must_fit FATALs with the breakdown when nothing fits L1 or a sharded output's constraints fail; without it those
+// return nullopt (the auto-config's candidate search). Other config errors always FATAL.
+std::optional<UnifiedMatmulPlan> plan_unified_matmul(
     const tt::tt_metal::IDevice& device,
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     uint32_t bias_tile_bytes,  // 0 without a bias
     const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
     const MatmulParams& attributes,
-    const std::optional<ttnn::Tensor>& output);
-
-// The same plan, or nullopt where plan_unified_matmul would FATAL because nothing fits L1 or a sharded output's
-// constraints fail (other config errors still FATAL); for the auto-config's candidate search.
-std::optional<UnifiedMatmulPlan> try_plan_unified_matmul(
-    const tt::tt_metal::IDevice& device,
-    const ttnn::Tensor& input_tensor_a,
-    const ttnn::Tensor& input_tensor_b,
-    uint32_t bias_tile_bytes,
-    const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
-    const MatmulParams& attributes);
+    const std::optional<ttnn::Tensor>& output,
+    bool must_fit);
 
 struct MatmulUnifiedProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(

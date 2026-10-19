@@ -36,29 +36,6 @@ struct ArchCostModel {
 // The part of the shorter costs that the buffering does not hide behind the longest one.
 constexpr double UNHIDDEN_FRACTION = 0.25;
 
-ArchCostModel cost_model(tt::ARCH arch) {
-    switch (arch) {
-        case tt::ARCH::QUASAR: return {16.0, 16.0, 128.0, 128.0, 512.0, 2000.0};
-        case tt::ARCH::BLACKHOLE: return {16.0, 16.0, 64.0, 64.0, 380.0, 1000.0};
-        default: return {16.0, 16.0, 32.0, 32.0, 256.0, 1000.0};
-    }
-}
-
-uint32_t fidelity_phases(tt::tt_metal::MathFidelity math_fidelity) {
-    switch (math_fidelity) {
-        case tt::tt_metal::MathFidelity::LoFi: return 1;
-        case tt::tt_metal::MathFidelity::HiFi2: return 2;
-        case tt::tt_metal::MathFidelity::HiFi3: return 3;
-        default: return 4;
-    }
-}
-
-bool in_dram(const Tensor& tensor) { return tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM; }
-
-bool is_32x32(const tt::tt_metal::Tile& tile) {
-    return tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH;
-}
-
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -70,7 +47,13 @@ double estimate_unified_matmul_cycles(
     bool B_in_dram,
     bool C_in_dram) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const ArchCostModel model = cost_model(arch);
+    const ArchCostModel model = arch == tt::ARCH::QUASAR      ? ArchCostModel{16.0, 16.0, 128.0, 128.0, 512.0, 2000.0}
+                                : arch == tt::ARCH::BLACKHOLE ? ArchCostModel{16.0, 16.0, 64.0, 64.0, 380.0, 1000.0}
+                                                              : ArchCostModel{16.0, 16.0, 32.0, 32.0, 256.0, 1000.0};
+    const uint32_t fidelity_phases = math_fidelity == tt::tt_metal::MathFidelity::LoFi    ? 1
+                                     : math_fidelity == tt::tt_metal::MathFidelity::HiFi2 ? 2
+                                     : math_fidelity == tt::tt_metal::MathFidelity::HiFi3 ? 3
+                                                                                          : 4;
     const double C_slices_on_busiest_core = (double)plan.max_C_slices_per_core * plan.batch_size;
     const double total_C_slices = (double)plan.C_slices_per_batch * plan.batch_size;
 
@@ -78,7 +61,7 @@ double estimate_unified_matmul_cycles(
     const uint32_t reloads_per_C_slice =
         plan.packer_l1_acc_en ? 1 : plan.K_chunks_per_C_slice - 1;  // with L1 accumulation only the last K chunk
     const double compute_cycles = C_slices_on_busiest_core * plan.C_entries_per_thread *
-                                  (plan.K_tiles * model.tile_matmul_cycles * fidelity_phases(math_fidelity) +
+                                  (plan.K_tiles * model.tile_matmul_cycles * fidelity_phases +
                                    (plan.K_chunks_per_C_slice + reloads_per_C_slice) * model.tile_pack_cycles);
 
     // Data movement on the busiest core, per C slice: its A rows and B columns over all of K. A multicast sender
@@ -119,10 +102,12 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_matmul_program_config(
         "MatmulUnifiedProgramConfig: with no cores the C slice is chosen with the placement; leave C_slice_M_tiles and "
         "C_slice_N_tiles at 0");
     // What the unified kernels do not do; the legacy picker takes these.
-    const bool output_tile_is_32x32 = !attributes.output_tile.has_value() || is_32x32(attributes.output_tile.value());
+    const tt::tt_metal::Tile::TileShape full_tile = {TILE_HEIGHT, TILE_WIDTH};
+    const bool output_tile_is_full =
+        !attributes.output_tile.has_value() || attributes.output_tile->get_tile_shape() == full_tile;
     if (transpose_a || transpose_b || attributes.untilize_out || attributes.global_cb.has_value() ||
-        attributes.sub_device_id.has_value() || !is_32x32(A.tensor_spec().tile()) ||
-        !is_32x32(B.tensor_spec().tile()) || !output_tile_is_32x32 || A.logical_shape().rank() < 2 ||
+        attributes.sub_device_id.has_value() || A.tensor_spec().tile().get_tile_shape() != full_tile ||
+        B.tensor_spec().tile().get_tile_shape() != full_tile || !output_tile_is_full || A.logical_shape().rank() < 2 ||
         B.logical_shape().rank() < 2) {
         return std::nullopt;
     }
@@ -214,9 +199,6 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_matmul_program_config(
                  ROW_MAJOR)});
         // Keep a sharded operand where it is: an L1 shard can then be bound in place, and a DRAM shard is read by
         // the core next to its bank (the cores listed in bank order, which the C slice walk follows).
-        const auto shard_tiles = [](const Tensor& tensor, uint32_t dim) {
-            return tensor.shard_spec()->shape[dim] / (dim == 0 ? TILE_HEIGHT : TILE_WIDTH);
-        };
         const auto dram_bank_cores = [&]() {
             std::vector<CoreRange> cores;
             for (const CoreCoord& core :
@@ -228,16 +210,21 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_matmul_program_config(
         const tt::tt_metal::TensorMemoryLayout A_layout = A.memory_config().memory_layout();
         const tt::tt_metal::TensorMemoryLayout B_layout = B.memory_config().memory_layout();
         if (A.is_sharded() && A_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
-            const CoreRangeSet cores = in_dram(A) ? dram_bank_cores() : A.shard_spec()->grid;
+            const CoreRangeSet cores = A.memory_config().is_dram() ? dram_bank_cores() : A.shard_spec()->grid;
             candidates.push_back(
                 {"A_shard_rows",
-                 shrinking_C_slices(cores, shard_tiles(A, 0), /*fixed_is_N=*/false, A.shard_spec()->orientation)});
+                 shrinking_C_slices(
+                     cores,
+                     A.shard_spec()->shape[0] / TILE_HEIGHT,
+                     /*fixed_is_N=*/false,
+                     A.shard_spec()->orientation)});
         }
         if (B.is_sharded() && B_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
-            const CoreRangeSet cores = in_dram(B) ? dram_bank_cores() : B.shard_spec()->grid;
+            const CoreRangeSet cores = B.memory_config().is_dram() ? dram_bank_cores() : B.shard_spec()->grid;
             candidates.push_back(
                 {"B_shard_columns",
-                 shrinking_C_slices(cores, shard_tiles(B, 1), /*fixed_is_N=*/true, B.shard_spec()->orientation)});
+                 shrinking_C_slices(
+                     cores, B.shard_spec()->shape[1] / TILE_WIDTH, /*fixed_is_N=*/true, B.shard_spec()->orientation)});
         }
     }
 
@@ -249,8 +236,8 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_matmul_program_config(
                 config.cores.bounding_box().end_coord.y >= device.compute_with_storage_grid_size().y) {
                 break;
             }
-            const std::optional<ttnn::prim::qsr::UnifiedMatmulPlan> plan =
-                ttnn::prim::qsr::try_plan_unified_matmul(device, A, B, bias_tile_bytes, config, attributes);
+            const std::optional<ttnn::prim::qsr::UnifiedMatmulPlan> plan = ttnn::prim::qsr::plan_unified_matmul(
+                device, A, B, bias_tile_bytes, config, attributes, std::nullopt, /*must_fit=*/false);
             if (!plan.has_value()) {
                 continue;
             }
@@ -260,7 +247,12 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_matmul_program_config(
                 break;
             }
             const double cycles = estimate_unified_matmul_cycles(
-                *plan, device.arch(), math_fidelity, in_dram(A), in_dram(B), C_memory.is_dram());
+                *plan,
+                device.arch(),
+                math_fidelity,
+                A.memory_config().is_dram(),
+                B.memory_config().is_dram(),
+                C_memory.is_dram());
             log_debug(
                 tt::LogOp,
                 "Unified matmul auto-config: {} with a {}x{}-tile C slice on {} cores: {:.0f} cycles",

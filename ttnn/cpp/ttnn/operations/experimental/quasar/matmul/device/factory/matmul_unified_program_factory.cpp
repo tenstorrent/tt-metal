@@ -167,8 +167,10 @@ UnifiedMatmulPlan size_dfbs(
     return plan;
 }
 
-// must_fit: FATAL with the breakdown when nothing fits L1 or a sharded output's constraints fail; otherwise nullopt.
-std::optional<UnifiedMatmulPlan> plan_unified_matmul_impl(
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+std::optional<UnifiedMatmulPlan> plan_unified_matmul(
     const tt::tt_metal::IDevice& device,
     const ttnn::Tensor& A,
     const ttnn::Tensor& B,
@@ -177,6 +179,7 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul_impl(
     const MatmulParams& attributes,
     const std::optional<ttnn::Tensor>& output,
     bool must_fit) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     UnifiedMatmulPlan base{};
 
     TT_FATAL(
@@ -642,33 +645,6 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul_impl(
     return plan;
 }
 
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
-UnifiedMatmulPlan plan_unified_matmul(
-    const tt::tt_metal::IDevice& device,
-    const ttnn::Tensor& A,
-    const ttnn::Tensor& B,
-    uint32_t bias_tile_bytes,
-    const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
-    const MatmulParams& attributes,
-    const std::optional<ttnn::Tensor>& output) {
-    return CMAKE_UNIQUE_NAMESPACE::plan_unified_matmul_impl(
-               device, A, B, bias_tile_bytes, config, attributes, output, /*must_fit=*/true)
-        .value();
-}
-
-std::optional<UnifiedMatmulPlan> try_plan_unified_matmul(
-    const tt::tt_metal::IDevice& device,
-    const ttnn::Tensor& A,
-    const ttnn::Tensor& B,
-    uint32_t bias_tile_bytes,
-    const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
-    const MatmulParams& attributes) {
-    return CMAKE_UNIQUE_NAMESPACE::plan_unified_matmul_impl(
-        device, A, B, bias_tile_bytes, config, attributes, std::nullopt, /*must_fit=*/false);
-}
-
 ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_program_artifacts(
     const MatmulParams& operation_attributes,
     const MatmulInputs& tensor_args,
@@ -691,13 +667,15 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                                            ? tt::tt_metal::datatype_to_dataformat_converter(bias_tensor->dtype())
                                            : tt::DataFormat{};
     const UnifiedMatmulPlan plan = plan_unified_matmul(
-        device,
-        A_tensor,
-        B_tensor,
-        bias_tensor.has_value() ? tt::tile_size(bias_format) : 0,
-        config,
-        operation_attributes,
-        tensor_return_value.at(0));
+                                       device,
+                                       A_tensor,
+                                       B_tensor,
+                                       bias_tensor.has_value() ? tt::tile_size(bias_format) : 0,
+                                       config,
+                                       operation_attributes,
+                                       tensor_return_value.at(0),
+                                       /*must_fit=*/true)
+                                       .value();
 
     // ---- Tensor parameters: the kernels' tensor accessors are generated from these specs ----
     Group<TensorParameter> tensor_parameters = {
