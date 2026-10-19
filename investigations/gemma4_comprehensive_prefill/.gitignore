@@ -1,0 +1,6 @@
+/results.json
+/results.json.tmp
+/chunk_*/
+/first_attempt.json
+/probe/
+!/comparison.csv

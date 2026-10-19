@@ -70,6 +70,24 @@ The default chunk size is 8192; change `GEMMA4_PERF_CHUNK_SIZE` to a multiple of
 
 Results are saved to `investigations/gemma4_single_prefill_<chunk_size>/results.json`; `GEMMA4_PERF_OUTPUT` overrides the directory. Set `GEMMA4_PERF_PROFILE_PROGRAMS=1` to collect an additional replay with kernel source names and individual program timestamps on the chip with the longest execution span. That diagnostic replay is separate from the latency samples.
 
+Compare full requests and equally sized mixed batches at 4k, 6k, and 8k in one test:
+
+```bash
+pytest 'models/demos/gemma4_d_p/demo/prefill_perf.py::test_prefill_comprehensive_comparison[blackhole-8x4]' -sv
+```
+
+All three chunk sizes run sequentially on the same mesh, sharing device weights and releasing traces, caches, and cached programs between sizes. There is no chunk-size parametrization; `GEMMA4_PERF_CHUNK_SIZE` does not select a subset. Each size measures both the single request and mixed batch through legacy and packed prefill:
+
+| Projection chunk | Single request | Mixed requests | Resident KV slots | Default long prefix |
+|---:|---:|---|---:|---:|
+| 4096 | 4096 | 256, 512, 768, 1024, 1536 | 5 | 258048 |
+| 6144 | 6144 | 256, 512, 768, 1024, 1536, 2048 | 6 | 251904 |
+| 8192 | 8192 | 512, 512, 1024, 1536, 2048, 2560 | 6 | 253952 |
+
+The default run measures prefix 0 and the aligned long prefix for each size. Legacy pads each mixed request to the projection chunk size and executes requests sequentially; packed executes one shared projection/MLP pass for the whole batch. The 8k mix uses six requests because seven full-context KV slots exceed device DRAM with the full checkpoint. Single-request output PCC/relative RMSE are diagnostic, and all outputs must be finite. Results are saved after each size to `investigations/gemma4_comprehensive_prefill/results.json`, with raw per-chip samples in `chunk_4096/results.json`, `chunk_6144/results.json`, and `chunk_8192/results.json`. `GEMMA4_PERF_OUTPUT` overrides the parent directory. `GEMMA4_PERF_PREFIXES=0` shortens the run; explicit nonzero prefixes must align to all three chunk sizes.
+
+The full 60-layer test passed in 694.74 seconds on 2026-10-19, collecting all 24 measurements in one invocation. The [comparison table](../../../../investigations/gemma4_comprehensive_prefill/comparison.csv) and [sample distributions](../../../../investigations/gemma4_comprehensive_prefill/measurements.json) retain the run. Single-request output PCC ranged from 0.9948 to 0.9961 across the six size/prefix combinations.
+
 The initial single-request investigation (2026-10-19, model revision `3d19910c295`) measured 111.0 → 130.1 ms at prefix 0 and 274.0 → 331.7 ms at prefix 253952, legacy → striped. At chunk 4096 the corresponding measurements were 75.1 → 83.1 ms and 144.5 → 153.7 ms. [Recorded samples and program breakdowns](../../../../investigations/gemma4_single_prefill_diagnosis/measurements.json) include the baseline and isolated tuning experiments.
 
 For chunk 8192, one diagnostic replay gave the following sums of device-program durations on the chip with the longest full-pass span. These are attribution samples, separate from the latency medians above.

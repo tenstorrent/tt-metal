@@ -3,6 +3,7 @@
 
 """Full-model traced prefill: striped batches versus sequential legacy requests."""
 
+import gc
 import json
 import os
 import statistics
@@ -19,7 +20,11 @@ from loguru import logger
 import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.demo.packed_prefill import _output
-from models.demos.gemma4_d_p.demo.text_demo_prefill import TRACE_REGION_SIZE, _get_prefill_tokens
+from models.demos.gemma4_d_p.demo.text_demo_prefill import (
+    TRACE_REGION_SIZE,
+    _get_prefill_tokens,
+    _shared_device_weights,
+)
 from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
 from models.demos.gemma4_d_p.tt.runners.kv_caches import allocate_ring_kv_caches
@@ -120,12 +125,66 @@ def test_prefill_single_request_comparison(mesh_device, reset_seeds, monkeypatch
     )
 
 
-def _run_comparison(mesh_device, monkeypatch, *, cases, chunk_size, output_name, compare_outputs=False):
+@torch.no_grad()
+@pytest.mark.timeout(14400)
+@parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+def test_prefill_comprehensive_comparison(mesh_device, reset_seeds, monkeypatch):
+    mixed_requests = {
+        4096: (256, 512, 768, 1024, 1536),
+        6144: (256, 512, 768, 1024, 1536, 2048),
+        8192: (512, 512, 1024, 1536, 2048, 2560),
+    }
+    root = Path(os.getenv("GEMMA4_PERF_OUTPUT", "investigations/gemma4_comprehensive_prefill"))
+    root.mkdir(parents=True, exist_ok=True)
+    summary = dict(complete=False, chunk_sizes=list(mixed_requests), runs=[])
+
+    def save():
+        temporary = root / "results.json.tmp"
+        temporary.write_text(json.dumps(summary, indent=2) + "\n")
+        temporary.replace(root / "results.json")
+
+    try:
+        save()
+        with _shared_device_weights():
+            for chunk_size, lengths in mixed_requests.items():
+                assert sum(lengths) == chunk_size
+                logger.info("[prefill_perf] comparing chunk={} single vs mixed={}", chunk_size, lengths)
+                report = _run_comparison(
+                    mesh_device,
+                    monkeypatch,
+                    cases={f"single_{chunk_size}": (chunk_size,), "mixed": lengths},
+                    chunk_size=chunk_size,
+                    output_name="gemma4_comprehensive_prefill",
+                    output_dir=root / f"chunk_{chunk_size}",
+                    compare_outputs=True,
+                )
+                summary["runs"].append(
+                    {
+                        **report,
+                        "results": [
+                            {key: value for key, value in row.items() if key not in ("captures", "program_profile")}
+                            for row in report["results"]
+                        ],
+                    }
+                )
+                save()
+                gc.collect()
+                mesh_device.clear_program_cache()
+        summary["complete"] = True
+    finally:
+        save()
+
+
+def _run_comparison(
+    mesh_device, monkeypatch, *, cases, chunk_size, output_name, compare_outputs=False, output_dir=None
+):
     monkeypatch.setenv("GEMMA4_PREFILL_MAX_TRACES", str(len(cases)))
     num_users = max(len(lengths) for lengths in cases.values())
     max_seq_len = -(-262144 // chunk_size) * chunk_size
     last_prefix = (262144 - chunk_size) // chunk_size * chunk_size
-    root = Path(os.getenv("GEMMA4_PERF_OUTPUT", f"investigations/{output_name}"))
+    root = Path(
+        output_dir if output_dir is not None else os.getenv("GEMMA4_PERF_OUTPUT", f"investigations/{output_name}")
+    )
     root.mkdir(parents=True, exist_ok=True)
     repeats = int(os.getenv("GEMMA4_PERF_REPEATS", "7"))
     device_repeats = int(os.getenv("GEMMA4_PERF_DEVICE_REPEATS", "3"))
@@ -252,11 +311,12 @@ def _run_comparison(mesh_device, monkeypatch, *, cases, chunk_size, output_name,
                     output = _output(runtime, striped=path == "packed")
                     assert torch.isfinite(output).all()
                     output_metrics = None
-                    if compare_outputs:
+                    if compare_outputs and len(lengths) == 1:
+                        output_key = (name, prefix)
                         if path == "legacy":
-                            legacy_outputs[prefix] = output
+                            legacy_outputs[output_key] = output
                         else:
-                            output_metrics = summarize_metrics([cache_metrics(legacy_outputs.pop(prefix), output)])
+                            output_metrics = summarize_metrics([cache_metrics(legacy_outputs.pop(output_key), output)])
                             logger.info(
                                 "[prefill_perf] legacy/packed output comparison prefix={}: {}", prefix, output_metrics
                             )
@@ -341,3 +401,4 @@ def _run_comparison(mesh_device, monkeypatch, *, cases, chunk_size, output_name,
         if legacy_trace is not None:
             ttnn.release_trace(mesh_device, legacy_trace)
         runtime.release_trace()
+    return report
