@@ -9,11 +9,10 @@ to be its own pytest rootdir — nested ``pytest_plugins`` is rejected by pytest
 and that constraint is itself part of the contract, so the fixture cannot simply
 be collected into this run.
 
-This wrapper bridges that: it is collected by the existing jobs (which all run
-pytest from ``tests/python_tests/``) and drives the fixture as a subprocess with
-its own rootdir. No CI configuration is needed, and a harness change that would
-break an external consumer fails in the PR that makes it rather than during a
-later submodule uplift.
+This wrapper bridges that: ``tests/run_hardware_free.sh`` collects it (pytest
+from ``tests/python_tests/``) and drives the fixture as a subprocess with its
+own rootdir. A harness change that would break an external consumer fails in
+the PR that makes it rather than during a later submodule uplift.
 
 A failure here is an API break. Fix the change, or land it with a deprecation
 path — do not adjust the fixture until it passes again.
@@ -32,11 +31,11 @@ from pathlib import Path
 import pytest
 
 FIXTURE_DIR = Path(__file__).resolve().parents[2] / "out_of_tree"
-# Deliberately below the ambient pytest-timeout budget CI passes (--timeout=60
-# in setup-and-test.yml and collect-test-durations.yml): our own timeout has to
-# fire first, because ``_run_fixture`` turns it into a failure carrying the
-# child's output, whereas pytest-timeout reports a bare kill. Measured cost of
-# the child in CI: 7.1s on wormhole, so the headroom is ample.
+# Deliberately below the pytest-timeout budget tests/run_hardware_free.sh passes
+# (--timeout=120): our own timeout has to fire first, because ``_run_fixture``
+# turns it into a failure carrying the child's output, whereas pytest-timeout
+# reports a bare kill. Measured cost of the child in CI: 7.1s on wormhole, so
+# the headroom is ample.
 TIMEOUT_SECONDS = 50
 
 # Node ids the child must report as passing. Checking exact ids, from the junit

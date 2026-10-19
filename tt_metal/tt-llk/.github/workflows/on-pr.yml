@@ -68,12 +68,14 @@ jobs:
             tests:
               - 'tests/**'
               - '!tests/hardware_free/**'
+              - '!tests/run_hardware_free.sh'
               - '!tests/sources/quasar/**'
               - '!tests/python_tests/quasar/**'
               - '!tests/python_tests/fuser/quasar/**'
               - '!tests/python_tests/fuser/tests/quasar/**'
             hardware_free:
               - 'tests/hardware_free/**'
+              - 'tests/run_hardware_free.sh'
               - 'perf/**'
             github:
               - '.github/**'
@@ -104,6 +106,7 @@ jobs:
             if ("${{ needs.detect-changes.outputs.blackhole }}" === "true") expectedLabels.add("blackhole");
             if ("${{ needs.detect-changes.outputs.wormhole }}" === "true") expectedLabels.add("wormhole");
             if ("${{ needs.detect-changes.outputs.tests }}" === "true") expectedLabels.add("test-infra");
+            if ("${{ needs.detect-changes.outputs.hardware_free }}" === "true") expectedLabels.add("test-infra");
             if ("${{ needs.detect-changes.outputs.github }}" === "true") expectedLabels.add("ci");
             if ("${{ needs.detect-changes.outputs.documentation }}" === "true") expectedLabels.add("documentation");
             if ("${{ needs.detect-changes.outputs.performance }}" === "true") expectedLabels.add("performance");

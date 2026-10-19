@@ -522,6 +522,7 @@ jobs:
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-hardware-free-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
          needs.find-changed-files.outputs.llk-perf-changed == 'true' ||
          needs.find-changed-files.outputs.llk-quasar-changed == 'true')
@@ -539,6 +540,7 @@ jobs:
             if ("${{ needs.find-changed-files.outputs.llk-common-changed }}" === "true") expectedLabels.add("llk:common");
             if ("${{ needs.find-changed-files.outputs.llk-sfpi-changed }}" === "true") expectedLabels.add("sfpi");
             if ("${{ needs.find-changed-files.outputs.llk-tests-changed }}" === "true") expectedLabels.add("llk:test-infra");
+            if ("${{ needs.find-changed-files.outputs.llk-hardware-free-changed }}" === "true") expectedLabels.add("llk:test-infra");
             if ("${{ needs.find-changed-files.outputs.llk-ci-changed }}" === "true") expectedLabels.add("llk:ci");
             if ("${{ needs.find-changed-files.outputs.llk-perf-changed }}" === "true") expectedLabels.add("llk:performance");
             if ("${{ needs.find-changed-files.outputs.llk-quasar-changed }}" === "true") expectedLabels.add("llk:quasar");

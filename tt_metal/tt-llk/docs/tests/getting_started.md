@@ -478,6 +478,12 @@ There are few custom `pytest` command line arguments exposed that enable alterin
 | `--detailed-artefacts` | Adds `-save-temps=obj -fdump-tree-all -fdump-rtl-all -v` compilation flags when compiling kernel elfs, allowing generation of compiler level debug information, used when debugging compiler bugs |
 | `--op=OP` | Run only tests for the given op(s), matched by `MathOperation` name (case-insensitive, exact). Repeatable: `--op=exp --op=log` |
 
+## Host-only tests
+
+Tests that exercise the harness, perf tooling, or kernel sources and never open a card live under `tests/hardware_free/`, grouped as `harness/`, `perf/`, `accuracy/`, and `kernels/`. Card smoke collects `tests/python_tests/`, so a host-only test added there runs on every SKU.
+
+Run them with `tests/run_hardware_free.sh` from `tests/`. It sets `LLK_HARDWARE_FREE=1` and makes two passes: `CHIP_ARCH=wormhole` for the tree, then `CHIP_ARCH=blackhole` for gathering and the out-of-tree contract. The PR gate runs that script. Do not point a card job at this directory.
+
 ## Usage examples
 
 ### Basic run workflow

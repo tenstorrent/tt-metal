@@ -109,7 +109,7 @@ while IFS= read -r FILE; do
             ;;
         # Host-only tests, and the gate modules they import. Before the perf and
         # tests catch-alls: those would start the card perf and smoke jobs.
-        tt_metal/tt-llk/tests/hardware_free/**)
+        tt_metal/tt-llk/tests/hardware_free/**|tt_metal/tt-llk/tests/run_hardware_free.sh)
             LLK_HARDWARE_FREE_CHANGED=true
             ;;
         tt_metal/tt-llk/perf/**)
