@@ -161,7 +161,7 @@ ALWI void softshrink_tile_init() { MATH(SFPU_UNARY_INIT(softshrink)); }
 // clang-format on
 ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
     MATH(if constexpr (ckernel::sfpu::hardshrink_bf16_whole_tile && !DST_ACCUM_MODE) {
-        if (param0 == 0x3f000000u) {
+        if (param0 == ckernel::sfpu::hardshrink_bf16_param0_bits) {
             SFPU_UNARY_CALL(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
