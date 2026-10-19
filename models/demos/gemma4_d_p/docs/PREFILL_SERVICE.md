@@ -70,6 +70,14 @@ The default chunk size is 8192; change `GEMMA4_PERF_CHUNK_SIZE` to a multiple of
 
 Results are saved to `investigations/gemma4_single_prefill_<chunk_size>/results.json`; `GEMMA4_PERF_OUTPUT` overrides the directory. Set `GEMMA4_PERF_PROFILE_PROGRAMS=1` to retain kernel source names and individual program timestamps from the measured samples on the chip with the longest execution span. This adds host-side record processing, but no extra replays.
 
+For debugging, replay one 4k packed batch with requests `[256, 512, 768, 1024, 1536]`:
+
+```bash
+pytest 'models/demos/gemma4_d_p/demo/packed_prefill_debug.py::test_prefill_packed_4k_traced[blackhole-8x4]' -sv
+```
+
+This uses all 60 layers, the canonical Gutenberg token source and trace reservation, zero cached prefix, and the same five 256k cache slots as the 4k benchmark. Like the canonical test, it warms up the forward, captures it with the output kept alive, then executes the trace. It performs exactly one replay, with no performance sweep or output comparison. Pytest timeout is disabled for breakpoints. The `ttnn.execute_trace(...)` call is the replay entry point; Python attention code runs during warmup and capture.
+
 Compare full requests and equally sized mixed batches at 4k, 6k, and 8k in one test:
 
 ```bash
