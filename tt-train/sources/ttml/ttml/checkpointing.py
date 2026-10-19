@@ -14,7 +14,6 @@ import os
 import pickle
 import warnings
 
-import ml_dtypes
 from tqdm import tqdm
 
 import ttnn
@@ -66,15 +65,11 @@ def _tensor_meta(tensor: ttml.autograd.Tensor) -> dict:
     return {"layout": "ROW_MAJOR" if val.get_layout() == ttnn.Layout.ROW_MAJOR else "TILE", "dtype": dtype}
 
 
-def _tensor_from_record(meta: dict, data, mapper) -> ttml.autograd.Tensor:
-    """Rebuild a Tensor from header `meta` + its streamed `data`, distributed onto the mesh via `mapper`
-    (None on a unit mesh; see `Sharding.derive_mapper`)."""
+def _load_into(live: ttml.autograd.Tensor, meta: dict, data) -> None:
+    """Load header `meta` + its streamed `data` into the `live` tensor in place. The live tensor decides the sharding
+    (its mapper distributes the data; see `Sharding.derive_mapper`) and the dtype (see `assign_numpy`)."""
     layout = ttnn.Layout.ROW_MAJOR if meta["layout"] == "ROW_MAJOR" else ttnn.Layout.TILE
-    if meta["dtype"] == "FLOAT32":
-        arr, new_type = data, ttnn.DataType.FLOAT32
-    else:
-        arr, new_type = data.astype(ml_dtypes.bfloat16), ttnn.DataType.BFLOAT16
-    return ttml.autograd.Tensor.from_numpy(arr, layout=layout, new_type=new_type, mapper=mapper)
+    ttml.autograd.assign_numpy(live, data, layout=layout, mapper=Sharding.from_tensor(live).derive_mapper())
 
 
 def _leaf_label(path: tuple, name: str) -> str:
@@ -109,28 +104,10 @@ def _walk(value, path: tuple = ()) -> tuple:
     raise ValueError(f"checkpointing: unsupported state value of type {type(value).__name__}")
 
 
-def _check_device_shape(path: tuple, name: str, new: ttml.autograd.Tensor, live: ttml.autograd.Tensor, record_shape):
-    """Refuse to install `new` over `live` unless the per-device shapes agree.
-
-    `assign` / `set_state_dict` replace the underlying tensor without any shape check, so a record that does
-    not describe a tensor of the live layout (one shard saved as if it were the full tensor, redistributed by
-    the live mapper) would otherwise land silently at the wrong size."""
-    got = tuple(new.get_value(NATIVE).shape)
-    want = tuple(live.get_value(NATIVE).shape)
-    if got != want:
-        raise CheckpointShapeError(
-            f"checkpointing: {_leaf_label(path, name)} record of shape {tuple(record_shape)} redistributes to a "
-            f"per-device shape {got}, but the live tensor is {want} per device "
-            f"({Sharding.from_tensor(live).describe()}). The record does not hold a full tensor of this layout -- "
-            f"most likely it was saved as one device's shard through a wrong topology label. Nothing was restored "
-            f"past this point; re-save from a run whose tensors gather to their full shape."
-        )
-
-
 def _rebuild(
     node, live_node, f, model_shapes: dict | None, display_progress: bool = False, path: tuple = ("optimizer",)
 ):
-    """Reconstruct a skeleton `node` from stream `f`, resharding each tensor per the live `live_node`.
+    """Reconstruct a skeleton `node` from stream `f`, loading each tensor into its live counterpart in `live_node`.
 
     `path` names the current sub-state (e.g. AdamW's `exp_avg`/`exp_avg_sq`) so each leaf's progress bar is
     distinguishable rather than a string of identical "Loading optimizer" bars, and so errors can name the leaf.
@@ -154,10 +131,8 @@ def _rebuild(
                     f"wrong topology label). Refusing to restore it; re-save from a run whose state gathers to the "
                     f"full shape."
                 )
-            live = live_node[name]
-            new = _tensor_from_record(meta, data, Sharding.from_tensor(live).derive_mapper())
-            _check_device_shape(path, name, new, live, data.shape)
-            named[name] = new
+            _load_into(live_node[name], meta, data)
+            named[name] = live_node[name]
         return named
     return {
         key: _rebuild(v, live_node[key], f, model_shapes, display_progress, path + (key,)) for key, v in node.items()
@@ -190,9 +165,7 @@ def _load_params(params: ttml.NamedParameters, skeleton: dict, f, display_progre
         shapes[name] = tuple(data.shape)
         if name not in params:
             continue
-        new = _tensor_from_record(meta, data, Sharding.from_tensor(params[name]).derive_mapper())
-        _check_device_shape(("model",), name, new, params[name], data.shape)
-        params[name].assign(new)
+        _load_into(params[name], meta, data)
         restored.add(name)
 
     missing = set(params) - restored  # in model, not restored → left at init (dangerous)

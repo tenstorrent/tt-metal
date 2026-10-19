@@ -96,8 +96,11 @@ void kernel_main() {
     constexpr uint32_t dfb_beta_id = dfb::beta;
 #endif
 #if defined RMSNORM and not defined FUSE_PRE_ADD
-    constexpr uint32_t dfb_xmm_id = dfb_in0;  // x minus mean
+    // RMSNorm without a residual has no x - E[x] stage: "xmm" is the resident input shard itself.
+    constexpr bool xmm_is_input_shard = true;
+    constexpr uint32_t dfb_xmm_id = dfb_in0;
 #else
+    constexpr bool xmm_is_input_shard = false;
     constexpr uint32_t dfb_xmm_id = dfb::xmm;  // x minus mean
 #endif
     // RMSNorm normalizes by the mean of squares, so it has no mean to reduce and the E[x] chain's
@@ -328,7 +331,6 @@ void kernel_main() {
         reduce_uninit();
         dfb_ex.push_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         reconfig_data_format(dfb_ex_external_id, dfb_scaler_global_id);
-        dfb_ex.wait_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
     }
 
     // x - E[x]
@@ -438,13 +440,9 @@ void kernel_main() {
     dfb_xmm2.wait_front(num_tiles_per_block);
 #endif
 
-#if defined RMSNORM and not defined FUSED_PRE_ADD
-    reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
-#else
-    if constexpr (FLOAT32_DTYPE) {
+    if constexpr (xmm_is_input_shard || FLOAT32_DTYPE) {
         reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
     }
-#endif
 
     dfb_xmm2.wait_front(num_tiles_per_block);
 
@@ -510,9 +508,12 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
             pack_init(dfb_ex2pe_id);
 #endif
+            // The reduction result above was packed into dfb_ex2 by this kernel. The loop below
+            // reads dfb_ex2 back by tile index across the whole count, so wait for the whole
+            // count.
+            dfb_ex2.wait_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
                 // 1/[sqrt(Var + eps)],
-                dfb_ex2.wait_front(1);
                 dfb_ex2pe.reserve_back(1);
                 tile_regs_acquire();
                 add_init(dfb_ex2_id, dfb_eps);
@@ -526,24 +527,22 @@ void kernel_main() {
                 dfb_ex2pe.push_back(1);
                 tile_regs_release();
             }
+            // Pop the count that the wait above claimed. enable_sqrt is the complement of the
+            // condition under which the receiver kernel waits and pops dfb_ex2 as its first-stage
+            // reduce buffer, so exactly one of the two kernels pops dfb_ex2.
+            dfb_ex2.pop_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         }
     }
 
     if constexpr (!do_gamma && !do_beta) {
         pack_reconfig_data_format(dfb_out_id);
     }
-// (x - Ex) * 1/[sqrt(Var + eps)]
-#if defined RMSNORM and not defined FUSE_PRE_ADD
+    // (x - Ex) * 1/[sqrt(Var + eps)]
     if constexpr (FLOAT32_DTYPE) {
         reconfig_data_format(dfb_xmm_id, dfb_ex_global_id);
-    } else {
+    } else if constexpr (xmm_is_input_shard) {
         reconfig_data_format_srca(dfb_ex2_id, dfb_xmm_id);
     }
-#else
-    if constexpr (FLOAT32_DTYPE) {
-        reconfig_data_format(dfb_xmm_id, dfb_ex_global_id);
-    }
-#endif
     mul_bcast_cols_init(dfb_xmm_id, dfb_ex_global_id);
     index_h_offset = 0;
     // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
@@ -587,15 +586,18 @@ void kernel_main() {
     }
     dfb_im.push_back(num_tiles_per_block);
 
-#if !(defined RMSNORM and not defined FUSE_PRE_ADD)
-    // RMSNorm without a fused pre-add reads x straight from the resident input shard (xmm aliases in0),
-    // which is never pushed and so must not be popped (see the x - E[x] pass above).
-    dfb_xmm.pop_front(num_tiles_per_block);
-#endif
-    dfb_im.wait_front(num_tiles_per_block);
+    // xmm was pushed by x - E[x] (LayerNorm) or by the pre-add (RMSNorm + FUSE_PRE_ADD).
+    // RMSNorm without a fused pre-add reads x straight from the resident input shard
+    // (xmm aliases in0), which is never pushed and so must not be popped.
+    if constexpr (!xmm_is_input_shard) {
+        dfb_xmm.pop_front(num_tiles_per_block);
+    }
 
 #ifdef FUSE_GAMMA
     {
+        // The intermediate tiles were packed and pushed above. Wait for them before the loop
+        // below reads them back by tile index.
+        dfb_im.wait_front(num_tiles_per_block);
         reconfig_data_format(dfb_im_id, dfb_gamma_id);
         if constexpr (!do_beta) {
             pack_reconfig_data_format(dfb_out_id);
@@ -639,12 +641,14 @@ void kernel_main() {
         }
         dfb_outgamma.push_back(num_tiles_per_block);
         dfb_im.pop_front(num_tiles_per_block);
-        dfb_outgamma.wait_front(num_tiles_per_block);
     }
 #endif
 
 #ifdef FUSE_BETA
     {
+        // The fusion buffer carries the gamma stage's output when gamma is fused, and this kernel's
+        // own intermediate tiles when it is not. Wait for them here in either case.
+        dfb_fusion.wait_front(num_tiles_per_block);
         reconfig_data_format(dfb_fusion_id, dfb_beta_id);
         pack_reconfig_data_format(dfb_out_id);
         add_bcast_rows_init(dfb_fusion_id, dfb_beta_id);
@@ -681,8 +685,17 @@ void kernel_main() {
         }
         dfb_out.push_back(num_tiles_per_block);
         dfb_fusion.pop_front(num_tiles_per_block);
-        dfb_out.wait_front(num_tiles_per_block);
     }
+#endif
+#ifdef FUSE_GAMMA
+    // Gamma is read by tile index across every row of the block, so it is waited once rather
+    // than per row. Pop it here to balance the buffer.
+    dfb_gamma.pop_front(block_w);
+#endif
+#ifdef FUSE_BETA
+    // Beta is read by tile index across every row of the block, so it is waited once rather
+    // than per row. Pop it here to balance the buffer.
+    dfb_beta.pop_front(block_w);
 #endif
     // The single scaler tile is waited by both reductions (E[x] and Var[x]) but never popped;
     // pop it once at the end so the buffer is left balanced.

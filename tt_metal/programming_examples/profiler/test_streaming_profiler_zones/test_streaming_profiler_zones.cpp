@@ -176,7 +176,7 @@ int main(int argc, char** argv) {
         static const char* const kRisc[5] = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
         std::vector<uint32_t> slots(10, 0);
         detail::ReadFromDeviceL1(
-            mesh_device->get_devices().front(),
+            mesh_device->get_device(distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims())),
             CoreCoord{0, 0},
             kBenchAddr,
             static_cast<uint32_t>(slots.size() * sizeof(uint32_t)),

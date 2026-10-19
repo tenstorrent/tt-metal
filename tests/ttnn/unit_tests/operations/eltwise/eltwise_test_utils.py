@@ -10,6 +10,8 @@ from mpmath import cosh as mp_cosh
 from mpmath import mp
 
 from tests.ttnn.utils_for_testing import (
+    assert_equal,
+    assert_with_ulp,
     flush_subnormal_values_to_zero,
     generate_all_bfloat16_bitpatterns,
 )
@@ -60,6 +62,68 @@ def flush_to_zero(tensor):
     return tensor
 
 
+def assert_ftz_band(result, band_mask, band_desc):
+    """Assert a known flush-to-zero band is non-empty and device-flushed to 0.
+
+    The band is a deterministic slice of the exhaustive sweep, so the
+    non-emptiness assertion guards against a future golden/kernel change that
+    shifts a boundary and silently empties the band (which would otherwise let
+    the test pass without ever checking the documented FTZ behavior).
+    """
+    assert band_mask.any(), f"expected {band_desc} to be non-empty for this exhaustive sweep"
+    assert_equal(torch.zeros_like(result[band_mask]), result[band_mask])
+
+
+def assert_ftz_then_ulp(golden, result, ulp_threshold, reference=None, allow_nonfinite=False):
+    """Exactly 0 where |reference| < SNB, within ulp_threshold of golden elsewhere.
+
+    reference defaults to golden. Pass a float64 reference when float32
+    rounding of the golden can lift a truly subnormal result to SNB itself.
+    Unlike assert_ftz_band, the FTZ region may be empty.
+    """
+    if reference is None:
+        reference = golden
+    ftz = reference.abs() < SMALLEST_NORMAL_BF16
+    assert_equal(torch.zeros_like(result[ftz]), result[ftz])
+    assert_with_ulp(
+        expected_result=golden[~ftz],
+        actual_result=result[~ftz],
+        ulp_threshold=ulp_threshold,
+        allow_nonfinite=allow_nonfinite,
+    )
+
+
+def assert_all_nonfinite(result, desc):
+    """Every element must be non-finite. NaN or ±inf both pass, since bfloat16 packing can turn NaN into inf."""
+    nonfinite = ~torch.isfinite(result)
+    assert nonfinite.all(), f"expected all {desc} outputs to be non-finite; {int((~nonfinite).sum())} were finite"
+
+
+def assert_finite_matches_golden(golden, result, desc):
+    """Wherever the golden is finite, the device output must be finite too.
+
+    PCC zeroes non-finite values on both sides, so on its own it can hide a stray NaN or inf.
+    """
+    unexpected_nonfinite = torch.isfinite(golden) & ~torch.isfinite(result)
+    assert (
+        not unexpected_nonfinite.any()
+    ), f"{desc}: {int(unexpected_nonfinite.sum())} finite-input elements produced a non-finite device output"
+
+
+def bf16_binade_samples(min_magnitude):
+    """Positive magnitudes from min_magnitude to MAX_BF16, as float32.
+
+    Takes the first, middle and last bfloat16 mantissa of every binade (power-of-two
+    interval) from 2^6 up, plus min_magnitude and MAX_BF16 themselves. Binades below
+    2^6 are not sampled, so min_magnitude should be at least 64.
+    """
+    exponent_fields = torch.arange(127 + 6, 255, dtype=torch.int32)
+    mantissas = torch.tensor([0x00, 0x40, 0x7F], dtype=torch.int32)
+    bits = ((exponent_fields[:, None] << 7) | mantissas).flatten().to(torch.int16)
+    magnitudes = torch.cat([bits.view(torch.bfloat16).float(), torch.tensor([min_magnitude, MAX_BF16])]).unique()
+    return magnitudes[magnitudes >= min_magnitude]
+
+
 def generate_bfloat16_bits_in_range(low, high, dtype=torch.bfloat16, ftz=True):
     """
     Generate all bfloat16 bit patterns within a specified [low, high] range.
@@ -99,6 +163,50 @@ def generate_bfloat16_bits_in_range(low, high, dtype=torch.bfloat16, ftz=True):
     padded[:num_elements] = filtered
 
     return padded.reshape(rows, cols)
+
+
+def generate_float32_bits(include_spl_values=False):
+    """
+    Generate every bfloat16 bit pattern, stored as float32.
+
+    A float32 accuracy sweep cannot enumerate all 2^32 encodings. Its input
+    domain is the bfloat16 lattice: the 65,536 bfloat16 values, promoted to
+    float32 without rounding. Each value is an exact float32 whose lower 16
+    mantissa bits are zero (the bfloat16 encoding shifted left by 16).
+
+    Subnormals are flushed to zero. Float32 and bfloat16 share the exponent
+    range, and the hardware flushes both. When include_spl_values is False,
+    +/-0, +/-infinity, and NaN are replaced by +0 as well.
+
+    Args:
+        include_spl_values (bool, optional): If True, keep -0, +/-inf, and NaN.
+            If False, replace them with +0. Defaults to False.
+
+    Returns:
+        torch.Tensor: Shape (256, 256), dtype float32.
+    """
+    return generate_bfloat16_bits(dtype=torch.float32, include_spl_values=include_spl_values)
+
+
+def generate_float32_bits_in_range(low, high, ftz=True):
+    """
+    Bfloat16 values inside [low, high], stored as float32.
+
+    Same value set as generate_bfloat16_bits_in_range: every bfloat16 encoding
+    that falls in range, promoted to float32 and padded to a tile-aligned
+    (N, 32) shape. N is the smallest multiple of 32 that fits the filtered
+    values; padding repeats the first in-range value.
+
+    Args:
+        low (float): Lower bound of the range (inclusive).
+        high (float): Upper bound of the range (inclusive).
+        ftz (bool, optional): If True, flush subnormal values to zero before
+            filtering. Defaults to True.
+
+    Returns:
+        torch.Tensor: Shape (N, 32), dtype float32.
+    """
+    return generate_bfloat16_bits_in_range(low, high, dtype=torch.float32, ftz=ftz)
 
 
 # Mantissa codes for the binary-op sweep grid (7-bit):
@@ -358,6 +466,11 @@ def to_tt_tensor(
         layout=layout,
         memory_config=memory_config,
     )
+
+
+def to_float32_tt_tensor(input_tensor, device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """Convert a torch tensor to a ttnn.float32 tensor on device with TILE_LAYOUT and DRAM."""
+    return to_tt_tensor(input_tensor, device, dtype=ttnn.float32, layout=layout, memory_config=memory_config)
 
 
 def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, **op_kwargs):

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <memory>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
