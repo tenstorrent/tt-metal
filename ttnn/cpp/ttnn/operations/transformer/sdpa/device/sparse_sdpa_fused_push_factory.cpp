@@ -100,10 +100,11 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAPushFusedFactory:
         push.max_rows, push.stripe_chunk);
     using Layout = ttnn::operations::experimental::high_bw_all_gather::SparsePushPlanLayout;
 
+    const char* buffers_env = std::getenv("SPARSE_PUSH_MUX_BUFFERS");  // packets in flight per mux channel
     tt::tt_fabric::FabricMuxConfig mux_config(
         kSendersPerChannel,
         0,
-        2,
+        buffers_env ? static_cast<uint8_t>(std::stoul(buffers_env)) : 2,
         0,
         tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
@@ -173,11 +174,16 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAPushFusedFactory:
     writer_ct.push_back(1u);  // mux
     ttnn::ccl::fabric_mux_connection_ct_args(
         kSendersPerChannel, tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_config, writer_ct);
-    const tt::tt_metal::KernelDescriptor::Defines defines = {
+    tt::tt_metal::KernelDescriptor::Defines defines = {
         {"DEST_CHIP_ID", ttnn::operations::ccl::common::stringify(dest_chip_ids)},
         {"DEST_MESH_ID", ttnn::operations::ccl::common::stringify(dest_mesh_ids)},
         {"FABRIC_2D", "1"},
+        {"MESH_ROWS", std::to_string(mesh_shape[0])},
+        {"MESH_COLS", std::to_string(mesh_shape[1])},
     };
+    if (const char* split = std::getenv("SPARSE_PUSH_TIE_SPLIT"); split && std::string(split) != "0") {
+        defines.emplace_back("PUSH_TIE_SPLIT", "1");
+    }
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/device/kernels/";
 
     tt::tt_metal::KernelDescriptor reader;
