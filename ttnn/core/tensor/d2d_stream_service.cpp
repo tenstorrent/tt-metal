@@ -893,8 +893,9 @@ constexpr tt::CBIndex kPacketHeaderCbIndex = tt::CBIndex::c_1;
 // pages and keeps that many DRAM reads in flight while fabric-writing. Decoupled from
 // the (vestigial) socket chunk plan so the pipeline runs at full depth regardless of
 // pages_per_chunk. Sizes the per-lane scratch CB (kSenderReadRingSlots * tensor page);
-// two lanes consume 2*kSenderReadRingSlots trids, which must fit the 0..15 id space.
-constexpr uint32_t kSenderReadRingSlots = 4;
+// two lanes consume 2*kSenderReadRingSlots trids, which must fit the 1..15 id space. Six, not a power of
+// two: a 6208 B fabric payload holds three 2 KB tile pages, and a ring of six is two whole groups.
+constexpr uint32_t kSenderReadRingSlots = 6;
 
 // CT-arg layout must stay in sync with persistent_d2d_receiver.cpp.
 Program build_receiver_program(
