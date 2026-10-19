@@ -9,8 +9,11 @@
 #include "ttnn/operations/eltwise/unary/device/kernels/dram_read_common.hpp"
 
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/work_split.hpp>
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <limits>
 #include <numeric>
 #include <mutex>
@@ -185,6 +188,19 @@ struct TensorReads {
     uint32_t main_start_banks;
 };
 
+// True if the chain holds any of these ops.
+template <UnaryOpType... Types>
+bool chain_has(const std::vector<EltwiseUnaryWithParam>& op_chain) {
+    return std::any_of(op_chain.begin(), op_chain.end(), [](const auto& op) { return ((op.type() == Types) || ...); });
+}
+
+// Ops that keep main's path on many cores per DRAM bank, whatever their cost class. With 4 KB pages xielu's kernel is
+// bound by its SFPU work, and no flow beat main. With 2 KB pages main's time for softplus swings with the shape: the
+// flows lost to it at some sizes in trace replay.
+bool keeps_main_path(const std::vector<EltwiseUnaryWithParam>& op_chain, bool large_pages) {
+    return large_pages ? chain_has<UnaryOpType::XIELU>(op_chain) : chain_has<UnaryOpType::SOFTPLUS>(op_chain);
+}
+
 // Main gives each core a contiguous range of pages, the first cores a page more than the rest.
 uint32_t width_shards_main_starts_in(const DramReadPlan& plan, uint64_t total_pages, uint32_t num_cores) {
     std::vector<bool> started(plan.num_shards);
@@ -198,26 +214,28 @@ uint32_t width_shards_main_starts_in(const DramReadPlan& plan, uint64_t total_pa
     return static_cast<uint32_t>(std::count(started.begin(), started.end(), true));
 }
 
-// Flow for many cores per DRAM bank; None keeps main's path. Main's per-core ranges queue cores on one bank while
-// others idle, so the flows win up to close to the DRAM time per tile. Each branch is taken only where it beat main.
-DramReadFlow choose_flow_many_cores_per_bank(OpCost cost, const TensorReads& t, uint64_t pages_per_core) {
+// Pages above 2 KB (fp32, int32) on many cores per DRAM bank, measured from 65 pages per core.
+DramReadFlow choose_flow_large_pages(OpCost cost, const TensorReads& t, uint64_t pages_per_core) {
+    constexpr uint64_t kMinPagesPerCore = 64;
     // Below this the work queue has too little to balance: 128 pages is 8 chunks of the minimum size.
     constexpr uint64_t kMinPagesPerCoreForQueue = 128;
     // Below this, heavy ops read one page at a time, so their first tiles arrive early; above it the SFPU sets their
     // time.
     constexpr uint64_t kMaxPagesPerCoreForOnePage = 512;
+    // With fewer pages main's time is its launch time for light ops, and bursts do not shorten it.
+    constexpr uint64_t kMinPagesPerCoreForLightBursts = 96;
     const bool small = pages_per_core < kMinPagesPerCoreForQueue;
     const DramReadFlow deep = small ? DramReadFlow::StaticBurst : DramReadFlow::WorkQueue;
-    if (cost == OpCost::Unmeasured) {
+    if (cost == OpCost::Unmeasured || pages_per_core < kMinPagesPerCore) {
         return DramReadFlow::None;
     }
-    // On small width shards main's order already crosses banks, and on small interleaved tensors with large pages it
-    // already keeps up: deeper reads only delay the first tiles.
-    if (small && (t.width_shards || (t.interleaved && t.large_pages))) {
+    // On small width shards main's order already crosses banks, and on small interleaved tensors it already keeps up:
+    // deeper reads only delay the first tiles.
+    if (small && (t.width_shards || t.interleaved)) {
         return DramReadFlow::None;
     }
     if (cost <= OpCost::Moderate) {
-        return deep;
+        return pages_per_core >= kMinPagesPerCoreForLightBursts ? deep : DramReadFlow::None;
     }
     // With every bank serving the tensor, DRAM keeps up with mid and heavy ops, so the flows only add overhead.
     if (t.all_banks) {
@@ -226,10 +244,52 @@ DramReadFlow choose_flow_many_cores_per_bank(OpCost cost, const TensorReads& t, 
     if (cost == OpCost::Mid) {
         return deep;
     }
-    if (pages_per_core < kMaxPagesPerCoreForOnePage) {
-        return DramReadFlow::StaticOnePage;
+    return pages_per_core < kMaxPagesPerCoreForOnePage ? DramReadFlow::StaticOnePage : deep;
+}
+
+// Flow for many cores per DRAM bank; None keeps main's path. Main's per-core ranges queue cores on one bank while
+// others idle, so the flows win up to close to the DRAM time per tile. With 2 KB pages each gate is the smallest share
+// from which its flow beat main's path for every measured op of the group at every measured size from 16 to 196 pages
+// per core. Heavy ops keep main's path: main's own time for them swings with the shape, so no flow won at every size.
+DramReadFlow choose_flow_many_cores_per_bank(OpCost cost, const TensorReads& t, uint64_t pages_per_core) {
+    if (t.large_pages) {
+        return choose_flow_large_pages(cost, t, pages_per_core);
     }
-    return t.large_pages ? deep : DramReadFlow::None;
+    if (cost >= OpCost::Heavy) {
+        return DramReadFlow::None;
+    }
+    struct Gate {
+        uint64_t min_pages_per_core;
+        DramReadFlow flow;
+    };
+    // On every bank, bursts until the queue has enough pages to balance: 128 pages is 8 chunks of the minimum size.
+    constexpr uint64_t kMinPagesPerCoreForQueueOnAllBanks = 128;
+    constexpr Gate kNever{std::numeric_limits<uint64_t>::max(), DramReadFlow::None};
+    enum Layout : uint8_t { Interleaved, AllBankShards, HeightShards, WidthShards };
+    enum Cost : uint8_t { LightOrModerate, Mid };
+    // Rows by layout, columns by cost. With every bank serving the tensor DRAM keeps up with mid ops, so they keep
+    // main's path there. Shards on every bank keep the earlier 96-page gate: the sweep did not cover them.
+    constexpr std::array<std::array<Gate, 2>, 4> kGates{{
+        {{{65, DramReadFlow::WorkQueue}, kNever}},                         // interleaved
+        {{{96, DramReadFlow::WorkQueue}, kNever}},                         // shards on every bank
+        {{{40, DramReadFlow::WorkQueue}, {32, DramReadFlow::WorkQueue}}},  // height shards
+        {{{73, DramReadFlow::WorkQueue}, {32, DramReadFlow::WorkQueue}}},  // width shards
+    }};
+    const auto layout = [&] {
+        if (t.interleaved) {
+            return Interleaved;
+        }
+        if (t.all_banks) {
+            return AllBankShards;
+        }
+        return t.width_shards ? WidthShards : HeightShards;
+    }();
+    const Gate gate = kGates[layout][cost == OpCost::Mid ? Mid : LightOrModerate];
+    if (pages_per_core < gate.min_pages_per_core) {
+        return DramReadFlow::None;
+    }
+    const bool all_banks = layout == Interleaved || layout == AllBankShards;
+    return all_banks && pages_per_core < kMinPagesPerCoreForQueueOnAllBanks ? DramReadFlow::StaticBurst : gate.flow;
 }
 
 // Flow for few cores per DRAM bank; None keeps main's path. Main's order leaves fewer cores idle there, so the flows
@@ -306,9 +366,9 @@ DramReadPlan get_dram_read_plan(
     // From this many cores per DRAM bank, main's order queues cores on a bank while others idle; with fewer it is
     // closer to balanced and a stricter rule applies.
     constexpr uint32_t kManyCoresPerDramBank = 8;
-    // Smallest shares where a flow was measured: 65 pages per core with many cores per bank (14 MiB on Blackhole),
-    // and the stricter rule's shortest flow starts at 24.
-    constexpr uint64_t kMinPagesPerCoreManyCoresPerBank = 64;
+    // Smallest shares where a flow beat main's path: 32 pages per core with many cores per bank (mid ops on shards,
+    // Blackhole), and the stricter rule's shortest flow starts at 24.
+    constexpr uint64_t kMinPagesPerCoreManyCoresPerBank = 32;
     constexpr uint64_t kMinPagesPerCoreFewCoresPerBank = 24;
     // Smaller pages (bfp8, bfp4) leave most ops compute-bound, and the flows did not beat main's order for them.
     constexpr uint32_t kMinPageBytes = 2048;
@@ -406,7 +466,9 @@ DramReadPlan get_dram_read_plan(
         .shard_width = shard_width,
         .main_start_banks = main_start_banks};
     plan.flow = many_cores_per_bank
-                    ? choose_flow_many_cores_per_bank(chain_cost(op_chain), reads, pages_per_core)
+                    ? (keeps_main_path(op_chain, reads.large_pages)
+                           ? DramReadFlow::None
+                           : choose_flow_many_cores_per_bank(chain_cost(op_chain), reads, pages_per_core))
                     : choose_flow_few_cores_per_bank(
                           reads.large_pages ? large_page_cost(op_chain) : chain_cost(op_chain), reads, pages_per_core);
     if (plan.flow == DramReadFlow::WorkQueue &&
@@ -531,7 +593,55 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     return ret;
 }
 
+namespace {
+
+// Small DRAM tensors, interleaved or sharded: each core of the grid adds host and dispatch time to a launch, so a
+// tensor with few pages runs on part of the grid. Pages per core by the op's cost keep the device time of the whole
+// grid (measured in trace replay); at least 8 cores, as fast as fewer; powers of two keep the cached programs few. L1
+// tensors keep their grid.
+tt::tt_metal::CoreRangeSet small_tensor_grid(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    const Tensor& input_tensor,
+    const std::optional<Tensor>& output_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const tt::tt_metal::CoreRangeSet& workers) {
+    constexpr uint32_t kMinCores = 8;
+    const bool dram = input_tensor.memory_config().is_dram() &&
+                      (!memory_config.has_value() || memory_config->is_dram()) &&
+                      (!output_tensor.has_value() || output_tensor->memory_config().is_dram());
+    if (!dram || input_tensor.layout() != tt::tt_metal::Layout::TILE) {
+        return workers;
+    }
+    // On more cores than this, fewer pages per core keep pace with the whole grid, except light ops on height shards.
+    constexpr uint32_t kMaxCoresAtFullLoad = 32;
+    const OpCost cost = chain_cost(op_chain);
+    const bool height_sharded =
+        input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
+    const uint64_t pages_per_core = cost == OpCost::Light ? 4 : cost <= OpCost::Mid ? 2 : 1;
+    const uint64_t pages_per_core_on_more = cost == OpCost::Light ? (height_sharded ? 4 : 3) : 1;
+    const uint64_t pages = input_tensor.physical_volume() / input_tensor.tensor_spec().tile().get_tile_hw();
+    if (pages >= pages_per_core * workers.num_cores()) {
+        return workers;
+    }
+    const auto cores_for = [&](uint64_t per_core) {
+        return std::max(kMinCores, std::bit_ceil(static_cast<uint32_t>(tt::div_up(pages, per_core))));
+    };
+    auto cores = cores_for(pages_per_core);
+    if (cores > kMaxCoresAtFullLoad) {
+        cores = cores_for(pages_per_core_on_more);
+    }
+    if (cores >= workers.num_cores()) {
+        return workers;
+    }
+    log_debug(tt::LogOp, "Unary: Using {} worker cores for {} pages", cores, pages);
+    return tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+        workers.ranges().front().start_coord, cores, workers, /*row_wise=*/true);
+}
+
+}  // namespace
+
 tt::tt_metal::CoreRangeSet get_worker_grid(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
@@ -577,7 +687,7 @@ tt::tt_metal::CoreRangeSet get_worker_grid(
         if (const auto grid = shard_grid_of(output_tensor->memory_config())) {
             if (const auto workers = sub_device_workers_for(*grid, output_tensor->device())) {
                 log_debug(tt::LogOp, "Unary: Using output tensor grid for worker grid {}", grid->str());
-                return *workers;
+                return small_tensor_grid(op_chain, input_tensor, output_tensor, memory_config, *workers);
             }
         }
     }
@@ -586,16 +696,21 @@ tt::tt_metal::CoreRangeSet get_worker_grid(
         if (const auto grid = shard_grid_of(*memory_config)) {
             if (const auto workers = sub_device_workers_for(*grid, input_tensor.device())) {
                 log_debug(tt::LogOp, "Unary: Using memory config shard spec grid for worker grid {}", grid->str());
-                return *workers;
+                return small_tensor_grid(op_chain, input_tensor, output_tensor, memory_config, *workers);
             }
         }
     }
 
     // No branch on the input's own grid: native L1 sharding needs both sides on one grid, so the
     // memory_config branch above already returned it.
-    log_debug(tt::LogOp, "Unary: Using all worker cores of the device");
     auto* device = input_tensor.device();
-    return device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+    log_debug(tt::LogOp, "Unary: Using the worker cores of the device");
+    return small_tensor_grid(
+        op_chain,
+        input_tensor,
+        output_tensor,
+        memory_config,
+        device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front()));
 }
 
 tt::tt_metal::ShardSpec generate_output_shard_spec(
