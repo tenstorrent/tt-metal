@@ -64,7 +64,7 @@ pinned to the grid's printed start time, and cycles are converted with the profi
 Keep profiler runs and power runs separate. With the profiler on, the kernels read the timer in
 their inner loops and the profiler is read back during the first idle pause, which is where the
 base current is measured. Unset `TT_METAL_DEVICE_PROFILER` before a power sweep
-(`run_power_cases.py` and `run_all.py` pass the environment through).
+(`run_sweep.py` passes the environment through).
 
 ## 4. `parser.py`
 
