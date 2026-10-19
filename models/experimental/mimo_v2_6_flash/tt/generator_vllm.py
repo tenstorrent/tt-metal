@@ -90,6 +90,7 @@ class MiMoV2ForCausalLM:
         self.already_warmed_up_prefill = False
         self.layer_groups = None
         self.kv_caches = None
+        self.decode_recaptures = 0  # decode traces captured again after a prefill compiled new programs
 
     # ------------------------------------------------------------------ construction and sizing
     @classmethod
@@ -294,6 +295,7 @@ class MiMoV2ForCausalLM:
         # Enqueue every row before reading any, the rows of different lanes interleaved so all replicas have work.
         by_lane = [[p for p in placed if p[1] == lane] for lane in range(self.dp)]
         order = [rows_of[k] for k in range(max(map(len, by_lane))) for rows_of in by_lane if k < len(rows_of)]
+        programs = [model.mesh_device.num_program_cache_entries() for model in self.models]
         pending = {}
         for i, lane, slot, start, end in order:
             chunk = torch.as_tensor(tokens[i, start:end]).to(torch.int32)
@@ -301,7 +303,25 @@ class MiMoV2ForCausalLM:
         logits = [None] * rows
         for i, (lane, handle) in pending.items():
             logits[i] = self.models[lane].prefill_read(handle)[0]
+        self._recapture_after_new_programs(programs)
         return torch.stack(logits).unsqueeze(1)
+
+    def _recapture_after_new_programs(self, programs):
+        """``programs``: each replica's program-cache size before the prefill. A prefill that compiled new programs
+        (a chunk length or offset first seen while serving) put their program-cache buffers in memory the replica's
+        decode trace may write on replay (tech_reports/.../TraceCorrectness.md, unsafe allocations), so that replica's
+        decode trace is captured again, around them. Every slot is idle during the capture, so no KV is written."""
+        for lane, model in enumerate(self.models):
+            if model.decode_trace is None or model.mesh_device.num_program_cache_entries() == programs[lane]:
+                continue
+            new = model.mesh_device.num_program_cache_entries() - programs[lane]
+            model.release_decode_trace()
+            model.capture_decode_trace()
+            self.decode_recaptures += 1
+            logger.info(
+                f"MiMo vLLM: replica {lane} decode trace recaptured after {new} new prefill programs "
+                f"({self.decode_recaptures} recaptures so far)"
+            )
 
     # ------------------------------------------------------------------ decode
     def decode_forward(

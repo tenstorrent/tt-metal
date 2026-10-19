@@ -91,7 +91,6 @@ class TtMiMoMoE:
         del w_gate_up
         self.w_down = as_weight(w_down, plan, plan.shard(-2), expert_dtype, cache_name(cache_dir, prefix, "w_down"))
 
-        self._zero_cache = {}
         self.expert_config = compute_config(ttnn.MathFidelity.HiFi2, fp32_acc=True)
         # Measured on BH (decode, 32 experts): wider K blocks cut the per-expert handshakes; down over 8x8 cores.
         self.gate_up_program = mcast_1d_config((8, 2), TILE, 2 * self.inter_local, self.hidden, in0_block_w=64)
@@ -102,19 +101,6 @@ class TtMiMoMoE:
         self.fabric_gather = False  # set by the model: the block reductions all-gather over the fabric
         self.down_stream = None
         self.ids_buf = None
-
-    def _zeros(self, num_tokens):
-        """Cached [1, 1, T, E] zeros. ``ttnn.zeros`` writes from the host, which a trace capture cannot do,
-        so the tensor is made on first use (warm-up) and reused."""
-        if num_tokens not in self._zero_cache:
-            self._zero_cache[num_tokens] = ttnn.zeros(
-                ttnn.Shape((1, 1, num_tokens, self.num_experts)),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.plan.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        return self._zero_cache[num_tokens]
 
     def _topk(self, logits):
         """fp32 router logits [1, 1, T, E] -> (top-k indices uint32, normalized unbiased weights fp32), [1, 1, T, k]."""
@@ -151,15 +137,18 @@ class TtMiMoMoE:
 
     def route(self, x, token_mask=None):
         """x [1, 1, T, hidden] -> dense routing weights [1, 1, T, E] (bf16; zero off the top-8)."""
-        num_tokens = x.shape[-2]
         logits = self._router_logits(x)
         indices, weights = self._topk(logits)
+        # Zeros filled on device for every call. A zero tensor cached per T and first made after a decode trace capture
+        # (a prefill length first seen while serving) would sit in memory the trace's replays write to.
+        zeros32 = ttnn.zeros_like(logits)
         logits.deallocate(True)
+        zeros = ttnn.typecast(zeros32, ttnn.bfloat16)
+        zeros32.deallocate(True)
         weights_bf16 = ttnn.typecast(weights, ttnn.bfloat16)
         weights.deallocate(True)
-        zeros = self._zeros(num_tokens)  # scatter is out of place, so one cached zero tensor per T is safe
         dense = ttnn.scatter(zeros, dim=-1, index=indices, src=weights_bf16)
-        for t in (weights_bf16, indices):
+        for t in (zeros, weights_bf16, indices):
             t.deallocate(True)
         if token_mask is not None:
             masked = ttnn.mul(dense, token_mask)
