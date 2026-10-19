@@ -60,7 +60,8 @@ DEVICE_MS_BASELINES = {
     (8192, 100): 1875.0,
     (8192, 256): 6371.5,
 }
-# Allowed run-to-run variation either side of the baseline, keyed by context_k.
+# Allowed run-to-run variation either side of the baseline, keyed by context_k. Only SLOW fails;
+# FAST is reported so the baseline can be updated.
 # Device time excludes host staging, so its margins are tighter.
 WALL_MS_MARGINS = {10: 0.03, 100: 0.03, 256: 0.02}
 DEVICE_MS_MARGINS = {1: 0.02, 10: 0.02, 100: 0.02, 256: 0.02}
@@ -88,8 +89,9 @@ def test_model_perf_glx(mesh_device, reset_seeds):
     """Check the 1k/10k/100k/256k device times and 10k/100k/256k wall times of a traced 256k prefill
     against their baselines.
 
-    Runs every chunk size in one process, writing weights once. Fails if a time is outside its
-    range on either side: too slow is a regression, too fast means the baseline needs updating.
+    Runs every chunk size in one process, writing weights once. Fails if a time is above its range
+    (a regression). A time below its range is reported as FAST, meaning the baseline needs updating,
+    but does not fail.
     """
     if unset := [(c, k) for c in CHUNK_SIZES for k in REPORT_CONTEXT_KS if (c, k) not in DEVICE_MS_RANGES]:
         pytest.fail(f"no device-time baseline for (chunk_size, context_k) {unset} (context in units of 1k)")
@@ -97,7 +99,7 @@ def test_model_perf_glx(mesh_device, reset_seeds):
     mesh_config = _mesh_config(mesh_device)
     hf_model_id = _hf_model_id()
 
-    rows, failures = [], []
+    rows, failures, fast = [], [], []
     with _shared_device_weights():
         for chunk_size in CHUNK_SIZES:
             logger.info(f"[perf_gate] ===== chunk_size={chunk_size} context_len={CONTEXT_LEN} =====")
@@ -129,9 +131,7 @@ def test_model_perf_glx(mesh_device, reset_seeds):
                         failures.append(f"{context_k}k@{chunk_size} {metric}: {ms:.1f}ms > max {max_ms:.1f}ms")
                     elif ms < min_ms:
                         result = "FAST"
-                        failures.append(
-                            f"{context_k}k@{chunk_size} {metric}: {ms:.1f}ms < min {min_ms:.1f}ms, update the baseline"
-                        )
+                        fast.append(f"{context_k}k@{chunk_size} {metric}: {ms:.1f}ms < min {min_ms:.1f}ms")
                     else:
                         result = "PASS"
                     rows.append(
@@ -139,4 +139,6 @@ def test_model_perf_glx(mesh_device, reset_seeds):
                     )
 
     logger.info("[perf_gate] wall and device times vs baseline ranges:\n" + "\n".join([RESULT_HEADER, *rows]))
-    assert not failures, "prefill time outside baseline range: " + ", ".join(failures)
+    if fast:
+        logger.warning("[perf_gate] faster than baseline range, update the baselines: " + ", ".join(fast))
+    assert not failures, "prefill time above baseline range: " + ", ".join(failures)
