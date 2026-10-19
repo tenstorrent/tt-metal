@@ -1,0 +1,198 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "sparse_push_plan_device_operation.hpp"
+
+#include <algorithm>
+#include <set>
+
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
+
+namespace ttnn::operations::experimental::high_bw_all_gather {
+
+namespace plan_detail {
+
+constexpr uint32_t kMaxCores = 64;
+constexpr uint32_t kBlockAlign = 64;  // keeps every core's word / byte / count range 64 B aligned
+enum PlanCb : uint32_t { kImage = 0, kRow = 1, kPre = 2, kScratch = 3 };
+
+uint32_t round_up(uint32_t x, uint32_t m) { return (x + m - 1) / m * m; }
+
+}  // namespace plan_detail
+
+using namespace plan_detail;
+
+SparsePushPlanLayout SparsePushPlanLayout::make(uint32_t max_rows, uint32_t stripe_chunk) {
+    SparsePushPlanLayout l;
+    l.bitmap_words = max_rows / 32;
+    l.num_blocks = max_rows / stripe_chunk;
+    l.prefix_off = round_up(kBitmapOff + l.bitmap_words, 16);
+    l.counts_off = round_up(l.prefix_off + (l.bitmap_words + 3) / 4, 16);
+    l.pages = round_up(l.counts_off + l.num_blocks, kPageWords) / kPageWords;
+    return l;
+}
+
+void SparsePushPlanDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& attrs, const tensor_args_t& args) {
+    const auto& idx = args.indices;
+    TT_FATAL(idx.dtype() == DataType::UINT32 && idx.layout() == Layout::ROW_MAJOR, "indices must be UINT32 ROW_MAJOR");
+    TT_FATAL(idx.buffer() != nullptr && idx.buffer()->buffer_type() == BufferType::DRAM, "indices must be in DRAM");
+    TT_FATAL(idx.padded_shape().rank() == 4, "indices must be [1, 1, rows, topk]");
+    TT_FATAL(attrs.num_devices >= 1 && attrs.num_devices <= 32, "sparse push plan supports up to 32 devices");
+    TT_FATAL(attrs.stripe_chunk % 32 == 0, "stripe_chunk {} must be a multiple of 32", attrs.stripe_chunk);
+    TT_FATAL(
+        attrs.max_rows % attrs.stripe_chunk == 0 && attrs.max_rows % 512 == 0,
+        "max_rows {} must be a multiple of stripe_chunk {} and of 512",
+        attrs.max_rows,
+        attrs.stripe_chunk);
+    TT_FATAL(attrs.pages_per_packet >= 1 && attrs.banks >= 1, "pages_per_packet and banks must be positive");
+}
+
+SparsePushPlanDeviceOperation::spec_return_value_t SparsePushPlanDeviceOperation::compute_output_specs(
+    const operation_attributes_t& attrs, const tensor_args_t& args) {
+    const auto layout = SparsePushPlanLayout::make(attrs.max_rows, attrs.stripe_chunk);
+    const tt::tt_metal::TensorLayout rm(
+        DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{BufferType::DRAM});
+    return {
+        tt::tt_metal::TensorSpec(Shape({1, 1, layout.pages, SparsePushPlanLayout::kPageWords}), rm),
+        tt::tt_metal::TensorSpec(args.indices.logical_shape(), rm)};
+}
+
+SparsePushPlanDeviceOperation::tensor_return_value_t SparsePushPlanDeviceOperation::create_output_tensors(
+    const operation_attributes_t& attrs, const tensor_args_t& args) {
+    auto specs = compute_output_specs(attrs, args);
+    return {
+        create_device_tensor(specs[0], args.indices.device()), create_device_tensor(specs[1], args.indices.device())};
+}
+
+tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor(
+    const operation_attributes_t& attrs, const tensor_args_t& args, tensor_return_value_t& outputs) {
+    const auto& indices = args.indices;
+    auto* idx_buf = indices.buffer();
+    auto* table_buf = outputs[0].buffer();
+    auto* compact_buf = outputs[1].buffer();
+    const auto layout = SparsePushPlanLayout::make(attrs.max_rows, attrs.stripe_chunk);
+    const uint32_t rows = indices.padded_shape()[2];
+    const uint32_t topk = indices.padded_shape()[3];
+    const uint32_t row_bytes = topk * sizeof(uint32_t);
+
+    auto* device = indices.device();
+    const auto grid = device->compute_with_storage_grid_size();
+    const uint32_t cores = std::min<uint32_t>({kMaxCores, grid.x * grid.y, std::max(rows, 1u)});
+    const auto core_list = tt::tt_metal::grid_to_cores(cores, grid.x, grid.y, true);
+    std::set<CoreRange> ranges;
+    for (const auto& c : core_list) {
+        ranges.insert(CoreRange(c, c));
+    }
+    const CoreRangeSet all_cores(ranges);
+    const uint32_t blocks_per_core = round_up((layout.num_blocks + cores - 1) / cores, kBlockAlign);
+
+    tt::tt_metal::ProgramDescriptor desc;
+    auto add_cb = [&](uint32_t id, uint32_t bytes) {
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = bytes,
+            .core_ranges = all_cores,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(id),
+                .data_format = tt::DataFormat::RawUInt32,
+                .page_size = bytes}}},
+        });
+    };
+    add_cb(kImage, layout.pages * SparsePushPlanLayout::kPageWords * sizeof(uint32_t));
+    add_cb(kRow, round_up(row_bytes, 64));
+    add_cb(kPre, round_up(layout.num_blocks * sizeof(uint32_t), 64));
+    add_cb(kScratch, round_up(blocks_per_core * (attrs.stripe_chunk / 32) * sizeof(uint32_t), 64));
+
+    auto add_semaphore = [&]() {
+        const auto id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
+        return id;
+    };
+    const uint32_t arrive_sem = add_semaphore();
+    const uint32_t go_sem = add_semaphore();
+
+    std::vector<uint32_t> ct = {
+        attrs.num_devices,
+        attrs.stripe_chunk,
+        layout.bitmap_words,
+        layout.num_blocks,
+        SparsePushPlanLayout::kBitmapOff,
+        layout.prefix_off,
+        layout.counts_off,
+        SparsePushPlanLayout::kOwnerOff,
+        layout.pages,
+        attrs.pages_per_packet,
+        attrs.banks,
+        topk,
+        cores,
+        blocks_per_core,
+        arrive_sem,
+        go_sem,
+        SparsePushPlanLayout::kMagic,
+    };
+    tt::tt_metal::TensorAccessorArgs(idx_buf).append_to(ct);
+    tt::tt_metal::TensorAccessorArgs(table_buf).append_to(ct);
+    tt::tt_metal::TensorAccessorArgs(compact_buf).append_to(ct);
+
+    tt::tt_metal::KernelDescriptor kernel;
+    kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/device/kernels/sparse_push_plan.cpp";
+    kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    kernel.core_ranges = all_cores;
+    kernel.compile_time_args = std::move(ct);
+    kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default};
+
+    std::vector<uint32_t> core_xy;
+    for (const auto& c : core_list) {
+        const auto phys = device->worker_core_from_logical_core(c);
+        core_xy.push_back(phys.x);
+        core_xy.push_back(phys.y);
+    }
+    const uint32_t rows_per_core = (rows + cores - 1) / cores;
+    for (uint32_t i = 0; i < cores; ++i) {
+        const uint32_t r0 = std::min(rows, i * rows_per_core);
+        const uint32_t r1 = std::min(rows, r0 + rows_per_core);
+        tt::tt_metal::KernelDescriptor::RTArgList rt;
+        rt.push_back(idx_buf);
+        rt.push_back(table_buf);
+        rt.push_back(compact_buf);
+        rt.push_back(i);
+        rt.push_back(r0);
+        rt.push_back(r1 - r0);
+        rt.push_back(core_xy[0]);
+        rt.push_back(core_xy[1]);
+        rt.append(core_xy);
+        kernel.emplace_runtime_args(core_list[i], rt);
+    }
+    desc.kernels.push_back(std::move(kernel));
+    return desc;
+}
+
+}  // namespace ttnn::operations::experimental::high_bw_all_gather
+
+namespace ttnn::prim {
+
+std::vector<Tensor> sparse_push_plan(
+    const Tensor& indices,
+    uint32_t num_devices,
+    uint32_t stripe_chunk,
+    uint32_t max_rows,
+    uint32_t pages_per_packet,
+    uint32_t banks) {
+    using Op = ttnn::operations::experimental::high_bw_all_gather::SparsePushPlanDeviceOperation;
+    return ttnn::device_operation::launch<Op>(
+        Op::operation_attributes_t{
+            .num_devices = num_devices,
+            .stripe_chunk = stripe_chunk,
+            .max_rows = max_rows,
+            .pages_per_packet = pages_per_packet,
+            .banks = banks},
+        Op::tensor_args_t{.indices = indices});
+}
+
+}  // namespace ttnn::prim

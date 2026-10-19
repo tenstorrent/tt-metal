@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/global_semaphore.hpp"
@@ -44,8 +45,19 @@ Tensor high_bw_all_gather(
     // PROTOTYPE: index-driven sparse push instead of the dense gather (see HighBwSparsePushFactory).
     const std::optional<Tensor>& push_runs_tensor = std::nullopt);
 
+// PROTOTYPE on-device plan for the sparse push: returns {plan table, indices rewritten to compact slots}
+// (see device/sparse_push_plan_device_operation.hpp).
+std::vector<Tensor> sparse_push_plan(
+    const Tensor& indices,
+    uint32_t num_devices,
+    uint32_t stripe_chunk,
+    uint32_t max_rows,
+    uint32_t pages_per_packet,
+    uint32_t banks);
+
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 
 namespace ttnn::experimental {
 using operations::experimental::high_bw_all_gather::high_bw_all_gather;
+using operations::experimental::high_bw_all_gather::sparse_push_plan;
 }  // namespace ttnn::experimental
