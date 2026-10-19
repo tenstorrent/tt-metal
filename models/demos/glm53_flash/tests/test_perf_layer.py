@@ -49,9 +49,11 @@ DECODE_STEPS = int(os.environ.get("GLM53_PERF_DECODE_STEPS", "3"))
 # "both" | "prefill" | "decode": the Tracy device-zone hash table collides for the full prefill+decode kernel
 # set of a MoE layer ("Source location hashes are colliding"), so each phase can be profiled in its own run
 PHASE = os.environ.get("GLM53_PERF_PHASE", "both")
-# 1: seed the DSA latent cache through the sparse prefill path (indexer + sparse_sdpa) so a decode-only
-# profile never compiles the dense SDPA prefill kernel whose Tracy zones collide on this commit
-FORCE_SPARSE_PREFILL = os.environ.get("GLM53_PERF_FORCE_SPARSE_PREFILL", "0") == "1"
+# 1: skip the prefill entirely and seed the DSA latent cache with random rows (the decode profile does
+# not depend on the cache content), so a decode-only profile compiles no SDPA prefill kernel at all:
+# both the dense and the sparse prefill kernels share compute_streaming.hpp, whose Tracy zones
+# collide on this commit (profiler.cpp "Source location hashes are colliding")
+SEED_ONLY = os.environ.get("GLM53_PERF_SEED_ONLY", "0") == "1"
 DUMP = Path("bringup/references/glm53_flash/T4097")
 
 
@@ -67,15 +69,23 @@ def test_layer_perf(mesh_device):
         raw, hf_config=cfg, layer_idx=LAYER, mesh_device=mesh_device, max_batch=1, max_seq_len=S + 64
     )
     kind = f"{'KDA' if dec.layer.is_kda else 'DSA'}+{'MoE' if dec.layer.is_moe else 'dense'}"
-    if FORCE_SPARSE_PREFILL and not dec.layer.is_kda:
-        dec.layer.attn.sparse_from = 0  # every prefill through the sparse path (exact below 2048 anyway)
+    if SEED_ONLY:
+        if dec.cache is not None:
+            g = torch.Generator().manual_seed(0)
+            rows = -(-S // 32) * 32
+            latent = torch.randn(1, 1, rows, cfg.kv_lora_rank, generator=g) * 0.5
+            dec.cache.fill(
+                ttnn.from_torch(latent, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device), user=0
+            )
+        logger.info(f"layer {LAYER} ({kind}) seed-only: prefill skipped, cache seeded with {S} random rows")
 
     # ---- prefill: compile pass, then the measured warmed pass
     x_dev = host_streams_to_device(x_in, mesh_device)
-    dec.prefill_forward(x_dev, user=0, seq_len=S)
-    ttnn.synchronize_device(mesh_device)
-    _read_profiler(mesh_device)
-    if PHASE in ("both", "prefill"):
+    if not SEED_ONLY:
+        dec.prefill_forward(x_dev, user=0, seq_len=S)
+        ttnn.synchronize_device(mesh_device)
+        _read_profiler(mesh_device)
+    if PHASE in ("both", "prefill") and not SEED_ONLY:
         signpost("PERF_PREFILL")
         t0 = time.perf_counter()
         y = dec.prefill_forward(x_dev, user=0, seq_len=S)
