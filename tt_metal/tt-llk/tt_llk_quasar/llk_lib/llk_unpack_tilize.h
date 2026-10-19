@@ -60,6 +60,7 @@ inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, cons
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
     static_assert(MOP_BANK == 0 || MOP_BANK == 1, "MOP_BANK can only be 0 or 1");
+    LLK_ASSERT(block_ct_dim <= MOP_LOOP_LEN_MAX, "block_ct_dim exceeds the MOP loop length");
 
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
     const std::uint32_t MOP_INNER_LOOP     = block_ct_dim;
@@ -462,6 +463,7 @@ inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const std::uint32
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
     static_assert(!(EN_32BIT_DEST && UNP_SEL != p_unpacr::UNP_A), "If EN_32BIT_DEST then UNP_SEL should be UNP_A");
+    LLK_ASSERT(block_ct_dim <= MOP_LOOP_LEN_MAX, "block_ct_dim exceeds the MOP loop length");
 
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
     const std::uint32_t MOP_INNER_LOOP     = block_ct_dim;
