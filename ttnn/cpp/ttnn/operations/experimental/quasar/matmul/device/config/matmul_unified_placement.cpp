@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_auto_config.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_placement.hpp"
 
 #include <algorithm>
 #include <string>
@@ -36,17 +36,15 @@ struct ArchCostModel {
 // The part of the shorter costs that the buffering does not hide behind the longest one.
 constexpr double UNHIDDEN_FRACTION = 0.25;
 
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
-double estimate_unified_matmul_cycles(
+// Estimated device cycles of a plan: the largest of the busiest core's compute and data movement and the device's
+// DRAM traffic, part of the other two (the buffering overlaps them imperfectly), and a fixed cost per C slice.
+double estimate_plan_cycles(
     const ttnn::prim::qsr::UnifiedMatmulPlan& plan,
     tt::ARCH arch,
     tt::tt_metal::MathFidelity math_fidelity,
     bool A_in_dram,
     bool B_in_dram,
     bool C_in_dram) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
     const ArchCostModel model = arch == tt::ARCH::QUASAR      ? ArchCostModel{16.0, 16.0, 128.0, 128.0, 512.0, 2000.0}
                                 : arch == tt::ARCH::BLACKHOLE ? ArchCostModel{16.0, 16.0, 64.0, 64.0, 380.0, 1000.0}
                                                               : ArchCostModel{16.0, 16.0, 32.0, 32.0, 256.0, 1000.0};
@@ -88,7 +86,10 @@ double estimate_unified_matmul_cycles(
     return longest_cycles + UNHIDDEN_FRACTION * shorter_cycles + C_slices_on_busiest_core * model.C_slice_cycles;
 }
 
-std::optional<MatmulUnifiedProgramConfig> choose_unified_matmul_program_config(
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
     const Tensor& A,
     const Tensor& B,
     bool transpose_a,
@@ -246,7 +247,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_matmul_program_config(
                 plan->sharded_output_layout != C_memory.memory_layout()) {
                 break;
             }
-            const double cycles = estimate_unified_matmul_cycles(
+            const double cycles = estimate_plan_cycles(
                 *plan,
                 device.arch(),
                 math_fidelity,
@@ -255,7 +256,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_matmul_program_config(
                 C_memory.is_dram());
             log_debug(
                 tt::LogOp,
-                "Unified matmul auto-config: {} with a {}x{}-tile C slice on {} cores: {:.0f} cycles",
+                "Unified matmul placement: {} with a {}x{}-tile C slice on {} cores: {:.0f} cycles",
                 candidate.name,
                 plan->C_slice_M_tiles,
                 plan->C_slice_N_tiles,

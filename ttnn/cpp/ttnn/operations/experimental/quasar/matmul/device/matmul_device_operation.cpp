@@ -8,7 +8,6 @@
 
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
-#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_auto_config.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 #include "tt-metalium/hal_types.hpp"
 #include "tt-metalium/experimental/global_circular_buffer.hpp"
@@ -2430,33 +2429,6 @@ MatmulParams create_matmul_attributes(
         parameters.sub_device_id};
 }
 
-namespace {
-// A MatmulUnifiedProgramConfig without cores asks for its placement to be chosen; every later step plans the
-// chosen one.
-void resolve_unified_placement(
-    MatmulParams& attributes, const Tensor& input_tensor_a, const Tensor& input_tensor_b, uint32_t bias_tile_bytes) {
-    using operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig;
-    const MatmulUnifiedProgramConfig* requested = std::get_if<MatmulUnifiedProgramConfig>(&*attributes.program_config);
-    if (requested == nullptr || requested->cores.num_cores() > 0) {
-        return;
-    }
-    std::optional<MatmulUnifiedProgramConfig> chosen =
-        operations::experimental::quasar::matmul::choose_unified_matmul_program_config(
-            input_tensor_a,
-            input_tensor_b,
-            attributes.transpose_a,
-            attributes.transpose_b,
-            bias_tile_bytes,
-            attributes,
-            *requested);
-    TT_FATAL(
-        chosen.has_value(),
-        "MatmulUnifiedProgramConfig: no placement of this matmul fits L1 or the unified matmul does not support it "
-        "(transposed operands, untilized output, tiles other than 32x32)");
-    attributes.program_config = std::move(chosen.value());
-}
-}  // namespace
-
 MatmulDeviceOperation::tensor_return_value_t matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -2464,26 +2436,19 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     const std::optional<Tensor>& optional_output_tensor,
     const MatmulParams& attributes) {
     MatmulParams normalized_attributes = attributes;
-    if (!normalized_attributes.program_config.has_value()) {
-        uint32_t bias_single_tile_size = 0;
-        if (bias.has_value()) {
-            auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(bias.value().dtype());
-            bias_single_tile_size = tt::tile_size(bias_data_format);
-        }
-
-        normalized_attributes.program_config = operations::experimental::quasar::matmul::get_program_config(
-            input_tensor_a,
-            input_tensor_b,
-            normalized_attributes.transpose_a,
-            normalized_attributes.transpose_b,
-            bias_single_tile_size,
-            normalized_attributes);
+    uint32_t bias_single_tile_size = 0;
+    if (bias.has_value()) {
+        auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(bias.value().dtype());
+        bias_single_tile_size = tt::tile_size(bias_data_format);
     }
-    resolve_unified_placement(
-        normalized_attributes,
+    // The caller's config, with its placement chosen if it has none, or an auto-chosen one.
+    normalized_attributes.program_config = operations::experimental::quasar::matmul::get_program_config(
         input_tensor_a,
         input_tensor_b,
-        bias.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(bias->dtype())) : 0);
+        normalized_attributes.transpose_a,
+        normalized_attributes.transpose_b,
+        bias_single_tile_size,
+        normalized_attributes);
     operations::experimental::quasar::matmul::normalize_program_config(
         normalized_attributes.program_config.value(), input_tensor_a.device()->compute_with_storage_grid_size());
     return ttnn::device_operation::launch<MatmulDeviceOperation>(
@@ -2495,18 +2460,14 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     const std::optional<Tensor>& optional_output_tensor,
     const MatmulParams& attributes) {
     MatmulParams normalized_attributes = attributes;
-    if (!normalized_attributes.program_config.has_value()) {
-        uint32_t bias_single_tile_size = 0;
-
-        normalized_attributes.program_config = operations::experimental::quasar::matmul::get_program_config(
-            input_tensors.at(0),
-            input_tensors.at(1),
-            normalized_attributes.transpose_a,
-            normalized_attributes.transpose_b,
-            bias_single_tile_size,
-            normalized_attributes);
-    }
-    resolve_unified_placement(normalized_attributes, input_tensors.at(0), input_tensors.at(1), 0);
+    uint32_t bias_single_tile_size = 0;
+    normalized_attributes.program_config = operations::experimental::quasar::matmul::get_program_config(
+        input_tensors.at(0),
+        input_tensors.at(1),
+        normalized_attributes.transpose_a,
+        normalized_attributes.transpose_b,
+        bias_single_tile_size,
+        normalized_attributes);
     operations::experimental::quasar::matmul::normalize_program_config(
         normalized_attributes.program_config.value(), input_tensors.at(0).device()->compute_with_storage_grid_size());
     // validate requires optional_input_tensors.size() == 1; this path has no bias.
