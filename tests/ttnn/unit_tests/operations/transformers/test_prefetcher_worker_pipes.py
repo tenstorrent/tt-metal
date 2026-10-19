@@ -28,10 +28,14 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up,
 )
 from tests.ttnn.unit_tests.operations.prefetcher_support import require_tensor_prefetcher
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 # Two weights whose per-receiver blocks differ in size, so every tensor switch re-sizes the pipes:
 # (dtype, per-receiver output width in tiles).
 _TWO_TENSORS = [(ttnn.bfloat16, 2), (ttnn.bfloat8_b, 1)]
+
+# The tests that run the prefetcher put it on its own sub-device, and sub-device managers need fast dispatch.
+_needs_sub_devices = skip_for_slow_dispatch("sub-device managers require fast dispatch")
 
 
 def _core_range(x0, y0, x1, y1):
@@ -149,6 +153,7 @@ def _prefetcher_sub_devices(device, layout):
         device.remove_sub_device_manager(sub_device_manager)
 
 
+@_needs_sub_devices
 @pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
 @pytest.mark.parametrize("num_tensors", [1, 2], ids=["1tensor", "2tensors"])
 def test_worker_pipes_completion(device, num_tensors, num_layers):
@@ -191,6 +196,7 @@ def _matmul_program_config(layout, per_core_n):
     )
 
 
+@_needs_sub_devices
 @pytest.mark.parametrize("enable_performance_mode", [False, True], ids=["counted", "perf"])
 @pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
 @pytest.mark.parametrize("recv_per_reader", [1, 2], ids=["1recv", "2recv"])
@@ -203,6 +209,7 @@ def test_worker_pipes_matmul(device, recv_per_reader, num_layers, enable_perform
     _check_matmuls(device, _Layout(device, recv_per_reader), num_layers, enable_performance_mode)
 
 
+@_needs_sub_devices
 def test_worker_pipes_readers_follow_pipe_order(device):
     """Reader i drives the i-th pipe given, wherever its sender sits.
 
