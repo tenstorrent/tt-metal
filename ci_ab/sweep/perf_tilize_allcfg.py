@@ -80,6 +80,14 @@ for fmt, acc in ((BF16, NO), (FP32, YES)):
     for ct in (4, 8, 16):
         CASES.append(("block", fmt, acc, 1, ct, TA(ta_form="block", ta_full=1)))
 
+for fmt, acc in ((BF16, NO), (FP32, YES)):
+    for fr in (1, 2, 4, 8, 16):
+        for nf in (2, 4):
+            if (fr, nf) == (16, 4):
+                continue
+            for ct in (2, 4, 8):
+                CASES.append(("tinyblk", fmt, acc, 1, ct, TA(ta_form="block", ta_face_r=fr, ta_nf=nf)))
+
 
 def _id(c):
     n, fmt, acc, rt, ct, ta = c
