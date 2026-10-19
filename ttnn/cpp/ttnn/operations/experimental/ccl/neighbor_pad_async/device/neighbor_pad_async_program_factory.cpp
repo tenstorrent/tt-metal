@@ -559,7 +559,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                     const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                     tt::tt_fabric::append_fabric_connection_rt_args(
-                        src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+                        *mesh_device, src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
                 }
             } else {
                 writer_rt_args.push_back(forward_coord.has_value());
@@ -568,7 +568,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                     const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                     tt::tt_fabric::append_fabric_connection_rt_args(
-                        src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+                        *mesh_device, src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
                 }
                 writer_rt_args.push_back(false);
             }
@@ -866,7 +866,13 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                         const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                         const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(w_backward_coord.value());
                         tt::tt_fabric::append_fabric_connection_rt_args(
-                            src_fabric_node_id, dst_fabric_node_id, w_link, program, {w_core}, w_writer_rt_args);
+                            *mesh_device,
+                            src_fabric_node_id,
+                            dst_fabric_node_id,
+                            w_link,
+                            program,
+                            {w_core},
+                            w_writer_rt_args);
                     }
                 } else {
                     w_writer_rt_args.push_back(w_forward_coord.has_value());
@@ -874,7 +880,13 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                         const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                         const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(w_forward_coord.value());
                         tt::tt_fabric::append_fabric_connection_rt_args(
-                            src_fabric_node_id, dst_fabric_node_id, w_link, program, {w_core}, w_writer_rt_args);
+                            *mesh_device,
+                            src_fabric_node_id,
+                            dst_fabric_node_id,
+                            w_link,
+                            program,
+                            {w_core},
+                            w_writer_rt_args);
                     }
                     w_writer_rt_args.push_back(false);
                 }

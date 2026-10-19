@@ -578,7 +578,13 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
             const auto target_fabric_node_id = mesh_device->get_fabric_node_id(coord);
             const auto forward_device_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                target_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+                *mesh_device,
+                target_fabric_node_id,
+                forward_device_fabric_node_id,
+                link,
+                program,
+                {core},
+                writer_rt_args);
         }
 
         writer_rt_args.push_back(backward_coord.has_value());
@@ -586,7 +592,13 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
             const auto target_fabric_node_id = mesh_device->get_fabric_node_id(coord);
             const auto backward_device_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                target_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+                *mesh_device,
+                target_fabric_node_id,
+                backward_device_fabric_node_id,
+                link,
+                program,
+                {core},
+                writer_rt_args);
         }
 
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);

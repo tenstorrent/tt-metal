@@ -806,7 +806,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 const auto dst_node_id =
                     mesh_device->get_fabric_node_id(dir ? forward_coord.value() : backward_coord.value());
                 tt::tt_fabric::add_fabric_mux_v2_to_program(
-                    program, mux_config, mux_logical_core, src_node_id, dst_node_id, link);
+                    *mesh_device, program, mux_config, mux_logical_core, src_node_id, dst_node_id, link);
             }
 
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
@@ -947,7 +947,13 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
                             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                             tt::tt_fabric::append_fabric_connection_rt_args(
-                                src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+                                *mesh_device,
+                                src_fabric_node_id,
+                                dst_fabric_node_id,
+                                link,
+                                program,
+                                {core},
+                                writer_rt_args);
                         }
                         writer_rt_args.push_back(false);
                     } else {
@@ -957,7 +963,13 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
                             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                             tt::tt_fabric::append_fabric_connection_rt_args(
-                                src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+                                *mesh_device,
+                                src_fabric_node_id,
+                                dst_fabric_node_id,
+                                link,
+                                program,
+                                {core},
+                                writer_rt_args);
                         }
                     }
                 }
@@ -1485,7 +1497,7 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
                 const auto dst_node_id =
                     mesh_device->get_fabric_node_id(dir ? forward_coord.value() : backward_coord.value());
                 tt::tt_fabric::add_fabric_mux_v2_to_program(
-                    desc, mux_config, mux_logical_core, src_node_id, dst_node_id, link);
+                    *mesh_device, desc, mux_config, mux_logical_core, src_node_id, dst_node_id, link);
             }
 
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
@@ -1628,7 +1640,7 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
                             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
                             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                             tt::tt_fabric::append_fabric_connection_rt_args(
-                                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
+                                *mesh_device, src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
                         }
                         writer_rt_args.push_back(false);
                     } else {
@@ -1638,7 +1650,7 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
                             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
                             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                             tt::tt_fabric::append_fabric_connection_rt_args(
-                                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
+                                *mesh_device, src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
                         }
                     }
                 }

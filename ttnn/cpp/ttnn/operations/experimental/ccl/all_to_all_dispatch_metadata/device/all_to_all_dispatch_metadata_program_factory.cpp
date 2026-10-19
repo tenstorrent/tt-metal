@@ -912,6 +912,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
                     reader_runtime_args[8],
                     reader_runtime_args[9]);
                 tt::tt_fabric::append_fabric_connection_rt_args(
+                    *mesh_device,
                     src_fabric_node_id,
                     mesh_device->get_fabric_node_id(neighbor_coordinate),
                     link_id,

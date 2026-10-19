@@ -478,6 +478,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         }
         if (!reader_dst_nodes.empty()) {
             append_routing_plane_connection_manager_rt_args(
+                *mesh_device,
                 sender_fabric_node_id,
                 reader_dst_nodes,
                 {link},
@@ -523,6 +524,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         }
         if (!writer_dst_nodes.empty()) {
             append_routing_plane_connection_manager_rt_args(
+                *mesh_device,
                 sender_fabric_node_id,
                 writer_dst_nodes,
                 {link},

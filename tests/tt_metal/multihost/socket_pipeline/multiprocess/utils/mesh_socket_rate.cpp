@@ -137,6 +137,7 @@ tt::tt_metal::Program create_send_async_rate_program(
 
     for (uint32_t i = 0; i < num_links; i++) {
         tt::tt_fabric::append_fabric_connection_rt_args(
+            *mesh_device,
             sender_fabric_node_id,
             receiver_fabric_node_id,
             link_indices[i],
@@ -263,11 +264,23 @@ tt::tt_metal::Program create_socket_forward_rate_program(
 
     for (uint32_t i = 0; i < num_bwd_links; i++) {
         tt::tt_fabric::append_fabric_connection_rt_args(
-            my_fabric_node_id, upstream_fabric_node_id, bwd_link_indices[i], program, my_core_coord, rt_args);
+            *mesh_device,
+            my_fabric_node_id,
+            upstream_fabric_node_id,
+            bwd_link_indices[i],
+            program,
+            my_core_coord,
+            rt_args);
     }
     for (uint32_t i = 0; i < num_fwd_links; i++) {
         tt::tt_fabric::append_fabric_connection_rt_args(
-            my_fabric_node_id, downstream_fabric_node_id, fwd_link_indices[i], program, my_core_coord, rt_args);
+            *mesh_device,
+            my_fabric_node_id,
+            downstream_fabric_node_id,
+            fwd_link_indices[i],
+            program,
+            my_core_coord,
+            rt_args);
     }
 
     // Append num_iterations as the last runtime arg
@@ -350,7 +363,13 @@ tt::tt_metal::Program create_recv_async_rate_program(
 
     for (uint32_t i = 0; i < num_bwd_links; i++) {
         tt::tt_fabric::append_fabric_connection_rt_args(
-            my_fabric_node_id, upstream_fabric_node_id, bwd_link_indices[i], program, my_core_coord, rt_args);
+            *mesh_device,
+            my_fabric_node_id,
+            upstream_fabric_node_id,
+            bwd_link_indices[i],
+            program,
+            my_core_coord,
+            rt_args);
     }
 
     // Append num_iterations as the last runtime arg

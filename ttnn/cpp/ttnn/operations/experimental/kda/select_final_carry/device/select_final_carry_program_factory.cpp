@@ -192,6 +192,7 @@ tt::tt_metal::ProgramDescriptor build_program(
                     }
                 }
                 tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                    *mesh,
                     mesh->get_fabric_node_id(coord),
                     destinations,
                     {static_cast<uint32_t>(link)},
