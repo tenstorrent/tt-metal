@@ -40,6 +40,7 @@ on:
           - all
           - bh-lb-disaggregated-prefill-perf
           - bh-qb2-disaggregated-prefill-d2d-socket-sync
+          - bh-ttnn-stress
       build-type:
         required: false
         type: choice
