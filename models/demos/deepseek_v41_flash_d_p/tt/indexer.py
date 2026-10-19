@@ -48,7 +48,7 @@ import torch
 import ttnn
 
 from . import ccl
-from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, tp_sum
+from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, tp_sum
 from .quant import fp4_qdq, fp8_qdq, round_tf32
 from .rope import RopeTable, deinterleave_perm, rope_heads
 from .settings import settings
@@ -92,7 +92,7 @@ class TtIndexer:
         assert (self.w_rows // ratio) % 32 == 0, f"W / ratio = {self.w_rows // ratio} compressed rows not tile-aligned"
         assert chunk // ratio >= self.topk, f"a chunk's {chunk // ratio} keys < topk {self.topk} (valid_length >= k)"
         assert rope.half * 2 == self.rd, (rope.half, self.rd)
-        self.ckc = compute_config(mesh)
+        self.ckc = attn_compute_config(mesh)  # weights_proj, wq_b: ATTN_FIDELITY (P.7)
         self.round_x = settings.get("COMPRESSOR_X") == "round_tf32"
         # wq_b [nh * hd, q_lora] -> W^T [q_lora, nh * hd], every head's rope rows de-interleaved; replicated
         perm = deinterleave_perm(self.hd, self.rd)
@@ -116,13 +116,7 @@ class TtIndexer:
         self.score_cfg = ttnn.bringup.IndexerScoreProgramConfig(
             q_chunk_size=min(Q_CHUNK, self.sq), k_chunk_size=K_CHUNK, head_group_size=0
         )
-        self.score_ckc = ttnn.init_device_compute_kernel_config(
-            mesh.arch(),
-            math_fidelity=getattr(ttnn.MathFidelity, settings.get("MATMUL_FIDELITY")),
-            math_approx_mode=False,
-            fp32_dest_acc_en=bool(settings.get("FP32_DEST_ACC")),
-            packer_l1_acc=False,
-        )
+        self.score_ckc = attn_compute_config(mesh)  # the ring score: ATTN_FIDELITY (P.7)
         self._kbuf = {}  # compressed capacity T -> the ring's persistent gathered-key buffer [1, 1, T, hd]
 
     # ------------------------------------------------------------------ load time

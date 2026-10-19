@@ -1,0 +1,75 @@
+{
+ "overseer": [
+  {
+   "id": "OV-18",
+   "answer": "done",
+   "evidence": "P.5 had not added fabric_bf16 (settings.py CCL_IMPL choices were stock / fabric); P.6 added it in tt/settings.py / tt/ccl.py and timed stock / fabric / fabric_bf16 per op (BREADCRUMBS P.6)"
+  }
+ ],
+ "used": [
+  {
+   "id": "DS41-65",
+   "how": "fabric_bf16 uses fabric_reduce_scatter's default FPU add (exact_fp32_add off) on bf16 partials; fabric keeps exact_fp32_add=True",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-66",
+   "how": "the bf16 RS uses the same rs_links(mesh) link count and cache_descriptors=True as the exact path",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-30",
+   "how": "the sums the fork cannot take stay the exact all_gather + SFPU add; a bf16 partial reaching that path is cast to fp32 first",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "every ladder / profile run with --no-precompile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD on every run",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "deleted tests/ttnn/unit_tests/operations/ds41_ccl_bf16/ (tt-probe scripts) before finishing",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a bf16 reduce-scatter fed by a separate fp32->bf16 typecast is slower than the exact fp32 RS on a TP-2 box; the producer must write bf16 (now DS41-67)"
+ ],
+ "cited_only": [
+  "DS41-67"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.6",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-18T21:16:29",
+  "head": "d4f7632bcab",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.6.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/ccl.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
