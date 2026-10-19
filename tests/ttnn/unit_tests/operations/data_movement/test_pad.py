@@ -8,8 +8,11 @@ import pytest
 import torch
 import math
 
-from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
-from tests.ttnn.unit_tests.operations.test_utils import TILE_HEIGHT, TILE_WIDTH
+from tt_py_test_utils_common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
+from tests.ttnn.unit_tests.operations.test_utils import (
+    TILE_HEIGHT,
+    TILE_WIDTH,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
 from tests.ttnn.utils_for_testing import assert_equal as assert_tensors_equal
 import ttnn

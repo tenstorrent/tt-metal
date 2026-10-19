@@ -56,6 +56,9 @@ struct ProgramCommandSequence {
         CoreCoord logical_core;
         uint8_t* dst;
         uint32_t size;
+        // Sum of the DFBs' config generations when the payload was last serialized. Each generation only
+        // grows, so the sum changes exactly when one of the DFBs changed.
+        uint64_t last_config_generation;
     };
     struct CircularBufferConfigUpdate {
         CircularBufferImpl* circular_buffer;
