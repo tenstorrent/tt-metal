@@ -23,6 +23,7 @@ accumulator only takes its expected count from each ring, a later call's rows wa
 """
 
 import os
+from dataclasses import dataclass
 
 import torch
 
@@ -34,11 +35,40 @@ from .combine_plan import link_of
 from .sparse_combine_l1 import _ACC_COMPUTE, _ACC_WRITER, _PORT_READER, TILE, route
 
 CB_INJ, CB_ROW, CB_META, CB_TAB, CB_ACC, CB_OUT, CB_W = 0, 1, 2, 3, 4, 5, 6
-PIECE_MAX = int(
-    os.environ.get("SPC_PIECE", "7168")
-)  # row bytes per fabric packet at most: wider rows go as P equal pieces (64-byte multiples), each
+PIECE_MAX = 7168  # row bytes per fabric packet at most (default; piece_max): wider rows go as P equal pieces (64-B multiples), each
 # with its own 32-byte trailer, so a 7232 B fabric payload (more router slots) serves every model's rows; pieces sit
 # PS apart (64-byte aligned for the DRAM reads)
+
+
+@dataclass(frozen=True)
+class CombineProbes:
+    """Perf / debug probes of the combine: never set by model code, read from the environment in this one place
+    (SPC_* names). Production choices are sparse_combine_rf_prepare's arguments (piece_max, inj_slots, depth /
+    ring_depth, n_acc, acc_on_ports, ...)."""
+
+    prof: bool = False  # SPC_PROF=1: profile words
+    tprof: str = "0"  # SPC_TPROF: per-call timeline (scratch_flat_combine_rf.py TPROF lines)
+    pace_us: float = 0.0  # SPC_PACE: pace every port's injections to finish at this time
+    inj_b: int = 8  # SPC_INJB: injection batch
+    abl: str = "0"  # SPC_ABL: ablation mask
+    credthr: str = "8"  # SPC_CREDTHR: credit return threshold
+    noyread: str = "0"  # SPC_NOYREAD: rows not read from y (garbage)
+    nodrain: bool = False  # SPC_NODRAIN=1: no end-of-call credit drain
+
+    @staticmethod
+    def from_env(env=None):
+        env = os.environ if env is None else env
+        return CombineProbes(
+            prof=env.get("SPC_PROF") == "1",
+            tprof=env.get("SPC_TPROF", "0"),
+            pace_us=float(env.get("SPC_PACE", "0")),
+            inj_b=int(env.get("SPC_INJB", "8")),
+            abl=env.get("SPC_ABL", "0"),
+            credthr=env.get("SPC_CREDTHR", "8"),
+            noyread=env.get("SPC_NOYREAD", "0"),
+            nodrain=env.get("SPC_NODRAIN") == "1",
+        )
+
 
 _RF_READER = r"""
 #include <cstdint>
@@ -885,6 +915,9 @@ def sparse_combine_rf_prepare(
     ports_per_direction=False,
     acc_on_ports=False,
     piece_max=None,
+    inj_slots=64,
+    ring_depth=None,
+    probes=None,
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
     logical (x, y) cells the combine may use (ports nearest their Ethernet cores, accumulators the rest), else the
@@ -904,7 +937,10 @@ def sparse_combine_rf_prepare(
     order): half the port cells with two links. acc_on_ports (with l1): the ports sit on accumulator cells (the A
     accumulator cells are the same on every chip; each chip's ports take the ones nearest its Ethernet cores), each
     port core also an accumulator - its sender RISC also runs the hand-off grants and the output writes - so the
-    combine takes max(ports, A) cells instead of ports + A."""
+    combine takes max(ports, A) cells instead of ports + A. piece_max: row bytes per fabric packet at most (one piece a
+    row with the L1 hand-off: >= the row, and a fabric payload >= row + 32 B). inj_slots: a port's L1 hand-off
+    injection ring (slots; less leaves the arena room for deeper rings with wide rows). ring_depth: the rings' depth
+    exactly (default: min(depth, what the arena leaves)). probes: CombineProbes (default: CombineProbes.from_env())."""
     R, C = tuple(mesh_device.shape)
     N, L, A0 = R * C, num_links, n_acc
     row_bytes = W * 2
@@ -915,13 +951,14 @@ def sparse_combine_rf_prepare(
     PS = ((PD + 32 + 63) // 64) * 64
     SLOT = ISLOT = NP * PS
     # the L1 hand-off's y writers (se_yrm.hpp SE_Y_L1) write a row's columns at slot + column offset and its trailer
-    # at slot + row bytes: one piece a row. Wider rows (DeepSeek V4.1 H 5120: 10240 B) need SPC_PIECE >= the row and a
-    # fabric payload >= row + 32 B (e.g. SPC_PIECE=10240, fabric_payload_size 10880), else the combine waits for piece
+    # at slot + row bytes: one piece a row. Wider rows (DeepSeek V4.1 H 5120: 10240 B) need piece_max >= the row and a
+    # fabric payload >= row + 32 B (e.g. piece_max 10240, fabric_payload_size 10880), else the combine waits for piece
     # trailers that never come (a hang)
     assert l1 is None or NP == 1, (
-        f"combine L1 hand-off: {row_bytes} B rows need one piece (SPC_PIECE={PIECE_MAX} < row: set SPC_PIECE >= "
+        f"combine L1 hand-off: {row_bytes} B rows need one piece (piece_max {PIECE_MAX} < row: pass piece_max >= "
         f"{row_bytes} and a fabric payload >= {row_bytes + 32})"
     )
+    pr = probes or CombineProbes.from_env()
     chips, nb, (wrap_x, wrap_y) = mesh_plan(mesh_device, num_links, torus)
     FUSED = bool(acc_on_ports)
     assert not FUSED or l1 is not None, "acc_on_ports: the L1 hand-off"
@@ -994,7 +1031,7 @@ def sparse_combine_rf_prepare(
     if arena is not None:  # (the rings' depth from what the arena leaves: the accumulators' CBs and 2 local slots)
         sh_ = arena.memory_config().shard_spec
         arena_bytes = int(sh_.shape[0]) * int(sh_.shape[1]) * (4 if arena.dtype == ttnn.uint32 else 2)
-        QP0 = int(os.environ.get("SPC_QP", "64"))
+        QP0 = inj_slots
         # (fused: room kept for an 8-slot local ring and a 32-slot injection ring; what is left after the rings
         # grows them, below)
         keep = (8 + min(32, QP0)) * ISLOT if FUSED else (2 * ISLOT if l1 else 0)
@@ -1002,9 +1039,9 @@ def sparse_combine_rf_prepare(
         D = min(depth, fit)
     else:
         D = depth
-    D = int(os.environ.get("SPC_D", D))
+    D = D if ring_depth is None else int(ring_depth)
     assert D >= 1, f"combine: no room for one ring slot per source chip ({N - 1} x {SLOT} B)"
-    QP = int(os.environ.get("SPC_QP", "64"))  # a port's L1 hand-off injection ring (its own region, no rings there)
+    QP = inj_slots  # a port's L1 hand-off injection ring (its own region, no rings there)
     acc_area = RINGS + (N - 1) * D * SLOT
     if FUSED and arena is not None:  # (local ring up to 16 slots, then the injection ring up to QP, from what is left)
         a_end = al(acc_area) + acc_cbs
@@ -1096,9 +1133,9 @@ def sparse_combine_rf_prepare(
         wxy = [v for c in wv for v in (c.x, c.y)]
         assert len(wv) <= 32
     l1_args = []
-    prof = os.environ.get("SPC_PROF") == "1"
-    pace_us = float(os.environ.get("SPC_PACE", "0"))  # pace every port's injections to finish at this time
-    inj_b = int(os.environ.get("SPC_INJB", "8"))
+    prof = pr.prof
+    pace_us = pr.pace_us  # pace every port's injections to finish at this time
+    inj_b = pr.inj_b
     subs = {
         "__CRED__": str(CRED),
         "__USED__": str(USED),
@@ -1107,12 +1144,12 @@ def sparse_combine_rf_prepare(
         "__HDRS__": str(HDRS),
         "__RINGS__": str(RINGS),
         "__PROF__": str(int(prof)),
-        "__ABL__": os.environ.get("SPC_ABL", "0"),
+        "__ABL__": pr.abl,
         "__INJB__": str(inj_b),
-        "__CREDTHR__": os.environ.get("SPC_CREDTHR", "8"),
+        "__CREDTHR__": pr.credthr,
         "__PACE__": str(int(pace_us > 0)),
         "__P__": str(NP),
-        "__TPROF__": os.environ.get("SPC_TPROF", "0"),
+        "__TPROF__": pr.tprof,
         "__L1__": str(int(l1 is not None)),
         "__CBTAB__": str(CB_TAB),
         "__CBW__": str(CB_W),
@@ -1121,12 +1158,10 @@ def sparse_combine_rf_prepare(
         "__DK__": str(max(det_k, 1)),
         "__DNTOK__": str(MAXT if det else 1),
         "__DPG__": str(max(det_pg, 64)),
-        "__NOYREAD__": os.environ.get("SPC_NOYREAD", "0"),  # (probe: rows not read from y: garbage)
+        "__NOYREAD__": pr.noyread,  # (probe: rows not read from y: garbage)
         "__PD__": str(PD),
         "__PS__": str(PS),
-        "__DRAIN__": "false"
-        if os.environ.get("SPC_NODRAIN") == "1"
-        else "true",  # (probe: no end-of-call credit drain)
+        "__DRAIN__": "false" if pr.nodrain else "true",  # (probe: no end-of-call credit drain)
         "__MRTOT__": str(M_RTOT),
         "__MRDONE__": str(M_RDONE),
         "__MTAKEN__": str(M_TAKEN),

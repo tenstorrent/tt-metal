@@ -23,6 +23,7 @@ from ttnn.bringup.combine_rf.combine_plan import combine_planner_prepare, port_l
 from ttnn.bringup.combine_rf.sparse_combine_l1 import route
 from ttnn.bringup.combine_rf.sparse_combine_rf import sparse_combine_rf_prepare
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import layout_from_env
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
@@ -163,12 +164,21 @@ def test_flat_combine_rf(mesh_device, device_params):
         wdtype="bf4",
         act=ACT,
         pin=1,
+        layout=layout_from_env(),  # (the harness's MIMO_FL_* recipe names, parsed into FlatLayoutOptions)
     )
+    logger.info(f"flat layout {op.layout}")
     logger.info(f"flat expert built in {time.time() - t0:.1f} s (weights {os.environ.get('FC_WEIGHTS', 'fake')})")
     for routing in os.environ.get("FC_ROUTINGS", "uniform,zipf_spread_1.2,zipf_packed_1.2").split(","):
         t0 = time.time()
         _flat_combine_rf_routing(mesh_device, op, routing)
         logger.info(f"{routing}: done in {time.time() - t0:.1f} s")
+
+
+def _combine_opts():  # (the harness recipe's combine knobs: SPC_PIECE row bytes per packet, SPC_QP injection slots, SPC_D rings)
+    o = dict(piece_max=int(os.environ.get("SPC_PIECE", "7168")), inj_slots=int(os.environ.get("SPC_QP", "64")))
+    if os.environ.get("SPC_D"):
+        o["ring_depth"] = int(os.environ["SPC_D"])
+    return o
 
 
 def _flat_combine_rf_routing(mesh_device, op, routing):
@@ -230,7 +240,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
                 max_e=plan["sched_max_e"],
                 gu_nreg=plan["sched_gu_nreg"],
                 pin=1,
-                pin_ratio=os.environ.get("MIMO_FL_PIN_RATIO", "8"),
+                pin_ratio=str(op.layout.pin_ratio),
             )
             if DET
             else None,
@@ -311,6 +321,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
         ports_per_direction=PER_DIR_PORTS,
         acc_on_ports=ACC_ON_PORTS,
         **common,
+        **_combine_opts(),
     )
     if DEVPLAN:  # (the planner was built for FC_NACC accumulators: the combine must have found that many cells)
         assert len(fused.cells["accs"]) == n_acc, (
@@ -323,7 +334,14 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
         None
         if ACC_ON_PORTS
         else sparse_combine_rf_prepare(
-            mesh_device, S, H, rows, writers=0, ports_per_direction=PER_DIR_PORTS, **{**common, "depth": fused.depth}
+            mesh_device,
+            S,
+            H,
+            rows,
+            writers=0,
+            ports_per_direction=PER_DIR_PORTS,
+            **{**common, "depth": fused.depth},
+            **_combine_opts(),
         )
     )
     coll = fused.collector
@@ -373,15 +391,16 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
             token_index=tidx,
             down_fp32=True,
             l1_args=st["l1a"],
+            y_l1=st["y_l1"],
+            layout=op.layout,
         )
 
-    st = dict(l1a=[])
-    if L1:  # the reference y: one flat call that still writes y (before the hand-off sets MIMO_FL_Y_L1)
-        os.environ.pop("MIMO_FL_Y_L1", None)
+    st = dict(l1a=[], y_l1=False)
+    if L1:  # the reference y: one flat call that still writes y (the y writers without the L1 hand-off)
         call(empty, next(keys), coll["counts_addr"] + 512)
         ttnn.synchronize_device(mesh_device)
         ys_ref = [ttnn.to_torch(t).reshape(n_rows, H).float() for t in ttnn.get_device_tensors(y)]
-        os.environ["MIMO_FL_Y_L1"] = "1"
+        st["y_l1"] = True  # (the L1 hand-off from here on: without its args the flat expert alone writes no y)
         k_flat = next(keys)  # (flat alone from here on: no y writes)
 
     def run_fused():
@@ -410,6 +429,8 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
                     o, t_ = hdr & 0xFF, (hdr >> 8) & 0xFFFF
                     rows[ch].append((r_, (o // C, o % C), t_, 0, 0, w0 >> 16))
     outs = [ttnn.to_torch(t).reshape(S, H).float() for t in ttnn.get_device_tensors(out)]
+    if os.environ.get("FC_OUT_DUMP"):  # (debug: the fused output and the flat expert's y rows, for A/B bit-exactness)
+        torch.save({"outs": outs, "ys": ys, "plan": dict(plan)}, f"{os.environ['FC_OUT_DUMP']}.{routing}.pt")
     n_rep = int(os.environ.get("FC_DET_REPEAT", "10"))  # (bit-exact repeats of the fused call: the combine's sum order)
     if n_rep:
         o0 = ttnn.clone(out)
