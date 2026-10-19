@@ -459,19 +459,37 @@ class Gemma4Generator:
             start = int(start)
             suffix_length = int(length) - start
             suffix_lengths.append(suffix_length)
-            ids = self.model.upload(
-                tokens[row : row + 1, start:length].reshape(1, 1, 1, suffix_length).int(),
-                ttnn.uint32,
-                ttnn.ROW_MAJOR_LAYOUT,
+            trace_suffix = (
+                os.getenv("GEMMA4_PREFIX_TRACE_SUFFIX") == "1"
+                and len(slots) == 1 and slot == 0 and start > 0 and suffix_length >= 8
+                and not return_all_logits
+                and all(isinstance(t, torch.Tensor) and t.shape[0] == 1 for t in self._tables(page_table))
             )
-            logits = self.model.prefill_forward(
-                ids,
-                page_table=table,
-                kv_cache=kv_cache,
-                user_id=slot,
-                return_all_logits=return_all_logits,
-                start_pos=start,
-            )
+            if trace_suffix:
+                # Reuse the canonical logits-only trace: explicit input tokens
+                # and absolute positions, with no sampling or RNG advancement.
+                for position in range(start, int(length)):
+                    traced = self.decode_forward(
+                        tokens[:, position : position + 1], torch.tensor([position]),
+                        page_table=page_table, kv_cache=kv_cache, return_logits=True,
+                    )
+                # The trace owns padded output storage; retain an independent
+                # logical row across subsequent trace release/rebinding.
+                logits = ttnn.clone(traced[:, :, :1, :])
+            else:
+                ids = self.model.upload(
+                    tokens[row : row + 1, start:length].reshape(1, 1, 1, suffix_length).int(),
+                    ttnn.uint32,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                )
+                logits = self.model.prefill_forward(
+                    ids,
+                    page_table=table,
+                    kv_cache=kv_cache,
+                    user_id=slot,
+                    return_all_logits=return_all_logits,
+                    start_pos=start,
+                )
             if os.getenv("GEMMA4_PREFIX_DIAGNOSE") == "1":
                 from models.demos.gemma4_26b_a4b_qb2.tests.prefix_cache_diagnostic import compare_paths
 

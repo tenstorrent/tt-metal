@@ -16,6 +16,7 @@ import ttnn
 from models.demos.gemma4_26b_a4b_qb2.tests.test_api import completions, sampled_ids
 from models.demos.gemma4_26b_a4b_qb2.tt.generator import Gemma4Generator
 from models.demos.gemma4_26b_a4b_qb2.tt.generator_vllm import Gemma4ForCausalLM
+from models.demos.gemma4_26b_a4b_qb2.tt.multichip_decoder import MultichipDecoder
 
 
 @pytest.mark.parametrize("start,end", [(0, 31), (32, 33), (32, 63), (96, 129), (992, 1025), (1024, 1057)])
@@ -71,6 +72,50 @@ def test_host_sampling_forwards_cached_prefix():
     assert generator.prefill_forward.call_args.kwargs["kv_cache"] is cache
     generator.serving_prefill_tokens.assert_not_called()
     generator.configure_sampling.assert_not_called()
+
+
+@pytest.mark.parametrize("start,length", [(32, 8), (32, 31), (992, 32), (1008, 32)])
+def test_shared_suffix_batch_keeps_absolute_request_mapping(monkeypatch, start, length):
+    monkeypatch.setenv("GEMMA4_PREFIX_SHARED_BATCH", "1")
+    monkeypatch.setattr(ttnn, "reshape", torch.reshape)
+    monkeypatch.setattr(ttnn, "repeat", lambda value, repeats: value.repeat(*repeats))
+    layer = SimpleNamespace(
+        _validate_kv_cache=Mock(),
+        config=SimpleNamespace(max_position_embeddings=2048),
+        positions_u32=torch.arange(2048).reshape(1, -1),
+        positions_i32=torch.arange(2048).reshape(1, -1),
+        decode_forward=Mock(return_value="output"),
+    )
+    table = torch.tensor([[7, 9, 11], [13, 15, 17]])
+    result = MultichipDecoder._prefill_continuation(
+        layer, torch.zeros(1, 1, length, 32), rope_mats=(torch.zeros(1, 1, 2048, 32),),
+        page_table=table, kv_cache=object(), user_id=1, start_pos=start,
+    )
+    assert result == "output"
+    args = layer.decode_forward.call_args.kwargs
+    assert args["current_pos"].flatten().tolist() == list(range(start, start + length))
+    assert args["cache_pos"].tolist() == list(range(start, start + length))
+    assert args["page_table"].tolist() == [table[1].tolist()] * length
+
+
+def test_traced_suffix_uses_explicit_tokens_without_sampling(monkeypatch):
+    monkeypatch.setenv("GEMMA4_PREFIX_TRACE_SUFFIX", "1")
+    monkeypatch.setattr(ttnn, "reshape", torch.reshape)
+    monkeypatch.setattr(ttnn, "clone", torch.clone)
+    generator = object.__new__(Gemma4Generator)
+    generator.model = SimpleNamespace(max_seq_len=2048, config=SimpleNamespace(vocab_size=16))
+    generator._upload_page_tables = lambda value: value
+    generator.decode_forward = Mock(return_value=torch.zeros(1, 1, 32, 4))
+    cache, table = object(), torch.tensor([[7, 9]])
+    generator.prefill_forward(
+        torch.arange(63).reshape(1, 63), page_table=table, kv_cache=cache, prompt_lens=[63], start_pos=[32]
+    )
+    assert generator.decode_forward.call_count == 31
+    for position, call in zip(range(32, 63), generator.decode_forward.call_args_list):
+        assert call.args[0].item() == position
+        assert call.args[1].item() == position
+        assert call.kwargs["return_logits"] is True
+        assert call.kwargs["page_table"] is table and call.kwargs["kv_cache"] is cache
 
 
 def _metric_totals(url):

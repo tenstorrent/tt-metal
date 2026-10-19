@@ -26,6 +26,13 @@ python -m pytest "$model_dir/tests/test_prefix_caching.py" -k 'not live' --junit
 export EXTRA_MODELS_DIR="$PWD/models/demos" MESH_DEVICE=P300x2
 export GEMMA4_26B_ALLOW_HOST_SAMPLING=1 GEMMA4_PREFIX_CACHING_EXPERIMENT=1
 export GEMMA4_PREFIX_DIAGNOSE=1
+export GEMMA4_PREFIX_SHARED_BATCH=0 GEMMA4_PREFIX_TRACE_SUFFIX=0
+case "${GEMMA4_PREFIX_SUFFIX_MODE:-serial}" in
+    serial) ;;
+    shared) export GEMMA4_PREFIX_SHARED_BATCH=1 ;;
+    trace) export GEMMA4_PREFIX_TRACE_SUFFIX=1 ;;
+    *) echo 'Unsupported suffix experiment mode'; exit 2 ;;
+esac
 export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
 export TT_MESH_GRAPH_DESC_PATH="$PWD/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto"
 export TT_METAL_CACHE="$results/kernel-cache"

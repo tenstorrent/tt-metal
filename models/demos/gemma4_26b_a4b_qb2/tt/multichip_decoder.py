@@ -1184,6 +1184,18 @@ class MultichipDecoder(OptimizedDecoder):
             raise ValueError("Sequence outside HF context contract")
         rope_2d = tuple(ttnn.reshape(r, (r.shape[-2], r.shape[-1])) for r in rope_mats)
         request_table = page_table[user_id : user_id + 1, :]
+        if os.getenv("GEMMA4_PREFIX_SHARED_BATCH") == "1" and 8 <= length <= 32:
+            # Repeated rows refer to one request, not independent batch slots.
+            # The existing shared-batch path still updates KV and attends in
+            # row order; only token-local MLP/collective/tail work is batched.
+            return self.decode_forward(
+                hidden_states,
+                rope_mats=rope_2d,
+                current_pos=self.positions_u32[:, start_pos : start_pos + length],
+                cache_pos=ttnn.reshape(self.positions_i32[:, start_pos : start_pos + length], (length,)),
+                page_table=ttnn.repeat(request_table, (length, 1)),
+                kv_cache=kv_cache,
+            )
         rows, tiles, chunks, groups = [], [], [], []
 
         def merge(parts):
