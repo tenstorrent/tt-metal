@@ -472,7 +472,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     const uint32_t num_workers_per_direction = 4;
-    const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const auto buffer_size_bytes_full_size_channel =
+        tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
 
     std::vector<CoreCoord> mux_cores = {
         CoreCoord(2, 0), CoreCoord(2, 1), CoreCoord(2, 2), CoreCoord(2, 3)};  // to be modified based on device type

@@ -771,7 +771,7 @@ AllToAllAsyncGenericProgram::create_at(
         /*mesh_device=*/*device,
         /*num_channels=*/static_cast<uint8_t>(mux_config_clients),
         /*num_buffers_per_channel=*/num_mux_buffers_per_channel,
-        /*channel_buffer_size_bytes=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
+        /*channel_buffer_size_bytes=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*device),
         /*base_l1_address=*/mux_l1_base_address,
         /*usable_l1_end_address=*/mux_l1_small_floor_address);
     if (use_worker_mux) {

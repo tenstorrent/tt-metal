@@ -51,6 +51,7 @@ public:
     virtual uint32_t get_l1_unreserved_size() const = 0;
     virtual uint32_t get_l1_alignment() const = 0;
     virtual uint32_t get_max_payload_size_bytes() const = 0;
+    virtual size_t get_channel_buffer_size_bytes() const = 0;
     virtual bool is_2D_routing_enabled() const = 0;
     virtual uint32_t get_device_frequency_mhz(const FabricNodeId& device_id) const = 0;
     virtual bool is_multi_mesh() const = 0;
