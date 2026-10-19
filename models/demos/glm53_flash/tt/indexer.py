@@ -105,6 +105,11 @@ class TtIndexCache:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
         )
+        # constants for the prefill tail writes (one row per call): slot ids and single-user page tables,
+        # uploaded once here so no host->device write happens inside a prefill pass
+        rm = lambda t: ttnn.from_torch(t, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        self._slot_ids = [rm(torch.tensor([j], dtype=torch.int32)) for j in range(self.P)]
+        self._user_pts = [rm(torch.tensor([[u]], dtype=torch.int32)) for u in range(max_batch)]
 
     def pools_batched(self) -> ttnn.Tensor:
         """[max_batch, 1, pools_per_user, D] view for scoring (taken after the latest writes)."""
@@ -219,23 +224,14 @@ class TtDSAIndexer(LightweightModule):
                 pooled = ttnn.pad(pooled, [(0, 0), (0, 0), (0, n_pad - n_pools), (0, 0)], value=0.0)
             cache.write_pools(pooled, user)
         tail = seq_len - n_pools * P
-        if tail:
-            # rows n_pools*P .. seq_len-1 -> ring block of `user`, slots (pos % P) = 0..tail-1
-            k_rows = ttnn.reshape(ttnn.slice(k_idx, [0, 0, n_pools * P, 0], [1, 1, seq_len, D]), [1, tail, 1, D])
-            g_rows = ttnn.reshape(ttnn.slice(g_idx, [0, 0, n_pools * P, 0], [1, 1, seq_len, D]), [1, tail, 1, D])
-            slots = ttnn.from_torch(
-                torch.arange(tail, dtype=torch.int32),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-            )
-            pt = ttnn.from_torch(
-                torch.full((tail, 1), user, dtype=torch.int32),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-            )
-            cache.write_ring_rows(k_rows, g_rows, slots, page_table=pt)
+        # rows n_pools*P .. seq_len-1 -> ring block of `user`, slot (pos % P) = 0..tail-1, written ONE row per
+        # call: paged_update_cache gives every batch entry its own core and each core read-modify-writes the
+        # whole 32-row tile of the block, so two rows of the same block in one call would race
+        for j in range(tail):
+            row = n_pools * P + j
+            k_row = ttnn.reshape(ttnn.slice(k_idx, [0, 0, row, 0], [1, 1, row + 1, D]), [1, 1, 1, D])
+            g_row = ttnn.reshape(ttnn.slice(g_idx, [0, 0, row, 0], [1, 1, row + 1, D]), [1, 1, 1, D])
+            cache.write_ring_rows(k_row, g_row, cache._slot_ids[j], page_table=cache._user_pts[user])
         ttnn.deallocate(k_idx)
         ttnn.deallocate(g_idx)
 
@@ -286,9 +282,11 @@ class TtDSAIndexer(LightweightModule):
         )  # [1,1,T,pools_per_user] bf16, -inf where not visible
         scores_rm = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
         expanded = ttnn.repeat_interleave(scores_rm, self.P, dim=-1)  # [1,1,T,4*pools] token-level scores
-        # k capped to the scored width (short contexts: every visible token is selected, as in HF, and the
-        # op requires width >= k); k must be a multiple of 16 in [16, 2048]
-        k_eff = max(16, min(self.cfg.index_topk, kv_len * self.P) // 16 * 16)
+        # Every query handed here must see >= index_topk pooled tokens (prefill rows >= 2048, decode positions
+        # > 2050): then the top-k block is a full valid prefix and sparse_sdpa, which reads a row up to its
+        # FIRST sentinel, sees the appended tail ids. Shorter contexts belong to the dense path (TtDSA).
+        k_eff = self.cfg.index_topk
+        assert kv_len * self.P >= k_eff, f"sparse selection needs >= {k_eff} scored tokens, got {kv_len * self.P}"
         top = ttnn.experimental.topk_large_indices(expanded, k=k_eff, valid_length=kv_len * self.P)
         # [1,1,T,2048] uint32 token ids, 0xFFFFFFFF where -inf. (to_layout / repeat_interleave may alias
         # their inputs, so the intermediates are released together once the ids exist.)

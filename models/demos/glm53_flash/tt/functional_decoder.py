@@ -220,10 +220,14 @@ class FunctionalDecoder(LightweightModule):
         token or re-prefill afterwards. Refused for a DSA layer whose ``max_seq_len`` reaches the
         sparse threshold unless ``allow_sparse_range`` (replays past position 2047 would run the dense
         attention, which is not HF semantics there)."""
-        if not self.layer.is_kda and self.max_seq_len > self.cfg.index_topk and not allow_sparse_range:
+        if (
+            not self.layer.is_kda
+            and self.max_seq_len > self.layer.attn.dense_exact_max_pos + 1
+            and not allow_sparse_range
+        ):
             raise ValueError(
-                f"traced decode is valid only below position {self.cfg.index_topk}; this decoder allows "
-                f"max_seq_len={self.max_seq_len}. Use eager decode_forward beyond, or pass allow_sparse_range=True"
+                f"traced decode is HF-exact only through position {self.layer.attn.dense_exact_max_pos}; this decoder "
+                f"allows max_seq_len={self.max_seq_len}. Use eager decode_forward beyond, or pass allow_sparse_range=True"
             )
         warm = self.decode_forward(streams, positions=positions)
         ttnn.synchronize_device(self.device)

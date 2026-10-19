@@ -50,7 +50,7 @@ def weights():
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("seq_len", [96, 1000])
+@pytest.mark.parametrize("seq_len", [1, 2, 3, 31, 33, 96, 1000])
 def test_dsa_prefill_then_decode(mesh_device, weights, seq_len):
     from transformers import DynamicCache
 
