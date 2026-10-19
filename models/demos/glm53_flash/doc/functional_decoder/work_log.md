@@ -35,3 +35,14 @@ Stage: tt-model-bringup stage 1 (functional decoder, 1x1 mesh) = design Phase 1.
   output tile count (TT_FATAL "num_cores_with_work must equal in0_mcast_receiver_num_cores"): `pick_sparse_grid`.
   First run (layer 4, T=32, realistic MLP input from the T256 dump): output PCC 0.9964, but top-8 sets identical to
   HF on only 16/32 tokens (dense routing-weight PCC 0.985) -> quantifying whether that is near-tie noise.
+- Root cause of the router mismatch: the HF layer builders cast the whole module to bf16 before restoring the
+  strict-fp32 tensors (router bias ~5.5 resolves 0.03 in bf16) -> fixed (`cast_like_from_pretrained`), dumps
+  regenerated. Separately, `moe_grouped_topk` ranks with bf16 resolution and swaps the 8th expert on ~6/32 real
+  tokens (HF biased-score gaps 0.003-0.004) -> router is now an exact fp32 composite (iterative masked argmax).
+  Result: top-8 identical 32/32 (T=32) and 255/256 (T=256); MoE output PCC 0.99993 / 0.99995.
+- `tt/dsa.py`: dense causal SDPA prefill on materialized K/V (exact for context <= 2048), latent written with
+  paged_fill_cache; decode = paged_update_cache (height-sharded [1,B,32,512] input) + absorbed
+  paged_flash_multi_latent_attention_decode. L1 trap: the decode op's c_19 staging CB is sized
+  (cores_per_user-1)*(out+2) fp32 tiles (1.6 MB at 12 cores/user with the 512-wide latent) -> 4 cores/user,
+  k_chunk 32. Layer 3 vs HF: prefill PCC 0.99964 (T=96) / 0.99961 (T=1000), latent cache 0.99997, decode 0.9991-0.9999.
+- Commit 25c8b1100f8: moe, dsa, decoder_layer, functional_decoder (stage contract), tests.
