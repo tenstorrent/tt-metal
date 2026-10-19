@@ -15,6 +15,8 @@ namespace ckernel::sfpu {
 bool bf16_dest_tanhshrink();
 template <int ITERATIONS>
 void calculate_tanhshrink_bf16();
+// Whether BF16 DEST runs the generated tanhshrink kernel as one call over the whole tile.
+inline constexpr bool tanhshrink_bf16_whole_tile = true;
 
 // tanhshrink(x) = x - tanh(x).
 // For small |x|, tanh(x) ~= x, so the subtractive form x - tanh(x) suffers catastrophic
@@ -27,7 +29,7 @@ void calculate_tanhshrink_bf16();
 // sigmoid-based accurate tanh (deg-3 would be ~1700 fp32 ULP).
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanhshrink() {
-    if constexpr (!is_fp32_dest_acc_en) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
         if (bf16_dest_tanhshrink()) {
             calculate_tanhshrink_bf16<ITERATIONS>();
             return;
@@ -98,18 +100,15 @@ void init_tanhshrink_bf16();
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanhshrink_init() {
-    if constexpr (!is_fp32_dest_acc_en) {
-        if (bf16_dest_tanhshrink()) {
-            init_tanhshrink_bf16();
-            return;
-        }
-    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     // The bf16 large-|x| path uses only local literal polynomials, so it needs no init.
     if constexpr (is_fp32_dest_acc_en) {
         // The fp32 large-|x| path only needs the reciprocal Newton constants; the accurate
         // exp it uses is pure arithmetic (no LUT / programmable constants).
         sfpu_reciprocal_init<false>();
+    }
+    if constexpr (!is_fp32_dest_acc_en) {
+        init_tanhshrink_bf16();
     }
 }
 

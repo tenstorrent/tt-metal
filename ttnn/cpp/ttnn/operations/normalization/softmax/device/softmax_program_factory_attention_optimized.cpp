@@ -102,9 +102,15 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     // MAX and PREV_MAX stay with the bulk group. They are subtracted from the bulk buffers for
     // numeric stability, and fp32 there against 16-bit operands widened the per-row spread at
     // w <= 4096 (worst row 0.9916 -> 0.9648) for no gain in the mean.
-    const tt::DataFormat im_cb_data_format = (fp32_dest_acc_en && in0_cb_data_format == tt::DataFormat::Float32)
-                                                 ? tt::DataFormat::Float32
-                                                 : tt::DataFormat::Float16_b;
+    //
+    // All of the above is for the defaulted compute config. A caller that passes fp32_dest_acc_en
+    // explicitly keeps Float32 bulk buffers, as before fp32 accumulation became the default: an
+    // explicit accurate config (e.g. HiFi4, approx off, fp32 acc) relies on exp(x - max) staying
+    // fp32 until the final multiply, and its program, including the use_large_kernel switch below,
+    // must not change underneath it.
+    const bool bulk_fp32 = fp32_dest_acc_en && (in0_cb_data_format == tt::DataFormat::Float32 ||
+                                                attributes.has_explicit_compute_kernel_config);
+    const tt::DataFormat im_cb_data_format = bulk_fp32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const std::uint32_t im_tile_size = tt::tile_size(im_cb_data_format);
 
     const tt::DataFormat acc_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;

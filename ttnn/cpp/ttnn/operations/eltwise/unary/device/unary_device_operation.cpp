@@ -4,6 +4,7 @@
 
 #include "unary_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -142,6 +143,32 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
 
     validate_integer_input_dtype(args.op_chain, input_tensor.dtype());
+
+    // The compute kernel and its scalar runtime args come from op_chain[0] alone, and dedicated kernels
+    // hard-code their op and never expand SFPU_OP_CHAIN_0, while those same ops emit an empty init/func
+    // into eltwise_sfpu_metal2.cpp. Either way, one of them in a longer chain is silently dropped. MAC_TSS is the
+    // exception only in first position: mac_tss_kernel.cpp expands the chain after filling the DST
+    // registers mac_tile reads, which eltwise_sfpu_metal2.cpp never fills. BITCAST runs on the generic kernel but
+    // emits no init/func: the factory reinterprets the input CB only when it is op_chain[0], while the output
+    // dtype comes from op_chain.back(), so it is only correct on its own.
+    if (args.op_chain.size() > 1) {
+        for (size_t i = 0; i < args.op_chain.size(); ++i) {
+            const auto type = args.op_chain[i].type();
+            const bool leading_mac = i == 0 && type == operations::unary::UnaryOpType::MAC_TSS;
+            const bool chainable = type != operations::unary::UnaryOpType::BITCAST &&
+                                   !utils::uses_dedicated_compute_kernel(type, input_tensor.dtype());
+            TT_FATAL(
+                leading_mac || type != operations::unary::UnaryOpType::BITCAST,
+                "Unary: BITCAST cannot share a chain with other ops (chain has {} ops)",
+                args.op_chain.size());
+            TT_FATAL(
+                leading_mac || chainable,
+                "Unary: {} uses a dedicated compute kernel and must be {} in the chain (chain has {} ops)",
+                type,
+                type == operations::unary::UnaryOpType::MAC_TSS ? "the first op" : "the only op",
+                args.op_chain.size());
+        }
+    }
 
     for (const auto& op : args.op_chain) {
         if (op.type() == operations::unary::UnaryOpType::LGAMMA) {
@@ -316,12 +343,12 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
-    // On cache hit, the descriptor is not rebuilt and no relaxation is applied. The dispatched
-    // tensor_layout must be the same as the one built for the cached program.  Anything omitted
-    // from this key can give different config and fail validation (wrong data now and a hard TT_FATAL
-    // once the Metal 2.0 port declares TensorParameter relaxations). The output layout needs its
-    // own term because compute_output_specs can hand back a caller-supplied preallocated spec and
-    // validation only compares its Layout enum against the input's.
+    // On cache hit, the program is not rebuilt. The TensorParameter relaxations let shape and rank vary
+    // and nothing else: the dispatched tensor_layout must be the same as the one built for the cached
+    // program. Anything omitted from this key that the relaxed match compares exactly fails validation
+    // with a hard TT_FATAL on the hit. The output layout needs its own term because
+    // compute_output_specs can hand back a caller-supplied preallocated spec and validation only
+    // compares its Layout enum against the input's.
     //
     // Hashing tensor_layout does not ignore shape. Alignment is part of tensor_layout and since
     // legacyShapeToAlignment returns {padded_h, padded_w} for an overpadded TILE tensor instead of tile

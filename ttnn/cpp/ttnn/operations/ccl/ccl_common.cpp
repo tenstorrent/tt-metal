@@ -164,6 +164,17 @@ tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distrib
     return l1_small_bank_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
 }
 
+void warn_if_semaphores_fall_back_to_l1(tt::tt_metal::BufferType sem_buffer_type) {
+    if (sem_buffer_type == tt::tt_metal::BufferType::L1_SMALL) {
+        return;
+    }
+    log_warning(
+        tt::LogOp,
+        "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. "
+        "Pass a non-zero l1_small_size to ttnn.open_device / ttnn.open_mesh_device to reserve an L1_SMALL region "
+        "for them.");
+}
+
 size_t l1_small_floor_address(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
     const auto& allocator = mesh_device.allocator();
     return allocator->get_worker_l1_size() - allocator->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
@@ -721,8 +732,8 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     const std::vector<ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
     std::optional<uint32_t> /*receiver_device_id*/,
     std::optional<uint32_t> /*sender_device_id*/) {
-    auto sender_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(tt::tt_metal::hal::get_arch());
-    auto receiver_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(tt::tt_metal::hal::get_arch());
+    auto sender_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    auto receiver_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     for (uint32_t i = 0; i < topology_config.num_links; ++i) {
         bool is_clockwise_direction_edm_enabled =
             !topology_config.is_linear || topology_config.ring_index != topology_config.ring_size - 1;
