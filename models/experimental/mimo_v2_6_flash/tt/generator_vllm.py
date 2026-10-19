@@ -424,6 +424,14 @@ class MiMoV2ForCausalLM:
             self.already_warmed_up_prefill = True
             return
         t0 = time.time()
+        # Decode makes persistent L1 buffers on its first step (the MoE fabric row gather's among them). Layernorm and
+        # some reductions size their circular buffers from the free L1 and key the program on that plan
+        # (ttnn/cpp/ttnn/operations/core/program_cache_l1.hpp), so prefill is compiled with those buffers in place, as
+        # served prefills run. The plugin warms prefill before decode and, with trace_mode decode_only, not again after.
+        idle = torch.full((self.models[0].max_batch,), -1, dtype=torch.int32)  # every slot idle: no KV is written
+        handles = [(m, m.decode_enqueue(torch.zeros_like(idle), idle)) for m in self.models if m.decode_trace is None]
+        for m, handle in handles:
+            m.decode_read(handle)
         model0 = self.models[0]
         groups = sorted(set(self.layer_groups))
         width = model0.vllm_tables[groups[0]].shape[1]
