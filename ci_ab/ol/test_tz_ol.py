@@ -9,6 +9,7 @@ CASES = {
     "fp32_512x1024": (ttnn.float32, (1, 1, 512, 1024)),
     "int32_2048x64": (ttnn.int32, (1, 1, 2048, 64)),
     "bf16_4096x32": (ttnn.bfloat16, (1, 1, 4096, 32)),
+    "bf16_to_bfp8_2048x64": (ttnn.bfloat16, (1, 1, 2048, 64)),
 }
 
 
@@ -20,6 +21,10 @@ def test_tz(device, case):
     else:
         t = torch.randn(shape, dtype=torch.float32 if dt == ttnn.float32 else torch.bfloat16)
     x = ttnn.from_torch(t, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    if case.startswith("bf16_to_bfp8"):
+        y = ttnn.tilize(x, dtype=ttnn.bfloat8_b, use_multicore=True)
+        assert torch.allclose(ttnn.to_torch(y).float(), t.float(), rtol=0.05, atol=0.05)
+        return
     y = ttnn.tilize(x, use_multicore=True)
     out = ttnn.to_torch(y)
     assert torch.equal(out.to(t.dtype), t)

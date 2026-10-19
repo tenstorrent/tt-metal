@@ -107,6 +107,12 @@ for form in ("tile", "block"):  # the 2-face rows #60672 moves, with compile-tim
             for ct in (1, 2, 4, 8):
                 CASES.append((name, fmt, acc, 1, ct, TA(ta_form=form, ta_nf=nf, ta_ctf=1)))
 
+for ct in (3, 5, 6, 7, 12):  # main's per-tile rows for the bf16 to Bfp8_b block rows
+    CASES.append(("ctb", io(F.Float16_b, F.Bfp8_b), NO, 1, ct, TA()))
+for ct in (1, 2, 3, 4, 8):  # bf16 to Bfp4_b in the block form, and its per-tile row at 3
+    CASES.append(("ctb", io(F.Float16_b, F.Bfp4_b), NO, 1, ct, TA(ta_form="block")))
+CASES.append(("ctb", io(F.Float16_b, F.Bfp4_b), NO, 1, 3, TA()))
+
 
 def _id(c):
     n, fmt, acc, rt, ct, ta = c

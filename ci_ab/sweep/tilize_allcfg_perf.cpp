@@ -36,6 +36,14 @@
 #ifndef TA_SECT
 #define TA_SECT 0
 #endif
+// 1 where the tree's tilize_block unpacks a 2-tile row to a BFP output one call per tile
+#ifndef TA_BFP2_PER_TILE
+#if __has_include("llk_tilize_bfp2_per_tile.h")
+#define TA_BFP2_PER_TILE 1
+#else
+#define TA_BFP2_PER_TILE 0
+#endif
+#endif
 // 1 where the tree's llk_unpack_tilize_block unpacks 8-bit and unpack-to-DEST rows one call per tile (the X3 fix)
 #ifndef TA_BLOCK_U2D_PER_TILE
 #if __has_include("llk_tilize_block_per_tile_32b.h")
@@ -92,7 +100,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     const std::uint32_t tile_row_addr = L1_ADDRESS(src + (i % 8) * 0x1000);
 #if UNPACK_BLOCK
-                    if (!TA_BLOCK_U2D_PER_TILE || !(unpack_to_dest || IS_8BIT_FORMAT(formats.unpack_A_src)))
+                    const bool bfp2_per_tile = TA_BFP2_PER_TILE && BLOCK_CT_DIM == 2 && IS_BFP_FORMAT(formats.pack_dst);
+                    if (!bfp2_per_tile && (!TA_BLOCK_U2D_PER_TILE || !(unpack_to_dest || IS_8BIT_FORMAT(formats.unpack_A_src))))
                     {
                         _llk_unpack_tilize_block_wrapper_(
                             tile_row_addr, 0, BLOCK_CT_DIM, formats.unpack_A_src, formats.unpack_A_dst, 0, TA_FACE_R, TA_NF, false);
