@@ -2238,12 +2238,22 @@ def run_chunked_transformer_updated(
     # (compiles), then alternate push_ab_reps times per chunk.
     push_ab_rows = []
 
-    def _push_ab(c, kv_actual):
-        mlas = [layer.mla for layer in transformer.layers]
+    # The A/B paths: dense gather; sparse push; sparse push with the next layer's prefix prefetched during sparse_sdpa.
+    push_ab_paths = {"gather": (False, False), "push": (True, False), "push+prefetch": (True, True)}
+    prefetch_resources = {layer.mla.layer_idx: layer.mla._push_prefetch for layer in transformer.layers}
 
-        def run(push):
-            for m in mlas:
-                m._sparse_kv_push = push
+    def _set_path(path):
+        push, prefetch = push_ab_paths[path]
+        for layer in transformer.layers:
+            layer.mla._sparse_kv_push = push
+            layer.mla._push_prefetch = prefetch_resources[layer.mla.layer_idx] if prefetch else None
+
+    if push_ab_chunks:
+        _set_path("gather")  # the prefill itself runs today's dense gather
+
+    def _push_ab(c, kv_actual):
+        def run(path):
+            _set_path(path)
             tokens = ttnn.from_torch(
                 chunk_tok_host[c],
                 device=mesh_device,
@@ -2269,16 +2279,17 @@ def run_chunked_transformer_updated(
             return time.time() - t0
 
         if not push_ab_rows:
-            run(False), run(True)  # compile both paths outside the measured samples
-        samples = {False: [], True: []}
-        for push in (False, True) * push_ab_reps:
-            samples[push].append(run(push))
-        for m in mlas:
-            m._sparse_kv_push = False
-        push_ab_rows.append((c, kv_actual, samples[False], samples[True]))
+            for path in push_ab_paths:
+                run(path)  # compile every path outside the measured samples
+        samples = {path: [] for path in push_ab_paths}
+        for _ in range(push_ab_reps):
+            for path in push_ab_paths:
+                samples[path].append(run(path))
+        _set_path("gather")
+        push_ab_rows.append((c, kv_actual, samples))
         logger.info(
-            f"[push A/B] chunk={c} prefix={kv_actual} gather={[round(x * 1000, 1) for x in samples[False]]} ms "
-            f"push={[round(x * 1000, 1) for x in samples[True]]} ms"
+            f"[push A/B] chunk={c} prefix={kv_actual} "
+            + " ".join(f"{p}={[round(x * 1000, 1) for x in v]} ms" for p, v in samples.items())
         )
 
     profiler.start("tt_forward")
@@ -2386,28 +2397,27 @@ def run_chunked_transformer_updated(
             def stats(xs):
                 return statistics.median(xs), statistics.stdev(xs) if len(xs) >= 2 else 0.0
 
-            headers = ["chunk", "prefix", "gather median", "stddev", "push median", "stddev", "saved", "speedup"]
+            headers = ["chunk", "prefix"]
+            for path in push_ab_paths:
+                headers += [f"{path} median", "stddev"]
+            headers += ["push speedup", "push+prefetch speedup"]
             rows = []
-            for ci, pre, g, pu in push_ab_rows:
-                (gm, gs), (pm, ps) = stats(g), stats(pu)
-                rows.append(
-                    [
-                        f"chunk {ci}",
-                        f"{pre}",
-                        format_duration(gm),
-                        format_duration(gs),
-                        format_duration(pm),
-                        format_duration(ps),
-                        f"{(gm - pm) * 1000:+.1f} ms",
-                        f"{gm / pm:.3f}x",
-                    ]
-                )
+            for ci, pre, samples in push_ab_rows:
+                row = [f"chunk {ci}", f"{pre}"]
+                med = {}
+                for path in push_ab_paths:
+                    m, sd = stats(samples[path])
+                    med[path] = m
+                    row += [format_duration(m), format_duration(sd)]
+                row += [f"{med['gather'] / med['push']:.3f}x", f"{med['gather'] / med['push+prefetch']:.3f}x"]
+                rows.append(row)
             widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(headers)]
             fmt = lambda r: " | ".join(x.rjust(w) for x, w in zip(r, widths))
             table = [fmt(headers), "-+-".join("-" * w for w in widths)] + [fmt(r) for r in rows]
             logger.info(
                 f"[push A/B] per-chunk forward time, {num_layers} layers, {push_ab_reps} samples per path "
-                f"(dense KVPE gather vs sparse KV push with on-device plan):\n" + "\n".join(table)
+                f"(dense KVPE gather vs sparse KV push with on-device plan, without / with prefetch):\n"
+                + "\n".join(table)
             )
         if determinism_check:
             # Compare the whole cache the iteration just wrote, bit-exactly. PCC rounds away a single
