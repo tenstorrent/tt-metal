@@ -509,6 +509,21 @@ def test_binary_xlogy_ttnn(input_shapes, device):
     assert comp_pass
 
 
+def test_binary_xlogy_nan_inf_ttnn(device):
+    x = torch.full((1, 1, 32, 32), 2.0)
+    x[..., 0, :] = 0.0
+    y = torch.full((1, 1, 32, 32), 3.0)
+    y[..., :8] = float("nan")
+    y[..., 8:16] = float("inf")
+    golden = ttnn.get_golden_function(ttnn.xlogy)(x, y)
+
+    x_tt = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(ttnn.xlogy(x_tt, y_tt))
+
+    assert torch.allclose(out, golden, rtol=1e-3, equal_nan=True)
+
+
 @pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)])

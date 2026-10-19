@@ -135,11 +135,16 @@ inline void calculate_sfpu_binary(
         } else if constexpr (BINOP == BinaryOp::POW) {
             result = calculate_sfpu_binary_power(in0, in1);
         } else if constexpr (BINOP == BinaryOp::XLOGY) {
-            v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
+            v_if(in1 < 0.0f) { result = nan; }
             v_else {
                 sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
                 _calculate_log_body_(log_c, log_d, dst_index_out);
                 result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
+                v_if(sfpi::is_nan(in1)) { result = nan; }
+                v_endif;
+                // The log body returns a finite value for +inf; xlogy(x, +inf) is x * inf unless x is 0.
+                v_if((sfpi::as<sfpi::vInt>(in1) == 0x7F800000) && (in0 != 0.0f)) { result = in0 * in1; }
+                v_endif;
             }
             v_endif;
         } else if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
