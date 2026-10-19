@@ -26,6 +26,9 @@ inline const char* kSenderKernel = "tests/tt_metal/tt_metal/test_kernels/misc/so
 inline const char* kReceiverKernel = "tests/tt_metal/tt_metal/test_kernels/misc/socket/host_socket_receiver.cpp";
 inline const char* kPingPongKernel = "tests/tt_metal/tt_metal/test_kernels/misc/socket/host_socket_pingpong.cpp";
 inline const char* kEchoKernel = "tests/tt_metal/tt_metal/test_kernels/misc/socket/host_socket_echo.cpp";
+inline const char* kBurstSenderKernel = "tests/tt_metal/tt_metal/test_kernels/misc/socket/host_socket_burst_sender.cpp";
+inline const char* kBurstReceiverKernel =
+    "tests/tt_metal/tt_metal/test_kernels/misc/socket/host_socket_burst_receiver.cpp";
 
 // Warmup laps the latency kernels run untimed; must match WARMUP_ITERS in
 // tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_noc_utils.h.
@@ -44,6 +47,25 @@ Percentiles summarize(std::vector<double> samples);
 
 /// Appends one latency row to $TT_HOST_SOCKET_CSV_LATENCY, if set.
 void record_latency(const std::string& label, uint32_t page_size, const Percentiles& us);
+
+/// Appends one burst row to $TT_HOST_SOCKET_CSV_BURST, if set.
+void record_burst(
+    uint32_t page_size, uint32_t burst, uint32_t ring_pages, const Percentiles& local_us, const Percentiles& remote_us);
+
+/// Collects both endpoints' hop samples onto `report_rank`: the receiver's
+/// publish-to-drain samples are sent over the context. Collective over the two
+/// ranks. Returns the merged set on `report_rank`, empty elsewhere.
+HostMeshSocket::HopSamples gather_hop_samples(
+    HostMeshSocket& socket,
+    const std::shared_ptr<multihost::DistributedContext>& context,
+    multihost::Rank report_rank,
+    multihost::Rank other_rank);
+
+/// Logs and records (as hop_<name>) every non-empty hop in `hops`.
+void report_hop_samples(const std::string& label, uint32_t page_size, const HostMeshSocket::HopSamples& hops);
+
+/// Converts nanosecond samples to microsecond percentiles.
+Percentiles summarize_ns(const std::vector<uint64_t>& ns);
 
 struct Params {
     uint32_t page_size = 14336;  // 14 KiB: the target packet size. Not a power of two.
@@ -84,8 +106,14 @@ std::vector<uint32_t> payload_for_core(uint32_t core_index, uint64_t size_bytes)
 /// receiver). Returns void so gtest's ASSERT_* and GTEST_SKIP can be used inside.
 /// `ack_latency_ns_out`, when given, collects the relay's forward-to-credit
 /// samples (the streaming ack round trip) and enables that sampling.
+/// `hops_out`, when given, receives every relay hop stamp from both ranks on the
+/// sender rank (empty on the receiver).
 void run_transfer(
-    const Params& params, bool verify, double* gbps_out = nullptr, std::vector<uint64_t>* ack_latency_ns_out = nullptr);
+    const Params& params,
+    bool verify,
+    double* gbps_out = nullptr,
+    std::vector<uint64_t>* ack_latency_ns_out = nullptr,
+    HostMeshSocket::HopSamples* hops_out = nullptr);
 
 /// Appends one benchmark row to $TT_HOST_SOCKET_CSV, if that is set. Header is
 /// written when the file is created, so a sweep can concatenate runs.

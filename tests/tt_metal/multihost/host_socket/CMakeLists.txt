@@ -18,6 +18,7 @@ target_sources(
         test_host_transport.cpp
         test_socket_hotswap.cpp
         test_host_socket_latency.cpp
+        test_host_socket_burst.cpp
 )
 
 target_include_directories(

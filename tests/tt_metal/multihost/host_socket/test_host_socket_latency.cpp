@@ -146,9 +146,14 @@ TEST(HostSocketLatencyTest, StreamingAckLatency) {
 
     double gbps = 0.0;
     std::vector<uint64_t> samples;
-    run_transfer(params, /*verify=*/false, &gbps, &samples);
+    HostMeshSocket::HopSamples hops;
+    run_transfer(params, /*verify=*/false, &gbps, &samples, &hops);
 
-    if (context->rank() != kSenderRank || samples.empty()) {
+    if (context->rank() != kSenderRank) {
+        return;
+    }
+    report_hop_samples("stream", params.page_size, hops);
+    if (samples.empty()) {
         return;
     }
     std::vector<double> us;

@@ -88,10 +88,26 @@ public:
 
     uint64_t pages_transferred() const;
 
-    /// Sender only. Batch-handoff to peer-credit round trip. Off by default:
-    /// costs a timestamp per batch.
+    /// Per-batch hop stamps taken by the relay, each on its own host's clock.
+    /// Off by default: costs a timestamp per batch. Enable on both endpoints.
+    struct HopSamples {
+        /// Sender host: transport send issued -> source ring slot released (the
+        /// NIC finished reading it). The device's D2H credit follows this.
+        std::vector<uint64_t> send_to_release_ns;
+        /// Sender host: transport send issued -> peer reports its device consumed
+        /// the batch. The streaming ack round trip.
+        std::vector<uint64_t> send_to_credit_ns;
+        /// Receiver host: batch published to the device -> device acked it. The
+        /// H2D leg as the host sees it.
+        std::vector<uint64_t> publish_to_drain_ns;
+    };
     void set_latency_sampling(bool enabled);
+    /// Sender only: the send_to_credit samples. Kept for callers that want just
+    /// the ack round trip.
     std::vector<uint64_t> take_latency_samples_ns();
+    /// Every hop this endpoint stamps; a sender fills the first two, a receiver
+    /// the third.
+    HopSamples take_hop_samples();
 
 private:
     struct Impl;

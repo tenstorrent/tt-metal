@@ -24,7 +24,10 @@
 #   multirank  3 ranks, 2 endpoints: non-participants must not be waited on
 #   hotswap    the same body and kernels over a D2D MeshSocket and over this one
 #   perf       throughput at 14 KiB pages
-#   latency    idle device-to-device round trip, then ack latency under load
+#   latency    host-to-host round trip, idle device-to-device round trip, then
+#              ack latency and per-hop relay stamps under load
+#   burst      latency to the last message's credit for (page size) x (burst
+#              size); the knee against the bandwidth-delay product
 #   sweep      page-size sweep at fixed volume, then core-count scaling, then
 #              ring-depth scaling (locates the bandwidth-delay product)
 #   soak       long-running verified soak (see HOST_SOCKET_SOAK_SECONDS)
@@ -210,6 +213,8 @@ run_gtest() {  # label, gtest_filter, then VAR=VAL overrides
             -x TT_HOST_SOCKET_BATCH_PAGES -x TT_HOST_SOCKET_MIN_GBPS \
                 -x TT_HOST_SOCKET_CSV \
             -x TT_HOST_SOCKET_CSV_LATENCY -x TT_HOST_SOCKET_LAT_ITERS -x TT_HOST_SOCKET_IDLE_RTT_US \
+            -x TT_HOST_SOCKET_CSV_BURST -x TT_HOST_SOCKET_BURSTS -x TT_HOST_SOCKET_BURST_ITERS \
+            -x TT_HOST_SOCKET_RING_CAP_BYTES -x TT_HOST_SOCKET_ACK_PAGE_SIZE \
             -x OMPI_MCA_btl_tcp_if_include -x OMPI_MCA_oob_tcp_if_include \
             -x OMPI_MCA_btl_tcp_if_exclude -x OMPI_MCA_oob_tcp_if_exclude \
             "$HERE/rank_env.sh" "$BIN" --gtest_filter="$filter" 2>&1 | tee "$log"
@@ -249,17 +254,36 @@ case "$MODE" in
         run_gtest "correctness" 'HostSocketTest.*Correctness*' || rc=$?
         ;;
     latency)
-        # Idle device-to-device round trip, then the streaming ack round trip.
-        # Both are timed on a single clock, so no cross-host sync is needed; the
-        # second run is given the first's RTT so it can also report the forward
-        # path with the return transit removed.
+        # Host-to-host alone first (no device: what it costs is the transport),
+        # then the idle device-to-device round trip per page size, then the
+        # streaming ack round trip with the relay's per-hop stamps. Every figure
+        # is timed on a single clock, so no cross-host sync is needed; the last
+        # run is given the idle RTT so it can also report the forward path with
+        # the return transit removed.
         export TT_HOST_SOCKET_CSV_LATENCY="${HOST_SOCKET_CSV_LATENCY:-$HERE/results/latency_${SLURM_JOB_ID:-local}.csv}"
         mkdir -p "$(dirname "$TT_HOST_SOCKET_CSV_LATENCY")"
-        run_gtest "round-trip latency" 'HostSocketLatencyTest.RoundTrip' || rc=$?
-        idle_rtt=$(awk -F, '$1=="d2d_round_trip"{print $5}' "$TT_HOST_SOCKET_CSV_LATENCY" 2>/dev/null | tail -1)
-        [[ -n "${idle_rtt:-}" ]] && echo "== idle round trip p50 = ${idle_rtt} us"
+        run_gtest "host-to-host round trip" 'HostTransportTest.PingPongLatency' || rc=$?
+        for ps in ${HOST_SOCKET_LATENCY_PAGE_SIZES:-64 1024 4096 14336 65536}; do
+            run_gtest "round-trip latency @${ps}B" 'HostSocketLatencyTest.RoundTrip' \
+                TT_HOST_SOCKET_PAGE_SIZE="$ps" || rc=$?
+        done
+        idle_rtt=$(awk -F, '$1=="d2d_round_trip" && $2==14336 {print $5}' "$TT_HOST_SOCKET_CSV_LATENCY" 2>/dev/null | tail -1)
+        [[ -n "${idle_rtt:-}" ]] && echo "== idle round trip p50 @14336B = ${idle_rtt} us"
         run_gtest "streaming ack latency" 'HostSocketLatencyTest.StreamingAckLatency' \
             TT_HOST_SOCKET_IDLE_RTT_US="${idle_rtt:-0}" || rc=$?
+        ;;
+    burst)
+        # One run per page size; each sweeps the burst list on one kernel launch.
+        # Ring depth is the largest burst, capped in bytes because the receiver
+        # mirrors D2D and lands the ring in L1.
+        export TT_HOST_SOCKET_CSV_LATENCY="${HOST_SOCKET_CSV_LATENCY:-$HERE/results/latency_${SLURM_JOB_ID:-local}.csv}"
+        export TT_HOST_SOCKET_CSV_BURST="${HOST_SOCKET_CSV_BURST:-$HERE/results/burst_${SLURM_JOB_ID:-local}.csv}"
+        mkdir -p "$(dirname "$TT_HOST_SOCKET_CSV_BURST")"
+        for ps in ${HOST_SOCKET_BURST_PAGE_SIZES:-64 256 1024 4096 14336 16384 65536}; do
+            run_gtest "burst to last credit @${ps}B" 'HostSocketLatencyTest.BurstToLastCredit' \
+                TT_HOST_SOCKET_PAGE_SIZE="$ps" \
+                TT_HOST_SOCKET_FIFO_PAGES="${HOST_SOCKET_BURST_RING_PAGES:-64}" || rc=$?
+        done
         ;;
     multirank)
         # Three ranks, two endpoints. Exercises the path where a socket is built
@@ -323,9 +347,10 @@ case "$MODE" in
         "$0" hotswap || rc=$?
         "$0" perf || rc=$?
         "$0" latency || rc=$?
+        "$0" burst || rc=$?
         ;;
     *)
-        echo "unknown mode: $MODE (want transport|smoke|multirank|hotswap|perf|latency|sweep|soak|all)" >&2
+        echo "unknown mode: $MODE (want transport|smoke|multirank|hotswap|perf|latency|burst|sweep|soak|all)" >&2
         exit 2
         ;;
 esac

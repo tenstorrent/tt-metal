@@ -98,10 +98,15 @@ public:
     uint64_t pages_forwarded() const { return forwarded_.load(std::memory_order_acquire); }
     uint64_t pages_retired() const { return retired_.load(std::memory_order_acquire); }
 
-    // Batch-handoff to peer-credit round trip. Off by default: one timestamp per
-    // batch.
+    // Per-batch hop stamps, all on this host's clock. Off by default: one
+    // timestamp per batch.
+    //   send -> release  the transport finished reading the source ring slot (the
+    //                    NIC is done with it), which is when the device gets its
+    //                    D2H credit back
+    //   send -> credit   the peer reported its device consumed the batch
     void set_credit_latency_sampling(bool enabled);
     std::vector<uint64_t> take_credit_latencies_ns();
+    std::vector<uint64_t> take_release_latencies_ns();
 
 private:
     HostTransport& transport_;
@@ -118,8 +123,10 @@ private:
         uint64_t sent_ns;
     };
     std::atomic<bool> sampling_{false};
-    std::deque<Sample> pending_samples_;
+    std::deque<Sample> pending_samples_;          // waiting on the peer's credit
+    std::deque<Sample> pending_release_samples_;  // waiting on the local release
     std::vector<uint64_t> latencies_ns_;
+    std::vector<uint64_t> release_latencies_ns_;
     mutable std::mutex latency_mutex_;
 };
 
@@ -139,6 +146,12 @@ public:
 
     uint64_t pages_arrived() const { return arrived_.load(std::memory_order_acquire); }
 
+    // Per-batch hop stamp on this host's clock: publish -> drain is the time from
+    // commit_pages() making a batch visible to the device until bytes_acked shows
+    // the device has consumed it, i.e. the H2D leg as the host sees it.
+    void set_drain_latency_sampling(bool enabled);
+    std::vector<uint64_t> take_drain_latencies_ns();
+
 private:
     HostTransport& transport_;
     tt::tt_metal::distributed::H2DSocket& socket_;
@@ -150,6 +163,15 @@ private:
     // to pages has to happen on an unwrapped total: accumulate 32-bit deltas.
     uint64_t consumed_bytes_ = 0;
     uint32_t last_acked_wire_ = 0;
+
+    struct Sample {
+        uint64_t total;  // arrived total this batch reached
+        uint64_t published_ns;
+    };
+    std::atomic<bool> sampling_{false};
+    std::deque<Sample> pending_samples_;
+    std::vector<uint64_t> latencies_ns_;
+    mutable std::mutex latency_mutex_;
 };
 
 // Process-wide non-blocking event loop; one thread services every endpoint.

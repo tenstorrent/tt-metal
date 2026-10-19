@@ -117,7 +117,12 @@ std::vector<uint32_t> payload_for_core(uint32_t core_index, uint64_t size_bytes)
     return data;
 }
 
-void run_transfer(const Params& params, bool verify, double* gbps_out, std::vector<uint64_t>* ack_latency_ns_out) {
+void run_transfer(
+    const Params& params,
+    bool verify,
+    double* gbps_out,
+    std::vector<uint64_t>* ack_latency_ns_out,
+    HostMeshSocket::HopSamples* hops_out) {
     const auto& context = multihost::DistributedContext::get_current_world();
     const auto rank = context->rank();
     const bool is_sender = rank == kSenderRank;
@@ -140,7 +145,7 @@ void run_transfer(const Params& params, bool verify, double* gbps_out, std::vect
     transport.max_batch_pages = static_cast<uint32_t>(env_u64("TT_HOST_SOCKET_BATCH_PAGES", 8));
 
     HostMeshSocket socket(mesh_device, config, transport);
-    if (ack_latency_ns_out != nullptr) {
+    if (ack_latency_ns_out != nullptr || hops_out != nullptr) {
         socket.set_latency_sampling(true);
     }
 
@@ -221,7 +226,13 @@ void run_transfer(const Params& params, bool verify, double* gbps_out, std::vect
     }
     context->barrier();
 
-    if (ack_latency_ns_out != nullptr) {
+    if (hops_out != nullptr) {
+        // Collective: both ranks take part even when only one keeps the result.
+        *hops_out = gather_hop_samples(socket, context, kSenderRank, kReceiverRank);
+        if (ack_latency_ns_out != nullptr) {
+            *ack_latency_ns_out = hops_out->send_to_credit_ns;
+        }
+    } else if (ack_latency_ns_out != nullptr) {
         *ack_latency_ns_out = socket.take_latency_samples_ns();
     }
 
@@ -261,6 +272,100 @@ void record_latency(const std::string& label, uint32_t page_size, const Percenti
     }
     out << label << ',' << page_size << ',' << us.count << ',' << us.min << ',' << us.p50 << ',' << us.avg << ','
         << us.p99 << ',' << us.max << '\n';
+}
+
+void record_burst(
+    uint32_t page_size,
+    uint32_t burst,
+    uint32_t ring_pages,
+    const Percentiles& local_us,
+    const Percentiles& remote_us) {
+    const char* path = std::getenv("TT_HOST_SOCKET_CSV_BURST");
+    if (path == nullptr || *path == '\0') {
+        return;
+    }
+    const bool fresh = !std::filesystem::exists(path);
+    std::ofstream out(path, std::ios::app);
+    if (!out) {
+        return;
+    }
+    if (fresh) {
+        out << "page_size,burst,ring_pages,samples,"
+               "local_min_us,local_p50_us,local_avg_us,local_p99_us,local_max_us,"
+               "remote_min_us,remote_p50_us,remote_avg_us,remote_p99_us,remote_max_us,"
+               "remote_p50_per_msg_us,remote_p50_gbps\n";
+    }
+    const double bytes = static_cast<double>(page_size) * burst;
+    out << page_size << ',' << burst << ',' << ring_pages << ',' << local_us.count << ',' << local_us.min << ','
+        << local_us.p50 << ',' << local_us.avg << ',' << local_us.p99 << ',' << local_us.max << ',' << remote_us.min
+        << ',' << remote_us.p50 << ',' << remote_us.avg << ',' << remote_us.p99 << ',' << remote_us.max << ','
+        << remote_us.p50 / burst << ',' << (remote_us.p50 > 0 ? bytes / remote_us.p50 / 1e3 : 0.0) << '\n';
+}
+
+Percentiles summarize_ns(const std::vector<uint64_t>& ns) {
+    std::vector<double> us;
+    us.reserve(ns.size());
+    for (uint64_t v : ns) {
+        us.push_back(static_cast<double>(v) / 1000.0);
+    }
+    return summarize(std::move(us));
+}
+
+HostMeshSocket::HopSamples gather_hop_samples(
+    HostMeshSocket& socket,
+    const std::shared_ptr<multihost::DistributedContext>& context,
+    multihost::Rank report_rank,
+    multihost::Rank other_rank) {
+    const multihost::Tag kHopTag{0x4850};
+    auto mine = socket.take_hop_samples();
+    // Only the receiver's drain samples live off the reporting rank; the sender
+    // stamps are already there.
+    auto ship = [&](std::vector<uint64_t>& v) {
+        if (context->rank() == report_rank) {
+            uint64_t count = 0;
+            context->recv(std::span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)), other_rank, kHopTag);
+            std::vector<uint64_t> incoming(count);
+            if (count != 0) {
+                context->recv(
+                    std::span<std::byte>(reinterpret_cast<std::byte*>(incoming.data()), count * sizeof(uint64_t)),
+                    other_rank,
+                    kHopTag);
+            }
+            v.insert(v.end(), incoming.begin(), incoming.end());
+        } else {
+            uint64_t count = v.size();
+            context->send(std::span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)), report_rank, kHopTag);
+            if (count != 0) {
+                context->send(
+                    std::span<std::byte>(reinterpret_cast<std::byte*>(v.data()), count * sizeof(uint64_t)),
+                    report_rank,
+                    kHopTag);
+            }
+        }
+    };
+    ship(mine.send_to_release_ns);
+    ship(mine.send_to_credit_ns);
+    ship(mine.publish_to_drain_ns);
+    if (context->rank() != report_rank) {
+        return {};
+    }
+    return mine;
+}
+
+void report_hop_samples(const std::string& label, uint32_t page_size, const HostMeshSocket::HopSamples& hops) {
+    auto one = [&](const char* name, const std::vector<uint64_t>& ns) {
+        if (ns.empty()) {
+            return;
+        }
+        const auto p = summarize_ns(ns);
+        GTEST_LOG_(INFO) << label << " hop " << name << " @" << page_size << " B: min " << p.min << " p50 " << p.p50
+                         << " avg " << p.avg << " p99 " << p.p99 << " max " << p.max << " us (" << p.count
+                         << " batches)";
+        record_latency(label + "_hop_" + name, page_size, p);
+    };
+    one("send_to_release", hops.send_to_release_ns);
+    one("send_to_credit", hops.send_to_credit_ns);
+    one("publish_to_drain", hops.publish_to_drain_ns);
 }
 
 void record_result(const Params& params, double gbps) {

@@ -329,8 +329,26 @@ void HostMeshSocket::set_latency_sampling(bool enabled) {
     for (auto& connection : impl_->connections) {
         if (auto* sender = dynamic_cast<RelaySender*>(connection.relay.get())) {
             sender->set_credit_latency_sampling(enabled);
+        } else if (auto* receiver = dynamic_cast<RelayReceiver*>(connection.relay.get())) {
+            receiver->set_drain_latency_sampling(enabled);
         }
     }
+}
+
+HostMeshSocket::HopSamples HostMeshSocket::take_hop_samples() {
+    HopSamples all;
+    auto append = [](std::vector<uint64_t>& into, std::vector<uint64_t> from) {
+        into.insert(into.end(), from.begin(), from.end());
+    };
+    for (auto& connection : impl_->connections) {
+        if (auto* sender = dynamic_cast<RelaySender*>(connection.relay.get())) {
+            append(all.send_to_credit_ns, sender->take_credit_latencies_ns());
+            append(all.send_to_release_ns, sender->take_release_latencies_ns());
+        } else if (auto* receiver = dynamic_cast<RelayReceiver*>(connection.relay.get())) {
+            append(all.publish_to_drain_ns, receiver->take_drain_latencies_ns());
+        }
+    }
+    return all;
 }
 
 std::vector<uint64_t> HostMeshSocket::take_latency_samples_ns() {
