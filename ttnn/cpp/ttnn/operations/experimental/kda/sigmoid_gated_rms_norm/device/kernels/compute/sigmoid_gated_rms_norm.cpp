@@ -92,7 +92,8 @@ void activate_gate(uint32_t Vt, DFB& norm) {
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
         copy_tile(dfb::gate, i, 0);
-        sigmoid_tile(0);
+        // BF16-grade sigmoid (exp_21f, one Newton step): the gate multiplies into a BF16 output.
+        sigmoid_tile<VectorMode::RC, false, false>(0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, dfb::norm, i);
