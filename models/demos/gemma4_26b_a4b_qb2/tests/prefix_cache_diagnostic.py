@@ -63,5 +63,7 @@ def compare_paths(generator, tokens, table, cache, original, start):
     restore_ids = model.upload(tokens[:, start:].reshape(1, 1, 1, -1).int(), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
     model.prefill_forward(restore_ids, page_table=table, kv_cache=cache, start_pos=start)
     assert summary["decode_vs_continuation"]["equal"], "Continuation differs from ordinary decode on identical prefix KV"
+    if start > 0:
+        assert summary["original_vs_decode"]["equal"], "Cached suffix differs from ordinary decode"
     if "cold_cache_decode" in values:
         assert summary["original_vs_cold_cache_decode"]["equal"], "Scheduler reuse differs from cold-cache decode"

@@ -38,12 +38,19 @@ export TT_MESH_GRAPH_DESC_PATH="$PWD/tt_metal/fabric/mesh_graph_descriptors/p300
 export TT_METAL_CACHE="$results/kernel-cache"
 tt_config='{"tt":{"fabric_config":"FABRIC_1D","trace_region_size":1000000000,"sample_on_device_mode":"all","trace_mode":"decode_only","enable_model_warmup":false}}'
 max_context=262144
+cache_flag=--enable-prefix-caching
+if [ "${GEMMA4_PREFIX_CACHE_MODE:-on}" = off ]; then cache_flag=--no-enable-prefix-caching; fi
+serving_args=()
 test_file="$model_dir/tests/test_prefix_caching.py"
 test_selection=live_decode_contract
 case "${GEMMA4_PREFIX_SUITE:-boundary}" in
     boundary) ;;
     lifetime) max_context=4096; test_file="$model_dir/tests/test_prefix_cache_lifetime.py"; test_selection=live_lifetime ;;
     growing) test_file="$model_dir/tests/test_prefix_cache_lifetime.py"; test_selection=live_growing ;;
+    agentic)
+        export GEMMA4_PREFIX_DIAGNOSE=0
+        serving_args=(--enable-auto-tool-choice --tool-call-parser gemma4 --reasoning-parser gemma4 --default-chat-template-kwargs '{"enable_thinking":true}')
+        ;;
     *) echo 'Unsupported prefix experiment suite'; exit 2 ;;
 esac
 setsid python -u -m vllm.entrypoints.openai.api_server \
@@ -53,7 +60,7 @@ setsid python -u -m vllm.entrypoints.openai.api_server \
     --hf-overrides '{"architectures":["TTGemma4A4BForCausalLM"]}' \
     --host 127.0.0.1 --port 8000 --block-size 32 --max-num-seqs 1 \
     --max-model-len "$max_context" --max-num-batched-tokens "$max_context" --max-logprobs -1 \
-    --async-scheduling --enable-prefix-caching --no-enable-chunked-prefill \
+    --async-scheduling "$cache_flag" --no-enable-chunked-prefill "${serving_args[@]}" \
     --no-enable-log-requests --no-enable-log-outputs \
     --additional-config "$tt_config" > "$results/server.log" 2>&1 &
 server_pid=$!
@@ -70,6 +77,11 @@ while ! curl --max-time 2 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; do
     fi
     sleep 5
 done
+if [ "${GEMMA4_PREFIX_SUITE:-boundary}" = agentic ]; then
+    touch "$results/server-ready.txt"
+    wait "$server_pid"
+    exit $?
+fi
 status=0
 timeout 1800 python -m pytest "$test_file" -k "$test_selection" \
     --gemma-server-url http://127.0.0.1:8000 --junitxml "$results/live.xml" -x -v || status=$?

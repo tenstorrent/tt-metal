@@ -264,3 +264,27 @@ for performance because explicit readbacks and replay are enabled via
 `GEMMA4_PREFIX_DIAGNOSE=1`. All validation remains remote. No local validation
 or device process has been started by this experiment.
 
+# Completed lifetime and growing-context evidence
+
+Remote runs 39238204679 (qb2-120-p03t09) and 39238201191
+(qb2-120-p01t03) passed concurrently on distinct machines, using Metal
+7d5c3e5cb8438989e36a6a35c704f1154f9a4584 and workflow 38d4d6f.
+Lifetime checks covered eviction/reconstruction, divergent suffixes and
+three exact seeded device-sampling repeats. The raw continuation output
+was whitespace, so this is state/repeatability evidence, not quality.
+
+For growing conversations with 127 computed suffix tokens, three warmed
+pair medians (cold wall -> cached wall seconds) were 2.109 -> 2.737 at
+4,096 cached tokens, 3.891 -> 2.748 at 8,192, and 7.529 -> 2.781 at
+16,384. Corresponding TTFT was 2.087 -> 2.712, 3.862 -> 2.720, and
+7.489 -> 2.741 seconds. Counter assertions verified cached/computed tokens.
+Full-vocabulary cached suffix logits equaled ordinary decode in artifacts;
+cold-prefill numerical equality remains a known failure.
+
+The next exploratory standard-Harbor experiment selects only Astropy14096
+from the existing CI-nightly list on separate inference branches, preserving
+the standard mini-swe-agent, timeouts and repetition guard. Four independent
+arms vary caching and presence of request seed9472; GPQA42 and server9472
+remain untouched. One task cannot qualify accuracy or justify seed removal.
+All execution remains remote; no local validation/device process was run.
+
