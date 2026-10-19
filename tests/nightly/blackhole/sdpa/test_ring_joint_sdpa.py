@@ -1704,6 +1704,7 @@ def run_ring_joint_sdpa_chunked(
     math_fidelity=None,
     kv_mean_offset: float = 0.0,
     perf_call_hook=None,
+    unchecked_features: Sequence[str] = (),
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1730,6 +1731,9 @@ def run_ring_joint_sdpa_chunked(
 
     perf_call_hook(config_id, call) (perf only, do_check=False) replaces the single op call per
     chunk and Q/K config: the hook runs call() as often as it likes, e.g. to time warm repeats.
+
+    unchecked_features names opt-ins ("K split", "matmul_math_fidelity", "segmented accumulation") whose
+    "output must differ without it" check is skipped, for chunks where the op legitimately drops them.
     """
     torch.manual_seed(CHUNKED_PREFILL_SEED)
     assert perf_call_hook is None or (not do_check and num_iterations == 1), "perf_call_hook is perf-only"
@@ -1959,6 +1963,8 @@ def run_ring_joint_sdpa_chunked(
                 feature_baselines["matmul_math_fidelity"] = feature_baseline(matmul_math_fidelity=None)
             if segmented_accumulation and max_k_splits == 1:
                 feature_baselines["segmented accumulation"] = feature_baseline(segmented_accumulation=False)
+            for feature in unchecked_features:
+                feature_baselines.pop(feature, None)
         feature_differs = {}
 
         use_device_determinism_compare = (
@@ -8055,7 +8061,10 @@ def test_ring_joint_attention_gemma4_global_chunk_sweep_accuracy(
 ):
     """The sweep's selected global tunings against the CPU reference, as test_ring_joint_attention_gemma4_global_
     segmented_accuracy checks production: packed K/V, LoFi, K/V rows sharing a mean direction, RMSE < 0.05. A 64K
-    sequence; the first chunk or the last (prefix 64K - C). K split and segmented accumulation must change the output.
+    sequence; the first chunk or the last (prefix 64K - C). K split and segmented accumulation must change the output,
+    except K split on the first chunk: this runner sizes chunk 0's cache to the chunk, so Q rows equal the local K/V
+    rows, the op runs it as non-chunked causal attention and drops the K split (production's full-capacity cache keeps
+    chunk 0 chunked). LoFi must still change it.
     """
     total_seq = 65536
     chunk_idx = 0 if position == "first" else total_seq // chunk_size - 1
@@ -8072,6 +8081,7 @@ def test_ring_joint_attention_gemma4_global_chunk_sweep_accuracy(
             segmented_accumulation=segmented,
             kv_mean_offset=1.0,
             rmse_threshold=0.05,
+            unchecked_features=("K split",) if position == "first" else (),
         )
 
 
