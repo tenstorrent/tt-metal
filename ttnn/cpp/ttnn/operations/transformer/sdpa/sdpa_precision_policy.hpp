@@ -26,7 +26,7 @@ struct RecipeSelection {
 // tech_reports/FlashAttention/SDPAPrecisionRecipes.md.
 struct PrecisionPolicy {
     RecipeSelection selection;
-    tt::tt_metal::MathFidelity pv_fidelity;  // compute-config fidelity; C runs QK at HiFi4 in-kernel
+    tt::tt_metal::MathFidelity pv_fidelity;  // compute-config fidelity; C runs QK at HiFi3 in-kernel
     // False (STANDARD, FAST): BF16 scores against a reference row max, O and l accumulated in FP32 in L1.
     bool fp32_destination;
     auto operator<=>(const PrecisionPolicy&) const = default;
