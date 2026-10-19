@@ -942,6 +942,14 @@ std::optional<MoEExpertRowsParams> select_moe_compute_expert_rows(
         if (forced_rows != nullptr) {
             m_top = m_bottom = static_cast<uint32_t>(std::max(1, std::atoi(forced_rows)));
         }
+        // Wormhole's kernel config buffer (70656 B) does not hold the M > 1 kernels (71680 B at H 7168, M 2).
+        if (mesh_device->arch() == tt::ARCH::WORMHOLE_B0 && m_top > 1) {
+            if (forced_rows != nullptr) {
+                return ring_because(
+                    fmt::format("TT_METAL_MOE_COMPUTE_ROW_TILES={}: Wormhole runs one row tile per job", forced_rows));
+            }
+            m_top = 1;
+        }
         for (uint32_t m = m_top; m >= m_bottom && m >= 2; --m) {
             std::string why;
             auto ws = plan_moe_expert_rows(mesh_device, shape, banks, budget, m, args.fp32_dest_acc_en, why);
