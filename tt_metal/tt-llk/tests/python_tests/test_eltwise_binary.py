@@ -334,11 +334,9 @@ def _run_eltwise_binary_test(
         )
     # A transposed SrcA is handed over per face on both threads.
     per_face_handoff = per_face_handoff or transpose_srca == Transpose.Yes
-    if math_block and (
-        per_face_handoff or broadcast_type != BroadcastType.None_ or acc_to_dest
-    ):
+    if math_block and (per_face_handoff or acc_to_dest):
         pytest.skip(
-            "The block math call takes the per-tile hand-off without broadcast or accumulation"
+            "The block math call takes the per-tile hand-off without accumulation"
         )
     if transpose_srca == Transpose.Yes and broadcast_type == BroadcastType.Scalar:
         pytest.skip("SrcA transpose is not supported with scalar broadcast")
@@ -448,7 +446,7 @@ def _run_eltwise_binary_test(
         broadcast_golden = get_golden_generator(BroadcastGolden)
         golden_src_B = broadcast_golden(
             broadcast_type,
-            src_B_tilized_flat,
+            golden_src_B,
             formats.input_format,
             num_faces=num_faces,
             tile_cnt=tile_cnt_A,
@@ -1441,6 +1439,74 @@ def test_eltwise_binary_unpack_ab_block_fixed_b(
     )
 
 
+def _lofi_and_highest_fidelity(formats, math_op):
+    fidelities = _get_valid_math_fidelity(formats, math_op)
+    return [f for f in fidelities if f in (MathFidelity.LoFi, fidelities[-1])]
+
+
+BCAST_BLOCK_FORMATS = {
+    DestAccumulation.No: [
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float16, DataFormat.Float16),
+        InputOutputFormat(DataFormat.Bfp8_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
+    ],
+    DestAccumulation.Yes: [
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+    ],
+}
+
+
+# The block unpack with a broadcast B, which advances with A (mode 1) or stays on the block's first tile (mode 2).
+@blackhole_only
+@pytest.mark.nightly
+@parametrize(
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    formats=lambda dest_acc: BCAST_BLOCK_FORMATS[dest_acc],
+    broadcast_type=[BroadcastType.Row, BroadcastType.Column, BroadcastType.Scalar],
+    math_op=lambda formats: get_eltwise_binary_math_ops(formats),
+    math_fidelity=lambda formats, math_op: _lofi_and_highest_fidelity(formats, math_op),
+    tile_dimensions=[[32, 32]],
+    input_dimensions=[[256, 32]],
+    unpack_ab_block=[1, 2],
+    per_face_handoff=[False, True],
+    math_block=[False, True],
+)
+def test_eltwise_binary_unpack_ab_block_bcast(
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    formats,
+    broadcast_type,
+    math_op,
+    math_fidelity,
+    tile_dimensions,
+    input_dimensions,
+    unpack_ab_block,
+    per_face_handoff,
+    math_block,
+):
+    _run_eltwise_binary_test(
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        formats,
+        broadcast_type,
+        math_op,
+        math_fidelity,
+        Transpose.No,
+        input_dimensions,
+        tile_dimensions,
+        False,
+        per_face_handoff=per_face_handoff,
+        unpack_ab_block=unpack_ab_block,
+        math_block=math_block,
+    )
+
+
 SMOKE_FORMATS = {
     DestAccumulation.No: [
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
@@ -1681,6 +1747,51 @@ def test_eltwise_binary_unpack_ab_block_smoke(
         math_fidelity,
         tile_dimensions,
         input_dimensions,
+        per_face_handoff,
+        math_block,
+    )
+
+
+@blackhole_only
+@parametrize(
+    dest_acc=[DestAccumulation.No],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    formats=SMOKE_BF16,
+    broadcast_type=[BroadcastType.Row, BroadcastType.Column, BroadcastType.Scalar],
+    math_op=lambda formats: get_eltwise_binary_math_ops(formats),
+    math_fidelity=lambda formats, math_op: _lofi_and_highest_fidelity(formats, math_op),
+    tile_dimensions=[[32, 32]],
+    input_dimensions=[[256, 32]],
+    unpack_ab_block=[1, 2],
+    per_face_handoff=[False, True],
+    math_block=[False, True],
+)
+def test_eltwise_binary_unpack_ab_block_bcast_smoke(
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    formats,
+    broadcast_type,
+    math_op,
+    math_fidelity,
+    tile_dimensions,
+    input_dimensions,
+    unpack_ab_block,
+    per_face_handoff,
+    math_block,
+):
+    test_eltwise_binary_unpack_ab_block_bcast(
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        formats,
+        broadcast_type,
+        math_op,
+        math_fidelity,
+        tile_dimensions,
+        input_dimensions,
+        unpack_ab_block,
         per_face_handoff,
         math_block,
     )

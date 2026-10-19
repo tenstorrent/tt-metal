@@ -367,12 +367,11 @@ inline void _llk_unpack_AB_(
 }
 
 // One config context acquire for a block of tile pairs: the base addresses are written once and advanced by the tile strides in the instruction stream.
-// Call _llk_unpack_AB_init_ with BroadcastType::NONE first; it uses SCRATCH_SEC0 and SCRATCH_SEC1.
+// Call _llk_unpack_AB_init_ with the same BType first; it uses SCRATCH_SEC0 and SCRATCH_SEC1. A row broadcast reads row 0 of each B tile.
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_block_(
     const std::uint32_t address_a, const std::uint32_t address_b, const std::uint32_t num_tiles, const std::uint32_t stride_a, const std::uint32_t stride_b)
 {
-    static_assert(BType == BroadcastType::NONE, "_llk_unpack_AB_block_ supports BroadcastType::NONE only");
     LLK_ASSERT(num_tiles > 0, "A block has at least one tile");
     LLK_ASSERT(is_valid_L1_address(address_a) && is_valid_L1_address(address_b), "L1 addresses must be in valid L1 memory region");
     LLK_ASSERT(

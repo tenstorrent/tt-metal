@@ -1037,8 +1037,8 @@ inline void _llk_math_eltwise_binary_(const ckernel::TensorShape tensor_shape, s
 /**
  * @brief Run a standard (no dest reuse) elementwise binary operation on num_tiles consecutive DEST tiles from dst_index.
  *
- * With the whole-tile program, no broadcast, 32x32 tiles and half sync, the DEST address is written once per call: a LoFi
- * tile's rows end at the next tile, and above LoFi the init's dst_step makes the last fidelity phase step to it.
+ * With the whole-tile program, 32x32 tiles and half sync, the DEST address is written once per call: a LoFi tile's rows
+ * end at the next tile, and above LoFi the init's dst_step makes the last fidelity phase step to it.
  *
  * @tparam dst_step: Must match the init's; without it a program above LoFi runs per tile
  * @param tensor_shape: Tensor shape describing tile dimensions
@@ -1060,8 +1060,7 @@ inline void _llk_math_eltwise_binary_block_(const ckernel::TensorShape tensor_sh
         "eltwise_binary block: Src zero-substitution flag is not in DEFAULT state");
 
     if constexpr (
-        Dst == DstSync::SyncHalf && eltwise_binary_standard_tile_dvalid<src_dvalid> && src_b_bcast_type == BroadcastType::NONE &&
-        (dst_step || !is_high_fidelity(math_fidelity)))
+        Dst == DstSync::SyncHalf && eltwise_binary_standard_tile_dvalid<src_dvalid> && (dst_step || !is_high_fidelity(math_fidelity)))
     {
         if (eltwise_binary_tile_shape<src_b_bcast_type>(tensor_shape) && tensor_shape.total_num_faces() == 4)
         {

@@ -129,7 +129,7 @@ inline void llk_unpack_AB(
 }
 
 // One config context acquire for ntiles consecutive tile pairs; a fixed operand reads its start tile for every pair.
-template <bool fixed_a = false, bool fixed_b = false>
+template <bool fixed_a = false, bool fixed_b = false, BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_block(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -162,7 +162,7 @@ inline void llk_unpack_AB_block(
 
     // One execute per tile; the state is identical for every iteration, so it is restated once.
     SAN_HOOK(execute<OperationUnpackBinary>(
-        StateVal<OperationUnpackBinary::BroadcastType>(to_underlying(BroadcastType::NONE)),
+        StateVal<OperationUnpackBinary::BroadcastType>(to_underlying(BType)),
         StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operandA_id]),
         StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operandA_id]),
         StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operandA_id)),
@@ -176,6 +176,6 @@ inline void llk_unpack_AB_block(
         StateDiscard<std::uint32_t>(ntiles)));
 
     WAYPOINT("UABW");
-    _llk_unpack_AB_block_<BroadcastType::NONE>(address_a, address_b, ntiles, fixed_a ? 0 : page_a, fixed_b ? 0 : page_b);
+    _llk_unpack_AB_block_<BType>(address_a, address_b, ntiles, fixed_a ? 0 : page_a, fixed_b ? 0 : page_b);
     WAYPOINT("UABD");
 }

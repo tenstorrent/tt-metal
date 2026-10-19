@@ -41,9 +41,16 @@ constexpr SrcDvalid BCAST_MUL_SRC_DVALID = SrcDvalid::PerFace;
 #endif
 template <EltwiseBinaryType op>
 constexpr SrcDvalid bcast_src_dvalid = op == EltwiseBinaryType::ELWMUL ? BCAST_MUL_SRC_DVALID : SrcDvalid::PerFace;
+// ELTWISE_BINARY_BCAST_BLOCK_UNPACK true (seen by all three threads): any_tiles_bcast_block unpacks its tile pairs with one call.
+#if defined(ELTWISE_BINARY_BCAST_BLOCK_UNPACK)
+constexpr bool BCAST_BLOCK_UNPACK = (ELTWISE_BINARY_BCAST_BLOCK_UNPACK);
+#else
+constexpr bool BCAST_BLOCK_UNPACK = false;
+#endif
 }  // namespace detail
 #define CKERNEL_BCAST_HANDOFF(op) , detail::bcast_src_dvalid<op>
-#define CKERNEL_BCAST_INIT_HANDOFF(op) , EltwiseBinaryReuseDestType::NONE, detail::bcast_src_dvalid<op>
+#define CKERNEL_BCAST_INIT_HANDOFF(op) \
+    , EltwiseBinaryReuseDestType::NONE, detail::bcast_src_dvalid<op>, detail::BCAST_BLOCK_UNPACK
 #else
 #define CKERNEL_BCAST_HANDOFF(op)
 #define CKERNEL_BCAST_INIT_HANDOFF(op)
@@ -309,6 +316,65 @@ ALWI void any_tiles_bcast(
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE CKERNEL_BCAST_HANDOFF(tBcastOp)>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<tBcastDim>(icb0, icb1, itile0, itile1, bcast_row_idx)));
+}
+
+// clang-format off
+/**
+ * Performs the broadcast op of *any_tiles_bcast* on ntiles tiles of A from start_itile0 into consecutive DST slots from
+ * start_idst. B stays on start_itile1 when fixed_b (a column or scalar broadcast along a row of tiles) and advances with
+ * A otherwise. On Blackhole kernels that define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true, the tile pairs are unpacked with
+ * one call; elsewhere it runs the op tile by tile. The DST register buffer must be in acquired state via *acquire_dst*
+ * call. This call is blocking and is only available on the compute engine.
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range                                    | Required |
+ * |----------------|---------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31                                        | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31                                        | True     |
+ * | start_itile0   | The index of the first tile in A                              | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_itile1   | The index of the first tile in B                              | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_idst     | The index of the first tile in DST REG for the result         | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | ntiles         | The number of tiles                                           | uint32_t | start_idst + ntiles <= acquired DST REG size   | True     |
+ */
+// clang-format on
+template <
+    EltwiseBinaryType tBcastOp,
+    BroadcastType tBcastDim,
+    bool fixed_b = (tBcastDim != BroadcastType::ROW),
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void any_tiles_bcast_block(
+    uint32_t icb0, uint32_t icb1, uint32_t start_itile0, uint32_t start_itile1, uint32_t start_idst, uint32_t ntiles) {
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (detail::BCAST_BLOCK_UNPACK) {
+        UNPACK((llk_unpack_AB_block<false, fixed_b, tBcastDim>(icb0, icb1, start_itile0, start_itile1, ntiles)));
+#ifdef TRISC_MATH
+        // As binary_block: above LoFi the math thread binds, so the tiles run as one call
+        if constexpr (tBcastOp == EltwiseBinaryType::ELWMUL && MATH_FIDELITY != MathFidelity::LoFi) {
+            llk_math_eltwise_binary_bcast_block<
+                tBcastOp,
+                tBcastDim,
+                is_fp32_dest_acc_en,
+                MATH_FIDELITY,
+                detail::bcast_src_dvalid<tBcastOp>,
+                true>(icb0, icb1, start_idst, ntiles);
+        } else {
+            for (uint32_t i = 0; i < ntiles; ++i) {
+                llk_math_eltwise_binary<
+                    tBcastOp,
+                    tBcastDim,
+                    is_fp32_dest_acc_en,
+                    MATH_FIDELITY,
+                    EltwiseBinaryReuseDestType::NONE,
+                    detail::bcast_src_dvalid<tBcastOp>>(icb0, icb1, start_idst + i, true /* clear_fp32_dst_acc */);
+            }
+        }
+#endif
+        return;
+    }
+#endif
+    for (uint32_t i = 0; i < ntiles; ++i) {
+        any_tiles_bcast<tBcastOp, tBcastDim, is_fp32_dest_acc_en>(
+            icb0, icb1, start_itile0 + i, fixed_b ? start_itile1 : start_itile1 + i, start_idst + i);
+    }
 }
 
 // clang-format off

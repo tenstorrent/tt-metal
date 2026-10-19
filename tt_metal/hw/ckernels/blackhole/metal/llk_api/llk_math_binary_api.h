@@ -249,3 +249,58 @@ inline void llk_math_eltwise_binary_block(
         src_dvalid,
         dst_step>(tensor_shape, dst_index, num_tiles);
 }
+
+// A broadcast op on num_tiles consecutive DEST tiles from dst_index; B's tile picks the hand-off as at the init.
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType src_b_bcast_type,
+    bool is_fp32_dest_acc_en,
+    MathFidelity math_fidelity,
+    SrcDvalid src_dvalid = SrcDvalid::PerFace,
+    bool dst_step = false>
+inline void llk_math_eltwise_binary_bcast_block(
+    const std::uint32_t operand_A,
+    [[maybe_unused]] const std::uint32_t operand_B,
+    std::uint32_t dst_index,
+    const std::uint32_t num_tiles) {
+    LLK_ASSERT(
+        (dst_index + num_tiles <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "llk_math_eltwise_binary_bcast_block: dst index exceeds available dest register capacity.");
+
+    const std::uint32_t operand_id = get_operand_id(operand_A);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+
+    constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
+
+    SAN_HOOK(execute<OperationFpuEltwiseBinary>(
+        StateVal<OperationFpuEltwiseBinary::EltwiseBinaryType>(to_underlying(eltwise_binary_type)),
+        StateVal<OperationFpuEltwiseBinary::BroadcastType>(to_underlying(src_b_bcast_type)),
+        StateVal<OperationFpuEltwiseBinary::MathFidelity>(to_underlying(effective_math_fidelity)),
+        StateVal<OperationFpuEltwiseBinary::ReuseDest>(to_underlying(EltwiseBinaryReuseDestType::NONE)),
+        StateVal<OperationFpuEltwiseBinary::FaceHeight>(tensor_shape.face_r_dim),
+        StateVal<OperationFpuEltwiseBinary::NumFaces>(tensor_shape.total_num_faces()),
+        StateVal<OperationFpuEltwiseBinary::NumFacesCDim>(tensor_shape.num_faces_c_dim),
+        StateDiscard<std::uint32_t>(dst_index),
+        StateDiscard<bool>(false)));
+
+    if constexpr (eltwise_binary_bcast_per_tile<src_b_bcast_type, src_dvalid>) {
+        if (ELTWISE_BINARY_B_TILE_NOT_FULL(get_operand_id(operand_B))) {
+            _llk_math_eltwise_binary_block_<
+                eltwise_binary_type,
+                src_b_bcast_type,
+                DST_SYNC_MODE,
+                is_fp32_dest_acc_en,
+                effective_math_fidelity,
+                SrcDvalid::PerFace>(tensor_shape, dst_index, num_tiles);
+            return;
+        }
+    }
+    _llk_math_eltwise_binary_block_<
+        eltwise_binary_type,
+        src_b_bcast_type,
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        effective_math_fidelity,
+        src_dvalid,
+        dst_step>(tensor_shape, dst_index, num_tiles);
+}

@@ -293,7 +293,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(INPUT_NUM_BLOCKS); ++block)
                     {
-                        _llk_unpack_AB_block_<BroadcastType::NONE>(
+                        _llk_unpack_AB_block_<BROADCAST_TYPE>(
                             L1_ADDRESS(buffer_A[block * block_tiles]), L1_ADDRESS(buffer_B[block * block_tiles]), block_tiles, stride_a, stride_b);
                     }
                 }
