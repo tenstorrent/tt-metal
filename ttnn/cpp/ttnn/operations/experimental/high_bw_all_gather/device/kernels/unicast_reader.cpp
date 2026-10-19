@@ -96,6 +96,17 @@ void kernel_main() {
     constexpr uint32_t ext_packet_size = get_compile_time_arg_val(ext_base + 13);
     constexpr uint32_t cb_meta_writer_id = get_compile_time_arg_val(ext_base + 14);
     constexpr auto gathered_prefix_meta_args = TensorAccessorArgs<extent_from_metadata ? ext_ct_base + 16 : 0>();
+    // Resumable-window block: four flags/ids always pushed, then the optional accessors.
+    constexpr uint32_t win_ct_base =
+        extent_from_metadata ? gathered_prefix_meta_args.next_compile_time_args_offset() : ext_ct_base + 16;
+    constexpr bool win_prefix_only = get_compile_time_arg_val(win_ct_base + 0) != 0;
+    constexpr bool win_has_start = get_compile_time_arg_val(win_ct_base + 1) != 0;
+    constexpr bool win_has_progress = get_compile_time_arg_val(win_ct_base + 2) != 0;
+    constexpr uint32_t win_cb_scratch_id = get_compile_time_arg_val(win_ct_base + 3);
+    constexpr auto window_start_args = TensorAccessorArgs<win_has_start ? win_ct_base + 4 : 0>();
+    constexpr uint32_t progress_ct =
+        win_has_start ? window_start_args.next_compile_time_args_offset() : win_ct_base + 4;
+    constexpr auto progress_args = TensorAccessorArgs<win_has_progress ? progress_ct : 0>();
 
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
@@ -127,6 +138,9 @@ void kernel_main() {
     const uint32_t batch_slot_num_layers = get_common_arg_val<uint32_t>(4);
     const uint32_t batch_slot_layer_idx = get_common_arg_val<uint32_t>(5);
     const uint32_t gathered_prefix_meta_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t window_start_addr = get_common_arg_val<uint32_t>(6);
+    const uint32_t window_max_slabs = get_common_arg_val<uint32_t>(7);
+    const uint32_t progress_addr = get_common_arg_val<uint32_t>(8);
     const uint32_t ext_slice_idx = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t ext_link = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t ext_worker = get_arg_val<uint32_t>(arg_idx++);
@@ -170,6 +184,7 @@ void kernel_main() {
     uint32_t eff_final_count = final_count;
     uint32_t eff_page_start = input_page_id_start;
     uint32_t eff_page_end = input_page_id_end;
+    uint32_t window_end_global = 0;  // recorded into progress_tensor on completion
     if constexpr (extent_from_metadata) {
         namespace part = ttnn::operations::experimental::high_bw_all_gather::partition;
         CircularBuffer cb_writer_meta(cb_meta_writer_id);
@@ -179,9 +194,24 @@ void kernel_main() {
         // so one CB serves as both the NoC landing slot and the reader->writer mailbox.
         const uint32_t prefix_start = trace_metadata::read_metadata_scalar_u32(
             noc, gathered_prefix_meta_args, gathered_prefix_meta_addr, writer_meta_l1);
+        // prefix_only: only slabs fully written by earlier chunks; otherwise through the current chunk.
         const uint32_t gathered =
-            part::gathered_dim_size_for_prefix(prefix_start + ext_slab_global, ext_slab_global, ext_full_gathered_dim);
-        const uint32_t active_pages = part::active_num_input_pages(gathered, ext_slab_global, ext_pages_per_slab);
+            win_prefix_only ? part::part_min((prefix_start / ext_slab_global) * ext_slab_global, ext_full_gathered_dim)
+                            : part::gathered_dim_size_for_prefix(
+                                  prefix_start + ext_slab_global, ext_slab_global, ext_full_gathered_dim);
+        // Window [lo, hi) in slabs, uniform over every source stripe and direction so the per-iteration
+        // chunk counts -- and therefore both semaphores -- stay balanced.
+        const uint32_t end_slabs = gathered / ext_slab_global;
+        uint32_t lo_slabs = 0;
+        if constexpr (win_has_start) {
+            const uint32_t window_start =
+                trace_metadata::read_metadata_scalar_u32(noc, window_start_args, window_start_addr, writer_meta_l1);
+            lo_slabs = part::part_min(window_start / ext_slab_global, end_slabs);
+        }
+        const uint32_t hi_slabs = lo_slabs + part::part_min(window_max_slabs, end_slabs - lo_slabs);
+        window_end_global = hi_slabs * ext_slab_global;
+        const uint32_t lo_pages = lo_slabs * ext_pages_per_slab;
+        const uint32_t active_pages = (hi_slabs - lo_slabs) * ext_pages_per_slab;
         const auto sched = part::worker_schedule(
             active_pages,
             ext_split_factor,
@@ -200,18 +230,20 @@ void kernel_main() {
             ext_input_page_size,
             ext_output_chunk_size,
             ext_packet_size);
+        // The schedule is window-relative; shift pages and output positions by lo.
+        const uint32_t lo_output = ext_bank_owned ? lo_pages : lo_pages * ext_split_factor;
         eff_total_chunks = sched.total_chunks;
-        eff_slice_start = sched.local_output_start;
+        eff_slice_start = sched.local_output_start + lo_output;
         eff_slice_count = sched.slice_count;
-        eff_final_start = sched.final_start;
+        eff_final_start = sched.final_start + lo_output;
         eff_final_count = sched.final_count;
-        eff_page_start = sched.input_page_start;
-        eff_page_end = sched.input_page_end;
+        eff_page_start = sched.input_page_start + lo_pages;
+        eff_page_end = sched.input_page_end + lo_pages;
 
         CoreLocalMem<HighBwAllGatherMetadataSchedule> mailbox(writer_meta_l1);
-        mailbox->slice_start = sched.local_output_start;
+        mailbox->slice_start = eff_slice_start;
         mailbox->slice_count = sched.slice_count;
-        mailbox->final_start = sched.final_start;
+        mailbox->final_start = eff_final_start;
         mailbox->final_count = sched.final_count;
         mailbox->data_valid_granularity = sched.data_valid_granularity;
         clobber_all_memory();
@@ -330,4 +362,18 @@ void kernel_main() {
     data_valid_sem.wait_min(eff_total_chunks);
     data_valid_sem.consume(eff_total_chunks);
     noc.async_atomic_barrier();
+
+    // Record how far this call got. Every reader writes the same value; the last write wins harmlessly.
+    if constexpr (win_has_progress) {
+        CircularBuffer cb_scratch(win_cb_scratch_id);
+        if constexpr (!batch_index_from_metadata) {
+            cb_scratch.reserve_back(1);  // the slot-select path already holds this page
+        }
+        const uint32_t scratch_l1 = cb_scratch.get_write_ptr();
+        CoreLocalMem<volatile uint32_t> scratch(scratch_l1);
+        scratch[0] = window_end_global;
+        const auto progress_accessor = TensorAccessor(progress_args, progress_addr);
+        noc.async_write(CoreLocalMem<uint32_t>(scratch_l1), progress_accessor, sizeof(uint32_t), {}, {.page_id = 0});
+        noc.async_write_barrier();
+    }
 }

@@ -102,6 +102,16 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 data_valid_semaphore: Optional caller-owned persistent relay/completion semaphore.
                     Supplying both semaphore handles selects the allocation-free, no-internal-sync
                     dispatch path intended for sub-device overlap.
+                window_start_tensor: Optional resumable-window start, a 1-element uint32 DRAM tensor in
+                    gathered-dim elements (slab-aligned; absent = 0). Typically the ``progress_tensor`` of an
+                    earlier partial call. Requires ``gathered_prefix_tensor``.
+                window_max_slabs: Optional cap on the slabs this call gathers past the window start
+                    (runtime, not hashed; None = to the end of the extent).
+                prefix_only: Gather only slabs written before this chunk -- the extent becomes
+                    ``floor(start / gathered_slab_global)`` slabs instead of including the current chunk.
+                    For prefetching a later layer's prefix while the current chunk is still being written.
+                progress_tensor: Optional 1-element uint32 DRAM tensor that receives the window end this
+                    call reached (gathered-dim elements). Must not alias any input metadata tensor.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -120,7 +130,11 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("gathered_prefix_tensor") = nb::none(),
         nb::arg("gathered_slab_global") = 0,
         nb::arg("ready_semaphore") = nb::none(),
-        nb::arg("data_valid_semaphore") = nb::none());
+        nb::arg("data_valid_semaphore") = nb::none(),
+        nb::arg("window_start_tensor") = nb::none(),
+        nb::arg("window_max_slabs") = nb::none(),
+        nb::arg("prefix_only") = false,
+        nb::arg("progress_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail

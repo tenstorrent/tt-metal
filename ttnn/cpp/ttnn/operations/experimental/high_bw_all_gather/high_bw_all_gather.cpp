@@ -24,7 +24,11 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
     const std::optional<GlobalSemaphore>& ready_semaphore,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
+    const std::optional<GlobalSemaphore>& data_valid_semaphore,
+    const std::optional<Tensor>& window_start_tensor,
+    std::optional<uint32_t> window_max_slabs,
+    bool prefix_only,
+    const std::optional<Tensor>& progress_tensor) {
     return ttnn::prim::high_bw_all_gather(
         input_tensor,
         output_tensor,
@@ -41,7 +45,11 @@ Tensor high_bw_all_gather(
         gathered_prefix_tensor,
         gathered_slab_global,
         ready_semaphore,
-        data_valid_semaphore);
+        data_valid_semaphore,
+        window_start_tensor,
+        window_max_slabs,
+        prefix_only,
+        progress_tensor);
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather

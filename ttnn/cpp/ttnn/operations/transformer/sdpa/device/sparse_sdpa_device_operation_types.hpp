@@ -8,6 +8,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
+#include <tt-metalium/sub_device_types.hpp>
 #include <optional>
 
 namespace ttnn::prim {
@@ -28,6 +29,9 @@ struct SparseSDPAParams {
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
     bool has_scaled_kv() const { return kv_format == transformer::SparseKVFormat::SCALED_FP8; }
+    // Worker cores, resolved from subdevice_id / sub_core_grids (default: all cores of the first subdevice).
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt;
+    tt::tt_metal::CoreRangeSet worker_core_grid;
 };
 
 struct SparseSDPAInputs {

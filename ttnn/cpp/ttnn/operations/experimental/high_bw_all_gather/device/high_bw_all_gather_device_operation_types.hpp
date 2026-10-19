@@ -82,6 +82,11 @@ struct HighBwAllGatherParams {
     // `gathered_slab_global` is the block-cyclic slab width in gathered-dim elements (chunk_local * sp).
     // It is structural -- identical for every chunk and every layer -- so it is hashed.
     uint32_t gathered_slab_global = 0;
+
+    // Resumable window over the metadata extent, in whole slabs. The quota VALUE is a runtime argument
+    // (nullopt = unbounded); prefix_only changes the reader's extent formula, so it is hashed.
+    std::optional<uint32_t> window_max_slabs;
+    bool prefix_only = false;
 };
 
 struct HighBwAllGatherInputs {
@@ -96,6 +101,14 @@ struct HighBwAllGatherInputs {
     // start position in the gathered dim.
     std::optional<Tensor> gathered_prefix_tensor{std::nullopt};
     bool has_gathered_prefix_metadata() const { return gathered_prefix_tensor.has_value(); }
+    // Resumable window. 1-element uint32 DRAM tensors in gathered-dim elements (global tokens), slab-aligned.
+    // window_start_tensor: where this call's window begins (absent = 0). progress_tensor: the window end
+    // the call reached, written on completion -- kept separate from window_start_tensor so the write cannot
+    // race another worker's read of the start.
+    std::optional<Tensor> window_start_tensor{std::nullopt};
+    std::optional<Tensor> progress_tensor{std::nullopt};
+    bool has_window_start() const { return window_start_tensor.has_value(); }
+    bool has_progress() const { return progress_tensor.has_value(); }
 };
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
