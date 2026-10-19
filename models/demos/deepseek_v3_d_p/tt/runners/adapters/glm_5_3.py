@@ -50,6 +50,7 @@ class GLM53Adapter(MLAPrefillAdapter):
     routing_use_l1_small_for_semaphores = True
 
     supports_mtp = True
+    pipeline_remainder_on_last_ranks = True
 
     def load_hf_config(self):
         """GLM's ``glm_moe_dsa`` isn't AutoConfig-loadable, so return the hand-built HF-attribute config
