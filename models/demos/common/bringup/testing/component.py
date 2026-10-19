@@ -38,7 +38,7 @@ import math
 import torch
 
 from models.demos.common.bringup.core import defaults, metrics
-from models.demos.common.bringup.reference.interface import run_block
+from models.demos.common.bringup.reference.interface import run_block, step_reference
 from models.demos.common.bringup.testing import accuracy_guard, determinism, model_precision
 from models.demos.common.bringup.testing.harness import (
     compare,
@@ -108,10 +108,9 @@ def run_component_test(
 
 
 def _run_golden(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
-    ref_hooks = s.hooks()
     g, c = component_golden(s)
     layer = s.representative_layer(s.block_type_of(layer)) if layer is None else layer
-    ref = ref_hooks.reference(s, layers=[*s.state_sources(layer), layer], dtype=torch.float32)  # F65: its sources
+    ref = step_reference(s, [*s.state_sources(layer), layer], torch.float32)  # F65: its sources; F112: numerics
     st = _step(ref, layer, step)
     gl = g.layer(c, layer)
     inputs = [gl[i].float() if gl[i].is_floating_point() else gl[i] for i in st.inputs]
@@ -167,7 +166,7 @@ def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
 
     g, c = component_golden(s)
     layer = s.representative_layer(s.block_type_of(layer)) if layer is None else layer
-    ref = s.hooks().reference(s, layers=[*s.state_sources(layer), layer], dtype=torch.float32)
+    ref = step_reference(s, [*s.state_sources(layer), layer], torch.float32)  # F112: numerics
     st = _step(ref, layer, step)
     want = g.layer(c, layer)[st.output]
     want = want.float() if want.is_floating_point() else want
@@ -671,7 +670,7 @@ def run_swap_test(
     g, c = component_golden(s)
     layer = s.representative_layer(block_type)
     hooks = s.hooks()
-    ref = hooks.reference(s, layers=[*s.state_sources(layer), layer], dtype=torch.float32)
+    ref = step_reference(s, [*s.state_sources(layer), layer], torch.float32)  # F112: numerics
     steps = ref.block_graph(layer)
     rctx, dctx = reference_ctx(ref, layer, g, c, s), device_ctx(layer, g, c, s)
     if hasattr(hooks, "swap_context"):

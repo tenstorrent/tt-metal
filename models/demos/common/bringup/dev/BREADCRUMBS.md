@@ -1325,3 +1325,11 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F110: a gate whose commit git refuses (a pre-commit hook) is FAIL with the hook's output as its reason, not PASS
   with the change uncommitted. DeepSeek-V4.1 P.5: prefer-expect-error refused the accept gate's commit, the
   orchestrator crashed with P.5 marked PASS.
+
+- F112 (owner rule, 2026-10-19): no parity-only rounding. Agents' rule 17 (bringup-engineer.md; rule 14 and the
+  reference / plan roles point at it): a model never rounds to a format the device then neither computes nor stores
+  in. `hooks.reference` may take `numerics` ("official" for the goldens, "native" with those roundings off);
+  per-step checks (component, swap) use `reference.interface.step_reference`, which asks for `tests.step_numerics`
+  (default native) when the hook takes it; older hooks keep their only arithmetic. DeepSeek-V4.1: ~12 fp8 / fp4
+  quant-dequant passes (tt/quant.py, ~25 eltwise ops each) were added only to pass per-step checks against the
+  quantizing reference.
