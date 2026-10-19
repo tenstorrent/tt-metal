@@ -85,7 +85,8 @@ LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 # Shared libraries the binaries and Open MPI link against (hwloc, numa, nsl, atomic,
-# libevent), and the tools the suites shell out to:
+# libevent) and the SFPI cross compiler the JIT kernel build runs (gmp, mpfr, mpc), and
+# the tools the suites shell out to:
 #   pciutils, kmod, ipmitool   chip count after reset, KMD version, FRU and BMC reset
 #   sudo                       the suites' privileged steps, as the image user
 #   gh, curl, ca-certificates  the tt-syseng-diag download
@@ -102,7 +103,10 @@ RUN apt-get update \
         libatomic1 \
         libevent-core-2.1-7 \
         libevent-pthreads-2.1-7 \
+        libgmp10 \
         libhwloc15 \
+        libmpc3 \
+        libmpfr6 \
         libnsl2 \
         libnuma1 \
         openssh-server \
@@ -161,7 +165,8 @@ USER user
 WORKDIR /home/user/tt-metal
 
 # Smoke test, no hardware needed. Fails the build instead of pushing a broken image:
-# every binary a script runs resolves its libraries, the tools the suites shell out to
+# every binary a script runs resolves its libraries, the SFPI compiler the JIT build runs
+# compiles, the tools the suites shell out to
 # are present, and the Python entry points import, including the deploy-tier pytest's
 # conftest and test base. What it writes is removed again: created here as the image user,
 # generated/ would not be writable by the host uids mpi-docker runs as.
@@ -177,7 +182,14 @@ RUN for bin in \
         ldd "$bin" > /tmp/ldd.txt; \
         if grep "not found" /tmp/ldd.txt; then echo "ERROR: $bin has unresolved libraries" >&2; exit 1; fi; \
     done \
+    && for elf in $(find runtime/sfpi -type f -perm -u+x); do \
+        head -c4 "$elf" | grep -q ELF || continue; \
+        if ldd "$elf" 2>/dev/null | grep "not found"; then echo "ERROR: $elf has unresolved libraries" >&2; exit 1; fi; \
+    done \
     && rm -f /tmp/ldd.txt \
+    && echo 'int main() { return 0; }' \
+        | runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -mcpu=tt-bh -O2 -x c++ -c - -o /tmp/sfpi-smoke.o \
+    && rm -f /tmp/sfpi-smoke.o \
     && for tool in lspci modinfo ipmitool gh curl sudo ssh sshd mpirun setpriv; do \
         command -v "$tool" > /dev/null || { echo "ERROR: $tool not found" >&2; exit 1; }; \
     done \
