@@ -10,6 +10,7 @@ import torch
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
+from models.demos.llama_3p1_8b_d_p.tt.config import tp_topology
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import (
     SUPPORTED_CACHE_DTYPES,
     LlamaKVCache,
@@ -45,7 +46,7 @@ def _validate_device_tensor(tensor, mesh_device, *, name, shape, dtype):
         raise ValueError(f"{name} must use interleaved DRAM, got {tensor.memory_config()}")
 
 
-def _forwarding_links(mesh_device, *, axis, required_links, owner):
+def _forwarding_links(mesh_device, *, axis, required_links, owner, ring=True):
     links = []
     axis_size = layout.mesh_shape[axis]
     other_axis = 1 - axis
@@ -57,7 +58,12 @@ def _forwarding_links(mesh_device, *, axis, required_links, owner):
             src[other_axis] = other_coord
             src_coord = ttnn.MeshCoordinate(src)
             src_node = mesh_device.get_fabric_node_id(src_coord)
-            for neighbor in ((axis_coord - 1) % axis_size, (axis_coord + 1) % axis_size):
+            neighbors = (
+                ((axis_coord - 1) % axis_size, (axis_coord + 1) % axis_size)
+                if ring
+                else tuple(n for n in (axis_coord - 1, axis_coord + 1) if 0 <= n < axis_size)
+            )
+            for neighbor in neighbors:
                 dst = list(src)
                 dst[axis] = neighbor
                 dst_coord = ttnn.MeshCoordinate(dst)
@@ -129,23 +135,24 @@ class FullCausalAttention:
             packer_l1_acc=False,
         )
 
-        # The packed cache has one KV head per TP column. Select one slot/layer plane and gather its
-        # capacity/256 SP blocks into these persistent output buffers before restoring natural order.
+        # The packed cache holds one batch row per local KV head. Select each head's slot/layer plane and gather
+        # its capacity/256 SP blocks into these persistent output buffers before restoring natural order.
         gather_shape = (1, 1, self.max_seq_len, Model.HEAD_DIM)
-        self.gathered_k = ttnn.empty(
-            gather_shape,
-            dtype=cache_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self.gathered_v = ttnn.empty(
-            gather_shape,
-            dtype=cache_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+
+        def gather_buffers():
+            return [
+                ttnn.empty(
+                    gather_shape,
+                    dtype=cache_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for _ in range(layout.local_kv_heads)
+            ]
+
+        self.gathered_k = gather_buffers()
+        self.gathered_v = gather_buffers()
 
         # Each SP row receives one exact FP32 absolute-position stream. Row-major storage keeps the
         # persistent logical local payload to 32*max_seq_len bytes; only the selected slice is tiled.
@@ -396,7 +403,8 @@ class FullCausalAttention:
         for name in ("gathered_k", "gathered_v", "query_position_table", "key_positions"):
             tensor = getattr(self, name)
             if tensor is not None:
-                tensor.deallocate(True)
+                for t in tensor if isinstance(tensor, list) else (tensor,):
+                    t.deallocate(True)
                 setattr(self, name, None)
 
     def __call__(self, q, kv_cache, *, slot_idx, layer_idx, actual_start, actual_end):
@@ -409,19 +417,23 @@ class FullCausalAttention:
             actual_end=actual_end,
         )
         logical_n = math.ceil(actual_end / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        batch_index = slot_idx * Model.NUM_LAYERS + layer_idx
-        natural_k = self._gather_and_reorder(
-            kv_cache.k,
-            self.gathered_k,
-            batch_index=batch_index,
-            logical_n=logical_n,
-        )
-        natural_v = self._gather_and_reorder(
-            kv_cache.v,
-            self.gathered_v,
-            batch_index=batch_index,
-            logical_n=logical_n,
-        )
+        heads = layout.local_kv_heads
+        first_row = (slot_idx * Model.NUM_LAYERS + layer_idx) * heads
+
+        def gather(cache_tensor, buffers):
+            per_head = [
+                self._gather_and_reorder(cache_tensor, buffers[h], batch_index=first_row + h, logical_n=logical_n)
+                for h in range(heads)
+            ]
+            if heads == 1:
+                return per_head[0]
+            joined = ttnn.concat(per_head, dim=1)
+            for tensor in per_head:
+                tensor.deallocate(True)
+            return joined
+
+        natural_k = gather(kv_cache.k, self.gathered_k)
+        natural_v = gather(kv_cache.v, self.gathered_v)
         mask, query_valid = self._chunk_mask(
             actual_start=actual_start,
             actual_end=actual_end,
@@ -459,6 +471,7 @@ class AttentionOutputProjection:
             axis=layout.tp_axis,
             required_links=(0, 1),
             owner="AttentionOutputProjection",
+            ring=layout.tp_ring,
         )
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -512,9 +525,10 @@ class AttentionOutputProjection:
             shape=(1, layout.local_q_heads, layout.local_sequence, Model.HEAD_DIM),
             dtype=ttnn.bfloat16,
         )
-        topology = ttnn.get_usable_topology(heads, topology=ttnn.Topology.Ring, cluster_axis=layout.tp_axis)
-        if topology != ttnn.Topology.Ring:
-            raise RuntimeError(f"attention output requires a live TP ring, but TTNN selected {topology}")
+        want = tp_topology()
+        topology = ttnn.get_usable_topology(heads, topology=want, cluster_axis=layout.tp_axis)
+        if topology != want:
+            raise RuntimeError(f"attention output requires a live TP {want}, but TTNN selected {topology}")
 
     def __call__(self, heads):
         self._validate_input(heads)
@@ -533,7 +547,7 @@ class AttentionOutputProjection:
             cluster_axis=layout.tp_axis,
             num_links=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
+            topology=tp_topology(),
         )
         partial.deallocate(True)
         return output
