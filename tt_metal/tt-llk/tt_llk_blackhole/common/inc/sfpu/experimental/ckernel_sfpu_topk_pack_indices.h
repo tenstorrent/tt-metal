@@ -16,7 +16,7 @@ namespace ckernel::sfpu
  * @param scores: First score tile in DEST.
  * @param indices: First raw UInt32 index tile in DEST.
  * @param output: First packed output tile in DEST.
- * @param score_half: For K=512, select the first or second 512-element score half.
+ * @param score_half: For K=512, select the first or second 512-element score half; IDs always start at indices[0].
  * @note Use the shared SFPU params wrapper with VectorMode::RC_custom and initialize
  *       the SFPU before calling. Load indices without numeric conversion. Output may
  *       alias either input at the same start; other overlapping regions are unsupported.
@@ -27,17 +27,22 @@ inline void _topk_xl_pack_supplied_indices_(const std::uint32_t scores, const st
 {
     static_assert(K == 512 || K == 1024 || K == 2048);
     // Each SFPI slot addresses 32 elements (two physical DEST rows).
+    constexpr std::uint32_t elements_per_slot = 32;
     constexpr std::uint32_t tile_slots = 32;
+    constexpr auto score_mask                 = 0xffff0000u;
+    constexpr auto index_mask                 = 0xffffu;
+    constexpr auto sentinel_id                = -1;
+    constexpr std::int32_t padding            = static_cast<std::int32_t>(0xff80ffffu);
     constexpr std::uint32_t half_slots = tile_slots / 2;
     const std::uint32_t score_offset   = scores * tile_slots + (K == 512 ? score_half * half_slots : 0);
-    for (std::uint32_t i = 0; i < K / 32; ++i)
+    for (std::uint32_t i = 0; i < K / elements_per_slot; ++i)
     {
         sfpi::vInt score  = sfpi::dst_reg[score_offset].mode<sfpi::DataLayout::I32>();
         sfpi::vInt id     = sfpi::dst_reg[indices * tile_slots].mode<sfpi::DataLayout::I32>();
-        sfpi::vInt packed = (score & 0xffff0000u) | (id & 0xffffu);
-        v_if (id == -1)
+        sfpi::vInt packed = (score & score_mask) | (id & index_mask);
+        v_if (id == sentinel_id)
         {
-            packed = static_cast<std::int32_t>(0xff80ffffu);
+            packed = padding;
         }
         v_endif;
         sfpi::dst_reg[output * tile_slots].mode<sfpi::DataLayout::I32>() = packed;
@@ -47,7 +52,7 @@ inline void _topk_xl_pack_supplied_indices_(const std::uint32_t scores, const st
     {
         for (std::uint32_t i = 0; i < half_slots; ++i)
         {
-            sfpi::dst_reg[output * tile_slots].mode<sfpi::DataLayout::I32>() = sfpi::vInt(static_cast<std::int32_t>(0xff80ffffu));
+            sfpi::dst_reg[output * tile_slots].mode<sfpi::DataLayout::I32>() = sfpi::vInt(padding);
             sfpi::dst_reg++;
         }
     }
