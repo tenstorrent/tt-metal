@@ -185,13 +185,14 @@ def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     return flat.reshape(src.shape)
 
 
-def received_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
+def received_inputs(
+    src: torch.Tensor, input_format: DataFormat, output_format=None, dest_acc=None
+) -> torch.Tensor:
     """*src* as the op receives it: what ``quantize_input_to_unpack_format`` hands the
     golden, and the unpack hands the kernel. The same tensor on every format but a block
-    float -- and, not modelled here, a Float32 input at ``dest_acc=No``, which the unpack
-    and the golden both truncate to the 16-bit Dest. The lane checks below then judge the
-    value before truncation; harmless while truncation only moves toward zero, so at worst
-    a lane near a boundary is excused that the truncated value would not be.
+    float -- and, given the variant, a Float32 input at ``dest_acc=No``, which the unpack
+    and the golden both truncate to the 16-bit Dest: past 256 every truncated bf16 value
+    is an integer, so -8326436.5 arrives as the pole -8323072.
 
     The lane checks that ask where an input *is* -- on a singularity, inside the op's
     claim, inside a tracked issue's lanes -- have to ask it of this value, not of the one
@@ -209,6 +210,18 @@ def received_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor
     short = (-flat.numel()) % BFP_BLOCK
     padded = torch.cat([flat, torch.zeros(short, dtype=flat.dtype, device=flat.device)])
     received = quantize_input_to_unpack_format(padded, input_format)[: flat.numel()]
+    if (
+        input_format == DataFormat.Float32
+        and getattr(dest_acc, "name", dest_acc) == "No"
+    ):
+        from helpers.golden_generators import truncate_to_dest_width
+
+        width = (
+            DataFormat.Float16
+            if output_format == DataFormat.Float16
+            else DataFormat.Float16_b
+        )
+        received = truncate_to_dest_width(received.to(torch.float32), width)
     return received.reshape(src.shape)
 
 
@@ -477,7 +490,9 @@ def claimed_lanes(
         SingularitySide,
     )
 
-    value = received_inputs(src, input_format).to(torch.float32)
+    value = received_inputs(src, input_format, output_format, dest_acc).to(
+        torch.float32
+    )
     claimed = torch.ones_like(value, dtype=torch.bool)
     for point, side in _OP_SINGULARITIES.get(op, {}).get(Operand.A, ()):
         # The defined side keeps the point: sqrt(0) and acosh(1) are answers. A golden
@@ -504,15 +519,16 @@ def claimed_lanes(
     return claimed
 
 
-_claimed = claimed_lanes
-
-
-def _at_a_singularity(op, src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
+def _at_a_singularity(
+    op, src: torch.Tensor, input_format: DataFormat, output_format=None, dest_acc=None
+) -> torch.Tensor:
     """Lanes received (:func:`received_inputs`) exactly on one of *op*'s
     ``_OP_SINGULARITIES`` points, either side."""
     from helpers.sfpu_domains import _OP_SINGULARITIES, Operand
 
-    value = received_inputs(src, input_format).to(torch.float32)
+    value = received_inputs(src, input_format, output_format, dest_acc).to(
+        torch.float32
+    )
     on_point = torch.zeros_like(value, dtype=torch.bool)
     for point, _side in _OP_SINGULARITIES.get(op, {}).get(Operand.A, ()):
         on_point |= value == point
@@ -818,7 +834,7 @@ def nonfinite_failures(
     * **an answer the Dest cannot hold** (:func:`dest_holds`), on the same grounds as
       in the mask: past an fp16 Dest under a wider output, what comes back is the
       Dest's overflow, not the op's.
-    * **an input the op makes no claim on** (:func:`_claimed`): the op's own limit
+    * **an input the op makes no claim on** (:func:`claimed_lanes`): the op's own limit
       rather than the sweep's -- the undefined side of a registered singularity, or
       past an argument-reduction limit on a format that reaches it. ``Sin`` and ``Cos``
       disagree on bf16 lanes far past 65504. The sweep ranks the claimed lanes only,
@@ -849,14 +865,18 @@ def nonfinite_failures(
         # A bfloat16 pack cannot overflow that way -- its range is the Dest's.
         saturated |= same_sign & (result.detach().to(torch.float32).abs() == output_max)
     excused = torch.isnan(golden) | (
-        past_range & (saturated | _at_a_singularity(op, src, input_format))
+        past_range
+        & (
+            saturated
+            | _at_a_singularity(op, src, input_format, output_format, dest_acc)
+        )
     )
     return (
         nonfinite_mismatches(golden, result)
         & normal_input
         & dest_holds(golden, input_format, output_format, dest_acc)
         & ~excused
-        & _claimed(op, src, input_format, output_format, dest_acc)
+        & claimed_lanes(op, src, input_format, output_format, dest_acc)
         & ~(
             known_nonfinite_lanes(
                 op,
@@ -1031,19 +1051,19 @@ def record(
     keep whichever arrived last, which is the polarity that can hide error; ``max`` is
     the one that cannot. For the same reason a cell already recorded unmeasurable
     (:func:`record_unmeasurable`) stays so: a number arriving later does not rescue it.
+    A floor is derived from one reading's lanes, so two readings that differ keep the
+    worst lane with no floor, which can demote the cell but cannot hide error.
     """
     cells = MEASURED.setdefault(op_name, {})
     current = cells.get(key)
     if isinstance(current, str):
         return  # already unmeasurable; a reading elsewhere does not rescue it
     new = Floored(max_ulp, *floor) if floor else max_ulp
-    if (
-        current is None
-        or _max_of(new) > _max_of(current)
-        # A tie keeps the reading with no floor, whichever arrives first: a floor
-        # rescues lanes, so it is the polarity that can hide error.
-        or (_max_of(new) == _max_of(current) and not isinstance(new, Floored))
-    ):
+    if current is None or current == new:
+        cells[key] = new
+    elif isinstance(new, Floored) or isinstance(current, Floored):
+        cells[key] = max(_max_of(new), _max_of(current))
+    elif new > current:
         cells[key] = new
 
 

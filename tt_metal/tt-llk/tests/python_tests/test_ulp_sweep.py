@@ -1404,6 +1404,40 @@ def test_the_claim_excludes_the_poles_of_the_gamma_family():
     assert claimed_lanes(MathOperation.Abs, src, DataFormat.Float32).all()
 
 
+def test_the_claim_judges_a_float32_input_as_the_16bit_dest_truncates_it():
+    """-8326436.5 truncates to the bf16 pole -8323072 at ``dest_acc=No``; a 32-bit
+    Dest keeps it off the lattice."""
+    from helpers.ulp_sweep import claimed_lanes
+
+    src = torch.tensor([-8326436.5, -2.5], dtype=torch.float32)
+    op, fmt = MathOperation.Polygamma, DataFormat.Float32
+    for out in (DataFormat.Float16_b, DataFormat.Float32):
+        assert claimed_lanes(op, src, fmt, out, DestAccumulation.No).tolist() == [
+            False,
+            True,
+        ], out.name
+        assert claimed_lanes(op, src, fmt, out, DestAccumulation.Yes).all(), out.name
+
+
+def test_the_polygamma_golden_is_the_pole_on_every_nonpositive_integer():
+    """+inf for an odd order (every term of the series is positive), NaN for an even one
+    (no limit); torch answers a large finite number there. Off the lattice, torch."""
+    from helpers.golden_generators import UnarySFPUGolden
+
+    golden = UnarySFPUGolden()
+    golden.data_format = DataFormat.Float32
+    for order in (1, 2, 3):
+        golden._polygamma_order = order
+        for pole in (-6.0, 0.0, -0.0, -1048576.0):
+            value = golden._polygamma(pole)
+            assert (value == math.inf) if order % 2 else math.isnan(value), (
+                order,
+                pole,
+            )
+        want = torch.polygamma(order, torch.tensor(-2.5, dtype=torch.float64)).item()
+        assert golden._polygamma(-2.5) == want, order
+
+
 def test_a_lane_the_dest_cannot_hold_is_neither_ranked_nor_a_failure():
     """A Float16 input runs on an fp16 Dest. Under a Float32 output an answer past
     65504 or below 6.1e-5 is the Dest's overflow or flush, not the op's; the golden's
@@ -1599,7 +1633,7 @@ def test_a_floor_that_still_leaves_the_cell_over_the_ceiling_demotes_and_says_so
 
 def test_floored_measurements_survive_the_xdist_merge():
     """A worker exports a floored cell as a dict and the controller folds it back as
-    `Floored`; the worst lane still wins against a plain reading either way."""
+    `Floored`; the same reading again keeps it."""
     from helpers.ulp_sweep import Floored
 
     MEASURED.clear()
@@ -1609,8 +1643,27 @@ def test_floored_measurements_survive_the_xdist_merge():
     MEASURED.clear()
     merge_measured(exported)
     assert MEASURED["Gelu"][key] == Floored(14337, 2, 2.4e-7)
-    record("Gelu", key, 5, floor=(1, 1e-7))  # a smaller reading does not replace it
+    merge_measured(exported)
     assert MEASURED["Gelu"][key] == Floored(14337, 2, 2.4e-7)
-    record("Gelu", key, 20000)  # a larger one does, floor or not
-    assert MEASURED["Gelu"][key] == 20000
+    MEASURED.clear()
+
+
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        ((14337, (2, 2.4e-7)), (5, None)),
+        ((5, None), (14337, (2, 2.4e-7))),
+        ((14337, (2, 2.4e-7)), (14337, (3, 1e-7))),
+        ((5, (1, 1e-7)), (14337, (2, 2.4e-7))),
+    ],
+)
+def test_differing_readings_of_a_floored_cell_drop_the_floor(first, second):
+    """The floor came from one reading's lanes: a budget of 1.1x its residual would
+    reject a plain 5 the other reading measured. Either order keeps the worst lane
+    unfloored."""
+    MEASURED.clear()
+    key = ("Float16", "Float16", "No", "No")
+    for max_ulp, floor in (first, second):
+        record("Gelu", key, max_ulp, floor=floor)
+    assert MEASURED["Gelu"][key] == 14337
     MEASURED.clear()
