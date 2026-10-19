@@ -71,6 +71,12 @@ void reset_state(std::uint32_t& counter)
 int main()
 {
     disable_branch_prediction();
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
+    {
+        volatile std::uint32_t* cfg = ckernel::get_cfg_pointer();
+        cfg[DISABLE_RISC_BP_Disable_trisc_ADDR32] |= DISABLE_RISC_BP_Disable_trisc_MASK;
+    }
+#endif
 
     std::uint32_t counter = 0;
 
