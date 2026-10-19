@@ -101,9 +101,15 @@ class SparseKvPushPlanner:
         self._last: SparseKvPushPlan | None = None
         self._key = None
         self.host_seconds = 0.0  # cumulative host planning time
+        # Perf A/B only: when `memo` is a dict, plans are kept per (memo_tag, generation) so re-running the same chunk
+        # reuses them without reading the indices back (stand-in for on-device planning).
+        self.memo = None
+        self.memo_tag = None
+        self.generation = 0
 
     def invalidate(self):
         self._last = None
+        self.generation += 1
 
     def buffer_rows(self, rows: int, page_bytes: int) -> int:
         """Compact buffer rows for up to `rows` distinct rows: each owner's stream pads to whole bank-lane units."""
@@ -117,6 +123,10 @@ class SparseKvPushPlanner:
     def plan(self, indices: ttnn.Tensor, *, stripe_chunk: int, buffer_rows: int, page_bytes: int) -> SparseKvPushPlan:
         key = (indices.buffer_address(), stripe_chunk, buffer_rows, page_bytes)
         if self._last is not None and self._key == key:
+            return self._last
+        memo_key = (self.memo_tag, self.generation, key[1:])
+        if self.memo is not None and memo_key in self.memo:
+            self._key, self._last = key, self.memo[memo_key]
             return self._last
         t0 = time.perf_counter()
         # Indices are sequence-sharded over every chip in row-major order, so chip c holds rows c*rows..
@@ -145,6 +155,8 @@ class SparseKvPushPlanner:
         )
         self._key = key
         self._last = SparseKvPushPlan(streams=streams_tt, compact_indices=compact_tt)
+        if self.memo is not None:
+            self.memo[memo_key] = self._last
         dt = time.perf_counter() - t0
         self.host_seconds += dt
         logger.info(f"sparse KV push plan: {dt:.3f}s on host, up to {used} buffer rows per chip")
