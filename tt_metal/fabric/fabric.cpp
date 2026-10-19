@@ -551,8 +551,8 @@ tt::tt_metal::CoreCoord get_forwarding_eth_core(
         physical_chip_id, cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_chans[link_idx]));
 }
 
-tt::tt_fabric::Topology get_fabric_topology() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+tt::tt_fabric::Topology get_fabric_topology(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
     return control_plane.get_fabric_context().get_fabric_topology();
 }
 
