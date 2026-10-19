@@ -48,6 +48,10 @@ X_DIRECTIONS = (Direction.EAST, Direction.WEST)
 Y_DIRECTIONS = (Direction.NORTH, Direction.SOUTH)
 LOCAL_DELIVER = "local_deliver"
 
+# The Z port roles the 2D rules know, by their names in a chip's z_port_role. Only an express chord is a Z step within
+# the mesh.
+Z_PORT_ROLES = {"none", "intermesh_boundary", "express_chord"}
+
 
 class ChunkEncoding(str, Enum):
     """A scatter write chunk type the rules know, by its name in NocScatterWriteChunkEncoding."""
@@ -311,6 +315,7 @@ def get_mesh_view(manifest: dict, mesh_key: str) -> MeshView:
     Reads mesh `mesh_key`, such as "M0", from the manifest.
     A chip's Z peer is known when its z_port_role is "express_chord" and all its Z routers' links reach the same chip
     of this mesh. Only local chips have a z_port_role and routers, so a chip on another host has no known Z peer.
+    Raises ManifestError for a local chip whose z_port_role is missing or names a role the rules don't know.
     """
     if not (mesh_key.startswith("M") and mesh_key[1:].isdigit()):
         raise ManifestError(f"mesh key {mesh_key!r} isn't M<mesh id>")
@@ -323,15 +328,22 @@ def get_mesh_view(manifest: dict, mesh_key: str) -> MeshView:
     coord_of = {key: tuple(_lookup(manifest, f"{path}.chips.{key}.mesh_coord")) for key in chips}
 
     z_peers = {}
-    for key, chip in chips.items():
-        if chip.get("z_port_role") != "express_chord":
+    for key in chips:
+        chip_path = f"{path}.chips.{key}"
+        if not _lookup(manifest, f"{chip_path}.is_local"):
+            continue
+        role = _lookup(manifest, f"{chip_path}.z_port_role")
+        if role not in Z_PORT_ROLES:
+            raise ManifestError(f"{chip_path}.z_port_role is {role!r}; the 2D rules know {sorted(Z_PORT_ROLES)}")
+        if role != "express_chord":
             continue
         # A peer is a router path, such as "M0/C5/Z0"; an unconnected link has none.
-        peers = {
-            None if router["link"]["peer"] is None else tuple(router["link"]["peer"].split("/")[:2])
-            for router_key, router in _lookup(manifest, f"{path}.chips.{key}.routers").items()
+        links = [
+            _lookup(manifest, f"{chip_path}.routers.{router_key}.link.peer")
+            for router_key in _lookup(manifest, f"{chip_path}.routers")
             if router_key.startswith("Z")
-        }
+        ]
+        peers = {None if link is None else tuple(link.split("/")[:2]) for link in links}
         if len(peers) == 1:
             (peer,) = peers
             if peer is not None and peer[0] == mesh_key and peer[1] in coord_of:
@@ -405,7 +417,7 @@ def _step_2d(chip: Coord, direction: Direction, mesh: MeshView) -> Coord | None:
     if x_wraps:
         x %= x_size
 
-    # If the coordinates stepped are out of bounds, this means ?
+    # A step off an edge that doesn't wrap has no chip
     return (y, x) if 0 <= y < y_size and 0 <= x < x_size else None
 
 
@@ -458,7 +470,7 @@ def walk_2d(
             continue
 
         # If the action is "deliver here" and the destination mesh is the same as the current mesh,
-        # this packet is is expected to be delivered here
+        # this packet is expected to be delivered here
         if action & enc.local_deliver_bit:
             delivers.append(chip)
 

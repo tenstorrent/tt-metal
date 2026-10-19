@@ -221,6 +221,21 @@ class GetMeshViewTest(unittest.TestCase):
         with self.assertRaisesRegex(ManifestError, r"meshes\.M7"):
             get_mesh_view(MESH_MANIFEST, "M7")
 
+    def test_a_local_chip_the_z_rule_cannot_read_is_refused(self):
+        cases = {
+            "no z_port_role": (lambda chips: chips["C1"].pop("z_port_role"), r"chips\.C1\.z_port_role"),
+            "an unknown z_port_role": (lambda chips: chips["C1"].update(z_port_role="chord"), r"'chord'"),
+            "a Z link with no peer": (
+                lambda chips: chips["C0"]["routers"]["Z0"]["link"].pop("peer"),
+                r"chips\.C0\.routers\.Z0\.link\.peer",
+            ),
+        }
+        for name, (edit, named) in cases.items():
+            manifest = copy.deepcopy(MESH_MANIFEST)
+            edit(manifest["meshes"]["M0"]["chips"])
+            with self.subTest(name), self.assertRaisesRegex(ManifestError, named):
+                get_mesh_view(manifest, "M0")
+
 
 def mesh(y_size, x_size, torus=(False, False), z_peers=None):
     return MeshView(0, (y_size, x_size), torus, z_peers or {})
