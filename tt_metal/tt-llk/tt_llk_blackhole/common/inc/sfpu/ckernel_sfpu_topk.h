@@ -1822,6 +1822,21 @@ inline void bitonic_topk_merge_group(const std::uint32_t offset, const std::uint
     bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(offset, ld_dist);
 }
 
+// Bit m is set when the merge at m_iter m (0 to 7, 7 standing for more) takes the dest counter walk at run length kq.
+template <bool FUSED>
+constexpr std::uint32_t topk_merge_walk_mask(const int kq)
+{
+    std::uint32_t mask = 0;
+    for (int m = 0; m < 8; m++)
+    {
+        const int dist   = (kq << m) > 32 ? 32 : (kq << m);
+        const int total  = ((64 >> m) < 2 * kq) ? 2 * kq : (64 >> m);
+        const bool walks = ((kq & 7) == 0) && !(FUSED && kq < 16) && ((dist & 7) == 0) && (total * (FUSED ? 4 : 8) > 128);
+        mask |= walks ? (1u << m) : 0u;
+    }
+    return mask;
+}
+
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -1865,9 +1880,13 @@ inline void _bitonic_topk_merge(const int m_iter)
         _sfpu_load_config32_(p_sfpu::LREG13, rank_span >> 16, rank_span & 0xFFFF); // right-run complement (2K-1)
     }
 
-    // The counter walk below pays only when every m_iter of this K takes it (dist a multiple of 8, more than 16 group
-    // words a quadrant); for smaller K each group is addressed on its own, which costs the RISC less.
-    if constexpr (constexpr int kq = k > 32 ? 32 : k; ((kq & 7) != 0) || (2 * kq * (FUSED ? 4 : 8) <= 128))
+    // The counter walk pays only at an m_iter with a multiple of 8 for dist and more than 16 group words a quadrant;
+    // elsewhere each group is addressed on its own, which costs the RISC less.
+    constexpr int kq = k > 32 ? 32 : k;
+    constexpr std::uint32_t walk_mask = topk_merge_walk_mask<FUSED>(kq);
+    constexpr bool walk_none          = walk_mask == 0;
+    constexpr bool walk_all           = walk_mask == 0xFF;
+    auto merge_per_group              = [&]()
     {
         std::uint32_t dst_addr_offset = 0;
         for (int face = 0; face < 2; face++)
@@ -1908,7 +1927,19 @@ inline void _bitonic_topk_merge(const int m_iter)
             dst_addr_offset = 16;
             set_dst_write_addr(dst_addr_offset);
         }
+    };
+    if constexpr (walk_none)
+    {
+        merge_per_group();
         return;
+    }
+    else if constexpr (!walk_all)
+    {
+        if (((walk_mask >> (m_iter > 7 ? 7 : m_iter)) & 1) == 0)
+        {
+            merge_per_group();
+            return;
+        }
     }
     constexpr bool merge_macros = TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED;
     if constexpr (merge_macros)
@@ -1949,12 +1980,13 @@ inline void _bitonic_topk_merge(const int m_iter)
         for (int col = 0; col < 2; col++)
         {
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-            int k_max             = k > 32 ? 32 : k;
+            constexpr int k_max   = kq;
             std::uint32_t inner_d = k_max >> 2; // inner loop comparisons to sort len=K sequence;
+            // From 32 up the run fills a quadrant at every m_iter, so the loop bounds do not depend on it.
             std::uint32_t total_datums_to_compare =
-                ((64 >> m_iter) < 2 * k_max) ? 2 * k_max
-                                             : (64 >> m_iter); // max(2, max(64, 64/(2^m))) total datums to compare; there's always at least 2*K datums
-            std::uint32_t dist            = (k_max << m_iter) > 32 ? 32 : (k_max << m_iter); // min(32, k*2^k)
+                (k_max >= 32 || (64 >> m_iter) < 2 * k_max) ? 2 * k_max
+                                                            : (64 >> m_iter); // max(2, max(64, 64/(2^m))) total datums to compare
+            std::uint32_t dist            = (k_max >= 32 || (k_max << m_iter) > 32) ? 32 : (k_max << m_iter); // min(32, k*2^k)
             std::uint32_t ld_dist         = (dist < 16) ? dist : 2 * dist;                   // Accounts for face offsets within a tile
             std::uint32_t datums_compared = 0;
             // Blocks start on a face row: the dest counter walks a block's fixed group words, 4 rows on (20 into the next face).
