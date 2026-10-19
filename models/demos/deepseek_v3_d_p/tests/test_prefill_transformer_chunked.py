@@ -45,7 +45,11 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Confi
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tests._reuse import acquire_transformer, finish_transformer
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    moe_fabric_payload,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
     get_fused_ring_host_timing,
@@ -85,8 +89,10 @@ SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 # are untouched.
 SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 
-# GLM rows only; the Kimi/Mistral rows keep their own device params.
-GLM_L1_SMALL_SIZE = 1216
+# GLM rows only; the Kimi/Mistral rows keep their own device params. 1216 overflowed on the traced path
+# once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs. Keep in
+# sync with the glm_5_3 runner adapter.
+GLM_L1_SMALL_SIZE = 1536
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 
 
@@ -204,26 +210,29 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut five times.
+    # then re-cut eight times. Last re-cut: CI run 38480868957 / job 115586663557, where the traced MoE
+    # runs the routed expert overlapped with combine_fabric2d, ~27-54 ms less per chunk than main's
+    # centre (CI run 37730295536 / job 113160290655).
     (61, 11, 10): [
-        0.390,
+        0.321,
+        0.335,
+        0.367,
         0.397,
-        0.429,
-        0.453,
-        0.494,
+        0.432,
+        0.461,
+        0.490,
         0.526,
-        0.550,
-        0.578,
-        0.623,
-        0.652,
-        0.684,
+        0.569,
+        0.607,
+        0.641,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
     # 55k / code_debug: per-chunk medians over nine post-warmup iterations on a Galaxy with
-    # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%.
-    (61, 11, 10): [0.396, 0.399, 0.430, 0.455, 0.496, 0.528, 0.552, 0.579, 0.624, 0.652, 0.681],
+    # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%. Re-cut from the same run
+    # as the traced table (CI run 37730295536 / job 113160290655).
+    (61, 11, 10): [0.380, 0.384, 0.415, 0.439, 0.479, 0.509, 0.531, 0.560, 0.604, 0.634, 0.670],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
@@ -237,9 +246,10 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Recentered to CI run 36882661594 / job 110557773564: fused prefill RMSNorm takes ~13-15 ms off
-    # every chunk versus the previous centre (run 36356786056 / job 108727344674).
-    (78, 11, 10): [0.510, 0.509, 0.521, 0.516, 0.527, 0.526, 0.525, 0.530, 0.543, 0.550, 0.559],
+    # Recentered to CI run 38480868957 / job 115586663804: the traced MoE runs the routed expert
+    # overlapped with combine_fabric2d, ~54-61 ms less on every chunk than main's centre (CI run
+    # 37809088320 / job 113425373669).
+    (78, 11, 10): [0.430, 0.428, 0.436, 0.434, 0.445, 0.449, 0.448, 0.452, 0.463, 0.469, 0.478],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
@@ -254,29 +264,30 @@ MISTRAL4_UNTRACED_MAX_OUT_OF_BAND = 1
 # is armed; other parametrizations have no key and stay record-only. Values are per-chunk medians
 # from a CI run, not a galaxy box.
 MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power, run 36924348392. Must be cut there: on plain bh_sc1 the same rows
-    # split into two clusters 1.5x apart depending which box the pool gave them.
+    # Cut on bh_sc1_high_power, run 38480868957 / job 115586663717 (LoFi SDPA + 8256 B packets, the MoE
+    # running the routed expert overlapped with combine_fabric2d). Must be cut there: on plain bh_sc1
+    # the same rows split into two clusters 1.5x apart depending which box the pool gave them.
     (36, 20, 10): [
-        0.111,
-        0.116,
+        0.086,
+        0.091,
+        0.096,
+        0.102,
+        0.107,
+        0.113,
         0.120,
-        0.129,
+        0.123,
+        0.127,
         0.134,
         0.141,
-        0.151,
+        0.142,
+        0.148,
         0.153,
-        0.157,
-        0.165,
-        0.175,
-        0.172,
-        0.179,
+        0.158,
+        0.164,
+        0.169,
+        0.176,
+        0.181,
         0.185,
-        0.190,
-        0.197,
-        0.204,
-        0.212,
-        0.218,
-        0.222,
     ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
@@ -1135,7 +1146,7 @@ def run_chunked_transformer(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1177,7 +1188,7 @@ def test_ds_prefill_transformer_chunked(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1235,7 +1246,7 @@ _PADDED_MODES = ["notrace", "traced"]
             (8, 4),
             # L1_SMALL holds the routing semaphores plus sparse-MLA high-bandwidth-gather semaphores.
             torus_xy_device_params(
-                fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(KimiK27Config),
                 l1_small_size=768,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -1292,9 +1303,9 @@ def test_kimi_prefill_transformer_chunked_padded(
         pytest.param(
             (8, 4),
             # L1_SMALL holds the routing semaphores plus the sparse-MLA high-bandwidth-gather
-            # semaphores; GLM needs 1216, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
+            # semaphores; GLM needs 1536, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
             torus_xy_device_params(
-                fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -1361,7 +1372,7 @@ def test_glm_prefill_transformer_chunked_padded(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(MistralSmall4Config),
                 l1_small_size=768,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -1455,7 +1466,7 @@ def mistral4_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters):
             # trace_region_size: without it the captured buffers fall back to general DRAM and
             # trace_bytes() reads 0.
             torus_xy_device_params(
-                fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(MistralSmall4Config),
                 l1_small_size=768,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -1551,7 +1562,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -1567,7 +1578,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             fabric2d_device_params(
-                fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -2665,7 +2676,7 @@ def glm_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_is
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(KimiK27Config),
                 l1_small_size=768,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -2758,7 +2769,7 @@ def test_kimi_prefill_transformer_chunked_perf(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(KimiK27Config),
                 l1_small_size=768,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -2855,7 +2866,7 @@ def test_kimi_prefill_transformer_chunked(
         pytest.param(
             (8, 4),
             fabric2d_device_params(
-                fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(KimiK3Config),
                 l1_small_size=KimiK3Config.L1_SMALL_SIZE,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -2923,7 +2934,7 @@ def test_kimi_k3_prefill_transformer_chunked(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -2997,7 +3008,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -3010,7 +3021,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             fabric2d_device_params(
-                fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE, l1_small_size=GLM_L1_SMALL_SIZE
+                fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=GLM_L1_SMALL_SIZE
             ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),

@@ -16,11 +16,9 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
     BROADCAST_TYPES,
     binary_broadcast_acc_to_dest_modes,
     binary_broadcast_dest_sync_modes,
-    binary_broadcast_implied_math_formats,
     binary_broadcast_input_dimensions,
     binary_broadcast_math_fidelities,
     binary_broadcast_tile_dimensions,
-    skip_if_quasar_binary_broadcast_unsupported,
 )
 from quasar.test_eltwise_binary_broadcast_quasar import (
     test_eltwise_binary_broadcast_quasar as run_eltwise_binary_broadcast,
@@ -37,9 +35,6 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
     math_fidelity=lambda formats, math_op: binary_broadcast_math_fidelities(
         formats, math_op
     ),
-    implied_math_format=lambda formats: binary_broadcast_implied_math_formats(
-        formats, is_perf=True
-    ),
     dest_sync=lambda: binary_broadcast_dest_sync_modes(is_perf=True),
     unpack_to_dest=[False],
     tile_dimensions=lambda formats, broadcast_type: binary_broadcast_tile_dimensions(
@@ -49,7 +44,7 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
         dest_acc, dest_sync, tile_dimensions, is_perf=True
     ),
     acc_to_dest=lambda input_dimensions, tile_dimensions: binary_broadcast_acc_to_dest_modes(
-        input_dimensions, tile_dimensions, is_perf=True
+        input_dimensions, tile_dimensions
     ),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
@@ -62,7 +57,6 @@ def test_perf_eltwise_binary_broadcast_quasar(
     math_op,
     broadcast_type,
     math_fidelity,
-    implied_math_format,
     dest_sync,
     unpack_to_dest,
     tile_dimensions,
@@ -72,16 +66,12 @@ def test_perf_eltwise_binary_broadcast_quasar(
     loop_factor,
     is_perf,
 ):
-    skip_if_quasar_binary_broadcast_unsupported(
-        tile_dimensions, math_fidelity, acc_to_dest
-    )
     run_eltwise_binary_broadcast(
         formats,
         dest_acc,
         math_op,
         broadcast_type,
         math_fidelity,
-        implied_math_format,
         dest_sync,
         unpack_to_dest,
         tile_dimensions,

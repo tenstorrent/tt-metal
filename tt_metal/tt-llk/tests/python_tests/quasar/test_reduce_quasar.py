@@ -21,7 +21,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -41,7 +40,6 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -106,14 +104,6 @@ def reduce_tile_dimensions(formats, *, is_perf=False):
     )
 
 
-def reduce_implied_math_formats(formats, *, is_perf=False):
-    if is_perf:
-        return [ImpliedMathFormat.Yes]
-    if formats.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
-    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-
-
 def reduce_input_dimensions():
     return [64, 64]
 
@@ -153,9 +143,6 @@ def reduce_pool_type_and_math_fidelity_combinations(formats, *, is_perf=False):
         formats, is_perf=False
     ),
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
-    implied_math_format=lambda formats: reduce_implied_math_formats(
-        formats, is_perf=False
-    ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
@@ -166,7 +153,6 @@ def test_reduce_quasar(
     reduce_dim,
     pool_type_and_math_fidelity,
     dest_sync_mode,
-    implied_math_format,
     run_types,
     loop_factor,
     *,
@@ -259,7 +245,6 @@ def test_reduce_quasar(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
@@ -294,10 +279,6 @@ def test_reduce_quasar(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         "dest_acc": dest_acc,
-        "disable_format_inference": (
-            implied_math_format == ImpliedMathFormat.Yes
-            and formats.input_format.is_mx_format()
-        ),
     }
 
     configuration = create_test_or_perf_config(
@@ -344,7 +325,6 @@ def test_reduce_quasar_multi_tile_unpack(
         reduce_dim,
         (pool_type, MathFidelity.LoFi),
         DestSync.Half,
-        ImpliedMathFormat.No,
         run_types=[PerfRunType.L1_TO_L1],
         loop_factor=1,
         unpack_num_tiles=unpack_num_tiles,
@@ -450,7 +430,6 @@ def test_reduce_quasar_mxfp4_2x_gapool(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
@@ -479,7 +458,6 @@ def test_reduce_quasar_mxfp4_2x_gapool(
         ),
         "unpack_to_dest": False,
         "dest_acc": dest_acc,
-        "disable_format_inference": False,
     }
 
     configuration = create_test_or_perf_config(

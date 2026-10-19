@@ -9,10 +9,10 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-template <typename T>
+template <typename T, dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 void read_mean_rstd(
     const Noc& noc,
-    DFBBindingToken dfb_token,
+    DFBBindingToken<Pap, Cap> dfb_token,
     uint32_t tile_offset,
     uint32_t normalized_dims,
     uint32_t outer_idx,
