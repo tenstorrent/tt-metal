@@ -213,12 +213,6 @@ void kernel_main() {
 #else
     constexpr bool in0_transpose_tile = false;
 #endif
-#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
-    // LoFi with more than one K tile per block packs per tile: the block run read slower there (Llama FF1 LoFi +1 %).
-    constexpr bool mm_block_pack = MATH_FIDELITY != MathFidelity::LoFi || in0_block_w == 1;
-#else
-    constexpr bool mm_block_pack = false;
-#endif
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
@@ -284,6 +278,13 @@ void kernel_main() {
     constexpr uint32_t last_subblock_w_valid = out_subblock_w;
 #endif
     constexpr bool last_subblock_padded = last_subblock_w_valid < out_subblock_w;
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+    constexpr bool mm_out_block_pack = llk_matmul_block_pack<MATH_FIDELITY, in0_block_w, mm_out_dfb_id>();
+    constexpr bool mm_partials_block_pack = llk_matmul_block_pack<MATH_FIDELITY, in0_block_w, mm_partials_dfb_id>();
+#else
+    constexpr bool mm_out_block_pack = false;
+    constexpr bool mm_partials_block_pack = false;
+#endif
 #ifdef ARCH_QUASAR
     // Quasar's matmul LLK bakes ct_dim/rt_dim into the unpack/math MOPs at matmul_block_init; the
     // narrowed matmul_block call below (effective_subblock_w < out_subblock_w) desynchronizes the
@@ -497,7 +498,7 @@ void kernel_main() {
 #endif
                                 uint32_t start_dst_index = 0;
 #ifdef ARCH_BLACKHOLE
-                                if constexpr (mm_block_pack) {
+                                if constexpr (mm_out_block_pack) {
                                     pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
                                 } else {
                                     PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
@@ -529,7 +530,7 @@ void kernel_main() {
 
                                 uint32_t start_dst_index = 0;
 #ifdef ARCH_BLACKHOLE
-                                if constexpr (mm_block_pack) {
+                                if constexpr (mm_partials_block_pack) {
                                     pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
                                 } else {
                                     PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
