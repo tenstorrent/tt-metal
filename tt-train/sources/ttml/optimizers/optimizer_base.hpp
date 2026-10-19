@@ -68,6 +68,10 @@ private:
 // VALUE before the step (Tensor::tensor_topology() returns a reference into attributes the ops overwrite), leave
 // the step body as it is, and call this at the end of the iteration over everything the step wrote. Optimizer
 // state follows its parameter's distribution, so it takes the same label.
+//
+// Relabels the native tensor only. The other-precision copy picks the label up when it is next re-derived from the
+// native tensor after a write, so call this only on tensors the step wrote; a tensor the step did not write would
+// keep a stale copy.
 void restore_topology(std::initializer_list<autograd::TensorPtr> written, const tt::tt_metal::TensorTopology& topology);
 
 }  // namespace ttml::optimizers
