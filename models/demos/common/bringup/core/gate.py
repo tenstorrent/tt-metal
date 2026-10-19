@@ -441,11 +441,18 @@ def run_gate(
         history_add={"t": now(), "status": verdict, "s": round(dur, 1)},  # every gate run's time (F70)
     )
     if commit and verdict == "PASS":
-        with ledger.locked():
-            res.commit = git_commit(
-                spec,
-                stage_paths(spec, ledger, task),
-                commit_subject(spec, task),
-                f"Gate: PASS\n" + "\n".join(res.lines),
-            )
+        try:
+            with ledger.locked():
+                res.commit = git_commit(
+                    spec,
+                    stage_paths(spec, ledger, task),
+                    commit_subject(spec, task),
+                    f"Gate: PASS\n" + "\n".join(res.lines),
+                )
+        except RuntimeError as e:  # F110: a refused commit (a pre-commit hook) is a FAIL, never a PASS left uncommitted
+            hook = [ln for ln in str(e).splitlines() if ln.strip() and "Skipped" not in ln and "Passed" not in ln]
+            why = ["  the gate passed but git refused the commit (fix what the hook names, then rerun):"]
+            why += [f"    {ln}" for ln in hook[-25:]]
+            res.verdict, res.lines = "FAIL", res.lines + why
+            ledger.update(tid, status="FAIL", reason=res.lines, history_add={"t": now(), "status": "FAIL"})
     return res
