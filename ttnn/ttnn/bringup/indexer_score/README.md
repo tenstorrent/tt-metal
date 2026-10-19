@@ -1,0 +1,91 @@
+# ttnn.bringup.indexer_score_dsa, ttnn.bringup.ring_indexer_score_dsa, ttnn.bringup.indexer_score_msa, ttnn.bringup.IndexerScoreProgramConfig
+
+## What it does
+Fork of `ttnn.experimental.indexer_score_dsa` / `ring_indexer_score_dsa` / `indexer_score_msa` and
+`ttnn.IndexerScoreProgramConfig` (`ttnn/cpp/ttnn/operations/experimental/indexer_score`), synced to source @
+`bdc576fa652`. The fork adds:
+- fp32 DEST for DSA scoring: `compute_kernel_config.fp32_dest_acc_en=True` accepted by `indexer_score_dsa` /
+  `ring_indexer_score_dsa` (num_groups 1, block_size 0, learned gates), with the mask srcA reconfig it needs. MSA and
+  block pooling still refuse it.
+- `key_compression_ratio=2` (source: 1 or 4).
+- `ring_indexer_score_dsa(natural_query_blocks=True)`: queries are natural contiguous blocks at any tile-aligned
+  start while the keys stay in the block-cyclic cache layout (linear causal diagonal).
+- `IndexerScoreProgramConfig.__repr__` prints its values (stable fork-call capture signatures).
+Everything else as `ttnn.experimental.<same name>` / `ttnn.IndexerScoreProgramConfig`.
+
+## Consider it instead of
+- `ttnn.experimental.ring_indexer_score_dsa` / `indexer_score_dsa` when the bf16-DEST logits are too coarse for the
+  top-k selection (the source scores ~1.7% low per row and fails a 0.99 top-k overlap gate on Hy4's indexer; CHANGELOG.md).
+- the same source ops when the index keys pool 2 tokens (`key_compression_ratio=2`, DeepSeek-V4.1), or when queries
+  are natural contiguous blocks over a block-cyclic key cache.
+- a `ttnn.all_gather` of the keys + `ttnn.experimental.indexer_score_dsa`: the ring op (source and fork) fuses the SP
+  gather with the scoring.
+With fp32 DEST off, ratio 1 / 4 and `natural_query_blocks=False` the fork is the source program; prefer the source op then.
+
+## Options
+Fork additions marked; the rest as the source (`indexer_score_nanobind.cpp`).
+- `IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=1)`; value `__repr__` (fork).
+- `indexer_score_dsa(q, k, weights, *, chunk_start_idx=None, key_compression_ratio=1, program_config=IndexerScoreProgramConfig(),
+  compute_kernel_config=None, cache_batch_idx=None, kv_len=None, seq_shard_axes=None, block_cyclic_sp_axis=None,
+  block_cyclic_chunk_local=None, block_cyclic_cache_tp_sharded=False)`.
+- `ring_indexer_score_dsa(q, k, weights, k_local, ag_multi_device_global_semaphore, *, cluster_axis, topology,
+  num_links=1, ag_sub_device_id=None, chunk_start_idx=None, key_compression_ratio=1, program_config=..., compute_kernel_config=None,
+  cache_batch_idx=None, kv_len=None, seq_subshard_axis=None, block_cyclic_sp_axis=None, block_cyclic_chunk_local=None,
+  block_cyclic_cache_tp_sharded=False, chunk_start_idx_tensor=None, valid_end_tensor=None, cache_batch_idx_tensor=None,
+  index_cache_num_layers=1, index_cache_layer_idx=0, natural_query_blocks=False)`.
+- `indexer_score_msa(q, k, *, num_groups, chunk_start_idx=None, scale=1.0, block_size=0, program_config=..., compute_kernel_config=None,
+  cache_batch_idx=None, kv_len=None, seq_shard_axes=None, block_cyclic_sp_axis=None, block_cyclic_chunk_local=None,
+  block_cyclic_cache_tp_sharded=False)`: unchanged by the fork.
+- `compute_kernel_config.fp32_dest_acc_en` (fork, opt-in, default False): fp32 DEST for DSA scoring. Use
+  `k_chunk_size=32`: above 32 the head reduction uses a blocked multiply that runs at LoFi-like precision whatever the
+  fidelity (CHANGELOG.md).
+- `key_compression_ratio` (fork adds 2): 1 (default), 2, 4.
+- `natural_query_blocks=False` (fork, opt-in, ring only): needs `block_cyclic_sp_axis` / `block_cyclic_chunk_local`,
+  an axis ring (`cluster_axis` set) and the host-scalar `chunk_start_idx` (refused with `chunk_start_idx_tensor`).
+
+## Measured
+- Hy4 layer-0 indexer golden (32 heads x 128, top-2048 of 4096 keys): source logits rel 0.024, top-k overlap 0.985;
+  fork fp32 DEST, k_chunk 32: rel 0.0036, overlap 0.99708 (CHANGELOG.md).
+- Random inputs, 32 heads: per-column path fp32 DEST rel 0.0019 vs bf16 DEST 0.0118; blocked path 0.029 vs 0.023
+  (CHANGELOG.md; `tests/unit/test_fp32_dest.py`).
+- `natural_query_blocks` + ratio 2, 2x2 (S 2048, W 1024, Sq 512): visible columns PCC 0.9999985, rel 0.00186 vs fp32
+  torch; DeepSeek-V4.1 component gate C.enc_source.indexer err 0.0174 <= 0.0329 (CHANGELOG.md).
+- Model cases, 2x2, 4 chips: hy4 ring SP2 x TP2 and glm53 full-mesh ring ratio 4: pcc 0.9999985, rel 0.00186
+  (`tests/cases.py`).
+- Speed: not measured.
+
+## Limits
+- fp32 DEST: DSA only (not MSA, not block pooling); `dst_full_sync_en` must stay False.
+- The nanobind docstrings of `indexer_score_dsa` / `indexer_score_msa` still say `fp32_dest_acc_en` must stay false and
+  only math_fidelity is honoured; for DSA the fork accepts fp32 DEST (code in `device/indexer_score_device_operation.cpp`).
+- `natural_query_blocks`: axis ring only, block-cyclic layout required, no metadata (`chunk_start_idx_tensor`) path.
+- Source multi-device tests are not carried (they open FABRIC_1D / torus meshes); the ring op is covered by the
+  fork's own 2x2 FABRIC_2D tests. `tests/unit/test_key_stride_ring.py` has a 2x4 case skipped on a 2x2 box.
+- Known source-test divergence: `test_indexer_score_rejects_fp32_dest_acc` fails on the fork by design (`tests/source.yaml`).
+- No model case for deepseek_v41_flash_d_p's call (ratio 2 / 1, natural_query_blocks) in `tests/cases.py`.
+
+## How to call
+```python
+logits = ttnn.bringup.ring_indexer_score_dsa(
+    q, kbuf, w, k_local, ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=0),
+    cluster_axis=0, topology=ttnn.Topology.Linear, num_links=2,
+    chunk_start_idx=start, key_compression_ratio=2,
+    program_config=ttnn.bringup.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=32, head_group_size=0),
+    compute_kernel_config=ckc,  # HiFi4, fp32_dest_acc_en=True
+    kv_len=kv_len, seq_subshard_axis=1, block_cyclic_sp_axis=0, block_cyclic_chunk_local=w_rows,
+    natural_query_blocks=True,
+)  # models/demos/deepseek_v41_flash_d_p/tt/indexer.py
+```
+Tests: `tests/test_indexer_score.py` (model cases, `tests/cases.py`), `tests/unit/test_fp32_dest.py`,
+`tests/unit/test_key_stride.py`, `tests/unit/test_key_stride_ring.py`, `tests/unit/test_natural_query_blocks.py`,
+source tests via `tests/source.yaml`.
+
+## Used by
+- hy4_preview_d_p: `tt/indexer.py`, ring op, HiFi4 + fp32 DEST, q 64 x k 32; C.dense_full.indexer, O.1.
+- glm53_flash_d_p: `tt/indexer.py`, ring op over the full-mesh snake, key_compression_ratio 4, and `indexer_score_dsa`
+  (`GLM_INDEXER_SCORE`, default `bringup`), HiFi4 + fp32 DEST, q 64 x k 32; O.1.
+- deepseek_v41_flash_d_p: `tt/indexer.py`, ring op over axis 0 + TP query sub-shard, key_compression_ratio 2 / 1,
+  `natural_query_blocks`; C.enc_source.indexer.
+
+## History
+CHANGELOG.md
