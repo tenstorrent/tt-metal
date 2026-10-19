@@ -154,16 +154,10 @@ class TtDecoderLayer(LightweightModule):
         return streams, new_state
 
     # ------------------------------------------------------------------- decode
-    def decode_forward(
-        self,
-        streams: ttnn.Tensor,
-        state: LayerState,
-        *,
-        positions: ttnn.Tensor,
-        host_positions: list[int] | None = None,
-    ) -> tuple[ttnn.Tensor, LayerState]:
-        """streams [1,1,B,4*hidden] fp32 (one token per user), positions [B] int32 row-major
-        (each user's current context length = the position of this token)."""
+    def decode_forward(self, streams: ttnn.Tensor, state: LayerState, *, positions) -> tuple[ttnn.Tensor, LayerState]:
+        """streams [1,1,B,4*hidden] fp32 (one token per user); ``positions`` carries the persistent
+        [B] int32 device tensors ``positions`` / ``pool_ids`` / ``ring_slots`` and the host values
+        (``FunctionalDecoder.DecodePositions``). KDA layers ignore it."""
         new_state = LayerState(kda=state.kda, cache=state.cache)
 
         def attention(h):
@@ -171,7 +165,9 @@ class TtDecoderLayer(LightweightModule):
             if self.is_kda:
                 y, new_state.kda = self.attn.decode_forward(h, state.kda, inplace=True)
                 return y
-            return self.attn.decode_forward(h, state.cache, positions, host_positions)
+            return self.attn.decode_forward(
+                h, state.cache, positions.positions, positions.pool_ids, positions.ring_slots, positions.host
+            )
 
         streams = self.attn_hc.forward(streams, attention, sublayer_dtype=ttnn.bfloat16)
 

@@ -108,7 +108,6 @@ class TtKDA(LightweightModule):
         self.qkv_dim = self.kcfg.q_dim
         self.conv_width = self.kcfg.q_dim + self.kcfg.k_dim + self.kcfg.v_dim
         raw = normalize_kda_state_dict(attn_state_dict, self.kcfg)
-        self.raw = raw
         self.weight_cache_path = weight_cache_path
         # ---- prefill (ttKDA) weights, materialized once and shared across sequence lengths
         self.prefill_weights: KDAWeights = load_kda_weights(
