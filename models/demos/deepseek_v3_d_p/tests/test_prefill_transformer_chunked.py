@@ -1650,6 +1650,9 @@ def run_chunked_transformer_updated(
     kv_pcc_threshold=None,
     seq_cache=None,
     tp_shard_kv=None,
+    sparse_cache_format=None,
+    push_ab_chunks=(),
+    push_ab_reps=2,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
     full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
@@ -1924,6 +1927,7 @@ def run_chunked_transformer_updated(
         kv_only_last_layer=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
         tp_shard_kv=tp_shard_kv,
+        **({"sparse_kv_cache_format": sparse_cache_format} if sparse_cache_format is not None else {}),
     )
 
     # Production overlap qualification asks this full-model harness to prove that the requested profile
@@ -2000,6 +2004,8 @@ def run_chunked_transformer_updated(
     # default that dense ring_mla wants. Match the cache format to the path (dense variants keep the
     # default). Same distinction as run_chunked_transformer.
     cache_format = MlaKvCacheFormat.BF16_RM if resolve_has_indexer(config) else MlaKvCacheFormat.BFP8_TILE
+    if sparse_cache_format is not None and resolve_has_indexer(config):
+        cache_format = sparse_cache_format
     tt_kvpe_cache = init_mla_kv_cache(
         cache_format=cache_format,
         hf_config=config,
@@ -2226,6 +2232,56 @@ def run_chunked_transformer_updated(
     det_baseline = None
     det_failures = []
 
+    # Sparse KV push A/B (PROTOTYPE): at the chunks in push_ab_chunks, re-run that chunk with every layer's dense
+    # KVPE gather and then with the sparse push (shared layers only), alternating. Re-running a chunk rewrites the
+    # same KV and indexer keys, so the prefill itself is unaffected.
+    push_ab_rows = []
+
+    def _push_ab(c, kv_actual):
+        mlas = [layer.mla for layer in transformer.layers]
+        samples = {False: [], True: []}
+        plan_s = []
+        for push in (False, True) * push_ab_reps:
+            for m in mlas:
+                m._sparse_kv_push = push
+            planner = mlas[0].tt_ccl.sparse_kv_push
+            plan0 = planner[0].host_seconds if planner else 0.0
+            tokens = ttnn.from_torch(
+                chunk_tok_host[c],
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+            )
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.time()
+            transformer.forward(
+                tokens,
+                tt_kvpe_cache,
+                actual_isl=CHUNK,
+                actual_start=kv_actual,
+                actual_end=kv_actual + CHUNK,
+                cache_user_id=0,
+                return_intermediates=False,
+                index_kv_cache=tt_index_kv_cache,
+            )
+            ttnn.synchronize_device(mesh_device)
+            samples[push].append(time.time() - t0)
+            if push:
+                plan_s.append(mlas[0].tt_ccl.sparse_kv_push[0].host_seconds - plan0)
+            ttnn.deallocate(tokens)
+        for m in mlas:
+            m._sparse_kv_push = False
+        gather_s, push_s = min(samples[False]), min(samples[True])
+        plan = min(plan_s)
+        push_ab_rows.append((c, kv_actual, gather_s, push_s, plan))
+        logger.info(
+            f"[push A/B] chunk={c} prefix={kv_actual} gather={gather_s * 1000:.1f} ms push={push_s * 1000:.1f} ms "
+            f"(host plan {plan * 1000:.1f} ms) samples gather={[round(x * 1000) for x in samples[False]]} "
+            f"push={[round(x * 1000) for x in samples[True]]}"
+        )
+
     profiler.start("tt_forward")
     for it in range(num_iters):
         # Unconditional. The carry is the one piece of state an iteration MUTATES, so iteration N
@@ -2315,6 +2371,8 @@ def run_chunked_transformer_updated(
             chunk_seconds = time.time() - chunk_start
             chunk_times.append(chunk_seconds)
             logger.info(f"[chunk timing] iter={it} chunk={c} {chunk_seconds * 1000:.2f} ms")
+            if it == 0 and c in push_ab_chunks:
+                _push_ab(c, kv_actual)
             if fused_host_calls:
                 logger.info(
                     f"[fused-indexer host timing] iter={it} chunk={c} calls={fused_host_calls} "
@@ -2324,6 +2382,14 @@ def run_chunked_transformer_updated(
         iter_total = time.time() - iter_start
         iteration_chunk_times.append(chunk_times)
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
+        if push_ab_rows and it == 0:
+            lines = ["prefix    gather_ms  push_ms  host_plan_ms  push-plan_ms  saved_ms(excl plan)"]
+            for _, pre, g, pu, pl in push_ab_rows:
+                lines.append(
+                    f"{pre:>8}  {g * 1000:9.1f}  {pu * 1000:7.1f}  {pl * 1000:12.1f}  {(pu - pl) * 1000:12.1f}  "
+                    f"{(g - pu + pl) * 1000:9.1f}"
+                )
+            logger.info("[push A/B] per-chunk wall time, all 78 layers (min of reps):\n" + "\n".join(lines))
         if determinism_check:
             # Compare the whole cache the iteration just wrote, bit-exactly. PCC rounds away a single
             # flipped element in num_layers x seq x kvpe; torch.equal does not. The cache is the right
@@ -3068,6 +3134,58 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         perf_margin=resolved_perf_margin,
         preload_isl=preload_isl,
         use_trace=use_trace,
+    )
+
+
+# PROTOTYPE sparse KV push depth sweep: prefill the real 1M-token prompt (PREFILL_TRACE_DIR = the glm53-1020k golden,
+# whose metadata carries all 1,044,480 token ids) chunk by chunk with the dense gather, and at the checkpoint chunks
+# time that chunk again with the dense gather and with the sparse push on the shared layers (see _push_ab).
+PUSH_SWEEP_LEN = 204 * CHUNK  # 1,044,480 tokens
+PUSH_SWEEP_CHUNKS = (10, 25, 50, 100, 150, 203)  # prefix 51k, 128k, 256k, 512k, 768k, 1039k
+
+
+@pytest.mark.parametrize("num_layers", [78], ids=["L78"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                l1_small_size=GLM_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="local design sweep")
+@pytest.mark.timeout(0)
+def test_glm_prefill_sparse_push_depth_sweep(
+    variant, config_only, mesh_device, device_params, weight_cache_path, num_layers, num_links
+):
+    n_chunks = int(os.environ.get("PUSH_SWEEP_N_CHUNKS", PUSH_SWEEP_LEN // CHUNK))
+    ab_chunks = tuple(c for c in PUSH_SWEEP_CHUNKS if c < n_chunks)
+    run_chunked_transformer_updated(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        num_layers,
+        n_chunks,
+        GateComputeMode.DEVICE_FP32,
+        num_links,
+        per_axis_topology(device_params["fabric_config"]),
+        1,
+        routing_use_l1_small_for_semaphores=True,
+        seq_cache=PUSH_SWEEP_LEN,
+        sparse_cache_format=MlaKvCacheFormat.SCALED_FP8,
+        push_ab_chunks=ab_chunks,
     )
 
 
