@@ -123,7 +123,7 @@ public:
      * @tparam Advance: Whether the math thread also flips to the paired bank.
      * @note The full data-valid reset bit is not exposed: the ISA marks it unsupported on
      *       Blackhole. Hot loops should prefer releasing through the consuming operation
-     *       (@ref hal::fpu SourceRelease, @ref hal::math_counters release) — zero extra
+     *       (@ref hal::fpu SourceRelease, @ref hal::counters::rwc::MathCounter::flip) — zero extra
      *       instructions; this is the standalone form.
      */
     template <src_ops::BankAdvance Advance = src_ops::BankAdvance::Flip>
