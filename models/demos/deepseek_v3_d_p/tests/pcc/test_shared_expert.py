@@ -105,11 +105,12 @@ def shared_expert_sub_device(mesh_device):
     ids=["isl_5k", "isl_5k-k3-6144", "isl_5k-k3-6144-situ", "isl_5k-v4pro-3072", "isl_5k-v4pro-3072-clamped"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, tp_axis",
     [
         pytest.param(
             (1, 4),
             torus_x_device_params(),
+            1,
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="torus-x-1x4",
@@ -118,8 +119,18 @@ def shared_expert_sub_device(mesh_device):
             (2, 4),
             fabric2d_device_params(),
             1,
+            1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
+        ),
+        # The same LoudBox, transposed: TP=4 on mesh axis 0, as when SP moves to axis 1.
+        pytest.param(
+            (4, 2),
+            fabric2d_device_params(),
+            1,
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-4x2-tp0",
         ),
         # BH Galaxy. A Blackhole box accepts no mesh smaller than all 32 devices, so this is the
         # only param where the SiTU cases can run at all -- SiTU needs ttnn.softcap, Blackhole-only.
@@ -127,6 +138,7 @@ def shared_expert_sub_device(mesh_device):
             (8, 4),
             torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
             2,
+            1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
@@ -141,6 +153,7 @@ def test_shared_expert_pcc(
     hidden_dim: int,
     activation: str,
     num_links: int,
+    tp_axis: int,
 ):
     """
     Test TtSharedExpert PCC against TorchExpert reference.
@@ -157,7 +170,8 @@ def test_shared_expert_pcc(
 
     activations_dtype = ttnn.bfloat16
     weights_dtype = ttnn.bfloat8_b
-    topology = per_axis_topology(device_params["fabric_config"])[1]
+    sp_axis = 1 - tp_axis
+    topology = per_axis_topology(device_params["fabric_config"])[tp_axis]
     # Only read on the SiTU path; TorchExpert and TtSharedExpert must be given the same pair or the
     # comparison silently measures two different activations.
     situ_betas = dict(
@@ -179,8 +193,8 @@ def test_shared_expert_pcc(
     signpost(f"SharedExpert PCC test - {mesh_shape=} {seq_len_per_chip=} {activation=} {num_links=} {topology=}")
 
     # Query available ethernet links
-    actual_num_links = get_num_links(mesh_device, cluster_axis=1)  # Query along mesh columns
-    logger.debug(f"Available ethernet links along mesh columns: {actual_num_links}")
+    actual_num_links = get_num_links(mesh_device, cluster_axis=tp_axis)  # Query along the TP axis
+    logger.debug(f"Available ethernet links along the TP axis: {actual_num_links}")
     logger.debug(f"Using num_links={num_links}, topology={topology}")
 
     # ========================================
@@ -221,6 +235,7 @@ def test_shared_expert_pcc(
             subdevice_id=subdevice_id,
             subdevice_cores=subdevice_cores,
             clamped_silu_glu_limit=clamp_limit,
+            tp_axis=tp_axis,
             **situ_betas,
         )
 
@@ -229,14 +244,16 @@ def test_shared_expert_pcc(
         # ========================================
         # 3D input matching test_ttnn_moe.py convention (post all-gather):
         #   shape = [dispatch_group_size, seq_len_per_chip, emb_dim]
-        # Sharded along dim 0 across mesh rows (DP), replicated across mesh cols (TP).
-        dispatch_group_size = mesh_shape[0]
+        # Sharded along dim 0 across the SP axis, replicated across the TP axis.
+        dispatch_group_size = mesh_shape[sp_axis]
         torch_input = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.float32)
         logger.debug(f"Created torch input: {torch_input.shape}")
 
         tt_input = ttnn.from_torch(
             torch_input,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, None)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=mesh_device.shape, dims=(0, None) if sp_axis == 0 else (None, 0)
+            ),
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             dtype=activations_dtype,
@@ -260,7 +277,9 @@ def test_shared_expert_pcc(
         logger.debug("Converting TTNN output to torch for comparison")
         tt_output_torch = ttnn.to_torch(
             tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1) if tp_axis == 1 else (-1, 0)
+            ),
         )
         logger.debug(f"TTNN output converted to torch: {tt_output_torch.shape}")
 
