@@ -308,6 +308,14 @@ constexpr uint32_t NH = __NH__;  // rotating row headers: flush (and pop the sen
 constexpr uint32_t HSZ = __HSZ__;
 static_assert(sizeof(PACKET_HEADER_TYPE) <= HSZ, "header stride");
 constexpr uint32_t HW = sizeof(PACKET_HEADER_TYPE) / 4;
+constexpr uint32_t NL = __NL__;  // fabric connections: 1 (a port per link) or L (a port per direction, all its links)
+#if __FUSED__
+// (a port that is also an accumulator, acc_on_ports: this RISC also runs the port's L1 hand-off - slot grants to the y
+// writers, pushes of landed rows - and the accumulator's output writes; RISCV_1 runs the accumulator's reader)
+constexpr uint32_t cb_out = __CBOUT__;
+constexpr uint32_t NT_ = __NT__;
+constexpr auto o_args = TensorAccessorArgs<8>();
+#endif
 
 void kernel_main() {
     size_t a = 0;
@@ -340,6 +348,17 @@ void kernel_main() {
     const uint32_t a_dbg = a;
     a += 4;
     auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
+#if __NL__ > 1
+    auto conn1 = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
+#endif
+    // a row's connection: its link (accumulator + source + home) % L with a port per direction, else the port's one
+    auto conn_of = [&](uint32_t l) -> decltype(conn)& {
+#if __NL__ > 1
+        if (l) return conn1;
+#endif
+        (void)l;
+        return conn;
+    };
 
     // headers per (destination chip, rotation), routed once; a send only sets the NoC command
     auto hdr_at = [&](uint32_t chip, uint32_t rot) {
@@ -351,6 +370,57 @@ void kernel_main() {
     }
     const uint32_t cstage = area + HDRS + N * NH * HSZ;  // credit snapshots, one per rotation
     conn.open();
+#if __NL__ > 1
+    conn1.open();
+#endif
+#if __FUSED__
+    const uint32_t hW = get_arg_val<uint32_t>(a++), hdid = get_arg_val<uint32_t>(a++), hQ = get_arg_val<uint32_t>(a++);
+    const uint32_t hwords = get_arg_val<uint32_t>(a++), o_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t n_tok = get_arg_val<uint32_t>(a++), acc_me = get_arg_val<uint32_t>(a++);
+    uint32_t hwx[32], hwy[32];
+    for (uint32_t w = 0; w < hW; ++w) {
+        hwx[w] = get_arg_val<uint32_t>(a++);
+        hwy[w] = get_arg_val<uint32_t>(a++);
+    }
+    const auto ob = TensorAccessor(o_args, o_addr, row_bytes);
+    volatile tt_l1_ptr uint32_t* hland = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC) + 128;
+    const uint32_t hbase = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC)[101];
+    uint32_t hgranted = 0, hpushed = 0, wr_i = 0;
+    // the hand-off receiver's step (as _RF_READER_L1): grant ring slots, push rows every writer has landed
+    auto hand_off = [&]() {
+        if (hpushed >= n_inj) return;
+        const uint32_t want = hpushed + hQ < n_inj ? hpushed + hQ : n_inj;
+        uint32_t g = hgranted;
+        while (g < want && cb_pages_reservable_at_back(cb_inj, g - hpushed + 1)) ++g;
+        if (g > hgranted && (g - hgranted >= 8 || g == want)) {
+            for (uint32_t w = 0; w < hW; ++w) noc_semaphore_inc(get_noc_addr(hwx[w], hwy[w], hwords + 4 * hdid), g - hgranted);
+            hgranted = g;
+        }
+        uint32_t m = 0xFFFFFFFF;
+        for (uint32_t w = 0; w < hW; ++w) {
+            const uint32_t v = hland[w] - hbase;
+            m = v < m ? v : m;
+        }
+        while (hpushed < m && hpushed < hgranted) {
+            cb_push_back(cb_inj, 1);
+            ++hpushed;
+        }
+    };
+    // the accumulator writer's step (as _ACC_WRITER): one finished token row to the output
+    auto write_out = [&]() {
+        if (wr_i < n_tok && cb_pages_available_at_front(cb_out, NT_)) {
+            noc_async_write(get_read_ptr(cb_out), ob.get_noc_addr(wr_i * A + acc_me), row_bytes);
+            noc_async_writes_flushed();
+            cb_pop_front(cb_out, NT_);
+            ++wr_i;
+        }
+    };
+    auto fused_more = [&]() { return hpushed < n_inj || wr_i < n_tok; };
+#else
+    auto hand_off = [&]() {};
+    auto write_out = [&]() {};
+    auto fused_more = [&]() { return false; };
+#endif
 
     volatile tt_l1_ptr uint32_t* cred = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + CRED);
     volatile tt_l1_ptr uint32_t* used = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + USED);
@@ -407,10 +477,12 @@ void kernel_main() {
     };
     const uint32_t tstart = get_timestamp_32b();
 
-    while (inj_done < n_inj || returned - ret0 < n_ret) {
+    while (inj_done < n_inj || returned - ret0 < n_ret || fused_more()) {
         bool did = false;
         const uint32_t it0 = get_timestamp_32b();
         invalidate_l1_cache();
+        hand_off();
+        write_out();
         const uint32_t tot = any_ret();
         const bool pending = tot != returned;
         if (pending && unflushed < NH) give_back(false);
@@ -428,14 +500,15 @@ void kernel_main() {
             }
             const uint32_t ts0 = get_timestamp_32b();
             const uint32_t dst = area + RINGS + ((me - (me > home)) * D + u % D) * SLOT;  // (my ring at home's acc)
+            auto& cn = conn_of(NL > 1 ? (o + me + home) % L : 0);
             for (uint32_t pc = 0; pc < P; ++pc) {
                 const uint32_t pb = (pc + 1 == P ? row_bytes - pc * PD : PD) + 32;
                 auto* h = hdr_at(home, sent % NH);
                 h->to_noc_unicast_write(NocUnicastCommandHeader{get_noc_addr(ax[o], ay[o], dst + pc * PS)}, pb);
                 const uint32_t t0 = get_timestamp_32b();
-                conn.wait_for_empty_write_slot();
+                cn.wait_for_empty_write_slot();
                 p_slot += get_timestamp_32b() - t0;
-                conn.send_current_slot_non_blocking(src + pc * PS, pb, reinterpret_cast<uint32_t>(h));
+                cn.send_current_slot_non_blocking(src + pc * PS, pb, reinterpret_cast<uint32_t>(h));
                 ++sent;
                 ++unflushed;
             }
@@ -460,6 +533,10 @@ void kernel_main() {
     }
     flush();
     misc[1] = returned;
+#if __FUSED__
+    misc[101] = hbase + n_inj;
+    noc_async_write_barrier();
+#endif
     // drain: every row this port injected is consumed (its credit snapshot landed), so nothing of this call reaches
     // this core after the program ends (the arena may be per call: its L1 is another op's after this)
     for (bool open_ = __DRAIN__; open_;) {
@@ -471,7 +548,8 @@ void kernel_main() {
         const uint32_t tdbg = get_arg_val<uint32_t>(a_dbg + 2), tpage = get_arg_val<uint32_t>(a_dbg + 3);
         volatile tt_l1_ptr uint32_t* d = misc + 192;
         d[0] = 0x7E100000 | tpage; d[1] = p0; d[2] = get_timestamp_32b(); d[3] = p_slot; d[4] = p_idle; d[5] = p_cred;
-        d[6] = n_blocked; d[7] = n_inj; d[8] = p_send; d[9] = n_empty; d[10] = d[11] = d[12] = d[13] = d[14] = d[15] = 0;
+        d[6] = n_blocked; d[7] = n_inj; d[8] = p_send; d[9] = n_empty; d[10] = p_flush; d[11] = n_credpk;
+        d[12] = d[13] = d[14] = d[15] = 0;
         const InterleavedAddrGen<true> dg = {.bank_base_address = tdbg, .page_size = 512};
         noc_async_write(area + MISC + 192 * 4, get_noc_addr(tpage, dg), 64);
         noc_async_write_barrier();
@@ -487,6 +565,10 @@ void kernel_main() {
         noc_async_write_barrier();
     }
     conn.close();
+#if __NL__ > 1
+    conn1.close();
+#endif
+    noc_async_atomic_barrier();
 }
 """
 
@@ -608,8 +690,8 @@ void kernel_main() {
     constexpr uint32_t L1M = __L1__;
     const uint32_t QL = get_arg_val<uint32_t>(a + 4), LB = get_arg_val<uint32_t>(a + 5), WL = get_arg_val<uint32_t>(a + 6);
     const uint32_t ldid = get_arg_val<uint32_t>(a + 7), lwords = get_arg_val<uint32_t>(a + 8);
-    volatile tt_l1_ptr uint32_t* landed = misc + 128;
-    const uint32_t lbase = L1M ? misc[101] : 0;
+    volatile tt_l1_ptr uint32_t* landed = misc + __ALAND__;  // (128, or 160 when ports share the core)
+    const uint32_t lbase = L1M ? misc[__ALBASE__] : 0;
     uint32_t lgranted = 0;
     auto lgrant_to = [&](uint32_t g) {
         for (uint32_t w = 0; w < WL; ++w) {
@@ -631,22 +713,112 @@ void kernel_main() {
         return true;
     };
     uint32_t t_local = 0;
+    auto take_local = [&]() -> bool {  // the next local row (L1 hand-off ring), if every writer landed it
+        uint32_t m = 0xFFFFFFFF;
+        for (uint32_t w = 0; w < WL; ++w) {
+            const uint32_t v = landed[w] - lbase;
+            m = v < m ? v : m;
+        }
+        if (li >= m) return false;
+        const uint32_t sl = LB + (li % QL) * SLOT;
+        push_pieces(sl, (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sl + LASTPB)[0] >> 8) & 0xFFFF);
+        ++li;
+        ++done;
+        const uint32_t g = li + QL < n_local ? li + QL : n_local;
+        if (g > lgranted && (g - lgranted >= 4 || g == n_local)) lgrant_to(g);
+        return true;
+    };
+    auto peek_local = [&]() -> uint32_t {  // the next local row's token, if every writer landed it (else ~0)
+        uint32_t m = 0xFFFFFFFF;
+        for (uint32_t w = 0; w < WL; ++w) {
+            const uint32_t v = landed[w] - lbase;
+            m = v < m ? v : m;
+        }
+        if (li >= m) return 0xFFFFFFFF;
+        return (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(LB + (li % QL) * SLOT + LASTPB)[0] >> 8) & 0xFFFF;
+    };
+    auto peek_ring = [&](uint32_t k) -> uint32_t {  // source k's next row's token, if all its pieces landed (else ~0)
+        const uint32_t s = area + RINGS + ((k - (k > hc)) * D + taken[k] % D) * SLOT;
+        for (uint32_t pc = 0; pc < P; ++pc) {
+            volatile tt_l1_ptr uint32_t* tp =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
+            if (tp[3] == 0 || tp[7] == 0) return 0xFFFFFFFF;
+        }
+        return (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + LASTPB)[0] >> 8) & 0xFFFF;
+    };
+    auto take_ring = [&](uint32_t k) -> bool {  // the next row of source k's ring, if all its pieces landed
+        const uint32_t tk = taken[k];
+        const uint32_t s = area + RINGS + ((k - (k > hc)) * D + tk % D) * SLOT;
+        for (uint32_t pc = 0; pc < P; ++pc) {
+            volatile tt_l1_ptr uint32_t* tp =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
+            if (tp[3] == 0 || tp[7] == 0) return false;
+        }
+        volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + LASTPB);
+        push_pieces(s, (tr[0] >> 8) & 0xFFFF);
+        for (uint32_t pc = 0; pc < P; ++pc) {
+            volatile tt_l1_ptr uint32_t* tp =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
+            tp[3] = 0;
+            tp[7] = 0;
+        }
+        taken[k] = tk + 1;
+        --want[k];
+        ++done;
+        noc_semaphore_inc(get_noc_addr(px[k], py[k], area + RET + 4 * (k * AP + me)), 1);
+        noc_semaphore_inc(get_noc_addr(px[k], py[k], area + MISC + 4 * (__MRTOT__ + k)), 1);
+        return true;
+    };
+    // Deterministic order (__DET__, with the L1 hand-off and the device plan): each home token's rows are added in
+    // the planner's per-token source order (combine_plan det); a ring holds its source's rows in production order,
+    // so a ring's head row is taken once it is its token's next. A token's sum no longer depends on arrival timing,
+    // and a ring waits only on its head token's earlier rows (not on a global step). Deadlock-free: a token's order is
+    // by (predicted finish on the source, source), nondecreasing along every source's production, so the row with
+    // the lowest key not yet taken is always takeable once it lands. A table whose per-source totals disagree with
+    // want / n_local is not used (the polling loop below takes everything; misc[102] flags it).
+    if constexpr (__DET__ && L1M) {
+        constexpr uint32_t DK = __DK__, NTOK = __DNTOK__;
+        const uint32_t ol = (tl + 256 + 63) & ~63u;  // (the table CB: unused with the hand-off's device plan)
+        const InterleavedAddrGen<true> og = {.bank_base_address = get_arg_val<uint32_t>(a + 9 + 2 * WL),
+                                             .page_size = __DPG__};
+        noc_async_read(get_noc_addr(me, og), ol, (NTOK * DK + 63) / 64 * 64);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        const uint8_t* ord = reinterpret_cast<const uint8_t*>(ol);
+        uint32_t tot[N];
+        for (uint32_t k = 0; k < N; ++k) tot[k] = 0;
+        for (uint32_t i = 0; i < NTOK * DK; ++i) {
+            if (ord[i] < N) ++tot[ord[i]];
+        }
+        bool ok = true;
+        for (uint32_t k = 0; k < N; ++k) ok = ok && tot[k] == (k == hc ? n_local : want[k]);
+        misc[102] = ok ? 0 : 0xBAD0DE7;
+        uint8_t pos[NTOK];
+        for (uint32_t j = 0; j < NTOK; ++j) pos[j] = 0;
+        auto next_is = [&](uint32_t t, uint32_t k) -> bool {
+            const uint32_t j = t / A;
+            return t != 0xFFFFFFFF && pos[j] < DK && ord[j * DK + pos[j]] == k;
+        };
+        while (ok && done < n_rows) {
+            invalidate_l1_cache();
+            for (uint32_t t = 0; li < n_local && next_is(t = peek_local(), hc);) {
+                take_local();
+                ++pos[t / A];
+            }
+            for (uint32_t k = 0; k < N; ++k) {
+                if (k == hc) continue;
+                for (uint32_t t = 0; want[k] && next_is(t = peek_ring(k), k);) {
+                    take_ring(k);
+                    ++pos[t / A];
+                }
+            }
+        }
+    }
     while (done < n_rows) {
         invalidate_l1_cache();
         if (li == n_local && t_local == 0) t_local = get_timestamp_32b();
         while (L1M && li < n_local) {
-            uint32_t m = 0xFFFFFFFF;
-            for (uint32_t w = 0; w < WL; ++w) {
-                const uint32_t v = landed[w] - lbase;
-                m = v < m ? v : m;
-            }
-            if (li >= m) break;
-            const uint32_t sl = LB + (li % QL) * SLOT;
-            push_pieces(sl, (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sl + LASTPB)[0] >> 8) & 0xFFFF);
-            ++li;
-            ++done;
-            const uint32_t g = li + QL < n_local ? li + QL : n_local;
-            if (g > lgranted && (g - lgranted >= 4 || g == n_local)) lgrant_to(g);
+            if (!take_local()) break;
         }
         while (!L1M && li < n_local) {
             const uint32_t* en = lentry(li);
@@ -656,30 +828,7 @@ void kernel_main() {
             ++done;
         }
         for (uint32_t k = 0; k < N; ++k) {
-            if (!want[k]) continue;
-            const uint32_t tk = taken[k];
-            const uint32_t s = area + RINGS + ((k - (k > hc)) * D + tk % D) * SLOT;
-            bool all = true;
-            for (uint32_t pc = 0; pc < P && all; ++pc) {
-                volatile tt_l1_ptr uint32_t* tp =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
-                all = tp[3] != 0 && tp[7] != 0;
-            }
-            if (all) {
-                volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + LASTPB);
-                push_pieces(s, (tr[0] >> 8) & 0xFFFF);
-                for (uint32_t pc = 0; pc < P; ++pc) {
-                    volatile tt_l1_ptr uint32_t* tp =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
-                    tp[3] = 0;
-                    tp[7] = 0;
-                }
-                taken[k] = tk + 1;
-                --want[k];
-                ++done;
-                noc_semaphore_inc(get_noc_addr(px[k], py[k], area + RET + 4 * (k * AP + me)), 1);
-                noc_semaphore_inc(get_noc_addr(px[k], py[k], area + MISC + 4 * (__MRTOT__ + k)), 1);
-            }
+            if (want[k]) take_ring(k);
         }
     }
     if constexpr (__DEVPLAN__) {  // (the compute's end marker: it does not know the row count)
@@ -688,7 +837,7 @@ void kernel_main() {
         cb_push_back(cb_meta, 1);
     }
     const uint32_t p_total = get_timestamp_32b() - p0;
-    if (L1M) misc[101] = lbase + n_local;
+    if (L1M) misc[__ALBASE__] = lbase + n_local;
     noc_async_atomic_barrier();
     if constexpr (__TPROF__) {
         const uint32_t tdbg = get_arg_val<uint32_t>(a + 2), tpage = get_arg_val<uint32_t>(a + 3);
@@ -732,6 +881,10 @@ def sparse_combine_rf_prepare(
     counts_off=None,
     l1=None,
     devplan=None,
+    deterministic=False,
+    ports_per_direction=False,
+    acc_on_ports=False,
+    piece_max=None,
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
     logical (x, y) cells the combine may use (ports nearest their Ethernet cores, accumulators the rest), else the
@@ -743,11 +896,20 @@ def sparse_combine_rf_prepare(
     in DRAM; flat_routed_expert_with_program l1_args = run.l1_args). Returns run(y, out) (standalone) with
     run.build(y, out) -> the MeshProgramDescriptor and run.collector. devplan (with l1): dict(plan=, table=) from
     combine_plan (the planner's per-call counts and hand-off table, on the device): the kernels read their counts from
-    the plan, rows_by_chip only places the cores."""
+    the plan, rows_by_chip only places the cores. deterministic (with l1 and a devplan holding the planner's "dord"
+    order table, combine_plan det=): every accumulator takes its rows in a fixed (source schedule entry, source chip)
+    order, so the sums are bit-identical from call to call. ports_per_direction (with l1 and a devplan from
+    combine_plan port_luts(per_direction=True)): one port core per direction, its sender driving every link of that
+    direction (a row goes out on its link (accumulator + source + home) % L; credit snapshots on link 0, so they stay in
+    order): half the port cells with two links. acc_on_ports (with l1): the ports sit on accumulator cells (the A
+    accumulator cells are the same on every chip; each chip's ports take the ones nearest its Ethernet cores), each
+    port core also an accumulator - its sender RISC also runs the hand-off grants and the output writes - so the
+    combine takes max(ports, A) cells instead of ports + A."""
     R, C = tuple(mesh_device.shape)
     N, L, A0 = R * C, num_links, n_acc
     row_bytes = W * 2
     NT = (row_bytes + TILE - 1) // TILE
+    PIECE_MAX = piece_max or globals()["PIECE_MAX"]  # (piece_max: e.g. one piece a row for the L1 hand-off)
     NP = (row_bytes + PIECE_MAX - 1) // PIECE_MAX
     PD = ((row_bytes + NP - 1) // NP + 63) // 64 * 64
     PS = ((PD + 32 + 63) // 64) * 64
@@ -761,11 +923,28 @@ def sparse_combine_rf_prepare(
         f"{row_bytes} and a fabric payload >= {row_bytes + 32})"
     )
     chips, nb, (wrap_x, wrap_y) = mesh_plan(mesh_device, num_links, torus)
-    port_core = place_ports(mesh_device, chips, cells)
-    used_cores = {(c.x, c.y) for c in port_core.values()}
+    FUSED = bool(acc_on_ports)
+    assert not FUSED or l1 is not None, "acc_on_ports: the L1 hand-off"
     grid = mesh_device.compute_with_storage_grid_size()
     pool = cells if cells is not None else [(x, y) for y in range(grid.y) for x in range(grid.x)]
-    acc_cores = [ttnn.CoreCoord(x, y) for x, y in pool if (x, y) not in used_cores][:A0]
+    if FUSED:  # the accumulator cells: every chip's nearest-to-Ethernet port cells, then the pool's first others
+        free_ports = place_ports(mesh_device, chips, pool)
+        aset_xy = sorted({(c.x, c.y) for c in free_ports.values()}, key=pool.index)
+        assert len(aset_xy) <= n_acc, f"acc_on_ports: {len(aset_xy)} port cells over the chips > {n_acc} accumulators"
+        aset_xy += [c for c in pool if c not in aset_xy][: n_acc - len(aset_xy)]
+        port_core = place_ports(mesh_device, chips, aset_xy)
+    else:
+        port_core = place_ports(mesh_device, chips, cells)
+    PER_DIR = bool(ports_per_direction)
+    assert not PER_DIR or all(len(p["links"]) == num_links for ports in chips.values() for p in ports.values())
+    if PER_DIR:  # (one core per (chip, direction): link 0's; every link of the direction maps to it)
+        port_core = {k: port_core[k[:2] + (0,)] for k in port_core}
+    used_cores = {(c.x, c.y) for c in port_core.values()}
+    if FUSED:
+        acc_cores = [ttnn.CoreCoord(x, y) for x, y in aset_xy]
+        used_cores = set()  # (the ports are accumulator cells)
+    else:
+        acc_cores = [ttnn.CoreCoord(x, y) for x, y in pool if (x, y) not in used_cores][:A0]
     A = len(acc_cores)
     assert N <= 32 and A <= 16, (N, A)
     AP = (A + 3) // 4 * 4
@@ -793,16 +972,33 @@ def sparse_combine_rf_prepare(
             inj[(ch, fh(ch, home), l)].append((yrow, hdr))
             want[(home, o)][idx(ch)] += 1
             n_ret[(home, fh(home, ch), l)] += 1
+    if PER_DIR:  # (a direction's port injects every link's rows: its lists merged, under link 0's key)
+        for k in [k for k in port_core if k[2] != 0]:
+            k0 = k[:2] + (0,)
+            inj[k0] = inj[k0] + inj.pop(k)
+            n_ret[k0] += n_ret.pop(k)
     al = lambda v: (v + 63) // 64 * 64  # noqa: E731
     MAXT = (S + A - 1) // A
-    tab_cb = 256 * 8 + 128
+    det = bool(deterministic)
+    assert not det or (
+        l1 is not None and devplan is not None and "dord" in devplan
+    ), "deterministic: the L1 hand-off and a device plan with the planner's order table (combine_plan det=)"
+    det_k = int(devplan.get("top_k", 0)) if det else 0
+    assert not det or det_k, "deterministic: devplan top_k (the routing's top-k: the order table's row stride)"
+    det_pg = int(devplan["dord"].shape[-1]) * 4 if det else 0
+    assert not det or MAXT * det_k <= det_pg, (MAXT, det_k, det_pg)
+    tab_cb = max(256 * 8 + 128, 256 + 64 + (MAXT * det_k + 63) // 64 * 64) if det else 256 * 8 + 128
     acc_cbs = sum(
         al(v) for v in [tab_cb, 2 * NT * TILE, 2 * 32, MAXT * NT * 4096, 2 * NT * TILE] + ([2 * TILE] if l1 else [])
     )
     if arena is not None:  # (the rings' depth from what the arena leaves: the accumulators' CBs and 2 local slots)
         sh_ = arena.memory_config().shard_spec
         arena_bytes = int(sh_.shape[0]) * int(sh_.shape[1]) * (4 if arena.dtype == ttnn.uint32 else 2)
-        fit = (arena_bytes - RINGS - acc_cbs - (2 * ISLOT if l1 else 0)) // ((N - 1) * SLOT)
+        QP0 = int(os.environ.get("SPC_QP", "64"))
+        # (fused: room kept for an 8-slot local ring and a 32-slot injection ring; what is left after the rings
+        # grows them, below)
+        keep = (8 + min(32, QP0)) * ISLOT if FUSED else (2 * ISLOT if l1 else 0)
+        fit = (arena_bytes - RINGS - acc_cbs - keep) // ((N - 1) * SLOT)
         D = min(depth, fit)
     else:
         D = depth
@@ -810,7 +1006,12 @@ def sparse_combine_rf_prepare(
     assert D >= 1, f"combine: no room for one ring slot per source chip ({N - 1} x {SLOT} B)"
     QP = int(os.environ.get("SPC_QP", "64"))  # a port's L1 hand-off injection ring (its own region, no rings there)
     acc_area = RINGS + (N - 1) * D * SLOT
-    port_area = RINGS + (QP * ISLOT if l1 is not None else 0)
+    if FUSED and arena is not None:  # (local ring up to 16 slots, then the injection ring up to QP, from what is left)
+        a_end = al(acc_area) + acc_cbs
+        QL_F = min(16, (arena_bytes - a_end - min(32, QP) * ISLOT) // ISLOT)
+        QP = min(QP, (arena_bytes - a_end - QL_F * ISLOT) // ISLOT)
+        assert QL_F >= 2 and QP >= 8, f"acc_on_ports: local ring {QL_F} / injection ring {QP} slots"
+    port_area = RINGS + (QP * ISLOT if l1 is not None else 0)  # (fused: the ring after the accumulator's, see build)
     area_bytes = max(acc_area, port_area)
     all_cores = sorted(used_cores | {(c.x, c.y) for c in acc_cores})
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in all_cores])
@@ -843,7 +1044,7 @@ def sparse_combine_rf_prepare(
     tabs, offs = {}, {}
     for ch in chips:
         lst = []
-        for k in sorted(k for k in port_core if k[0] == ch):
+        for k in sorted(k for k in port_core if k[0] == ch and k in inj):
             offs[("p",) + k] = len(lst)
             lst += inj[k]
         for i in range(A):
@@ -864,8 +1065,12 @@ def sparse_combine_rf_prepare(
         mesh_mapper=shard,
     )
     tab_bytes = 8 * n_tab
-    if l1 is not None:  # destination ids per chip: its ports (sorted), then its accumulators
-        port_ids = {ch: {k: j for j, k in enumerate(sorted(k for k in port_core if k[0] == ch))} for ch in chips}
+    pkey = (lambda k: k[:2]) if PER_DIR else (lambda k: k)  # noqa: E731  (a physical port's key)
+    if l1 is not None:  # destination ids per chip: its ports (sorted; per direction with PER_DIR), then accumulators
+        port_ids = {}
+        for ch in chips:
+            uk = sorted({pkey(k) for k in port_core if k[0] == ch})
+            port_ids[ch] = {k: uk.index(pkey(k)) for k in port_core if k[0] == ch}
         n_y = max((max((r[0] for r in rows), default=-1) for rows in rows_by_chip.values()), default=-1) + 1
         n_tiles = max((n_y + 31) // 32, 1)
         lt = torch.full((R, C, n_tiles, 64), 0, dtype=torch.int64)
@@ -874,7 +1079,8 @@ def sparse_combine_rf_prepare(
                 yrow, home, t = row[:3]
                 l = link_of(t % A, idx(ch), idx(home), L)
                 hdr = idx(home) | (t << 8) | ((row[4] if len(row) > 4 else 0) << 24)
-                dd = len(port_ids[ch]) + t % A if home == ch else port_ids[ch][(ch, fh(ch, home), l)]
+                n_pid = len(set(port_ids[ch].values()))
+                dd = n_pid + t % A if home == ch else port_ids[ch][(ch, fh(ch, home), l)]
                 wb = row[5] if len(row) > 5 else 0x3F80  # (gate weight, bf16 bits; 1.0 without)
                 lt[ch[0], ch[1], yrow // 32, 2 * (yrow % 32)] = dd | (wb << 16)
                 lt[ch[0], ch[1], yrow // 32, 2 * (yrow % 32) + 1] = hdr
@@ -911,6 +1117,10 @@ def sparse_combine_rf_prepare(
         "__CBTAB__": str(CB_TAB),
         "__CBW__": str(CB_W),
         "__DEVPLAN__": str(int(devplan is not None)),
+        "__DET__": str(int(det)),
+        "__DK__": str(max(det_k, 1)),
+        "__DNTOK__": str(MAXT if det else 1),
+        "__DPG__": str(max(det_pg, 64)),
         "__NOYREAD__": os.environ.get("SPC_NOYREAD", "0"),  # (probe: rows not read from y: garbage)
         "__PD__": str(PD),
         "__PS__": str(PS),
@@ -921,6 +1131,12 @@ def sparse_combine_rf_prepare(
         "__MRDONE__": str(M_RDONE),
         "__MTAKEN__": str(M_TAKEN),
         "__NH__": str(NH_),
+        "__NL__": str(L if PER_DIR else 1),
+        "__FUSED__": str(int(FUSED)),
+        "__CBOUT__": str(CB_OUT),
+        "__NT__": str(NT),
+        "__ALAND__": "160" if FUSED else "128",
+        "__ALBASE__": "103" if FUSED else "101",
         "__HSZ__": str(HSZ_),
     }
     dbg_t = ttnn.from_torch(
@@ -997,7 +1213,13 @@ def sparse_combine_rf_prepare(
             program = ttnn.ProgramDescriptor()
             placed = []  # (the arena-backed CBs: rebind(arena) rebuilds them on another arena tensor)
             state["placed"].append((ch, program, placed))
-            my = [(d, li, port_core[(ch, d, li)]) for d, p in ports.items() for li in range(len(p["links"]))]
+            my = [
+                (d, li, port_core[(ch, d, li)])
+                for d, p in ports.items()
+                for li in range(len(p["links"]))
+                if not PER_DIR or li == 0
+            ]
+            p_xy = {(c.x, c.y) for _, _, c in my}  # (this chip's port cores; fused: accumulator cells too)
             pset = ttnn.CoreRangeSet([ttnn.CoreRange(k, k) for _, _, k in my])
             aset = ttnn.CoreRangeSet([ttnn.CoreRange(k, k) for k in acc_cores])
             specs = [  # (cb, cores, total, format, page): CB_TAB first (both kinds), then each kind's own
@@ -1022,10 +1244,11 @@ def sparse_combine_rf_prepare(
                 ends = {"p": al(port_area), "a": al(acc_area)}
                 for cb, crs, total, fmt, page in specs:
                     if l1 is not None and cb == CB_INJ:  # (the hand-off ring: the writers address it directly)
-                        placed.append((cb, crs, RINGS, QP * ISLOT, fmt, page))
-                        continue
-                    if cb == CB_TAB:  # (both kinds, each in its own region)
-                        for k, crs_k in (("p", pset), ("a", aset)):
+                        if not FUSED:
+                            placed.append((cb, crs, RINGS, QP * ISLOT, fmt, page))
+                        continue  # (fused: after the accumulator's local ring, below)
+                    if cb == CB_TAB:  # (both kinds, each in its own region; fused: the accumulators' only)
+                        for k, crs_k in (("p", pset), ("a", aset)) if not FUSED else (("a", aset),):
                             placed.append((cb, crs_k, ends[k], total, fmt, page))
                             ends[k] = al(ends[k] + total)
                         continue
@@ -1036,21 +1259,29 @@ def sparse_combine_rf_prepare(
                 assert (
                     max(ends.values()) <= arena_bytes
                 ), f"combine needs {max(ends.values()) >> 10} KB per core, the arena has {arena_bytes >> 10} KB"
-                if l1 is not None:  # the accumulators' local ring: what is left of the arena
+                if (
+                    l1 is not None
+                ):  # the accumulators' local ring: what is left of the arena (fused: and the port's ring)
                     loc_off = ends["a"]
-                    QL = min(16, (arena_bytes - loc_off) // ISLOT)
+                    QL = QL_F if FUSED else min(16, (arena_bytes - loc_off) // ISLOT)
                     assert QL >= 2, f"no room for the accumulators' local ring ({(arena_bytes - loc_off) >> 10} KB)"
+                    inj_off = loc_off + QL * ISLOT if FUSED else RINGS
+                    if FUSED:
+                        assert inj_off + QP * ISLOT <= arena_bytes, "acc_on_ports: no room for the injection ring"
+                        cbs.append(arena_cbs([(CB_INJ, pset, inj_off, QP * ISLOT, ttnn.uint32, ISLOT)], area_t)[0])
+                        placed.append((CB_INJ, pset, inj_off, QP * ISLOT, ttnn.uint32, ISLOT))
             program.cbs = cbs
             if l1 is not None:
                 pids = port_ids[ch]
                 tab_dev = devplan["table"] if devplan is not None else l1_tab
-                la = [len(pids) + A, ISLOT, int(tab_dev.buffer_address()), int(l1["words"]), 0, 0, 0, 0]
-                for k in sorted(pids, key=pids.get):
-                    v = virt(port_core[k])
-                    la += [v.x, v.y, area + RINGS, QP, area + MISC + 512]
+                n_pid = len(set(pids.values()))
+                la = [n_pid + A, ISLOT, int(tab_dev.buffer_address()), int(l1["words"]), 0, 0, 0, 0]
+                for j in range(n_pid):
+                    v = virt(port_core[min(k for k in pids if pids[k] == j)])
+                    la += [v.x, v.y, area + inj_off, QP, area + MISC + 512]
                 for i_, ac in enumerate(acc_cores):
                     v = virt(ac)
-                    la += [v.x, v.y, area + loc_off, QL, area + MISC + 512]
+                    la += [v.x, v.y, area + loc_off, QL, area + MISC + (640 if FUSED else 512)]
                 l1_args.append(la)
             pr_rt, ps_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for d, li, core in my:
@@ -1088,6 +1319,7 @@ def sparse_combine_rf_prepare(
                     else [len(inj[k]), n_ret[k]]
                 )
                 args = [area, mesh_id, idx(ch), li] + cnt_args + chip_ids + acc_xy
+                n_conn = len(ports[d]["links"]) if PER_DIR else 1
                 for i in range(N):
                     s = (i // C, i % C)
                     if s != ch and fh(ch, s) == d:
@@ -1098,7 +1330,14 @@ def sparse_combine_rf_prepare(
                 args += [int(pace_us * 1350 / len(inj[k])) if pace_us > 0 and inj[k] else 0]
                 args += [int(dbg_t.buffer_address()), DIRS.index(d) * 2 + li]
                 args += [int(tdbg_t.buffer_address()), 8 + DIRS.index(d) * 2 + li]
-                args += list(ttnn.setup_fabric_connection(node(ch), node(peer), ports[d]["links"][li], program, core))
+                for lj in range(n_conn) if PER_DIR else [li]:
+                    args += list(
+                        ttnn.setup_fabric_connection(node(ch), node(peer), ports[d]["links"][lj], program, core)
+                    )
+                if FUSED:  # (the hand-off receiver's args, then the accumulator writer's)
+                    ai = [(c.x, c.y) for c in acc_cores].index((core.x, core.y))
+                    args += [len(wv), port_ids[ch][k], QP, int(l1["words"]), int(out.buffer_address())]
+                    args += [len(range(ai, S, A)), ai] + wxy
                 ps_rt[core.x][core.y] = args
             ar_rt, ac_rt, aw_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for i, core in enumerate(acc_cores):
@@ -1127,13 +1366,17 @@ def sparse_combine_rf_prepare(
                         args += [0, 0, 0]
                 args += [int(dbg_t.buffer_address()), 8 + i, int(tdbg_t.buffer_address()), 16 + i]
                 if l1 is not None:
-                    args += [QL, area + loc_off, len(wv), len(port_ids[ch]) + i, int(l1["words"])] + wxy
+                    args += [QL, area + loc_off, len(wv), len(set(port_ids[ch].values())) + i, int(l1["words"])] + wxy
+                    if det:  # (the planner's order table: page i)
+                        args += [int(devplan["dord"].buffer_address())]
                 else:
                     args += [0, 0, 0, 0, 0]
                 ar_rt[core.x][core.y] = args
                 n_rows = len(loc[(ch, i)]) + sum(want[(ch, i)])
                 ac_rt[core.x][core.y] = [0 if devplan is not None else n_rows, n_tok]
-                aw_rt[core.x][core.y] = [int(out.buffer_address()), n_tok, i]
+                if not FUSED or (core.x, core.y) not in p_xy:  # (fused port cores: the sender writes)
+                    aw_rt[core.x][core.y] = [int(out.buffer_address()), n_tok, i]
+            aw_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in acc_cores if not FUSED or (c.x, c.y) not in p_xy])
             program.kernels = [
                 ttnn.KernelDescriptor(
                     kernel_source=srcs["pr1"] if l1 is not None else srcs["pr"],
@@ -1147,7 +1390,7 @@ def sparse_combine_rf_prepare(
                     kernel_source=srcs["ps"],
                     source_type=st,
                     core_ranges=pset,
-                    compile_time_args=[CB_INJ, row_bytes, SLOT, D, A, N, L, ISLOT],
+                    compile_time_args=[CB_INJ, row_bytes, SLOT, D, A, N, L, ISLOT] + (o_ct if FUSED else []),
                     runtime_args=ps_rt,
                     config=dm("RISCV_0", NOC1),
                 ),
@@ -1170,12 +1413,16 @@ def sparse_combine_rf_prepare(
                 ttnn.KernelDescriptor(
                     kernel_source=srcs["aw"],
                     source_type=st,
-                    core_ranges=aset,
+                    core_ranges=aw_set,
                     compile_time_args=[CB_OUT, row_bytes, NT, A] + o_ct,
                     runtime_args=aw_rt,
                     config=dm("RISCV_0", NOC1),
                 ),
             ]
+            if FUSED:  # (no separate hand-off receiver: the sender runs it; no writer kernel on the port cores)
+                program.kernels = [k_ for k_ in program.kernels if k_.kernel_source != srcs["pr1"]]
+                if not p_xy.isdisjoint({(c.x, c.y) for c in acc_cores}) and len(p_xy) == len(acc_cores):
+                    program.kernels = [k_ for k_ in program.kernels if k_.kernel_source != srcs["aw"]]
             mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(*ch), ttnn.MeshCoordinate(*ch))] = program
         return mesh_desc
 
@@ -1207,7 +1454,7 @@ def sparse_combine_rf_prepare(
     run.counts = dict(n_inj={k: len(v) for k, v in inj.items()}, n_ret=n_ret)
     run.cells = run_cells
     run.depth = D
-    run.l1 = dict(acc_area=acc_area, port_area=port_area, rings=(N - 1) * D * SLOT, state=RINGS, slot=SLOT)
+    run.l1 = dict(acc_area=acc_area, port_area=port_area, rings=(N - 1) * D * SLOT, state=RINGS, slot=SLOT, inj=QP)
     run.zero_runs = zero_runs
     run.dbg = dbg_t
     return run

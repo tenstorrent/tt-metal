@@ -52,7 +52,14 @@ struct SeYRmWriter {
     uint32_t nd = 0, islot = 0, words = 0, widx = 0, tab_tile = 0xFFFFFFFF, tab_base = 0;
     uint32_t dx[L1_MAXD], dy[L1_MAXD], dbase[L1_MAXD], dq[L1_MAXD], dland[L1_MAXD];
     uint32_t cnt[L1_MAXD];               // rows issued per destination this call
-    uint8_t tcnt[rows][L1_MAXD];         // rows per destination of each in-flight row tile
+    // A row tile goes out in one or more parts (units): as many leading rows as the destinations have granted slots
+    // for, the rest once they grant more - so a ring smaller than one tile's rows for it (e.g. an accumulator's local
+    // ring of a few slots) never blocks the writer for good. Each unit has its own transaction id and landed counts;
+    // the tile's out CB pages go when its last unit retires.
+    uint8_t tcnt[rows][L1_MAXD];         // rows per destination of each in-flight unit
+    uint8_t ulast[rows];                 // 1: the unit completes its row tile
+    uint32_t part = 0;                   // rows of the current row tile already issued
+    uint32_t uiss = 0, uret = 0;         // units issued / retired
     volatile tt_l1_ptr uint32_t* grant;  // words[0..32): grants received (cumulative)
     volatile tt_l1_ptr uint32_t* gbase;  // words[32..64): grants consumed by earlier calls
 #endif
@@ -94,24 +101,38 @@ struct SeYRmWriter {
 
     // Issue the next row tile's writes if the compute has pushed it and a transaction id is free; true if issued.
     bool issue(const SeDyn& dyn) {
+#if defined(SE_Y_L1)
+        if (uiss - uret == rows ||
+            (part == 0 &&
+             (issued - retired == rows || !cb_pages_available_at_front(out_cb, (issued - retired + 1) * pcd)))) {
+            return false;
+        }
+#else
         if (issued - retired == rows || !cb_pages_available_at_front(out_cb, (issued - retired + 1) * pcd)) {
             return false;
         }
+#endif
         const uint32_t src = base + (issued % rows) * tile_bytes;
         const uint32_t row_base = is * mt * 32 + ir * 32;
         const uint32_t left = dyn.cnt[ia] - row_base;
         const uint32_t n = left < 32 ? left : 32;
         const uint32_t row0 = dyn.off[ia] + row_base;
-        const uint32_t trid = trid0 + issued % rows;
 #if defined(SE_Y_L1)
+        const uint32_t trid = trid0 + uiss % rows;
         if (nd == 0) {  // (nothing to hand off to: the flat expert alone without y)
-            (void)src, (void)row0;
-            ++issued;
+            (void)src, (void)row0, (void)trid;
             for (uint32_t d = 0; d < L1_MAXD; ++d) {
-                tcnt[(issued - 1) % rows][d] = 0;
+                tcnt[uiss % rows][d] = 0;
             }
+            ulast[uiss % rows] = 1;
+            ++uiss;
+            ++issued;
             goto advanced;
         }
+#else
+        const uint32_t trid = trid0 + issued % rows;
+#endif
+#if defined(SE_Y_L1)
         {
             // this tile's table page: (destination, header word) per row
             const uint32_t page = row0 / 32, tabl = words + 256;
@@ -122,21 +143,25 @@ struct SeYRmWriter {
                 tab_tile = page;
             }
             const volatile tt_l1_ptr uint32_t* ent = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(tabl);
-            uint8_t* tc = tcnt[issued % rows];
+            uint8_t* tc = tcnt[uiss % rows];
             for (uint32_t d = 0; d < nd; ++d) {
                 tc[d] = 0;
             }
-            for (uint32_t i = 0; i < n; ++i) {
-                ++tc[ent[2 * i] & 0xFF];
-            }
             invalidate_l1_cache();
-            for (uint32_t d = 0; d < nd; ++d) {  // every slot this tile needs granted?
-                if (tc[d] && grant[d] - gbase[d] < cnt[d] + tc[d]) {
-                    return false;
+            // this unit: the tile's next rows while their destinations have granted slots for them
+            uint32_t i1 = part;
+            for (; i1 < n; ++i1) {
+                const uint32_t d = ent[2 * i1] & 0xFF;
+                if (grant[d] - gbase[d] < cnt[d] + tc[d] + 1) {
+                    break;
                 }
+                ++tc[d];
             }
-            const uint32_t stage = words + 512 + (issued % rows) * 32 * 32;  // trailers in flight (column-0 writer)
-            for (uint32_t i = 0; i < n; ++i) {
+            if (i1 == part) {
+                return false;
+            }
+            const uint32_t stage = words + 512 + (uiss % rows) * 32 * 32;  // trailers in flight (column-0 writer)
+            for (uint32_t i = part; i < i1; ++i) {
                 const uint32_t d = ent[2 * i] & 0xFF, hdr = ent[2 * i + 1], wbits = ent[2 * i] >> 16;
                 const uint32_t slot = dbase[d] + (cnt[d] % dq[d]) * islot;
                 ++cnt[d];
@@ -166,6 +191,13 @@ struct SeYRmWriter {
                 }
             }
             (void)row0;
+            ulast[uiss % rows] = i1 == n ? 1 : 0;
+            ++uiss;
+            if (i1 < n) {  // (the tile's other rows in a later unit: the cursor stays on it)
+                part = i1;
+                return true;
+            }
+            part = 0;
         }
 #elif defined(SE_YRM_SELF)  // (perf probe: y rows written onto themselves in this core's L1 - no DRAM / mesh traffic,
         // the writes still issue and retire)
@@ -205,20 +237,30 @@ struct SeYRmWriter {
     // Retire the oldest issued row tile once its writes are flushed (frees its pages); returns the number of virtual
     // experts completed by it (0 or 1).
     uint32_t retire(const SeDyn& dyn) {
-        if (retired == issued ||
-            !ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid0 + retired % rows)) {
+#ifdef SE_Y_L1
+        if (uret == uiss || !ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid0 + uret % rows)) {
             return 0;
         }
-        cb_pop_front(out_cb, pcd);
-#ifdef SE_Y_L1
         {
-            const uint8_t* tc = tcnt[retired % rows];
+            const uint8_t* tc = tcnt[uret % rows];
             for (uint32_t d = 0; d < nd; ++d) {
                 if (tc[d]) {
                     noc_semaphore_inc(get_noc_addr(dx[d], dy[d], dland[d] + 4 * widx), tc[d]);
                 }
             }
         }
+        const bool tile_done = ulast[uret % rows] != 0;
+        ++uret;
+        if (!tile_done) {
+            return 0;
+        }
+        cb_pop_front(out_cb, pcd);
+#else
+        if (retired == issued ||
+            !ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid0 + retired % rows)) {
+            return 0;
+        }
+        cb_pop_front(out_cb, pcd);
 #endif
         ++retired;
         if (++dr == rows_v(dyn, da, ds)) {

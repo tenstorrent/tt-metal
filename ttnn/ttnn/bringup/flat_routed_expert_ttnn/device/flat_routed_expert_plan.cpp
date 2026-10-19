@@ -513,8 +513,8 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // DRISC mode: one subgrid, not inside the combine overlap (not validated there)
     // (inside the combine overlap only with MIMO_FL_CMB_DRISC=1, while it is being validated there)
     const char* cmb_drisc = std::getenv("MIMO_FL_CMB_DRISC");
-    p.drisc = flat_drisc_enabled() && p.nsg == 1 && (cfg.cmb_rt == 0 || (cmb_drisc && std::atoi(cmb_drisc) != 0)) &&
-              !p.uneven;
+    // (uneven splits: each DRISC job carries its slot's own pair-sets and receivers, se_drisc_post.hpp)
+    p.drisc = flat_drisc_enabled() && p.nsg == 1 && (cfg.cmb_rt == 0 || (cmb_drisc && std::atoi(cmb_drisc) != 0));
     if (p.drisc) {
         flat_drisc_set_auto_pure(
             !p.rdown);  // (flat_drisc.cpp: pure DRISC slots unless the readers compute down columns)
@@ -913,7 +913,13 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     TT_FATAL(
         (p.uneven || p.ngrp % p.n_rd_sg == 0) && p.r_ <= (p.uneven ? R_MAX : 4u),
         "flat_routed_expert: gate/up pair-sets per reader");
+    // gate/up weight ring: 2 expert slices (with pinning: the pinned expert's and one cycling); MIMO_FL_GU_NREG
+    // (probe): more regions, so more small experts stream in under a pinned expert's chunks (the down ring must match:
+    // MIMO_FL_DRING = the same count keeps the down weights per region, SE_DN_REG)
     p.ring_g = 2 * p.nk_gu;
+    if (const char* nr = std::getenv("MIMO_FL_GU_NREG")) {
+        p.ring_g = static_cast<uint32_t>(std::max(2, std::atoi(nr))) * p.nk_gu;
+    }
     p.d_ch = p.rdown ? std::min(D_CHAINS, p.n_rd_sg) : D_CHAINS;
     // 16-column units (40 down cores on V4.1-Flash): 4 chains. Each gate/up core writes its h slice to every chain
     // head, the chains forward it; at E 24 M 1024 bfp8 h 3 / 4 / 5 / 7 / 10 chains: 211.7 / 211.6 / 213.4 / 226.6 /
