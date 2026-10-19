@@ -2461,12 +2461,14 @@ def test_high_bw_all_gather_cached_link_discovery(mesh_device, num_links, expect
 _WINDOW_STRIPE_ROWS = 64  # per-chip rows per block-cyclic slab
 _WINDOW_SLABS = 8  # slabs the cache holds
 _WINDOW_NUM_LAYERS = 2
+# The gather moves rows as opaque pages, so a packed scaled-FP8 KVPE row (656 B) is modelled as 328 bf16 values:
+# same page size and DRAM alignment, while the data stays exactly comparable on the host.
+_WINDOW_ROW_WIDTHS = pytest.mark.parametrize("width", [328, 576], ids=["kv_scaled_fp8_656b", "kv_bf16_1152b"])
 
 
-def _window_case_tensors(mesh_device):
+def _window_case_tensors(mesh_device, width=576):
     num_devices = mesh_device.get_num_devices()
     local_rows = _WINDOW_STRIPE_ROWS * _WINDOW_SLABS
-    width = 576
     torch.manual_seed(0)
     host_input = torch.rand((_WINDOW_NUM_LAYERS, 1, local_rows * num_devices, width), dtype=torch.bfloat16)
     device_input = _make_tensor(
@@ -2506,9 +2508,10 @@ def _read_progress(progress):
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @_AG_TRACED_AXIS
-def test_high_bw_all_gather_resumable_window(mesh_device, ag_traced):
+@_WINDOW_ROW_WIDTHS
+def test_high_bw_all_gather_resumable_window(mesh_device, ag_traced, width):
     num_devices = mesh_device.get_num_devices()
-    host_input, device_input, local_rows, width = _window_case_tensors(mesh_device)
+    host_input, device_input, local_rows, width = _window_case_tensors(mesh_device, width)
     slab_global = _WINDOW_STRIPE_ROWS * num_devices
     layer = 1  # gather the "next layer" slot, as the prefetch does in the model
 
