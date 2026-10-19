@@ -18,6 +18,7 @@
 #include "api/tt-metalium/device.hpp"
 #include "impl/host_api/temp_quasar_api.hpp"
 #include "api/tt-metalium/experimental/offline_kernel_compile.hpp"
+#include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
@@ -176,10 +177,15 @@ struct ScratchpadBindingHandle {
     uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
     uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
-    std::optional<LLKMetadata> llk_metadata;
-    // Present only for opted-in multi-binding: the ProgramSpec resource name groups bindings
-    // into one allocation. Host-only identity; does not affect the kernel binary or JIT hash.
-    std::optional<std::string> shared_allocation_id;
+    std::optional<LLKMetadata> llk_metadata;  // LLK related metadata (dataformat/ tile format)
+    // Present only if the binding handle could share it's allocation with another scratchpad.
+    // Configured in advanced options: ScratchpadAdvancedOptions::allow_multi_kernel_binding.
+    //
+    // Note this field does not affect kernel hash computation,
+    // as the build artifact of 2 kernels with/without shared allocation is the same.
+    //
+    // The ScratchpadSpecName serves as an identifier & does not carry specific meaning.
+    std::optional<experimental::ScratchpadSpecName> shared_allocation_identifier;
 };
 
 // Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).
