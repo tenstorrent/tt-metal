@@ -38,7 +38,7 @@ for blk in ${OL_BLOCKS:-1 2}; do for a in ${OL_ARMS:-$1 $RV}; do
   timeout -s INT -k 60 1500 python3 -m tracy -r -p --no-web-server -o $o $S/ol/run_nodes.py > $o.log 2>&1
   echo "== run $r $a rc=$? $(( $(date +%s) - t0 )) s: $(grep -aE '[0-9]+ (passed|failed)' $o.log | tail -1)"
   grep -a -m3 -E '^(FAILED|ERROR)' $o.log | cut -c1-200
-  grep -aqE '[0-9]+ passed' $o.log || { echo "== log errors $a r$r"; grep -a -B30 -m1 "Fatal Python error" $o.log | grep -a -v "^  File" | head -24 | cut -c1-300; }
+  grep -aqE '[0-9]+ passed' $o.log || { echo "== log errors $a r$r"; tail -25 $o.log | cut -c1-300; grep -a -B30 -m1 "Fatal Python error" $o.log | grep -a -v "^  File" | head -24 | cut -c1-300; }
   python3 $S/ol/sum_op19.py $o $a $r
   echo "RAB ELF $a r$r $(elfsum $TT_METAL_CACHE) $(ls -d $TT_METAL_CACHE/*/kernels/*/* 2>/dev/null | grep -ci tiliz) tilize builds"
   if [[ -z ${KDONE[$a]} ]]; then KDONE[$a]=1  # per compute kernel build: md5 of each TRISC's .text
