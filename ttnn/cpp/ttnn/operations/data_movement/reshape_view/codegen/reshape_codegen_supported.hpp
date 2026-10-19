@@ -42,8 +42,9 @@ bool supported_by_codegen(const Tensor& input, const ttnn::Shape& logical_output
 // Perf routing only, for a call supported_by_codegen: native measures faster than the program the gate admits.
 // TILE: native's tiled reshape beats tile rows unless the full plan cuts reads 8x, saves 16+ reads per output tile,
 // or copies whole face halves over more than one native round. ROW_MAJOR: rm_native_faster's stick-size rule, taken
-// only while native's scratch and the stick program fit the static L1 window. Never true for uint16: native rejects
-// it, so demoting would fail the call. Depends on shapes and static device geometry only, never on live L1.
+// only while the stick program fits the static L1 window and native's scratch fits both that window and the L1 free
+// once the output is allocated. Never true for uint16: native rejects it, so demoting would fail the call. TILE
+// depends on shapes and static device geometry only.
 bool is_demoted(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,

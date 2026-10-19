@@ -276,12 +276,15 @@ def test_reshape_codegen_rm_shrinks_plan_under_l1_pressure(device, case, shapes,
     expected = source.reshape(out_shape)
     x = _to_device(device, source, dtype, ttnn.ROW_MAJOR_LAYOUT, _DRAM)
     gate._assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
-    full = device.num_program_cache_entries()
-    for step, free in enumerate(free_kib, start=1):
+    for free in free_kib:
         hog = gate._l1_hog_leaving(device, free * 1024)
+        before = device.num_program_cache_entries()
         gate._assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+        assert device.num_program_cache_entries() == before + 1, f"{free} KiB free did not build a smaller program"
+        # Routing must not demote to native once native's scratch no longer fits.
+        gate._assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
         ttnn.deallocate(hog)
-        assert device.num_program_cache_entries() == full + step, f"{free} KiB free did not build a smaller program"
     # With the hog freed the full plan comes back and hits its program.
+    before = device.num_program_cache_entries()
     gate._assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
-    assert device.num_program_cache_entries() == full + len(free_kib)
+    assert device.num_program_cache_entries() == before

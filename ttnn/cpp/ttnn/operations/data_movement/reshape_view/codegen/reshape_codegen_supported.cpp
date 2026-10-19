@@ -11,6 +11,8 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "ttnn/operations/data_movement/common/common.hpp"
+
 namespace ttnn::operations::data_movement::reshape_codegen {
 
 namespace {
@@ -201,13 +203,13 @@ bool staged_native_faster(
 constexpr uint64_t kNativeSourceReadSlack = 128;
 constexpr uint64_t kNativeDestSlotSlack = 80;
 
-// Native's row-major kernel fits its minimum scratch in the static L1 window. Native sizes that scratch from live L1
-// and fails when it does not fit.
+// Native's row-major kernel fits its minimum scratch in `budget`. Native sizes that scratch from live L1 and fails
+// when it does not fit.
 bool native_rm_fits_l1(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    uint64_t static_budget) {
+    uint64_t budget) {
     const uint32_t elem = input.element_size();
     const uint64_t old_stick = static_cast<uint64_t>(input.logical_shape()[-1]) * elem;
     const uint64_t new_stick = static_cast<uint64_t>(logical_output_shape[-1]) * elem;
@@ -217,7 +219,7 @@ bool native_rm_fits_l1(
     const bool divisible = old_stick % new_stick == 0 || new_stick % old_stick == 0;
     const uint64_t kernels =
         divisible && native_runs_two_kernels(static_cast<uint32_t>(new_stick), output_mem_config) ? 2 : 1;
-    return kernels * per_kernel <= static_budget;
+    return kernels * per_kernel <= budget;
 }
 
 // Wormhole thresholds, fitted from the same forced sweeps run on Wormhole. Its DRAM reads stay transaction-bound up to
@@ -229,16 +231,16 @@ constexpr uint32_t kWhMinUnderfilledSplitPiece = 20;
 // Blackhole's counterpart of kWhMinDramMergePiece; the reason is at its use in rm_native_faster.
 constexpr uint32_t kBhMinDramMergePiece = 256;
 
-// Whether an rm_native_faster verdict may be taken once the static fit is known. Native's scratch must fit, and the
-// stick program rm_native_faster was measured against must fit the static L1 window. When only the slab program
-// fits, it reads a batch of windows behind one barrier, as for widths that do not divide.
+// Whether an rm_native_faster verdict may be taken once the static fit is known. Native's scratch must fit
+// `native_budget`, and the stick program rm_native_faster was measured against must fit the static L1 window. When
+// only the slab program fits, it reads a batch of windows behind one barrier, as for widths that do not divide.
 bool demotion_applies(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    uint64_t static_budget,
+    uint64_t native_budget,
     bool stick_program_fits) {
-    return stick_program_fits && native_rm_fits_l1(input, logical_output_shape, output_mem_config, static_budget);
+    return stick_program_fits && native_rm_fits_l1(input, logical_output_shape, output_mem_config, native_budget);
 }
 
 // Whether native's kernel measures faster than the ROW_MAJOR program the gate admits. Thresholds fitted on Blackhole
@@ -415,11 +417,16 @@ bool is_demoted(
         }
         RmGeometry geometry(input, logical_output_shape, output_mem_config, num_cores);
         const uint64_t static_budget = geometry.static_budget();
+        // Native sizes its scratch from the L1 free once the output is allocated; demoting a call whose scratch does
+        // not fit there would fail it where a row-major program still fits.
+        const uint64_t reserved = pending_output_l1_bytes(input, geometry.output_spec());
+        const uint64_t max_l1 = get_max_l1_space(input);
+        const uint64_t live_budget = max_l1 > reserved ? max_l1 - reserved : 0;
         return demotion_applies(
             input,
             logical_output_shape,
             output_mem_config,
-            static_budget,
+            std::min(static_budget, live_budget),
             geometry.fit_stick(static_budget).has_value());
     }
     const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
