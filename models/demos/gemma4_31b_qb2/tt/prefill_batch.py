@@ -69,3 +69,94 @@ class DeferredPrefillHistory(list):
         self._pending.discard(index)
         if not self._pending:
             self._restore = None
+
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class RaggedPrefill:
+    """Host-only request coordinates; packed offsets are never absolute starts."""
+
+    lengths: tuple
+    starts: tuple
+    slots: tuple
+    rows: tuple
+    spans: tuple
+    offsets: tuple
+    family: int
+    total: int
+
+    @classmethod
+    def build(cls, lengths, starts, slots, rows, *, max_context=262144):
+        lengths, starts, slots, rows = map(tuple, (lengths, starts, slots, rows))
+        count = len(lengths)
+        if not 2 <= count <= 32 or any(len(values) != count for values in (starts, slots, rows)):
+            raise ValueError("Ragged prefill needs matching metadata for2..32 requests")
+        if any(type(value) is not int for values in (lengths, starts, slots, rows) for value in values):
+            raise ValueError("Ragged coordinates must be integers")
+        if (len(set(slots)) != count or len(set(rows)) != count or
+                any(not 0 <= slot < 32 for slot in slots) or any(row < 0 for row in rows)):
+            raise ValueError("Expected distinct valid slots and original result rows")
+        if any(length <= 0 or start < 0 or start % 128 or start + length > max_context
+               for length, start in zip(lengths, starts)):
+            raise ValueError("Invalid logical span or page-aligned native start")
+        spans = tuple(padded_span(length) for length in lengths)
+        families = {config_family(length) for length in lengths}
+        total = sum(spans)
+        if len(families) != 1 or max(spans) > 1024 or total > 2048:
+            raise ValueError("Ragged sharing requires one native family and at most2048 own padded rows")
+        offsets = []
+        position = 0
+        for span in spans:
+            offsets.append(position)
+            position += span
+        return cls(lengths, starts, slots, rows, spans, tuple(offsets), families.pop(), total)
+
+    def reduction_buckets(self):
+        """Request-local256 blocks plus optional128 tails, in stable request order."""
+        blocks, tails = [], []
+        for row, (offset, span) in enumerate(zip(self.offsets, self.spans)):
+            for local in range(0, span // 256 * 256, 256):
+                blocks.append((row, local, offset + local, 256))
+            if span % 256:
+                local = span // 256 * 256
+                tails.append((row, local, offset + local, 128))
+        return tuple(blocks), tuple(tails)
+
+
+def plan_ragged_prefill_batches(lengths, maximum, *, long_spans=False, packed_rows=MAX_PACKED_ROWS):
+    # Reuse original validation. The original rectangle function stays unchanged.
+    plan_prefill_batches(lengths, maximum, long_spans=long_spans, packed_rows=packed_rows)
+    pending = sorted(range(len(lengths)), key=lambda row: lengths[row])
+    groups = []
+    while pending:
+        if padded_span(lengths[pending[0]]) > 1024:
+            # Preserve original long-span grouping and chunk policy exactly.
+            tail = plan_prefill_batches([lengths[row] for row in pending], maximum,
+                                       long_spans=long_spans, packed_rows=packed_rows)
+            groups.extend([[pending[index] for index in group] for group in tail])
+            break
+        # Equal-span special families and existing wide uniform groups keep
+        # their original rectangular dispatch, capacity and streaming policy.
+        original = plan_prefill_batches([lengths[row] for row in pending], maximum,
+                                        long_spans=long_spans, packed_rows=packed_rows)[0]
+        original_rows = [pending[index] for index in original]
+        original_spans = [padded_span(lengths[row]) for row in original_rows]
+        if (config_family(lengths[pending[0]]) != 512 or
+                (len(set(original_spans)) == 1 and sum(original_spans) > 2048)):
+            groups.append(original_rows)
+            pending = pending[len(original_rows):]
+            continue
+        group = [pending.pop(0)]
+        total = padded_span(lengths[group[0]])
+        while pending and len(group) < maximum:
+            row = pending[0]
+            span = padded_span(lengths[row])
+            if (span > 1024 or config_family(lengths[row]) != config_family(lengths[group[0]]) or
+                    total + span > min(2048, packed_rows)):
+                break
+            group.append(pending.pop(0))
+            total += span
+        groups.append(group)
+    return groups

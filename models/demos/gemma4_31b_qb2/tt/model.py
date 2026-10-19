@@ -18,6 +18,7 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
+from models.demos.gemma4_31b_qb2.tt.prefill_batch import RaggedPrefill
 
 HF_ID = "google/gemma-4-31B-it"
 HF_REVISION = "842da3794eaa0b77d5f08bae87a17459d91ff475"
@@ -221,6 +222,44 @@ class Gemma4Model:
             last_row = sequence_length - 1 - tile_start
             x = x[:, :, last_row : last_row + 1, :]
         return self.terminal(x)
+
+    def prefill_ragged_device(self, tokens, *, descriptor, page_tables, kv_cache, histories=None, retain_histories=None):
+        if not isinstance(descriptor, RaggedPrefill):
+            raise ValueError("Expected validated host ragged metadata")
+        expected = RaggedPrefill.build(descriptor.lengths, descriptor.starts, descriptor.slots, descriptor.rows,
+                                      max_context=self.layers[0].max_context)
+        count = len(descriptor.lengths)
+        retain = [True] * count if retain_histories is None else list(retain_histories)
+        if (descriptor != expected or len(kv_cache) != len(self.layers) or list(tokens.shape) != [1, descriptor.total] or
+                len(retain) != count or any(type(flag) is not bool for flag in retain) or
+                (histories is not None and (len(histories) != count or any(len(h) != len(self.layers) for h in histories)))):
+            raise ValueError("Invalid ragged model metadata")
+        keep = histories is not None and any(retain)
+        x = self.embed(tokens, sequence_length=descriptor.total)
+        if descriptor.family == 128:
+            x = self.gather_hidden(x)
+        for i, (layer, cache) in enumerate(zip(self.layers, kv_cache)):
+            result = layer.prefill_ragged(
+                x, descriptor=descriptor,
+                page_table=page_tables[i] if i in page_tables else page_tables[layer.kind], kv_cache=cache,
+                histories=[history[i] for history in histories] if histories is not None else None,
+                return_history=keep,
+            )
+            if keep:
+                x, tails = result
+            else:
+                x, tails = result, [None] * count
+            if histories is not None:
+                for row in range(count):
+                    histories[row][i] = tails[row] if retain[row] else None
+            del tails, result
+        last = []
+        for offset, length in zip(descriptor.offsets, descriptor.lengths):
+            index = offset + length - 1
+            tile_start = index // 32 * 32
+            tile = x[:, :, tile_start : tile_start + 32, :]
+            last.append(tile[:, :, index - tile_start : index - tile_start + 1, :])
+        return self.terminal(ttnn.concat(last, dim=2))
 
     def prefill_batched_device(
         self,

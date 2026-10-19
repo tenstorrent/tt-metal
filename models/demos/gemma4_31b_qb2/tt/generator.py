@@ -21,7 +21,9 @@ import ttnn
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
 from models.demos.gemma4_31b_qb2.tt.model import Gemma4Model
-from models.demos.gemma4_31b_qb2.tt.prefill_batch import DeferredPrefillHistory, padded_span, plan_prefill_batches
+from models.demos.gemma4_31b_qb2.tt.prefill_batch import (
+    DeferredPrefillHistory, RaggedPrefill, padded_span, plan_prefill_batches, plan_ragged_prefill_batches,
+)
 
 
 @dataclass
@@ -55,6 +57,8 @@ class Gemma4Generator:
         # The next capture gets a new entry object, so old handles stay invalid.
         self._entry_storage = None
         self.prefill_shapes = set()
+        # Fixed for this generator lifetime; default/rectangle control remains0.
+        self.ragged_prefill_rows = os.environ.get("GEMMA_PREFILL_RAGGED_ROWS", "0") == "1"
         self.counters = {
             k: 0
             for k in (
@@ -494,7 +498,8 @@ class Gemma4Generator:
             del histories
         outputs = [None] * len(jobs)
         maximum = int(os.environ.get("GEMMA_BATCH_PREFILL_MAX_BATCH", "1"))
-        for indices in plan_prefill_batches(
+        planner = plan_ragged_prefill_batches if self.ragged_prefill_rows else plan_prefill_batches
+        for indices in planner(
             [job["span"] for job in jobs],
             maximum,
             long_spans=os.environ.get("GEMMA_BATCH_PREFILL_LONG", "0") == "1",
@@ -502,7 +507,23 @@ class Gemma4Generator:
         ):
             group = [jobs[index] for index in indices]
             padded = max(padded_span(job["span"]) for job in group)
-            if os.environ.get("GEMMA_BATCH_PREFILL_REPORT", "0") == "1":
+            is_ragged_group = self.ragged_prefill_rows and len({padded_span(job["span"]) for job in group}) > 1
+            if is_ragged_group:
+                descriptor = RaggedPrefill.build(
+                    [job["span"] for job in group], [job["start"] for job in group],
+                    [job["slot"] for job in group], [job["row"] for job in group],
+                    max_context=self.model.layers[0].max_context,
+                )
+            if is_ragged_group and os.environ.get("GEMMA_BATCH_PREFILL_REPORT", "0") == "1":
+                logger.info(
+                    "PREFILL_RAGGED_REQUEST_BATCH " + json.dumps({
+                        "layout": "ragged", "requests": len(group), "slots": [job["slot"] for job in group],
+                        "spans": list(descriptor.lengths), "own_padded_spans": list(descriptor.spans),
+                        "offsets": list(descriptor.offsets), "packed_rows": descriptor.total,
+                        "starts": list(descriptor.starts), "time": time.time(),
+                    })
+                )
+            elif os.environ.get("GEMMA_BATCH_PREFILL_REPORT", "0") == "1":
                 logger.info(
                     "PREFILL_REQUEST_BATCH "
                     + json.dumps(
@@ -535,6 +556,28 @@ class Gemma4Generator:
                         histories=job["histories"],
                     )
                 ]
+            elif is_ragged_group:
+                packed = torch.zeros(1, descriptor.total, dtype=torch.int32)
+                for offset, job in zip(descriptor.offsets, group):
+                    packed[0, offset : offset + job["span"]] = job["ids"][0, : job["span"]]
+                tt_ids = self._upload(packed, ttnn.uint32)
+                tables, uploaded = {}, {}
+                for kind in group[0]["tables"]:
+                    # These are immutable full absolute table rows. Per-request
+                    # cache fills consume only that request's own rounded span.
+                    table_key = tuple(id(job["tables"][kind]) for job in group)
+                    if table_key not in uploaded:
+                        uploaded[table_key] = self._upload(torch.cat([job["tables"][kind] for job in group], dim=0))
+                        self.counters["prefill_table_uploads"] += 1
+                    tables[kind] = uploaded[table_key]
+                merged = self.model.prefill_ragged_device(
+                    tt_ids, descriptor=descriptor, page_tables=tables, kv_cache=state.kv,
+                    histories=[job["histories"] for job in group] if history_keys is not None else None,
+                    retain_histories=[retain_prefill_history[job["row"]] for job in group]
+                    if retain_prefill_history is not None else None,
+                )
+                device_outputs = [merged[:, :, index : index + 1, :] for index in range(len(group))]
+                del merged, descriptor
             else:
                 packed = torch.zeros(len(group), padded, dtype=torch.int32)
                 for index, job in enumerate(group):

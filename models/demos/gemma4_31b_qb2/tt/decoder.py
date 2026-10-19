@@ -836,6 +836,184 @@ class Decoder:
             v = self._norm(v)
         return (q, k, v)
 
+    def _ragged_rotate(self, tensor, position, sequence):
+        # Identical original per-span table selection and native RoPE arithmetic.
+        rope_shape = ttnn.Shape([1, 1, sequence, self.head_dim])
+        if position == 0:
+            cos = ttnn.reshape(self.cos, rope_shape, rope_shape)
+            sin = ttnn.reshape(self.sin, rope_shape, rope_shape)
+        else:
+            available = min(sequence, self.max_context - position)
+            cos_rows = self.cos[position : position + available, :]
+            sin_rows = self.sin[position : position + available, :]
+            if available < sequence:
+                cos_rows = ttnn.concat([cos_rows, self.cos[: sequence - available, :]], dim=0)
+                sin_rows = ttnn.concat([sin_rows, self.sin[: sequence - available, :]], dim=0)
+            cos = ttnn.reshape(cos_rows, rope_shape)
+            sin = ttnn.reshape(sin_rows, rope_shape)
+        return ttnn.experimental.rotary_embedding(tensor, cos, sin)
+
+    def _prefill_ragged_qkv(self, x, descriptor):
+        tied = not self.sliding
+        fused = self._pref_linear(
+            self._input_norm(x, "input_layernorm", False),
+            "qk" if tied else "qkv",
+            sequence_hint=descriptor.family,
+        )
+        raw_q, raw_k, raw_v = ttnn.experimental.nlp_create_qkv_heads(
+            fused, num_heads=8, num_kv_heads=self.kv_heads, transpose_k_heads=False,
+            kv_tied=tied, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        del fused
+        if tied:
+            del raw_k
+        queries, keys, values = [], [], []
+        for offset, span, start in zip(descriptor.offsets, descriptor.spans, descriptor.starts):
+            q = raw_q[:, :, offset : offset + span, :]
+            v = raw_v[:, :, offset : offset + span, :]
+            q = self._ragged_rotate(self._norm(q, "self_attn.q_norm"), start, span)
+            if tied:
+                v = self._norm(v)
+                k = self._ragged_rotate(ttnn.multiply(v, self.norms["self_attn.k_norm"]), start, span)
+            else:
+                k = raw_k[:, :, offset : offset + span, :]
+                k = self._ragged_rotate(self._norm(k, "self_attn.k_norm"), start, span)
+                v = self._norm(v)
+            queries.append(q)
+            keys.append(k)
+            values.append(v)
+        # Every consumer has been enqueued on CQ0. No combined projection/head
+        # owner is retained by the descriptor or outside this invocation.
+        return queries, keys, values
+
+    def _reduce_ragged(self, x, descriptor, residual_width):
+        """Preserve request-local BF16 ring phase with256 blocks and128 tails."""
+        if x.shape[2] != descriptor.total or x.shape[-1] != self.hidden_size:
+            raise ValueError("Ragged CCL must consume the combined projection rows")
+        if residual_width == self.hidden_size:
+            return self._reduce(x, residual_width)
+        if x.dtype != ttnn.bfloat16 or x.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+            raise ValueError("Preserve original BF16 DRAM O/down CCL inputs")
+        pieces = {}
+        for bucket in descriptor.reduction_buckets():
+            if not bucket:
+                continue
+            size = bucket[0][3]
+            inputs = [x[:, :, packed : packed + size, :] for _, _, packed, _ in bucket]
+            packed = inputs[0] if len(inputs) == 1 else ttnn.concat(inputs, dim=2)
+            del inputs
+            reduced = self._reduce(packed, residual_width, batch=len(bucket))
+            del packed
+            for index, (row, local, _, _) in enumerate(bucket):
+                pieces[row, local] = reduced[:, :, index * size : (index + 1) * size, :]
+            del reduced
+        ordered = [pieces[row, local] for row, span in enumerate(descriptor.spans)
+                   for local in range(0, span, 256)]
+        return ordered[0] if len(ordered) == 1 else ttnn.concat(ordered, dim=2)
+
+    def _prefill_ragged_mlp(self, x, descriptor):
+        n = self._input_norm(x, "pre_feedforward_layernorm", False)
+        gate = self._pref_linear(n, "gate", "gelu_tanh", sequence_hint=descriptor.family)
+        up = self._pref_linear(n, "up", sequence_hint=descriptor.family)
+        del n
+        product = ttnn.multiply(gate, up)
+        del gate, up
+        local = self._pref_linear(product, "down", sequence_hint=descriptor.family)
+        del product
+        reduced = self._reduce_ragged(local, descriptor, x.shape[-1])
+        del local
+        post = self._resnorm(reduced, "post_feedforward_layernorm", False)
+        del reduced
+        return ttnn.add(
+            x, post, dtype=self.residual_dtype,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)],
+        )
+
+    def prefill_ragged(self, x, *, descriptor, page_table, kv_cache, histories=None, return_history=False):
+        """One shared same-family matrix row sum, with native attention islands."""
+        count = len(descriptor.lengths)
+        if (tuple(x.shape)[:3] != (1, 1, descriptor.total) or
+                x.shape[-1] != self.prefill_input_width(descriptor.spans[0]) or
+                descriptor.total > 2048 or max(descriptor.spans) > 1024):
+            raise ValueError("Invalid ragged residual representation")
+        histories = [None] * count if histories is None else list(histories)
+        if len(histories) != count or page_table.shape[0] != count:
+            raise ValueError("Expected one native history/table row per request")
+        if self.sliding and any(start and history is None for start, history in zip(descriptor.starts, histories)):
+            raise ValueError("Sliding continuation requires original preceding history")
+        q, k, v = self._prefill_ragged_qkv(x, descriptor)
+        if not self.sliding:
+            q = [ttnn.typecast(value, ttnn.bfloat8_b) for value in q]
+        for row, (start, span) in enumerate(zip(descriptor.starts, descriptor.spans)):
+            pt = page_table[row : row + 1, start // 128 : (start + span) // 128]
+            for cache, value in zip(kv_cache, (k[row], v[row])):
+                ttnn.experimental.paged_fill_cache(cache, ttnn.typecast(value, cache.dtype), pt, batch_idx=0)
+        del pt, cache, value
+        groups = {}
+        for row, span in enumerate(descriptor.spans):
+            coordinate = (0 if histories[row] is None else histories[row][0].shape[2]) if self.sliding else descriptor.starts[row]
+            groups.setdefault((coordinate, span), []).append(row)
+        outputs = [None] * count
+        for (coordinate, span), rows in groups.items():
+            def selected(values):
+                return values[rows[0]] if len(rows) == 1 else ttnn.concat([values[row] for row in rows], dim=0)
+
+            qq = selected(q)
+            pt = (page_table[rows[0] : rows[0] + 1] if len(rows) == 1 else
+                  ttnn.concat([page_table[row : row + 1] for row in rows], dim=0))
+            cfg = self._prefill_sdpa_config(qq, kv_cache[0], pt,
+                                           start=0 if self.sliding else coordinate, logical_sequence=span)
+            if self.sliding:
+                kk, vv = selected(k), selected(v)
+                if coordinate:
+                    previous = [histories[rows[0]][j] if len(rows) == 1 else
+                                ttnn.concat([histories[row][j] for row in rows], dim=0) for j in range(2)]
+                    attn = ttnn.transformer.scaled_dot_product_attention(
+                        qq, ttnn.concat([previous[0], kk], dim=2), ttnn.concat([previous[1], vv], dim=2),
+                        attn_mask=self.history_mask[:, :, :span, 1024 - coordinate : 1024 + span],
+                        is_causal=False, scale=1.0, program_config=cfg, compute_kernel_config=self.pref_compute,
+                    )
+                    del previous
+                else:
+                    attn = ttnn.transformer.scaled_dot_product_attention(
+                        qq, kk, vv, is_causal=True, scale=1.0, sliding_window_size=self.window,
+                        program_config=cfg, compute_kernel_config=self.pref_compute,
+                    )
+                del kk, vv
+            else:
+                attn = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    qq, kv_cache[0], kv_cache[1], pt, chunk_start_idx=coordinate,
+                    scale=1.0, program_config=cfg, compute_kernel_config=self.pref_compute,
+                )
+            del qq, pt
+            for index, row in enumerate(rows):
+                outputs[row] = attn if len(rows) == 1 else attn[index : index + 1]
+        next_histories = [None] * count
+        if self.sliding and return_history:
+            for row, length in enumerate(descriptor.lengths):
+                tails = []
+                for j, value in enumerate((k[row], v[row])):
+                    live = value[:, :, :length, :]
+                    joined = ttnn.concat([histories[row][j], live], dim=2) if histories[row] is not None else live
+                    tails.append(joined[:, :, max(0, joined.shape[2] - self.window - self.PAGE_SIZE) :, :])
+                next_histories[row] = tuple(tails)
+            del live, joined, value, tails
+        del q, k, v, histories, attn
+        attention = ttnn.concat(outputs, dim=2)
+        del outputs
+        joined = self._concat_heads(attention)
+        del attention
+        local = self._pref_linear(joined, "o", sequence_hint=descriptor.family)
+        del joined
+        reduced = self._reduce_ragged(local, descriptor, x.shape[-1])
+        del local
+        post = self._resnorm(reduced, "post_attention_layernorm", False)
+        del reduced
+        residual = ttnn.add(x, post, dtype=self.residual_dtype)
+        del post
+        result = self._prefill_ragged_mlp(residual, descriptor)
+        return (result, next_histories) if return_history else result
+
     def prefill_batched(
         self,
         x,
