@@ -7,8 +7,10 @@
 // a|b: a[h] is column h and b[h] column Nv + h past tile ab_page. With 2*Nv <= 32 both sit in tile ab_page (one read,
 // ab_in[0]); with Nv = 24 (TP = 2) the a|b block spans two tiles and b's tile is read into ab_in[1] when it differs
 // from a's (b_idx = 1, decided by the host per core), so the compute gathers b's row from ab_in[b_idx].
-// GDN_FAST (fast_mode): the a|b tile(s) are staging only. The reader extracts a[u*T+t, h] / b[u*T+t, h] for the T
-// tokens, computes beta = sigmoid(b) and decay = exp(-exp(A) * softplus(a + dt_bias)) in software fp32 (the very
+// GDN_FAST order: ctrl, constants, z + a|b, bulk reads + selectors (pushed), then dt_bias / nea, the state read
+// (issued), the software gate math and beta_t / dec fills, state push (compute needs dec / beta_t only inside the token
+// loop). GDN_FAST (fast_mode): the a|b tile(s) are staging only. The reader extracts a[u*T+t, h] / b[u*T+t, h] for the
+// T tokens, computes beta = sigmoid(b) and decay = exp(-exp(A) * softplus(a + dt_bias)) in software fp32 (the very
 // functions of reader_gdn_decode_step_conv_fast.cpp, gdn_step_gate_math.hpp) and pushes them as T all-equal fp32
 // scalar tiles beta_t[t] / dec[t]; the gate selector tiles (csel, rsel) and the SFPU gate path do not exist.
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
