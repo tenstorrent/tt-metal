@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
-#define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true
 #define CKL_ELTWISE_CHAIN_PACK_BLOCK
 
 #include <cstdint>
