@@ -34,11 +34,11 @@ elsewhere in this directory.
 
 Examples
 --------
-    ./make_pj_per_flop_by_engine.py . --label "Wormhole n300" \\
+    ./make_pj_per_flop_by_engine.py out_fig1/matmul --label "Wormhole n300" \\
         --seq 1024 --hidden 2048 --k 2048 --iters 160
 
-    ./make_pj_per_flop_by_engine.py . --label "Wormhole n300" \\
-        --compare ../p100a_power_cases/data --compare-label "Blackhole p100a" \\
+    ./make_pj_per_flop_by_engine.py out_fig1/matmul --label "Wormhole n300" \\
+        --compare /path/to/blackhole_run/matmul --compare-label "Blackhole p100a" \\
         --seq 1024 --hidden 2048 --k 2048 --iters 160
 """
 import argparse

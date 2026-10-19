@@ -15,14 +15,14 @@ without touching the hardware.
 
 Examples
 --------
-Wormhole, from the run committed in turkmanovic/tt-energyprofiler@master:
+One run, e.g. the matmul cases of a run_sweep.py output root:
 
-    ./make_pj_per_flop.py out_new2 --label "Wormhole n150" \\
+    ./make_pj_per_flop.py out_fig1/matmul --label "Wormhole n150" \\
         --seq 1024 --hidden 2048 --k 2048 --iters 160
 
 Two boards on one shared y-axis, for comparison:
 
-    ./make_pj_per_flop.py out_new2 --label "Wormhole n150" \\
+    ./make_pj_per_flop.py out_fig1/matmul --label "Wormhole n150" \\
         --compare /path/to/blackhole_run --compare-label "Blackhole p100a" \\
         --seq 1024 --hidden 2048 --k 2048 --iters 160
 """
