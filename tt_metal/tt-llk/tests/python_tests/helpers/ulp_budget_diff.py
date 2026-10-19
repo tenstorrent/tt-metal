@@ -23,11 +23,10 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from xml.etree import ElementTree
 
 import yaml
@@ -35,20 +34,20 @@ import yaml
 if __package__:
     from .ulp_provenance import (
         KEY_FIELDS,
+        PROVENANCE_FIELDS,
         BudgetTable,
-        KeyLine,
-        Kind,
         Provenance,
         key_value,
+        load_yaml,
     )
 else:  # run by path on the slim runner, where `helpers/__init__.py` cannot import
     from ulp_provenance import (
         KEY_FIELDS,
+        PROVENANCE_FIELDS,
         BudgetTable,
-        KeyLine,
-        Kind,
         Provenance,
         key_value,
+        load_yaml,
     )
 
 #: ``sfpu_accuracy_budget.MEASURED_ARCH``, by enum name. A ULP row that does not name an
@@ -101,9 +100,9 @@ class Row:
     op: str
     key: Tuple[Tuple[str, str], ...]
     max_ulp: Optional[int]
-    #: The row's own provenance, or its op's key line when it has no comment: the table
-    #: states the run once there, and updating either registers as a re-measurement.
-    provenance: Union[Provenance, KeyLine]
+    #: The measurement the row records, from its own fields. A raise that comes with a
+    #: new one is a re-measurement; one that leaves it as it was is a number edited.
+    provenance: Provenance
     #: The near-zero floor is part of the gate: `ulp_elementwise_valid` accepts a lane
     #: inside it however many steps out it is, so widening it loosens the gate.
     near_zero_atol: Optional[float] = None
@@ -141,7 +140,7 @@ class Change:
     differently than the base did, since a collapsed row governs several. *held_before*
     and *held_after* say what the cell was held to on each side, as the report shows it.
 
-    *remeasured* is whether the deciding row's provenance comment differs from the same
+    *remeasured* is whether the deciding row's provenance (its measurement fields) differs from the same
     row's in the base table -- the table's rule for raising a budget. Read off that one
     row, not off the two rows the cell resolves to: when a deleted row hands its cells to
     a broader one, those two comments differ although no comment was touched.
@@ -196,28 +195,6 @@ def _number(value) -> Optional[float]:
     return value if isinstance(value, (int, float)) and value is not True else None
 
 
-class _NoDuplicateKeys(yaml.SafeLoader):
-    """``SafeLoader`` refusing a repeated mapping key, which PyYAML lets the last one
-    win and the registry's ``_read_yaml`` refuses."""
-
-    def construct_mapping(self, node, deep=False):
-        # On the node's own keys, before a `<<` merge folds in the anchor's: an explicit
-        # key overriding a merged one is YAML, a key written twice is not.
-        seen = set()
-        for key_node, _ in node.value:
-            if (
-                isinstance(key_node, yaml.ScalarNode)
-                and key_node.tag != "tag:yaml.org,2002:merge"
-            ):
-                if key_node.value in seen:
-                    raise ValueError(
-                        f"line {key_node.start_mark.line + 1}: repeated key "
-                        f"{key_node.value!r}"
-                    )
-                seen.add(key_node.value)
-        return super().construct_mapping(node, deep=deep)
-
-
 def _check_number(where: str, name: str, value, *, integer: bool = False) -> None:
     """The registry's ``_check_number``: a bool, a non-number, a non-finite or a
     negative value is refused there, so the table cannot load."""
@@ -232,11 +209,14 @@ def _check_number(where: str, name: str, value, *, integer: bool = False) -> Non
 
 def _check_row(where: str, fields: dict) -> None:
     """What the registry refuses in one row, so a table it cannot load gets no verdict:
-    an unknown field, a metric that is neither, a bad number, or the two metrics' fields
-    mixed in one row."""
-    unknown = set(fields) - set(KEY_FIELDS) - CONTRACT_FIELDS
+    an unknown field, a malformed provenance field, a metric that is neither, a bad
+    number, or the two metrics' fields mixed in one row."""
+    unknown = set(fields) - set(KEY_FIELDS) - CONTRACT_FIELDS - set(PROVENANCE_FIELDS)
     if unknown:
         raise ValueError(f"{where}: unknown field(s) {sorted(unknown)}")
+    problems = Provenance.of(fields).problems()
+    if problems:
+        raise ValueError(f"{where}: {problems[0]}")
     metric = fields.get("metric", "ulp")
     if metric not in ("ulp", "tolerance"):
         raise ValueError(f"{where}: metric must be ulp or tolerance, got {metric!r}")
@@ -264,7 +244,7 @@ def parse_table(text: str) -> Dict[Cell, Row]:
     :class:`BudgetTable`: values as PyYAML loads them, so anchors and ``<<`` merge keys
     mean what they mean, and a YAML boolean names the cell the registry would. Refuses,
     as the registry does, a table it could not load."""
-    loaded = yaml.load(text, Loader=_NoDuplicateKeys) or {}
+    loaded = load_yaml(text, "budget table") or {}
     if not isinstance(loaded, dict):
         raise ValueError("expected a mapping of op names at the top level")
     for op, entries in loaded.items():
@@ -285,7 +265,7 @@ def parse_table(text: str) -> Dict[Cell, Row]:
             op=row.op,
             key=cell[1],
             max_ulp=row.max_ulp,
-            provenance=row.provenance or table.blocks[row.op].key_line,
+            provenance=row.provenance,
             near_zero_atol=row.near_zero_atol,
             atol=_number(values.get("atol")),
             rtol=_number(values.get("rtol")),
@@ -572,14 +552,13 @@ def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
 
 
 def _remeasured(base: Dict[Cell, Row], row: Optional[Row]) -> bool:
-    """Whether *row*, the head row deciding a cell, carries a provenance comment the base
-    table's same row did not. A new row counts only with a comment of its own: one that
-    leans on the op header carries no measurement of its own."""
+    """Whether *row*, the head row deciding a cell, carries provenance the base table's
+    same row did not. A new row counts only with provenance fields of its own."""
     if row is None:
         return False
     was = base.get((row.op, row.key))
     if was is None:
-        return isinstance(row.provenance, Provenance)
+        return row.provenance != Provenance()
     return was.provenance != row.provenance
 
 
@@ -638,9 +617,9 @@ def render_budget_diff(changes: List[Change]) -> str:
     if regressions:
         out += [
             f"**{len(regressions)} cell(s) loosen a gate.** A budget may only be raised "
-            "by re-measuring and updating that row's provenance comment in the same "
-            "change — that is the table's own rule, and it is what makes every number "
-            "in it traceable.",
+            "by re-measuring and updating that row's `measured` figure and its date in "
+            "the same change — that is the table's own rule, and it is what makes "
+            "every number in it traceable.",
             "",
             *_md_table(
                 ("cell", "change", "before", "after", "re-measured"),
@@ -679,7 +658,7 @@ def _allowed_note(regressions: List[Change]) -> str:
     if unmeasured:
         note += (
             f"\n**{len(unmeasured)} of them carry no fresh measurement** -- the row's "
-            "provenance comment is unchanged, so the budget was edited rather than "
+            "measurement is unchanged, so the budget was edited rather than "
             "re-measured:\n\n"
         )
         note += "".join(f"- `{(c.after or c.before).describe()}`\n" for c in unmeasured)
@@ -736,10 +715,7 @@ def _nonfinite_cells(rows: Iterable[dict]) -> Dict[Cell, int]:
 def recorded_nonfinite(row: Row) -> int:
     """How many non-finite lanes the row already accounts for: the count on a "not
     measurable" row, 0 on any other."""
-    p = row.provenance
-    if isinstance(p, Provenance) and p.kind is Kind.UNMEASURABLE:
-        return p.nonfinite_lanes or 0
-    return 0
+    return row.provenance.nonfinite or 0
 
 
 def recorded_max(row: Row) -> Optional[int]:
@@ -753,20 +729,30 @@ def recorded_max(row: Row) -> Optional[int]:
     pinned = dict(row.key)
     if "in" not in pinned or "out" not in pinned:
         return None
-    p = row.provenance
-    if isinstance(p, KeyLine):
-        p = p.header_provenance
-    return None if p is None else p.recorded_max
+    return row.provenance.measured
 
 
 def _headroom_line(cell: Cell, worst: int, reference: int, verdict: str) -> str:
     return f"| `{_cell_name(*cell)}` | {worst} | {reference} | {verdict} |"
 
 
-#: The sweep's test id (test_unary_sfpu_ulp.py's parametrize ids), read back into the
-#: cell it ran: ``test_unary_sfpu_ulp_sweep[Abs-in:Float16_b-out:Float16_b-approx:No-
+#: The labels of the sweep's test id after the op (test_unary_sfpu_ulp.py's parametrize
+#: ids): ``test_unary_sfpu_ulp_sweep[Abs-in:Float16_b-out:Float16_b-approx:No-
 #: dest_acc:Yes]``.
-_SWEEP_ID = re.compile(r"\[(\w+)-in:(\w+)-out:(\w+)-approx:(\w+)-dest_acc:(\w+)\]$")
+_SWEEP_ID_LABELS = ("in", "out", "approx", "dest_acc")
+
+
+def _sweep_cell(name: str) -> Optional[Tuple[str, str, str, str, str]]:
+    """The cell a sweep test id ran, as ``(op, in, out, approx, dest)``, or ``None`` for
+    any other test. Neither an op nor a format name holds a ``-``."""
+    if not name.endswith("]") or "[" not in name:
+        return None
+    op, *parts = name[name.index("[") + 1 : -1].split("-")
+    pairs = [part.partition(":") for part in parts]
+    if [label for label, _, _ in pairs] != list(_SWEEP_ID_LABELS):
+        return None
+    return (op, *(value for _, _, value in pairs))
+
 
 #: A failure message longer than this is cut: the first line of an assertion already
 #: names the cell and the figure, and the rest of a long message buries the next one.
@@ -809,12 +795,11 @@ def junit_failures(text: str) -> List[Failure]:
             continue
         name = case.get("name", "")
         lines = (bad.get("message") or bad.text or "").strip().splitlines()
-        found = _SWEEP_ID.search(name)
         failures.append(
             Failure(
                 test=name[name.find("[") :] if "[" in name else name,
                 message=(lines[0] if lines else "")[:_MESSAGE_CHARS],
-                cell=found.groups() if found else None,
+                cell=_sweep_cell(name),
             )
         )
     return failures
@@ -835,9 +820,9 @@ def junit_completed(text: str) -> List[Tuple[str, str, str, str, str]]:
             (skipped.get("message") or "") + (skipped.text or "")
         ):
             continue
-        found = _SWEEP_ID.search(case.get("name", ""))
-        if found:
-            cells.append(found.groups())
+        cell = _sweep_cell(case.get("name", ""))
+        if cell is not None:
+            cells.append(cell)
     return cells
 
 

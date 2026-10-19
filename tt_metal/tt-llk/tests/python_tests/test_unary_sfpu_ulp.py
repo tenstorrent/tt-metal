@@ -282,14 +282,15 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     # overflow first: an all-non-finite cell also has `lanes == 0`, and only this
     # reason carries the lane count the headroom report reads back.
     if overflowed.any():
+        verdict = ulp_sweep.nonfinite_verdict(overflowed, src, golden, result, stats)
         reason = nonfinite_reason(overflowed, src, golden, result, stats, lanes)
         unmeasurable = (
             f"{reason}. No budget buys an overflow, and a step count cannot describe "
             "one."
         )
     elif lanes == 0:
-        reason = "no lane a step count can describe"
-        unmeasurable = reason
+        verdict = ulp_sweep.Unmeasurable(why="no lane a step count can describe")
+        unmeasurable = verdict.why
     else:
         unmeasurable = None
     if unmeasurable:
@@ -302,7 +303,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
                 nonfinite=int(overflowed.sum()),
             )
         if ulp_sweep.EMIT:
-            ulp_sweep.record_unmeasurable(mathop.name, key, reason)
+            ulp_sweep.record_unmeasurable(mathop.name, key, verdict)
             return
         if not gated:
             pytest.skip(f"{cell}: {RECORDED_SKIP} -- not measurable: {unmeasurable}")
