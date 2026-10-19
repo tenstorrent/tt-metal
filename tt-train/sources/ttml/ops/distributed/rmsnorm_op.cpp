@@ -8,41 +8,48 @@
 
 #include <stdexcept>
 #include <tt-metalium/constants.hpp>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 #include "ops/rmsnorm_op.hpp"
 #include "ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.hpp"
-#include "ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather_bw.hpp"
 #include "ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.hpp"
-#include "ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather_bw.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::ops::distributed {
 
 namespace {
 
-// Number of devices the hidden dim is sharded over. Without an axis, all_gather walks every device
-// as one line, which is only a real fabric line on a 1-D mesh.
-uint32_t get_num_shards(const std::optional<uint32_t> cluster_axis) {
-    auto* device = &autograd::ctx().get_device();
-    const auto& mesh_shape = device->shape();
-    if (cluster_axis.has_value()) {
-        if (cluster_axis.value() >= mesh_shape.dims()) {
-            throw std::invalid_argument(fmt::format(
-                "distributed rmsnorm: cluster_axis {} is out of range for mesh shape {}",
-                cluster_axis.value(),
-                mesh_shape));
-        }
-        return mesh_shape[cluster_axis.value()];
+// rms of the full row from the gathered rms_norm_pre_all_gather stats [B,1,S,32*num_shards]. Each shard's tile
+// holds its sum(x^2) in column 0 and undefined values elsewhere, so a matmul with a selector that is 1/C at row
+// 32*k of column 0 picks out exactly those columns and averages them: [B,1,S,32] with the mean square in column 0.
+ttnn::Tensor rms_from_gathered_stats(
+    const ttnn::Tensor& stats, uint32_t num_shards, uint32_t full_width, float epsilon) {
+    constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
+    std::vector<float> selector(num_shards * tile_width * tile_width, 0.F);
+    for (uint32_t shard = 0; shard < num_shards; ++shard) {
+        selector[shard * tile_width * tile_width] = 1.F / static_cast<float>(full_width);
     }
-    if (!mesh_shape.is_line_topology()) {
-        throw std::invalid_argument(fmt::format(
-            "distributed rmsnorm: cluster_axis must be specified on a multi-dimensional mesh {}", mesh_shape));
-    }
-    return static_cast<uint32_t>(device->num_devices());
+    auto selector_tensor = core::from_vector<float, ttnn::DataType::FLOAT32>(
+        selector, ttnn::Shape({1U, 1U, num_shards * tile_width, tile_width}), &autograd::ctx().get_device());
+
+    auto mean_square = ttnn::matmul(
+        stats,
+        selector_tensor,
+        /* transpose_a */ false,
+        /* transpose_b */ false,
+        /* memory_config */ std::nullopt,
+        /* dtype */ ttnn::DataType::FLOAT32,
+        /* program_config */ std::nullopt,
+        /* activation */ std::nullopt,
+        /* compute_kernel_config */ core::ComputeKernelConfig::precise());
+    auto rms = ttnn::sqrt(ttnn::add(mean_square, epsilon));
+    return ttnn::typecast(rms, ttnn::DataType::BFLOAT16);
 }
 
 }  // namespace
@@ -63,7 +70,8 @@ autograd::TensorPtr rmsnorm(
             "distributed rmsnorm: gamma must be [1, 1, 1, {}] (sharded like the input), got {}", local_width, g_shape));
     }
 
-    const uint32_t num_shards = get_num_shards(cluster_axis);
+    // Number of devices the hidden dim is sharded over.
+    const uint32_t num_shards = ttnn_fixed::distributed::get_axis_size(cluster_axis);
     if (num_shards == 1U) {
         // The local row is the full row: the fused single-device kernel needs no stats exchange.
         return ops::rmsnorm(tensor, gamma, epsilon);
@@ -75,12 +83,12 @@ autograd::TensorPtr rmsnorm(
             local_width,
             tt::constants::TILE_WIDTH));
     }
+    const uint32_t full_width = local_width * num_shards;
 
     const auto compute_kernel_config = core::ComputeKernelConfig::precise();
     const auto& x = tensor->get_value();
 
-    // Stats stay fp32 end to end: a bf16 sum of x^2 over a long row keeps only ~3 significant digits,
-    // and the backward reuses it.
+    // Stats stay fp32 end to end: a bf16 sum of x^2 over a long row keeps only ~3 significant digits.
     auto local_stats = ttnn::rms_norm_pre_all_gather(
         x, ttnn::DataType::FLOAT32, /* residual_input_tensor */ std::nullopt, compute_kernel_config);
     auto stats = ttnn_fixed::distributed::all_gather(local_stats, /* dim */ 3, cluster_axis);
@@ -96,20 +104,21 @@ autograd::TensorPtr rmsnorm(
         /* program_config */ std::nullopt,
         /* dtype */ x.dtype()));
 
-    autograd::GradFunction grad = [tensor, gamma, out, stats, epsilon, cluster_axis, compute_kernel_config]() {
+    // Backward needs only rms, one value per row, so the gathered stats are released here.
+    auto rms = rms_from_gathered_stats(stats, num_shards, full_width, epsilon);
+
+    autograd::GradFunction grad = [tensor, gamma, out, rms, full_width, cluster_axis]() {
         const auto& x = tensor->get_value();
         const auto& g = gamma->get_value();
         const auto& dL_dout = out->get_grad();
 
-        auto local_bw_stats = ttnn::rms_norm_pre_all_gather_bw(
-            x, dL_dout, stats, epsilon, g, /* memory_config */ std::nullopt, compute_kernel_config);
-        auto bw_stats = ttnn_fixed::distributed::all_gather(local_bw_stats, /* dim */ 3, cluster_axis);
+        auto local_sums = metal::rmsnorm_bw_local_sum(x, g, dL_dout);
+        auto gathered_sums = ttnn_fixed::distributed::all_gather(local_sums, /* dim */ 3, cluster_axis);
 
-        auto grads = ttnn::rms_norm_post_all_gather_bw(
-            x, dL_dout, stats, bw_stats, epsilon, g, /* memory_config */ std::nullopt, compute_kernel_config);
+        auto grads = metal::rmsnorm_bw_external_scale(x, g, rms, dL_dout, gathered_sums, full_width);
         if (grads.size() != 2U) {
             throw std::runtime_error(fmt::format(
-                "rms_norm_post_all_gather_bw returned an unexpected number of gradients. Expected 2, got {}",
+                "rmsnorm_bw_external_scale returned an unexpected number of gradients. Expected 2, got {}",
                 grads.size()));
         }
         if (grads[0].has_value()) {

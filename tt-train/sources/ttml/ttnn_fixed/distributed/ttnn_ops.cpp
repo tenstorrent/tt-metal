@@ -4,6 +4,9 @@
 
 #include "ttnn_ops.hpp"
 
+#include <fmt/format.h>
+
+#include <stdexcept>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <umd/device/cluster.hpp>
@@ -58,14 +61,9 @@ bool is_cluster_axis_ring(uint32_t cluster_axis) {
 // wrap around connections along the axis.
 ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
     if (!cluster_axis.has_value()) {
-        auto* mesh_device = &ttml::autograd::ctx().get_device();
-        const auto& mesh_shape = mesh_device->shape();
-
-        TT_FATAL(
-            mesh_shape.is_line_topology(),
-            "cluster_axis must be specified for non-line mesh topologies. "
-            "Mesh shape {} has multiple non-trivial dimensions.",
-            mesh_shape);
+        // Rejects a missing axis on a multi-dimensional mesh.
+        get_axis_size(cluster_axis);
+        const auto& mesh_shape = ttml::autograd::ctx().get_device().shape();
 
         // Find the only non-trivial axis (dimension > 1)
         for (size_t i = 0; i < mesh_shape.dims(); ++i) {
@@ -82,6 +80,25 @@ ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
 }
 
 }  // namespace
+
+uint32_t get_axis_size(const std::optional<uint32_t>& cluster_axis) {
+    auto* mesh_device = &ttml::autograd::ctx().get_device();
+    const auto& mesh_shape = mesh_device->shape();
+    if (cluster_axis.has_value()) {
+        if (cluster_axis.value() >= mesh_shape.dims()) {
+            throw std::invalid_argument(
+                fmt::format("cluster_axis {} is out of range for mesh shape {}", cluster_axis.value(), mesh_shape));
+        }
+        return mesh_shape[cluster_axis.value()];
+    }
+    if (!mesh_shape.is_line_topology()) {
+        throw std::invalid_argument(fmt::format(
+            "cluster_axis must be specified for non-line mesh topologies. Mesh shape {} has multiple non-trivial "
+            "dimensions.",
+            mesh_shape));
+    }
+    return static_cast<uint32_t>(mesh_device->num_devices());
+}
 
 ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
     auto* mesh_device = &ttml::autograd::ctx().get_device();

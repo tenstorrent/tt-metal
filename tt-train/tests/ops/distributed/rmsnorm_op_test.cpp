@@ -7,10 +7,13 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <bit>
+#include <cmath>
 #include <core/xtensor_utils.hpp>
 #include <numeric>
 #include <optional>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -24,8 +27,14 @@ namespace {
 
 constexpr float kEpsilon = 1e-5F;
 
-bool has_two_devices() {
-    return tt::tt_metal::GetNumAvailableDevices() == 2;
+// The system mesh is bounded by the mesh graph descriptor, not by the chip count: on a 4-chip box run
+// under a 1x2 descriptor only 2 devices are usable, and opening a bigger mesh is a hard failure.
+size_t system_mesh_size() {
+    return tt::tt_metal::distributed::SystemMesh::instance().shape().mesh_size();
+}
+
+bool has_at_least_devices(size_t num_devices) {
+    return system_mesh_size() >= num_devices;
 }
 
 struct RMSNormReference {
@@ -34,8 +43,26 @@ struct RMSNormReference {
     xt::xarray<float> dgamma;
 };
 
+// Round-to-nearest-even to bfloat16, which is what the device sees after from_xtensor.
+xt::xarray<float> round_to_bf16(const xt::xarray<float>& values) {
+    xt::xarray<float> rounded = values;
+    for (auto& value : rounded) {
+        uint32_t bits = std::bit_cast<uint32_t>(value);
+        bits += 0x7FFFU + ((bits >> 16U) & 1U);
+        value = std::bit_cast<float>(bits & 0xFFFF0000U);
+    }
+    return rounded;
+}
+
+// fp32 formula on bf16-rounded inputs, so the comparison only measures device arithmetic, not input rounding.
 RMSNormReference rmsnorm_reference(
-    const xt::xarray<float>& x, const xt::xarray<float>& gamma, const xt::xarray<float>& dy, float epsilon) {
+    const xt::xarray<float>& x_f32,
+    const xt::xarray<float>& gamma_f32,
+    const xt::xarray<float>& dy_f32,
+    float epsilon) {
+    const xt::xarray<float> x = round_to_bf16(x_f32);
+    const xt::xarray<float> gamma = round_to_bf16(gamma_f32);
+    const xt::xarray<float> dy = round_to_bf16(dy_f32);
     xt::xarray<float> rms = xt::sqrt(xt::mean(x * x, {3}, xt::keep_dims) + epsilon);
     xt::xarray<float> gained = gamma * dy / rms;
     xt::xarray<float> scale = xt::mean(x * gained, {3}, xt::keep_dims);
@@ -108,7 +135,11 @@ void expect_all_close(
 }
 
 void run_distributed_rmsnorm(
-    uint32_t batch, uint32_t seq_len, uint32_t hidden, std::optional<uint32_t> cluster_axis = std::nullopt) {
+    uint32_t batch,
+    uint32_t seq_len,
+    uint32_t hidden,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    bool zero_first_row = false) {
     using namespace ttml;
 
     auto& rng = autograd::ctx().get_generator();
@@ -118,6 +149,10 @@ void run_distributed_rmsnorm(
         test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1U, 1U, 1U, hidden}, 0.5F, 1.5F, rng());
     xt::xarray<float> dy = test_utils::make_uniform_xarray<float>(
         std::array<std::size_t, 4>{batch, 1U, seq_len, hidden}, -1.0F, 1.0F, rng());
+    if (zero_first_row) {
+        // rms = sqrt(eps) on this row; every gradient must stay finite.
+        xt::view(x, 0, 0, 0, xt::all()) = 0.F;
+    }
 
     auto tensor = autograd::create_tensor(shard_last_dim(x, cluster_axis), /* requires_grad */ true);
     auto tt_gamma = autograd::create_tensor(shard_last_dim(gamma, cluster_axis), /* requires_grad */ true);
@@ -130,11 +165,12 @@ void run_distributed_rmsnorm(
     ASSERT_TRUE(core::is_tensor_initialized(tt_gamma->get_grad()));
 
     const auto expected = rmsnorm_reference(x, gamma, dy, kEpsilon);
-    expect_all_close(out->get_value(), expected.out, cluster_axis, /* rtol */ 3e-2F, /* atol */ 3e-2F);
-    expect_all_close(tensor->get_grad(), expected.dx, cluster_axis, /* rtol */ 5e-2F, /* atol */ 5e-2F);
-    // dL/dgamma sums over B * S rows, so its absolute error grows with the row count.
-    const float dgamma_atol = 5e-2F * static_cast<float>(batch * seq_len) / 32.0F;
-    expect_all_close(tt_gamma->get_grad(), expected.dgamma, cluster_axis, /* rtol */ 5e-2F, dgamma_atol);
+    // Outputs and dx are bf16 (relative step 2^-8 ~ 4e-3); the row reductions behind them go through tf32.
+    expect_all_close(out->get_value(), expected.out, cluster_axis, /* rtol */ 1e-2F, /* atol */ 1e-2F);
+    expect_all_close(tensor->get_grad(), expected.dx, cluster_axis, /* rtol */ 2e-2F, /* atol */ 2e-2F);
+    // dL/dgamma sums B * S independent per-row errors, so its absolute error grows with sqrt(B * S).
+    const float dgamma_atol = 1e-2F * std::sqrt(static_cast<float>(batch * seq_len));
+    expect_all_close(tt_gamma->get_grad(), expected.dgamma, cluster_axis, /* rtol */ 2e-2F, dgamma_atol);
 }
 
 }  // namespace
@@ -142,7 +178,7 @@ void run_distributed_rmsnorm(
 class TwoDeviceDistributedRMSNormTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!has_two_devices()) {
+        if (!has_at_least_devices(2U)) {
             GTEST_SKIP() << "Skipping test that needs 2 devices";
         }
         ttml::ttnn_fixed::distributed::enable_fabric(2U);
@@ -166,11 +202,22 @@ TEST_F(TwoDeviceDistributedRMSNormTest, Batched) {
 }
 
 // A wider row makes the full-row mean depend on the fp32 stats rather than on rounding of a short sum.
-// 1024 per device stays under the L1 cap of rms_norm_post_all_gather_bw, which keeps the whole local row in L1
-// (1184 on Wormhole, 1248 on Blackhole).
+// The streaming path of rmsnorm_bw (above ~7K per device) is not reachable here: the forward's
+// rms_norm_pre_all_gather keeps the whole local row in L1 and overflows first. RMSNormBwShardedModesTest covers it.
 TEST_F(TwoDeviceDistributedRMSNormTest, WideHidden) {
     SKIP_FOR_WATCHER();
     run_distributed_rmsnorm(1, 64, 2048);
+}
+
+// Wan2.2-14B hidden at a training-length sequence: 256 tile rows per device.
+TEST_F(TwoDeviceDistributedRMSNormTest, LongSequenceWanHidden) {
+    SKIP_FOR_WATCHER();
+    run_distributed_rmsnorm(1, 8192, 5120);
+}
+
+TEST_F(TwoDeviceDistributedRMSNormTest, ZeroRowStaysFinite) {
+    SKIP_FOR_WATCHER();
+    run_distributed_rmsnorm(2, 32, 256, std::nullopt, /* zero_first_row */ true);
 }
 
 TEST_F(TwoDeviceDistributedRMSNormTest, NonTileAlignedSeqLen) {
@@ -213,11 +260,77 @@ TEST_F(TwoDeviceDistributedRMSNormTest, RejectsUnshardedGamma) {
     EXPECT_THROW(ops::distributed::rmsnorm(x, full_gamma, kEpsilon), std::invalid_argument);
 }
 
+// Runs on a Blackhole QuietBox 2 (4 chips): TP=4 over a 1x4 line.
+class FourDeviceDistributedRMSNormTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (!has_at_least_devices(4U)) {
+            GTEST_SKIP() << "Skipping test that needs 4 devices";
+        }
+        ttml::ttnn_fixed::distributed::enable_fabric(4U);
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 4));
+        ttml::autograd::ctx().set_seed(42);
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(FourDeviceDistributedRMSNormTest, Small) {
+    SKIP_FOR_WATCHER();
+    run_distributed_rmsnorm(1, 32, 512);
+}
+
+TEST_F(FourDeviceDistributedRMSNormTest, NonTileAlignedSeqLen) {
+    SKIP_FOR_WATCHER();
+    run_distributed_rmsnorm(2, 33, 512);
+}
+
+// Wan2.2-14B hidden size: 1280 per device.
+TEST_F(FourDeviceDistributedRMSNormTest, WanHidden) {
+    SKIP_FOR_WATCHER();
+    run_distributed_rmsnorm(1, 256, 5120);
+}
+
+// Runs on a Blackhole QuietBox 2 as a 2x2 mesh: hidden is sharded over one axis and replicated over the other.
+class TwoByTwoMeshDistributedRMSNormTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (!has_at_least_devices(4U)) {
+            GTEST_SKIP() << "Skipping test that needs 4 devices";
+        }
+        ttml::ttnn_fixed::distributed::enable_fabric(4U);
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(2, 2));
+        ttml::autograd::ctx().set_seed(42);
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(TwoByTwoMeshDistributedRMSNormTest, ShardedAlongAxis1) {
+    SKIP_FOR_WATCHER();
+    run_distributed_rmsnorm(2, 64, 256, /* cluster_axis */ 1U);
+}
+
+TEST_F(TwoByTwoMeshDistributedRMSNormTest, ShardedAlongAxis0) {
+    SKIP_FOR_WATCHER();
+    run_distributed_rmsnorm(2, 64, 256, /* cluster_axis */ 0U);
+}
+
+TEST_F(TwoByTwoMeshDistributedRMSNormTest, RejectsMissingClusterAxis) {
+    auto x = ttml::autograd::create_tensor(shard_last_dim(xt::ones<float>({1U, 1U, 32U, 256U}), 1U));
+    auto gamma = ttml::autograd::create_tensor(shard_last_dim(xt::ones<float>({1U, 1U, 1U, 256U}), 1U));
+    EXPECT_THROW(ttml::ops::distributed::rmsnorm(x, gamma, kEpsilon), std::invalid_argument);
+}
+
 // Runs on a T3K (2x4) or Galaxy (8x4): hidden is sharded over one mesh axis and replicated over the other.
 class MeshDistributedRMSNormTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        const auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        const auto num_devices = system_mesh_size();
         if (num_devices == 32U) {
             mesh_shape_ = tt::tt_metal::distributed::MeshShape(8, 4);
         } else if (num_devices == 8U) {

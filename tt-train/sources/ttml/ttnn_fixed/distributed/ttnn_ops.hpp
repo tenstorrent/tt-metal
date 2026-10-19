@@ -7,6 +7,11 @@
 
 namespace ttml::ttnn_fixed::distributed {
 
+// Number of devices a collective along `cluster_axis` spans: the mesh extent along that axis, or every device when
+// no axis is given, which is only a real fabric line on a 1-D mesh. Throws std::invalid_argument for an axis out of
+// range or for a missing axis on a multi-dimensional mesh.
+uint32_t get_axis_size(const std::optional<uint32_t>& cluster_axis = std::nullopt);
+
 ttnn::Tensor all_gather(
     const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
 ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis = std::nullopt);

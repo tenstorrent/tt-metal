@@ -27,10 +27,7 @@ autograd::TensorPtr reduce_scatter(
 
 autograd::TensorPtr scatter(
     const autograd::TensorPtr& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
-    auto* device = &autograd::ctx().get_device();
-    auto mesh_shape = device->shape();
-    uint32_t tp_size =
-        cluster_axis.has_value() ? mesh_shape[cluster_axis.value()] : static_cast<uint32_t>(device->num_devices());
+    const uint32_t tp_size = ttnn_fixed::distributed::get_axis_size(cluster_axis);
 
     auto scattered = ttnn_fixed::distributed::reduce_scatter(tensor->get_value(), dim, cluster_axis);
     /* average across TP as input is assumed to be replicated across TP axis*/
