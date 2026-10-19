@@ -465,7 +465,7 @@ inline void matmul_configure_mop(
     tmp.program();
 }
 
-// Block the row MOP was programmed for (ct_dim << 16 | rt_dim); zero when the last matmul init programmed the tile MOP.
+// Block the row MOP was programmed for (ct_dim << 16 | rt_dim); zero when the row_mop init fell back to the tile MOP.
 inline std::uint32_t matmul_row_mop_dims = 0;
 
 // ttsim pushes a whole MOP expansion into its 512-entry instruction FIFO at once, which a row MOP of 8 HiFi4 tiles
@@ -971,7 +971,6 @@ inline void _llk_math_matmul_init_(
     if constexpr (THROTTLE_LEVEL > 0)
     {
         matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        matmul_row_mop_dims = 0;
         // On a geometry the throttled MOP does not support, fall back to the unthrottled one:
         // throttling is only a throughput cap, and the throttled sequence wedges there.
         //
@@ -1002,12 +1001,10 @@ inline void _llk_math_matmul_init_(
     else if constexpr (tile_mop || !matmul_row_mop_supported)
     {
         matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        matmul_row_mop_dims = 0;
         matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else
     {
-        matmul_row_mop_dims = 0;
         if ((in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM) && (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM))
         {
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true>(transpose);
