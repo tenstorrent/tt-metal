@@ -11,4 +11,5 @@ set(MIMIR_TESTS_SRC
     test_mimir_local_dram.cpp
     test_mimir_tl1.cpp
     test_mimir_remote_dram.cpp
+    test_mimir_prefetcher.cpp
 )
