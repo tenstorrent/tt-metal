@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -1408,7 +1409,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) && !has_operand_activations &&
         !has_post_activations && num_tiles_per_cycle > 1 &&
         (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast ||
-         compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar) &&
+         (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar &&
+          std::getenv("EB_NOSCALAR") == nullptr)) &&  // scratch toggle: the previous rule
         bf16_or_bfp8(a_data_format) &&
         bf16_or_bfp8(b_data_format) && bf16_or_bfp8(c_data_format) &&
         // a bf16 and a bfp8_b operand add or subtract unpack bound (the 8-bit stall), so the whole-tile wait shows below 16 tiles
