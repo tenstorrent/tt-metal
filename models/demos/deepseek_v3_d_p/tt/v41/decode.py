@@ -14,8 +14,10 @@ Layout. The token is replicated on every row of one 32-row tile and on every chi
 splits hidden and heads as in prefill), so every fused V4.1 op runs in whole tiles unchanged and no query split or
 head->sequence all-to-all is needed: ``q`` is all-gathered over TP, every chip attends with all heads, the output is
 partitioned back by group. The caches are already replicated on every chip in natural order (``cache.py``), so one
-token reads the whole context without a collective. The MoE runs on a second ``TtV41Moe`` built for 64 rows per chip (its
-routing setup counts tokens in multiples of 64; the tile is repeated), sharing the expert tensors of the prefill block.
+token reads the whole context without a collective. The MoE runs on a second ``TtV41Moe`` built for ``MOE_ROWS`` rows
+per chip, sharing the expert tensors of the prefill block: 64 rows (the tile repeated) with the prefill routing setup,
+which counts tokens in multiples of 64, or the tile's 32 with the decode routing of ``tt/v41/routing.py``
+(``V41_DECODE_ROUTING=1``: the gate's selection one core per row, the routing setup from one all-gathered index tile).
 
 Fixed shapes. Every step runs the same device graph for its position parity, so it can be traced: the indexer scores
 the whole index-K cache (``-inf`` added to the columns not yet written, a mask row the host uploads per step) and
@@ -38,6 +40,7 @@ to the candidate source's block budget (``CANDIDATE_TOPK_BLOCKS * CANDIDATE_BLOC
 select over the full row, as the reference).
 """
 
+import os
 import time
 from dataclasses import dataclass, field
 from unittest import mock
@@ -56,12 +59,16 @@ from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
 from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
+from models.demos.deepseek_v3_d_p.tt.v41.routing import install_decode_routing
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 ROWS = 32  # the decode tile: the token on every row (every fused V4.1 op works in whole tiles)
-MOE_ROWS = 64  # the MoE's routing setup (masked_bincount) wants a multiple of 64 tokens per chip
+# the decode routing (tt/v41/routing.py) runs the MoE on the tile itself; the prefill routing setup (masked_bincount)
+# wants a multiple of 64 tokens per chip, so the tile is repeated for it
+DECODE_ROUTING = os.environ.get("V41_DECODE_ROUTING", "0") == "1"
+MOE_ROWS = ROWS if DECODE_ROUTING else 64
 
 
 def _round_up(x: int, m: int) -> int:
@@ -166,7 +173,13 @@ class TtV41Decoder:
         # allocated by the prefill MoE for its Linear topology (forced under the overlap); the Ring path would want
         # one of the decode input's shape, so the decode shared expert keeps Linear
         moe.moe.shared_expert.topology = ttnn.Topology.Linear
+        if DECODE_ROUTING:
+            install_decode_routing(moe, self.moe_real_rows())
         return moe
+
+    def moe_real_rows(self) -> int | None:
+        """The real rows of the MoE tile under a padding config: every row here (the token is on every row)."""
+        return None
 
     # --- host inputs -> fixed device buffers -----------------------------------------------------------------
     def _host_inputs(self, token: int, state: V41PrefillState, step: _Step) -> dict:
@@ -407,6 +420,8 @@ class TtV41Decoder:
 
     def _ffn(self, moe: TtV41Moe, h):
         """The decode MoE on the tile repeated to MOE_ROWS rows (identical rows route identically) -> ROWS rows."""
+        if MOE_ROWS == ROWS:
+            return moe(h)
         out = moe(ttnn.concat([h] * (MOE_ROWS // ROWS), dim=2))
         return ttnn.slice(out, [0, 0, 0, 0], [1, 1, ROWS, out.shape[3]])
 

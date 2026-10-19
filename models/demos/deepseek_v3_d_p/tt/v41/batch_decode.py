@@ -153,8 +153,8 @@ class TtV41BatchDecoder(TtV41Decoder):
         ``sample_on_device``: the step ends in ``ttnn.sampling`` over each row's top-128 logits (the four TP chips'
         top-32 each) with per-row top-k, top-p and temperature, and ``decode`` returns token ids instead of logits
         (``sampling`` keyword: ``{slot: (k, p, temperature)}``; a temperature of 0 is argmax: k 1)."""
+        self.users = users_per_rank  # before the decoder builds the MoEs: their decode routing takes the real rows
         super().__init__(model, weight_cache_path, routed_expert_weights_dtype, trace=trace, warmup=warmup)
-        self.users = users_per_rank
         self.pool = V41DecodePool(
             self.mesh_device,
             self.config,
@@ -488,14 +488,18 @@ class TtV41BatchDecoder(TtV41Decoder):
         beyond = ttnn.ge(self.iota[ratio], self.buffers[f"visible{ratio}"])
         return ttnn.typecast(ttnn.where(beyond, NEG_INF, 0.0), ttnn.bfloat16)
 
+    def moe_real_rows(self) -> int:
+        """The slots' rows of the MoE tile: the first ``users_per_rank`` of every chip (``padding_config``)."""
+        return self.users
+
     def _ffn(self, moe: TtV41Moe, h):
         """The decode MoE on the tile repeated to MOE_ROWS rows, the slots' rows real -> ROWS rows."""
-        x = ttnn.concat([h] * (MOE_ROWS // ROWS), dim=2)
+        x = h if MOE_ROWS == ROWS else ttnn.concat([h] * (MOE_ROWS // ROWS), dim=2)
         if self.padding_config is None:
             out = moe(x)
         else:
             out = moe(x, actual_isl=self.users, padding_config=self.padding_config)
-        return ttnn.slice(out, [0, 0, 0, 0], [1, 1, ROWS, out.shape[3]])
+        return out if MOE_ROWS == ROWS else ttnn.slice(out, [0, 0, 0, 0], [1, 1, ROWS, out.shape[3]])
 
     # --- attention ------------------------------------------------------------------------------------------------
     def _attention(self, attn: TtV41Attention, x, masks: dict, selection: dict):
