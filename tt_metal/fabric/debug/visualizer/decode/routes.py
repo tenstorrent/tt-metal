@@ -48,8 +48,8 @@ X_DIRECTIONS = (Direction.EAST, Direction.WEST)
 Y_DIRECTIONS = (Direction.NORTH, Direction.SOUTH)
 LOCAL_DELIVER = "local_deliver"
 
-# The Z port roles the 2D rules know, by their names in a chip's z_port_role. Only an express chord is a Z step within
-# the mesh.
+# The Z port roles the 2D rules know, by their names in the manifest's vocabulary.z_port_roles. Only an express chord
+# is a Z step within the mesh.
 Z_PORT_ROLES = {"none", "intermesh_boundary", "express_chord"}
 
 
@@ -315,7 +315,8 @@ def get_mesh_view(manifest: dict, mesh_key: str) -> MeshView:
     Reads mesh `mesh_key`, such as "M0", from the manifest.
     A chip's Z peer is known when its z_port_role is "express_chord" and all its Z routers' links reach the same chip
     of this mesh. Only local chips have a z_port_role and routers, so a chip on another host has no known Z peer.
-    Raises ManifestError for a local chip whose z_port_role is missing or names a role the rules don't know.
+    Raises ManifestError when the manifest's Z port roles aren't the ones the rules know, or for a local chip whose
+    z_port_role is missing or names a role the rules don't know.
     """
     if not (mesh_key.startswith("M") and mesh_key[1:].isdigit()):
         raise ManifestError(f"mesh key {mesh_key!r} isn't M<mesh id>")
@@ -327,6 +328,9 @@ def get_mesh_view(manifest: dict, mesh_key: str) -> MeshView:
     chips = _lookup(manifest, f"{path}.chips")
     coord_of = {key: tuple(_lookup(manifest, f"{path}.chips.{key}.mesh_coord")) for key in chips}
 
+    roles = _lookup(manifest, "vocabulary.z_port_roles")
+    if set(roles) != Z_PORT_ROLES:
+        raise ManifestError(f"vocabulary.z_port_roles names {sorted(roles)}; the 2D rules know {sorted(Z_PORT_ROLES)}")
     z_peers = {}
     for key in chips:
         chip_path = f"{path}.chips.{key}"
