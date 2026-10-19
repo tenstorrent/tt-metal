@@ -15,7 +15,8 @@ fields:
     arches: [wormhole_b0, blackhole]
     policy: restore
     # _llk_math_hw_configure_ writes is_fp32_dest_acc_en; ops that need 16-bit Dest views
-    # (datacopy, transpose_dest, fast_tilize) clear it and set it back.
+    # (fast_tilize) clear it and set it back. BH DEST_32B_LOW moves swap it for INT8_math_enabled
+    # through _dest_32b_lo_moves_begin_/_end_.
     configured_by: [is_fp32_dest_acc_en]
     # Set the configured value; they are not departures from it.
     configuring_functions: [_llk_math_hw_configure_, _llk_set_fp32_dest_acc_]
@@ -37,4 +38,9 @@ fields:
 # its function and field under either policy, so a tracked write whose invalidate lives in another
 # file goes here too. restored_by must name a function defined in that arch's headers.
 # Keys: path (repo-relative), function, field, restored_by, reason.
-sites: []
+sites:
+  - path: tt_metal/tt-llk/tt_llk_blackhole/common/inc/cmath_common.h
+    function: _dest_32b_lo_moves_begin_
+    field: ALU_ACC_CTRL_Fp32_enabled
+    restored_by: _dest_32b_lo_moves_end_
+    reason: every caller pairs it with _dest_32b_lo_moves_end_, which puts back the value begin read.

@@ -106,6 +106,28 @@ inline LLK_ZEROFLAG_DEFAULT_ATTR void _configure_default_zero_flag_state_()
     _apply_src_zero_flag_(value);
 }
 
+// MOVA2D/MOVB2D with DEST_32B_LOW write the low 16 bits of 32-bit Dest datums. The ISA requires Dest to be in a 32-bit
+// mode for them (DEST_32B_LOW must match Fp32_enabled || INT8_math_enabled; MOVA2D.md, MOVB2D.md), but on Blackhole
+// Fp32_enabled also makes these moves treat SrcA as Tf32, and Tf32 with DEST_32B_LOW corrupts the write (HW erratum
+// TEN-4245). INT8_math_enabled selects the same 32-bit mode without that, so the low-half moves run with it in place
+// of Fp32_enabled. Returns the ALU_ACC_CTRL word for _dest_32b_lo_moves_end_ to restore both bits from. Out of line, as
+// the sync dwarfs a call and some kernels are tight on code space.
+inline __attribute__((noinline)) std::uint32_t _dest_32b_lo_moves_begin_()
+{
+    static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_ACC_CTRL_INT8_math_enabled_ADDR32);
+    tensix_sync(); // the read below must see every earlier config write
+    const std::uint32_t alu_acc_ctrl = load_blocking(&get_cfg_pointer()[ALU_ACC_CTRL_Fp32_enabled_ADDR32]);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(1);
+    return alu_acc_ctrl;
+}
+
+inline __attribute__((noinline)) void _dest_32b_lo_moves_end_(const std::uint32_t alu_acc_ctrl)
+{
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>((alu_acc_ctrl & ALU_ACC_CTRL_Fp32_enabled_MASK) >> ALU_ACC_CTRL_Fp32_enabled_SHAMT);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>((alu_acc_ctrl & ALU_ACC_CTRL_INT8_math_enabled_MASK) >> ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
+}
+
 // Data-movement ops keep the flag set so values pass through faithfully (bf16 -0.0, 16b/32b ints).
 inline void _configure_preserve_zero_flag_state_()
 {

@@ -30,7 +30,8 @@ inline void transpose_dest_configure_mop();
  * transpose_of_faces additionally transposes the face arrangement, not just elements within each face.
  *
  * @tparam transpose_of_faces: Also transpose the arrangement of faces, not just elements within a face.
- * @note Toggles DISABLE_IMPLIED_SRCA_FMT and the SrcA format/FP32/zero-flag config bits, restoring them on exit.
+ * @note Toggles DISABLE_IMPLIED_SRCA_FMT and the SrcA format/FP32/INT8 math/zero-flag config bits, restoring them on
+ *       exit.
  */
 template <bool transpose_of_faces>
 inline void transpose_dest_32b()
@@ -39,6 +40,7 @@ inline void transpose_dest_32b()
     // On Blackhole the ALU format is normally inferred; we must disable this for
     // the SrcA format switching approach to control MOVD2B/MOVB2D behavior.
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
+    std::uint32_t alu_acc_ctrl;
 
     // Zero-flag PRESERVE for the hi16/lo16 MOV sequence is established by the caller
     // (_llk_math_transpose_dest_), covering both the 32-bit and 16-bit paths.
@@ -69,7 +71,7 @@ inline void transpose_dest_32b()
 
         // Since all high bits have been written. We can set the appropriate formats and
         // write all the transposed low bits to Dest register.
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+        alu_acc_ctrl = _dest_32b_lo_moves_begin_();
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
 
         TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 0);
@@ -88,14 +90,14 @@ inline void transpose_dest_32b()
         lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 12); // Dest=0, SrcA=0
 
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+        alu_acc_ctrl = _dest_32b_lo_moves_begin_();
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
 
         // Write transposed Face 0 low bits to Dest, to make room for Face 1 high bits
         TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 0);
         TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8); // Dest=16, SrcA=0
 
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+        _dest_32b_lo_moves_end_(alu_acc_ctrl);
 
         // Transpose Face 1 hi bits and move to SrcA
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
@@ -120,7 +122,7 @@ inline void transpose_dest_32b()
 
         // Since all high bits have been written. We can set the appropriate formats and
         // write all the low bits to Dest register.
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+        alu_acc_ctrl = _dest_32b_lo_moves_begin_();
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
 
         // Write transposed Face 1 low bits to Face 2's area in Dest
@@ -138,7 +140,7 @@ inline void transpose_dest_32b()
 
     // Restore config state
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+    _dest_32b_lo_moves_end_(alu_acc_ctrl);
 }
 
 // Notes on these template parameters:
