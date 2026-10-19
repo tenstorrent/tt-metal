@@ -217,7 +217,7 @@ the runtime then gets `prefill_forward` instead of `prefill_chunk`:
         entry of that layer ran, with this `request_id` (the runner's forward counter)."""
 ```
 
-Metadata: F little-endian `(slot, start, end)` uint32 triples, 12 * F bytes (F = 1 is today's 12 bytes).
+Metadata: tt-d-gen's `PrefillBatchMetadata` layout (`forward_entries`), today's 12 bytes at F = 1. F is at most 16.
 `[start, end)` keeps its single-chunk meaning; `start == end` is an empty entry (no attention, no KV
 write, slot ignored). The SHUTDOWN / WARMUP sentinels fill every word with -1 / -2. Order contract,
 validated on the first rank (`forward_entries.validate_forward_entries`):

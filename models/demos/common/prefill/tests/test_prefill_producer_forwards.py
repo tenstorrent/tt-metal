@@ -199,7 +199,7 @@ def test_packed_payload(env):
 
     rows, _, metadata = producer._shutdown_payload()
     assert rows.shape == (sp, 1, forward_chunks * C // sp)
-    assert metadata == struct.pack("<12i", *[-1] * 12)
+    assert metadata == struct.pack("<50i", *[-1] * 50)
 
 
 def check_packed_run(forwards, stats, cfg):

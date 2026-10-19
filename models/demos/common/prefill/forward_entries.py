@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Chunk entries of a packed prefill forward and their H2D / D2D metadata.
+"""Chunk entries of a packed prefill forward and their H2D / D2D metadata, tt-d-gen's PrefillBatchMetadata.
 
-A forward holds ``forward_chunks`` (F) entries of ``chunk_size`` tokens each. Its metadata is F little-endian
-``(slot, start, end)`` uint32 triples (12 * F bytes); F = 1 is the single-chunk ``struct.pack("<3I", ...)``.
-``[start, end)`` is the absolute KV-position range of the entry's real tokens, and ``start == end`` is an empty
-entry (no attention, no KV write). Sentinels fill every word with ``SHUTDOWN_WORD`` / ``WARMUP_WORD``.
+A forward holds ``forward_chunks`` (F) entries of ``chunk_size`` tokens each. At F = 1 its metadata is the
+single-chunk ``(slot, start, end)`` record, ``struct.pack("<3I", ...)``. Above that it is ``{num_chunks,
+reserved}`` followed by ``MAX_FORWARD_CHUNKS`` records, little-endian uint32, 200 bytes; records past
+``num_chunks`` are ``(INVALID_SLOT, 0, 0)``. ``[start, end)`` is the absolute KV-position range of the entry's
+real tokens, and ``start == end`` is an empty entry (no attention, no KV write). Sentinels fill every word with
+``SHUTDOWN_WORD`` / ``WARMUP_WORD``.
 
 Pure Python: the producer, the runner and host tests import it without a device.
 """
@@ -16,6 +18,9 @@ from dataclasses import dataclass
 
 ENTRY_WORDS = 3
 ENTRY_BYTES = 4 * ENTRY_WORDS
+MAX_FORWARD_CHUNKS = 16  # tt-d-gen's kMaxPrefillChunksPerBatch
+HEADER_WORDS = 2
+INVALID_SLOT = 0xFFFFFFFF
 SHUTDOWN_WORD = -1
 WARMUP_WORD = -2
 # The KV-cache writer's tile grid: an entry starts on a tile row.
@@ -37,7 +42,9 @@ EMPTY_ENTRY = PrefillEntry(0, 0, 0)
 
 
 def metadata_size_bytes(forward_chunks: int) -> int:
-    return ENTRY_BYTES * forward_chunks
+    if not 1 <= forward_chunks <= MAX_FORWARD_CHUNKS:
+        raise ValueError(f"PREFILL_FORWARD_CHUNKS={forward_chunks} outside [1, {MAX_FORWARD_CHUNKS}]")
+    return ENTRY_BYTES if forward_chunks == 1 else 4 * (HEADER_WORDS + ENTRY_WORDS * MAX_FORWARD_CHUNKS)
 
 
 def pad_entries(entries, forward_chunks: int) -> list:
@@ -48,12 +55,32 @@ def pad_entries(entries, forward_chunks: int) -> list:
     return entries + [EMPTY_ENTRY] * (forward_chunks - len(entries))
 
 
+def forward_metadata_words(entries) -> list:
+    """The metadata of a forward of ``entries`` (empty ones at the tail) as int32 words, as the device tensor
+    holds them."""
+    entries = list(entries)
+    e = entries[0]
+    if e.slot in (SHUTDOWN_WORD, WARMUP_WORD) and e.start == e.end == e.slot:
+        return sentinel_words(e.slot, len(entries))
+    if len(entries) == 1:
+        return [e.slot, e.start, e.end]
+    if len(entries) > MAX_FORWARD_CHUNKS:
+        raise ValueError(f"{len(entries)} entries do not fit the {MAX_FORWARD_CHUNKS}-record metadata")
+    real = [e for e in entries if not e.is_empty]
+    if entries[: len(real)] != real:
+        raise ValueError(f"empty entries must come after every non-empty one: {entries}")
+    words = [len(real), 0] + [w for e in real for w in (e.slot, e.start, e.end)]
+    words += [INVALID_SLOT, 0, 0] * (MAX_FORWARD_CHUNKS - len(real))
+    return [w - (1 << 32) if w >= 1 << 31 else w for w in words]
+
+
 def pack_forward_metadata(entries) -> bytes:
-    return struct.pack("<" + "3I" * len(entries), *(w for e in entries for w in (e.slot, e.start, e.end)))
+    words = forward_metadata_words(entries)
+    return struct.pack(f"<{len(words)}i", *words)
 
 
 def sentinel_words(word: int, forward_chunks: int) -> list:
-    return [word] * (ENTRY_WORDS * forward_chunks)
+    return [word] * (metadata_size_bytes(forward_chunks) // 4)
 
 
 def sentinel_metadata(word: int, forward_chunks: int) -> bytes:
@@ -62,13 +89,22 @@ def sentinel_metadata(word: int, forward_chunks: int) -> bytes:
 
 
 def decode_forward_metadata(words, forward_chunks: int) -> list:
-    """The forward's entries from its metadata words read as int32. Words past the F triples (MTP's
-    provided-levels word on D2D) are ignored."""
+    """The forward's ``forward_chunks`` entries, empty ones at the tail, from its metadata words read as int32.
+    A sentinel decodes to entries of its word. Words past the metadata (MTP's provided-levels word on D2D) are
+    ignored."""
     words = [int(w) for w in words]
-    n = ENTRY_WORDS * forward_chunks
+    n = metadata_size_bytes(forward_chunks) // 4
     if len(words) < n:
         raise ValueError(f"metadata has {len(words)} words, a forward of {forward_chunks} entries needs {n}")
-    return [PrefillEntry(*words[i : i + ENTRY_WORDS]) for i in range(0, n, ENTRY_WORDS)]
+    if forward_chunks == 1:
+        return [PrefillEntry(*words[:ENTRY_WORDS])]
+    if words[0] in (SHUTDOWN_WORD, WARMUP_WORD) and words[1] == words[2] == words[0]:
+        return [PrefillEntry(words[0], words[0], words[0])] * forward_chunks
+    num_chunks = words[0]
+    if not 1 <= num_chunks <= forward_chunks:
+        raise ValueError(f"num_chunks={num_chunks} outside [1, {forward_chunks}]")
+    records = [words[HEADER_WORDS + ENTRY_WORDS * k : HEADER_WORDS + ENTRY_WORDS * (k + 1)] for k in range(num_chunks)]
+    return [PrefillEntry(*r) for r in records] + [EMPTY_ENTRY] * (forward_chunks - num_chunks)
 
 
 def validate_forward_entries(entries, *, chunk_size: int, forward_chunks: int, num_users: int, max_seq_len: int):
