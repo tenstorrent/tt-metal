@@ -29,11 +29,12 @@ class TA(TemplateParameter):
     ta_nf: int = 4
     ta_full: int = 0
     ta_sect: int = 0  # tiles per DEST section, 0 = as many as fit
+    ta_ctf: int = 0  # 1 = formats compiled in, as production kernels have them
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
             [f"#define UNPACK_BLOCK {1 if self.ta_form == 'block' else 0}", f"#define TA_FACE_R {self.ta_face_r}",
-             f"#define TA_NF {self.ta_nf}", f"#define TA_FULL {self.ta_full}", f"#define TA_SECT {self.ta_sect}"])
+             f"#define TA_NF {self.ta_nf}", f"#define TA_FULL {self.ta_full}", f"#define TA_SECT {self.ta_sect}", f"#define TA_CTF {self.ta_ctf}"])
 
 
 def io(a, b):
@@ -100,11 +101,17 @@ for form in ("tile", "block"):  # 8-bit source: per-face unpack, default pack
         for ct in (1, 2, 4, 8):
             CASES.append(("f8", io(F.Fp8_e4m3, F.Float16_b), NO, 1, ct, TA(ta_form=form, ta_nf=nf)))
 
+for form in ("tile", "block"):  # the 2-face rows #60672 moves, with compile-time formats like production
+    for nf in (2, 4):
+        for name, fmt, acc in (("ctf", BF16, NO), ("ctf", FP32, YES), ("ctfu2d", FP32, YES), ("ctf", io(F.Fp8_e4m3, F.Float16_b), NO)):
+            for ct in (1, 2, 4, 8):
+                CASES.append((name, fmt, acc, 1, ct, TA(ta_form=form, ta_nf=nf, ta_ctf=1)))
+
 
 def _id(c):
     n, fmt, acc, rt, ct, ta = c
     return (f"{n}-{fmt.input_format.name}-{fmt.output_format.name}-{acc.name}-r{rt}c{ct}-f{ta.ta_face_r}n{ta.ta_nf}"
-            f"-s{ta.ta_sect}-y{ta.ta_full}-{ta.ta_form}")
+            f"-s{ta.ta_sect}-y{ta.ta_full}-{ta.ta_form}" + ("-ctf" if ta.ta_ctf else ""))
 
 
 @pytest.mark.perf
@@ -127,6 +134,7 @@ def test_perf_tilize_allcfg(perf_report, case):
         variant_stimuli=StimuliConfig(None, fmt.input_format, None, fmt.input_format, fmt.output_format,
                                       tile_count_A=tiles, tile_count_B=tiles, tile_count_res=tiles),
         dest_acc=acc,
-        unpack_to_dest=fmt.input_format in (F.Int32, F.UInt32) or name == "u2d",
+        unpack_to_dest=fmt.input_format in (F.Int32, F.UInt32) or name in ("u2d", "ctfu2d"),
+        compile_time_formats=bool(ta.ta_ctf),
     )
     configuration.run(perf_report)
