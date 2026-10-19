@@ -23,6 +23,7 @@ from ..llk_params import DestAccumulation, L1Accumulation, PerfRunType
 from ..logger import logger
 from ..metrics import compute_metrics, export_counters, export_metrics
 from ..profiler import Profiler, ProfilerData
+from . import window_hash
 from ..stimuli_config import StimuliConfig
 from ..test_config import BuildMode, ProfilerBuild, TestConfig
 from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
@@ -982,6 +983,7 @@ class PerfConfig(TestConfig):
         results = []
         counter_results_list = []
         code_sizes = {}
+        window_rows = []
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             for templates, runtimes, run_type in self.run_configs:
@@ -1030,6 +1032,13 @@ class PerfConfig(TestConfig):
                     TestConfig.get_elf_text_size(elf_dir / f"{c}.elf")
                     for c in components
                 )
+                for c in components:
+                    window_rows.append(
+                        (run_type.name, c)
+                        + window_hash.fingerprint(
+                            TestConfig.OBJDUMP, elf_dir / f"{c}.elf"
+                        )
+                    )
 
             variant_raw_data = []
             variant_counter_results = []
@@ -1112,6 +1121,19 @@ class PerfConfig(TestConfig):
             self.passed_runtimes,
         )
         perf_report.append(combined, label=self.test_name)
+        window_hash.write_rows(
+            TestConfig.perf_run_dir(),
+            self.test_name,
+            PerfConfig._build_sweep_frame(
+                code_sizes,
+                self.formats_config,
+                self.unpack_to_dest,
+                self.dest_acc,
+                self.passed_templates,
+                self.passed_runtimes,
+            ),
+            window_rows,
+        )
 
         # Append raw counter data to the separate counter report
         if counter_results_list and PerfConfig.COUNTER_REPORT is not None:
