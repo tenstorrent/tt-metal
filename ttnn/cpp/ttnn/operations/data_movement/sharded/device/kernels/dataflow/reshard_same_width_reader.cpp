@@ -10,6 +10,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "experimental/kernel_args.h"
 
 // Named RTAs: write_offset, num_reads
@@ -34,7 +35,8 @@ void kernel_main() {
     // The shard DFB borrows the local tensor's buffer; it is used here purely as an address source.
     DataflowBuffer shard_dfb(dfb::shard);
 
-    uint32_t src_addr = remote.get_bank_base_address();
+    // Raw: bank-relative base on remote L1/DRAM banks (no handle form yet).
+    uint32_t src_addr = tensor_accessor::detail::TransferAccess::bank_base(remote);
     uint32_t l1_write_addr = shard_dfb.get_write_ptr() + write_offset;
 #ifdef UNALIGNED
     constexpr uint32_t local_unit_size_padded = get_arg(args::local_unit_size_padded);

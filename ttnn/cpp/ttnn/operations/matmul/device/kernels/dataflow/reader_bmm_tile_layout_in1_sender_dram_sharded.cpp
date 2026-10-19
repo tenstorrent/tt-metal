@@ -11,6 +11,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
@@ -35,9 +36,11 @@ void kernel_main() {
         return;
     }
 
-    const uint32_t in1_tensor_addr = TensorAccessor(tensor::in1).get_bank_base_address();
+    // Raw: DRAM bank-relative base for direct bank reads.
+    const uint32_t in1_tensor_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::in1));
 #ifdef FUSE_BIAS
-    const uint32_t in3_tensor_addr = TensorAccessor(tensor::bias).get_bank_base_address();
+    // Raw: DRAM bank-relative base for direct bank reads.
+    const uint32_t in3_tensor_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::bias));
 #endif
     const uint32_t dram_bank_id = get_arg(args::dram_bank_id);
     const uint32_t vc = get_arg(args::vc);

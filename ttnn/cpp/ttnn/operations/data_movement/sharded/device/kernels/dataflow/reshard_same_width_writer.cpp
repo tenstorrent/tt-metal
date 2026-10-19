@@ -10,6 +10,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "experimental/kernel_args.h"
 
 // Named RTAs: read_offset, num_writes
@@ -34,7 +35,8 @@ void kernel_main() {
     Noc noc;
     AllocatorBank<bank_type> bank;
 
-    uint32_t dst_addr = remote.get_bank_base_address();
+    // Raw: bank-relative base on remote L1/DRAM banks (no handle form yet).
+    uint32_t dst_addr = tensor_accessor::detail::TransferAccess::bank_base(remote);
     uint32_t l1_read_addr = shard_dfb.get_read_ptr() + read_offset;
 #ifdef UNALIGNED
     constexpr uint32_t local_unit_size_padded = get_arg(args::local_unit_size_padded);

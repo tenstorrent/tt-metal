@@ -184,13 +184,6 @@ public:
         return get_shard_noc_addr(shard_id, offset, noc);
     }
 
-    // Returns the bank-relative base address (offset) used by this accessor.
-    // (For L1-sharded tensors, this is the local L1 base address of the shard region.)
-    // Not noted, unlike get_noc_addr: it must stay constexpr, and C++17 allows no asm there. A kernel that uses it for
-    // direct access to its local shard should hold a LocalTensorAccessor, which is noted.
-    FORCE_INLINE
-    constexpr uint32_t get_bank_base_address() const { return bank_base_address; }
-
     // Helpers
     struct PageMapping {
         size_t bank_id;
@@ -523,11 +516,6 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
             "TensorAccessor::is_local_shard is not supported by the interleaved tensor accessor");
         return false;
     }
-
-    // Returns the bank-relative base address (offset) used by this accessor.
-    // (For L1-sharded tensors, this is the local L1 base address of the shard region.)
-    FORCE_INLINE
-    constexpr uint32_t get_bank_base_address() const { return this->bank_base_address; }
 
     // Returns a proxy for shard pages iterator
     tensor_accessor::ShardPages<TensorAccessor> shard_pages(

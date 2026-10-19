@@ -10,6 +10,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "experimental/kernel_args.h"
 
 // Named RTAs: total_num_sticks, local_stride_bytes, remote_stride_bytes, num_segments
@@ -33,7 +34,8 @@ void kernel_main() {
     Noc noc;
     AllocatorBank<bank_type> bank;
 
-    const uint32_t base_read_addr = remote.get_bank_base_address();
+    // Raw: bank-relative base on remote L1/DRAM banks (no handle form yet).
+    const uint32_t base_read_addr = tensor_accessor::detail::TransferAccess::bank_base(remote);
     uint32_t base_write_addr = shard_dfb.get_write_ptr();
 
     for (uint32_t i = 0; i < num_segments; ++i) {

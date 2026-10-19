@@ -5,7 +5,7 @@
 // Metal 2.0 reshard same-width (HEIGHT_SHARDED -> HEIGHT_SHARDED) writer.
 //
 // Writes units from the local sharded buffer out to the remote tensor.
-//   - The remote tensor base address comes from TensorAccessor(tensor::remote).get_bank_base_address().
+//   - The remote tensor base address comes from TransferAccess::bank_base(TensorAccessor(tensor::remote)) (raw).
 //   - The local sharded buffer base L1 address comes from DataflowBuffer(dfb::shard_cb).get_read_ptr()
 //     (the DFB borrows the local tensor's buffer; it is used here purely as an address source).
 //
@@ -20,6 +20,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -38,7 +39,8 @@ void kernel_main() {
     Noc noc;
     AllocatorBank<bank_type> bank;
 
-    const uint32_t dst_addr = remote.get_bank_base_address();
+    // Raw: bank-relative base on remote L1/DRAM banks (no handle form yet).
+    const uint32_t dst_addr = tensor_accessor::detail::TransferAccess::bank_base(remote);
     uint32_t l1_read_addr = shard_cb.get_read_ptr() + read_offset;
     uint32_t vararg_idx = 0;
 #ifdef UNALIGNED

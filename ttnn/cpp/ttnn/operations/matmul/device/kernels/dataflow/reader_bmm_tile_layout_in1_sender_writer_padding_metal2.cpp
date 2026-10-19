@@ -57,6 +57,7 @@
 #include "api/remote_circular_buffer.h"
 #endif
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
@@ -266,7 +267,8 @@ void kernel_main() {
 #if defined(IN1_DRAM_WIDTH_SHARDED) || defined(IN1_DRAM_HEIGHT_SHARDED)
     // The DRAM-sharded paths below address banks directly rather than paging through the accessor,
     // so they need in1's raw base address. It comes off the binding, never through a runtime arg.
-    const uint32_t in1_tensor_addr = s1.get_bank_base_address();
+    // Raw: DRAM bank-relative base for direct bank reads.
+    const uint32_t in1_tensor_addr = tensor_accessor::detail::TransferAccess::bank_base(s1);
 #endif  // IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED
 #endif  // ENABLE_PREFETCHER_PIPE / IN1_SHARDED / ENABLE_GLOBAL_CB
 
@@ -614,7 +616,8 @@ void kernel_main() {
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
                         // Bank-direct reads need bias's raw base address; it comes off the binding.
-                        const uint32_t in3_tensor_addr = s3.get_bank_base_address();
+                        // Raw: DRAM bank-relative base for direct bank reads.
+                        const uint32_t in3_tensor_addr = tensor_accessor::detail::TransferAccess::bank_base(s3);
 
                         AllocatorBank<AllocatorBankType::DRAM> bias_dram_bank;
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
