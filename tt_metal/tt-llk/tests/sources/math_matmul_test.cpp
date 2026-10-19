@@ -210,6 +210,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
+#ifndef MATMUL_PACK_FORM
+#define MATMUL_PACK_FORM 0
+#endif
+
+#if defined(ARCH_BLACKHOLE)
+// MATMUL_PACK_FORM 1 packs the block with one program run, 2 closes every tile (block-float outputs and small tiles).
+inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces)
+{
+    if constexpr (MATMUL_PACK_FORM == 1)
+    {
+        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, address, num_tiles);
+    }
+    else
+    {
+        _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride, num_faces);
+    }
+}
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -271,10 +290,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
                     _llk_packer_wait_for_math_done_();
-                    for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+#if defined(ARCH_BLACKHOLE)
+                    if constexpr (MATMUL_PACK_FORM != 0)
                     {
-                        const std::uint32_t result_tile = block * NUM_TILES_IN_BLOCK + tile;
-                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[result_tile]));
+                        matmul_pack_out(
+                            DST_INDEX,
+                            L1_ADDRESS(buffer_Res[block * NUM_TILES_IN_BLOCK]),
+                            NUM_TILES_IN_BLOCK,
+                            (L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0])) << 4,
+                            num_faces);
+                    }
+                    else
+#endif
+                    {
+                        for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                        {
+                            const std::uint32_t result_tile = block * NUM_TILES_IN_BLOCK + tile;
+                            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[result_tile]));
+                        }
                     }
                     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }

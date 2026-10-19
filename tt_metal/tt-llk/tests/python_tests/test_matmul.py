@@ -147,8 +147,9 @@ def test_matmul(
             DEST_SYNC(),
             THROTTLE_LEVEL(),
             MATMUL_PACK_BLOCK(
-                matmul_dims.rt_dim * matmul_dims.ct_dim > 1
-                and not formats.output_format.is_block_float()
+                0
+                if matmul_dims.rt_dim * matmul_dims.ct_dim == 1
+                else (2 if formats.output_format.is_block_float() else 1)
             ),
         ],
         runtimes=[
