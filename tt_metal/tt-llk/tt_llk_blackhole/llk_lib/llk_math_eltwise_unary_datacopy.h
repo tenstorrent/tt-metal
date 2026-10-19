@@ -26,6 +26,8 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
  *
  * For the unpack-to-dest path with 32-bit data, applies the Blackhole hi16/lo16 broadcast workarounds
  * (Issue #449) and an extra zero-flag clear (budabackend#2730); otherwise runs the preconfigured datacopy MOP.
+ * A2D of UInt16 into a 32-bit Dest runs that MOP between _dest_32b_lo_moves_begin_ and _dest_32b_lo_moves_end_
+ * (INT8_math_enabled in place of Fp32_enabled, TEN-4245), which costs a tensix_sync() per call.
  *
  * @tparam type: Datacopy direction, values = <A2D/B2D>
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
@@ -115,9 +117,9 @@ inline void _llk_math_eltwise_unary_datacopy_(
             //   1. MOVD2B(DEST_NORM):    copy hi16 of source row from dest into B register
             //   2. MOVD2B(DEST_32B_LOW): copy lo16 of source row from dest into B register
             //   3. SrcA=Tf32 + MOVB2D(DEST_NORM, MOV_8_ROW_BRCST): broadcast hi16 from B to dest
-            //   4. Fp32_enabled=0 (BH HW bug: MOVB2D DEST_32B_LOW ignores writes when Fp32 is on)
+            //   4. INT8_math_enabled in place of Fp32_enabled (see _dest_32b_lo_moves_begin_),
             //      SrcA=Float32 + MOVB2D(DEST_32B_LOW, MOV_8_ROW_BRCST): broadcast lo16 from B to dest
-            //   5. Fp32_enabled=1: restore FP32 dest mode
+            //   5. restore Fp32_enabled and INT8_math_enabled
             // _llk_unpack_A_ hands this thread the SrcB bank (SETDVALID is unsupported on Blackhole)
             const std::uint32_t tile_base = dst_index * 64;
 
@@ -133,8 +135,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
             TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 32); // face 2 rows 0-7
             TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 40); // face 2 rows 8-15
 
-            // BH HW bug: MOVB2D(DEST_32B_LOW) is ignored when Fp32 dest mode is active.
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+            // Low halves: INT8_math_enabled in place of Fp32_enabled (see _dest_32b_lo_moves_begin_).
+            std::uint32_t alu_acc_ctrl = _dest_32b_lo_moves_begin_();
             // SrcA=Float32 (non-Tf32): MOVB2D(DEST_32B_LOW) writes lo16 of 32-bit dest
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
 
@@ -143,7 +145,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
             TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 32); // face 2 rows 0-7
             TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 40); // face 2 rows 8-15
 
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+            _dest_32b_lo_moves_end_(alu_acc_ctrl);
 
             // Source row 16 -> faces 1 (rows 16-31) and 3 (rows 48-63)
             TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 16);   // hi16 to B
@@ -157,8 +159,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
             TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 48); // face 3 rows 0-7
             TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 56); // face 3 rows 8-15
 
-            // BH HW bug: MOVB2D(DEST_32B_LOW) is ignored when Fp32 dest mode is active.
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+            // Low halves: INT8_math_enabled in place of Fp32_enabled (see _dest_32b_lo_moves_begin_).
+            alu_acc_ctrl = _dest_32b_lo_moves_begin_();
             // SrcA=Float32 (non-Tf32): MOVB2D(DEST_32B_LOW) writes lo16 of 32-bit dest
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
 
@@ -167,7 +169,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
             TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 48); // face 3 rows 0-7
             TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 56); // face 3 rows 8-15
 
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+            _dest_32b_lo_moves_end_(alu_acc_ctrl);
 
             TTI_CLEARDVALID(0b10, 0);
         }
@@ -196,8 +198,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
             TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 48); // face 3 rows 0-7
             TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 56); // face 3 rows 8-15
 
-            // BH HW bug: MOVB2D(DEST_32B_LOW) is ignored when Fp32 dest mode is active.
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+            // Low halves: INT8_math_enabled in place of Fp32_enabled (see _dest_32b_lo_moves_begin_).
+            const std::uint32_t alu_acc_ctrl = _dest_32b_lo_moves_begin_();
             // SrcA=Float32 (non-Tf32): MOVB2D(DEST_32B_LOW) writes lo16 of 32-bit dest
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
 
@@ -210,7 +212,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
             TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 48); // face 3 rows 0-7
             TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 56); // face 3 rows 8-15
 
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+            _dest_32b_lo_moves_end_(alu_acc_ctrl);
 
             TTI_CLEARDVALID(0b10, 0);
         }
@@ -253,8 +255,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
                 TT_MOVB2D(
                     p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 28); // right face rows 12-15
 
-                // BH HW bug: MOVB2D(DEST_32B_LOW) is ignored when Fp32 dest mode is active.
-                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+                // Low halves: INT8_math_enabled in place of Fp32_enabled (see _dest_32b_lo_moves_begin_).
+                const std::uint32_t alu_acc_ctrl = _dest_32b_lo_moves_begin_();
                 // SrcA=Float32 (non-Tf32): MOVB2D(DEST_32B_LOW) writes lo16 of 32-bit dest
                 cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
 
@@ -270,7 +272,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
                 TT_MOVB2D(
                     p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 28); // right face rows 12-15
 
-                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+                _dest_32b_lo_moves_end_(alu_acc_ctrl);
             }
 
             TTI_CLEARDVALID(0b10, 0);
@@ -304,7 +306,17 @@ inline void _llk_math_eltwise_unary_datacopy_(
 
         if constexpr (type == DataCopyType::A2D)
         {
-            ckernel_template::run();
+            // UInt16 into a 32-bit Dest: the MOP's moves are MOVA2D(DEST_32B_LOW) (see eltwise_unary_configure_mop).
+            if (is_fp32_dest_acc_en && (dst_format == to_underlying(DataFormat::UInt16)))
+            {
+                const std::uint32_t alu_acc_ctrl = _dest_32b_lo_moves_begin_();
+                ckernel_template::run();
+                _dest_32b_lo_moves_end_(alu_acc_ctrl);
+            }
+            else
+            {
+                ckernel_template::run();
+            }
         }
         else if constexpr (type == DataCopyType::B2D)
         {
