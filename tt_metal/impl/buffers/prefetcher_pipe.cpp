@@ -704,7 +704,7 @@ void PrefetcherPipeImpl::build_dram_sender_config_pages() {
             receiver_phys.push_back(target_device->worker_core_from_logical_core(receiver));
         }
         const auto sender_page = build_sender_config_page(common, receiver_sent_base - sender_page_addr, receiver_phys);
-        write_dram_sender_l1(
+        write_dram_core_l1(
             *mesh_device, target_device, sender_core_, sender_page_addr, std::as_bytes(std::span(sender_page)));
 
         const CoreCoord sender_virtual = target_device->virtual_core_from_logical_core(sender_core_, CoreType::DRAM);

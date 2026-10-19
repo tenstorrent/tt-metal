@@ -61,21 +61,27 @@ public:
     static constexpr auto attribute_names =
         std::forward_as_tuple("sender_receiver_core_mapping", "size", "buffer_type");
     auto attribute_values() const {
-        return std::make_tuple(this->sender_receiver_core_mapping_, this->size_, cb_buffer().buffer_type());
+        return std::make_tuple(this->sender_receiver_core_mapping_, this->size_, this->buffer_type_);
     }
 
 private:
     void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);
     // Allocates and writes the per-GCB sender state block in DRISC L1. DRAM-sender flavour only.
     void initialize_dram_sender_state_block(uint32_t max_num_receivers_per_sender);
+    // Writes each DRAM receiver's config page (dram_receiver_config_page.hpp) with zeroed credit lines.
+    void write_dram_receiver_config_pages();
+    bool has_dram_receivers() const { return receiver_core_type_ == CoreType::DRAM; }
 
     // Tag for the private experimental DRAM-sender constructor; only the experimental
     // factory (a friend) can name this type. Takes MeshDevice because the DRAM-sender
     // path relies on the per-mesh DriscL1Arena for pages_sent placement.
+    // `receiver_logical_cores_per_sender` lists each sender's receivers in credit-slot order. Worker
+    // receivers are on Blackhole; DRAM receivers (CCEs) on Quasar.
     struct DramSenderTag {};
     GlobalCircularBufferImpl(
         distributed::MeshDevice& mesh_device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+        std::vector<std::vector<CoreCoord>> receiver_logical_cores_per_sender,
         uint32_t size,
         BufferType buffer_type,
         DramSenderTag);
@@ -90,6 +96,8 @@ private:
     CoreRangeSet receiver_cores_;
     CoreRangeSet all_cores_;
     uint32_t size_ = 0;
+    BufferType buffer_type_ = BufferType::L1;
+    CoreType receiver_core_type_ = CoreType::WORKER;
     // Private experimental DRAM-sender metadata. `sender_core_type_value_` is stored as
     // uint8_t (0=Worker, 1=Dram) so the SenderCoreType enum stays in the experimental
     // header. Accessed only through the friend struct in
@@ -107,7 +115,8 @@ private:
     // survives multi-GCB request switching. Layout in
     // tt_metal/impl/buffers/dram_sender_state_block.hpp.
     DeviceAddr sender_state_drisc_l1_base_ = 0;
-    // Per sender, its receivers' logical coords in row-wise order (see the ctor for why row-wise).
+    // Per sender, its receivers' logical coords in credit-slot order: row-wise for worker receivers
+    // (see the factory for why row-wise), the caller's order for DRAM receivers.
     // Logical, not physical: the physical worker coord depends on the device being addressed, and
     // the DRAM-sender flavour spans a mesh whose devices need not agree.
     std::vector<std::vector<CoreCoord>> receiver_logical_cores_per_sender_;
@@ -116,6 +125,9 @@ private:
     // backing range; released when the last GlobalCircularBuffer copy goes out of scope.
     // Empty for worker-sender GCBs.
     std::shared_ptr<::tt::tt_metal::DriscL1Allocation> drisc_sender_state_alloc_;
+    // DRAM receivers only: the receiver-zone range holding each receiver's config page and then its
+    // FIFO, at one offset on every DRAM core. config_address() and buffer_address() point into it.
+    std::shared_ptr<::tt::tt_metal::DriscL1Allocation> drisc_receiver_alloc_;
 
     friend struct global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals;
 };
