@@ -210,6 +210,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
+#ifndef MATMUL_PACK_FORM
+#define MATMUL_PACK_FORM 0
+#endif
+
+#if defined(ARCH_BLACKHOLE)
+// MATMUL_PACK_FORM 1 packs the block with one program run, 2 closes every tile (block-float outputs and small tiles).
+inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4)
+{
+    if constexpr (MATMUL_PACK_FORM == 1)
+    {
+        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, address, num_tiles);
+    }
+    else
+    {
+        _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride, num_faces);
+    }
+}
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -245,9 +264,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     const std::uint32_t tile_index = tile % MAX_TILES_DEST;
 #if defined(ARCH_BLACKHOLE)
-                    if constexpr (pack_block_en)
+                    if constexpr (MATMUL_PACK_FORM != 0)
                     {
-                        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index), CT_DIM * RT_DIM);
+                        matmul_pack_out(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index), CT_DIM * RT_DIM, TILE_SIZE_PACK << 4);
                         break;
                     }
 #endif
@@ -275,13 +294,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[i])), "pack result real-buffer address is outside L1");
                     }
 #if defined(ARCH_BLACKHOLE)
-                    if constexpr (pack_block_en)
+                    if constexpr (MATMUL_PACK_FORM != 0)
                     {
                         if (LOOP_FACTOR == 1)
                         {
                             LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[CT_DIM * RT_DIM - 1])), "pack result real-buffer address is outside L1");
                         }
-                        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, addr, CT_DIM * RT_DIM);
+                        matmul_pack_out(i, addr, CT_DIM * RT_DIM, TILE_SIZE_PACK << 4);
                         break;
                     }
 #endif

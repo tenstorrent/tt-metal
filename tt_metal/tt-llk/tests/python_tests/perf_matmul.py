@@ -17,7 +17,7 @@ from helpers.matmul_sweep import (
     DEST_RT_CT_BLOCKS,
     PERF_RING_TILES,
     generate_tile_dims,
-    matmul_pack_block,
+    matmul_pack_form,
     mid_fill_rt_ct_pairs,
     unpack_matmul_fits_perf_ring,
 )
@@ -161,7 +161,7 @@ def test_perf_matmul(
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
             MATMUL_PACK_BLOCK(
-                matmul_pack_block(
+                matmul_pack_form(
                     formats,
                     dest_sync,
                     math_fidelity,
