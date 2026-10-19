@@ -1,0 +1,6 @@
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_dest_clear_api.h
+tt_metal/tt-llk/tests/python_tests/perf_unpack_tilizeA_B.py
+tt_metal/tt-llk/tests/python_tests/test_unpack_tilizeA_B.py
+tt_metal/tt-llk/tests/sources/unpack_tilizeA_B_perf.cpp
+tt_metal/tt-llk/tests/sources/unpack_tilizeA_B_test.cpp
+tt_metal/tt-llk/tests/helpers/include/llk_tilize_block_per_tile_32b.h
