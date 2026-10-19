@@ -4,6 +4,7 @@
 # reciprocal (datacopy+SFPU), normalize (eltwise broadcast multiply).
 
 # buongiorno
+quasar_use_dvalid: true
 
 operands:
   # Q: query tile block
