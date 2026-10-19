@@ -128,7 +128,9 @@ class Runner:
 
 def main(argv):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--calls", required=True, help="call-list JSON (see calls.py)")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--calls", help="call-list JSON (see calls.py)")
+    source.add_argument("--op", help="use the committed sweep sample configs/sweeps/<op>.json")
     parser.add_argument("--before-tree", required=True, help="tt-metal checkout built at the base commit")
     parser.add_argument("--after-tree", required=True, help="tt-metal checkout built with the change")
     parser.add_argument("--out", required=True, help="results JSON")
@@ -143,7 +145,7 @@ def main(argv):
     parser.add_argument("--no-prime", action="store_true", help="skip the discarded first pair of processes")
     parser.add_argument("--no-device", action="store_true")
     args = parser.parse_args(argv)
-    args.calls = os.path.abspath(args.calls)
+    args.calls = os.path.abspath(args.calls or os.path.join(HERE, "configs", "sweeps", f"{args.op}.json"))
 
     doc = calls_mod.load_calls(args.calls)
     runner = Runner(args, doc)

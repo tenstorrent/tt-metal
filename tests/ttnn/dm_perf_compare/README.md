@@ -20,6 +20,10 @@ python tests/ttnn/dm_perf_compare/run.py \
     --out results.json
 ```
 
+`--op <op>` instead of `--calls` uses the default list, `configs/sweeps/<op>.json`: 40 calls drawn
+with a fixed seed (0) from the op's sweep grids. Regenerate with `sample_sweeps.py`; it needs no
+device. A change that brings its own calls passes them with `--calls`.
+
 Each tree is a built tt-metal checkout; the script runs each side's processes with that tree's
 `TT_METAL_HOME` and `PYTHONPATH`. Needs one card; processes run one after another.
 

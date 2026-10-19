@@ -196,3 +196,12 @@ def test_q2_control_counts_false_flags():
 def test_noisy_control_is_marked_unreliable():
     assert results_for(after_default=100.0, after_native=100.0)["noise"]["reliable"] is True
     assert stats.noise_pct({"c": [-12.0, -11.0, -10.0, 0.0, 0.0]}) > stats.MAX_NOISE_PCT
+
+
+def test_committed_sweep_samples_parse():
+    sweeps = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs", "sweeps")
+    names = sorted(os.listdir(sweeps))
+    assert names
+    for name in names:
+        doc = calls.load_calls(os.path.join(sweeps, name))
+        assert doc["op"] == name[: -len(".json")]
