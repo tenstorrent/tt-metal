@@ -103,9 +103,11 @@ class RecurrenceResult:
 @dataclass(frozen=True)
 class PendingFinalCarry:
     """The relay's final carry, left for the caller to run later: run(companion) dispatches it, merged with the
-    companion program (as _RelayFinalCarry takes one), and returns the final state."""
+    companion program (as _RelayFinalCarry takes one), and returns the final state. program_inputs are its
+    FinalCarryProgram and inputs, for a caller that merges the carry into its own program instead."""
 
     run: object
+    program_inputs: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -561,7 +563,15 @@ def _scan_sp_grouped_chunks(
             PendingFinalCarry(
                 lambda companion=None: final_carry(
                     rank_final, prefix_final_state, actual_start, actual_end, geometry.local_rows, companion=companion
-                )
+                ),
+                program_inputs=dict(
+                    program=final_carry._program,
+                    rank_final=rank_final,
+                    prefix_final=prefix_final_state,
+                    actual_start=actual_start,
+                    actual_end=actual_end,
+                    local_rows=geometry.local_rows,
+                ),
             ),
         )
     if final_carry is not None:
@@ -840,7 +850,13 @@ class KDARecurrence:
         if isinstance(scan.final_state, PendingFinalCarry):
             pending = scan.final_state
             return RecurrenceResult(
-                output, PendingFinalCarry(lambda companion=None: ttnn.reshape(pending.run(companion), shape))
+                output,
+                PendingFinalCarry(
+                    lambda companion=None: ttnn.reshape(pending.run(companion), shape),
+                    program_inputs=(
+                        None if pending.program_inputs is None else {**pending.program_inputs, "final_shape": shape}
+                    ),
+                ),
             )
         return RecurrenceResult(output, ttnn.reshape(scan.final_state, shape))
 

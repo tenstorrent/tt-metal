@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import torch
+from ttnn.operations.matmul_reduce_scatter import matmul_reduce_scatter
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
@@ -274,6 +275,18 @@ class ttKDA:
         # beside the output projection, a GateMatmulProgram on the other columns, after the gated norm.
         self.overlap_output_gate = program_config.overlap_output_gate and self.recurrence.uses_ring_relay
         self.carry_with_output_projection = self.overlap_output_gate
+        # The fused projection + reduce-scatter reads the norm output from DRAM and runs the carry on its idle cores.
+        self.fused_output_reduce_scatter = (
+            program_config.fused_output_reduce_scatter
+            and self.carry_with_output_projection
+            and self.tensor_parallel_size > 1
+            and self._tp_cluster_axis is not None
+        )
+        if self.fused_output_reduce_scatter:
+            self.norm_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            self.fused_output_compute_config = ttnn.ComputeConfigDescriptor(
+                math_fidelity=program_config.output_projection_math_fidelity, fp32_dest_acc_en=True
+            )
         self.input_projection_gate_columns = 0
         self.output_gate_weight = None
         self._output_gate_program = None
@@ -615,6 +628,46 @@ class ttKDA:
         )
         return self._reduce_scatter(output)
 
+    def _project_output_and_final_carry(self, normed: ttnn.Tensor, carry: dict) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """The output projection fused with the TP reduce-scatter, carrying the final carry's program on its idle
+        cores."""
+        program = carry["program"]
+        final_state = program.allocate_output(carry["prefix_final"])
+        cluster_axis = self._tp_cluster_axis
+        projected = matmul_reduce_scatter(
+            normed,
+            self.weights.output_projection,
+            cluster_axis=cluster_axis,
+            scatter_dim=-1,
+            topology=self.tp_ccl_topology,
+            num_links=self.tt_ccl.get_num_links(cluster_axis),
+            compute_kernel_config=self.fused_output_compute_config,
+            extra_program=lambda coord, cores: program.program(
+                coord,
+                cores,
+                rank_final=carry["rank_final"],
+                prefix_final=carry["prefix_final"],
+                output=final_state,
+                actual_start=carry["actual_start"],
+                actual_end=carry["actual_end"],
+                local_rows=carry["local_rows"],
+                prefix_on_last_rank=True,
+            ),
+            extra_tensors=[
+                t
+                for t in (
+                    carry["rank_final"],
+                    carry["prefix_final"],
+                    carry["actual_start"],
+                    carry["actual_end"],
+                    final_state,
+                )
+                if t is not None
+            ],
+        )
+        ttnn.deallocate(normed)
+        return projected, ttnn.reshape(final_state, carry["final_shape"])
+
     def _output_projection(self, normed: ttnn.Tensor, output: ttnn.Tensor):
         """(io_tensors, MeshProgramDescriptor) of the output projection on the cores the final carry leaves (and
         max_matmul_cores allows)."""
@@ -754,7 +807,9 @@ class ttKDA:
         ttnn.deallocate(result.output)
         # The norm read the output gate, the projection's last columns in use.
         ttnn.deallocate(inputs.projected)
-        if self.carry_with_output_projection:
+        if self.fused_output_reduce_scatter:
+            output, final_state = self._project_output_and_final_carry(output, result.final_state.program_inputs)
+        elif self.carry_with_output_projection:
             normed = output
             output = ttnn.allocate_tensor_on_device(
                 ttnn.Shape(list(normed.shape)[:-1] + [self.weights.output_projection.shape[-1]]),
