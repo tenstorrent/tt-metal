@@ -6,10 +6,12 @@
 # reshape_force_native; (2) a demoted case runs native; (3) a routed tile-rows call traces and replays new data;
 # (4) a small row-major call keeps its program key when the L1 frontier moves; (5) the row-major cases the merge
 # gate's test_reshape_codegen.py leaves out are bit-exact, route as fitted, and key the CB depth live L1 picks; (6) so
-# are the segment-map TILE cases it leaves out.
+# are the segment-map TILE cases it leaves out; (7) a routed call runs with the least free L1 native runs with; (8) a
+# segment map over its size caps runs native.
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from tests.ttnn.unit_tests.operations.data_movement import test_reshape_codegen as gate
@@ -363,3 +365,79 @@ _TILE_ROUTES = [
 @pytest.mark.parametrize("case,in_shape,out_shape,dtype,layout,route", _TILE_ROUTES, ids=[r[0] for r in _TILE_ROUTES])
 def test_reshape_codegen_tile_routing(device, case, in_shape, out_shape, dtype, layout, route):
     gate.test_reshape_codegen_routing(device, case, in_shape, out_shape, dtype, layout, route)
+
+
+# Row-major bf16 pages of this many bytes, the L1 alignment, so the hog sets free L1 to the alignment.
+_HOG_PAGE_BYTES = 16
+_CLASH = "clash with L1 buffers"
+
+
+def _l1_hog_leaving_exact(device, free_bytes_per_bank):
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    pages_per_bank = (view.largest_contiguous_bytes_free_per_bank - free_bytes_per_bank) // _HOG_PAGE_BYTES
+    if pages_per_bank <= 0:
+        pytest.skip("L1 already has less free space than the test needs")
+    return ttnn.allocate_tensor_on_device(
+        ttnn.Shape((pages_per_bank * view.num_banks, _HOG_PAGE_BYTES // 2)),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        device,
+        _L1,
+    )
+
+
+def _native_runs_with(device, x, out_shape, free_bytes):
+    hog = _l1_hog_leaving_exact(device, free_bytes)
+    logger.info(f'[EXPECTED_ERROR BEGIN] RuntimeError message="{_CLASH}"')
+    try:
+        ttnn.deallocate(_force_native(x, out_shape, memory_config=_DRAM))
+        return True
+    except RuntimeError as error:
+        if _CLASH not in str(error):
+            raise
+        return False
+    finally:
+        logger.info(f'[EXPECTED_ERROR END] RuntimeError message="{_CLASH}"')
+        ttnn.deallocate(hog)
+
+
+# (id, in shape, out shape, dtype, free L1 per bank native is known to run with). Routed to codegen; the segment
+# map's smallest plan is the fallback whenever no larger plan fits.
+_L1_FLOOR = [
+    ("tile_rows_bf16", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, 32 * 1024),
+    ("mapped_fp32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.float32, 32 * 1024),
+]
+
+
+@pytest.mark.parametrize("case,in_shape,out_shape,dtype,ceiling", _L1_FLOOR, ids=[c[0] for c in _L1_FLOOR])
+def test_reshape_codegen_runs_at_native_l1_floor(device, case, in_shape, out_shape, dtype, ceiling):
+    source = gate._make(in_shape, dtype)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT)
+    assert _native_runs_with(device, x, out_shape, ceiling), f"native does not run with {ceiling} B free"
+    # Native's least free L1, to the hog's granularity: it fails at `low` and runs at `high`.
+    low, high = 0, ceiling
+    while high - low > _HOG_PAGE_BYTES:
+        middle = (low + high) // 2 // _HOG_PAGE_BYTES * _HOG_PAGE_BYTES
+        if _native_runs_with(device, x, out_shape, middle):
+            high = middle
+        else:
+            low = middle
+    hog = _l1_hog_leaving_exact(device, high)
+    out = ttnn.reshape(x, out_shape, memory_config=_DRAM)
+    gate._assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
+    ttnn.deallocate(hog)
+
+
+def test_reshape_codegen_mapped_over_caps_runs_native(device, expect_error):
+    # Every datum of a width-1 input is its own segment, so each output tile's map row holds 1024 entries (16 KiB);
+    # 1025 output tiles put the map over its 16 MiB cap.
+    in_shape, out_shape = [1, 1025 * 1024, 1], [1, 1025 * 32, 32]
+    source = torch.rand(in_shape, dtype=torch.bfloat16)
+    x = _to_device(device, source, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    with expect_error(RuntimeError, "within its size caps"):
+        _force_codegen(x, out_shape, memory_config=_DRAM)
+    assert_equal(source.reshape(out_shape), ttnn.to_torch(_force_native(x, out_shape, memory_config=_DRAM)))
+    # Native compiled its program; auto taking codegen would compile a new one.
+    entries = device.num_program_cache_entries()
+    assert_equal(source.reshape(out_shape), ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)))
+    assert device.num_program_cache_entries() == entries, "auto did not run native"

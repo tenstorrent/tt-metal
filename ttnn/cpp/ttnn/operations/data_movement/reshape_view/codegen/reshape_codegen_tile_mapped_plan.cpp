@@ -6,7 +6,7 @@
 
 #include <algorithm>
 #include <array>
-#include <deque>
+#include <list>
 #include <map>
 #include <mutex>
 #include <utility>
@@ -38,7 +38,8 @@ constexpr uint64_t kReadNs = 155;
 constexpr uint64_t kRowLaunchNs = 34;
 constexpr uint64_t kMinGainNs = 1500;
 constexpr std::array<uint32_t, 2> kPipelinedDepths = {8, 4};
-constexpr size_t kLayoutCacheEntries = 64;
+// Distinct reshapes memoized; a miss re-walks up to kMaxOutTiles output tiles.
+constexpr size_t kLayoutCacheEntries = 1024;
 
 uint64_t tile_pages(const Shape3& s) { return s.c * tt::div_up(s.h, kTileDim) * tt::div_up(s.w, kTileDim); }
 
@@ -291,27 +292,36 @@ std::optional<std::pair<Shape3, Shape3>> mapped_shapes(const ttnn::Shape& in_sha
 Candidates cached_candidates(
     const Shape3& in, const Shape3& out, uint32_t element_bytes, uint32_t tile_bytes, uint32_t num_cores) {
     using Key = std::array<uint64_t, 10>;
+    using Entry = std::pair<Key, Candidates>;
     static std::mutex mutex;
-    static std::map<Key, Candidates> cache;
-    static std::deque<Key> insertion_order;
+    static std::list<Entry> recency;
+    static std::map<Key, std::list<Entry>::iterator> cache;
 
     const Key key{in.c, in.h, in.w, out.c, out.h, out.w, element_bytes, tile_bytes, num_cores, entries_alignment()};
     {
         std::lock_guard lock(mutex);
         if (auto it = cache.find(key); it != cache.end()) {
-            return it->second;
+            recency.splice(recency.begin(), recency, it->second);
+            return it->second->second;
         }
     }
     auto candidates = plan_candidates(in, out, element_bytes, tile_bytes, num_cores);
     std::lock_guard lock(mutex);
-    if (cache.emplace(key, candidates).second) {
-        insertion_order.push_back(key);
-        if (insertion_order.size() > kLayoutCacheEntries) {
-            cache.erase(insertion_order.front());
-            insertion_order.pop_front();
+    if (!cache.contains(key)) {
+        recency.emplace_front(key, candidates);
+        cache.emplace(key, recency.begin());
+        if (recency.size() > kLayoutCacheEntries) {
+            cache.erase(recency.back().first);
+            recency.pop_back();
         }
     }
     return candidates;
+}
+
+// Upper bound on the segments of one output tile. When both widths are multiples of 16, each output face row is one
+// run inside one input face row, so a tile has at most two segments per row; otherwise at most one per datum.
+uint64_t max_segments_per_page(const Shape3& in, const Shape3& out) {
+    return in.w % kFaceDim == 0 && out.w % kFaceDim == 0 ? 2 * kTileDim : kTileElems;
 }
 
 void write_entry(uint32_t* entry, const Segment& segment) {
@@ -343,6 +353,27 @@ std::optional<TileMappedLayout> tile_mapped_layout(
         return candidates.unsliced;
     }
     return std::nullopt;
+}
+
+bool tile_mapped_within_caps(
+    const ttnn::Shape& in_shape,
+    const ttnn::Shape& out_shape,
+    uint32_t element_bytes,
+    uint32_t tile_bytes,
+    uint32_t num_cores) {
+    const auto shapes = mapped_shapes(in_shape, out_shape);
+    if (!shapes) {
+        return false;
+    }
+    const auto& [in, out] = *shapes;
+    const uint64_t pages = tile_pages(out);
+    if (pages == 0 || pages > kMaxOutTiles) {
+        return false;
+    }
+    if (pages * tt::round_up(max_segments_per_page(in, out), entries_alignment()) * kEntryBytes <= kMaxMapBytes) {
+        return true;
+    }
+    return cached_candidates(in, out, element_bytes, tile_bytes, num_cores).unsliced.has_value();
 }
 
 TileMappedPlan build_tile_mapped_plan(
@@ -395,7 +426,10 @@ TileMappedPlan build_tile_mapped_plan(
 }
 
 uint32_t tile_mapped_input_depth(const TileMappedLayout& layout, uint32_t tile_bytes, uint64_t l1_budget) {
-    // Map, input and scratch CBs, each starting at a DRAM-aligned address.
+    // Map, input and scratch CBs, each starting at a DRAM-aligned address. At depth 1 the unsliced map needs no more
+    // L1 than native's tiled reshape, which holds one map page, one input tile and one output tile, each also
+    // DRAM-aligned: native's map page holds every segment it splits the output tile into, and this map's segments are
+    // those same segments, merged further once grouped by input tile.
     const auto footprint = [](uint64_t bytes) { return tt::round_up(bytes, tt::tt_metal::hal::get_dram_alignment()); };
     const uint64_t fixed = footprint(layout.page_bytes()) + footprint(tile_bytes);
     for (const uint32_t depth : kPipelinedDepths) {

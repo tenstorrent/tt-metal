@@ -5,7 +5,6 @@
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_supported.hpp"
 
 #include <algorithm>
-#include <limits>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
@@ -133,7 +132,8 @@ struct TileRouteChoice {
 // Tries, in order: tile rows where it beats native, then tile rows and the segment map where they do not; the first
 // whose smallest plan fits the static window is taken. The segment map beats native only on widths that are not
 // multiples of 32, where tile rows does not apply. Tile rows falls back to the segment map when live L1 holds none of
-// its plans, and its smallest plan needs no more L1 than native's tiled reshape, so tile rows beats native only while
+// its plans, and the segment map's smallest plan needs no more L1 than native's tiled reshape
+// (tile_mapped_input_depth), so wherever native runs one of the two does; tile rows therefore beats native only while
 // the segment map is within its size caps. Native rejects uint16, so every program beats it there. With
 // `winners_only`, returns no plan before building any output spec when no program can beat native.
 TileRouteChoice choose_tile_route(
@@ -158,9 +158,10 @@ TileRouteChoice choose_tile_route(
     const auto rows_fit_budget = [&](const TileRowsChoice& c) { return tile_rows_l1_bytes(c, tile_bytes) <= budget; };
     const bool rows_fit = rows.has_value() && (rows_fit_budget(*rows) ||
                                                plan_tile_rows_fitting(in_shape, logical_output_shape, rows_fit_budget));
-    const bool mapped_within_caps =
-        fit_tile_mapped(input, logical_output_shape, num_cores, std::numeric_limits<uint64_t>::max()).has_value();
-    const bool live_fallback = native_rejects || mapped_within_caps;
+    const auto mapped_within_caps = [&] {
+        return tile_mapped_within_caps(
+            in_shape, logical_output_shape, static_cast<uint32_t>(input.element_size()), tile_bytes, num_cores);
+    };
 
     const auto take = [&](TileRoute tile_route, bool beats_native) {
         route.plan = LaunchPlan{.tile_route = tile_route};
@@ -171,7 +172,7 @@ TileRouteChoice choose_tile_route(
         return route;
     };
     if (rows_fit && rows_win) {
-        return take(TileRoute::TileRows, live_fallback);
+        return take(TileRoute::TileRows, native_rejects || mapped_within_caps());
     }
     if (rows_fit) {
         return take(TileRoute::TileRows, false);
@@ -179,7 +180,7 @@ TileRouteChoice choose_tile_route(
     if (fit_tile_mapped(input, logical_output_shape, num_cores, budget).has_value()) {
         return take(TileRoute::TileMapped, native_rejects || !row_permutation);
     }
-    const bool within_caps = rows.has_value() || mapped_within_caps;
+    const bool within_caps = rows.has_value() || mapped_within_caps();
     route.violation = within_caps ? kTileStaticFitViolation : kTileCapsViolation;
     return route;
 }
