@@ -82,11 +82,3 @@ def parse_calls(doc):
 def load_calls(path):
     with open(path) as f:
         return parse_calls(json.load(f))
-
-
-def control_indices(count, wanted):
-    """Evenly spread call indices for the A-vs-A control, so it samples the whole list."""
-    wanted = min(wanted, count)
-    if wanted <= 0:
-        return []
-    return sorted({round(i * (count - 1) / max(wanted - 1, 1)) for i in range(wanted)})
