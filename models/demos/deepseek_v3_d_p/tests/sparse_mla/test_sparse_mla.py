@@ -1075,6 +1075,75 @@ def test_sparse_mla_indexer_reuse_chunked(
     ttnn.synchronize_device(mesh_device)
 
 
+@pytest.mark.parametrize(
+    "variant, mesh_device, seq_len, device_params",
+    [c for c in SPARSE_REUSE_CASES if "8x4" in c.id or "(8, 4)" in str(c.values)],
+    indirect=["variant", "mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "cache_format", [MlaKvCacheFormat.BF16_RM, MlaKvCacheFormat.SCALED_FP8], ids=["kv_bf16", "kv_scaled_fp8"]
+)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_kv_push_matches_gather(
+    mesh_device, seq_len, device_params, variant, cache_format, config_only, ds_layer, ds_checkpoint, ds_repo
+):
+    """PROTOTYPE sparse KV push: a layer fed injected top-k indices that pushes only the referenced KV rows into a
+    compact buffer (sparse_kv_push=True) must match the same layer gathering the whole prefix. Same rows in the same
+    index order -> sparse_sdpa sees identical inputs, so the outputs match bit-for-bit."""
+    config = config_only
+    config.max_seq_len = seq_len
+    weights, _ = build_weights(variant, config, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo)
+    mesh_shape = list(mesh_device.shape)
+    sp_axis, tp_axis = 0, 1
+
+    def _kvpe():
+        return init_mla_kv_cache(
+            cache_format=cache_format,
+            hf_config=config,
+            mesh_device=mesh_device,
+            seq_len=seq_len,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=1,
+            tp_axis=tp_axis,
+        )
+
+    common = dict(
+        config=config,
+        weights=weights,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        is_chunked=True,
+        active_seq_len=seq_len,
+        actual_start=0,
+    )
+    _, _, _, shard_dims, idx = run_mla_inference(tt_kvpe_cache=_kvpe(), return_indices=True, **common)
+    out_gather, _, _, _ = run_mla_inference(
+        tt_kvpe_cache=_kvpe(), inject_indices=idx, mla_kwargs=dict(sparse_kv_push=False), **common
+    )
+    out_push, _, _, _ = run_mla_inference(
+        tt_kvpe_cache=_kvpe(), inject_indices=idx, mla_kwargs=dict(sparse_kv_push=True), **common
+    )
+
+    def _to_torch(t):
+        return ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        ).to(torch.bfloat16)
+
+    a, b = _to_torch(out_gather), _to_torch(out_push)
+    _, pcc_message = assert_with_pcc(a, b, 0.9999)
+    logger.info(
+        f"[{variant.name}] sparse KV push vs gather ({cache_format.name}): bitwise={torch.equal(a, b)} {pcc_message}"
+    )
+    ttnn.synchronize_device(mesh_device)
+
+
 # Anchor cases (per-variant prod-closest mesh, seq=4096); collected == run.
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params",
