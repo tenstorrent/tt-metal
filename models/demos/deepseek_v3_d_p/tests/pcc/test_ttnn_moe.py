@@ -169,11 +169,9 @@ def run_model(
     per-token ids are built here and handed to both sides, and the torch reference takes the
     resulting route instead of running its own gate.
 
-    ``measure`` wraps the forward for a perf caller: it is called as ``measure(forward)``,
-    must invoke the thunk and return its result, and owns the device sync. The perf gates use
-    it to run the forward inside a real-time-profiler window (see
-    ``tests/perf/test_kimi_moe_perf.py``) so the measured region is the forward alone --
-    the constructor's one-time weight tilize/typecast stays outside it.
+    ``measure`` is a perf hook, called as ``measure(forward, tt_moe, tt_x)``; it must return a
+    forward's result and owns the device sync. ``forward(x)`` runs the MoE on ``x`` (default ``tt_x``)
+    and frees it, so callers running it more than once pass copies of ``tt_x``.
     """
     if routed_activation not in _TORCH_ROUTED_ACTIVATION or routed_activation not in _UPSTREAM_ACT:
         raise ValueError(f"no torch reference for {routed_activation}; supported: {list(_TORCH_ROUTED_ACTIVATION)}")
@@ -578,9 +576,9 @@ def run_model(
 
     tt_x = upload_tt_x()
 
-    def forward():
+    def forward(x=None):
         return tt_moe(
-            tt_x,
+            tt_x if x is None else x,
             return_intermediates=run_pcc_check,
             actual_isl=actual_isl,
             padding_side="right",
@@ -592,9 +590,7 @@ def run_model(
         tt_output, tt_intermediates = forward()
         ttnn.synchronize_device(mesh_device)
     else:
-        # measure() syncs: the real-time profiler stops collecting once the window closes, so
-        # the sync has to happen inside it or the last programs' records are still in flight.
-        tt_output, tt_intermediates = measure(forward)
+        tt_output, tt_intermediates = measure(forward, tt_moe, tt_x)
     signpost(header="tt_forward_END")
 
     profiler.end("tt_forward")
