@@ -144,6 +144,9 @@ class PrefillModelAdapter(ABC):
     # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
+    # The drafter partial travels as its own D2D plane next to the model's planes; False packs it beside the
+    # hidden instead, widening the activation to 2H.
+    dflash_partial_separate_plane: bool = False
     supports_mtp: bool = False
     supports_tp_shard_kv: bool = False
     tp_shard_kv_default: bool = False
