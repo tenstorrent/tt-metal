@@ -297,6 +297,23 @@ These are experiment-entrypoint failures, not model accuracy failures.
 Only this experiment's runs/containers were stopped; baseline Shield
 39221429342 and other users' work were not modified.
 
+The corrected run reached the standard Harbor task step. The exploratory
+2x2 uses identical Metal `0aa4df2867dc3c8b709e04a8c6f089234033c524`,
+workflow `fe31b8a`, image, physical B1, 262144 context and traced suffix mode.
+The cache-off arm disables prefix caching explicitly at server startup;
+the client-only inference profile does not launch or override this server.
+
+| Request seed9472 | Prefix caching | Run | Runner |
+| --- | --- | --- | --- |
+| Present | Off | 39241180817 | qb2-120-p01t03 |
+| Present | On | 39241807530 | qb2-120-p03t09 |
+| Absent | Off | 39241811717 | qb2-120-p02t02 |
+| Absent | On | 39241815211 | qb2-120-p05t06 |
+
+These four concurrent jobs have distinct physical workers. The baseline
+Shield worker qb2-120-p05t09 is not used. Runs are pending measurement;
+dispatch/reaching the client step is not evidence of task completion.
+
 Remote runs 39238204679 (qb2-120-p03t09) and 39238201191
 (qb2-120-p01t03) passed concurrently on distinct machines, using Metal
 7d5c3e5cb8438989e36a6a35c704f1154f9a4584 and workflow 38d4d6f.
