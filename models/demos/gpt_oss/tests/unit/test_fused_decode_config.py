@@ -106,6 +106,25 @@ def test_one_token_takes_fused_decode_not_dense_moe():
     assert not dense_moe_decode_layout_supported(**SUPPORTED)
 
 
+# One P300 board at TP=2: a 1x2 system of its own, or one data-parallel half (a 1x2 submesh) of a QuietBox 2.
+BOARD = {**BATCHED, "mesh_shape": (1, 2), "tp": 2}
+
+
+@pytest.mark.parametrize("system_devices", [2, 4], ids=["p300_board", "quietbox2_data_parallel_half"])
+def test_batched_envelope_takes_one_p300_board(system_devices):
+    assert dense_moe_decode_layout_supported(**{**BOARD, "system_devices": system_devices})
+    assert not fused_decode_layout_supported(**{**BOARD, "system_devices": system_devices})
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"tp": 1}, {"system_devices": 8}, {"tokens": 1}, {"is_blackhole": False}],
+    ids=["tp_1", "slice_of_8_device_system", "batch_1", "wormhole"],
+)
+def test_outside_board_envelope_keeps_original_moe(change):
+    assert not dense_moe_decode_layout_supported(**{**BOARD, **change})
+
+
 @pytest.mark.parametrize(
     "change",
     [

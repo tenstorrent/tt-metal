@@ -396,6 +396,44 @@ def prepare_gpt_oss_generator_args(
             False,  # stop_at_eos
             False,  # run_in_ci
         ),
+        # Batch 32 on Blackhole: one 32-token tile per device, the batched decode (P300 board 1x2 at TP=2, QuietBox 2
+        # 1x4 at TP=4)
+        (
+            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            1,  # data_parallel
+            32,  # batch_size (per data-parallel group)
+            1,  # repeat_batches
+            4 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 32 * 4 * 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
+            False,  # warmup_prefill
+            False,  # users_row_sharded
+            False,  # long_context_mode
+            True,  # stop_at_eos
+            False,  # run_in_ci
+        ),
+        # 64 users on a QuietBox 2: data parallel over its two P300 boards, one TP=2 model per board (a 1x2 submesh of
+        # the 1x4 mesh), 32 users each on the batched decode
+        (
+            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            2,  # data_parallel
+            32,  # batch_size (per data-parallel group)
+            1,  # repeat_batches
+            4 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 32 * 4 * 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
+            False,  # warmup_prefill
+            False,  # users_row_sharded
+            False,  # long_context_mode
+            True,  # stop_at_eos
+            False,  # run_in_ci
+        ),
         # Seqlen sweep: 1k-128k context lengths, one step per seqlen (on single-row meshes, >64k steps are skipped)
         (
             [
@@ -441,6 +479,8 @@ def prepare_gpt_oss_generator_args(
         "batch128_logprobs",
         "long_context_128k",
         "long_context_short_prefill_long_decode",
+        "batch32",
+        "batch64_dp2",
         "seqlen-sweep",
     ],
 )
@@ -473,7 +513,13 @@ def test_gpt_oss_demo(
     is_seqlen_sweep = "seqlen-sweep" in test_id
     # On single-row meshes (T3K, LoudBox), cap max_seq_len at 64k for seqlen-sweep so steps >64k are skipped
     actual_max_seq_len = min(max_seq_len, 64 * 1024) if (is_seqlen_sweep and mesh_shape[0] == 1) else max_seq_len
-    if mesh_shape[0] == 1:
+    # The batched decode (one 32-token tile per device) serves 32 users per data-parallel group on Blackhole 1x2 / 1x4
+    # (fused_decode.config.dense_moe_decode_layout_supported).
+    group_shape = (mesh_shape[0], mesh_shape[1] // data_parallel)
+    batched_decode = is_blackhole() and batch_size == 32 and group_shape in ((1, 2), (1, 4)) and not users_row_sharded
+    if data_parallel > 1 and not batched_decode:
+        pytest.skip(f"Data-parallel demo needs the Blackhole batched decode on 1x2 / 1x4 groups (mesh {mesh_shape})")
+    if mesh_shape[0] == 1 and not batched_decode:
         if batch_size > 1:
             pytest.skip(
                 f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
@@ -481,7 +527,7 @@ def test_gpt_oss_demo(
         elif max_seq_len > 64 * 1024 and not is_seqlen_sweep:
             # Seqlen sweep uses actual_max_seq_len (capped at 64k) for execution; skip only non-sweep tests
             pytest.skip(f"Long context demo with >64k tokens skipped for mesh shape {mesh_shape} due to OOM.")
-    if is_blackhole() and batch_size > 1:
+    if is_blackhole() and batch_size > 1 and not batched_decode:
         pytest.skip(
             f"Batch size {batch_size} demo skipped on Blackhole: throughput experts are not supported, "
             "only batch=1 low-latency experts run on this arch."
@@ -493,11 +539,16 @@ def test_gpt_oss_demo(
         pytest.skip(f"This test configuration is skipped in CI: {config_id}")
 
     # Use our refactored TestFactory for consistent setup
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
-    config = setup["config"]
-    mesh_config = setup["mesh_config"]
-
-    logger.debug(f"Using mesh config: {mesh_config}, model config: {config}")
+    if data_parallel == 1:
+        setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+        config = setup["config"]
+        mesh_config = setup["mesh_config"]
+        logger.debug(f"Using mesh config: {mesh_config}, model config: {config}")
+    else:
+        # Each submesh model derives its own mesh config, and nothing may use the parent mesh's command queue (a submesh
+        # whose queue the parent also used cannot be closed), so skip the test-factory setup: its CCL manager allocates
+        # semaphores on the parent mesh.
+        mesh_config = None
 
     # Configuration matching tt_transformers defaults
     num_devices = mesh_device.get_num_devices()
