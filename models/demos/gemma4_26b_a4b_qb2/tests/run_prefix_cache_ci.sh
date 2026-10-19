@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
+export OMP_NUM_THREADS=8
 cd "${TT_METAL_HOME:?}"
 model_dir=models/demos/gemma4_26b_a4b_qb2
 results=${GEMMA4_PREFIX_RESULTS:?}
@@ -43,6 +44,11 @@ started=$SECONDS
 while ! curl --max-time 2 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; do
     if ! kill -0 "$server_pid" 2>/dev/null || (( SECONDS - started > 1200 )); then
         tail -100 "$results/server.log"
+        if kill -0 "$server_pid" 2>/dev/null; then
+            timeout 120 python tools/tt-triage.py --llm-output \
+                --llm-output-path "$results/startup-triage.txt" \
+                --triage-summary-path "$results/startup-triage-summary.txt" || true
+        fi
         exit 1
     fi
     sleep 5

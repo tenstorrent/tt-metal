@@ -107,3 +107,16 @@ writable by the image user. This is infrastructure setup evidence, not model
 correctness or performance evidence. The workflow now checks the runner-local
 Shield pinned checkpoint cache identified in successful run 39217198324, mounts
 it read-only when present, and otherwise uses a writable experiment-specific cache.
+
+Remote run [39227511399](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39227511399)
+used Metal `589b160eff576d95b42a1f06f9776212d0b0a92b`, workflow `0324431`,
+runner `qb2-120-p02t02`. Host contracts passed again. No complete prior cache was
+present; downloading into the experiment workspace failed with ENOSPC during
+checkpoint loading. Devices closed cleanly in the failure log. No prefix requests
+ran. The automatic download fallback is removed. The next run is a short remote
+storage/cache discovery probe; subsequent model runs require every indexed shard
+to exist in the selected pinned cache and use offline read-only access.
+
+The remote runner now explicitly matches the profile's `OMP_NUM_THREADS=8` and
+attempts startup triage before terminating a live server that exceeds the startup
+bound. Neither adjustment has been measured as a runtime improvement.
