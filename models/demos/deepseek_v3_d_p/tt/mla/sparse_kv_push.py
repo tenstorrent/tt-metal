@@ -96,11 +96,20 @@ class SparseKvPushPlanner:
         self.banks = mesh_device.dram_grid_size().x
         self._last: SparseKvPushPlan | None = None
 
+    def buffer_rows(self, rows: int, page_bytes: int) -> int:
+        """Compact buffer rows for up to `rows` distinct rows: each owner's stream pads to whole bank-lane units."""
+        unit = self._pages_per_packet(page_bytes) * self.banks
+        return rows + self.mesh_device.get_num_devices() * unit
+
+    @staticmethod
+    def _pages_per_packet(page_bytes: int) -> int:
+        return max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
+
     def plan(self, indices: ttnn.Tensor, *, stripe_chunk: int, buffer_rows: int, page_bytes: int) -> SparseKvPushPlan:
         if self._last is not None and self._last.indices is indices:
             return self._last
         n_dev = self.mesh_device.get_num_devices()
-        pages_per_packet = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
+        pages_per_packet = self._pages_per_packet(page_bytes)
         # Indices are sequence-sharded over every chip in row-major order, so chip c holds rows c*rows..
         host_idx = ttnn.to_torch(indices, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=2))
         host_idx = host_idx.to(torch.int64).numpy().astype(np.int64) & 0xFFFFFFFF

@@ -432,6 +432,11 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
             }
             expected_output_shape[0] = 1;
         }
+        // The sparse push's compact buffer pads each owner's stream to whole bank-lane units, so it may be taller.
+        if (tensor_args.has_push_runs() && output_shape.rank() == expected_output_shape.rank() &&
+            output_shape[args.dim] >= expected_output_shape[args.dim]) {
+            expected_output_shape[args.dim] = output_shape[args.dim];
+        }
         TT_FATAL(
             output_shape == expected_output_shape,
             "Output tensor shape must be the worst-case gathered shape {}, got {}",
