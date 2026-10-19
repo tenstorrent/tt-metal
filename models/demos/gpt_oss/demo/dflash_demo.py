@@ -179,5 +179,6 @@ def test_dflash_demo(mesh_device, device_params, isl):
         f"DFlash ISL {isl}: {n} tokens, {sum(accept) / len(accept):.2f} tokens per round ({len(accept)} rounds), "
         f"{round_ms:.3f} ms per round, {n / rounds_s:.1f} tok/s/user"
     )
-    # the round time does not depend on the answer text (the acceptance does): a perf regression guard
+    # perf regression guard: the round time moves little with the answer text (at most 2.4% over 5 prompt dates), the
+    # acceptance moves a lot
     assert round_ms <= MAX_ROUND_MS[isl], f"{round_ms:.3f} ms per round > {MAX_ROUND_MS[isl]} ms at ISL {isl}"

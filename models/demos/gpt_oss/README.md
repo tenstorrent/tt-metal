@@ -85,6 +85,7 @@ gives 2.38 ms per token (420 tok/s/user).
 | `tt/dflash/lm_head.py`, `lm_rescore.py`, `argmax.py` | the two-stage LM head and the on-device acceptance |
 | `tt/dflash/capture.py` | the target's prefill features for the drafter |
 | `reference/dflash.py` | torch reference of the drafter and of DFlash greedy decoding |
+| `tt/fused_decode/kernels/` | the device kernels of these programs (shared with the fused batch-1 decode they extend) |
 
 ## Configuration
 
