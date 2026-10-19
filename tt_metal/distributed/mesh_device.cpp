@@ -2003,6 +2003,11 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, u
         check_dram_bank(device, bank_id);
         return CoreCoord(bank_id, 0);
     }
+    if (metal_env().get_hal().get_arch() == tt::ARCH::QUASAR) {
+        TT_THROW(
+            "Quasar DRAM views have no unused subchannel: each view's CCE is its sender, (bank_id, 0). Use "
+            "dram_sender_logical_cores instead.");
+    }
     return tt::tt_metal::pick_unused_dram_logical_core(
         metal_env().get_cluster().get_soc_desc(device->id()), bank_id, device->id());
 }
@@ -2016,6 +2021,9 @@ std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* 
         return {CoreCoord(bank_id, 0)};
     }
     const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
+    if (metal_env().get_hal().get_arch() == tt::ARCH::QUASAR) {
+        return {soc_desc.get_logical_core_for_dram_view(static_cast<int>(bank_id))};
+    }
 
     // Sender 0: the free non-endpoint subchannel.
     const CoreCoord free_core = pick_unused_dram_logical_core(device, bank_id);

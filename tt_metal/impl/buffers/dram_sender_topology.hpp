@@ -122,4 +122,8 @@ void write_dram_sender_l1(
     DeviceAddr local_addr,
     std::span<const std::byte> bytes);
 
+// Package index of a DRAM core: its channel times the DRAM cores per channel, plus its subchannel. On
+// Quasar this is the CCE index cce_sram_address takes. Two logical coords can name one core.
+uint32_t package_dram_core_index(const metal_SocDescriptor& soc_desc, const CoreCoord& dram_logical);
+
 }  // namespace tt::tt_metal

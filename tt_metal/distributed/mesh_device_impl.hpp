@@ -420,7 +420,8 @@ public:
     std::shared_ptr<experimental::HostRegion> host_region();
 
     // tt::tt_metal::pick_unused_dram_logical_core (impl/buffers/dram_sender_topology.hpp) against
-    // `device`'s SoC descriptor.
+    // `device`'s SoC descriptor. Throws on Quasar outside DramSenderPlacement::DispatchEngine, where
+    // each view's CCE is its sender.
     CoreCoord pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const;
 
     // Returns the ordered list of DRISC logical cores that drive a bank's DRAM-sender
@@ -429,6 +430,7 @@ public:
     // subchannel (idle for NOC0 during matmul). Both run their kernels on NOC0; the
     // pair lets two DRISC cores share a bank's receiver set. Under
     // DramSenderPlacement::DispatchEngine a bank has one endpoint, so the list has one element.
+    // With Quasar CCE senders the list is the view's one CCE, (bank_id, 0).
     //
     // The result names endpoint roles (see metal_SocDescriptor::dram_bank_endpoint_coords), so a
     // well-formed descriptor set returns the same coords for every `device` in a mesh; the

@@ -24,6 +24,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <string>
 #include <string_view>
 #include <optional>
@@ -43,6 +44,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
@@ -52,7 +54,9 @@
 #include "impl/kernels/kernel.hpp"  // DramConfig + CreateKernel(DramConfig)
 #include "impl/program/program_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
+#include "llrt/hal.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"  // receiver_socket_md (for L1 layout sizing)
 
 namespace tt::tt_metal::distributed {
@@ -63,16 +67,162 @@ static_assert(
     kNumOpSignalSlots == experimental::kTensorPrefetcherNumSignals,
     "Every op signal needs its slot in the signal slot table");
 
-constexpr uint32_t kNumGddrSubchannelsPerBank = 3;
 // Blackhole MPFE round-robin weights occupy the 3-bit field defined by
 // GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_MASK in the DRISC-only register map.
 constexpr uint32_t kMaxMpfeWeight = 7;
 constexpr std::string_view kBenchmarkMpfeEnvPrefix = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_";
 constexpr std::string_view kBenchmarkTimerName = "TENSOR_PREFETCHER_MPFE_ACTIVE_LIFETIME";
 
-constexpr const char* kKernelPath = "tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp";
+// How request pages reach a sender.
+enum class RequestTransportKind : uint8_t {
+    H2DSocket,
+    Tl1Ring,
+};
+
+// What differs between the Blackhole DRISC prefetcher and the Quasar CCE prefetcher.
+struct PrefetcherArchTraits {
+    const char* kernel_path;
+    uint32_t senders_per_bank;
+    RequestTransportKind transport;
+    // GDDR subchannels per bank the sender roles assume; unset skips the check.
+    std::optional<uint32_t> gddr_subchannels_per_bank;
+    // Whether QuasarTensorPrefetcherConfig::stage_ring_bytes caps the stage ring.
+    bool stage_ring_capped;
+    // Receiver-contiguous batched delivery only: K-row-major tensors and streaming are rejected.
+    bool receiver_contiguous_batched_only;
+    bool supports_prefetcher_pipes;
+    // IsTensorPrefetcherSupported stays false until the port is complete.
+    bool port_complete;
+};
+
+constexpr PrefetcherArchTraits kBlackholeTraits{
+    .kernel_path = "tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp",
+    .senders_per_bank = 2,
+    .transport = RequestTransportKind::H2DSocket,
+    .gddr_subchannels_per_bank = 3,
+    .stage_ring_capped = false,
+    .receiver_contiguous_batched_only = false,
+    .supports_prefetcher_pipes = true,
+    .port_complete = true,
+};
+
+constexpr PrefetcherArchTraits kQuasarTraits{
+    .kernel_path = "tt_metal/impl/buffers/kernels/tensor_prefetcher_cce.cpp",
+    .senders_per_bank = 1,
+    .transport = RequestTransportKind::Tl1Ring,
+    .gddr_subchannels_per_bank = std::nullopt,
+    .stage_ring_capped = true,
+    .receiver_contiguous_batched_only = true,
+    .supports_prefetcher_pipes = false,
+    .port_complete = false,
+};
+
+const PrefetcherArchTraits& prefetcher_traits_for(tt::ARCH arch) {
+    if (arch == tt::ARCH::BLACKHOLE) {
+        return kBlackholeTraits;
+    }
+    if (arch == tt::ARCH::QUASAR) {
+        return kQuasarTraits;
+    }
+    TT_THROW("Tensor prefetcher is not available on architecture {}", arch);
+}
+
+std::optional<uint32_t> stage_ring_cap(
+    const PrefetcherArchTraits& traits, const experimental::QuasarTensorPrefetcherConfig& quasar_config) {
+    if (!traits.stage_ring_capped) {
+        return std::nullopt;
+    }
+    return quasar_config.stage_ring_bytes;
+}
 
 inline uint32_t align_up(uint32_t a, uint32_t align) { return (a + align - 1) & ~(align - 1); }
+
+// Per-core carve of the DRISC L1 kernel working region (above the arena's sender-state zone):
+//   [signal slots | socket_config | socket_data FIFO | selector scratch | stage ring].
+// Each pipe's NOC XY table, credit counters and write cursors live in its sender config page in that
+// zone, owned by the pipe rather than the prefetcher kernel. Each DRAM core hosts exactly one
+// H2DSocket recv (for its own sender), so the layout is uniform across all DRAM cores. The
+// MeshBuffer L1 allocator can't reach DRAM-core L1, so the addresses go to the H2DSocket bypass
+// ctor directly (see h2d_socket_internal.hpp).
+struct KernelRegionCarve {
+    uint32_t signal_slots_l1_addr = 0;
+    // One L1 alignment per slot rather than packed -- see signal_slot_stride_.
+    uint32_t signal_slot_stride = 0;
+    uint32_t socket_config_l1_addr = 0;
+    uint32_t socket_data_l1_addr = 0;
+    uint32_t selector_scratch_l1_addr = 0;
+    uint32_t stage_ring_base = 0;
+    uint32_t stage_ring_size = 0;
+    // Empty when the carve fits the region; otherwise why it does not.
+    std::string failure_reason;
+};
+
+KernelRegionCarve carve_kernel_region(
+    const Hal& hal, const DriscL1Arena& arena, std::optional<uint32_t> stage_ring_cap) {
+    KernelRegionCarve carve;
+    const uint32_t kernel_region_size = arena.kernel_working_region_size();
+    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    if (kernel_region_size < 2 * l1_alignment) {
+        carve.failure_reason = fmt::format(
+            "DRISC L1 kernel region ({} B) too small for the prefetcher ping-pong stage", kernel_region_size);
+        return carve;
+    }
+    const uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+    const uint32_t page_size = align_up(kRequestPageBytes, pcie_alignment);
+    const uint32_t socket_fifo_size = align_up(page_size * TensorPrefetcherManager::kSocketFifoPages, pcie_alignment);
+    const uint32_t socket_config_bytes = align_up(sizeof(receiver_socket_md), pcie_alignment);
+    const uint32_t socket_data_bytes = socket_fifo_size + pcie_alignment;
+    const uint32_t kernel_region_base = static_cast<uint32_t>(arena.kernel_working_region_base());
+    // Signal slots at the front of the region: a uint32 counter per command queue, written by the
+    // dispatcher for WaitForCqOnTensorPrefetcher, then one per op signal, incremented by device
+    // kernels; the kernel's WAIT_SIGNAL handler polls them.
+    carve.signal_slot_stride = l1_alignment;
+    const uint32_t signal_slots_bytes = kNumSignalSlots * carve.signal_slot_stride;
+    carve.signal_slots_l1_addr = align_up(kernel_region_base, l1_alignment);
+    carve.socket_config_l1_addr = align_up(carve.signal_slots_l1_addr + signal_slots_bytes, pcie_alignment);
+    carve.socket_data_l1_addr = align_up(carve.socket_config_l1_addr + socket_config_bytes, pcie_alignment);
+    // The selector scratch takes a NoC read from DRAM, which lands at the same offset within a
+    // DRAM-alignment word as its source, and selector pages start DRAM-aligned.
+    const uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
+    carve.selector_scratch_l1_addr = align_up(carve.socket_data_l1_addr + socket_data_bytes, dram_alignment);
+    carve.stage_ring_base =
+        align_up(carve.selector_scratch_l1_addr + kTensorPrefetcherSelectorScratchBytes, l1_alignment);
+    const uint32_t kernel_region_end = kernel_region_base + kernel_region_size;
+    if (carve.stage_ring_base >= kernel_region_end) {
+        carve.failure_reason =
+            fmt::format("DRISC L1 kernel region ({} B) too small for socket buffers + stage ring", kernel_region_size);
+        return carve;
+    }
+    carve.stage_ring_size = kernel_region_end - carve.stage_ring_base;
+    // The cap applies before the align-down, so the capped ring is still aligned.
+    if (stage_ring_cap.has_value()) {
+        carve.stage_ring_size = std::min(carve.stage_ring_size, *stage_ring_cap);
+    }
+    // Same align-down as TensorPrefetcherManager::set_stage_ring_size, so the size checked here is the
+    // size the manager ends up with.
+    const uint32_t ring_size_align = 6u * l1_alignment;
+    carve.stage_ring_size = carve.stage_ring_size / ring_size_align * ring_size_align;
+    // After aligning down, make sure the ring is still big enough for at least
+    // one minimal sub-chunk per slot. Catches accidental shrink-to-zero if the
+    // socket carve-out ever grows past the L1 region.
+    if (carve.stage_ring_size < 6 * l1_alignment) {
+        if (stage_ring_cap.has_value()) {
+            carve.failure_reason = fmt::format(
+                "DRISC L1 stage ring shrank to {} B after alignment — the {} B stage ring cap or the socket buffers "
+                "left too little of the {} B kernel region",
+                carve.stage_ring_size,
+                *stage_ring_cap,
+                kernel_region_size);
+        } else {
+            carve.failure_reason = fmt::format(
+                "DRISC L1 stage ring shrank to {} B after alignment — socket buffers consumed too much of the {} B "
+                "kernel region",
+                carve.stage_ring_size,
+                kernel_region_size);
+        }
+    }
+    return carve;
+}
 
 uint32_t get_mpfe_port(const metal_SocDescriptor& soc_desc, const CoreCoord& sender_logical_core) {
     const CoreCoord sender_physical = soc_desc.get_physical_dram_core_from_logical(sender_logical_core);
@@ -629,10 +779,24 @@ TensorPrefetcherManager::TensorPrefetcherManager(
 
 TensorPrefetcherManager::~TensorPrefetcherManager() { stop(); }
 
-void TensorPrefetcherManager::enumerate_dram_senders() {
+void TensorPrefetcherManager::enumerate_dram_senders(const std::vector<uint32_t>& sender_banks) {
     TT_FATAL(!devices_.empty(), "Tensor prefetcher requires at least one device");
     // dram_grid_size() already TT_FATALs unless every device in the mesh reports the same bank count.
     num_banks_ = mesh_device_->dram_grid_size().x;
+    const PrefetcherArchTraits& traits = prefetcher_traits_for(mesh_device_->arch());
+
+    std::vector<uint32_t> provisioned_banks = sender_banks;
+    if (provisioned_banks.empty()) {
+        provisioned_banks.resize(num_banks_);
+        std::iota(provisioned_banks.begin(), provisioned_banks.end(), 0u);
+    }
+    std::vector<bool> bank_listed(num_banks_, false);
+    for (const uint32_t bank : provisioned_banks) {
+        TT_FATAL(
+            bank < num_banks_, "Tensor prefetcher sender bank {} is out of range for {} DRAM banks", bank, num_banks_);
+        TT_FATAL(!bank_listed[bank], "Tensor prefetcher sender bank {} is listed more than once", bank);
+        bank_listed[bank] = true;
+    }
 
     // Logical DRAM coords name an endpoint role, so a bank's two senders have the same logical
     // coords on every device even when their DRAM harvest masks differ; only the physical
@@ -640,13 +804,13 @@ void TensorPrefetcherManager::enumerate_dram_senders() {
     // the rest agree, because everything downstream (socket placement, kernel placement, pipe sender
     // indices) indexes senders by slot and would otherwise silently drive another device's wrong
     // DRISC core.
-    // Two roles per bank on DRAM cores (the free subchannel, then the NOC1-endpoint subchannel); one on a
-    // dispatch engine, which holds every endpoint.
-    const size_t roles_per_bank = on_dispatch_engine() ? 1 : 2;
-    const auto senders_on = [this, roles_per_bank](const IDevice* device) {
+    // Roles per bank on DRAM cores come from the arch (two on Blackhole: the free subchannel, then the
+    // NOC1-endpoint subchannel); a dispatch engine holds every endpoint, so it has one.
+    const size_t roles_per_bank = on_dispatch_engine() ? 1 : traits.senders_per_bank;
+    const auto senders_on = [this, roles_per_bank, &provisioned_banks](const IDevice* device) {
         std::vector<CoreCoord> senders;
-        senders.reserve(roles_per_bank * num_banks_);
-        for (uint32_t b = 0; b < num_banks_; ++b) {
+        senders.reserve(roles_per_bank * provisioned_banks.size());
+        for (const uint32_t b : provisioned_banks) {
             const std::vector<CoreCoord> bank_senders = mesh_device_->impl().dram_sender_logical_cores(device, b);
             TT_FATAL(
                 bank_senders.size() == roles_per_bank,
@@ -828,20 +992,23 @@ void TensorPrefetcherManager::build_and_launch_programs(
     const uint32_t pcie_alignment = mesh_device_->impl().metal_env().get_hal().get_alignment(HalMemType::HOST);
     const uint32_t socket_page_size = align_up(kRequestPageBytes, pcie_alignment);
 
+    const PrefetcherArchTraits& traits = prefetcher_traits_for(mesh_device_->arch());
     programs_.clear();
     for (uint32_t d = 0; d < devices_.size(); ++d) {
         auto program = std::make_unique<Program>(CreateProgram(*mesh_device_));
         const auto& soc_desc = mesh_device_->impl().metal_env().get_cluster().get_soc_desc(devices_[d]->id());
-        TT_FATAL(
-            soc_desc.get_grid_size(tt::CoreType::DRAM).y == kNumGddrSubchannelsPerBank,
-            "Tensor prefetcher expected {} GDDR subchannels per bank, found {}",
-            kNumGddrSubchannelsPerBank,
-            soc_desc.get_grid_size(tt::CoreType::DRAM).y);
+        if (traits.gddr_subchannels_per_bank.has_value()) {
+            TT_FATAL(
+                soc_desc.get_grid_size(tt::CoreType::DRAM).y == *traits.gddr_subchannels_per_bank,
+                "Tensor prefetcher expected {} GDDR subchannels per bank, found {}",
+                *traits.gddr_subchannels_per_bank,
+                soc_desc.get_grid_size(tt::CoreType::DRAM).y);
+        }
 
         for (uint32_t s = 0; s < num_senders_; ++s) {
             const CoreCoord sender_logical = sender_logical_cores_[s];
             const uint32_t bank_id = static_cast<uint32_t>(sender_logical.x);
-            const uint32_t bank_sender_base = 2 * bank_id;
+            const uint32_t bank_sender_base = traits.senders_per_bank * bank_id;
             const bool controls_ordinary_mpfe = mpfe_policy.has_value() && s == bank_sender_base;
             uint32_t own_mpfe_port = 0;
             uint32_t ordinary_mpfe_port = 0;
@@ -881,7 +1048,7 @@ void TensorPrefetcherManager::build_and_launch_programs(
             // call push this kernel past the DRISC firmware window. Other builds are unaffected.
             KernelHandle kernel_id = CreateKernel(
                 *program,
-                kKernelPath,
+                traits.kernel_path,
                 sender_logical,
                 DramConfig{.noc = NOC::NOC_0, .compile_args = compile_args, .defines = {{"WATCHER_NOINLINE", "1"}}});
 
@@ -956,12 +1123,21 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
             "Blackhole tensor prefetcher configuration cannot be used on architecture {}",
             mesh_device_->arch());
     }
+    if (mesh_device_->arch() != ARCH::QUASAR) {
+        TT_FATAL(
+            !config.quasar.has_value(),
+            "Quasar tensor prefetcher configuration cannot be used on architecture {}",
+            mesh_device_->arch());
+    }
 
     const auto& hal = mesh_device_->impl().metal_env().get_hal();
     TT_FATAL(
         mesh_device_->impl().dram_sender_placement().has_value(),
         "Tensor prefetcher requires programmable DRAM cores, which auto-enable on Blackhole with firmware "
         ">= 19.12.0.0, or fast dispatch on a dispatch engine serving one command queue");
+    const PrefetcherArchTraits& traits = prefetcher_traits_for(mesh_device_->arch());
+    const experimental::QuasarTensorPrefetcherConfig quasar_config =
+        config.quasar.value_or(experimental::QuasarTensorPrefetcherConfig{});
 
     // Populate devices_ before resolving sender slots: enumerate_dram_senders checks the slots
     // against every device's DRAM topology. Build the coord->index map at the same time so
@@ -973,67 +1149,43 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
         devices_.push_back(device);
         device_index_by_coord_.emplace(mesh_device_->get_view().find_device(device->id()), d);
     }
-    enumerate_dram_senders();
+    enumerate_dram_senders(quasar_config.dram_sender_banks);
     drain_targets_per_sender_.assign(num_senders_, {});
     if (on_dispatch_engine()) {
         start_on_dispatch_engine();
         return;
     }
 
-    // DRISC L1 layout: the kernel working region (above the arena's sender-state zone) holds the
-    // CQ signal slots, the request socket and the ping-pong stage ring. Each pipe's NOC XY table,
-    // credit counters and write cursors live in its sender config page in that zone, owned by the
-    // pipe rather than the prefetcher kernel.
-    auto& arena = mesh_device_->impl().drisc_l1_arena();
-    const uint32_t kernel_region_size = arena.kernel_working_region_size();
-    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    TT_FATAL(
-        kernel_region_size >= 2 * l1_alignment,
-        "DRISC L1 kernel region ({} B) too small for the prefetcher ping-pong stage",
-        kernel_region_size);
-    // Carve the per-core DRISC L1 kernel working region into:
-    //   [signal slots | socket_config | socket_data FIFO | selector scratch | stage ring].
-    // Each DRAM core hosts exactly one H2DSocket recv (for its own sender), so
-    // the layout is uniform across all DRAM cores. The MeshBuffer L1 allocator
-    // can't reach DRAM-core L1, so we hand the addresses to the H2DSocket
-    // bypass ctor directly (see h2d_socket_internal.hpp).
-    const uint32_t pcie_alignment_for_layout = hal.get_alignment(HalMemType::HOST);
-    const uint32_t page_size_for_layout = align_up(kRequestPageBytes, pcie_alignment_for_layout);
-    const uint32_t socket_fifo_size_for_layout =
-        align_up(page_size_for_layout * kSocketFifoPages, pcie_alignment_for_layout);
-    const uint32_t socket_config_bytes = align_up(sizeof(receiver_socket_md), pcie_alignment_for_layout);
-    const uint32_t socket_data_bytes = socket_fifo_size_for_layout + pcie_alignment_for_layout;
-    const uint32_t kernel_region_base = static_cast<uint32_t>(arena.kernel_working_region_base());
-    // Signal slots at the front of the region: a uint32 counter per command queue, written by the
-    // dispatcher for WaitForCqOnTensorPrefetcher, then one per op signal, incremented by device
-    // kernels; the kernel's WAIT_SIGNAL handler polls them. One L1 alignment apiece rather than
-    // packed — see signal_slot_stride_.
-    signal_slot_stride_ = l1_alignment;
+    const KernelRegionCarve carve =
+        carve_kernel_region(hal, mesh_device_->impl().drisc_l1_arena(), stage_ring_cap(traits, quasar_config));
+    TT_FATAL(carve.failure_reason.empty(), "{}", carve.failure_reason);
+    signal_slot_stride_ = carve.signal_slot_stride;
     const uint32_t signal_slots_bytes = kNumSignalSlots * signal_slot_stride_;
-    signal_slots_l1_addr_ = align_up(kernel_region_base, l1_alignment);
-    socket_config_l1_addr_ = align_up(signal_slots_l1_addr_ + signal_slots_bytes, pcie_alignment_for_layout);
-    socket_data_l1_addr_ = align_up(socket_config_l1_addr_ + socket_config_bytes, pcie_alignment_for_layout);
-    // The selector scratch takes a NoC read from DRAM, which lands at the same offset within a
-    // DRAM-alignment word as its source, and selector pages start DRAM-aligned.
-    const uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
-    selector_scratch_l1_addr_ = align_up(socket_data_l1_addr_ + socket_data_bytes, dram_alignment);
-    stage_ring_base_ = align_up(selector_scratch_l1_addr_ + kTensorPrefetcherSelectorScratchBytes, l1_alignment);
-    const uint32_t kernel_region_end = kernel_region_base + kernel_region_size;
-    TT_FATAL(
-        stage_ring_base_ < kernel_region_end,
-        "DRISC L1 kernel region ({} B) too small for socket buffers + stage ring",
-        kernel_region_size);
-    set_stage_ring_size(kernel_region_end - stage_ring_base_, l1_alignment);
-    // After aligning down, make sure the ring is still big enough for at least
-    // one minimal sub-chunk per slot. Catches accidental shrink-to-zero if the
-    // socket carve-out ever grows past the L1 region.
-    TT_FATAL(
-        stage_ring_size_ >= 6 * l1_alignment,
-        "DRISC L1 stage ring shrank to {} B after alignment — socket buffers consumed too much of the {} B "
-        "kernel region",
-        stage_ring_size_,
-        kernel_region_size);
+    signal_slots_l1_addr_ = carve.signal_slots_l1_addr;
+    socket_config_l1_addr_ = carve.socket_config_l1_addr;
+    socket_data_l1_addr_ = carve.socket_data_l1_addr;
+    selector_scratch_l1_addr_ = carve.selector_scratch_l1_addr;
+    stage_ring_base_ = carve.stage_ring_base;
+    set_stage_ring_size(carve.stage_ring_size, hal.get_alignment(HalMemType::L1));
 
+    if (traits.transport == RequestTransportKind::Tl1Ring) {
+        const size_t num_cces = MetalContext::instance(mesh_device_->impl().get_context_id())
+                                    .get_cluster()
+                                    .get_soc_desc(devices_.front()->id())
+                                    .get_metal_dram_cores(tt::CoordSystem::TRANSLATED)
+                                    .size();
+        if (num_senders_ >= num_cces) {
+            log_warning(
+                tt::LogMetal,
+                "Tensor prefetcher: all {} CCEs are senders, so none is left for receiver Programs. Pass "
+                "QuasarTensorPrefetcherConfig::dram_sender_banks to keep CCEs free for receivers.",
+                num_cces);
+        }
+        TT_THROW(
+            "Tensor prefetcher: the CCE sender Program builder is not wired yet, so StartTensorPrefetcher cannot "
+            "launch senders on {}",
+            mesh_device_->arch());
+    }
     allocate_sockets();
     build_and_launch_programs(stage_ring_base_, stage_ring_size_, mpfe_policy);
 
@@ -1094,7 +1246,10 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     // remain on its primary sender, and the kernel slices every bank's shard by the one
     // receivers_per_bank count, so every bank must drive exactly that many. Receiver-contiguous
     // tensors may use either this topology or a dual-sender split.
-    bool krow_compatible_mapping = mapping.size() == num_banks_;
+    const PrefetcherArchTraits& traits = prefetcher_traits_for(mesh_device_->arch());
+    // The limit is the CCE sender's; a dispatch engine on the same arch does not have it.
+    const bool receiver_contiguous_batched_only = !on_dispatch_engine() && traits.receiver_contiguous_batched_only;
+    bool krow_compatible_mapping = !receiver_contiguous_batched_only && mapping.size() == num_banks_;
     std::vector<bool> primary_bank_seen(num_banks_, false);
     if (krow_compatible_mapping) {
         for (const auto& [sender, receivers] : mapping) {
@@ -1208,6 +1363,13 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     for (size_t tensor_idx = 0; tensor_idx < data_tensors.size(); ++tensor_idx) {
         const auto& input = data_tensors[tensor_idx];
         const bool streaming = !input.rotation.empty();
+        if (receiver_contiguous_batched_only) {
+            TT_FATAL(
+                !streaming,
+                "Tensor prefetcher on {} delivers batched tensors only, but input tensor {} has a streaming rotation",
+                mesh_device_->arch(),
+                tensor_idx);
+        }
         // Streaming delivers block (rotation[r] + p) mod block_count, only a valid permutation when
         // block_count == ring_size (== total_receivers). The consuming ring matmul always uses
         // num_blocks = ring_size, so this holds for the intended use.
@@ -1249,6 +1411,14 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         // rotation participates in dedup (slot_equal), so tensors that differ only in rotation get
         // distinct slots.
         layout.streaming = streaming ? 1u : 0u;
+        if (receiver_contiguous_batched_only) {
+            TT_FATAL(
+                layout.layout_mode == static_cast<uint32_t>(LayoutMode::ReceiverContiguous),
+                "Tensor prefetcher on {} supports receiver-contiguous tensors only, but input tensor {} resolved to "
+                "the K-row-major layout. Shard it so each receiver owns a disjoint contiguous shard.",
+                mesh_device_->arch(),
+                tensor_idx);
+        }
         // One read of a K-row-major bank shard feeds every receiver of that bank, so its sender has to
         // own them all, and every bank's shard is sliced by the same receiver count.
         TT_FATAL(
@@ -1472,6 +1642,11 @@ void TensorPrefetcherManager::queue(
     ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
     const std::vector<experimental::TensorPrefetcherInput>& tensors,
     MeshCommandQueue* trace_capture_cq) {
+    if (!on_dispatch_engine() && !prefetcher_traits_for(mesh_device_->arch()).supports_prefetcher_pipes) {
+        TT_THROW(
+            "QueueTensorPrefetcherRequest with PrefetcherPipes is not supported by the CCE prefetcher on {}",
+            mesh_device_->arch());
+    }
     // target_for validates the list: banks in contiguous runs appearing once each, one to two DRAM
     // senders per bank and in sender order, one shared geometry, and disjoint receivers.
     const RequestTarget target = target_for(prefetcher_pipes);
@@ -2054,6 +2229,117 @@ void TensorPrefetcherManager::stop() {
     active_ = false;
 }
 
+TensorPrefetcherPreconditions tensor_prefetcher_preconditions(const MeshDevice& mesh_device) {
+    const MetalContext& metal = MetalContext::instance(mesh_device.impl().get_context_id());
+    // The streaming profiler owns the same DRISCs. A bank's senders are its free (non-endpoint)
+    // subchannel and its NOC1 worker endpoint (dram_sender_logical_cores), and a streaming-profiler
+    // relay takes that same free subchannel with BOTH of its NIUs in stream mode
+    // (set_drisc_niu_stream_mode). Two resident kernels cannot share one DRISC L1, so the profiler
+    // wins and the prefetcher reports unsupported rather than racing it for the core.
+    if (metal.rtoptions().get_streaming_profiler_enabled()) {
+        return {
+            .ok = false,
+            .reason =
+                "the streaming profiler (TT_METAL_STREAMING_PROFILER=1) holds the DRISCs the prefetcher "
+                "needs; unset it to use the prefetcher"};
+    }
+    const std::optional<DramSenderPlacement> placement = mesh_device.impl().dram_sender_placement();
+    if (!placement.has_value()) {
+        return {
+            .ok = false,
+            .reason =
+                "the device cannot run DRAM-sender endpoints (that takes programmable DRAM cores, which auto-enable "
+                "on Blackhole with firmware >= 19.12.0.0 and on Quasar with programmable DRAM views in the SoC "
+                "descriptor, or Quasar fast dispatch on a dispatch engine serving one command queue)"};
+    }
+    // The checks below are the CCE sender's; a dispatch engine's senders need none of them.
+    if (*placement == DramSenderPlacement::DispatchEngine || mesh_device.arch() != tt::ARCH::QUASAR) {
+        return {.ok = true, .reason = ""};
+    }
+    const Hal& hal = metal.hal();
+
+    const Cluster& cluster = metal.get_cluster();
+    const std::vector<IDevice*> devices = mesh_device.get_devices();
+    for (const IDevice* device : devices) {
+        const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(device->id());
+        const uint32_t num_views = static_cast<uint32_t>(soc_desc.get_num_dram_views());
+        std::unordered_map<CoreCoord, uint32_t> view_by_sender_core;
+        for (uint32_t view = 0; view < num_views; ++view) {
+            if (!soc_desc.is_dram_view_programmable(static_cast<int>(view))) {
+                return {
+                    .ok = false,
+                    .reason = fmt::format("DRAM view {} on device {} has no programmable CCE", view, device->id())};
+            }
+            for (const CoreCoord& sender_logical : mesh_device.impl().dram_sender_logical_cores(device, view)) {
+                const CoreCoord sender_translated = soc_desc.get_physical_dram_core_from_logical(sender_logical);
+                if (view_by_sender_core.contains(sender_translated)) {
+                    return {
+                        .ok = false,
+                        .reason = fmt::format(
+                            "DRAM views {} and {} on device {} share the sender CCE at translated {}",
+                            view_by_sender_core.at(sender_translated),
+                            view,
+                            device->id(),
+                            sender_translated.str())};
+                }
+                view_by_sender_core.emplace(sender_translated, view);
+            }
+        }
+    }
+
+    if (metal.rtoptions().get_fast_dispatch()) {
+        return {.ok = false, .reason = "the CCE prefetcher requires slow dispatch (set TT_METAL_SLOW_DISPATCH_MODE=1)"};
+    }
+
+    const KernelRegionCarve carve = carve_kernel_region(
+        hal,
+        mesh_device.impl().drisc_l1_arena(),
+        stage_ring_cap(prefetcher_traits_for(mesh_device.arch()), experimental::QuasarTensorPrefetcherConfig{}));
+    if (!carve.failure_reason.empty()) {
+        return {.ok = false, .reason = carve.failure_reason};
+    }
+
+    // Device open writes RUN_MSG_INIT and waits for firmware to flip it to RUN_MSG_DONE, so INIT here
+    // means the CCE was reset or re-inited since. RUN_MSG_GO is a running Program, which is fine: this
+    // checks that firmware is present, not that the CCE is idle.
+    const dev_msgs::Factory& dev_msgs_factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::DRAM);
+    const uint64_t go_message_address =
+        hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG) & ~uint64_t{0x3};
+    for (const IDevice* device : devices) {
+        const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(device->id());
+        const uint32_t num_views = static_cast<uint32_t>(soc_desc.get_num_dram_views());
+        for (uint32_t view = 0; view < num_views; ++view) {
+            for (const CoreCoord& sender_logical : mesh_device.impl().dram_sender_logical_cores(device, view)) {
+                dev_msgs::go_msg_t go_message = dev_msgs_factory.create<dev_msgs::go_msg_t>();
+                const CoreCoord sender_virtual = device->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
+                cluster.read_core(
+                    go_message.data(),
+                    go_message.size(),
+                    tt_cxy_pair(device->id(), sender_virtual),
+                    go_message_address);
+                const uint8_t signal = go_message.view().signal();
+                if (signal == dev_msgs::RUN_MSG_DONE || signal == dev_msgs::RUN_MSG_GO) {
+                    continue;
+                }
+                const CoreCoord sender_translated = soc_desc.get_physical_dram_core_from_logical(sender_logical);
+                const uint32_t cce_index = package_dram_core_index(soc_desc, sender_logical);
+                return {
+                    .ok = false,
+                    .reason = fmt::format(
+                        "CCE {} (device {}, DRAM view {}, translated {}) holds GO_MSG signal 0x{:02x}: {}",
+                        cce_index,
+                        device->id(),
+                        view,
+                        sender_translated.str(),
+                        signal,
+                        signal == dev_msgs::RUN_MSG_INIT ? "its firmware has not finished init"
+                                                         : "its mailbox is corrupt")};
+            }
+        }
+    }
+    return {.ok = true, .reason = ""};
+}
+
 }  // namespace tt::tt_metal::distributed
 
 // -----------------------------------------------------------------------------
@@ -2062,27 +2348,22 @@ void TensorPrefetcherManager::stop() {
 namespace tt::tt_metal::experimental {
 
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device) {
-    auto& env = mesh_device.impl().metal_env();
-    // The streaming profiler owns the same DRISCs. A bank's senders are its free (non-endpoint)
-    // subchannel and its NOC1 worker endpoint (dram_sender_logical_cores), and a streaming-profiler
-    // relay takes that same free subchannel with BOTH of its NIUs in stream mode
-    // (set_drisc_niu_stream_mode). Two resident kernels cannot share one DRISC L1, so the profiler
-    // wins and the prefetcher reports unsupported rather than racing it for the core.
-    if (env.get_rtoptions().get_streaming_profiler_enabled()) {
+    if (!distributed::tensor_prefetcher_preconditions(mesh_device).ok) {
         return false;
     }
-    return mesh_device.impl().dram_sender_placement().has_value();
+    // A dispatch engine runs its own senders; only the CCE sender waits on its port.
+    return dram_senders_on_dispatch_engine(mesh_device) ||
+           distributed::prefetcher_traits_for(mesh_device.arch()).port_complete;
 }
 
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config) {
+    const distributed::TensorPrefetcherPreconditions preconditions =
+        distributed::tensor_prefetcher_preconditions(mesh_device);
     TT_FATAL(
-        IsTensorPrefetcherSupported(mesh_device),
-        "Tensor prefetcher is not supported on this mesh device. Either it cannot run DRAM-sender endpoints "
-        "(that takes Blackhole with firmware >= 19.12.0.0, or Quasar fast dispatch with one command queue), or "
-        "the streaming profiler "
-        "is enabled (TT_METAL_STREAMING_PROFILER=1) and holds the DRISCs the prefetcher needs. Unset "
-        "TT_METAL_STREAMING_PROFILER to use the prefetcher, or call IsTensorPrefetcherSupported() first to "
-        "skip the prefetcher path.");
+        preconditions.ok,
+        "Tensor prefetcher is not supported on this mesh device: {}. Call IsTensorPrefetcherSupported() first to "
+        "skip the prefetcher path.",
+        preconditions.reason);
     auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
     manager.start(config);
 }

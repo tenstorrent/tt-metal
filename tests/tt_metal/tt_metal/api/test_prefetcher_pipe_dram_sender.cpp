@@ -16,6 +16,7 @@
 //   * per-sender DRISC L1 placement: a pipe reserves its config page on its own sender core, so a
 //     whole set of pipes costs the small DRISC zone one offset.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -24,6 +25,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -31,6 +33,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
@@ -876,6 +879,23 @@ TEST_F(PrefetcherPipeDramSenderFixture, DriscKernelReadsDramAndWorkerL1OverNoc) 
             EXPECT_EQ(got_page, expected[i]) << "sender " << sender.str() << " source " << i;
         }
     }
+}
+
+TEST_F(PrefetcherPipeDramSenderFixture, TensorPrefetcherGateKeepsBlackholeResultAndRejectsQuasarConfig) {
+    const bool streaming_profiler_enabled =
+        mesh_device_->impl().metal_env().get_rtoptions().get_streaming_profiler_enabled();
+    EXPECT_EQ(experimental::IsTensorPrefetcherSupported(*mesh_device_), !streaming_profiler_enabled);
+    if (streaming_profiler_enabled) {
+        GTEST_SKIP();
+    }
+    EXPECT_THAT(
+        [this] {
+            experimental::StartTensorPrefetcher(
+                *mesh_device_,
+                experimental::TensorPrefetcherConfig{.quasar = experimental::QuasarTensorPrefetcherConfig{}});
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Quasar tensor prefetcher configuration cannot be used on architecture")));
 }
 
 // One MeshDevice spanning two chips, which is what makes the per-device fan-out inside one pipe set
