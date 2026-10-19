@@ -1352,3 +1352,10 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 
 - F115: `pytest --collect-only` / `--co` is not a direct pytest (it lists tests, runs no fixture, opens no device).
   DeepSeek-V4.1 P.8 attempt 1 was failed after 2h20m of passing work for one `pytest --collect-only -q`.
+
+- F116 (owner, 2026-10-19): a perf agent's own checks are the A/B report's change-on side. ab_measure keeps every
+  run (frozen test command, ladder rung, profile) in side.json with its own stamp (code key, switch env, command) and
+  reuses a matching one; `orchestrator measure --task <id> [--part <test stem | rung | profile | test | ladder>]` runs
+  them as the report's 'on' side (its switch, environment and results dirs). The perf brief tells the agent to run its
+  frozen tests that way after its last edit. F105's accept reuse reads the per-run stamps. DeepSeek-V4.1 P.8: the
+  agent's ~1 h of frozen tests and the report's on side were the same runs, twice.

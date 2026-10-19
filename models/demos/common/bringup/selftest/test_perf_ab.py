@@ -290,7 +290,7 @@ def test_a_measured_side_is_reused(mk):
     assert decide(o, "P.1", "rerun") == 0
     assert o.run() == HUMAN
     assert len(mk.calls) == n  # same code and switch: both sides reused, nothing re-run
-    assert sum(": reused (" in x for x in mk.lines) == 2
+    assert sum(" reused (same code and switch)" in x for x in mk.lines) == 8  # F116: per run, 4 a side
 
 
 def test_a_setting_name_switches_its_variable(mk, monkeypatch):
@@ -422,3 +422,38 @@ def test_a_waiting_pick_is_judged_by_its_own_change_not_its_neighbours(mk, sandb
     (sandbox.repo / "src/neighbour.py").write_text("x = 1\n")  # someone else's uncommitted work under src/
     assert o.run() == HUMAN, mk.lines
     assert o.led.status("X.9") == "PASS"
+
+
+def _apply_change(sandbox):
+    for p, text in CHANGE["P.1.perf.1.md"]["write"].items():
+        (sandbox.repo / p).write_text(text)
+
+
+def test_an_agents_measure_run_is_the_reports_on_side(mk, sandbox):
+    """F116: `orchestrator measure` runs the change-on side's frozen test as the report would; the report reuses it."""
+    from models.demos.common.bringup.orchestrator import measure
+
+    o = mk([pick()], CHANGE)
+    _apply_change(sandbox)  # the agent's change, as its last edit left it
+    assert measure(o, "P.1", ["test_c_x"]) == 1  # the toy change fails its component check (rc 1)
+    d = o.run_dir / "ab" / "P.1"
+    assert [(c["on"], c["dir"].relative_to(d).as_posix()) for c in mk.calls] == [(True, "new/test_c_x")]
+    assert o.run() == HUMAN, mk.lines  # the mock agent writes the same change: the code key is unchanged
+    runs = [(c["on"], c["dir"].relative_to(d).as_posix()) for c in mk.calls[1:]]
+    assert (True, "new/test_c_x") not in runs and (True, "new/profile") in runs and (False, "old/test_c_x") in runs
+    assert any("test_c_x reused" in ln for ln in mk.lines)
+    rec = o.led.state()["P.1"]["ab"]
+    assert rec["tests"]["test_c_x"]["new"]["rc"] == 1  # the reused result, in the table
+
+
+def test_a_code_edit_after_measure_measures_again(mk, sandbox):
+    from models.demos.common.bringup.orchestrator import measure
+
+    o = mk(
+        [pick()], {"P.1.perf.1.md": {"write": dict(CHANGE["P.1.perf.1.md"]["write"], **{"src/impl.txt": "hifi2b\n"})}}
+    )
+    _apply_change(sandbox)
+    measure(o, "P.1", ["test"])
+    assert o.run() == HUMAN, mk.lines  # the agent's last edit differs from what was measured
+    d = o.run_dir / "ab" / "P.1"
+    assert [c["dir"].relative_to(d).as_posix() for c in mk.calls].count("new/test_c_x") == 2
