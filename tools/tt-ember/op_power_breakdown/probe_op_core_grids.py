@@ -14,20 +14,21 @@ the measurement.
 Uses tt-metal's device profiler, which is compiled in by default (build_metal.sh has
 --disable-profiler, not --enable-profiler). Each op is run a couple of times with
 TT_METAL_DEVICE_PROFILER=1; ttnn.ReadDeviceProfiler() flushes per-core kernel records to
-generated/profiler/.logs/profile_log_device.csv, and the rows added by each op are counted by
-their distinct (core_x, core_y).
+profile_log_device.csv (only with TT_METAL_PROFILER_MID_RUN_DUMP=1, which this sets), and the
+rows added by each op are counted by their distinct (core_x, core_y).
 
-Run it the same way as the workload -- TT_METAL_HOME set, tt-metal venv active:
+Run it the same way as the workload -- TT_METAL_HOME set, tt-metal venv active. The op list
+follows LONG_MATMUL_MODE as in the workload; the batches below are the published p100a run's,
+so they go with the legacy list:
 
-    TT_METAL_DEVICE_PROFILER=1 ./probe_op_core_grids.py --seq 1024 --hidden 2048 \\
-        --ffn 8192 --heads 16 --batches 32,7,7,7,3,14,21,35,5,9,10,5
+    TT_METAL_DEVICE_PROFILER=1 LONG_MATMUL_MODE=legacy python3 probe_op_core_grids.py \\
+        --seq 1024 --hidden 2048 --ffn 8192 --heads 16 --batches 32,7,7,7,3,14,21,35,5,9,10,5
 """
 import argparse
 import csv
 import importlib.util
 import os
 import sys
-from collections import defaultdict
 from pathlib import Path
 
 if not os.environ.get("TT_METAL_HOME"):
@@ -36,10 +37,20 @@ if not os.environ.get("TT_METAL_HOME"):
 if os.environ.get("TT_METAL_DEVICE_PROFILER") != "1":
     sys.stderr.write("Set TT_METAL_DEVICE_PROFILER=1 so the device profiler records anything.\n")
     raise SystemExit(2)
+# Without it ReadDeviceProfiler() keeps the records until the device closes, and every op would
+# read as zero cores.
+os.environ.setdefault("TT_METAL_PROFILER_MID_RUN_DUMP", "1")
 
 import ttnn  # noqa: E402
 
-CSV_PATH = Path(os.environ["TT_METAL_HOME"]) / "generated/profiler/.logs/profile_log_device.csv"
+# Where tt-metal writes the CSV: $TT_METAL_PROFILER_DIR (relative to this process's cwd, as
+# tt-metal resolves it), else <tt-metal root>/generated/profiler.
+_PROFILER_DIR = os.environ.get("TT_METAL_PROFILER_DIR")
+CSV_PATH = (
+    (Path(_PROFILER_DIR).resolve() if _PROFILER_DIR else Path(os.environ["TT_METAL_HOME"]) / "generated" / "profiler")
+    / ".logs"
+    / "profile_log_device.csv"
+)
 
 
 def load_workload(path: Path):
@@ -81,6 +92,7 @@ def main():
     args = ap.parse_args()
 
     wl = load_workload(args.workload)
+    legacy = wl.legacy_mode()
 
     if CSV_PATH.exists():
         CSV_PATH.unlink()
@@ -90,7 +102,7 @@ def main():
     total_cores = grid.x * grid.y
     results = []
     try:
-        factories = wl.make_factories(device, args.seq, args.hidden, args.ffn, args.heads)
+        factories = wl.make_factories(device, args.seq, args.hidden, args.ffn, args.heads, legacy)
         batches = [int(b) for b in args.batches.split(",")] if args.batches else []
         seen_before = 0
 
@@ -100,8 +112,8 @@ def main():
                 try:
                     fn, _, _ = factory(b)
                     break
-                except Exception:
-                    if b == 1:
+                except Exception as e:
+                    if b == 1 or not wl.is_out_of_memory(e):
                         raise
                     b = max(1, b // 2)
 
@@ -113,6 +125,11 @@ def main():
             hdr, rows = read_csv_rows()
             new = rows[seen_before:]
             seen_before = len(rows)
+            if not new:
+                raise SystemExit(
+                    f"{name}: no new profiler rows in {CSV_PATH}; check TT_METAL_PROFILER_DIR and that "
+                    "TT_METAL_PROFILER_MID_RUN_DUMP is not 0"
+                )
             cores = cores_in_rows(new, hdr) if hdr else set()
             results.append((name, b, len(cores)))
             print(f"{name:<16} batch={b:<3d} cores={len(cores):3d}", flush=True)
