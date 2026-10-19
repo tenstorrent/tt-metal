@@ -9,13 +9,14 @@ its own next token. Every pass uses the same row order: row 32 i + u is row i of
 start_u + i, so a 32-row step i holds one row of each user (the batched decode's layout: one K/V cache write per step).
 
 Passes (device tensors throughout; the host writes the per-round inputs and reads two 256-row argmax results):
-  draft: the noise block [last token, mask x 7] through the drafter's 8 layers (256-row matmuls; attention in 8 steps
-      of 32 rows: K/V of every step written first, then each step attends to its user's whole block, not causal), its
-      LM head, a per-device argmax;
-  verify: the block [last token, 7 drafts] through the target: attention in 8 steps of 32 rows (step i is the batched
-      decode attention at positions start_u + i, so it sees the K/V rows of steps 0 .. i: causal within the block), the
-      MoE on all 256 rows at once (router, every expert's gate / up / down as 256-row matmuls in the dense layout of the
-      batched decode, each expert weight read once per pass, the routing weights zeroing unrouted experts), the
+  draft: the noise block [last token, mask x 7] through the drafter's 8 layers (256-row matmuls; Q / K norms and RoPE
+      for all 256 rows at once with per-row cos / sin; attention in 8 steps of 32 rows: K/V of every step written first,
+      then each step attends to its user's whole block, not causal), its LM head, a per-device argmax;
+  verify: the block [last token, 7 drafts] through the target: norm, QKV, o_proj and the all-reduce over all 256 rows;
+      the attention core in 8 steps of 32 rows (step i is the batched decode attention at positions start_u + i, so it
+      sees the K/V rows of steps 0 .. i: causal within the block; Q and K rotated by one op, K and V written by one op),
+      the MoE on all 256 rows at once (router, every expert's gate / up / down as 256-row matmuls in the dense layout of
+      the batched decode, each expert weight read once per pass, the routing weights zeroing unrouted experts), the
       target's LM head, a per-device argmax; the outputs of target layers 1, 6, 11, 16, 21 kept for the drafter;
   context: those features of all 256 rows into the drafter's K/V cache at positions start_u + i (rows past the
       accepted ones are rewritten by the next round's block before they are read).
@@ -174,23 +175,17 @@ class BatchedDraft:
         from ..model import create_rope_setup
 
         self.rope = create_rope_setup(mesh, target.hf_config, max_local_batch_size=U32, datatype=ttnn.bfloat16)
-        self.trans_mat = self.rope.get_both_trans_mats()["decode"]
-        grid = mesh.compute_with_storage_grid_size()
-        n_qkv = (nq + 2 * nkv) * hd
-        self.qkv_in_mc = ttnn.create_sharded_memory_config(
-            (U32, hd),
-            ttnn.num_cores_to_corerangeset(n_qkv // hd, grid, row_wise=True),
-            ttnn.ShardStrategy.WIDTH,
-            ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        self.head_mc = ttnn.create_sharded_memory_config(
+        # all rows' Q / K norms and RoPE at once (prefill layout, per-row cos / sin), then per step only the head split
+        # (Q heads on cores 0-31, K on 32-63) and one K / V cache write
+        self.head64_mc = ttnn.create_sharded_memory_config(
             shape=(TILE, hd),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            core_grid=ttnn.CoreGrid(y=8, x=8),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+        n_heads = nq + 2 * nkv
+        self.qkv_grid = ttnn.CoreCoord(10, n_heads // 10) if n_heads % 10 == 0 else ttnn.CoreCoord(n_heads, 1)
         self.sdpa_pc = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(8, 8), q_chunk_size=0, k_chunk_size=128, exp_approx_mode=False
         )
@@ -203,33 +198,6 @@ class BatchedDraft:
         self.argmax = _Argmax(target.lm_head_weight.shape[-1], target.vocab_size)
 
     # -- pieces ----------------------------------------------------------------------------------------------------
-    def _step_heads(self, qkv, i):
-        """32-row step i of a [1, 1, rows, qkv] projection -> q, k, v heads [1, 32, heads, hd] (height-sharded)."""
-        part = ttnn.slice(qkv, [0, 0, i * U32, 0], [1, 1, (i + 1) * U32, qkv.shape[-1]])
-        part_s = ttnn.to_memory_config(part, self.qkv_in_mc)
-        part.deallocate(True)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
-            part_s, num_heads=self.nq, num_kv_heads=self.nkv, memory_config=self.head_mc
-        )
-        part_s.deallocate(True)
-        return q, k, v
-
-    def _norm_rope(self, t, w, rot):
-        flat = ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG)
-        t.deallocate(True)
-        normed = ttnn.rms_norm(flat, epsilon=self.eps, weight=w, compute_kernel_config=self.ck)
-        flat.deallocate(True)
-        sharded = ttnn.to_memory_config(normed, self.head_mc)
-        normed.deallocate(True)
-        out = ttnn.experimental.rotary_embedding_llama(sharded, rot[0], rot[1], self.trans_mat, is_decode_mode=True)
-        sharded.deallocate(True)
-        return out
-
-    def _write_kv(self, layer, k, v, pos):
-        kc, vc = self.caches[layer]
-        ttnn.experimental.paged_update_cache(kc, k, update_idxs_tensor=pos, page_table=self.page_table)
-        ttnn.experimental.paged_update_cache(vc, v, update_idxs_tensor=pos, page_table=self.page_table)
-
     def _linear(self, x, w, bias=None):
         return ttnn.linear(
             x,
@@ -239,6 +207,55 @@ class BatchedDraft:
             compute_kernel_config=self.mm_ck,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+    def rows_cos_sin(self, pos_rows):
+        """Per-row cos / sin [1, 1, rows, hd] for positions pos_rows (device [1, rows] UINT32)."""
+        out = []
+        for m in (self.rope.cos_matrix, self.rope.sin_matrix):
+            t = ttnn.embedding(pos_rows, m, layout=ttnn.TILE_LAYOUT)
+            out.append(ttnn.reshape(t, [1, 1, self.rows, self.hd]))
+        return out
+
+    def _rows_qk(self, qkv, L, cos, sin, with_q):
+        """[1, 1, rows, qkv] projection -> the same with K (and Q) head-normed and rotated, every row at its own
+        position: a head split, the norms and RoPE in the prefill layout, the heads joined again."""
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=self.nq,
+            num_kv_heads=self.nkv,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        trans = self.rope.get_both_trans_mats()["prefill"]
+        parts = []
+        for t, w, rotate in ((q, L["q_norm"], with_q), (k, L["k_norm"], True), (v, None, False)):
+            if rotate:
+                n = ttnn.rms_norm(t, epsilon=self.eps, weight=w, compute_kernel_config=self.ck)
+                t.deallocate(True)
+                t = ttnn.experimental.rotary_embedding_llama(n, cos, sin, trans, is_decode_mode=False)
+                n.deallocate(True)
+            parts.append(ttnn.experimental.nlp_concat_heads(t, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            t.deallocate(True)
+        out = ttnn.concat(parts, dim=-1)
+        for t in parts:
+            t.deallocate(True)
+        return out
+
+    def _step_write(self, li, qkv, i, pos):
+        """Step i of a prepared [1, 1, rows, qkv]: its heads (Q on cores 0-31) and the K / V cache write. Returns Q."""
+        part = ttnn.interleaved_to_sharded_partial(
+            qkv, self.qkv_grid, [U32, self.hd], self.block, i, ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )  # fmt: skip
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            part, num_heads=self.nq, num_kv_heads=self.nkv, overlap_qk_coregrid=False, memory_config=self.head64_mc
+        )
+        part.deallocate(True)
+        kc, vc = self.caches[li]
+        ttnn.experimental.paged_fused_update_cache(kc, k, vc, v, update_idxs_tensor=pos, page_table=self.page_table)
+        k.deallocate(True)
+        v.deallocate(True)
+        return q
 
     # -- prompt context ---------------------------------------------------------------------------------------------
     def add_prompt_context(self, features, user, chunk=2048):
@@ -284,21 +301,18 @@ class BatchedDraft:
 
     # -- passes -----------------------------------------------------------------------------------------------------
     def context(self, features, pos, rot):
-        """features: device [1, 1, rows, 5 * hidden] (row 32 i + u); pos / rot: per-step positions and RoPE rows."""
+        """features: device [1, 1, rows, 5 * hidden] (row 32 i + u); pos: per-step positions; rot: per-row (cos, sin)."""
         ctx = self._linear(features, self.fc_full)
         ctx2 = ttnn.rms_norm(ctx, epsilon=self.eps, weight=self.hidden_norm, compute_kernel_config=self.ck)
         ctx.deallocate(True)
         for li in range(self.layers):
             L = self.L[li]
             qkv = self._linear(ctx2, L["qkv"], L["qkv_b"])
-            for i in range(self.block):
-                q, k, v = self._step_heads(qkv, i)
-                q.deallocate(True)
-                k = self._norm_rope(k, L["k_norm"], rot[i])
-                self._write_kv(li, k, v, pos[i])
-                k.deallocate(True)
-                v.deallocate(True)
+            qkv2 = self._rows_qk(qkv, L, *rot, with_q=False)
             qkv.deallocate(True)
+            for i in range(self.block):
+                self._step_write(li, qkv2, i, pos[i]).deallocate(True)
+            qkv2.deallocate(True)
         ctx2.deallocate(True)
 
     def draft(self, tokens, pos, rot, bound):
@@ -311,15 +325,10 @@ class BatchedDraft:
             x = ttnn.rms_norm(h, epsilon=self.eps, weight=L["ln1"], compute_kernel_config=self.ck)
             qkv = self._linear(x, L["qkv"], L["qkv_b"])
             x.deallocate(True)
-            qs = []
-            for i in range(self.block):  # every step's K/V first: each row attends to its whole block
-                q, k, v = self._step_heads(qkv, i)
-                qs.append(self._norm_rope(q, L["q_norm"], rot[i]))
-                k = self._norm_rope(k, L["k_norm"], rot[i])
-                self._write_kv(li, k, v, pos[i])
-                k.deallocate(True)
-                v.deallocate(True)
+            qkv2 = self._rows_qk(qkv, L, *rot, with_q=True)
             qkv.deallocate(True)
+            qs = [self._step_write(li, qkv2, i, pos[i]) for i in range(self.block)]  # every step's K/V first
+            qkv2.deallocate(True)
             kc, vc = self.caches[li]
             outs = []
             for i in range(self.block):
@@ -336,15 +345,15 @@ class BatchedDraft:
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
                 qs[i].deallocate(True)
-                attn_s = ttnn.to_memory_config(attn, self.head_mc)
-                attn.deallocate(True)
-                heads = ttnn.experimental.nlp_concat_heads_decode(attn_s, num_heads=self.nq)
-                attn_s.deallocate(True)
-                outs.append(ttnn.to_memory_config(heads, ttnn.DRAM_MEMORY_CONFIG))
-                heads.deallocate(True)
-            heads = ttnn.concat(outs, dim=2)
+                outs.append(attn)
+            # [1, rows, heads, hd] -> [1, heads, rows, hd] -> [1, 1, rows, heads * hd]
+            attn = ttnn.concat(outs, dim=1)
             for t in outs:
                 t.deallocate(True)
+            perm = ttnn.permute(attn, (0, 2, 1, 3))
+            attn.deallocate(True)
+            heads = ttnn.experimental.nlp_concat_heads(perm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            perm.deallocate(True)
             partial = self._linear(heads, L["o"])
             heads.deallocate(True)
             o = _all_reduce(partial)
@@ -482,13 +491,6 @@ class BatchedVerify:
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        self.sdpa_out_mc = ttnn.create_sharded_memory_config(
-            shape=(-(-self.local_heads // TILE) * TILE, hd),
-            core_grid=ttnn.num_cores_to_corerangeset(U32, ttnn.CoreCoord(8, 8), row_wise=True),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
         self.sdpa_pc = {flag: sdpa_decode_program_config(flag) for flag in (False, True)}
         # the unpadded decode o_proj (batched_decode.BatchedOProj) is DRAM width-sharded: interleaved copies
         self.oproj_w = [
@@ -497,6 +499,16 @@ class BatchedVerify:
         ]
         # QKV / o_proj over 256 rows: the batched decode's compute config (HiFi2, BF16 accumulation in L1)
         self.qkv_ck = attn0.batched_qkv.compute_kernel_config
+        # Q and K rotated by one op and K / V written by one op (the fused decode's layout: Q heads on cores 0-31, K on
+        # 32-63; cos / sin rows for the Q users then the K users)
+        from ..model import create_rope_setup
+
+        self.rope_qk = create_rope_setup(
+            self.mesh, cfg, max_local_batch_size=users, datatype=ttnn.bfloat16, use_qk_fused=True
+        )
+        self.trans_qk = self.rope_qk.get_both_trans_mats()["decode"]
+        # the QKV head input's width-sharded cores (interleaved_to_sharded_partial takes a rectangle)
+        self.qkv_grid = ttnn.CoreCoord(10, (self.local_heads + 2 * self.local_kv_heads) // 10)
 
     def _router(self, layer, x):
         """Dense [rows, experts] routing weights: each row's softmax over its top-k logits, zeros elsewhere (as
@@ -569,71 +581,72 @@ class BatchedVerify:
         down.deallocate(True)
         return out
 
-    def _attention(self, li, layer, res, pos, rot_idx):
+    def _attention(self, li, layer, res, pos, rot_mats):
         """The layer's attention for all rows: input norm, QKV and o_proj (+ all-reduce) once over the 256 rows (their
         weights read once per pass); per 32-row step the decode attention core: heads, RoPE, paged K/V write at
-        positions start_u + i, paged SDPA decode (step i sees steps 0 .. i). res: [rows, hidden] width-sharded residual.
-        Returns res + attention (same layout)."""
+        positions start_u + i, paged SDPA decode (step i sees steps 0 .. i). res: [rows, hidden] width-sharded residual;
+        rot_mats[i]: step i's fused-QK cos / sin. Returns res + attention (same layout)."""
         attn_mod, model = layer.self_attn, self.model
         w, cfg = attn_mod.weights, attn_mod.config
         nh, nkv, hd = self.local_heads, self.local_kv_heads, cfg.head_dim
         normed = layer.input_layernorm.forward_sharded(res)
         x = ttnn.to_memory_config(normed, ttnn.DRAM_MEMORY_CONFIG)
         normed.deallocate(True)
-        qkv = ttnn.matmul(x, w.wqkv, dtype=ttnn.bfloat16, compute_kernel_config=self.qkv_ck)
+        qkv = ttnn.linear(x, w.wqkv, bias=w.wqkv_bias, dtype=ttnn.bfloat16, compute_kernel_config=self.qkv_ck)
         x.deallocate(True)
-        qkv = ttnn.add(qkv, w.wqkv_bias, output_tensor=qkv)
         k_cache, v_cache = self.kv_cache[li]
-        trans = attn_mod.transformation_mats["decode"]
         outs = []
         for i in range(self.block):
-            part = ttnn.slice(qkv, [0, 0, i * U32, 0], [1, 1, (i + 1) * U32, qkv.shape[-1]])
-            part_s = ttnn.to_memory_config(part, attn_mod.batched_qkv.heads_memory_config)
-            part.deallocate(True)
+            # step i's 32 rows straight from the interleaved QKV into the width-sharded head input
+            part = ttnn.interleaved_to_sharded_partial(
+                qkv, self.qkv_grid, [U32, hd], self.block, i, ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )  # fmt: skip
+            # Q heads on cores 0-31, K on 32-63: Q and K rotated by one op, K and V written by one op
             q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
-                part_s, num_heads=nh, num_kv_heads=nkv, memory_config=self.head_grid_mc
+                part, num_heads=nh, num_kv_heads=nkv, overlap_qk_coregrid=False, memory_config=self.head_grid_mc
             )
-            part_s.deallocate(True)
-            rope = model.rope_setup.get_rot_mats(rot_idx[i])
-            q2 = ttnn.experimental.rotary_embedding_llama(q, rope[0], rope[1], trans, is_decode_mode=True)
-            k2 = ttnn.experimental.rotary_embedding_llama(k, rope[0], rope[1], trans, is_decode_mode=True)
+            part.deallocate(True)
+            cos, sin = rot_mats[i]
+            q2, k2 = ttnn.experimental.rotary_embedding_llama_fused_qk(q, k, cos, sin, self.trans_qk)
             q.deallocate(True)
             k.deallocate(True)
-            # (to_memory_config returns its input when the layout already matches: free after the writes)
-            k3 = ttnn.to_memory_config(k2, attn_mod.kv_mem_cfg)
-            v3 = ttnn.to_memory_config(v, attn_mod.kv_mem_cfg)
-            ttnn.experimental.paged_update_cache(k_cache, k3, update_idxs_tensor=pos[i], page_table=self.page_table)
-            ttnn.experimental.paged_update_cache(v_cache, v3, update_idxs_tensor=pos[i], page_table=self.page_table)
-            for t in (k2, v, k3, v3):
-                t.deallocate(True)
-            sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                q2,
-                k_cache,
-                v_cache,
-                cur_pos_tensor=pos[i],
-                sliding_window_size=cfg.sliding_window,
-                attention_sink=w.decode_sinks,
-                page_table_tensor=self.page_table,
-                scale=cfg.scaling,
-                program_config=self.sdpa_pc[bool(cfg.sliding_window)],
-                compute_kernel_config=attn_mod.program_config.get_compute_kernel_config(),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.experimental.paged_fused_update_cache(
+                k_cache, k2, v_cache, v, update_idxs_tensor=pos[i], page_table=self.page_table
+            )
+            k2.deallocate(True)
+            v.deallocate(True)
+            outs.append(
+                ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                    q2,
+                    k_cache,
+                    v_cache,
+                    cur_pos_tensor=pos[i],
+                    sliding_window_size=cfg.sliding_window,
+                    attention_sink=w.decode_sinks,
+                    page_table_tensor=self.page_table,
+                    scale=cfg.scaling,
+                    program_config=self.sdpa_pc[bool(cfg.sliding_window)],
+                    compute_kernel_config=attn_mod.program_config.get_compute_kernel_config(),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
             )
             q2.deallocate(True)
-            sdpa_s = ttnn.to_memory_config(sdpa, self.sdpa_out_mc)
-            sdpa.deallocate(True)
-            heads = ttnn.experimental.nlp_concat_heads_decode(sdpa_s, num_heads=nh)
-            sdpa_s.deallocate(True)
-            outs.append(ttnn.to_memory_config(heads, ttnn.DRAM_MEMORY_CONFIG))
-            heads.deallocate(True)
         qkv.deallocate(True)
-        heads = ttnn.concat(outs, dim=2)
+        # [1, rows, heads, hd] (row 32 i + u) -> [1, heads, rows, hd] -> [1, 1, rows, heads * hd]: one concat, one
+        # permute and one head concat per layer (not a reshard, a head concat and a copy per step)
+        sdpa = ttnn.concat(outs, dim=1)
         for t in outs:
             t.deallocate(True)
+        perm = ttnn.permute(sdpa, (0, 2, 1, 3))
+        sdpa.deallocate(True)
+        heads = ttnn.experimental.nlp_concat_heads(perm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        perm.deallocate(True)
         op = attn_mod.batched_oproj
         o = ttnn.matmul(heads, self.oproj_w[li], dtype=ttnn.bfloat16, compute_kernel_config=self.qkv_ck)
         heads.deallocate(True)
-        partial = ttnn.add(o, op.bias, dtype=ttnn.bfloat8_b)  # the decode's BF8 partial sum
+        # the decode's BF8 partial sum (the bias inside the matmul with a BF8 output: top-1 vs HF 0.08)
+        partial = ttnn.add(o, op.bias, dtype=ttnn.bfloat8_b)
         o.deallocate(True)
         partial16 = ttnn.typecast(partial, ttnn.bfloat16)
         partial.deallocate(True)
@@ -671,8 +684,13 @@ class BatchedVerify:
         feats = []
         res = ttnn.to_memory_config(x, self.residual_mc, dtype=ttnn.bfloat16)
         x.deallocate(True)
+        rot_mats = []  # every layer's RoPE rows of step i (once per pass, not per layer)
+        for r in rot_idx:
+            r2 = ttnn.concat([r, r], dim=1)  # the Q users' rows, then the K users'
+            rot_mats.append(self.rope_qk.get_rot_mats(r2))
+            r2.deallocate(True)
         for li, layer in enumerate(model.layers):
-            res2 = self._attention(li, layer, res, pos, rot_idx)
+            res2 = self._attention(li, layer, res, pos, rot_mats)
             res.deallocate(True)
             n2 = layer.post_attention_layernorm.forward_sharded(res2)
             normed = ttnn.to_memory_config(n2, ttnn.DRAM_MEMORY_CONFIG)
@@ -690,6 +708,8 @@ class BatchedVerify:
             x = x2
             if li < len(model.layers) - 1:
                 x2.deallocate(True)
+        for t in (t for pair in rot_mats for t in pair):
+            t.deallocate(True)
         features = ttnn.concat(feats, dim=-1)
         for t in feats:
             t.deallocate(True)
@@ -737,6 +757,7 @@ class BatchedDFlashRunner:
         self.pos = [_replicate(mesh, z, ttnn.int32) for _ in range(B)]
         self.rot = [_replicate(mesh, z.reshape(1, users), ttnn.uint32) for _ in range(B)]
         self.bound = _replicate(mesh, z, ttnn.int32)
+        self.pos_rows = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)
         self.traces = None
 
     def prefill(self, prompts):
@@ -757,7 +778,7 @@ class BatchedDFlashRunner:
 
     # -- passes (eager, or captured once and replayed) ----------------------------------------------------------------
     def _rot_mats(self):
-        return [self.draft.rope.get_rot_mats(r) for r in self.rot]
+        return self.draft.rows_cos_sin(self.pos_rows)
 
     def _draft_pass(self):
         return self.draft.draft(self.d_tokens, self.pos, self._rot_mats(), self.bound)
@@ -799,6 +820,7 @@ class BatchedDFlashRunner:
             _copy(mesh, self.pos[i], st + i, ttnn.int32)
             _copy(mesh, self.rot[i], (st + i).reshape(1, U), ttnn.uint32)
         _copy(mesh, self.bound, st + B - 1, ttnn.int32)
+        _copy(mesh, self.pos_rows, (st[None] + torch.arange(B)[:, None]).reshape(1, self.rows), ttnn.uint32)
 
     def _run(self, which):
         if self.traces is None:
