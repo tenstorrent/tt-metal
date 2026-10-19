@@ -8,7 +8,8 @@ requester's top-k indices reference, into the requester's gather buffer laid out
 reads that buffer through indices rewritten to compact slots (no block-cyclic remap).
 
 This v1 builds the plan on the host from the indices (eager only, not trace-safe). One plan serves every layer
-that reuses the same indices (GLM-5.3 shared layers), since only the KV slot differs between them.
+that reuses the same indices (GLM-5.3 shared layers), since only the KV slot differs between them; the cache is keyed
+on index contents because the indexer writes every chunk's indices into the same buffer.
 """
 
 from dataclasses import dataclass
@@ -24,7 +25,7 @@ _STREAM_HEADER_WORDS = 16  # stream payload starts at byte 64
 
 @dataclass
 class SparseKvPushPlan:
-    indices: ttnn.Tensor  # the injected indices this plan was built from (kept so the cache key stays valid)
+    host_indices: np.ndarray  # the indices this plan was built from (the indexer reuses one buffer across chunks)
     streams: ttnn.Tensor  # per-device [1, 1, links, words] uint32 push lists
     compact_indices: ttnn.Tensor  # indices rewritten to compact slots, same distribution as `indices`
 
@@ -95,6 +96,7 @@ class SparseKvPushPlanner:
         self.links = links
         self.banks = mesh_device.dram_grid_size().x
         self._last: SparseKvPushPlan | None = None
+        self._key = None
 
     def buffer_rows(self, rows: int, page_bytes: int) -> int:
         """Compact buffer rows for up to `rows` distinct rows: each owner's stream pads to whole bank-lane units."""
@@ -106,13 +108,14 @@ class SparseKvPushPlanner:
         return max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
 
     def plan(self, indices: ttnn.Tensor, *, stripe_chunk: int, buffer_rows: int, page_bytes: int) -> SparseKvPushPlan:
-        if self._last is not None and self._last.indices is indices:
-            return self._last
-        n_dev = self.mesh_device.get_num_devices()
-        pages_per_packet = self._pages_per_packet(page_bytes)
         # Indices are sequence-sharded over every chip in row-major order, so chip c holds rows c*rows..
         host_idx = ttnn.to_torch(indices, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=2))
         host_idx = host_idx.to(torch.int64).numpy().astype(np.int64) & 0xFFFFFFFF
+        key = (stripe_chunk, buffer_rows, page_bytes)
+        if self._last is not None and self._key == key and np.array_equal(self._last.host_indices, host_idx):
+            return self._last
+        n_dev = self.mesh_device.get_num_devices()
+        pages_per_packet = self._pages_per_packet(page_bytes)
         rows = host_idx.shape[2] // n_dev
         per_chip = host_idx.reshape(n_dev, rows, host_idx.shape[-1])
         streams, compact = build_plan_host(
@@ -132,5 +135,6 @@ class SparseKvPushPlanner:
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=2),
             **common,
         )
-        self._last = SparseKvPushPlan(indices=indices, streams=streams_tt, compact_indices=compact_tt)
+        self._key = key
+        self._last = SparseKvPushPlan(host_indices=host_idx, streams=streams_tt, compact_indices=compact_tt)
         return self._last
