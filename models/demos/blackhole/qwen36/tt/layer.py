@@ -178,9 +178,12 @@ class Qwen36DecoderLayer:
         path used. The DistributedNorm wrapper (TP>1) mirrors tt_transformers
         decoder.py and handles the fractured->replicated transition.
         """
-        norm_cls = (
-            _FusedDistRMSNorm if (getattr(args, "prefill_fused_dist_norm", False) and self.num_devices > 1) else RMSNorm
-        )
+        fused = getattr(args, "prefill_fused_dist_norm", False) and self.num_devices > 1
+        # RMSNorm's distributed path gathers its statistics with no cluster_axis, i.e. over the whole mesh; on a
+        # 2D (rows, tp) mesh that mixes the rows' tokens, so only the fused norm (TP-axis gather) is correct there.
+        if tpc.is_2d_mesh(mesh_device) and not fused:
+            raise ValueError("2D meshes need the fused distributed RMSNorm (QWEN36_FUSED_DIST_NORM=1)")
+        norm_cls = _FusedDistRMSNorm if fused else RMSNorm
         norm = norm_cls(
             device=mesh_device,
             dim=args.dim,
