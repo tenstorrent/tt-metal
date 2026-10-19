@@ -81,7 +81,7 @@ too. **Activate it before invoking `auto.py`**, because the workload script is l
 
 ```bash
 export TT_METAL_HOME=/path/to/tt-metal
-cd /path/to/tt-metal-with-tt-ember/tools/tt-ember
+cd "$TT_METAL_HOME"/tools/tt-ember
 source /path/to/ttnn_venv/bin/activate
 
 tt-smi -r && sleep 15          # clean thermal/electrical baseline
