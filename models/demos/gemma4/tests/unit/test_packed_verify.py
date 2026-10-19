@@ -94,8 +94,13 @@ def test_pli_device_matches_host_scaled_embedding(mesh_device, reset_seeds):
     device = _device_pli_for_ids(model, mesh_device, ids)
     assert device.shape == host.shape
     pcc = torch.corrcoef(torch.stack([host.flatten(), device.flatten()]))[0, 1].item()
-    logger.info("device PLI versus host PLI: PCC={} max|diff|={}", pcc, (host - device).abs().max().item())
-    assert pcc > 0.999
+    max_diff = (host - device).abs().max().item()
+    logger.info("device PLI versus host PLI: PCC={} max|diff|={}", pcc, max_diff)
+    assert pcc > 0.9999
+    # Device PLI rounds each intermediate to bf16 and the host rounds once, so they differ by 1-2 bf16
+    # steps (0.25 at |x| = 33.25). PCC dilutes a wrong scale on one layer's slice across all 35 layers;
+    # an elementwise relative bound does not.
+    assert torch.allclose(device, host, rtol=2**-6, atol=0.05), f"max|diff|={max_diff}"
 
 
 @parametrize_mesh_with_fabric()
