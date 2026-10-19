@@ -187,6 +187,8 @@ def test_command_violations(sandbox):
                 "python cpu.py",
                 "scripts/tt-probe.sh x <<EOF\nimport ttnn\nEOF",
                 "git status && ls",
+                "cd x; source python_env/bin/activate; pytest --collect-only -q t.py",  # F115: lists, runs nothing
+                "python -m pytest --co t.py",
             ],
             sandbox.repo,
         )
