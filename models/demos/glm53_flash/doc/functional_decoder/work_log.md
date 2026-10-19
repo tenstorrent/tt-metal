@@ -83,3 +83,9 @@ Stage: tt-model-bringup stage 1 (functional decoder, 1x1 mesh) = design Phase 1.
 - Tracy (`python -m tracy -r -p`) fails at device close for the full prefill+decode run of layer 3:
   `profiler.cpp:334 "Source location hashes are colliding"` (16-bit zone-location hash collision in the kernel
   set), so no device CSV; `TT_METAL_DEVICE_PROFILER=1` + process_ops_logs hits the same gap. Trying per-phase runs.
+- Profiler collision identified offline (same FNV-1a 16-bit hash as profiler.cpp): zones "PACK SUB_EXP"
+  (compute_streaming.hpp:632) and "Softmax(Q@KT)@V" (compute_streaming.hpp:1769) of the dense SDPA prefill
+  kernel collide at 0x6835 on main 8cfcaf754d3, so every run that compiles `scaled_dot_product_attention`
+  throws at device close (tt-metal profiler bug, not model code; worth an upstream issue). Per-phase runs do not
+  help for DSA layers (the warm-up prefill compiles the kernel). Evidence plan: tt-perf-report tables from
+  layer 4 (KDA+MoE, no SDPA) for both phases; layer 3 keeps wall-clock numbers.

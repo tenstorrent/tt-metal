@@ -38,6 +38,9 @@ except ImportError:  # pragma: no cover - tracy module ships with the source tre
 LAYER = int(os.environ.get("GLM53_PERF_LAYER", "3"))
 PREFILL_LEN = int(os.environ.get("GLM53_PERF_PREFILL", "1024"))
 DECODE_STEPS = int(os.environ.get("GLM53_PERF_DECODE_STEPS", "10"))
+# "both" | "prefill" | "decode": the Tracy device-zone hash table collides for the full prefill+decode kernel
+# set of a MoE layer ("Source location hashes are colliding"), so each phase can be profiled in its own run
+PHASE = os.environ.get("GLM53_PERF_PHASE", "both")
 DUMP = Path("bringup/references/glm53_flash/T4097")
 
 
@@ -58,14 +61,19 @@ def test_layer_perf(mesh_device):
     x_dev = host_streams_to_device(x_in, mesh_device)
     dec.prefill_forward(x_dev, user=0, seq_len=S)
     ttnn.synchronize_device(mesh_device)
-    signpost("PERF_PREFILL")
-    t0 = time.perf_counter()
-    y = dec.prefill_forward(x_dev, user=0, seq_len=S)
-    ttnn.synchronize_device(mesh_device)
-    t_prefill = time.perf_counter() - t0
-    signpost("PERF_PREFILL_END")
-    ttnn.deallocate(y)
-    logger.info(f"layer {LAYER} ({kind}) warmed prefill S={S}: {t_prefill*1e3:.1f} ms wall ({S / t_prefill:.0f} tok/s)")
+    if PHASE in ("both", "prefill"):
+        signpost("PERF_PREFILL")
+        t0 = time.perf_counter()
+        y = dec.prefill_forward(x_dev, user=0, seq_len=S)
+        ttnn.synchronize_device(mesh_device)
+        t_prefill = time.perf_counter() - t0
+        signpost("PERF_PREFILL_END")
+        ttnn.deallocate(y)
+        logger.info(
+            f"layer {LAYER} ({kind}) warmed prefill S={S}: {t_prefill*1e3:.1f} ms wall ({S / t_prefill:.0f} tok/s)"
+        )
+    if PHASE == "prefill":
+        return
 
     # ---- decode: capture trace (warm-up inside), then measured replays
     streams_dev = ttnn.from_torch(
