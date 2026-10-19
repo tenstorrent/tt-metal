@@ -791,3 +791,79 @@ def test_log2_bf16_unflushed_zero_and_subnormal_inputs(device):
         f"{(~ok).sum().item()} of {ok.numel()} inputs off torch and stock; first input 0x{bits[~ok][0].item():04x} "
         f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"
     )
+
+
+def test_log2_bf16_bfloat8_b(device):
+    """bfloat8_b in and out. The SFPU reads Bfp8_b data in DEST as BF16, so this runs the BF16 kernel, as the
+    BF16 cases do. The result must correlate with torch's on the input as stored to PCC 0.999, as upstream's
+    bfloat8_b unary cases require.
+    """
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole", "wormhole_b0"):
+        pytest.skip(f"ttnn.log2 keeps its stock kernel on {board}")
+    torch.manual_seed(0)
+    x = torch.empty(1, 1, 64, 64).uniform_(0.1, 10.0).to(torch.bfloat16)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    stored = ttnn.to_torch(tt_x).to(torch.float64).flatten()
+    output = ttnn.log2(tt_x)
+    assert output.dtype == ttnn.bfloat8_b
+    actual = ttnn.to_torch(output).to(torch.float64).flatten()
+    golden = ttnn.get_golden_function(ttnn.log2)(stored).to(torch.float64)
+    pcc = torch.corrcoef(torch.stack([actual, golden]))[0, 1].item()
+    assert pcc >= 0.999, f"PCC {pcc:.6f} against torch"
+
+
+def test_log2_bf16_exhaustive_inputs(device):
+    """All 65,536 BF16 inputs through ttnn.log2, the call TT-NN users make.
+
+    Each must store torch's float64 result (torch.log2(x)) as the BF16 pack stores it (NaN as an
+    infinity, a result below the smallest normal, or within 2^-12 above it, as 0), a finite word within
+    STEPS BF16 steps of it, or the word STOCK lists for that input on the board, as
+    {word: [(first input, last input), ...]} over the input bits. SKIP lists the inputs this case does
+    not judge, which the LLK sweep checks against its own golden: where torch's float64 formula misses
+    the exact result (a cancellation), where the kernel departs from torch by its spec, and NaN inputs
+    whose stock word varies with the payload.
+    """
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole", "wormhole_b0"):
+        pytest.skip(f"ttnn.log2 keeps its stock kernel on {board}")
+    STOCK = {
+        "blackhole": {0xFF80: [(0x0001, 0x007F), (0x8001, 0x807F)]},
+        "wormhole_b0": {0xFF80: [(0x0001, 0x007F), (0x8001, 0x807F)]},
+    }
+    STEPS = 1
+    SKIP = [(0x0001, 0x007F), (0x8001, 0x807F)]
+    bits = torch.arange(1 << 16, dtype=torch.int32)
+    x = bits.to(torch.int16).view(torch.bfloat16).reshape(1, 1, 256, 256)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tiny = torch.finfo(torch.bfloat16).tiny
+
+    def stored(t):
+        t = t.to(torch.bfloat16).to(torch.float64).flatten()
+        return torch.where(t.abs() < tiny, torch.zeros_like(t), t)
+
+    def ordered(t):
+        # BF16 words in value order, so that adjacent finite values differ by one step.
+        words = t.to(torch.bfloat16).view(torch.int16).to(torch.int32)
+        return torch.where(words < 0, -(words & 0x7FFF), words)
+
+    actual = stored(ttnn.to_torch(ttnn.log2(tt_x)))
+    x = x.flatten().to(torch.float64)
+    reference = (torch.log2(x)).to(torch.float64).flatten()
+    expected = stored(reference)
+    finite = torch.isfinite(expected) & torch.isfinite(actual)
+    ok = (actual == expected) | (finite & ((ordered(actual) - ordered(expected)).abs() <= STEPS))
+    # A NaN result reaches L1 as a NaN or as an infinity of either sign.
+    ok |= torch.isnan(reference) & (torch.isnan(actual) | torch.isinf(actual))
+    # The SFPU flushes a result below the smallest normal, or within 2^-12 above it, to 0.
+    ok |= (actual == 0) & (reference.abs() < tiny * (1 + 2.0**-12))
+    for word, ranges in STOCK.get(board, {}).items():
+        value = stored(torch.tensor([word], dtype=torch.int32).to(torch.int16).view(torch.bfloat16))
+        for first, last in ranges:
+            ok |= (bits >= first) & (bits <= last) & ((actual == value) | (torch.isnan(actual) & torch.isnan(value)))
+    for first, last in SKIP:
+        ok |= (bits >= first) & (bits <= last)
+    assert ok.all(), (
+        f"{(~ok).sum().item()} of {ok.numel()} inputs off torch and stock; first input 0x{bits[~ok][0].item():04x} "
+        f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"
+    )

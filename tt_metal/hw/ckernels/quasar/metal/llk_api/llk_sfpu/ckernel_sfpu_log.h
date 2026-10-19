@@ -203,6 +203,9 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const std::uint32_t 
     return result;
 }
 
+// The log_base_scale_factor the generated log2 kernel is fitted for, as FP32 bits; any other log_base_scale_factor runs
+// the stock kernel.
+inline constexpr std::uint32_t log2_bf16_log_base_scale_factor_bits = 0x3fb8aa3bu;
 // Whether BF16 DEST runs the generated log2 kernel as one call over the whole tile.
 inline constexpr bool log2_bf16_whole_tile = false;
 // The stock log2 kernel needs no BF16 setup.
