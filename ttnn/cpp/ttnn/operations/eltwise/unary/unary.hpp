@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tt-metalium/base_types.hpp>
+
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/types.hpp"
@@ -102,6 +104,16 @@ DECLARE_UNARY_OP(tanhshrink)
 DECLARE_UNARY_OP(erfc)
 
 #undef DECLARE_UNARY_OP
+
+// softsign with an explicit SFPU instruction sequence. The mode has no default on purpose: a call without one
+// must keep resolving to the overload above, which runs the legacy sequence, rather than become ambiguous.
+// See softsign_tile<SfpuMode> (api/compute/eltwise_unary/activations.h) for the per-mode contract.
+Tensor softsign(
+    const Tensor& input_tensor,
+    tt::tt_metal::SfpuMode sfpu_mode,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 #define DECLARE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(op_name)                       \
     Tensor op_name(                                                                    \

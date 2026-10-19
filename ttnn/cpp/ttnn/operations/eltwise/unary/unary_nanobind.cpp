@@ -989,6 +989,80 @@ void bind_gelu(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none()));
 }
 
+// softsign is bound on its own because it takes an optional SFPU instruction-sequence selector. The two overloads
+// keep the legacy call unchanged: without sfpu_mode, nanobind resolves to the first, which emits the plain
+// softsign_tile(); with it, to the second, which emits softsign_tile<SfpuMode>().
+void bind_softsign(nb::module_& mod) {
+    const auto* doc = R"doc(
+        Applies softsign to :attr:`input_tensor` element-wise.
+
+        .. math::
+            \mathrm{output\_tensor}_i = \frac{\mathrm{input\_tensor}_i}{1 + |\mathrm{input\_tensor}_i|}
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            sfpu_mode (ttnn.SfpuMode, optional): SFPU instruction sequence to run. When omitted, the legacy
+                sequence runs (equivalent to `PreciseRelaxed` under the default compute configuration).
+
+                - `PreciseStrict`: two Newton steps for 1 / (1 + |x|); special values follow
+                  torch.nn.functional.softsign: +-0 -> +-0, NaN -> NaN, +-inf -> NaN, finite |x| >= 2**126 -> +-1.
+                - `ApproximateStrict`: a cheaper reciprocal (Blackhole: none, Wormhole: one Newton step);
+                  special values as `PreciseStrict`.
+                - `PreciseRelaxed`: as `PreciseStrict` without the special-value guard; the caller guarantees
+                  |x| < 2**126, and results outside that range are unspecified.
+                - `ApproximateRelaxed`: the fastest sequence; same input guarantee as `PreciseRelaxed`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
+                 - TILE, ROW_MAJOR
+
+            `sfpu_mode` is supported on Wormhole and Blackhole.
+        )doc";
+
+    ttnn::bind_function<"softsign">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                const std::optional<tt::tt_metal::MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::softsign),
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                tt::tt_metal::SfpuMode,
+                const std::optional<tt::tt_metal::MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::softsign),
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("sfpu_mode").noconvert(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()));
+}
+
 // geglu is bound separately from the other GLU-family ops (glu/reglu/swiglu use
 // bind_unary_operation_with_dim_parameter) because it exposes the GELU variant selector.
 void bind_geglu(nb::module_& mod) {
@@ -1740,12 +1814,7 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|hardswish|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation_subcoregrids<"softsign">(
-        mod,
-        &ttnn::softsign,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|softsign|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_softsign(mod);
     bind_unary_operation_subcoregrids<"cbrt">(
         mod,
         &ttnn::cbrt,

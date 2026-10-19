@@ -299,6 +299,23 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {
                 fmt::format("tanh_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("tanh_tile<{1}u>({0});", idst, (uint32_t)param0)};
+        case UnaryOpType::SOFTSIGN: {
+            // params[0] is a tt::tt_metal::SfpuMode. The kernel-side ckernel::SfpuMode shares its enumerator
+            // names and values; softsign without a parameter keeps the legacy APPROX-driven sequence.
+            static constexpr const char* sfpu_mode_strs[] = {
+                "ckernel::SfpuMode::PreciseStrict",
+                "ckernel::SfpuMode::ApproximateStrict",
+                "ckernel::SfpuMode::PreciseRelaxed",
+                "ckernel::SfpuMode::ApproximateRelaxed"};
+            // Compare before converting, as RDIV does: it also rejects NaN and out-of-range values.
+            TT_FATAL(
+                param0_raw == T{0} || param0_raw == T{1} || param0_raw == T{2} || param0_raw == T{3},
+                "Invalid SfpuMode {} for softsign (expected 0..3)",
+                param0_raw);
+            const char* mode = sfpu_mode_strs[static_cast<uint32_t>(param0_raw)];
+            return {
+                fmt::format("softsign_tile_init<{}>();", mode), fmt::format("softsign_tile<{1}>({0});", idst, mode)};
+        }
         case UnaryOpType::HEAVISIDE:
             return {
                 "heaviside_tile_init();",

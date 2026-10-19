@@ -136,6 +136,7 @@ DB_SCHEMA = [
     Column("relu_config", "int64", True, "configuration"),
     Column("reuse_dest_type", "string", True, "configuration"),
     Column("sfpu_bcast_dim", "string", True, "configuration"),
+    Column("sfpu_mode", "string", True, "configuration"),
     Column("sign_magnitude", "bool", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),

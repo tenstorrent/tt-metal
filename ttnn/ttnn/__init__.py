@@ -243,6 +243,7 @@ from ttnn.types import (
     fp8_e4m3,
     float32,
     MathFidelity,
+    SfpuMode,
     MemoryConfig,
     BufferType,
     TensorMemoryLayout,

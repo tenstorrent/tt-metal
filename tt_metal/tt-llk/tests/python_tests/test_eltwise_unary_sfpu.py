@@ -23,6 +23,7 @@ from helpers.llk_params import (
     DestAccumulation,
     FastMode,
     MathOperation,
+    SfpuMode,
     format_dict,
 )
 from helpers.param_config import (
@@ -56,6 +57,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_MODE_OVERRIDE,
     SFPU_POLYGAMMA_ORDER,
     SFPU_RELU_MAX_THRESHOLD,
     SFPU_RELU_MIN_INT_THRESHOLD,
@@ -931,6 +933,142 @@ def test_eltwise_unary_sfpu_relu_max_threshold(
     )
 
 
+# SfpuMode proof of concept on softsign: the four modes are four instruction sequences (two reciprocal
+# precisions x guard on/off), selected through the mode-typed calculate_softsign<SfpuMode>.
+_SFPU_MODES = list(SfpuMode)
+_STRICT_SFPU_MODES = [mode for mode in SfpuMode if mode.is_strict]
+
+# Finite inputs the unguarded sequence gets wrong: the reciprocal of 1 + |x| flushes to 0 once
+# |x| >= 2**126, so x * (1 / (1 + |x|)) comes out +-0 where softsign is +-1.
+_SOFTSIGN_FLUSH_BAND = [2.0**126, 1.5 * 2.0**126, 2.0**127, 3.0e38]
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    sfpu_mode=_SFPU_MODES,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_softsign_mode(
+    formats: list[InputOutputFormat],
+    sfpu_mode: SfpuMode,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """Every SfpuMode meets softsign's tolerance on the interior domain ([-5, 5]).
+
+    Relaxed modes are only defined there, so this is the one gate all four share; the
+    precision half picks the tolerance (approximate modes resolve the approximate contract).
+    """
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        sfpu_mode.approximation_mode,
+        MathOperation.Softsign,
+        FastMode.No,
+        input_dimensions,
+        sfpu_mode=sfpu_mode,
+    )
+
+
+def _softsign_strict_probe_spec(formats, dest_acc):
+    """Probe values for softsign's Strict contract, gated on what the pipeline delivers.
+
+    The flush band and its neighbour just below are always sent; non-finites only where
+    specials_safe() says the pipeline carries them, and -0.0 only on the unpack-to-dest path.
+    """
+    values = [
+        *_SOFTSIGN_FLUSH_BAND,
+        *[-x for x in _SOFTSIGN_FLUSH_BAND],
+        2.0**125,
+        -(2.0**125),
+        1.0e30,
+        0.0,
+        1.0,
+        -1.0,
+        3.0,
+        -3.0,
+        1.0e6,
+    ]
+    if specials_safe(formats.input_format, formats.output_format, dest_acc):
+        values += [float("inf"), float("-inf"), float("nan")]
+    if negative_zero_delivered(formats.input_format, dest_acc):
+        values.append(-0.0)
+    return StimuliSpec.custom(values=values, seed=0)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    sfpu_mode=_STRICT_SFPU_MODES,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_softsign_strict_specials(
+    formats: list[InputOutputFormat],
+    sfpu_mode: SfpuMode,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """Strict modes meet softsign's special-value contract on the probe table.
+
+    The driver gates the whole table on the op's tolerance (torch's softsign: +-inf -> NaN,
+    NaN -> NaN). On top of that, every lane in the flush band must be exactly +-1.0: the
+    golden rounds to 1.0 there, and the guard writes the constant, so there is nothing to
+    round. The legacy (Relaxed) sequence returns +-0.0 on these lanes, and +0.0 for -0.0.
+    """
+    res_tensor, _ = eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        sfpu_mode.approximation_mode,
+        MathOperation.Softsign,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_softsign_strict_probe_spec(formats, dest_acc),
+        sfpu_mode=sfpu_mode,
+    )
+
+    torch_format = format_dict[formats.input_format]
+    src = _softsign_probe_inputs(formats, dest_acc, input_dimensions)
+    in_band = torch.isfinite(src) & (src.abs() >= 2.0**126)
+    assert in_band.any(), "probe table lost its flush-band lanes"
+    expected = torch.sign(src[in_band]).to(torch_format)
+    got = res_tensor.to(torch_format)[in_band]
+    bad = torch.nonzero(got != expected).flatten()
+    assert (
+        bad.numel() == 0
+    ), f"{bad.numel()} flush-band lane(s) are not exactly +-1.0; first: " + ", ".join(
+        f"x={src[in_band][i].item():.6g} got {got[i].item():.6g}"
+        for i in bad[:8].tolist()
+    )
+
+    # softsign(+-0) = +-0 with the sign kept. The tolerance gate above cannot see a zero's
+    # sign, and the unguarded product turns -0.0 into +0.0, so compare the zero lanes' bits.
+    # -0.0 reaches the SFPU only on the unpack-to-dest path; elsewhere every zero lane is +0.0.
+    int_format = torch.int32 if torch_format == torch.float32 else torch.int16
+    zeros = src == 0
+    got_zero_bits = res_tensor.to(torch_format)[zeros].contiguous().view(int_format)
+    want_zero_bits = src[zeros].to(torch_format).contiguous().view(int_format)
+    assert torch.equal(got_zero_bits, want_zero_bits), (
+        "softsign(+-0) must keep the zero's sign; got bits "
+        f"{sorted(set(got_zero_bits.tolist()))}, want {sorted(set(want_zero_bits.tolist()))}"
+    )
+
+
+def _softsign_probe_inputs(formats, dest_acc, input_dimensions):
+    """The exact src_A the strict-specials test sends, regenerated with the driver's seed and spec."""
+    torch.manual_seed(0)
+    src_A, _, _, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=_softsign_strict_probe_spec(formats, dest_acc),
+    )
+    return src_A.to(torch.float32)
+
+
 # Cat E: the shift amount itself, which SFPU_SHIFT_AMOUNT makes reachable. The amounts are
 # shared with the binary shift sweep through sfpu_domains.SHIFT_EDGE_AMOUNTS.
 _UNARY_SHIFT_OPS = [MathOperation.LeftShift, MathOperation.RightShift]
@@ -1358,8 +1496,13 @@ def eltwise_unary_sfpu(
     polygamma_order=None,
     twos_complement=False,
     gate_on_step_budget=False,
+    sfpu_mode=None,
 ):
-    """*gate_on_step_budget* is for a caller whose hand-built stimulus the op's step
+    """*sfpu_mode* (an SfpuMode) runs the op's mode-typed kernel API through
+    SFPU_MODE_OVERRIDE; pass the matching *approx_mode* (``sfpu_mode.approximation_mode``)
+    so the stimulus domain and the accuracy contract resolve for the same precision.
+
+    *gate_on_step_budget* is for a caller whose hand-built stimulus the op's step
     budget was measured on (``MEASURED_ON_SWEEP`` in test_sfpu_accuracy_budget.py): it
     gates on the whole contract rather than only its tolerance arm."""
     torch.manual_seed(0)
@@ -1447,6 +1590,7 @@ def eltwise_unary_sfpu(
                 if polygamma_order is None
                 else [SFPU_POLYGAMMA_ORDER(polygamma_order)]
             ),
+            *([] if sfpu_mode is None else [SFPU_MODE_OVERRIDE(sfpu_mode)]),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

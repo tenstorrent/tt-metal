@@ -610,7 +610,12 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
     else if constexpr (OPERATION == SfpuType::softsign)
     {
+        // SFPU_MODE_OVERRIDE selects the mode-typed API; without it, the legacy APPROX_MODE call.
+#ifdef SFPU_MODE_OVERRIDE
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(init_softsign<SFPU_MODE_OVERRIDE>);
+#else
         llk_math_eltwise_unary_sfpu_init<OPERATION>(init_softsign<APPROX_MODE>);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::gelu_tanh)
     {
@@ -1285,7 +1290,11 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::softsign)
     {
+#ifdef SFPU_MODE_OVERRIDE
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (SFPU_MODE_OVERRIDE, ITERATIONS), dst_index, vector_mode);
+#else
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::sigmoid)
     {
