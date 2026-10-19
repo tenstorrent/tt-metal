@@ -1260,6 +1260,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     const uint32_t l1_unreserved_base =
         mesh_device_->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     tt::tt_fabric::FabricMuxConfig mux_config(
+        *mesh_device_,
         1,  // num_workers_per_direction
         0,  // num_header_only_channels
         1,  // num_buffers_per_channel
@@ -1476,12 +1477,12 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         if (has_forward) {
             const auto dst_node_id = mesh_device_->get_fabric_node_id(MeshCoordinate(0, ring_index + 1));
             fwd_mux_rt = mux_config.get_fabric_mux_run_time_args<ProgramDescriptor>(
-                src_node_id, dst_node_id, 0, program_desc, mux_fwd_core);
+                *mesh_device_, src_node_id, dst_node_id, 0, program_desc, mux_fwd_core);
         }
         if (has_backward) {
             const auto dst_node_id = mesh_device_->get_fabric_node_id(MeshCoordinate(0, ring_index - 1));
             bwd_mux_rt = mux_config.get_fabric_mux_run_time_args<ProgramDescriptor>(
-                src_node_id, dst_node_id, 0, program_desc, mux_bwd_core);
+                *mesh_device_, src_node_id, dst_node_id, 0, program_desc, mux_bwd_core);
         }
 
         // Kernel Descriptors

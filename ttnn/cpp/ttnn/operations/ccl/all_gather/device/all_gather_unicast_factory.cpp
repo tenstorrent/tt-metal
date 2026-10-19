@@ -267,6 +267,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Fabric mux config
     constexpr uint8_t num_buffers_per_channel = 2;  // hardcoded since no observable impact on performance
     tt::tt_fabric::FabricMuxConfig mux_config(
+        *mesh_device,
         /*num_full_size_channels=*/workers_per_dir,
         /*num_header_only_channels=*/0,
         /*num_buffers_full_size_channel=*/num_buffers_per_channel,
@@ -497,7 +498,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                 const CoreCoord mux_core_coord = mux_core(link, dir);
                 const auto dst_node = mesh_device->get_fabric_node_id(*dir_neighbor(dir));
                 auto mux_rt_args = mux_config.get_fabric_mux_run_time_args(
-                    sender_fabric_node_id, dst_node, link, program, mux_core_coord);
+                    *mesh_device, sender_fabric_node_id, dst_node, link, program, mux_core_coord);
                 tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_core_coord}, mux_rt_args);
             }
         }

@@ -48,6 +48,7 @@ auto launch_mux_workers(
     // The mux stays below the floor of the L1_SMALL region, where carried semaphores live (#56769).
     const size_t l1_small_floor_address = ttnn::ccl::l1_small_floor_address(mesh_device);
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        mesh_device,
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
@@ -92,7 +93,7 @@ auto launch_mux_workers(
             std::vector<uint32_t> mux_rt_args = {};
             const auto dst_node_id = mesh_device.get_fabric_node_id(neighbor_coord);
             mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                src_node_id, dst_node_id, link, program, {mux_logical_core});
+                mesh_device, src_node_id, dst_node_id, link, program, {mux_logical_core});
 
             tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
             mux_neigbor_core_map[neighbor_coord] = mux_virtual_core;
