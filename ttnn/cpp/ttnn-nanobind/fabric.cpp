@@ -315,10 +315,15 @@ void bind_fabric_api(nb::module_& mod) {
     mod.def(
         "fabric_connection_rt_args_size",
         &tt::tt_metal::internal::fabric_connection_rt_args_size,
+        nb::arg("mesh_device"),
         nb::arg("num_connections"),
         R"(
             Return the number of runtime-argument words required for a fabric connection
-            block in the currently opened fabric context.
+            block in the fabric context of the given mesh device.
+
+            Args:
+                mesh_device: The mesh device whose fabric context is queried
+                num_connections: Number of connections in the block
         )");
 
     mod.def(
