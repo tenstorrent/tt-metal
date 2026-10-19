@@ -451,19 +451,33 @@ bool BinaryNgDeviceOperation::skip_launch(
 }
 
 namespace {
-// CMAKE_UNIQUE_NAMESPACE keeps this helper's name from colliding with a sibling's in the unity build.
+// CMAKE_UNIQUE_NAMESPACE keeps these helpers' names from colliding with a sibling's in the unity build.
 namespace CMAKE_UNIQUE_NAMESPACE {
-// A sharded operand is admitted only as an L1-sharded tiled layout (height/block/width) that carries a
-// shard spec: the factories need the spec to borrow or place, and a sharded DRAM tensor or a non-tiled
-// sharded layout is not handled. An interleaved operand always passes (the NoC-read path).
+// Height, block or width sharding with a 2D shard spec. The factories' shard helpers (is_uneven)
+// dereference the spec of a sharded operand, so this check also keeps ND-only shards out of them.
+bool is_2d_shard_layout(const tt::tt_metal::MemoryConfig& mc) {
+    const bool layout_2d = mc.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+                           mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+                           mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    return layout_2d && mc.shard_spec().has_value();
+}
+
+// Passes an interleaved operand, or an L1 shard with a 2D spec, which a factory can borrow in place. A DRAM
+// shard, an ND-only shard and a shard in another buffer type fail.
 bool sharded_operand_ok(const tt::tt_metal::MemoryConfig& mc) {
     if (!mc.is_sharded()) {
         return true;
     }
-    const bool tiled_layout = mc.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
-                              mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-                              mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
-    return mc.buffer_type() == BufferType::L1 && tiled_layout && mc.shard_spec().has_value();
+    return mc.buffer_type() == BufferType::L1 && is_2d_shard_layout(mc);
+}
+
+// Passes an interleaved operand, or a DRAM shard with a 2D spec. Only L1 backs a DFB, so the native factory
+// moves a DRAM shard over the NoC; its sharding-aware TensorAccessor maps each page id to a bank.
+bool noc_operand_ok(const tt::tt_metal::MemoryConfig& mc) {
+    if (!mc.is_sharded()) {
+        return true;
+    }
+    return mc.buffer_type() == BufferType::DRAM && is_2d_shard_layout(mc);
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
@@ -624,8 +638,9 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
 
 bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // Strict subset of matches_metal_v2_slice. kernels_qsr/ holds only the four no-broadcast FPU
-    // sources, so every rejection below is also a precondition of create_no_bcast_artifacts.
+    // Narrower than matches_metal_v2_slice in op, dtype and broadcast, but it also admits DRAM shards.
+    // kernels_qsr/ holds only the four no-broadcast FPU sources, so every rejection below is also a
+    // precondition of create_no_bcast_artifacts.
     const NativeTuning& tuning = native_tuning();
     // Cheapest possible check first: this predicate runs on EVERY dispatch, cache hits included.
     if (!tuning.enabled) {
@@ -694,23 +709,16 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (a.padded_shape() != b.padded_shape() || a.padded_shape() != out_spec.padded_shape()) {
         return false;
     }
-    // Sharded operands are admitted only when all three are L1 shards the factory borrows, so each DFB
-    // is the resident shard itself. Any shard tile count is admitted: the factory keeps the compute count
-    // and moves the tiles that do not divide by it through small owned rings. Anything mixed -- an
-    // interleaved operand beside a sharded one, a divergent grid or shard spec -- stays on the fallback.
-    // out_spec is the supplied output tensor's own spec when one is given, so it covers that case too.
-    if (a.memory_config().is_sharded() || b.memory_config().is_sharded() || out_spec.memory_config().is_sharded()) {
-        if (!CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(a.memory_config()) ||
-            !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(b.memory_config()) ||
-            !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(out_spec.memory_config())) {
-            return false;
-        }
-        // Reports all three volumes only for one memory config (is_native_L1_sharding).
-        const auto shard_volumes = get_shard_volumes(a.tensor_spec(), b.tensor_spec(), out_spec);
-        if (!shard_volumes.has_value() || !shard_volumes->a_shard_volume.has_value() ||
-            !shard_volumes->b_shard_volume.has_value() || !shard_volumes->c_shard_volume.has_value()) {
-            return false;
-        }
+    // Each operand on its own is interleaved (L1 or DRAM), an L1 shard or a DRAM shard with a 2D spec, in any
+    // mix. The factory borrows each operand that sits in its anchor, an L1 shard config or the L1 banks, and
+    // moves the rest over the NoC through each operand's sharding-aware TensorAccessor. out_spec is the supplied
+    // output tensor's spec when one is given.
+    const auto placement_ok = [](const tt::tt_metal::MemoryConfig& mc) {
+        return CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(mc) || CMAKE_UNIQUE_NAMESPACE::noc_operand_ok(mc);
+    };
+    if (!placement_ok(a.memory_config()) || !placement_ok(b.memory_config()) ||
+        !placement_ok(out_spec.memory_config())) {
+        return false;
     }
 
     // A zero-volume output has no work to place, and an empty worker grid has nowhere to place it.
@@ -720,10 +728,12 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (out_spec.padded_shape().volume() == 0 || attributes.worker_grid.num_cores() == 0) {
         return false;
     }
-    // Mirrors dataflow_buffer.cpp's two directional STRIDED asserts; reject rather than trip them.
+    // Mirrors dataflow_buffer.cpp's two directional STRIDED asserts; reject rather than trip them. The counts
+    // are the NoC path's, the most DM threads a program runs. The rule's values always pass, so only a set R or
+    // W beside the compute count can fail.
+    const NativeConfig noc = resolve_native_config(tuning, {.inputs = true, .output = true});
     const auto ratio_ok = [](uint32_t p, uint32_t c) { return std::max(p, c) % std::min(p, c) == 0; };
-    return ratio_ok(tuning.reader_threads, tuning.compute_threads) &&
-           ratio_ok(tuning.compute_threads, tuning.writer_threads);
+    return ratio_ok(noc.reader_threads, noc.compute_threads) && ratio_ok(noc.compute_threads, noc.writer_threads);
 }
 
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(

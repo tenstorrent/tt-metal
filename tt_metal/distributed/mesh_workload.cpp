@@ -44,7 +44,6 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
-#include "tt_metal/impl/debug/inspector/inspector.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
@@ -80,9 +79,9 @@ std::optional<MeshCoordinateRange> find_intersection(
 
 }  // namespace
 
-MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) { Inspector::mesh_workload_created(this); }
+MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {}
 
-MeshWorkloadImpl::~MeshWorkloadImpl() { Inspector::mesh_workload_destroyed(this); }
+MeshWorkloadImpl::~MeshWorkloadImpl() = default;
 
 MeshWorkloadImpl::FinalizedMetadata& MeshWorkloadImpl::get_finalized_metadata() {
     TT_ASSERT(finalized_metadata_.has_value());
@@ -97,7 +96,6 @@ void MeshWorkloadImpl::set_finalized(uint32_t max_program_kernels_sizeB, int mes
         auto& program_impl = program.impl();
         metadata.num_program_devices += device_range.shape().mesh_size();
         metadata.runs_on_noc_multicast_only_cores |= program_impl.runs_on_noc_multicast_only_cores();
-        metadata.runs_on_noc_unicast_only_cores |= program_impl.runs_on_noc_unicast_only_cores();
 
         const auto& program_config_sizes = program_impl.get_program_config_sizes();
         if (metadata.program_config_sizes.empty()) {
@@ -128,7 +126,6 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
         "Program range {} overlaps with the previously added range {}",
         device_range,
         *potential_intersection);
-    Inspector::mesh_workload_add_program(this, device_range, program.impl().get_id());
     programs_[device_range] = std::move(program);
 }
 
@@ -293,14 +290,7 @@ ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh
 }
 
 void MeshWorkloadImpl::set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status) {
-    // Enqueue re-commits the status on every launch, but the Inspector record describes a
-    // transition and writing one costs a mutex and a YAML append. Report only real changes.
-    const auto [entry, inserted] = program_binary_status_.try_emplace(mesh_id, status);
-    if (!inserted && entry->second == status) {
-        return;
-    }
-    entry->second = status;
-    Inspector::mesh_workload_set_program_binary_status(this, mesh_id, status);
+    program_binary_status_[mesh_id] = status;
 }
 
 void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
@@ -320,10 +310,6 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
 
 bool MeshWorkloadImpl::runs_on_noc_multicast_only_cores() {
     return get_finalized_metadata().runs_on_noc_multicast_only_cores;
-}
-
-bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
-    return get_finalized_metadata().runs_on_noc_unicast_only_cores;
 }
 
 // kernels_ is sized to the programmable-core-type count by finalize_offsets, which reaches this
