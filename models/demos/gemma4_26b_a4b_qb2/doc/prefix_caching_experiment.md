@@ -384,6 +384,18 @@ grading output is PASSED/reward1.0, not a claim that every pytest case passed.
 This single successful unseeded cached trajectory does not establish seed
 removal safety or a speedup over different trajectories. Other arms pending.
 
+### Seeded, cache on
+
+Run39247598502 also passed official Astropy reward1.0 with no terminal
+agent exception. Agent1303.737s, client wall1364s, trial1353.644s.
+Server totals:59 stop requests, input1,004,807, cached987,008,
+computed17,799, output42,830; TTFT sum451.250s and decode842.080s.
+The trajectory records58 agent turns and recovers from one malformed bash
+tool call. Harbor omits that failed-format response's usage and reports
+989,532 input/32,023 output, so server totals represent actual work.
+Both cached arms passed this one task. Their different turn/output counts
+prevent interpreting the shorter unseeded run as an isolated speed effect.
+
 Remote runs 39238204679 (qb2-120-p03t09) and 39238201191
 (qb2-120-p01t03) passed concurrently on distinct machines, using Metal
 7d5c3e5cb8438989e36a6a35c704f1154f9a4584 and workflow 38d4d6f.
