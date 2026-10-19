@@ -1378,3 +1378,8 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   skills, selftests, dev notes, dashboards, knowledge, any markdown). DeepSeek-V4.1 P.8: the on side's swap test failed
   by design (rounding mismatch) and the overseer's framework commits had changed the key: the accept would have rerun
   ~1 h of tests the A/B had already run; done by hand once. WALL_RUNS 20 / WALL_WARM 10 (P.8: ~10 warm-up chunks).
+
+- F121 (owner, 2026-10-20): when max precision pins every switch of a pick (switches_pinned) to one side's values
+  (gate_tests_side), the A/B runs the frozen tests once, on that side, and shows the result for both: they cannot see
+  the change. DeepSeek-V4.1 P.9 (COMBINE_ACC, pinned fp32, with EXPERTS_COMBINE pinned separate): ~40 min of identical
+  tests per side.
