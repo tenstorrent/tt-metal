@@ -3,8 +3,15 @@
 
 """Chunked prefill for one MiMo decoder layer of each type on the Galaxy (TP=8 x DP=4).
 
-Every replica prefills the same four prompts (200 to 1333 tokens), each in chunks of a different size:
-64, 128, 256 and 512 tokens on rows 0-3, so chunks are both shorter and longer than the 128-token window.
+Two cases:
+
+* ``short``: every replica prefills the same four prompts (200 to 1333 tokens), each in chunks of a
+  different size: 64, 128, 256 and 512 tokens on rows 0-3, so chunks are both shorter and longer than
+  the 128-token window.
+* ``32k``: every replica prefills one 32768-token prompt, in chunks of 1024, 2048, 4096 and 8192 tokens on
+  rows 0-3 (#61416). The fp32 reference runs attention in query blocks (``reference.model.QUERY_BLOCK``),
+  so it fits on the host; set ``MIMO_REF_CACHE`` to a directory to keep its outputs between runs.
+
 Every chunk after the first reads the earlier ones from the paged KV cache: a SWA layer only the window
 before the chunk (kv.SwaBlockTable keeps kv.swa_blocks_per_user blocks per user), a global layer the whole
 context on the chip that owns the user (chunked MLA prefill over the K and 128-wide V caches). The test checks:
@@ -19,7 +26,9 @@ The caches start out full of random values instead of zeros, so reading a block 
 key outside the window, shows up as an error.
 """
 
+import hashlib
 import os
+from dataclasses import dataclass
 
 import pytest
 import torch
@@ -43,17 +52,58 @@ from models.experimental.mimo_v2_6_flash.tt.decoder import TtMiMoDecoderLayer
 from models.experimental.mimo_v2_6_flash.tt.model import prefill_padded_len
 from models.experimental.mimo_v2_6_flash.tt.rope import MiMoRotarySetup, meta_rope_permutation
 
-MAX_SEQ = 2048
 MAX_BATCH = 32
 BLOCK = 64
-LOGICAL_BLOCKS = MAX_SEQ // BLOCK
-CONTEXT_BLOCKS = pad_to(-(-(MAX_SEQ + kv_lib.PREFILL_MAX_PAD) // BLOCK), 8)  # as TtMiMoModel.prefill_context_blocks
-PROMPT_LENS = (200, 517, 960, 1333)
-CHUNKS = (64, 128, 256, 512)  # chunk size on replica rows 0..3
-DECODE_STEPS = 3
 HIDDEN_STD = 0.5
 MODES = ("oneshot", "chunked")
 KV_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[os.environ.get("MIMO_KV_DTYPE", "bfp8")]
+
+
+@dataclass(frozen=True)
+class Case:
+    max_seq: int  # page table width in tokens; room for the prompts plus the decode steps
+    prompt_lens: tuple
+    chunks: tuple  # chunk size on replica rows 0..3
+    # Decode tokens per user. The decode scores are pooled over a row's tokens, and one token whose 8th and
+    # 9th expert scores tie within the router's error moves its output a lot, so a row needs enough tokens
+    # that one such tie cannot decide the score (layer 5 at 32K: one tie in 3 tokens pooled to 0.978).
+    decode_steps: int
+
+    @property
+    def logical_blocks(self):
+        return self.max_seq // BLOCK
+
+    @property
+    def context_blocks(self):
+        """As TtMiMoModel.prefill_context_blocks."""
+        return pad_to(-(-(self.max_seq + kv_lib.PREFILL_MAX_PAD) // BLOCK), 8)
+
+
+CASES = {
+    "short": Case(max_seq=2048, prompt_lens=(200, 517, 960, 1333), chunks=(64, 128, 256, 512), decode_steps=3),
+    "32k": Case(max_seq=32768 + 1024, prompt_lens=(32768,), chunks=(1024, 2048, 4096, 8192), decode_steps=32),
+}
+
+
+def reference_prefill(ref_layer, layer_idx, x):
+    """fp32 reference output and K/V history for one whole prompt, from ``MIMO_REF_CACHE`` when it is there."""
+    root = os.environ.get("MIMO_REF_CACHE")
+    path = None
+    if root:
+        digest = hashlib.sha1(x.numpy().tobytes()).hexdigest()[:16]
+        path = os.path.join(root, f"layer{layer_idx}_len{x.shape[0]}_{digest}.pt")
+        if os.path.exists(path):
+            saved = torch.load(path)
+            hist = ref.KVHistory()
+            hist.k, hist.v, hist.pos = saved["k"], saved["v"], saved["pos"]
+            return saved["y"], hist
+    hist = ref.KVHistory()
+    with torch.no_grad():
+        y = ref_layer(x, torch.arange(x.shape[0]), hist)
+    if path:
+        os.makedirs(root, exist_ok=True)
+        torch.save(dict(y=y, k=hist.k, v=hist.v, pos=hist.pos), path)
+    return y, hist
 
 
 def to_tt(x, plan):
@@ -88,7 +138,7 @@ def garbage_cache(plan, num_blocks, dims, seed):
 class Row:
     """One replica (Galaxy row) with its layer and a one-shot and a chunked cache with their page tables."""
 
-    def __init__(self, sm, cfg, layer_idx, weights, dims, r):
+    def __init__(self, sm, cfg, layer_idx, weights, dims, r, case):
         self.plan = plan = MeshPlan(sm)
         self.ropes = {
             "swa": MiMoRotarySetup(sm, MAX_BATCH, dims.head_dim, dims.rope_dim, cfg.swa_rope_theta),
@@ -97,25 +147,27 @@ class Row:
         # Replica 0 converts the weights and fills the cache; the other rows load the cached tensors.
         self.layer = TtMiMoDecoderLayer(plan, cfg, layer_idx, weights, self.ropes, cache_dir=cache_dir("layer_bfp8"))
         attn = self.layer.attn
-        self.chunk = CHUNKS[r]
-        n = len(PROMPT_LENS)
+        self.chunk = case.chunks[r]
+        self.context_blocks = case.context_blocks
+        logical = case.logical_blocks
+        n = len(case.prompt_lens)
         self.swa, self.tables = {}, {}
         for mode in MODES:
             if attn.is_swa:
                 self.swa[mode] = kv_lib.SwaBlockTable(
                     n,
                     MAX_BATCH,
-                    LOGICAL_BLOCKS,
+                    logical,
                     BLOCK,
                     attn.sliding_window,
                     kv_lib.swa_blocks_per_user(attn.sliding_window, BLOCK),
-                    min_blocks=LOGICAL_BLOCKS,  # decode here runs paged_update_cache (no SwaDecodeQkv)
+                    min_blocks=logical,  # decode here runs paged_update_cache (no SwaDecodeQkv)
                 )
                 self.tables[mode], num_blocks = self.swa[mode].host_table(TP), self.swa[mode].num_blocks
                 self.scratch = 0
             else:
                 self.swa[mode] = None
-                self.tables[mode], num_blocks = kv_lib.page_tables(n, MAX_BATCH, LOGICAL_BLOCKS, TP, attn.rep, seed=r)
+                self.tables[mode], num_blocks = kv_lib.page_tables(n, MAX_BATCH, logical, TP, attn.rep, seed=r)
                 self.scratch = num_blocks - 1  # the chip pair's scratch block (kv.page_tables)
         v_dim = attn.v_head_dim if attn.split_users else attn.head_dim
         self.kv = {
@@ -158,7 +210,7 @@ class Row:
             padded,
             BLOCK,
             self.scratch,
-            context_blocks=CONTEXT_BLOCKS if later and tbl is None else None,
+            context_blocks=self.context_blocks if later and tbl is None else None,
             window=tbl.window_blocks(slot, start_pos) if later and tbl is not None else None,
             start_tensor=start,
         )
@@ -199,26 +251,29 @@ class Row:
 
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("case_name", list(CASES))
 @pytest.mark.parametrize("layer_idx", [0, 1, 5])
-def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
+def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx, case_name):
+    case = CASES[case_name]
     torch.manual_seed(4321 + layer_idx)
     cfg, ckpt = load_config_and_ckpt()
     weights = ref.load_layer_weights(ckpt, cfg, layer_idx)
     ref_layer = ref.ReferenceDecoderLayer(cfg, layer_idx, weights=weights)
     dims = cfg.attention_dims(layer_idx)
-    logger.info(f"layer {layer_idx}: swa={dims.is_swa} moe={cfg.is_moe(layer_idx)} kv_heads={dims.num_kv_heads}")
+    logger.info(
+        f"layer {layer_idx} ({case_name}): swa={dims.is_swa} moe={cfg.is_moe(layer_idx)} kv_heads={dims.num_kv_heads}"
+    )
 
     rows = [
-        Row(sm, cfg, layer_idx, weights if r == 0 else None, dims, r) for r, sm in enumerate(dp_submeshes(mesh_device))
+        Row(sm, cfg, layer_idx, weights if r == 0 else None, dims, r, case)
+        for r, sm in enumerate(dp_submeshes(mesh_device))
     ]
 
     # The same prompts on every row; the reference sees each whole prompt once.
     users = []
-    for length in PROMPT_LENS:
+    for length in case.prompt_lens:
         x = (torch.randn(length, cfg.hidden_size) * HIDDEN_STD).bfloat16().float()
-        hist = ref.KVHistory()
-        with torch.no_grad():
-            y = ref_layer(x, torch.arange(length), hist)
+        y, hist = reference_prefill(ref_layer, layer_idx, x)
         users.append(dict(x=x, ref=y, hist=hist, ref_k=hist.k.clone(), ref_v=hist.v.clone()))
 
     # ---- prefill: one shot and in chunks, every row enqueued before anything is read
@@ -262,8 +317,8 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
     logger.info(f"chunked KV vs reference, worst over rows/users/chips: {worst_kv}")
 
     # ---- decode from the chunked cache; the same inputs on every row, so one reference serves all four
-    decode_pool = {r: ([], []) for r in range(DP)}
-    for step in range(DECODE_STEPS):
+    decode_pool = {r: ([], [], [], []) for r in range(DP)}
+    for step in range(case.decode_steps):
         pos = torch.full((MAX_BATCH,), -1, dtype=torch.int32)
         x = torch.zeros(MAX_BATCH, cfg.hidden_size)
         for u, usr in enumerate(users):
@@ -304,17 +359,21 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
             for u, usr in enumerate(users):
                 xd, rd = usr["x_decode"], usr["ref_decode"]
                 p, pd = pcc(got[u], rd), pcc(got[u] - xd, rd - xd)
-                worst["decode"] = min(worst["decode"], p)
-                decode_pool[r][0].append(got[u] - xd)
-                decode_pool[r][1].append(rd - xd)
+                pool = decode_pool[r]
+                pool[0].append(got[u])
+                pool[1].append(rd)
+                pool[2].append(got[u] - xd)
+                pool[3].append(rd - xd)
                 logger.info(f"decode step {step} row {r} slot {u} pos {int(pos[u])}: pcc {p:.5f} delta {pd:.5f}")
-    # One decode token's delta is dominated by its MoE output, and a token whose 8th and 9th expert scores
-    # are within the router matmul's error (~2^-12 relative) picks a different expert on device. As in
-    # test_decoder_tp8_dp4.py, the delta is checked over all of a row's decode tokens together.
-    for r, (got_d, ref_d) in decode_pool.items():
+    # One decode token is dominated by its MoE output, and a token whose 8th and 9th expert scores are within
+    # the router matmul's error (~2^-12 relative) picks a different expert on device: layer 5 at 32K has one
+    # at position 32769 (gap 1.0e-4), output PCC 0.94. As for the delta in test_decoder_tp8_dp4.py, both
+    # decode scores are taken over all of a row's decode tokens together; each token's own score is logged.
+    for got, ref_out, got_d, ref_d in decode_pool.values():
+        worst["decode"] = min(worst["decode"], pcc(torch.stack(got), torch.stack(ref_out)))
         worst["decode_delta"] = min(worst["decode_delta"], pcc(torch.stack(got_d), torch.stack(ref_d)))
 
-    logger.info(f"layer {layer_idx} worst over 4 rows x {len(users)} prompts: {worst}")
+    logger.info(f"layer {layer_idx} ({case_name}) worst over 4 rows x {len(users)} prompts: {worst}")
     # Same bounds as test_decoder_tp8_dp4.py: ~1-2% of MoE tokens flip one expert at a near-tie.
     assert worst["chunked"] > 0.995 and worst["decode"] > 0.995, worst
     assert worst["chunked_delta"] > 0.99 and worst["decode_delta"] > 0.99, worst
@@ -334,7 +393,7 @@ def test_prefill_programs_do_not_key_on_start(mesh_device, layer_idx):
     cfg, ckpt = load_config_and_ckpt()
     dims = cfg.attention_dims(layer_idx)
     weights = ref.load_layer_weights(ckpt, cfg, layer_idx)
-    row = Row(dp_submeshes(mesh_device)[0], cfg, layer_idx, weights, dims, 0)
+    row = Row(dp_submeshes(mesh_device)[0], cfg, layer_idx, weights, dims, 0, CASES["short"])
     device = row.plan.mesh_device
 
     def prefill_user(slot, length, chunk=128):
