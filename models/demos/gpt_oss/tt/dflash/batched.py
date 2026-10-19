@@ -207,6 +207,9 @@ class BatchedDraft:
         mesh = mesh_device
         rep = ttnn.ReplicateTensorToMesh(mesh)
 
+        # BF16 weights (BF8: round 49.85 -> 49.69 ms, acceptance 4.59 -> 4.53 tokens per round: slower overall)
+        wdt = ttnn.bfloat16
+
         def put(t, mapper=rep, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
             return ttnn.from_torch(
                 t.contiguous(),
@@ -247,14 +250,15 @@ class BatchedDraft:
                 dict(
                     ln1=norm_w(w[p + "input_layernorm.weight"]),
                     ln2=norm_w(w[p + "post_attention_layernorm.weight"]),
-                    qkv=put(per_device([q, k, v]).T, cols),
+                    qkv=put(per_device([q, k, v]).T, cols, dtype=wdt),
                     qkv_b=put(per_device([qb, kb, vb]).reshape(1, -1), cols),
                     q_norm=norm_w(reverse_permute_1d(w[a + "q_norm.weight"])),
                     k_norm=norm_w(reverse_permute_1d(w[a + "k_norm.weight"])),
-                    o=put(w[a + "o_proj.weight"].T, rows),
+                    o=put(w[a + "o_proj.weight"].T, rows, dtype=wdt),
                     o_b=put(w[a + "o_proj.bias"].reshape(1, -1)),
-                    gu=put(per_device([g, u]).T, cols),
-                    down=put(w[m + "down_proj.weight"].T, rows),
+                    g=put(g.T, cols, dtype=wdt),  # gate and up as two matmuls: no slices of a joint output
+                    u=put(u.T, cols, dtype=wdt),
+                    down=put(w[m + "down_proj.weight"].T, rows, dtype=wdt),
                 )
             )
         self.block_size = block_size
@@ -484,12 +488,8 @@ class BatchedDraft:
             o.deallocate(True)
             h = h2
             x = ttnn.rms_norm(h, epsilon=self.eps, weight=L["ln2"], compute_kernel_config=self.ck)
-            gu = self._linear(x, L["gu"])
+            g, u = self._linear(x, L["g"]), self._linear(x, L["u"])
             x.deallocate(True)
-            I = self.inter
-            g = ttnn.slice(gu, (0, 0, 0, 0), (1, 1, self.rows, I))
-            u = ttnn.slice(gu, (0, 0, 0, I), (1, 1, self.rows, 2 * I))
-            gu.deallocate(True)
             act = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
             g.deallocate(True)
             u.deallocate(True)
