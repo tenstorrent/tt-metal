@@ -364,6 +364,13 @@ void RunSemaphoreIncMulticastTest(
         EXPECT_TRUE(has_issue) << "Without atomic barrier, should have unflushed multicast semaphore issue at device "
                                << device_id << " core " << sender_core_virtual.str();
     }
+
+    // Only BRISC runs here. When the suite runs in order, this core's NCRISC recorded unflushed semaphore increments
+    // in SemaphoreIncWriteBarrierDoesNotFlush, and those events are still in its L1 profiler buffer. BRISC must not
+    // push them again, which relies on init_profiler clearing every RISC's DEVICE_BUFFER_END_INDEX.
+    EXPECT_FALSE(fixture->has_unflushed_semaphore_issue(device_id, sender_core_virtual, NCRISC_PROCESSOR_ID))
+        << "NCRISC does not run in this program, yet an issue was reported for it at device " << device_id << " core "
+        << sender_core_virtual.str();
 }
 
 // Every core issues repeated inline dword writes (4-byte immediate value, no L1 source buffer) to one destination

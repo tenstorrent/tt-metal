@@ -251,7 +251,11 @@ void ProfilerStateManager::start_debug_dump_thread(
                     DeviceProfiler& profiler = profiler_it->second;
                     // The kernels are done, but BRISC publishes a core's last chunks in finish_profiler only after it
                     // has reported completion to dispatch, and stalls there if a buffer is full, so chunks can still
-                    // land while this read runs. Poll again until a poll finds nothing new.
+                    // land while this read runs. Poll again until a poll finds nothing new. Only BRISC and NCRISC
+                    // record NOC events, finish_profiler pushes them first, and each stalls at most once, so 4 polls
+                    // cover the worst case: one before BRISC publishes, BRISC's handover, BRISC's chunk with
+                    // NCRISC's handover, and NCRISC's chunk. Later chunks stay behind the read cursors for the next
+                    // poll.
                     constexpr uint32_t max_drain_polls = 4;
                     for (uint32_t poll = 0; poll < max_drain_polls; ++poll) {
                         const bool found_new_data = profiler.pollDebugDumpResults(
