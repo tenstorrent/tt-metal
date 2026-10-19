@@ -60,13 +60,10 @@ constexpr ArchCostModel QUASAR_COST_MODEL{
     .C_slice_cycles = 2000.0,
 };
 
-// The part of the shorter costs that the buffering does not hide behind the longest one. Set by hand, not
-// measured: with 0, plans that tie on the longest cost tie overall (decode with A in DRAM then took 8 cores over 32).
-constexpr double UNHIDDEN_FRACTION = 0.25;
-
-// Estimated device cycles of a plan: the largest of the busiest core's compute and data movement and the device's
-// DRAM traffic, part of the other two (the buffering overlaps them imperfectly), and a fixed cost per C slice.
-double estimate_plan_cycles(
+// Estimated cycles of a plan: the slowest of the busiest core's compute and data movement and the device's DRAM
+// traffic (the buffers overlap them), plus a fixed cost per C slice. Second, to break ties: the three summed
+// (decode reads the same DRAM bytes on 8 cores as on 32).
+std::pair<double, double> estimate_plan_cycles(
     const ttnn::prim::qsr::UnifiedMatmulPlan& plan,
     tt::ARCH arch,
     tt::tt_metal::MathFidelity math_fidelity,
@@ -109,9 +106,8 @@ double estimate_plan_cycles(
                           (B_in_dram ? B_bytes / (plan.B_mcast_num_dests + 1) : 0.0) + (C_in_dram ? C_bytes : 0.0));
     const double dram_cycles = dram_bytes / model.dram_bytes_per_cycle;
 
-    const double longest_cycles = std::max({compute_cycles, dm_cycles, dram_cycles});
-    const double shorter_cycles = compute_cycles + dm_cycles + dram_cycles - longest_cycles;
-    return longest_cycles + UNHIDDEN_FRACTION * shorter_cycles + C_slices_on_busiest_core * model.C_slice_cycles;
+    const double slowest_cycles = std::max({compute_cycles, dm_cycles, dram_cycles});
+    return {slowest_cycles + C_slices_on_busiest_core * model.C_slice_cycles, compute_cycles + dm_cycles + dram_cycles};
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -181,18 +177,20 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
         std::vector<MatmulUnifiedProgramConfig> configs;
     };
     std::vector<Candidate> candidates;
-    // C slices of a fixed width (fixed_is_N) or height, the other dimension all of C's, shrunk along its divisors
-    // until a plan fits.
+    // C slices of a fixed width (fixed_is_N) or height, the other dimension all of C's, then split into 2, 3, ...
+    // pieces until a plan fits. The last piece may be shorter (13 tiles in 4 pieces: 4, 4, 4, 1).
     const auto shrinking_C_slices =
         [&](CoreRangeSet cores, uint32_t fixed_tiles, bool fixed_is_N, tt::tt_metal::ShardOrientation orientation) {
             std::vector<MatmulUnifiedProgramConfig> configs;
             const uint32_t free_tiles = fixed_is_N ? M_tiles : N_tiles;
+            uint32_t previous_free_slice_tiles = 0;
             for (uint32_t pieces = 1; pieces <= free_tiles; ++pieces) {
-                if (free_tiles % pieces == 0) {
-                    const uint32_t free_slice_tiles = free_tiles / pieces;
+                const uint32_t free_slice_tiles = tt::div_up(free_tiles, pieces);
+                if (free_slice_tiles != previous_free_slice_tiles) {
                     configs.push_back(
                         fixed_is_N ? make_config(cores, free_slice_tiles, fixed_tiles, orientation)
                                    : make_config(cores, fixed_tiles, free_slice_tiles, orientation));
+                    previous_free_slice_tiles = free_slice_tiles;
                 }
             }
             return configs;
@@ -259,7 +257,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
     }
 
     std::optional<MatmulUnifiedProgramConfig> best;
-    double best_cycles = 0.0;
+    std::pair<double, double> best_estimate;
     for (const Candidate& candidate : candidates) {
         for (const MatmulUnifiedProgramConfig& config : candidate.configs) {
             if (config.cores.bounding_box().end_coord.x >= device.compute_with_storage_grid_size().x ||
@@ -276,7 +274,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
                 plan->sharded_output_layout != C_memory.memory_layout()) {
                 break;
             }
-            const double cycles = estimate_plan_cycles(
+            const std::pair<double, double> estimate = estimate_plan_cycles(
                 *plan,
                 device.arch(),
                 math_fidelity,
@@ -290,10 +288,10 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
                 plan->C_slice_M_tiles,
                 plan->C_slice_N_tiles,
                 plan->cores.size(),
-                cycles);
-            if (!best.has_value() || cycles < best_cycles) {
+                estimate.first);
+            if (!best.has_value() || estimate < best_estimate) {
                 best = config;
-                best_cycles = cycles;
+                best_estimate = estimate;
             }
             break;
         }
