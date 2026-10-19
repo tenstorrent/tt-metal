@@ -1842,16 +1842,24 @@ class ttMLA:
         planner, ready_sem, done_sem = self.tt_ccl.get_sparse_kv_push(self.ccl_num_links)
         storage = kvpe_cache.storage
         row_bytes = storage.shape[-1] * (1 if storage.dtype == ttnn.fp8_e4m3 else 2)
+        page_bytes = -(-row_bytes // 64) * 64  # DRAM-aligned row page
+        dense = self._sparse_kv_gather_buffer
+        push_buffer = self.tt_ccl.get_mla_sparse_kv_gather_buffer(
+            seq_len=planner.buffer_rows(dense.shape[2], page_bytes),
+            row_width=dense.shape[-1],
+            dtype=dense.dtype,
+            layout=dense.layout,
+        )
         plan = planner.plan(
             indices,
             stripe_chunk=seq_len_local // self.tp_factor,
-            buffer_rows=self._sparse_kv_gather_buffer.shape[2],
-            page_bytes=-(-row_bytes // 64) * 64,  # DRAM-aligned row page
+            buffer_rows=push_buffer.shape[2],
+            page_bytes=page_bytes,
         )
         compact = ttnn.experimental.high_bw_all_gather(
             storage,
             dim=2,
-            output_tensor=self._sparse_kv_gather_buffer,
+            output_tensor=push_buffer,
             cluster_axis=None,
             num_links=self.ccl_num_links,
             input_batch_index=cache_batch_idx if storage.shape[0] > 1 else None,
