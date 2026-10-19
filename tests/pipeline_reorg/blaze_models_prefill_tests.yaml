@@ -1740,8 +1740,10 @@
   test_tags: [kimi_k2_7, runner, kv_cache]
   test_group: disagg_prefill
   skus:
-    bh_sc1_high_power:
-      timeout: 70
+    # 8 kW like the SC4 quad, so the SC4-vs-SC1 scaling table compares one power class. Kimi runs
+    # ~30% slower at 8 kW than at 14 kW, hence the longer timeout.
+    bh_sc1:
+      timeout: 90
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   budget_type: demo
@@ -1761,7 +1763,8 @@
   test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
   test_group: disagg_prefill
   skus:
-    bh_sc1_high_power:
+    # 8 kW like the SC4 quad, so the SC4-vs-SC1 scaling table compares one power class.
+    bh_sc1:
       timeout: 80
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
