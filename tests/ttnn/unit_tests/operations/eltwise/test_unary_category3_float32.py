@@ -219,8 +219,11 @@ def test_exp_underflow(device, fast):
     [
         False,
         pytest.param(
-            strict=True,
-            reason="#60792: fast-mode float32 exp returns NaN instead of +inf for x >= 89",
+            True,
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="#60792: fast-mode float32 exp returns NaN instead of +inf for x >= 89",
+            ),
         ),
     ],
     ids=["accurate", "fast"],

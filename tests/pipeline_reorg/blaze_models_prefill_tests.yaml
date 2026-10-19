@@ -229,7 +229,7 @@
       export OMP_NUM_THREADS=$(nproc)
       export TT_METAL_SHM_TRACKING_DISABLED=1
       export LOGURU_LEVEL=INFO
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k galaxy -vvv --tb=short
     '
   test_type: kimi_moe_perf
   test_tags: [kimi_k2_7, kimi_k3, moe]

@@ -59,7 +59,7 @@ from helpers.test_variant_parameters import (
     ZERO_POINT,
 )
 from helpers.tile_constants import MAX_NUM_FACES, MAX_TILE_ELEMENTS
-from helpers.utils import passed_test
+from helpers.utils import fp32_bits_as_int32, int32_to_smag32, passed_test
 
 
 @pytest.fixture(autouse=True)
@@ -164,8 +164,8 @@ def _run_sfpu_binary_llk_golden(
     if sign_magnitude:
         # The SIGN_MAGNITUDE_FORMAT path reads and writes Dest as SMAG32: stage the operands
         # and encode the 2's-comp golden the same way (as the quant family does).
-        src_A = _int32_to_smag32(src_A)
-        golden_tensor = _int32_to_smag32(golden_tensor)
+        src_A = int32_to_smag32(src_A)
+        golden_tensor = int32_to_smag32(golden_tensor)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -1029,19 +1029,6 @@ _QUANT_INT8_MIN = -127
 _QUANT_INT8_MAX = 127
 
 
-def _fp32_bits_as_int32(t: torch.Tensor) -> torch.Tensor:
-    """Reinterpret a float32 tensor's bits as int32 (no numeric conversion)."""
-    return t.to(torch.float32).contiguous().view(torch.int32)
-
-
-def _int32_to_smag32(t: torch.Tensor) -> torch.Tensor:
-    """Encode a 2's-complement int32 tensor as sign-magnitude 32-bit (SMAG32):
-    bit31 = sign, bits[30:0] = magnitude. Used to stage operands for and model
-    the SIGN_MAGNITUDE_FORMAT kernel path, which skips the 2's-comp<->SM casts."""
-    v = t.to(torch.int64)
-    return (v.abs() | ((v < 0).to(torch.int64) << 31)).to(torch.int32)
-
-
 _QUANT_OPS = ["QUANT", "REQUANT", "DEQUANT"]
 
 QUANT_SWEEP = dict(
@@ -1082,14 +1069,14 @@ def _run_quant(
         a_float = a_vals.to(torch.float32)
         # The SIGN_MAGNITUDE_FORMAT path skips the 2's-comp->SM input cast, so operand
         # A must already be SMAG32; the default path expects raw 2's-complement.
-        a_staged = _int32_to_smag32(a_vals) if sign_magnitude else a_vals
+        a_staged = int32_to_smag32(a_vals) if sign_magnitude else a_vals
     else:
         # fp32 operand A.
         a_float = (torch.rand(n, dtype=torch.float32) - 0.5) * 4000.0  # +/-2000
         a_vals = a_float
-        a_staged = _fp32_bits_as_int32(a_float)
+        a_staged = fp32_bits_as_int32(a_float)
 
-    b_staged = _fp32_bits_as_int32(scale)
+    b_staged = fp32_bits_as_int32(scale)
 
     buffer_A, tile_cnt = _stage_binary_operands(
         a_staged, b_staged, tile_indices, torch.int32
@@ -1110,7 +1097,7 @@ def _run_quant(
         if sign_magnitude:
             # SM path stores the STOCH_RND SMAG32 result as-is (no SM32_TO_2SC cast):
             # negatives keep bit31|magnitude and negative-zero stays 0x80000000.
-            golden_active = _int32_to_smag32(clamped)
+            golden_active = int32_to_smag32(clamped)
             golden_active[neg_zero] = torch.tensor(-(2**31), dtype=torch.int32)
         else:
             # 2's-comp path: SM32_TO_2SC maps STOCH_RND negative-zero to -1 (not +0).
