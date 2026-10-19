@@ -27,7 +27,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.dsa import TtDSA, TtLatentCache
-from models.demos.glm53_flash.tt.kda import TtKDA, device_scalar_u32
+from models.demos.glm53_flash.tt.kda import TtKDA
 from models.demos.glm53_flash.tt.mhc import build_mhc
 from models.demos.glm53_flash.tt.mlp import TtClampedSwiGLU
 from models.demos.glm53_flash.tt.moe import TtMoE
@@ -135,10 +135,10 @@ class TtDecoderLayer(LightweightModule):
         def attention(h):
             h = self._norm(h, self.input_norm_w)  # [1,1,T,hidden] bf16
             if self.is_kda:
-                start = actual_start if actual_start is not None else device_scalar_u32(self.device, 0)
+                start = actual_start if actual_start is not None else self.attn.scalar(0)
                 end = actual_end
                 if end is None and seq_len != T:
-                    end = device_scalar_u32(self.device, seq_len)
+                    end = self.attn.scalar(seq_len)
                 y, new_state.kda = self.attn.prefill_forward(
                     ttnn.reshape(h, [1, T, self.hidden]), state.kda, start, end
                 )

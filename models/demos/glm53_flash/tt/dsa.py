@@ -7,22 +7,25 @@ HF ``Glm5NextTextAttention`` (qk_rope_head_dim = 0, so no rotary anywhere):
     c = rmsnorm(kv_a(x))                           [T, 512]   (the latent, cached per token)
     k_h = c @ Wkb1[h]^T, v_h = c @ Wkb2[h]^T       (kv_b = [64 x (256 k | 256 v), 512])
     o = softmax(q k^T / 16) v -> concat heads -> o_proj
-For context <= 2048 (+ the incomplete tail pool) the indexer selects every visible token, so
-the layer is exact causal attention; longer contexts use the pooled-key indexer (sparse path,
-``TtDSAIndexer``).
+The indexer selects the top 512 complete key pools (2048 tokens) plus the incomplete tail, so a
+query at position a sees every visible token while floor((a+1)/4) <= 512, i.e. a <= 2050: there
+the layer is exact causal attention (dense path). Beyond, the pooled-key indexer picks the keys
+(sparse path, ``TtDSAIndexer`` + ``sparse_sdpa``).
 
 Device design (section 5.3 of the design doc, single chip = Phase 1):
-  * prefill (T <= 2048): materialize K, V per head from the latent and run
-    ``ttnn.transformer.scaled_dot_product_attention`` (causal, head_dim 256); the latent is
-    written to the paged cache with ``paged_fill_cache``. Longer chunks: absorbed q, indexer
-    selection and ``sparse_sdpa`` over the user's latent rows.
+  * prefill: the latent is written to the paged cache with ``paged_fill_cache`` and the pooled-key
+    index is maintained. Query rows [0, 2048) run the dense causal SDPA on materialized K/V; rows
+    from 2048 on (they always see >= 2048 pooled tokens, so the top-k row is a full valid prefix)
+    run the indexer selection + ``sparse_sdpa`` on the absorbed q.
   * decode: absorbed MLA. q_lat[h] = q[h] @ Wkb1[h] (256 -> 512), then
-    ``paged_flash_multi_latent_attention_decode`` over the latent cache (head_dim_v = 512),
-    then o[h] = o_lat[h] @ Wkb2[h]^T (512 -> 256), concat heads, o_proj. The latent of the new
-    token is appended with ``paged_update_cache`` first. Positions >= index_topk run the
-    indexer + ``sparse_sdpa`` per user (host chunk geometry, not traced).
-  * the pooled-key index (``TtIndexCache``) is maintained on every prefill and decode call,
-    dense or sparse, so a user may cross the 2048 boundary on the dense path.
+    ``paged_flash_multi_latent_attention_decode`` over the latent cache for every user slot
+    (exact through position 2050), then o[h] = o_lat[h] @ Wkb2[h]^T (512 -> 256), concat heads,
+    o_proj. Users at position >= 2051 get their row replaced by the per-user indexer +
+    ``sparse_sdpa`` result (host chunk geometry, not traced). The latent of the new token is
+    appended with ``paged_update_cache`` first and the index is maintained for every user.
+  * ``sparse_sdpa`` reads an index row up to its FIRST sentinel, so every row handed to it must be
+    a contiguous valid prefix: that holds exactly because only queries with >= 2048 visible pooled
+    tokens reach it.
 
 Cache: ``[max_blocks, 1, block_size, 512]`` bf16, paged; page_table ``[B, max_blocks_per_seq]`` int32.
 """
@@ -175,9 +178,10 @@ class TtDSA(LightweightModule):
         self.indexer = TtDSAIndexer(
             device, cfg, {k[len("indexer.") :]: v for k, v in sd.items() if k.startswith("indexer.")}
         )
-        # query position from which fewer than all visible tokens may be selected (HF: all complete pools are
-        # selected while floor((a+1)/4) <= 512, i.e. a <= 2050; switching at 2048 is exact as well)
-        self.sparse_from = cfg.index_topk
+        # prefill rows from here on use the sparse path (they see >= 2048 pooled tokens: full index rows)
+        self.sparse_row_start = cfg.index_topk  # 2048
+        # decode: dense attention is HF-exact while floor((a+1)/4) <= index_topk/4, i.e. a <= 2050
+        self.dense_exact_max_pos = cfg.index_topk + cfg.index_kpool - 2  # 2050
         self.hifi2 = _compute(device)
         self.hifi4 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
         grid = device.compute_with_storage_grid_size()
@@ -233,38 +237,25 @@ class TtDSA(LightweightModule):
         ttnn.deallocate(qh)
         return q_lat
 
-    def _unabsorb_o(self, o_lat: ttnn.Tensor) -> ttnn.Tensor:
-        """o_lat [1,H,T,L] -> o_proj output [1,1,T,4096]."""
+    def _o_lat_to_heads(self, o_lat: ttnn.Tensor) -> ttnn.Tensor:
+        """o_lat [1,H,T,L] -> concat-heads v-space [1,1,T,H*Dv] (per-head @ Wkb2^T)."""
         T = o_lat.shape[-2]
         o = ttnn.matmul(o_lat, self.w_absorb_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,H,T,Dv]
-        o = ttnn.reshape(ttnn.transpose(o, 1, 2), [1, 1, T, self.H * self.Dv])
-        return ttnn.linear(o, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        return ttnn.reshape(ttnn.transpose(o, 1, 2), [1, 1, T, self.H * self.Dv])
 
-    # --------------------------------------------------------------------- prefill
-    def prefill_forward(self, x: ttnn.Tensor, cache: TtLatentCache, user: int, seq_len: int) -> ttnn.Tensor:
-        """One user, chunk from position 0. x [1,1,T_pad,4096] with T_pad % block_size == 0 and the
-        logical ``seq_len`` <= T_pad; returns [1,1,T_pad,4096] (rows past seq_len are garbage).
-        Fills the user's latent pages [0, T_pad) and the pooled-key index; dense exact attention
-        when seq_len <= sparse_from, else the indexer + sparse_sdpa path."""
-        T = x.shape[-2]
+    def _o_proj(self, o_heads: ttnn.Tensor) -> ttnn.Tensor:
+        return ttnn.linear(o_heads, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+
+    def _dense_attention(self, q: ttnn.Tensor, c: ttnn.Tensor) -> ttnn.Tensor:
+        """Causal attention of q [1,1,T,H*Dq] over the latent c [1,1,T,L] (K/V materialized);
+        returns concat-heads v-space [1,1,T,H*Dv]."""
+        T = q.shape[-2]
         H, Dq, Dv = self.H, self.Dq, self.Dv
-        q_resid = self._q_resid(x)
-        q = self._q(q_resid)  # [1,1,T,H*Dq]
-        c = self._latent(x)  # [1,1,T,L]
-        cache.fill(c, user)
-        self.indexer.maintain_prefill(x, cache.index, user, seq_len)
-        if seq_len > self.sparse_from:
-            ttnn.deallocate(c)
-            return self._prefill_sparse(x, q, q_resid, cache, user, seq_len)
-        ttnn.deallocate(q_resid)
         k = ttnn.linear(c, self.w_k_all, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,H*Dq]
         v = ttnn.linear(c, self.w_v_all, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,H*Dv]
-        ttnn.deallocate(c)
-        # [1,1,T,H*D] -> [1,H,T,D]
         qh = ttnn.transpose(ttnn.reshape(q, [1, T, H, Dq]), 1, 2)
         kh = ttnn.transpose(ttnn.reshape(k, [1, T, H, Dq]), 1, 2)
         vh = ttnn.transpose(ttnn.reshape(v, [1, T, H, Dv]), 1, 2)
-        ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
         o = ttnn.transformer.scaled_dot_product_attention(
@@ -279,20 +270,43 @@ class TtDSA(LightweightModule):
         ttnn.deallocate(qh)
         ttnn.deallocate(kh)
         ttnn.deallocate(vh)
-        o = ttnn.reshape(ttnn.transpose(o, 1, 2), [1, 1, T, H * Dv])
-        return ttnn.linear(o, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        return ttnn.reshape(ttnn.transpose(o, 1, 2), [1, 1, T, H * Dv])
 
-    def _prefill_sparse(self, x, q, q_resid, cache: TtLatentCache, user: int, seq_len: int) -> ttnn.Tensor:
-        """Chunk from position 0 with seq_len > index_topk: indexer selection + sparse_sdpa."""
+    # --------------------------------------------------------------------- prefill
+    def prefill_forward(self, x: ttnn.Tensor, cache: TtLatentCache, user: int, seq_len: int) -> ttnn.Tensor:
+        """One user, chunk from position 0. x [1,1,T_pad,4096] with T_pad % block_size == 0 and the
+        logical ``seq_len`` <= T_pad; returns [1,1,T_pad,4096] (rows past seq_len are garbage).
+        Fills the user's latent pages [0, T_pad) and the pooled-key index. Rows [0, 2048) are the
+        dense causal attention (exact); rows from 2048 use the indexer + sparse_sdpa."""
         T = x.shape[-2]
+        split = self.sparse_row_start
+        q_resid = self._q_resid(x)
+        q = self._q(q_resid)  # [1,1,T,H*Dq]
+        c = self._latent(x)  # [1,1,T,L]
+        cache.fill(c, user)
+        self.indexer.maintain_prefill(x, cache.index, user, seq_len)
+        if T <= split:
+            ttnn.deallocate(q_resid)
+            o = self._dense_attention(q, c)
+            ttnn.deallocate(q)
+            ttnn.deallocate(c)
+            return self._o_proj(o)
+        # dense rows [0, split)
+        o_dense = self._dense_attention(
+            ttnn.slice(q, [0, 0, 0, 0], [1, 1, split, self.H * self.Dq]),
+            ttnn.slice(c, [0, 0, 0, 0], [1, 1, split, self.L]),
+        )
+        ttnn.deallocate(c)
+        # sparse rows [split, T)
         idx = self.indexer
-        n_pools = seq_len // idx.P
-        q_i, w_i = idx.queries_and_weights(x, q_resid)
+        x_s = ttnn.slice(x, [0, 0, split, 0], [1, 1, T, x.shape[-1]])
+        qr_s = ttnn.slice(q_resid, [0, 0, split, 0], [1, 1, T, q_resid.shape[-1]])
+        q_i, w_i = idx.queries_and_weights(x_s, qr_s)
         ttnn.deallocate(q_resid)
-        indices = idx.select(q_i, w_i, cache.index, user, query_start=0, num_pools_valid=n_pools)  # [1,1,T,W] uint32
+        indices = idx.select(q_i, w_i, cache.index, user, query_start=split, num_pools_valid=seq_len // idx.P)
         ttnn.deallocate(q_i)
         ttnn.deallocate(w_i)
-        q_lat = self._absorb_q(q)  # [1,H,T,L]
+        q_lat = self._absorb_q(ttnn.slice(q, [0, 0, split, 0], [1, 1, T, self.H * self.Dq]))  # [1,H,T-split,L]
         ttnn.deallocate(q)
         q_rm = ttnn.to_layout(q_lat, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(q_lat)
@@ -305,15 +319,18 @@ class TtDSA(LightweightModule):
             kv_format=ttnn.transformer.SparseKVFormat.BF16,
             scale=self.scale,
             k_chunk_size=128,
-        )  # [1,H,T,L] row-major
+        )  # [1,H,T-split,L] row-major
         ttnn.deallocate(q_rm)
         ttnn.deallocate(indices)
         ttnn.deallocate(kv_rm)
         o_lat = ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(o_rm)
-        y = self._unabsorb_o(o_lat)
+        o_sparse = self._o_lat_to_heads(o_lat)  # [1,1,T-split,H*Dv]
         ttnn.deallocate(o_lat)
-        return y
+        o = ttnn.concat([o_dense, o_sparse], dim=-2)  # [1,1,T,H*Dv]
+        ttnn.deallocate(o_dense)
+        ttnn.deallocate(o_sparse)
+        return self._o_proj(o)
 
     # ---------------------------------------------------------------------- decode
     def decode_forward(
@@ -327,11 +344,11 @@ class TtDSA(LightweightModule):
     ) -> ttnn.Tensor:
         """x [1,1,B,4096] (one token per user at position a = positions[b]); ``pool_ids`` = a // 4 and
         ``ring_slots`` = a % 4 ([B] int32 device tensors, host-derived like ``positions``). Appends the
-        latent and maintains the pooled-key index, then attends over [0, a]: dense flash-MLA decode when
-        every user is below ``sparse_from`` (trace-safe), else the per-user indexer + sparse_sdpa path,
-        which needs ``host_positions`` (the same values) for its chunk geometry and is not traced.
-        A dense call for a user at a >= sparse_from is NOT HF semantics; the caller must route long
-        contexts through ``host_positions`` (see FunctionalDecoder)."""
+        latent, maintains the pooled-key index, then attends over [0, a] with the dense flash-MLA decode
+        for every slot (HF-exact through position 2050, trace-safe). With ``host_positions`` (the same
+        values), users at a >= 2051 get their row replaced by the per-user indexer + sparse_sdpa result
+        (host chunk geometry, not traced). Without ``host_positions`` a user beyond 2050 is attended
+        densely, which is NOT HF semantics: FunctionalDecoder enforces the routing."""
         B = x.shape[-2]
         q_resid = self._q_resid(x)
         q = self._q(q_resid)  # [1,1,B,H*Dq]
@@ -339,13 +356,9 @@ class TtDSA(LightweightModule):
         cache.update(ttnn.reshape(c, [1, B, 1, self.L]), positions)
         ttnn.deallocate(c)
         self.indexer.maintain_decode(x, cache.index, pool_ids, ring_slots)
-        if host_positions is not None and max(host_positions) >= self.sparse_from:
-            return self._decode_sparse(x, q, q_resid, cache, host_positions)
-        ttnn.deallocate(q_resid)
         q_lat = self._absorb_q(q)  # [1,H,B,L]
         ttnn.deallocate(q)
         q_dec = ttnn.transpose(q_lat, 1, 2)  # [1,B,H,L] (decode layout: batch, padded heads, dim)
-        ttnn.deallocate(q_lat)
         o_lat = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             q_dec,
             cache.cache,
@@ -360,21 +373,30 @@ class TtDSA(LightweightModule):
         ttnn.deallocate(q_dec)
         oh = ttnn.transpose(o_lat, 1, 2)  # [1,H,B,L]
         ttnn.deallocate(o_lat)
-        y = self._unabsorb_o(oh)
-        ttnn.deallocate(oh)
-        return y
-
-    def _decode_sparse(self, x, q, q_resid, cache: TtLatentCache, positions: list[int]) -> ttnn.Tensor:
-        """Per-user indexer selection + sparse_sdpa at host-known positions (index already maintained)."""
-        B = x.shape[-2]
-        idx = self.indexer
-        P, D = idx.P, idx.D
-        q_i, w_i = idx.queries_and_weights(x, q_resid)  # [1,Hi,B,D], [1,1,B,Hi]
+        sparse_users = (
+            [u for u, a in enumerate(host_positions) if a > self.dense_exact_max_pos] if host_positions else []
+        )
+        if sparse_users:
+            sparse_rows = self._decode_sparse_rows(x, q_resid, q_lat, cache, host_positions, sparse_users)
+            rows = [
+                sparse_rows[u] if u in sparse_rows else ttnn.slice(oh, [0, 0, u, 0], [1, self.H, u + 1, self.L])
+                for u in range(B)
+            ]
+            oh_new = rows[0] if B == 1 else ttnn.concat(rows, dim=-2)
+            ttnn.deallocate(oh)
+            oh = oh_new
         ttnn.deallocate(q_resid)
-        q_lat = self._absorb_q(q)  # [1,H,B,L]
-        ttnn.deallocate(q)
-        outs = []
-        for u in range(B):
+        ttnn.deallocate(q_lat)
+        return self._o_proj(self._o_lat_to_heads(oh))
+
+    def _decode_sparse_rows(self, x, q_resid, q_lat, cache: TtLatentCache, positions: list[int], users: list[int]):
+        """Per-user indexer selection + sparse_sdpa rows {u: [1,H,1,L]} for the listed users (positions
+        > dense_exact_max_pos, so every index row is a full valid prefix)."""
+        idx = self.indexer
+        D = idx.D
+        q_i, w_i = idx.queries_and_weights(x, q_resid)  # [1,Hi,B,D], [1,1,B,Hi]
+        out = {}
+        for u in users:
             a = positions[u]
             # indexer_score_dsa wants a tile-aligned query block and chunk start: score the 32 positions
             # [a - a%32, a - a%32 + 32) with this user's query placed at row r = a % 32 (zero rows elsewhere,
@@ -382,7 +404,7 @@ class TtDSA(LightweightModule):
             start, r = a - a % TILE, a % TILE
             qu = self._place_row(ttnn.slice(q_i, [0, 0, u, 0], [1, idx.Hi, u + 1, D]), r)
             wu = self._place_row(ttnn.slice(w_i, [0, 0, u, 0], [1, 1, u + 1, idx.Hi]), r)
-            indices32 = idx.select(qu, wu, cache.index, u, query_start=start, num_pools_valid=(a + 1) // P)
+            indices32 = idx.select(qu, wu, cache.index, u, query_start=start, num_pools_valid=(a + 1) // idx.P)
             indices = ttnn.slice(indices32, [0, 0, r, 0], [1, 1, r + 1, indices32.shape[-1]])
             q_rm = ttnn.to_layout(ttnn.slice(q_lat, [0, 0, u, 0], [1, self.H, u + 1, self.L]), ttnn.ROW_MAJOR_LAYOUT)
             kv_rm = cache.user_rows_rm(u, a + 1)
@@ -398,16 +420,15 @@ class TtDSA(LightweightModule):
             ttnn.deallocate(kv_rm)
             ttnn.deallocate(q_rm)
             ttnn.deallocate(indices32)
-            outs.append(ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT))
+            out[u] = ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(q_i)
         ttnn.deallocate(w_i)
-        ttnn.deallocate(q_lat)
-        o_lat = outs[0] if B == 1 else ttnn.concat(outs, dim=-2)  # [1,H,B,L]
-        return self._unabsorb_o(o_lat)
+        return out
 
     def selected_ids(self, x: ttnn.Tensor, cache: TtLatentCache, user: int, position: int) -> list[int]:
-        """Test hook: the token ids the indexer selects for one query ``x`` [1,1,1,4096] (the
-        normalized attention input) of ``user`` at ``position`` on the CURRENT index cache (read only)."""
+        """Test hook: the raw index row (token ids, 0xFFFFFFFF sentinels) the indexer selects for one
+        query ``x`` [1,1,1,4096] (the normalized attention input) of ``user`` at ``position`` on the
+        CURRENT index cache (read only)."""
         idx = self.indexer
         q_resid = self._q_resid(x)
         q_i, w_i = idx.queries_and_weights(x, q_resid)
@@ -418,7 +439,7 @@ class TtDSA(LightweightModule):
         ids = ttnn.to_torch(ttnn.slice(ids32, [0, 0, r, 0], [1, 1, r + 1, ids32.shape[-1]])).flatten().tolist()
         for t in (q_resid, q_i, w_i, ids32):
             ttnn.deallocate(t)
-        return [int(i) for i in ids if 0 <= int(i) <= position]
+        return [int(i) for i in ids]
 
     def _place_row(self, row: ttnn.Tensor, r: int) -> ttnn.Tensor:
         """[.., 1, W] -> [.., 32, W] with ``row`` at row r and zeros elsewhere (tile pad cannot front-pad)."""

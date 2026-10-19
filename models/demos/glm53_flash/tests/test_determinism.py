@@ -63,3 +63,32 @@ def test_repeat_determinism_and_no_fallback(mesh_device, layer_idx):
     assert torch.equal(results[0], results[1]), "traced decode is not bit-deterministic across repeats"
     logger.info(f"layer {layer_idx}: two traced decode replays from the same state are bit-identical")
     ttnn.release_trace(mesh_device, trace_id)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_sparse_path_determinism(mesh_device):
+    """Sparse prefill (4097 tokens, random prompt) and one sparse decode step repeated from the same
+    state give bit-identical outputs (no data-dependent nondeterminism in the indexer / top-k / gather)."""
+    R = Path("bringup/references/glm53_flash/R4097")
+    snapshot = default_snapshot_dir()
+    raw = load_layer_raw(snapshot, 3, shard_headers(snapshot))
+    cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
+    pre = torch.load(R / "layer3_prefill.pt")
+    x_in = pre["x_in"]
+    S = x_in.shape[1]
+    dec = FunctionalDecoder.from_state_dict(
+        raw, hf_config=cfg, layer_idx=3, mesh_device=mesh_device, max_batch=1, max_seq_len=S + 64
+    )
+    x_dev = host_streams_to_device(x_in, mesh_device)
+    d0 = torch.load(R / "layer3_decode0.pt")
+    xd = host_streams_to_device(d0["x_in"], mesh_device, pad_to=1)
+    outs, douts = [], []
+    for _ in range(2):
+        y = dec.prefill_forward(x_dev, user=0, seq_len=S)
+        outs.append(device_streams_to_host(y, 4, S))
+        dp = dec.make_decode_positions([d0["position"]])
+        yd = dec.decode_forward(xd, positions=dp)
+        douts.append(device_streams_to_host(yd, 4, 1))
+    assert torch.equal(outs[0], outs[1]), "sparse prefill is not bit-deterministic"
+    assert torch.equal(douts[0], douts[1]), "sparse decode is not bit-deterministic"
+    logger.info(f"layer 3 sparse prefill S={S} + sparse decode at {d0['position']}: repeats bit-identical")
