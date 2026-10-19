@@ -252,7 +252,8 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
         connection_dst = FabricNodeId(src_fabric_node_id.mesh_id, first_hop_neighbors[0]);
     }
 
-    const auto& available_links = get_forwarding_link_indices(src_fabric_node_id, connection_dst);
+    const auto& available_links = get_forwarding_link_indices(
+        *BaseFabricFixture::devices_map_.at(src_physical), src_fabric_node_id, connection_dst);
     if (available_links.empty()) {
         return UnicastTrafficResult{{}, {}, FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 0), 0, true};
     }
@@ -477,6 +478,7 @@ MeshPathResult find_2d_path_with_transit() {
 // Uses mesh coordinates to scan all positions.
 // ============================================================================
 bool find_pair_for_direction(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     RoutingDirection target_direction,
     FabricNodeId& src_node,
     FabricNodeId& dst_node) {
@@ -492,7 +494,7 @@ bool find_pair_for_direction(
         }
 
         FabricNodeId neighbor_node(MeshId{0}, neighbors[0]);
-        auto links = get_forwarding_link_indices(candidate, neighbor_node);
+        auto links = get_forwarding_link_indices(mesh_device, candidate, neighbor_node);
         if (links.empty()) {
             continue;
         }
@@ -1008,7 +1010,7 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelLiveness) {
         FabricNodeId src_node(MeshId{0}, 0);
         FabricNodeId dst_node(MeshId{0}, 0);
 
-        if (!find_pair_for_direction(direction, src_node, dst_node)) {
+        if (!find_pair_for_direction(*devices_.front(), direction, src_node, dst_node)) {
             log_info(
                 tt::LogTest,
                 "No device pair found for direction {} — skipping this direction",

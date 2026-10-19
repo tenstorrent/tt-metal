@@ -84,8 +84,8 @@ RecvAsyncMeshWorkloadFactory::create_at(
     if (num_cores > 0) {
         const auto& receiver_fabric_node_id = receiver_fabric_node_ids[0];
         const auto& sender_fabric_node_id = sender_fabric_node_ids[0];
-        auto available_link_indices =
-            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+        auto available_link_indices = tt::tt_fabric::get_forwarding_link_indices(
+            *socket_mesh_device, receiver_fabric_node_id, sender_fabric_node_id);
         uint32_t num_available_links = available_link_indices.size();
 
         TT_FATAL(
@@ -216,8 +216,8 @@ RecvAsyncMeshWorkloadFactory::create_at(
                 num_pages_remainder,                         // num_pages_remainder
             };
 
-            auto link_indices =
-                tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+            auto link_indices = tt::tt_fabric::get_forwarding_link_indices(
+                *socket_mesh_device, receiver_fabric_node_id, sender_fabric_node_id);
             TT_FATAL(!link_indices.empty(), "No link indices found for receiver core");
 
             uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
@@ -306,8 +306,8 @@ RecvAsyncMeshWorkloadFactory::create_at(
                 block_remainder_pages,                       // block_remainder_pages
             };
 
-            auto link_indices =
-                tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+            auto link_indices = tt::tt_fabric::get_forwarding_link_indices(
+                *socket_mesh_device, receiver_fabric_node_id, sender_fabric_node_id);
             TT_FATAL(!link_indices.empty(), "No link indices found for receiver core");
 
             uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];

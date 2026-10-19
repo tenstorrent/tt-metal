@@ -47,11 +47,13 @@ inline bool validate_workload_or_fail(const AddrgenTestParams& p) {
 
 // Resolve forwarding link and fail early if none found.
 inline bool pick_forwarding_link_or_fail(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const tt::tt_fabric::FabricNodeId& /*src*/,
     const tt::tt_fabric::FabricNodeId& /*dst*/,
     uint32_t& out_link_idx,
     const AddrgenTestParams& p) {
     auto links = tt::tt_fabric::get_forwarding_link_indices(
+        mesh_device,
         tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip},
         tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip});
 
@@ -298,7 +300,7 @@ Notes:
 
     // Resolve forwarding and append fabric connection args
     uint32_t link_idx = 0;
-    if (!pick_forwarding_link_or_fail(src, dst, link_idx, p)) {
+    if (!pick_forwarding_link_or_fail(*mesh, src, dst, link_idx, p)) {
         return;
     }
 
