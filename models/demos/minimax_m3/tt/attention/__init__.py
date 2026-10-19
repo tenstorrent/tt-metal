@@ -99,8 +99,8 @@ class Attention:
             rope_mats: Tuple of (cos, sin) matrices for RoPE
             kv_cache: Externally-owned :class:`MiniMaxKVCache` (packed K/V/index_k), written at
                 ``self.local_layer_idx`` (the local layer).
-            entries: the forward's chunks (tt/prefill_entry.py), each a cache slot and start position;
-                None = one chunk in slot 0 at position 0.
+            entries: the forward's chunks (tt/prefill_entry.py), each a cache slot and its [start, end) token
+                range; None = one full chunk in slot 0 at position 0.
 
         Returns:
             Attention output [1, 1, seq_len, hidden_size]

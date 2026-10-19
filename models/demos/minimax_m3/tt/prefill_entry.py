@@ -52,6 +52,8 @@ def validate_entries(entries, *, chunk_size: int, forward_chunks: int, num_users
 def packed_real_rows(entries, sp: int, chunk_local: int) -> tuple:
     """Per SP chip, the count of leading real rows of the packed forward, for the MoE padding config. A chip
     whose pad rows precede a later real row counts all its rows as real."""
+    # TODO: per-entry real-row ranges in the MoE padding config, so a partial entry followed by a non-empty one
+    # does not route its pad rows.
     return _packed_real_rows(tuple(entries), sp, chunk_local)
 
 

@@ -439,9 +439,9 @@ class TtPrefillRuntime:
             kv_cache: the engine-owned MiniMaxKVCache (from the adapter's allocate_kv_cache); the entries'
                 KV is written into it. The same object is passed on every call.
             entries: the forward's PrefillEntry list, in pack order (validate_entries).
-            request_id: the engine's forward counter, part of the runner's call contract. Only the
-                layer-completion sink needs it, to build a globally-dense
-                seq = request_id * num_layers + layer_idx.
+            request_id: the runner's forward index, not a request id (a forward's entries can belong to
+                several requests). Part of the runner's call contract; only the layer-completion sink uses it,
+                as seq = request_id * num_layers + layer_idx.
             d2h_service: the device-side per-layer ack transport. This runtime emits acks only through
                 the host callback (set_layer_completion_sink), so a caller asking for the D2H path gets a
                 loud error rather than silently missing acks.

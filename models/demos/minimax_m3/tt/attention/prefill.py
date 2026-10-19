@@ -63,7 +63,8 @@ def attention_forward(
         entries: the forward's chunks (tt/prefill_entry.py), one equal block of rows each; None = one chunk
             in slot 0 at position 0. Projections run once on all rows; the attention core runs per non-empty
             entry against its slot at its start (>0 selects the cache-read paths). Empty entries (the tail)
-            get zero rows.
+            get zero rows. A partial entry's pad rows follow its real rows, so causality keeps them out of the
+            real rows' attention; their K/V land past the slot's valid prefix, which later chunks overwrite.
 
     Returns:
         Attention output [1, 1, seq_len, hidden_size]
