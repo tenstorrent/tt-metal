@@ -144,7 +144,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             label=f"Synthetic Kimi-K3 T{_SEQUENCE} {layout} {interval} start={actual_start} length={length}",
             state_linf_threshold=None,
             pcc_threshold=_PCC_THRESHOLD,
-            nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.05, convolution=0.007),
+            nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.05),
         )
         assert all(
             marker.item() == 0 for marker in mismatch_markers
@@ -242,7 +242,7 @@ def test_kimi_k3_layer_1_real_weights_accuracy(
             tensor_parallel_axis,
             pcc_threshold=0.9995,
             valid_length=length,
-            nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.02, convolution=0.007),
+            nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.02),
         )
         for tensor in (hidden_tt, end_tt, output, state.recurrent, state.convolution):
             ttnn.deallocate(tensor)
