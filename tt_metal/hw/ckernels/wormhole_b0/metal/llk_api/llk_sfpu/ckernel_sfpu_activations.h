@@ -46,7 +46,7 @@ inline void hardsigmoid_bf16_tile_init() {
 
 template <bool APPROXIMATION_MODE, ActivationType ACTIVATION_TYPE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
 inline void calculate_activation() {
-    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
         if (bf16_dest_hardsigmoid()) {
             calculate_hardsigmoid_bf16<ITERATIONS>();
             return;
