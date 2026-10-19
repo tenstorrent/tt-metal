@@ -92,6 +92,24 @@ def _probs(response):
 
 
 @pytest.mark.timeout(600)
+def test_live_trace_host_short_suffixes(gemma_server_url, record_property):
+    for suffix in range(1, 8):
+        request = {
+            "prompt": [100 + i % 71 for i in range(32 + suffix)],
+            "max_tokens": 2, "logprobs": 5,
+            "cache_salt": f"host-short-{suffix}-{uuid4()}",
+        }
+        cold = _request(gemma_server_url, request)
+        before = _metric_totals(gemma_server_url)
+        cached = _request(gemma_server_url, request)
+        after = _metric_totals(gemma_server_url)
+        assert after["request_prefill_kv_computed_tokens_sum"] - before["request_prefill_kv_computed_tokens_sum"] == suffix
+        assert _probs(_request(gemma_server_url, request)) == _probs(cached)
+        record_property(f"suffix_{suffix}_cold", json.dumps(cold))
+        record_property(f"suffix_{suffix}_cached", json.dumps(cached))
+
+
+@pytest.mark.timeout(600)
 def test_live_lifetime_divergence_and_eviction(gemma_server_url, record_property):
     salt = f"lifetime-{uuid4()}"
     prompt = [100 + i % 71 for i in range(1025)]

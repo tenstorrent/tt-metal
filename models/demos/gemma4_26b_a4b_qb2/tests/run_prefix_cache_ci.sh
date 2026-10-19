@@ -54,7 +54,7 @@ case "${GEMMA4_PREFIX_SUITE:-boundary}" in
         export TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_TRACEBACKS=1
         export TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0
         test_file="$model_dir/tests/test_prefix_cache_lifetime.py"
-        test_selection=live_trace_chat_transitions
+        test_selection=live_trace
         ;;
     traceperf)
         max_context=4096
