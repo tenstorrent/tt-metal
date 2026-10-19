@@ -16,6 +16,7 @@ namespace ttml::optimizers {
 
 SGDComposite::SGDComposite(ttml::serialization::NamedParameters parameters, const SGDCompositeConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
+    require_bf16_parameters(m_parameters, "SGDComposite");
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             m_theta.emplace(

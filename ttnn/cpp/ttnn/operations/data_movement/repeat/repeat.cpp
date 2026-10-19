@@ -8,6 +8,8 @@
 #include <optional>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/operations/core/core.hpp"
@@ -317,6 +319,20 @@ MemoryConfig derive_output_mem_config(
         input_mc.is_sharded() ? MemoryConfig(input_mc.memory_layout(), input_mc.buffer_type()) : input_mc);
 }
 
+// Fills in a shard_spec for a sharded config that has none, sized to working_tensor. nullopt when no
+// valid spec exists; each caller picks its own interleaved fallback.
+std::optional<MemoryConfig> synthesize_sharded_mem_config(
+    const ttnn::Tensor& working_tensor,
+    const MemoryConfig& mem_config,
+    std::optional<ShardOrientation> orientation_hint) {
+    auto synth = repeat::generate_repeat_shard_spec(
+        working_tensor, working_tensor.padded_shape(), mem_config.memory_layout(), orientation_hint);
+    if (!synth.has_value()) {
+        return std::nullopt;
+    }
+    return MemoryConfig(mem_config.memory_layout(), mem_config.buffer_type(), synth);
+}
+
 // Whether the codegen path can serve this call, on the rank-matched tensor and repeat vector.
 // Correctness only -- perf demotion is a separate, routing-only question.
 bool codegen_can_serve(
@@ -360,15 +376,37 @@ void validate_optional_output(
     const auto& out = optional_output_tensor.value();
 
     if (memory_config.has_value()) {
+        const auto& out_mc = out.memory_config();
         TT_FATAL(
-            memory_config->buffer_type() == out.memory_config().buffer_type() &&
-                memory_config->memory_layout() == out.memory_config().memory_layout(),
+            memory_config->buffer_type() == out_mc.buffer_type(),
             "repeat: memory_config must match optional_output_tensor memory config");
-        // An omitted shard_spec is derived from the prealloc; an explicit one has to agree with it.
-        if (memory_config->shard_spec().has_value()) {
+        if (memory_config->created_with_nd_shard_spec()) {
+            // A config built from an NdShardSpec is ND_SHARDED, but a tensor allocated from it is normalized to
+            // HEIGHT/WIDTH/BLOCK_SHARDED when the spec fits a 2D shard. Compare the ND spec, not the layout.
+            // created_with_nd_shard_spec() also covers such a config read back from a tensor, which then carries
+            // a legacy shard_spec too.
             TT_FATAL(
-                memory_config->shard_spec() == out.memory_config().shard_spec(),
-                "repeat: memory_config shard_spec must match optional_output_tensor");
+                memory_config->nd_shard_spec() == out_mc.nd_shard_spec(),
+                "repeat: memory_config nd_shard_spec must match optional_output_tensor");
+            // Only the layout is relaxed: the allocation flags change allocator semantics, as in operator==.
+            namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
+            namespace range_lockstep_allocation = tt::tt_metal::experimental::range_lockstep_allocation;
+            TT_FATAL(
+                per_core_allocation::is_per_core_allocation(*memory_config) ==
+                        per_core_allocation::is_per_core_allocation(out_mc) &&
+                    range_lockstep_allocation::is_range_lockstep_allocation(*memory_config) ==
+                        range_lockstep_allocation::is_range_lockstep_allocation(out_mc),
+                "repeat: memory_config allocation mode must match optional_output_tensor");
+        } else {
+            TT_FATAL(
+                memory_config->memory_layout() == out_mc.memory_layout(),
+                "repeat: memory_config must match optional_output_tensor memory config");
+            // An omitted shard_spec is derived from the prealloc; an explicit one has to agree with it.
+            if (memory_config->shard_spec().has_value()) {
+                TT_FATAL(
+                    memory_config->shard_spec() == out_mc.shard_spec(),
+                    "repeat: memory_config shard_spec must match optional_output_tensor");
+            }
         }
     }
 
@@ -444,8 +482,27 @@ ttnn::Tensor repeat_native(
     if (std::all_of(
             working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](auto x) { return x == 1; })) {
         // working_tensor holds the rank expansion from match_input_rank. input_tensor does not.
-        return finalize_into_preallocated(
-            ttnn::to_memory_config(working_tensor, output_mem_config), optional_output_tensor);
+        // A sharded config with neither a shard_spec nor an nd_shard_spec can't be handed to
+        // to_memory_config: reuse the input's spec when it already has that layout (rank expansion
+        // leaves it valid), else synthesize one, else stay interleaved like the composite path.
+        // An ND config carries only nd_shard_spec and is passed through as requested.
+        MemoryConfig all_ones_mc = output_mem_config;
+        if (all_ones_mc.is_sharded() && !all_ones_mc.shard_spec().has_value() &&
+            !all_ones_mc.nd_shard_spec().has_value()) {
+            const auto& input_mc = input_tensor.memory_config();
+            if (input_mc.memory_layout() == all_ones_mc.memory_layout() &&
+                input_mc.buffer_type() == all_ones_mc.buffer_type()) {
+                all_ones_mc = input_mc;
+            } else {
+                std::optional<ShardOrientation> orientation_hint;
+                if (input_tensor.shard_spec().has_value()) {
+                    orientation_hint = input_tensor.shard_spec()->orientation;
+                }
+                all_ones_mc = synthesize_sharded_mem_config(working_tensor, all_ones_mc, orientation_hint)
+                                  .value_or(MemoryConfig(TensorMemoryLayout::INTERLEAVED, all_ones_mc.buffer_type()));
+            }
+        }
+        return finalize_into_preallocated(ttnn::to_memory_config(working_tensor, all_ones_mc), optional_output_tensor);
     }
 
     // Direct prim write only when no later layout/reshard hop will reallocate.
@@ -541,19 +598,24 @@ ttnn::Tensor repeat_native(
     // Composite-only re-shard; native path already wrote sharded output.
     if (!native_sharded && output_mem_config.is_sharded()) {
         MemoryConfig final_mc = output_mem_config;
-        if (!final_mc.shard_spec().has_value()) {
-            auto synth = repeat::generate_repeat_shard_spec(
-                working_tensor, working_tensor.padded_shape(), final_mc.memory_layout(), input_orientation_hint);
-            if (synth.has_value()) {
-                final_mc = MemoryConfig(final_mc.memory_layout(), final_mc.buffer_type(), synth);
-            } else {
+        // Synthesize only for a config with no spec at all. A config built from an NdShardSpec carries
+        // only nd_shard_spec and is placed as requested.
+        if (!final_mc.shard_spec().has_value() && !final_mc.nd_shard_spec().has_value()) {
+            auto synth = synthesize_sharded_mem_config(working_tensor, final_mc, input_orientation_hint);
+            if (!synth.has_value()) {
                 // No valid spec; keep interleaved.
                 return finalize_into_preallocated(working_tensor, optional_output_tensor);
             }
+            final_mc = *synth;
         }
         auto i2s_out = optional_output_tensor.has_value() ? optional_output_tensor : std::nullopt;
-        working_tensor = ttnn::interleaved_to_sharded(
-            working_tensor, final_mc, /*data_type_arg=*/std::nullopt, /*keep_l1_aligned=*/std::nullopt, i2s_out);
+        if (final_mc.shard_spec().has_value()) {
+            working_tensor = ttnn::interleaved_to_sharded(
+                working_tensor, final_mc, /*data_type_arg=*/std::nullopt, /*keep_l1_aligned=*/std::nullopt, i2s_out);
+        } else {
+            // ND-only spec: interleaved_to_sharded rejects distributions the legacy 2D spec can't express.
+            working_tensor = ttnn::to_memory_config(working_tensor, final_mc, std::nullopt, i2s_out);
+        }
     }
 
     return finalize_into_preallocated(working_tensor, optional_output_tensor);
@@ -604,7 +666,8 @@ ttnn::Tensor repeat(
     detail::validate_optional_output(
         input_tensor, working_tensor, working_repetition_vector, memory_config, optional_output_tensor);
 
-    if (detail::codegen_can_serve(working_tensor, working_repetition_vector, output_mem_config) &&
+    if (operations::data_movement::codegen_supported_on_arch(working_tensor) &&
+        detail::codegen_can_serve(working_tensor, working_repetition_vector, output_mem_config) &&
         !repeat_codegen::is_demoted(working_tensor, working_repetition_vector)) {
         // The codegen path writes an interleaved output in the input's buffer type and adds no layout
         // or resharding hop after it, so its last per-dim step can land in the prealloc directly.

@@ -22,7 +22,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from models.tt_transformers.tt.prefetcher import (
     Prefetcher,
     VERIFIED_MODEL_CONFIGS,
