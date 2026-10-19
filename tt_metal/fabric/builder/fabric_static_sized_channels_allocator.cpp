@@ -368,11 +368,16 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                 {1, 1, 0, 0, 0, 0}    // Option 7: VC0 only, smallest
             },
             // BLACKHOLE
+            // Slots left over after the uniform rows go to the worker-connected sender channel, and its depth
+            // is what intra-mesh CCLs are bound by: 6 forwarding slots per sender lose nothing against 8, while
+            // the worker channel gets the rest. A fifth VC0 sender (the inter-mesh landing channel) would
+            // otherwise drop it from 17 slots to 9 and make every CCL up to 8% slower than on one mesh.
             {
                 {32, 32, 0, 0, 0, 0},  // Option 1: VC0 only
                 {16, 32, 0, 0, 0, 0},  // Option 2: VC0 only
                 {16, 16, 0, 0, 0, 0},  // Option 3: VC0 only
-                {8, 16, 0, 0, 0, 0},   // Option 4: VC0 only
+                {6, 16, 0, 0, 0, 0},   // Option 4: VC0 only, the rest to worker injection
+                {8, 16, 0, 0, 0, 0},   // Option 5: VC0 only
                 {8, 8, 0, 0, 0, 0},    // Option 5: VC0 only
                 {4, 8, 0, 0, 0, 0},    // Option 6: VC0 only
                 {4, 4, 0, 0, 0, 0},    // Option 7: VC0 only, smaller
@@ -399,11 +404,13 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             // (the VC0-only table goes up to 32/32), and capping the VC0 receiver at 8 halves the data in
             // flight per hop versus a single-mesh fabric (16), slowing every intra-mesh CCL. Try deeper VC0
             // first; the first row that fits the available buffer space wins. VC0 sender slots stop at 6:
-            // with 8 the router's per-slot state overflows the 1912 B erisc0 stack (bh_hal.cpp).
+            // with 8 the router's per-slot state overflows the 1912 B erisc0 stack (bh_hal.cpp). Forwarding
+            // senders take 4 so the worker-connected channel gets the leftover slots (15 instead of 7): its
+            // depth is what intra-mesh CCLs are bound by, and this brings them within 5% of a single mesh.
             {
-                {6, 16, 2, 2, 0, 0},  // Option 1: single-mesh VC0 receiver depth, fewer VC0 sender slots
-                {6, 16, 1, 1, 0, 0},  // Option 2: single-mesh VC0 receiver depth, minimal VC1
-                {4, 16, 2, 2, 0, 0},  // Option 3: single-mesh VC0 receiver depth, smaller VC0 sender
+                {4, 16, 2, 2, 0, 0},  // Option 1: single-mesh VC0 receiver depth, the rest to worker injection
+                {6, 16, 2, 2, 0, 0},  // Option 2: single-mesh VC0 receiver depth, fewer VC0 sender slots
+                {6, 16, 1, 1, 0, 0},  // Option 3: single-mesh VC0 receiver depth, minimal VC1
                 {4, 8, 2, 4, 0, 0},   // Option 4: supports VC0+VC1
                 {4, 8, 2, 2, 0, 0},   // Option 5: supports VC0+VC1, smaller VC1 receiver
                 {2, 4, 2, 2, 0, 0},   // Option 6: supports VC0+VC1, smaller overall
