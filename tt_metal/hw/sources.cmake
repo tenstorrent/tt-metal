@@ -2,6 +2,8 @@ set(HW_JIT_API_HEADERS
     inc/experimental/drisc_mode.h
     inc/experimental/gddr_dma.h
     inc/experimental/blaze_rt_arg.h
+    inc/experimental/cce_gddr.h
+    inc/experimental/cce_remote_cb.h
     inc/api/alignment.h
     inc/api/compile_time_args.h
     inc/api/remote_circular_buffer.h
