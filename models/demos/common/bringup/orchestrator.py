@@ -1276,16 +1276,7 @@ class Orchestrator:
         }
         rec.update(rungs=self.ab_rungs(task), tests={}, ladder={}, profile={}, note="")
         owned = [p for p in changed if allowed(p, list(task.get("paths") or []))]
-        # each command of the gate as the gate runs it (gate_command: no precompile pass for a perf step)
-        segs = [x.strip() for x in gate_command(task).split("&&") if x.strip()]
-        tests = [x for x in segs if "test_profile.py" not in x and "test_ladder.py" not in x]
-        # F114: the clean wall run and the profiled run, together (one metrics file per side)
-        prof_cmd = " && ".join(re.sub(r"\bBRINGUP_PROFILE_OPS=\S+\s*", "", x) for x in segs if "test_profile.py" in x)
-        prof_cmd = prof_cmd or None
-        base = gate_env(self.spec, self.led, tid)
-        base[accuracy_guard.AB_ENV] = "1"  # the profile guard lets the orchestrator's own profile through
-        for k in list(old) + list(on) + ["BRINGUP_PROFILE_OPS"]:
-            base.pop(k, None)
+        base = self.ab_base(old, on, tid)
         sides = ([("old", old)] if old else []) + [("new", on)]
         if not owned:
             rec["note"] = "the agent changed nothing under the task's paths (its summary and BREADCRUMBS say why)"
@@ -1303,59 +1294,14 @@ class Orchestrator:
             ] = f"INVALID: switch {missing} (tasks.yaml ab) appears in none of the task's code, so it would change nothing"
             sides = []
         code = self.ab_code_key(task)
-
-        def run(side, name, cmd, extra):
-            out = d / side / name
-            M.reset(tid, out)
-            self.echo(f"  [{tid}] A/B {'on' if side == 'new' else 'off'}: {name}")
-            rc = self.run_cmd(cmd, dict(base, **{M.RESULTS_ENV: str(out)}, **extra), out / f"{name}.log")
-            text = (out / f"{name}.log").read_text(errors="replace")
-            sig = INFRA_FAILURES.search(text) or TEST_TIMEOUT.search(text)
-            if sig or rc == SAFE_HANG_RC:
-                raise InfraStop(tid, sig.group(0) if sig else f"{name} hung (rc {rc})")
-            return rc, {k: v["value"] for k, v in M.load(tid, out).items()}, text
-
+        kinds = {n: k for n, k, _, _ in self.ab_items(task)}
         try:
             for side, env in sides:
-                stamp = {"code": code, "env": env, "rungs": rec["rungs"], "tests": tests, "profile": prof_cmd}
-                prev = d / side / "side.json"
-                if prev.exists() and json.loads(prev.read_text()).get("stamp") == stamp:
-                    kept = json.loads(prev.read_text())
-                    for n, r in kept["tests"].items():
-                        rec["tests"].setdefault(n, {})[side] = r
-                    for n, r in kept["ladder"].items():
-                        rec["ladder"].setdefault(n, {})[side] = r
-                    if kept.get("profile") is not None:
-                        rec["profile"][side] = kept["profile"]
-                    self.echo(f"  [{tid}] A/B {'on' if side == 'new' else 'off'}: reused ({prev})")
-                    continue
-                prev.unlink(missing_ok=True)
-                for i, cmd in enumerate(tests):
-                    name = Path(next((w for w in cmd.split() if w.endswith(".py")), f"test{i}")).stem
-                    rc, _, text = run(side, name, cmd, env)
-                    checks = [m.strip() for m in FAILED_CHECK.findall(text)][:12]
-                    rec["tests"].setdefault(name, {})[side] = {"rc": rc, "checks": checks}
-                for rung in rec["rungs"]:
-                    cmd = f"scripts/run_safe_pytest.sh --no-precompile --run-all {LADDER_TEST}"
-                    rc, got, _ = run(side, rung, cmd, dict(env, BRINGUP_RUNG=rung))
-                    rec["ladder"].setdefault(rung, {})[side] = dict(self.ab_summary(got), rc=rc)
-                if prof_cmd:
-                    rc, got, _ = run(side, "profile", prof_cmd, env)
-                    keys = ["device_ms_total", "chunk_wall_ms", "profiled_programs", "pcc_chunk_out"] + [
-                        k for k in task["gate"].get("metrics") or {} if k.startswith("device_ms_") and "*" not in k
-                    ]
-                    rec["profile"][side] = dict({k: got.get(k) for k in dict.fromkeys(keys)}, rc=rc)
-                prev.write_text(
-                    json.dumps(
-                        {
-                            "stamp": stamp,
-                            "tests": {n: r[side] for n, r in rec["tests"].items() if side in r},
-                            "ladder": {n: r[side] for n, r in rec["ladder"].items() if side in r},
-                            "profile": rec["profile"].get(side),
-                        },
-                        indent=1,
-                    )
-                )
+                for n, r in self.ab_measure(task, side, env, base, code).items():
+                    if kinds[n] == "profile":
+                        rec["profile"][side] = r
+                    else:
+                        rec["tests" if kinds[n] == "test" else "ladder"].setdefault(n, {})[side] = r
         except InfraStop as e:
             rec["note"] = f"stopped early: {e.sig} (reset the board; `decide --task {tid} --rerun` measures again)"
         same = [
@@ -1384,6 +1330,71 @@ class Orchestrator:
         )
         self.echo(f"  [{tid}] A/B report: {rec['table']}")
         return rec
+
+    def ab_base(self, old: dict, on: dict, tid: str) -> dict:
+        """The A/B runs' environment without either side's switch (each run adds its side's)."""
+        base = gate_env(self.spec, self.led, tid)
+        base[accuracy_guard.AB_ENV] = "1"  # the profile guard lets the orchestrator's own profile through
+        for k in list(old) + list(on) + ["BRINGUP_PROFILE_OPS"]:
+            base.pop(k, None)
+        return base
+
+    def ab_items(self, task: dict) -> list[tuple[str, str, str, dict]]:
+        """The A/B report's runs as (name, kind, command, extra env): each frozen test command of the gate (as the gate
+        runs it, gate_command), the ladder at every A/B rung, and the plain profile (with F114's clean wall run)."""
+        segs = [x.strip() for x in gate_command(task).split("&&") if x.strip()]
+        tests = [x for x in segs if "test_profile.py" not in x and "test_ladder.py" not in x]
+        items = [
+            (Path(next((w for w in c.split() if w.endswith(".py")), f"test{i}")).stem, "test", c, {})
+            for i, c in enumerate(tests)
+        ]
+        ladder = f"scripts/run_safe_pytest.sh --no-precompile --run-all {LADDER_TEST}"
+        items += [(r, "ladder", ladder, {"BRINGUP_RUNG": r}) for r in self.ab_rungs(task)]
+        prof = " && ".join(re.sub(r"\bBRINGUP_PROFILE_OPS=\S+\s*", "", x) for x in segs if "test_profile.py" in x)
+        return items + ([("profile", "profile", prof, {})] if prof else [])
+
+    def ab_measure(self, task: dict, side: str, env: dict, base: dict, code: str, only=None) -> dict:
+        """F116: one side's runs (all, or the names / kinds in ``only``). Each run is kept in side.json with its own
+        stamp (code key, switch, command); a run whose stamp matches is reused, not run again: the agent's `measure`
+        runs of the 'on' side are the report's. {name: result}; raises InfraStop on a board problem."""
+        tid = task["id"]
+        d = self.run_dir / "ab" / tid / side
+        f = d / "side.json"
+        kept = json.loads(f.read_text()) if f.exists() else {}
+        items = kept.get("items", {}) if kept.get("version") == 2 else {}
+        out = {}
+        for name, kind, cmd, extra in self.ab_items(task):
+            if only and name not in only and kind not in only:
+                continue
+            stamp = {"code": code, "env": env, "cmd": cmd, "extra": extra}
+            label = f"  [{tid}] A/B {'on' if side == 'new' else 'off'}: {name}"
+            if (items.get(name) or {}).get("stamp") == stamp:
+                out[name] = items[name]["result"]
+                self.echo(f"{label} reused (same code and switch)")
+                continue
+            res = d / name
+            M.reset(tid, res)
+            self.echo(label)
+            rc = self.run_cmd(cmd, dict(base, **{M.RESULTS_ENV: str(res)}, **env, **extra), res / f"{name}.log")
+            text = (res / f"{name}.log").read_text(errors="replace")
+            sig = INFRA_FAILURES.search(text) or TEST_TIMEOUT.search(text)
+            if sig or rc == SAFE_HANG_RC:
+                raise InfraStop(tid, sig.group(0) if sig else f"{name} hung (rc {rc})")
+            got = {k: v["value"] for k, v in M.load(tid, res).items()}
+            if kind == "test":
+                result = {"rc": rc, "checks": [m.strip() for m in FAILED_CHECK.findall(text)][:12]}
+            elif kind == "ladder":
+                result = dict(self.ab_summary(got), rc=rc)
+            else:
+                keys = ["device_ms_total", "chunk_wall_ms", "profiled_programs", "pcc_chunk_out"] + [
+                    k for k in task["gate"].get("metrics") or {} if k.startswith("device_ms_") and "*" not in k
+                ]
+                result = dict({k: got.get(k) for k in dict.fromkeys(keys)}, rc=rc)
+            out[name] = result
+            items[name] = {"kind": kind, "stamp": stamp, "result": result, "t": now()}
+            d.mkdir(parents=True, exist_ok=True)
+            f.write_text(json.dumps({"version": 2, "items": items}, indent=1))
+        return out
 
     def ab_metrics(self, tid: str, d: Path, side: str, name: str) -> dict:
         return {k: v["value"] for k, v in M.load(tid, d / side / name).items()}
@@ -1502,7 +1513,18 @@ class Orchestrator:
         if not stamp_file.exists() or not rec.get("on"):
             return None
         kept = json.loads(stamp_file.read_text())
-        if (kept.get("stamp") or {}).get("code") != self.ab_code_key(task):
+        code = self.ab_code_key(task)
+        if kept.get("version") == 2:  # F116: per-run stamps; every run of the report's 'on' side, on this code
+            items = kept.get("items", {})
+            want = [n for n, _, _, _ in self.ab_items(task)]
+            if any((items.get(n) or {}).get("stamp", {}).get("code") != code for n in want):
+                return None
+            kept = {
+                k: {n: items[n]["result"] for n in want if items[n]["kind"] == kind}
+                for k, kind in (("tests", "test"), ("ladder", "ladder"))
+            }
+            kept["profile"] = next((items[n]["result"] for n in want if items[n]["kind"] == "profile"), None)
+        elif (kept.get("stamp") or {}).get("code") != code:
             return None
         m = re.search(r"BRINGUP_RUNG=(\S+)", task["gate"]["cmd"])
         rung = m.group(1) if m else None
@@ -1514,7 +1536,11 @@ class Orchestrator:
         if any(rc != 0 for rc in rcs) or (rung and rung not in kept.get("ladder", {})):
             return None
         metrics = {}
-        names = [d.name for d in side.iterdir() if d.is_dir()]
+        names = [
+            d.name
+            for d in side.iterdir()
+            if d.is_dir() and (d.name in kept["tests"] or d.name in kept["ladder"] or d.name == "profile")
+        ]
         ladder = set(kept.get("ladder", {}))
         for name in sorted(names, key=lambda n: (n in ladder, n == "profile")):  # tests, then the gate's rung, profile
             if name in ladder and name != rung:
@@ -1698,6 +1724,26 @@ def _place_fixes(orch: Orchestrator) -> bool:
     return True
 
 
+def measure(orch: Orchestrator, tid: str, parts: list[str] | None) -> int:
+    """F116: a perf agent's checks with the change on, run as the A/B report's 'on' side (its commands, the switch of
+    tasks.yaml ab.change, its results dirs): each run is stamped with the code key, and the report reuses it while the
+    code under the task's paths is unchanged. 0 when every run exited 0."""
+    task = orch.led.task(tid)
+    ab = task.get("ab") or {}
+    old, _ = model_precision.switch_env(orch.spec, ab.get("env") or {})
+    on, _ = model_precision.switch_env(orch.spec, ab.get("change") or {})
+    try:
+        got = orch.ab_measure(task, "new", on, orch.ab_base(old, on, tid), orch.ab_code_key(task), only=parts)
+    except InfraStop as e:
+        print(f"measure {tid}: stopped: {e.sig}")
+        return 2
+    for n, r in got.items():
+        print(f"{n}: rc {r.get('rc')} " + json.dumps({k: v for k, v in r.items() if k != "rc"})[:400])
+    if not got:
+        print(f"measure {tid}: no run matches {parts}; runs: {[n for n, _, _, _ in orch.ab_items(task)]}")
+    return 0 if got and all(r.get("rc") == 0 for r in got.values()) else 1
+
+
 def decide(orch: Orchestrator, tid: str, decision: str, note: str = "") -> int:
     """The owner's answer to a perf pick's A/B report; ``resume`` then applies it (perf_step)."""
     import getpass
@@ -1718,7 +1764,7 @@ def decide(orch: Orchestrator, tid: str, decision: str, note: str = "") -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=["run", "resume", "pause", "decide"])
+    ap.add_argument("command", choices=["run", "resume", "pause", "decide", "measure"])
     ap.add_argument("--spec", default=os.environ.get("BRINGUP_SPEC"))
     ap.add_argument("--until", help="stop after this task")
     ap.add_argument("--only", help="run just this task (if runnable)")
@@ -1729,9 +1775,12 @@ def main(argv=None) -> int:
     for d in ("accept", "reject", "rerun"):
         how.add_argument(f"--{d}", dest="decision", action="store_const", const=d, help=f"decide: {d}")
     ap.add_argument("--note", default="", help="decide: stored with the decision")
+    ap.add_argument(
+        "--part", action="append", help="measure: a run (test file stem, rung, profile) or a kind (test, ladder)"
+    )
     a = ap.parse_args(argv)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
-    if a.command in ("run", "resume"):
+    if a.command in ("run", "resume", "measure"):
         checkout_env.pin()  # F68: gates, agents and tests use this checkout's cache, venv and paths
     spec = Spec.load(a.spec)
     orch = Orchestrator(spec, model=a.model)
@@ -1739,6 +1788,10 @@ def main(argv=None) -> int:
         if not a.task or not a.decision:
             ap.error("decide needs --task and one of --accept / --reject / --rerun")
         return decide(orch, a.task, a.decision, a.note)
+    if a.command == "measure":
+        if not a.task:
+            ap.error("measure needs --task")
+        return measure(orch, a.task, a.part)
     if a.command == "pause":
         orch.pause_file.write_text(now() + "\n")
         print(f"pause requested: the running orchestrator stops before its next task ({orch.pause_file})")
