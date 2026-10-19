@@ -878,7 +878,7 @@ void TestDevice::create_sync_kernel() {
     uint32_t num_muxes_to_terminate = sync_connection_manager.get_num_muxes_to_terminate();
 
     // If the test is using the NeighborExchange topology, synchronization must use unicast packets
-    const auto topology = tt::tt_fabric::get_fabric_topology();
+    const auto topology = this->device_info_provider_->get_fabric_topology();
     bool use_unicast_sync_packets = (topology == tt::tt_fabric::Topology::NeighborExchange);
 
     // Compile-time args
