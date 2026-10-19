@@ -48,10 +48,11 @@ _TIMING_SAMPLES = 5
 _PCC_THRESHOLD = 0.9995
 _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
-# LoudBox targets.
+# LoudBox targets. SP2xTP4 is the CI bh_loudbox runner's median (6.816, 6.821 ms); a developer LoudBox measured
+# 6.45 ms, so the others, measured there, may run slow on the runner.
 _PERF_REFERENCE_MS = {
     "SP1xTP8": 6.447,
-    "SP2xTP4": 6.452,
+    "SP2xTP4": 6.819,
     "SP4xTP2": 5.593,
 }
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
