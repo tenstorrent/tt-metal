@@ -1155,10 +1155,9 @@ struct SenderKernelTrafficConfig {
                 conn->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
             } else {
 #ifdef FABRIC2_WORKER
-                // Fabric 2.0 steady state: the minimal per-packet worker cost is the header push itself
-                // (header -> injection slot, header -> x280 cell ring, barrier, 4 B doorbell); the payload
-                // left in the slot by warmup is re-sent, as with the stock credit-only path.
-                conn->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+                // Fabric 2.0 steady state: the header is unchanged, so the adapter re-posts its request
+                // without copying the header again, as with the stock credit-only path.
+                conn->resend_header((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 #else
                 fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
 #endif
