@@ -64,11 +64,11 @@ ALWI auto append_pow_bit(Tuple bits) {
     }
 }
 
-template <class... BitOps, std::size_t... BitIndex>
+template <class... BitOps, std::size_t... BitIndex, typename DFB0, typename DFB1>
 ALWI void run_pow(
     uint32_t num_tiles,
-    DataflowBuffer& dfb_in_obj,
-    DataflowBuffer& dfb_out_obj,
+    DFB0& dfb_in_obj,
+    DFB1& dfb_out_obj,
     std::tuple<BitOps...> bit_ops,
     std::index_sequence<BitIndex...>) {
     ckl::eltwise_chain(
