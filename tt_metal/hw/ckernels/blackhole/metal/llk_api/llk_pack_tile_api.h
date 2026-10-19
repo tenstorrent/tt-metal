@@ -159,6 +159,22 @@ inline void llk_matmul_pack(
     }
 }
 
+// Matmul output blocks take llk_pack_block where the tt-llk matmul sweep reads it faster: DestSync full, and with DestSync
+// half the pack-bound LoFi blocks of one K tile. More K tiles at LoFi read slower in Llama FF1 (+1 percent).
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, std::uint32_t output>
+constexpr bool llk_matmul_block_pack() {
+    if constexpr (math_fidelity == MathFidelity::LoFi && kt_per_section > 1) {
+        return false;
+    } else if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
+        return true;
+    } else {
+        constexpr bool small_tile = pack_tile_num_faces[output] != 4 || pack_tile_face_r_dim[output] != FACE_R_DIM ||
+                                    pack_partial_face[output] != 0;
+        constexpr bool float32_out = static_cast<DataFormat>(pack_dst_format[output]) == DataFormat::Float32;
+        return math_fidelity == MathFidelity::LoFi && !(small_tile && float32_out);
+    }
+}
+
 // What one pack run can write back to back: plain format, full 32x32 tiles, one tile per CB page.
 inline bool llk_pack_block_is_contiguous(const std::uint32_t output_id) {
     const std::uint32_t dst_format = pack_dst_format[output_id];
