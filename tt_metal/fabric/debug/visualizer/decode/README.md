@@ -56,13 +56,12 @@ with it. A fabric change falls into one of three cases:
 From the repo root:
 
 ```bash
-python3 -m unittest tt_metal.fabric.debug.visualizer.decode.tests.test_routes
+python3 -m unittest discover -s tt_metal/fabric/debug/visualizer/decode/tests -t .
 ```
 
-The tests import `tt_metal.fabric...`, so they run as a module. They use `unittest` rather than pytest because the
-repo's root `conftest.py` imports torch.
+The tests import `tt_metal.fabric...`, so `-t .` makes the repo root the top level they're imported from. They use `unittest` rather than pytest because the repo's root `conftest.py` imports torch.
 
-`tests/scripts/run_fabric_manifest_tests.sh` also runs `tests/check_manifest_routes.py` on every manifest it writes.
+`tests/scripts/run_fabric_manifest_tests.sh` runs the same command, then runs `tests/check_manifest_routes.py` on every manifest it writes.
 The check runs `get_encodings_from_manifest`, then `get_mesh_view` on each mesh, and fails, naming the manifest and the
 key, when a fabric change renames or removes a key or name `routes.py` reads, or adds a value it doesn't know. To run
 it on other manifests, pass their files or directories:
