@@ -296,15 +296,15 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
                                   data_format == tt::DataFormat::UInt32;
 
     // Metal 2.0's validator requires an explicit unpack mode for every Float32 buffer a compute
-    // kernel consumes while 32-bit dest is enabled; legacy defaulted silently. The legacy descriptor
-    // left unpack_to_dest_mode empty — i.e. Default on every buffer — which is UnpackToSrc. When the
-    // data format is Float32 all three buffers compute consumes carry that format (an is_bf8 input
-    // cannot also be Float32), so all three need the entry.
+    // kernel consumes while 32-bit dest is enabled. When the data format is Float32 all three
+    // buffers compute consumes carry that format (an is_bf8 input cannot also be Float32). Unpack
+    // them straight to Dest, as the sharded WH transpose does: through SrcA they would be truncated
+    // to TF32 and this copy-only op would drop the low 13 mantissa bits of every element.
     ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     if (data_format == tt::DataFormat::Float32) {
-        unpack_modes[INPUT0_DFB] = UnpackMode::UnpackToSrc;
-        unpack_modes[INPUT1_DFB] = UnpackMode::UnpackToSrc;
-        unpack_modes[CONCAT_DFB] = UnpackMode::UnpackToSrc;
+        unpack_modes[INPUT0_DFB] = UnpackMode::UnpackToDest;
+        unpack_modes[INPUT1_DFB] = UnpackMode::UnpackToDest;
+        unpack_modes[CONCAT_DFB] = UnpackMode::UnpackToDest;
     }
 
     // The legacy factory set a Metal ComputeConfigDescriptor directly rather than resolving a TTNN
