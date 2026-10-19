@@ -323,8 +323,9 @@ inline void _llk_math_face_compressed_mm_mop_config_(const std::uint32_t face_r_
  * @tparam ct_dim: Output width in tiles, 1 to 16.
  * @param face_r_dim: Activation rows per face, 1 or 8.
  * @note Call this before @ref _llk_math_face_compressed_mm_ with the same ct_dim. This thread has no
- *       uninit: it leaves behind only addrmods, the MOP and the replay buffer, which the next op's init
- *       reprograms anyway.
+ *       uninit: it leaves behind only addrmods, the MOP, the replay buffer and a clear Src zero flag, which
+ *       the next op's init reprograms anyway. The finalize ELWADD needs the flag clear, so re-run this init
+ *       after any op that sets it.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_face_compressed_mm_init_.
  */
 template <std::uint32_t ct_dim = 1>
@@ -336,6 +337,7 @@ inline void _llk_math_face_compressed_mm_init_(const std::uint32_t face_r_dim)
     _llk_math_face_compressed_mm_addrmod_config_(face_r_dim);
     _llk_math_face_compressed_mm_mop_config_<ct_dim>(face_r_dim);
 
+    math::_configure_elw_zero_flag_state_(); // ELW* need the Src zero flag clear
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 

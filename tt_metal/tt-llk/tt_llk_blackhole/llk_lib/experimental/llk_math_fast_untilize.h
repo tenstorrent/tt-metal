@@ -126,6 +126,10 @@ inline void _llk_math_fast_untilize_block_(const std::uint32_t dst_index, const 
 {
     LLK_ASSERT(block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM, "BH fast-untilize supports block_ct_dim 2, 3, or 4");
 
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        math::_configure_elw_zero_flag_state_(); // the fp32 copy is ELWADD, which needs the Src zero flag clear
+    }
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
 
