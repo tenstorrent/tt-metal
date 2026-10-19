@@ -130,6 +130,36 @@ class MATMUL_STREAM_NARROW(TemplateParameter):
         )
 
 
+@dataclass(init=False, repr=False, eq=False)
+class MATMUL_FORM_KEYS(TemplateParameter):
+    """Blackhole matmul: the k steps per DEST section and output format matmul_default_form picks the forms by.
+
+    The report already carries both (k_dimm, formats.output), so they are kept out of the dataclass fields; the repr
+    still holds them, as the variant hash reads it."""
+
+    def __init__(self, kt_per_section: int, output_format: DataFormat):
+        self.kt_per_section = kt_per_section
+        self.output_format = output_format
+
+    def __repr__(self) -> str:
+        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name})"
+
+    def convert_to_cpp(self) -> str:
+        return (
+            "#define MATMUL_FORM_KEYS\n"
+            f"constexpr std::uint32_t MATMUL_KT_PER_SECTION = {self.kt_per_section};\n"
+            f"constexpr DataFormat MATMUL_OUT_FORMAT = DataFormat::{self.output_format.name};"
+        )
+
+    @staticmethod
+    def for_block(formats, kt_dim: int) -> list:
+        """[MATMUL_FORM_KEYS(...)] on Blackhole, else []."""
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return []
+        # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
+        return [MATMUL_FORM_KEYS(1 if kt_dim == 1 else (2 if kt_dim <= 4 else 5), formats.output_format)]
+
+
 @dataclass
 class MATMUL_UNPACK_TTSYNC(TemplateParameter):
     """Blackhole matmul unpack with the row base addresses written through GPRs and WRCFG under Auto TTSync."""

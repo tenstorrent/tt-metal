@@ -22,6 +22,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_AB_matmul.h"
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
+#elif defined(ARCH_BLACKHOLE)
+constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>();
+#endif
 #include "llk_unpack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -61,7 +66,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, stream_narrow
 #define MATMUL_UNPACK_TEMPLATE_ARGS \
-    0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>()
+    0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), matmul_hoist_rows
 #else
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_TEMPLATE_ARGS
@@ -138,6 +143,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_math_common.h"
 #include "llk_math_matmul.h"
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+constexpr bool matmul_tile_mop = !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
+#else
+constexpr bool matmul_tile_mop = false;
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -168,7 +178,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
+        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(
             in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
         PROFILER_SYNC();
     }
@@ -189,7 +199,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(DST_INDEX, CT_DIM, RT_DIM);
+                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(DST_INDEX, CT_DIM, RT_DIM);
                     }
                 }
             }
@@ -206,7 +216,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         "Matmul block exceeds destination capacity");
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(DST_INDEX, CT_DIM, RT_DIM);
+                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(DST_INDEX, CT_DIM, RT_DIM);
                     }
                     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }

@@ -92,7 +92,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
     }
 }
 
-template <bool row_mop>
+template <bool row_mop, uint32_t kt_per_section, DataFormat out_format>
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_dfb_id,
     uint32_t in1_dfb_id,
@@ -129,7 +129,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
     mm_partials_dfb.pop_front(static_cast<uint16_t>(out_subblock_num_tiles));
     // Reconfigure srcA back
     reconfig_data_format_srca(mm_partials_reload_dfb_id, in1_dfb_id);
-    matmul_block_init<row_mop>(
+    matmul_block_init<row_mop, false, kt_per_section, out_format>(
         in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
 }
 
@@ -264,6 +264,13 @@ void kernel_main() {
     constexpr uint32_t mm_out_dfb_id = untilize_mode_out_dfb_id;
 #endif
     DataflowBuffer mm_out_dfb(mm_out_dfb_id);
+#ifdef ARCH_BLACKHOLE
+    // the format each DEST section is packed to: the partials until the last inner block
+    constexpr DataFormat mm_pack_format =
+        static_cast<DataFormat>(unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : mm_out_dfb_id]);
+#else
+    constexpr DataFormat mm_pack_format = DataFormat::Invalid;
+#endif
 
     // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
     // planner may pad per_core_N_compute beyond per_core_N_in1_sender so that out_subblock_w can be
@@ -297,7 +304,7 @@ void kernel_main() {
     constexpr bool spill = num_blocks_inner_dim > 1;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
-    matmul_block_init<row_mop>(
+    matmul_block_init<row_mop, false, in0_block_w, mm_pack_format>(
         in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
@@ -338,7 +345,7 @@ void kernel_main() {
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb_id, in0_dfb_id);
                         reconfig_data_format_srca(in0_transpose_dfb_id, in1_dfb_id);
-                        matmul_block_init<row_mop>(
+                        matmul_block_init<row_mop, false, in0_block_w, mm_pack_format>(
                             in0_dfb_id,
                             in1_dfb_id,
                             static_cast<uint32_t>(in1_transpose_tile),
@@ -375,7 +382,7 @@ void kernel_main() {
 
                             tile_regs_acquire();
                             if (enable_reload) {
-                                reload_from_cb_to_dst<row_mop>(
+                                reload_from_cb_to_dst<row_mop, in0_block_w, mm_pack_format>(
                                     in0_dfb_id,
                                     in1_dfb_id,
                                     mm_partials_dfb_id,
@@ -399,7 +406,7 @@ void kernel_main() {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
-                                matmul_block<row_mop>(
+                                matmul_block<row_mop, false, in0_block_w, mm_pack_format>(
                                     in0_dfb_id,
                                     in1_dfb_id,
                                     in0_index,
@@ -634,7 +641,7 @@ void kernel_main() {
                     reconfig_data_format_srca(mm_partials_dfb_id, in1_dfb_id);
 #endif
                     // reconfigure init for matmul
-                    matmul_block_init<row_mop>(
+                    matmul_block_init<row_mop, false, in0_block_w, mm_pack_format>(
                         in0_dfb_id,
                         in1_dfb_id,
                         static_cast<uint32_t>(in1_transpose_tile),

@@ -12,6 +12,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "llk_matmul_forms.h"
 
 #ifndef HF
 #define HF 0
@@ -37,7 +38,7 @@ inline bool math_matmul_init_reuse_a = true;
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of faces.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL, bool row_form = false>
 inline void matmul_configure_addrmod(
     const bool transpose,
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
@@ -70,14 +71,28 @@ inline void matmul_configure_addrmod(
     }
         .set(ADDR_MOD_0);
 
-    // reset all, increment fidelity if we have more fidelity phases
-    addr_mod_t {
-        .srca     = {.incr = 0, .clr = 1, .cr = 1},
-        .srcb     = {.incr = 0, .clr = 1, .cr = 1},
-        .dest     = {.incr = 0, .clr = 1, .cr = 1},
-        .fidelity = {.incr = fidelity_increment, .clr = 0},
+    if constexpr (!row_form)
+    {
+        // reset all, increment fidelity if we have more fidelity phases
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 1, .cr = 1},
+            .fidelity = {.incr = fidelity_increment, .clr = 0},
+        }
+            .set(ADDR_MOD_5);
     }
-        .set(ADDR_MOD_5);
+    else if constexpr (is_high_fidelity(math_fidelity))
+    {
+        // the row form's phase end returns to the tile base, which the tile end keeps in the DEST carriage return register
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 0, .cr = 1},
+            .fidelity = {.incr = 1, .clr = 0},
+        }
+            .set(ADDR_MOD_5);
+    }
 
     if constexpr (THROTTLE_LEVEL)
     {
@@ -602,6 +617,15 @@ inline void matmul_run_row_mop(const std::uint32_t dst_index, const std::uint32_
     }
 }
 
+// Whether the default math path should run the row form (tile_mop false) for the keys a kernel fixes at compile time;
+// see @ref matmul_default_form.
+template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format>
+constexpr bool matmul_math_row_form()
+{
+    constexpr char form = matmul_default_form<math_fidelity, dst_sync, fp32_dest, kt_per_section, out_format>();
+    return form == 'r' || form == 'R';
+}
+
 // DEST stride (rows) the default row form was programmed with; zero when the last matmul init programmed another MOP.
 inline std::uint32_t matmul_rows_dest_stride = 0;
 
@@ -623,13 +647,6 @@ inline void matmul_configure_mop_rows(const std::uint32_t ct_dim, const std::uin
     }
     const std::uint32_t dest_stride = matmul_row_dest_stride(ct_dim, rt_dim);
     matmul_set_row_tile_end_dest(dest_stride);
-    if constexpr (high_fidelity)
-    {
-        // a phase ends back at the tile base, which the tile end keeps in the DEST carriage return register
-        constexpr addr_mod_t phase_end {.dest = {.incr = 0, .clr = 0, .cr = 1}, .fidelity = {.incr = 1, .clr = 0}};
-        TTI_SETC16(ADDR_MOD_DST_SEC5_DestIncr_ADDR32, phase_end.dest.val() | (phase_end.fidelity.val() << 13));
-    }
-
     matmul_load_row_replay();
 
     constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
@@ -951,10 +968,9 @@ inline void _llk_math_matmul_init_(
     // in1=32x16 NOT supported with transpose (no addr_mod handling)
     LLK_ASSERT(!(transpose && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)), "Transpose with input 1 dimensions 32x16 not supported");
 
-    matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-
     if constexpr (THROTTLE_LEVEL > 0)
     {
+        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         matmul_row_mop_dims = 0;
         // On a geometry the throttled MOP does not support, fall back to the unthrottled one:
         // throttling is only a throughput cap, and the throttled sequence wedges there.
@@ -980,10 +996,12 @@ inline void _llk_math_matmul_init_(
     }
     else if constexpr (row_mop)
     {
+        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         matmul_configure_row_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else if constexpr (tile_mop || !matmul_row_mop_supported)
     {
+        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         matmul_row_mop_dims = 0;
         matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
@@ -992,10 +1010,12 @@ inline void _llk_math_matmul_init_(
         matmul_row_mop_dims = 0;
         if ((in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM) && (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM))
         {
+            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true>(transpose);
             matmul_configure_mop_rows<math_fidelity>(ct_dim, rt_dim);
         }
         else
         {
+            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_rows_dest_stride = 0;
             matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }

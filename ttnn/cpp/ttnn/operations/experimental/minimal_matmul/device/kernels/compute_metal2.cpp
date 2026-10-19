@@ -398,7 +398,7 @@ void add_bias_and_addcmul_block(
 }
 
 // Slightly modified from compute_common.hpp
-template <bool row_mop, typename In0Tok, typename In1Tok, typename OutTok>
+template <bool row_mop, uint32_t kt_per_section, DataFormat out_format, typename In0Tok, typename In1Tok, typename OutTok>
 void matmul_blocks(
     const In0Tok in0_dfb,
     const In1Tok in1_dfb,
@@ -421,7 +421,7 @@ void matmul_blocks(
             uint32_t in1_index = in1_index_offset;
 
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block<row_mop>(
+                matmul_block<row_mop, false, kt_per_section, out_format>(
                     in0_dfb,
                     in1_dfb,
                     in0_index,
@@ -462,7 +462,15 @@ void matmul_blocks(
 // subblock, and no epilogue pass re-reads the intermediate (which cost ~2100 cycles per output tile on the math
 // thread). The out tiles land row-major in a half-width block, as swiglu_block writes them. block_float_output selects
 // the cheaper sigmoid (swiglu_sfpu.hpp).
-template <bool block_float_output, bool row_mop, typename In0Tok, typename In1Tok, typename IntermTok, typename OutTok>
+template <
+    bool block_float_output,
+    bool row_mop,
+    uint32_t kt_per_section,
+    DataFormat out_format,
+    typename In0Tok,
+    typename In1Tok,
+    typename IntermTok,
+    typename OutTok>
 void matmul_blocks_swiglu(
     const In0Tok in0_dfb,
     const In1Tok in1_dfb,
@@ -484,7 +492,7 @@ void matmul_blocks_swiglu(
             uint32_t in0_index = in0_index_offset;
             uint32_t in1_index = in1_index_offset;
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block<row_mop>(
+                matmul_block<row_mop, false, kt_per_section, out_format>(
                     in0_dfb,
                     in1_dfb,
                     in0_index,
@@ -509,7 +517,7 @@ void matmul_blocks_swiglu(
                     }
                 }
                 reconfig_data_format_srca(interm_dfb, in1_dfb);
-                matmul_block_init<row_mop>(
+                matmul_block_init<row_mop, false, kt_per_section, out_format>(
                     in0_dfb, in1_dfb, false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
             }
             tile_regs_commit();
@@ -558,6 +566,12 @@ void kernel_main() {
     constexpr bool row_mop = subblock_h * subblock_w >= 8 && K_block_tiles > 1;
 #else
     constexpr bool row_mop = false;
+#endif
+#ifdef ARCH_BLACKHOLE
+    // each DEST section is packed to the intermediate buffer
+    constexpr DataFormat mm_pack_format = static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::intermediate)]);
+#else
+    constexpr DataFormat mm_pack_format = DataFormat::Invalid;
 #endif
     // SwiGLU without a bias, applied on the pack thread in each output block's last K block
     constexpr bool swiglu_in_k_loop = get_arg(args::swiglu_in_k_loop) == 1;
@@ -630,7 +644,7 @@ void kernel_main() {
             reconfig_data_format(dfb::in1, dfb::in0);
             pack_reconfig_data_format(dfb::intermediate);
             retarget_packer(dfb::intermediate);
-            matmul_block_init<row_mop>(
+            matmul_block_init<row_mop, false, K_block_tiles, mm_pack_format>(
                 dfb::in0,
                 dfb::in1,
                 false /*transpose*/,
@@ -652,7 +666,7 @@ void kernel_main() {
                     pack_reconfig_data_format(dfb::out);
                     // SwiGLU collapses the interleaved gate/up block to half its N width.
                     dfb_out.reserve_back(out_block_num_tiles >> 1);
-                    matmul_blocks_swiglu<swiglu_block_float_output, row_mop>(
+                    matmul_blocks_swiglu<swiglu_block_float_output, row_mop, K_block_tiles, mm_pack_format>(
                         dfb::in0,
                         dfb::in1,
                         dfb::intermediate,
@@ -669,7 +683,7 @@ void kernel_main() {
                         dfb_intermediate.pop_front(out_block_num_tiles);
                     }
                 } else {
-                    matmul_blocks<row_mop>(
+                    matmul_blocks<row_mop, K_block_tiles, mm_pack_format>(
                         dfb::in0,
                         dfb::in1,
                         dfb::intermediate,

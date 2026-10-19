@@ -34,6 +34,7 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_FORM_KEYS,
     MATMUL_STREAM_NARROW,
     NUM_BLOCKS,
     NUM_FACES,
@@ -287,6 +288,7 @@ def test_math_matmul(
                 matmul_config.tile_dimensions.ct_dim,
                 matmul_config.tile_dimensions.rt_dim,
             ),
+            *MATMUL_FORM_KEYS.for_block(formats, matmul_config.tile_dimensions.kt_dim),
         ],
         runtimes=[
             TILE_COUNT(matmul_config.tile_dimensions.tile_cnt),

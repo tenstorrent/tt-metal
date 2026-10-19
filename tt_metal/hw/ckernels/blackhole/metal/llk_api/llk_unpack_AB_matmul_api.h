@@ -41,7 +41,9 @@ inline void llk_unpack_AB_matmul_init_impl(
         partial_face_b);
 }
 
-template <bool auto_ttsync = false>
+// kt_per_section and out_format pick the per-row or hoisted call (unpack_AB_matmul_hoist_rows); 0 and Invalid when
+// unknown.
+template <bool auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid>
 inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -60,7 +62,7 @@ inline void llk_unpack_AB_matmul_impl(
         0,
         auto_ttsync,
         get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
-        unpack_AB_matmul_hoist_rows<MATH_FIDELITY, DST_SYNC_MODE>()>(
+        unpack_AB_matmul_hoist_rows<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>()>(
         base_address_a,
         base_address_b,
         tile_index_a,
@@ -173,7 +175,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     }
 }
 
-template <bool auto_ttsync = false>
+template <bool auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid>
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -225,7 +227,7 @@ inline void llk_unpack_AB_matmul(
         StateDiscard<std::uint32_t>(tile_index_a),
         StateDiscard<std::uint32_t>(tile_index_b)));
 
-    llk_unpack_AB_matmul_impl<auto_ttsync>(
+    llk_unpack_AB_matmul_impl<auto_ttsync, kt_per_section, out_format>(
         base_address_a,
         base_address_b,
         tile_index_a,
