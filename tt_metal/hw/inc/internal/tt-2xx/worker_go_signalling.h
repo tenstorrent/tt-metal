@@ -61,8 +61,11 @@ __attribute__((interrupt)) inline void fds_go_interrupt_handler() {
     // The host rewrites go_message_index only after quiesce with no go in flight, so no locking is needed.
     if (group_id == overlay::fds_signalling::go_group_for_sub_device(mailboxes->go_message_index)) {
         const uint32_t slot = fds_go_ring_write_slot;
-        mailboxes->go_messages[overlay::fds_signalling::sub_device_from_go_group(group_id)].slot[slot].signal =
-            RUN_MSG_GO;
+        volatile tt_l1_ptr go_msg_t* go_message =
+            &mailboxes->go_messages[overlay::fds_signalling::sub_device_from_go_group(group_id)].slot[slot];
+        // The core has run the slot's previous go: the dispatcher never gets more than the ring ahead of it.
+        ASSERT(go_message->signal != RUN_MSG_GO);
+        go_message->signal = RUN_MSG_GO;
         fds_go_ring_write_slot = (slot + 1) % GO_RING_DEPTH;
     }
 }
