@@ -25,7 +25,7 @@ walk.delivers, walk.exits, walk.odd
 
 ## Design decisions
 
-- **Values come from the manifest, by name.** `get_encodings_from_manifest` looks up each value by its key, checks it (for example, that the action bits are distinct bits of a byte, and that the 1D hop fields fill a route word), and raises `ManifestError` naming the first key it can't use.
+- **Values come from the manifest, by name.** `get_encodings_from_manifest` looks up each value by its key, checks its JSON type and its value (for example, that the action bits are distinct bits of a byte, and that the 1D hop fields fill a route word), and raises `ManifestError` naming the first key it can't use. `get_mesh_view` does the same for the mesh values it reads.
 - **Meaning is tied to names, and only the known names are accepted.** The rules hardcode what some names mean: which 1D hop names write and which forward (`HOP_ACTIONS`), the direction names (`Direction`), `local_deliver`, the Z port roles (`Z_PORT_ROLES`), and the scatter chunk type names (`ChunkEncoding`). The loaders check those names against the manifest's full list of each (`routing_encodings.1d.hop`, `routing_encodings.2d.action_bits`, `vocabulary.z_port_roles` and `enums.NocScatterWriteChunkEncoding`), not only the values a run uses, so a renamed, added or removed value fails at load, naming what the manifest holds and what the rules know, instead of decoding wrong.
 - **Names are enum values.** `Direction` and `ChunkEncoding` are `str` enums whose values are the manifest's names. A member equals its name, looks up the manifest's keys, and writes to JSON as the name.
 - **The rules mirror the router, not the API.** Where the code that builds a route and the router that reads it
@@ -213,12 +213,12 @@ the manifest carries, a value whose meaning is in `routes.py`, and a change to t
 | --- | --- | --- |
 | An encoding's value or width changes, such as a bit position, the table code width or a tree edge field | Nothing, while the loader's checks still hold: the rules read these from the manifest | Nothing |
 | A key the rules read is renamed or removed | The route decoder check in `run_fabric_manifest_tests.sh`: `get_encodings_from_manifest` or `get_mesh_view` raises `ManifestError`, "manifest has no ...", naming the manifest | The key in `routes.py` |
+| A value the rules read changes type, such as an object where an array was | The same check: `ManifestError`, naming the key, the type it has and the type the rules need | The read in `routes.py`, and its `_lookup` type |
 | A 1D hop, 2D action bit, Z port role or scatter chunk type is renamed, added or removed | The same check: `ManifestError`, naming what the manifest holds and what the rules know | `HOP_ACTIONS`, `Direction` and `LOCAL_DELIVER`, `Z_PORT_ROLES`, or `ChunkEncoding`, and the rule on this page |
 | The code a rule mirrors changes what it does | Nothing | The rule on this page, its function in `routes.py`, and its tests |
 
 `tests/check_manifest_routes.py` runs the loaders on every manifest `run_fabric_manifest_tests.sh` writes, which is
-what makes the second and third rows fail in CI. What it can't reach is the path to a Z router's peer
-(`routers.<Z key>.link.peer`): decode reads it only at an express chord chip, and no mock-cluster chip is one, so a key renamed on that path fails only when decode reads a manifest that has one.
+what makes the second to fourth rows fail in CI. What it can't reach is the path to a Z router's peer (`routers.<Z key>.link.peer`): decode reads it only at an express chord chip, and no mock-cluster chip is one, so a key renamed or a type changed on that path fails only when decode reads a manifest that has one.
 
 `tests/test_routes.py` holds hand-written cases, one or two for each branch of each rule. They catch a change to
 `routes.py` that breaks a rule, not a fabric change the rules missed.
