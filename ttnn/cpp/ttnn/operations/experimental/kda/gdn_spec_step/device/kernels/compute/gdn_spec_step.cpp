@@ -302,18 +302,29 @@ inline void decay_state_sfpu(
     hd32_dfb.reserve_back(n);
     pack_reconfig_data_format(dfb::hd);
     reconfig_data_format_srca(cur32);
-    for (uint32_t i = 0; i < n; ++i) {
+    // The all-equal dec tile is loaded into DST[3] once per acquire and stays resident for up to 3 state tiles
+    // (DST[0..2]); fp32 DST under the half-DST sync holds 4 tiles. Per element this is still S * dec in fp32 on the
+    // SFPU (the multiply is commutative; the operands are the same exact fp32 values), so every bit is unchanged.
+    constexpr uint32_t kChunk = 3;
+    for (uint32_t i0 = 0; i0 < n; i0 += kChunk) {
+        const uint32_t m = (n - i0) < kChunk ? (n - i0) : kChunk;
         tile_regs_acquire();
         copy_init(cur32);
-        copy_tile(cur32, i, 0);
+        for (uint32_t jj = 0; jj < m; ++jj) {
+            copy_tile(cur32, i0 + jj, jj);
+        }
         copy_init(dec_id);  // FPU datacopy re-init after the SFPU ops of the previous iteration
-        copy_tile(dec_id, 0, 1);
+        copy_tile(dec_id, 0, kChunk);
         mul_binary_tile_init();
-        mul_binary_tile(0, 1, 0);
+        for (uint32_t jj = 0; jj < m; ++jj) {
+            mul_binary_tile(jj, kChunk, jj);
+        }
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, dfb::hd, i);
-        pack_tile(0, dfb::hd32, i);
+        for (uint32_t jj = 0; jj < m; ++jj) {
+            pack_tile(jj, dfb::hd, i0 + jj);
+            pack_tile(jj, dfb::hd32, i0 + jj);
+        }
         tile_regs_release();
     }
     hd_dfb.push_back(n);
