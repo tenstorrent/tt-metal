@@ -67,7 +67,7 @@ def test_picker_valid_for_ring_sdpa():
         assert (seq_len // 8) % q == 0, (seq_len, q)
 
 
-@pytest.mark.parametrize("seq_len", [8192, 16384, 24576, 32768, 40960, 49152])
+@pytest.mark.parametrize("seq_len", [8192, 16384, 24576, 32768, 40960])
 def test_ring_program_config_keeps_base_fields(qwen_cfg, seq_len):
     # SDPA_RING_PROGCFG above the traced buckets = the real SDPA_PROGCFG with q_chunk_size and k_chunk_size
     # replaced (k640 only where it divides S / 8, i.e. 40960) and the approximate exponential
@@ -86,9 +86,12 @@ def test_ring_program_config_keeps_base_fields(qwen_cfg, seq_len):
     assert _fields(qwen_ring_sdpa_program_config(base, seq_len, n_local_heads, exp_approx_mode=True)) == _fields(ring)
 
 
-@pytest.mark.parametrize("seq_len, chunk_start_idx", [(1024, 0), (2048, 0), (4096, 0), (8192, 2048), (40960, 4096)])
+@pytest.mark.parametrize(
+    "seq_len, chunk_start_idx", [(1024, 0), (2048, 0), (4096, 0), (8192, 2048), (40960, 4096), (49152, 0)]
+)
 def test_ring_program_config_is_base_outside_picker(qwen_cfg, seq_len, chunk_start_idx):
-    # <= 4096 (traced buckets) and chunked prefill (chunk_start_idx > 0) keep the real SDPA_PROGCFG.
+    # <= 4096 (traced buckets), chunked prefill (chunk_start_idx > 0) and lengths above the 40960 cap
+    # (QWEN_OPT_MAX_SEQ_LEN) keep the real SDPA_PROGCFG.
     base = qwen_cfg.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx=chunk_start_idx)
     ring = qwen_cfg.model_config["SDPA_RING_PROGCFG"](seq_len, chunk_start_idx=chunk_start_idx)
     assert _fields(ring) == _fields(base)
