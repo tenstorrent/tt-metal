@@ -381,6 +381,137 @@ def _compact_plan(needed_by_chip, n_dev, stripe_chunk, workers, pages_per_packet
     return torch.from_numpy(host.astype(np.int32)), slot_maps, int(load.max()), ends
 
 
+_RELAY = os.environ.get("SPARSE_RELAY", "0") not in ("", "0")  # also read by the op's factory
+
+
+def _relay_route(o, d, mesh_shape):
+    """One-hop torus path owner -> dest as [(chip, dir)], dir 0 E (col+1), 1 W, 2 N (row-1), 3 S (row+1).
+
+    Vertical first to the destination's row, then horizontal. Distance ties (half the ring) are split by parity
+    so both directions carry the same load.
+    """
+    rows, cols = mesh_shape
+    ro, co = divmod(o, cols)
+    rd, cd = divmod(d, cols)
+    hops, r, c = [], ro, co
+    dv = (rd - ro) % rows
+    if dv:
+        south = dv < rows - dv or (dv == rows - dv and (ro + cd) % 2 == 0)
+        for _ in range(dv if south else rows - dv):
+            hops.append((r * cols + c, 3 if south else 2))
+            r = (r + (1 if south else -1)) % rows
+    dh = (cd - co) % cols
+    if dh:
+        east = dh < cols - dh or (dh == cols - dh and (ro + rd) % 2 == 0)
+        for _ in range(dh if east else cols - dh):
+            hops.append((r * cols + c, 0 if east else 1))
+            c = (c + (1 if east else -1)) % cols
+    assert r * cols + c == d
+    return hops
+
+
+def _relay_plan(
+    needed_by_chip, n_dev, stripe_chunk, workers, pages_per_packet, buffer_rows, base_offsets=None, mesh_shape=(8, 4)
+):
+    """One-hop relay variant of _compact_plan (same slot maps / compact layout; `workers` = links).
+
+    Packets are the same P-row bank lanes as _compact_plan's; each moves one hop per round and is staged at every
+    intermediate chip in a P-row bank lane of a staging region at the tail of the output buffer. Stream page per
+    sender (link * 4 + dir); see kernels/relay_push_reader.cpp for the item format.
+    """
+    links, B, P = workers, _DRAM_BANKS, pages_per_packet
+    unit = P * B
+    lane = lambda base, j: base + (j % B) + (j // B) * unit
+    senders = links * 4
+    items = [[[] for _ in range(senders)] for _ in range(n_dev)]  # [chip][sender] -> [(round, item)]
+    load = {}  # (chip, dir, round, link) -> rows
+    stage_count = np.zeros(n_dev, dtype=np.int64)
+    staged_rows = np.zeros(n_dev, dtype=np.int64)
+    slot_maps, ends = [], []
+    routes = {}
+    rounds = 1
+
+    def pick(chip, dirs, rnd, n):
+        best = min(((load.get((chip, dr, rnd, l), 0), dr, l) for dr in dirs for l in range(links)))
+        load[(chip, best[1], rnd, best[2])] = best[0] + n
+        return best[2] * 4 + best[1]
+
+    for dest, rows in enumerate(needed_by_chip):
+        owner, local = _owner_local(rows, stripe_chunk, n_dev)
+        slot_map = np.full(buffer_rows, -1, dtype=np.int32)
+        base = 0 if base_offsets is None else base_offsets[dest]
+        for o in range(n_dev):
+            sel = owner == o
+            o_rows, o_local = rows[sel], local[sel]
+            order = np.argsort(o_local)
+            o_rows, o_local = o_rows[order], o_local[order]
+            k = np.arange(len(o_local))
+            j, i = k // P, k % P
+            slot_map[o_rows] = base + (j % B) + (j // B) * unit + i * B
+            if (o, dest) not in routes:
+                routes[(o, dest)] = _relay_route(o, dest, mesh_shape)
+            hops = routes[(o, dest)]
+            rounds = max(rounds, len(hops))
+            for jj in range(-(-len(o_local) // P)):
+                chunk = o_local[jj * P : (jj + 1) * P]
+                n = len(chunk)
+                final = lane(base, jj)
+                if not hops:
+                    items[o][pick(o, range(4), 0, n)].append((0, (3, final, n, chunk)))
+                    continue
+                src = None  # (chip, slot) where the packet is staged
+                for h, (chip, dr) in enumerate(hops):
+                    if h + 1 < len(hops):
+                        nxt = hops[h + 1][0]
+                        tgt = ("S", nxt, int(stage_count[nxt]))
+                        stage_count[nxt] += 1
+                        staged_rows[nxt] += n
+                    else:
+                        tgt = final
+                    item = (1, tgt, n, chunk) if src is None else (2, tgt, n, src)
+                    items[chip][pick(chip, (dr,), h, n)].append((h, item))
+                    src = tgt
+            base += -(-len(o_local) // unit) * unit
+        assert base <= buffer_rows, f"compact buffer overflow: {base} > {buffer_rows}"
+        slot_maps.append(slot_map)
+        ends.append(base)
+
+    need = int(-(-stage_count.max() // B)) * unit
+    stage_base = (buffer_rows - need) // unit * unit
+    assert stage_base >= max(ends), f"no room for relay staging: {need} rows after {max(ends)} of {buffer_rows}"
+    page = lambda t: t if not isinstance(t, tuple) else lane(stage_base, t[2])
+
+    pages = []
+    for c in range(n_dev):
+        for snd in range(senders):
+            words = [rounds] + [0] * 15
+            by_round = [[] for _ in range(rounds)]
+            for h, it in items[c][snd]:
+                by_round[h].append(it)
+            for rnd in range(rounds):
+                for kind, tgt, n, src in by_round[rnd]:
+                    words += [kind, page(tgt), n]
+                    words += [page(src)] if kind == 2 else list(map(int, src))
+                words.append(0)
+            pages.append(words)
+    width = max(len(w) for w in pages)
+    width += -width % 16
+    host = np.zeros((n_dev * senders, width), dtype=np.int64)
+    for idx, w in enumerate(pages):
+        host[idx, : len(w)] = w
+    host = host.reshape(n_dev, 1, senders, width)
+    worker_rows = max(load.values()) if load else 0
+    logger.info(
+        f"relay plan: {rounds} rounds, P={P}, max staged rows/chip {int(staged_rows.max())}, "
+        f"staging at {stage_base} (+{need}), max rows per sender-round {worker_rows}"
+    )
+    return torch.from_numpy(host.astype(np.int32)), slot_maps, worker_rows, ends
+
+
+def _push_plan(*args, **kwargs):
+    return (_relay_plan if _RELAY else _compact_plan)(*args, **kwargs)
+
+
 @run_for_blackhole()
 @_PERF
 @pytest.mark.timeout(0)
@@ -480,7 +611,7 @@ def test_sparse_push_vs_full_gather(mesh_device, chunk_global, prefix_slabs, kv_
                     needed = prefix_needed
                 else:
                     needed = [np.concatenate([p, current_rows]) for p in prefix_needed]
-                host_streams, slot_maps, worker_rows, _ = _compact_plan(
+                host_streams, slot_maps, worker_rows, _ = _push_plan(
                     needed, n_dev, stripe_chunk, workers, pages_per_packet, cache_tokens
                 )
                 streams = ttnn.from_torch(
@@ -666,8 +797,8 @@ def test_sparse_overlap_real_topk(mesh_device):
             u = np.unique(natural[c])
             prefix_needed.append(u[u < prefix_tokens])
         plan_kw = dict(n_dev=n_dev, stripe_chunk=stripe_chunk, workers=workers, pages_per_packet=pages_per_packet)
-        pre_streams, pre_maps, _, ends = _compact_plan(prefix_needed, buffer_rows=cache_tokens, **plan_kw)
-        rem_streams, rem_maps, _, _ = _compact_plan(
+        pre_streams, pre_maps, _, ends = _push_plan(prefix_needed, buffer_rows=cache_tokens, **plan_kw)
+        rem_streams, rem_maps, _, _ = _push_plan(
             [current_rows] * n_dev, buffer_rows=cache_tokens, base_offsets=ends, **plan_kw
         )
         maps = [np.where(p >= 0, p, r) for p, r in zip(pre_maps, rem_maps)]

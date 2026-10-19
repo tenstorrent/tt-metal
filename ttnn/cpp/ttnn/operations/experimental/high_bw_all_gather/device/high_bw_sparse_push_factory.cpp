@@ -34,9 +34,18 @@ struct WorkerKernels {
     tt::tt_metal::KernelHandle writer;
 };
 
+// PROTOTYPE switch: SPARSE_RELAY=1 selects the one-hop relay kernels (relay_push_*.cpp), which take one stream page
+// per sender instead of one per link.
+bool relay_mode() {
+    const char* v = std::getenv("SPARSE_RELAY");
+    return v != nullptr && std::string(v) != "0";
+}
+
 uint32_t num_links(const HighBwAllGatherInputs& tensor_args) {
     // push_runs_tensor per device: [1, 1, links, words]; one stream page per link, shared by its 4 senders.
-    return tensor_args.push_runs_tensor->padded_shape()[-2];
+    // Relay: [1, 1, links * 4, words], one page per (link, direction) sender.
+    const uint32_t pages = tensor_args.push_runs_tensor->padded_shape()[-2];
+    return relay_mode() ? pages / kDirections : pages;
 }
 
 }  // namespace
@@ -55,6 +64,7 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
     const uint32_t mesh_cols = mesh_shape[1];
     const uint32_t num_devices = mesh_rows * mesh_cols;
 
+    const bool relay = relay_mode();
     const uint32_t links = num_links(tensor_args);
     const uint32_t workers = links * kDirections;
     TT_FATAL(workers >= 1 && workers <= kMaxWorkers, "sparse push supports 1..2 links, got {}", links);
@@ -124,6 +134,80 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
         cb(kRuns, kBlockWords * sizeof(uint32_t), 1, tt::DataFormat::RawUInt32);
         cb(kScalar, kScalarCbBytes, 1, tt::DataFormat::RawUInt32);
         cb(kHeaders, tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(), 1 + 4, tt::DataFormat::RawUInt32);
+
+        if (relay) {
+            const uint32_t per_round = links * kDirections;
+            std::vector<uint32_t> reader_ct = {
+                page_bytes,
+                pages_per_packet,
+                pages_per_slot,
+                batch_from_meta ? 1u : 0u,
+                kBlockWords,
+                runs_page_bytes,
+                per_round,
+            };
+            tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct);
+            tt::tt_metal::TensorAccessorArgs(runs_tensor.buffer()).append_to(reader_ct);
+            tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_ct);
+            if (batch_from_meta) {
+                tt::tt_metal::TensorAccessorArgs(tensor_args.input_batch_index_tensor->buffer()).append_to(reader_ct);
+            }
+            std::vector<uint32_t> writer_ct = {page_bytes, workers, packet_bytes, per_round};
+            tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct);
+            const std::map<std::string, std::string> defines = {{"FABRIC_2D", "1"}};
+            const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/device/kernels/";
+            auto reader = tt::tt_metal::CreateKernel(
+                program,
+                kdir + "relay_push_reader.cpp",
+                worker_range,
+                tt::tt_metal::ReaderDataMovementConfig(reader_ct, defines));
+            auto writer = tt::tt_metal::CreateKernel(
+                program,
+                kdir + "relay_push_writer.cpp",
+                worker_range,
+                tt::tt_metal::WriterDataMovementConfig(writer_ct, defines));
+            tt::tt_metal::SetCommonRuntimeArgs(
+                program,
+                reader,
+                {input_tensor.buffer()->address(),
+                 runs_tensor.buffer()->address(),
+                 batch_from_meta ? tensor_args.input_batch_index_tensor->buffer()->address() : 0u,
+                 operation_attributes.batch_slot_num_layers,
+                 operation_attributes.batch_slot_layer_idx,
+                 operation_attributes.input_batch_index.value_or(0),
+                 output_tensor.buffer()->address(),
+                 done_sem.address()});
+            tt::tt_metal::SetCommonRuntimeArgs(
+                program, writer, {output_tensor.buffer()->address(), ready_sem.address(), done_sem.address()});
+            const auto src_node = mesh_device->get_fabric_node_id(coord);
+            for (uint32_t w = 0; w < workers; ++w) {
+                const uint32_t link = w / kDirections, dir = w % kDirections;
+                tt::tt_metal::SetRuntimeArgs(program, reader, worker_cores[w], {w});
+                const auto nbr_node = mesh_device->get_fabric_node_id(neighbors[dir]);
+                std::vector<uint32_t> writer_rt = {
+                    w, link, static_cast<uint32_t>(nbr_node.chip_id), static_cast<uint32_t>(*nbr_node.mesh_id)};
+                for (uint32_t other = 0; other < kMaxWorkers; ++other) {
+                    const auto phys =
+                        mesh_device->worker_core_from_logical_core(worker_cores[std::min(other, workers - 1)]);
+                    writer_rt.push_back(static_cast<uint32_t>(phys.x));
+                    writer_rt.push_back(static_cast<uint32_t>(phys.y));
+                }
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    src_node, nbr_node, link, program, worker_cores[w], writer_rt);
+                tt::tt_metal::SetRuntimeArgs(program, writer, worker_cores[w], writer_rt);
+            }
+            workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(program));
+            shared_variables.emplace(
+                ttnn::MeshCoordinateRange(coord),
+                shared_variables_t{
+                    .worker_cores = worker_cores,
+                    .reader_kernel_id = reader,
+                    .writer_kernel_id = writer,
+                    .ready_sem = ready_sem,
+                    .done_sem = done_sem,
+                    .relay = true});
+            continue;
+        }
 
         std::vector<uint32_t> reader_ct = {
             page_bytes,
@@ -224,6 +308,10 @@ void HighBwSparsePushFactory::override_runtime_arguments(
         reader[3] = operation_attributes.batch_slot_num_layers;
         reader[4] = operation_attributes.batch_slot_layer_idx;
         reader[5] = operation_attributes.input_batch_index.value_or(0);
+        if (vars.relay) {
+            reader[6] = output_tensor.buffer()->address();
+            reader[7] = operation_attributes.data_valid_semaphore->address();
+        }
         auto& writer = tt::tt_metal::GetCommonRuntimeArgs(program, vars.writer_kernel_id);
         writer[0] = output_tensor.buffer()->address();
         writer[1] = operation_attributes.ready_semaphore->address();
