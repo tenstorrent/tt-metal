@@ -33,7 +33,14 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& gathered_prefix_tensor = std::nullopt,
     uint32_t gathered_slab_global = 0,
     const std::optional<GlobalSemaphore>& ready_semaphore = std::nullopt,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt);
+    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt,
+    // Resumable window (metadata extent only): gather slabs [window_start, window_start + window_max_slabs)
+    // of the active extent and record the reached end in progress_tensor. prefix_only limits the extent to
+    // slabs written before this chunk.
+    const std::optional<Tensor>& window_start_tensor = std::nullopt,
+    std::optional<uint32_t> window_max_slabs = std::nullopt,
+    bool prefix_only = false,
+    const std::optional<Tensor>& progress_tensor = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 

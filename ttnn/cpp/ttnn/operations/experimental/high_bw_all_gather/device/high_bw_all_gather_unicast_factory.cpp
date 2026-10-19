@@ -275,6 +275,17 @@ void validate_semaphore_core_coverage(
         required_cores);
 }
 
+// Window quota sentinel: no cap, gather the whole remaining extent.
+constexpr uint32_t kUnboundedWindow = 0xFFFFFFFFu;
+
+uint32_t window_start_address(const HighBwAllGatherInputs& tensor_args) {
+    return tensor_args.has_window_start() ? tensor_args.window_start_tensor->buffer()->address() : 0u;
+}
+
+uint32_t progress_address(const HighBwAllGatherInputs& tensor_args) {
+    return tensor_args.has_progress() ? tensor_args.progress_tensor->buffer()->address() : 0u;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 using namespace CMAKE_UNIQUE_NAMESPACE;
@@ -916,6 +927,26 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
             tt::tt_metal::TensorAccessorArgs(tensor_args.gathered_prefix_tensor->buffer())
                 .append_to(reader_compile_args);
         }
+        // Resumable window: the offset lo shifts every worker's pages uniformly, which keeps bank-owned
+        // coalescing intact only if a slab is a whole number of bank rounds.
+        if (extent_from_metadata && output_bank_owned_schedule) {
+            TT_FATAL(
+                pages_per_slab % num_dram_banks == 0,
+                "high_bw_all_gather window offsets need pages_per_slab ({}) divisible by the DRAM bank count ({})",
+                pages_per_slab,
+                num_dram_banks);
+        }
+    }
+    // Window block, appended after the extent block. Flags always pushed; accessors conditional.
+    reader_compile_args.push_back(operation_attributes.prefix_only ? 1u : 0u);
+    reader_compile_args.push_back(tensor_args.has_window_start() ? 1u : 0u);
+    reader_compile_args.push_back(tensor_args.has_progress() ? 1u : 0u);
+    reader_compile_args.push_back(cb_meta_id);
+    if (tensor_args.has_window_start()) {
+        tt::tt_metal::TensorAccessorArgs(tensor_args.window_start_tensor->buffer()).append_to(reader_compile_args);
+    }
+    if (tensor_args.has_progress()) {
+        tt::tt_metal::TensorAccessorArgs(tensor_args.progress_tensor->buffer()).append_to(reader_compile_args);
     }
 
     // Writer
@@ -994,7 +1025,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
          prefix_metadata_address,
          batch_metadata_address,
          operation_attributes.batch_slot_num_layers,
-         operation_attributes.batch_slot_layer_idx});
+         operation_attributes.batch_slot_layer_idx,
+         window_start_address(tensor_args),
+         operation_attributes.window_max_slabs.value_or(kUnboundedWindow),
+         progress_address(tensor_args)});
     tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, data_valid_granularity});
 
     // Mux runtime args: one fabric connection per active direction per link, to that direction's neighbor. The
@@ -1268,6 +1302,9 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
         reader_common.at(3) = batch_metadata_address;
         reader_common.at(4) = operation_attributes.batch_slot_num_layers;
         reader_common.at(5) = operation_attributes.batch_slot_layer_idx;
+        reader_common.at(6) = window_start_address(tensor_args);
+        reader_common.at(7) = operation_attributes.window_max_slabs.value_or(kUnboundedWindow);
+        reader_common.at(8) = progress_address(tensor_args);
         auto& writer_common = GetCommonRuntimeArgs(program, shared_vars.writer_kernel_id);
         writer_common.at(0) = output_addr;
 

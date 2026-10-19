@@ -2450,3 +2450,189 @@ def test_high_bw_all_gather_cached_link_discovery(mesh_device, num_links, expect
                 rows_per_device=32,
                 num_links=invalid_links,
             )
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Resumable window: a prefix_only prefetch capped at window_max_slabs, then a resume from its recorded
+# progress, must reproduce one full gather of the same slot exactly. Production shape: full-mesh snake on
+# the 8x4 Galaxy, KV cache striped over all 32 chips, multi-slot cache selected through metadata.
+# ---------------------------------------------------------------------------------------------------------
+
+_WINDOW_STRIPE_ROWS = 64  # per-chip rows per block-cyclic slab
+_WINDOW_SLABS = 8  # slabs the cache holds
+_WINDOW_NUM_LAYERS = 2
+
+
+def _window_case_tensors(mesh_device):
+    num_devices = mesh_device.get_num_devices()
+    local_rows = _WINDOW_STRIPE_ROWS * _WINDOW_SLABS
+    width = 576
+    torch.manual_seed(0)
+    host_input = torch.rand((_WINDOW_NUM_LAYERS, 1, local_rows * num_devices, width), dtype=torch.bfloat16)
+    device_input = _make_tensor(
+        mesh_device, host_input, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    )
+    return host_input, device_input, local_rows, width
+
+
+def _zero_gather_output(mesh_device, local_rows, width):
+    return _make_tensor(
+        mesh_device,
+        torch.zeros((1, 1, local_rows * mesh_device.get_num_devices(), width), dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _assert_gathered_prefix(output, host_input, layer, local_rows, rows_per_rank, num_devices):
+    """Every chip's output holds rows [0, rows_per_rank) of every rank's slot at the rank's fixed stride."""
+    for chip, shard in enumerate(ttnn.get_device_tensors(output)):
+        actual = ttnn.to_torch(shard)
+        for rank in range(num_devices):
+            lo = rank * local_rows
+            assert torch.equal(
+                actual[0, 0, lo : lo + rows_per_rank], host_input[layer, 0, lo : lo + rows_per_rank]
+            ), f"chip {chip} rank {rank} prefix mismatch over {rows_per_rank} rows"
+
+
+def _read_progress(progress):
+    values = {int(ttnn.to_torch(shard).flatten()[0]) for shard in ttnn.get_device_tensors(progress)}
+    assert len(values) == 1, f"chips disagree on recorded progress: {values}"
+    return values.pop()
+
+
+@run_for_blackhole("resumable full-mesh window requires Blackhole")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@_AG_TRACED_AXIS
+def test_high_bw_all_gather_resumable_window(mesh_device, ag_traced):
+    num_devices = mesh_device.get_num_devices()
+    host_input, device_input, local_rows, width = _window_case_tensors(mesh_device)
+    slab_global = _WINDOW_STRIPE_ROWS * num_devices
+    layer = 1  # gather the "next layer" slot, as the prefetch does in the model
+
+    topk_grid, gather_grid = _sparse_mla_overlap_grids(mesh_device)
+    manager = mesh_device.create_sub_device_manager(
+        [ttnn.SubDevice([topk_grid]), ttnn.SubDevice([gather_grid])],
+        0,
+    )
+    mesh_device.load_sub_device_manager(manager)
+    ready_sem, data_valid_sem = _make_l1_small_semaphore_pair(mesh_device, gather_grid)
+    ttnn.synchronize_device(mesh_device)
+
+    slot_meta = _meta_scalar(mesh_device, 0)  # user 0
+    prefix_meta = _meta_scalar(mesh_device, 0)  # chunk start, global
+    progress = _meta_scalar(mesh_device, 0x7EADBEEF)
+    output = _zero_gather_output(mesh_device, local_rows, width)
+
+    def gather(**window):
+        ttnn.experimental.high_bw_all_gather(
+            device_input,
+            dim=2,
+            output_tensor=output,
+            cluster_axis=None,
+            subdevice_id=ttnn.SubDeviceId(1),
+            sub_core_grids=gather_grid,
+            num_links=_NUM_LINKS,
+            input_batch_index_tensor=slot_meta,
+            batch_slot_num_layers=_WINDOW_NUM_LAYERS,
+            batch_slot_layer_idx=layer,
+            gathered_prefix_tensor=prefix_meta,
+            gathered_slab_global=slab_global,
+            ready_semaphore=ready_sem,
+            data_valid_semaphore=data_valid_sem,
+            **window,
+        )
+
+    def prefetch(quota):
+        gather(prefix_only=True, window_max_slabs=quota, progress_tensor=progress)
+
+    def resume():
+        gather(window_start_tensor=progress)
+
+    # (chunk start in slabs, prefetch quota in slabs). Covers: nothing written yet, an empty quota,
+    # partial quotas, and a quota past the whole written prefix.
+    cases = [(0, 2), (1, 0), (1, 1), (3, 2), (5, 100), (7, 3), (7, 7)]
+    traces = {}
+    try:
+        if ag_traced:
+            # The quota is a runtime arg baked into a capture, so trace one pair per quota value and vary
+            # only the chunk start through metadata.
+            for quota in sorted({q for _, q in cases}):
+                prefetch(quota)  # compile before capture
+                resume()
+                ttnn.synchronize_device(mesh_device)
+                pair = []
+                for issue in (lambda q=quota: prefetch(q), resume):
+                    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                    issue()
+                    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+                    pair.append(tid)
+                traces[quota] = pair
+
+        for start_slabs, quota in cases:
+            _write_meta_scalar(prefix_meta, start_slabs * slab_global)
+            _write_meta_scalar(progress, 0x7EADBEEF)
+            # Fresh zeros so the resume, not a previous case, must supply every row it is checked on.
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.zeros((1, 1, local_rows * num_devices, width), dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                ),
+                output,
+            )
+
+            if ag_traced:
+                ttnn.execute_trace(mesh_device, traces[quota][0], cq_id=0, blocking=True)
+            else:
+                prefetch(quota)
+            ttnn.synchronize_device(mesh_device)
+            expected_slabs = min(quota, start_slabs)
+            assert _read_progress(progress) == expected_slabs * slab_global, (start_slabs, quota)
+            _assert_gathered_prefix(
+                output, host_input, layer, local_rows, expected_slabs * _WINDOW_STRIPE_ROWS, num_devices
+            )
+
+            if ag_traced:
+                ttnn.execute_trace(mesh_device, traces[quota][1], cq_id=0, blocking=True)
+            else:
+                resume()
+            ttnn.synchronize_device(mesh_device)
+            # Resume covers the rest of the written prefix plus the current chunk's slab.
+            _assert_gathered_prefix(
+                output, host_input, layer, local_rows, (start_slabs + 1) * _WINDOW_STRIPE_ROWS, num_devices
+            )
+    finally:
+        for pair in traces.values():
+            for tid in pair:
+                ttnn.release_trace(mesh_device, tid)
+        mesh_device.clear_loaded_sub_device_manager()
+        mesh_device.remove_sub_device_manager(manager)
+
+
+@run_for_blackhole("resumable window validation requires Blackhole")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_high_bw_all_gather_resumable_window_validation(mesh_device, expect_error):
+    num_devices = mesh_device.get_num_devices()
+    _, device_input, local_rows, width = _window_case_tensors(mesh_device)
+    output = _zero_gather_output(mesh_device, local_rows, width)
+    start = _meta_scalar(mesh_device, 0)
+    common = dict(dim=2, output_tensor=output, cluster_axis=None, num_links=_NUM_LINKS)
+
+    with expect_error(RuntimeError, "require gathered_prefix_tensor"):
+        ttnn.experimental.high_bw_all_gather(device_input, prefix_only=True, **common)
+    with expect_error(RuntimeError, "must not alias"):
+        ttnn.experimental.high_bw_all_gather(
+            device_input,
+            input_batch_index_tensor=_meta_scalar(mesh_device, 0),
+            batch_slot_num_layers=_WINDOW_NUM_LAYERS,
+            gathered_prefix_tensor=_meta_scalar(mesh_device, 0),
+            gathered_slab_global=_WINDOW_STRIPE_ROWS * num_devices,
+            window_start_tensor=start,
+            progress_tensor=start,
+            **common,
+        )

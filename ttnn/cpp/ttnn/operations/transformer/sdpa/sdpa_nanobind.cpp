@@ -419,6 +419,9 @@ void bind_sdpa(nb::module_& mod) {
                 q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
             block_cyclic_cache_tp_sharded (bool): True = the cache is striped across ALL sp*tp devices (linear chip =
                 sp_coord*tp + tp_coord), so stripes = sp*tp and per-stripe chunk = block_cyclic_chunk_local/tp.
+            subdevice_id (ttnn.SubDeviceId, optional): active TENSIX subdevice to run on (default: the first).
+            sub_core_grids (ttnn.CoreRangeSet, optional): restrict work to these cores within the subdevice
+                (default: all of its cores). Part of the program-cache key.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -436,7 +439,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none(),
         nb::arg("block_cyclic_cache_tp_sharded") = false,
-        nb::arg("attention_sink") = nb::none());
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,

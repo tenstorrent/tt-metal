@@ -137,6 +137,10 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         // hashed -- it is structural (chunk_local * sp), identical for every chunk and layer.
         tensor_args.has_gathered_prefix_metadata(),
         args.gathered_slab_global,
+        // Window: prefix_only and tensor presence change the reader binary; the quota value does not.
+        args.prefix_only,
+        tensor_args.has_window_start(),
+        tensor_args.has_progress(),
         tensor_args);
 }
 
@@ -230,6 +234,47 @@ void validate_gathered_prefix_metadata(const HighBwAllGatherParams& args, const 
         "high_bw_all_gather gathered_prefix_tensor must be in DRAM");
 }
 
+void validate_scalar_tensor(const Tensor& t, const char* name) {
+    TT_FATAL(t.storage_type() == StorageType::DEVICE, "high_bw_all_gather {} must be on device", name);
+    TT_FATAL(t.dtype() == DataType::UINT32, "high_bw_all_gather {} must be UINT32, got {}", name, t.dtype());
+    TT_FATAL(t.layout() == Layout::ROW_MAJOR, "high_bw_all_gather {} must be ROW_MAJOR", name);
+    TT_FATAL(t.logical_volume() == 1, "high_bw_all_gather {} must hold exactly one element", name);
+    TT_FATAL(
+        t.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+            t.memory_config().buffer_type() == BufferType::DRAM,
+        "high_bw_all_gather {} must be DRAM INTERLEAVED",
+        name);
+}
+
+// Resumable-window controls ride on the on-device extent derivation, so they need the metadata extent.
+void validate_window_controls(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
+    const bool windowed = args.prefix_only || args.window_max_slabs.has_value() || tensor_args.has_window_start() ||
+                          tensor_args.has_progress();
+    if (!windowed) {
+        return;
+    }
+    TT_FATAL(
+        tensor_args.has_gathered_prefix_metadata(),
+        "high_bw_all_gather window controls (window_start_tensor / window_max_slabs / prefix_only / "
+        "progress_tensor) require gathered_prefix_tensor");
+    if (tensor_args.has_window_start()) {
+        validate_scalar_tensor(*tensor_args.window_start_tensor, "window_start_tensor");
+    }
+    if (tensor_args.has_progress()) {
+        const auto& progress = *tensor_args.progress_tensor;
+        validate_scalar_tensor(progress, "progress_tensor");
+        for (const auto* other :
+             {&tensor_args.window_start_tensor,
+              &tensor_args.gathered_prefix_tensor,
+              &tensor_args.input_batch_index_tensor}) {
+            TT_FATAL(
+                !other->has_value() || (*other)->buffer()->address() != progress.buffer()->address(),
+                "high_bw_all_gather progress_tensor must not alias an input metadata tensor: it is written while "
+                "other workers may still read the inputs");
+        }
+    }
+}
+
 void validate_slot_extent_control_mix(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
     if (!tensor_args.has_gathered_prefix_metadata()) {
         return;
@@ -250,6 +295,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     validate_batch_index_metadata(args, tensor_args);
     validate_gathered_prefix_metadata(args, tensor_args);
     validate_slot_extent_control_mix(args, tensor_args);
+    validate_window_controls(args, tensor_args);
 
     // Constraints on input tensor
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must to be on device!");
@@ -416,6 +462,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_hit(
     const auto& output_tensor = tensor_args.output_tensor;
     TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in buffers on device!");
     validate_slot_extent_control_mix(args, tensor_args);
+    validate_window_controls(args, tensor_args);
     if (args.input_batch_index.has_value()) {
         TT_FATAL(args.dim != 0, "high_bw_all_gather input_batch_index cannot be used when gathering dim 0");
         TT_FATAL(
@@ -493,7 +540,11 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
     const std::optional<GlobalSemaphore>& ready_semaphore,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
+    const std::optional<GlobalSemaphore>& data_valid_semaphore,
+    const std::optional<Tensor>& window_start_tensor,
+    std::optional<uint32_t> window_max_slabs,
+    bool prefix_only,
+    const std::optional<Tensor>& progress_tensor) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -594,12 +645,16 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .gathered_dim_size = gathered_dim_size,
             .batch_slot_num_layers = batch_slot_num_layers,
             .batch_slot_layer_idx = batch_slot_layer_idx,
-            .gathered_slab_global = gathered_slab_global},
+            .gathered_slab_global = gathered_slab_global,
+            .window_max_slabs = window_max_slabs,
+            .prefix_only = prefix_only},
         HighBwAllGatherInputs{
             .input_tensor = input_tensor,
             .output_tensor = output_tensor,
             .input_batch_index_tensor = input_batch_index_tensor,
-            .gathered_prefix_tensor = gathered_prefix_tensor}};
+            .gathered_prefix_tensor = gathered_prefix_tensor,
+            .window_start_tensor = window_start_tensor,
+            .progress_tensor = progress_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
@@ -622,7 +677,11 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
     const std::optional<GlobalSemaphore>& ready_semaphore,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
+    const std::optional<GlobalSemaphore>& data_valid_semaphore,
+    const std::optional<Tensor>& window_start_tensor,
+    std::optional<uint32_t> window_max_slabs,
+    bool prefix_only,
+    const std::optional<Tensor>& progress_tensor) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -639,7 +698,11 @@ Tensor high_bw_all_gather(
         gathered_prefix_tensor,
         gathered_slab_global,
         ready_semaphore,
-        data_valid_semaphore);
+        data_valid_semaphore,
+        window_start_tensor,
+        window_max_slabs,
+        prefix_only,
+        progress_tensor);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }
