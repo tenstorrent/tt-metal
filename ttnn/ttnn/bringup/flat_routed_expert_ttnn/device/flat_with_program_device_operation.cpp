@@ -16,8 +16,21 @@ namespace ttnn::operations::bringup::flat_routed_expert {
 
 void FlatWithProgramDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& p, const tensor_args_t& t) {
+    if (std::getenv("FLAT_WP_KEYLOG")) {  // (debug: the cache key of every miss)
+        log_info(
+            tt::LogOp,
+            "flat_with_program miss: extra_key {} writers {} counts_addr {} addrs {} flat_key {}",
+            p.extra_key,
+            p.writers,
+            p.counts_addr,
+            p.addrs,
+            p.flat_key);
+    }
     TT_FATAL(p.flat.cmb_rt > 0, "flat_with_program: the report args are not set");
-    TT_FATAL(!p.extra.mesh_programs.empty(), "flat_with_program: no programs to append");
+    TT_FATAL(
+        p.extra && !p.extra->mesh_programs.empty(),
+        "flat_with_program: no programs to append (a program-cache miss: the caller passed no extra program, expecting "
+        "a hit)");
     TT_FATAL(p.writers > 0, "flat_with_program: no y writers");
     (void)t;
 }
@@ -33,7 +46,7 @@ FlatWithProgramFactory::cached_mesh_workload_t FlatWithProgramFactory::create_me
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
     uint32_t prog_i = 0;
-    for (const auto& [range, desc] : p.extra.mesh_programs) {
+    for (const auto& [range, desc] : p.extra->mesh_programs) {
         TT_FATAL(range.shape().mesh_size() == 1, "flat_with_program: one appended program per chip");
         auto flat = FlatRoutedExpertProgramFactory::create(p.flat, t, output);
         flat.program.append(desc);
@@ -62,7 +75,7 @@ FlatWithProgramFactory::cached_mesh_workload_t FlatWithProgramFactory::create_me
             }
         }
         ++prog_i;
-        if (std::getenv("FLAT_WP_LOG") && range.start_coord() == p.extra.mesh_programs.front().first.start_coord()) {
+        if (std::getenv("FLAT_WP_LOG") && range.start_coord() == p.extra->mesh_programs.front().first.start_coord()) {
             const uint32_t ti =
                 MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
             for (const auto& kg : flat.program.impl().get_kernel_groups(ti)) {

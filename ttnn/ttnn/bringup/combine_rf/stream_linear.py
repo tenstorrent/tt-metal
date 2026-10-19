@@ -138,6 +138,7 @@ void kernel_main() {
         cb_pop_front(4, PNP);
     }
     noc_async_write_barrier();
+    noc_async_atomic_barrier();  // (no unacknowledged atomic past the kernel: the next program's barrier)
 }
 """
 

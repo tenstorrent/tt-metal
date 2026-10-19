@@ -420,7 +420,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         const char* am = std::getenv("MIMO_FL_DRISC_ALT_MAXCNT");
         // (two tiles up to: GLM-Flash 224, K2.7 E12 (reader down columns) 384: M 256 85.2 two tiles vs 89.1 / 98.1
         // one tile, job 1 on NOC0 / NOC1)
-        drisc_dual_def["SE_DRISC_ALT_MAXCNT"] = am ? std::string(am) : std::string(p.rdown ? "384" : "224");
+        // DRISC-only (no Tensix readers to take hot calls): both tiles on every call - one tile per bank for the whole
+        // call starved its small experts (K3 2 x 4 overlap, Zipf spread / packed fused 3369 / 6148 -> 2589 / 5906 us;
+        // Tensix readers 2727 / 5920)
+        drisc_dual_def["SE_DRISC_ALT_MAXCNT"] =
+            am ? std::string(am) : std::string(!p.dual ? "0xFFFFFFFF" : (p.rdown ? "384" : "224"));
     }
     if (p.drisc && flat_drisc_tiles() == 2) {  // both tiles of a bank every call (se_drisc.hpp SD_PAIRED)
         drisc_dual_def["SE_DRISC_PAIRED_ALWAYS"] = "1";
@@ -480,7 +484,6 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         return d;
     };
-    TT_FATAL(!p.uneven || !p.drisc, "flat_routed_expert: the uneven split runs Tensix readers only");
     TT_FATAL(!p.uneven || !p.rdown || p.r_ <= 5, "flat_routed_expert: reader tails take <= 5 receivers (semaphores)");
     const auto rg_at = [&](uint32_t r) { return p.rgs.empty() ? p.rg : p.rgs[r]; };
     if (p.rdown) {
@@ -587,7 +590,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     };
     Args drisc_post;
     if (p.drisc) {
-        TT_FATAL(p.nsg == 1 && p.r_ <= 8, "MIMO_FL_DRISC: one subgrid");
+        TT_FATAL(
+            p.nsg == 1 && p.r_ <= 8, "MIMO_FL_DRISC: one subgrid, <= 8 receivers a slot (se_drisc.hpp SE_DRISC_MAX_R)");
         for (const auto& [r, tail] : p.rdn) {
             TT_FATAL(!p.drisc_slot(r) || p.dual, "MIMO_FL_DRISC: a reader down column on a DRISC-only slot");
         }
@@ -601,7 +605,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             .lit(p.drisc_n)
             .lit(p.r_)
             .lit(flat_drisc_mpfe(p.rdown))
-            .lits({p.rg * p.slot * w_tile, p.slot * w_tile, p.rg, G, p.nk_gu, GRANT, DATA});
+            .lits({0, p.slot * w_tile, 0, G, p.nk_gu, GRANT, DATA});
+        // per slot (se_drisc_post.hpp): its DRISC / alternate, region, and its own chunk / blocks / receivers (an
+        // uneven split's readers forward rgs[r] pair-sets to r_of(r) gate/up cores from gu_off[r])
         for (uint32_t r = 0; r < p.drisc_n; ++r) {
             const auto [ac, aj] = flat_drisc_alt(device, r, banks);
             uint32_t axy = 0;
@@ -609,15 +615,19 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 const auto v = device->virtual_core_from_logical_core(ac, tt::CoreType::DRAM);
                 axy = static_cast<uint32_t>((v.x << 16) | v.y);
             }
+            TT_FATAL(p.r_of(r) <= p.r_, "MIMO_FL_DRISC: slot {} has {} receivers > {}", r, p.r_of(r), p.r_);
             drisc_post.lit(drisc_xy(r))
                 .lit(flat_drisc_job(r, banks))
                 .lit((r / banks) * p.region_bytes)
                 .lit(axy)
-                .lit(aj == ~0u ? 0 : aj);
+                .lit(aj == ~0u ? 0 : aj)
+                .lit(rg_at(r) * p.slot * w_tile)
+                .lit(rg_at(r))
+                .lit(p.r_of(r));
         }
         for (uint32_t r = 0; r < p.drisc_n; ++r) {
             for (uint32_t j = 0; j < p.r_; ++j) {
-                drisc_post.lit(pk(p.gu[r * p.r_ + j]));
+                drisc_post.lit(j < p.r_of(r) ? pk(p.gu[p.gu_at(r, j)]) : 0u);
             }
         }
         TT_FATAL(
@@ -862,6 +872,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         if (std::getenv("MIMO_FL_XMC_NODATA")) {
             xmc_def["XMC_NODATA"] = "1";
         }
+        if (std::getenv("MIMO_FL_XMC_POSTED")) {  // (probe: posted x multicasts - no per-destination acks)
+            xmc_def["XMC_POSTED"] = "1";
+        }
         if (std::getenv("MIMO_FL_XMC_UNLINKED")) {  // (probe: the x multicasts without linked chains)
             xmc_def["XMC_UNLINKED"] = "1";
         }
@@ -1040,8 +1053,16 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             }
         }
         std::vector<CoreCoord> gu_t, gu_d;
+        std::vector<uint32_t> rd_of(ngu, ~0u);  // (each gate/up core's reader slot: uneven splits are not ci / r_)
+        for (uint32_t r = 0; r < n_rd; ++r) {
+            for (uint32_t j = 0; j < p.r_of(r); ++j) {
+                if (p.gu_at(r, j) < ngu) {
+                    rd_of[p.gu_at(r, j)] = r;
+                }
+            }
+        }
         for (uint32_t ci = 0; ci < ngu; ++ci) {
-            (!p.uneven && p.drisc_slot(ci / p.r_) ? gu_d : gu_t).push_back(p.gu[ci]);
+            (rd_of[ci] != ~0u && p.drisc_slot(rd_of[ci]) ? gu_d : gu_t).push_back(p.gu[ci]);
         }
         const std::vector<uint32_t> recv_ct = {
             0,         x_blk,   1,    p.slot, E * p.nk_gu, V,        p.ring_g, 16,    1,     3,      2,    MTG,
