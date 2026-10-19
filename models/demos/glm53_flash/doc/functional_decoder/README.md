@@ -12,8 +12,8 @@ tt-metal main `8cfcaf754d3` + the commits on `arg/glm53_flash`.
 |---|---|---|---|
 | `from_state_dict(state_dict, hf_config=cfg_or_config_json, layer_idx, mesh_device, max_batch, max_seq_len)` | raw checkpoint tensors of `model.language_model.layers.{i}.` (prefix stripped, fp8 groups dequantized by `reference/checkpoint.load_layer_raw`) | decoder | allocates the KDA user slots / the DSA paged latent + pooled-key index caches |
 | `prefill_forward(streams, user, seq_len)` | packed mHC streams `[1,1,T_pad,4*4096]` fp32, `T_pad % 32 == 0`, rows past `seq_len` padding | `[1,1,T_pad,4*4096]` fp32 | KDA: writes slot `user`; DSA: fills the user's cache pages `[0, T_pad)`, pooled keys, tail ring |
-| `decode_forward(streams, positions, host_positions=None)` | `[1,1,B,4*4096]` fp32 (B == max_batch user slots), `positions` int32 `[B]` = each user's context length | `[1,1,B,4*4096]` | KDA state updated in place; DSA cache appended at `positions[b]`; sparse path when `host_positions` has a value >= 2048 |
-| `capture_decode_trace(streams, positions)` / `replay_decode(trace_id)` | persistent device inputs | output tensor at a fixed address | dense decode is trace-replayable (state updated inside the captured graph) |
+| `decode_forward(streams, positions)` | `[1,1,B,4*4096]` fp32 (B == max_batch user slots); `positions` = `DecodePositions` from `make_decode_positions(host_positions)` / `update_decode_positions` (persistent `[B]` int32: position, position // 4, position % 4, + host values) | `[1,1,B,4*4096]` | KDA state updated in place; DSA latent appended and the pooled-key index maintained (dense and sparse); sparse path when any host position >= 2048 |
+| `capture_decode_trace(streams, positions)` / `replay_decode(trace_id)` | persistent device inputs | `(trace_id, output tensor, warm-up output)` | dense decode is trace-replayable (state and index updated inside the captured graph); refused for DSA decoders with max_seq_len > 2048 unless `allow_sparse_range` |
 
 Residual convention: HF `[B, S, 4, 4096]` <-> packed `[1, 1, B*S, 16384]` (`host_streams_to_device` /
 `device_streams_to_host`, test boundary only).
@@ -41,14 +41,17 @@ Residual convention: HF `[B, S, 4, 4096]` <-> packed `[1, 1, B*S, 16384]` (`host
 | `test_dsa.py` | layer 3 MLA, T=96 / 1000 + 3 decode | prefill 0.99964 / 0.99961, latent cache 0.99997, decode 0.9991-0.9999 |
 | `test_decoder_layer.py` | full layers 0 / 3 / 4 vs HF dump, T=256 + 4 decode; T=200 non-aligned live HF | 0.99984 / 0.99992 / 0.99997 prefill, 0.9999 decode; 0.99980 / 0.99993 |
 | `test_decode_trace.py` | traced decode replay vs the HF dump (layers 0/3/4); two users (100 + 37 tokens, slots) | replay PCC 0.9999 (same as the eager run of the same steps); per-user 0.9998-0.99998 |
-| `test_dsa_sparse.py` | layer 3 at 4097 tokens (sparse path) + decode 4097..4100 | prefill 0.99977 (selected rows 0.99990), decode 0.9999 |
+| `test_dsa_sparse.py` | layer 3 at 4097 tokens (sparse path, repeated prompt) + decode 4097..4100 | prefill 0.99977 (selected rows 0.99990), decode 0.9999 |
+| `test_dsa_long.py` | random-token prompt: 4097 + 12 sparse decode steps with the TT/HF selected-id sets and the pooled-key cache vs a host recomputation; 2040-token dense prefill (slot 1, permuted page table) then decode 2040..2063 across the switch; 16385-token sparse prefill + 2 decode | 0.9997+; 98-99 % ids common; pool cache 0.99999; transition >= 0.9996 (tails 0-3); 16K prefill 0.9991 (last 2048 rows 0.9998), decode 0.99996 |
+| `test_batch8.py` | 8 user slots (lengths 1..200, permuted page table), layers 3 and 4, 3 batched decode steps | prefill >= 0.9968 (1-token user), decode worst per user 0.9994 |
 | `test_determinism.py` | layers 0, 3: repeated prefill and traced-decode replay, `throw_exception_on_fallback` raised | bit-identical outputs, no host fallback |
 | watcher | `TT_METAL_WATCHER=10` on the layer-3 dump test (`~/ashai/glm53/_logs/watcher_layer3`) | PASSED, 10 dumps, no watcher exceptions |
-| `test_perf_layer.py` | warmed prefill S=1024, traced decode B=1 (wall clock) | layer 3: 314 ms prefill, 10.95 ms/step; layer 4: 300 ms, 10.96 ms/step |
+| `test_perf_layer.py` | warmed prefill S=1024 (wall), traced decode B=1 (one replay, tt-perf-report `Device Time`) | prefill: layer 3 314 ms, layer 4 298 ms (device 293 ms, 1002 ops); decode: layer 3 10.93 ms/step device (435 ops, wall 11.36), layer 4 10.76 ms/step device (471 ops, wall 11.2) |
 
 Context contract: `doc/context_contract.json`. Full log: `doc/functional_decoder/work_log.md`.
-Profiler note: Tracy device zones of the dense SDPA prefill kernel collide (`compute_streaming.hpp:632` vs `:1769`,
-hash 0x6835) on main 8cfcaf754d3, so tt-perf-report tables come from layer 4 (no SDPA); layer 3 keeps wall-clock numbers.
+Profiler note: Tracy device zones of the SDPA prefill kernels (dense and sparse share `compute_streaming.hpp`: `:632` vs
+`:1769`, hash 0x6835) collide on main 8cfcaf754d3, so prefill tables exist for layer 4 only; decode tables for both layers
+come from one-replay runs (`GLM53_PERF_DECODE_STEPS=1`, layer 3 with `GLM53_PERF_SEED_ONLY=1`), tables under `doc/functional_decoder/tracy/`.
 
 ## Running
 
@@ -63,5 +66,8 @@ python models/demos/glm53_flash/reference/hf_layer_reference.py --layers 0,1,2,3
 
 - Performance is the design's Phase 2/3 work: the KDA decode recurrence and the per-block MoE are composites,
   the sparse decode untilizes the user's latent prefix per step, and the decode SDPA runs on 4 cores per user.
-- The sparse DSA decode path takes host positions (chunk geometry) and is therefore not captured in the trace.
+- The sparse DSA decode path takes host positions (chunk geometry) and is therefore not captured in the trace;
+  the pooled-key index is nevertheless maintained inside the traced dense graph, so a user can cross 2048.
+- Indexer scores are ranked at bf16 resolution (`indexer_score_dsa` + `topk_large_indices`): 98-99 % of the
+  HF-selected ids per step on a random prompt, layer PCC >= 0.9997.
 - `moe_grouped_topk` is not used (bf16 ranking swaps near-tied experts); the exact fp32 composite costs ~8x5 ops.

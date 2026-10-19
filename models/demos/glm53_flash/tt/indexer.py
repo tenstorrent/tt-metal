@@ -286,14 +286,17 @@ class TtDSAIndexer(LightweightModule):
         )  # [1,1,T,pools_per_user] bf16, -inf where not visible
         scores_rm = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
         expanded = ttnn.repeat_interleave(scores_rm, self.P, dim=-1)  # [1,1,T,4*pools] token-level scores
-        top = ttnn.experimental.topk_large_indices(expanded, k=self.cfg.index_topk, valid_length=kv_len * self.P)
+        # k capped to the scored width (short contexts: every visible token is selected, as in HF, and the
+        # op requires width >= k); k must be a multiple of 16 in [16, 2048]
+        k_eff = max(16, min(self.cfg.index_topk, kv_len * self.P) // 16 * 16)
+        top = ttnn.experimental.topk_large_indices(expanded, k=k_eff, valid_length=kv_len * self.P)
         # [1,1,T,2048] uint32 token ids, 0xFFFFFFFF where -inf. (to_layout / repeat_interleave may alias
         # their inputs, so the intermediates are released together once the ids exist.)
         for t in (scores, scores_rm, expanded):
             if t.is_allocated():
                 ttnn.deallocate(t)
         tail = self._tail_ids(T, query_start)  # [1,1,T,P-1] uint32 (cached per geometry)
-        width = self.cfg.index_topk + self.P - 1
+        width = k_eff + self.P - 1
         pad = (-width) % 128
         parts = [top, tail]
         if pad:

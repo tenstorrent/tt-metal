@@ -127,3 +127,21 @@ New tests (`tests/test_dsa_long.py`, `tests/test_batch8.py`, log `_logs/tests_lo
   1-token user), 3 decode steps worst per-user 0.99938 (layer 3) / 0.99936 (layer 4).
 Regression after the refactor (`_logs/regress_dsa_refactor.log`): dense DSA T=96, sparse 4097, traced layer 3,
 two users: unchanged PCCs.
+- Perf re-collected with GLM53_PERF_DECODE_STEPS=1 (one signposted replay, so rows == ops) and the device profiler
+  drained around the window; layer 3 decode profiled with GLM53_PERF_FORCE_SPARSE_PREFILL=1 (cache seeded through the
+  sparse prefill, so the colliding dense-SDPA kernel is never compiled). `Device Time` column (us):
+  - layer4_kda_moe decode (1 replay): 471 ops, 10.76 ms device per step, duplicate ids 0; top: AccumulationDeviceOperation 2.64 ms x8, UnaryDeviceOperation 1.48 ms x17, BinaryNgDeviceOperation 1.28 ms x110, SparseMatmulDeviceOperation 1.11 ms x2, MatmulDeviceOperation 1.03 ms x12, TernaryDeviceOperation 0.62 ms x38
+  - layer3_dsa_moe decode: the first forced-sparse seeding at S=1024 failed (topk_large_indices needs width >= k;
+    the selection now caps k to the visible width) -> re-profiled below.
+- Full logged sweep (`_logs/sweep_<test>.log`, one chip): test_kda 2, test_moe 2, test_dsa 2, test_decoder_layer 5,
+  test_decode_trace 5, test_dsa_sparse 1, test_dsa_long 3, test_batch8 2, test_determinism 2 -> 24/24 passed.
+- Watcher (`TT_METAL_WATCHER=10`): layer-3 dump test (earlier) clean; traced decode (`test_decode_trace.py -k traced`,
+  `_logs/watcher_test_decode_trace`) clean, 4043 lines, 0 suspicious; KDA and sparse tests re-run below.
+- Watcher re-runs (`TT_METAL_WATCHER=10`, logs `_logs/watcher_test_kda`, `_logs/watcher_test_dsa_sparse`):
+  test_kda.py (ttKDA prefill kernels incl. the fabric history exchange, decode composite, T=96/1000) PASSED, 1012 lines,
+  0 suspicious; test_dsa_sparse.py (indexer, topk_large_indices, sparse_sdpa, sparse decode) PASSED, 2981 lines,
+  0 suspicious. Together with the layer-3 dump test and the traced decode run, every path kind has a clean watcher run.
+- layer3_dsa_moe traced decode (B=1, pos 1024, one replay, GLM53_PERF_SEED_ONLY=1 so no SDPA prefill kernel is
+  compiled; wall 11.36 ms/step): 435 ops, 10.93 ms device per step, duplicate ids 0; top op classes: AccumulationDeviceOperation 2.64 ms x8, MatmulDeviceOperation 1.66 ms x13, UnaryDeviceOperation 1.44 ms x12, SparseMatmulDeviceOperation 1.11 ms x2, BinaryNgDeviceOperation 0.96 ms x92, TernaryDeviceOperation 0.63 ms x38, FillPadDeviceOperation 0.55 ms x30
+  (files `doc/functional_decoder/tracy/layer3_dsa_moe/`). The earlier forced-sparse seeding also collided: sparse_sdpa
+  shares compute_streaming.hpp with the dense prefill kernel.
