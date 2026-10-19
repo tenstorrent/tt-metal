@@ -532,6 +532,12 @@ class TtMiMoModel:
         if greedy_only:
             next_tokens = self.greedy_head(logits, token_input=tokens_tt)
             return {"logits": logits, "next_tokens": next_tokens}
+        rows = None
+        if self.layer_groups is not None:
+            # vLLM samples on the host: it reads the users' rows (row-major) instead of 32 rows of tiles.
+            rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+            rows = ttnn.slice(rm, (0, 0, 0, 0), (1, 1, self.decode_users, self.vocab_local))
+            rm.deallocate(True)
         # Each chip's top-k over its vocab shard: the host can merge 8 x k candidates per user instead of
         # reading 32 x 152576 logits every step.
         values, indices = ttnn.topk(logits, k=self.DECODE_TOPK, dim=-1, largest=True, sorted=True)
@@ -548,7 +554,10 @@ class TtMiMoModel:
             ttnn.reshape(ttnn.to_layout(best, ttnn.ROW_MAJOR_LAYOUT), (1, self.max_batch)), ttnn.uint32
         )
         best.deallocate(True)
-        return {"logits": logits, "values": values, "indices": indices, "next_tokens": next_tokens}
+        out = {"logits": logits, "values": values, "indices": indices, "next_tokens": next_tokens}
+        if rows is not None:
+            out["logits_rows"] = rows
+        return out
 
     def _feed_back(self, inputs, output, tokens_written=False):
         """Device-side step advance: the greedy token becomes the next input; active positions move by one."""
@@ -640,6 +649,12 @@ class TtMiMoModel:
         out = self.plan.to_torch_tp_concat(handle["logits"], dim=-1).float()
         self._release(handle)
         return out.reshape(self.max_batch, -1)
+
+    def decode_read_rows(self, handle):
+        """Logits of the decode users' slots [decode_users, vocab] (vLLM mode: reads only those rows)."""
+        out = self.plan.to_torch_tp_concat(handle["logits_rows"], dim=-1).float()
+        self._release(handle)
+        return out.reshape(self.decode_users, -1)
 
     def decode_read_topk(self, handle):
         """Per-user candidates: values [max_batch, tp * k] and global vocab ids [max_batch, tp * k]."""

@@ -346,7 +346,7 @@ class MiMoV2ForCausalLM:
             if entry is None:
                 continue
             lane, n, handle = entry
-            logits[lane * self.per_lane : lane * self.per_lane + n, 0] = self.models[lane].decode_read(handle)[:n]
+            logits[lane * self.per_lane : lane * self.per_lane + n, 0] = self.models[lane].decode_read_rows(handle)[:n]
         return logits
 
     def read_decode_output(self, out, async_read=False, **kwargs):
