@@ -21,9 +21,15 @@ from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.prefix_cache import alloc_zeros_like
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
+from models.demos.blackhole.qwen36.tt.tp_common import aliases as _tpc_aliases
 from models.demos.blackhole.qwen36.tt.tp_common import kv_cache_bf8_enabled
 from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
-from models.demos.blackhole.qwen36.tt.tp_common import spec_hostfix_enabled, verify_device_topk_m
+from models.demos.blackhole.qwen36.tt.tp_common import (
+    spec_hostfix_enabled,
+    verify_attn_lean_enabled,
+    verify_dar_enabled,
+    verify_device_topk_m,
+)
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
@@ -1817,6 +1823,8 @@ class Qwen36Model:
         The bucket is exactly the R real rows, so there is no row-select. ``feed`` is the post-norm
         drafter feed (spec_feed_rows); its programs are the inner norm's, already compiled by the
         self.norm call."""
+        if self._decode_ar is not None and x.shape[-1] == self.args.dim:
+            return self._spec_tail_replicated(x, sharded)
         rows = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x)
         normed = self.norm(rows, mode=Mode.PREFILL)  # -> full [1,1,R,dim]
@@ -1829,6 +1837,36 @@ class Qwen36Model:
         if sharded:
             return logits, feed, normed
         return logits, feed
+
+    def _spec_tail_replicated(self, x, sharded):
+        """_spec_tail for the replicated RES40 residual (QWEN36_VERIFY_DAR): the final norm is the plain decode's local
+        sharded norm (_final_norm_decode), so the LM head sees what a decode step feeds it; no stats / hidden all-gathers.
+        The drafter feed is this device's dim/tp span of that normed row (mesh_partition, the inverse of the gather: the
+        MTP chain does the same, Qwen36MTP.forward_decode) instead of a second distributed norm over the fractured rows.
+        Returns what _spec_tail returns: (logits, feed) or, sharded, (logits shard, feed, normed)."""
+        normed = self._final_norm_decode(x)  # [1,1,R,dim] DRAM, replicated
+        ttnn.deallocate(x)
+        logits = self._lm_head(normed, gather=not sharded)
+        feed = ttnn.mesh_partition(normed, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if sharded:
+            return logits, feed, normed
+        ttnn.deallocate(normed)
+        return logits, feed
+
+    def _verify_dar(self, rows):
+        """The DecodeResidualAllReduce the traced verify runs on (QWEN36_VERIFY_DAR, default on), or None for the fractured
+        residual of the old verify. Needs the decode all-reduce itself (QWEN36_DECODE_ALLREDUCE=1 and a supported mesh,
+        ``self._decode_ar``), a bucket of at most one tile of rows (RES40 shard height) and the fused gdn_spec_step on every
+        GDN layer (the unfused verify keeps its fp32 out-proj reduce-scatter). Lossless: the per-row reduction is the
+        very all_reduce_async of plain decode, so verify rows and decode rows round the same way (the old reduce-scatter
+        + all-gather summed the TP partials in another order)."""
+        if not verify_dar_enabled() or self._decode_ar is None or rows > ttnn.TILE_SIZE:
+            return None
+        if not all(
+            getattr(layer.attention, "_spec_fused", False) for layer in self.layers if not layer.is_full_attention
+        ):
+            return None
+        return self._decode_ar
 
     def _forward_verify_bucket_tp(self, n_users):
         """Trace body: recurrent verify over the persistent B*T-row bucket buffers -> per-position
@@ -1853,6 +1891,22 @@ class Qwen36Model:
         x = self.embd(self._vfy_token_buf)
         x = ttnn.reshape(x, (1, 1, rows, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        _dar = self._verify_dar(rows)
+        if _dar is not None:
+            x = _dar.enter(x)  # QWEN36_VERIFY_DAR: one AG -> replicated RES40 residual, as the plain decode
+        # QWEN36_VERIFY_ATTN_LEAN: cos/sin in the prefill-shaped layout apply_partial_rope_decode wants ([1,1,R,rd]; the
+        # staged buffers are [1,R,1,rd]), built ONCE here instead of 4 reshapes per attention layer; and the T strided
+        # position slices of the grouped KV write, likewise shared by every attention layer.
+        _cos, _sin, _pos_groups, _tmp = self._vfy_cos_buf, self._vfy_sin_buf, None, []
+        if verify_attn_lean_enabled():
+            _rd = self.args.rope_head_dim
+            _cos = ttnn.reshape(self._vfy_cos_buf, (1, 1, rows, _rd))
+            _sin = ttnn.reshape(self._vfy_sin_buf, (1, 1, rows, _rd))
+            _tmp += [(_cos, self._vfy_cos_buf), (_sin, self._vfy_sin_buf)]
+            from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK
+
+            if KV_GROUP_WRITE_OK and T > 1:
+                _pos_groups = [ttnn.slice(self._vfy_kvpos_buf, (j,), (rows,), (T,)) for j in range(T)]
         for layer in self.layers:
             if layer.is_full_attention:
                 # Hybrid verify: every row is a pseudo-user of its own sequence. cur_pos for row u*T+j is
@@ -1863,8 +1917,8 @@ class Qwen36Model:
                 # [B, nb] per-user table, is reused by every group.
                 x_new = layer.forward(
                     x,
-                    cos=self._vfy_cos_buf,
-                    sin=self._vfy_sin_buf,
+                    cos=_cos,
+                    sin=_sin,
                     mode="decode",
                     position_tensor=self._vfy_kvpos_buf,
                     page_table=self._vfy_kvpt_buf,
@@ -1878,6 +1932,7 @@ class Qwen36Model:
                     spec_verify_mode=True,
                     spec_page_table=self._vfy_kvpt1_buf,
                     n_users=n_users,
+                    spec_pos_groups=_pos_groups,
                 )
             else:
                 x_new = layer.forward(
@@ -1894,6 +1949,11 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
+        for _new, _old in _tmp:  # per-trace temporaries (a reshape that aliased its source is not freed twice)
+            if _new is not _old and not _tpc_aliases(_new, _old):
+                ttnn.deallocate(_new)
+        for _g in _pos_groups or ():
+            ttnn.deallocate(_g)
         if self._vfy_sharded:
             shard_logits, rows_out, normed = self._spec_tail(x, sharded=True)
             idx, val = self.shard_argmax_max_rows(shard_logits, rows)

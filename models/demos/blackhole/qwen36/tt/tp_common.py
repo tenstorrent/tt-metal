@@ -64,6 +64,27 @@ def verify_device_topk_m():
     return int(os.environ.get("QWEN36_VERIFY_TOPK_M", "64"))
 
 
+def verify_dar_enabled():
+    """QWEN36_VERIFY_DAR (default "1"; "0" = today's verify, byte for byte): the traced verify body runs on the replicated
+    RES40 residual of the plain decode (DecodeResidualAllReduce: one AG at entry, one all_reduce_async per row-parallel
+    output, local sharded norms), 2 CCLs per layer instead of 4. It still needs QWEN36_DECODE_ALLREDUCE=1 and a bucket of
+    <= 32 rows; the model decides the rest (see Qwen36Model._verify_dar). Note 42 has the design."""
+    return os.environ.get("QWEN36_VERIFY_DAR", "1") == "1"
+
+
+def verify_attn_lean_enabled():
+    """QWEN36_VERIFY_ATTN_LEAN (default "1"; "0" = today's verify attention, byte for byte): the full-attention layers of the
+    traced verify take the lean decode op sequence (TPAttention._forward_verify_lean) and the model hands them cos/sin
+    already in the layout the rope wants (one reshape per trace, not four per layer). Note 42 has the op list."""
+    return os.environ.get("QWEN36_VERIFY_ATTN_LEAN", "1") == "1"
+
+
+def verify_layout_cuts_enabled():
+    """QWEN36_VERIFY_LAYOUT_CUTS (default "1"; "0" = today's verify, byte for byte): drop layout copies that the plain
+    decode does not have (GDN verify projection: no sharded-to-interleaved + copy of the norm output). Note 42."""
+    return os.environ.get("QWEN36_VERIFY_LAYOUT_CUTS", "1") == "1"
+
+
 def spec_hostfix_enabled():
     """Host-side spec-step fixes (QWEN36_SPEC_HOSTFIX, default 1; 0 = the old code paths): conflict check without
     tolist, one read of the drafter ids, vectorized row loops, drafter page tables skipped when unchanged.

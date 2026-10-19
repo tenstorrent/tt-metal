@@ -3320,13 +3320,13 @@ class TPGatedDeltaNet:
         )
         return ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
 
-    def _forward_verify_recurrent_fused(self, x, valid_len, T, n_users, spec_ctrl, pre_gathered):
+    def _forward_verify_recurrent_fused(self, x, valid_len, T, n_users, spec_ctrl, pre_gathered, decode_ar=None):
         """forward_verify_recurrent under QWEN36_VERIFY_SPEC_STEP=1: the same gather + ONE decode projection, handed
         to gdn_spec_step UN-SLICED (the op reads q|k|v|z|a|b out of the projection tile itself)."""
         qkvzab, _, _, _, bucket = self._verify_project(x, valid_len, pre_gathered, raw=True)
-        return self._verify_fullbatch_fused(qkvzab, T, n_users, bucket, spec_ctrl)
+        return self._verify_fullbatch_fused(qkvzab, T, n_users, bucket, spec_ctrl, decode_ar=decode_ar)
 
-    def _verify_fullbatch_fused(self, qkvzab, T, n_users, bucket, ctrl):
+    def _verify_fullbatch_fused(self, qkvzab, T, n_users, bucket, ctrl, decode_ar=None):
         """``_verify_fullbatch`` under QWEN36_VERIFY_SPEC_STEP=1: ONE gdn_spec_step dispatch per layer.
 
         The op rebuilds every user's conv window from win[par] (rows mi+1 .. mi+K-1) + its T new projection rows,
@@ -3342,7 +3342,7 @@ class TPGatedDeltaNet:
         win = self._verify_win_pair
         gated = self._gdn_spec_step(qkvzab, win[0], win[1], self._spec_ring, ctrl, T, B)
         ttnn.deallocate(qkvzab)
-        return self._out_proj_tail(gated, R, bucket)
+        return self._out_proj_tail(gated, R, bucket, decode_ar=decode_ar)
 
     def _seed_fullbatch_fused(self, qkvzab, n_users, bucket):
         """``_seed_fullbatch`` under QWEN36_VERIFY_SPEC_STEP=1: gdn_spec_step at T = 1 against the DURABLE state.
@@ -3601,7 +3601,15 @@ class TPGatedDeltaNet:
         self._write_spec_rows(ring_parts, e_parts)
 
     def forward_verify_recurrent(
-        self, x, valid_len, pre_gathered=False, n_users=1, state_blk_idx=None, conv_sel=None, spec_ctrl=None
+        self,
+        x,
+        valid_len,
+        pre_gathered=False,
+        n_users=1,
+        state_blk_idx=None,
+        conv_sel=None,
+        spec_ctrl=None,
+        decode_ar=None,
     ):
         """Batched hybrid spec-decode verify for GDN: advance B users x T candidate rows at once.
 
@@ -3620,6 +3628,9 @@ class TPGatedDeltaNet:
                      Rebuilds each user's conv window from the accepted prefix + the new rows.
         spec_ctrl  : QWEN36_VERIFY_SPEC_STEP=1 only: device uint32 ROW_MAJOR [1, N] page from spec_ctrl_page
                      ({parity, mi, ring block | HOLD}); replaces the two selectors above (both ignored).
+        decode_ar  : QWEN36_VERIFY_DAR=1 only (fused spec op only): tp_common.DecodeResidualAllReduce. x is then the local
+                     sharded norm of the replicated RES40 residual and the out-projection is all-reduced back into RES40,
+                     exactly like _forward_decode_step_op, instead of reduce-scattered into the fractured residual.
 
         Side effects: the ring is updated in place (every candidate's state, for every user) and
         _verify_win_buf (fused: win[1-par]) becomes the new E_prev. rec_state and conv_states are untouched; the
@@ -3639,7 +3650,11 @@ class TPGatedDeltaNet:
                     "QWEN36_VERIFY_SPEC_STEP=1: forward_verify_recurrent needs spec_ctrl, the gdn_spec_step ctrl page "
                     "(spec_ctrl_page); call prepare_spec_verify + seed_spec_state first"
                 )
-            return self._forward_verify_recurrent_fused(x, valid_len, T, n_users, spec_ctrl, pre_gathered)
+            return self._forward_verify_recurrent_fused(
+                x, valid_len, T, n_users, spec_ctrl, pre_gathered, decode_ar=decode_ar
+            )
+        if decode_ar is not None:
+            raise ValueError("QWEN36_VERIFY_DAR needs the fused gdn_spec_step verify (QWEN36_VERIFY_SPEC_STEP=1)")
         if state_blk_idx is None or conv_sel is None:
             raise ValueError("forward_verify_recurrent needs state_blk_idx and conv_sel (the deferred-select verify)")
         qkv_all, z_all, a_all, b_all, bucket = self._verify_project(x, valid_len, pre_gathered)
@@ -3664,7 +3679,17 @@ class TPGatedDeltaNet:
         # We slice valid rows out of it below, so interleave first (row-slicing a width-shard is not
         # supported). We then own that copy and must free it.
         _x_owned = False
-        if pre_gathered and x.is_sharded():
+        # QWEN36_VERIFY_LAYOUT_CUTS: when every row is real, the sharded norm output goes straight to matmul_1d_decode, which
+        # interleaves it into L1 itself (what _forward_decode_step_op does). The old sharded -> DRAM -> L1 round trip
+        # was one extra ShardedToInterleaved + one Copy per GDN layer. Only the row slice below needs interleaved input.
+        _direct = (
+            pre_gathered
+            and x.is_sharded()
+            and x.shape[-2] == valid_len
+            and tpc.verify_layout_cuts_enabled()
+            and valid_len <= tpc.TILE_SIZE
+        )
+        if pre_gathered and x.is_sharded() and not _direct:
             x = ttnn.to_memory_config(x, mc)
             _x_owned = True
         if len(x.shape) == 4:
@@ -3829,14 +3854,18 @@ class TPGatedDeltaNet:
         ttnn.deallocate(z_all)
         return self._out_proj_tail(gated, R, bucket)
 
-    def _out_proj_tail(self, gated, R, bucket):
+    def _out_proj_tail(self, gated, R, bucket, decode_ar=None):
         """Out-proj + all-reduce (+ the R < bucket zero pad) over gated [1, R, value_dim_tp] rows; consumes gated.
-        The tail of _out_tail, shared with the gdn_spec_step paths (whose op emits the gated rows itself)."""
+        The tail of _out_tail, shared with the gdn_spec_step paths (whose op emits the gated rows itself).
+        decode_ar (QWEN36_VERIFY_DAR): all-reduce into the replicated RES40 residual (no zero pad: bucket == R)."""
         tw = self.tw
         mc, rm = ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, R, partial.shape[-1]))
+        if decode_ar is not None:
+            assert R == bucket, f"QWEN36_VERIFY_DAR needs a bucket of exactly the real rows (R={R}, bucket={bucket})"
+            return decode_ar.all_reduce(partial, keep_fp32=True)  # partial is bf16 here, as _forward_decode_step_op
         o_red = tt_all_reduce(
             partial, self.mesh, self.tt_ccl, cluster_axis=0, dim=3, topology=self.args.ccl_topology(), memory_config=mc
         )

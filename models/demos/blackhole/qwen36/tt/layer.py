@@ -194,7 +194,10 @@ class Qwen36DecoderLayer:
         state_blk_idx=None,
         conv_sel=None,
         spec_ctrl=None,
+        spec_pos_groups=None,
     ):
+        # spec_pos_groups (QWEN36_VERIFY_ATTN_LEAN): the verify's per-candidate-group KV positions, strided slices of the row
+        # position buffer built ONCE per trace by the model instead of once per attention layer; None = slice in the layer.
         # spec_ctrl: QWEN36_VERIFY_SPEC_STEP=1 -- the fused GDN spec op's ctrl page ({parity, mi, ring block | HOLD}),
         # which replaces state_blk_idx / conv_sel for the recurrent verify; None (the default) leaves them in charge.
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
@@ -222,8 +225,10 @@ class Qwen36DecoderLayer:
         # Replicated-residual decode (QWEN36_DECODE_ALLREDUCE=1): dispatch on the tensor itself — a full-width
         # input is the replicated RES40 residual; a fractured one (flag off, or a caller that bypassed the model
         # entry) takes the unchanged fractured path below.
+        # QWEN36_VERIFY_DAR: the traced verify (GDN layers: mode "prefill" + decode_cfg) also hands the layer the replicated
+        # residual; the same tensor-based dispatch applies, so a fractured input (seed, flag off) takes the old path.
         _dar = self._decode_ar
-        if _dar is not None and not (mode == "decode" and x.shape[-1] == self.args.dim):
+        if _dar is not None and not ((mode == "decode" or decode_cfg) and x.shape[-1] == self.args.dim):
             _dar = None
         _dar_kw = {"decode_ar": _dar} if _dar is not None else {}
         if self.num_devices > 1:
@@ -287,6 +292,7 @@ class Qwen36DecoderLayer:
                         **_dar_kw,
                         spec_n_users=n_users,
                         spec_user_page_table=spec_user_page_table,
+                        spec_pos_groups=spec_pos_groups,
                     )
             else:
                 # GDN carries its recurrent/conv state internally (capture_state on
@@ -309,6 +315,7 @@ class Qwen36DecoderLayer:
                             state_blk_idx=state_blk_idx,
                             conv_sel=conv_sel,
                             spec_ctrl=spec_ctrl,
+                            **_dar_kw,
                         )
                     elif gdn_collect:
                         # Batched per-user prefill: stash this user's from-scratch state for
