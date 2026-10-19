@@ -35,7 +35,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <umd/device/driver_atomics.hpp>
+#include <tt-umd/driver_atomics.hpp>
 
 #include "socket_service_common.hpp"
 #include "tensor/tensor_ops.hpp"
