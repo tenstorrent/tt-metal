@@ -129,3 +129,24 @@ prioritizes this shared cache, mounts it read-only, sets `HF_HUB_OFFLINE=1`, and
 requires 100 GiB free locally before pulling the existing image or running the model.
 The failed worker's standard infrastructure cleanup reclaimed 913.7 GB of Docker
 storage; the experiment did not issue broad cleanup or reset commands.
+# Remote correctness finding and diagnostic follow-up
+
+Run [39230676369](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39230676369)
+used Metal `c56f74cc7f93165dbfcfe1a1e1202c0b4dbc6fa4` and workflow `75a859e`.
+All 11 host contracts passed. The full 30-layer physical-B1 server started,
+but the first live 33-token case failed: cold greedy token 128, cached token
+130, with 32 confirmed cache hits and only one computed suffix token. Cold
+37.33 s and cached 30.21 s include different first-use compilation and are
+not speedup evidence. Remaining live cases were stopped at this failure.
+
+Source-only diagnosis is recorded in `prefix_caching_autodebug.md`. The
+leading hypothesis is prefill/decode arithmetic differences (including BF16
+direct prefill KV versus BFP8 cached KV); scheduler ownership is not yet
+proven. The next remote diagnostic replays the final token through ordinary
+decode and continuation on exactly the same physical cache, saves complete
+logits and top candidates, then restores the original path. It uses the full
+selected policy; no relaxed correctness assertion. Its timings are invalid
+for performance because explicit readbacks and replay are enabled via
+`GEMMA4_PREFIX_DIAGNOSE=1`. All validation remains remote. No local validation
+or device process has been started by this experiment.
+

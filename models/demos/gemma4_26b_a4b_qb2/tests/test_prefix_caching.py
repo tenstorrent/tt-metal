@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Focused prefix-cache contracts; execute in remote CI only."""
 
+import json
 from time import perf_counter
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -101,6 +102,8 @@ def test_live_cached_suffix_matches_cold_host_logits(gemma_server_url, length, r
     hit_delta = _cache_hits(gemma_server_url) - hits_before
     record_property("prefix_cache_hits", hit_delta)
     record_property("prompt_tokens", length)
+    record_property("cold_response", json.dumps(cold))
+    record_property("cached_response", json.dumps(warm))
     assert hit_delta > 0, "Request did not exercise a cache hit"
     assert sampled_ids(warm) == sampled_ids(cold)
     cold_probs = cold["choices"][0]["logprobs"]["top_logprobs"][0]
