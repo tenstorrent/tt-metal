@@ -401,20 +401,23 @@ def _native_runs_with(device, x, out_shape, free_bytes):
         ttnn.deallocate(hog)
 
 
-# (id, in shape, out shape, dtype, free L1 per bank native is known to run with). Routed to codegen; the segment
-# map's smallest plan is the fallback whenever no larger plan fits.
+# (id, in shape, out shape, dtype, layout, free L1 per bank native is known to run with). Routed to codegen. TILE
+# falls back to the segment map's smallest plan whenever no larger plan fits; row-major routes only shapes whose
+# smallest plan fits native's smallest scratch.
 _L1_FLOOR = [
-    ("tile_rows_bf16", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, 32 * 1024),
-    ("mapped_fp32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.float32, 32 * 1024),
+    ("tile_rows_bf16", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, 32 * 1024),
+    ("mapped_fp32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.float32, ttnn.TILE_LAYOUT, 32 * 1024),
+    ("rm_arbitrary_bf16", [64, 97], [97, 64], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 32 * 1024),
 ]
 
 
-@pytest.mark.parametrize("case,in_shape,out_shape,dtype,ceiling", _L1_FLOOR, ids=[c[0] for c in _L1_FLOOR])
-def test_reshape_codegen_runs_at_native_l1_floor(device, case, in_shape, out_shape, dtype, ceiling):
+@pytest.mark.parametrize("case,in_shape,out_shape,dtype,layout,ceiling", _L1_FLOOR, ids=[c[0] for c in _L1_FLOOR])
+def test_reshape_codegen_runs_at_native_l1_floor(device, case, in_shape, out_shape, dtype, layout, ceiling):
     source = gate._make(in_shape, dtype)
-    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT)
+    x = _to_device(device, source, dtype, layout)
     assert _native_runs_with(device, x, out_shape, ceiling), f"native does not run with {ceiling} B free"
-    # Native's least free L1, to the hog's granularity: it fails at `low` and runs at `high`.
+    # The edge of native's L1 fit, to the hog's granularity: it fails at `low` and runs at `high`. Native's row-major
+    # ring depth follows free L1, so its fit need not be monotone; any edge it runs at must hold the routed program.
     low, high = 0, ceiling
     while high - low > _HOG_PAGE_BYTES:
         middle = (low + high) // 2 // _HOG_PAGE_BYTES * _HOG_PAGE_BYTES
