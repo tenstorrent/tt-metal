@@ -35,6 +35,18 @@ case "${GEMMA4_PREFIX_SUFFIX_MODE:-serial}" in
 esac
 export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
 export TT_MESH_GRAPH_DESC_PATH="$PWD/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto"
+if [ "${GEMMA4_PREFIX_MESH_HEALTH_CHECK:-false}" = true ]; then
+    # Uses the serving topology unchanged, after the workflow ownership gate.
+    # A failed health probe exits before loading model weights; no reset here.
+    timeout 180 python -u - <<'PY' > "$results/mesh-health.log" 2>&1
+import ttnn
+
+ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 4))
+ttnn.close_mesh_device(mesh)
+print("MESH_HEALTH_OK", flush=True)
+PY
+fi
 export TT_METAL_CACHE="$results/kernel-cache"
 tt_config='{"tt":{"fabric_config":"FABRIC_1D","trace_region_size":1000000000,"sample_on_device_mode":"all","trace_mode":"decode_only","enable_model_warmup":false}}'
 max_context=262144
