@@ -40,12 +40,12 @@ class Precision:
     sdpa_hifi4_fp32_acc: bool = True  # SDPA at HiFi4 with fp32 dest accumulation (off: HiFi2, bf16 acc)
     linear_hifi4: bool = True  # every Linear at HiFi4 (off: HiFi2; both accumulate in fp32)
     fp32_residual: bool = True  # keep the residual stream x in fp32 between blocks (off: bf16)
-    # SLat only: out_layer writes fp32 (off: bf16; fails G2 free-running because CFG 7.5 amplifies the rounding)
+    # out_layer writes fp32 (off: bf16; fails G2 free-running because CFG 7.5 amplifies the rounding)
     fp32_output: bool = True
-    # SLat only: input_layer and out_layer at HiFi4 (off: tt_dit's default fidelity; the texture sample drifts 6.8x
+    # input_layer and out_layer at HiFi4 (off: tt_dit's default fidelity; the texture sample drifts 6.8x
     # the CPU bf16 floor over 12 steps)
     io_hifi4: bool = True
-    # SLat only: out_layer reads the final norm output in fp32 (off: cast to bf16 first)
+    # out_layer reads the final norm output in fp32 (off: cast to bf16 first)
     fp32_out_input: bool = True
 
 
@@ -213,12 +213,13 @@ class TtStructureFlow(Module):
         self.mesh_device = mesh_device
         self.precision = precision
         d = host.MODEL_CHANNELS
-        self.input_layer = Linear(host.CHANNEL_PAD, d, mesh_device=mesh_device)
+        io = _hifi4(mesh_device) if precision.io_hifi4 else None
+        self.input_layer = Linear(host.CHANNEL_PAD, d, mesh_device=mesh_device, compute_kernel_config=io)
         self.blocks = ModuleList(Block(mesh_device=mesh_device, precision=precision) for _ in range(host.NUM_BLOCKS))
         self.final_norm = LayerNorm(
             d, norm_eps=host.FINAL_NORM_EPS, norm_elementwise_affine=False, mesh_device=mesh_device
         )
-        self.out_layer = Linear(d, host.CHANNEL_PAD, mesh_device=mesh_device)
+        self.out_layer = Linear(d, host.CHANNEL_PAD, mesh_device=mesh_device, compute_kernel_config=io)
         self._host_state: dict[str, torch.Tensor] = {}
         self._tables: dict[int, DeviceTables] = {}
 
@@ -267,6 +268,10 @@ class TtStructureFlow(Module):
             h = ttnn.typecast(h, ttnn.float32)
         for block, mod in zip(self.blocks, mods):
             h = block(h, mod, context, tables)
-        h = self.out_layer(_norm_in(self.final_norm(h)))
+        h = self.final_norm(h)
+        h = self.out_layer(
+            h if self.precision.fp32_out_input else _norm_in(h),
+            dtype=ttnn.float32 if self.precision.fp32_output else None,
+        )
         out = ttnn.to_torch(ttnn.get_device_tensors(h)[0]).float()
         return host.tokens_to_x(out)
