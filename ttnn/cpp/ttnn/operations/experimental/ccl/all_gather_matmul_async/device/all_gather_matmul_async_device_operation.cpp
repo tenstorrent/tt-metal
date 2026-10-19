@@ -168,7 +168,6 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
     using OperationType = ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation;
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
     /* All Gather setup */
     const auto [all_gather_async_operation_attributes, all_gather_async_tensor_args] =
