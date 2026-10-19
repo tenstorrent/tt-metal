@@ -516,7 +516,6 @@ RUN dnf install -y \
     libmpc-devel \
     numactl-devel \
     rdma-core-devel \
-
     mpfr-devel \
     libtool \
     make \

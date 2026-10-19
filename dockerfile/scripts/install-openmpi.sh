@@ -53,6 +53,9 @@ echo "Running autogen.pl..."
 # CFLAGS: force C17 (-std=gnu17). GCC 14 auto-selects C23 (gnu23) which promotes
 # certain OpenMPI _Bool->volatile void* assignments to hard errors. GCC uses the
 # last -std flag on the command line, so this overrides the gnu23 embedded in CC.
+# --disable-oshmem: OpenSHMEM is auto-enabled once UCX is found, but tt-metal does
+# not use it and oshmem/mca/sshmem fails under GCC 14 (-Wint-conversion is an error:
+# "initialization of 'void *' from 'long unsigned int'"). Without UCX it was never built.
 CFLAGS="-std=gnu17" ./configure \
     --prefix="${OMPI_PREFIX}" \
     --with-ft=ulfm \
@@ -62,6 +65,7 @@ CFLAGS="-std=gnu17" ./configure \
     --disable-dlopen \
     --with-ucx="${UCX_PREFIX}" \
     --enable-mca-no-build=pml-ucx \
+    --disable-oshmem \
     --enable-static \
     --with-slurm=/opt/slurm \
     --without-munge \
