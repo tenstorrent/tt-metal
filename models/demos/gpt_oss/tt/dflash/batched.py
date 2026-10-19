@@ -47,8 +47,9 @@ def _copy(mesh, dst, t, dtype):
 
 
 def _all_reduce(x):
+    """TP all-reduce over the mesh row (2 fabric links: [256, 2880] in 0.054 ms, 1 link 0.062; same sums)."""
     return ttnn.all_reduce(
-        x, num_links=1, topology=ttnn.Topology.Ring, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        x, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
 
@@ -452,6 +453,37 @@ class BatchedVerify:
             fp32_dest_acc_en=True,  # FP32 sums over the 23040-long K (4.5x smaller error, same time)
             packer_l1_acc=True,
         )
+        # gate / up [rows, hidden] x [hidden, E * I_local] and the routing-weight expand [rows, E] x [E, E * I_local]:
+        # 1D over 72 cores (all 8 row tiles x 10 output tiles each; gate / up in 2-tile K blocks, the auto config's
+        # sums), outputs width-sharded in L1 ([rows, 320] per core), SwiGLU and the routing multiply there: MoE
+        # 1.16 -> 1.00 ms per layer, identical output
+        n_act = self.moe[0]["gate"].shape[-1]
+        moe_cores = ttnn.CoreCoord(9, 8)
+        per_n = n_act // TILE // (moe_cores.x * moe_cores.y)
+
+        def moe_pc(in0_block_w):
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=moe_cores,
+                in0_block_w=in0_block_w,
+                out_subblock_h=1,
+                out_subblock_w=5,
+                out_block_h=m_tiles,
+                out_block_w=per_n,
+                per_core_M=m_tiles,
+                per_core_N=per_n,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+
+        self.gate_pc, self.expand_pc = moe_pc(2), moe_pc(1)
+        self.moe_mc = ttnn.create_sharded_memory_config(
+            (self.rows, per_n * TILE),
+            ttnn.CoreGrid(y=moe_cores.y, x=moe_cores.x),
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
         # router: the whole K in one block per output tile (TopKRouter.dense_decode's accumulation order: the same
         # logits), one core per 32-row tile
         k_tiles = self.hidden // TILE
@@ -548,10 +580,22 @@ class BatchedVerify:
         w = self._router(layer, x)
         x8 = ttnn.typecast(x, ttnn.bfloat8_b)
         # the biases inside the matmuls (with the FP32 down below: the fixed-text agreement of the separate adds)
-        gate = ttnn.linear(x8, W["gate"], bias=W["gate_bias"], dtype=ttnn.bfloat16, compute_kernel_config=self.ck)
-        up = ttnn.linear(x8, W["up"], bias=W["up_bias"], dtype=ttnn.bfloat16, compute_kernel_config=self.ck)
+        gate, up = (
+            ttnn.linear(
+                x8,
+                W[n],
+                bias=W[n + "_bias"],
+                program_config=self.gate_pc,
+                memory_config=self.moe_mc,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.ck,
+            )
+            for n in ("gate", "up")
+        )
         x8.deallocate(True)
-        w_cols = ttnn.matmul(w, W["expand"], dtype=ttnn.bfloat16)
+        w_cols = ttnn.matmul(
+            w, W["expand"], program_config=self.expand_pc, memory_config=self.moe_mc, dtype=ttnn.bfloat16
+        )
         limit, alpha = self.swiglu_limit, self.alpha
         act = ttnn.multiply(
             up,
@@ -563,10 +607,12 @@ class BatchedVerify:
                 UWP(U.SILU),
                 UWP(U.MUL_UNARY_SFPU, 1.0 / alpha),
             ],
+            memory_config=self.moe_mc,
         )
         gate.deallocate(True)
         up.deallocate(True)
-        act8 = ttnn.multiply(act, w_cols, dtype=ttnn.bfloat16)  # BF16 like the batched decode's down input
+        # BF16 like the batched decode's down input, to DRAM for the 2D down
+        act8 = ttnn.multiply(act, w_cols, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         act.deallocate(True)
         w_cols.deallocate(True)
         down = ttnn.matmul(
