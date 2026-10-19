@@ -7,7 +7,10 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/buffer_distribution_spec.hpp>
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include <array>
 #include <optional>
+#include <vector>
 
 namespace ttnn::operations::unary {
 
@@ -27,6 +30,49 @@ std::optional<UnaryShardSpecs> get_shard_specs(
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec);
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
+
+// How a unary op on a DRAM sharded or interleaved TILE tensor reads its pages. The flow is part of the program hash.
+enum class DramReadFlow : uint8_t {
+    None,           // main's path: each core reads a contiguous range, one page per barrier
+    StaticBurst,    // even split, rotated order, several pages per barrier
+    StaticOnePage,  // even split, rotated order, one page per barrier
+    WorkQueue,      // cores pull chunks of pages from a scheduler core
+};
+
+struct DramReadPlan {
+    DramReadFlow flow = DramReadFlow::None;
+    // Page order, see dram_read::RotatedPages.
+    uint32_t shard_stride = 0;
+    uint32_t num_shards = 0;
+    uint32_t last_shard_pages = 0;
+    uint32_t shard_width = 0;
+    uint32_t row_pages = 0;
+    // Pages per read barrier and per write flush.
+    uint32_t read_burst = 1;
+    uint32_t write_burst = 1;
+    uint32_t chunk_pages = 0;  // WorkQueue only
+
+    std::array<uint32_t, 5> page_order() const {
+        return {shard_stride, num_shards, last_shard_pages, shard_width, row_pages};
+    }
+};
+
+// Picks the read flow from the op chain's compute cost, the tensor layout and the pages per core. num_cores counts the
+// op's worker grid, num_device_cores the device's whole compute grid.
+DramReadPlan get_dram_read_plan(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    const tt::tt_metal::TensorSpec& input_spec,
+    const tt::tt_metal::TensorSpec& output_spec,
+    uint32_t num_cores,
+    uint32_t num_device_cores,
+    uint32_t num_dram_banks);
+
+// The same, for an op on input over worker_grid.
+DramReadPlan get_dram_read_plan(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    const Tensor& input,
+    const tt::tt_metal::TensorSpec& output_spec,
+    const tt::tt_metal::CoreRangeSet& worker_grid);
 
 tt::tt_metal::CoreRangeSet get_worker_grid(
     const Tensor& input_tensor,

@@ -23,6 +23,7 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "dram_read.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
@@ -32,7 +33,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
     copy_init(dfb::in);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
+    for (dram_read::Tiles tiles(num_tiles); tiles.next();) {
         tile_regs_acquire();
 
         dfb_in.wait_front(1);
