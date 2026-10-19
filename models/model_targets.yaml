@@ -410,6 +410,11 @@ targets:
               decode_t/s: 11.43
               prefill_t/s: 449.7
               prefill_time_to_token: 0.1846
+              # Widened to +/-30% (default is +/-15%): prefill t/s and TTFT on this leg
+              # swing >15% between runners (PR #59424, pt.9). Observed within +/-30%
+              # across runs 105288186828 (f10cs06) and 105412280076 (f10cs09).
+              prefill_t_s_tolerance: 0.30
+              prefill_time_to_token_tolerance: 0.30
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
@@ -470,6 +475,10 @@ targets:
               prefill_time_to_token: 1.8949
               compile_decode: 48.0716
               compile_prefill: 49.38
+              # Widened to +/-30% (default is +/-15%): compile_prefill is cache-sensitive
+              # (58.91s on f10cs06 run 105288186828 vs 49.38s on f10cs09 run 105412280076,
+              # ~19% swing). Observed within +/-30% across both runs (PR #59424, pt.9).
+              compile_prefill_tolerance: 0.30
             accuracy: {}
       p300x2:
         entries:
@@ -922,6 +931,10 @@ targets:
               prefill_t/s: 6642.8391
               prefill_time_to_token: 0.0173
               compile_prefill: 68.64
+              # Widened to +/-30% (default is +/-15%): compile_prefill is cache-sensitive
+              # (76.8s on f10cs06 run 105288186828 vs 68.64s on f10cs09 run 105412280076,
+              # ~12% swing). Observed within +/-30% across both runs (PR #59424, pt.9).
+              compile_prefill_tolerance: 0.30
             accuracy: {}
       wh_galaxy_perf:
         entries:
@@ -1313,6 +1326,11 @@ targets:
               prefill_time_to_token: 1.4058
               compile_decode: 35.88
               compile_prefill: 40.83
+              # Widened to +/-30% (default is +/-15%): compile_* calibrated on fast f10cs09
+              # (run 105412280076); slow f10cs06/f10cs08 run 105288186828 measured 51.24s
+              # prefill / 43.16s decode (~25% / ~20% swing). Within +/-30% (PR #59424, pt.9).
+              compile_prefill_tolerance: 0.30
+              compile_decode_tolerance: 0.30
             accuracy: {}
   mamba-2.8b:
     aliases: ["mamba-2.8b-slimpj", "state-spaces/mamba-2.8b-slimpj"]
@@ -2378,6 +2396,10 @@ targets:
               prefill_t/s: 876.3
               prefill_time_to_token: 0.1708
               compile_decode: 0.0452
+              # Widened to +/-30% (default is +/-15%): prefill_t/s swings across runs
+              # (749.6 prior calibration vs 876.3 run 105412280076, ~15-17%). Observed
+              # within +/-30% across runs (PR #59424, pt.9).
+              prefill_t_s_tolerance: 0.30
             accuracy: {}
             owner_id: U08H31YMN4Q # Sanjay Sanjay
             team: models
