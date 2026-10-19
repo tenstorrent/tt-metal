@@ -63,6 +63,7 @@ def _classify(*paths):
         ("tt_metal/tt-llk/tests/python_tests/test_matmul.py", "false"),
         ("tt_metal/tt-llk/tests/python_tests/accuracy/test_sfpu_accuracy.py", "false"),
         ("tt_metal/tt-llk/tests/run_quasar_regression.sh", "false"),
+        ("tt_metal/tt-llk/tests/ttsim_ignore_list.txt", "false"),
         ("tt_metal/tt-llk/tt_llk_blackhole/README.md", "false"),
     ],
 )

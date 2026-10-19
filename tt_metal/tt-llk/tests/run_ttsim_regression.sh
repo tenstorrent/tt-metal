@@ -34,9 +34,13 @@ TIMEOUT="${TIMEOUT:-300}"
 ARCHITECTURE="${TTSIM_ARCHITECTURE:-blackhole}"
 IGNORE_FILE="${TTSIM_IGNORE_FILE:-${SCRIPT_DIR}/ttsim_ignore_list.txt}"
 USE_IGNORE=1
+LIST_IGNORE=0
 TEST_PATHS=()
 PYTEST_ARGS=()
 DESELECT_ARGS=()
+IGNORE_PREFIXES=()
+# pytest's own status when the selection matches nothing.
+PYTEST_NO_TESTS_COLLECTED=5
 
 # Cache layout for auto-provisioned ttsim artifacts. The release tag comes from
 # tt_metal/ttsim-version, the same pin every tt-metal sim pipeline uses, so
@@ -71,7 +75,11 @@ Options:
                         this script; env: TTSIM_IGNORE_FILE). Sections are
                         [all], [blackhole], [wormhole], and [quasar]. Entries
                         are pytest node-id prefixes relative to python_tests/.
+                        file.py::test_name also skips test_name_extra; use
+                        file.py::test_name[ to skip one parametrized test.
   --no-ignore           Run every collected test; do not read the ignore list.
+  --list-ignore         Print the prefixes selected for --architecture and exit.
+                        Does not download ttsim or run pytest.
   -h, --help            Show this help message.
 
 Environment:
@@ -92,6 +100,7 @@ Examples:
   $(basename "$0") -n 16 test_eltwise_unary_datacopy.py
   $(basename "$0") -- -k Float16_b
   $(basename "$0") -a quasar --no-ignore
+  $(basename "$0") -a quasar --list-ignore
   WORKERS=8 $(basename "$0")
 EOF
     exit 0
@@ -105,8 +114,16 @@ while [[ $# -gt 0 ]]; do
         -n|--workers)      WORKERS="$2"; shift 2 ;;
         -t|--timeout)      TIMEOUT="$2"; shift 2 ;;
         -a|--architecture) ARCHITECTURE="$2"; shift 2 ;;
-        --ignore-file)     IGNORE_FILE="$2"; shift 2 ;;
+        --ignore-file)
+            if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+                echo "ERROR: --ignore-file requires a path" >&2
+                exit 1
+            fi
+            IGNORE_FILE="$2"
+            shift 2
+            ;;
         --no-ignore)       USE_IGNORE=0; shift ;;
+        --list-ignore)     LIST_IGNORE=1; shift ;;
         -h|--help)         usage ;;
         --)           shift; PYTEST_ARGS+=("$@"); break ;;
         -*)           PYTEST_ARGS+=("$1"); shift ;;
@@ -144,12 +161,12 @@ fi
 # ──────────────────────────────────────────────────────────────
 # Ignore list
 # ──────────────────────────────────────────────────────────────
-# Entries are pytest node-id prefixes. `--deselect` drops every collected
-# item whose node id starts with the prefix, so a file path skips the file
-# and `file.py::test_name` skips every parametrization of that test.
-# The same prefixes go to the collection pass and the real run; otherwise a
-# deselected test would still be in the collected denominator and the HTML
-# report would count it as crashed.
+# Entries are pytest node-id prefixes. `--deselect` uses
+# nodeid.startswith(), so a file path skips that file, `file.py::test_name`
+# also skips `test_name_extra`, and `file.py::test_name[` skips only the
+# parametrizations of that test. The same prefixes go to the collection pass
+# and the real run; otherwise a deselected test would still be in the
+# collected denominator and the HTML report would count it as crashed.
 load_ttsim_ignore_list() {
     local file="$1"
     local arch="$2"
@@ -168,6 +185,11 @@ load_ttsim_ignore_list() {
         line="${line%"${line##*[![:space:]]}"}"
         [[ -z "$line" || "$line" == \#* ]] && continue
 
+        # Drop a trailing " # comment", then trim the right side again.
+        line="${line%%[[:space:]]#*}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+
         if [[ "$line" =~ ^\[([A-Za-z0-9_-]+)\][[:space:]]*(#.*)?$ ]]; then
             section="${BASH_REMATCH[1]}"
             case "$section" in
@@ -185,6 +207,7 @@ load_ttsim_ignore_list() {
             exit 1
         fi
         if [[ "$section" == "all" || "$section" == "$arch" ]]; then
+            IGNORE_PREFIXES+=("$line")
             DESELECT_ARGS+=(--deselect "$line")
         fi
     done <"$file"
@@ -192,6 +215,13 @@ load_ttsim_ignore_list() {
 
 if [[ "$USE_IGNORE" -eq 1 ]]; then
     load_ttsim_ignore_list "$IGNORE_FILE" "$ARCHITECTURE"
+fi
+
+if [[ "$LIST_IGNORE" -eq 1 ]]; then
+    if [[ ${#IGNORE_PREFIXES[@]} -gt 0 ]]; then
+        printf '%s\n' "${IGNORE_PREFIXES[@]}"
+    fi
+    exit 0
 fi
 
 # ──────────────────────────────────────────────────────────────
@@ -459,7 +489,7 @@ echo " Per-test fork  : on"
 echo " Timeout        : ${TIMEOUT}s"
 echo " Tests collected: ${collected_count}"
 if [[ "$USE_IGNORE" -eq 1 ]]; then
-    echo " Ignore list    : ${IGNORE_FILE} ($(( ${#DESELECT_ARGS[@]} / 2 )) for ${ARCHITECTURE})"
+    echo " Ignore list    : ${IGNORE_FILE} (${#IGNORE_PREFIXES[@]} for ${ARCHITECTURE})"
 else
     echo " Ignore list    : disabled"
 fi
@@ -534,6 +564,10 @@ if [[ $pytest_exit -eq 0 ]]; then
     echo " ALL TESTS PASSED"
 else
     echo " TESTS FAILED (pytest exit code: $pytest_exit)"
+    if [[ $pytest_exit -eq $PYTEST_NO_TESTS_COLLECTED && ${#IGNORE_PREFIXES[@]} -gt 0 ]]; then
+        echo " No tests were collected. The ignore list may have deselected every requested test."
+        echo " Re-run with --no-ignore to include those tests."
+    fi
 fi
 echo "------------------------------------------------------------"
 echo " XML  : ${XML_PATH}"

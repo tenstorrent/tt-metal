@@ -173,8 +173,10 @@ jobs:
         continue-on-error: true
         # CHIP_ARCH has no script flag: helpers/chip_architecture.py reads it from the
         # environment at import so the suite does not probe for real silicon.
-        # ignore-file is repo-relative; resolve it inside the container so the
-        # path is the one the checkout is actually mounted at.
+        # ignore-file is repo-relative. Prefix it with $GITHUB_WORKSPACE, which
+        # this step reads at runtime inside the container (the path the checkout
+        # is mounted at). Do not use ${{ github.workspace }}: the runner expands
+        # that expression on the host before the container starts.
         env:
           CHIP_ARCH: ${{ steps.arch.outputs.name }}
           ARCH: ${{ steps.arch.outputs.name }}

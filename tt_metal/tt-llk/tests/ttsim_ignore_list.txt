@@ -1,13 +1,20 @@
 # Node ids skipped by tests/run_ttsim_regression.sh.
 #
-# Paths are relative to tests/python_tests/, matching the node ids in pytest's
-# short test summary. Each entry is a prefix: pytest deselects every item whose
-# node id starts with it. A file path skips that file. file.py::test_name skips
-# that test and every parametrization.
+# Paths are relative to tests/python_tests/. Copy ids from
+# python_tests/ttsim_results/latest.collected.txt after a run, or from
+# `pytest --collect-only -q` in that directory. Wormhole and Blackhole runs
+# do not print a short test summary.
+#
+# Each entry is a prefix. pytest --deselect drops every node id that starts
+# with the entry, so:
+#   - a file path skips that file
+#   - file.py::test_name skips that test, every parametrization, and any
+#     sibling whose name starts with test_name (test_name_extra, test_name2)
+#   - file.py::test_name[ skips only the parametrizations of that test
 #
 # [all] applies on every architecture. [blackhole], [wormhole], and [quasar]
 # apply only for that --architecture. Blank lines and full-line # comments are
-# ignored. A section header may carry a trailing comment.
+# ignored. A section header or an entry may carry a trailing " # comment".
 
 [all]
 
