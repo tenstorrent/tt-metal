@@ -25,9 +25,9 @@ using namespace ::toy_scaled_add;
 
 namespace {
 
-// The kernels stay with the Python package that first ran them; CMakeLists.txt installs them at this
-// same root-relative path for packaged runtimes.
-constexpr const char* kKernelDir = "ttnn/ttnn/operations/toy_scaled_add/kernels/";
+// The op's kernels, next to the args header they share with this factory; CMakeLists.txt installs them at
+// this same root-relative path for packaged runtimes.
+constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/toy_scaled_add/device/kernels/";
 
 std::string kernel_path(const char* name) { return std::string(kKernelDir) + name; }
 
