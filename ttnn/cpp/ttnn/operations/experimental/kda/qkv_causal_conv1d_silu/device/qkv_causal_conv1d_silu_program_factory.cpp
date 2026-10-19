@@ -97,9 +97,12 @@ void add_history_exchange(
     const auto& device = in.input.mesh_tensor().device();
     const uint32_t axis = attrs.sequence_parallel_axis;
     const uint32_t sp_size = device.shape()[axis];
+    // A 2D multicast is routed by the connection's ETH direction, so every hop must leave in the same direction.
+    // 1D fabric follows its routing plane, which may turn (the QuietBox ring).
     TT_FATAL(
-        sp_size == 1 || ttnn::ccl::is_axis_straight(device, axis),
-        "qkv_causal_conv1d_silu: the fabric history exchange needs a straight SP axis");
+        sp_size == 1 || !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
+            ttnn::ccl::is_axis_straight(device, axis),
+        "qkv_causal_conv1d_silu: the 2D fabric history exchange needs a straight SP axis");
     const uint32_t row_bytes = channel_tiles * qkv_conv::tile_row_bytes;
     // A single rank sends nothing; any aligned value satisfies the kernel's static_assert.
     const uint32_t max_payload = sp_size > 1
