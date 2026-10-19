@@ -436,6 +436,7 @@ def _native_runs_with(device, x, out_shape, free_bytes):
 _L1_FLOOR = [
     ("tile_rows_bf16", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, 32 * 1024),
     ("mapped_fp32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.float32, ttnn.TILE_LAYOUT, 32 * 1024),
+    ("lcm_fp32", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.float32, ttnn.TILE_LAYOUT, 32 * 1024),
     ("rm_arbitrary_bf16", [64, 97], [97, 64], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 32 * 1024),
 ]
 
