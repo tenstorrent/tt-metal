@@ -1,0 +1,145 @@
+{
+ "used": [
+  {
+   "id": "K-1",
+   "how": "act_q / fp4_q may return their input (native, already the dtype): every call site frees the result only when it is not the input (q_a, kv, shared expert, experts, attention)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-2",
+   "how": "weighted path: counts / regions are [1, Eg] indexed by the flat expert's gids, so the column-local planner ids and the FlatRoutedExpert gids (r epc + le, n_global Eg) were made to match",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-30",
+   "how": "combine_rf acc_unpack_fp32: the accumulators' fp32 sums copied through UnpackToDestFp32, not srcA (TF32 truncation before the fp32 output)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "every model test and the fork regression run with --no-precompile",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD on every run",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-56",
+   "how": "deleted tests/ttnn/unit_tests/operations/ds41_p8/ (tt-probe artifacts) before finishing",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-65",
+   "how": "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 for the per-op A/B profile of the experts call",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-79",
+   "how": "the fabric payload under EXPERTS_COMBINE=weighted set to 10880 B (one 10240 B row + trailer, inside BH's [4352, 15232]) through hooks.device_params",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-10",
+   "how": "the weighted path keeps bfp8 [N, K] weights exact: flat_routed_expert_with_program got weights_nk",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-35",
+   "how": "same: [N, K] tiles (weights_nk) in the fused op, not W^T",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-23",
+   "how": "weighted cannot round q(r h) (the weight moves to the combine): MAX_PRECISION pins EXPERTS_COMBINE=separate",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-62",
+   "how": "took the chain (dispatch, combine, K-slot sum) as the lever; measured what remains: the two weight-stream-bound passes",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-63",
+   "how": "the flat fork's options-off regression compared with its known 13 failures",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-67",
+   "how": "the combine writes bf16 under CCL_IMPL=fabric_bf16 (the reduce-scatter's input), fp32 otherwise",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "combine_rf's fp32 accumulators hold every home token in L1 (W x 4 B a token): the free cells bound tokens per call (DS41-69)",
+  "combine_rf: a local hand-off ring under 4 slots deadlocks (grants batched by 4) (DS41-70)",
+  "a CCL used as a barrier while a near-whole-L1 arena is allocated clashes: its CBs scale with the fabric packet size (DS41-70)",
+  "ttnn.reshape of a small row-major tensor to one page costs ~1 ms on the device; uint16 refused (DS41-71)",
+  "combine_rf's arrival-order fp32 sums are not bit-identical across calls; the frozen component tests check determinism (det order needed)"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-69",
+  "DS41-70",
+  "DS41-71"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.8",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-19T12:06:48",
+  "head": "d516b305c05",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.8.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/quant.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/shared_expert.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/weighted_combine.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/combine_rf/CHANGELOG.md",
+   "ttnn/ttnn/bringup/combine_rf/README.md",
+   "ttnn/ttnn/bringup/combine_rf/combine_plan.py",
+   "ttnn/ttnn/bringup/combine_rf/sparse_combine_rf.py",
+   "ttnn/ttnn/bringup/combine_rf/tests/__init__.py",
+   "ttnn/ttnn/bringup/combine_rf/tests/unit/__init__.py",
+   "ttnn/ttnn/bringup/combine_rf/tests/unit/test_column_planner.py",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/README.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_routed_expert.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_routed_expert.hpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_routed_expert_nanobind.cpp"
+  ]
+ }
+}

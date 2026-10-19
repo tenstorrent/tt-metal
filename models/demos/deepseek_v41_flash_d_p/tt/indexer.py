@@ -49,7 +49,7 @@ import ttnn
 
 from . import ccl
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, tp_sum
-from .quant import fp4_qdq, fp8_qdq, round_tf32
+from .quant import act_q, fp4_q, native, round_tf32
 from .rope import RopeTable, deinterleave_perm, rope_heads
 from .settings import settings
 
@@ -93,7 +93,7 @@ class TtIndexer:
         assert chunk // ratio >= self.topk, f"a chunk's {chunk // ratio} keys < topk {self.topk} (valid_length >= k)"
         assert rope.half * 2 == self.rd, (rope.half, self.rd)
         self.ckc = attn_compute_config(mesh)  # weights_proj, wq_b: ATTN_FIDELITY (P.7)
-        self.round_x = settings.get("COMPRESSOR_X") == "round_tf32"
+        self.round_x = settings.get("COMPRESSOR_X") == "round_tf32" and not native()  # NUMERICS=native: as is
         # wq_b [nh * hd, q_lora] -> W^T [q_lora, nh * hd], every head's rope rows de-interleaved; replicated
         perm = deinterleave_perm(self.hd, self.rd)
         wq = w["wq_b"].float()
@@ -173,7 +173,7 @@ class TtIndexer:
     def query(self, qr: ttnn.Tensor, start: int) -> ttnn.Tensor:
         """q_resid [1, 1, W, q_lora] fp32 -> the chip's index queries [1, nh, Sq, hd] bf16 (fp4 values)."""
         sub = self._sub(qr)
-        qq = fp8_qdq(sub, dtype=ttnn.bfloat16)
+        qq = act_q(sub, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (tt/quant.py)
         ttnn.deallocate(sub)
         q = ttnn.linear(qq, self.wq_b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
         ttnn.deallocate(qq)
@@ -187,7 +187,7 @@ class TtIndexer:
         qr_ = rope_heads(qh, cos, sin, interleave=True)
         for t in (qh, cos, sin):
             ttnn.deallocate(t)
-        out = fp4_qdq(qr_, Q_BLOCK, dtype=ttnn.bfloat16)
+        out = fp4_q(qr_, Q_BLOCK, dtype=ttnn.bfloat16)
         ttnn.deallocate(qr_)
         return out
 

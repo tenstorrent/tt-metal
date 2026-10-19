@@ -37,7 +37,7 @@ import ttnn
 from .common import DRAM
 from .norm import TtDistributedRmsNorm
 from .q_a import TtAttnInProj
-from .quant import fp8_qdq
+from .quant import act_q
 from .rope import RopeTable, deinterleave_perm, rope_deinterleaved
 
 
@@ -74,14 +74,16 @@ class TtWindowKv:
         kr = rope_deinterleaved(kn, cos, sin)
         for t in (kn, cos, sin):
             ttnn.deallocate(t)
-        out = fp8_qdq(kr, dtype=ttnn.bfloat16)
-        ttnn.deallocate(kr)
+        out = act_q(kr, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (tt/quant.py)
+        if out is not kr:
+            ttnn.deallocate(kr)
         return out
 
     def __call__(self, x: ttnn.Tensor, start: int) -> ttnn.Tensor:
-        xq = fp8_qdq(x, dtype=ttnn.bfloat16)
+        xq = act_q(x, dtype=ttnn.bfloat16)
         p = self.proj(xq)
-        ttnn.deallocate(xq)
+        if xq is not x:
+            ttnn.deallocate(xq)
         out = self.from_proj(p, start)
         ttnn.deallocate(p)
         return out

@@ -130,3 +130,18 @@ shapes, mesh, row-major y).
 - Files: device/flat_routed_expert_{plan.cpp,program_factory.cpp}, device/flat_with_program_device_operation.{hpp,cpp},
   device/kernels/{se11_xmc.cpp,se_drisc_post.hpp,se_yrm.hpp}, flat_expert.py, flat_routed_expert.{hpp,cpp},
   flat_routed_expert_nanobind.cpp, the two worklogs; ../combine_rf/
+
+### flat_routed_expert_with_program: math_fidelity, weights_nk (2026-10-19, deepseek_v41_flash_d_p P.8)
+- What: `flat_routed_expert_with_program(..., math_fidelity=0, weights_nk=False)`: the flat expert's matmul fidelity
+  and the [N, K] weight tiles (as for flat_routed_expert); both in the program-cache key. Defaults = the program before
+  (LoFi, [K, N] tiles).
+- Why: DeepSeek-V4.1's experts run at HiFi4 (owner rule) on bfp8 [N, K] weights (exact e2m1 x ue8m0, DS41-35) with
+  combine_rf's weighted combine appended (EXPERTS_COMBINE=weighted).
+- Results: see ../combine_rf/CHANGELOG.md (P.8): layer 0, 2x2, the fused call at full precision (HiFi4, bf16 x / h):
+  2 passes x ~2.1 ms; experts call 6.1 ms vs separate 8.5 ms (synced wall, one layer).
+- Regression (options off, 2026-10-19, after the build): `tests/unit/` 25 passed / 14 failed: the known 13 (12 TP2 /
+  TP4 `p.nsg == 1`, the MiMo indexed_perf band) + test_flat_expert_mesh[2x2], which passed in the run's precompile pass
+  (min PCC 1.00000) and failed in the real pass on its module-level `_BETWEEN` tensors of the precompile pass's closed
+  mesh (K-52); alone with --no-precompile: 1 passed (min PCC 0.99804). So: the baseline's 26 / 13.
+- Needed by: deepseek_v41_flash_d_p P.8 (tt/weighted_combine.py)
+- Files: flat_routed_expert.{hpp,cpp}, flat_routed_expert_nanobind.cpp

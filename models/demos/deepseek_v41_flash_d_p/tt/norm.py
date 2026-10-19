@@ -37,7 +37,8 @@ import ttnn
 
 from . import ccl
 from .common import DRAM, TP_AXIS, tp_sum
-from .quant import fp8_qdq
+from .quant import act_q
+from .settings import settings
 
 PACK_N = 1  # mhc_pre_xing_pack with one "stream": the sum of squares lands in column n (n + 2) = 3
 SS_COL = PACK_N * (PACK_N + 2)
@@ -55,6 +56,10 @@ class TtDistributedRmsNorm:
         tp = mesh.shape[TP_AXIS] if split else 1
         assert hidden % (32 * tp) == 0, f"hidden {hidden} does not split into tiles over TP {tp}"
         self.mesh, self.hidden, self.eps, self.split, self.tp = mesh, hidden, float(eps), split, tp
+        # ffn_norm (gather) writes FFN_NORM_DTYPE (P.8): bf16 = the last multiply's packer rounds the row once, the
+        # all-gather moves half the bytes, the router and the experts read it as is
+        bf16 = gather and settings.get("FFN_NORM_DTYPE") == "bf16"
+        self.out_dtype = ttnn.bfloat16 if bf16 else ttnn.float32
         self.inv_h = 1.0 / float(hidden)
         # w as [1, 1, 1, H] fp32 TILE, the last dim split over the TP axis (chip column c holds w[c H/TP, (c+1) H/TP)),
         # replicated over the SP axis; split=False: replicated everywhere.
@@ -95,7 +100,7 @@ class TtDistributedRmsNorm:
         rs = self.rstd(x)
         xn = ttnn.multiply(x, rs, dtype=ttnn.float32, memory_config=DRAM)
         ttnn.deallocate(rs)
-        y = ttnn.multiply(xn, self.weight, dtype=ttnn.float32, memory_config=DRAM)
+        y = ttnn.multiply(xn, self.weight, dtype=self.out_dtype, memory_config=DRAM)
         ttnn.deallocate(xn)
         if not self.gather:
             return y
@@ -108,7 +113,7 @@ class TtDistributedRmsNorm:
     @staticmethod
     def quant(y: ttnn.Tensor, dtype=ttnn.bfloat16) -> ttnn.Tensor:
         """q(y): the fp8 act quant-dequant (blocks of 32, ue8m0, e4m3 RNE) the experts read; bit-exact (DS41-13)."""
-        return fp8_qdq(y, dtype=dtype)
+        return act_q(y, dtype=dtype)  # NUMERICS=native: a cast (y itself when already dtype)
 
 
 # norm steps -> checkpoint weight under layers.<i>.

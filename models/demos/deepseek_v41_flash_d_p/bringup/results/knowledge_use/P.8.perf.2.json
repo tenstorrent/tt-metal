@@ -1,0 +1,62 @@
+{
+ "used": [
+  {
+   "id": "K-52",
+   "how": "every frozen test run with --no-precompile, as the gate writes it",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD on every run and the probe",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "deleted the probe's tests/ttnn/unit_tests/operations/ds41_p8a2/ before finishing (outside the allowed paths)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-72",
+   "how": "expected the q_a swap failure under NUMERICS=native; probed device native vs a native CPU q_a to show it is only the skipped fp8 q-dq, then updated the entry with that evidence",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-43",
+   "how": "swap_ffn_hc's failing noise-floor check is covered by the owner's hc_fn waiver (printed WAIVED); not worked on",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-23",
+   "how": "kept MAX_PRECISION EXPERTS_COMBINE=separate: weighted cannot apply the weight before q(h)",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how a perf brief's 'accuracy first' interacts with framework rule 14 (component / swap tests at max precision, a variable the caller sets wins): a precision-lowering perf switch set in the environment is checked against the official per-step limits"
+ ],
+ "overseer": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.8",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-19T12:36:00",
+  "head": "d516b305c05",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.8.perf.2.json"
+  ]
+ }
+}

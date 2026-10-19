@@ -29,6 +29,7 @@ from models.demos.deepseek_v41_flash_d_p.tt.settings import TABLE
 
 N_CALLS = 3
 LAYER = 0
+N_REF = 128  # tokens of test_weighted_vs_separate's float64 reference
 
 
 @pytest.mark.timeout(3600)
@@ -336,3 +337,245 @@ def test_kernels(mesh_device, impl, kernels, monkeypatch):
         pcc = (ac @ bc / (ac.norm() * bc.norm())).item()
         print(f"EXPERTS_KERNELS_CMP impl={impl} {kernel} vs {first}: rel {rel:.5f} pcc {pcc:.7f}")
         assert bool(torch.isfinite(b).all()) and pcc > 0.999, (kernel, rel, pcc)
+
+
+def _weighted_params() -> dict:
+    """The run's device params with the fabric payload EXPERTS_COMBINE=weighted needs (bringup/hooks.py), so that
+    both paths run on one mesh."""
+    from models.demos.common.bringup.testing import harness
+    from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import FABRIC_PAYLOAD
+
+    return harness.device_params(hooks._WeightedPayloadSpec(spec(), FABRIC_PAYLOAD))
+
+
+def _host(mesh, t) -> torch.Tensor:
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import hidden_split_to_host
+
+    return hidden_split_to_host(mesh, t).double()
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("device_params", [_weighted_params()], indirect=True, ids=["box_payload"])
+@pytest.mark.parametrize("mesh_device", [tuple(spec().mesh)], indirect=True, ids=["x".join(map(str, spec().mesh))])
+@pytest.mark.parametrize("combines", ["separate,weighted", "weighted"], ids=["ab", "w"])
+@pytest.mark.parametrize("prof", [False, True], ids=["time", "ops"])
+def test_weighted_vs_separate(mesh_device, combines, prof):
+    """EXPERTS_COMBINE A/B (P.8) on the same random inputs (layer LAYER, the run's chunk, the current NUMERICS /
+    FFN_NORM_DTYPE / EXPERTS_PRECISION / CCL_IMPL settings): the mean wall time of a whole experts call (q(x) ..
+    reduce over the row, synchronized: the device time of one layer's experts per chunk), weighted vs separate rel
+    error / PCC / worst row, and the determinism check (weighted twice on the same inputs: elements that differ).
+    With NUMERICS=official separate rounds q(r h) to fp8 before w2 and weighted cannot (the weight moves to the
+    combine), so the rel error there includes that rounding; with NUMERICS=native both run the same math.
+    prof (ids "ops"; run with the device profiler env, testing/profiler.py PROFILER_ENV): one more call per path in the
+    profiler's op mode, the device time per op printed (EXPERTS_COMBINE_OPS)."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+    S = spec()
+    ck, cfg = hooks._checkpoint(S), hooks._config(S)
+    chunk = hooks._chunk(S)
+    g = torch.Generator().manual_seed(0)
+    x = torch.randn(chunk, cfg.dim, generator=g)
+    sc = torch.rand(chunk, cfg.n_experts, generator=g)
+    top = sc.topk(cfg.topk_experts, dim=-1)
+    dense = torch.zeros(chunk, cfg.n_experts)
+    dense.scatter_(1, top.indices, 1.5 * top.values / top.values.sum(-1, keepdim=True))
+    xdt = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
+    tag = " ".join(f"{k}={settings.get(k)}" for k in ("NUMERICS", "FFN_NORM_DTYPE", "EXPERTS_PRECISION", "CCL_IMPL"))
+    outs, again = {}, None
+    for combine in combines.split(","):  # (separate first: its programs are built before weighted's)
+        t0 = time.time()
+        mod = E.build_experts(mesh_device, ck, cfg, LAYER, chunk, combine=combine)
+        load = time.time() - t0
+        xd = row_split_to_device(mesh_device, x, dtype=xdt)
+        rd = row_split_to_device(mesh_device, dense)
+        for _ in range(2):
+            ttnn.deallocate(mod(xd, rd))
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.time()
+        for _ in range(N_CALLS):
+            ttnn.deallocate(mod(xd, rd))
+        ttnn.synchronize_device(mesh_device)
+        dt = (time.time() - t0) / N_CALLS
+        od = mod(xd, rd)
+        outs[combine] = _host(mesh_device, od)
+        ttnn.deallocate(od)
+        if combine == "weighted":
+            od = mod(xd, rd)
+            again = _host(mesh_device, od)
+            ttnn.deallocate(od)
+        if prof:
+            from models.demos.common.bringup.testing import profiler
+
+            profiler.enable(mesh_device, ops=True)
+            profiler.signpost(f"experts_{combine}")
+            ttnn.deallocate(mod(xd, rd))
+            profiler.signpost("end")
+            res = profiler.result()
+            profiler.disable()
+            tot = 0.0
+            for key, rows_ in res["op_ns"].items():
+                if not key.startswith("experts_"):
+                    continue
+                for r_ in rows_:
+                    tot += r_["ns"]
+                    print(
+                        f"EXPERTS_COMBINE_OPS {combine} {r_['op'][:60]:60s} calls {r_['calls']:3d} "
+                        f"{r_['ns'] / 1e3:9.1f} us  {r_['shape'][:70]}"
+                    )
+            print(f"EXPERTS_COMBINE_OPS {combine} total {tot / 1e3:.1f} us (device, slowest chip per op)")
+        print(
+            f"EXPERTS_COMBINE_TIME combine={combine} layer={LAYER} chunk={chunk} call_ms={dt * 1e3:.2f} load_s={load:.1f} {tag}"
+        )
+        for t in (xd, rd):
+            ttnn.deallocate(t)
+        mod.free()
+        del mod
+    # float64 reference on N_REF tokens: y = sum_k w_k w2(silu(min(w1 q, 10)) clamp(w3 q, +-10)), q = x as the device
+    # reads it (bf16 cast natively, fp8 q-dq officially), no rounding of h (the exact math both paths approximate)
+    sel = torch.arange(0, chunk, chunk // N_REF)
+    xq = x[sel].double()
+    if xdt == ttnn.bfloat16:
+        xq = xq.to(torch.bfloat16).double()
+    if settings.get("NUMERICS") == "official":
+        from models.demos.deepseek_v41_flash_d_p.reference.kernels import act_quant_dequant
+
+        xq = act_quant_dequant(xq.float(), 32).double()
+    else:
+        xq = xq.to(torch.bfloat16).double()
+    ref = torch.zeros(len(sel), cfg.dim, dtype=torch.float64)
+    ds = dense[sel].double()
+    lim = float(cfg.swiglu_limit)
+    for e in sorted(set(torch.nonzero(ds)[:, 1].tolist())):
+        rows = torch.nonzero(ds[:, e]).flatten()
+        p = ck.expert(LAYER, e)
+        w1, w3, w2 = (E.fp4_dequant(*p[nm]).double() for nm in E.NAMES)
+        g_, u_ = xq[rows] @ w1.T, xq[rows] @ w3.T
+        h = torch.nn.functional.silu(g_.clamp(max=lim)) * u_.clamp(-lim, lim)
+        ref[rows] += ds[rows, e : e + 1] * (h @ w2.T)
+    for name, o in outs.items():
+        d = o[sel] - ref
+        rel = (d.norm() / ref.norm()).item()
+        bias = ((d * ref).sum() / (ref * ref).sum()).item()
+        rr = o[sel].norm(dim=1) / ref.norm(dim=1)
+        print(
+            f"EXPERTS_COMBINE_REF {name} vs float64 ({len(sel)} tokens): rel {rel:.6f} bias {bias:+.6f} row_norm_ratio "
+            f"mean {rr.mean().item():.6f} [{rr.min().item():.5f}, {rr.max().item():.5f}] {tag}"
+        )
+    b = outs["weighted"]
+    nd = int((again != b).sum().item())
+    dmax = ((again - b).abs().max() / b.abs().max()).item()
+    print(
+        f"EXPERTS_COMBINE_DETERMINISM weighted twice: {nd} of {b.numel()} elements differ (max |diff| / max|y| "
+        f"{dmax:.3g}) {tag}"
+    )
+    assert bool(torch.isfinite(b).all())
+    if "separate" not in outs:
+        return
+    a = outs["separate"]
+    rel = ((b - a).norm() / a.norm()).item()
+    ac, bc = a - a.mean(), b - b.mean()
+    pcc = (ac.reshape(-1) @ bc.reshape(-1) / (ac.norm() * bc.norm())).item()
+    row = ((b - a).norm(dim=1) / a.norm(dim=1).clamp_min(1e-30)).max().item()
+    ratio = b.norm(dim=1) / a.norm(dim=1).clamp_min(1e-30)
+    print(
+        f"EXPERTS_COMBINE_CMP weighted vs separate: rel {rel:.6f} pcc {pcc:.8f} worst_row {row:.5f} "
+        f"row_norm_ratio [{ratio.min().item():.5f}, {ratio.max().item():.5f}] {tag}"
+    )
+    assert pcc > 0.999, (rel, pcc)
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [_weighted_params()], indirect=True, ids=["box_payload"])
+@pytest.mark.parametrize("mesh_device", [tuple(spec().mesh)], indirect=True, ids=["x".join(map(str, spec().mesh))])
+@pytest.mark.parametrize("route", ["local", "remote", "random"])
+@pytest.mark.parametrize("S", [64, 256, 448, 468, 512])
+@pytest.mark.parametrize("arena_kb", [0, 1252], ids=["arena_auto", "arena1252"])
+def test_weighted_combine_routes(mesh_device, route, S, arena_kb):
+    """Debug harness of tt/weighted_combine.py alone (no model inputs): fake (uninitialized) expert weights, S tokens per
+    chip, the routing forced so that every row stays on its home chip (local), goes to the other chip of the column
+    (remote) or is random; the call must finish, then the combine's sums are checked against the y rows it read only
+    when ``route`` is local... (fake weights: only completion and finiteness of the rows that got experts)."""
+    from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+
+    from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import WeightedCombine
+
+    S_ = spec()
+    cfg = hooks._config(S_)
+    R, C = tuple(mesh_device.shape)
+    E, K, H, I = cfg.n_experts, cfg.topk_experts, cfg.dim, cfg.inter
+    epc = E // (R * C)
+    Eg = R * epc
+    gids = [[r * epc + le for le in range(epc)] for r in range(R) for c in range(C)]
+    fe = FlatRoutedExpert(
+        mesh_device,
+        "fake",
+        m=max(256, R * S),
+        H=H,
+        I=I,
+        gids=gids,
+        n_global=Eg,
+        wdtype="bf8",
+        act="clamped_silu",
+        pin=1,
+        weights_nk=True,
+        routed=False,
+    )
+    wc = WeightedCombine(
+        mesh_device,
+        dict(fe.plan),
+        H=H,
+        I=I,
+        epc=epc,
+        K=K,
+        S=S,
+        out_dtype=ttnn.float32,
+        x_bf16=False,
+        h_bf16=False,
+        arena_bytes=arena_kb * 1024 or None,
+    )
+    g = torch.Generator().manual_seed(1)
+    ids = torch.zeros(R, S, K, dtype=torch.int64)  # per mesh row r, its tokens' global expert ids
+    for r in range(R):
+        for t in range(S):
+            for k in range(K):
+                c = k % C  # half the slots in each column
+                if route == "local":
+                    rr = r
+                elif route == "remote":
+                    rr = (r + 1) % R
+                else:
+                    rr = int(torch.randint(0, R, (1,), generator=g))
+                ids[r, t, k] = c * Eg + rr * epc + (t * K + k) % epc  # (distinct experts within a token)
+    w = torch.rand(R, S, K, generator=g) + 0.5
+    idx_d = ttnn.from_torch(
+        ids.reshape(1, R * S, K).unsqueeze(0).to(torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, None)),
+    )
+    w_d = ttnn.from_torch(
+        w.reshape(1, 1, R * S, K),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, None)),
+    )
+    x_d = ttnn.from_torch(
+        (torch.randn(1, 1, R * S, H, generator=g) * 0.3),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, None)),
+    )
+    xg = wc.gather_x(x_d)
+    ids_g, wts_g = wc.routing(idx_d, w_d)
+    t0 = time.time()
+    out = wc(fe, xg, ids_g, wts_g, 4)
+    ttnn.synchronize_device(mesh_device)
+    print(f"WC_ROUTES route={route} S={S} passes={wc.P} first call {time.time() - t0:.2f} s")
+    o = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
+    print(f"WC_ROUTES route={route} S={S} out {tuple(o.shape)} finite {bool(torch.isfinite(o).all())}")
