@@ -190,7 +190,7 @@ bool is_demoted(
     return choice.has_value() && native_faster(input, *choice, reshape_core_grid(input, sub_core_grids).num_cores());
 }
 
-bool codegen_plan_fits_live_l1(
+bool codegen_cb_plan_fits_live_l1(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
@@ -209,11 +209,11 @@ LaunchPlan launch_plan(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     const char* violation = scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids);
-    TT_FATAL(violation == nullptr, "reshape_force_codegen: outside the codegen scope: {}", violation);
+    TT_FATAL(violation == nullptr, "reshape_codegen: outside the codegen scope: {}", violation);
     auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
-    TT_FATAL(choice.has_value(), "reshape_force_codegen: outside the codegen scope: {}", kPlanCapsViolation);
+    TT_FATAL(choice.has_value(), "reshape_codegen: outside the codegen scope: {}", kPlanCapsViolation);
     violation = static_fit_violation(input, logical_output_shape, output_mem_config, *choice);
-    TT_FATAL(violation == nullptr, "reshape_force_codegen: outside the codegen scope: {}", violation);
+    TT_FATAL(violation == nullptr, "reshape_codegen: outside the codegen scope: {}", violation);
     return LaunchPlan{.tile_rows = std::move(*choice)};
 }
 

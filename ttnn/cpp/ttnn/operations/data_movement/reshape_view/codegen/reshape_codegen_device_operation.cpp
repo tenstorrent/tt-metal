@@ -80,10 +80,11 @@ Tensor reshape_codegen(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
-    ttnn::operations::data_movement::reshape_codegen::LaunchPlan plan) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     using OperationType = ReshapeCodegenDeviceOperation;
     require_device_input(input);
+    auto plan = ttnn::operations::data_movement::reshape_codegen::launch_plan(
+        input, logical_output_shape, output_mem_config, sub_core_grids);
     return ttnn::device_operation::launch<OperationType>(
         ReshapeCodegenParams{
             .logical_output_shape = logical_output_shape,

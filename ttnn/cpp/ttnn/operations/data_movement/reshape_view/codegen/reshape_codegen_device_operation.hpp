@@ -46,7 +46,6 @@ Tensor reshape_codegen(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
-    ttnn::operations::data_movement::reshape_codegen::LaunchPlan plan);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
 }  // namespace ttnn::prim

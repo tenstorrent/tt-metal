@@ -52,14 +52,14 @@ bool is_demoted(
 // Live-L1 routing gate, for a call supported_by_codegen: whether the smallest plan fits the L1 free once the output
 // is allocated. Native needs only a few CB pages, so routing sends a false call there instead of to the program
 // factory's no-plan error. Never consulted by validate or the forced entry.
-bool codegen_plan_fits_live_l1(
+bool codegen_cb_plan_fits_live_l1(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
 // The static plan for a supported call; the program factory shrinks it to live L1. Raises with unsupported_reason's
-// text otherwise. Shared by routing and the forced entry.
+// text otherwise. Built by prim::reshape_codegen.
 LaunchPlan launch_plan(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
