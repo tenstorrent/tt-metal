@@ -209,3 +209,54 @@ def test_bruteforce_sweep_ltx_portrait_121f_halo(
         table_key=key,
         max_seconds=float(os.environ.get("SWEEP_MAX_SECONDS", "720")),
     )
+
+
+# 1080p-portrait (576x1088) latent upsampler and VAE encoder on the 4x8. The upsampler shards (5x2 before the
+# 2x upsample, 10x4 after) and the encoder's full-res shard (68x18 at T=3) had no _BLOCKINGS entries, so 21 convs
+# per run took the channel fallback, the 1024-ch ones at T=H=W=1 (exabox job 137185). Same layout as the 1080p/153f
+# list: per-device conv input dims (key + kernel - 1) on one chip, pre-padded input. hw_product per site: the 5x2
+# shards cannot reach 16 or 32.
+_SWEEP_LAYERS_LTX_PORTRAIT_UPS_ENC = [
+    # (name,          C_in, C_out, kernel,    T,  H,  W,  hw_product)
+    ("ups_post_res", 1024, 1024, (3, 3, 3), 18, 12, 6, (16, 32)),  # key 18x10x4, 8 per run
+    ("ups_pre_res", 1024, 1024, (3, 3, 3), 18, 7, 4, (4, 8)),  # key 18x5x2, 8 per run
+    ("ups_ups", 1024, 4096, (1, 3, 3), 16, 7, 4, (4, 8)),  # key 16x5x2
+    ("ups_final", 1024, 128, (3, 3, 3), 18, 12, 6, (16, 32)),  # key 18x10x4
+    ("ups_initial", 128, 1024, (3, 3, 3), 18, 7, 4, (4, 8)),  # key 18x5x2
+    ("enc_conv_in", 64, 128, (3, 3, 3), 3, 70, 20, 32),  # key 3x68x18
+    ("enc_down", 128, 64, (3, 3, 3), 3, 70, 20, 32),  # key 3x68x18
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [[(1, 1), {"trace_region_size": TRACE_REGION_SIZE}]],
+    ids=["bh_1x1"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, T, H, W, hw_product",
+    _SWEEP_LAYERS_LTX_PORTRAIT_UPS_ENC,
+    ids=[l[0] for l in _SWEEP_LAYERS_LTX_PORTRAIT_UPS_ENC],
+)
+def test_bruteforce_sweep_ltx_portrait_ups_enc(
+    mesh_device, device_params, layer_name, C_in, C_out, kernel, T, H, W, hw_product
+):
+    out_dir = os.environ.get("SWEEP_OUT_DIR", "sweep_results_ltx_portrait_ups_enc")
+    run_sweep(
+        mesh_device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        f"{out_dir}/{layer_name}_{C_in}x{C_out}.json",
+        padding=(0, 0, 0),
+        h_factor=4,
+        w_factor=8,
+        max_combos=int(os.environ.get("SWEEP_MAX_COMBOS", "80")),
+        max_t_block=8,
+        hw_product=hw_product,
+        max_seconds=float(os.environ.get("SWEEP_MAX_SECONDS", "300")),
+    )
