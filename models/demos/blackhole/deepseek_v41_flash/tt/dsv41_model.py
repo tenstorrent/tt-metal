@@ -1226,7 +1226,9 @@ class Model:
             if ix is None or ix.key_owner is not None or not getattr(sp, "dyn_on", False):
                 continue
             r = self.attns[L].ratio
-            off = ix.KL - s_end // r
+            off = (
+                ix.KL_full if ix.sh is not None else ix.KL
+            ) - s_end // r  # column-sharded FIFO: ix.KL is the per-column length
             n = min(ceil32(mx // r), s_end // r, dec.k_cache.shape[2])
             for (i_src, u_dst), rws in by_u.items():
                 self._export_user_keys(ix, dec.k_cache, i_src, u_dst, sorted(rws), off, n)
