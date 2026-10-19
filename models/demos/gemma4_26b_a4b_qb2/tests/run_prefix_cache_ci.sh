@@ -38,6 +38,7 @@ export TT_MESH_GRAPH_DESC_PATH="$PWD/tt_metal/fabric/mesh_graph_descriptors/p300
 export TT_METAL_CACHE="$results/kernel-cache"
 tt_config='{"tt":{"fabric_config":"FABRIC_1D","trace_region_size":1000000000,"sample_on_device_mode":"all","trace_mode":"decode_only","enable_model_warmup":false}}'
 max_context=262144
+server_host=127.0.0.1
 cache_flag=--enable-prefix-caching
 if [ "${GEMMA4_PREFIX_CACHE_MODE:-on}" = off ]; then cache_flag=--no-enable-prefix-caching; fi
 serving_args=()
@@ -48,6 +49,7 @@ case "${GEMMA4_PREFIX_SUITE:-boundary}" in
     lifetime) max_context=4096; test_file="$model_dir/tests/test_prefix_cache_lifetime.py"; test_selection=live_lifetime ;;
     growing) test_file="$model_dir/tests/test_prefix_cache_lifetime.py"; test_selection=live_growing ;;
     agentic)
+        server_host=0.0.0.0
         export GEMMA4_PREFIX_DIAGNOSE=0
         serving_args=(--enable-auto-tool-choice --tool-call-parser gemma4 --reasoning-parser gemma4 --default-chat-template-kwargs '{"enable_thinking":true}')
         ;;
@@ -58,7 +60,7 @@ setsid python -u -m vllm.entrypoints.openai.api_server \
     --revision 4d7ae4984b7db7de8f8457170b3f1a419ee76d52 \
     --tokenizer-revision 4d7ae4984b7db7de8f8457170b3f1a419ee76d52 \
     --hf-overrides '{"architectures":["TTGemma4A4BForCausalLM"]}' \
-    --host 127.0.0.1 --port 8000 --block-size 32 --max-num-seqs 1 \
+    --host "$server_host" --port 8000 --block-size 32 --max-num-seqs 1 \
     --max-model-len "$max_context" --max-num-batched-tokens "$max_context" --max-logprobs -1 \
     --async-scheduling "$cache_flag" --no-enable-chunked-prefill "${serving_args[@]}" \
     --no-enable-log-requests --no-enable-log-outputs \
