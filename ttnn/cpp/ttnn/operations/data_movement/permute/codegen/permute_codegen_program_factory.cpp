@@ -161,10 +161,10 @@ ProgramDescriptor build_row_invariant(
     ProgramDescriptor desc;
     desc.cbs.push_back(make_cb(kCbIn, cb_data_format, slot_bytes, kPermuteRmCbTurns * cb_batch, split.all_cores));
 
-    KernelDescriptor reader = make_kernel(split.all_cores);
-    reader.kernel_source = kReaderStickUnified;
-    TensorAccessorArgs(*src_buffer).append_to(reader.compile_time_args);
-    reader.named_compile_time_args = {
+    KernelDescriptor stick_reader = make_kernel(split.all_cores);
+    stick_reader.kernel_source = kReaderStickUnified;
+    TensorAccessorArgs(*src_buffer).append_to(stick_reader.compile_time_args);
+    stick_reader.named_compile_time_args = {
         {"mode", kModeSequenced},
         {"cb_id", kCbIn},
         {"stick_bytes", stick_bytes},
@@ -183,21 +183,21 @@ ProgramDescriptor build_row_invariant(
         {"valid_last_page_bytes", kUnusedNamedArg},
         {"page_size", kUnusedNamedArg},
     };
-    reader.config = ReaderConfigDescriptor{};
+    stick_reader.config = ReaderConfigDescriptor{};
 
-    KernelDescriptor writer = make_kernel(split.all_cores);
-    writer.kernel_source = kWriterRowInvariant;
-    TensorAccessorArgs(*dst_buffer).append_to(writer.compile_time_args);
-    writer.named_compile_time_args = {
+    KernelDescriptor scatter_writer = make_kernel(split.all_cores);
+    scatter_writer.kernel_source = kWriterRowInvariant;
+    TensorAccessorArgs(*dst_buffer).append_to(scatter_writer.compile_time_args);
+    scatter_writer.named_compile_time_args = {
         {"cb_id", kCbIn},
         {"write_size", stick_bytes},
         {"batch", cb_batch},
     };
-    writer.config = WriterConfigDescriptor{};
+    scatter_writer.config = WriterConfigDescriptor{};
 
-    KernelDescriptor::RTArgList writer_common;
-    writer_common.push_back(dst_buffer);
-    writer.emplace_common_runtime_args(writer_common);
+    KernelDescriptor::RTArgList scatter_writer_common;
+    scatter_writer_common.push_back(dst_buffer);
+    scatter_writer.emplace_common_runtime_args(scatter_writer_common);
 
     // The writer walks input rows in order; the permute sequencer maps each to its output row.
     const std::vector<uint32_t> row_shape(input_shape.begin(), input_shape.begin() + row_axes);
@@ -207,21 +207,21 @@ ProgramDescriptor build_row_invariant(
     uint32_t start = 0;
     for (const auto& core : split.cores_in_order) {
         const uint32_t n = work_for_core(split, core);
-        reader.emplace_runtime_args(core, {src_buffer, n, start});
+        stick_reader.emplace_runtime_args(core, {src_buffer, n, start});
 
-        KernelDescriptor::RTArgList writer_args;
-        writer_args.push_back(n);
-        writer_args.push_back(row_axes);
-        writer_args.append(std::vector<uint32_t>(out_row_strides.begin(), out_row_strides.begin() + row_axes));
-        writer_args.append(row_shape);
-        writer_args.append(row_perm);
-        writer_args.append(row_index(start, row_shape));
-        writer.emplace_runtime_args(core, writer_args);
+        KernelDescriptor::RTArgList scatter_args;
+        scatter_args.push_back(n);
+        scatter_args.push_back(row_axes);
+        scatter_args.append(std::vector<uint32_t>(out_row_strides.begin(), out_row_strides.begin() + row_axes));
+        scatter_args.append(row_shape);
+        scatter_args.append(row_perm);
+        scatter_args.append(row_index(start, row_shape));
+        scatter_writer.emplace_runtime_args(core, scatter_args);
         start += n;
     }
 
-    desc.kernels.push_back(std::move(reader));
-    desc.kernels.push_back(std::move(writer));
+    desc.kernels.push_back(std::move(stick_reader));
+    desc.kernels.push_back(std::move(scatter_writer));
     return desc;
 }
 
