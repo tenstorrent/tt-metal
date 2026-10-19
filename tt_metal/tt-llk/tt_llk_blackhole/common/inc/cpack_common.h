@@ -298,7 +298,8 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
 }
 
 // Channel-1 W stride the closed block pack last wrote; set_packer_strides zeroes the register.
-inline std::uint32_t pack_ch1_w_stride = 0;
+// Internal linkage lets a kernel without a closed block drop the store.
+static std::uint32_t pack_ch1_w_stride = 0;
 
 template <PackMode pack_mode = PackMode::Default>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
