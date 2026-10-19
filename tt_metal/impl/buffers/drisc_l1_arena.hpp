@@ -85,14 +85,13 @@ public:
     DriscL1Arena(const DriscL1Arena&) = delete;
     DriscL1Arena& operator=(const DriscL1Arena&) = delete;
 
-    // Allocate `size` bytes on `dram_sender_logical` alone, leaving the same
-    // address free on every other bank. A sender is handed its state address
-    // explicitly (a DRAM-sender PrefetcherPipe passes it in the request header),
-    // so N single-sender objects cost one range each rather than N zone-wide
-    // offsets.
+    // Allocate `size` bytes on the DRAM sender core `core` (logical) alone,
+    // leaving the same address free on every other bank. A sender is handed its
+    // state address explicitly (a DRAM-sender PrefetcherPipe passes it in the
+    // request header), so N single-sender objects cost one range each rather
+    // than N zone-wide offsets.
     // TT_FATAL on invalid alignment; TT_THROW on zone full.
-    std::shared_ptr<DriscL1Allocation> allocate_on(
-        const CoreCoord& dram_sender_logical, uint32_t size, uint32_t alignment);
+    std::shared_ptr<DriscL1Allocation> allocate_on(const CoreCoord& core, uint32_t size, uint32_t alignment);
 
     // Fixed base for the prefetcher kernel's working region. Unchanged for
     // the device's lifetime, regardless of current arena allocations.

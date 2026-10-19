@@ -12,12 +12,9 @@
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/sender_core_type.hpp>
 
-namespace tt::tt_metal {
-
-namespace experimental {
+namespace tt::tt_metal::experimental {
 
 // Sender domain of a GlobalCircularBuffer: SenderCoreType::Worker, the only kind there is.
 SenderCoreType sender_core_type(const GlobalCircularBuffer& gcb);
 
-}  // namespace experimental
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental
