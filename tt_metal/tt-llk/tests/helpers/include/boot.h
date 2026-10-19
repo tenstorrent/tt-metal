@@ -64,9 +64,11 @@ constexpr std::uint32_t NOC_OVERLAY_START_ADDR    = 0xFFB40000;
 constexpr std::uint32_t NOC_STREAM_REG_SPACE_SIZE = 0x1000;
 constexpr std::uint32_t BRISC_COUNTER_SLOT        = 3;
 
-TT_ALWAYS_INLINE void write(std::uint32_t slot, std::uint32_t value)
+TT_ALWAYS_INLINE void write([[maybe_unused]] std::uint32_t slot, [[maybe_unused]] std::uint32_t value)
 {
+#if !defined(TT_METAL_TTSIM) // ttsim models no overlay registers; the host polls L1 there
     *reinterpret_cast<volatile std::uint32_t*>(NOC_OVERLAY_START_ADDR + slot * NOC_STREAM_REG_SPACE_SIZE + STREAM_SCRATCH_REG_INDEX * 4) = value;
+#endif
 }
 } // namespace host_signal
 #endif
