@@ -488,8 +488,8 @@ def sfpu_binary(
     torch.manual_seed(0)
 
     # Default tensor size. 32-bit formats use [128, 128]. 16-bit formats use
-    # [256, 128]: four blocks of eight tiles only when dest_acc=No and the perf
-    # pin is off. Perf regroups that tensor into the Yes shape (eight blocks of four).
+    # [256, 128]. dest_acc=No fills that tensor as four blocks of eight tiles.
+    # dest_acc=Yes holds four tiles, so the same tensor is eight blocks of four.
     if input_dimensions is None:
         input_dimensions = (
             [128, 128] if formats.input_format.is_32_bit() else [256, 128]
@@ -650,10 +650,8 @@ def sfpu_binary(
 
     bcast = broadcast_type if broadcast_type else LlkBroadcastType.None_
 
-    # perf runs dest_acc No with the Yes block shape.
-    geometry_dest_acc = DestAccumulation.Yes if is_perf else dest_acc
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half, geometry_dest_acc, formats, block_dimensions, TILE_DIMENSIONS
+        DestSync.Half, dest_acc, formats, block_dimensions, TILE_DIMENSIONS
     )
 
     run_types = _resolve_perf_args(is_perf, perf_report, run_types)
