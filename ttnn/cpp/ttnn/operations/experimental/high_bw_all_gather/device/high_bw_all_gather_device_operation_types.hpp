@@ -91,6 +91,7 @@ struct HighBwAllGatherParams {
     // PROTOTYPE sparse push from the all-gathered on-device plan tables (0 = host-built run lists). Structural.
     uint32_t push_stripe_chunk = 0;
     uint32_t push_max_rows = 0;
+    uint32_t push_part = 0;  // 0 all needed rows, 1 rows before the chunk start, 2 the rest
 };
 
 struct HighBwAllGatherInputs {

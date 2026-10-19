@@ -47,7 +47,9 @@ Tensor high_bw_all_gather(
     // PROTOTYPE: with push_stripe_chunk > 0, push_runs_tensor is the all-gathered sparse_push_plan table for a cache
     // of push_max_rows rows (stripe_chunk rows per block-cyclic block) instead of host-built run lists.
     uint32_t push_stripe_chunk = 0,
-    uint32_t push_max_rows = 0);
+    uint32_t push_max_rows = 0,
+    // 0 = every needed row, 1 = only rows before the chunk start (prefix), 2 = only the rest (remainder).
+    uint32_t push_part = 0);
 
 // PROTOTYPE on-device plan for the sparse push: returns {plan table, indices rewritten to compact slots}
 // (see device/sparse_push_plan_device_operation.hpp).
@@ -57,7 +59,8 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t stripe_chunk,
     uint32_t max_rows,
     uint32_t pages_per_packet,
-    uint32_t banks);
+    uint32_t banks,
+    const std::optional<Tensor>& chunk_start = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 

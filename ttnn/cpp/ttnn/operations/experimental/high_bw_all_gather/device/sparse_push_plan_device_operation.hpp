@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/program_descriptors.hpp>
@@ -23,15 +24,17 @@ namespace ttnn::operations::experimental::high_bw_all_gather {
 // bank lane (k / P) % banks of packet group (k / P) / banks, at offset k % P (see kernels/sparse_push_reader.cpp).
 //
 // Table: uint32 [1, 1, pages, 1024], one 4 KiB row-major page per row. Word offsets:
-//   [0] magic, [1] num_devices, [2] stripe_chunk
-//   [16, 16 + num_devices)   rows this requester needs from each owner
-//   [64, 64 + W)             bitmap of needed rows, W = max_rows / 32
+//   [0] magic, [1] num_devices, [2] stripe_chunk, [3] active blocks (later blocks are stale), [4] split block
+//   [32, 32 + num_devices)   rows this requester needs from each owner
+//   [64, 64 + num_devices)   of those, rows in blocks before the split block (the chunk start): the prefix part
+//   [128, 128 + W)           bitmap of needed rows, W = max_rows / 32
 //   prefix_off               one byte per bitmap word: set bits before it within its block
 //   counts_off               set bits per block, num_blocks = max_rows / stripe_chunk
 struct SparsePushPlanLayout {
     static constexpr uint32_t kMagic = 0x5350504Cu;
-    static constexpr uint32_t kOwnerOff = 16;
-    static constexpr uint32_t kBitmapOff = 64;
+    static constexpr uint32_t kOwnerOff = 32;
+    static constexpr uint32_t kOwnerPrefixOff = 64;
+    static constexpr uint32_t kBitmapOff = 128;
     static constexpr uint32_t kPageWords = 1024;
 
     uint32_t bitmap_words = 0;
@@ -53,6 +56,8 @@ struct SparsePushPlanParams {
 
 struct SparsePushPlanInputs {
     Tensor indices;  // uint32 row-major [1, 1, rows, topk] per device, 0xFFFFFFFF = masked
+    // Optional 1-element uint32 DRAM tensor holding the chunk start row: rows before it are the prefix part.
+    std::optional<Tensor> chunk_start;
 };
 
 struct SparsePushPlanDeviceOperation {
@@ -79,6 +84,7 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t stripe_chunk,
     uint32_t max_rows,
     uint32_t pages_per_packet,
-    uint32_t banks);
+    uint32_t banks,
+    const std::optional<Tensor>& chunk_start = std::nullopt);
 
 }  // namespace ttnn::prim

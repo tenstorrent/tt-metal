@@ -162,10 +162,16 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
         layout.num_blocks,
         or_go_sem,
         or_done_sem,
+        SparsePushPlanLayout::kOwnerPrefixOff,
+        args.chunk_start.has_value() ? 1u : 0u,
     };
     tt::tt_metal::TensorAccessorArgs(idx_buf).append_to(ct);
     tt::tt_metal::TensorAccessorArgs(table_buf).append_to(ct);
     tt::tt_metal::TensorAccessorArgs(compact_buf).append_to(ct);
+    auto* start_buf = args.chunk_start.has_value() ? args.chunk_start->buffer() : nullptr;
+    if (start_buf != nullptr) {
+        tt::tt_metal::TensorAccessorArgs(start_buf).append_to(ct);
+    }
 
     tt::tt_metal::KernelDescriptor kernel;
     kernel.kernel_source =
@@ -197,6 +203,9 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
         rt.push_back(r0);
         rt.push_back(r1 - r0);
         rt.push_back((r1 - r0) / 2);
+        if (start_buf != nullptr) {
+            rt.push_back(start_buf);
+        }
         kernel.emplace_runtime_args(core_list[i], rt);
     }
     kernel.common_runtime_args = {core_xy.begin(), core_xy.end()};
@@ -220,7 +229,8 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t stripe_chunk,
     uint32_t max_rows,
     uint32_t pages_per_packet,
-    uint32_t banks) {
+    uint32_t banks,
+    const std::optional<Tensor>& chunk_start) {
     using Op = ttnn::operations::experimental::high_bw_all_gather::SparsePushPlanDeviceOperation;
     return ttnn::device_operation::launch<Op>(
         Op::operation_attributes_t{
@@ -229,7 +239,7 @@ std::vector<Tensor> sparse_push_plan(
             .max_rows = max_rows,
             .pages_per_packet = pages_per_packet,
             .banks = banks},
-        Op::tensor_args_t{.indices = indices});
+        Op::tensor_args_t{.indices = indices, .chunk_start = chunk_start});
 }
 
 }  // namespace ttnn::prim

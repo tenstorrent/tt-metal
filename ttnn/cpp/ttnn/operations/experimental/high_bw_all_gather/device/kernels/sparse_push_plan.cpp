@@ -57,9 +57,12 @@ void kernel_main() {
     constexpr uint32_t num_blocks = get_compile_time_arg_val(18);
     constexpr uint32_t or_go_sem_id = get_compile_time_arg_val(19);    // BRISC -> NCRISC: chunk copies have landed
     constexpr uint32_t or_done_sem_id = get_compile_time_arg_val(20);  // NCRISC -> BRISC: its half of the OR is done
-    constexpr auto indices_args = TensorAccessorArgs<21>();
+    constexpr uint32_t owner_prefix_off = get_compile_time_arg_val(21);  // words; per-owner rows before the split
+    constexpr bool has_split = get_compile_time_arg_val(22) != 0;
+    constexpr auto indices_args = TensorAccessorArgs<23>();
     constexpr auto table_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto compact_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
+    constexpr auto split_args = TensorAccessorArgs<has_split ? compact_args.next_compile_time_args_offset() : 0>();
     constexpr uint32_t unit = pages_per_packet * banks;
     constexpr uint32_t row_bytes = topk * sizeof(uint32_t);
     constexpr uint32_t seg_bytes = seg_len * sizeof(uint32_t);
@@ -76,6 +79,7 @@ void kernel_main() {
     const uint32_t unit_start = get_arg_val<uint32_t>(arg++);
     const uint32_t unit_count = get_arg_val<uint32_t>(arg++);
     const uint32_t rewrite_split = get_arg_val<uint32_t>(arg++);
+    const uint32_t split_addr = has_split ? get_arg_val<uint32_t>(arg++) : 0;
     // Common runtime args: every core's (x, y), core 0 first.
     auto core_noc = [&](uint32_t c, uint32_t l1) {
         return get_noc_addr(get_common_arg_val<uint32_t>(2 * c), get_common_arg_val<uint32_t>(2 * c + 1), l1);
@@ -212,7 +216,7 @@ void kernel_main() {
 #endif
 
 #if defined(SPARSE_PUSH_PLAN_TIMING) && !defined(REWRITE_HELPER)
-    // Stamps (core 0, wall clock), stored in header words 4..13: start, scatter, reduce, -, own rewrite, all done,
+    // Stamps (core 0, wall clock), stored in header words 8..17: start, scatter, reduce, -, own rewrite, all done,
     // chunk reads, dirty-map reads, OR + popcount.
     uint32_t stamps[10] = {};
     stamps[0] = get_timestamp_32b();
@@ -370,7 +374,22 @@ void kernel_main() {
     for (uint32_t o = 0; o < num_devices; ++o) {
         owner_total[o] = 0;
     }
+    // The split block: rows before the chunk start form the prefix part of each owner's run.
+    uint32_t split_block = active_blocks;
+    if constexpr (has_split) {
+        const auto split = TensorAccessor(split_args, split_addr);
+        noc_async_read(split.get_noc_addr(0), row_l1, sizeof(uint32_t));
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        split_block = seg[0] / stripe_chunk;
+    }
+    uint32_t owner_prefix[num_devices];
     for (uint32_t b = 0, o = 0; b < active_blocks; ++b) {
+        if (b == split_block) {
+            for (uint32_t k = 0; k < num_devices; ++k) {
+                owner_prefix[k] = owner_total[k];
+            }
+        }
         pre[b] = owner_total[o];
         owner_total[o] += counts[b];
         o = o + 1 == num_devices ? 0 : o + 1;
@@ -379,7 +398,9 @@ void kernel_main() {
         base[o] = acc;
         acc += (owner_total[o] + unit - 1) / unit * unit;
         image[owner_off + o] = owner_total[o];
+        image[owner_prefix_off + o] = split_block < active_blocks ? owner_prefix[o] : owner_total[o];
     }
+    image[4] = split_block;
     image[0] = magic;
     image[1] = num_devices;
     image[2] = stripe_chunk;
@@ -396,7 +417,7 @@ void kernel_main() {
     PLAN_STAMP(5);
     if (core_idx == 0) {
         for (uint32_t i = 0; i < 10; ++i) {
-            image[4 + i] = stamps[i];
+            image[8 + i] = stamps[i];
         }
         write_span(0, bitmap_off * 4);
         noc_async_write_barrier();
