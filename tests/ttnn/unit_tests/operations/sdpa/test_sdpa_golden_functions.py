@@ -863,6 +863,34 @@ def test_ring_mla_golden_uses_runtime_slot_and_logical_prefix():
     torch.testing.assert_close(output, expected)
 
 
+@pytest.mark.parametrize("prefix_rows", [None, 32])
+def test_ring_mla_golden_restores_split_kv_global_order(prefix_rows):
+    # SP2 x TP4 split KV: 8 sources of 4-row regions per 32-row chunk, two chunks of capacity per source.
+    torch.manual_seed(21)
+    sources, region, slabs = 8, 4, 2
+    query = torch.randn(1, 2, sources * region, 6)
+    global_kv = torch.randn(1, 1, sources * region * slabs, 6)
+    source_major = torch.empty_like(global_kv)
+    for global_region in range(sources * slabs):
+        source, slab = global_region % sources, global_region // sources
+        physical = (source * slabs + slab) * region
+        source_major[..., physical : physical + region, :] = global_kv[
+            ..., global_region * region : (global_region + 1) * region, :
+        ]
+    runtime = {} if prefix_rows is None else {"kv_actual_isl": prefix_rows}
+    logical_n = global_kv.shape[-2] if prefix_rows is None else prefix_rows + query.shape[-2]
+
+    golden = ttnn.get_golden_function(ttnn.transformer.ring_mla)
+    actual, _ = golden(
+        query, source_major, head_dim_v=3, logical_n=logical_n, _ttnn_ring_mla_kv_sources=sources, **runtime
+    )
+    expected, _ = golden(query, global_kv, head_dim_v=3, logical_n=logical_n, **runtime)
+    torch.testing.assert_close(actual, expected)
+    # Without the reorder, source 0's second region (global rows 32..35) would stand in for global rows 4..7.
+    misordered, _ = golden(query, source_major, head_dim_v=3, logical_n=logical_n, **runtime)
+    assert not torch.allclose(misordered, expected)
+
+
 def test_flash_mla_prefill_golden_casts_kv_to_query_dtype():
     torch.manual_seed(11)
     query = torch.randn(1, 2, 4, 8, dtype=torch.bfloat16)

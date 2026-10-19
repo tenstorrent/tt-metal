@@ -54,6 +54,8 @@ constexpr uint32_t BRISC_RD_CMD_BUF = 1;      // for all reads
 constexpr uint32_t BRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
 constexpr uint32_t BRISC_AT_CMD_BUF = 3;      // for atomics
 
+constexpr uint32_t NOC_NUM_CMD_BUFS = 4;
+
 /* Qsr has 64 bit addresses, use same encoding as BH and WH */
 constexpr uint32_t NOC_ADDR_COORD_SHIFT = 36;
 const uint32_t NOC_TARG_ADDR_COORDINATE = NOC_TARG_ADDR_HI;
@@ -71,6 +73,26 @@ extern uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
 extern uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 extern uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
 extern uint32_t noc_posted_writes_num_issued[NUM_NOCS];
+
+// The NIU registers are device memory, so they are ordered against the lock and counters only by an I/O fence.
+inline __attribute__((always_inline)) void noc_io_fence() { asm volatile("fence iorw, iorw" ::: "memory"); }
+
+// Every DM core shares the NIU command buffers, so the issue functions below program and issue a command under
+// its buffer's lock. The *_set_state / *_with_state paths do not take it and are not safe across DM cores.
+extern uint32_t noc_cmd_buf_lock[NOC_NUM_CMD_BUFS];
+
+struct NocCmdBufLock {
+    uint32_t* const word;
+    inline __attribute__((always_inline)) explicit NocCmdBufLock(uint32_t cmd_buf) : word(&noc_cmd_buf_lock[cmd_buf]) {
+        while (__atomic_exchange_n(word, 1u, __ATOMIC_ACQUIRE)) {
+        }
+        noc_io_fence();
+    }
+    inline __attribute__((always_inline)) ~NocCmdBufLock() {
+        noc_io_fence();
+        __atomic_store_n(word, 0u, __ATOMIC_RELEASE);
+    }
+};
 
 enum class NocBarrierType : uint8_t {
     READS_NUM_ISSUED,
@@ -170,6 +192,15 @@ inline __attribute__((always_inline)) uint32_t NOC_CFG_READ_REG(uint32_t noc, ui
     uintptr_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CFG(reg_id);
     volatile uint32_t* ptr = (volatile uint32_t*)offset;
     return *ptr;
+}
+
+// An issuer counts a command before issuing it, so a status register never runs ahead of its counter. Reading
+// the register first keeps that true for this snapshot: equal means every command counted so far has completed.
+inline __attribute__((always_inline)) bool noc_status_reg_matches_counter(
+    uint32_t noc, uint32_t status_reg, const uint32_t* counter) {
+    const uint32_t status = NOC_STATUS_READ_REG(noc, status_reg);
+    noc_io_fence();
+    return status == __atomic_load_n(counter, __ATOMIC_RELAXED);
 }
 
 inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint32_t cmd_buf) {
@@ -322,6 +353,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t len_bytes,
     uint32_t read_req_vc = 1) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    NocCmdBufLock lock(cmd_buf);
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
@@ -332,10 +365,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        noc_reads_num_issued[noc] += 1;
+        __atomic_fetch_add(&noc_reads_num_issued[noc], 1, __ATOMIC_RELAXED);
     }
+    noc_io_fence();
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 }
 
 // Quasar has only 1 NOC -- dynamic NOC is not supported.
@@ -346,7 +380,7 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_reads_flushed(uint
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_reads_flushed(uint32_t noc) {
-    return (NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED) == noc_reads_num_issued[noc]);
+    return noc_status_reg_matches_counter(noc, NIU_MST_RD_RESP_RECEIVED, &noc_reads_num_issued[noc]);
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_read_with_transaction_id_flushed(
@@ -373,6 +407,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     bool posted = false,
     uint32_t trid = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    NocCmdBufLock lock(cmd_buf);
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
     if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -397,16 +433,16 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-
     if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
         if (posted) {
-            noc_posted_writes_num_issued[noc] += 1;
+            __atomic_fetch_add(&noc_posted_writes_num_issued[noc], 1, __ATOMIC_RELAXED);
         } else {
-            noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += num_dests;
+            __atomic_fetch_add(&noc_nonposted_writes_num_issued[noc], 1, __ATOMIC_RELAXED);
+            __atomic_fetch_add(&noc_nonposted_writes_acked[noc], num_dests, __ATOMIC_RELAXED);
         }
     }
+    noc_io_fence();
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
@@ -422,6 +458,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
     uint32_t num_dests,
     bool multicast_path_reserve) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    NocCmdBufLock lock(cmd_buf);
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
@@ -439,11 +477,12 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        noc_nonposted_writes_num_issued[noc] += 1;
-        noc_nonposted_writes_acked[noc] += num_dests;
+        __atomic_fetch_add(&noc_nonposted_writes_num_issued[noc], 1, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&noc_nonposted_writes_acked[noc], num_dests, __ATOMIC_RELAXED);
     }
+    noc_io_fence();
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
@@ -476,7 +515,7 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_s
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_sent(uint32_t noc) {
-    return (NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT) == noc_nonposted_writes_num_issued[noc]);
+    return noc_status_reg_matches_counter(noc, NIU_MST_NONPOSTED_WR_REQ_SENT, &noc_nonposted_writes_num_issued[noc]);
 }
 
 template <typename T = void>
@@ -486,7 +525,7 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_posted_writes_sent
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_posted_writes_sent(uint32_t noc) {
-    return (NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT) == noc_posted_writes_num_issued[noc]);
+    return noc_status_reg_matches_counter(noc, NIU_MST_POSTED_WR_REQ_SENT, &noc_posted_writes_num_issued[noc]);
 }
 
 template <typename T = void>
@@ -496,7 +535,7 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_f
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_flushed(uint32_t noc) {
-    return (NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED) == noc_nonposted_writes_acked[noc]);
+    return noc_status_reg_matches_counter(noc, NIU_MST_WR_ACK_RECEIVED, &noc_nonposted_writes_acked[noc]);
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_sent(
@@ -516,7 +555,7 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_atomics_
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(uint32_t noc) {
-    return (NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED) == noc_nonposted_atomics_acked[noc]);
+    return noc_status_reg_matches_counter(noc, NIU_MST_ATOMIC_RESP_RECEIVED, &noc_nonposted_atomics_acked[noc]);
 }
 
 inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic_ret_val) {
@@ -633,13 +672,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     uint32_t len_bytes,
     uint32_t read_req_vc = 1) {
     while (len_bytes > NOC_MAX_BURST_SIZE) {
-        while (!noc_cmd_buf_ready(noc, cmd_buf));
         ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE, read_req_vc);
         src_addr += NOC_MAX_BURST_SIZE;
         dest_addr += NOC_MAX_BURST_SIZE;
         len_bytes -= NOC_MAX_BURST_SIZE;
     }
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
     ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
 }
 
@@ -659,7 +696,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
     uint32_t trid = 0) {
     if constexpr (!one_packet) {
         while (len_bytes > NOC_MAX_BURST_SIZE) {
-            while (!noc_cmd_buf_ready(noc, cmd_buf));
             ncrisc_noc_fast_write<noc_mode, use_trid>(
                 noc,
                 cmd_buf,
@@ -678,7 +714,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
             len_bytes -= NOC_MAX_BURST_SIZE;
         }
     }
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
     ncrisc_noc_fast_write<noc_mode, use_trid>(
         noc,
         cmd_buf,
@@ -707,7 +742,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
     uint32_t num_dests,
     bool multicast_path_reserve) {
     while (len_bytes > NOC_MAX_BURST_SIZE) {
-        while (!noc_cmd_buf_ready(noc, cmd_buf));
         ncrisc_noc_fast_write_loopback_src<noc_mode>(
             noc,
             cmd_buf,
@@ -723,7 +757,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
         dest_addr += NOC_MAX_BURST_SIZE;
         len_bytes -= NOC_MAX_BURST_SIZE;
     }
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
     ncrisc_noc_fast_write_loopback_src<noc_mode>(
         noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve);
 }
@@ -740,6 +773,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     bool posted = false,
     uint32_t customized_src_addr = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    NocCmdBufLock lock(cmd_buf);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -767,15 +801,16 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, be32);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if (posted) {
-            noc_posted_writes_num_issued[noc] += 1;
+            __atomic_fetch_add(&noc_posted_writes_num_issued[noc], 1, __ATOMIC_RELAXED);
         } else {
-            noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += 1;
+            __atomic_fetch_add(&noc_nonposted_writes_num_issued[noc], 1, __ATOMIC_RELAXED);
+            __atomic_fetch_add(&noc_nonposted_writes_acked[noc], 1, __ATOMIC_RELAXED);
         }
     }
+    noc_io_fence();
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
@@ -791,6 +826,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
     uint32_t customized_src_addr = 0,
     uint32_t num_dests = 1) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    NocCmdBufLock lock(cmd_buf);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -817,15 +853,16 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, be32);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if (posted) {
-            noc_posted_writes_num_issued[noc] += 1;
+            __atomic_fetch_add(&noc_posted_writes_num_issued[noc], 1, __ATOMIC_RELAXED);
         } else {
-            noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += num_dests;
+            __atomic_fetch_add(&noc_nonposted_writes_num_issued[noc], 1, __ATOMIC_RELAXED);
+            __atomic_fetch_add(&noc_nonposted_writes_acked[noc], num_dests, __ATOMIC_RELAXED);
         }
     }
+    noc_io_fence();
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool program_ret_addr = false>
@@ -840,6 +877,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    NocCmdBufLock lock(cmd_buf);
     posted = false;
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (!posted) {
@@ -870,12 +908,13 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
         NOC_AT_LEN,
         NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(wrap) | NOC_AT_IND_32((addr >> 2) & 0x3) | NOC_AT_IND_32_SRC(0));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, incr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, 0x1);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if (!posted) {
-            noc_nonposted_atomics_acked[noc] += 1;
+            __atomic_fetch_add(&noc_nonposted_atomics_acked[noc], 1, __ATOMIC_RELAXED);
         }
     }
+    noc_io_fence();
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, 0x1);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
@@ -892,6 +931,7 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    NocCmdBufLock lock(cmd_buf);
     posted = false;
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (!posted) {
@@ -923,12 +963,13 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
         NOC_AT_LEN,
         NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(wrap) | NOC_AT_IND_32((addr >> 2) & 0x3) | NOC_AT_IND_32_SRC(0));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, incr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, 0x1);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if (!posted) {
-            noc_nonposted_atomics_acked[noc] += num_dests;
+            __atomic_fetch_add(&noc_nonposted_atomics_acked[noc], num_dests, __ATOMIC_RELAXED);
         }
     }
+    noc_io_fence();
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, 0x1);
 }
 
 // issue noc reads while wait for outstanding transactions done
@@ -936,6 +977,7 @@ template <uint8_t noc_mode = DM_DEDICATED_NOC, bool skip_ptr_update = false, boo
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    NocCmdBufLock lock(cmd_buf);
     if constexpr (noc_mode == DM_DYNAMIC_NOC && !skip_ptr_update) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
@@ -951,10 +993,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr_);  // (uint32_t)src_addr
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DEDICATED_NOC && !skip_ptr_update) {
-        noc_reads_num_issued[noc] += 1;
+        __atomic_fetch_add(&noc_reads_num_issued[noc], 1, __ATOMIC_RELAXED);
     }
+    noc_io_fence();
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 }
 
 // clang-format off

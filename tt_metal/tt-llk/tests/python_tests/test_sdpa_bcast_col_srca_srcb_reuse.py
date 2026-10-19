@@ -20,7 +20,7 @@
 #   - The preamble waits on STALLWAIT(WAIT_SFPU | SRCA_VLD | SRCB_VLD), so the unpacker must call the SrcA+SrcB
 #     dummy-valid helper _llk_unpack_A_sdpa_set_srca_srcb_dummy_valid_(), not the SrcB-only one.
 #
-# Geometry: the MOP is two 8-row ELWMULs with dest.incr == 8 and srcb.incr == 0, i.e. 16 CONTIGUOUS dest rows with
+# Geometry: the MOP covers two 8-row groups with dest.incr == 8 and srcb.incr == 0, i.e. 16 CONTIGUOUS dest rows with
 # both halves reusing the same 8 per-row scales. That is the demo's tile -- an 8x32 logical tile packed into one
 # 16x16 DEST face ("Each tile is 8x32, which is the same as a full 16x16 face", sdpa.h:317) with dest rows 0-7
 # holding logical columns 0-15 and rows 8-15 holding columns 16-31. So the test drives a single 16x16 face
@@ -37,22 +37,21 @@ import torch
 from conftest import blackhole_only
 from helpers.device import BootMode
 from helpers.format_config import DataFormat
-from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
+from helpers.golden_generators import EltwiseBinaryGolden
 from helpers.llk_params import (
     DestAccumulation,
     MathFidelity,
-    MathOperation,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import input_output_formats, parametrize, runtime
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import NUM_FACES, TILE_COUNT
+from helpers.test_variant_parameters import MATH_FIDELITY, NUM_FACES, TILE_COUNT
 from helpers.tile_constants import FACE_C_DIM, MAX_FACE_R_DIM
 from helpers.utils import passed_test
 
-# LoFi-only, bf16-natural path. Keep the grid tiny for the advance test.
+# BF16 operands with the fidelity modes accepted by the SDPA correction selector.
 SDPA_FORMATS = input_output_formats([DataFormat.Float16_b])
 
 # One 16x16 DEST face per tile (see the geometry note above).
@@ -65,15 +64,15 @@ LOGICAL_ROWS = 8
 @blackhole_only
 @parametrize(
     formats=SDPA_FORMATS,
+    math_fidelity=list(MathFidelity),
+    cancellation=runtime([False, True]),
 )
 def test_sdpa_bcast_col_srca_srcb_reuse(
     formats,
+    math_fidelity,
+    cancellation,
     boot_mode=BootMode.DEFAULT,
 ):
-    # A single-axis @parametrize passes the value as a 1-tuple; unwrap it.
-    if isinstance(formats, tuple):
-        (formats,) = formats
-
     torch_format = format_dict[formats.output_format]
     tile_cnt = 1
 
@@ -88,13 +87,33 @@ def test_sdpa_bcast_col_srca_srcb_reuse(
         tile_dimensions=TILE_DIMS,
     )
 
+    if cancellation:
+        # SDPA corrects the previous chunk with O + O * (corr - 1). A max jump
+        # makes corr small, exposing LoFi's truncated SrcA mantissa. Signed,
+        # BF16-exact O values retain low mantissa bits; include corr == 0 too.
+        columns = torch.arange(FACE_C_DIM)
+        signs = torch.where(columns % 2 == 0, 1, -1)
+        src_A = (
+            ((8 + (columns + 1) / 16) * signs)
+            .expand(MAX_FACE_R_DIM, FACE_C_DIM)
+            .contiguous()
+            .flatten()
+            .to(torch_format)
+        )
+        correction = torch.tensor(
+            [0, 1 / 256, 1 / 128, 1 / 64, 1 / 32, 1 / 16, 1 / 8, 1 / 4],
+            dtype=torch_format,
+        )
+        src_B = torch.zeros_like(src_A).reshape(MAX_FACE_R_DIM, FACE_C_DIM)
+        src_B[:LOGICAL_ROWS, 0] = correction - 1
+        src_B = src_B.flatten()
+
     # Golden, in the same flat DEST-row order the packer writes back. The op's ELWMUL carries CLR_NONE and
     # accumulates into DEST while SrcA is a copy of DEST, so what the hardware computes is
     #   out[d, c] = X[d, c] + X[d, c] * P[d % 8, 0]
     # rather than the algebraically equal X * (1 + P): only the PRODUCT goes through the FPU, so only the
-    # product carries LoFi's mantissa truncation. EltwiseBinaryGolden models that truncation (SrcA masked to
-    # 5 mantissa bits, SrcB to 7), which a raw torch multiply does not. The column value repeats every 8 dest
-    # rows because srcb.incr == 0 across the MOP's two 8-row chunks.
+    # product carries fidelity masking (LoFi uses 5 SrcA mantissa bits and 7 SrcB bits). The column repeats
+    # every 8 dest rows because srcb.incr == 0 across the MOP's two 8-row chunks.
     x = src_A.reshape(MAX_FACE_R_DIM, FACE_C_DIM).to(torch_format)
     p_col0 = src_B.reshape(MAX_FACE_R_DIM, FACE_C_DIM).to(torch_format)[
         :LOGICAL_ROWS, 0
@@ -104,21 +123,25 @@ def test_sdpa_bcast_col_srca_srcb_reuse(
         .reshape(MAX_FACE_R_DIM, 1)
         .expand(MAX_FACE_R_DIM, FACE_C_DIM)
     )
-    # Both operands are already quantized (stimuli are generated in input_format), so input_format is left
-    # unset -- the same call shape test_experimental_reconfig_escape.py uses.
-    product = get_golden_generator(EltwiseBinaryGolden)(
-        MathOperation.Elwmul,
-        x.flatten(),
-        bcast_col.flatten(),
-        formats.output_format,
-        MathFidelity.LoFi,
-    )
-    golden_tensor = x.flatten() + product
+    # Follow the dest-reuse golden in test_eltwise_binary: mask the original
+    # operands for each fidelity phase. Accumulate into the seed before the
+    # final output cast; rounding the product to BF16 first loses cancellation.
+    # Instantiate directly because compile-producer replaces registered goldens
+    # with a dummy that does not implement fidelity masking.
+    binary_golden = EltwiseBinaryGolden()
+    golden_tensor = x.flatten().to(torch.float32)
+    for phase in range(max(1, math_fidelity.value)):
+        a, b = binary_golden._apply_fidelity_masking(
+            formats.input_format, x.flatten(), bcast_col.flatten(), phase
+        )
+        golden_tensor += a.to(torch.float32) * b.to(torch.float32)
+    golden_tensor = golden_tensor.to(torch_format)
 
     configuration = TestConfig(
         "sources/sdpa_bcast_col_srca_srcb_reuse_test.cpp",
         formats,
         templates=[
+            MATH_FIDELITY(math_fidelity),
             # NUM_FACES is a TEMPLATE parameter, not a runtime one: it emits `constexpr num_faces`, and the
             # SDPA addrmod config needs a compile-time face count (SETC16 "n" asm constraint). The mop's own
             # inner-loop count is 2, not NUM_FACES_HOST -- that one is a fixed property of the primitive and

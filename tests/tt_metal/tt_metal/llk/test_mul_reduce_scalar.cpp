@@ -189,12 +189,15 @@ float one_tile_rel_tol(int num_tiles) { return 0.01f + 0.001f * static_cast<floa
 
 using namespace tt::tt_metal::unit_tests::compute::mul_reduce_scalar;
 
-// Runs on any single card (Wormhole or Blackhole); mul_reduce_scalar is
-// supported on both architectures.
+// Wormhole and Blackhole. Quasar skips: the reader and writer are still
+// DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923).
 class MulReduceScalarTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
 
 // Standard 32x32-tile suite parametrized by tile count.
 TEST_P(MulReduceScalarTest, MulReduceScalar) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+    }
     int num_tiles = GetParam();
     ASSERT_TRUE(run_mul_reduce_scalar_test(this->device(), {.num_tiles = num_tiles, .tile_height = 32}));
 }
@@ -210,6 +213,9 @@ INSTANTIATE_TEST_SUITE_P(
 class MulReduceScalarTinyTileTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
 
 TEST_P(MulReduceScalarTinyTileTest, MulReduceScalarTinyTile) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+    }
     int num_tiles = GetParam();
     ASSERT_TRUE(run_mul_reduce_scalar_test(this->device(), {.num_tiles = num_tiles, .tile_height = 16}));
 }

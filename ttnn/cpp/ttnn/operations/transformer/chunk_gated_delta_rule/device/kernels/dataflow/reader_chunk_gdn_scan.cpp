@@ -36,12 +36,13 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 #if defined(GDN_MCAST_SENDER) || defined(GDN_MCAST_RECEIVER) || defined(GDN_FUSED_RECEIVER)
-#include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "chunk_gdn_handoff_dm.hpp"
 #include "hostdevcommon/common_values.hpp"
 // Semaphore ids (SEM_READY/SEM_VALID) arrive as the two trailing compile-time args after the
 // accessor chain — read in kernel_main below, so factory and kernel cannot drift.
@@ -201,7 +202,7 @@ void kernel_main() {
         eye.reserve_back(1);
         noc.async_write_zeros(eye, eye.get_tile_size());
         noc.write_zeros_l1_barrier();
-        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eye.get_write_ptr());
+        CoreLocalMem<volatile uint32_t> p(eye.get_write_ptr());
         for (uint32_t r = 0; r < 32; r++) {
             p[(r < 16) ? r * 17 : 768 + (r - 16) * 17] =
                 0x3F800000u;  // 1.0f at (r, r): faces 0 and 3 carry the diagonal
@@ -378,12 +379,8 @@ void kernel_main() {
         // that last used it — which the producer's VALID for that chunk preceded, which its reset of
         // this very word preceded. Hence the word counts exactly one chunk at a time for any NP.
         const uint32_t pi = c % NP;
-        const uint64_t dst = get_noc_addr(
-            get_arg_val<uint32_t>(6 + 2 * pi),
-            get_arg_val<uint32_t>(7 + 2 * pi),
-            credit_base + 4 * slot,
-            noc.get_noc_id());
-        noc_semaphore_inc(dst, 1, noc.get_noc_id());
+        gdn_handoff::credit_inc(
+            noc, get_arg_val<uint32_t>(6 + 2 * pi), get_arg_val<uint32_t>(7 + 2 * pi), credit_base + 4 * slot);
     };
 
     uint32_t next = 0;

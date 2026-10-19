@@ -5,6 +5,7 @@ import struct
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TernarySFPUGolden,
@@ -35,14 +36,15 @@ from helpers.test_variant_parameters import (
     DISABLE_SRC_ZERO_FLAG,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_CLOBBER_LREGS,
     SFPU_TERNARY_OP,
     SFPU_TERNARY_SCALAR,
 )
 
 _SCALAR_VALUE = 2.0
 
-#: The approximation mode every test here compiles sfpu_ternary_test.cpp with, and so the
-#: one test_sfpu_ternary's contract names.
+#: The default approximation mode sfpu_ternary_test.cpp is compiled with, and so the one
+#: test_sfpu_ternary's contract names. test_sfpu_ternary_approx_after_lreg_clobber overrides it.
 _APPROX_MODE = ApproximationMode.No
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
 
@@ -81,6 +83,8 @@ def _run_sfpu_ternary(
     spec_A=None,
     spec_B=None,
     spec_C=None,
+    approx_mode=_APPROX_MODE,
+    clobber_lregs=False,
 ):
     # The specs below carry no seed; seed here so a near-tolerance variant cannot pass by luck.
     torch.manual_seed(0)
@@ -120,16 +124,20 @@ def _run_sfpu_ternary(
         formats.output_format,
     )
 
+    templates = [
+        SFPU_TERNARY_OP(mathop),
+        SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
+        APPROX_MODE(approx_mode),
+        DISABLE_SRC_ZERO_FLAG(True),
+        DEST_SYNC(),
+    ]
+    if clobber_lregs:
+        templates.append(SFPU_CLOBBER_LREGS())
+
     configuration = TestConfig(
         "sources/sfpu_ternary_test.cpp",
         formats,
-        templates=[
-            SFPU_TERNARY_OP(mathop),
-            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(_APPROX_MODE),
-            DISABLE_SRC_ZERO_FLAG(True),
-            DEST_SYNC(),
-        ],
+        templates=templates,
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
             src_A.flatten(),
@@ -165,7 +173,7 @@ def _run_sfpu_ternary(
     # rows were measured over this driver's own variants. The mode the kernel compiled
     # is passed: left unset, a row keyed `approx: "No"` would not match.
     assert_against_contract(
-        mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=_APPROX_MODE
+        mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=approx_mode
     )
 
 
@@ -196,6 +204,42 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
         pytest.skip("Bfp8_b is only supported for addcmul")
 
     _run_sfpu_ternary(formats, dest_acc, mathop)
+
+
+# Ops whose body runs sfpu_reciprocal_iter's Newton-Raphson step in every approximation
+# mode, so their init must program the vConstFloatPrgm0 = 2.0 that step reads in every mode
+# (tenstorrent/tt-llk#1701 items 2 and 5).
+_TERNARY_RECIP_NEWTON_OPS = [
+    MathOperation.SfpuAddcdiv,
+    MathOperation.SfpuSnakeBeta,
+]
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=_TERNARY_RECIP_NEWTON_OPS,
+)
+def test_sfpu_ternary_approx_after_lreg_clobber(formats, dest_acc, mathop):
+    """APPROX_MODE=Yes with the SFPU registers clobbered first: the init must program the
+    Newton step's 2.0 (vConstFloatPrgm0) itself, or 1/c comes out about 47.6x too large.
+    """
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "Blackhole regression for https://github.com/tenstorrent/tt-llk/issues/1701 "
+            "items 2 and 5, verified on Blackhole silicon only; Wormhole's "
+            "sfpu_reciprocal_init programs its constants in both modes"
+        )
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        approx_mode=ApproximationMode.Yes,
+        clobber_lregs=True,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
