@@ -430,7 +430,9 @@ class TTMLRolloutSampler(RolloutSampler):
                     prompt_np[b, : len(seq)] = np.asarray(seq, dtype=np.uint32)
 
                 input_tensor = self._tokens_to_tensor(prompt_np, B)
-                prefill_mask = build_causal_mask(prefill_width, device=True)
+                # Llama's forward_kv slices the KV cache to the mask width and uses the composite SDPA, so it needs a mask.
+                # Qwen3's prefill uses the fused SDPA, which treats None as causal.
+                prefill_mask = build_causal_mask(prefill_width, device=True) if self._kind == "llama" else None
                 logits = self._forward(input_tensor, prefill_mask, kv, new_tokens=cache_advance)
 
                 prefill_seed = int(np.random.randint(low=1, high=int(1e7)))
