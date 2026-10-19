@@ -8,7 +8,7 @@ import pytest
 from models.tt_dit.utils.conv3d import _BLOCKINGS
 
 from ..wan2_2.bruteforce_conv3d_sweep import HaloSpec, build_all_blockings, halo_masks, halo_sticks, prefetch_shard_fits
-from .bruteforce_conv3d_sweep_ltx import _SWEEP_LAYERS_LTX25_544P_145F_HALO
+from .bruteforce_conv3d_sweep_ltx import _SWEEP_LAYERS_LTX25_544P_145F_HALO, _SWEEP_LAYERS_LTX_PORTRAIT_121F_HALO
 
 
 @pytest.mark.parametrize(
@@ -79,3 +79,16 @@ def test_ltx_table_blockings_without_prefetch_shard():
         if k[2] in (128, 256, 512, 1024) and k[4] == (3, 3, 3) and not prefetch_shard_fits(*v, k[4], k[2])
     }
     assert no_shard == set()
+
+
+@pytest.mark.parametrize(
+    "name, C_in, C_out, T, H, W, key, logical_hw",
+    _SWEEP_LAYERS_LTX_PORTRAIT_121F_HALO,
+    ids=[l[0] for l in _SWEEP_LAYERS_LTX_PORTRAIT_121F_HALO],
+)
+def test_ltx_portrait_decoder_layers_key_into_table(name, C_in, C_out, T, H, W, key, logical_hw):
+    # Without these entries the 576x1088 decode on the 4x8 took the channel fallback (1.32 s vs 0.40 s).
+    blk = _BLOCKINGS.get((4, 8, C_in, C_out, (3, 3, 3), *key))
+    assert blk is not None, f"{name}: no _BLOCKINGS entry for {key}"
+    _, _, T_out_block, H_out_block, W_out_block = blk
+    assert H_out_block * W_out_block == 32 and T_out_block <= 8
