@@ -302,7 +302,14 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
         }
 
         append_routing_plane_connection_manager_rt_args(
-            sender_fabric_node_id, dst_nodes, {link}, program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
+            *mesh_device,
+            sender_fabric_node_id,
+            dst_nodes,
+            {link},
+            program,
+            worker_sender_writer_kernel_id,
+            {core},
+            writer_rt_args);
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 

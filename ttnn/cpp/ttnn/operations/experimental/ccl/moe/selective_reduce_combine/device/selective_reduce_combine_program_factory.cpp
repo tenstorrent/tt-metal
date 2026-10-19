@@ -298,6 +298,7 @@ auto launch_mux_workers(
             // that hung dm0 in noc_async_read_barrier_with_trid (see moe_compute dm0.cpp).
             const auto dst_node_id = mesh_device.get_fabric_node_id(neighbor_coord);
             tt::tt_fabric::add_fabric_mux_v2_to_program(
+                mesh_device,
                 program,
                 mux_config,
                 mux_logical_core,
