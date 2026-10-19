@@ -383,6 +383,7 @@ inline void _llk_pack_init_(
     const bool narrow_tile         = false,
     const std::uint32_t num_tiles  = 1)
 {
+    asm volatile("nop");
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0 pack init supports only PackMode::Default and PackMode::Untilize");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
