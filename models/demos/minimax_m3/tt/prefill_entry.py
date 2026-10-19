@@ -3,8 +3,8 @@
 
 """Chunk entries of a packed prefill forward.
 
-A forward of ``forward_tokens`` rows holds ``forward_tokens // chunk_size`` entries in pack order. Each SP chip
-holds every entry's ``chunk_size // sp`` rows back to back, in the entry's rotated per-chip layout.
+A forward of ``forward_tokens_budget`` rows holds ``forward_tokens_budget // chunk_size`` entries in pack order.
+Each SP chip holds every entry's ``chunk_size // sp`` rows back to back, in the entry's rotated per-chip layout.
 """
 
 from dataclasses import dataclass

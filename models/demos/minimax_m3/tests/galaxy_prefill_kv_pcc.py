@@ -13,9 +13,9 @@ Env:
                       in multi-run optional: seeds the initial capacity and the default PREFILL_GOLDEN_ROOT]
   PREFILL_CHUNKED     "1" -> chunked prefill (chunk loop, cache-read path); "0" -> one-shot  [default 0]
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode)                                  [default 5120]
-  PREFILL_FORWARD_TOKENS  tokens per forward (chunked mode): consecutive chunks of the prompt packed into
-                      one forward of PREFILL_FORWARD_TOKENS // PREFILL_CHUNK_SIZE entries, the last forward
-                      padded with empty entries                                        [default: chunk size]
+  PREFILL_FORWARD_TOKENS_BUDGET  tokens per forward (chunked mode): consecutive chunks of the prompt packed
+                      into one forward of PREFILL_FORWARD_TOKENS_BUDGET // PREFILL_CHUNK_SIZE entries, the last
+                      forward padded with empty entries                                [default: chunk size]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement (less noise)      [default 1]
   PREFILL_SKIP_PCC    "1" -> perf only: skip the per-layer golden KV PCC (no kv_cache/ needed) [default 0]
   PREFILL_EXPECTED_TPS  whole-sequence tok/s baseline; when set, assert measured median is
@@ -523,7 +523,7 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
         "trace_tokens": n_trace,
         "chunk": chunk,
         "n_chunks": n_chunks,
-        "forward_tokens": fwd_chunks * chunk,
+        "forward_tokens_budget": fwd_chunks * chunk,
         "n_forwards": n_forwards,
         "capacity": capacity,
         "recompile_s": recompile_s,
@@ -600,7 +600,7 @@ def main():
     runs_source = os.environ.get("PREFILL_RUNS")
     chunked = os.getenv("PREFILL_CHUNKED", "0") == "1"
     chunk_size = int(os.getenv("PREFILL_CHUNK_SIZE", "5120"))
-    forward_tokens = int(os.getenv("PREFILL_FORWARD_TOKENS") or chunk_size)
+    forward_tokens_budget = int(os.getenv("PREFILL_FORWARD_TOKENS_BUDGET") or chunk_size)
     golden_root = os.environ.get("PREFILL_GOLDEN_ROOT") or (
         os.path.dirname(os.path.normpath(golden_dir)) if golden_dir else None
     )
@@ -759,7 +759,7 @@ def main():
             max_seq_len=capacity,
             mesh_shape=(rows, cols),
             chunk_size=chunk,
-            forward_tokens=forward_tokens if chunked or runs_source is not None else chunk,
+            forward_tokens_budget=forward_tokens_budget if chunked or runs_source is not None else chunk,
             num_users=1,
             expert_weight_dtype=expert_dtype,
             weight_cache_path=cache_path,

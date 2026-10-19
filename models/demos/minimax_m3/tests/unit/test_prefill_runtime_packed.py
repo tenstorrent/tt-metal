@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Packed forwards through TtPrefillRuntime.prefill_forward: 4 x 1024-token chunk entries per forward must fill the
-KV cache like the same chunks prefilled one per forward (forward_tokens == chunk_size, today's path).
+KV cache like the same chunks prefilled one per forward (forward_tokens_budget == chunk_size, today's path).
 
 One schedule of five forwards over four slots covers consecutive chunks of one slot, mixed depths, interleaved
 partial entries, an empty tail and mid-slab resumes (two consecutive mid-slab entries of one slot). The same
 entries then run one per forward through the same runtime (empty tail) and through a runtime built with
-forward_tokens == chunk_size, each into its own cache. Every slot is compared per layer (K, V and, on the MSA
+forward_tokens_budget == chunk_size, each into its own cache. Every slot is compared per layer (K, V and, on the MSA
 layers, index_k) in natural order. After compile() the packed schedule must add no program-cache entries.
 
 Real weights, first 5 layers (3 dense + 2 MSA/MoE), from the warm tilized weight cache (HF_MODEL / TT_CACHE_PATH);
@@ -31,7 +31,7 @@ NUM_LAYERS = 5
 C, W, USERS = 1024, 4096, 4
 CAPACITY = 8 * C
 PCC = 0.998  # packing only: same forward width, one entry per forward
-PCC_CHUNK_WIDTH = 0.997  # vs forward_tokens == chunk_size: the auto matmul configs follow the forward width (M)
+PCC_CHUNK_WIDTH = 0.997  # vs forward_tokens_budget == chunk_size: the auto matmul configs follow the forward width (M)
 EMPTY = PrefillEntry(0, 0, 0)
 SCHEDULE = [
     [PrefillEntry(0, 0, C), PrefillEntry(0, C, 2 * C), PrefillEntry(1, 0, C), PrefillEntry(2, 0, C)],
@@ -79,13 +79,13 @@ def test_prefill_runtime_packed(mesh_device, device_params, reset_seeds):
             return [0] * C
         return tokens[e.slot][e.start : e.end] + [0] * (C - (e.end - e.start))
 
-    def build(forward_tokens):
+    def build(forward_tokens_budget):
         cfg = TtPrefillRuntimeConfig(
             num_layers=NUM_LAYERS,
             max_seq_len=CAPACITY,
             mesh_shape=tuple(mesh_device.shape),
             chunk_size=C,
-            forward_tokens=forward_tokens,
+            forward_tokens_budget=forward_tokens_budget,
             num_users=USERS,
             expert_weight_dtype=ttnn.bfloat4_b,
             weight_cache_path=cache_path,
@@ -157,9 +157,9 @@ def test_prefill_runtime_packed(mesh_device, device_params, reset_seeds):
         return worst
 
     worst_same_width = worst_pcc(solo_same_width, "one entry per forward")
-    worst_chunk_width = worst_pcc(alone, "forward_tokens == chunk_size")
+    worst_chunk_width = worst_pcc(alone, "forward_tokens_budget == chunk_size")
     logger.info(
-        f"[packed] worst pcc vs one entry per forward {worst_same_width:.5f}, vs forward_tokens == chunk_size "
+        f"[packed] worst pcc vs one entry per forward {worst_same_width:.5f}, vs forward_tokens_budget == chunk_size "
         f"{worst_chunk_width:.5f}; programs added after compile(): {new_programs}"
     )
     assert worst_same_width >= PCC, f"packing changes a slot's KV (worst pcc={worst_same_width:.5f})"

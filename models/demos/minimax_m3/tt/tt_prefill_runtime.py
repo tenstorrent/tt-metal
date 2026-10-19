@@ -49,8 +49,8 @@ class TtPrefillRuntimeConfig:
     max_seq_len: int  # per-user KV-cache length in tokens; must be a multiple of chunk_size
     mesh_shape: tuple = (8, 4)  # (SP rows, TP cols) on the Blackhole galaxy
     chunk_size: int = 5120  # tokens per chunk, the KV / RoPE block-cyclic period; one-shot sets this == max_seq_len
-    # Tokens per forward: forward_tokens // chunk_size chunk entries (prefill_forward). None = chunk_size.
-    forward_tokens: Optional[int] = None
+    # Tokens per forward: forward_tokens_budget // chunk_size chunk entries (prefill_forward). None = chunk_size.
+    forward_tokens_budget: Optional[int] = None
     num_users: int = 1  # independent cache slots (user-major batch)
     sp_axis: int = 0
     tp_axis: int = 1
@@ -82,12 +82,12 @@ class TtPrefillRuntimeConfig:
     overlap_shared_expert: bool = True
 
     def __post_init__(self):
-        if self.forward_tokens is None:
-            self.forward_tokens = self.chunk_size
+        if self.forward_tokens_budget is None:
+            self.forward_tokens_budget = self.chunk_size
 
     @property
     def forward_chunks(self) -> int:
-        return self.forward_tokens // self.chunk_size
+        return self.forward_tokens_budget // self.chunk_size
 
     @property
     def sp_factor(self) -> int:
@@ -111,9 +111,10 @@ class TtPrefillRuntime:
         assert (
             config.max_seq_len % config.chunk_size == 0
         ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
+        budget = config.forward_tokens_budget
         assert (
-            config.forward_tokens >= config.chunk_size and config.forward_tokens % config.chunk_size == 0
-        ), f"forward_tokens ({config.forward_tokens}) must be a positive multiple of chunk_size ({config.chunk_size})"
+            budget >= config.chunk_size and budget % config.chunk_size == 0
+        ), f"forward_tokens_budget ({budget}) must be a positive multiple of chunk_size ({config.chunk_size})"
         # The KV cache, its slot addressing and gather_layer are all sized by config.num_layers, while
         # the model builds one layer per entry of layer_indices. If those disagree, a layer addresses
         # past the per-user cache stride and silently corrupts another slot.
@@ -151,7 +152,7 @@ class TtPrefillRuntime:
             f"Building TtPrefillRuntime model: num_layers={self.config.num_layers} "
             f"first_layer_idx={self.config.first_layer_idx} is_first_rank={self.config.is_first_rank} "
             f"is_last_rank={self.config.is_last_rank} max_seq_len={self.config.max_seq_len} "
-            f"chunk_size={self.config.chunk_size} forward_tokens={self.config.forward_tokens} "
+            f"chunk_size={self.config.chunk_size} forward_tokens_budget={self.config.forward_tokens_budget} "
             f"num_users={self.config.num_users} "
             f"mesh_shape={self.config.mesh_shape}"
         )
@@ -169,7 +170,7 @@ class TtPrefillRuntime:
             max_local_batch_size=1,
             sequence_parallel=True,
             use_ep_moe=self.config.use_ep_moe,
-            ep_seq_len_per_chip=self.config.forward_tokens // self.config.sp_factor,
+            ep_seq_len_per_chip=self.config.forward_tokens_budget // self.config.sp_factor,
             expert_weight_dtype=self.config.expert_weight_dtype,
             first_layer_idx=self.config.first_layer_idx,
             layer_indices=self.config.layer_indices,
@@ -216,7 +217,7 @@ class TtPrefillRuntime:
         caller re-allocates it via ``allocate_kv_caches`` and passes the new handle into ``compile`` /
         ``prefill_chunk``), the indexed RoPE tables (rebuilt here) and the config the asserts / compile
         sweep / ``gather_layer`` un-rotation read (swapped here). The CCL scratch buffers are keyed by
-        shape, so a new capacity just adds an entry. ``forward_tokens`` stays fixed: it is baked into the
+        shape, so a new capacity just adds an entry. ``forward_tokens_budget`` stays fixed: it is baked into the
         MoE dispatch buffers at build time. Call ``compile(new_kv_cache)`` afterwards — the JIT buckets
         for the new cache shapes are not warm.
 
@@ -256,7 +257,7 @@ class TtPrefillRuntime:
 
     def make_placeholder_activation(self) -> ttnn.Tensor:
         """Zero hidden-state activation matching the decoder-layer-boundary residual and the D2D receiver
-        backing: global ``[1, 1, forward_tokens, hidden_size]`` bf16 TILE DRAM, sequence sharded across the SP
+        backing: global ``[1, 1, forward_tokens_budget, hidden_size]`` bf16 TILE DRAM, sequence sharded across the SP
         rows and the embedding sharded (or replicated) across the TP cols per
         ``pipeline_activation_emb_tp_sharded`` — the same layout as the runner's D2D_MAPPER_CONFIG. Warm-up
         stand-in for a non-first pipeline rank, which receives the real activation over the D2D socket at
@@ -266,7 +267,7 @@ class TtPrefillRuntime:
         dims[cfg.sp_axis] = 2  # seq across SP rows
         if cfg.pipeline_activation_emb_tp_sharded:
             dims[cfg.tp_axis] = 3  # emb across TP cols (else replicated on tp -> left None)
-        zeros = torch.zeros(1, 1, cfg.forward_tokens, self.hf_config.hidden_size, dtype=torch.bfloat16)
+        zeros = torch.zeros(1, 1, cfg.forward_tokens_budget, self.hf_config.hidden_size, dtype=torch.bfloat16)
         return ttnn.from_torch(
             zeros,
             device=self.mesh_device,
@@ -283,7 +284,7 @@ class TtPrefillRuntime:
 
     def make_forward_input(self, chunk_tokens: list, starts: list) -> ttnn.Tensor:
         """Build one forward's device input for ``prefill_forward``. On the first rank: the entries' token IDs
-        as an SP-sharded uint32 ROW_MAJOR DRAM tensor of per-chip shape ``(1, 1, forward_tokens // sp)``,
+        as an SP-sharded uint32 ROW_MAJOR DRAM tensor of per-chip shape ``(1, 1, forward_tokens_budget // sp)``,
         replicated across the TP cols. ``chunk_tokens`` holds one natural-order chunk_size token list per
         entry (pad the tail; an empty entry is all pad) and ``starts`` the entries' starts. Chip r receives,
         in entry order, each entry's tokens at ``rotated_chunk_positions(start)[r]`` — the contiguous slice
@@ -305,7 +306,7 @@ class TtPrefillRuntime:
             )
         sp = cfg.sp_factor
         tok = torch.tensor(pack_forward_tokens(chunk_tokens, starts, sp), dtype=torch.int32)
-        tok = tok.reshape(sp, 1, cfg.forward_tokens // sp)
+        tok = tok.reshape(sp, 1, cfg.forward_tokens_budget // sp)
         return ttnn.from_torch(
             tok,
             device=self.mesh_device,
@@ -331,7 +332,7 @@ class TtPrefillRuntime:
 
         For a fixed cache capacity a chunk runs one of exactly THREE program sets per layer, so three warm-up
         forwards cover the served loop: (i) the FIRST chunk (start == 0: no-cache attention variants,
-        exact-size gathers), followed by cache-read chunks when forward_tokens > chunk_size, (ii) a full
+        exact-size gathers), followed by cache-read chunks when forward_tokens_budget > chunk_size, (ii) a full
         CACHE-READ chunk (start > 0), (iii) a RAGGED chunk (end < start + chunk_size: the MoE padding-config
         variant). (ii) and (iii) fill the rest of the forward with empty entries (zero rows). Every
         per-chunk offset — kv_actual / cached_len, logical_n, kv_len, chunk_start_idx, gathered_dim_size,
@@ -386,7 +387,7 @@ class TtPrefillRuntime:
         metadata_msg=None,
     ):
         """Prefill ONE chunk ``[actual_start, actual_end)`` into user ``slot_id``: ``prefill_forward`` with a
-        single entry (forward_tokens == chunk_size). See prefill_forward for the arguments."""
+        single entry (forward_tokens_budget == chunk_size). See prefill_forward for the arguments."""
         assert self.config.forward_chunks == 1, "a packed runtime takes prefill_forward with forward_chunks entries"
         return self.prefill_forward(
             input_tensor,
@@ -413,7 +414,7 @@ class TtPrefillRuntime:
         get_last_token: int = -1,
         metadata_msg=None,
     ):
-        """Prefill ONE forward of ``forward_tokens // chunk_size`` chunk ``entries`` (tt/prefill_entry.py) into
+        """Prefill ONE forward of ``forward_tokens_budget // chunk_size`` chunk ``entries`` (tt/prefill_entry.py) into
         the engine-owned ``kv_cache``. Norms, projections and the MoE run once on all rows; the attention core
         (RoPE, KV write, SP gathers, SDPA) runs per non-empty entry against its slot. With ``skip_lm_head``
         (the default) returns None — single-rank is headless, the populated cache is the output, read back
