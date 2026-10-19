@@ -13,10 +13,8 @@ Inputs and thresholds stay away from NaN and from a zero threshold, whose IEEE h
 defect (item 3), so this test checks only how the threshold is decoded. The golden is torch's compare
 and the check is exact: every lane is 0.0 or 1.0.
 
-Wormhole's ordered compares are an SFPMAD subtract plus a sign test. When x and the threshold are the
-same infinity, inf - inf is a NaN that keeps the product's sign, so gt/lt/ge/le(+inf, +inf) come out
-wrong (-inf happens to route right). That is a compare defect, not a decode one, and those lanes are
-left out of the check on Wormhole; the infinite thresholds are still checked against every other input.
+On Wormhole, gt/lt/ge/le(+inf, +inf) are wrong: the compare subtracts, and inf - inf is a NaN with the
+product's sign (tt-metal#53908). The check skips those four lanes there.
 """
 
 import struct
@@ -24,16 +22,16 @@ import struct
 import torch
 from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
-    DestSync,
     MathOperation,
     VectorMode,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -48,7 +46,7 @@ from helpers.test_variant_parameters import (
 # Quasar has no _calculate_comp_unary_.
 pytestmark = skip_for_quasar
 
-ELEMENTS_PER_TILE = 1024
+ELEMENTS_PER_TILE = TILE_DIM * TILE_DIM
 
 
 def _from_bits(bits: int) -> float:
@@ -109,12 +107,11 @@ def _bits(value: float) -> int:
 
 
 @parametrize(
-    formats=input_output_formats([DataFormat.Float32], same=True),
     mathop=list(_TORCH_COMPARE),
     threshold=THRESHOLDS,
-    dest_sync=[DestSync.Half],
 )
-def test_sfpu_comp_unary_threshold(formats, mathop, threshold, dest_sync):
+def test_sfpu_comp_unary_threshold(mathop, threshold):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     reps = ELEMENTS_PER_TILE // len(INPUTS) + 1
     src_A = torch.tensor((list(INPUTS) * reps)[:ELEMENTS_PER_TILE], dtype=torch.float32)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.float32)
@@ -123,12 +120,12 @@ def test_sfpu_comp_unary_threshold(formats, mathop, threshold, dest_sync):
         "sources/sfpu_comp_unary_threshold_test.cpp",
         formats,
         templates=[
-            generate_input_dim([32, 32], [32, 32]),
+            generate_input_dim([TILE_DIM, TILE_DIM], [TILE_DIM, TILE_DIM]),
             APPROX_MODE(ApproximationMode.No),
             MATH_OP(mathop=mathop),
             SFPU_UNARY_SCALAR(_bits(threshold)),
             VECTOR_MODE(VectorMode.RC),
-            DEST_SYNC(dest_sync),
+            DEST_SYNC(),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -160,8 +157,8 @@ def test_sfpu_comp_unary_threshold(formats, mathop, threshold, dest_sync):
         get_chip_architecture() == ChipArchitecture.WORMHOLE
         and mathop in _ORDERED_COMPARES
     ):
-        # WH compares by subtracting: inf - inf is a NaN with the product's sign (see the docstring).
-        checked = ~(torch.isinf(src_A) & (src_A == threshold))
+        # tt-metal#53908: inf - inf is a NaN with the product's sign, so only (+inf, +inf) misorders.
+        checked = ~(torch.isposinf(src_A) & (src_A == threshold))
 
     wrong = sorted(
         {
