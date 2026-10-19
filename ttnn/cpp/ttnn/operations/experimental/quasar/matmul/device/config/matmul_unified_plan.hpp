@@ -173,9 +173,8 @@ std::pair<uint32_t, uint32_t> maximize_subblock_size(
 // `output` is the C tensor when the caller supplied one (or the op already created it); it decides whether
 // C can be packed in place. Without it the op allocates C from the plan, which matches by construction.
 // must_fit FATALs with the breakdown when nothing fits L1 or a sharded output's constraints fail; without it those
-// return nullopt (the auto-config's candidate search). Other config errors always FATAL.
+// return nullopt (choose_unified_placement's candidate search). Other config errors always FATAL.
 std::optional<UnifiedMatmulPlan> plan_unified_matmul(
-    const tt::tt_metal::IDevice& device,
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     uint32_t bias_tile_bytes,  // 0 without a bias
@@ -183,5 +182,16 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul(
     const MatmulParams& attributes,
     const std::optional<ttnn::Tensor>& output,
     bool must_fit);
+
+// A config is what the caller asks for, its placement is the cores, C slice and orientation, and the plan
+// (UnifiedMatmulPlan) is everything derived from a config with a placement.
+// Returns `requested` with the placement whose plan has the lowest estimated cycles among the natural ones; nullopt
+// when the unified matmul cannot run the case or no placement fits.
+std::optional<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig> choose_unified_placement(
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b,
+    uint32_t bias_tile_bytes,  // 0 without a bias
+    const MatmulParams& attributes,
+    const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& requested);
 
 }  // namespace ttnn::prim::qsr

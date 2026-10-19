@@ -1864,7 +1864,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 // tensor accessor. Geometry, blocking, buffer fit and sharded-output constraints are
                 // all checked by the plan (shared with the factory and compute_output_specs).
                 (void)plan_unified_matmul(
-                    *input_tensor_a.device(),
                     input_tensor_a,
                     input_tensor_b,
                     optional_bias.has_value()
@@ -2216,7 +2215,6 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                     // core writes its own shard.
                     // Reached only when no output tensor was supplied, so C is allocated from this plan.
                     const UnifiedMatmulPlan plan = plan_unified_matmul(
-                                                       *input_tensor_a.device(),
                                                        input_tensor_a,
                                                        input_tensor_b,
                                                        bias_single_tile_size,
