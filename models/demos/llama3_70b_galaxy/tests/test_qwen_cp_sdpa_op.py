@@ -236,12 +236,14 @@ def _pipelined_ms(mesh_device, fn, iters=20):
 
 
 @torch.no_grad()
+@pytest.mark.model_perf_tg
 @pytest.mark.parametrize("mesh_device", [(ROWS, COLS)], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("seq_len", [40960])
 def test_qwen_cp_sdpa_time(mesh_device, seq_len):
-    """Pipelined timing (20 back-to-back calls, one sync): the keep-34 pair (+ nlp_concat_heads) against qwen_cp_sdpa,
-    and one stock chunked call against its port with the stock / local kernel files."""
+    """Pipelined timing (20 back-to-back calls, one sync): the stock chunked SDPA pair (+ nlp_concat_heads) that the
+    model ran before qwen_cp_sdpa, against qwen_cp_sdpa, and one stock chunked call against its port with the stock /
+    local kernel files. Fails if qwen_cp_sdpa is slower than the stock pair + nlp_concat_heads it replaces."""
     from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_cp_sdpa import qwen_cp_sdpa
 
     ctx = cp.CPContext(mesh_device, seq_len)
@@ -285,3 +287,8 @@ def test_qwen_cp_sdpa_time(mesh_device, seq_len):
         )
     for name, ms in res.items():
         logger.info(f"QCP_PIPE S={seq_len} {name}: {ms:.3f} ms")
+    # 10% allowance for run-to-run timing noise on a shared host; the op replaces the pair + concat in the model.
+    assert res["qwen_cp_sdpa"] <= 1.10 * res["pair+nlp_concat_heads"], (
+        f"qwen_cp_sdpa {res['qwen_cp_sdpa']:.3f} ms is slower than the stock pair + nlp_concat_heads "
+        f"{res['pair+nlp_concat_heads']:.3f} ms"
+    )

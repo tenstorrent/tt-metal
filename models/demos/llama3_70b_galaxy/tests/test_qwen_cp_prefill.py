@@ -80,7 +80,9 @@ def _local_rows(t, c, cols, dim=2):
 
 @torch.no_grad()
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "worker_l1_size": 1345000}], indirect=True
+)  # production dispatch / L1
 @pytest.mark.parametrize("seq_len", [16384, 40960])
 def test_cp_q_prep_local(mesh_device, seq_len):
     torch.manual_seed(0)
@@ -211,6 +213,7 @@ from models.demos.llama3_70b_galaxy.tt import qwen_cp_prefill as cp  # noqa: E40
 FABRIC_PARAMS = [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": True}]
 
 
+@pytest.mark.host_only
 @pytest.mark.parametrize("seq_len", [16384, 40960])
 def test_cp_layout_host(seq_len):
     lay = cp.CPLayout(seq_len)
@@ -247,23 +250,19 @@ def _prefill_ccl(mesh_device, seq_len):
 def _stored_layer(mesh_device, margs, layer=10):
     """The model's stored prefill weights of one layer, loaded from the tensor cache (never written), plus the
     per-row full matrices W_r rebuilt from the HF checkpoint with the model's transform (job139 recipe)."""
-    import json
     import os
 
-    from safetensors import safe_open
-
     from models.demos.llama3_70b_galaxy.tt.load_checkpoints import convert_hf_to_meta
+    from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 
-    hf = os.environ["HF_MODEL"]
-    wmap = json.load(open(os.path.join(hf, "model.safetensors.index.json")))["weight_map"]
+    hf = os.getenv("HF_MODEL")
+    if not hf:
+        pytest.skip("HF_MODEL is not set (Qwen3-32B repo id or checkpoint directory)")
     names = ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj", "mlp.gate_proj"]
     names += ["mlp.up_proj", "mlp.down_proj"]
-    sd = {}
-    for n in names:
-        key = f"model.layers.{layer}.{n}.weight"
-        with safe_open(os.path.join(hf, wmap[key]), framework="pt") as f:
-            sd[key] = f.get_tensor(key)
-    sd = convert_hf_to_meta(sd, margs.head_dim)
+    keys = [f"model.layers.{layer}.{n}.weight" for n in names]
+    sd = load_hf_state_dict_filtered(hf, keys)  # local dir or HF repo id
+    sd = convert_hf_to_meta({k: sd[k] for k in keys}, margs.head_dim)
     pa, pm = f"layers.{layer}.attention", f"layers.{layer}.feed_forward"
     qkv = [
         torch.cat(

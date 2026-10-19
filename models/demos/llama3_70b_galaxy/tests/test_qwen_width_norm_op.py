@@ -13,7 +13,6 @@ Run on the Wormhole Galaxy (8x4 mesh):
     pytest models/demos/llama3_70b_galaxy/tests/test_qwen_width_norm_op.py -s
 """
 
-import os
 from types import SimpleNamespace
 
 import pytest
@@ -44,10 +43,12 @@ def _devices(t):
 
 @torch.no_grad()
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "worker_l1_size": 1345000}], indirect=True
+)  # production dispatch / L1
 @pytest.mark.parametrize("x_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8"])
 @pytest.mark.parametrize("seq_len", [16384, 24576, 32768, 40960])
-def test_qwen_width_norm(mesh_device, seq_len, x_dtype):
+def test_qwen_width_norm(mesh_device, seq_len, x_dtype, monkeypatch):
     torch.manual_seed(0)
     rows = seq_len // 32
     xh = torch.randn(1, 1, rows, 5120)
@@ -62,11 +63,9 @@ def test_qwen_width_norm(mesh_device, seq_len, x_dtype):
     ckc = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
     )
-    os.environ["QWEN_CP_WIDTH_NORM"] = "0"
-    try:
+    with monkeypatch.context() as mp:
+        mp.setenv("QWEN_CP_WIDTH_NORM", "0")  # the stock 2-slice norm, restored to the caller's value afterwards
         stock = _devices(cp.local_norm(dn, x, ckc))[0]
-    finally:
-        os.environ.pop("QWEN_CP_WIDTH_NORM")
 
     o1 = qwen_width_norm(x, g, eps=EPS, fidelity=ttnn.MathFidelity.HiFi4)
     o2 = qwen_width_norm(x, g, eps=EPS, fidelity=ttnn.MathFidelity.HiFi4)

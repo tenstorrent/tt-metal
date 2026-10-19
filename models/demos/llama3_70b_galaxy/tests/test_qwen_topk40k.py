@@ -25,13 +25,11 @@ Metrics, printed as one TOPK40K_RESULT line (thresholds live in the tt-ops gate,
                      the device top-5. ref_gt_top1 / ref_gt_top5: the reference model's own values.
 """
 
-import json
 import os
 
 import pytest
 import torch
 from loguru import logger
-from safetensors import safe_open
 from transformers import AutoTokenizer
 
 import ttnn
@@ -40,6 +38,7 @@ from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import DECO
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
+from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 
 REFPT = "models/tt_transformers/tests/reference_outputs/Qwen3-32B.refpt"
 PADDED_LEN = 40960
@@ -47,11 +46,10 @@ SPLIT = 511  # demo TokenAccuracy: split_point 512 -> first scored prediction is
 
 
 def _hf_tensor(name):
-    ckpt = os.environ["HF_MODEL"]
-    with open(os.path.join(ckpt, "model.safetensors.index.json")) as f:
-        shard = json.load(f)["weight_map"][name]
-    with safe_open(os.path.join(ckpt, shard), framework="pt") as f:
-        return f.get_tensor(name)
+    ckpt = os.getenv("HF_MODEL")
+    if not ckpt:
+        pytest.skip("HF_MODEL is not set (Qwen3-32B repo id or checkpoint directory)")
+    return load_hf_state_dict_filtered(ckpt, [name])[name]  # local dir or HF repo id
 
 
 def topk_metrics(dev_logits, ref_top5, ref_tokens):

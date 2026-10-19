@@ -26,6 +26,8 @@ from models.demos.llama3_70b_galaxy.tt.generator import (
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import PREFILL_SUPPORT_SEQLENS
 from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import QWEN_OPT_MAX_SEQ_LEN
 
+pytestmark = pytest.mark.host_only  # no device: these tests run anywhere
+
 # User decision (2026-10-08, keep 01b): Qwen prefill > 4096 pads to multiples of 8192 and the warmup
 # compiles every such bucket. A change of TtQwenModelArgs.prefill_pad_multiple must fail here.
 USER_QWEN_PAD_MULTIPLE = 8192

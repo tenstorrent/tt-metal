@@ -90,7 +90,9 @@ def _replicated(mesh_device, t, dtype):
 
 @torch.no_grad()
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "worker_l1_size": 1345000}], indirect=True
+)  # production dispatch / L1
 @pytest.mark.parametrize("seq_len", [16384, 40960])
 def test_qwen_qkv_direct_bit_exact(mesh_device, seq_len):
     torch.manual_seed(0)

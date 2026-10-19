@@ -14,11 +14,12 @@ test_qwen_ag_matmul: on the 8x4 Galaxy (FABRIC_1D_RING), per kind (QKV: N=1280, 
     2. qwen_ag_matmul on zero-filled gathered / output buffers, twice with fresh buffers (descriptor cache hit):
        the output torch.equal to the stock pair on all 32 devices, every gathered slot the op writes (all slots with
        copy_local, else the remote ones) torch.equal to the stock gather.
-    3. Pipelined wall time per call (2 warm-ups, REPS x BATCH back-to-back calls, one sync per batch, median) of the
-       stock pair and of the fused op. Printed as QAGMM_TIME lines.
+    3. With QAGMM_TIME=1 only: pipelined wall time per call (2 warm-ups, REPS x BATCH back-to-back calls, one sync per
+       batch, median) of the stock pair and of the fused op. Printed as QAGMM_TIME lines; never asserted.
+    Inputs come from a fixed seed (SEED), so a mismatch reproduces.
     QAGMM_SEQS / QAGMM_KINDS (comma lists) narrow the sweep; QAGMM_WAVES (e.g. 8,8,8,8,8; ';' separates sets)
     forces the wave sizes; QAGMM_V2=1 tests qwen_ag_matmul_v2 (7x10 grid, senders in the in0 receivers) instead;
-    QAGMM_PROBES=1 adds timing probes (port, nowait, and for v1 nomm / agonly).
+    QAGMM_PROBES=1 (with QAGMM_TIME=1) adds timing probes (port, nowait, and for v1 nomm / agonly).
 
 Run on the Wormhole Galaxy (8x4 mesh):
     pytest models/demos/llama3_70b_galaxy/tests/test_qwen_ag_matmul_op.py -s
@@ -50,6 +51,7 @@ ROWS, COLS = 8, 4
 SEQS = (16384, 24576, 32768, 40960)
 FABRIC_PARAMS = [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": True, "worker_l1_size": 1345000}]
 K = 5120
+SEED = 0
 
 
 def _kinds(margs):
@@ -60,6 +62,7 @@ def _kinds(margs):
     }
 
 
+@pytest.mark.host_only
 def test_qwen_ag_matmul_plan():
     """Slot coverage: on every device, each gathered row (every slot, own and remote) is in exactly one block of one
     column; resident plans start every column on its own slot; the QKV shape is resident."""
@@ -84,6 +87,7 @@ def test_qwen_ag_matmul_plan():
                 assert all(v == 1 for v in cover), (S, r, resident)
 
 
+@pytest.mark.host_only
 def test_qwen_ag_matmul_check_ring(monkeypatch, expect_error):
     """Host only: check_ring passes on 8 rows + FABRIC_1D_RING and raises ValueError on 4 rows or on FABRIC_1D."""
 
@@ -100,6 +104,7 @@ def test_qwen_ag_matmul_check_ring(monkeypatch, expect_error):
         check_ring(_Mesh((ROWS, COLS)))
 
 
+@pytest.mark.host_only
 def test_qwen_ag_matmul_release_on_error(monkeypatch, expect_error):
     """Host only: model_prefill and layer_major_prefill free the fused ops' words when a layer raises."""
     freed = []
@@ -190,8 +195,9 @@ def test_qwen_ag_matmul(mesh_device):
     mesh.set_sub_device_stall_group([pf.worker_sub_device_id])
     ccl = TT_CCL(mesh, margs, pf.worker_sub_device_id, mode="prefill", is_qwen=True)
     KINDS = _kinds(margs)
-    g = torch.Generator().manual_seed(int(time.time()))
-    ok = True
+    g = torch.Generator().manual_seed(SEED)
+    logger.info(f"QAGMM inputs seed {SEED}")
+    failures = []
     for kind in kinds:
         kd = KINDS[kind]
         N = kd["N"]
@@ -272,7 +278,8 @@ def test_qwen_ag_matmul(mesh_device):
                     port = matmul_port(xa, w, waves=waves, out=_zeros(mesh, (1, 1, S // 4, N)), **mm_kw, **rk)
                     eq = sum(torch.equal(a, b) for a, b in zip(_host(port), ref_h))
                     logger.info(f"QAGMM port {port_tag}: torch.equal on {eq}/32 devices")
-                    ok &= eq == 32
+                    if eq != 32:
+                        failures.append(f"port {port_tag}: torch.equal on {eq}/32 devices")
                     ttnn.deallocate(port)
                 gath = _zeros(mesh, (1, 1, S // 4, K))
                 out = _zeros(mesh, (1, 1, S // 4, N))
@@ -302,10 +309,15 @@ def test_qwen_ag_matmul(mesh_device):
                             rows_bad = diff.any(-1).nonzero().flatten().tolist()
                             logger.info(f"QAGMM dev {d}: bad tile rows {rows_bad[:40]} ({len(rows_bad)})")
                             break
-                ok &= eq_o == 32 and bad_slots == 0
+                if eq_o != 32 or bad_slots:
+                    failures.append(f"fused {tag} call {rep}: out equal on {eq_o}/32 devices, {bad_slots} bad slots")
                 for t in (xa, ref, o, gg):
                     ttnn.deallocate(t)
             x = xs[0]
+            if os.environ.get("QAGMM_TIME") != "1":
+                for t in xs:
+                    ttnn.deallocate(t)
+                continue
             m_s, r_s = _timeit(mesh, lambda: stock(x, S), reps, batch)
             m_f, r_f = _timeit(
                 mesh, lambda: fused(x, w, copy_local=kd["copy_local"], waves=waves, **mm_kw, **rk), reps, batch
@@ -342,4 +354,4 @@ def test_qwen_ag_matmul(mesh_device):
             for t in xs:
                 ttnn.deallocate(t)
         ttnn.deallocate(w)
-    assert ok
+    assert not failures, "qwen_ag_matmul mismatches:\n" + "\n".join(failures)

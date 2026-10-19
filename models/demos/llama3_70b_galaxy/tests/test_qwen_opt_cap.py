@@ -27,6 +27,8 @@ import pytest
 
 import ttnn
 
+pytestmark = pytest.mark.host_only  # no device: these tests run anywhere
+
 CAP = 40960  # the user's limit; QWEN_OPT_MAX_SEQ_LEN must equal it
 SWEEP = [4096, 8192, 16384, 24576, 32768, 40960, 40961, 45000, 45056, 49152, 57344, 65536, 73728, 131072]
 TT = Path(__file__).resolve().parents[1] / "tt"

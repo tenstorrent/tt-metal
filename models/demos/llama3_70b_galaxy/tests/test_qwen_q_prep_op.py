@@ -80,6 +80,7 @@ def _time(fn, iters):
     return (time.perf_counter() - start) / iters * 1e3
 
 
+@pytest.mark.host_only
 @pytest.mark.parametrize("seq_len", [16384, 40960])
 def test_qwen_q_prep_plan_covers_owned_rows(seq_len):
     """Host only: the per-pair row ranges cover each owned (head, tile row) exactly once."""

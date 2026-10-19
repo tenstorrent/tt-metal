@@ -17,6 +17,8 @@ from models.demos.llama3_70b_galaxy.tt.qwen_model_config import (
     ring_sdpa_k_chunk,
 )
 
+pytestmark = pytest.mark.host_only  # no device: these tests run anywhere
+
 N_LOCAL_HEADS = 8  # Qwen3-32B: 64 q heads / 8 kv heads per device row
 NUM_CORES = 70  # 7 x 10 SDPA grid
 
