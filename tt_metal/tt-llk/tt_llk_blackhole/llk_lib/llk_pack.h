@@ -524,6 +524,7 @@ inline void _llk_pack_init_(
     const std::uint32_t num_tiles,
     const bool skip_bh_tilize_workaround)
 {
+    asm volatile("nop");
     static_assert(
         !mutex_ADC || pack_mode == PackMode::Default,
         "mutex_ADC is supported for PackMode::Default only: other modes issue ADC instructions from inside the MOP, "
