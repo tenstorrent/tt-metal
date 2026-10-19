@@ -78,7 +78,7 @@ def _cfgs():
 
     def add(s, fi, fo, dacc, dim, pool, fid, ci=None):
         held = dim == ReduceDimension.Row and pool != ReducePool.Max
-        slow_hold = held and (fid in (FID.HiFi3, FID.HiFi4) or (fid == FID.HiFi2 and fi == F32))
+        slow_hold = held and (fid in (FID.HiFi3, FID.HiFi4) or fi == F32)
         ci = replace(ci or CI_RED(), api_tiles=int(fi in (B8, B4) or slow_hold))
         out.append((s, fi, fo, dacc, dim, pool, fid, ci))
 
