@@ -36,7 +36,7 @@ for blk in 1 2; do for a in $1 $RV; do
   timeout -s INT -k 60 1500 python3 -m tracy -r -p --no-web-server -o $o $S/ol/run_nodes.py > $o.log 2>&1
   echo "== run $r $a rc=$? $(( $(date +%s) - t0 )) s: $(grep -aE '[0-9]+ (passed|failed)' $o.log | tail -1)"
   grep -a -m3 -E '^(FAILED|ERROR)' $o.log | cut -c1-200
-  grep -aqE '[0-9]+ passed' $o.log || { echo "== log tail $a r$r"; tail -20 $o.log | cut -c1-250; }
+  grep -aqE '[0-9]+ passed' $o.log || { echo "== log errors $a r$r"; grep -a -m12 -E "error|Error|FATAL|THROW|Fatal" $o.log | cut -c1-300; }
   python3 $S/ol/sum_op19.py $o $a $r
   echo "RAB ELF $a r$r $(elfsum $TT_METAL_CACHE) $(ls -d $TT_METAL_CACHE/*/kernels/*/* 2>/dev/null | grep -ci tiliz) tilize builds"
 done; done
