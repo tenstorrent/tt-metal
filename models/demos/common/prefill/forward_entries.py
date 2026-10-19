@@ -162,16 +162,14 @@ def packed_forward_refusals(
     if forward_chunks == 1:
         return []
     reasons = []
-    if not supports_packed_forward:
-        reasons.append("the model adapter does not set supports_packed_forward")
     if mtp_levels:
         reasons.append("PREFILL_MTP_LEVELS > 0 (MTP lookahead is per chunk)")
     if dflash:
         reasons.append("PREFILL_DFLASH=1")
     if use_trace:
         reasons.append("PREFILL_USE_TRACE=1 (per-entry arguments are not trace inputs)")
-    if d2h_acks:
-        reasons.append("PREFILL_LAYER_ACK_D2H=1")
+    if d2h_acks and supports_packed_forward:
+        reasons.append("PREFILL_LAYER_ACK_D2H=1 with the adapter's prefill_forward")
     return reasons
 
 

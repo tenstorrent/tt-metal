@@ -200,7 +200,7 @@ export PREFILL_MODEL=my_model PREFILL_NUM_LAYERS=<L> \
 ```
 
 Left unset, the producer falls back to the adapter defaults (61 layers), which will not match a deeper
-runner. The ack count is `num_layers × forwards`, so the drain hangs.
+runner. The ack count is `num_layers × chunks`, so the drain hangs.
 
 With `PREFILL_FORWARD_CHUNKS=F > 1` (packed forwards, `ADDING_A_PREFILL_MODEL.md` section 2.1) both
 modules pack each forward with one run of consecutive chunks per slot, round-robin (or shuffled for

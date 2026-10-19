@@ -58,8 +58,8 @@ class MyModelAdapter(PrefillModelAdapter):
     supports_dflash: bool = False  # may PREFILL_DFLASH=1 attach the DFlash drafter to this model? The
                                # drafter is a separate checkpoint targeting ONE architecture (today only
                                # Kimi-K2.7), so leave it False unless a matching drafter exists.
-    supports_packed_forward: bool = False  # does the runtime implement prefill_forward (section 2.1)? Gates
-                               # PREFILL_FORWARD_CHUNKS > 1; the runner checks it before building the runtime.
+    supports_packed_forward: bool = False  # does the runtime implement prefill_forward (section 2.1)? Without
+                               # it, PREFILL_FORWARD_CHUNKS > 1 runs prefill_chunk once per entry.
 
     def load_hf_config(self):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to
@@ -203,8 +203,10 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
 
 With `PREFILL_FORWARD_CHUNKS=F` (`PrefillRunParams.forward_chunks`, default 1) one forward carries F
 chunk *entries* of `chunk_size` tokens: `forward_tokens = F * chunk_size` rows. F = 1 is the
-`prefill_chunk` path above, unchanged. F > 1 needs `supports_packed_forward = True` on the adapter, and
-the runtime then gets `prefill_forward` instead of `prefill_chunk`:
+`prefill_chunk` path above, unchanged. At F > 1 the runner calls `prefill_chunk` once per non-empty
+entry, each with its own slot, range and 12 B metadata tensor, and joins the outputs back into the
+forward's layout. A runtime that sets `supports_packed_forward = True` on the adapter gets the whole
+forward through `prefill_forward` instead:
 
 ```python
     def prefill_forward(self, input_tensor, kv_cache, entries, request_id=0, d2h_service=None, *, metadata_msg=None):
@@ -213,8 +215,9 @@ the runtime then gets `prefill_forward` instead of `prefill_chunk`:
         of every entry's rotated chunk, in entry order: `chunk_layout.pack_forward_tokens`), or the
         `[1, 1, forward_tokens, H]` activation from the previous rank. Return the forward_tokens-row
         activation on a non-last rank, None on the last. Size the non-first-rank placeholder input to
-        forward_tokens. Call the layer-completion sink once per KV-writing layer per forward, after every
-        entry of that layer ran, with this `request_id` (the runner's forward counter)."""
+        forward_tokens. Per KV-writing layer, call `sink.layers_completed(layer, layer + 1, slot, start, end)`
+        once for each non-empty entry, after that entry's layer ran. `request_id` is the runner's forward
+        counter."""
 ```
 
 Metadata: tt-d-gen's `PrefillBatchMetadata` layout (`forward_entries`), today's 12 bytes at F = 1. F is at most 16.
@@ -228,10 +231,10 @@ validated on the first rank (`forward_entries.validate_forward_entries`):
 - `start % 32 == 0`, `start < end <= start + chunk_size`, `start + chunk_size <= max_seq_len`;
 - runs of different slots may come in any order.
 
-A layer ack for forward c means that layer's KV is written for every non-empty entry of forward c.
+Each layer completion names one entry, on either path, so a consumer retires each chunk on its own.
 
 The runner refuses F > 1 at startup, before the model loads, together with `PREFILL_MTP_LEVELS > 0`,
-`PREFILL_DFLASH=1`, `PREFILL_USE_TRACE=1` or `PREFILL_LAYER_ACK_D2H=1`.
+`PREFILL_DFLASH=1` or `PREFILL_USE_TRACE=1`, and `PREFILL_LAYER_ACK_D2H=1` with `prefill_forward`.
 
 ---
 
