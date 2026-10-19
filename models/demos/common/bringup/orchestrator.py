@@ -1279,7 +1279,9 @@ class Orchestrator:
         # each command of the gate as the gate runs it (gate_command: no precompile pass for a perf step)
         segs = [x.strip() for x in gate_command(task).split("&&") if x.strip()]
         tests = [x for x in segs if "test_profile.py" not in x and "test_ladder.py" not in x]
-        prof_cmd = next((re.sub(r"\bBRINGUP_PROFILE_OPS=\S+\s*", "", x) for x in segs if "test_profile.py" in x), None)
+        # F114: the clean wall run and the profiled run, together (one metrics file per side)
+        prof_cmd = " && ".join(re.sub(r"\bBRINGUP_PROFILE_OPS=\S+\s*", "", x) for x in segs if "test_profile.py" in x)
+        prof_cmd = prof_cmd or None
         base = gate_env(self.spec, self.led, tid)
         base[accuracy_guard.AB_ENV] = "1"  # the profile guard lets the orchestrator's own profile through
         for k in list(old) + list(on) + ["BRINGUP_PROFILE_OPS"]:
@@ -1339,7 +1341,7 @@ class Orchestrator:
                     rec["ladder"].setdefault(rung, {})[side] = dict(self.ab_summary(got), rc=rc)
                 if prof_cmd:
                     rc, got, _ = run(side, "profile", prof_cmd, env)
-                    keys = ["device_ms_total", "pcc_chunk_out"] + [
+                    keys = ["device_ms_total", "chunk_wall_ms", "profiled_programs", "pcc_chunk_out"] + [
                         k for k in task["gate"].get("metrics") or {} if k.startswith("device_ms_") and "*" not in k
                     ]
                     rec["profile"][side] = dict({k: got.get(k) for k in dict.fromkeys(keys)}, rc=rc)

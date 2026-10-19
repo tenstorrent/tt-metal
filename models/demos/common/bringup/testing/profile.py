@@ -5,6 +5,9 @@
 
 Runs the last chunk of the profile rung (spec ``perf.rung``, default the last rung with ``prefix_from_golden``) after
 loading the golden state prefix: once to compile, once unsynced for the real wall time, once with section profiling.
+F114: the gate first runs it with the device profiler off and BRINGUP_PROFILE_WALL=1 (compile, then WALL_RUNS timed
+runs: chunk_wall_ms = their median, chunk_wall_clean = 1); the profiled run then keeps that chunk_wall_ms and records
+its own as chunk_wall_ms_profiled (instrumented kernels and buffer dumps make it slower and noisier).
 Writes ``<results>/<task>_profile.json`` (read by the dashboard and by the opportunity list) and records
 chunk_wall_ms, host_transfers_per_layer, pcc_chunk_out (last layer's output vs the golden), prefill_ms_full (opt-in), prefill_tok_s,
 prefill_chunk_ms_c<nn>, device_ms_total, device_ms_<phase>, device_ms_chip<c>, host_overhead_ms, profiled_programs,
@@ -25,6 +28,8 @@ from models.demos.common.bringup.reference.golden import Golden
 from models.demos.common.bringup.testing import accuracy_guard, cpu_bridge, profiler
 from models.demos.common.bringup.testing.harness import begin_chunk
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
+
+WALL_RUNS = 3  # F114: timed runs of the clean wall measurement (the median counts)
 
 
 def profile_rung(s) -> str:
@@ -263,6 +268,19 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         model.free(h)
 
     run()  # compile and fill the program cache: performance is measured warm only
+    if os.environ.get("BRINGUP_PROFILE_WALL") == "1":  # F114: the clean wall run (device profiler off), nothing else
+        assert not os.environ.get(profiler.PROFILER_ENV), f"BRINGUP_PROFILE_WALL=1 runs without {profiler.PROFILER_ENV}"
+        walls = []
+        for _ in range(WALL_RUNS):
+            reload()
+            t0 = time.time()
+            run()
+            walls.append(round((time.time() - t0) * 1e3, 1))
+        metrics.record("chunk_wall_ms", sorted(walls)[len(walls) // 2])
+        metrics.record("chunk_wall_ms_runs", walls)
+        metrics.record("chunk_wall_clean", 1)
+        print(f"PROFILE wall (device profiler off): {walls} ms, median {sorted(walls)[len(walls) // 2]}")
+        return {"wall_ms": sorted(walls)[len(walls) // 2], "wall_runs_ms": walls}
     reload()
     cpu_bridge.STATS.reset()
     t0 = time.time()
@@ -316,7 +334,14 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
             per_chip[c] += ns
     for c, ns in sorted(per_chip.items()):
         metrics.record(f"device_ms_chip{c}", round(ns / 1e6, 2))
-    metrics.record("chunk_wall_ms", round(wall * 1e3, 1))
+    # F114: with a clean wall run first (gate_command adds it), the profiled run's wall is only for reference
+    clean = os.environ.get("BRINGUP_WALL_CLEAN") == "1" and metrics.load(metrics.record_task()).get("chunk_wall_clean")
+    metrics.record("chunk_wall_ms_profiled", round(wall * 1e3, 1))
+    if clean:
+        wall = metrics.load(metrics.record_task())["chunk_wall_ms"]["value"] / 1e3
+    else:
+        metrics.record("chunk_wall_ms", round(wall * 1e3, 1))
+        metrics.record("chunk_wall_clean", 0)
     metrics.record("chunk_start", start)
     metrics.record("chunk_len", chunk)
     metrics.record("device_model_hybrid", int("Hybrid" in type(model).__name__))
