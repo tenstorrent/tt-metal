@@ -7,7 +7,9 @@
 # Wormhole/Blackhole this excludes Quasar-only tests; for Quasar it selects
 # Quasar-only tests. Each test runs in a forked subprocess so that ttsim's
 # `_Exit(1)` on UnimplementedFunctionality (and similar) only kills that one
-# test and the suite continues.
+# test and the suite continues. Node ids listed in ttsim_ignore_list.txt are
+# deselected for the architecture under test, on both the collection pass
+# and the real run.
 #
 # Generates:
 #   - JUnit XML at python_tests/ttsim_results/ttsim_<timestamp>.xml
@@ -30,8 +32,11 @@ LATEST_COLLECTED="${RESULTS_DIR}/latest.collected.txt"
 WORKERS="${WORKERS:-10}"
 TIMEOUT="${TIMEOUT:-300}"
 ARCHITECTURE="${TTSIM_ARCHITECTURE:-blackhole}"
+IGNORE_FILE="${TTSIM_IGNORE_FILE:-${SCRIPT_DIR}/ttsim_ignore_list.txt}"
+USE_IGNORE=1
 TEST_PATHS=()
 PYTEST_ARGS=()
+DESELECT_ARGS=()
 
 # Cache layout for auto-provisioned ttsim artifacts. The release tag comes from
 # tt_metal/ttsim-version, the same pin every tt-metal sim pipeline uses, so
@@ -62,6 +67,11 @@ Options:
   -a, --architecture A  ttsim architecture: 'blackhole', 'wormhole', or
                         'quasar' (default: blackhole; env: TTSIM_ARCHITECTURE).
                         Controls test selection and collection.
+  --ignore-file PATH    Node-id ignore list (default: ttsim_ignore_list.txt next to
+                        this script; env: TTSIM_IGNORE_FILE). Sections are
+                        [all], [blackhole], [wormhole], and [quasar]. Entries
+                        are pytest node-id prefixes relative to python_tests/.
+  --no-ignore           Run every collected test; do not read the ignore list.
   -h, --help            Show this help message.
 
 Environment:
@@ -71,6 +81,7 @@ Environment:
                         \${TTSIM_CACHE_DIR:-\$HOME/.cache/ttsim} and exports
                         this automatically.
   TTSIM_CACHE_DIR       Override the download cache root (default: ~/.cache/ttsim).
+  TTSIM_IGNORE_FILE     Override the default ignore-list path.
   GH_TOKEN              Optional. Sent with the GitHub API request for the
                         release digest, to avoid the unauthenticated rate limit.
 
@@ -80,6 +91,7 @@ Examples:
   TT_METAL_SIMULATOR=~/sim/libttsim.so $(basename "$0") -a quasar
   $(basename "$0") -n 16 test_eltwise_unary_datacopy.py
   $(basename "$0") -- -k Float16_b
+  $(basename "$0") -a quasar --no-ignore
   WORKERS=8 $(basename "$0")
 EOF
     exit 0
@@ -93,6 +105,8 @@ while [[ $# -gt 0 ]]; do
         -n|--workers)      WORKERS="$2"; shift 2 ;;
         -t|--timeout)      TIMEOUT="$2"; shift 2 ;;
         -a|--architecture) ARCHITECTURE="$2"; shift 2 ;;
+        --ignore-file)     IGNORE_FILE="$2"; shift 2 ;;
+        --no-ignore)       USE_IGNORE=0; shift ;;
         -h|--help)         usage ;;
         --)           shift; PYTEST_ARGS+=("$@"); break ;;
         -*)           PYTEST_ARGS+=("$1"); shift ;;
@@ -125,6 +139,59 @@ esac
 # it. Explicit test paths from the caller are still honored as-is.
 if [[ "$ARCHITECTURE" == "quasar" && ${#TEST_PATHS[@]} -eq 0 ]]; then
     TEST_PATHS=(quasar)
+fi
+
+# ──────────────────────────────────────────────────────────────
+# Ignore list
+# ──────────────────────────────────────────────────────────────
+# Entries are pytest node-id prefixes. `--deselect` drops every collected
+# item whose node id starts with the prefix, so a file path skips the file
+# and `file.py::test_name` skips every parametrization of that test.
+# The same prefixes go to the collection pass and the real run; otherwise a
+# deselected test would still be in the collected denominator and the HTML
+# report would count it as crashed.
+load_ttsim_ignore_list() {
+    local file="$1"
+    local arch="$2"
+    local section=""
+    local line
+
+    if [[ ! -f "$file" ]]; then
+        echo "ERROR: ignore list not found: $file" >&2
+        exit 1
+    fi
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        # Trim surrounding whitespace. A line of only whitespace becomes empty.
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" || "$line" == \#* ]] && continue
+
+        if [[ "$line" =~ ^\[([A-Za-z0-9_-]+)\][[:space:]]*(#.*)?$ ]]; then
+            section="${BASH_REMATCH[1]}"
+            case "$section" in
+                all|blackhole|wormhole|quasar) ;;
+                *)
+                    echo "ERROR: unknown section [$section] in $file (expected all, blackhole, wormhole, or quasar)" >&2
+                    exit 1
+                    ;;
+            esac
+            continue
+        fi
+
+        if [[ -z "$section" ]]; then
+            echo "ERROR: ignore entry before any [section] in $file: $line" >&2
+            exit 1
+        fi
+        if [[ "$section" == "all" || "$section" == "$arch" ]]; then
+            DESELECT_ARGS+=(--deselect "$line")
+        fi
+    done <"$file"
+}
+
+if [[ "$USE_IGNORE" -eq 1 ]]; then
+    load_ttsim_ignore_list "$IGNORE_FILE" "$ARCHITECTURE"
 fi
 
 # ──────────────────────────────────────────────────────────────
@@ -310,6 +377,10 @@ if [[ "$WORKERS" -gt 0 ]]; then
     )
 fi
 
+if [[ ${#DESELECT_ARGS[@]} -gt 0 ]]; then
+    PYTEST_BASE_ARGS+=("${DESELECT_ARGS[@]}")
+fi
+
 # ──────────────────────────────────────────────────────────────
 # Enumerate the expected test set (stable denominator)
 # ──────────────────────────────────────────────────────────────
@@ -317,8 +388,10 @@ fi
 # set is pure static parametrization (there is no pytest_generate_tests, and
 # pytest_collection_modifyitems no-ops without --test-order-file) and therefore
 # identical across ttsim versions, so it gives us a version-independent
-# denominator. The renderer diffs it against the testcases actually recorded in
-# the JUnit XML; anything collected but never recorded is counted as "crashed"
+# denominator. The ignore list's --deselect prefixes are applied here too, so
+# an ignored test is absent from both lists. The renderer diffs this list
+# against the testcases actually recorded in the JUnit XML; anything collected
+# but never recorded is counted as "crashed"
 # (a hard crash that took down the worker before its result could be written,
 # so --forked never turned it into a normal failure).
 #
@@ -343,6 +416,9 @@ COLLECT_CMD=(
     --compile-producer
     -m "$MARKER_EXPR"
 )
+if [[ ${#DESELECT_ARGS[@]} -gt 0 ]]; then
+    COLLECT_CMD+=("${DESELECT_ARGS[@]}")
+fi
 if [[ ${#TEST_PATHS[@]} -gt 0 ]]; then
     COLLECT_CMD+=("${TEST_PATHS[@]}")
 fi
@@ -382,6 +458,11 @@ echo " Workers (-n)   : ${WORKERS}"
 echo " Per-test fork  : on"
 echo " Timeout        : ${TIMEOUT}s"
 echo " Tests collected: ${collected_count}"
+if [[ "$USE_IGNORE" -eq 1 ]]; then
+    echo " Ignore list    : ${IGNORE_FILE} ($(( ${#DESELECT_ARGS[@]} / 2 )) for ${ARCHITECTURE})"
+else
+    echo " Ignore list    : disabled"
+fi
 echo " JUnit XML      : ${XML_PATH}"
 echo " HTML report    : ${HTML_PATH}"
 echo " Test paths     : ${TEST_PATHS[*]:-<all>}"

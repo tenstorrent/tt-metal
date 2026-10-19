@@ -27,6 +27,14 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
+      ignore-file:
+        required: false
+        type: string
+        default: "tt_metal/tt-llk/tests/ttsim_ignore_list.txt"
+        description: >
+          Repo-relative node-id ignore list forwarded to run_ttsim_regression.sh.
+          The script applies the section for the leg's architecture. An empty
+          string passes --no-ignore.
 
 # No `checks: write` — see the informational note above.
 permissions:
@@ -165,10 +173,26 @@ jobs:
         continue-on-error: true
         # CHIP_ARCH has no script flag: helpers/chip_architecture.py reads it from the
         # environment at import so the suite does not probe for real silicon.
+        # ignore-file is repo-relative; resolve it inside the container so the
+        # path is the one the checkout is actually mounted at.
         env:
           CHIP_ARCH: ${{ steps.arch.outputs.name }}
+          ARCH: ${{ steps.arch.outputs.name }}
+          IGNORE_FILE: ${{ inputs.ignore-file }}
         run: |
-          ${{ matrix.test-group.cmd }} --architecture ${{ steps.arch.outputs.name }}
+          set -euo pipefail
+          extra=()
+          if [[ -n "$IGNORE_FILE" ]]; then
+            ignore_path="${GITHUB_WORKSPACE}/${IGNORE_FILE}"
+            if [[ ! -f "$ignore_path" ]]; then
+              echo "::error::ttsim ignore list not found: ${ignore_path}"
+              exit 1
+            fi
+            extra+=(--ignore-file "$ignore_path")
+          else
+            extra+=(--no-ignore)
+          fi
+          ${{ matrix.test-group.cmd }} --architecture "$ARCH" "${extra[@]}"
 
       # Rename the timestamped outputs to stable per-arch names so the artifact has predictable
       # filenames (the script writes ttsim_<timestamp>.{xml,html} plus latest.* symlinks, which
@@ -179,6 +203,7 @@ jobs:
         shell: bash
         env:
           ARCH: ${{ steps.arch.outputs.name }}
+          IGNORE_FILE: ${{ inputs.ignore-file }}
         run: |
           set -euo pipefail
           RESULTS_DIR="${GITHUB_WORKSPACE}/${{ env.LLK_PATH }}/tests/python_tests/ttsim_results"
@@ -198,6 +223,11 @@ jobs:
               > "${ARTIFACT_DIR}/ttsim-${ARCH}.enumerated"
           fi
           cp "${GITHUB_WORKSPACE}/tt_metal/ttsim-version" "${ARTIFACT_DIR}/ttsim-version"
+          # The list the regression step deselected from, so the artifact shows
+          # which node ids were excluded for this arch.
+          if [[ -n "$IGNORE_FILE" && -f "${GITHUB_WORKSPACE}/${IGNORE_FILE}" ]]; then
+            cp "${GITHUB_WORKSPACE}/${IGNORE_FILE}" "${ARTIFACT_DIR}/ttsim_ignore_list.txt"
+          fi
           ls -la "${ARTIFACT_DIR}/"
 
       - name: Upload ttsim report
@@ -216,6 +246,7 @@ jobs:
         shell: bash
         env:
           ARCH: ${{ steps.arch.outputs.name }}
+          IGNORE_FILE: ${{ inputs.ignore-file }}
           XML_PATH: ttsim-report-${{ steps.arch.outputs.name }}/ttsim-${{ steps.arch.outputs.name }}.xml
           ENUM_PATH: ttsim-report-${{ steps.arch.outputs.name }}/ttsim-${{ steps.arch.outputs.name }}.enumerated
         run: |
@@ -284,6 +315,11 @@ jobs:
 
           enumerated_disp="${enumerated:-}"; [[ -z "$enumerated_disp" ]] && enumerated_disp="n/a"
           crashed_disp="${crashed:-}";       [[ -z "$crashed_disp" ]] && crashed_disp="n/a"
+          if [[ -n "${IGNORE_FILE}" ]]; then
+            ignore_disp="${IGNORE_FILE}"
+          else
+            ignore_disp="disabled"
+          fi
 
           {
             echo "## ttsim regression: ${ARCH}"
@@ -300,6 +336,7 @@ jobs:
             echo "| ❌ Failed | ${failed} |"
             echo "| ⏩ Skipped | ${skipped} |"
             echo "| 💥 Crashed | ${crashed_disp} |"
+            echo "| 🚫 Ignore list | ${ignore_disp} |"
             echo "| 📈 Pass rate | ${pass_pct}% |"
             echo ""
             echo "HTML report: available in the \`ttsim-report-${ARCH}\` artifact of this run."
