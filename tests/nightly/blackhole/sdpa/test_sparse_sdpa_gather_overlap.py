@@ -829,7 +829,8 @@ def test_gather_schemes_vs_prefix(mesh_device):
 
     lines = [
         f"fp8, chunk {chunk_global}, dense quota {quota} slabs, sparse rows/chip = min(prefix, {dcap}) (8x4 TORUS_XY)",
-        f"{'prefix':>8} | {'today':>7} | {'dense ovl+resume':>18}{'vs today':>9} | {'sparse ovl+rem':>16}{'vs today':>9}",
+        f"{'prefix':>8} | {'today: sdpa + gather = total':>30} | {'dense: overlap + resume = total':>32}{'vs':>7} | "
+        f"{'sparse: overlap + remainder = total':>36}{'vs':>7}",
     ]
     rng = np.random.default_rng(0)
     for p_slabs in prefix_list:
@@ -892,17 +893,20 @@ def test_gather_schemes_vs_prefix(mesh_device):
             push(pre_t, compact[0])
             push(rem_t, compact[0])
             t_gather = timed(full_gather)
-            t_dense = timed(lambda: (sdpa80_dense(), prefetch())) + timed(resume)
-            t_sparse = timed(lambda: (sdpa80_compact(), push(pre_t, compact[1]))) + timed(
+            d_ovl, d_res = timed(lambda: (sdpa80_dense(), prefetch())), timed(resume)
+            s_ovl, s_rem = timed(lambda: (sdpa80_compact(), push(pre_t, compact[1]))), timed(
                 lambda: push(rem_t, compact[1])
             )
         finally:
             ttnn.synchronize_device(mesh_device)
             mesh_device.clear_loaded_sub_device_manager()
-        t_today = timed(lambda: _sparse_sdpa(q, dense[0], idx_nat, s_local * TP, kv_fmt)) + t_gather
+        t_sdpa = timed(lambda: _sparse_sdpa(q, dense[0], idx_nat, s_local * TP, kv_fmt))
+        t_today, t_dense, t_sparse = t_sdpa + t_gather, d_ovl + d_res, s_ovl + s_rem
+        pct = lambda t: f"{100 * (t - t_today) / t_today:>+6.1f}%"
         lines.append(
-            f"{prefix:>8} | {t_today:>7.0f} | {t_dense:>18.0f}{100 * (t_today - t_dense) / t_today:>8.1f}% | "
-            f"{t_sparse:>16.0f}{100 * (t_today - t_sparse) / t_today:>8.1f}%"
+            f"{prefix:>8} | {t_sdpa:>8.0f} + {t_gather:>7.0f} = {t_today:>7.0f} | "
+            f"{d_ovl:>9.0f} + {d_res:>7.0f} = {t_dense:>7.0f}{pct(t_dense)} | "
+            f"{s_ovl:>9.0f} + {s_rem:>9.0f} = {t_sparse:>7.0f}{pct(t_sparse)}"
         )
     logger.info("\n" + "\n".join(lines))
     mesh_device.remove_sub_device_manager(manager)
