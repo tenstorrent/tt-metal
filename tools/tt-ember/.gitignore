@@ -1,9 +1,2 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-
-# Tool output directories
+# Default output directories of the examples in README.md
 out*/

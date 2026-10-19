@@ -1,26 +1,12 @@
-<div align="center">
+# tt-ember
 
-<picture>
-  <img alt="tt-ember logo" src="docs/images/tt_ember_logo.png" height="220">
-</picture>
-
-**Power and energy telemetry for Tenstorrent hardware.**
-
-</div>
-<br>
-
-tt-ember collects and analyzes power metrics (voltage, current, power) from Tenstorrent hardware during workload execution, built on [TT-Metalium](https://github.com/tenstorrent/tt-metal). It produces per-interval statistics, charge and energy calculations, and matplotlib visualizations — all aligned to the execution windows of the measured application. An optional device-side layer correlates per-kernel activity (reader / compute / writer) with the same power telemetry for a wait-vs-active-vs-overhead breakdown.
-
------
-**Contents:** [Overview](#overview) · [Repository Structure](#repository-structure) · [Prerequisites](#prerequisites) · [Quick Start](#quick-start) · [Scripts](#scripts) · [Output](#output-structure) · [Benchmark App](#the-benchmark-application) · [Power Metrics](#power-metrics)
-
------
+tt-ember collects and analyzes power metrics (voltage, current, power) from Tenstorrent hardware during workload execution. It produces per-interval statistics, charge and energy calculations, and matplotlib visualizations — all aligned to the execution windows of the measured application. An optional device-side layer correlates per-kernel activity (reader / compute / writer) with the same power telemetry for a wait-vs-active-vs-overhead breakdown.
 
 ## Overview
 
 tt-ember runs a measured application (by default the `long_matmul` programming example) while a telemetry binary samples the device's power sensors, then joins the two by wall-clock time to attribute power and energy to each phase of execution. Everything is driven by a handful of Python scripts — no build step for the tooling itself; only the `tt-metal` binaries it drives need to be compiled.
 
-## Repository Structure
+## Files
 
 ```
 tt-ember/
@@ -61,11 +47,7 @@ pause, which is the one the base current is measured in. Unset it before a power
 
 ### Built binaries
 
-The following binaries must be compiled from the [`tt-metal`](https://github.com/tenstorrent/tt-metal) repository before running the pipeline. Point `$TT_METAL_HOME` at your checkout:
-
-```bash
-export TT_METAL_HOME=/path/to/tt-metal
-```
+The pipeline drives two tt-metal binaries, with `$TT_METAL_HOME` set to the tt-metal root:
 
 ```
 $TT_METAL_HOME/build_Release/tools/umd/telemetry
