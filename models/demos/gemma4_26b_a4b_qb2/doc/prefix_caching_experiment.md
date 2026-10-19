@@ -161,6 +161,11 @@ sampling-state check, not evidence that the seed is necessary or removable.
 No standard-Harbor accuracy or final Shield release has been dispatched for
 the caching candidate yet.
 
+Those next checks were dispatched with exact Metal
+`7d5c3e5cb8438989e36a6a35c704f1154f9a4584`, workflow `38d4d6f`, traced mode:
+growing run `39238201191` on `qb2-120-p01t03`; lifetime run `39238204679`
+on `qb2-120-p03t09`. Both remain separate from the baseline Shield release.
+
 ### Serial control result
 
 [39235204816](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39235204816)
