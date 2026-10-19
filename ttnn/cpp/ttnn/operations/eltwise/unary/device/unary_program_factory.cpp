@@ -405,61 +405,43 @@ tt::tt_metal::experimental::ProgramRunArgs make_run_args(
     KernelRunArgs writer_run_args{.kernel = WRITER};
     KernelRunArgs compute_run_args{.kernel = COMPUTE};
 
-    // Sharded readers/writers take {units, start_id}; interleaved add the five chunk fields, which are
-    // zero unless ROW_MAJOR. A changed split can flip a core between noop and active, so every slot is
-    // written on every core, noop cores zero-filled -- otherwise a flipped core keeps stale args.
-    auto add_dm_args = [&](KernelRunArgs& kra,
-                           const CoreCoord& core,
-                           uint32_t num_pages,
-                           uint32_t start_id,
-                           const std::array<uint32_t, 5>& chunk_tail) {
+    // Per node only the work split; the chunk fields (zero unless ROW_MAJOR) and the scalars are the same on every
+    // core, so they go once as common args. A changed split can flip a core between noop and active, so every
+    // node's slots are written on every dispatch, noop cores zero-filled.
+    auto add_dm_args = [](KernelRunArgs& kra, const CoreCoord& core, uint32_t num_pages, uint32_t start_id) {
         AddRuntimeArgsForNode(kra.runtime_arg_values, core, {{"num_pages", num_pages}, {"start_id", start_id}});
-        if (!has_sharding) {
-            AddRuntimeArgsForNode(
-                kra.runtime_arg_values,
-                core,
-                {{"chunks_per_row", chunk_tail[0]},
-                 {"chunk_size", chunk_tail[1]},
-                 {"last_chunk_size", chunk_tail[2]},
-                 {"rows_per_tile", chunk_tail[3]},
-                 {"total_rows", chunk_tail[4]}});
-        }
     };
 
     uint32_t scheduler_xy = 0;
+    RmChunkConstants chunks{};
     enumerate_core_rt_args(
         operation_attributes, tensor_args, output, plan, [&](const CoreRtArgs& w, const RmChunkConstants& kc) {
             if (w.noop) {
-                add_dm_args(reader_run_args, w.core, 0, 0, {});
-                add_dm_args(writer_run_args, w.core, 0, 0, {});
-                AddRuntimeArgsForNode(
-                    compute_run_args.runtime_arg_values,
-                    w.core,
-                    {{"num_tiles", 0}, {"packed_scalar1", 0}, {"packed_scalar2", 0}});
+                add_dm_args(reader_run_args, w.core, 0, 0);
+                add_dm_args(writer_run_args, w.core, 0, 0);
+                AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, w.core, {{"num_tiles", 0}});
                 return;
             }
-            const std::array<uint32_t, 5> rtail =
-                rm_interleaved
-                    ? std::array<
-                          uint32_t,
-                          5>{kc.chunks_per_row, kc.input_chunk_size, kc.input_last_chunk_size, kc.rows_per_tile, kc.total_rows}
-                    : std::array<uint32_t, 5>{};
-            const std::array<uint32_t, 5> wtail =
-                rm_interleaved
-                    ? std::array<
-                          uint32_t,
-                          5>{kc.chunks_per_row, kc.output_chunk_size, kc.output_last_chunk_size, kc.rows_per_tile, kc.total_rows}
-                    : std::array<uint32_t, 5>{};
-            add_dm_args(reader_run_args, w.core, w.in_units, w.start_id, rtail);
-            add_dm_args(writer_run_args, w.core, w.out_units, w.start_id, wtail);
+            chunks = kc;  // the same on every core
+            add_dm_args(reader_run_args, w.core, w.in_units, w.start_id);
+            add_dm_args(writer_run_args, w.core, w.out_units, w.start_id);
             scheduler_xy = std::max(scheduler_xy, w.scheduler_xy);
-            AddRuntimeArgsForNode(
-                compute_run_args.runtime_arg_values,
-                w.core,
-                {{"num_tiles", w.compute_units},
-                 {"packed_scalar1", packed_scalar1},
-                 {"packed_scalar2", packed_scalar2}});
+            AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, w.core, {{"num_tiles", w.compute_units}});
         });
+    if (!has_sharding) {
+        for (auto [kra, chunk_size, last_chunk_size] :
+             {std::tuple{&reader_run_args, chunks.input_chunk_size, chunks.input_last_chunk_size},
+              std::tuple{&writer_run_args, chunks.output_chunk_size, chunks.output_last_chunk_size}}) {
+            auto& common = kra->common_runtime_arg_values;
+            common["chunks_per_row"] = rm_interleaved ? chunks.chunks_per_row : 0;
+            common["chunk_size"] = rm_interleaved ? chunk_size : 0;
+            common["last_chunk_size"] = rm_interleaved ? last_chunk_size : 0;
+            common["rows_per_tile"] = rm_interleaved ? chunks.rows_per_tile : 0;
+            common["total_rows"] = rm_interleaved ? chunks.total_rows : 0;
+        }
+    }
+    compute_run_args.common_runtime_arg_values["packed_scalar1"] = packed_scalar1;
+    compute_run_args.common_runtime_arg_values["packed_scalar2"] = packed_scalar2;
 
     if (plan.flow != DramReadFlow::None) {
         const auto page_order = plan.page_order();
@@ -629,14 +611,15 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     const TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec(), .relaxations = shape_dynamic};
 
     // --- Reader Kernel ---
-    // Sharded readers/writers take {units, start_id}; interleaved add the five chunk fields.
+    // Readers and writers take {num_pages, start_id} per node; interleaved ones also take the five chunk fields, the
+    // same on every node, as common args.
     Group<std::string> dm_runtime_arg_names = {"num_pages", "start_id"};
+    Group<std::string> dm_common_runtime_arg_names;
     if (!has_sharding) {
-        dm_runtime_arg_names.insert(
-            dm_runtime_arg_names.end(),
+        dm_common_runtime_arg_names.insert(
+            dm_common_runtime_arg_names.end(),
             {"chunks_per_row", "chunk_size", "last_chunk_size", "rows_per_tile", "total_rows"});
     }
-    Group<std::string> dm_common_runtime_arg_names;
     if (dram_flow) {
         dm_common_runtime_arg_names.insert(
             dm_common_runtime_arg_names.end(), kPageOrderArgNames.begin(), kPageOrderArgNames.end());
@@ -811,7 +794,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             },
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args = std::move(compute_compile_time_args),
-        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "packed_scalar1", "packed_scalar2"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"num_tiles"}, .common_runtime_arg_names = {"packed_scalar1", "packed_scalar2"}},
         .hw_config = std::move(compute_hw_config),
     };
 
