@@ -45,7 +45,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import check_fabric2d_setup
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import check_fabric2d_setup, get_ep_mesh_mapper
 
 
 class TtDispatchModule(LightweightModule):
@@ -131,6 +131,7 @@ class TtDispatchModule(LightweightModule):
     def shard_expert_offsets(
         mesh_device: ttnn.MeshDevice,
         expert_offsets: torch.Tensor,
+        sp_axis: int = 0,
     ) -> ttnn.Tensor:
         """
         Convert and shard the offset tensor for dispatch operation.
@@ -139,16 +140,13 @@ class TtDispatchModule(LightweightModule):
             mesh_device: The mesh device to place the tensor on
             expert_offsets: Base offset for each expert from each chip (sparse per group)
                 Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts) - from get_gate_outputs()
+            sp_axis: Mesh axis the dispatch groups run along.
 
         Returns:
             TTNN tensor sharded across mesh devices
         """
         logger.debug(f"[shard_expert_offsets] INPUT: expert_offsets.shape={expert_offsets.shape}")
-        mesh_mapper = ttnn.ShardTensor2dMesh(
-            mesh_device,
-            mesh_shape=mesh_device.shape,
-            dims=(1, 0),
-        )
+        mesh_mapper = get_ep_mesh_mapper(mesh_device, sp_axis)
         result = ttnn.from_torch(
             expert_offsets,
             mesh_mapper=mesh_mapper,

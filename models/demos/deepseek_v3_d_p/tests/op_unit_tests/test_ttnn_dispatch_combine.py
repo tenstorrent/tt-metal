@@ -27,7 +27,7 @@ from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM2
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_y_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_y_device_params
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -67,6 +67,7 @@ def run_dispatch_combine(
     dispatched_buffer_layout,
     is_ci_env=False,
     is_ci_v2_env=False,
+    sp_axis=0,
 ):
     """Test end-to-end TTNN dispatch→combine round-trip with host reduction."""
     if (is_ci_env or is_ci_v2_env) and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
@@ -81,12 +82,13 @@ def run_dispatch_combine(
 
     num_devices = mesh_device.get_num_devices()
 
-    mesh_config = extract_mesh_config(mesh_device)
-    sp_axis = mesh_config.sp_axis
+    mesh_config = extract_mesh_config(mesh_device, sp_axis)
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    logger.debug(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
+    logger.debug(
+        f"Testing with {sp_axis=}, {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}"
+    )
     ttnn.visualize_mesh_device(mesh_device)
 
     # Compute configuration constants (use dispatch_group_size for dispatch/combine parallelism)
@@ -201,6 +203,7 @@ def run_dispatch_combine(
         expert_dispatch_table=expert_dispatch_table,
         num_links=num_links,
         experts_per_chip=experts_per_chip,
+        sp_axis=sp_axis,
     )
     tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _, _ = tt_moe_routing_setup(
         ttnn_top_k_experts_indices=indices,
@@ -220,7 +223,7 @@ def run_dispatch_combine(
     )
 
     # Validate routing setup outputs against torch reference
-    ep_composer = get_ep_mesh_composer(mesh_device)
+    ep_composer = get_ep_mesh_composer(mesh_device, sp_axis)
     host_offsets = ttnn.to_torch(ttnn.unsqueeze_to_4D(tt_dispatch_offsets), mesh_composer=ep_composer).squeeze(2)
     host_token_counts = ttnn.to_torch(ttnn.unsqueeze_to_4D(tt_expert_token_counts), mesh_composer=ep_composer).squeeze(
         2
@@ -415,7 +418,10 @@ def dispatch_combine_shape_params():
 _MESH_IDS = (
     "fabric2d-torus-y-4x1-2link",
     "fabric2d-torus-y-8x1-2link",
+    "fabric2d-torus-x-1x4-2link",
+    "fabric2d-torus-x-1x8-2link",
     "fabric2d-mesh-4x2-2link",
+    "fabric2d-mesh-2x4-2link",
     "fabric2d-torus-xy-8x4-2link",
 )
 _MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id in _MESH_IDS]
@@ -449,9 +455,13 @@ def _ci_unsupported_param_combos_dispatch_combine(**params):
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     ids=["tile", "row_major"],
 )
+# The SP (dispatch) axis. sp1 is the 4x4-stage layout, where the SP ring runs along mesh axis 1; on a
+# non-square mesh it also catches any helper that still assumes axis 0.
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp0", "sp1"])
 def test_ttnn_dispatch_combine(
     mesh_device,
     device_params,
+    sp_axis,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
@@ -463,7 +473,8 @@ def test_ttnn_dispatch_combine(
     is_ci_env,
     is_ci_v2_env,
 ):
-    sp_axis = extract_mesh_config(mesh_device).sp_axis
+    if mesh_device.shape[sp_axis] == 1:
+        pytest.skip(f"mesh {tuple(mesh_device.shape)} has no extent along sp_axis={sp_axis}")
     topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     run_dispatch_combine(
         mesh_device,
@@ -478,6 +489,7 @@ def test_ttnn_dispatch_combine(
         dispatched_buffer_layout,
         is_ci_env=is_ci_env,
         is_ci_v2_env=is_ci_v2_env,
+        sp_axis=sp_axis,
     )
 
 
@@ -689,14 +701,24 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, device_params, num_links, o
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, sp_axis",
     [
         pytest.param(
             (8, 1),
             torus_y_device_params(),
             1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
             id="fabric2d-torus-y-8x1-1link",
+        ),
+        # The same ring with the SP axis on mesh axis 1, as in the 4x4 stages.
+        pytest.param(
+            (1, 8),
+            torus_x_device_params(),
+            1,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 8), topology="ring"),
+            id="fabric2d-torus-x-1x8-1link",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -707,13 +729,12 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, device_params, num_links, o
     ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
 )
 def test_ttnn_dispatch_combine_top4(
-    mesh_device, device_params, num_links, dispatched_buffer_layout, is_ci_env, is_ci_v2_env
+    mesh_device, device_params, num_links, sp_axis, dispatched_buffer_layout, is_ci_env, is_ci_v2_env
 ):
     """Regression test for num_experts_per_tok > 2 (previously caused hangs due to undersized CB buffering)."""
     # dispatch_buffer_capacity_factor: ceil(N/2) of the most conservative integer
     # N such that dgs*seq*N >= theoretical worst-case dispatch buffer. Real traffic
     # never approaches the worst case, so half-capacity is sufficient.
-    sp_axis = extract_mesh_config(mesh_device).sp_axis
     topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     run_dispatch_combine(
         mesh_device=mesh_device,
@@ -728,4 +749,5 @@ def test_ttnn_dispatch_combine_top4(
         dispatched_buffer_layout=dispatched_buffer_layout,
         is_ci_env=is_ci_env,
         is_ci_v2_env=is_ci_v2_env,
+        sp_axis=sp_axis,
     )
