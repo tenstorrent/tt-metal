@@ -32,6 +32,11 @@ import ttnn
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
 
 
+def tp_topology():
+    """The TP collectives' topology: a ring when the TP axis wraps, a line otherwise."""
+    return ttnn.Topology.Ring if layout.tp_ring else ttnn.Topology.Linear
+
+
 class MeshConfig:
     """Prefill mesh parallelization. TP is the only knob; SP follows from the mesh shape."""
 
