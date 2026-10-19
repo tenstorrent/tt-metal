@@ -207,7 +207,7 @@ def test_production_local_trace(mesh_device, tp_axis, device_params, local_rows)
                     label=f"compact SP{sp} start={actual_start}",
                     state_linf_threshold=None,
                     pcc_threshold=0.9995,
-                    nrmse=LayerNrmseThresholds(output=0.015, recurrent=0.05, convolution=0.007),
+                    nrmse=LayerNrmseThresholds(output=0.015, recurrent=0.05),
                 )
         finally:
             ttnn.release_trace(mesh_device, trace)
