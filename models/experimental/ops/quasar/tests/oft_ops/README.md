@@ -111,9 +111,9 @@ These mirror `tests/vad_variant_ops/`, whose 5x4-grid helpers `op_utils.py` re-e
 
 ## Status
 
-Authored from static analysis only: **never run** (no device available at authoring).
+Authored from static analysis only.
 
-Expect first-run touch-ups:
+Expect Quasar first-run touch-ups:
 
 - tensors with partly empty shards on the 5x4 grid (576 rows over 20 x 32-row shards,
   25281 rows over 1280-row shards)
