@@ -5,7 +5,7 @@ training_config:
   num_epochs: 1
   max_steps: 20
   use_clip_grad_norm: false
-  data_path: "${TT_METAL_RUNTIME_ROOT}/tt-train/data/shakespeare_deepseek.yaml"
+  data_path: "data/shakespeare_deepseek.yaml"
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/moe/deepseek_16B.yaml"
   optimizer:
     type: AdamW
