@@ -45,9 +45,11 @@ FORCE_INLINE auto local_noc_addr(uint32_t addr, uint8_t noc_id = noc_index) {
 /**
  * @brief Zero out the exact tile size for a DFB's current write entry using the device zero API.
  *
+ * @tparam DFB DataflowBuffer type (any access-pattern specialization on Quasar)
  * @param dfb DataflowBuffer whose current write entry should be zeroed
  */
-FORCE_INLINE void zero_tile(::DataflowBuffer dfb) {
+template <typename DFB>
+FORCE_INLINE void zero_tile(DFB dfb) {
     Noc noc;
     noc.async_write_zeros(dfb, dfb.get_tile_size());
     noc.write_zeros_l1_barrier();

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "kda_nanobind.hpp"
-#include "ttnn/operations/experimental/kda/chronological_selections/chronological_selections_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
 
@@ -20,7 +19,6 @@ namespace ttnn::operations::experimental::kda::detail {
 
 void bind_kda(nb::module_& mod) {
     auto kda_module = mod.def_submodule("kda", "Experimental KDA operations");
-    chronological_selections::detail::bind_chronological_selections(kda_module);
     affine_exclusive_scan::detail::bind_affine_exclusive_scan(kda_module);
     chain_affine_transforms::detail::bind_chain_affine_transforms(kda_module);
     gdn_decode_step::detail::bind_gdn_decode_step(kda_module);
