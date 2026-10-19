@@ -16,6 +16,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "sparse_push_route.hpp"
 
 #include <cstdint>
 
@@ -132,9 +133,14 @@ void kernel_main() {
     auto run_pass = [&](uint32_t part) {
         uint32_t nth_on_dir = 0;
         for (uint32_t dest = 0; dest < num_devices && !stopped; ++dest) {
-            const bool on_dir = dest == my_rank ? dir == 0
-                                                : static_cast<uint32_t>(tt::tt_fabric::get_next_hop_router_direction(
-                                                      dest_mesh_ids[dest], dest_chip_ids[dest])) == dir;
+            const bool on_dir = dest == my_rank
+                                    ? dir == 0
+                                    : sparse_push::route<MESH_ROWS, MESH_COLS>(
+                                          my_rank,
+                                          dest,
+                                          static_cast<uint32_t>(tt::tt_fabric::get_next_hop_router_direction(
+                                              dest_mesh_ids[dest], dest_chip_ids[dest])))
+                                              .dir == dir;
             // Requesters on this direction alternate between links.
             if (!on_dir || nth_on_dir++ % links != link) {
                 continue;

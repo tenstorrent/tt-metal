@@ -1202,3 +1202,143 @@ def test_sparse_overlap_device_plan(mesh_device):
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
     )
     assert torch.equal(out_dense, out_compact), "fused prefix push + resume differs from the dense-gather path"
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Link efficiency of the table push vs hop count: every requester needs ROWS rows from each owner at a fixed
+# torus offset (1, 2 or 3 rows away, both directions), so the per-link byte load is known and only the hop count
+# changes. Reports push time and effective GB/s on the busiest link.
+# ---------------------------------------------------------------------------------------------------------
+
+
+def _busiest_direction_mb(n_dev, mesh_r, mesh_c, idx, stripe_chunk, page_bytes):
+    """MB on the busiest (chip, direction) for the push of `idx` [requester, rows, topk], N/S then E/W shortest paths."""
+    load = {}
+    for d in range(n_dev):
+        v = idx[d].reshape(-1)
+        v = np.unique(v[v != 0xFFFFFFFF])
+        per_owner = np.bincount((v // stripe_chunk) % n_dev, minlength=n_dev)
+        rd, cd = divmod(d, mesh_c)
+        for o in range(n_dev):
+            if o == d or not per_owner[o]:
+                continue
+            r, c = divmod(o, mesh_c)
+            for axis, n, (a, b) in (("NS", mesh_r, (r, rd)), ("EW", mesh_c, (c, cd))):
+                step = (b - a) % n
+                step = step if step <= n // 2 else step - n
+                for _ in range(abs(step)):
+                    key = (r, c, axis, step > 0)
+                    load[key] = load.get(key, 0) + per_owner[o] * page_bytes
+                    if axis == "NS":
+                        r = (r + (1 if step > 0 else -1)) % n
+                    else:
+                        c = (c + (1 if step > 0 else -1)) % n
+    return max(load.values()) / 1e6
+
+
+@run_for_blackhole()
+@_PERF
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY_GLM], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_sparse_push_hop_efficiency(mesh_device):
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import _shard_over_mesh
+
+    kv_fmt, chunk_global = "fp8", 5120
+    n_dev, mesh_r, mesh_c = mesh_device.get_num_devices(), 8, 4
+    links, stripe_chunk, s_local = 2, chunk_global // 32, chunk_global // 32
+    cache_tokens = 1044480
+    rows_per_owner = int(os.environ.get("HOP_ROWS", "2048"))
+    page_bytes = 704
+    pages_per_packet = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
+    buffer_rows = cache_tokens + n_dev * pages_per_packet * _DRAM_BANKS
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    shard_seq = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+    cache = _kv_cache(mesh_device, 1, cache_tokens, kv_fmt, shard_seq, seed=3)
+    out = _zero_kv_buffer(mesh_device, buffer_rows, kv_fmt)
+    grid = mesh_device.compute_with_storage_grid_size()
+    sems = [
+        ttnn.create_global_semaphore(mesh_device, _cols(0, grid.x - 1), 0, ttnn.BufferType.L1_SMALL) for _ in range(2)
+    ]
+    rng = np.random.default_rng(0)
+    blocks_per_owner = cache_tokens // stripe_chunk // n_dev
+
+    def owner_rows(o, count):
+        j = rng.choice(blocks_per_owner - 1, size=count // stripe_chunk + 1, replace=False)
+        rows = ((j[:, None] * n_dev + o) * stripe_chunk + np.arange(stripe_chunk)[None, :]).reshape(-1)
+        return rows[:count]
+
+    def timed(fn, n=10):
+        fn()
+        ttnn.synchronize_device(mesh_device)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        fn()
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        us = (time.perf_counter() - t0) / n * 1e6
+        ttnn.release_trace(mesh_device, tid)
+        return us
+
+    lines = [f"table push, {rows_per_owner} rows per (owner, requester), 704 B rows, {links} links (8x4 TORUS_XY)"]
+    for hops in os.environ.get("HOP_CASES", "1,2,3,all").split(","):
+        # Requester (r, c) needs rows from the owners `hops` rows north and south of it, or from every owner.
+        idx = np.full((n_dev, s_local, TOPK), 0xFFFFFFFF, dtype=np.int64)
+        for d in range(n_dev):
+            r, c = divmod(d, mesh_c)
+            if hops == "all":
+                owners = [o for o in range(n_dev) if o != d]
+            else:
+                h = int(hops)
+                owners = [((r + h) % mesh_r) * mesh_c + c, ((r - h) % mesh_r) * mesh_c + c]
+            need = np.concatenate([owner_rows(o, rows_per_owner) for o in owners])
+            flat = idx[d].reshape(-1)
+            flat[: need.size] = need
+        idx_tt = ttnn.from_torch(
+            torch.from_numpy(idx.reshape(1, 1, n_dev * s_local, TOPK).astype(np.uint32).view(np.int32)),
+            dtype=ttnn.uint32,
+            mesh_mapper=shard_seq,
+            **common,
+        )
+        table, _ = ttnn.experimental.sparse_push_plan(
+            idx_tt,
+            num_devices=n_dev,
+            stripe_chunk=stripe_chunk,
+            max_rows=cache_tokens,
+            pages_per_packet=pages_per_packet,
+            banks=_DRAM_BANKS,
+        )
+        _shard_over_mesh(table, mesh_device)
+        tables = ttnn.from_torch(
+            torch.zeros(1, 1, table.shape[2] * n_dev, 1024, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            mesh_mapper=replicate,
+            **common,
+        )
+        ttnn.experimental.high_bw_all_gather(table, dim=2, output_tensor=tables, cluster_axis=None, num_links=links)
+        push = lambda: ttnn.experimental.high_bw_all_gather(
+            cache,
+            dim=2,
+            output_tensor=out,
+            cluster_axis=None,
+            num_links=links,
+            push_runs_tensor=tables,
+            push_stripe_chunk=stripe_chunk,
+            push_max_rows=cache_tokens,
+            ready_semaphore=sems[0],
+            data_valid_semaphore=sems[1],
+        )
+        us = timed(push)
+        # Busiest direction's bytes (both links of it), from a dimension-ordered shortest-path route model.
+        mb = _busiest_direction_mb(n_dev, mesh_r, mesh_c, idx, stripe_chunk, page_bytes)
+        lines.append(
+            f"  {hops} hop(s): {us:7.0f} us, busiest direction {mb:6.2f} MB -> {mb * 1e6 / us / 1e3:5.1f} GB/s "
+            f"(pushed {(idx != 0xFFFFFFFF).sum() * page_bytes / n_dev / 1e6:.1f} MB per chip)"
+        )
+        for t in (idx_tt, table, tables):
+            ttnn.deallocate(t)
+    logger.info("\n" + "\n".join(lines))

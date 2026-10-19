@@ -39,6 +39,12 @@ struct WorkerKernels {
     tt::tt_metal::KernelHandle writer;
 };
 
+// Packets in flight per mux channel (prototype knob SPARSE_PUSH_MUX_BUFFERS).
+uint8_t sparse_push_mux_buffers() {
+    const char* env = std::getenv("SPARSE_PUSH_MUX_BUFFERS");
+    return env ? static_cast<uint8_t>(std::stoul(env)) : 2;
+}
+
 uint32_t num_links(const HighBwAllGatherParams& params, const HighBwAllGatherInputs& tensor_args) {
     if (params.push_stripe_chunk > 0) {
         return params.num_links.value_or(2);
@@ -130,7 +136,7 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
     tt::tt_fabric::FabricMuxConfig mux_config(
         /*num_full_size_channels=*/senders_per_channel,
         /*num_header_only_channels=*/0,
-        /*num_buffers_full_size_channel=*/2,
+        /*num_buffers_full_size_channel=*/sparse_push_mux_buffers(),
         /*num_buffers_header_only_channel=*/0,
         /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
         /*base_l1_address=*/mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
@@ -229,7 +235,14 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
             {"DEST_CHIP_ID", ttnn::operations::ccl::common::stringify(dest_chip_ids)},
             {"DEST_MESH_ID", ttnn::operations::ccl::common::stringify(dest_mesh_ids)},
             {"FABRIC_2D", "1"},
+            {"MESH_ROWS", std::to_string(mesh_rows)},
+            {"MESH_COLS", std::to_string(mesh_cols)},
         };
+        // Table mode only: the run-list reader picks connections straight from the routing table.
+        if (const char* split = std::getenv("SPARSE_PUSH_TIE_SPLIT");
+            from_table && split && std::string(split) != "0") {
+            writer_defines["PUSH_TIE_SPLIT"] = "1";
+        }
         // Profiling switch for the prototype: SPARSE_PUSH_SKIP=reads|sends times one side without the other.
         std::map<std::string, std::string> reader_defines = writer_defines;
         if (const char* skip = std::getenv("SPARSE_PUSH_SKIP")) {
