@@ -302,6 +302,7 @@ ProgramDescriptor build_blocked(
     compute.kernel_source = kComputeBlocked;
     compute.named_compile_time_args = {{"x_block_size", kXBlock}, {"w_block_size", kWBlock}};
     compute.config = ComputeConfigDescriptor{.fp32_dest_acc_en = element_size == kBytesPerWideElement};
+    compute.opt_level = KernelBuildOptLevel::O3;  // as native's transpose_xw_rm_single_tile_size
 
     KernelDescriptor::RTArgList reader_common;
     reader_common.reserve(1 + 2 * rank);

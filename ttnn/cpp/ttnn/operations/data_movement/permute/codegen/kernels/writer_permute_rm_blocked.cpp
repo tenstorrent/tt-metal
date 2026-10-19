@@ -121,8 +121,8 @@ void kernel_main() {
                 {.offset_bytes = l1_offset},
                 {.page_id = dest_linear_idx, .offset_bytes = x_offset});
         }
-        noc.async_writes_flushed();
+        // Barrier per block, as native: flushed-only lets many sub-line DRAM writes pile up in flight.
+        noc.async_write_barrier();
         cb_out.pop_front(w_block_size);
     }
-    noc.async_write_barrier();
 }
