@@ -306,7 +306,7 @@ def test_prefill_and_release_translate_runner_slots(expect_error):
     rows = []
     e = _engine(B)
 
-    def prefill_row(row, prompt_ids, page_table_row, _cap_blocks=None):
+    def prefill_row(row, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None):
         rows.append(row)
         e._fresh[row] = len(prompt_ids)
         e._active.add(row)
@@ -399,7 +399,7 @@ class _FakeDevice:
         B, T, K = self.B, self.T, self.T - 1
         dev = self
 
-        def prefill_row(row, prompt_ids, page_table_row, _cap_blocks=None):
+        def prefill_row(row, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None):
             reset_draft_skip(e, row)
             e._parked.pop(row, None)
             e._fresh_dirty.discard(row)
