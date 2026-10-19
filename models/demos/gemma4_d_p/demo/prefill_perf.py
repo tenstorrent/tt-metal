@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from loguru import logger
+from tabulate import tabulate
 
 import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
@@ -40,6 +41,51 @@ CASES = {
 
 def _distribution(values):
     return {"median": statistics.median(values), "min": min(values), "max": max(values), "samples": values}
+
+
+def _print_summary(reports):
+    rows = []
+    for report in reports:
+        legacy = {(row["case"], row["prefix"]): row for row in report["results"] if row["path"] == "legacy"}
+        for packed in report["results"]:
+            if packed["path"] != "packed":
+                continue
+            baseline = legacy[packed["case"], packed["prefix"]]
+            lengths = packed["request_lengths"]
+            requests = f"{len(lengths)} x {lengths[0]}" if len(set(lengths)) == 1 else " + ".join(map(str, lengths))
+            rows.append(
+                [
+                    f"{report['chunk_size']:,}",
+                    requests,
+                    f"{packed['prefix']:,}",
+                    f"{baseline['device_us']['median'] / 1000:.2f}",
+                    f"{packed['device_us']['median'] / 1000:.2f}",
+                    f"{baseline['device_us_per_token']:.3f}",
+                    f"{packed['device_us_per_token']:.3f}",
+                    f"{packed['device_speedup_vs_legacy']:.2f}x",
+                ]
+            )
+    print("\nGemma4 prefill comparison - median device time")
+    print(
+        tabulate(
+            rows,
+            headers=[
+                "Chunk",
+                "Requests",
+                "Prefix",
+                "Legacy ms",
+                "Packed ms",
+                "Legacy us/tok",
+                "Packed us/tok",
+                "Speedup",
+            ],
+            tablefmt="simple_outline",
+            colalign=("right", "left", "right", "right", "right", "right", "right", "right"),
+            disable_numparse=True,
+        )
+    )
+    print("Legacy runs requests sequentially; packed runs one batch. us/token excludes padding.")
+    print("Speedup = legacy / packed (>1 favors packed). KV history is synthetic.\n", flush=True)
 
 
 def _device_samples(mesh, trace_id, *, repeats, num_slots=1, stage=None, profile=False):
@@ -144,7 +190,8 @@ def _replay_spans(records, host_us, repeats, num_slots, num_devices, sources=Non
 @pytest.mark.timeout(7200)
 @parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
 def test_prefill_packed_perf(mesh_device, reset_seeds, monkeypatch):
-    _run_comparison(mesh_device, monkeypatch, cases=CASES, chunk_size=8192, output_name="gemma4_varlen_perf")
+    report = _run_comparison(mesh_device, monkeypatch, cases=CASES, chunk_size=8192, output_name="gemma4_varlen_perf")
+    _print_summary([report])
 
 
 @torch.no_grad()
@@ -153,13 +200,14 @@ def test_prefill_packed_perf(mesh_device, reset_seeds, monkeypatch):
 def test_prefill_single_request_comparison(mesh_device, reset_seeds, monkeypatch):
     chunk_size = int(os.getenv("GEMMA4_PERF_CHUNK_SIZE", "8192"))
     assert 0 < chunk_size <= 262144 and chunk_size % 1024 == 0, "Chunk size must be a multiple of 1024 up to 262144"
-    _run_comparison(
+    report = _run_comparison(
         mesh_device,
         monkeypatch,
         cases={f"single_{chunk_size}": (chunk_size,)},
         chunk_size=chunk_size,
         output_name=f"gemma4_single_prefill_{chunk_size}",
     )
+    _print_summary([report])
 
 
 @torch.no_grad()
@@ -209,6 +257,7 @@ def test_prefill_comprehensive_comparison(mesh_device, reset_seeds, monkeypatch)
         summary["complete"] = True
     finally:
         save()
+    _print_summary(summary["runs"])
 
 
 def _run_comparison(mesh_device, monkeypatch, *, cases, chunk_size, output_name, output_dir=None):

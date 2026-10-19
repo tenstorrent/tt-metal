@@ -84,6 +84,8 @@ All three chunk sizes run sequentially on the same mesh, sharing device weights 
 | 6144 | 6144 | 256, 512, 768, 1024, 1536, 2048 | 6 | 251904 |
 | 8192 | 8192 | 512, 512, 1024, 1536, 2048, 2560 | 6 | 253952 |
 
+Each comparison test prints a final table of median device milliseconds, microseconds per real token, and packed speedup, grouped by chunk size, request lengths, and cached prefix. The comprehensive test prints all three chunk sizes together.
+
 The default run measures prefix 0 and the aligned long prefix for each size. Legacy pads each mixed request to the projection chunk size and executes requests sequentially; packed executes one shared projection/MLP pass for the whole batch. The 8k mix uses six requests because seven full-context KV slots exceed device DRAM with the full checkpoint. Results are saved after each size to `investigations/gemma4_comprehensive_prefill/results.json`, with raw per-chip samples in `chunk_4096/results.json`, `chunk_6144/results.json`, and `chunk_8192/results.json`. `GEMMA4_PERF_OUTPUT` overrides the parent directory. `GEMMA4_PERF_PREFIXES=0` shortens the run; explicit nonzero prefixes must align to all three chunk sizes.
 
 The original version, which reconstructed real token histories and checked outputs, passed in 694.74 seconds on 2026-10-19, collecting all 24 measurements in one invocation. The [comparison table](../../../../investigations/gemma4_comprehensive_prefill/comparison.csv) and [sample distributions](../../../../investigations/gemma4_comprehensive_prefill/measurements.json) retain the run. Single-request output PCC ranged from 0.9948 to 0.9961 across the six size/prefix combinations.
