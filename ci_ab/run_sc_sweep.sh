@@ -5,7 +5,7 @@
 # order SIDES then reversed, twice; isolates and counters once a side. Guard: elfguard.py (MUSTDIFF pairs must differ).
 # usage: run_sc_sweep.sh <part i/n>
 set +e +o pipefail
-PART=${1:-0/1}; SIDES=${SIDES:-main head B1 B3}; export CI_RED_DIM=${CI_RED_DIM:-Scalar} MUSTDIFF=${MUSTDIFF:-"main:head head:B1 B1:B3"}
+PART=${1:-0/1}; SIDES=${SIDES:-main head B4 B5}; export CI_RED_DIM=${CI_RED_DIM:-Scalar} MUSTDIFF=${MUSTDIFF:-"main:head head:B4 B4:B5"}
 R=$(git rev-parse --show-toplevel); S=$R/ci_ab; cd $R
 echo "== checkout $(git log --oneline -1 | cut -c1-60), $(hostname), $(date -u +%T), part $PART, sides $SIDES, dim $CI_RED_DIM, nproc $(nproc)"
 place() { while read -r rel; do [[ -n $rel ]] && cp "$S/v/$1/$rel" "$R/$rel"; done < $S/v/files.txt; }

@@ -201,17 +201,12 @@ inline void reduce_scalar_transpose_pool()
     // copy over from dest to B and do transpose
     // use rows 16 - 31 in src B as scratch
     TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, row);
-    TTI_GATESRCRST(0b1, 0b1);
     TTI_TRNSPSRCB;
-    // gate math instructions until src B has been updated
-    TTI_GATESRCRST(0b1, 0b1);
     // copy over all 16 rows from B to A
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
-    // gate math instructions until src A has been updated by MOV instructions
-    TTI_GATESRCRST(0b1, 0b1);
     // zero out scratch in dest
     TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, row);
 
@@ -262,6 +257,10 @@ inline void reduce_scalar_pool_face()
 template <PoolType type, MathFidelity math_fidelity, std::uint32_t row>
 inline void reduce_scalar_pool_faces(const std::uint32_t first, const std::uint32_t num_faces, const bool keep_last)
 {
+    if (first >= num_faces)
+    {
+        return;
+    }
     for (std::uint32_t face = first; face < num_faces - 1; face++)
     {
         reduce_scalar_pool_face<type, math_fidelity, p_setrwc::CLR_AB, row>();
@@ -277,12 +276,67 @@ inline void reduce_scalar_pool_faces(const std::uint32_t first, const std::uint3
 }
 
 /**
+ * @brief REDUCE_SCALAR: move the partials of DEST row `row` through SrcB into SrcA rows 16-31 and clear the row, leaving
+ *        SrcA rows 0-15 (the bank's face) for a pool of their own.
+ */
+template <std::uint32_t row>
+inline void reduce_scalar_transpose_upper()
+{
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
+    TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, row);
+    TTI_TRNSPSRCB;
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 16, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 20, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 24, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 28, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, row);
+}
+
+/**
+ * @brief REDUCE_SCALAR SUM/AVG: the phases of one face into DEST row `row` (SrcA rows 0-15) alternating with the final
+ *        pool phases of the previous tile into DEST row 0 (SrcA rows 16-31): two chains on different rows, each phase
+ *        in its own order. ADDR_MOD_2 steps SrcA to 16, ADDR_MOD_3 back to 0 with the next phase, ADDR_MOD_4 back to 0
+ *        and phase 0. The final pool's last phase releases the banks unless keep.
+ */
+template <MathFidelity math_fidelity, std::uint32_t row>
+inline void reduce_scalar_face_with_final_pool(const bool keep)
+{
+    for (std::uint32_t i = 0; i < (is_high_fidelity(math_fidelity) ? to_underlying(math_fidelity) : 1u) - 1; i++)
+    {
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, row);
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 0);
+    }
+    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, row);
+    if (keep)
+    {
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_4, p_gpool::INDEX_DIS, 0);
+    }
+    else
+    {
+        TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_4, p_gpool::INDEX_DIS, 0);
+    }
+}
+
+/**
+ * @brief REDUCE_SCALAR SUM/AVG, one tile after the first of a block: face 0 into `row`, then in face 1's banks the
+ *        previous tile's partials (`prev_row`) transposed and pooled into row 0 alongside face 1, then the other faces.
+ */
+template <PoolType type, MathFidelity math_fidelity, std::uint32_t row, std::uint32_t prev_row>
+inline void reduce_scalar_block_tile(const std::uint32_t num_faces, const bool last)
+{
+    reduce_scalar_pool_face<type, math_fidelity, p_setrwc::CLR_AB, row>();
+    reduce_scalar_transpose_upper<prev_row>();
+    reduce_scalar_face_with_final_pool<math_fidelity, row>(last && num_faces == 2);
+    reduce_scalar_pool_faces<type, math_fidelity, row>(2, num_faces, last);
+}
+
+/**
  * @brief REDUCE_SCALAR block of tiles accumulated into one DEST tile, faces >= 2.
  *
- * MAX pools every tile into the scratch row and transposes once. SUM/AVG keeps main's sums, one transpose and final
- * pool per tile in tile order, but alternates scratch rows 4 and 5 and transposes tile t in the banks of tile t+1's
- * first face, so the unpacker fills the free banks meanwhile; that final pool reads the scaler row of face 0, not
- * face 3, the same values for a scaler tile whose faces share their first row.
+ * MAX pools every tile into the scratch row and transposes once. SUM/AVG keeps the tile path's sums, one transpose and
+ * final pool per tile in tile order, but alternates scratch rows 4 and 5, so tile t's final pool runs in tile t+1's
+ * face 1 banks alongside that face and the unpacker fills the free banks meanwhile; that pool reads face 1's scaler row
+ * instead of face 3's, the same values for a scaler tile whose faces share their first row.
  */
 template <PoolType type, MathFidelity math_fidelity>
 inline void reduce_scalar_block_accumulate(const std::uint32_t dst_index, const std::uint32_t num_tiles, const std::uint32_t num_faces)
@@ -301,21 +355,33 @@ inline void reduce_scalar_block_accumulate(const std::uint32_t dst_index, const 
     }
     else
     {
+        // The modes of reduce_scalar_face_with_final_pool; the tile path does not use 2 to 4.
+        addr_mod_t {
+            .srca = {.incr = 16},
+        }
+            .set(ADDR_MOD_2);
+        addr_mod_t {
+            .srca     = {.clr = 1},
+            .fidelity = {.incr = 1},
+        }
+            .set(ADDR_MOD_3);
+        addr_mod_t {
+            .srca     = {.clr = 1},
+            .fidelity = {.clr = 1},
+        }
+            .set(ADDR_MOD_4);
+
         reduce_scalar_pool_faces<type, math_fidelity, 4>(0, num_faces, false);
         for (std::uint32_t tile = 1; tile < num_tiles; tile++)
         {
             const bool last = tile == num_tiles - 1;
             if (tile & 1)
             {
-                reduce_scalar_pool_face<type, math_fidelity, p_setrwc::CLR_NONE, 5>();
-                reduce_scalar_transpose_pool<type, math_fidelity, 4>();
-                reduce_scalar_pool_faces<type, math_fidelity, 5>(1, num_faces, last);
+                reduce_scalar_block_tile<type, math_fidelity, 5, 4>(num_faces, last);
             }
             else
             {
-                reduce_scalar_pool_face<type, math_fidelity, p_setrwc::CLR_NONE, 4>();
-                reduce_scalar_transpose_pool<type, math_fidelity, 5>();
-                reduce_scalar_pool_faces<type, math_fidelity, 4>(1, num_faces, last);
+                reduce_scalar_block_tile<type, math_fidelity, 4, 5>(num_faces, last);
             }
         }
         if ((num_tiles - 1) & 1)
@@ -720,6 +786,7 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
             }
                 .set(ADDR_MOD_1);
         }
+
     }
 }
 
