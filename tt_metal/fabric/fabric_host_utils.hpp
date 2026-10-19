@@ -5,11 +5,13 @@
 #pragma once
 
 #include <cstdint>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // FabricType
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <umd/device/types/core_coordinates.hpp>          // CoreType
 #include <llrt/tt_cluster.hpp>
 #include <tt_stl/assert.hpp>
 #include <map>
@@ -28,6 +30,7 @@ class PhysicalSystemDescriptor;
 namespace tt::tt_fabric {
 
 class TopologyMapper;
+class FabricContext;
 
 class FabricNodeId;
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
@@ -73,6 +76,24 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     RoutingDirection direction);
+
+// Context-explicit form of the public get_forwarding_link_indices: resolves the forwarding direction and the link
+// indices from `control_plane` instead of the default MetalContext's. Returns {} when there is no forwarding direction.
+std::vector<uint32_t> get_forwarding_link_indices(
+    const ControlPlane& control_plane, const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
+
+// Context-explicit form of the public append_fabric_connection_rt_args: reads the control plane and cluster from
+// `fabric_context` instead of the default MetalContext's. Instantiated for Program and ProgramDescriptor.
+template <typename ProgramOrDescriptor>
+void append_fabric_connection_rt_args(
+    const FabricContext& fabric_context,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    uint32_t link_idx,
+    ProgramOrDescriptor& worker_program_or_desc,
+    const tt::tt_metal::CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    CoreType core_type);
 
 // Helper: Build adjacency map and discover corners/edges using BFS
 using AdjacencyMap = std::unordered_map<ChipId, std::vector<ChipId>>;

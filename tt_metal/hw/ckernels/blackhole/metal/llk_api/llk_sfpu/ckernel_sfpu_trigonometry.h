@@ -850,12 +850,6 @@ void init_cosh_bf16();
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void cosh_init() {
-    if constexpr (!is_fp32_dest_acc_en) {
-        if (bf16_dest_cosh()) {
-            init_cosh_bf16();
-            return;
-        }
-    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.442695f;  // log2(e) == 1 / ln(2)
     if constexpr (is_fp32_dest_acc_en) {
@@ -864,6 +858,9 @@ void cosh_init() {
     } else {
         sfpi::vConstFloatPrgm1 = -0.6931471805599453f;  // -ln(2)
         sfpi::vConstFloatPrgm2 = 0.500122011f;          // c2
+    }
+    if constexpr (!is_fp32_dest_acc_en) {
+        init_cosh_bf16();
     }
 }
 

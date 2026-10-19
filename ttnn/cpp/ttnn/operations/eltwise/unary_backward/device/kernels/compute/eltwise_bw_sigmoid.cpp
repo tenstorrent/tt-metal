@@ -15,19 +15,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"  // MulBinary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // Sigmoid
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"       // RsubUnary
+#include "operand_reconfig.hpp"
 
 namespace ckl = compute_kernel_lib;
-
-// Switching the unpacker's format between the two operand buffers is only needed when the
-// operands carry different formats, which the program factory signals with
-// MIXED_OPERAND_DATA_FORMATS. For the same-dtype case -- every call in practice -- the single
-// configuration compute_kernel_hw_startup() installs already covers both buffers, and a
-// reconfiguration per tile transition is pure overhead, so stay disabled by default.
-#ifdef MIXED_OPERAND_DATA_FORMATS
-constexpr auto operand_reconfig = ckl::DataFormatReconfig::Enabled;
-#else
-constexpr auto operand_reconfig = ckl::DataFormatReconfig::Disabled;
-#endif
 
 void kernel_main() {
     const uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
@@ -35,6 +25,9 @@ void kernel_main() {
     constexpr auto dfb_grad_out_id = tt::CBIndex::c_0;
     constexpr auto dfb_input_id = tt::CBIndex::c_1;
     constexpr auto dfb_grad_in_id = tt::CBIndex::c_2;
+    DataflowBuffer dfb_grad_out(dfb_grad_out_id);
+    DataflowBuffer dfb_input(dfb_input_id);
+    DataflowBuffer dfb_grad_in(dfb_grad_in_id);
 
     // 1.0f as the bit pattern the scalar SFPU ops take.
     constexpr uint32_t one_bits = 0x3f800000u;
@@ -53,7 +46,7 @@ void kernel_main() {
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
                 operand_reconfig),
-            ckl::Dst::D0>{},
+            ckl::Dst::D0>{dfb_grad_out},
         // dest[1] = input
         ckl::CopyTile<
             ckl::input(
@@ -62,7 +55,7 @@ void kernel_main() {
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
                 operand_reconfig),
-            ckl::Dst::D1>{},
+            ckl::Dst::D1>{dfb_input},
         ckl::Sigmoid<ckl::Dst::D1>{},                                // dest[1] = s
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},  // dest[0] = grad_out * s
         ckl::RsubUnary<ckl::Dst::D1>{one_bits},                      // dest[1] = 1 - s
@@ -71,5 +64,5 @@ void kernel_main() {
             dfb_grad_in_id,
             ckl::ReservePolicy::PerBlockSize,
             ckl::PushPolicy::PerBlockSize,
-            ckl::DataFormatReconfig::Disabled)>{});
+            ckl::DataFormatReconfig::Disabled)>{dfb_grad_in});
 }
