@@ -398,20 +398,22 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             // (VC0) traffic. Blackhole's erisc has room for far more than the Wormhole-sized rows below
             // (the VC0-only table goes up to 32/32), and capping the VC0 receiver at 8 halves the data in
             // flight per hop versus a single-mesh fabric (16), slowing every intra-mesh CCL. Try deeper VC0
-            // first; the first row that fits the available buffer space wins. VC0 sender slots stop at 6:
+            // first; the first row that fits the available buffer space wins. VC0 sender slots stop at 7:
             // with 8 the router's per-slot state overflows the 1912 B erisc0 stack (bh_hal.cpp). Minimal VC1
             // first: the slots it frees go to the worker-connected sender channel, whose depth is what
-            // intra-mesh CCLs are bound by (12 slots instead of 7). VC1 carries only inter-mesh traffic.
+            // intra-mesh CCLs are bound by. VC1 carries only inter-mesh traffic. With 60 slots, {7,16,1,1}
+            // (worker 11) beats {6,16,1,1} (worker 15): the MoE dispatch/combine traffic wants forwarding depth.
             {
-                {6, 16, 1, 1, 0, 0},  // Option 1: single-mesh VC0 receiver depth, minimal VC1
-                {6, 16, 2, 2, 0, 0},  // Option 2: single-mesh VC0 receiver depth, fewer VC0 sender slots
-                {4, 16, 2, 2, 0, 0},  // Option 3: single-mesh VC0 receiver depth, smaller VC0 sender
-                {4, 8, 2, 4, 0, 0},   // Option 4: supports VC0+VC1
-                {4, 8, 2, 2, 0, 0},   // Option 5: supports VC0+VC1, smaller VC1 receiver
-                {2, 4, 2, 2, 0, 0},   // Option 6: supports VC0+VC1, smaller overall
-                {2, 4, 1, 1, 0, 0},   // Option 7: supports VC0+VC1, smaller overall
-                {2, 2, 1, 1, 0, 0},   // Option 8: supports VC0+VC1, smaller overall
-                {1, 1, 1, 1, 0, 0}    // Option 9: supports VC0+VC1, smallest
+                {7, 16, 1, 1, 0, 0},  // Option 1: single-mesh VC0 receiver depth, minimal VC1
+                {6, 16, 1, 1, 0, 0},  // Option 2: single-mesh VC0 receiver depth, minimal VC1, shallower VC0 sender
+                {6, 16, 2, 2, 0, 0},  // Option 3: single-mesh VC0 receiver depth, fewer VC0 sender slots
+                {4, 16, 2, 2, 0, 0},  // Option 4: single-mesh VC0 receiver depth, smaller VC0 sender
+                {4, 8, 2, 4, 0, 0},   // Option 5: supports VC0+VC1
+                {4, 8, 2, 2, 0, 0},   // Option 6: supports VC0+VC1, smaller VC1 receiver
+                {2, 4, 2, 2, 0, 0},   // Option 7: supports VC0+VC1, smaller overall
+                {2, 4, 1, 1, 0, 0},   // Option 8: supports VC0+VC1, smaller overall
+                {2, 2, 1, 1, 0, 0},   // Option 9: supports VC0+VC1, smaller overall
+                {1, 1, 1, 1, 0, 0}    // Option 10: supports VC0+VC1, smallest
             }};
 
         // VC0+VC1+VC2 mesh options: vc2 mirrors vc1 values in each row
