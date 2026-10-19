@@ -9,8 +9,8 @@ Usage, from the repository root:
 
 Runs get_encodings_from_manifest, then get_mesh_view on each mesh, on every fabric_manifest_rank_*.json under each
 directory PATH, or each file PATH. Fails when either raises ManifestError, or when it finds no manifests. A manifest
-can match its schema and still fail here: a fabric change can rename or remove a key or name routes.py looks up, or
-add a value it doesn't know.
+can match its schema and still fail here: a fabric change can rename or remove a key or name routes.py looks up,
+change a value's type, or add a value it doesn't know.
 """
 
 import json

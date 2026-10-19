@@ -63,8 +63,7 @@ The tests import `tt_metal.fabric...`, so `-t .` makes the repo root the top lev
 
 `tests/scripts/run_fabric_manifest_tests.sh` runs the same command, then runs `tests/check_manifest_routes.py` on every manifest it writes.
 The check runs `get_encodings_from_manifest`, then `get_mesh_view` on each mesh, and fails, naming the manifest and the
-key, when a fabric change renames or removes a key or name `routes.py` reads, or adds a value it doesn't know. To run
-it on other manifests, pass their files or directories:
+key, when a fabric change renames or removes a key or name `routes.py` reads, changes a value's type, or adds a value it doesn't know. To run it on other manifests, pass their files or directories:
 
 ```bash
 python3 -m tt_metal.fabric.debug.visualizer.decode.tests.check_manifest_routes generated/fabric
