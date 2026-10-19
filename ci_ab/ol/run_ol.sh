@@ -14,11 +14,10 @@ suffix() { echo "$1" | awk -F/ '{n=NF; print $(n-3)"/"$(n-2)"/"$(n-1)"/"$n}'; }
 declare -A PK
 while read -r rel; do PK[$rel]=$(find "$SP" -path "*/$(suffix $rel)" -type f 2>/dev/null); done < $S/files.txt
 echo "== package copies found: $(for r in "${!PK[@]}"; do echo ${PK[$r]}; done | wc -w) for $(wc -l < $S/files.txt) files"
-ls /work/ci_ab/ol/test_tz_ol.py > /dev/null && cp /work/ci_ab/ol/test_tz_ol.py /work/tests/ttnn/test_tz_ol.py
-grep -h "def test_tz\|^    \"" /work/tests/ttnn/test_tz_ol.py | sed -n 's/^    "\([^"]*\)".*/tests\/ttnn\/test_tz_ol.py::test_tz[\1]/p' > /work/ci_ab/ol/nodes.txt
+ls /work/ci_ab/ol/test_tz_ol.py > /dev/null && cp /work/ci_ab/ol/test_tz_ol.py /work/tests/ttnn/unit_tests/operations/data_movement/test_tz_ol.py
+grep -h "^    \"" /work/ci_ab/ol/test_tz_ol.py | sed -n 's/^    "\([^"]*\)".*/tests\/ttnn\/unit_tests\/operations\/data_movement\/test_tz_ol.py::test_tz[\1]/p' > /work/ci_ab/ol/nodes.txt
 echo "== nodes $(wc -l < /work/ci_ab/ol/nodes.txt): $(head -1 /work/ci_ab/ol/nodes.txt)"
 python3 -c "import ttnn, tracy; print('== imports ok')" 2>&1 | tail -2
-use M; timeout 900 python3 -m pytest -q -p no:cacheprovider -o addopts= "$(head -1 /work/ci_ab/ol/nodes.txt)" > /tmp/dry.txt 2>&1; echo "== dry run rc=$?"; tail -25 /tmp/dry.txt | cut -c1-250
 use() {  # use <arm>
   local v=${1%b}
   while read -r rel; do
@@ -27,6 +26,8 @@ use() {  # use <arm>
   done < $S/files.txt
   export TT_METAL_CACHE=$OUT/cache_$1; mkdir -p $TT_METAL_CACHE
 }
+python3 -m pytest --collect-only -q -p no:cacheprovider -o addopts= tests/ttnn/unit_tests/operations/data_movement/test_tz_ol.py 2>&1 | tail -8 | cut -c1-200
+use M; timeout 900 python3 -m pytest -q -p no:cacheprovider -o addopts= "$(head -1 /work/ci_ab/ol/nodes.txt)" > /tmp/dry.txt 2>&1; echo "== dry run rc=$?"; tail -25 /tmp/dry.txt | cut -c1-250
 elfsum() { for e in $(ls $1/*/kernels/*/*/trisc*/*.elf 2>/dev/null | grep -i tiliz); do $OBJ -O binary -j .text "$e" /tmp/e.bin 2>/dev/null && md5sum < /tmp/e.bin | cut -c1-10; done | sort | md5sum | cut -c1-10; }
 RV=$(echo $1 | tr ' ' '\n' | tac | tr '\n' ' ')
 r=0
