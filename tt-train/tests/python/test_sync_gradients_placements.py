@@ -81,6 +81,7 @@ def _detect_arch() -> Optional[str]:
 
 
 def _num_available_devices() -> int:
+    """Chips the cluster exposes, independent of any mesh graph descriptor; 0 if that cannot be queried."""
     try:
         return int(ttnn.distributed.get_num_devices())
     except Exception:  # noqa: BLE001
@@ -130,23 +131,30 @@ def _named_mesh_or_skip(fresh_device_mesh, shape: tuple[int, ...], axis_names: t
     keeps whatever is set (the bench box runs its own descriptor). With no descriptor at all, a shape that is the
     whole host is tried with the runtime's default descriptor; anything else skips.
 
-    Skips come only from here (no descriptor) and from the conftest (too few devices): any other failure to open the
-    mesh propagates, so a fabric timeout or a descriptor that does not describe the host fails the tests instead of
+    Skips come only from here (too few chips, or no descriptor) and from the conftest (too few devices): any other
+    failure to open the mesh propagates, so a fabric timeout or a descriptor that does not describe the host fails the tests instead of
     skipping them."""
     needed = int(np.prod(shape))
+    what = f"{axis_names} placements tests"
+    # The conftest's host-size check reads the system mesh descriptor, and the descriptor installed below makes that
+    # exactly `shape`-sized on any host; count the chips themselves first, so a smaller host skips instead of failing
+    # to place the descriptor.
+    chips = _num_available_devices()
+    if chips and chips < needed:
+        pytest.skip(f"{what} needs a {shape} mesh with ({needed} devices); the host has {chips}")
     previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
     arch = _detect_arch()
     candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, shape)) if arch is not None else None
     if candidate and os.path.isfile(candidate) and (needed > 2 or not previous):
         os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
-    elif not os.environ.get("TT_MESH_GRAPH_DESC_PATH") and _num_available_devices() != needed:
+    elif not os.environ.get("TT_MESH_GRAPH_DESC_PATH") and chips != needed:
         pytest.skip(f"needs a bundled MGD for arch={arch!r} shape={shape}, or TT_MESH_GRAPH_DESC_PATH.")
     # The conftest's host-size check asks the live MetalEnv how many devices exist, and this module's earlier 1x2
     # fixtures created that MetalEnv for a line; release it so the check creates one from the descriptor set above.
     # The conftest releases it again before opening, which is harmless with no mesh open.
     _release_metal_env_quietly()
     try:
-        with fresh_device_mesh(shape, axis_names, what=f"{axis_names} placements tests", require_mgd=False) as mesh:
+        with fresh_device_mesh(shape, axis_names, what=what, require_mgd=False) as mesh:
             yield mesh
     finally:
         _restore_mgd_path(previous)
