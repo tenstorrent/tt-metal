@@ -489,3 +489,20 @@ def test_no_side_ran_the_gate_tests_then_the_gate_runs(mk, monkeypatch):
     o = mk([pick()], CHANGE)
     assert o.run() == HUMAN
     assert o.gate_tests_side(o.led.task("P.1")) is None
+
+
+def test_frozen_tests_run_once_when_max_precision_pins_the_switch(mk, monkeypatch):
+    """F121: max precision pins every switch to the off side's values, so the gate's frozen tests are the off side's
+    run: the on side does not run them again (they cannot see the change); the table shows the one result twice."""
+    from models.demos.common.bringup.testing import model_precision
+
+    monkeypatch.setattr(model_precision, "overrides", lambda spec: {"TOY_FIDELITY": "hifi4"})
+    o = mk([pick()], CHANGE)
+    assert o.run() == HUMAN, mk.lines
+    d = o.run_dir / "ab" / "P.1"
+    runs = [(c["on"], c["dir"].relative_to(d).as_posix()) for c in mk.calls]
+    assert (False, "old/test_c_x") in runs and (True, "new/test_c_x") not in runs
+    assert (True, "new/profile") in runs and (True, "new/last") in runs
+    rec = o.led.state()["P.1"]["ab"]
+    assert rec["tests"]["test_c_x"]["new"]["rc"] == 0 and "shared" in rec["tests"]["test_c_x"]["new"]
+    assert "frozen tests ran once" in rec["note"] and rec["gate_on"]["ok"]
