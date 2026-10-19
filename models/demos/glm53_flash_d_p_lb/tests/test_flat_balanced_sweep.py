@@ -167,6 +167,9 @@ def test_flat_balanced_sweep(device):
             mc = flops / (ms * 1e-3) / (peak_core * N_COMPUTE)
             mg = flops / (ms * 1e-3) / (peak_core * N_GRID)
             rows_out.append((M, rows, ms, wall, ms / E * 1e3, dram, mc, mg, ghz))
+            if os.environ.get("GLM_SWEEP_DRISC_DUMP") == "1" and not UNIFIED:  # (MIMO_FL_DRISC_PROF: the last call)
+                print(f"[sweep] DRISC dump after M {M}", flush=True)
+                ttnn._ttnn.operations.bringup.flat_drisc_dump(device)
             print(
                 f"[sweep] M {M!s:>5} rows {rows:6d}: dev {ms:8.3f} ms (wall {wall:8.3f}) {ms / E * 1e3:7.1f} us/expert "
                 f"DRAM {dram:5.1%} math90 {mc:5.1%} math110 {mg:5.1%} @ {ghz:.3f} GHz",

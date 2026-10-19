@@ -1136,3 +1136,14 @@ Not yet measured beside the DRISC weight stream (NOC1 = the DRISC tile 1 port; t
   no y M 58 / 145 1199 / 1331 (NOC1 reads 1199 / 1322); with y 1221 / 1554 (1208 / 1436: the y writes vs the NOC0
   reads). In the fused case (no y) x reads cost only ~34 us at M 145 (XRD_SKIP 1288 vs 1322) and ~0 at M 58 - the
   147 us earlier was with the y writes. x is not what keeps uniform GLM-Flash under 90%.
+- Unit size, profiled (MIMO_FL_DRISC_PROF + flat_drisc_dump after each M, GLM_SWEEP_DRISC_DUMP=1; no y). Pure DRISC
+  without dual has no switch (ALT_MAXCNT 0xFFFFFFFF: both of a bank's tiles every call). The profile's timestamp reads
+  alone slow UB 1 from 1199 / 1322 to 1821 / 1865 us (M 58 / 145) and UB 2 not (1122 / 1360): single-block units are
+  bound by the per-unit cost on the DRAM core. Per tile, cycles of the last call (units 2304 UB 1, 1152 UB 2):
+  | | dma | refresh (grant waits) | write | flush + inc | total |
+  | UB 1 M 58, tile 1 / free tile | 468k / 583k | 250k / 30k | 455k / 460k | 345k / 454k | 2.19M / 2.41M |
+  | UB 2 M 58 | ~300-335k | 21-78k | ~290-390k | ~260-280k | 1.38-1.47M |
+  | UB 2 M 145 | ~275-330k | 205-410k | ~290-450k | ~235-285k | 1.70-1.75M |
+  UB 2 unprofiled M 58: 657 cycles a 13.8 KB block (UB 1: 702), ~29 GB/s a tile: mostly per byte, not per unit -
+  16 tiles cap near ~460 GB/s (~90%). UB 2 at M 145: the DRISCs wait 12-24% of the call on the gate/up cores' grants
+  (2-5% at M 58): the receive side limits there. Next: what the gate/up cores wait on at M 145 (zones).
