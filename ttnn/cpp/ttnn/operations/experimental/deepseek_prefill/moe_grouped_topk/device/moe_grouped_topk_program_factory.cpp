@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "moe_grouped_topk_device_operation.hpp"
 
 #include <bit>
@@ -88,7 +89,10 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     // On Blackhole a core with two or more rows runs them in pairs: a row's activated scores and winning-group tiles
     // stay while the next row's steps run.
     const uint32_t rows_in_flight =
-        (device->arch() == tt::ARCH::BLACKHOLE && num_height_tiles_per_core_group_1 >= 2) ? 2u : 1u;
+        (device->arch() == tt::ARCH::BLACKHOLE && std::getenv("CI_AB_MAIN_FACTORY") == nullptr &&
+         num_height_tiles_per_core_group_1 >= 2)
+            ? 2u
+            : 1u;
 
     auto cb_in_scores = tt::CBIndex::c_0;
     auto cb_in_bias = tt::CBIndex::c_1;
@@ -167,7 +171,8 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
                                 default_unpack(cb_winning_group_scores);
     // On Blackhole the index tiles no sort compares are uint16 (bit 0 the one-group template, bit 1 the group template,
     // bit 2 the grouped template and winning-group tiles); the rank-tag sorts get each token's winning groups by id.
-    const bool blackhole = device->arch() == tt::ARCH::BLACKHOLE;
+    // Scratch A/B only: CI_AB_MAIN_FACTORY builds main's program.
+    const bool blackhole = device->arch() == tt::ARCH::BLACKHOLE && std::getenv("CI_AB_MAIN_FACTORY") == nullptr;
     const bool index_words_compared = operation_attributes.stable_sort && !sort_keys_tf32;
     const uint32_t index_u16_mask = (blackhole && !index_words_compared) ? 0x7u : 0u;
     const bool winning_groups_by_id = blackhole && operation_attributes.stable_sort && sort_keys_tf32;
