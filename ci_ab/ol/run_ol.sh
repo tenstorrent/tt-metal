@@ -15,7 +15,7 @@ declare -A PK
 while read -r rel; do PK[$rel]=$(find "$SP" -path "*/$(suffix $rel)" -type f 2>/dev/null); done < $S/files.txt
 echo "== package copies found: $(for r in "${!PK[@]}"; do echo ${PK[$r]}; done | wc -w) for $(wc -l < $S/files.txt) files"
 ls /work/ci_ab/ol/test_tz_ol.py > /dev/null && cp /work/ci_ab/ol/test_tz_ol.py /work/tests/ttnn/unit_tests/operations/data_movement/test_tz_ol.py
-grep -h "^    \"" /work/ci_ab/ol/test_tz_ol.py | sed -n 's/^    "\([^"]*\)".*/tests\/ttnn\/unit_tests\/operations\/data_movement\/test_tz_ol.py::test_tz[\1]/p' > /work/ci_ab/ol/nodes.txt
+grep -h "^    \"" /work/ci_ab/ol/test_tz_ol.py | sed -n 's/^    "\([^"]*\)".*/tests\/ttnn\/unit_tests\/operations\/data_movement\/test_tz_ol.py::test_tz[case=\1]/p' > /work/ci_ab/ol/nodes.txt
 echo "== nodes $(wc -l < /work/ci_ab/ol/nodes.txt): $(head -1 /work/ci_ab/ol/nodes.txt)"
 python3 -c "import ttnn, tracy; print('== imports ok')" 2>&1 | tail -2
 use() {  # use <arm>
