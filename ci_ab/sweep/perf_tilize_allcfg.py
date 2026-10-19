@@ -88,6 +88,13 @@ for fmt, acc in ((BF16, NO), (FP32, YES)):
             for ct in (2, 4, 8):
                 CASES.append(("tinyblk", fmt, acc, 1, ct, TA(ta_form="block", ta_face_r=fr, ta_nf=nf)))
 
+for form in ("tile", "block"):  # Float32 lossless: the unpacker writes a 32-bit DEST directly (production fp32 tilize)
+    for fr, nf in ((16, 4), (16, 2)):
+        for ct in (1, 2, 4, 8, 16):
+            CASES.append(("u2d", FP32, YES, 1, ct, TA(ta_form=form, ta_face_r=fr, ta_nf=nf)))
+for ct in (1, 4, 8):
+    CASES.append(("u2d", FP32, YES, 1, ct, TA(ta_sect=1)))
+
 
 def _id(c):
     n, fmt, acc, rt, ct, ta = c
@@ -98,7 +105,7 @@ def _id(c):
 @pytest.mark.perf
 @pytest.mark.parametrize("case", CASES, ids=[_id(c) for c in CASES])
 def test_perf_tilize_allcfg(perf_report, case):
-    _, fmt, acc, rt, ct, ta = case
+    name, fmt, acc, rt, ct, ta = case
     if ta.ta_form == "block" and not HAS_BLOCK:
         pytest.skip("no block tilize in this tree")
     if effective_dest_acc(fmt.input_format, fmt.output_format, acc) != acc:
@@ -115,6 +122,6 @@ def test_perf_tilize_allcfg(perf_report, case):
         variant_stimuli=StimuliConfig(None, fmt.input_format, None, fmt.input_format, fmt.output_format,
                                       tile_count_A=tiles, tile_count_B=tiles, tile_count_res=tiles),
         dest_acc=acc,
-        unpack_to_dest=fmt.input_format in (F.Int32, F.UInt32),
+        unpack_to_dest=fmt.input_format in (F.Int32, F.UInt32) or name == "u2d",
     )
     configuration.run(perf_report)
