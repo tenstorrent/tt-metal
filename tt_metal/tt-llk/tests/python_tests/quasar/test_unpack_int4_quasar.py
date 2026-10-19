@@ -16,7 +16,6 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     PackerReluType,
     PerfRunType,
     format_dict,
@@ -27,7 +26,6 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import integer_format_bounds
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
@@ -111,7 +109,6 @@ def test_unpack_int4_quasar(formats_dest_acc, input_dimensions):
         test_name="sources/quasar/pack_quasar_test.cpp",
         formats=formats,
         templates=[
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             DEST_SYNC(DestSync.Half),
         ],
         runtimes=[
