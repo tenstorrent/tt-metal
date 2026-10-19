@@ -27,7 +27,7 @@ walk.delivers, walk.exits, walk.odd
 
 - **Values come from the manifest, by name.** `get_encodings_from_manifest` looks up each value by its key, checks its JSON type and its value (for example, that the action bits are distinct bits of a byte, and that the 1D hop fields fill a route word), and raises `ManifestError` naming the first key it can't use. `get_mesh_view` does the same for the mesh values it reads.
 - **Meaning is tied to names, and only the known names are accepted.** The rules hardcode what some names mean: which 1D hop names write and which forward (`HOP_ACTIONS`), the direction names (`Direction`), `local_deliver`, the Z port roles (`Z_PORT_ROLES`), and the scatter chunk type names (`ChunkEncoding`). The loaders check those names against the manifest's full list of each (`routing_encodings.1d.hop`, `routing_encodings.2d.action_bits`, `vocabulary.z_port_roles` and `enums.NocScatterWriteChunkEncoding`), not only the values a run uses, so a renamed, added or removed value fails at load, naming what the manifest holds and what the rules know, instead of decoding wrong.
-- **Names are enum values.** `Direction` and `ChunkEncoding` are `str` enums whose values are the manifest's names. A member equals its name, looks up the manifest's keys, and writes to JSON as the name.
+- **Names are enum values.** `Direction` and `ChunkEncoding` are `str` enums whose values are the manifest's names. A member equals its name, looks up the manifest's keys, and writes to JSON as the name. `OddKind`, what an `Odd2D` reports, is a `str` enum too, so a misspelt kind is an `AttributeError` rather than a comparison that never matches.
 - **The rules mirror the router, not the API.** Where the code that builds a route and the router that reads it
   disagree, the rules follow the router. For example, a plain scatter write marks all four chunk types as writes,
   whatever its `chunk_count`. The router goes by `chunk_count`, and so does the rule.
@@ -106,7 +106,7 @@ direction whose bit is set, wrapping around on a torus axis. Z goes to the chip'
 - **Mirrors:** `admit_2d_dispatch` and `live_eth_mask_2d` (`fabric_erisc_router.cpp`).
 - A chip's Z peer is known when its `z_port_role` is `express_chord` and all its Z routers' `link.peer`s name the same chip of this mesh. A chip has one Z port, used either as an express chord along Y or as an intermesh boundary
 (`ZPortRole`, `fabric_edge_capability.hpp`).
-- What the walk can't follow, it reports as an `Odd2D` and doesn't follow:
+- What the walk can't follow, it reports as an `Odd2D`, whose `kind` is an `OddKind`, and doesn't follow:
   - `off_edge`: a step off an edge that doesn't wrap;
   - `no_z_peer`: a Z bit at a chip whose Z peer isn't known;
   - `ignored_bit`: a bit the router ignores, as above;
