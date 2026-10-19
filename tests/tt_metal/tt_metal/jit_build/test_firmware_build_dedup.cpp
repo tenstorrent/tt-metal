@@ -31,6 +31,9 @@ TEST(DramCoreFirmwareBuildDeathTest, BuildsDriscAfterContextWithoutDramCores) {
     const auto build_both = [&] {
         setenv("TT_METAL_CACHE", (root.string() + "/").c_str(), 1);
         llrt::RunTimeOptions rtoptions;
+        // Otherwise a pre-compiled bundle for this build key becomes the firmware binary root: the checks below
+        // would read the bundle's ELFs, and the build would write weakened ELFs into it.
+        rtoptions.set_disable_precompiled_fw(true);
         bool built = false;
         enumerate_offline_compile_device_configs(rtoptions, [&](const JitDeviceConfig& with_dram_config) {
             if (built || with_dram_config.arch != tt::ARCH::BLACKHOLE) {
