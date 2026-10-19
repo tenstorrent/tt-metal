@@ -1131,3 +1131,8 @@ other core's L1. GB/s of bf16 x.
 - Reads must be >= 1-2 KB a row (the issue cost); NOC1 DRAM reads cap at ~225 GB/s spread and less for cores sharing
   rows, NOC0 ~350; one receiving core takes ~150 GB/s of x (so >= 2 snake heads for a hot expert's ~85-100 GB/s).
 Not yet measured beside the DRISC weight stream (NOC1 = the DRISC tile 1 port; the full op's NOC0 x reads hang).
+- The full op's MIMO_FL_XRD_NOC=0 hang was the relay's reader and sender both on NOC0 (dedicated-NoC mode: one RISC
+  per NoC). Now reads on NOC0 move the sender to NOC1 (unicast chain only; TT_FATAL on a shared NoC). It runs, no gain:
+  no y M 58 / 145 1199 / 1331 (NOC1 reads 1199 / 1322); with y 1221 / 1554 (1208 / 1436: the y writes vs the NOC0
+  reads). In the fused case (no y) x reads cost only ~34 us at M 145 (XRD_SKIP 1288 vs 1322) and ~0 at M 58 - the
+  147 us earlier was with the y writes. x is not what keeps uniform GLM-Flash under 90%.

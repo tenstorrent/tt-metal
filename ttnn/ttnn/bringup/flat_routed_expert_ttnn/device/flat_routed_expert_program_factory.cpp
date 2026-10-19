@@ -715,8 +715,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     // DRISC mode (flat_drisc.hpp): the DRAM cores' persistent senders read and forward the gate/up weights; the
     // readers only post each call's job (se_drisc_go.cpp)
     const uint32_t drisc_base = p.drisc ? flat_drisc_base() : 0;
-    // x reads on NOC1, the relays' multicast (x path 0) on NOC0
-    const NOC x_rd_noc = NOC::NOC_1, x_mc_noc = NOC::NOC_0;
+    // x reads on NOC1, the relays' multicast (x path 0) on NOC0; the sender moves to NOC1 when the reads go to NOC0
+    const NOC x_rd_noc = NOC::NOC_1;
+    NOC x_mc_noc = NOC::NOC_0;
     // (probe MIMO_FL_XRD_DYN=1: the relays' kernels in dynamic-NoC mode - per-RISC command buffers and counters - so
     // their x reads and multicasts may share a NoC, e.g. MIMO_FL_XRD_NOC=0)
     const NOC_MODE x_mode = cstr(pr.xrd_dyn) ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC;
@@ -915,6 +916,15 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         // (probe MIMO_FL_XRD_NOC=0/1: the x readers' NoC)
         const NOC xrd_noc = cstr(pr.xrd_noc) ? (std::atoi(cstr(pr.xrd_noc)) ? NOC::NOC_1 : NOC::NOC_0) : x_rd_noc;
+        // one RISC per NoC on a relay (dedicated-NoC mode): reads on NOC0 put its sender on NOC1 - the unicast x chain
+        // only (a NOC1 multicast would need the rectangle's corners swapped)
+        if (xrd_noc == NOC::NOC_0 && x_mode == NOC_MODE::DM_DEDICATED_NOC) {
+            TT_FATAL(x_chain, "MIMO_FL_XRD_NOC=0: the relays' sender moves to NOC1, which needs the unicast x chain");
+            x_mc_noc = NOC::NOC_1;
+        }
+        TT_FATAL(
+            x_mode == NOC_MODE::DM_DYNAMIC_NOC || xrd_noc != x_mc_noc,
+            "flat_routed_expert: a relay's x reader and sender on one NoC (dedicated-NoC mode)");
         if (const char* xb = cstr(pr.xrd_big)) {
             xrd_def["XRD_BIG"] = xb;
         }
