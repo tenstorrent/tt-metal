@@ -76,7 +76,7 @@ inline void execute_high_fidelity_gapool()
  * Moves data from destination registers to source A or B registers.
  *
  * @tparam binary_reuse_dest Direction: DEST_TO_SRCA or DEST_TO_SRCB
- * @param idst Destination tile index (0-7)
+ * @param idst Destination tile index (0-15; a full-sync 16-bit Dst holds 16 32x32 tiles, every other mode fewer)
  */
 template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::uint32_t idst = 0)
@@ -117,7 +117,33 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
             case 7:
                 MOVD2A_16_ROWS(448);
                 break;
+            case 8:
+                MOVD2A_16_ROWS(512);
+                break;
+            case 9:
+                MOVD2A_16_ROWS(576);
+                break;
+            case 10:
+                MOVD2A_16_ROWS(640);
+                break;
+            case 11:
+                MOVD2A_16_ROWS(704);
+                break;
+            case 12:
+                MOVD2A_16_ROWS(768);
+                break;
+            case 13:
+                MOVD2A_16_ROWS(832);
+                break;
+            case 14:
+                MOVD2A_16_ROWS(896);
+                break;
+            case 15:
+                MOVD2A_16_ROWS(960);
+                break;
             default:
+                // Nothing was moved: SrcA still holds the previous tile, which the next reduce would count again.
+                LLK_ASSERT(false, "mul_reduce_scalar: DEST_TO_SRCA move supports idst 0-15 only");
                 break;
         }
     }
