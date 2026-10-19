@@ -62,7 +62,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     log_debug(tt::LogOp, "out0_cb_data_format: {}", out0_cb_data_format);
     log_debug(tt::LogOp, "mask_cb_data_format: {}", mask_cb_data_format);
     log_debug(tt::LogOp, "im_cb_data_format: {}", im_cb_data_format);
-    log_debug(tt::LogOp, "fused_attention_scale_cb_data_format: {}", im_cb_data_format);
+    log_debug(tt::LogOp, "fused_attention_scale_cb_data_format: {}", fused_attention_scale_cb_data_format);
     log_debug(tt::LogOp, "max_scaler_cb_data_format: {}", max_scaler_cb_data_format);
     log_debug(tt::LogOp, "sum_scaler_cb_data_format: {}", sum_scaler_cb_data_format);
     log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);

@@ -595,7 +595,8 @@ may be ``All`` or ``IgnoreSign`` (treats bit 31 as zero).
 
 Scale ``in`` by 2^``scale``. You may select an ``LdexpMode::Fast``,
 which for the vector case can be slightly faster at the expense of not
-dealing with exponent overflow or underflow.
+dealing with exponent overflow or underflow. Values of ``scale``
+outside of [-127,127] produce unspecified results.
 
 .. code-block:: c++
 
@@ -781,7 +782,9 @@ routine.  It may be ignored, with the loss of consistency checking, if
 one uses the cookieless evaluator.
 
 Note that the 8- and 16-bit formats use a bespoke representation, and
-the 8 bit format in particular has a range of (-2.0, +2.0).
+the 8 bit format in particular has a range of (-2.0, +2.0). Also, as
+its zero representation coincides with a small negative value, small
+values below that threshold are flushed to zero to avoid a discontinuity.
 
 On Quasar, use of these routines conflicts with use of the ``vConst``
 constants.

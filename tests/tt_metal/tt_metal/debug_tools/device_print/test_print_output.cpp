@@ -137,7 +137,7 @@ public:
     void TestOutput(
         const std::string& kernel_path,
         const std::vector<std::string>& expected_messages,
-        stl::Span<const uint32_t> runtime_args = {}) {
+        ttsl::Span<const uint32_t> runtime_args = {}) {
         for (auto& mesh_device : this->devices_) {
             RunProgram(mesh_device, kernel_path, runtime_args);
             EXPECT_TRUE(FileContainsAllStrings(dprint_file_name, expected_messages));
