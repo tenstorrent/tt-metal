@@ -145,7 +145,14 @@ template <
     uint32_t cb_recip_scratch,
     uint32_t cb_normalized_out,
     bool independent_q_release>
-static __attribute__((noinline)) void sdpa_fused_fp32_chunk(
+// Key-range builds (causal, sliding, chunked) carry the unfused edge-chunk path as well: size-optimize the fused
+// chunk there (kernel config buffer), or everywhere with FFP_OS.
+#if defined(FFP_OS) || (defined(SDPA_RECIPE_KRANGE) && defined(FFP_OS_KRANGE))
+#define SDPA_FFP_ATTR __attribute__((noinline, optimize("Os")))
+#else
+#define SDPA_FFP_ATTR __attribute__((noinline))
+#endif
+static SDPA_FFP_ATTR void sdpa_fused_fp32_chunk(
     AccumulatorHalf& prev, AccumulatorHalf& cur, bool is_last_iter, bool release_q) {
     constexpr uint32_t KT = Sk_chunk_t;
     constexpr uint32_t G = Sq_chunk_t;
