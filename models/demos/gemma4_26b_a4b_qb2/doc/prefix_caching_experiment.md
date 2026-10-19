@@ -682,3 +682,17 @@ rerun, full cohort and exact-image Shield qualification remain pending.
 Inherited shared-sampler allocation exemptions, cold-request retirement and
 host-sampling retirement remain outside the narrow reuse claim.
 
+One bounded CI-only mesh health probe was then authorized through an
+explicit, default-off workflow input, retaining ownership checks and the
+unchanged serving fabric descriptor. Run
+[39266079252](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39266079252)
+used Metal `4133ca2541b3c517789fbdaa380db2ebd8205c19`, workflow `7ecc595`,
+on `qb2-120-p02t02`. After 17 host checks, it failed in
+`set_fabric_config(FABRIC_1D)` with the same missing second Ethernet link
+between physical chips 2–3. No model weights were loaded; device drivers
+closed cleanly. `mesh-health.log` preserves the topology and stack trace.
+The runner's standard startup hook had already performed its recovery;
+this probe performed no manual reset and did not weaken the topology.
+No additional retry is planned on this worker without operator repair or
+healthy routing. This remains an infrastructure result, not a model gate.
+
