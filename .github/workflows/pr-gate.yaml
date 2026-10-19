@@ -466,6 +466,21 @@ jobs:
       enable-kernel-ccache: true
     secrets: inherit
 
+  # tt-train C++ smoke tests from the tt-ml-validation package (tests/pipeline_reorg/train_pr_gate_tests.yaml).
+  train-smoke-tests:
+    needs: [asan-build, find-changed-files]
+    if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
+      github.ref_name == 'main' ||
+      needs.find-changed-files.outputs.tt-train-changed == 'true')
+      }}
+    uses: ./.github/workflows/tt-train-tests.yaml
+    secrets: inherit
+    with:
+      test-category: pr_gate
+      enabled-skus: ALL_SKUS_IN_TESTS
+      docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
+      package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+
   # A quick check that parses the models charts in README.md and models/README.md
   # and ensures that models attributes are in sync.
   model-charts-sync:
@@ -723,6 +738,7 @@ jobs:
       - ttnn-smoke-tests
       - runtime-examples
       - ttnn-examples
+      - train-smoke-tests
       - code-analysis
       - model-charts-sync
       - build-docs
@@ -746,6 +762,7 @@ jobs:
             asan-build, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
-            llk-smoke-tests, llk-quasar-tests, llk-hardware-free-tests
+            llk-smoke-tests, llk-quasar-tests, llk-hardware-free-tests,
+            train-smoke-tests
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"

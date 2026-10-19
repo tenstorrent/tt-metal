@@ -6,13 +6,22 @@ on:
       test-category:
         required: true
         type: string
-        description: "Choice of 'merge_gate', 'unit', 'perf'. Maps tests/pipeline_reorg/train_{test-category}_tests.yaml."
+        description: "Choice of 'pr_gate', 'merge_gate', 'unit', 'perf'. Maps tests/pipeline_reorg/train_{test-category}_tests.yaml."
       docker-image:
         required: true
         type: string
       build-artifact-name:
-        required: true
+        required: false
         type: string
+        default: ""
+        description: "Build tarball to extract into the workspace. Leave empty when package-artifact-name is set."
+      package-artifact-name:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          .deb packages artifact to install instead of extracting a build tarball. Test commands
+          must then call the installed binaries (e.g. ttml_tests from tt-ml-validation).
       wheel-artifact-name:
         required: false
         type: string
@@ -142,7 +151,11 @@ jobs:
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
-          submodules: recursive
+          submodules: ${{ inputs.package-artifact-name == '' && 'recursive' || 'false' }}
+          sparse-checkout: |
+            ${{ inputs.package-artifact-name != '' && '.github' || '' }}
+            ${{ inputs.package-artifact-name != '' && 'tools' || '' }}
+            ${{ inputs.package-artifact-name != '' && 'tt-train/tests/ops' || '' }}
           path: docker-job
 
       - name: ⬇️  Setup Job
@@ -158,7 +171,26 @@ jobs:
           redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
           auto-triage: ${{ !inputs.enable-watcher }}
 
+      - name: ⬇️ Download packages
+        if: ${{ inputs.package-artifact-name != '' }}
+        uses: ./docker-job/.github/actions/download-artifact-with-retry
+        timeout-minutes: 15
+        with:
+          name: ${{ inputs.package-artifact-name }}
+          path: /work/pkgs/
+
+      - name: Install packages
+        if: ${{ inputs.package-artifact-name != '' }}
+        timeout-minutes: 10
+        run: |
+          # tt-metalium-jit is optional: TT_USE_SYSTEM_SFPI builds don't produce it.
+          shopt -s nullglob
+          jit=(./pkgs/tt-metalium-jit_*.deb)
+          shopt -u nullglob
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-nn_*.deb ./pkgs/tt-ml-validation_*.deb "${jit[@]}"
+
       - name: Set up tt-train
+        if: ${{ inputs.package-artifact-name == '' }}
         uses: ./docker-job/.github/actions/setup-tt-train
         timeout-minutes: 10
         with:
@@ -173,6 +205,9 @@ jobs:
 
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
+        env:
+          LSAN_OPTIONS: ${{ inputs.package-artifact-name != '' && 'suppressions=/usr/share/tt-metalium/lsan.supp' || '' }}
+          UBSAN_OPTIONS: ${{ inputs.package-artifact-name != '' && 'print_stacktrace=1:halt_on_error=1' || '' }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log

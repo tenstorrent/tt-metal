@@ -42,6 +42,9 @@ while IFS= read -r FILE; do
         CMakeLists.txt|**/CMakeLists.txt|**/*.cmake|*.cmake.in|**/*.cmake.in|CMakePresets.json)
             CMAKE_CHANGED=true
             ANY_CODE_CHANGED=true
+            if [[ "$FILE" == tt-train/* || "$FILE" == "cmake/packaging.cmake" ]]; then
+                TTTRAIN_CHANGED=true
+            fi
             ;;
         tt_metal/sfpi-info.sh|tt_metal/sfpi-version)
             # Read in by a cmake file; also pins the SFPI compiler used to build LLK
@@ -175,7 +178,13 @@ while IFS= read -r FILE; do
             TTNN_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tt-train/**/*.@(h|hpp|inl|c|cpp|py))
+        # The tt-train gate test lists. They are not source files but decide what the gates
+        # run, so a PR that only edits them must still build and run the train gate jobs.
+        tt-train/tests/ops/smoke_tests.txt|tt-train/tests/ops/run_smoke_tests.sh|tests/pipeline_reorg/train_pr_gate_tests.yaml|tests/pipeline_reorg/train_merge_gate_tests.yaml)
+            TTTRAIN_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
+        tt-train/*(*/)*.@(h|hpp|inl|c|cpp|py|fbs))
             TTTRAIN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;

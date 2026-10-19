@@ -542,6 +542,22 @@ install(
 
 target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
+# Device kernels are JIT-compiled from paths relative to the tt-metalium root, so an installed
+# ttml needs the kernel sources and the headers they include under that root.
+install(
+    DIRECTORY
+        ${CMAKE_CURRENT_SOURCE_DIR}/metal/
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt-train/sources/ttml/metal
+    COMPONENT ttml-validation
+    FILES_MATCHING
+    PATTERN
+    "*.h"
+    PATTERN
+    "*.hpp"
+    REGEX
+    "/kernels/.*\\.cpp$"
+)
+
 # CPack configuration for creating ttml deb package
 set(CPACK_GENERATOR "DEB")
 set(CPACK_PACKAGE_NAME "ttml")
