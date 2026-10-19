@@ -1387,9 +1387,13 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
 #if defined(ARCH_BLACKHOLE)
     // A broadcast whose A advances one tile per step runs a block of steps as one any_tiles_bcast_block call in kernels
     // that define ELTWISE_BINARY_BCAST_BLOCK_UNPACK; a column or scalar B keeps one tile, a row or block B advances too.
-    static constexpr bool runs_bcast_block = ckernel::detail::BCAST_BLOCK_UNPACK && Bcast != BroadcastDim::None &&
-                                             Accumulation == DestAccumulation::Disabled && !same_dfb &&
-                                             (AMapping == InputTileMapping::Block || AMapping == InputTileMapping::Row);
+    static constexpr bool runs_bcast_block =
+        ckernel::detail::bcast_block_unpack<
+            (Op == BinaryFpuOp::Add)   ? ckernel::EltwiseBinaryType::ELWADD
+            : (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB
+                                       : ckernel::EltwiseBinaryType::ELWMUL> &&
+        Bcast != BroadcastDim::None && Accumulation == DestAccumulation::Disabled && !same_dfb &&
+        (AMapping == InputTileMapping::Block || AMapping == InputTileMapping::Row);
 
     // Arguments as exec's for the block's first step; num_tiles steps into consecutive DEST slots.
     ALWI void exec_block(

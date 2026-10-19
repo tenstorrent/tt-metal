@@ -32,7 +32,7 @@
 // Rows of broadcast multiplies into consecutive DST slots run as one any_tiles_bcast_block call in kernels that define
 // ELTWISE_BINARY_BCAST_BLOCK_UNPACK true.
 #if defined(ARCH_BLACKHOLE)
-constexpr bool SDPA_BCAST_BLOCK = ckernel::detail::BCAST_BLOCK_UNPACK;
+constexpr bool SDPA_BCAST_BLOCK = ckernel::detail::bcast_block_unpack<ckernel::EltwiseBinaryType::ELWMUL>;
 #else
 constexpr bool SDPA_BCAST_BLOCK = false;
 #endif

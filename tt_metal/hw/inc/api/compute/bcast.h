@@ -47,6 +47,15 @@ constexpr bool BCAST_BLOCK_UNPACK = (ELTWISE_BINARY_BCAST_BLOCK_UNPACK);
 #else
 constexpr bool BCAST_BLOCK_UNPACK = false;
 #endif
+#if defined(PER_TILE_HANDOFF_GAINS)
+constexpr bool BCAST_LOFI_HALF_SYNC = !(PER_TILE_HANDOFF_GAINS);
+#else
+constexpr bool BCAST_LOFI_HALF_SYNC = false;
+#endif
+// A multiply handed over per face above LoFi is bound by math, and the block unpack reads slower there; it keeps per tile.
+template <EltwiseBinaryType op>
+constexpr bool bcast_block_unpack = BCAST_BLOCK_UNPACK && (op != EltwiseBinaryType::ELWMUL || BCAST_LOFI_HALF_SYNC ||
+                                                           bcast_src_dvalid<op> == SrcDvalid::PerTile);
 }  // namespace detail
 #define CKERNEL_BCAST_HANDOFF(op) , detail::bcast_src_dvalid<op>
 #define CKERNEL_BCAST_INIT_HANDOFF(op) \
@@ -323,8 +332,9 @@ ALWI void any_tiles_bcast(
  * Performs the broadcast op of *any_tiles_bcast* on ntiles tiles of A from start_itile0 into consecutive DST slots from
  * start_idst. B stays on start_itile1 when fixed_b (a column or scalar broadcast along a row of tiles) and advances with
  * A otherwise. On Blackhole kernels that define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true, the tile pairs are unpacked with
- * one call; elsewhere it runs the op tile by tile. The DST register buffer must be in acquired state via *acquire_dst*
- * call. This call is blocking and is only available on the compute engine.
+ * one call (a multiply only at LoFi or with the per-tile hand-off); elsewhere it runs the op tile by tile. The DST
+ * register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+ * compute engine.
  *
  * | Argument       | Description                                                   | Type     | Valid Range                                    | Required |
  * |----------------|---------------------------------------------------------------|----------|------------------------------------------------|----------|
@@ -344,7 +354,7 @@ template <
 ALWI void any_tiles_bcast_block(
     uint32_t icb0, uint32_t icb1, uint32_t start_itile0, uint32_t start_itile1, uint32_t start_idst, uint32_t ntiles) {
 #if defined(ARCH_BLACKHOLE)
-    if constexpr (detail::BCAST_BLOCK_UNPACK) {
+    if constexpr (detail::bcast_block_unpack<tBcastOp>) {
         UNPACK((llk_unpack_AB_block<false, fixed_b, tBcastDim>(icb0, icb1, start_itile0, start_itile1, ntiles)));
 #ifdef TRISC_MATH
         // As binary_block: above LoFi the math thread binds, so the tiles run as one call
