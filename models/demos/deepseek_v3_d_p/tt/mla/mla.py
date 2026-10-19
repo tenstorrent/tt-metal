@@ -1905,7 +1905,7 @@ class ttMLA:
     def _next_layer_prefetch(self, plan, kvpe_cache, cache_batch_idx):
         """Callable that pushes the next layer's prefix rows on the gather sub-device, or None."""
         resources = self._push_prefetch
-        if resources is None or not plan.split_prefix:
+        if resources is None or not self._sparse_kv_push or not plan.split_prefix:
             return None
         planner = self.tt_ccl.get_sparse_kv_push(self.ccl_num_links)[0]
         nxt = self.layer_idx + 1
@@ -2106,7 +2106,7 @@ class ttMLA:
         # The first shared layer after this one reuses these indices: plan its push now and prefetch its prefix
         # rows during this layer's sparse_sdpa.
         overlap = None
-        if self._push_prefetch is not None and metadata is None:
+        if self._push_prefetch is not None and self._sparse_kv_push and metadata is None:
             plan, _ = self._sparse_push_plan(indices, kvpe_cache, seq_len_local, kv_actual_isl, self.layer_idx + 1)
             overlap = self._next_layer_prefetch(plan, kvpe_cache, cache_batch_idx)
         output = self._finish_sparse_chunked_attn(
