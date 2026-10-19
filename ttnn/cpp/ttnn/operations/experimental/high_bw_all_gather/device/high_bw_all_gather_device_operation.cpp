@@ -134,6 +134,7 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         // hashed -- it is structural (chunk_local * sp), identical for every chunk and layer.
         tensor_args.has_gathered_prefix_metadata(),
         args.gathered_slab_global,
+        args.legacy,
         tensor_args);
 }
 
@@ -470,8 +471,16 @@ HighBwAllGatherDeviceOperation::tensor_return_value_t HighBwAllGatherDeviceOpera
 }
 
 HighBwAllGatherDeviceOperation::program_factory_t HighBwAllGatherDeviceOperation::select_program_factory(
-    const HighBwAllGatherParams&, const HighBwAllGatherInputs&) {
-    return program_factory_t{HighBwAllGatherUnicastFactory{}};
+    const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
+    // The fabric program moves whole pages, so a ROW_MAJOR gather along the innermost dim (each rank owns part of
+    // every output page) stays on the legacy program. Layout and dim are in the program hash.
+    const auto& input = tensor_args.input_tensor;
+    const bool row_major_innermost =
+        input.layout() == Layout::ROW_MAJOR && args.dim == static_cast<int32_t>(input.padded_shape().rank()) - 1;
+    if (args.legacy || row_major_innermost) {
+        return program_factory_t{HighBwAllGatherUnicastFactory{}};
+    }
+    return program_factory_t{HighBwAllGatherFabricFactory{}};
 }
 
 std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_build_operation_args(
@@ -490,7 +499,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
     const std::optional<GlobalSemaphore>& ready_semaphore,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
+    const std::optional<GlobalSemaphore>& data_valid_semaphore,
+    bool legacy) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -591,7 +601,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .gathered_dim_size = gathered_dim_size,
             .batch_slot_num_layers = batch_slot_num_layers,
             .batch_slot_layer_idx = batch_slot_layer_idx,
-            .gathered_slab_global = gathered_slab_global},
+            .gathered_slab_global = gathered_slab_global,
+            .legacy = legacy},
         HighBwAllGatherInputs{
             .input_tensor = input_tensor,
             .output_tensor = output_tensor,
@@ -619,7 +630,8 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
     const std::optional<GlobalSemaphore>& ready_semaphore,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
+    const std::optional<GlobalSemaphore>& data_valid_semaphore,
+    bool legacy) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -636,7 +648,8 @@ Tensor high_bw_all_gather(
         gathered_prefix_tensor,
         gathered_slab_global,
         ready_semaphore,
-        data_valid_semaphore);
+        data_valid_semaphore,
+        legacy);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }

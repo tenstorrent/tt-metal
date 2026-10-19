@@ -5,6 +5,36 @@ large-message collective for the sparse-MLA prefill path. It is independent of
 `ttnn.all_gather`: there is no composite fallback and no environment-variable
 selection.
 
+It has two programs with one contract (validation, program hash and output are shared): the fabric program
+(`device/high_bw_all_gather_fabric_factory.cpp`, kernels in `device/kernels/fabric/`), which is the default, and the
+legacy unicast program (`device/high_bw_all_gather_unicast_factory.cpp`), selected with `legacy=True`. The legacy
+program is deprecated and will be removed; the "Data flow" and "Measured contribution" sections below describe it.
+A ROW_MAJOR gather along the innermost dim (each rank owns part of every output page) always runs the legacy
+program, since the fabric program moves whole pages.
+
+## Default program (fabric)
+Terms (logical vs physical pages, outer slices, fabric chunks, CB batches, outgoing shards, the counters):
+`device/kernels/fabric/fabric_all_gather_chunk_walk.hpp`.
+
+Per chip, per ring, per ring direction and per link, one **fabric link worker** core: a reader (NCRISC, NoC0) reads
+this chip's own shard from the input, then the shards it forwards from its own output; a sender (BRISC, NoC1) sends
+each fabric chunk one fabric hop into the same pages of the neighbour's output. **Local copy cores** write the chip's
+own shard: one per link, or two per link for a non-interleaved input (the ND-sharded KV cache), which they convert
+block by block into the output for the link workers to read from there. Link workers sit next to the Ethernet core of
+their link (`tt_fabric::get_forwarding_eth_core`).
+
+- **Fabric chunks**: up to `payload / page` consecutive pages of one page lane (pages k, k + 8, k + 16, ...), physically contiguous in an interleaved
+  tensor, one packet each (a page larger than the payload is split over several packets). Link workers split the
+  lanes between them.
+- **Forwarding**: outgoing shard k is what upstream sent as its outgoing shard k - 1. Upstream's last packet of every
+  outgoing shard (or a bare increment, if the shard has no chunk in that worker's lanes) increments this worker's
+  shards-arrived counter, so the reader forwards shard k once the counter reaches k.
+- **Fence**: before sending, each sender waits until its downstream has signalled that it started this call (the
+  downstream-started counter), so a reused output is never overwritten early.
+- **Rings**: axis line / ring; for `cluster_axis=None` a snake, or on a torus with both sides >= 3 two edge-disjoint
+  Hamiltonian cycles (every chip uses all four neighbours). Even rings are balanced: the opposite shard goes half each
+  way.
+
 ## Contract
 
 - row-major or tile-layout DRAM input;
@@ -124,7 +154,7 @@ drain any in-flight work, and reset both semaphore values to zero before reuse.
 Omitting both handles preserves the existing behavior: the op allocates its
 own semaphores on a cache miss and performs the legacy readiness synchronization.
 
-## Data flow
+## Data flow (legacy program)
 
 ```text
 local DRAM pages
@@ -229,7 +259,7 @@ problematic trim-derived VC0 fast path, but also gives up VC0 channel-service
 trimming for every op in that Fabric instance. Use a separate process/Fabric
 instance if another workload needs a different trimming policy.
 
-## Measured contribution
+## Measured contribution (legacy program)
 
 Measurements use firmware `19.10.99`, an 8x1 mesh, two links, a 14,336-byte
 Fabric payload, 65,536 rows per device (512K rows globally), persistent output,
