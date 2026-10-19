@@ -405,7 +405,13 @@ public:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
     template <typename Operand>
     [[nodiscard]] Operand front() const {
-#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
+#ifdef ARCH_QUASAR
+#ifdef UCK_CHLKC_UNPACK
+        return Operand{get_read_ptr_impl()};  // 16B units == the buffer-descriptor base address
+#else
+        return Operand{0};  // only the unpack TRISC reads the front; other TRISCs never use the address
+#endif
+#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
         return Operand{0};
 #else
         return Operand{(get_read_ptr_impl() >> (4 - cb_addr_shift)) - 1};
@@ -419,7 +425,13 @@ public:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
     template <typename Operand>
     [[nodiscard]] Operand back() const {
-#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
+#ifdef ARCH_QUASAR
+#ifdef UCK_CHLKC_PACK
+        return Operand{get_write_ptr_impl()};  // 16B units == the buffer-descriptor base address
+#else
+        return Operand{0};  // only the pack TRISC writes the back; other TRISCs never use the address
+#endif
+#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
         return Operand{0};
 #else
         return Operand{(get_write_ptr_impl() >> (4 - cb_addr_shift)) - 1};

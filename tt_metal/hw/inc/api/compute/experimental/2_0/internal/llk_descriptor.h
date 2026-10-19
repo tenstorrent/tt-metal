@@ -8,7 +8,9 @@
 
 #include "tensor_shape.h"                // ckernel::TensorShape + geometry helpers
 #include "api/compute/common_globals.h"  // DataFormat enum + ckernel_defs macros (IS_BFP_FORMAT, SCALE_DATUM_SIZE, ...)
-#include "data_format_derive.h"          // infer_unpack_dst_format (register-format rebias)
+#ifndef ARCH_QUASAR
+#include "data_format_derive.h"  // infer_unpack_dst_format (register-format rebias)
+#endif
 
 // =====================================================================================================
 // INTERNAL (NOT user-facing). The compile-time descriptor + per-tile stride math consumed by the LLK layer
@@ -39,6 +41,7 @@ struct LLKMemDescriptor {
 // Round up to the 16-byte L1 word granularity (matches tt_metal's L1_ALIGNMENT on Blackhole).
 constexpr std::uint32_t round_up_l1_words(std::uint32_t bytes) { return (bytes + 15u) >> 4; }
 
+#ifndef ARCH_QUASAR  // BH absolute tile addressing; Quasar indexes tiles via the buffer descriptor.
 // clang-format off
 /**
  * (internal) Per-tile L1 stride in 16-byte words, for absolute (out-of-order) tile addressing (base +
@@ -78,6 +81,7 @@ constexpr std::uint32_t tile_stride_words(DataFormat format, TensorShape shape) 
     }
     return round_up_l1_words(mantissa_bytes + exp_bytes);
 }
+#endif
 
 // NOTE (matmul partial_face): the id-free matmul computes partial_face inline at its two call sites, NOT via
 // a shared helper, because UNPACK and MATH use DIFFERENT thresholds:
@@ -110,6 +114,7 @@ constexpr bool is_legal_tile_shape(TensorShape s) {
     return fr && (s.face_c_dim == 16) && grid && (nf == 1 || nf == 2 || nf == 4);
 }
 
+#ifndef ARCH_QUASAR  // BH register-format derivation (data_format_derive.h / IS_BFP_FORMAT).
 /**
  * (internal) True iff `f` is a 32-bit register format (Float32/UInt32/Int32). These must take the
  * unpack-to-dest A2D path (SrcB is only 19 bits wide), so bcast / transpose use this to select that path at
@@ -135,6 +140,7 @@ constexpr bool is_unpack_to_dest() {
  * are rejected at the copy/pack surfaces (silent-garbage otherwise). Typed wrapper over IS_BFP_FORMAT.
  */
 constexpr bool is_block_float_format(DataFormat f) { return IS_BFP_FORMAT(static_cast<std::uint32_t>(f)); }
+#endif
 
 /**
  * (internal) True iff the tile has fewer than 32 rows (partial tile height). For block-float formats a

@@ -4,10 +4,10 @@
 
 #pragma once
 
-// The experimental 2.0 compute API is Blackhole-only this phase. llk_operand.h is included by every 2.0 op
+// The experimental 2.0 compute API targets Blackhole and Quasar. llk_operand.h is included by every 2.0 op
 // header, so guarding it here hard-fails the compile of any 2.0 kernel built for another arch.
-#ifndef ARCH_BLACKHOLE
-#error "The experimental 2.0 compute API (LLKOperand) is Blackhole-only; build with ARCH_BLACKHOLE defined."
+#if !defined(ARCH_BLACKHOLE) && !defined(ARCH_QUASAR)
+#error "The experimental 2.0 compute API (LLKOperand) supports Blackhole and Quasar only."
 #endif
 
 #include <cstdint>
@@ -57,6 +57,7 @@ struct LLKOperand {
     static constexpr LLKMemDescriptor descriptor = LLKMemDescriptor{Format, Shape};
 };
 
+#ifndef ARCH_QUASAR  // Quasar addresses tiles through the buffer descriptor programmed at init (base + index).
 namespace detail {
 // Absolute per-tile L1 base for operand `op` at `tile_index` (16B words). Stride folds to a compile-time
 // constant via tile_stride_words (one tile's L1 size). Shared by every block/absolute-addressing op.
@@ -66,6 +67,7 @@ ALWI std::uint32_t tile_address(LLKOperand<Format, Shape> op, std::uint32_t tile
     return op.l1_address + tile_index * stride;
 }
 }  // namespace detail
+#endif
 
 }  // namespace experimental
 }  // namespace ckernel
