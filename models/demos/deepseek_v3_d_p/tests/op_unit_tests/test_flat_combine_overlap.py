@@ -29,13 +29,15 @@ _YRM = os.environ.get("FLAT_CMB_YRM", "1") == "1"
 _GRID = os.environ.get("FLAT_CMB_GRID", "11x10")
 assert _GRID in ("11x10", "12x9"), _GRID
 _LAST_ROW = 8 if _GRID == "12x9" else 9
-if not os.environ.get("FLAT_CMB_NO_OVERLAP"):  # (serial: the flat expert's own default plan on the whole grid)
-    os.environ.setdefault("MIMO_FL_ROWS", f"{1 if _YRM else 2},{_LAST_ROW}")
+# the flat expert's layout: below combine's rows (FLAT_CMB_NO_OVERLAP: its own default plan on the whole grid);
+# MIMO_FL_* in the environment still apply on top (flat_layouts.layout_from_env)
+_LAYOUT = {} if os.environ.get("FLAT_CMB_NO_OVERLAP") else dict(row0=1 if _YRM else 2, row1=_LAST_ROW)
 
 import pytest
 import torch
 from loguru import logger
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import layout_from_env
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -189,6 +191,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, fake_weights
         n_global=num_routed_experts,
         act="silu",
         pin=int(os.environ.get("FLAT_CMB_PIN", "1")),
+        layout=layout_from_env(_LAYOUT),
     )
     topology = per_axis_topology(device_params["fabric_config"])[0]
 
@@ -266,6 +269,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, fake_weights
             pin=flat.pin,
             y_row_major=_YRM,
             y_out=y_out,
+            layout=flat.layout,
         )
 
     ref = []
@@ -405,7 +409,7 @@ def test_flat_combine_overlap_perf(mesh_device, device_params, threshold_id, mod
     if os.environ.get("FLAT_CMB_NO_OVERLAP"):  # (the flat expert on other rows, e.g. MIMO_FL_ROWS=0,9: no overlap)
         logger.info(
             f"flat+combine {model_id} {threshold_id} traced: flat {flat_us:.1f} + combine {combine_us:.1f} = "
-            f"{flat_us + combine_us:.1f} us (MIMO_FL_ROWS={os.environ.get('MIMO_FL_ROWS', 'default')})"
+            f"{flat_us + combine_us:.1f} us (layout rows {_LAYOUT.get('row0', 'all')}..{_LAYOUT.get('row1', '')})"
         )
         return
     c["overlapped"]()

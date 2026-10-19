@@ -36,7 +36,7 @@ from loguru import logger
 
 from models.demos.common.bringup.testing.harness import mesh_parametrize
 
-FLAT_ENV = {"MIMO_FL_CMB_DRISC": "1", "MIMO_FL_DRISC_DUAL": "0", "MIMO_FL_ND": "32", "MIMO_FL_NH": "1"}
+FLAT_LAYOUT = dict(drisc_in_overlap=True, drisc_dual=False, max_down=32, x_helpers=1)  # (flat_layouts.GLM_FLASH)
 H, I, E, NG, M = 4096, 2048, 36, 288, 8192
 CB_BYTES = 256 * 1024
 
@@ -334,14 +334,24 @@ def _program(mesh, plan, iters, dram, env):
 
 @mesh_parametrize
 def test_noc_wedge_probe(mesh_device):
+    from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import layout_from_env
+
     import ttnn
 
-    for k, v in FLAT_ENV.items():
-        os.environ.setdefault(k, v)
     env = dict(os.environ)
     plan = dict(
         ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
-            mesh_device, H, I, E, NG, M, weights_bf8=False, pin=1, x_bf16=False, h_bf16=False
+            mesh_device,
+            H,
+            I,
+            E,
+            NG,
+            M,
+            weights_bf8=False,
+            pin=1,
+            x_bf16=False,
+            h_bf16=False,
+            layout=layout_from_env(FLAT_LAYOUT),
         )
     )
     logger.info(

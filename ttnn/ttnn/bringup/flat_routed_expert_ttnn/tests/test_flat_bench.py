@@ -31,7 +31,8 @@ Knobs (env):
                      Default: the preset's.
   FLAT_BENCH_REAL    1: real (random) weights instead of fake ones
   FLAT_BENCH_ITERS   timed calls per case (default 10)
-  flat planner probes (MIMO_FL_ROWS, MIMO_FL_XDOWN, MIMO_FL_RD_SAMECOL, ...) apply as usual.
+  layout fields by their old names (MIMO_FL_ND / NH / HG / ROWS / X_CHAIN / DRISC_* ..., flat_layouts.layout_from_env)
+  and the planner probes (MIMO_FL_XDOWN, MIMO_FL_RD_SAMECOL, ...) apply as usual.
 
 Run:  scripts/run_safe_pytest.sh --no-precompile ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/test_flat_bench.py -s
       (on a Galaxy, one chip: TT_VISIBLE_DEVICES=0 ...; a 4-case sweep takes about a minute)
@@ -46,6 +47,7 @@ import pytest
 import torch
 
 import ttnn
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import layout_from_env
 
 PRESETS = {
     # name: (H, I, local experts, global experts, activation, indexed x)
@@ -95,7 +97,17 @@ def test_flat_bench(device):
         weights = "fake"
     t_build = time.time()
     op = FlatRoutedExpert(
-        device, weights, m=CAP, H=H, I=I, gids=[list(range(E))], n_global=NG, wdtype="bf4", act=ACT, pin=PIN
+        device,
+        weights,
+        m=CAP,
+        H=H,
+        I=I,
+        gids=[list(range(E))],
+        n_global=NG,
+        wdtype="bf4",
+        act=ACT,
+        pin=PIN,
+        layout=layout_from_env(),
     )
     del weights
     lay = dict(op.plan)
@@ -186,6 +198,8 @@ def test_flat_bench(device):
     finally:
         if hdl is not None:
             ttnn.device.UnregisterProgramRealtimeProfilerCallback(hdl)
-    print(f"[bench] | case | M_total | total ms | us/expert | DRAM % | math % ({n_compute} compute) | math % ({n_grid} grid) |")
+    print(
+        f"[bench] | case | M_total | total ms | us/expert | DRAM % | math % ({n_compute} compute) | math % ({n_grid} grid) |"
+    )
     for name, rows, ms, pe, dram, mc, mg in rows_out:
         print(f"[bench] | {name} | {rows} | {ms:.3f} | {pe:.1f} | {dram:.0%} | {mc:.0%} | {mg:.0%} |")
