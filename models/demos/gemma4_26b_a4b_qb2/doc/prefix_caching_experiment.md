@@ -120,3 +120,12 @@ to exist in the selected pinned cache and use offline read-only access.
 The remote runner now explicitly matches the profile's `OMP_NUM_THREADS=8` and
 attempts startup triage before terminating a live server that exceeds the startup
 bound. Neither adjustment has been measured as a runtime improvement.
+
+Remote discovery run [39230215308](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39230215308)
+passed without executing the model. It found the complete pinned checkpoint at
+`/mnt/models/huggingface/hub` and reported 1.7 TiB free on the local NVMe volume.
+All shard names from the index were checked for readability. The workflow now
+prioritizes this shared cache, mounts it read-only, sets `HF_HUB_OFFLINE=1`, and
+requires 100 GiB free locally before pulling the existing image or running the model.
+The failed worker's standard infrastructure cleanup reclaimed 913.7 GB of Docker
+storage; the experiment did not issue broad cleanup or reset commands.
