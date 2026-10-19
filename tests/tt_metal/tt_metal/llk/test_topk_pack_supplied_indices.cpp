@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <cstdint>
 #include <random>
 #include <vector>
@@ -13,31 +14,35 @@ namespace tt::tt_metal {
 
 TEST_F(LLKBlackholeSingleCardFixture, TopkPackSuppliedIndices) {
     constexpr std::uint32_t tile_elements = tt::constants::TILE_HW;
-    constexpr std::uint32_t tiles = 32;  // two rounds across all four size/half cases
+    constexpr std::uint32_t block_tiles = 4;
+    constexpr std::uint32_t padding = 0xff80ffffu;
+    constexpr std::uint32_t tiles = 64;  // two rounds across four size/half cases and both output aliases
+    constexpr std::array<std::uint32_t, 4> entry_counts = {2048, 1024, 512, 512};
     std::mt19937 rng(5554);
     std::vector<std::uint32_t> input(tiles * tile_elements);
     for (auto& word : input) {
         word = rng();
     }
-    for (std::uint32_t block = 0; block < tiles / 4; ++block) {
-        const auto ids = (block * 4 + 2) * tile_elements;
+    for (std::uint32_t block = 0; block < tiles / block_tiles; ++block) {
+        const auto ids = (block * block_tiles + 2) * tile_elements;
         for (std::uint32_t i = 0; i < 2 * tile_elements; i += 11) {
             input[ids + i] = UINT32_MAX;
         }
     }
     auto expected = input;
-    for (std::uint32_t block = 0; block < tiles / 4; ++block) {
-        const auto start = block * 4 * tile_elements;
+    for (std::uint32_t block = 0; block < tiles / block_tiles; ++block) {
+        const auto start = block * block_tiles * tile_elements;
         const auto mode = block % 4;
-        const auto k = mode == 0 ? 2048u : mode == 1 ? 1024u : 512u;
+        const auto k = entry_counts[mode];
+        const auto output = start + (block / entry_counts.size() % 2) * 2 * tile_elements;
         const auto offset = mode == 3 ? 512u : 0u;
         for (std::uint32_t i = 0; i < k; ++i) {
             const auto id = input[start + 2 * tile_elements + i];
-            expected[start + i] =
-                id == UINT32_MAX ? 0xff80ffffu : (input[start + offset + i] & 0xffff0000u) | (id & 0xffffu);
+            expected[output + i] =
+                id == UINT32_MAX ? padding : (input[start + offset + i] & 0xffff0000u) | (id & 0xffffu);
         }
         for (std::uint32_t i = k; i < tile_elements; ++i) {
-            expected[start + i] = 0xff80ffffu;
+            expected[output + i] = padding;
         }
     }
     const auto result = unit_tests::llk::single_core::run_unary(
@@ -46,9 +51,9 @@ TEST_F(LLKBlackholeSingleCardFixture, TopkPackSuppliedIndices) {
         tt::DataFormat::UInt32,
         input,
         tiles,
-        true,
+        true /* fp32_dest_acc_en */,
         "tests/tt_metal/tt_metal/test_kernels/compute/topk_pack_supplied_indices.cpp",
-        4);
+        block_tiles /* cb_depth_tiles */);
     EXPECT_EQ(result, expected);
 }
 
