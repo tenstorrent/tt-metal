@@ -13,6 +13,10 @@ from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
+# Written into each finished call's GlobalSemaphores when validate_cache_hits is set. It is above every ready-credit and
+# barrier target, so a cache hit that kept the previous call's semaphore addresses would stop waiting for its data.
+SEMAPHORE_POISON = 1 << 20
+
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
     # create global semaphore handles
@@ -50,6 +54,7 @@ def run_all_gather_impl(
     precision_offset=None,
     matmul_1d_mcast_in0=None,
     program_config=None,
+    validate_cache_hits=False,
 ):
     if use_legacy_allgather:
         pytest.skip(LEGACY_CCL_SKIP)
@@ -317,6 +322,7 @@ def run_all_gather_impl(
             tt_matmul_out_tensor_list.append(tt_matmul_out_tensor)
         logger.info(f"Done executing trace")
     else:
+        cache_entries = []
         for i in range(num_iters):
             tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(i)
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
@@ -327,7 +333,23 @@ def run_all_gather_impl(
                 ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
                 logger.info(f"Done op")
 
+            if validate_cache_hits:
+                # The kernels leave their semaphores back at zero, so without the poison a cache hit that skipped
+                # the semaphore refresh would still pass on the previous call's semaphores.
+                cache_entries.append(mesh_device.num_program_cache_entries())
+                completed_sems = list(ccl_semaphore_handles[i])
+                if use_barrier:
+                    completed_sems.append(barrier_semaphore_handles[i])
+                for sem in completed_sems:
+                    ttnn.reset_global_semaphore_value(sem, SEMAPHORE_POISON)
+                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+
             logger.info(f"Done iteration {i}")
+
+        if validate_cache_hits:
+            assert all(
+                n == cache_entries[0] for n in cache_entries
+            ), f"program cache entries per call: {cache_entries}; the calls after the first must be cache hits"
 
     for i in range(num_iters):
         tt_mm_out_tensor = tt_matmul_out_tensor_list[i]
@@ -681,7 +703,8 @@ def test_all_gather_matmul_async_1d_sharded_decode(mesh_device, all_gather_topol
     """The 1D mcast_in0 config that models/common attention_1d and tt_transformers run for the fused all-gather +
     WO matmul in decode on a T3K ring (Llama-3.1-8B shapes): L1 width-sharded activation and all-gather output on
     8x1 cores, DRAM weights, L1 width-sharded matmul output. Three iterations with fresh inputs and semaphores check
-    that program-cache hits re-point every tensor and semaphore.
+    that program-cache hits re-point every tensor and semaphore: the calls after the first must not add cache entries,
+    and each finished call's semaphores are poisoned so a hit still pointing at them fails.
     """
     num_devices = mesh_device.get_num_devices()
     dim, rows, tile = 4096, 32, 32
@@ -737,4 +760,5 @@ def test_all_gather_matmul_async_1d_sharded_decode(mesh_device, all_gather_topol
         use_barrier=True,
         use_persistent_buffers=False,
         program_config=program_config,
+        validate_cache_hits=True,
     )
