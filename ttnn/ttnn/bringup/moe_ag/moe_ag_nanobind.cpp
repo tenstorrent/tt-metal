@@ -64,7 +64,9 @@ void bind_moe_ag(nb::module_& mod) {
             phase (int): 0 one pass over the T tokens; 1 / 2 (two mesh rows, fused send-back): the other row's tokens
                 into ``other`` [S, H] / this row's tokens plus the peer's gathered phase-1 partial into ``own``.
             split (bool): phase 0, two mesh rows: outputs own [S, H] (this row's tokens) and other [S, H].
-            tiled (bool): phase 0: the [T, H] partials as bf16 tiles (the > 2-row reduce-scatter input).
+            tiled (bool): default False. bf16 TILE output instead of ROW_MAJOR. Phase 0: the [T, H] partials as
+                bf16 tiles (the > 2-row reduce-scatter input; T % 32 == 0; exclusive with split). Phase 2: the
+                [S, H] own output as bf16 tiles (S % 32 == 0). Not phase 1 (its partial is gathered row-major).
             peer (ttnn.Tensor, optional): phase 2: the gathered phase-1 partials [.., 2 S, H] bf16 ROW_MAJOR.
             outputs (List[ttnn.Tensor], optional): preallocated outputs.
 

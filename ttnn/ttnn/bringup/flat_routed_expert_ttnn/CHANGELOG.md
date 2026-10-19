@@ -49,6 +49,22 @@ shapes, mesh, row-major y).
 - Files: device/flat_routed_expert_plan.hpp, device/flat_routed_expert_program_factory.cpp, flat_routed_expert.cpp /
   .hpp, flat_routed_expert_nanobind.cpp, flat_expert.py
 
+### Import @ f080c8df021 (2026-10-17, commit 9003c0fd2ca)
+- What: the op re-imported from `mstaletovic/galaxy-unified-k3-v41-combine` @ `f080c8df021` (V4.1-tuned), with
+  combine_rf (`../combine_rf/`, Python): DRISC readers (`device/flat_drisc.{hpp,cpp}`, `flat_drisc_stop` /
+  `flat_drisc_dump`), the uneven gate/up split (DeepSeek-V4.1 I 2304), 16-column units, the combine overlap
+  (`flat_routed_expert_with_program`, `device/flat_with_program_device_operation.{hpp,cpp}`), `FLAT_COMBINE_OVERLAP_WORKLOG.md`
+  and `tests/unit/test_flat_uneven_split.py`. Copied as is (repo formatters applied); one adaptation: MathFidelity is
+  namespaced on this tree (`using tt::tt_metal::MathFidelity;` in the program factory).
+- Why: owner decision 2026-10-17 (routed experts only): try the flat routed expert against the fused
+  unified_routed_expert (P.2).
+- Results (commit 9003c0fd2ca message): builds; unit suite on the 2x2 QuietBox 18 passed / 14 failed, every V4.1 / GLM /
+  K3 uneven-split case passing; the failures: the 12 tp2 / tp4 `p.nsg == 1` cases the previous copy (2026-10-13)
+  already had, the mimo perf baseline and test_flat_expert_mesh (cq_id 0 out of range).
+- Needed by: deepseek_v41_flash_d_p P.3
+- Files: the whole folder (CMakeLists.txt, device/, device/kernels/, flat_expert.py, flat_routed_expert.{hpp,cpp},
+  flat_routed_expert_nanobind.cpp, the two worklogs, tests/unit/test_flat_uneven_split.py)
+
 ### DeepSeek-V4.1 expert numerics: routing weight on h, fp8 q(h), [N, K] weights, wide x rows
 - What: four opt-in arguments of `ttnn.bringup.flat_routed_expert` (and `FlatRoutedExpert`), all off by default (the
   program, its kernels, runtime args and CBs are then the previous ones; the new config fields are in the program key):
@@ -98,4 +114,19 @@ shapes, mesh, row-major y).
 - Files: `flat_routed_expert.{hpp,cpp}`, `flat_routed_expert_nanobind.cpp`, `flat_expert.py`,
   `device/flat_routed_expert_{plan.hpp,plan.cpp,types.hpp,device_operation.cpp,program_factory.hpp,program_factory.cpp}`,
   `device/kernels/{se3_compute.cpp,se5_recv.cpp,se6_dcompute.cpp,se_meta.hpp,se_rh.hpp}`,
-  `tests/unit/test_ds41_h_options.py`
+  `tests/unit/test_ds41_h_options.py`, `tests/test_flat_bench.py` (commit 2bbb41e2bb8, 2026-10-18)
+
+### Sync to e4d239c6d81 (2026-10-19, commit dc556fa6726)
+- What: synced with combine_rf to `mstaletovic/galaxy-unified-k3-v41-combine` @ `e4d239c6d81` (22 commits after
+  `f080c8df021`): a three-way merge onto the DeepSeek-V4.1 options above, one conflict (flat_expert.py weight packing),
+  both sides kept (the source's pack-once replicate + the [N, K] layout and exactness check). Brings the se_yrm
+  small-ring hang fix, the stream_linear atomic barrier fix, DRISC-only and uneven-split plans, relay_words, and
+  combine_rf's accumulators on port cores.
+- Why: keep the fork on the source's fixes.
+- Results (commit dc556fa6726 message): build OK. 2x2 QuietBox: unit suite 26 passed / 13 failed (the same 13 as at the
+  import: 12 x `p.nsg == 1`, the mimo perf band); test_ds41_h_options 7/7; deepseek_v41 test_c_swa_experts PASS, vs CPU
+  rel 0.00224936 (0.00225 before), same plan (nu=3 mt=1 gate/up=48 down=32, no DRISC).
+- Needed by: deepseek_v41_flash_d_p
+- Files: device/flat_routed_expert_{plan.cpp,program_factory.cpp}, device/flat_with_program_device_operation.{hpp,cpp},
+  device/kernels/{se11_xmc.cpp,se_drisc_post.hpp,se_yrm.hpp}, flat_expert.py, flat_routed_expert.{hpp,cpp},
+  flat_routed_expert_nanobind.cpp, the two worklogs; ../combine_rf/

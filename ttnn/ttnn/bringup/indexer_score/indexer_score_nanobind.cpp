@@ -63,10 +63,12 @@ void bind_indexer_score(nb::module_& mod) {
             program_config: work-unit knobs (q_chunk_size, k_chunk_size,
                 head_group_size; elements, tile-aligned). Defaults always fit
                 L1; raise head_group_size (0 = all resident) for performance.
-            compute_kernel_config: optional DeviceComputeKernelConfig. Only
-                math_fidelity is honored (default: HiFi2, or LoFi when q and k
-                are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
-                stay false (the custom LLK is validated for bf16 DEST half-sync).
+            compute_kernel_config: optional DeviceComputeKernelConfig. math_fidelity
+                is honored (default: HiFi2, or LoFi when q and k are both bfloat8_b).
+                fp32_dest_acc_en=True is accepted (bring-up fork, opt-in; default False
+                = the source program) for DSA scoring: q.k, the gate MAC over heads and
+                the accumulator run in fp32, the output stays bf16. dst_full_sync_en
+                must stay false (the kernel is built half-sync).
             cache_batch_idx: optional int. Selects the batch slot of a shared
                 [B, 1, T, D] k cache (which may then be ND-sharded across DRAM
                 banks). Re-applied each dispatch, so switching slots does not
@@ -168,7 +170,8 @@ void bind_indexer_score(nb::module_& mod) {
             compute_kernel_config: optional DeviceComputeKernelConfig. Only
                 math_fidelity is honored (default: HiFi2, or LoFi when q and k
                 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
-                stay false (the custom LLK is validated for bf16 DEST half-sync).
+                stay false (fp32 DEST is accepted for DSA scoring only: num_groups 1,
+                block_size 0, learned gate weights).
             cache_batch_idx: optional int. Selects the batch slot of a shared
                 [B, 1, T, D] k cache (which may then be ND-sharded across DRAM
                 banks). Re-applied each dispatch, so switching slots does not
@@ -275,7 +278,9 @@ void bind_indexer_score(nb::module_& mod) {
                 kv_len are compressed-key rows.
             program_config: IndexerScoreProgramConfig work-unit knobs; see indexer_score_dsa.
                 head_group_size must be 0 (all Hi resident) or Hi -- head streaming is not supported here
-            compute_kernel_config: optional DeviceComputeKernelConfig (only math_fidelity honored)
+            compute_kernel_config: optional DeviceComputeKernelConfig: math_fidelity, and opt-in
+                fp32_dest_acc_en=True (bring-up fork; fp32 q.k / gate MAC / accumulator, bf16 output) as in
+                indexer_score_dsa; dst_full_sync_en must stay false
             cache_batch_idx: optional int selecting one k_local cache slot; only that slot is gathered into
                 k slot 0. See indexer_score_dsa.
             kv_len: optional int, valid tile-aligned key prefix in (0, T]. With block-cyclic K, transport is

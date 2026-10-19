@@ -21,11 +21,12 @@ void bind_combine(nb::module_& mod) {
     ttnn::bind_function<"combine", "ttnn.bringup.">(
         mod,
         R"doc(
-        Routes expert-processed tokens back to their origin devices and accumulates weighted contributions at each token's original position.
+        Routes expert-processed tokens back to their origin devices, each into its token's original (token, top-k slot) position.
 
         For each entry in dispatched_buffer, the kernel reads the corresponding metadata entry
-        to determine the origin device, original token index, top-k slot, and router weight.
-        It then writes the weighted expert output back to the origin device's output buffer:
+        to determine the origin device, original token index and top-k slot. No router weight is
+        read or applied: the rows are copied unweighted, and the caller does the weighted sum over
+        the top-k slots. It writes the expert output back to the origin device's output buffer:
         locally via NOC if the origin is the same device, or remotely via fabric if the origin
         is a different device in the dispatch group. This is the inverse of the dispatch op.
 
@@ -59,20 +60,23 @@ void bind_combine(nb::module_& mod) {
                 (L1 or DRAM). Defaults to the memory config of dispatched_buffer.
             subdevice_id (ttnn.SubDeviceId, optional): Subdevice ID for core allocation. Defaults to None.
             cluster_axis (int, optional): Mesh axis along which combine communicates
-                (0 = SP/dispatch axis). Defaults to 0.
+                (0 = SP/dispatch axis). Defaults to None. Only 0 (or None) passes validation;
+                under FABRIC_2D pass 0 explicitly (None is refused there).
             num_links (int, optional): Number of fabric links for remote token writes.
                 Defaults to 1.
             topology (ttnn.Topology, optional): Fabric topology for remote writes (Linear or Ring).
                 Defaults to Linear.
             init_zeros (bool, optional): Whether to zero-initialize the output buffer before writing.
                 Defaults to True.
+            use_l1_small_for_semaphores (bool, optional): Allocate the workload's
+                GlobalSemaphores in L1_SMALL instead of L1. Defaults to False.
             use_fp8_combine (bool, optional): When True, emit the combined output in fp8_e4m3.
                 Requires Blackhole hardware. Defaults to False.
 
         Returns:
             ttnn.Tensor:
-                Combined token embeddings with weighted expert contributions accumulated at each
-                token's original top-k slot.
+                Combined token embeddings: each expert's (unweighted) output at its token's original
+                top-k slot. The caller applies the routing weights and sums over the top-k axis.
                 Shape per device: (1, 1, seq_len_per_chip, num_experts_per_tok, hidden_dim).
                 BFLOAT16 ROW_MAJOR. Token slots corresponding to experts outside this dispatch
                 group contain uninitialized values.

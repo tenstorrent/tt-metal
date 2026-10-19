@@ -5,6 +5,9 @@
 - Python: `ttnn.bringup.*` (was `ttnn.experimental.kda.*`)
 - Forked for: glm53_flash_d_p_lb kda-precise-gate
 - Used by: glm53_flash_d_p / glm53_flash_d_p_lb (tt/kda_attention.py, GLM_KDA_DECAY=fork, the default)
+- Note (2026-10-19): glm53_flash_d_p_lb is the LoudBox bring-up that asked for the fork (task kda-precise-gate,
+  `models/demos/glm53_flash_d_p_lb/bringup/BREADCRUMBS.md`); it has no `tt/` of its own. The only caller is
+  `models/demos/glm53_flash_d_p/tt/kda_attention.py` (`_ForkPrepRecurrence`).
 
 Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMake target `ttnn_op_bringup_prepare_chunk_recurrence`, kernel paths and includes pointing at this folder, Python prefix `ttnn.bringup.`.
 

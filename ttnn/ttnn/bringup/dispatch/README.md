@@ -29,13 +29,13 @@ Keyword (optional):
 - `padding_config=None`: per-device [real_tokens, pad_side]; bounds the token loop.
 - `scales_tensor=None`: per-token fp8 scales copied into the metadata tail (Blackhole).
 - `memory_config=None`, `subdevice_id=None`.
-- `cluster_axis=None`: dispatch mesh axis (docstring says default 0; binding default is None).
+- `cluster_axis=None`: dispatch mesh axis; only 0 / None pass validation, FABRIC_2D needs 0 explicitly.
 - `num_links=1`: fabric links; 0 also disables fabric (fork gate).
 - `topology=Topology.Linear`.
-- `use_l1_small_for_semaphores=False`.
+- `use_l1_small_for_semaphores=False`: the GlobalSemaphores in L1_SMALL instead of L1.
 - `fp8_output=False`: FP8_E4M3 buffer (Blackhole).
 - `fp8_scaled_input=False`: fp8 ROW_MAJOR input + scales_tensor path (Blackhole).
-- `num_workers_per_sender=2`.
+- `num_workers_per_sender=2`: worker cores per sender (TILE and ROW_MAJOR input).
 No fork-only option: the fork change is automatic on a 1-device axis.
 Returns `(dispatched_buffer (1, 1, max_dispatch_buffer_token_size, H), metadata (1, 1, max_..., metadata_len))`.
 
