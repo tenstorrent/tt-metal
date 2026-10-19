@@ -17,6 +17,64 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
+# ► Week of 2026-10-19 — F5: fp32 runs native, on the SFPU kernel
+
+## 1. TL;DR
+
+- **The native gate admits fp32**: a, b and the output in one format, bf16 or fp32. In fp32, add, subtract,
+  multiply and divide all run the SFPU kernel; fast mode changes only the routing, which in fp32 is the SFPU kernel
+  either way.
+- **Every fp32 operand reaches the DST by `UnpackToDest`.** Main's LLK keeps the path's four rules since
+  2026-10-19 (design §3.6.1). The native kernels already kept their side: one acquire and one commit around each
+  batch's copies, and one hardware startup. No kernel change for fp32.
+- **The rule takes the compute batch from the kernel and the DST mode**: the slots of one DST section (8 in a
+  16-bit DST, 4 in a 32-bit DST) over the slots per tile (1 on the FPU kernel, 2 on the SFPU kernel). fp32 runs
+  at 2; a larger set batch is refused, and the settings line names both SFPU batches.
+- **Exact oracles, measured on craq-sim**: add, subtract and multiply match torch fp32 bit for bit; divide is
+  within one fp32 step of torch's quotient (on the Metal 2.0 factory, the largest relative error was 1.19e-7); a
+  zero product or quotient is +0.0; SQUARE on fp32 is the fp32 product bit for bit.
+- **The base moved** to main through 2026-10-19 (#60847's queued head). Main made `DataflowBuffer` a class
+  template on Quasar, so the native helpers that took a bare `DataflowBuffer&` stopped compiling (149 of 164
+  module tests failed); they now take each DFB as a template type, as main's Metal 2.0 kernels do.
+- **Verified** on craq-sim `b9d8e2f4`: the native module 165 passed, 1 skipped, 7 strict expected failures; native
+  off 1 passed, 172 skipped; the bf16 suites 84 of 84 and the bf16 activation formats 88 of 88 at both settings; the fp32
+  no-broadcast suite cases, now native, 8 of 8 at the rule and at `1,1,1`; clang-tidy 0 findings on the three
+  host files.
+
+---
+
+## 2. Changes
+
+- **Gate** (`matches_quasar_native_slice`): bf16 or fp32, one format for a, b and the output. Two checks, so that
+  a routing change falls back: fp32 runs only the SFPU kernel, and bf16 runs add and subtract only on the FPU kernel.
+- **Rule**: `native_max_tiles_per_cycle(sfpu, dst_32bit)` replaces `kNativeSfpuMaxTilesPerCycle` and reads the
+  section from `get_dest_reg_count`; `NativeMoves`
+  carries the DST mode; the factory derives `fp32_dest_acc_en` before the rule; the refusal of a larger set batch
+  covers both kernels and names the DST mode.
+- **Kernels**: the native preprocess helper and the SFPU kernel's batch function take template DFB types.
+- **Tests**: a `dtype` option in the arm child with the fp32 oracles, compared in fp32 steps; fp32 ops over the
+  nine op mixes at three configurations, on the tail-ring shards at the two configurations that have tail rings,
+  and with SQUARE on a, SQUARE on b and RELU on the result; a guard arm for a set batch of 4 in fp32; the settings
+  line's 32-bit batch.
+- **Docs**: design §3.6 and §3.6.1 (how the LLK keeps the rules), §6.1 (the fp32 oracles), §8 (F5 done; ND
+  shards added to milestone 3).
+
+---
+
+## 3. Verification
+
+- **RED, then GREEN.** On the build without F5, all 14 new tests fail for the expected reasons: every fp32 case
+  binds `kernels_dfb` (the Metal 2.0 factory), the fp32 guard runs instead of refusing, and the settings line
+  lacks the 32-bit batch. With F5, all 14 pass.
+- **Before the stack**, on the Metal 2.0 factory: fp32 add and divide stall on craq-sim (killed at 240 s). With
+  main's unpack-to-dest LLK they finish in about 10 s, exact.
+- **The fp32 activation-format cases**, which mostly ask for a bf16 output (a mixed format, so the Metal 2.0
+  factory runs them): 24 of 24. The 8 BFP8 cases of the same selection fail the DFB validator, on Quasar as at the
+  base.
+- **Not run**: fp32 with GELU or TANH (no exact model).
+
+---
+
 # ► Week of 2026-10-12, part 2 — F7: activations run native, on both kernels
 
 ## 1. TL;DR

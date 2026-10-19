@@ -184,18 +184,20 @@ struct NativeTuning {
 // The user DM cores of a Quasar cluster, which the reader and the writer threads share.
 inline constexpr uint32_t kNativeUserDmCores = 6;
 
-// The largest compute batch of the SFPU kernel. It holds the two operands of a tile in two DST slots, so 4 tiles fill
-// a 16-bit DST section; a 32-bit DST section holds only 2. The legacy binary_ng runs it at 2, as 4 fails on Blackhole
-// for a reason not yet known.
-inline constexpr uint32_t kNativeSfpuMaxTilesPerCycle = 4;
+// The largest compute batch of a native compute kernel: the tiles that one DST section holds at the factory's compute
+// config, 8 slots in a 16-bit DST and 4 in a 32-bit DST. The FPU kernel takes one slot per tile, and the SFPU kernel
+// two, the copies of the two operands. The legacy binary_ng runs the SFPU kernel at 2 in a 16-bit DST, as 4 fails on
+// Blackhole for a reason not yet known.
+uint32_t native_max_tiles_per_cycle(bool sfpu, bool dst_32bit);
 
-// What a program moves over the NoC, and from where, and which compute kernel it runs. A borrowed operand moves
-// nothing.
+// What a program moves over the NoC, and from where, and which compute kernel it runs in which DST mode. A borrowed
+// operand moves nothing.
 struct NativeMoves {
-    bool inputs = false;  // a or b is read over the NoC
-    bool output = false;  // c is written over the NoC
-    bool dram = false;    // a, b or c is in DRAM, interleaved or sharded
-    bool sfpu = false;    // the SFPU compute kernel runs the op
+    bool inputs = false;     // a or b is read over the NoC
+    bool output = false;     // c is written over the NoC
+    bool dram = false;       // a, b or c is in DRAM, interleaved or sharded
+    bool sfpu = false;       // the SFPU compute kernel runs the op
+    bool dst_32bit = false;  // the DST is 32-bit (fp32_dest_acc_en)
 };
 
 // The values one program runs with.
@@ -214,7 +216,7 @@ uint32_t native_compute_threads(const NativeTuning& tuning);
 // Each set knob, else the rule's value for what the program moves. The rule takes the most threads and, with
 // every operand in L1, the largest batches the hardware allows: C = 4; R = C when an input moves, else 1;
 // W = min(C, 6 - R) when the output moves, else 1, so R + W fits the 6 user DM cores; DM batch 8; compute batch
-// 8 where R <= C and W <= C, else 1, and at most kNativeSfpuMaxTilesPerCycle for the SFPU kernel; both batches 1
+// native_max_tiles_per_cycle where R <= C and W <= C, else 1; both batches 1
 // beside a DRAM operand; ring depth two batches per thread, a multiple of each. A borrowed input runs R = 1 and a
 // borrowed output W = 1, whatever is set. Above ring stride 1 only one tile of each compute batch comes out right.
 NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves);

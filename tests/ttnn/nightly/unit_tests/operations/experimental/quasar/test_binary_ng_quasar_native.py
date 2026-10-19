@@ -67,7 +67,8 @@ def _native_enabled():
 # prediction disagrees with the device is how a change on either side shows up.
 _RULE_COMPUTE_THREADS = 4
 _RULE_TILES_PER_CYCLE = 8
-# The SFPU kernel's rule batch is 4: it holds a tile in two DST slots, so 4 tiles fill the DST in bf16.
+# The SFPU kernel's rule batch is 4: it holds a tile in two DST slots, so 4 tiles fill a 16-bit DST section. In fp32
+# the rule runs it at 2; no prediction reads that batch, as SFPU batches are exact, and the log test checks it.
 _RULE_SFPU_TILES_PER_CYCLE = 4
 _USER_DM_CORES = 6
 
@@ -662,11 +663,19 @@ _GUARD_ARMS = [
         "R + W must be <= 6 (Quasar has 6 user DM cores), got R=6 (TTNN_QSR_READER_THREADS) + W=1 (rule)",
     ),
     (
-        # The SFPU kernel runs at most 4 tiles per compute batch, so a set batch of 8 is refused for multiply.
+        # A batch must fit one DST section: the SFPU kernel runs at most 4 tiles in a 16-bit DST, so a set batch of 8
+        # is refused for multiply.
         "sfpu-batch",
         {"TTNN_QSR_TILES_PER_CYCLE": "8"},
-        "tiles_per_cycle=8 (TTNN_QSR_TILES_PER_CYCLE) exceeds 4, the most the SFPU kernel runs",
+        "tiles_per_cycle=8 (TTNN_QSR_TILES_PER_CYCLE) exceeds 4, the most the SFPU kernel runs in a 16-bit DST",
         [("dram_128/multiply", "dram", None, None, (4 * 32, 32 * 32), {"op": "multiply"})],
+    ),
+    (
+        # In a 32-bit DST the SFPU kernel runs at most 2 tiles, so a set batch of 4 is refused for fp32 add.
+        "sfpu-batch-fp32",
+        {"TTNN_QSR_TILES_PER_CYCLE": "4"},
+        "tiles_per_cycle=4 (TTNN_QSR_TILES_PER_CYCLE) exceeds 2, the most the SFPU kernel runs in a 32-bit DST",
+        [("dram_128/fp32", "dram", None, None, (4 * 32, 32 * 32), {"dtype": "float32"})],
     ),
 ]
 
@@ -799,8 +808,10 @@ def _shard_cores(entry):
 
 
 def _runs_sfpu(entry):
-    """True when the op of a _SHARD_ARM_SRC entry runs the SFPU kernel: multiply out of its fast mode, or divide."""
-    return (entry[5] if len(entry) > 5 else {}).get("op") in ("multiply", "divide")
+    """True when the op of a _SHARD_ARM_SRC entry runs the SFPU kernel: multiply out of its fast mode, divide, or any
+    op on fp32 operands."""
+    opts = entry[5] if len(entry) > 5 else {}
+    return opts.get("op") in ("multiply", "divide") or opts.get("dtype") == "float32"
 
 
 def _expect_wrong(cases, knobs):
@@ -829,7 +840,8 @@ def _config_params(configs, cases):
 # of options: "out" gives the output its own placement (otherwise it takes the inputs'), "b" does the same for b,
 # "output_tensor" supplies a preallocated output with its own placement, "in_place" adds b into a with add_, "grid" (x0,
 # y0, x1, y1) runs the op on that sub-core grid, "op" runs "subtract", "multiply", "divide" or "multiply_fast" (multiply
-# in fast and approximate mode) instead of add, and "act" chains SQUARE on a ("lhs"), on b ("rhs"), on both ("both") or
+# in fast and approximate mode) instead of add, "dtype": "float32" runs it on fp32 operands and output (with "op" add,
+# subtract, multiply or divide, and "act" None, "lhs", "rhs" or "relu"), and "act" chains SQUARE on a ("lhs"), on b ("rhs"), on both ("both") or
 # on the result ("post"), a lone RELU on the result ("relu"), RELU on a ("relu_lhs"), or SQUARE on a and RELU on the
 # result ("relu_chain"). "out" may also be None, so that the op derives the output's memory config, or
 # "height_specless", an L1 height-sharded config without a shard spec, which the op completes; then "resolved_out" names
@@ -913,6 +925,28 @@ ACTS = {None: ({}, lambda a, b, exact, rounding: rounding(exact(a, b))),
                      lambda a, b, exact, rounding: rounding(exact(relu(a), b))),
         "relu_chain": ({"input_tensor_a_activations": [SQUARE], "activations": [RELU]},
                        lambda a, b, exact, rounding: relu(rounding(exact(square(a), b)).float()).to(torch.bfloat16))}
+
+
+def zero_positive(x):
+    # A zero product or quotient of the SFPU comes out as +0.0: adding 0.0 turns -0.0 into +0.0 and keeps every other
+    # value.
+    return x + 0.0
+
+
+# On fp32 operands every op runs on the SFPU kernel and keeps the fp32 result. Divide is within one fp32 step of
+# torch's fp32 quotient (FP32_STEPS); the others match torch bit for bit.
+OPS_FP32 = {"add": (ttnn.experimental.quasar.add, {}, torch.add, lambda x: x),
+            "subtract": (ttnn.experimental.quasar.subtract, {}, torch.subtract, lambda x: x),
+            "multiply": (ttnn.experimental.quasar.multiply, {}, torch.multiply, zero_positive),
+            "divide": (ttnn.experimental.quasar.divide, {}, torch.divide, zero_positive)}
+FP32_STEPS = {"divide": 1}
+ACTS_FP32 = {None: ACTS[None],
+             "lhs": ({"input_tensor_a_activations": [SQUARE]},
+                     lambda a, b, exact, rounding: rounding(exact(a * a, b))),
+             "rhs": ({"input_tensor_b_activations": [SQUARE]},
+                     lambda a, b, exact, rounding: rounding(exact(a, b * b))),
+             "relu": ({"activations": [RELU]}, lambda a, b, exact, rounding: torch.relu(rounding(exact(a, b))))}
+DTYPES = {"bfloat16": ttnn.bfloat16, "float32": ttnn.float32}
 profile_csv = root / "generated" / "profiler" / ".logs" / "profile_log_device.csv"
 if (EXPECT_NEOS or EXPECT_DMS) and profile_csv.exists():
     profile_csv.unlink()
@@ -955,11 +989,13 @@ try:
         else:
             out_mem = memory_config(*opts["out"]) if "out" in opts else mem
         b_mem = memory_config(*opts["b"]) if "b" in opts else mem
-        cfg = dict(dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        fp32 = opts.get("dtype") == "float32"
+        dtype = DTYPES[opts.get("dtype", "bfloat16")]
+        cfg = dict(dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
         ta = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=mem, **cfg)
         tb = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=b_mem, **cfg)
-        op_fn, op_extra, exact, rounding = OPS[opts.get("op", "add")]
-        act_kwargs, model = ACTS[opts.get("act")]
+        op_fn, op_extra, exact, rounding = (OPS_FP32 if fp32 else OPS)[opts.get("op", "add")]
+        act_kwargs, model = (ACTS_FP32 if fp32 else ACTS)[opts.get("act")]
         golden = model(ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float(), exact, rounding)
         cached = device.num_program_cache_entries()
         op_kwargs = {}
@@ -976,7 +1012,7 @@ try:
                     torch.zeros(shape), memory_config=memory_config(*opts["output_tensor"]), **cfg)
             if out_mem is not None:
                 op_kwargs["memory_config"] = out_mem
-            out = op_fn(ta, tb, dtype=ttnn.bfloat16, **op_extra, **act_kwargs, **op_kwargs)
+            out = op_fn(ta, tb, dtype=dtype, **op_extra, **act_kwargs, **op_kwargs)
         if "resolved_out" in opts and out.memory_config() != memory_config(*opts["resolved_out"]):
             failures.append("{}: the output took {}".format(name, out.memory_config()))
         spec = json.dumps(entry[1:])
@@ -986,7 +1022,12 @@ try:
         if spec in specs[i + 1:]:
             keep.extend([ta, tb, out])
         got = ttnn.to_torch(out)
-        differ = got.contiguous().view(torch.int16) != golden.contiguous().view(torch.int16)
+        if fp32:
+            # Distance in fp32 steps: adjacent floats of one sign are adjacent integers.
+            steps = (got.contiguous().view(torch.int32).long() - golden.contiguous().view(torch.int32).long()).abs()
+            differ = steps > FP32_STEPS.get(opts.get("op", "add"), 0)
+        else:
+            differ = got.contiguous().view(torch.int16) != golden.contiguous().view(torch.int16)
         if differ.any():
             # Pad a partial last tile row or column with matches, so that the mask holds whole tiles.
             differ = torch.nn.functional.pad(differ, (0, -differ.shape[-1] % 32, 0, -differ.shape[-2] % 32))
@@ -1755,8 +1796,8 @@ def test_native_mixed_layouts_match_the_prediction(name, knobs):
 # run the SFPU kernel. Each op runs one mix of each kind: the output's shard walked by the reader, the inputs' shard
 # walked by the writer, the bank walk in the reader and in the writer, pad slots in the reader and in the writer, all
 # three borrowed as slices with partial tiles, all three borrowed as shards with 4 tiles per compute thread, and the
-# NoC path beside DRAM. Under the rule, the shards hold 4 tiles per compute thread, so their wrong-tile counts tell
-# the SFPU batch of 4 from a batch of 2.
+# NoC path beside DRAM. Under the rule, the shards hold 4 tiles per compute thread, so the FPU kernel's batches give
+# the predicted wrong tiles, and the SFPU kernel's batches are exact.
 _OTHER_OPS = ("subtract", "multiply", "multiply_fast", "divide")
 _OP_MIXES = (
     "I.I.W32",
@@ -1872,6 +1913,70 @@ def test_native_activations_match_the_prediction(name, knobs):
     """
     p = _run_shard_arm([case[0] for case in _ACT_CASES], expect="qsr", timeout=1800, knobs=knobs)
     _check_arm(p, f"activations, {name}", expect_wrong=_expect_wrong(_ACT_CASES, knobs))
+
+
+# fp32: add, subtract, multiply and divide all run the SFPU kernel, in a 32-bit DST, where the rule's compute batch is 2.
+# They run the op mixes, the shards whose last tiles go through the tail rings, and three activations: SQUARE on a and
+# SQUARE on b, which run the Float32 activation rings of a and of b, and a lone RELU on the result, in the packer.
+_FP32_OPS = ("add", "subtract", "multiply", "divide")
+
+
+def _with_fp32(entry):
+    """A _SHARD_ARM_SRC entry on fp32 operands and output, named after it."""
+    opts = entry[5] if len(entry) > 5 else {}
+    return (f"{entry[0]}/fp32", *entry[1:5], {**opts, "dtype": "float32"})
+
+
+_FP32_CASES = [
+    (_with_fp32(_with_op(entry, op)), path, split)
+    for op in _FP32_OPS
+    for entry, path, split in _MIXED_CASES
+    if entry[0] in _OP_MIXES
+]
+_FP32_TAIL_SHARDS = [
+    _with_fp32(_with_op(entry, op))
+    for op in _FP32_OPS
+    for entry in _SMALL_SHARDS
+    if entry[0] in ("block_6", "height1", "height_5")
+]
+_FP32_ACT_CASES = [
+    (_with_act(_with_fp32(_with_op(entry, op)), act), path, split)
+    for op in ("add", "multiply")
+    for act in ("lhs", "rhs", "relu")
+    for entry, path, split in _MIXED_CASES
+    if entry[0] in _ACT_MIXES
+]
+_FP32_CONFIGS = {name: _MIXED_CONFIGS[name] for name in ("R1C1W1", "rule-n1", "rule")}
+# The configurations that have tail rings: at C = 1 every shard divides, and R4C4W2-n1 builds rule-n1's program.
+_FP32_TAIL_CONFIGS = {name: _BORROWED_CONFIGS_C2[name] for name in ("rule-n1", "R1C2W1-n1")}
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("name, knobs", _config_params(_FP32_CONFIGS, _FP32_CASES))
+def test_native_fp32_ops_match_the_prediction(name, knobs):
+    """fp32 add, subtract, multiply and divide must run native in every kind of mix and give the predicted output.
+
+    The oracle is torch's fp32 result, and divide may differ from it by one fp32 step. A batch larger than a
+    32-bit DST section holds overwrites the section the packer reads.
+    """
+    p = _run_shard_arm([case[0] for case in _FP32_CASES], expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"fp32 ops, {name}", expect_wrong=_expect_wrong(_FP32_CASES, knobs))
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("name, knobs", list(_FP32_TAIL_CONFIGS.items()), ids=list(_FP32_TAIL_CONFIGS))
+def test_native_fp32_on_the_tail_rings_match_the_oracle(name, knobs):
+    """fp32 ops must stay native and match the fp32 oracle where a shard's last tiles go through the tail rings."""
+    p = _run_shard_arm(_FP32_TAIL_SHARDS, expect="qsr", timeout=900, knobs=knobs)
+    _check_arm(p, f"fp32 ops on the tail rings, {name}")
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("name, knobs", _config_params(_ACT_CONFIGS, _FP32_ACT_CASES))
+def test_native_fp32_activations_match_the_prediction(name, knobs):
+    """Activations on fp32 operands must run native and give the predicted output."""
+    p = _run_shard_arm([case[0] for case in _FP32_ACT_CASES], expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"fp32 activations, {name}", expect_wrong=_expect_wrong(_FP32_ACT_CASES, knobs))
 
 
 # One case per child, as above, and one case of each kind of anchor and walk. The thread counts tell the
@@ -2016,7 +2121,10 @@ _LOG_CASES = {
             _OUTPUT_SHAPE: ["R=4 (rule) W=1 tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
             _INPUTS_SHAPE: ["R=1 W=1 (TTNN_QSR_WRITER_THREADS) tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
-            _SFPU_SHAPE: ["tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
+            _SFPU_SHAPE: [
+                "tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE) in a 16-bit DST",
+                "tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE) in a 32-bit DST",
+            ],
         },
         True,
     ),
@@ -2028,7 +2136,7 @@ _LOG_CASES = {
             _OUTPUT_SHAPE: ["R=1 (rule) W=1 tiles_per_cycle=8 (rule)"],
             _INPUTS_SHAPE: ["R=1 W=1 (rule) tiles_per_cycle=8 (rule)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
-            _SFPU_SHAPE: ["tiles_per_cycle=4 (rule)"],
+            _SFPU_SHAPE: ["tiles_per_cycle=4 (rule) in a 16-bit DST", "tiles_per_cycle=2 (rule) in a 32-bit DST"],
         },
         True,
     ),
@@ -2045,7 +2153,7 @@ _LOG_CASES = {
             _OUTPUT_SHAPE: ["R=2 (TTNN_QSR_READER_THREADS) W=1 tiles_per_cycle=1 (rule)"],
             _INPUTS_SHAPE: ["R=1 W=1 (rule) tiles_per_cycle=8 (rule)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
-            _SFPU_SHAPE: ["tiles_per_cycle=1 (rule)"],
+            _SFPU_SHAPE: ["tiles_per_cycle=1 (rule) in a 16-bit DST", "tiles_per_cycle=1 (rule) in a 32-bit DST"],
         },
         False,
     ),
@@ -2119,6 +2227,8 @@ def test_native_prediction_tables_cover_their_cases():
     padded_acts = set(_ACT_MIXES) & _MIXED_PAD_SLOTS
     assert not padded_acts, f"these activation mixes have pad slots: {padded_acts}"
     cases += _ACT_CASES
+    # The fp32 tables reuse the op and activation placements; the ones with pad slots stay out of the split check.
+    cases += [case for case in _FP32_CASES if case[0][0].split("/")[0] not in _MIXED_PAD_SLOTS] + _FP32_ACT_CASES
     # In place, a wrong-tile prediction is not verified above a batch of 1: a batch may read other threads'
     # slots, which in place hold their results, not their inputs.
     in_place = [case for case in _MIXED_CASES if len(case[0]) > 5 and case[0][5].get("in_place")]

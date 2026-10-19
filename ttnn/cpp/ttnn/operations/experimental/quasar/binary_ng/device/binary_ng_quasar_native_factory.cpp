@@ -665,6 +665,12 @@ ProgramArtifacts create_no_bcast_artifacts(
     const tt::DataFormat a_df = datatype_to_dataformat_converter(a_dtype);
     const tt::DataFormat b_df = datatype_to_dataformat_converter(b_dtype);
     const tt::DataFormat c_df = datatype_to_dataformat_converter(c_dtype);
+    // The DST mode, as in the descriptor factory. It sets the compute batch: a 32-bit DST section holds half the tiles.
+    const bool fp32_dest_acc_en = c_df == tt::DataFormat::UInt32 || c_df == tt::DataFormat::Int32 ||
+                                  c_df == tt::DataFormat::Float32 || a_df == tt::DataFormat::Float32 ||
+                                  b_df == tt::DataFormat::Float32 ||
+                                  (a_df == tt::DataFormat::Int32 && b_df == tt::DataFormat::Int32) ||
+                                  (a_df == tt::DataFormat::UInt32 && b_df == tt::DataFormat::UInt32);
     const tt::tt_metal::Tile a_tile = a.tensor_spec().tile();
     const tt::tt_metal::Tile b_tile = is_scalar ? a_tile : b_opt->tensor_spec().tile();
     const tt::tt_metal::Tile c_tile = c.tensor_spec().tile();
@@ -775,7 +781,12 @@ ProgramArtifacts create_no_bcast_artifacts(
     const auto in_dram = [](const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; };
     const bool any_dram = in_dram(a) || (!is_scalar && in_dram(*b_opt)) || in_dram(c);
     const NativeConfig cfg = resolve_native_config(
-        t, {.inputs = !a_borrowed || !b_borrowed, .output = !c_borrowed, .dram = any_dram, .sfpu = is_sfpu});
+        t,
+        {.inputs = !a_borrowed || !b_borrowed,
+         .output = !c_borrowed,
+         .dram = any_dram,
+         .sfpu = is_sfpu,
+         .dst_32bit = fp32_dest_acc_en});
     const uint32_t reader_threads = cfg.reader_threads;
     const uint32_t writer_threads = cfg.writer_threads;
     // A borrowed ring must divide by the compute count, so, until the DFB can give each tile counter its own
@@ -809,8 +820,8 @@ ProgramArtifacts create_no_bcast_artifacts(
     // HAS_SHARDING mirrors the descriptor's define for a borrowed shard; kernels_qsr/ does not read it.
     const bool has_sharding = anchor.kind == AnchorKind::kShard;
 
-    // --- num_tiles_per_cycle: tiles per tile_regs_acquire, which the DST capacity bounds; the rule's 8 is all
-    // of it in bf16. Neither batch has to divide a thread's share: the kernels run a short last batch. A
+    // --- num_tiles_per_cycle: tiles per tile_regs_acquire, which the DST capacity bounds; the rule takes all
+    // of it. Neither batch has to divide a thread's share: the kernels run a short last batch. A
     // borrowed ring is the shard or slice, walked once, so a batch there never wraps, and the ring holds the
     // thread's whole share. Above ring stride 1 a compute batch gives a wrong output; see the warning below. ---
     // in0/in1 endpoints are (R, C); out endpoints are (C, W).
@@ -823,12 +834,15 @@ ProgramArtifacts create_no_bcast_artifacts(
     // c_main_tiles of it, and the tail rings the rest.
     const uint32_t c_main_tiles = borrowed_tiles - tail_tiles;
     const uint32_t num_tiles_per_cycle = cfg.tiles_per_cycle;
-    // The SFPU kernel runs at most kNativeSfpuMaxTilesPerCycle tiles per batch, so a larger set batch is refused.
+    // A batch must fit one DST section, so a larger set batch is refused.
+    const uint32_t max_tiles_per_cycle = native_max_tiles_per_cycle(is_sfpu, fp32_dest_acc_en);
     TT_FATAL(
-        !is_sfpu || num_tiles_per_cycle <= kNativeSfpuMaxTilesPerCycle,
-        "binary_ng Quasar-native: tiles_per_cycle={} exceeds {}, the most the SFPU kernel runs",
+        num_tiles_per_cycle <= max_tiles_per_cycle,
+        "binary_ng Quasar-native: tiles_per_cycle={} exceeds {}, the most the {} kernel runs in a {}-bit DST",
         describe_native_value(t.tiles_per_cycle, num_tiles_per_cycle),
-        kNativeSfpuMaxTilesPerCycle);
+        max_tiles_per_cycle,
+        is_sfpu ? "SFPU" : "FPU",
+        fp32_dest_acc_en ? 32 : 16);
     // Capacity rules for the NoC rings; the borrowed path builds none. reserve_back(n) and wait_front(n)
     // cannot complete if n exceeds a thread's capacity, entries_per_thread, and the ring must hold two batches
     // for double buffering, so check here rather than let the op hang. A batch occupies n consecutive slots
@@ -1131,11 +1145,6 @@ ProgramArtifacts create_no_bcast_artifacts(
     }
 
     // --- Compute config (mirrors the descriptor factory). ---
-    const bool fp32_dest_acc_en = c_df == tt::DataFormat::UInt32 || c_df == tt::DataFormat::Int32 ||
-                                  c_df == tt::DataFormat::Float32 || a_df == tt::DataFormat::Float32 ||
-                                  b_df == tt::DataFormat::Float32 ||
-                                  (a_df == tt::DataFormat::Int32 && b_df == tt::DataFormat::Int32) ||
-                                  (a_df == tt::DataFormat::UInt32 && b_df == tt::DataFormat::UInt32);
 
     // unpack_modes: the descriptor sets UnpackToDest on all SFPU consumer CBs, but that is inert for
     // non-Float32 entries (and the DFB validator rejects UnpackToDest on a 32-bit format unless

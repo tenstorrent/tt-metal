@@ -8,14 +8,15 @@
 // Diverges from kernels_dfb/compute/eltwise_binary_sfpu_no_bcast_dfb.cpp as the native FPU kernel diverges
 // from its own: thread c of C processes its own share of num_tiles, and a borrowed shard's tiles past the
 // largest multiple of C come through the tail rings (TAIL_TILES). Which tiles a thread gets is the DFB's
-// assignment. Each tile takes two DST slots, the operands' copies. The factory runs at most
-// kNativeSfpuMaxTilesPerCycle tiles per batch. The native gate runs only bf16 multiply and divide on it.
+// assignment. Each tile takes two DST slots, the operands' copies, so a batch holds at most 4 tiles in a 16-bit DST
+// and 2 in a 32-bit DST. The native gate runs bf16 multiply and divide on it, and fp32 add, subtract, multiply and
+// divide.
 
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-// The SFPU binary op headers that are ported to Quasar, as in the kernels_dfb kernel. bf16 multiply and divide
+// The SFPU binary op headers that are ported to Quasar, as in the kernels_dfb kernel. The ops the native gate admits
 // use eltwise_binary_sfpu.h.
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/add_int_sfpu.h"

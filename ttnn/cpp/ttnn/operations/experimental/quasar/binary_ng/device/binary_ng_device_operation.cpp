@@ -664,15 +664,27 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (attributes.subtile_broadcast_type != SubtileBroadcastType::NONE) {
         return false;
     }
-    // add and subtract run the FPU kernel. multiply and divide run the SFPU kernel, and multiply runs the FPU kernel
-    // in fast and approximate mode. The SFPU kernel runs no other op here: each needs its own validation on Quasar.
+    // In bf16, add and subtract run the FPU kernel, multiply and divide run the SFPU kernel, and multiply runs the FPU
+    // kernel in fast and approximate mode. In fp32 all four run the SFPU kernel. The SFPU kernel runs no other op here:
+    // each needs its own validation on Quasar.
     const BinaryOpType op_type = attributes.binary_op_type;
     if (op_type != BinaryOpType::ADD && op_type != BinaryOpType::SUB && op_type != BinaryOpType::MUL &&
         op_type != BinaryOpType::DIV) {
         return false;
     }
-    // Implied by bf16 below, but asserted.
-    if (attributes.is_sfpu && op_type != BinaryOpType::MUL && op_type != BinaryOpType::DIV) {
+    // a and b in one format, bf16 or fp32; the output's format is checked below. Mixed formats are not validated on
+    // Quasar.
+    const DataType dtype = a.dtype();
+    if ((dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32) || b.dtype() != dtype) {
+        return false;
+    }
+    // Implied by the format, but checked, so that a routing change falls back instead of running untested: fp32 runs
+    // only the SFPU kernel, and bf16 runs add and subtract only on the FPU kernel.
+    const bool fp32 = dtype == DataType::FLOAT32;
+    if (fp32 && !attributes.is_sfpu) {
+        return false;
+    }
+    if (!fp32 && attributes.is_sfpu && op_type != BinaryOpType::MUL && op_type != BinaryOpType::DIV) {
         return false;
     }
     // Divide in fast and approximate mode, a reciprocal pass on b before an FPU multiply, is not validated on Quasar.
@@ -682,9 +694,6 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     // Attributes, not tensor.layout(): output_layout has no tensor when none was supplied.
     if (attributes.input_layout_a != Layout::TILE || attributes.input_layout_b != Layout::TILE ||
         attributes.output_layout != Layout::TILE) {
-        return false;
-    }
-    if (a.dtype() != DataType::BFLOAT16 || b.dtype() != DataType::BFLOAT16) {
         return false;
     }
     const auto& a_tile = a.tensor_spec().tile();
@@ -699,7 +708,7 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
 
     // is_binary_sfpu_op sees only the INPUT dtypes, so add(bf16, bf16, dtype=float32) reaches here with
     // is_sfpu false. data_type(), not dtype(), on TensorSpec.
-    if (out_spec.data_type() != DataType::BFLOAT16) {
+    if (out_spec.data_type() != dtype) {
         return false;
     }
     // get_shard_volumes counts every operand's shard in the output's tiles, so those must be 32x32 too.
