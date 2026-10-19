@@ -20,7 +20,8 @@ namespace ttnn::operations::experimental::high_bw_all_gather {
 
 namespace {
 
-constexpr uint32_t kMaxWorkers = 4;
+constexpr uint32_t kDirections = 4;  // E, W, N, S: one sender per (link, direction)
+constexpr uint32_t kMaxWorkers = 8;
 constexpr uint32_t kPacketSlots = 8;
 constexpr uint32_t kMetaEntryBytes = 16;
 constexpr uint32_t kBlockWords = 256;  // stream words per refill
@@ -33,8 +34,8 @@ struct WorkerKernels {
     tt::tt_metal::KernelHandle writer;
 };
 
-uint32_t num_workers(const HighBwAllGatherInputs& tensor_args) {
-    // push_runs_tensor per device: [1, 1, workers, words]; one page (row) per worker.
+uint32_t num_links(const HighBwAllGatherInputs& tensor_args) {
+    // push_runs_tensor per device: [1, 1, links, words]; one stream page per link, shared by its 4 senders.
     return tensor_args.push_runs_tensor->padded_shape()[-2];
 }
 
@@ -54,9 +55,9 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
     const uint32_t mesh_cols = mesh_shape[1];
     const uint32_t num_devices = mesh_rows * mesh_cols;
 
-    const uint32_t workers = num_workers(tensor_args);
-    TT_FATAL(
-        workers >= 1 && workers <= kMaxWorkers, "sparse push supports 1..{} workers, got {}", kMaxWorkers, workers);
+    const uint32_t links = num_links(tensor_args);
+    const uint32_t workers = links * kDirections;
+    TT_FATAL(workers >= 1 && workers <= kMaxWorkers, "sparse push supports 1..2 links, got {}", links);
     TT_FATAL(
         operation_attributes.ready_semaphore.has_value(),
         "sparse push (prototype) requires caller-owned ready_semaphore / data_valid_semaphore");
@@ -139,16 +140,16 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
         if (batch_from_meta) {
             tt::tt_metal::TensorAccessorArgs(tensor_args.input_batch_index_tensor->buffer()).append_to(reader_ct);
         }
-        std::vector<uint32_t> writer_ct = {page_bytes, num_devices, my_rank, workers, packet_bytes};
+        std::vector<uint32_t> writer_ct = {page_bytes, num_devices, my_rank, workers, packet_bytes, links};
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct);
+        // Both kernels look up each destination's first hop in the fabric routing table.
         std::map<std::string, std::string> writer_defines = {
             {"DEST_CHIP_ID", ttnn::operations::ccl::common::stringify(dest_chip_ids)},
             {"DEST_MESH_ID", ttnn::operations::ccl::common::stringify(dest_mesh_ids)},
-            {"DIRECTIONS", ttnn::operations::ccl::common::stringify(directions)},
             {"FABRIC_2D", "1"},
         };
         // Profiling switch for the prototype: SPARSE_PUSH_SKIP=reads|sends times one side without the other.
-        std::map<std::string, std::string> reader_defines;
+        std::map<std::string, std::string> reader_defines = writer_defines;
         if (const char* skip = std::getenv("SPARSE_PUSH_SKIP")) {
             (std::string(skip) == "reads" ? reader_defines : writer_defines)["SPARSE_PUSH_SKIP"] = "1";
         }
@@ -179,19 +180,19 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
         const auto sync_core = mesh_device->worker_core_from_logical_core(worker_cores[0]);
         const auto src_node = mesh_device->get_fabric_node_id(coord);
         for (uint32_t w = 0; w < workers; ++w) {
-            tt::tt_metal::SetRuntimeArgs(program, reader, worker_cores[w], {w, my_rank});
+            const uint32_t link = w / kDirections, dir = w % kDirections;
+            tt::tt_metal::SetRuntimeArgs(program, reader, worker_cores[w], {link, dir, my_rank});
             std::vector<uint32_t> writer_rt = {
-                w, static_cast<uint32_t>(sync_core.x), static_cast<uint32_t>(sync_core.y)};
+                w, dir, link, static_cast<uint32_t>(sync_core.x), static_cast<uint32_t>(sync_core.y)};
             for (uint32_t other = 0; other < kMaxWorkers; ++other) {
                 const auto phys =
                     mesh_device->worker_core_from_logical_core(worker_cores[std::min(other, workers - 1)]);
                 writer_rt.push_back(static_cast<uint32_t>(phys.x));
                 writer_rt.push_back(static_cast<uint32_t>(phys.y));
             }
-            for (const auto& neighbor : neighbors) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    src_node, mesh_device->get_fabric_node_id(neighbor), w, program, worker_cores[w], writer_rt);
-            }
+            // get_neighbors lists E, W, N, S, the eth_chan_directions order, so neighbors[dir] is this sender's hop.
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_node, mesh_device->get_fabric_node_id(neighbors[dir]), link, program, worker_cores[w], writer_rt);
             tt::tt_metal::SetRuntimeArgs(program, writer, worker_cores[w], writer_rt);
         }
 
