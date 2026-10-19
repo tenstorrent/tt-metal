@@ -15,13 +15,17 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
 namespace {
 
-constexpr uint32_t kDirections = 4;  // E, W, N, S: one sender per (link, direction)
-constexpr uint32_t kMaxWorkers = 8;
+constexpr uint32_t kDirections = 4;  // E, W, N, S: one fabric channel per (link, direction)
+constexpr uint32_t kMaxChannels = 8;
+// Senders per channel. 0 = one sender owns the router connection directly; K >= 1 = K senders feed a fabric mux
+// core that owns it. Prototype knob: SPARSE_PUSH_MUX_K.
+constexpr uint32_t kDefaultSendersPerChannel = 4;
 constexpr uint32_t kPacketSlots = 8;
 constexpr uint32_t kMetaEntryBytes = 16;
 constexpr uint32_t kBlockWords = 256;  // stream words per refill
@@ -56,8 +60,8 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
     const uint32_t num_devices = mesh_rows * mesh_cols;
 
     const uint32_t links = num_links(tensor_args);
-    const uint32_t workers = links * kDirections;
-    TT_FATAL(workers >= 1 && workers <= kMaxWorkers, "sparse push supports 1..2 links, got {}", links);
+    const uint32_t channels = links * kDirections;
+    TT_FATAL(channels >= 1 && channels <= kMaxChannels, "sparse push supports 1..2 links, got {}", links);
     TT_FATAL(
         operation_attributes.ready_semaphore.has_value(),
         "sparse push (prototype) requires caller-owned ready_semaphore / data_valid_semaphore");
@@ -80,17 +84,51 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
     const uint32_t runs_page_bytes = runs_tensor.buffer()->aligned_page_size();
     const bool batch_from_meta = tensor_args.has_batch_index_metadata();
 
-    const auto worker_cores_all =
-        corerange_to_cores(operation_attributes.resolved_worker_core_grid, std::nullopt, true);
-    TT_FATAL(worker_cores_all.size() >= workers, "sparse push needs {} worker cores", workers);
-    std::vector<CoreCoord> worker_cores(worker_cores_all.begin(), worker_cores_all.begin() + workers);
-    const CoreRangeSet worker_range(std::set<CoreRange>([&] {
+    const auto cores_all = corerange_to_cores(operation_attributes.resolved_worker_core_grid, std::nullopt, true);
+    uint32_t requested_k = kDefaultSendersPerChannel;
+    if (const char* k_env = std::getenv("SPARSE_PUSH_MUX_K")) {
+        requested_k = static_cast<uint32_t>(std::stoul(k_env));
+    }
+    // Each channel needs K senders plus its mux core; fall back to fewer senders when the grid is short.
+    uint32_t per_channel_k = requested_k;
+    while (per_channel_k > 0 && channels * (per_channel_k + 1) > cores_all.size()) {
+        --per_channel_k;
+    }
+    if (per_channel_k != requested_k) {
+        log_warning(
+            tt::LogOp,
+            "sparse push: {} senders per channel need {} cores, only {} available; using {}",
+            requested_k,
+            channels * (requested_k + 1),
+            cores_all.size(),
+            per_channel_k);
+    }
+    const bool use_mux = per_channel_k > 0;
+    const uint32_t senders_per_channel = use_mux ? per_channel_k : 1u;
+    const uint32_t workers = channels * senders_per_channel;
+    TT_FATAL(cores_all.size() >= workers, "sparse push needs {} worker cores", workers);
+    // Layout: channel c = link * 4 + dir; worker w = c * K + k. Mux cores follow the workers.
+    std::vector<CoreCoord> worker_cores(cores_all.begin(), cores_all.begin() + workers);
+    std::vector<CoreCoord> mux_cores;
+    if (use_mux) {
+        mux_cores.assign(cores_all.begin() + workers, cores_all.begin() + workers + channels);
+    }
+    auto to_range = [](const std::vector<CoreCoord>& cores) {
         std::set<CoreRange> ranges;
-        for (const auto& c : worker_cores) {
+        for (const auto& c : cores) {
             ranges.insert(CoreRange(c, c));
         }
-        return ranges;
-    }()));
+        return CoreRangeSet(ranges);
+    };
+    const CoreRangeSet worker_range = to_range(worker_cores);
+    const CoreRangeSet mux_range = to_range(mux_cores);
+    tt::tt_fabric::FabricMuxConfig mux_config(
+        /*num_full_size_channels=*/senders_per_channel,
+        /*num_header_only_channels=*/0,
+        /*num_buffers_full_size_channel=*/2,
+        /*num_buffers_header_only_channel=*/0,
+        /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
+        /*base_l1_address=*/mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
 
     std::vector<uint32_t> dest_chip_ids, dest_mesh_ids;
     for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
@@ -142,6 +180,13 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
         }
         std::vector<uint32_t> writer_ct = {page_bytes, num_devices, my_rank, workers, packet_bytes, links};
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct);
+        writer_ct.push_back(use_mux ? 1u : 0u);
+        if (use_mux) {
+            ttnn::ccl::fabric_mux_connection_ct_args(
+                senders_per_channel, tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_config, writer_ct);
+        } else {
+            writer_ct.insert(writer_ct.end(), {1, 0, 0, 0, 1});
+        }
         // Both kernels look up each destination's first hop in the fabric routing table.
         std::map<std::string, std::string> writer_defines = {
             {"DEST_CHIP_ID", ttnn::operations::ccl::common::stringify(dest_chip_ids)},
@@ -179,20 +224,60 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
 
         const auto sync_core = mesh_device->worker_core_from_logical_core(worker_cores[0]);
         const auto src_node = mesh_device->get_fabric_node_id(coord);
+        // get_neighbors lists E, W, N, S, the eth_chan_directions order, so neighbors[dir] is a channel's hop.
+        if (use_mux) {
+            auto mux = tt::tt_metal::CreateKernel(
+                program,
+                "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+                mux_range,
+                tt::tt_metal::DataMovementConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt::tt_metal::NOC::RISCV_0_default,
+                    .compile_args = mux_config.get_fabric_mux_compile_time_args(),
+                    .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+            for (uint32_t c = 0; c < channels; ++c) {
+                const uint32_t link = c / kDirections, dir = c % kDirections;
+                tt::tt_metal::SetRuntimeArgs(
+                    program,
+                    mux,
+                    mux_cores[c],
+                    mux_config.get_fabric_mux_run_time_args(
+                        src_node, mesh_device->get_fabric_node_id(neighbors[dir]), link, program, mux_cores[c]));
+            }
+        }
         for (uint32_t w = 0; w < workers; ++w) {
-            const uint32_t link = w / kDirections, dir = w % kDirections;
-            tt::tt_metal::SetRuntimeArgs(program, reader, worker_cores[w], {link, dir, my_rank});
+            const uint32_t c = w / senders_per_channel, k = w % senders_per_channel;
+            const uint32_t link = c / kDirections, dir = c % kDirections;
+            tt::tt_metal::SetRuntimeArgs(
+                program, reader, worker_cores[w], {link, dir, my_rank, k, senders_per_channel});
             std::vector<uint32_t> writer_rt = {
-                w, dir, link, static_cast<uint32_t>(sync_core.x), static_cast<uint32_t>(sync_core.y)};
-            for (uint32_t other = 0; other < kMaxWorkers; ++other) {
-                const auto phys =
-                    mesh_device->worker_core_from_logical_core(worker_cores[std::min(other, workers - 1)]);
+                w, dir, link, k, static_cast<uint32_t>(sync_core.x), static_cast<uint32_t>(sync_core.y)};
+            for (uint32_t other = 0; other < workers; ++other) {
+                const auto phys = mesh_device->worker_core_from_logical_core(worker_cores[other]);
                 writer_rt.push_back(static_cast<uint32_t>(phys.x));
                 writer_rt.push_back(static_cast<uint32_t>(phys.y));
             }
-            // get_neighbors lists E, W, N, S, the eth_chan_directions order, so neighbors[dir] is this sender's hop.
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                src_node, mesh_device->get_fabric_node_id(neighbors[dir]), link, program, worker_cores[w], writer_rt);
+            if (use_mux) {
+                ttnn::ccl::fabric_mux_connection_rt_args(
+                    /*mux_connection_valid=*/true,
+                    /*is_termination_master=*/k == 0,
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    mesh_device->worker_core_from_logical_core(mux_cores[c]),
+                    /*worker_id=*/k,
+                    worker_cores[w],
+                    mux_config,
+                    program,
+                    mesh_device->worker_core_from_logical_core(worker_cores[c * senders_per_channel]),
+                    writer_rt);
+            } else {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    src_node,
+                    mesh_device->get_fabric_node_id(neighbors[dir]),
+                    link,
+                    program,
+                    worker_cores[w],
+                    writer_rt);
+            }
             tt::tt_metal::SetRuntimeArgs(program, writer, worker_cores[w], writer_rt);
         }
 
