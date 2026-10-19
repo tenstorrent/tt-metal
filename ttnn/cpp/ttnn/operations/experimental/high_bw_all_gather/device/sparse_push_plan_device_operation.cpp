@@ -19,7 +19,17 @@ namespace plan_detail {
 constexpr uint32_t kMaxCores = 120;
 constexpr uint32_t kBlockAlign = 16;  // keeps every core's word / byte / count range 16 B aligned for L1 reads
 constexpr uint32_t kSegments = 4;     // work units per index row
-enum PlanCb : uint32_t { kImage = 0, kRow = 1, kPre = 2, kScratch = 3 };
+enum PlanCb : uint32_t {
+    kImage = 0,
+    kRow = 1,
+    kPre = 2,
+    kScratch = 3,
+    kDirty = 4,
+    kAllDirty = 5,
+    kRow2 = 6,
+    kSync = 7
+};
+constexpr uint32_t kChunkWords = 16;  // bitmap words per dirty chunk (see the kernel)
 
 uint32_t round_up(uint32_t x, uint32_t m) { return (x + m - 1) / m * m; }
 
@@ -85,7 +95,8 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
 
     auto* device = indices.device();
     const auto grid = device->compute_with_storage_grid_size();
-    const uint32_t cores = std::min<uint32_t>({kMaxCores, grid.x * grid.y, std::max(units, 1u)});
+    const uint32_t core_rows = std::max<uint32_t>(1, std::min<uint32_t>(grid.y, kMaxCores / grid.x));
+    const uint32_t cores = grid.x * core_rows;
     const auto core_list = tt::tt_metal::grid_to_cores(cores, grid.x, grid.y, true);
     std::set<CoreRange> ranges;
     for (const auto& c : core_list) {
@@ -107,9 +118,15 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
     };
     add_cb(kImage, layout.pages * SparsePushPlanLayout::kPageWords * sizeof(uint32_t));
     add_cb(kRow, round_up(seg_len * sizeof(uint32_t), 64));
-    add_cb(kPre, round_up(layout.num_blocks * sizeof(uint32_t), 64));
-    // Reduce scratch: one slot per other core holding its copy of this core's block range.
-    add_cb(kScratch, round_up(std::max(cores - 1, 1u) * blocks_per_core * (attrs.stripe_chunk / 32) * 4, 64));
+    add_cb(kRow2, round_up(seg_len * sizeof(uint32_t), 64));
+    add_cb(kPre, round_up((layout.num_blocks + attrs.num_devices) * sizeof(uint32_t), 64));  // + per-owner bases
+    // Reduce scratch: every core's copy of each chunk of this core's widest possible block range.
+    const uint32_t range_chunks = (blocks_per_core * (attrs.stripe_chunk / 32) + kChunkWords - 1) / kChunkWords;
+    add_cb(kScratch, cores * range_chunks * kChunkWords * 4);
+    const uint32_t dirty_words = round_up((layout.bitmap_words / kChunkWords + 31) / 32, 16);
+    add_cb(kDirty, (16 + dirty_words) * 4);
+    add_cb(kAllDirty, cores * (16 + dirty_words) * 4);
+    add_cb(kSync, 64);
 
     auto add_semaphore = [&]() {
         const auto id = static_cast<uint32_t>(desc.semaphores.size());
@@ -119,12 +136,13 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
     };
     const uint32_t arrive_sem = add_semaphore();
     const uint32_t go_sem = add_semaphore();
+    const uint32_t ready_sem = add_semaphore();
+    const uint32_t or_go_sem = add_semaphore();
+    const uint32_t or_done_sem = add_semaphore();
 
     std::vector<uint32_t> ct = {
         attrs.num_devices,
         attrs.stripe_chunk,
-        layout.bitmap_words,
-        layout.num_blocks,
         SparsePushPlanLayout::kBitmapOff,
         layout.prefix_off,
         layout.counts_off,
@@ -134,11 +152,16 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
         attrs.banks,
         topk,
         cores,
-        blocks_per_core,
+        kBlockAlign,
         arrive_sem,
         go_sem,
         SparsePushPlanLayout::kMagic,
         seg_len,
+        dirty_words,
+        ready_sem,
+        layout.num_blocks,
+        or_go_sem,
+        or_done_sem,
     };
     tt::tt_metal::TensorAccessorArgs(idx_buf).append_to(ct);
     tt::tt_metal::TensorAccessorArgs(table_buf).append_to(ct);
@@ -173,10 +196,17 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
         rt.push_back(i);
         rt.push_back(r0);
         rt.push_back(r1 - r0);
+        rt.push_back((r1 - r0) / 2);
         kernel.emplace_runtime_args(core_list[i], rt);
     }
     kernel.common_runtime_args = {core_xy.begin(), core_xy.end()};
+    // NCRISC takes the second half of each core's rewrite once BRISC has the table and bases ready.
+    tt::tt_metal::KernelDescriptor helper = kernel;
+    helper.defines.emplace_back("REWRITE_HELPER", "1");
+    helper.config = tt::tt_metal::DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_1_default};
     desc.kernels.push_back(std::move(kernel));
+    desc.kernels.push_back(std::move(helper));
     return desc;
 }
 

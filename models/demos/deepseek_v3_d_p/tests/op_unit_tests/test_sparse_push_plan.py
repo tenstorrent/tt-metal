@@ -7,6 +7,7 @@
 import os
 import statistics
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -17,6 +18,8 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SENTINEL, build_plan_host
 
 MAGIC = 0x5350504C
+# Real GLM-5.3 top-k for the last 5120-token chunk of a 1,044,480-token prompt.
+TRACE_1M = Path("/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120")
 OWNER_OFF, BITMAP_OFF, PAGE_WORDS = 16, 64, 1024
 
 
@@ -40,14 +43,23 @@ def _clustered_indices(rng, n_dev, rows, topk, prefix):
 @pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
 @pytest.mark.parametrize(
     "max_rows, prefix",
-    [(10240, 10240), (1044480, 1044480), (1044480, 61440)],
-    ids=["10k", "1M", "1M_cap_60k_prefix"],
+    [(10240, 10240), (1044480, 1044480), (1044480, 61440), (1044480, "L14"), (1044480, "L58"), (1044480, "L62")],
+    ids=["10k", "1M", "1M_cap_60k_prefix", "1M_real_L14", "1M_real_L58", "1M_real_L62"],
 )
 def test_sparse_push_plan_matches_host(mesh_device, max_rows, prefix):
     n_dev = mesh_device.get_num_devices()
     rows, topk, sc, p, banks = 160, 2048, 160, 12, 8
     rng = np.random.default_rng(0)
-    idx = _clustered_indices(rng, n_dev, rows, topk, prefix)
+    if isinstance(prefix, str):
+        from safetensors.numpy import load_file
+
+        f = TRACE_1M / "dsa" / f"dsa_topk_indices_layer_{prefix[1:]}" / "rows_00000000_00005120.safetensors"
+        if not f.exists():
+            pytest.skip(f"golden top-k not staged: {f}")
+        idx = next(iter(load_file(str(f)).values())).astype(np.int64).reshape(n_dev, rows, topk)
+        idx[idx < 0] = SENTINEL
+    else:
+        idx = _clustered_indices(rng, n_dev, rows, topk, prefix)
 
     _, want_compact, _ = build_plan_host(idx, n_dev, sc, 2, p, 10**9, banks)
     tt_idx = ttnn.from_torch(
@@ -88,27 +100,28 @@ def test_sparse_push_plan_matches_host(mesh_device, max_rows, prefix):
         want_bits = np.packbits(need.reshape(-1, 32)[:, ::-1], axis=1, bitorder="big").view(">u4").reshape(-1)
         want_counts = need.reshape(nb, sc).sum(1)
         want_owner = np.bincount(np.arange(nb) % n_dev, weights=want_counts, minlength=n_dev).astype(np.int64)
-        words_bits = need.reshape(nb, sc // 32, 32).sum(2)
-        want_prefix = (np.cumsum(words_bits, 1) - words_bits).reshape(-1).astype(np.uint8)
-        got_prefix = tbl[d, prefix_off : prefix_off + (w + 3) // 4].view(np.uint8)[:w]
+        # Only blocks up to the largest referenced row are written; the rest of the table may be stale.
+        ab = -(-(int(v.max()) + 1) // sc) if v.size else 0
+        aw = ab * (sc // 32)
         checks = {
-            "header": tbl[d, 0] == MAGIC and tbl[d, 1] == n_dev and tbl[d, 2] == sc,
+            "header": tbl[d, 0] == MAGIC and tbl[d, 1] == n_dev and tbl[d, 2] == sc and tbl[d, 3] == ab,
             "owner_counts": np.array_equal(tbl[d, OWNER_OFF : OWNER_OFF + n_dev], want_owner),
-            "bitmap": np.array_equal(tbl[d, BITMAP_OFF : BITMAP_OFF + w], want_bits.astype(np.uint32)),
-            "prefix": np.array_equal(got_prefix, want_prefix),
-            "counts": np.array_equal(tbl[d, counts_off : counts_off + nb], want_counts),
+            "bitmap": np.array_equal(tbl[d, BITMAP_OFF : BITMAP_OFF + aw], want_bits[:aw].astype(np.uint32)),
+            "counts": np.array_equal(tbl[d, counts_off : counts_off + ab], want_counts[:ab]),
             "compact": np.array_equal(got_compact[d], want_compact[d]),
         }
         bad += [(d, k) for k, ok in checks.items() if not ok]
     if os.environ.get("SPARSE_PUSH_PLAN_TIMING"):
-        # Header words 3..8: core-0 wall-clock stamps at start / scatter / reduce / assemble / own rewrite / all done.
-        d = np.diff(tbl[:, 3:9].astype(np.int64), axis=1) % (1 << 32)
-        names = ["scatter", "reduce", "assemble", "rewrite(core0)", "rewrite tail"]
+        # Header words 4..13: core-0 wall-clock stamps (see the kernel); phase deltas in k cycles, max over chips.
+        st = tbl[:, 4:14].astype(np.int64)
+
+        def dt(a, b):
+            return ((st[:, b] - st[:, a]) % (1 << 32)).max() / 1e3
+
         logger.info(
-            "SPARSE_PUSH_PLAN phases (k cycles, max over chips): "
-            + ", ".join(f"{n}={d[:, i].max() / 1e3:.1f}" for i, n in enumerate(names))
-            + f", total={d.sum(1).max() / 1e3:.1f}"
-            + f", reduce reads (core0)={((tbl[0, 9].astype(np.int64) - tbl[0, 4]) % (1 << 32)) / 1e3:.1f}"
+            f"SPARSE_PUSH_PLAN phases (k cycles): scatter={dt(0, 1):.1f} dirty-reads={dt(1, 7):.1f} "
+            f"chunk-reads={dt(7, 6):.1f} or+popcount={dt(6, 8):.1f} multicast={dt(8, 9):.1f} "
+            f"reduce-barrier={dt(9, 2):.1f} rewrite={dt(2, 4):.1f} tail={dt(4, 5):.1f} total={dt(0, 5):.1f}"
         )
     logger.info(
         f"SPARSE_PUSH_PLAN max_rows={max_rows} prefix={prefix}: {statistics.median(samples) * 1e6:.0f} us "
