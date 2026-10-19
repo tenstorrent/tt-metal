@@ -331,6 +331,26 @@ host dependency would not repair that task-container tool environment.
 Any dependency repair must preserve the standard agent and be identical
 across all four arms; no accuracy or seed-removal conclusion is available.
 
+The authorized experiment-only repair pins Harbor1da0bfd8 and replaces its
+task installer `--with litellm` with `--with 'litellm[mcp]==1.106.0'
+--with mcp==2.2.0`, gated by `GEMMA4_PREFIX_HARBOR_DEPS=1`. No shared
+Harbor fork or production branch is modified. New inference refs:
+seeded `17dbce4dfc4141efb78bda0bd60a9e8dd5f42f19`, unseeded
+`6be1ea66e722f305f328042bfe10785c9f3e018f`.
+
+Device-free remote preflight39246470559 passed in a fresh Astropy task-base
+container on120-qb2-p05t01. Image digest
+`sha256:29e2270fdba28472dd3aa4cc4a4d5fc80e39c5e10b6abcf1e17ce7358cd0cc9e`.
+The previously failing LiteLLM handler and mcp CacheableResult imported.
+Inventory: mini-swe-agent2.2.8, LiteLLM1.106.0, mcp2.2.0,
+fastapi0.147.0, orjson3.13.0, httpx2 2.14.0. No devices were mounted.
+
+Repaired seeded/cache-off bootstrap39246694017 uses Metal
+`7fe17051c4417a01ab7d72d414731145edd6f010`, workflowca53de0 and the
+new seeded inference ref. It explicitly waits for a nonzero server prompt
+counter before additional parallel arms may launch. Standard agent behavior,
+task, timeout, sampling and repetition settings are unchanged.
+
 Remote runs 39238204679 (qb2-120-p03t09) and 39238201191
 (qb2-120-p01t03) passed concurrently on distinct machines, using Metal
 7d5c3e5cb8438989e36a6a35c704f1154f9a4584 and workflow 38d4d6f.
