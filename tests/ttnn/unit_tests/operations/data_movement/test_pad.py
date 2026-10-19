@@ -9,17 +9,23 @@ import torch
 import math
 
 from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
-from tests.ttnn.unit_tests.operations.test_utils import (
-    TILE_HEIGHT,
-    TILE_WIDTH,
-    dm_codegen_supported_on_arch,
-    skip_unless_dm_codegen_arch,
-)
+from tests.ttnn.unit_tests.operations.test_utils import TILE_HEIGHT, TILE_WIDTH
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
 from tests.ttnn.utils_for_testing import assert_equal as assert_tensors_equal
 import ttnn
 
 torch.manual_seed(0)
+
+
+def dm_codegen_supported_on_arch(device):
+    # Mirrors codegen_supported_on_arch in data_movement/common: on other arches the ops route to native and the
+    # forced codegen entries raise.
+    return ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)
+
+
+def skip_unless_dm_codegen_arch(device):
+    if not dm_codegen_supported_on_arch(device):
+        pytest.skip(f"data-movement codegen is not supported on {device.arch()}")
 
 
 def random_torch_tensor(dtype, shape):

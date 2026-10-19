@@ -14,7 +14,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.unit_tests.operations.test_utils import skip_unless_dm_codegen_arch
+from tests.ttnn.unit_tests.operations.data_movement.test_pad import skip_unless_dm_codegen_arch
 from tests.ttnn.utils_for_testing import assert_equal
 
 # `ttnn.pad` takes no implementation argument -- it routes on its own. The forced legs below are
