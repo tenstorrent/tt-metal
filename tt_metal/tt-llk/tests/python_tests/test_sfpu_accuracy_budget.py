@@ -981,15 +981,14 @@ def test_enrolled_ops_is_sorted_and_stable():
 
 
 #: Enrolled ops with no step budget anywhere: the 3-segment LUT pair, two binaries
-#: whose per-format tolerances moved into the table, five transcendentals whose *best*
+#: whose per-format tolerances moved into the table, four transcendentals whose *best*
 #: cell is already past its output's usable ceiling (6 bf16, 51 fp16, 25 Bfp8_b) -- the
 #: measurements are on their rows, not repeated here to drift -- and Expm1Cw, which
 #: returns -1 where expm1 overflows (x past ~88.7) on every cell, so no cell has a lane
-#: count a step budget can describe. Recorded, not fixed; tracked: Erfc #51137, Digamma
-#: #51128, Softplus #51866 (input clamps, under #52178), Lgamma #55356 and Polygamma
-#: #52278.
+#: count a step budget can describe. Recorded, not fixed; tracked: Digamma #51128,
+#: Softplus #51866 (input clamps, under #52178), Lgamma #55356 and Polygamma #52278.
 #:
-#: Sign, Heaviside, GeluTanh, Tanhshrink, Xielu, I1 and SfpuElwmul are not here: per
+#: Sign, Heaviside, GeluTanh, Tanhshrink, Xielu, I1, Erfc and SfpuElwmul are not here: per
 #: variant, some of their cells are inside the ceiling, and the rest fall
 #: through to tolerance.
 ONLY_EVER_TOLERANCE = frozenset(
@@ -998,7 +997,6 @@ ONLY_EVER_TOLERANCE = frozenset(
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
-        MathOperation.Erfc,
         MathOperation.Polygamma,
         MathOperation.Softplus,
         MathOperation.Lgamma,

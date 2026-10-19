@@ -488,8 +488,10 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Erf: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.0, high=3.0)
     ),
+    # erfc decays to 0 rather than saturating: span past the kernel's 9.3 input clamp,
+    # through the FP32 subnormals (from 9.19) to where bf16 reaches 0 (9.49).
     MathOperation.Erfc: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.0, high=3.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
     # expm1: exp(x)-1; keep within a range that avoids fp overflow
     MathOperation.Expm1: OperandSpecs(
