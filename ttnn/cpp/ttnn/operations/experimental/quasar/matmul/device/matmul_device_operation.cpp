@@ -8,6 +8,7 @@
 
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 #include "tt-metalium/hal_types.hpp"
 #include "tt-metalium/experimental/global_circular_buffer.hpp"
