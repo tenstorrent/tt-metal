@@ -22,7 +22,7 @@ constexpr uint32_t QUASAR_NUM_READER_THREADS = 4;
 
 // Derived from a MatmulUnifiedProgramConfig + operand shapes by one function shared by validation, output-spec
 // derivation, the placement chooser and the factory, so they cannot disagree (all config constraints TT_FATAL there).
-struct UnifiedMatmulPlan {
+struct MatmulUnifiedPlan {
     uint32_t M_tiles = 0;
     uint32_t K_tiles = 0;
     uint32_t N_tiles = 0;
@@ -178,7 +178,7 @@ std::pair<uint32_t, uint32_t> maximize_subblock_size(
 // C can be packed in place. Without it the op allocates C from the plan, which matches by construction.
 // must_fit FATALs with the breakdown when nothing fits L1 or a sharded output's constraints fail; without it those
 // return nullopt (choose_unified_placement's candidate search). Other config errors always FATAL.
-std::optional<UnifiedMatmulPlan> plan_unified_matmul(
+std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     uint32_t bias_tile_bytes,  // 0 without a bias
@@ -226,7 +226,7 @@ constexpr ArchCostModel QUASAR_COST_MODEL{
 };
 
 // A config is what the caller asks for, its placement is the cores, C slice and orientation, and the plan
-// (UnifiedMatmulPlan) is everything derived from a config with a placement.
+// (MatmulUnifiedPlan) is everything derived from a config with a placement.
 // Returns `requested` with the placement whose plan has the lowest estimated cycles among the natural ones; nullopt
 // when the unified matmul cannot run the case or no placement fits.
 std::optional<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig> choose_unified_placement(

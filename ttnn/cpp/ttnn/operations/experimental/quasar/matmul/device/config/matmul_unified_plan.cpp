@@ -57,7 +57,7 @@ static_assert(
     "each reader thread owns whole A and B slices");
 
 // True when every sized DFB fits the extent cap and their total fits the L1 budget.
-bool dfbs_fit(const UnifiedMatmulPlan& plan, uint64_t l1_budget) {
+bool dfbs_fit(const MatmulUnifiedPlan& plan, uint64_t l1_budget) {
     const uint64_t dfb_bytes[] = {
         (uint64_t)plan.A_slice_entries * plan.A_entry_bytes,
         (uint64_t)plan.B_slice_entries * plan.B_entry_bytes,
@@ -106,11 +106,11 @@ std::optional<std::string> find_unsupported_feature(
 
 // The GEMM a plan runs, with only its size fields set. Batches of A that share one B are one [batch * M x N] GEMM:
 // A's and C's batches are stacked tile rows, so its C slices spread over the cores like any other rows.
-UnifiedMatmulPlan plan_gemm_size(const ttnn::Tensor& A, const ttnn::Tensor& B, const MatmulParams& attributes) {
+MatmulUnifiedPlan plan_gemm_size(const ttnn::Tensor& A, const ttnn::Tensor& B, const MatmulParams& attributes) {
     TT_FATAL(attributes.bcast_batch.has_value(), "bcast_batch should have been populated");
     const tt::tt_metal::Shape& A_shape = A.padded_shape();
     const tt::tt_metal::Shape& B_shape = B.padded_shape();
-    UnifiedMatmulPlan plan{};
+    MatmulUnifiedPlan plan{};
     plan.batch_size = get_batch_size(A_shape);
     plan.M_tiles = A_shape[-2] / TILE_HEIGHT;
     plan.K_tiles = A_shape[-1] / TILE_WIDTH;
@@ -133,7 +133,7 @@ UnifiedMatmulPlan plan_gemm_size(const ttnn::Tensor& A, const ttnn::Tensor& B, c
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-std::optional<UnifiedMatmulPlan> plan_unified_matmul(
+std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     const ttnn::Tensor& A,
     const ttnn::Tensor& B,
     uint32_t bias_tile_bytes,
@@ -150,7 +150,7 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul(
     const tt::tt_metal::IDevice& device = *A.device();
 
     // ---- GEMM size ----
-    UnifiedMatmulPlan base = plan_gemm_size(A, B, attributes);
+    MatmulUnifiedPlan base = plan_gemm_size(A, B, attributes);
 
     // ---- Cores ----
     TT_FATAL(config.cores.num_cores() > 0, "MatmulUnifiedProgramConfig.cores is empty");
@@ -243,7 +243,7 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul(
                                uint32_t K_chunk_tiles,
                                uint32_t num_reader_threads,
                                uint32_t C_buffer_depth) {
-        UnifiedMatmulPlan plan = base;
+        MatmulUnifiedPlan plan = base;
         plan.C_slice_M_tiles = C_slice_M_tiles;
         plan.C_slice_N_tiles = C_slice_N_tiles;
         // The C slices of one batch, walked across N then down M; every core produces its C slices for all batches.
@@ -382,13 +382,13 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul(
     // the end only where they fit). Returns nullopt when no K chunk fits L1 unless must_fit, which FATALs with the
     // breakdown.
     const auto plan_C_slice =
-        [&](uint32_t C_slice_M_tiles, uint32_t C_slice_N_tiles, bool must_fit) -> std::optional<UnifiedMatmulPlan> {
+        [&](uint32_t C_slice_M_tiles, uint32_t C_slice_N_tiles, bool must_fit) -> std::optional<MatmulUnifiedPlan> {
         // ---- Subblock ----
         // A candidate is viable when it voids no achievable borrow and its plan fits L1 at the K chunk the search
         // below bottoms out at, so an accepted subblock is guaranteed to fit.
         const uint32_t K_chunk_floor = config.K_chunk_tiles == 0 ? 1 : config.K_chunk_tiles;
         const auto subblock_viable = [&](uint32_t subblock_M_tiles, uint32_t subblock_N_tiles) {
-            const UnifiedMatmulPlan candidate = make_plan(
+            const MatmulUnifiedPlan candidate = make_plan(
                 C_slice_M_tiles,
                 C_slice_N_tiles,
                 subblock_M_tiles,
@@ -424,7 +424,7 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul(
 
         // ---- K chunk ----
         if (config.K_chunk_tiles != 0) {
-            const UnifiedMatmulPlan plan = make_plan(
+            const MatmulUnifiedPlan plan = make_plan(
                 C_slice_M_tiles,
                 C_slice_N_tiles,
                 subblock_M_tiles,
@@ -449,11 +449,11 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul(
                 (uint64_t)plan.C_slice_entries * plan.C_entry_bytes,
                 (uint64_t)plan.C_partials_entries * plan.C_partials_entry_bytes,
                 (uint64_t)plan.bias_entries * plan.bias_entry_bytes);
-            return fits ? std::optional<UnifiedMatmulPlan>(plan) : std::nullopt;
+            return fits ? std::optional<MatmulUnifiedPlan>(plan) : std::nullopt;
         }
         // A resident A shard is only borrowable with a single K chunk, so try that first (main pins
         // in0_block_w == K for height-sharded in0 for the same reason).
-        const UnifiedMatmulPlan single_K_chunk = make_plan(
+        const MatmulUnifiedPlan single_K_chunk = make_plan(
             C_slice_M_tiles,
             C_slice_N_tiles,
             subblock_M_tiles,
@@ -476,7 +476,7 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul(
             if (base.K_tiles % K_chunk_tiles != 0) {
                 continue;
             }
-            const UnifiedMatmulPlan plan = make_plan(
+            const MatmulUnifiedPlan plan = make_plan(
                 C_slice_M_tiles,
                 C_slice_N_tiles,
                 subblock_M_tiles,
@@ -530,9 +530,9 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul(
     const bool M_fixed = config.C_slice_M_tiles != 0 || C_slice_from_shard;
     const bool N_fixed = config.C_slice_N_tiles != 0 || C_slice_from_shard;
 
-    UnifiedMatmulPlan plan;
+    MatmulUnifiedPlan plan;
     if (M_fixed && N_fixed) {
-        std::optional<UnifiedMatmulPlan> fixed = plan_C_slice(share_M_tiles, share_N_tiles, must_fit);
+        std::optional<MatmulUnifiedPlan> fixed = plan_C_slice(share_M_tiles, share_N_tiles, must_fit);
         if (!fixed.has_value()) {
             return std::nullopt;
         }
@@ -561,10 +561,10 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul(
             const uint64_t area_b = (uint64_t)b.first * b.second;
             return area_a != area_b ? area_a > area_b : a.second > b.second;
         });
-        std::optional<UnifiedMatmulPlan> best;
+        std::optional<MatmulUnifiedPlan> best;
         uint64_t best_work = 0;
         for (const auto& [h, w] : candidates) {
-            std::optional<UnifiedMatmulPlan> candidate = plan_C_slice(h, w, /*must_fit=*/false);
+            std::optional<MatmulUnifiedPlan> candidate = plan_C_slice(h, w, /*must_fit=*/false);
             if (!candidate.has_value()) {
                 continue;
             }
@@ -598,7 +598,7 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul(
     // more L1 than one: an operand DFB holds at least MIN_OPERAND_BUFFER_DEPTH (two) slices.
     if (is_quasar && !plan.borrow_A && !plan.borrow_B) {
         for (uint32_t num_reader_threads : {QUASAR_NUM_READER_THREADS, MIN_OPERAND_BUFFER_DEPTH}) {
-            const UnifiedMatmulPlan candidate = make_plan(
+            const MatmulUnifiedPlan candidate = make_plan(
                 plan.C_slice_M_tiles,
                 plan.C_slice_N_tiles,
                 plan.subblock_M_tiles,
@@ -613,7 +613,7 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul(
         }
     }
     if ((uint64_t)plan.batch_size * plan.max_C_slices_per_core > 1) {
-        const UnifiedMatmulPlan candidate = make_plan(
+        const MatmulUnifiedPlan candidate = make_plan(
             plan.C_slice_M_tiles,
             plan.C_slice_N_tiles,
             plan.subblock_M_tiles,
@@ -661,7 +661,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 // traffic (the buffers overlap them), plus a fixed cost per C slice. Second, to break ties: the three summed
 // (decode reads the same DRAM bytes on 8 cores as on 32).
 std::pair<double, double> estimate_plan_cycles(
-    const UnifiedMatmulPlan& plan,
+    const MatmulUnifiedPlan& plan,
     tt::ARCH arch,
     tt::tt_metal::MathFidelity math_fidelity,
     bool A_in_dram,
@@ -729,7 +729,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
     const CoreCoord grid = attributes.user_core_coord.value_or(device.compute_with_storage_grid_size());
     // With a 32-bit DST ttnn.linear adds the bias separately (see the plan), so it takes no L1 here.
     const uint32_t fused_bias_tile_bytes = get_fp32_dest_acc_en(attributes.compute_kernel_config) ? 0 : bias_tile_bytes;
-    const UnifiedMatmulPlan gemm = plan_gemm_size(A, B, attributes);
+    const MatmulUnifiedPlan gemm = plan_gemm_size(A, B, attributes);
     const uint32_t M_tiles = gemm.M_tiles;
     const uint32_t N_tiles = gemm.N_tiles;
     const tt::tt_metal::MemoryConfig& C_memory = attributes.output_mem_config;
@@ -742,7 +742,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
     struct Candidate {
         std::string name;
         MatmulUnifiedProgramConfig config;
-        UnifiedMatmulPlan plan;
+        MatmulUnifiedPlan plan;
     };
     std::vector<Candidate> candidates;
     const auto add_candidate = [&](const std::string& name,
@@ -759,7 +759,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
             config.orientation = orientation;
             config.C_slice_M_tiles = C_slice_M_tiles;
             config.C_slice_N_tiles = C_slice_N_tiles;
-            const std::optional<UnifiedMatmulPlan> plan =
+            const std::optional<MatmulUnifiedPlan> plan =
                 plan_unified_matmul(A, B, fused_bias_tile_bytes, config, attributes, std::nullopt, /*must_fit=*/false);
             if (!plan.has_value()) {
                 continue;

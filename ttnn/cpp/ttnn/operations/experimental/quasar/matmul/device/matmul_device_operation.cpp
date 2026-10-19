@@ -2214,7 +2214,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                     // the accessor's shard -> core mapping is the factory's C slice -> core mapping and every
                     // core writes its own shard.
                     // Reached only when no output tensor was supplied, so C is allocated from this plan.
-                    const UnifiedMatmulPlan plan = plan_unified_matmul(
+                    const MatmulUnifiedPlan plan = plan_unified_matmul(
                                                        input_tensor_a,
                                                        input_tensor_b,
                                                        bias_single_tile_size,
