@@ -1,17 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PROTOTYPE host planner for the sparse KVPE push (high_bw_all_gather(push_runs_tensor=...)).
+"""PROTOTYPE planner for the sparse KVPE push (high_bw_all_gather(push_runs_tensor=...)).
 
 Instead of gathering the whole populated prefix onto every chip, each owner chip pushes only the KVPE rows the
 requester's top-k indices reference, into the requester's gather buffer laid out compactly; sparse_sdpa then
 reads that buffer through indices rewritten to compact slots (no block-cyclic remap).
 
-This v1 builds the plan on the host from the indices (eager only, not trace-safe). One plan serves every layer
-that reuses the same indices (GLM-5.3 shared layers), since only the KV slot differs between them. The indexer writes
-every chunk's indices into the same buffer, so a layer that computes new indices must call invalidate().
+The plan is built on device by default (ttnn.experimental.sparse_push_plan, then an all-gather of its tables; no host
+round trip, trace-safe). TT_SPARSE_KV_PUSH_PLAN=host builds it on the host from the indices instead (eager only).
+One plan serves every layer that reuses the same indices (GLM-5.3 shared layers), since only the KV slot differs
+between them. The indexer writes every chunk's indices into the same buffer, so a layer that computes new indices
+must call invalidate().
 """
 
+import os
 import time
 from dataclasses import dataclass
 
@@ -27,8 +30,16 @@ _STREAM_HEADER_WORDS = 16  # stream payload starts at byte 64
 
 @dataclass
 class SparseKvPushPlan:
-    streams: ttnn.Tensor  # per-device [1, 1, links, words] uint32 push lists
+    streams: ttnn.Tensor  # host plan: per-device [1, 1, links, words] push lists; device plan: all-gathered tables
     compact_indices: ttnn.Tensor  # indices rewritten to compact slots, same distribution as `indices`
+    push_kwargs: dict  # extra high_bw_all_gather arguments selecting the push variant
+
+
+def _shard_over_mesh(tensor, mesh_device):
+    """Declare `tensor` sharded on dim 2 over every chip in row-major order (what the full-mesh gather expects)."""
+    dist = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
+    coords = [ttnn.MeshCoordinate([c[i] for i in range(c.dims())]) for c in ttnn.MeshCoordinateRange(dist)]
+    tensor.update_tensor_topology(ttnn.TensorTopology(dist, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords))
 
 
 def _owner_local(n, stripe_chunk, num_devices):
@@ -106,6 +117,8 @@ class SparseKvPushPlanner:
         self.memo = None
         self.memo_tag = None
         self.generation = 0
+        self.on_device = os.getenv("TT_SPARSE_KV_PUSH_PLAN", "device") != "host"
+        self._tables = None  # all-gathered plan tables, allocated once
 
     def invalidate(self):
         self._last = None
@@ -120,9 +133,14 @@ class SparseKvPushPlanner:
     def _pages_per_packet(page_bytes: int) -> int:
         return max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
 
-    def plan(self, indices: ttnn.Tensor, *, stripe_chunk: int, buffer_rows: int, page_bytes: int) -> SparseKvPushPlan:
+    def plan(
+        self, indices: ttnn.Tensor, *, stripe_chunk: int, buffer_rows: int, page_bytes: int, max_rows: int
+    ) -> SparseKvPushPlan:
         key = (indices.buffer_address(), stripe_chunk, buffer_rows, page_bytes)
         if self._last is not None and self._key == key:
+            return self._last
+        if self.on_device:
+            self._key, self._last = key, self._plan_device(indices, stripe_chunk, page_bytes, max_rows)
             return self._last
         memo_key = (self.memo_tag, self.generation, key[1:])
         if self.memo is not None and memo_key in self.memo:
@@ -154,10 +172,41 @@ class SparseKvPushPlanner:
             **common,
         )
         self._key = key
-        self._last = SparseKvPushPlan(streams=streams_tt, compact_indices=compact_tt)
+        self._last = SparseKvPushPlan(streams=streams_tt, compact_indices=compact_tt, push_kwargs={})
         if self.memo is not None:
             self.memo[memo_key] = self._last
         dt = time.perf_counter() - t0
         self.host_seconds += dt
         logger.info(f"sparse KV push plan: {dt:.3f}s on host, up to {used} buffer rows per chip")
         return self._last
+
+    def _plan_device(self, indices, stripe_chunk, page_bytes, max_rows):
+        n_dev = self.mesh_device.get_num_devices()
+        table, compact = ttnn.experimental.sparse_push_plan(
+            indices,
+            num_devices=n_dev,
+            stripe_chunk=stripe_chunk,
+            max_rows=max_rows,
+            pages_per_packet=self._pages_per_packet(page_bytes),
+            banks=self.banks,
+        )
+        _shard_over_mesh(table, self.mesh_device)
+        rows = table.shape[2] * n_dev
+        if self._tables is None or self._tables.shape[2] != rows:
+            self._tables = ttnn.from_torch(
+                torch.zeros(1, 1, rows, table.shape[3], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        ttnn.experimental.high_bw_all_gather(
+            table, dim=2, output_tensor=self._tables, cluster_axis=None, num_links=self.links
+        )
+        ttnn.deallocate(table)
+        return SparseKvPushPlan(
+            streams=self._tables,
+            compact_indices=compact,
+            push_kwargs=dict(push_stripe_chunk=stripe_chunk, push_max_rows=max_rows),
+        )

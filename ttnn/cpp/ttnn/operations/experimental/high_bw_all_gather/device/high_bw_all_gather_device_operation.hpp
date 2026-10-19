@@ -69,6 +69,10 @@ Tensor high_bw_all_gather(
     bool prefix_only = false,
     const std::optional<Tensor>& progress_tensor = std::nullopt,
     // PROTOTYPE: index-driven sparse push instead of the dense gather (see HighBwSparsePushFactory).
-    const std::optional<Tensor>& push_runs_tensor = std::nullopt);
+    const std::optional<Tensor>& push_runs_tensor = std::nullopt,
+    // PROTOTYPE: with push_stripe_chunk > 0, push_runs_tensor is the all-gathered sparse_push_plan table for a cache
+    // of push_max_rows rows (stripe_chunk rows per block-cyclic block) instead of host-built run lists.
+    uint32_t push_stripe_chunk = 0,
+    uint32_t push_max_rows = 0);
 
 }  // namespace ttnn::prim

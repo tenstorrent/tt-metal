@@ -16,6 +16,7 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "sparse_push_plan_device_operation.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
@@ -38,7 +39,10 @@ struct WorkerKernels {
     tt::tt_metal::KernelHandle writer;
 };
 
-uint32_t num_links(const HighBwAllGatherInputs& tensor_args) {
+uint32_t num_links(const HighBwAllGatherParams& params, const HighBwAllGatherInputs& tensor_args) {
+    if (params.push_stripe_chunk > 0) {
+        return params.num_links.value_or(2);
+    }
     // push_runs_tensor per device: [1, 1, links, words]; one stream page per link, shared by its 4 senders.
     return tensor_args.push_runs_tensor->padded_shape()[-2];
 }
@@ -59,7 +63,8 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
     const uint32_t mesh_cols = mesh_shape[1];
     const uint32_t num_devices = mesh_rows * mesh_cols;
 
-    const uint32_t links = num_links(tensor_args);
+    const uint32_t links = num_links(operation_attributes, tensor_args);
+    const bool from_table = operation_attributes.push_stripe_chunk > 0;
     const uint32_t channels = links * kDirections;
     TT_FATAL(channels >= 1 && channels <= kMaxChannels, "sparse push supports 1..2 links, got {}", links);
     TT_FATAL(
@@ -159,20 +164,44 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
         };
         cb(kData, packet_bytes, kPacketSlots, tt::DataFormat::RawUInt8);
         cb(kMeta, kMetaEntryBytes, kPacketSlots, tt::DataFormat::RawUInt32);
-        cb(kRuns, kBlockWords * sizeof(uint32_t), 1, tt::DataFormat::RawUInt32);
+        // Table mode: requester's per-owner counts (256 B) plus a window of 16 bitmap blocks (128 B each).
+        cb(kRuns, from_table ? 4096 : kBlockWords * sizeof(uint32_t), 1, tt::DataFormat::RawUInt32);
         cb(kScalar, kScalarCbBytes, 1, tt::DataFormat::RawUInt32);
         cb(kHeaders, tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(), 1 + 4, tt::DataFormat::RawUInt32);
 
-        std::vector<uint32_t> reader_ct = {
-            page_bytes,
-            pages_per_packet,
-            num_dram_banks,
-            out_rows_per_rank,
-            pages_per_slot,
-            batch_from_meta ? 1u : 0u,
-            kBlockWords,
-            runs_page_bytes,
-        };
+        std::vector<uint32_t> reader_ct;
+        if (from_table) {
+            const auto layout =
+                SparsePushPlanLayout::make(operation_attributes.push_max_rows, operation_attributes.push_stripe_chunk);
+            TT_FATAL(
+                runs_tensor.padded_shape()[2] == layout.pages * num_devices,
+                "push table has {} pages, expected {} per device",
+                runs_tensor.padded_shape()[2],
+                layout.pages);
+            reader_ct = {
+                page_bytes,
+                pages_per_packet,
+                num_dram_banks,
+                pages_per_slot,
+                batch_from_meta ? 1u : 0u,
+                num_devices,
+                operation_attributes.push_stripe_chunk,
+                layout.num_blocks,
+                layout.pages,
+                SparsePushPlanLayout::kOwnerOff,
+                SparsePushPlanLayout::kBitmapOff};
+        } else {
+            reader_ct = {
+                page_bytes,
+                pages_per_packet,
+                num_dram_banks,
+                out_rows_per_rank,
+                pages_per_slot,
+                batch_from_meta ? 1u : 0u,
+                kBlockWords,
+                runs_page_bytes,
+            };
+        }
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct);
         tt::tt_metal::TensorAccessorArgs(runs_tensor.buffer()).append_to(reader_ct);
         if (batch_from_meta) {
@@ -201,7 +230,7 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
         const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/device/kernels/";
         auto reader = tt::tt_metal::CreateKernel(
             program,
-            kdir + "sparse_push_reader.cpp",
+            kdir + (from_table ? "sparse_push_table_reader.cpp" : "sparse_push_reader.cpp"),
             worker_range,
             tt::tt_metal::ReaderDataMovementConfig(reader_ct, reader_defines));
         auto writer = tt::tt_metal::CreateKernel(
@@ -249,7 +278,7 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
             const uint32_t c = w / senders_per_channel, k = w % senders_per_channel;
             const uint32_t link = c / kDirections, dir = c % kDirections;
             tt::tt_metal::SetRuntimeArgs(
-                program, reader, worker_cores[w], {link, dir, my_rank, k, senders_per_channel});
+                program, reader, worker_cores[w], {link, dir, my_rank, k, senders_per_channel, links});
             std::vector<uint32_t> writer_rt = {
                 w, dir, link, k, static_cast<uint32_t>(sync_core.x), static_cast<uint32_t>(sync_core.y)};
             for (uint32_t other = 0; other < workers; ++other) {

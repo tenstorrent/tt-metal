@@ -141,6 +141,8 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         args.prefix_only,
         tensor_args.has_window_start(),
         tensor_args.has_progress(),
+        args.push_stripe_chunk,
+        args.push_max_rows,
         tensor_args);
 }
 
@@ -565,7 +567,9 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     std::optional<uint32_t> window_max_slabs,
     bool prefix_only,
     const std::optional<Tensor>& progress_tensor,
-    const std::optional<Tensor>& push_runs_tensor) {
+    const std::optional<Tensor>& push_runs_tensor,
+    uint32_t push_stripe_chunk,
+    uint32_t push_max_rows) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -668,7 +672,9 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .batch_slot_layer_idx = batch_slot_layer_idx,
             .gathered_slab_global = gathered_slab_global,
             .window_max_slabs = window_max_slabs,
-            .prefix_only = prefix_only},
+            .prefix_only = prefix_only,
+            .push_stripe_chunk = push_stripe_chunk,
+            .push_max_rows = push_max_rows},
         HighBwAllGatherInputs{
             .input_tensor = input_tensor,
             .output_tensor = output_tensor,
@@ -704,7 +710,9 @@ Tensor high_bw_all_gather(
     std::optional<uint32_t> window_max_slabs,
     bool prefix_only,
     const std::optional<Tensor>& progress_tensor,
-    const std::optional<Tensor>& push_runs_tensor) {
+    const std::optional<Tensor>& push_runs_tensor,
+    uint32_t push_stripe_chunk,
+    uint32_t push_max_rows) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -726,7 +734,9 @@ Tensor high_bw_all_gather(
         window_max_slabs,
         prefix_only,
         progress_tensor,
-        push_runs_tensor);
+        push_runs_tensor,
+        push_stripe_chunk,
+        push_max_rows);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }

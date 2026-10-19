@@ -117,6 +117,10 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     of runs, then from byte 64 triples (dest_rank, local_row_start, count). Each owner pushes
                     only the listed rows of the selected cache slot into the requester's output, at the address
                     the dense full-mesh gather would use. Needs caller-owned semaphores and a 2D torus.
+                push_stripe_chunk: PROTOTYPE. When > 0, ``push_runs_tensor`` is instead the all-gathered
+                    ``sparse_push_plan`` table (cache of ``push_max_rows`` rows, ``push_stripe_chunk`` rows
+                    per block) and each owner derives what to push from it on device.
+                push_max_rows: PROTOTYPE. Row capacity the plan tables were built for.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -140,7 +144,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("window_max_slabs") = nb::none(),
         nb::arg("prefix_only") = false,
         nb::arg("progress_tensor") = nb::none(),
-        nb::arg("push_runs_tensor") = nb::none());
+        nb::arg("push_runs_tensor") = nb::none(),
+        nb::arg("push_stripe_chunk") = 0,
+        nb::arg("push_max_rows") = 0);
 
     ttnn::bind_function<"sparse_push_plan", "ttnn.experimental.">(
         mod,
