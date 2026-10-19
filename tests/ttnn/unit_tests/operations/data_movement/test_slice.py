@@ -2283,10 +2283,10 @@ def test_slice_nd_sharded_explicit_config_that_does_not_fit_rejected(device, exp
 
 def test_slice_nd_sharded_rescale_rank1(device):
     # Rank-1 ND sharding is valid and must also be rescaled: [256] / [64] on 4 cores sliced to [128]
-    # gives shard [32] (4 shards), not the stale [64] (2 shards for 4 cores). Data is not checked here
-    # because of issue #58370 (see test_slice_nd_sharded_rank1_input_data).
+    # gives shard [32] (4 shards), not the stale [64] (2 shards for 4 cores).
+    torch_input = torch.rand((256,), dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(
-        torch.rand((256,), dtype=torch.bfloat16),
+        torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
@@ -2298,13 +2298,9 @@ def test_slice_nd_sharded_rescale_rank1(device):
     out_mem_config = sliced.memory_config()
     assert out_mem_config.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED
     assert list(out_mem_config.nd_shard_spec.shard_shape) == [32]
+    assert torch.equal(ttnn.to_torch(sliced), torch_input[:128])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Issue #58370: SliceRmProgramFactory reads a rank-1 ND-sharded input with more than two shards "
-    "incorrectly, independent of the output memory config.",
-)
 def test_slice_nd_sharded_rank1_input_data(device):
     torch_input = torch.rand((256,), dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(
