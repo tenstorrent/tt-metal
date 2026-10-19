@@ -88,8 +88,31 @@ inline void ffp_state_scale() {
         sfpi::vFloat c = sfpi::dst_reg[32 * w];
 #pragma GCC unroll 4
         for (int t = 0; t < w; ++t) {
-            sfpi::dst_reg[32 * t] = sfpi::dst_reg[32 * t] * c;
+            sfpi::vFloat x = sfpi::dst_reg[32 * t];
+            sfpi::dst_reg[32 * t] = x * c;
         }
+        sfpi::dst_reg++;
+    }
+}
+// Sums: clamp non-finite / huge values to 2^100 so l stays finite and a redo can take this chunk's sums back out.
+inline void ffp_clamp_sums() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    for (int i = 0; i < 32; ++i) {
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        v_if(x < 1.2676506e30f) {}
+        v_else { sfpi::dst_reg[0] = 1.2676506e30f; }
+        v_endif;
+        sfpi::dst_reg++;
+    }
+}
+// dest tile 0: l; tile 1: this chunk's (bad) sums already added to l; tile 2: column-broadcast c. l = (l - bad) * c.
+inline void ffp_sum_unadd_scale() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    for (int i = 0; i < 32; ++i) {
+        sfpi::vFloat c = sfpi::dst_reg[64];
+        sfpi::vFloat l = sfpi::dst_reg[0];
+        sfpi::vFloat bad = sfpi::dst_reg[32];
+        sfpi::dst_reg[0] = (l - bad) * c;
         sfpi::dst_reg++;
     }
 }
@@ -128,7 +151,11 @@ static __attribute__((noinline)) void sdpa_fused_fp32_chunk(
     constexpr uint32_t G = Sq_chunk_t;
     constexpr uint32_t sbw = qkt_subblock_w;
     constexpr uint32_t n_kb = KT / sbw;
+#ifdef FFP_ONE_PIECE
+    constexpr uint32_t n_pieces = 1;
+#else
     constexpr uint32_t n_pieces = n_kb % 2 == 0 ? 2 : 1;
+#endif
     constexpr uint32_t kb_per_piece = n_kb / n_pieces;
     constexpr uint32_t piece_k = kb_per_piece * sbw;
     constexpr uint32_t pv_w = qktv_subblock_w;
@@ -216,8 +243,10 @@ static __attribute__((noinline)) void sdpa_fused_fp32_chunk(
 #endif
         PACK((ckernel::sfpu::restore_sdpa_grid_macro_instructions()));
         PACK((ckernel::sfpu::init_sdpa_exp_grid<scale_fp32>()));
+#ifndef FFP_KO_EXP
         PACK((SFPU_UNARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_exp_grid_batch, (32 * sbw), 0, VectorMode::None)));
+#ifndef FFP_KO_REFINE
         PACK((SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -225,6 +254,8 @@ static __attribute__((noinline)) void sdpa_fused_fp32_chunk(
             (32 * sbw, kFfpAccurateExp),
             0,
             VectorMode::None)));
+#endif
+#endif
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
         if (!relu_on) {
             PACK((llk_pack_relu_config(ReluConfig::zero())));
@@ -236,25 +267,39 @@ static __attribute__((noinline)) void sdpa_fused_fp32_chunk(
     };
 
     // Row sums of group g (P . 1) into the scratch row tile g.
-    auto denominator = [&](uint32_t g, uint32_t target_cb, uint32_t index, bool acc) {
+    auto denominator = [&](uint32_t g, uint32_t target_cb, uint32_t index, bool acc, uint32_t l_index = 0xffffffffu) {
         leave_qk();
         CircularBuffer(cb_qkt_im).wait_front((g + 1) * KT);
         set_src(cb_col_identity, cb_qkt_im);
         recipe_mm_reinit(cb_qkt_im, cb_col_identity, false, 1, 1, KT);
         tile_regs_acquire();
+#ifdef FFP_KO_DEN
+        for (uint32_t k = 0; k < 1; ++k) {
+#else
         for (uint32_t k = 0; k < KT; ++k) {
+#endif
             UNPACK((llk_unpack_AB_matmul(cb_qkt_im, cb_col_identity, g * KT + k, 0, 1, 1, KT)));
             MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE, kFfpDenPhases>(
                 cb_qkt_im, cb_col_identity, 0, 1, 1)));
         }
         tile_regs_commit();
         tile_regs_wait();
+        if (l_index != 0xffffffffu) {
+            PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, ffp_clamp_sums, 0, VectorMode::None)));
+            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+        }
         configure_single_tile_pack(target_cb);
         if (acc) {
             PACK((llk_pack_reconfig_l1_acc(1)));
         }
         pack_tile<true>(0, target_cb, index);
         if (acc) {
+            PACK((llk_pack_reconfig_l1_acc(0)));
+        }
+        if (l_index != 0xffffffffu) {
+            // Also L1-accumulate the sums onto l (same format, same single-tile pack): no separate fold.
+            PACK((llk_pack_reconfig_l1_acc(1)));
+            pack_tile<true>(0, sum_cb, l_index);
             PACK((llk_pack_reconfig_l1_acc(0)));
         }
         tile_regs_release();
@@ -304,7 +349,11 @@ static __attribute__((noinline)) void sdpa_fused_fp32_chunk(
                 v * pv_w,
                 pv_w,
                 1,
+#ifdef FFP_KO_PV
+                1,
+#else
                 k_len,
+#endif
                 KT,
                 /*skip_pack_configure=*/true);
         }
@@ -314,6 +363,9 @@ static __attribute__((noinline)) void sdpa_fused_fp32_chunk(
     // l row g += this chunk's sums.
     auto fold = [&](uint32_t g) {
         leave_qk();
+#ifdef FFP_KO_FOLD
+        return;
+#endif
         set_src(cb_lsum, cb_qkt_im);
         copy_init(cb_lsum);
         tile_regs_acquire();
@@ -346,7 +398,7 @@ static __attribute__((noinline)) void sdpa_fused_fp32_chunk(
     };
 
     // Redo group g on the reduce path: scores, real max, P, then O, l *= c, PV and P . 1 accumulated, m_ref = m.
-    auto redo_group = [&](uint32_t g) __attribute__((noinline)) {
+    auto redo_group = [&](uint32_t g) __attribute__((noinline, optimize("Os"))) {
         leave_qk();
         const uint32_t read_row = is_last_iter ? 0 : g;
         // Scores (FP32) over this row's P.
@@ -423,13 +475,26 @@ static __attribute__((noinline)) void sdpa_fused_fp32_chunk(
             reconfig_data_format_skip_int8(sum_cb, sum_cb);
             copy_init(sum_cb);
             copy_tile(sum_cb, read_row, 0);
+#ifdef FFP_DUAL
+            reconfig_data_format_skip_int8(cb_lsum, cb_lsum);
+            copy_init(cb_lsum);
+            copy_tile(cb_lsum, g, 1);
+#endif
             reconfig_data_format_skip_int8(cb_recip_scratch, cb_recip_scratch);
             unary_bcast_init<BroadcastType::COL>(cb_recip_scratch);
+#ifndef FFP_DUAL
             unary_bcast<BroadcastType::COL>(cb_recip_scratch, 0, 1);
+#else
+            unary_bcast<BroadcastType::COL>(cb_recip_scratch, 0, 2);
+#endif
             unary_bcast_uninit<BroadcastType::COL>(cb_recip_scratch);
             tile_regs_commit();
             tile_regs_wait();
+#ifndef FFP_DUAL
             PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, ffp_state_scale, (1), 0, VectorMode::None)));
+#else
+            PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, ffp_sum_unadd_scale, 0, VectorMode::None)));
+#endif
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
             configure_single_tile_pack(sum_cb);
             pack_tile<true>(0, sum_cb, 0);
@@ -453,11 +518,15 @@ static __attribute__((noinline)) void sdpa_fused_fp32_chunk(
         tile_regs_release();
         src_a = src_b = INVALID_CB;
         recipe_pack_to_unpack_barrier();
+        // The barrier's semaphore wait stalls the unpacker, not this RISC: wait for it before reading L1.
+        UNPACK((ckernel::tensix_sync()));
         UNPACK((ffp_build_ref(prev.max, g, g + 1)));
         arm_exp();
     };
 
     // Iteration it: QK of group it, denominator + check of group it - 1, PV of group it - 2.
+    uint32_t finished = 0;
+    uint32_t redone = 0;
     for (uint32_t it = 0; it < G + 2; ++it) {
         const bool do_qk = it < G;
         const bool do_den = it >= 1 && it <= G;
@@ -465,7 +534,9 @@ static __attribute__((noinline)) void sdpa_fused_fp32_chunk(
         const uint32_t pg = it - 2;
         if (do_pv && read_check(pg)) {
             redo_group(pg);
+            redone |= 1u << pg;
             finish_group(pg);
+            ++finished;
             do_pv = false;
         }
         for (uint32_t piece = 0; piece < n_pieces; ++piece) {
@@ -479,7 +550,11 @@ static __attribute__((noinline)) void sdpa_fused_fp32_chunk(
                 }
             }
             if (do_den && piece == 0) {
+#ifdef FFP_DUAL
+                denominator(it - 1, cb_lsum, it - 1, false, (it - 1) - finished);
+#else
                 denominator(it - 1, cb_lsum, it - 1, false);
+#endif
                 cb_push_back_hold_wr_ptr(cb_lsum, 1);
             }
             if (do_pv) {
@@ -487,11 +562,44 @@ static __attribute__((noinline)) void sdpa_fused_fp32_chunk(
             }
         }
         if (do_pv) {
+#if defined(FFP_FOLD)
             fold(pg);
+#elif !defined(FFP_DUAL)
+            // Late fold: the last chunk folds per group (normalization follows); others once at the end.
+            if (is_last_iter) {
+                fold(pg);
+            }
+#endif
             finish_group(pg);
+            ++finished;
         }
     }
     leave_qk();
+#if !defined(FFP_FOLD) && !defined(FFP_DUAL) && !defined(FFP_KO_FOLD)
+    if (!is_last_iter) {
+        // l (all rows published, the write pointer wrapped to row 0) += this chunk's sums, unchanged groups only.
+        set_src(cb_lsum, cb_qkt_im);
+        copy_init(cb_lsum);
+        configure_single_tile_pack(sum_cb);
+        PACK((llk_pack_reconfig_l1_acc(1)));
+        for (uint32_t g0 = 0; g0 < G; g0 += 4) {
+            const uint32_t n = G - g0 < 4 ? G - g0 : 4;
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < n; ++j) {
+                copy_tile(cb_lsum, g0 + j, j);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < n; ++j) {
+                if (!((redone >> (g0 + j)) & 1u)) {
+                    pack_tile<true>(j, sum_cb, g0 + j);
+                }
+            }
+            tile_regs_release();
+        }
+        PACK((llk_pack_reconfig_l1_acc(0)));
+    }
+#endif
     CircularBuffer(cb_kt_in).pop_front(DHt * KT);
     if (independent_q_release ? release_q : is_last_iter) {
         sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);

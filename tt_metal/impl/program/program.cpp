@@ -3662,6 +3662,10 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         size_t max_size = get_ringbuffer_size(device, programmable_core_type);
+        // RESEARCH (fused FP32 prototype): bench-only program size log.
+        if (std::getenv("FFP_PROGSIZE") != nullptr) {
+            log_warning(tt::LogMetal, "FFP_PROGSIZE {} of {}", state.offset, max_size);
+        }
 
         TT_FATAL(
             state.offset <= max_size,
