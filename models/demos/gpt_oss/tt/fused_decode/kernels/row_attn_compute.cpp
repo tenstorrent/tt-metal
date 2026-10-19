@@ -75,9 +75,9 @@ void kernel_main() {
     cb_wait_front(cb_qs, 2);
     cb_wait_front(cb_aux, 7);
     compute_kernel_hw_startup(cb_k, cb_qs, cb_s);
-    cb_wait_front(cb_k, 2 * nk);
     cb_reserve_back(cb_s, nk + 1);
     for (uint32_t j = 0; j < nk; ++j) {
+        cb_wait_front(cb_k, 2 * (j + 1));  // the block's chunks arrive after the older ones
         const uint32_t mk = mask_of(j);
         tile_regs_acquire();
         matmul_init(cb_qs, cb_k, 1);

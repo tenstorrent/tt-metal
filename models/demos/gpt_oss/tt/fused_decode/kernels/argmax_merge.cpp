@@ -78,6 +78,7 @@ void kernel_main() {
     // 2. exchange: the sender (local mode) copies the payload into this device's own slot too, so every device's
     // slot arrives with one increment of the receive semaphore
     noc_semaphore_inc(get_noc_addr(get_semaphore(ARGMAX_SEND_SEM)), 1);  // the sender may go
+    noc_async_atomic_barrier();
     volatile tt_l1_ptr uint32_t* recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(6));
     noc_semaphore_wait(recv, ARGMAX_RING);
     noc_semaphore_set(recv, 0);

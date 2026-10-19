@@ -118,6 +118,9 @@ class DFlashRunner:
             first = self.prefill(prompt_ids)
         ids = list(prompt_ids) + [first]
         t_prefill = time.perf_counter() - t0
+        if self.verify_trace is not None:
+            accept, rounds = self._generate_traced(ids, L, max_new_tokens)
+            return ids[L:], accept, dict(prefill=t_prefill, rounds=rounds)
         accept, rounds = [], []
         B = self.draft.block
         mesh = self.model.mesh_device
@@ -149,3 +152,51 @@ class DFlashRunner:
             accept.append(k + 1)
             rounds.append((t1 - t, t2 - t1, t3 - t2))
         return ids[L:], accept, dict(prefill=t_prefill, rounds=rounds)
+
+    def _enqueue_round(self):
+        """Queue one traced round: draft, verify, a non-blocking read of the result, context. Returns (host result,
+        event recorded after the read)."""
+        mesh = self.model.mesh_device
+        ttnn.execute_trace(mesh, self.draft_trace, cq_id=0, blocking=False)
+        ttnn.execute_trace(mesh, self.verify_trace, cq_id=0, blocking=False)
+        host = self.verify.result.cpu(blocking=False)
+        event = ttnn.record_event(mesh, 0)
+        ttnn.execute_trace(mesh, self.ctx_trace, cq_id=0, blocking=False)
+        return host, event
+
+    def _generate_traced(self, ids, L, max_new_tokens):
+        """Traced rounds, extends ids in place; returns (per-round accepted counts, per-round wall times). Every round's
+        inputs are written on device by the previous verify pass, so the next round is queued before this round's
+        result is read whenever this round cannot end the generation (it adds at most block tokens): the host's read
+        round trip overlaps the next round instead of idling the device between rounds."""
+        B = self.draft.block
+        accept, rounds = [], []
+        if len(ids) - L >= max_new_tokens or set(ids[L:]) & self.eos_ids:
+            return accept, rounds
+        start = len(ids) - 1
+        self.draft.set_draft_inputs(ids[-1], start)
+        self.verify.set_positions(start)
+        t = time.perf_counter()
+        pending = [self._enqueue_round()]
+        while pending:
+            if len(pending) == 1 and len(ids) - L + B < max_new_tokens:
+                pending.append(self._enqueue_round())
+            host, event = pending.pop(0)
+            ttnn.event_synchronize(event)
+            r = ttnn.to_torch(ttnn.get_device_tensors(host)[0]).reshape(-1).long().tolist()
+            d, post = r[1:B], r[B : 2 * B]  # [block tokens, target argmaxes]
+            k = 0
+            while k < B - 1 and d[k] == post[k]:
+                k += 1
+            ids += d[:k] + [post[k]]
+            accept.append(k + 1)
+            now = time.perf_counter()
+            rounds.append((now - t, 0.0, 0.0))
+            t = now
+            if len(ids) - L >= max_new_tokens or set(ids[L:]) & self.eos_ids:
+                break
+            if not pending:
+                pending.append(self._enqueue_round())
+        if pending:  # a queued round past the end (end of sequence): let it finish before returning
+            ttnn.synchronize_device(self.model.mesh_device)
+        return accept, rounds

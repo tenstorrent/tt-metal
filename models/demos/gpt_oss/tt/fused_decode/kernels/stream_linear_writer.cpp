@@ -289,20 +289,26 @@ void kernel_main() {
             ((blk * num_kv_heads + m / head_tiles) * (block_size / 32) + tr) * head_tiles + m % head_tiles;
         return is_k ? s_kc.get_noc_addr(tile) : s_vc.get_noc_addr(tile);
     };
-    for (uint32_t c = 0; c < cols; ++c) {
-        const uint32_t n = slot_column(c);
-        if (n >= q_cols && n < n_tiles) {
-            const uint32_t t0 = kv_l1 + (scr_pages + 2 * c) * kv_tile_bytes;
-            noc_async_read(kv_cache_addr_g(n, 0), t0, kv_tile_bytes);
-            if (two_groups) {
-                noc_async_read(kv_cache_addr_g(n, 1), t0 + kv_tile_bytes, kv_tile_bytes);
-            }
-        }
-    }
     noc_async_read_barrier();
     invalidate_l1_cache();
     cb_push_back(cb_rot, 2);
     cb_push_back(cb_cs, 2 * head_tiles);
+    // this core's K / V cache tiles (read-modify-write of the block rows): issued once x is in (below), they are
+    // first needed when the first K / V column comes out
+    auto read_kv_tiles = [&]() {
+        for (uint32_t c = 0; c < cols; ++c) {
+            const uint32_t n = slot_column(c);
+            if (n >= q_cols && n < n_tiles) {
+                const uint32_t t0 = kv_l1 + (scr_pages + 2 * c) * kv_tile_bytes;
+                noc_async_read(kv_cache_addr_g(n, 0), t0, kv_tile_bytes);
+                if (two_groups) {
+                    noc_async_read(kv_cache_addr_g(n, 1), t0 + kv_tile_bytes, kv_tile_bytes);
+                }
+            }
+        }
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+    };
 #endif
 
     cb_reserve_back(cb_x, kx + 1);
@@ -328,10 +334,19 @@ void kernel_main() {
     constexpr uint32_t gather_pages = x_pages > 0 ? x_pages : 1;
     if constexpr (x_pages == 0) {
         // page by page: x may be sharded over the boundary helpers (fused_decode/boundary.py)
+#ifdef BND_PH
+        // sharded over the helpers, BND_PH pages each and contiguous in a helper's L1: one read per helper (the
+        // sharded accessor's per-page address math made the 23 page reads take ~2 us)
+        for (uint32_t off = 0; off < kx * tiny_bytes; off += BND_PH * 2048) {
+            const uint32_t n = kx * tiny_bytes - off < BND_PH * 2048 ? kx * tiny_bytes - off : BND_PH * 2048;
+            noc_async_read(s_x.get_noc_addr(off / 2048), x_l1 + off, n);
+        }
+#else
         for (uint32_t p = 0; p * 2048 < kx * tiny_bytes; ++p) {
             const uint32_t n = kx * tiny_bytes - p * 2048 < 2048 ? kx * tiny_bytes - p * 2048 : 2048;
             noc_async_read(s_x.get_noc_addr(p), x_l1 + p * 2048, n);
         }
+#endif
     }
 #ifdef X_GATHER_SPLIT
     // Split gather (multi-row o_proj): this core gathers activation tiles [j0, j1) only and copies them to the same
@@ -399,6 +414,9 @@ void kernel_main() {
     }
 #endif
     cb_push_back(cb_x, kx + 1);
+#if defined(QKV_ROPE_KV) && ROWS > 1
+    read_kv_tiles();
+#endif
 
 #ifdef LM_TOPK
     // out_mode 6 with LM_TOPK = K (DFlash two-stage LM head, dflash/lm_rescore.py): each row's K largest outputs,

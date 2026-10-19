@@ -228,7 +228,7 @@ class FusedVerify:
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
-            memory_config=dram,
+            memory_config=l1,  # (row attention's Q reads skip DRAM latency)
             mesh_mapper=rep,
         )
         self.pages = rowtile_pages(H, M)

@@ -116,6 +116,7 @@ void kernel_main() {
     // V shard written: tell the fused KV write (semaphore PREP_SEM_BASE + 1 on its core)
     noc_semaphore_inc(
         get_noc_addr(get_arg_val<uint32_t>(10), get_arg_val<uint32_t>(11), get_semaphore(PREP_SEM_BASE + 1)), 1);
+    noc_async_atomic_barrier();  // the increment lands before the kernel ends
 #endif
     volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scl);
     for (uint32_t f = 0; f < 4; ++f) {

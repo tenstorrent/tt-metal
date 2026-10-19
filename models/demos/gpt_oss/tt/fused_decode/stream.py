@@ -743,6 +743,8 @@ class LinearStream(_BankStreamOp):
                 gs_noc += [p.x, p.y]
         for i, (core, bank, r, vc) in enumerate(self.assignments):
             reader_rt[core.x][core.y] = [weights.buffer_address(), bank, vc, r * self.cols * self.col_bytes]
+            if rope_kv is not None:  # KV_SPLIT: the core's first output column is a K / V column
+                reader_rt[core.x][core.y].append(int(self._slot_columns(bank, r, order)[0] >= self.heads[0]))
             writer_rt[core.x][core.y] = [
                 x.buffer_address(),
                 outs[0].buffer_address(),
@@ -788,7 +790,7 @@ class LinearStream(_BankStreamOp):
             defines = (defines or []) + [("X_GATHER_SPLIT", "1")]
         b_ = pending.boundary if pending is not None else None
         if b_ is not None and b_.mc:
-            defines = (defines or []) + [("BND_WAIT_N", str(b_.H))]
+            defines = (defines or []) + [("BND_WAIT_N", str(b_.H)), ("BND_PH", str(b_.PH))]
         if extra_defines:
             defines = (defines or []) + list(extra_defines)
         if spec_tt:

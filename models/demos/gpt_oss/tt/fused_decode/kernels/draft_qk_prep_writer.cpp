@@ -39,6 +39,7 @@ void kernel_main() {
     // K shard written: tell the fused KV write (semaphore PREP_SEM_BASE on its core)
     noc_semaphore_inc(
         get_noc_addr(get_arg_val<uint32_t>(2), get_arg_val<uint32_t>(3), get_semaphore(PREP_SEM_BASE)), 1);
+    noc_async_atomic_barrier();  // the increment lands before the kernel ends
 #endif
     cb_pop_front(cb_qo, 2);
 #ifndef PREP_JOINT

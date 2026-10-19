@@ -168,12 +168,17 @@ void kernel_main() {
     noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(RA_WAIT_SEM)), RA_WAIT_N);
     noc_async_read(s_q.get_noc_addr(2 * r), get_write_ptr(cb_q), tile);
     noc_async_read(s_q.get_noc_addr(2 * r + 1), get_write_ptr(cb_q) + tile, tile);
-    for (uint32_t j = j_new; j < nk; ++j) {
-        read_chunk(j);
-    }
+    // Q and the older chunks (read while QKV ran) go to compute first; the block's chunks follow (compute scores
+    // chunk by chunk)
     cb_push_back(cb_aux, 7);
     noc_async_read_barrier();
     cb_push_back(cb_q, 2);
-    cb_push_back(cb_k, 2 * nk);
-    cb_push_back(cb_v, 2 * nk);
+    cb_push_back(cb_k, 2 * j_new);
+    cb_push_back(cb_v, 2 * j_new);
+    for (uint32_t j = j_new; j < nk; ++j) {
+        read_chunk(j);
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_k, 2 * (nk - j_new));
+    cb_push_back(cb_v, 2 * (nk - j_new));
 }
