@@ -82,6 +82,21 @@ ENTRIES_PER_BLOCK = int(os.environ.get("MRS_WAVES", 1))
 # matmul, the binding stage. Measured (focus, 2 waves): the send units did not get faster (the ports are per-packet
 # bound, not increment bound) while wave-0 relays / fins waited for their block's second wave: +5 us. env: perf only
 ARRIVAL_INC_PER_WAVE = int(os.environ.get("MRS_INC_PER_WAVE", 1))
+# Output chunks (shapes whose per-core footprint misses L1). The per-chip block (block_m x block_n tiles) is cut into
+# n_m x n_n chunks of at most chunk_m x chunk_n tiles, and the whole G-entry walk runs once per chunk, in one program:
+# the grid, the slot size P and the zones are sized for one chunk. The chunk walk keeps the resident operand's axis
+# outer (scatter -1: m outer, so resident A is reloaded only when the m chunk changes; scatter -2: n outer). Zone slots
+# are reused across chunks: ZONE_SETS chunks' arrivals fit the zones at once, and a port sends chunk c only after the
+# downstream chip consumed chunk c - ZONE_SETS (a per-chunk credit the downstream's opposite port forwards over the
+# fabric). 1 chunk (the default whenever the shape fits) is the unchunked op, byte-identical. env MRS_CHUNKS="n_m,n_n":
+# perf experiments only (the test hook _FORCE_CHUNKS does the same)
+ZONE_SETS = int(os.environ.get("MRS_ZONE_SETS", 2))
+MAX_AUTO_CHUNKS = 1024  # auto chunk search: the most chunks tried before giving up (NotImplementedError)
+# The per-mesh staging tensor (cb_finished + zones) is sized "exact": each call plans as if no staging were allocated,
+# and the cached tensor is reallocated whenever its size differs. "grow" keeps the old grow-only cache: the allocated
+# size is a floor in every later plan's footprint, so after one large call (Wan 720p, P = 44: 880 KiB of staging) the
+# smaller shapes lose their resident regime (measured: Wan 8x4 chunks resident -> stream). env: perf experiments only
+STAGING_POLICY = os.environ.get("MRS_STAGING", "exact")
 KB_MIN_RESIDENT = 8  # smallest K-block the resident regime accepts (min(Kt, this))
 # largest K-block: the streamed operand needs several K-blocks per entry to overlap read / mcast / math (focus case,
 # diagonal senders: kb 64 -> 212 us, 32 -> 160 us, 16 -> 159 us, 8 -> 164 us on the fastest chip; Refinement 2,
@@ -402,11 +417,13 @@ def footprint(
     waves_of,
     staging_floor_tiles=0,
     depths=None,
+    zone_sets=1,
 ):
     """Per matmul core L1 bytes (l1_ledger.md): operand windows + fp32 hold + the staging slice. The staging tensor is
     cached grow-only per mesh, so it is counted at max(what this call needs, what is already allocated).
     Per regime (keyed by `resident`): hold_depths (hold_depth() of the schedule that regime runs), slots (its zone
-    slots per direction) and waves_of (its wave_plan: the streamed window and the slot size are a wave's)."""
+    slots per direction) and waves_of (its wave_plan: the streamed window and the slot size are a wave's).
+    zone_sets: chunks whose arrivals the zones hold at once (1 unchunked)."""
     wv = waves_of[resident]
     P = wv["P"]
     rA = resident and scatter_dim == -1
@@ -416,7 +433,7 @@ def footprint(
     w = tW * (Kt * core_n if rW else dW * kb * wv["win_n"])
     hold = HOLD_TILE_BYTES * hold_depths[resident] * P
     sl = slots[resident]
-    staging = STAGE_TILE_BYTES * max(staging_floor_tiles, (DEPTH_HANDOFF + sl["fwd"] + sl["bwd"]) * P)
+    staging = STAGE_TILE_BYTES * max(staging_floor_tiles, (DEPTH_HANDOFF + zone_sets * (sl["fwd"] + sl["bwd"])) * P)
     return a + w + hold + staging + STAGE_TILE_BYTES  # + the zero tile (CB_ZERO)
 
 
@@ -462,6 +479,107 @@ def super_block_plan(Kt, kb, resident, depth, budget, geo):
         if footprint(kb, resident, depth=depth, Kt=Kt, depths=deep, **geo) <= budget:
             return S, deep
     return 1, base
+
+
+def chunk_candidates(block_m, block_n, scatter_dim):
+    """(n_m, n_n) in the auto search order: fewest chunks first; at equal count, more splits along the axis the chunk
+    walk keeps inner (scatter -1: n, the resident A rows stay put; scatter -2: m). Only distinct chunk grids (a split
+    whose chunks would come out the same size as a smaller split is skipped)."""
+    inner_n = scatter_dim == -1
+    seen = set()
+    for total in range(1, min(MAX_AUTO_CHUNKS, block_m * block_n) + 1):  # a generator: the first fit ends the search
+        pairs = [(total // d, d) for d in range(1, total + 1) if total % d == 0]  # (n_m, n_n)
+        pairs.sort(key=lambda p: -(p[1] if inner_n else p[0]))
+        for n_m, n_n in pairs:
+            if n_m > block_m or n_n > block_n:
+                continue
+            key = (-(-block_m // n_m), -(-block_n // n_n))
+            if key in seen:
+                continue
+            seen.add(key)
+            yield n_m, n_n
+
+
+def plan_chunk_geometry(
+    n_m,
+    n_n,
+    *,
+    G,
+    kind,
+    L,
+    Kt,
+    block_m,
+    block_n,
+    gx,
+    gy,
+    tA,
+    tW,
+    scatter_dim,
+    staging_floor,
+    budget,
+    force_resident,
+):
+    """Grid, regime and schedule for one chunk of chunk_m x chunk_n tiles (the whole block when n_m = n_n = 1). Raises
+    NotImplementedError when the chunk's footprint misses the L1 budget."""
+    chunk_m, chunk_n = -(-block_m // n_m), -(-block_n // n_n)
+    n_m, n_n = -(-block_m // chunk_m), -(-block_n // chunk_n)  # no empty trailing chunk
+    zone_sets = 1 if n_m * n_n == 1 else max(1, min(ZONE_SETS, n_m * n_n))
+    gd = choose_grid(gx, gy, chunk_m, chunk_n, L)
+    core_m, core_n = gd["core_m"], gd["core_n"]
+    if kind == "ring_balanced" and gd["grid_m"] * gd["grid_n"] < 2:
+        raise ValueError("matmul_reduce_scatter: a balanced ring needs >= 2 matmul cores (two halves)")
+    # halves: with a resident cross-block operand, split along the streamed operand's multicast lines (W lines = fixed
+    # gn for scatter -1, A lines = fixed gm for scatter -2), so the two halves may compute different blocks and walk
+    # mirrored orders; else the row-major split of the core index. Each regime's schedule fixes its hold depth, which
+    # the footprint (and so the regime choice) needs.
+    mirror_split = "k"
+    if int(os.environ.get("MRS_MIRROR", MIRROR_HALF_ORDERS)) and kind == "ring_balanced":  # env: perf experiments only
+        if scatter_dim == -1 and gd["grid_n"] >= 2:
+            mirror_split = "n"
+        elif scatter_dim == -2 and gd["grid_m"] >= 2:
+            mirror_split = "m"
+    waves_of = {r: wave_plan(r, scatter_dim, core_m, core_n) for r in (False, True)}
+    sched_of = {
+        r: plan_transport(G, kind, mirror=r and mirror_split != "k", waves=waves_of[r]["n"]) for r in (False, True)
+    }
+    hold_depths = {r: hold_depth(sched_of[r][0]) for r in (False, True)}
+    geo = dict(
+        core_m=core_m,
+        core_n=core_n,
+        tA=tA,
+        tW=tW,
+        scatter_dim=scatter_dim,
+        slots={r: sched_of[r][1] for r in (False, True)},
+        hold_depths=hold_depths,
+        waves_of=waves_of,
+        staging_floor_tiles=staging_floor,
+        zone_sets=zone_sets,
+    )
+    resident, kb, depth = choose_k_block(Kt, budget, force_resident, **geo)
+    if os.environ.get("MRS_KB"):  # perf experiments only: cap the K-block (largest divisor of Kt <= MRS_KB)
+        kb = max(d for d in range(1, kb + 1) if Kt % d == 0 and d <= int(os.environ["MRS_KB"]))
+    super_block, depths = super_block_plan(Kt, kb, resident, depth, budget, geo)
+    chips_sched, slots = sched_of[resident]
+    waves = waves_of[resident]
+    return dict(
+        n_m=n_m,
+        n_n=n_n,
+        chunk_m=chunk_m,
+        chunk_n=chunk_n,
+        zone_sets=zone_sets,
+        gd=gd,
+        resident=resident,
+        kb=kb,
+        depths=depths,
+        super_block=super_block,
+        depth_hold=hold_depths[resident],
+        half_split=mirror_split if resident else "k",
+        sched=chips_sched,
+        slots=slots,
+        waves=waves,
+        P=waves["P"],  # slot tiles: every hold / finished / zone slot holds one wave
+        footprint=footprint(kb, resident, depth=depth, Kt=Kt, depths=depths, **geo),
+    )
 
 
 def _place_ports(strip, gx, gy, L):
@@ -539,7 +657,7 @@ def _mesh_resources(mesh, staging_tiles):
     if res is None or res["mesh"] is not mesh:
         import torch
 
-        sems = [ttnn.create_global_semaphore(mesh, grid, 0) for _ in range(3)]  # arr_fwd, arr_bwd, ready
+        sems = [ttnn.create_global_semaphore(mesh, grid, 0) for _ in range(4)]  # arr_fwd, arr_bwd, ready, credit
         n = gx * gy
         mbox_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -557,7 +675,7 @@ def _mesh_resources(mesh, staging_tiles):
         ttnn.synchronize_device(mesh)  # every counter / mailbox zero before any chip's first call
         res = dict(mesh=mesh, sems=sems, mailbox=mailbox, staging=None, staging_tiles=0)
         _MESH_CACHE[key] = res
-    if res["staging_tiles"] < staging_tiles:
+    if res["staging_tiles"] < staging_tiles or (STAGING_POLICY == "exact" and res["staging_tiles"] != staging_tiles):
         if res["staging"] is not None:
             ttnn.deallocate(res["staging"])
             res["staging"] = None
@@ -670,66 +788,69 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
     Mt, Kt, Nt = M // TILE, K // TILE, N // TILE
     block_m, block_n = (Mt // G, Nt) if scatter_dim == -2 else (Mt, Nt // G)
     gx, gy = _full_grid(mesh)
-    gd = choose_grid(gx, gy, block_m, block_n, L)
-    core_m, core_n = gd["core_m"], gd["core_n"]
-    P = core_m * core_n
-    n_cores = gd["grid_m"] * gd["grid_n"]
-    if kind == "ring_balanced" and n_cores < 2:
-        raise ValueError("matmul_reduce_scatter: a balanced ring needs >= 2 matmul cores (two halves)")
-
-    # halves: with a resident cross-block operand, split along the streamed operand's multicast lines (W lines = fixed
-    # gn for scatter -1, A lines = fixed gm for scatter -2), so the two halves may compute different blocks and walk
-    # mirrored orders; else the row-major split of the core index. Each regime's schedule fixes its hold depth, which
-    # the footprint (and so the regime choice) needs.
-    mirror_split = "k"
-    if int(os.environ.get("MRS_MIRROR", MIRROR_HALF_ORDERS)) and kind == "ring_balanced":  # env: perf experiments only
-        if scatter_dim == -1 and gd["grid_n"] >= 2:
-            mirror_split = "n"
-        elif scatter_dim == -2 and gd["grid_m"] >= 2:
-            mirror_split = "m"
-    waves_of = {r: wave_plan(r, scatter_dim, core_m, core_n) for r in (False, True)}
-    sched_of = {
-        r: plan_transport(G, kind, mirror=r and mirror_split != "k", waves=waves_of[r]["n"]) for r in (False, True)
-    }
-    slots_of = {r: sched_of[r][1] for r in (False, True)}
-    hold_depths = {r: hold_depth(sched_of[r][0]) for r in (False, True)}
     tA = int(a.buffer_aligned_page_size())
     tW = int(w.buffer_aligned_page_size())
     cached = _MESH_CACHE.get(id(mesh))
     staging_floor = cached["staging_tiles"] if cached is not None and cached["mesh"] is mesh else 0
-    geo = dict(
-        core_m=core_m,
-        core_n=core_n,
+    if STAGING_POLICY == "exact":
+        staging_floor = 0  # reallocated to this call's size below
+    budget = _l1_budget(mesh)
+    force_resident = getattr(hooks, "_FORCE_XBLOCK_RESIDENCY", None)
+    forced = getattr(hooks, "_FORCE_CHUNKS", None) or (
+        tuple(int(v) for v in os.environ["MRS_CHUNKS"].split(",")) if os.environ.get("MRS_CHUNKS") else None
+    )
+    plan_args = dict(
+        G=G,
+        kind=kind,
+        L=L,
+        Kt=Kt,
+        block_m=block_m,
+        block_n=block_n,
+        gx=gx,
+        gy=gy,
         tA=tA,
         tW=tW,
         scatter_dim=scatter_dim,
-        slots=slots_of,
-        hold_depths=hold_depths,
-        waves_of=waves_of,
-        staging_floor_tiles=staging_floor,
+        staging_floor=staging_floor,
+        budget=budget,
+        force_resident=force_resident,
     )
-    resident, kb, depth = choose_k_block(Kt, _l1_budget(mesh), getattr(hooks, "_FORCE_XBLOCK_RESIDENCY", None), **geo)
-    if os.environ.get("MRS_KB"):  # perf experiments only: cap the K-block (largest divisor of Kt <= MRS_KB)
-        kb = max(d for d in range(1, kb + 1) if Kt % d == 0 and d <= int(os.environ["MRS_KB"]))
-    super_block, depths = super_block_plan(Kt, kb, resident, depth, _l1_budget(mesh), geo)
-    half_split = mirror_split if resident else "k"
-    chips_sched, slots = sched_of[resident]
-    waves = waves_of[resident]
-    P = waves["P"]  # slot tiles: every hold / finished / zone slot holds one wave
+    if forced is not None:
+        pl = plan_chunk_geometry(*forced, **plan_args)
+    else:
+        pl = None
+        for n_m, n_n in chunk_candidates(block_m, block_n, scatter_dim):
+            try:
+                pl = plan_chunk_geometry(n_m, n_n, **plan_args)
+                break
+            except NotImplementedError:
+                continue
+        if pl is None:
+            raise NotImplementedError(
+                f"matmul_reduce_scatter: no split of the {block_m}x{block_n}-tile block into <= {MAX_AUTO_CHUNKS} "
+                "chunks fits L1"
+            )
+    gd, resident, kb, P = pl["gd"], pl["resident"], pl["kb"], pl["P"]
+    chips_sched, slots, waves = pl["sched"], pl["slots"], pl["waves"]
     hooks._LAST_PLAN = {
         "xblock": "resident" if resident else "stream",
         "schedule": kind,
         "kb": kb,
-        "depths": depths,
-        "super_block": super_block,
-        "hold_depth": hold_depths[resident],
+        "depths": pl["depths"],
+        "super_block": pl["super_block"],
+        "hold_depth": pl["depth_hold"],
         "grid": (gd["grid_m"], gd["grid_n"]),
         "strip": gd["strip"],
-        "half_split": half_split,
+        "half_split": pl["half_split"],
         "waves": waves["n"],
+        "chunks": (pl["n_m"], pl["n_n"]),
+        "chunk_tiles": (pl["chunk_m"], pl["chunk_n"]),
+        "zone_sets": pl["zone_sets"],
+        "P": P,
+        "footprint_kib": pl["footprint"] // 1024,
     }
 
-    staging_tiles = (DEPTH_HANDOFF + slots["fwd"] + slots["bwd"]) * P
+    staging_tiles = (DEPTH_HANDOFF + pl["zone_sets"] * (slots["fwd"] + slots["bwd"])) * P
     res = _mesh_resources(mesh, staging_tiles)
 
     out_shape = list(a_shape)
@@ -761,14 +882,19 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         gd=gd,
         P=P,
         kb=kb,
-        depths=depths,
-        super_block=super_block,
-        depth_hold=hold_depths[resident],
+        depths=pl["depths"],
+        super_block=pl["super_block"],
+        depth_hold=pl["depth_hold"],
         resident=resident,
         slots=slots,
         sched=chips_sched,
-        half_split=half_split,
+        half_split=pl["half_split"],
         waves=waves,
+        n_m=pl["n_m"],
+        n_n=pl["n_n"],
+        chunk_m=pl["chunk_m"],
+        chunk_n=pl["chunk_n"],
+        zone_sets=pl["zone_sets"],
         compute_kernel_config=compute_kernel_config,
         gx=gx,
         gy=gy,
@@ -860,11 +986,24 @@ def create_mesh_program_descriptor(ctx):
     a_row_per_block = block_m if scatter_dim == -2 else 0
     w_col_per_block = block_n if scatter_dim == -1 else 0
 
+    # chunks: every kernel walks num_chunks x (the per-chunk entries), chunk c -> (i_m, i_n) with the resident
+    # operand's axis outer; a chunk's tile origin is (i_m * chunk_m, i_n * chunk_n) inside the block
+    n_m, n_n, chunk_m, chunk_n = ctx["n_m"], ctx["n_n"], ctx["chunk_m"], ctx["chunk_n"]
+    num_chunks = n_m * n_n
+    m_outer = int(scatter_dim == -1)
+    n_inner = n_n if m_outer else n_m
+    zone_sets = ctx["zone_sets"]
+    credit_chunks = max(0, num_chunks - zone_sets)  # chunks whose sends wait for a downstream credit
+    chunk_ct = [num_chunks, n_inner, m_outer, chunk_m, chunk_n, block_m, block_n]
+    ring_slots = {d: zone_sets * slots[d] for d in _DIRS}  # zone slots per direction (the arrival CBs' capacity)
+
     staging = res["staging"]
     staging_addr = int(staging.buffer_address())
     zone_fwd_off = DEPTH_HANDOFF * P * STAGE_TILE_BYTES
-    zone_bwd_off = zone_fwd_off + slots["fwd"] * P * STAGE_TILE_BYTES
-    arr_fwd_addr, arr_bwd_addr, ready_addr = (int(ttnn.get_global_semaphore_address(s)) for s in res["sems"])
+    zone_bwd_off = zone_fwd_off + ring_slots["fwd"] * P * STAGE_TILE_BYTES
+    arr_fwd_addr, arr_bwd_addr, ready_addr, credit_addr = (
+        int(ttnn.get_global_semaphore_address(s)) for s in res["sems"]
+    )
     mailbox_addr = int(res["mailbox"].buffer_address())
     chunk_tiles = max(1, min(int(ttnn.get_tt_fabric_max_payload_size_bytes()) // STAGE_TILE_BYTES, P))
 
@@ -911,6 +1050,7 @@ def create_mesh_program_descriptor(ctx):
             int(os.environ.get("MRS_W_READ_NOC", READ_NOCS[regime][1])),  # env: perf experiments only
             W,
         ]
+        + chunk_ct  # 27..33
         + a_ct
         + w_ct
     )
@@ -929,8 +1069,11 @@ def create_mesh_program_descriptor(ctx):
         W,
         ctx["super_block"],  # K-windows a subblock accumulates in DEST per pack (entry 0 packs per window)
         CB_ZERO,
+        num_chunks,
+        n_inner,
+        int(resident),
     ]
-    writer_ct = [CB_FINISHED, P, W, out_nt, DEPTH_HANDOFF, STAGE_TILE_BYTES, num_entries, CB_ZERO] + o_ct
+    writer_ct = [CB_FINISHED, P, W, out_nt, DEPTH_HANDOFF, STAGE_TILE_BYTES, num_entries, CB_ZERO] + chunk_ct + o_ct
     max_port_cores = -(-n_cores // L)  # matmul cores one port serves (link(k) = k mod L)
     port_ct = [
         CB_PORT_CHUNKS,
@@ -943,7 +1086,11 @@ def create_mesh_program_descriptor(ctx):
         max_port_cores,
         W,
         int(ARRIVAL_INC_PER_WAVE or W == 1),  # every wave's unit carries the increment (else only the last)
+        num_chunks,
+        num_entries,  # entries per chunk
+        zone_sets,
     ]
+    assert PORT_GROUP + 1 <= 8, "port sender headers: PORT_GROUP data headers + 1 credit header (pool of 8)"
 
     src = ttnn.KernelDescriptor.SourceType.FILE_PATH
     # Perf-only ablation switches (debug scaffolding; output is wrong by design when set): MRS_ABLATE=compute,dram
@@ -998,15 +1145,21 @@ def create_mesh_program_descriptor(ctx):
             program.semaphores = [
                 ttnn.SemaphoreDescriptor(id=0, core_ranges=all_crs, initial_value=0),  # consumed_fwd
                 ttnn.SemaphoreDescriptor(id=1, core_ranges=all_crs, initial_value=0),  # consumed_bwd
+                # freed (port cores): chunks' worth of arrivals this port's matmul cores consumed, in the direction
+                # this port's peer sends into this chip (forwarded upstream as chunk credits)
+                ttnn.SemaphoreDescriptor(id=2, core_ranges=all_crs, initial_value=0),
             ]
+            # per (direction of the arrival, link): matmul cores whose half receives that direction's arrivals
+            receivers = {(d, l): 0 for d in _DIRS for l in range(L)}
+            for k in range(n_cores):
+                for d in _DIRS:
+                    receivers[(d, link_of(k))] += int(len(arrivals[(half(k), d)]) > 0)
 
             # ---- matmul cores: runtime args ----
             r_rt, c_rt, w_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for k, (gm, gn, core) in enumerate(mm_cores):
                 h = half(k)
                 l = link_of(k)
-                m_valid = min(core_m, block_m - gm * core_m)
-                n_valid = min(core_n, block_n - gn * core_n)
                 ent_words, roles_k, kinds_k = [], [], []
                 for b, (mask, lag) in zip(entries[h], entry_finish_plan(sc, h)):
                     r = roles[(b, h)]
@@ -1016,33 +1169,39 @@ def create_mesh_program_descriptor(ctx):
                     ent_words += [(b // W) | (mask << 16) | (lag << 20), thr_f | (thr_b << 16)]
                     roles_k.append([ROLE_COPY, ROLE_ADD_FWD, ROLE_ADD_BWD, ROLE_ADD_BOTH][mask] | (lag << 8))
                     kinds_k.append(KIND_FIN if r[0] == "fin" else (KIND_FWD if r[0] == "fwd" else KIND_BWD))
+                pf = port_vcore.get(("fwd", l)) if peers["fwd"] is not None else None
+                pb = port_vcore.get(("bwd", l)) if peers["bwd"] is not None else None
+                n_arr = {d: len(arrivals[(h, d)]) for d in _DIRS}
+                # a consumed chunk of d arrivals is reported to the port sending back upstream (opposite direction)
+                rep = {"fwd": pb, "bwd": pf}
+                for d in _DIRS:
+                    assert n_arr[d] == 0 or rep[d] is not None, (p, k, d)
                 r_rt[core.x][core.y] = (
                     [
                         a_addr,
                         w_addr,
-                        gm * core_m,
+                        gm * core_m,  # chunk-local origin of my per-core block
                         gn * core_n,
-                        m_valid,
-                        n_valid,
                         arr_fwd_addr,
                         arr_bwd_addr,
-                        # arrival increments my counters receive this call
+                        # arrival increments my counters receive per chunk
                         sum(inc_unit(b, W) == b for b in arrivals[(h, "fwd")]),
                         sum(inc_unit(b, W) == b for b in arrivals[(h, "bwd")]),
+                        n_arr["fwd"],  # arrival slots per chunk (consumption reports count these)
+                        n_arr["bwd"],
+                        (rep["fwd"].x | (rep["fwd"].y << 16)) if n_arr["fwd"] else 0,
+                        (rep["bwd"].x | (rep["bwd"].y << 16)) if n_arr["bwd"] else 0,
+                        credit_chunks,  # chunks whose consumption is reported (the rest needs no credit)
                     ]
                     + wave_words
                     + ent_words
                 )
                 c_rt[core.x][core.y] = wave_mm_words + roles_k
-                pf = port_vcore.get(("fwd", l)) if peers["fwd"] is not None else None
-                pb = port_vcore.get(("bwd", l)) if peers["bwd"] is not None else None
                 w_rt[core.x][core.y] = (
                     [
                         o_addr,
                         gm * core_m,
                         gn * core_n,
-                        m_valid,
-                        n_valid,
                         (pf.x | (pf.y << 16)) if pf is not None else 0,
                         (pb.x | (pb.y << 16)) if pb is not None else 0,
                         mailbox_addr + k * MAILBOX_STRIDE,
@@ -1122,6 +1281,12 @@ def create_mesh_program_descriptor(ctx):
                 pn = node(peer)
                 zone = zone_fwd_off if d == "fwd" else zone_bwd_off
                 arr_addr = arr_fwd_addr if d == "fwd" else arr_bwd_addr
+                # chunk credits: this port waits for one per chunk beyond the zone sets (downstream consumed chunk
+                # c - zone_sets) and forwards one per chunk this chip's cores consumed of the peer's (opp) arrivals
+                expect = receivers[(opp, l)]
+                fwd_total = credit_chunks if expect > 0 else 0
+                if credit_chunks:
+                    assert bool(unit_walks(ctx["sched"][q], opp, l)) == (expect > 0), (p, d, l)
                 args = (
                     [
                         staging_addr + zone,
@@ -1134,6 +1299,13 @@ def create_mesh_program_descriptor(ctx):
                         int(pn.chip_id),
                         len(core_words),
                         len(units),
+                        credit_addr,
+                        credit_chunks if units else 0,  # credits this port waits for
+                        expect,  # reports per consumed chunk (one per receiving core)
+                        fwd_total,  # credits this port forwards upstream
+                        ring_slots[d],  # the downstream zone ring (slots) of this direction
+                        len(down["arrivals"][(0, d)]),  # downstream arrivals per chunk, half 0 / half 1
+                        len(down["arrivals"][(1, d)]),
                     ]
                     + wave_tiles
                     + core_words
@@ -1178,10 +1350,10 @@ def create_mesh_program_descriptor(ctx):
                     CB_FINISHED, staging, 0, DEPTH_HANDOFF * P * STAGE_TILE_BYTES, mm_crs
                 ),
                 ttnn.cb_descriptor_from_sharded_tensor(
-                    CB_ARRIVALS_FWD, staging, zone_fwd_off, slots["fwd"] * P * STAGE_TILE_BYTES, mm_crs
+                    CB_ARRIVALS_FWD, staging, zone_fwd_off, ring_slots["fwd"] * P * STAGE_TILE_BYTES, mm_crs
                 ),
                 ttnn.cb_descriptor_from_sharded_tensor(
-                    CB_ARRIVALS_BWD, staging, zone_bwd_off, slots["bwd"] * P * STAGE_TILE_BYTES, mm_crs
+                    CB_ARRIVALS_BWD, staging, zone_bwd_off, ring_slots["bwd"] * P * STAGE_TILE_BYTES, mm_crs
                 ),
                 cb(CB_PORT_CHUNKS, 2 * PORT_GROUP * chunk_tiles, STAGE_TILE_BYTES, ttnn.bfloat16, used_port_crs),
                 cb(CB_ZERO, 1, STAGE_TILE_BYTES, ttnn.bfloat16, mm_crs),

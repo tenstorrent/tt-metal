@@ -105,6 +105,9 @@ void kernel_main() {
     constexpr uint32_t num_waves = get_compile_time_arg_val(11);
     constexpr uint32_t super_block = get_compile_time_arg_val(12);  // K-windows per DEST-resident pack (divides nkb)
     constexpr uint32_t cb_zero = get_compile_time_arg_val(13);      // one bf16 zero tile (the writer fills it)
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(14);   // the entry walk runs once per output chunk
+    constexpr uint32_t n_inner = get_compile_time_arg_val(15);      // chunks per outer (resident-axis) index
+    constexpr bool resident = get_compile_time_arg_val(16) != 0;
     static_assert(super_block >= 1 && num_k_blocks % super_block == 0, "super-block must divide the K-blocks");
     // runtime args: per wave rows | cols << 8 | sb_h << 16 | sb_w << 24, then per entry role | lag << 8
     constexpr uint32_t roles_idx = num_waves;
@@ -191,7 +194,7 @@ void kernel_main() {
 
     // One entry's matmul. fusable: its finish folds into the last super-block (an arrival entry: only if the
     // arrival landed by the end of that super-block's first subblock). Returns whether the finish is complete.
-    auto matmul_entry = [&](uint32_t e, bool fusable, uint32_t role) -> bool {
+    auto matmul_entry = [&](uint32_t e, bool fill, bool fusable, uint32_t role) -> bool {
         MaybeDeviceZoneScope("MM");
         const uint32_t wave = get_arg_val<uint32_t>(e % num_waves);
         const uint32_t rows = wave & 0xFF, cols = (wave >> 8) & 0xFF;
@@ -202,7 +205,7 @@ void kernel_main() {
         reconfig_data_format(cb_weight_k_window, cb_act_k_window);  // matmul: srcA = in1, srcB = in0
         PACK((pack_reconfig_data_format(cb_partial_hold)));
         ckernel::matmul_block_init(cb_act_k_window, cb_weight_k_window, false, sb_w, sb_h, kb);
-        const uint32_t S = e == 0 ? 1 : super_block;
+        const uint32_t S = fill ? 1 : super_block;  // an operand fill arrives at DRAM pace: pack per window
         const uint32_t n_super = num_k_blocks / S;
         const bool has_arrival = role != ROLE_COPY;
         const bool hold_prev = n_super > 1;  // earlier super-blocks to add in the last one
@@ -345,21 +348,25 @@ void kernel_main() {
 
     constexpr uint32_t NONE = 0xFFFFFFFF;
     uint32_t pending = NONE;
-    for (uint32_t e = 0; e < num_entries; ++e) {
-        const uint32_t word = get_arg_val<uint32_t>(roles_idx + e);
-        const uint32_t role = word & 0xFF;
-        const bool lag = (word >> 8) & 1;  // host: arrival expected late -> finish behind the next matmul
-        const bool fusable = !lag && pending == NONE;
-        const bool fused = matmul_entry(e, fusable, role);
-        if (pending != NONE) {
-            finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(
-                get_arg_val<uint32_t>(roles_idx + pending) & 0xFF);
-            pending = NONE;
-        }
-        if (lag) {
-            pending = e;  // the add waits for its arrival behind the next entry's matmul
-        } else if (!fused) {
-            finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(role);
+    for (uint32_t c = 0; c < num_chunks; ++c) {
+        // the resident operand reloads in the first entry of a chunk whose outer index changed (always chunk 0)
+        const bool chunk_fill = c == 0 || (resident && c % n_inner == 0);
+        for (uint32_t e = 0; e < num_entries; ++e) {
+            const uint32_t word = get_arg_val<uint32_t>(roles_idx + e);
+            const uint32_t role = word & 0xFF;
+            const bool lag = (word >> 8) & 1;  // host: arrival expected late -> finish behind the next matmul
+            const bool fusable = !lag && pending == NONE;
+            const bool fused = matmul_entry(e, chunk_fill && e == 0, fusable, role);
+            if (pending != NONE) {
+                finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(
+                    get_arg_val<uint32_t>(roles_idx + pending) & 0xFF);
+                pending = NONE;
+            }
+            if (lag) {
+                pending = e;  // the add waits for its arrival behind the next entry's matmul
+            } else if (!fused) {
+                finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(role);
+            }
         }
     }
 }

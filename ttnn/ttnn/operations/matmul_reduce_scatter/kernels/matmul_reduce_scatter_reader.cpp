@@ -15,6 +15,10 @@
 // upstream port's fabric writes already landed the bytes). The loader never blocks on the fabric, so a late arrival
 // no longer stalls this core's next-entry multicasts (and, through the handshakes, its lines). A final blocking drain
 // follows the last load. At the end: re-arm both counters by decrementing what arrived.
+// Chunks: the walk above runs once per output chunk (num_chunks x the per-chunk entries); a chunk moves the operand
+// slices at its tile origin, and the resident operand reloads only when its own axis' chunk index changes. Zone slots
+// are reused across chunks, so for every chunk the upstream must wait for, this core reports once its compute consumed
+// that chunk's arrivals (CB pages acked) to the local port that forwards the credit upstream.
 //
 // Multicast walk: the A parts' receivers ack (consumer-ready) right after reserving their slot, before this core's own
 // DRAM reads/barrier; an A receive is then a wait only. The W parts keep the fused ack + wait in the a, a2, b, b2
@@ -92,7 +96,14 @@ void kernel_main() {
     constexpr uint8_t w_read_noc = get_compile_time_arg_val(25);
     constexpr bool two_read_nocs = a_read_noc != w_read_noc || a_read_noc != noc_index;
     constexpr uint32_t num_waves = get_compile_time_arg_val(26);  // entries per block (entry e is wave e mod num_waves)
-    constexpr auto a_args = TensorAccessorArgs<27>();
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(27);
+    constexpr uint32_t n_inner = get_compile_time_arg_val(28);   // chunks along the inner axis
+    constexpr bool m_outer = get_compile_time_arg_val(29) != 0;  // chunk c: (c / n_inner, c % n_inner) as (m, n)
+    constexpr uint32_t chunk_m = get_compile_time_arg_val(30);
+    constexpr uint32_t chunk_n = get_compile_time_arg_val(31);
+    constexpr uint32_t block_m = get_compile_time_arg_val(32);
+    constexpr uint32_t block_n = get_compile_time_arg_val(33);
+    constexpr auto a_args = TensorAccessorArgs<34>();
     constexpr auto w_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     constexpr auto mc_a =
         McastArgs<get_named_compile_time_arg_val("a_ct_offset"), get_named_compile_time_arg_val("a_rt_offset")>();
@@ -118,37 +129,83 @@ void kernel_main() {
     uint32_t arg = 0;
     const uint32_t a_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t w_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t row0 = get_arg_val<uint32_t>(arg++);  // gm * core_m (block-local)
-    const uint32_t col0 = get_arg_val<uint32_t>(arg++);  // gn * core_n (block-local)
-    const uint32_t m_valid = get_arg_val<uint32_t>(arg++);
-    const uint32_t n_valid = get_arg_val<uint32_t>(arg++);
+    const uint32_t row0 = get_arg_val<uint32_t>(arg++);  // gm * core_m (chunk-local)
+    const uint32_t col0 = get_arg_val<uint32_t>(arg++);  // gn * core_n (chunk-local)
     const uint32_t arr_fwd_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t arr_bwd_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t total_fwd = get_arg_val<uint32_t>(arg++);  // arrival increments my counters receive this call
+    const uint32_t total_fwd = get_arg_val<uint32_t>(arg++);  // arrival increments my counters receive per chunk
     const uint32_t total_bwd = get_arg_val<uint32_t>(arg++);
+    const uint32_t slots_fwd = get_arg_val<uint32_t>(arg++);  // arrival slots I consume per chunk, per direction
+    const uint32_t slots_bwd = get_arg_val<uint32_t>(arg++);
+    const uint32_t rep_fwd_xy = get_arg_val<uint32_t>(arg++);  // port counting my consumed fwd / bwd chunks
+    const uint32_t rep_bwd_xy = get_arg_val<uint32_t>(arg++);
+    const uint32_t report_chunks = get_arg_val<uint32_t>(arg++);  // chunks the upstream waits for (num - zone sets)
     // per wave: row_off | col_off << 8 | rows << 16 | cols << 24 inside my per-core block
     const uint32_t waves_idx = arg;
     // per entry: [block | arrival_mask << 16 | lag << 20, thr_fwd | thr_bwd << 16]; an arrival has landed once my
     // counter of its direction reaches its threshold (one fused increment per (core, unit), in the upstream's order)
     const uint32_t entries_idx = waves_idx + num_waves;
     constexpr uint32_t ENTRY_WORDS = 2;
+    constexpr uint32_t total_entries = num_chunks * num_entries;
+    // chunk c's tile origin inside the block and my valid extents there
+    auto chunk_mn = [](uint32_t c, uint32_t& im, uint32_t& in) {
+        im = m_outer ? c / n_inner : c % n_inner;
+        in = m_outer ? c % n_inner : c / n_inner;
+    };
+    // (the wave_valid below caps it at a wave's extent)
+    auto valid_ext = [](uint32_t blk, uint32_t chunk, uint32_t ci, uint32_t off) {
+        const uint32_t c0 = ci * chunk;
+        const uint32_t ext = blk - c0 < chunk ? blk - c0 : chunk;  // this chunk's extent
+        return ext <= off ? 0u : ext - off;
+    };
 
     const auto a_acc = TensorAccessor(a_args, a_addr, a_tile_bytes);
     const auto w_acc = TensorAccessor(w_args, w_addr, w_tile_bytes);
     volatile tt_l1_ptr uint32_t* arr_fwd = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arr_fwd_addr);
     volatile tt_l1_ptr uint32_t* arr_bwd = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arr_bwd_addr);
     // try_land: credit, in entry order, every entry whose arrival counter(s) already cover it; never blocks
+    // consumption reports: chunks of my arrivals compute has popped (16-bit CB ack counter, accumulated as deltas)
+    const uint32_t freed_addr = get_semaphore(2);
+    uint32_t reported[2] = {0, 0};
+    uint16_t acked_seen[2] = {
+        (uint16_t)reg_read((uintptr_t)get_cb_tiles_acked_ptr(cb_arrivals_fwd)),
+        (uint16_t)reg_read((uintptr_t)get_cb_tiles_acked_ptr(cb_arrivals_bwd))};
+    uint32_t acked_total[2] = {0, 0};
+    auto try_report = [&]() {
+        for (uint32_t d = 0; d < 2; ++d) {
+            const uint32_t per_chunk = (d == 0 ? slots_fwd : slots_bwd) * P;
+            if (per_chunk == 0 || reported[d] >= report_chunks) {
+                continue;
+            }
+            const uint16_t now =
+                (uint16_t)reg_read((uintptr_t)get_cb_tiles_acked_ptr(d == 0 ? cb_arrivals_fwd : cb_arrivals_bwd));
+            acked_total[d] += (uint16_t)(now - acked_seen[d]);
+            acked_seen[d] = now;
+            const uint32_t xy = d == 0 ? rep_fwd_xy : rep_bwd_xy;
+            while (reported[d] < report_chunks && acked_total[d] >= (reported[d] + 1) * per_chunk) {
+                noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, freed_addr), 1);
+                ++reported[d];
+            }
+        }
+    };
     uint32_t land_next = 0;
     auto try_land = [&]() {
-        while (land_next < num_entries) {
-            const uint32_t word0 = get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * land_next);
-            const uint32_t word1 = get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * land_next + 1);
+        if (report_chunks > 0) {
+            try_report();
+        }
+        while (land_next < total_entries) {
+            const uint32_t le = land_next % num_entries;
+            const uint32_t lc = land_next / num_entries;
+            const uint32_t word0 = get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * le);
+            const uint32_t word1 = get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * le + 1);
             const uint32_t mask = (word0 >> 16) & 0x3;
             invalidate_l1_cache();
-            if ((mask & 1) && (*arr_fwd < (word1 & 0xFFFF) || !cb_pages_reservable_at_back(cb_arrivals_fwd, P))) {
+            if ((mask & 1) &&
+                (*arr_fwd < lc * total_fwd + (word1 & 0xFFFF) || !cb_pages_reservable_at_back(cb_arrivals_fwd, P))) {
                 return;
             }
-            if ((mask & 2) && (*arr_bwd < (word1 >> 16) || !cb_pages_reservable_at_back(cb_arrivals_bwd, P))) {
+            if ((mask & 2) &&
+                (*arr_bwd < lc * total_bwd + (word1 >> 16) || !cb_pages_reservable_at_back(cb_arrivals_bwd, P))) {
                 return;
             }
             if (mask & 1) {
@@ -180,26 +237,37 @@ void kernel_main() {
 
     const uint32_t a_base = get_write_ptr(cb_act_k_window);  // window slot 0 (the write pointer is at the base)
     const uint32_t w_base = get_write_ptr(cb_weight_k_window);
-    constexpr uint32_t num_steps = num_entries * num_k_blocks;
+    constexpr uint32_t num_steps = total_entries * num_k_blocks;
     auto block_of = [&](uint32_t step) {
-        return get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * (step / num_k_blocks)) & 0xFFFF;
+        return get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * ((step / num_k_blocks) % num_entries)) & 0xFFFF;
     };
-    auto wave_of = [&](uint32_t step) { return get_arg_val<uint32_t>(waves_idx + (step / num_k_blocks) % num_waves); };
+    auto wave_of = [&](uint32_t step) {
+        return get_arg_val<uint32_t>(waves_idx + ((step / num_k_blocks) % num_entries) % num_waves);
+    };
     // valid extent of a wave along one axis: my valid tiles past the wave's offset, capped at its extent
     auto wave_valid = [](uint32_t valid, uint32_t off, uint32_t ext) {
         return valid <= off ? 0u : (valid - off < ext ? valid - off : ext);
     };
-    // the resident operand moves only in entry 0 (later entries re-credit the same windows)
-    auto a_moves = [&](uint32_t step) { return !(resident_a && step >= num_k_blocks); };
-    auto w_moves = [&](uint32_t step) { return !(resident_w && step >= num_k_blocks); };
+    // the resident operand moves only in the first entry of a chunk whose outer (resident-axis) index changed; later
+    // entries re-credit the same windows
+    auto reloads = [&](uint32_t step) {
+        const uint32_t eg = step / num_k_blocks;
+        return eg % num_entries == 0 && (eg / num_entries) % n_inner == 0;
+    };
+    auto a_moves = [&](uint32_t step) { return !resident_a || reloads(step); };
+    auto w_moves = [&](uint32_t step) { return !resident_w || reloads(step); };
     // DRAM reads of the parts this core sends, into window `dst`
     auto issue_a = [&](uint32_t step, uint32_t dst) {
 #ifndef MRS_SKIP_DRAM  // perf ablation only
         MaybeDeviceZoneScope("RD_DRAM");
         const uint32_t wave = wave_of(step);
         const uint32_t row_off = wave & 0xFF;
+        uint32_t im, in;
+        chunk_mn(step / num_k_blocks / num_entries, im, in);
+        const uint32_t m_valid = valid_ext(block_m, chunk_m, im, row0);
         const uint32_t m_valid_w = wave_valid(m_valid, row_off, (wave >> 16) & 0xFF);
-        const uint32_t page0 = (block_of(step) * a_row_per_block + row0 + row_off) * Kt + (step % num_k_blocks) * kb;
+        const uint32_t page0 =
+            (block_of(step) * a_row_per_block + im * chunk_m + row0 + row_off) * Kt + (step % num_k_blocks) * kb;
         for (uint32_t part = 0; part < 2; ++part) {
             if (!a_sends[part]) {
                 continue;
@@ -224,8 +292,12 @@ void kernel_main() {
         MaybeDeviceZoneScope("RD_DRAM");
         const uint32_t wave = wave_of(step);
         const uint32_t col_off = (wave >> 8) & 0xFF;
+        uint32_t im, in;
+        chunk_mn(step / num_k_blocks / num_entries, im, in);
+        const uint32_t n_valid = valid_ext(block_n, chunk_n, in, col0);
         const uint32_t n_valid_w = wave_valid(n_valid, col_off, wave >> 24);
-        const uint32_t page0 = (step % num_k_blocks) * kb * Nt + block_of(step) * w_col_per_block + col0 + col_off;
+        const uint32_t page0 =
+            (step % num_k_blocks) * kb * Nt + block_of(step) * w_col_per_block + in * chunk_n + col0 + col_off;
         for (uint32_t part = 0; part < 2; ++part) {
             if (!w_sends[part]) {
                 continue;
@@ -450,20 +522,23 @@ void kernel_main() {
     }
     {
         MaybeDeviceZoneScope("ARR_WAIT");  // drain: the arrivals still outstanding after the last load
-        while (land_next < num_entries) {
+        while (land_next < total_entries) {
             try_land();
+        }
+        while (reported[0] < (slots_fwd ? report_chunks : 0) || reported[1] < (slots_bwd ? report_chunks : 0)) {
+            try_report();  // the upstream ports wait for these credits
         }
     }
 
     noc_async_write_barrier();  // the last multicasts have landed before this kernel retires
     // Re-arm the global arrival counters for the next call (decrement what arrived, never store 0).
     if (total_fwd > 0) {
-        noc_semaphore_wait_min(arr_fwd, total_fwd);
-        noc_semaphore_inc(get_noc_addr(arr_fwd_addr), 0u - total_fwd);
+        noc_semaphore_wait_min(arr_fwd, num_chunks * total_fwd);
+        noc_semaphore_inc(get_noc_addr(arr_fwd_addr), 0u - num_chunks * total_fwd);
     }
     if (total_bwd > 0) {
-        noc_semaphore_wait_min(arr_bwd, total_bwd);
-        noc_semaphore_inc(get_noc_addr(arr_bwd_addr), 0u - total_bwd);
+        noc_semaphore_wait_min(arr_bwd, num_chunks * total_bwd);
+        noc_semaphore_inc(get_noc_addr(arr_bwd_addr), 0u - num_chunks * total_bwd);
     }
     noc_async_atomic_barrier();
 }

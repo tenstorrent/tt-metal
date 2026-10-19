@@ -28,6 +28,8 @@ void kernel_main() {
     constexpr uint32_t mailbox_stride = get_compile_time_arg_val(6);  // bytes per matmul core in the mailbox
     constexpr uint32_t max_cores = get_compile_time_arg_val(7);       // matmul cores this port serves (upper bound)
     constexpr uint32_t num_waves = get_compile_time_arg_val(8);       // entry e is wave e mod num_waves
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(10);     // the unit walk repeats once per output chunk
+    constexpr uint32_t entries_per_chunk = get_compile_time_arg_val(11);
 
     uint32_t arg = 0;
     const uint32_t finished_base = get_arg_val<uint32_t>(arg++);  // staging address (cb_finished slot 0) on every core
@@ -64,13 +66,15 @@ void kernel_main() {
         num_acks = 0;
     };
 
-    for (uint32_t u = 0; u < num_units; ++u) {
+    for (uint32_t ug = 0; ug < num_chunks * num_units; ++ug) {
         MaybeDeviceZoneScope("PORT_GATHER_UNIT");  // gather of one unit: mailbox waits + chunk reads (occupancy)
+        const uint32_t u = ug % num_units;
         const uint32_t unit = get_arg_val<uint32_t>(units_idx + u);
         const uint32_t entry = unit & 0xFF;
         const uint32_t half_mask = (unit >> 8) & 0x3;
         const uint32_t first_half = (unit >> 10) & 0x1;
-        const uint32_t slot_off = (entry % depth_handoff) * P * tile_bytes;
+        // the producing core's cb_finished slot: its global entry index (chunk-major) mod the handoff depth
+        const uint32_t slot_off = (((ug / num_units) * entries_per_chunk + entry) % depth_handoff) * P * tile_bytes;
         const uint32_t tiles = get_arg_val<uint32_t>(wave_tiles_idx + entry % num_waves);
         const uint32_t chunks_per_core = (tiles + chunk_tiles - 1) / chunk_tiles;
         for (uint32_t walk = 0; walk < 2 * num_cores; ++walk) {  // halves in unit order (first_half first)

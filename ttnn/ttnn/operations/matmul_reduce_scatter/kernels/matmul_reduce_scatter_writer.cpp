@@ -25,16 +25,22 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t num_entries = get_compile_time_arg_val(6);  // G x num_waves
     constexpr uint32_t cb_zero = get_compile_time_arg_val(7);  // compute's fused-finish zero tile (filled here once)
-    constexpr auto out_args = TensorAccessorArgs<8>();
+    // chunks: the entry walk runs once per output chunk; chunk c covers the tiles at (i_m * chunk_m, i_n * chunk_n)
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(8);
+    constexpr uint32_t n_inner = get_compile_time_arg_val(9);
+    constexpr bool m_outer = get_compile_time_arg_val(10) != 0;
+    constexpr uint32_t chunk_m = get_compile_time_arg_val(11);
+    constexpr uint32_t chunk_n = get_compile_time_arg_val(12);
+    constexpr uint32_t block_m = get_compile_time_arg_val(13);
+    constexpr uint32_t block_n = get_compile_time_arg_val(14);
+    constexpr auto out_args = TensorAccessorArgs<15>();
     constexpr uint32_t KIND_FWD = 0, KIND_BWD = 1, KIND_FIN = 2;
     constexpr uint32_t consumed_fwd_id = 0, consumed_bwd_id = 1;
 
     uint32_t arg = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t row0 = get_arg_val<uint32_t>(arg++);
+    const uint32_t row0 = get_arg_val<uint32_t>(arg++);  // chunk-local origin of my per-core block
     const uint32_t col0 = get_arg_val<uint32_t>(arg++);
-    const uint32_t m_valid = get_arg_val<uint32_t>(arg++);
-    const uint32_t n_valid = get_arg_val<uint32_t>(arg++);
     const uint32_t fwd_port_xy = get_arg_val<uint32_t>(arg++);
     const uint32_t bwd_port_xy = get_arg_val<uint32_t>(arg++);
     const uint32_t mailbox_slot_addr = get_arg_val<uint32_t>(arg++);
@@ -42,6 +48,12 @@ void kernel_main() {
     const uint32_t kinds_idx = waves_idx + num_waves;
     auto wave_valid = [](uint32_t valid, uint32_t off, uint32_t ext) {
         return valid <= off ? 0u : (valid - off < ext ? valid - off : ext);
+    };
+    // my valid tiles past `off` in chunk ci of an axis (wave_valid caps them at a wave's extent)
+    auto valid_ext = [](uint32_t blk, uint32_t chunk, uint32_t ci, uint32_t off) {
+        const uint32_t c0 = ci * chunk;
+        const uint32_t ext = blk - c0 < chunk ? blk - c0 : chunk;
+        return ext <= off ? 0u : ext - off;
     };
 
     {  // one bf16 zero tile: compute's fused finish adds the hold as DEST += hold + 0 (never popped)
@@ -76,18 +88,22 @@ void kernel_main() {
         --outstanding;
     };
 
-    for (uint32_t e = 0; e < num_entries; ++e) {
+    for (uint32_t eg = 0; eg < num_chunks * num_entries; ++eg) {
+        const uint32_t e = eg % num_entries;
         const uint32_t kind = get_arg_val<uint32_t>(kinds_idx + e);
-        const uint32_t slot = finished_base + (e % depth_handoff) * P * tile_bytes;
+        const uint32_t slot = finished_base + (eg % depth_handoff) * P * tile_bytes;
         if (kind == KIND_FIN) {
             // stream the output: write each valid tile as soon as the finish has packed it, so the DRAM writes of
             // every core overlap the finish adds instead of all landing after them (the call's tail)
+            const uint32_t c = eg / num_entries;
+            const uint32_t im = m_outer ? c / n_inner : c % n_inner;
+            const uint32_t in = m_outer ? c % n_inner : c / n_inner;
             const uint32_t wave = get_arg_val<uint32_t>(waves_idx + e % num_waves);
             const uint32_t row_off = wave & 0xFF, col_off = (wave >> 8) & 0xFF, cols = wave >> 24;
-            const uint32_t m_valid_w = wave_valid(m_valid, row_off, (wave >> 16) & 0xFF);
-            const uint32_t n_valid_w = wave_valid(n_valid, col_off, cols);
+            const uint32_t m_valid_w = wave_valid(valid_ext(block_m, chunk_m, im, row0), row_off, (wave >> 16) & 0xFF);
+            const uint32_t n_valid_w = wave_valid(valid_ext(block_n, chunk_n, in, col0), col_off, cols);
             for (uint32_t i = 0; i < m_valid_w; ++i) {
-                const uint32_t page = (row0 + row_off + i) * out_n_tiles + col0 + col_off;
+                const uint32_t page = (im * chunk_m + row0 + row_off + i) * out_n_tiles + in * chunk_n + col0 + col_off;
                 {
                     MaybeDeviceZoneScope("FIN_WAIT");
                     cb_wait_front(cb_finished, outstanding * P + i * cols + n_valid_w);
