@@ -36,13 +36,53 @@ def _cols(first, last, rows=10):
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(first, 0), ttnn.CoreCoord(last, rows - 1))])
 
 
-def _sparse_sdpa(q, kv, idx, chunk_local, k_chunk=128, **grid):
+# KVPE cache formats: production is scaled FP8 (512 fp8 latents | 4 fp32 block scales | 64 bf16 rope = 656 B rows).
+_KV_FORMATS = {
+    "fp8": (ttnn.transformer.SparseKVFormat.SCALED_FP8, ttnn.fp8_e4m3, 656),
+    "bf16": (ttnn.transformer.SparseKVFormat.BF16, ttnn.bfloat16, K_DIM),
+}
+_KV_FMT = pytest.mark.parametrize("kv_fmt", list(_KV_FORMATS))
+
+
+def _kv_cache(mesh_device, batch, tokens, kv_fmt, mesh_mapper, seed=0):
+    """A KVPE cache in kv_fmt. Scaled FP8 is packed on device by the same ops the model's cache writer uses."""
+    gen = torch.Generator().manual_seed(seed)
+    common = dict(
+        layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=mesh_mapper
+    )
+    if kv_fmt == "bf16":
+        host = torch.randn(batch, 1, tokens, K_DIM, generator=gen).to(torch.bfloat16)
+        return ttnn.from_torch(host, dtype=ttnn.bfloat16, **common)
+    latent = torch.randn(batch, 1, tokens, V_DIM, generator=gen).to(torch.bfloat16)
+    rope = torch.randn(batch, 1, tokens, K_DIM - V_DIM, generator=gen).to(torch.bfloat16)
+    fp8, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+        ttnn.from_torch(latent, dtype=ttnn.bfloat16, **common), round_scale_to_power_of_two=True
+    )
+    return ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(
+        fp8, scales, ttnn.from_torch(rope, dtype=ttnn.bfloat16, **common)
+    )
+
+
+def _zero_kv_buffer(mesh_device, tokens, kv_fmt):
+    _, dtype, width = _KV_FORMATS[kv_fmt]
+    zeros = ttnn.from_torch(
+        torch.zeros(1, 1, tokens, width, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    return zeros if dtype == ttnn.bfloat16 else ttnn.typecast(zeros, dtype)
+
+
+def _sparse_sdpa(q, kv, idx, chunk_local, kv_fmt, k_chunk=128, **grid):
     return ttnn.transformer.sparse_sdpa(
         q,
         kv,
         idx,
         V_DIM,
-        kv_format=ttnn.transformer.SparseKVFormat.BF16,
+        kv_format=_KV_FORMATS[kv_fmt][0],
         scale=K_DIM**-0.5,
         k_chunk_size=k_chunk,
         block_cyclic_sp_axis=0,
@@ -75,7 +115,7 @@ def test_sparse_sdpa_sub_core_grids_matches_golden(mesh_device, cols):
     assert pcc(restricted, ref) >= 0.99
 
 
-def _glm_inputs(mesh_device, chunk_global, cache_tokens):
+def _glm_inputs(mesh_device, chunk_global, cache_tokens, kv_fmt):
     """Per-chip GLM shapes after the head->seq reshard: q [1,64,chunk/(sp*tp),576], natural-position
     indices into a populated prefix, and a replicated block-cyclic gather buffer of cache_tokens rows."""
     s_local = chunk_global // (SP * TP)
@@ -86,12 +126,7 @@ def _glm_inputs(mesh_device, chunk_global, cache_tokens):
     shard_seq = ttnn.ShardTensorToMesh(mesh_device, dim=2)  # 32-way, matches the post-reshard sharding
     tt_q = ttnn.from_torch(q, dtype=ttnn.bfloat16, mesh_mapper=shard_seq, **common)
     tt_idx = ttnn.from_torch(idx, dtype=ttnn.uint32, mesh_mapper=shard_seq, **common)
-    tt_kv = ttnn.from_torch(
-        torch.randn(1, 1, cache_tokens, K_DIM, generator=gen).to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        **common,
-    )
+    tt_kv = _kv_cache(mesh_device, 1, cache_tokens, kv_fmt, ttnn.ReplicateTensorToMesh(mesh_device), seed=1)
     return tt_q, tt_kv, tt_idx, s_local * TP  # chunk_local = per-SP-row chunk
 
 
@@ -111,19 +146,20 @@ _CHUNKS = pytest.mark.parametrize("chunk_global", [5120, 2048], ids=["5k", "2k"]
 @pytest.mark.parametrize("device_params", [_TORUS_XY], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @_CHUNKS
-def test_sparse_sdpa_glm_core_count_perf(mesh_device, chunk_global):
+@_KV_FMT
+def test_sparse_sdpa_glm_core_count_perf(mesh_device, chunk_global, kv_fmt):
     """sparse_sdpa alone on 120 / 100 / 80 cores at the GLM shape."""
     grid = mesh_device.compute_with_storage_grid_size()
-    tt_q, tt_kv, tt_idx, chunk_local = _glm_inputs(mesh_device, chunk_global, cache_tokens=chunk_global * 51)
+    tt_q, tt_kv, tt_idx, chunk_local = _glm_inputs(mesh_device, chunk_global, chunk_global * 51, kv_fmt)
     rows = []
     for name, sub in [("full", None), ("100", _cols(0, 9, grid.y)), ("80", _cols(0, 7, grid.y))]:
         kw = {} if sub is None else {"sub_core_grids": sub}
-        run = lambda: _sparse_sdpa(tt_q, tt_kv, tt_idx, chunk_local, **kw)
+        run = lambda: _sparse_sdpa(tt_q, tt_kv, tt_idx, chunk_local, kv_fmt, **kw)
         run()
         ttnn.synchronize_device(mesh_device)
         samples = sorted(_program_us(mesh_device, run, "sparse_sdpa") for _ in range(5))
         rows.append((name, samples[len(samples) // 2]))
-    logger.info(f"sparse_sdpa GLM {chunk_global} per-program median us: {rows}")
+    logger.info(f"sparse_sdpa GLM {chunk_global} {kv_fmt} per-program median us: {rows}")
 
 
 @run_for_blackhole()
@@ -133,7 +169,8 @@ def test_sparse_sdpa_glm_core_count_perf(mesh_device, chunk_global):
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @_CHUNKS
 @pytest.mark.parametrize("prefix_slabs", [10, 40], ids=["prefix10slabs", "prefix40slabs"])
-def test_sparse_sdpa_overlap_with_kvpe_prefetch(mesh_device, chunk_global, prefix_slabs):
+@_KV_FMT
+def test_sparse_sdpa_overlap_with_kvpe_prefetch(mesh_device, chunk_global, prefix_slabs, kv_fmt):
     """sparse_sdpa (80 cores, sub-device 0) || next-layer prefix prefetch (40 cores, sub-device 1), then the
     resume, swept over the prefetch quota (PREFETCH_QUOTAS) against sparse_sdpa + one full gather."""
     grid = mesh_device.compute_with_storage_grid_size()
@@ -145,22 +182,11 @@ def test_sparse_sdpa_overlap_with_kvpe_prefetch(mesh_device, chunk_global, prefi
     cache_slabs = prefix_slabs + 1
     cache_tokens = cache_slabs * slab_global
 
-    tt_q, tt_kv, tt_idx, chunk_local = _glm_inputs(mesh_device, chunk_global, cache_tokens)
+    tt_q, tt_kv, tt_idx, chunk_local = _glm_inputs(mesh_device, chunk_global, cache_tokens, kv_fmt)
     # Two-layer KVPE cache striped over all 32 chips (the gather source) and the second gather buffer.
     common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    host_cache = torch.randn(2, 1, cache_tokens, K_DIM).to(torch.bfloat16)
-    cache = ttnn.from_torch(
-        host_cache,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
-        **common,
-    )
-    next_buffer = ttnn.from_torch(
-        torch.zeros(1, 1, cache_tokens, K_DIM).to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        **common,
-    )
+    cache = _kv_cache(mesh_device, 2, cache_tokens, kv_fmt, ttnn.ShardTensorToMesh(mesh_device, dim=2), seed=2)
+    next_buffer = _zero_kv_buffer(mesh_device, cache_tokens, kv_fmt)
 
     def scalar(v):
         return ttnn.from_torch(
@@ -196,7 +222,7 @@ def test_sparse_sdpa_overlap_with_kvpe_prefetch(mesh_device, chunk_global, prefi
         )
 
     sdpa = lambda: _sparse_sdpa(
-        tt_q, tt_kv, tt_idx, chunk_local, subdevice_id=ttnn.SubDeviceId(0), sub_core_grids=sdpa_grid
+        tt_q, tt_kv, tt_idx, chunk_local, kv_fmt, subdevice_id=ttnn.SubDeviceId(0), sub_core_grids=sdpa_grid
     )
     full_gather = lambda: gather()
     quotas = [int(q) for q in os.environ.get("PREFETCH_QUOTAS", "3,6,9,12,15,18,21,24,30,40").split(",")]
@@ -238,7 +264,7 @@ def test_sparse_sdpa_overlap_with_kvpe_prefetch(mesh_device, chunk_global, prefi
         base_sdpa, base_gather = replay_us("solo_sdpa"), replay_us("solo_full_gather")
         base = base_sdpa + base_gather
         lines = [
-            f"GLM chunk {chunk_global}, prefix {prefix_slabs} slabs: sdpa {base_sdpa:.0f} + gather {base_gather:.0f} = {base:.0f}us"
+            f"GLM {kv_fmt} chunk {chunk_global}, prefix {prefix_slabs} slabs: sdpa {base_sdpa:.0f} + gather {base_gather:.0f} = {base:.0f}us"
         ]
         lines.append(f"{'quota':>6}{'prefetch':>10}{'overlap':>9}{'resume':>8}{'total':>8}{'saved':>8}")
         for q in quotas:
@@ -250,15 +276,6 @@ def test_sparse_sdpa_overlap_with_kvpe_prefetch(mesh_device, chunk_global, prefi
         # Leave the buffer from the largest quota's pair for the exactness check.
         ttnn.execute_trace(mesh_device, traces[f"overlap_q{quotas[-1]}"], cq_id=0, blocking=True)
         ttnn.execute_trace(mesh_device, traces[f"resume_q{quotas[-1]}"], cq_id=0, blocking=True)
-        # The overlapped prefetch + resume must have gathered layer 1's prefix exactly.
-        local_rows = cache_tokens // n_dev
-        rows = (prefix_slabs + 1) * (slab_global // n_dev)
-        shards = ttnn.get_device_tensors(next_buffer)
-        for chip in (0, n_dev - 1):
-            actual = ttnn.to_torch(shards[chip])
-            for rank in range(n_dev):
-                lo = rank * local_rows
-                assert torch.equal(actual[0, 0, lo : lo + rows], host_cache[1, 0, lo : lo + rows]), (chip, rank)
         signpost("done")
     finally:
         ttnn.synchronize_device(mesh_device)
@@ -266,3 +283,20 @@ def test_sparse_sdpa_overlap_with_kvpe_prefetch(mesh_device, chunk_global, prefi
             ttnn.release_trace(mesh_device, tid)
         mesh_device.clear_loaded_sub_device_manager()
         mesh_device.remove_sub_device_manager(manager)
+
+    # Device typecasts span both sub-devices, so check exactness once the overlap manager is gone.
+    # The overlapped prefetch + resume must have gathered layer 1's prefix exactly.
+    local_rows = cache_tokens // n_dev
+    rows = (prefix_slabs + 1) * (slab_global // n_dev)
+    # FP8 shards cannot go to torch directly; a device typecast maps each byte the same way on both sides.
+    as_bf16 = lambda t: t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16)
+    sources = [ttnn.to_torch(t)[1, 0, :rows] for t in ttnn.get_device_tensors(as_bf16(cache))]
+    shards = ttnn.get_device_tensors(as_bf16(next_buffer))
+    for chip in (0, n_dev - 1):
+        actual = ttnn.to_torch(shards[chip])
+        for rank in range(n_dev):
+            lo = rank * local_rows
+            # Packed FP8 rows carry raw scale bytes that may decode as NaN; compare them as equal.
+            torch.testing.assert_close(
+                actual[0, 0, lo : lo + rows], sources[rank], rtol=0, atol=0, equal_nan=True, msg=f"{chip} {rank}"
+            )
