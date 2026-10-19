@@ -23,6 +23,7 @@ in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md).
 | `tt/kernels/` | `generic_op` kernels: `moe_*` / `fabric_*` (decode MoE and reductions), `attn/`, `proj/` |
 | `tt/decoder.py`, `tt/model.py` | Decoder layer and full model for one 1x8 replica |
 | `tt/generator.py` | `MiMoGalaxyGenerator`: four replicas on the Galaxy rows (DP=4), traced decode with a device-resident greedy loop |
+| `tt/generator_vllm.py` | `MiMoV2ForCausalLM`, the vllm-tt-plugin model class: DP=4 as in-process lanes, vLLM-owned hybrid KV (1 global + 5 SWA KV cache groups). Launch and results in [doc/vllm_integration/README.md](doc/vllm_integration/README.md) |
 | `tests/` | TP=8 x DP=4 tests on the 4x8 mesh; `tests/perf/` perf scripts and tt-kernel-agent check / bench commands. Results in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md) |
 
 ## Running
@@ -52,8 +53,8 @@ some Ethernet links can stay untrained, and opening the mesh then fails in
 
 ## Not done yet
 
-- vLLM's hybrid KV page tables: the model prefills in chunks and from `start_pos > 0` with the SWA cache paged
-  by absolute position, but nothing feeds it vLLM's tables yet.
 - Prefill tracing and performance tuning (decode is traced and tuned; prefill MoE still uses per-32-token `sparse_matmul`).
 - Non-greedy sampling on device (the device loop is greedy; the host loop reads per-chip top-k candidates).
-- vLLM integration (vllm-tt-plugin#216), speculative decoding.
+- Serving gaps (doc/vllm_integration/README.md): decode logits depend on the decode slot's parity; prefills that
+  compile new programs make the vLLM adapter recapture the decode trace; host sampling only.
+- Speculative decoding.
