@@ -1059,12 +1059,18 @@ class TtLlamaAttention(LightweightModule):
         return dense_out_reduced
 
     def _qwen_local_q_setup(self, rot_mats, seq_len):
-        """Per-column helpers for _qwen_local_q_prep, built once per (seq_len, rot mats) and shared by all layers."""
+        """Per-column helpers for _qwen_local_q_prep, built once per (seq_len, rot mats) and shared by all layers.
+
+        One entry per prefill bucket, so the warmup sweep builds every bucket before traces are captured and a
+        later request never allocates these persistent tensors behind live traces. The cache is reset only when
+        the rot mats themselves change (a new model)."""
         cache = self.tt_ccl.__dict__.setdefault("_qwen_local_q_cache", {})
-        key = (seq_len, id(rot_mats[0]), id(rot_mats[1]))
-        if key in cache:
-            return cache[key]
-        cache.clear()
+        rot_key = (id(rot_mats[0]), id(rot_mats[1]))
+        if cache.get("rot_key") != rot_key:
+            cache.clear()
+            cache["rot_key"] = rot_key
+        if seq_len in cache:
+            return cache[seq_len]
         rows, cols = list(self.mesh_device.shape)
         sl = seq_len // 8  # ring SDPA slice length (2 * ring_size slices); column c owns slices c and 7 - c
         col_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=(rows, cols))
@@ -1115,8 +1121,8 @@ class TtLlamaAttention(LightweightModule):
             rot_local.append(ttnn.concat(parts, dim=2))
             for t in parts:
                 ttnn.deallocate(t)
-        cache[key] = (starts, ends_q, page_table, rot_local)
-        return cache[key]
+        cache[seq_len] = (starts, ends_q, page_table, rot_local)
+        return cache[seq_len]
 
     def _qwen_local_q_prep(self, q_pre_bf8, rot_mats, seq_len):
         """Q prep on this column's two ring-SDPA slices only; returns the full bf8 Q buffer (other slices unused)."""
