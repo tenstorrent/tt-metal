@@ -1,0 +1,3 @@
+tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
+tests/ttnn/unit_tests/operations/fused/test_rms_norm.py
+tests/ttnn/unit_tests/operations/fused/test_softmax.py
