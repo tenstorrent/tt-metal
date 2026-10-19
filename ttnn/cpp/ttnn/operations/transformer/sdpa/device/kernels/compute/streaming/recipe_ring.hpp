@@ -20,7 +20,8 @@ void sdpa_recipe_ring_segment(
     uint32_t primary_rows,
     uint32_t joint_rows,
     bool first_ring,
-    bool last_ring) {
+    bool last_ring,
+    uint32_t padded_slots) {
     static_assert(k_tiles % SDPA_RECIPE_QK_W == 0 && d_tiles % SDPA_RECIPE_PV_W == 0);
     const bool staged = q_end - q_begin > 1;
     constexpr uint32_t chunk_rows = k_tiles * 32;
@@ -87,7 +88,15 @@ void sdpa_recipe_ring_segment(
             resident = state;
         }
     }
-    if (dummy_kv_chunks_for_phase_alignment<false>((q_end - q_begin) * valid_chunks)) {
+    // Padded multicast slots: the reader runs its multicast group's longest Q count and pushes the K/V chunks each
+    // padded slot receives, as for a real Q chunk, so this core's CBs advance with the injector's. Pop them unread.
+    for (uint32_t i = 0; i < padded_slots * valid_chunks; ++i) {
+        CircularBuffer(1).wait_front(k_tiles * d_tiles);
+        CircularBuffer(1).pop_front(k_tiles * d_tiles);
+        CircularBuffer(2).wait_front(k_tiles * d_tiles);
+        CircularBuffer(2).pop_front(k_tiles * d_tiles);
+    }
+    if (dummy_kv_chunks_for_phase_alignment<false>((q_end - q_begin + padded_slots) * valid_chunks)) {
         CircularBuffer(1).wait_front(k_tiles * d_tiles);
         CircularBuffer(1).pop_front(k_tiles * d_tiles);
         CircularBuffer(2).wait_front(k_tiles * d_tiles);
