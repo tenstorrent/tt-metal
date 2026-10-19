@@ -1342,3 +1342,10 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   `python -m models.demos.common.bringup.testing.ops_lint` checks every folder. fork_op.py writes the README skeleton
   and the new INDEX entry; rule 6 / 16 and the fork-op skill say so. DeepSeek-V4.1: combine_rf (the weighted fp32
   combine) had no INDEX row, and our combine (unweighted) was followed by ~16 ops of sums.
+
+- F114 (owner, 2026-10-19): clean wall time. The profile gate ran its wall timing in the profiled process
+  (TT_METAL_DEVICE_PROFILER=1, mid-run dumps): instrumented kernels and buffer dumps; DeepSeek-V4.1's same code
+  measured 787 / 925 ms wall. gate_command (core/gate.py with_clean_wall) now precedes every profiled test_profile.py
+  segment by the same command without the profiler variables and BRINGUP_PROFILE_WALL=1 (compile + 3 timed runs,
+  chunk_wall_ms = median, chunk_wall_clean = 1); the profiled run (BRINGUP_WALL_CLEAN=1) keeps that and records its
+  own as chunk_wall_ms_profiled. The A/B report runs both and shows chunk_wall_ms and profiled_programs.
