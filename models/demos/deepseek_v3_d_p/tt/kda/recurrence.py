@@ -25,9 +25,12 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PREP_OUTPUT_BF16_MASK,
     KDA_PREPARATION_L1_BYTES_PER_CORE,
+    KDA_SUMMARY_L1_BYTES_PER_VALUE_TILE,
     KDARecurrenceProgramConfig,
+    auto_summary_group_chunks,
     l1_when_it_fits,
     preparation_bytes,
+    scan_value_tiles_per_core,
 )
 
 
@@ -584,30 +587,39 @@ class KDARecurrence:
         self._geometry = _RecurrenceGeometry(
             batch, local_rows, heads, key_dim, value_dim, KDA_CHUNK_SIZE, local_rows // KDA_CHUNK_SIZE
         )
-        # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
-        # and chunk preparation's DRAM writes.
-        preparation_size = preparation_bytes(batch * heads, local_rows // KDA_CHUNK_SIZE, key_dim, value_dim)
-        self._preparation_memory = l1_when_it_fits(device, preparation_size, KDA_PREPARATION_L1_BYTES_PER_CORE)
-        if self._preparation_memory.buffer_type != ttnn.BufferType.L1:
-            grid = device.compute_with_storage_grid_size()
-            logger.warning(
-                f"KDA chunk terms need {preparation_size // (grid.x * grid.y) // 1024} KiB per core, over the "
-                f"{KDA_PREPARATION_L1_BYTES_PER_CORE // 1024} KiB L1 budget; keeping them in DRAM, so chunk "
-                f"preparation and the scan run slower ({heads} heads, {local_rows} rows per device)."
-            )
         self._sequence_parallel_axis = sequence_parallel_axis
         self._sequence_parallel = (
             isinstance(device, ttnn.MeshDevice) and tuple(device.shape)[sequence_parallel_axis] > 1
         )
         grouped = self._sequence_parallel or program_config.local_scan_strategy == "grouped"
+        grid = device.compute_with_storage_grid_size()
+        value_tiles = value_dim // ttnn.TILE_SIZE
+        self._groups = 1
         if grouped:
             if key_dim != value_dim:
                 raise ValueError("grouped KDA affine prefix currently requires K == V")
-            self._summary_group_chunks = program_config.summary_group_chunks
+            self._summary_group_chunks = program_config.summary_group_chunks or auto_summary_group_chunks(
+                grid, batch * heads, self._geometry.num_chunks, value_tiles
+            )
             if self._geometry.num_chunks % self._summary_group_chunks:
                 raise ValueError("summary_group_chunks must divide the constructed local chunk count")
             self._groups = self._geometry.num_chunks // self._summary_group_chunks
             self._summary_memory = _group_summary_memory_config(device, batch * heads * self._groups, key_dim)
+        # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
+        # and chunk preparation's DRAM writes. The scans run one owner per head and group, and the summary's circular
+        # buffers grow with the value tiles each owner's cores keep, leaving less room for the chunk terms.
+        scan_value_tiles = scan_value_tiles_per_core(grid, batch * heads * self._groups, value_tiles)
+        preparation_budget = max(
+            KDA_PREPARATION_L1_BYTES_PER_CORE - (scan_value_tiles - 1) * KDA_SUMMARY_L1_BYTES_PER_VALUE_TILE, 0
+        )
+        preparation_size = preparation_bytes(batch * heads, self._geometry.num_chunks, key_dim, value_dim)
+        self._preparation_memory = l1_when_it_fits(device, preparation_size, preparation_budget)
+        if self._preparation_memory.buffer_type != ttnn.BufferType.L1:
+            logger.warning(
+                f"KDA chunk terms need {preparation_size // (grid.x * grid.y) // 1024} KiB per core, over the "
+                f"{preparation_budget // 1024} KiB L1 budget; keeping them in DRAM, so chunk "
+                f"preparation and the scan run slower ({heads} heads, {local_rows} rows per device)."
+            )
         # A persistent, replicated output for high_bw_all_gather of the per-rank packed [A | B] summaries; only the
         # one-group-per-head summary gathers them directly.
         self._gather_buffer = None

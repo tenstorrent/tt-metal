@@ -169,17 +169,83 @@ def test_program_config_rejects_invalid_values(
         config_type(**kwargs)
 
 
-@pytest.mark.parametrize("local_rows,expected_group_chunks", [(640, 20), (1280, 20), (2560, 20), (320, 10)])
-def test_kimi_k3_fixed_geometry_configuration(local_rows, expected_group_chunks):
+def test_kimi_k3_configuration_does_not_depend_on_sequence_length():
     from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 
-    config = kimi_k3_program_config(active_seq_len_local=local_rows, tp_ccl_topology=ttnn.Topology.Linear)
-    assert config.recurrence.summary_group_chunks == expected_group_chunks
+    config = kimi_k3_program_config(tp_ccl_topology=ttnn.Topology.Linear)
+    assert config.recurrence.summary_group_chunks is None
     assert config.recurrence.local_scan_strategy == "grouped"
+    assert config.derived_projection_matmuls
 
 
-def test_kimi_k3_rejects_untuned_geometry(expect_error):
-    from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
+_BLACKHOLE_GRID = ttnn.CoreCoord(12, 10)
 
-    with expect_error(ValueError, "no tuned"):
-        kimi_k3_program_config(active_seq_len_local=672, tp_ccl_topology=ttnn.Topology.Linear)
+
+@pytest.mark.parametrize(
+    "local_rows,heads,expected_group_chunks",
+    [
+        # Galaxy SP8xTP4 (24 heads per device): one group per head fills the grid at every length up to T=20480.
+        *[(rows, 24, rows // 32) for rows in (128, 640, 768, 896, 1280, 1408, 2560)],
+        # LoudBox SP1xTP8 at T=5120 (12 heads): five groups split each head's value tiles over idle workers.
+        (5120, 12, 32),
+        # LoudBox SP4xTP2 at T=5120 (48 heads): more groups would not add workers.
+        (1280, 48, 40),
+        # A prime chunk count can only run as one group.
+        (37 * 32, 24, 37),
+    ],
+)
+def test_auto_summary_group_chunks(local_rows, heads, expected_group_chunks):
+    from models.demos.deepseek_v3_d_p.tt.kda.config import auto_summary_group_chunks
+
+    num_chunks = local_rows // 32
+    group_chunks = auto_summary_group_chunks(_BLACKHOLE_GRID, heads, num_chunks, value_tiles=4)
+    assert group_chunks == expected_group_chunks
+    assert num_chunks % group_chunks == 0
+
+
+def test_auto_summary_group_chunks_rejects_more_heads_than_workers(expect_error):
+    from models.demos.deepseek_v3_d_p.tt.kda.config import auto_summary_group_chunks
+
+    with expect_error(ValueError, "summary owners"):
+        auto_summary_group_chunks(_BLACKHOLE_GRID, 121, 4, value_tiles=4)
+
+
+@pytest.mark.parametrize("rows", [32 * tiles for tiles in range(10, 129, 3)])
+@pytest.mark.parametrize(
+    "k,n", [(7168, 12440), (3072, 7168), (7168, 6220), (1536, 7168)], ids=["in", "out", "in8", "out8"]
+)
+def test_projection_matmul_config_is_valid_for_any_length(rows, k, n):
+    from models.demos.deepseek_v3_d_p.tt.kda.config import (
+        KDA_PROJECTION_CB_L1_BYTES_PER_CORE,
+        KIMI_K3_PROJECTION_DTYPE,
+        _projection_cb_bytes,
+        projection_matmul_config,
+    )
+
+    config = projection_matmul_config(_BLACKHOLE_GRID, rows, k, n, KIMI_K3_PROJECTION_DTYPE)
+    assert config is not None
+    assert config.per_core_M * _BLACKHOLE_GRID.y >= rows // 32
+    assert config.per_core_N * _BLACKHOLE_GRID.x >= -(-n // 32)
+    assert config.per_core_M % config.out_block_h == 0 and config.out_block_h >= min(config.per_core_M, 2)
+    assert config.out_block_h % config.out_subblock_h == 0 and config.per_core_N % config.out_subblock_w == 0
+    assert config.out_subblock_h * config.out_subblock_w <= 4
+    assert (k // 32) % config.in0_block_w == 0
+    assert (
+        _projection_cb_bytes(config.out_block_h, config.in0_block_w, config.per_core_N, KIMI_K3_PROJECTION_DTYPE)
+        <= KDA_PROJECTION_CB_L1_BYTES_PER_CORE
+    )
+
+
+def test_projection_matmul_config_keeps_tuned_schedules():
+    from models.demos.deepseek_v3_d_p.tt.kda.config import projection_matmul_config
+
+    # Galaxy SP8xTP4 at T=5120: the schedules tuned at 640 rows per device with bf16 weights.
+    projection = projection_matmul_config(_BLACKHOLE_GRID, 640, 7168, 12440, ttnn.bfloat16)
+    assert (projection.per_core_M, projection.out_block_h, projection.in0_block_w) == (2, 2, 4)
+    assert (projection.out_subblock_h, projection.out_subblock_w, projection.per_core_N) == (1, 3, 33)
+    projection = projection_matmul_config(_BLACKHOLE_GRID, 640, 3072, 7168, ttnn.bfloat16)
+    assert (projection.per_core_M, projection.out_block_h, projection.in0_block_w) == (2, 2, 8)
+    assert (projection.out_subblock_h, projection.out_subblock_w, projection.per_core_N) == (2, 1, 19)
+    # Below one row tile per grid row, or in one-row-tile passes, the auto-selected schedule is faster.
+    assert projection_matmul_config(_BLACKHOLE_GRID, 256, 7168, 12440, ttnn.bfloat16) is None
+    assert projection_matmul_config(_BLACKHOLE_GRID, 1280, 7168, 24880, ttnn.bfloat16) is None

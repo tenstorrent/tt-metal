@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     load_kda_layer_state_dict,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
+    KDA_CHUNK_SIZE,
     KDAProgramConfig,
     KDARecurrenceProgramConfig,
     kimi_k3_program_config,
@@ -381,7 +382,6 @@ def make_kimi_k3_device_case(
         ),
     )
     selected_program_config = program_config or kimi_k3_program_config(
-        active_seq_len_local=case.hidden.shape[1] // tuple(mesh_device.shape)[sequence_parallel_axis],
         # Match production: ring the TP axis wherever the opened fabric wraps it (Galaxy torus).
         tp_ccl_topology=(
             ttnn.Topology.Ring
@@ -494,6 +494,13 @@ def to_sp_input(hidden: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int
     )
 
 
+# Every Galaxy SP8xTP4 prefill chunk length the K3 KDA tests cover: each 1k from 1k to 11k tokens (128 to 1408 rows
+# per device). Nothing in the layer is configured per length; 11k checks a length past the 10k target.
+GALAXY_CHUNK_SEQUENCES = tuple(1024 * k for k in range(1, 12))
+
+_SMALL_MODEL_GROUP_CHUNKS = 8
+
+
 def build_layer(
     mesh_device: ttnn.MeshDevice,
     config: KDAConfig,
@@ -505,9 +512,12 @@ def build_layer(
     summary_group_chunks: int | None = None,
 ) -> ttKDA:
     if summary_group_chunks is None:
-        # Explicit small-model configurations preserve the established geometry coverage.
-        local_rows = active_seq_len // tuple(mesh_device.shape)[sp_axis]
-        summary_group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 5, 640: 5, 1280: 8, 2560: 8, 5120: 8}[local_rows]
+        # Small models would run one group per head; at most _SMALL_MODEL_GROUP_CHUNKS chunks per group keeps several
+        # groups, and the cross-group prefix, covered at every length.
+        num_chunks = active_seq_len // tuple(mesh_device.shape)[sp_axis] // KDA_CHUNK_SIZE
+        summary_group_chunks = max(
+            chunks for chunks in range(1, min(num_chunks, _SMALL_MODEL_GROUP_CHUNKS) + 1) if num_chunks % chunks == 0
+        )
     return ttKDA(
         mesh_device,
         config,

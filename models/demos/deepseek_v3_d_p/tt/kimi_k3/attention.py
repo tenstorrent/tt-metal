@@ -334,9 +334,7 @@ def build_attention(
             tt_ccl=get_tt_ccl(mesh_device),
             sp_axis=sp_axis,
             tp_axis=tp_axis,
-            program_config=kimi_k3_program_config(
-                active_seq_len_local=seq_len // tuple(mesh_device.shape)[sp_axis], tp_ccl_topology=tp_topology
-            ),
+            program_config=kimi_k3_program_config(tp_ccl_topology=tp_topology),
             active_seq_len=seq_len,
         ),
         layer_idx=layer_idx,

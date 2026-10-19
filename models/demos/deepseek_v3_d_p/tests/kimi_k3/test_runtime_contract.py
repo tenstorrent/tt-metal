@@ -162,8 +162,8 @@ def test_kda_construction_passes_global_and_local_geometry(monkeypatch, sp_axis,
     )
     kwargs = constructor.call_args.kwargs
     assert kwargs["active_seq_len"] == 2560
-    # SP8 owns 320 rows (10 chunks); SP4 owns 640 rows (20 chunks).
-    assert kwargs["program_config"].recurrence.summary_group_chunks == (10 if sp_axis == 0 else 20)
+    # The recurrence derives its summary groups from the local geometry it is constructed with.
+    assert kwargs["program_config"].recurrence.summary_group_chunks is None
 
 
 @pytest.mark.parametrize(
