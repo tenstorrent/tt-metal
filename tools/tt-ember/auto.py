@@ -17,14 +17,20 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from common import (
+    DEFAULT_DEVICE_ID,
+    DEFAULT_SLOT_MS,
+    DEFAULT_TELEMETRY_FREQ_HZ,
     DEFAULT_TRIM_MS,
+    EXIT_PROFILER_CSV_MISSING,
     EXIT_SUMMARY_MISSING,
     EXIT_TELEMETRY_DIED,
     EXIT_TELEMETRY_FILE_MISSING,
     EXIT_TELEMETRY_START,
     LONG_MATMUL_APP,
     RUN_COMPLETE_FILE,
+    check_long_matmul_device,
     long_matmul_args,
+    misplaced_options,
     run_settings,
     shell_join,
     subdir_name,
@@ -238,8 +244,12 @@ def run_workflow(
     paths = build_run_paths(output_root, subdir)
     # A previous attempt's results must not survive into this one; RUN_COMPLETE_FILE is written
     # again only if this run gets all the way through the parser. The parser clears its own
-    # kernel outputs.
-    for stale in (paths.run_dir / RUN_COMPLETE_FILE, paths.run_dir / "program_intervals.csv"):
+    # kernel outputs, but keeps the profiler CSV copy, since a re-parse may need it.
+    for stale in (
+        paths.run_dir / RUN_COMPLETE_FILE,
+        paths.run_dir / "program_intervals.csv",
+        paths.run_dir / device_profiler_csv.name,
+    ):
         stale.unlink(missing_ok=True)
 
     # tt-umd's telemetry tool takes -f as a polling PERIOD in microseconds, not a frequency in
@@ -353,11 +363,12 @@ def run_workflow(
             if device_profiler_csv.exists():
                 log(f"Device profiler csv found: {device_profiler_csv}")
                 parser_device_profiler_csv: Optional[Path] = device_profiler_csv
+            elif os.environ.get("TT_METAL_DEVICE_PROFILER", "0") not in ("", "0"):
+                # The run would otherwise be recorded as a profiler run without its kernel data.
+                log(f"ERROR: TT_METAL_DEVICE_PROFILER is set, but there is no profiler csv at {device_profiler_csv}.")
+                return EXIT_PROFILER_CSV_MISSING
             else:
-                log(
-                    "NOTE: no device profiler csv found -- was the app run with "
-                    "TT_METAL_DEVICE_PROFILER=1? Skipping kernel start/end analysis."
-                )
+                log("NOTE: no device profiler csv (TT_METAL_DEVICE_PROFILER is not set); skipping the kernel analysis.")
                 parser_device_profiler_csv = None
 
             log("Running parser...")
@@ -424,8 +435,9 @@ def main() -> int:
     parser.add_argument(
         "--telemetry-freq",
         type=positive_int,
-        default=50,
-        help="Telemetry sampling frequency in Hz; converted to the polling period the telemetry tool expects. Default: 50",
+        default=DEFAULT_TELEMETRY_FREQ_HZ,
+        help="Telemetry sampling frequency in Hz; converted to the polling period the telemetry tool expects. "
+        f"Default: {DEFAULT_TELEMETRY_FREQ_HZ}",
     )
 
     parser.add_argument(
@@ -477,15 +489,15 @@ def main() -> int:
     parser.add_argument(
         "--slot-ms",
         type=int,
-        default=1,
-        help="slot-ms passed to the parser. Default: 1",
+        default=DEFAULT_SLOT_MS,
+        help=f"slot-ms passed to the parser. Default: {DEFAULT_SLOT_MS}",
     )
     parser.add_argument(
         "--device-id",
         type=int,
-        default=0,
+        default=DEFAULT_DEVICE_ID,
         help=(
-            "Device whose telemetry the parser uses. Default: 0, the device long_matmul runs on; "
+            f"Device whose telemetry the parser uses. Default: {DEFAULT_DEVICE_ID}, the device long_matmul runs on; "
             "without it the parser would mix every chip's samples on a multi-chip board."
         ),
     )
@@ -551,7 +563,7 @@ def main() -> int:
 
     # --app-args takes everything after it, so an auto.py option written after it would silently
     # become an app argument. Refuse that instead.
-    misplaced = [a for a in args.app_args if a.split("=", 1)[0] in parser._option_string_actions]
+    misplaced = misplaced_options(parser, args.app_args)
     if misplaced:
         parser.error(f"--app-args must come last; these auto.py options follow it: {' '.join(misplaced)}")
 
@@ -577,6 +589,7 @@ def main() -> int:
             app_args.append(str(args.fixed_blocks_per_core))
         try:
             long_matmul_args(app_args)
+            check_long_matmul_device(args.app_exe, args.device_id)
         except ValueError as e:
             parser.error(str(e))
     elif args.fixed_blocks_per_core is not None:

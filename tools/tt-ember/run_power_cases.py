@@ -8,7 +8,7 @@ Top-level driver for the POWER_CASE power-experiment sweep.
 
 For each requested POWER_CASE value (see tt_metal/programming_examples/long_matmul/README.md for
 what each case disables or amplifies in the kernels), and for each requested --ops entry (which per-tile
-FPU instruction the compute kernel runs, via LONG_MATMUL_OP -- see compute.cpp), this script:
+instruction, FPU or SFPU, the compute kernel runs, via LONG_MATMUL_OP -- see compute.cpp), this script:
 
   1. Resets the hardware (`tt-smi -r`) and waits for it to re-initialize.
   2. Runs auto.py with POWER_CASE=<i> and LONG_MATMUL_OP=<op> exported into the application's
@@ -20,9 +20,9 @@ FPU instruction the compute kernel runs, via LONG_MATMUL_OP -- see compute.cpp),
   4. If more than one op was requested, also writes a cross-op cases file pairing every
      (op, case) combination -- e.g. "regular (matmul)" next to "regular (add)" -- and calls
      compare_cases.py once more to produce <output-root>/compare_runs_out/, so the two
-     operations can be read off the same chart, case by case. Any (op, case) pair whose
-     program_intervals.csv is missing (failed or not yet run) is skipped with a note rather
-     than failing the whole comparison.
+     operations can be read off the same chart, case by case. Any (op, case) pair that is not
+     a complete run with this sweep's settings (no run_complete.json, an incomplete run, or one
+     made with other settings) is skipped with a note rather than failing the whole comparison.
 
 This automates exactly the manual sequence, repeated once per op in --ops:
     tt-smi -r
@@ -59,6 +59,10 @@ from typing import Dict, List, Optional, Tuple
 import matplotlib
 
 from common import (
+    DEFAULT_DEVICE_ID,
+    DEFAULT_DPI,
+    DEFAULT_SLOT_MS,
+    DEFAULT_TELEMETRY_FREQ_HZ,
     LONG_MATMUL_APP,
     POWER_CASES_TRIM_MS,
     RUN_COMPLETE_FILE,
@@ -68,10 +72,13 @@ from common import (
     long_matmul_args,
     reset_hardware,
     run_settings,
+    check_long_matmul_device,
+    misplaced_options,
     run_status,
+    save_figure,
     shell_join,
 )
-from compare_cases import grouped_bar_chart
+from compare_cases import build_grid_order, grouped_bar_chart
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -213,6 +220,15 @@ class Runs:
 
     def complete(self, op: str, subdir: str) -> bool:
         return run_status(self.output_root / op / subdir, self.settings(op, subdir)) == "done"
+
+    def grid_order(self, pairs: List[Tuple[str, str]]) -> List[str]:
+        """Every grid in the complete runs among (op, subdir) pairs, ordered by core count."""
+        rows_by_case: Dict[str, List[Dict[str, str]]] = {}
+        for op, subdir in pairs:
+            if self.complete(op, subdir):
+                with (self.output_root / op / subdir / "program_intervals.csv").open(newline="") as f:
+                    rows_by_case[f"{op}/{subdir}"] = list(csv.DictReader(f))
+        return build_grid_order(rows_by_case)
 
     def rows(self, op: str, subdir: str, note_prefix: str) -> Optional[Dict[str, Dict[str, str]]]:
         """program_intervals.csv of op/subdir by grid, or None (with a note) if that run is not a
@@ -427,9 +443,7 @@ def plot_energy_by_engine_stacked(
     ax.set_title("Total dynamic energy by engine (reader / writer / compute), per grid")
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
+    save_figure(fig, out_path, dpi)
     print(f"Wrote: {out_path}", flush=True)
 
 
@@ -527,9 +541,7 @@ def plot_cross_op_stacked_by_engine(
     ax.set_ylabel(ylabel)
     ax.set_title(f"{title}, per grid, per op ({' vs '.join(ops_with_data)})")
     ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
+    save_figure(fig, out_path, dpi)
     print(f"Wrote: {out_path}", flush=True)
 
 
@@ -637,7 +649,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--auto-script", type=Path, default=Path(__file__).parent / "auto.py")
     ap.add_argument("--compare-script", type=Path, default=Path(__file__).parent / "compare_cases.py")
     ap.add_argument("--telemetry-exe", required=True, type=Path)
-    ap.add_argument("--telemetry-freq", type=int, default=50)
+    ap.add_argument("--telemetry-freq", type=int, default=DEFAULT_TELEMETRY_FREQ_HZ)
     ap.add_argument("--app-exe", required=True, type=Path)
     ap.add_argument("--parser-script", required=True, type=Path)
     ap.add_argument(
@@ -648,8 +660,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     ap.add_argument("--tt-metal-root", required=True, type=Path)
     ap.add_argument("--output-root", required=True, type=Path)
-    ap.add_argument("--slot-ms", type=int, default=1)
-    ap.add_argument("--device-id", type=int, default=0)
+    ap.add_argument("--slot-ms", type=int, default=DEFAULT_SLOT_MS)
+    ap.add_argument("--device-id", type=int, default=DEFAULT_DEVICE_ID)
     ap.add_argument(
         "--trim-ms",
         type=float,
@@ -658,7 +670,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "were made with it. A run made with another value counts as different settings.",
     )
     ap.add_argument("--tt-smi", default="tt-smi", help="tt-smi executable name or path. Default: tt-smi")
-    ap.add_argument("--dpi", type=int, default=150, help="DPI for comparison figures. Default: 150")
+    ap.add_argument("--dpi", type=int, default=DEFAULT_DPI, help=f"DPI for comparison figures. Default: {DEFAULT_DPI}")
     ap.add_argument(
         "--cases-file-name",
         default="power_cases.txt",
@@ -693,7 +705,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     args = ap.parse_args(argv)
     # --app-args takes everything after it; refuse options of this script written after it.
-    misplaced = [a for a in args.app_args if a.split("=", 1)[0] in ap._option_string_actions]
+    misplaced = misplaced_options(ap, args.app_args)
     if misplaced:
         ap.error(f"--app-args must come last; these options follow it: {' '.join(misplaced)}")
     # Same check auto.py makes, done here so a bad sweep fails before the first reset.
@@ -702,6 +714,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.app_exe.name == LONG_MATMUL_APP:
         try:
             m, n, k, iterations, fixed_blocks_per_core = long_matmul_args(args.app_args)
+            check_long_matmul_device(args.app_exe, args.device_id)
         except ValueError as e:
             ap.error(str(e))
         mnk_iters = (m, n, k, iterations)
@@ -733,8 +746,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         print(f"[ENERGY/FLOP] note: the app is not {LONG_MATMUL_APP}; skipping the energy-per-FLOP charts", flush=True)
 
+    # Check every run before the first reset: a run made with other settings stops the sweep, and
+    # finding one hours in, after the earlier ops, would waste them.
+    if not args.force:
+        conflicts = [
+            f"{op}/{subdir}"
+            for op in args.ops
+            for subdir, _label in cases_in_order
+            if run_status(output_root / op / subdir, runs.settings(op, subdir)) == "different"
+        ]
+        if conflicts:
+            print(
+                f"ERROR: these runs were made with different settings (see their {RUN_COMPLETE_FILE}): "
+                f"{', '.join(conflicts)}. Use another --output-root, or --force to replace them.",
+                file=sys.stderr,
+            )
+            return 1
+
     per_op_engine_j: Dict[str, Dict[str, Dict[str, float]]] = {}
-    cross_op_grid_order: List[str] = []
+    all_pairs = [(op, subdir) for op in args.ops for subdir, _label in cases_in_order]
     for op in args.ops:
         op_output_root = output_root / op
         if not args.dry_run:
@@ -746,20 +776,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         for power_case, (subdir, _label) in zip(args.power_cases, cases_in_order):
             run_dir = op_output_root / subdir
-            # A run is done only if auto.py recorded it as complete with the same settings: a
-            # run that failed part way is redone, and one made with another shape or mode stops
-            # the sweep instead of being mixed in.
-            status = run_status(run_dir, runs.settings(op, subdir))
-            if status == "done" and not args.force:
+            # A run is done only if auto.py recorded it as complete with the same settings; a
+            # run that failed part way is redone (runs with other settings were refused above).
+            if run_status(run_dir, runs.settings(op, subdir)) == "done" and not args.force:
                 print(f"\n[SKIP] '{op}/{subdir}' is already complete. Skipping (use --force to re-run).", flush=True)
                 continue
-            if status == "different" and not args.force:
-                print(
-                    f"ERROR: '{op}/{subdir}' holds a run made with different settings (see its "
-                    f"{RUN_COMPLETE_FILE}). Use another --output-root, or --force to replace it.",
-                    file=sys.stderr,
-                )
-                return 1
 
             rc = reset_hardware(args.tt_smi, args.dry_run)
             if rc != 0:
@@ -802,9 +823,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return rc
 
         if not args.dry_run:
-            active = runs.rows(op, ALL_ACTIVE_CASE, "[ENERGY]")
-            grid_order = list(active.keys()) if active else []
-            cross_op_grid_order = cross_op_grid_order or grid_order
+            grid_order = runs.grid_order([(op, subdir) for subdir, _label in cases_in_order])
             out_dir = op_output_root / "compare_runs_out"
 
             per_engine_j = compute_energy_by_engine(runs, op)
@@ -855,7 +874,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return rc
             cross_op_done = True
 
-            grid_order = cross_op_grid_order
+            grid_order = runs.grid_order(all_pairs)
             out_dir = output_root / "compare_runs_out"
             if not per_op_engine_j:
                 print(

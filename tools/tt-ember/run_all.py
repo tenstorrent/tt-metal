@@ -15,7 +15,12 @@ from pathlib import Path
 from typing import List, Optional
 
 from common import (
+    DEFAULT_DEVICE_ID,
+    DEFAULT_DPI,
+    DEFAULT_SLOT_MS,
+    DEFAULT_TELEMETRY_FREQ_HZ,
     DEFAULT_TRIM_MS,
+    check_long_matmul_device,
     RUN_COMPLETE_FILE,
     auto_py_command,
     exit_reason,
@@ -97,8 +102,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument(
         "--telemetry-freq",
         type=int,
-        default=50,
-        help="Telemetry frequency in Hz. Default: 50",
+        default=DEFAULT_TELEMETRY_FREQ_HZ,
+        help=f"Telemetry frequency in Hz. Default: {DEFAULT_TELEMETRY_FREQ_HZ}",
     )
     ap.add_argument(
         "--app-exe",
@@ -133,14 +138,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument(
         "--slot-ms",
         type=int,
-        default=1,
-        help="Bin width in ms passed to parser. Default: 1",
+        default=DEFAULT_SLOT_MS,
+        help=f"Bin width in ms passed to parser. Default: {DEFAULT_SLOT_MS}",
     )
     ap.add_argument(
         "--device-id",
         type=int,
-        default=0,
-        help="Device ID passed to parser. Default: 0",
+        default=DEFAULT_DEVICE_ID,
+        help=f"Device ID passed to parser. Default: {DEFAULT_DEVICE_ID}",
     )
     ap.add_argument(
         "--trim-ms",
@@ -167,11 +172,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument(
         "--dpi",
         type=int,
-        default=150,
-        help="DPI for comparison figures. Default: 150",
+        default=DEFAULT_DPI,
+        help=f"DPI for comparison figures. Default: {DEFAULT_DPI}",
     )
 
     args = ap.parse_args(argv)
+    try:
+        check_long_matmul_device(args.app_exe, args.device_id)
+    except ValueError as e:
+        ap.error(str(e))
     print(f"Output root: {args.output_root}", flush=True)
 
     # --- Runs: a run is done only if auto.py recorded it as complete with the same settings ---

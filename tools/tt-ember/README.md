@@ -41,6 +41,11 @@ results run `export LONG_MATMUL_MODE=legacy` first. `parser.py` also takes `--mo
 keeps the idle-pause window widened by the trim, floors dynamic current at 0, and uses the
 trimmed window for pJ/FLOP.
 
+The mode does not change the telemetry rate. The published captures polled every 50 us; to
+match them (and so the peak-current figures, which are maxima over the samples), pass
+`--telemetry-freq 20000`. The default, 50 Hz, polls every 20 ms, which gives the same averages
+but misses short spikes.
+
 Measure power and profile kernels in separate runs: with `TT_METAL_DEVICE_PROFILER=1` the
 kernels read the timer in their inner loops and the profiler is read back during the first idle
 pause, which is the one the base current is measured in. Unset it before a power sweep.
@@ -87,11 +92,11 @@ Results land in `./out/prefill_1024_2048_2048_160/` (see [Output Structure](#out
 
 Manages the full measurement lifecycle: starts the telemetry binary as a background subprocess, runs the application in the foreground while capturing its stdout to `summary.txt`, waits for a 10-second cool-down, and invokes `parser.py` on the captured data. All output is written to a structured directory under `--output-root`.
 
-It returns the app's or the parser's exit code when one of them fails, and its own codes otherwise: 20 (telemetry exited right after starting), 21 (no telemetry file), 22 (the app wrote no output), 23 (telemetry exited before the run ended). The sweeps print what each of these and the parser's 10 and 11 mean.
+It returns the app's or the parser's exit code when one of them fails, and its own codes otherwise: 20 (telemetry exited right after starting), 21 (no telemetry file), 22 (the app wrote no output), 23 (telemetry exited before the run ended), 24 (`TT_METAL_DEVICE_PROFILER` is set but the app wrote no profiler CSV). The sweeps print what each code means (see `EXIT_REASONS` in `common.py`). For `long_matmul`, `--device-id` must be 0: the app always runs on device 0.
 
 ### `parser.py` — Analysis Engine
 
-Can be run standalone against a previously captured telemetry log. Parses raw voltage, current, and power samples, bins them into time slots, computes per-interval metrics, writes a 29-column CSV, and produces 13 matplotlib figures (with `--program-log`; without it, only `telemetry_overview.png`). It exits with code 10 when the outputs are written but a run is unusable (a grid with no telemetry samples, or no idle pause to measure the base current in), and with code 11 for telemetry from several devices unless `--device-id` says which one to use.
+Can be run standalone against a previously captured telemetry log. Parses raw voltage, current, and power samples, bins them into time slots, computes per-interval metrics, writes a 29-column CSV, and produces 13 matplotlib figures (with `--program-log`; without it, only `telemetry_overview.png`). It exits with code 10 when the outputs are written but a run is unusable (a grid with no telemetry samples, no idle pause to measure the base current in, or lost profiler markers), and with code 11 for telemetry from several devices unless `--device-id` says which one to use.
 
 ```bash
 python3 parser.py \

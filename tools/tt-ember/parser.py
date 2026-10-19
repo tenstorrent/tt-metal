@@ -21,7 +21,22 @@ from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 
-from common import DEFAULT_TRIM_MS, EXIT_MULTIPLE_DEVICES, EXIT_RUN_INCOMPLETE, subdir_name
+from common import (
+    DEFAULT_DPI,
+    DEFAULT_TRIM_MS,
+    EXIT_INPUT_NOT_FOUND,
+    EXIT_MULTIPLE_DEVICES,
+    EXIT_NO_DEVICE_SAMPLES,
+    EXIT_NO_PROGRAM_ROWS,
+    EXIT_NO_SLOTS,
+    EXIT_NO_TELEMETRY_LINES,
+    EXIT_PROFILER_CSV_NOT_FOUND,
+    EXIT_PROFILER_CSV_WITHOUT_PROGRAM_LOG,
+    EXIT_PROGRAM_LOG_NOT_FOUND,
+    EXIT_RUN_INCOMPLETE,
+    save_figure,
+    subdir_name,
+)
 
 RE_TS = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)")
 RE_DEV = re.compile(r"\b(?:Device|Chip)\s+ID\s+(?P<dev>\d+)\b")
@@ -32,6 +47,13 @@ RE_METRIC = re.compile(
     r"\b(?P<key>TDP|TDC|VCORE)\s+(?P<val>\d+(?:\.\d+)?)(?:\s*/\s*(?:\d+(?:\.\d+)?|N/A))?\s*(?P<unit>W|A|mV)\b"
 )
 
+# Size of the per-metric charts, the top of the percentage axes (a little over 100 so a full
+# bar is visible), and the widths of the two stderr tables.
+METRIC_FIGSIZE = (12, 6)
+PCT_YLIM = 105.0
+KERNEL_TABLE_WIDTH = 130
+INTERVAL_TABLE_WIDTH = 220
+
 # 1 mAh = 3.6 A*s and 1 mWh = 3.6 J (3600 s/h / 1000).
 AS_PER_MAH = 3.6
 J_PER_MWH = 3.6
@@ -40,10 +62,10 @@ RE_PROGRAM_ROW = re.compile(
     r"^\s*"
     r"(?P<grid>\d+x\d+)\s+"
     r"(?P<cores>\d+)\s+"
-    r"(?:(?P<blocks_per_core>\d+(?:\s*/\s*\d+)?)\s+)?"
+    r"(?:\d+(?:\s*/\s*\d+)?\s+)?"  # blocks per core (fixed mode only)
     r"(?P<algo_time_s>\d+(?:\.\d+)?)\s+"
-    r"(?P<tflops>\d+(?:\.\d+)?)\s+"
-    r"(?P<per_iter_ms>\d+(?:\.\d+)?)\s+"
+    r"\d+(?:\.\d+)?\s+"  # TFLOPS
+    r"\d+(?:\.\d+)?\s+"  # per iteration [ms]
     r"(?P<start>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)\s+"
     r"(?P<end>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)"
     r"\s*$"
@@ -80,10 +102,7 @@ class Sample:
 class ProgramInterval:
     grid: str
     cores: int
-    blocks_per_core: Optional[str]
     algo_time_s: float
-    tflops: float
-    per_iter_ms: float
     start_time: datetime
     end_time: datetime
 
@@ -268,10 +287,7 @@ def parse_program_log(path: Path) -> List[ProgramInterval]:
                 ProgramInterval(
                     grid=m.group("grid"),
                     cores=int(m.group("cores")),
-                    blocks_per_core=m.group("blocks_per_core"),
                     algo_time_s=float(m.group("algo_time_s")),
-                    tflops=float(m.group("tflops")),
-                    per_iter_ms=float(m.group("per_iter_ms")),
                     start_time=datetime.fromisoformat(m.group("start")),
                     end_time=datetime.fromisoformat(m.group("end")),
                 )
@@ -374,18 +390,18 @@ def compute_kernel_intervals(
 
 def print_kernel_interval_report(kernel_intervals: List[Dict[str, object]]) -> None:
     print("\nKERNEL START/END INTERVAL ANALYSIS (device profiler)", file=sys.stderr)
-    print("=" * 130, file=sys.stderr)
+    print("=" * KERNEL_TABLE_WIDTH, file=sys.stderr)
     print(
         f"{'Grid':>6} {'Kernel':>8} {'Duration[s]':>12} {'Start':>26} {'End':>26}",
         file=sys.stderr,
     )
-    print("=" * 130, file=sys.stderr)
+    print("=" * KERNEL_TABLE_WIDTH, file=sys.stderr)
 
     for r in kernel_intervals:
         print(
             f"{str(r['grid']):>6} "
             f"{str(r['kernel']):>8} "
-            f"{format_num(r['duration_s'], '.6f'):>12} "
+            f"{format_num(r['duration_s']):>12} "
             f"{str(r['start_time']):>26} "
             f"{str(r['end_time']):>26}",
             file=sys.stderr,
@@ -730,18 +746,15 @@ def aggregate_kernel_utilization(rows: List[Dict[str, object]]) -> List[Dict[str
     for grid in grid_order:
         for kernel, risc in series_keys:
             group_rows = groups.get((grid, kernel, risc), [])
-            wait_vals = [r["wait_pct"] for r in group_rows if np.isfinite(r["wait_pct"])]
-            active_vals = [r["active_pct"] for r in group_rows if np.isfinite(r["active_pct"])]
-            overhead_vals = [r["overhead_pct"] for r in group_rows if np.isfinite(r["overhead_pct"])]
             agg.append(
                 {
                     "grid": grid,
                     "kernel": kernel,
                     "risc": risc,
                     "core_count": len(group_rows),
-                    "avg_wait_pct": safe_mean(wait_vals),
-                    "avg_active_pct": safe_mean(active_vals),
-                    "avg_overhead_pct": safe_mean(overhead_vals),
+                    "avg_wait_pct": mean_finite(group_rows, "wait_pct"),
+                    "avg_active_pct": mean_finite(group_rows, "active_pct"),
+                    "avg_overhead_pct": mean_finite(group_rows, "overhead_pct"),
                 }
             )
     return agg
@@ -784,7 +797,7 @@ def plot_kernel_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: in
         overhead_base = list(active_pct)
         wait_base = [a + o for a, o in zip(active_pct, overhead_pct)]
 
-        fig, ax = plt.subplots(figsize=(12, 6))
+        fig, ax = plt.subplots(figsize=METRIC_FIGSIZE)
         ax.bar(x, active_pct, label=active_label[kernel], color="tab:green")
         ax.bar(x, overhead_pct, bottom=overhead_base, label="Overhead (index/CB bookkeeping)", color="tab:olive")
         # Each TRISC waits in a different call: TRISC0 on input tiles (cb_wait_front), TRISC1 for
@@ -798,7 +811,7 @@ def plot_kernel_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: in
         ax.set_xticklabels(grids, rotation=45, ha="right")
         ax.set_xlabel("Grid size")
         ax.set_ylabel("% of kernel lifetime (avg over cores)")
-        ax.set_ylim(0, 105)
+        ax.set_ylim(0, PCT_YLIM)
 
         if kernel == "COMPUTE":
             role_label = _COMPUTE_RISC_LABELS.get(risc, risc)
@@ -811,10 +824,8 @@ def plot_kernel_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: in
         ax.legend(loc="lower right")
         ax.grid(True, axis="y")
 
-        fig.tight_layout()
         out_path = fig_dir / out_name
-        fig.savefig(out_path, dpi=dpi)
-        plt.close(fig)
+        save_figure(fig, out_path, dpi)
         out_files.append(out_path)
 
     return out_files
@@ -843,26 +854,23 @@ def aggregate_combined_utilization(rows: List[Dict[str, object]]) -> List[Dict[s
                 for r in rows
                 if str(r["grid"]) == grid and str(r["kernel"]) == kernel and (risc is None or str(r["risc"]) == risc)
             ]
-            active_s_vals = [r["active_s"] for r in subset if np.isfinite(r["active_s"])]
-            wait_s_vals = [r["wait_s"] for r in subset if np.isfinite(r["wait_s"])]
-            overhead_s_vals = [r["overhead_s"] for r in subset if np.isfinite(r["overhead_s"])]
-            active_pct_vals = [r["active_pct"] for r in subset if np.isfinite(r["active_pct"])]
-            wait_pct_vals = [r["wait_pct"] for r in subset if np.isfinite(r["wait_pct"])]
-            overhead_pct_vals = [r["overhead_pct"] for r in subset if np.isfinite(r["overhead_pct"])]
-            lifetime_s_vals = [r["lifetime_s"] for r in subset if np.isfinite(r["lifetime_s"])]
-
             agg.append(
                 {
                     "grid": grid,
                     "resource": label,
                     "core_count": len(subset),
-                    "avg_active_s": safe_mean(active_s_vals),
-                    "avg_wait_s": safe_mean(wait_s_vals),
-                    "avg_overhead_s": safe_mean(overhead_s_vals),
-                    "avg_active_pct": safe_mean(active_pct_vals),
-                    "avg_wait_pct": safe_mean(wait_pct_vals),
-                    "avg_overhead_pct": safe_mean(overhead_pct_vals),
-                    "avg_lifetime_s": safe_mean(lifetime_s_vals),
+                    **{
+                        f"avg_{key}": mean_finite(subset, key)
+                        for key in (
+                            "active_s",
+                            "wait_s",
+                            "overhead_s",
+                            "active_pct",
+                            "wait_pct",
+                            "overhead_pct",
+                            "lifetime_s",
+                        )
+                    },
                 }
             )
     return agg
@@ -904,7 +912,7 @@ def plot_combined_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: 
             "avg_wait_pct",
             "% of kernel lifetime (avg over cores)",
             "pct",
-            105.0,
+            PCT_YLIM,
             False,
         ),
         ("avg_active_s", "avg_overhead_s", "avg_wait_s", "Seconds (avg over cores)", "seconds", None, True),
@@ -982,10 +990,8 @@ def plot_combined_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: 
         ax.legend(loc="upper right", ncol=5 if show_duration_ref else 3, fontsize=8)
         ax.grid(True, axis="y")
 
-        fig.tight_layout()
         out_path = fig_dir / f"combined_utilization_{suffix}.png"
-        fig.savefig(out_path, dpi=dpi)
-        plt.close(fig)
+        save_figure(fig, out_path, dpi)
         out_files.append(out_path)
 
     return out_files
@@ -1089,6 +1095,11 @@ def safe_mean(values: List[float]) -> float:
     if not values:
         return float("nan")
     return float(np.mean(values))
+
+
+def mean_finite(rows: List[Dict[str, object]], key: str) -> float:
+    """Mean of rows[*][key] over the rows where it is finite; NaN if there are none."""
+    return safe_mean([r[key] for r in rows if np.isfinite(r[key])])
 
 
 def safe_max(values: List[float]) -> float:
@@ -1333,17 +1344,17 @@ def compute_interval_metrics(
     return results
 
 
-def format_num(x: object, fmt: str = ".6f") -> str:
+def format_num(x: object) -> str:
     if isinstance(x, (float, np.floating)):
         if not np.isfinite(x):
             return "nan"
-        return format(float(x), fmt)
+        return f"{float(x):.6f}"
     return str(x)
 
 
 def print_interval_report(results: List[Dict[str, object]], trim_ms: float) -> None:
     print("\nPROGRAM INTERVAL ANALYSIS", file=sys.stderr)
-    print("=" * 220, file=sys.stderr)
+    print("=" * INTERVAL_TABLE_WIDTH, file=sys.stderr)
     print(
         f"{'Grid':>6} "
         f"{'Cores':>6} "
@@ -1361,23 +1372,23 @@ def print_interval_report(results: List[Dict[str, object]], trim_ms: float) -> N
         f"{'End(-trim)':>26}",
         file=sys.stderr,
     )
-    print("=" * 220, file=sys.stderr)
+    print("=" * INTERVAL_TABLE_WIDTH, file=sys.stderr)
 
     for r in results:
         print(
             f"{str(r['grid']):>6} "
             f"{int(r['cores']):>6} "
-            f"{format_num(r['window_s'], '.6f'):>10} "
+            f"{format_num(r['window_s']):>10} "
             f"{int(r['sample_count']):>8} "
-            f"{format_num(r.get('base_current_a', float('nan')), '.6f'):>12} "
-            f"{format_num(r['avg_current_a'], '.6f'):>12} "
-            f"{format_num(r.get('dynamic_avg_current_a', float('nan')), '.6f'):>12} "
-            f"{format_num(r['peak_current_a'], '.6f'):>12} "
-            f"{format_num(r.get('dynamic_peak_current_a', float('nan')), '.6f'):>12} "
-            f"{format_num(r['charge_avg_mah'], '.6f'):>12} "
-            f"{format_num(r.get('dynamic_charge_avg_mah', float('nan')), '.6f'):>14} "
-            f"{format_num(r['charge_peak_mah'], '.6f'):>12} "
-            f"{format_num(r.get('dynamic_charge_peak_mah', float('nan')), '.6f'):>12} "
+            f"{format_num(r.get('base_current_a', float('nan'))):>12} "
+            f"{format_num(r['avg_current_a']):>12} "
+            f"{format_num(r.get('dynamic_avg_current_a', float('nan'))):>12} "
+            f"{format_num(r['peak_current_a']):>12} "
+            f"{format_num(r.get('dynamic_peak_current_a', float('nan'))):>12} "
+            f"{format_num(r['charge_avg_mah']):>12} "
+            f"{format_num(r.get('dynamic_charge_avg_mah', float('nan'))):>14} "
+            f"{format_num(r['charge_peak_mah']):>12} "
+            f"{format_num(r.get('dynamic_charge_peak_mah', float('nan'))):>12} "
             f"{str(r['interval_end']):>26}",
             file=sys.stderr,
         )
@@ -1453,7 +1464,7 @@ def plot_single_metric(
 ) -> None:
     x = np.arange(len(grids), dtype=float)
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=METRIC_FIGSIZE)
     ax.plot(x, values, marker="o")
     ax.set_xticks(x)
     ax.set_xticklabels(grids, rotation=45, ha="right")
@@ -1462,10 +1473,7 @@ def plot_single_metric(
     ax.set_title(title)
     ax.grid(True)
 
-    fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
+    save_figure(fig, out_path, dpi)
 
 
 def plot_dual_metric(
@@ -1483,7 +1491,7 @@ def plot_dual_metric(
     color_left = "tab:blue"
     color_right = "tab:red"
 
-    fig, ax1 = plt.subplots(figsize=(12, 6))
+    fig, ax1 = plt.subplots(figsize=METRIC_FIGSIZE)
     ax2 = ax1.twinx()
 
     line1 = ax1.plot(x, values_left, marker="o", color=color_left, label=ylabel_left)
@@ -1506,10 +1514,7 @@ def plot_dual_metric(
     labels = [l.get_label() for l in lines]
     ax1.legend(lines, labels, loc="best")
 
-    fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
+    save_figure(fig, out_path, dpi)
 
 
 def plot_compute_charge_vs_cores(
@@ -1535,7 +1540,7 @@ def plot_compute_charge_vs_cores(
     x_cores = np.array(cores, dtype=float)
     y = np.array(values, dtype=float)
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=METRIC_FIGSIZE)
 
     ax.plot(x_pos, y, marker="o", label="Measured")
 
@@ -1566,10 +1571,7 @@ def plot_compute_charge_vs_cores(
     ax.grid(True)
     ax.legend(loc="best")
 
-    fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
+    save_figure(fig, out_path, dpi)
 
 
 # The app prints "Mode: FIXED ..." or "Mode: SPLIT ..." in its banner.
@@ -1800,7 +1802,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         type=subdir_name,
         help="Name of the run subdirectory inside the output root.",
     )
-    ap.add_argument("--dpi", type=int, default=150)
+    ap.add_argument("--dpi", type=int, default=DEFAULT_DPI)
     ap.add_argument(
         "--slot-ms",
         type=int,
@@ -1880,19 +1882,19 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not args.input.exists():
         print(f"ERROR: input file not found: {args.input}", file=sys.stderr)
-        return 2
+        return EXIT_INPUT_NOT_FOUND
 
     if args.program_log is not None and not args.program_log.exists():
         print(f"ERROR: program log file not found: {args.program_log}", file=sys.stderr)
-        return 6
+        return EXIT_PROGRAM_LOG_NOT_FOUND
 
     if args.device_profiler_csv is not None:
         if not args.device_profiler_csv.exists():
             print(f"ERROR: device profiler csv file not found: {args.device_profiler_csv}", file=sys.stderr)
-            return 8
+            return EXIT_PROFILER_CSV_NOT_FOUND
         if args.program_log is None:
             print("ERROR: --device-profiler-csv requires --program-log.", file=sys.stderr)
-            return 9
+            return EXIT_PROFILER_CSV_WITHOUT_PROGRAM_LOG
 
     run_dir = args.output / args.subdir
     fig_dir = run_dir / "Figures"
@@ -1901,16 +1903,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     fig_dir.mkdir(parents=True, exist_ok=True)
 
     # The kernel outputs are written only when a profiler CSV is given, so an earlier run's would
-    # otherwise survive a re-run without one and sit next to this run's results.
-    # A re-parse may read its profiler CSV from the run directory itself, so that one is kept.
-    keep = args.device_profiler_csv.resolve() if args.device_profiler_csv else None
-    for stale in (
-        run_dir / "kernel_intervals.csv",
-        run_dir / "kernel_utilization.csv",
-        run_dir / "profile_log_device.csv",
-    ):
-        if stale.resolve() != keep:
-            stale.unlink(missing_ok=True)
+    # otherwise survive a re-run without one and sit next to this run's results. The copy of the
+    # profiler CSV is an input, not an output, and is kept (auto.py removes it for a new run).
+    for stale in (run_dir / "kernel_intervals.csv", run_dir / "kernel_utilization.csv"):
+        stale.unlink(missing_ok=True)
     shutil.rmtree(run_dir / KERNEL_FIGURES_DIR, ignore_errors=True)
 
     copied_input = copy_input_file(args.input, run_dir)
@@ -1928,14 +1924,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if stats["lines_matched"] == 0:
         print("ERROR: No telemetry lines matched. Check log format.", file=sys.stderr)
-        return 3
+        return EXIT_NO_TELEMETRY_LINES
 
     if not devices:
         if args.device_id is not None:
             print(f"ERROR: No telemetry samples found for device ID {args.device_id}.", file=sys.stderr)
         else:
             print("ERROR: Parsed samples, but no devices remained after filtering.", file=sys.stderr)
-        return 4
+        return EXIT_NO_DEVICE_SAMPLES
 
     if args.device_id is None and len(devices) > 1 and args.program_log is not None:
         print(
@@ -1948,7 +1944,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     t, dev_ids, v_v, i_a, p_w = build_timeseries(slots, devices)
     if t.size == 0:
         print("ERROR: Parsed samples, but no slots produced.", file=sys.stderr)
-        return 5
+        return EXIT_NO_SLOTS
 
     plot_png(t, dev_ids, v_v, i_a, p_w, telemetry_png, args.dpi)
 
@@ -1975,7 +1971,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         intervals = parse_program_log(args.program_log)
         if not intervals:
             print("ERROR: --program-log was provided, but no valid summary rows were parsed.", file=sys.stderr)
-            return 7
+            return EXIT_NO_PROGRAM_ROWS
 
         interval_results = compute_interval_metrics(
             raw_samples=raw_samples,

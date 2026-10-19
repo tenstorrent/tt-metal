@@ -44,6 +44,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from common import DEFAULT_DPI, save_figure
+
 RE_CASE_LINE = re.compile(r"^\s*Case\s+\d+\s*:\s*(?P<name>\S+)\s*(?::\s*(?P<label>.+?)\s*)?$")
 
 
@@ -132,9 +134,7 @@ def grouped_bar_chart(
     ax.set_title(title)
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
+    save_figure(fig, out_path, dpi)
     print(f"Wrote: {out_path}")
 
 
@@ -195,7 +195,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         type=Path,
         help="Text file with 'Case N: subdir_name' lines mapping use cases to run subdirectories",
     )
-    parser.add_argument("--dpi", type=int, default=150)
+    parser.add_argument("--dpi", type=int, default=DEFAULT_DPI)
     args = parser.parse_args(argv)
 
     if not args.input_dir.is_dir():

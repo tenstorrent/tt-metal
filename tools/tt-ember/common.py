@@ -29,23 +29,50 @@ RUN_COMPLETE_FILE = "run_complete.json"
 DEFAULT_TRIM_MS = 6.0
 POWER_CASES_TRIM_MS = 1.0
 
-# auto.py's own exit codes. They are kept apart from the parser's (2-11), which auto.py passes
-# through unchanged, and from the app's, which it also passes through.
+# Defaults the sweeps forward to auto.py, so all scripts measure with the same settings.
+DEFAULT_TELEMETRY_FREQ_HZ = 50
+DEFAULT_SLOT_MS = 1
+DEFAULT_DEVICE_ID = 0
+DEFAULT_DPI = 150
+
+# parser.py's exit codes (2-11). auto.py passes them through unchanged, as it does the app's.
+# 2 is also argparse's code for a bad flag; both mean the parser was not run on usable input.
+EXIT_INPUT_NOT_FOUND = 2
+EXIT_NO_TELEMETRY_LINES = 3
+EXIT_NO_DEVICE_SAMPLES = 4
+EXIT_NO_SLOTS = 5
+EXIT_PROGRAM_LOG_NOT_FOUND = 6
+EXIT_NO_PROGRAM_ROWS = 7
+EXIT_PROFILER_CSV_NOT_FOUND = 8
+EXIT_PROFILER_CSV_WITHOUT_PROGRAM_LOG = 9
+# The outputs are written, but the run can't be used.
+EXIT_RUN_INCOMPLETE = 10
+# Stopped before writing results.
+EXIT_MULTIPLE_DEVICES = 11
+
+# auto.py's own exit codes, kept apart from the parser's.
 EXIT_TELEMETRY_START = 20
 EXIT_TELEMETRY_FILE_MISSING = 21
 EXIT_SUMMARY_MISSING = 22
 EXIT_TELEMETRY_DIED = 23
-# parser.py's exit codes that mean the outputs were written but the run can't be used.
-EXIT_RUN_INCOMPLETE = 10
-EXIT_MULTIPLE_DEVICES = 11
+EXIT_PROFILER_CSV_MISSING = 24
 
 EXIT_REASONS = {
+    EXIT_INPUT_NOT_FOUND: "parser: telemetry file not found, or a bad flag",
+    EXIT_NO_TELEMETRY_LINES: "parser: no telemetry lines matched",
+    EXIT_NO_DEVICE_SAMPLES: "parser: no telemetry samples for the device",
+    EXIT_NO_SLOTS: "parser: no time slots",
+    EXIT_PROGRAM_LOG_NOT_FOUND: "parser: program log not found",
+    EXIT_NO_PROGRAM_ROWS: "parser: no grid rows in the program log",
+    EXIT_PROFILER_CSV_NOT_FOUND: "parser: device profiler CSV not found",
+    EXIT_PROFILER_CSV_WITHOUT_PROGRAM_LOG: "parser: --device-profiler-csv without --program-log",
     EXIT_RUN_INCOMPLETE: "parser: incomplete run (a grid with no samples, no base current, or lost profiler markers)",
     EXIT_MULTIPLE_DEVICES: "parser: telemetry from several devices and no --device-id",
     EXIT_TELEMETRY_START: "telemetry exited right after it started",
     EXIT_TELEMETRY_FILE_MISSING: "telemetry wrote no output file",
     EXIT_SUMMARY_MISSING: "the app wrote no output",
     EXIT_TELEMETRY_DIED: "telemetry exited before the run ended",
+    EXIT_PROFILER_CSV_MISSING: "TT_METAL_DEVICE_PROFILER is set, but the app wrote no profiler CSV",
 }
 
 SUBDIR_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
@@ -53,7 +80,8 @@ SUBDIR_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
 LONG_MATMUL_APP = "metal_example_long_matmul"
 
 # Environment variables that change what is measured: long_matmul's knobs (see its README), and
-# the debug features that add work on the device (the profiler, watcher and DPRINT).
+# the tt-metal options that change the device code or add work on the device (the profilers,
+# watcher, DPRINT, kernel asserts and the null/early-return kernels).
 WORKLOAD_ENV_VARS = (
     "POWER_CASE",
     "LONG_MATMUL_MODE",
@@ -65,8 +93,16 @@ WORKLOAD_ENV_VARS = (
     "LONG_MATMUL_DISABLE_WRITER",
     "LONG_MATMUL_WRITE_AMPLIFICATION_PCT",
     "TT_METAL_DEVICE_PROFILER",
+    "TT_METAL_DEVICE_PROFILER_DISPATCH",
+    "TT_METAL_DEVICE_PROFILER_NOC_EVENTS",
+    "TT_METAL_STREAMING_PROFILER",
     "TT_METAL_WATCHER",
     "TT_METAL_DPRINT_CORES",
+    "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS",
+    "TT_METAL_LLK_ASSERTS",
+    "TT_METAL_NULL_KERNELS",
+    "TT_METAL_KERNELS_EARLY_RETURN",
+    "TT_METAL_SLOW_DISPATCH_MODE",
 )
 
 
@@ -83,6 +119,21 @@ def subdir_name(text: str) -> str:
             f"invalid subdir {text!r}: use one directory name made of letters, digits, '_', '-' and '.'"
         )
     return text
+
+
+def misplaced_options(parser: argparse.ArgumentParser, app_args: List[str]) -> List[str]:
+    """Options of this script written after --app-args, which takes everything after it and
+    would otherwise pass them to the app silently."""
+    return [a for a in app_args if a.split("=", 1)[0] in parser._option_string_actions]
+
+
+def check_long_matmul_device(app_exe: Path, device_id: Optional[int]) -> None:
+    """Raise ValueError if device_id names a chip long_matmul does not run on: it always opens
+    device 0, so with another one the parser would analyse an idle chip and still exit 0."""
+    if app_exe.name == LONG_MATMUL_APP and device_id not in (None, 0):
+        raise ValueError(
+            f"{LONG_MATMUL_APP} always runs on device 0; --device-id {device_id} would measure an idle chip"
+        )
 
 
 def long_matmul_args(app_args: List[str]) -> Tuple[int, int, int, int, int]:
@@ -197,6 +248,16 @@ def auto_py_command(
         cmd += ["--device-id", str(device_id)]
     # --app-args must be last: auto.py passes everything after it to the app.
     return cmd + ["--app-args"] + [str(a) for a in app_args]
+
+
+def save_figure(fig, out_path: Path, dpi: int) -> None:
+    """Lay out, write and close a matplotlib figure, creating the directory it goes into."""
+    import matplotlib.pyplot as plt
+
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=dpi)
+    plt.close(fig)
 
 
 def environ_with(overrides: Mapping[str, str]) -> Dict[str, str]:

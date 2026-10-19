@@ -23,6 +23,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from common import DEFAULT_DPI, save_figure
+
+# Every chart here overlays all runs on one wide axis.
+FIGSIZE = (14, 6)
+
 METRICS = {
     "duration": ("window_s", "Duration [s]", "Duration vs Grid Size"),
     "charge_total_avg": ("charge_avg_mah", "Charge total avg [mAh]", "Total Charge (Avg Current) vs Grid Size"),
@@ -88,10 +93,7 @@ def finish_and_save(fig, ax, all_grids: list[str], ylabel: str, title: str, out_
     ax.grid(True)
     ax.legend(loc="best")
 
-    fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
+    save_figure(fig, out_path, dpi)
     print(f"  Saved: {out_path}")
 
 
@@ -100,7 +102,7 @@ def plot_metric(runs: dict[str, pd.DataFrame], column: str, ylabel: str, title: 
 
     all_grids = grid_union(runs)
 
-    fig, ax = plt.subplots(figsize=(14, 6))
+    fig, ax = plt.subplots(figsize=FIGSIZE)
 
     for run_name, df in runs.items():
         ax.plot(x_positions(df, all_grids), df[column].tolist(), marker="o", label=run_name)
@@ -113,7 +115,7 @@ def plot_overcompute(runs: dict[str, pd.DataFrame], column: str, out_path: Path,
 
     all_grids = grid_union(runs)
 
-    fig, ax = plt.subplots(figsize=(14, 6))
+    fig, ax = plt.subplots(figsize=FIGSIZE)
 
     for run_name, df in runs.items():
         if column not in df.columns:
@@ -153,7 +155,7 @@ def plot_overcompute_percentage(runs: dict[str, pd.DataFrame], column: str, out_
 
     all_grids = grid_union(runs)
 
-    fig, ax = plt.subplots(figsize=(14, 6))
+    fig, ax = plt.subplots(figsize=FIGSIZE)
 
     for run_name, df in runs.items():
         if column not in df.columns:
@@ -189,7 +191,7 @@ def plot_percentage_change(
 
     all_grids = grid_union(runs)
 
-    fig, ax = plt.subplots(figsize=(14, 6))
+    fig, ax = plt.subplots(figsize=FIGSIZE)
 
     for run_name, df in runs.items():
         if column not in df.columns:
@@ -224,7 +226,7 @@ def main() -> int:
     parser.add_argument(
         "--output-dir", type=Path, default=None, help="Where to save comparison PNGs. Default: <out-root>/comparison/"
     )
-    parser.add_argument("--dpi", type=int, default=150)
+    parser.add_argument("--dpi", type=int, default=DEFAULT_DPI)
     parser.add_argument(
         "--no-overcompute",
         action="store_true",
