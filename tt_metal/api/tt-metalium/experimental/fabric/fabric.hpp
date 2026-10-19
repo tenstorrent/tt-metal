@@ -123,8 +123,11 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 
 // returns which links on a given src chip are available for forwarding the data to a dst chip
 // these link indices can then be used to establish connection with the fabric routers
+// `mesh_device` selects the context the fabric is resolved in; src and dst need not belong to it.
 std::vector<uint32_t> get_forwarding_link_indices(
-    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id);
 
 // returns the logical ethernet core on src that link_idx forwards through toward dst, for a link index
 // from get_forwarding_link_indices. Resolved in the mesh device's context.
