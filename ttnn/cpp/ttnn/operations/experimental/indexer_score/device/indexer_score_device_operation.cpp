@@ -462,6 +462,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_mesh_cols,
         fused_route_plan_hash,
         attrs.key_stripe_split,  // bakes the reader's invP divisors: unsplit vs tp-split must not share a program
+        attrs.sub_core_grids,    // the kernels' core ranges and the schedule's grid
         tensor_args);
 }
 
@@ -484,6 +485,23 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     const auto& q_shape = q.logical_shape();
     const auto& k_shape = k.logical_shape();
     const auto& w_shape = w.logical_shape();
+
+    if (attrs.sub_core_grids.has_value()) {
+        TT_FATAL(
+            !attrs.has_fused_ring(),
+            "indexer_score: sub_core_grids is not supported with the fused ring (it places its own all-gather "
+            "workers)");
+        const auto& cg = *attrs.sub_core_grids;
+        TT_FATAL(cg.size() == 1, "indexer_score: sub_core_grids must be one rectangle (got {} ranges)", cg.size());
+        const auto device_grid = q.device()->compute_with_storage_grid_size();
+        const auto end = cg.bounding_box().end_coord;
+        TT_FATAL(
+            end.x < device_grid.x && end.y < device_grid.y,
+            "indexer_score: sub_core_grids {} exceeds the compute grid {}x{}",
+            cg,
+            device_grid.x,
+            device_grid.y);
+    }
 
     // Blackhole-only: the compute kernel relies on BH fast-untilize + custom BH LLK paths. Enforce in C++
     // so a Wormhole caller fails cleanly instead of hanging at launch.
@@ -911,6 +929,8 @@ ttnn::Tensor launch_indexer_score(
     bool allow_subshard,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
+    // One rectangle of worker cores the banded schedule is planned over; nullopt = the whole compute grid.
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt,
     bool block_cyclic_cache_tp_sharded = false,  // KV dedup key remap; both DSA and MSA frontends pass it through
     // Fused ring (all-gather subsumed): k is the gathered [B,1,T,D] persistent output buffer, k_local is this
     // chip's SP shard = the all-gather INPUT, fused_ring carries the AG config. Both nullopt = the classic path.
@@ -1157,6 +1177,7 @@ ttnn::Tensor launch_indexer_score(
     tensor_args.cache_batch_idx_tensor = std::move(cache_batch_idx_tensor);
     operation_attributes.index_cache_num_layers = index_cache_num_layers;
     operation_attributes.index_cache_layer_idx = index_cache_layer_idx;
+    operation_attributes.sub_core_grids = std::move(sub_core_grids);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
@@ -1196,6 +1217,7 @@ ttnn::Tensor indexer_score_dsa(
         /*allow_subshard=*/true,
         block_cyclic_sp_axis,
         block_cyclic_chunk_local,
+        /*sub_core_grids=*/std::nullopt,
         block_cyclic_cache_tp_sharded);
 }
 
@@ -1213,7 +1235,8 @@ ttnn::Tensor indexer_score_msa(
     const std::optional<std::vector<uint32_t>>& seq_shard_axes,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
-    bool block_cyclic_cache_tp_sharded) {
+    bool block_cyclic_cache_tp_sharded,
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids) {
     // M3 has no learned gates, only a 1/sqrt(d) scale. Rather than materialize a constant [B,Hi,Sq,1] gate
     // tensor (an extra fill op dispatched every call), the reader fills cb_w with `scale` in L1 in-kernel
     // (synthesize_gate); q is passed as the unused weights placeholder so the op infra still has a valid
@@ -1240,6 +1263,7 @@ ttnn::Tensor indexer_score_msa(
         /*allow_subshard=*/false,  // MSA has no TP sub-shard (queries); the KEY cache may still be TP-deduped
         block_cyclic_sp_axis,
         block_cyclic_chunk_local,
+        std::move(sub_core_grids),
         block_cyclic_cache_tp_sharded);
 }
 
@@ -1371,6 +1395,7 @@ ttnn::Tensor ring_indexer_score_dsa(
         /*allow_subshard=*/true,
         block_cyclic_sp_axis,
         block_cyclic_chunk_local,
+        /*sub_core_grids=*/std::nullopt,
         block_cyclic_cache_tp_sharded,
         k_local,
         fused_ring,

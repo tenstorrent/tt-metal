@@ -107,7 +107,15 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // stays a contiguous per-column rectangle (a block's group_rows rows share that block's band-chunk).
     const uint32_t group_count = Sqt / QC;
     const uint32_t band_count = units_in_group(KC, Tt);  // ceil(Tt/KC)
-    const auto grid = q.device()->compute_with_storage_grid_size();
+    // The schedule is planned over a rectangle: the whole compute grid, or the caller's sub_core_grids (its
+    // size is the grid the rows / columns are fitted to, its origin offsets every core below).
+    tt::tt_metal::CoreCoord grid = q.device()->compute_with_storage_grid_size();
+    tt::tt_metal::CoreCoord origin{0, 0};
+    if (args.sub_core_grids.has_value()) {
+        const auto box = args.sub_core_grids->bounding_box();
+        grid = box.grid_size();
+        origin = box.start_coord;
+    }
     const uint32_t grid_x = grid.x, grid_y = grid.y;
 
     const uint32_t group_rows = rows_for_groups(group_count, grid_y);
@@ -127,14 +135,14 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t bands_in_widest_block = (band_count + num_blocks - 1) / num_blocks;
     const uint32_t max_bands = (bands_in_widest_block + cols_used - 1) / cols_used;
 
-    const CoreRange core_rect(CoreCoord{0, 0}, CoreCoord{cols_used - 1, rows_used - 1});
+    const CoreRange core_rect(origin, CoreCoord{origin.x + cols_used - 1, origin.y + rows_used - 1});
     const CoreRangeSet core_ranges(core_rect);
 
     // Physical coords of the used rectangle, indexed [row][col], for the mcast bounding boxes below.
     std::vector<std::vector<CoreCoord>> phys(rows_used, std::vector<CoreCoord>(cols_used));
     for (uint32_t row = 0; row < rows_used; ++row) {
         for (uint32_t col = 0; col < cols_used; ++col) {
-            phys[row][col] = q.device()->worker_core_from_logical_core(CoreCoord{col, row});
+            phys[row][col] = q.device()->worker_core_from_logical_core(CoreCoord{origin.x + col, origin.y + row});
         }
     }
 
@@ -393,7 +401,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         {out.buffer()->address(), kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
     for (uint32_t row = 0; row < rows_used; ++row) {
         for (uint32_t col = 0; col < cols_used; ++col) {
-            const CoreCoord core{col, row};
+            const CoreCoord core{origin.x + col, origin.y + row};
             const std::vector<uint32_t> runtime{row * cols_used + col};
             tt::tt_metal::SetRuntimeArgs(program, reader_id, core, runtime);
             tt::tt_metal::SetRuntimeArgs(program, compute_id, core, runtime);
