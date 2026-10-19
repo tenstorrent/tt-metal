@@ -36,8 +36,12 @@ def test_live_trace_chat_transitions(gemma_server_url, record_property):
     else:
         pytest.fail("Could not select a prompt with a traced partial-page suffix")
     record_property("rendered_prompt_tokens", tokenized.json()["count"])
+    request_index = 0
 
     def chat(history, cache_salt):
+        nonlocal request_index
+        before = _metric_totals(gemma_server_url)
+        started = perf_counter()
         response = httpx.post(
             f"{gemma_server_url}/v1/chat/completions",
             json={
@@ -48,6 +52,12 @@ def test_live_trace_chat_transitions(gemma_server_url, record_property):
             }, timeout=600,
         )
         response.raise_for_status()
+        wall = perf_counter() - started
+        after = _metric_totals(gemma_server_url)
+        record_property(f"chat_{request_index}_wall_seconds", wall)
+        for name in before:
+            record_property(f"chat_{request_index}_{name}", after[name] - before[name])
+        request_index += 1
         result = response.json()
         content = result["choices"][0]["message"]["content"]
         assert content and any(c.isalpha() for c in content), result
@@ -68,7 +78,9 @@ def test_live_trace_chat_transitions(gemma_server_url, record_property):
         "role": "user", "content": "Give one specific example of a variable name and the information stored for it."
     }]
     record_property("growing_chat", json.dumps(chat(growing, salt)))
-    record_property("independent_cold_chat", json.dumps(chat(messages, salt + "-cold")))
+    independent_cold = chat(messages, salt + "-cold")
+    record_property("independent_cold_chat", json.dumps(independent_cold))
+    assert independent_cold["choices"][0]["message"]["content"] == cold["choices"][0]["message"]["content"]
 
 
 def _request(url, request):
