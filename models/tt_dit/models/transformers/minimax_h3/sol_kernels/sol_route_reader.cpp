@@ -4,15 +4,18 @@
 
 // Sol-Attn routing pre-pass (proxy scores -> threshold -> chunk mask / bias), reader (NCRISC).
 //
-// Work unit = (head h, Q-chunk tile row it): the routing of local Q chunks [32*it, 32*it+32) of head h against the
-// pooled K blocks of every shard. Per core, once: the ones-row tile, the Q-chunk selector (qsel), the block->chunk
+// Work unit (compile-time arg 20 UNITS_PER_SHARD = 0): (head h, Q-chunk tile row it), u = h*NQCT + it: the routing of
+// local Q chunks [32*it, 32*it+32) of head h against the pooled K blocks of every shard. UNITS_PER_SHARD = 1: (head h,
+// column shard sp), u = h*S + sp: every Q-chunk tile row of head h against shard sp only (see sol_route_compute.cpp).
+// Per core, once: the ones-row tile, the Q-chunk selector (qsel), the block->chunk
 // selector (ksel) and the 32 row-broadcast selectors (erow). Per unit: the head's whole pooled K [NBG, D] in D-major
 // tile order (position n*NBGT + c holds tile (c, n), so compute can use it as a transposed matmul operand) and the
-// head's pooled Q [NBP, D]; then per column shard sp: the constant OR-mask tiles of this Q-chunk tile row against
-// shard sp's blocks, and the column constants (full / valid / length-bias rows) of shard sp.
+// head's pooled Q [NBP, D]; then per (Q-chunk tile row it, column shard sp) of the unit: the constant OR-mask tiles of
+// that Q-chunk tile row against shard sp's blocks, and the column constants (full / valid / length-bias rows) of sp.
 //
 // Compile-time args: 0 H, 1 S, 2 NBPT, 3 DT, 4 NQCT, 5 NKCLT, 6 NQC, 7 NKC, 8 NKCP, 9 MODE, 10 EMIT_BIAS, 11 TAU,
-// 12 EPS2, 13 NEG, 14 INV_NV, 15 TQ, then TensorAccessorArgs of q_bar, kc, const_or, colconst, qsel, ksel, erow, ones.
+// 12 EPS2, 13 NEG, 14 INV_NV, 15 TQ, 16 DEBUG, 17 NX, 18 NY, 19 UNITS, 20 UNITS_PER_SHARD, then TensorAccessorArgs of
+// q_bar, kc, const_or, colconst, qsel, ksel, erow, ones.
 // Common runtime args: 0..7 the buffer addresses in the same order. Per-core: none.
 
 #include <cstdint>
@@ -34,7 +37,7 @@ void kernel_main() {
     constexpr uint32_t NQCT = get_compile_time_arg_val(4);
     constexpr uint32_t NKCLT = get_compile_time_arg_val(5);
     constexpr uint32_t NBGT = S * NBPT;
-    constexpr auto qb_args = TensorAccessorArgs<20>();
+    constexpr auto qb_args = TensorAccessorArgs<21>();
     constexpr auto kc_args = TensorAccessorArgs<qb_args.next_compile_time_args_offset()>();
     constexpr auto co_args = TensorAccessorArgs<kc_args.next_compile_time_args_offset()>();
     constexpr auto cc_args = TensorAccessorArgs<co_args.next_compile_time_args_offset()>();
@@ -46,6 +49,8 @@ void kernel_main() {
     constexpr uint32_t NX = get_compile_time_arg_val(17);
     constexpr uint32_t NY = get_compile_time_arg_val(18);
     constexpr uint32_t UNITS = get_compile_time_arg_val(19);
+    constexpr uint32_t UNITS_PER_SHARD = get_compile_time_arg_val(20);  // 1: unit = (head, shard); 0: (head, it)
+    static_assert(UNITS_PER_SHARD == 0 || get_compile_time_arg_val(9) == 1, "(head, shard) units are MODE 1 only");
     // Unit range of this core from its logical coordinates (no per-core runtime args): units [ci*U/N, (ci+1)*U/N).
     constexpr uint32_t NCORES = NX * NY;
     const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
@@ -81,8 +86,12 @@ void kernel_main() {
 
     CircularBuffer cbkc(cb_kc), cbco(cb_constor), cbcc(cb_colc);
     for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
-        const uint32_t h = u / NQCT;
-        const uint32_t it = u % NQCT;
+        // Unit decode: one of the two ranges below is a singleton, the loops run the same code either way.
+        const uint32_t h = UNITS_PER_SHARD ? u / S : u / NQCT;
+        const uint32_t it_lo = UNITS_PER_SHARD ? 0 : u % NQCT;
+        const uint32_t it_hi = UNITS_PER_SHARD ? NQCT : it_lo + 1;
+        const uint32_t sp_lo = UNITS_PER_SHARD ? u % S : 0;
+        const uint32_t sp_hi = UNITS_PER_SHARD ? sp_lo + 1 : S;
 
         // Pooled K of the head, D-major tile order.
         cbkc.reserve_back(NBGT * DT);
@@ -108,26 +117,28 @@ void kernel_main() {
 
         read_pages(qb, cb_q, h * NBPT * DT, NBPT * DT);
 
-        for (uint32_t sp = 0; sp < S; ++sp) {
-            cbco.reserve_back(NBPT);
-            for (uint32_t c = 0; c < NBPT; ++c) {
-                noc.async_read(
-                    co, cbco, TILE_BYTES, {.page_id = it * NBGT + sp * NBPT + c}, {.offset_bytes = c * TILE_BYTES});
-            }
-            cbcc.reserve_back(3 * NBPT);
-            for (uint32_t kind = 0; kind < 3; ++kind) {
-                for (uint32_t j = 0; j < NBPT; ++j) {
+        for (uint32_t it = it_lo; it < it_hi; ++it) {
+            for (uint32_t sp = sp_lo; sp < sp_hi; ++sp) {
+                cbco.reserve_back(NBPT);
+                for (uint32_t c = 0; c < NBPT; ++c) {
                     noc.async_read(
-                        cc,
-                        cbcc,
-                        TILE_BYTES,
-                        {.page_id = (kind * S + sp) * NBPT + j},
-                        {.offset_bytes = (kind * NBPT + j) * TILE_BYTES});
+                        co, cbco, TILE_BYTES, {.page_id = it * NBGT + sp * NBPT + c}, {.offset_bytes = c * TILE_BYTES});
                 }
+                cbcc.reserve_back(3 * NBPT);
+                for (uint32_t kind = 0; kind < 3; ++kind) {
+                    for (uint32_t j = 0; j < NBPT; ++j) {
+                        noc.async_read(
+                            cc,
+                            cbcc,
+                            TILE_BYTES,
+                            {.page_id = (kind * S + sp) * NBPT + j},
+                            {.offset_bytes = (kind * NBPT + j) * TILE_BYTES});
+                    }
+                }
+                noc.async_read_barrier();
+                cbco.push_back(NBPT);
+                cbcc.push_back(3 * NBPT);
             }
-            noc.async_read_barrier();
-            cbco.push_back(NBPT);
-            cbcc.push_back(3 * NBPT);
         }
     }
 }

@@ -129,6 +129,7 @@ class SolPrepassFused:
         math_fidelity=None,
         emit_chunk_union: bool = False,
         debug_moments: bool = False,
+        units_per_shard: bool | None = None,
     ):
         # "compact" (tier 3, DESIGN_BLOCK_COMPACT.md) consumes the gather-form block mask: same outputs as "gather".
         # emit_chunk_union=True additionally writes the (Q chunk x K chunk) union row as "chunk_union" (dormant option).
@@ -149,6 +150,15 @@ class SolPrepassFused:
         self.emit_bias = (os.environ.get("TT_SOL_EMIT_BIAS", "1") == "1") if emit_bias is None else bool(emit_bias)
         self.emit_chunk_union = bool(emit_chunk_union) and mode != "chunk"
         self.debug_moments = bool(debug_moments)  # route program writes mean/E2/var tiles into the bias tensor (tests)
+        # E1 (sol_attn_next_optimizations item 2): route-program unit = (head, shard) instead of (head, Q-chunk tile row),
+        # H*S units instead of H*NQCT (14 at NQCT = 1) over the 120-core grid. None -> SOL_ROUTE_UNITS_PER_SHARD (default
+        # 1); 0 reproduces the committed program. Applies to the gather-form mask (MODE 1) only, see _route_program.
+        self.route_units_per_shard = (
+            (os.environ.get("SOL_ROUTE_UNITS_PER_SHARD", "1") == "1")
+            if units_per_shard is None
+            else bool(units_per_shard)
+        )
+        self.route_units: tuple[int, int] | None = None  # (unit count, units_per_shard) of the last built route program
         self.math_fidelity = math_fidelity if math_fidelity is not None else ttnn.MathFidelity.HiFi4
         self._state: dict | None = None
         self._key = None
@@ -182,6 +192,7 @@ class SolPrepassFused:
             self.emit_bias,
             self.emit_chunk_union,
             self.debug_moments,
+            self.route_units_per_shard,
             str(self.math_fidelity),
             key,
         )
@@ -371,11 +382,13 @@ class SolPrepassFused:
         acc_in = [a for t in ins for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
         acc_out = [a for t in (mask, bias, union) for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
         nx, ny, cores = self._cores()
-        ct += [
-            nx,
-            ny,
-            H * NQCT,
-        ]  # grid + unit count (unit = (head, Q-chunk tile row)); kernels derive their range per core
+        # Unit = (head, shard): H*S units. The chunk-form outputs (MODE 0 mask, MODE 2 union row) assemble whole rows from
+        # every shard in the writer's L1 row buffer (their per-shard word ranges are not NoC-aligned), so those modes keep
+        # the (head, Q-chunk tile row) unit with H*NQCT units; the kernels static_assert the same rule.
+        units_per_shard = 1 if (self.route_units_per_shard and mode == 1) else 0
+        units = H * S if units_per_shard else H * NQCT
+        self.route_units = (units, units_per_shard)
+        ct += [nx, ny, units, units_per_shard]  # grid + unit count + unit kind; kernels derive their range per core
         mask_t = NKCLT if mode == 0 else NBPT  # per shard
         sizes = {
             0: NBGT * DT,

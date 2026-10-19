@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Sol-Attn routing pre-pass, writer (BRISC). Unit = (head h, Q-chunk tile row it); outputs arrive per column shard.
+// Sol-Attn routing pre-pass, writer (BRISC). Unit (compile-time arg 20 UNITS_PER_SHARD = 0) = (head h, Q-chunk tile
+// row it), outputs arrive per column shard; UNITS_PER_SHARD = 1: unit = (head h, column shard sp), outputs arrive per
+// Q-chunk tile row (gather-form rows and bias only: MODE 1, enforced below).
 //   chunk-form rows (MODE 0 mask, MODE 2 union row): the 0/1 chunk tiles of every shard are gathered into an L1 row
 //     buffer [32 rows x NKCP words] (word s*NKC + c, padding words zero) and the 32 complete rows are written as whole
 //     pages (NoC-aligned) to [1, H, NQCP, NKCP] at pages h*NQCP + 32*it + r.
@@ -11,7 +13,7 @@
 //   bias: the expanded bias tiles, page (h, Q chunk i, global block tile sp*NBPT + j) of [1, H, NQCP*32, NBG];
 //     batches always carry BIAS_BATCH pages of which the first nr are real.
 //
-// Compile-time args: 0..15 as the reader, then TensorAccessorArgs of mask, bias and union (dummy unless MODE 2).
+// Compile-time args: 0..20 as the reader, then TensorAccessorArgs of mask, bias and union (dummy unless MODE 2).
 // Common runtime args: 0 mask address, 1 bias address, 2 union address. Per-core: none.
 
 #include <cstdint>
@@ -53,13 +55,17 @@ void kernel_main() {
     constexpr uint32_t NQCP = NQCT * 32;
     constexpr uint32_t MASK_T = MODE == 0 ? NKCLT : NBPT;  // per shard
     constexpr uint32_t ROW_BYTES = NKCP * 4;
-    constexpr auto mk_args = TensorAccessorArgs<20>();
+    constexpr auto mk_args = TensorAccessorArgs<21>();
     constexpr auto bs_args = TensorAccessorArgs<mk_args.next_compile_time_args_offset()>();
     constexpr auto un_args = TensorAccessorArgs<bs_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t NX = get_compile_time_arg_val(17);
     constexpr uint32_t NY = get_compile_time_arg_val(18);
     constexpr uint32_t UNITS = get_compile_time_arg_val(19);
+    constexpr uint32_t UNITS_PER_SHARD = get_compile_time_arg_val(20);  // 1: unit = (head, shard); 0: (head, it)
+    // Chunk-form rows (MODE 0 mask, MODE 2 union) need every shard's words: their per-shard word ranges (s*NKC words,
+    // NKC*4 bytes each) are not NoC-aligned, so they stay on the (head, Q-chunk tile row) unit.
+    static_assert(UNITS_PER_SHARD == 0 || MODE == 1, "(head, shard) units emit only gather-form rows (MODE 1)");
     // Unit range of this core from its logical coordinates (no per-core runtime args): units [ci*U/N, (ci+1)*U/N).
     constexpr uint32_t NCORES = NX * NY;
     const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
@@ -81,16 +87,12 @@ void kernel_main() {
     uint32_t ring_used = 0;
 
     for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
-        const uint32_t h = u / NQCT;
-        const uint32_t it = u % NQCT;
-
-        // Zero the row buffer (chunk-form outputs fill only the real chunk words).
-        if constexpr (MODE != 1) {
-            CoreLocalMem<volatile uint32_t> w(rows_base);
-            for (uint32_t i = 0; i < 32 * NKCP; ++i) {
-                w[i] = 0;
-            }
-        }
+        // Unit decode: one of the two ranges below is a singleton, the loops run the same code either way.
+        const uint32_t h = UNITS_PER_SHARD ? u / S : u / NQCT;
+        const uint32_t it_lo = UNITS_PER_SHARD ? 0 : u % NQCT;
+        const uint32_t it_hi = UNITS_PER_SHARD ? NQCT : it_lo + 1;
+        const uint32_t sp_lo = UNITS_PER_SHARD ? u % S : 0;
+        const uint32_t sp_hi = UNITS_PER_SHARD ? sp_lo + 1 : S;
 
         if constexpr (DEBUG == 1) {  // 16 moment tiles of this unit -> bias pages [u*16, u*16+16)
             for (uint32_t b = 0; b < 2; ++b) {
@@ -108,93 +110,103 @@ void kernel_main() {
             }
         }
 
-        for (uint32_t sp = 0; sp < S; ++sp) {
-            // ---- mask tiles of this shard
-            cbm.wait_front(MASK_T);
-            const uint32_t mbase = cbm.get_read_ptr();
-            if constexpr (MODE == 0) {
-                for (uint32_t r = 0; r < 32; ++r) {
-                    CoreLocalMem<volatile uint32_t> w(rows_base + r * ROW_BYTES);
-                    for (uint32_t c = 0; c < NKC; ++c) {
-                        w[sp * NKC + c] = tile_elem_nz(mbase + (c >> 5) * TILE_BYTES, r, c & 31);
-                    }
-                }
-            } else {
-                for (uint32_t r = 0; r < 32; ++r) {
-                    if (ring_used != 0 && (ring_used % RING_PAGES) == 0) {
-                        noc.async_write_barrier();  // the ring wraps
-                    }
-                    const uint32_t saddr = ring_base + (ring_used % RING_PAGES) * (NBP * 4);
-                    CoreLocalMem<volatile uint32_t> w(saddr);
-                    for (uint32_t b = 0; b < NBP; ++b) {
-                        w[b] = tile_elem_nz(mbase + (b >> 5) * TILE_BYTES, r, b & 31);
-                    }
-                    noc.async_write(
-                        CoreLocalMem<uint32_t>(saddr),
-                        mk,
-                        NBP * 4,
-                        {},
-                        {.page_id = h * NQCP + it * 32 + r, .offset_bytes = sp * NBP * 4});
-                    ++ring_used;
+        for (uint32_t it = it_lo; it < it_hi; ++it) {
+            // Zero the row buffer (chunk-form outputs fill only the real chunk words).
+            if constexpr (MODE != 1) {
+                CoreLocalMem<volatile uint32_t> w(rows_base);
+                for (uint32_t i = 0; i < 32 * NKCP; ++i) {
+                    w[i] = 0;
                 }
             }
-            cbm.pop_front(MASK_T);
 
-            // ---- union-row tiles of this shard (MODE 2) into the row buffer
-            if constexpr (MODE == 2) {
-                cbu.wait_front(NKCLT);
-                const uint32_t ubase = cbu.get_read_ptr();
-                for (uint32_t r = 0; r < 32; ++r) {
-                    CoreLocalMem<volatile uint32_t> w(rows_base + r * ROW_BYTES);
-                    for (uint32_t c = 0; c < NKC; ++c) {
-                        w[sp * NKC + c] = tile_elem_nz(ubase + (c >> 5) * TILE_BYTES, r, c & 31);
-                    }
-                }
-                cbu.pop_front(NKCLT);
-            }
-
-            // ---- bias tiles of this shard
-            if constexpr (EMIT_BIAS == 1 && DEBUG == 0) {
-                for (uint32_t j = 0; j < NBPT; ++j) {
-                    for (uint32_t r0 = 0; r0 < 32 && it * 32 + r0 < NQC; r0 += BIAS_BATCH) {
-                        const uint32_t nr = min_u(BIAS_BATCH, min_u(32 - r0, NQC - (it * 32 + r0)));
-                        cbb.wait_front(BIAS_BATCH);
-                        for (uint32_t rr = 0; rr < nr; ++rr) {
-                            const uint32_t i = it * 32 + r0 + rr;
-                            noc.async_write(
-                                cbb,
-                                bs,
-                                TILE_BYTES,
-                                {.offset_bytes = rr * TILE_BYTES},
-                                {.page_id = (h * NQCP + i) * NBGT + sp * NBPT + j});
-                        }
-                        noc.async_write_barrier();
-                        cbb.pop_front(BIAS_BATCH);
-                    }
-                }
-            }
-        }
-
-        // ---- complete chunk-form rows (whole, aligned pages)
-        if constexpr (MODE != 1) {
-            for (uint32_t r = 0; r < 32; ++r) {
+            for (uint32_t sp = sp_lo; sp < sp_hi; ++sp) {
+                // ---- mask tiles of this shard
+                cbm.wait_front(MASK_T);
+                const uint32_t mbase = cbm.get_read_ptr();
                 if constexpr (MODE == 0) {
-                    noc.async_write(
-                        CoreLocalMem<uint32_t>(rows_base + r * ROW_BYTES),
-                        mk,
-                        ROW_BYTES,
-                        {},
-                        {.page_id = h * NQCP + it * 32 + r});
+                    for (uint32_t r = 0; r < 32; ++r) {
+                        CoreLocalMem<volatile uint32_t> w(rows_base + r * ROW_BYTES);
+                        for (uint32_t c = 0; c < NKC; ++c) {
+                            w[sp * NKC + c] = tile_elem_nz(mbase + (c >> 5) * TILE_BYTES, r, c & 31);
+                        }
+                    }
                 } else {
-                    noc.async_write(
-                        CoreLocalMem<uint32_t>(rows_base + r * ROW_BYTES),
-                        un,
-                        ROW_BYTES,
-                        {},
-                        {.page_id = h * NQCP + it * 32 + r});
+                    for (uint32_t r = 0; r < 32; ++r) {
+                        if (ring_used != 0 && (ring_used % RING_PAGES) == 0) {
+                            noc.async_write_barrier();  // the ring wraps
+                        }
+                        const uint32_t saddr = ring_base + (ring_used % RING_PAGES) * (NBP * 4);
+                        CoreLocalMem<volatile uint32_t> w(saddr);
+                        for (uint32_t b = 0; b < NBP; ++b) {
+                            w[b] = tile_elem_nz(mbase + (b >> 5) * TILE_BYTES, r, b & 31);
+                        }
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(saddr),
+                            mk,
+                            NBP * 4,
+                            {},
+                            {.page_id = h * NQCP + it * 32 + r, .offset_bytes = sp * NBP * 4});
+                        ++ring_used;
+                    }
+                }
+                cbm.pop_front(MASK_T);
+
+                // ---- union-row tiles of this shard (MODE 2) into the row buffer
+                if constexpr (MODE == 2) {
+                    cbu.wait_front(NKCLT);
+                    const uint32_t ubase = cbu.get_read_ptr();
+                    for (uint32_t r = 0; r < 32; ++r) {
+                        CoreLocalMem<volatile uint32_t> w(rows_base + r * ROW_BYTES);
+                        for (uint32_t c = 0; c < NKC; ++c) {
+                            w[sp * NKC + c] = tile_elem_nz(ubase + (c >> 5) * TILE_BYTES, r, c & 31);
+                        }
+                    }
+                    cbu.pop_front(NKCLT);
+                }
+
+                // ---- bias tiles of this shard
+                if constexpr (EMIT_BIAS == 1 && DEBUG == 0) {
+                    for (uint32_t j = 0; j < NBPT; ++j) {
+                        for (uint32_t r0 = 0; r0 < 32 && it * 32 + r0 < NQC; r0 += BIAS_BATCH) {
+                            const uint32_t nr = min_u(BIAS_BATCH, min_u(32 - r0, NQC - (it * 32 + r0)));
+                            cbb.wait_front(BIAS_BATCH);
+                            for (uint32_t rr = 0; rr < nr; ++rr) {
+                                const uint32_t i = it * 32 + r0 + rr;
+                                noc.async_write(
+                                    cbb,
+                                    bs,
+                                    TILE_BYTES,
+                                    {.offset_bytes = rr * TILE_BYTES},
+                                    {.page_id = (h * NQCP + i) * NBGT + sp * NBPT + j});
+                            }
+                            noc.async_write_barrier();
+                            cbb.pop_front(BIAS_BATCH);
+                        }
+                    }
                 }
             }
+
+            // ---- complete chunk-form rows (whole, aligned pages)
+            if constexpr (MODE != 1) {
+                for (uint32_t r = 0; r < 32; ++r) {
+                    if constexpr (MODE == 0) {
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(rows_base + r * ROW_BYTES),
+                            mk,
+                            ROW_BYTES,
+                            {},
+                            {.page_id = h * NQCP + it * 32 + r});
+                    } else {
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(rows_base + r * ROW_BYTES),
+                            un,
+                            ROW_BYTES,
+                            {},
+                            {.page_id = h * NQCP + it * 32 + r});
+                    }
+                }
+            }
+            noc.async_write_barrier();
         }
-        noc.async_write_barrier();
     }
 }
