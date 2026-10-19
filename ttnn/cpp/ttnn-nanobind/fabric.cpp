@@ -150,7 +150,8 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "setup_fabric_connection",
-        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
+           const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
            const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
            uint32_t link_idx,
            tt::tt_metal::ProgramDescriptor& program_descriptor,
@@ -159,6 +160,7 @@ void bind_fabric_api(nb::module_& mod) {
             std::vector<uint32_t> fabric_args;
 
             tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                mesh_device,
                 src_fabric_node_id,
                 dst_fabric_node_id,
                 link_idx,
@@ -169,6 +171,7 @@ void bind_fabric_api(nb::module_& mod) {
 
             return fabric_args;
         },
+        nb::arg("mesh_device"),
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_fabric_node_id"),
         nb::arg("link_idx"),
@@ -179,6 +182,7 @@ void bind_fabric_api(nb::module_& mod) {
             Sets up fabric connection: returns necessary runtime args and appends SemaphoreDescriptors to
             the given ProgramDescriptor
             Args:
+                mesh_device: The mesh device whose fabric the connection is resolved in
                 src_fabric_node_id: FabricNodeId of the source chip
                 dst_fabric_node_id: FabricNodeId of the destination chip
                 link_idx: Link index (0..n) to use between src and dst chips
@@ -189,7 +193,8 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "setup_routing_plane_connection",
-        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
+           const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
            const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
            const std::vector<uint32_t>& connection_link_indices,
            tt::tt_metal::ProgramDescriptor& program_descriptor,
@@ -199,6 +204,7 @@ void bind_fabric_api(nb::module_& mod) {
 
             tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(kernel_idx);
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
+                mesh_device,
                 src_fabric_node_id,
                 dst_nodes,
                 connection_link_indices,
@@ -209,6 +215,7 @@ void bind_fabric_api(nb::module_& mod) {
 
             return fabric_args;
         },
+        nb::arg("mesh_device"),
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_nodes"),
         nb::arg("connection_link_indices"),
@@ -220,6 +227,7 @@ void bind_fabric_api(nb::module_& mod) {
             SemaphoreDescriptors and defines to the given ProgramDescriptor.
             This API supports both 1D and 2D fabric routing.
             Args:
+                mesh_device: The mesh device whose fabric the connection is resolved in
                 src_fabric_node_id: FabricNodeId of the source chip
                 dst_nodes: List of FabricNodeIds of destination chips (one per route)
                 connection_link_indices: List of link indices (empty for auto-select, size 1 for all routes, or per-route)
@@ -255,7 +263,8 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "fabric_connection_rt_args",
-        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
+           const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
            const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
            const std::vector<uint32_t>& connection_link_indices,
            tt::tt_metal::ProgramDescriptor& program_descriptor,
@@ -265,6 +274,7 @@ void bind_fabric_api(nb::module_& mod) {
 
             tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(kernel_idx);
             tt::tt_metal::internal::append_routing_plane_connection_rt_args_no_defines<tt::tt_metal::ProgramDescriptor>(
+                mesh_device,
                 src_fabric_node_id,
                 dst_nodes,
                 connection_link_indices,
@@ -275,6 +285,7 @@ void bind_fabric_api(nb::module_& mod) {
 
             return fabric_args;
         },
+        nb::arg("mesh_device"),
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_nodes"),
         nb::arg("connection_link_indices"),
@@ -289,6 +300,7 @@ void bind_fabric_api(nb::module_& mod) {
             eager-compile model), and connection setup happens after compilation.
 
             Args:
+                mesh_device: The mesh device whose fabric the connections are resolved in
                 src_fabric_node_id: FabricNodeId of the source chip
                 dst_nodes: List of FabricNodeIds of destination chips (one per route)
                 connection_link_indices: List of link indices (empty for auto-select, size 1 for all routes, or per-route)

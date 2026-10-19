@@ -365,19 +365,19 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     // Append the fabric connection blocks in fixed order: W, E, N, S
     if (w_hops) {
         tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fn, coord_to_fabric_id(rep_w), link_idx_w, sender_prog, p.sender_core, writer_rt);
+            *mesh, src_fn, coord_to_fabric_id(rep_w), link_idx_w, sender_prog, p.sender_core, writer_rt);
     }
     if (e_hops) {
         tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fn, coord_to_fabric_id(rep_e), link_idx_e, sender_prog, p.sender_core, writer_rt);
+            *mesh, src_fn, coord_to_fabric_id(rep_e), link_idx_e, sender_prog, p.sender_core, writer_rt);
     }
     if (n_hops) {
         tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fn, coord_to_fabric_id(rep_n), link_idx_n, sender_prog, p.sender_core, writer_rt);
+            *mesh, src_fn, coord_to_fabric_id(rep_n), link_idx_n, sender_prog, p.sender_core, writer_rt);
     }
     if (s_hops) {
         tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fn, coord_to_fabric_id(rep_s), link_idx_s, sender_prog, p.sender_core, writer_rt);
+            *mesh, src_fn, coord_to_fabric_id(rep_s), link_idx_s, sender_prog, p.sender_core, writer_rt);
     }
 
     // Append hops

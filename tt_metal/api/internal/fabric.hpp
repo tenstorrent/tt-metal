@@ -62,6 +62,7 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
 // (e.g., blaze eager-compile model). Allocates semaphores and computes RT args only.
 template <typename ProgramOrDescriptor>
 void append_routing_plane_connection_rt_args_no_defines(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
