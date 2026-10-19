@@ -9,7 +9,8 @@ One core runs copy_tile -> exp_tile<approx=true>(x) -> pack_tile through ttnn.ge
 Wormhole has no SFPU scoreboard: an instruction that reads an LReg on the cycle after SFPMAD wrote it
 does not see the SFPMAD result. The fallback loops in ckernel_sfpu_exp.h issue SFPMAD and then
 SFP_STOCH_RND on the same LReg back to back, which needs an SFPNOP between them.
-With InputClamping::None (the SDPA streaming path) every output is 0.
+  - InputClamping::None (the SDPA streaming path): every output is 0.
+  - InputClamping::ClampToNegative: lanes whose input is below the -88.5 clamp threshold return garbage.
 
 The env var is read once at device startup, so every case runs in a fresh child process.
 """
@@ -32,6 +33,9 @@ ATOL = 0.1  # approx exp is within ~3.5 % of exp(x) <= exp(0.5)
 def make_input(clamp):
     torch.manual_seed(0)
     x = torch.empty(1, NUM_TILES, 32, 32).uniform_(-10.0, 0.5)  # inside approx exp's valid range
+    if clamp:
+        # ClampToNegative must map inputs below -88.5 to exp(-88.5) ~ 0; rows 16-31 of every tile sit below it.
+        x[:, :, 16:, :].uniform_(-200.0, -88.5)
     return x.bfloat16()
 
 
@@ -108,7 +112,7 @@ def spawn(disable_sfploadmacro, clamp):
 
 
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Wormhole-only: Blackhole stalls on SFPMAD read-after-write")
-@pytest.mark.parametrize("clamp", [False], ids=["clamp_none"])
+@pytest.mark.parametrize("clamp", [False, True], ids=["clamp_none", "clamp_negative"])
 @pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["sfploadmacro_off", "sfploadmacro_on"])
 def test_exp_approx_disable_sfploadmacro(disable_sfploadmacro, clamp):
     if not disable_sfploadmacro and os.environ.get("TT_METAL_SIMULATOR"):
