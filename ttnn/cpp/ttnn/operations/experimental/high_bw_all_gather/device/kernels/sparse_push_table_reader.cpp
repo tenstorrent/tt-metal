@@ -83,11 +83,12 @@ void kernel_main() {
     }
     const uint32_t slot_base = slot * pages_per_slot;
 
-    // kRuns holds the requester's per-owner counts and a window of its bitmap blocks.
+    // kRuns holds the requester's table header and per-owner counts, then a window of its bitmap blocks.
     cb_reserve_back(kRuns, 1);
-    const uint32_t counts_l1 = get_write_ptr(kRuns);
-    const uint32_t blocks_l1 = counts_l1 + 256;
-    auto* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_l1);
+    const uint32_t header_l1 = get_write_ptr(kRuns);
+    const uint32_t blocks_l1 = header_l1 + 256;
+    auto* header = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(header_l1);
+    auto* counts = header + owner_off;
 
     uint32_t batched = 0;
     auto flush_batch = [&]() {
@@ -111,7 +112,7 @@ void kernel_main() {
             continue;
         }
         const uint32_t first_page = dest * table_pages;
-        noc_async_read(table.get_noc_addr(first_page) + owner_off * 4, counts_l1, 128);
+        noc_async_read(table.get_noc_addr(first_page), header_l1, (owner_off + 32) * 4);
         noc_async_read_barrier();
         invalidate_l1_cache();
         uint32_t base = 0;
@@ -150,7 +151,9 @@ void kernel_main() {
         open_packet();
 
         // This chip's blocks: my_rank, my_rank + N, ...; block jb holds local rows [jb * sc, (jb + 1) * sc).
-        const uint32_t my_blocks = num_blocks > my_rank ? (num_blocks - my_rank + num_devices - 1) / num_devices : 0;
+        const uint32_t active_blocks = header[3] < num_blocks ? header[3] : num_blocks;
+        const uint32_t my_blocks =
+            active_blocks > my_rank ? (active_blocks - my_rank + num_devices - 1) / num_devices : 0;
         for (uint32_t jb0 = 0; jb0 < my_blocks; jb0 += kBlocksPerFill) {
             const uint32_t fill = my_blocks - jb0 < kBlocksPerFill ? my_blocks - jb0 : kBlocksPerFill;
             for (uint32_t f = 0; f < fill; ++f) {
