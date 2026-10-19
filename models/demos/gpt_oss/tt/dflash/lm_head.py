@@ -16,7 +16,7 @@ import torch
 import ttnn
 
 from ..fused_decode.config import LM_HEAD_DECODE_WEIGHT_DTYPE
-from ..fused_decode.stream import as_stream_tensor, linear_stream_rows, stream_linear_layout
+from ..fused_decode.stream import as_stream_tensor, linear_stream_rows, mark_cache_built, stream_linear_layout
 from ..fused_decode.terminal import MASK
 
 TILE = ttnn.TILE_SIZE
@@ -73,6 +73,5 @@ def padded_lm_head(
             layouts.append(stream_linear_layout(wd, bias, banks, order))
         assert layouts[0].shape[0] == rows
     t = as_stream_tensor(mesh_device, layouts, rows, dtype, cache)
-    if marker is not None:
-        marker.touch()
+    mark_cache_built(marker)
     return t, n

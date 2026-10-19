@@ -23,9 +23,9 @@ from models.demos.gpt_oss.demo.dflash_demo import (
     run_dflash,
 )
 
-ISL = 1024
-MIN_AGREEMENT = 0.95  # teacher-forced top-1 agreement (measured 0.965 - 0.992)
-MIN_ACCEPT = 3.0  # mean accepted tokens per round (measured 3.28 - 3.36 on this prompt)
+ISLS = {"1k": 1024, "16k": 16384}  # 16K: the long-context attention paths (block attention over many slices)
+MIN_AGREEMENT = 0.95  # teacher-forced top-1 agreement (measured 0.973 at 1K, 0.984 at 16K)
+MIN_ACCEPT = 3.0  # mean accepted tokens per round (measured 4.11 at 1K, 3.31 at 16K)
 
 
 def plain_greedy_next(runner, token, pos):
@@ -47,14 +47,17 @@ def plain_greedy_next(runner, token, pos):
 
 
 @pytest.mark.timeout(3600)
+@pytest.mark.parametrize("isl", list(ISLS.values()), ids=[f"isl_{k}" for k in ISLS])
 @parametrize_dflash_mesh()
-def test_dflash_accuracy(mesh_device, device_params):
-    runner, tokenizer = build_dflash(mesh_device, 4096)
-    prompt_ids = book_prompt(tokenizer, ISL)
-    toks, accept, _ = run_dflash(runner, prompt_ids, NEW_TOKENS)
-    runner.release_traces()
-    # (the prompt's K / V are untouched: the passes write positions >= ISL, which the decode below rewrites in order)
-    plain = [plain_greedy_next(runner, toks[i], ISL + i) for i in range(len(toks) - 1)]
+def test_dflash_accuracy(mesh_device, device_params, isl):
+    runner, tokenizer = build_dflash(mesh_device, max(4096, 1 << (isl + NEW_TOKENS + 15).bit_length()))
+    prompt_ids = book_prompt(tokenizer, isl)
+    try:
+        toks, accept, _ = run_dflash(runner, prompt_ids, NEW_TOKENS)
+    finally:
+        runner.release_traces()
+    # (the prompt's K / V are untouched: the passes write positions >= isl, which the decode below rewrites in order)
+    plain = [plain_greedy_next(runner, toks[i], isl + i) for i in range(len(toks) - 1)]
     agree = sum(int(p == t) for p, t in zip(plain, toks[1:])) / len(plain)
     mean_accept = sum(accept) / len(accept)
     first_diff = next((i + 1 for i, (p, t) in enumerate(zip(plain, toks[1:])) if p != t), None)

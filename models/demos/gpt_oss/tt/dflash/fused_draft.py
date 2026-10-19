@@ -33,6 +33,7 @@ from ..fused_decode.config import LM_HEAD_STREAM_PREFETCH
 from ..fused_decode.stream import (
     LinearStream,
     as_stream_tensor,
+    mark_cache_built,
     stream_down_layout,
     stream_gate_up_layout,
     stream_linear_layout,
@@ -392,8 +393,7 @@ class FusedDraft:
         self.w_kv = as_stream_tensor(
             mesh, lay["kv"], self.kv.weight_rows(), dtype, None if base_name is None else base_name + "_kv"
         )
-        if marker is not None:
-            marker.touch()
+        mark_cache_built(marker)
         # the context K's per-head RMSNorm (k_norm of its layer) + RoPE + head sharding and V's head sharding as one
         # DraftQKPrep program (joint mode: the L * nkv heads as rows)
         self.ctx_prep = DraftQKPrep(mesh, M, L * nkv, 0, hd, d.eps, d.head_mc, d.rope.cos_matrix, d.rope.sin_matrix)
@@ -490,8 +490,7 @@ class FusedDraft:
             self.w_o.append(put("o", self.o.weight_rows()))
             self.w_gu.append(put("gu", self.gu.weight_rows(S)))
             self.w_down.append(put("down", self.down.weight_rows(S)))
-        if marker is not None:
-            marker.touch()
+        mark_cache_built(marker)
 
     def forward(self):
         """The draft pass on the current inputs (d.t_toks / t_pos / t_rot / t_bound): [last token, 7 drafts] into the

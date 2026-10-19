@@ -108,9 +108,17 @@ class DFlashRunner:
         self.draft.add_prompt_context(self.capture.prefill_features(L), chunk=PROMPT_CHUNK)
         return int(logits.reshape(-1)[: self.V].float().argmax())
 
+    def _bounded(self, toks, max_new_tokens):
+        """The returned tokens: at most max_new_tokens, ending at the first EOS (a round appends its whole accepted
+        block, which can pass either limit)."""
+        toks = toks[: max(max_new_tokens, 0)]
+        end = next((i + 1 for i, t in enumerate(toks) if t in self.eos_ids), len(toks))
+        return toks[:end]
+
     def generate(self, prompt_ids, max_new_tokens, first=None):
-        """Returns (new tokens, per-round accepted counts, timings). first: the prefill's next token (prefill done).
-        Eager until capture_traces, traced after."""
+        """Returns (new tokens, per-round accepted counts, timings): at most max_new_tokens tokens (the first one is the
+        prefill's), up to and including the first EOS. first: the prefill's next token (prefill done). Eager until
+        capture_traces, traced after."""
         L = len(prompt_ids)
         t0 = time.perf_counter()
         if first is None:
@@ -119,7 +127,7 @@ class DFlashRunner:
         t_prefill = time.perf_counter() - t0
         if self.round_trace is not None:
             accept, rounds = self._generate_traced(ids, L, max_new_tokens)
-            return ids[L:], accept, dict(prefill=t_prefill, rounds=rounds)
+            return self._bounded(ids[L:], max_new_tokens), accept, dict(prefill=t_prefill, rounds=rounds)
         accept, rounds = [], []
         B = self.draft.block
         while len(ids) - L < max_new_tokens and not (set(ids[L:]) & self.eos_ids):
@@ -142,7 +150,7 @@ class DFlashRunner:
             t3 = time.perf_counter()
             accept.append(k + 1)
             rounds.append((t1 - t, t2 - t1, t3 - t2))
-        return ids[L:], accept, dict(prefill=t_prefill, rounds=rounds)
+        return self._bounded(ids[L:], max_new_tokens), accept, dict(prefill=t_prefill, rounds=rounds)
 
     def _enqueue_round(self):
         """Queue one traced round (draft, verify, context) and a non-blocking read of its result. Returns (host result,

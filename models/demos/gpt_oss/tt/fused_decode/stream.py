@@ -260,6 +260,18 @@ def as_stream_tensor(mesh_device, layouts, rows, dtype, cache_file_name):
     )
 
 
+def mark_cache_built(marker):
+    """Create a weight-cache marker (`<name>.built`, the cache holds every file of that name) if it is missing and its
+    directory is writable; an existing marker is left alone (a read-only cache, e.g. CI's shared one, keeps working:
+    as_stream_tensor builds missing files in memory there)."""
+    if marker is None or marker.exists():
+        return
+    if os.access(marker.parent, os.W_OK):
+        marker.touch()
+    else:
+        logger.warning(f"{marker.parent} is read-only: {marker.name} is not written")
+
+
 def _page_bytes(tiles, tile_bytes):
     """Largest NOC packet holding whole tiles that divides a `tiles`-tile block."""
     return max(d for d in range(1, tiles + 1) if tiles % d == 0 and d * tile_bytes <= MAX_PACKET_BYTES) * tile_bytes

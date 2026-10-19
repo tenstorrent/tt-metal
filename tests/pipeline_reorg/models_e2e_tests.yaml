@@ -942,6 +942,21 @@
   team: models
   budget_type: e2e
 
+- name: GPT-OSS 20B DFlash accuracy tests
+  cmd: |
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
+    pytest models/demos/gpt_oss/tests/test_dflash.py -k isl_1k --timeout 1800
+  model: gpt-oss-20b
+  model_family: GPT-OSS
+  skus:
+    bh_quietbox_2:
+      timeout: 30
+      tier: 2
+      release_ready: false
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+  budget_type: e2e
+
 - name: GPT-OSS 120B e2e tests
   cmd: |
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2

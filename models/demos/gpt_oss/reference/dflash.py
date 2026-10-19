@@ -111,8 +111,9 @@ def target_context(hidden_states, layer_ids):
 
 @torch.no_grad()
 def dflash_generate(target, draft, prompt_ids, max_new_tokens, eos_ids=(), log=None):
-    """Greedy DFlash (spec_generate semantics) with full recomputation. Returns (tokens after the prompt,
-    acceptance lengths per round, [(start, draft tokens)] per round)."""
+    """Greedy DFlash (spec_generate semantics) with full recomputation. Returns (tokens after the prompt: at most
+    max_new_tokens, up to and including the first EOS; acceptance lengths per round, [(start, draft tokens)] per
+    round)."""
     embed = target.get_input_embeddings()
     lm_head = target.get_output_embeddings()
     ids = list(prompt_ids)
@@ -141,4 +142,6 @@ def dflash_generate(target, draft, prompt_ids, max_new_tokens, eos_ids=(), log=N
             log(f"round {len(accept)}: start {start} accepted {a + 1}")
         if any(t in eos_ids for t in ids[len(prompt_ids) :]):
             break
-    return ids[len(prompt_ids) :], accept, drafts
+    toks = ids[len(prompt_ids) :][: max(max_new_tokens, 0)]  # a round appends its whole accepted block
+    end = next((i + 1 for i, t in enumerate(toks) if t in eos_ids), len(toks))
+    return toks[:end], accept, drafts
