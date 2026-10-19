@@ -509,7 +509,8 @@ std::optional<MuxDeployment> create_mux_deployment(
     uint8_t num_buffers_per_channel,
     uint32_t channel_buffer_size_bytes,
     const TestCaseConfig& test_case) {
-    const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, anchor_dst_fabric_node_id);
+    const auto link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*device, src_fabric_node_id, anchor_dst_fabric_node_id);
     if (link_indices.empty()) {
         return std::nullopt;
     }
