@@ -9,6 +9,7 @@ Run from the repository root: python3 -m unittest tt_metal.fabric.debug.visualiz
 """
 
 import copy
+import json
 import struct
 import unittest
 
@@ -17,6 +18,7 @@ from tt_metal.fabric.debug.visualizer.decode.routes import (
     ManifestError,
     MeshView,
     Odd2D,
+    OddKind,
     ScatterChunk,
     Step2D,
     TreeEdge2D,
@@ -388,6 +390,11 @@ class Walk2DTest(unittest.TestCase):
         # Every column of a 1x3 ring says east, so the route goes round.
         result = walk([0, E, E, E], (0, 0), mesh(1, 3, torus=(False, True)))
         self.assertEqual(result.odd, [Odd2D((0, 1), "revisit", "west")])
+
+    def test_a_kind_is_an_odd_kind_that_writes_to_json_as_its_name(self):
+        (odd,) = walk([0, 0, 0, 0], (0, 0), mesh(1, 3)).odd
+        self.assertIs(odd.kind, OddKind.EMPTY)
+        self.assertEqual(json.dumps(odd.kind), '"empty"')
 
 
 class GetRouteMapFromTable2DTest(unittest.TestCase):

@@ -427,22 +427,36 @@ class Step2D:
     dst: Coord
 
 
+class OddKind(str, Enum):
+    """
+    What an Odd2D reports:
+    - OFF_EDGE: a direction bit that steps off an edge of the mesh that doesn't wrap;
+    - NO_Z_PEER: a Z bit at a chip whose Z peer isn't known;
+    - IGNORED_BIT: a direction bit the router ignores: the way the packet came in, or north or south at a router the
+      packet entered from the east or west;
+    - UNKNOWN_BITS: bits that are neither a direction nor local delivery;
+    - EMPTY: an action byte of 0;
+    - REVISIT: a chip the route reaches again from the same side.
+    """
+
+    OFF_EDGE = "off_edge"
+    NO_Z_PEER = "no_z_peer"
+    IGNORED_BIT = "ignored_bit"
+    UNKNOWN_BITS = "unknown_bits"
+    EMPTY = "empty"
+    REVISIT = "revisit"
+
+
 @dataclass(frozen=True)
 class Odd2D:
     """
     A chip where the route map asks for something the router there doesn't do, or that the fabric doesn't build.
-    `kind` is one of:
-    - "off_edge": a direction bit that steps off an edge of the mesh that doesn't wrap;
-    - "no_z_peer": a Z bit at a chip whose Z peer isn't known;
-    - "ignored_bit": a direction bit the router ignores: the way the packet came in, or north or south at a router
-      the packet entered from the east or west;
-    - "unknown_bits": bits that are neither a direction nor local delivery;
-    - "empty": an action byte of 0;
-    - "revisit": a chip the route reaches again from the same side, which `direction` names.
+    `direction` is the bit's direction, or for a revisit, the side the chip is reached from. It's None for unknown bits
+    and an empty byte.
     """
 
     chip: Coord
-    kind: str
+    kind: OddKind
     direction: Direction | None = None
 
 
@@ -509,7 +523,7 @@ def walk_2d(
         chip, side = todo.popleft()
         # We should never revisit the same chip and direction in a single walk
         if (chip, side) in seen:
-            odd.append(Odd2D(chip, "revisit", side))
+            odd.append(Odd2D(chip, OddKind.REVISIT, side))
             continue
         seen.add((chip, side))
 
@@ -529,9 +543,9 @@ def walk_2d(
 
         # Unknown bits that we don't know how to process
         if action & ~known_bits:
-            odd.append(Odd2D(chip, "unknown_bits"))
+            odd.append(Odd2D(chip, OddKind.UNKNOWN_BITS))
         elif action == 0:
-            odd.append(Odd2D(chip, "empty"))
+            odd.append(Odd2D(chip, OddKind.EMPTY))
 
         for direction, bit in enc.direction_bits:
             # Action != bit
@@ -540,13 +554,13 @@ def walk_2d(
 
             # A router doesn't send back the way the packet came, and packets entered through x don't turn into y
             if direction == side or (side in X_DIRECTIONS and direction in Y_DIRECTIONS):
-                odd.append(Odd2D(chip, "ignored_bit", direction))
+                odd.append(Odd2D(chip, OddKind.IGNORED_BIT, direction))
                 continue
 
             # Step to the next chip
             next_chip = _step_2d(chip, direction, mesh)
             if next_chip is None:
-                odd.append(Odd2D(chip, "no_z_peer" if direction == Direction.Z else "off_edge", direction))
+                odd.append(Odd2D(chip, OddKind.NO_Z_PEER if direction == Direction.Z else OddKind.OFF_EDGE, direction))
                 continue
             steps.append(Step2D(chip, direction, next_chip))
             todo.append((next_chip, OPPOSITE_2D[direction]))
