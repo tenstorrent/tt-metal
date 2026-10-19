@@ -650,8 +650,13 @@ class TtPrefillBlock(LightweightModule):
         if self.ffn_only:
             # The upstream rank ran this layer's attention (and wrote/acked its KV); x is its residual.
             x = self._ffn_and_residual(
-                x, return_intermediates=return_intermediates, actual_isl=actual_isl, padding_side=padding_side,
-                actual_start=actual_start, metadata=metadata, cache_user_id=cache_user_id,
+                x,
+                return_intermediates=return_intermediates,
+                actual_isl=actual_isl,
+                padding_side=padding_side,
+                actual_start=actual_start,
+                metadata=metadata,
+                cache_user_id=cache_user_id,
             )
             if return_indexer_indices:
                 return x, None, None
@@ -776,7 +781,9 @@ class TtPrefillBlock(LightweightModule):
             return x, kv_cache, mla_indices
         return x, kv_cache
 
-    def _ffn_and_residual(self, x, *, return_intermediates, actual_isl, padding_side, actual_start, metadata, cache_user_id):
+    def _ffn_and_residual(
+        self, x, *, return_intermediates, actual_isl, padding_side, actual_start, metadata, cache_user_id
+    ):
         """ffn_norm -> (MoE | dense FFN) -> residual add: the second half of forward()."""
         ffn_norm_out = self.ffn_norm(x)
         if self.is_moe:

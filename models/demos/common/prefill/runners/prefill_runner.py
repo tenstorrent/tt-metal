@@ -29,11 +29,11 @@ from models.demos.common.prefill.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
     compute_layer_split,
-    ffn_handoff_flags,
 )
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_rows as d2d_rows_for
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
 from models.demos.common.prefill.runners.runner_utils import (
+    ffn_handoff_flags,
     indexer_indices_global_spec,
     make_h2d_spec,
     num_mtp_tokens,

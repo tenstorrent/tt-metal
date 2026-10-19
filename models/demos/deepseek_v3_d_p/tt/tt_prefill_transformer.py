@@ -197,12 +197,12 @@ class TtPrefillTransformer(LightweightModule):
         # after attention, and/or it first runs the FFN of the layer before first_layer_idx, whose attention
         # (and KV) the upstream rank owns. KV slots, acks and the indexer chain follow attention, so they
         # are exactly those of the whole-layer split at the same boundary.
-        assert not (attn_only_last_layer and (is_last_rank or kv_only_last_layer)), (
-            "the last rank has no downstream stage to run its last layer's FFN"
-        )
-        assert not (ffn_prefix_layer and (is_first_rank or first_layer_idx == 0)), (
-            "the first rank has no upstream stage that ran the prefix layer's attention"
-        )
+        assert not (
+            attn_only_last_layer and (is_last_rank or kv_only_last_layer)
+        ), "the last rank has no downstream stage to run its last layer's FFN"
+        assert not (
+            ffn_prefix_layer and (is_first_rank or first_layer_idx == 0)
+        ), "the first rank has no upstream stage that ran the prefix layer's attention"
         self.attn_only_last_layer = attn_only_last_layer
         self.mesh_device = mesh_device
         self.seq_len = seq_len

@@ -47,7 +47,7 @@ def test_ffn_handoff_flags(monkeypatch, env, num_ranks, expected):
     assert ffn_handoff_flags(num_ranks) == expected
 
 
-def test_ffn_handoff_flags_rejects_a_wrong_boundary_count(monkeypatch):
+def test_ffn_handoff_flags_rejects_a_wrong_boundary_count(monkeypatch, expect_error):
     monkeypatch.setenv("PREFILL_PP_FFN_HANDOFF", "1,0")
-    with pytest.raises(ValueError, match="must list 3 boundaries"):
+    with expect_error(ValueError, "must list 3 boundaries"):
         ffn_handoff_flags(4)
