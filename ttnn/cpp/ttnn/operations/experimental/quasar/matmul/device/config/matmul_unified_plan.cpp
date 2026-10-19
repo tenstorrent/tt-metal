@@ -727,68 +727,82 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
 
     const tt::tt_metal::IDevice& device = *A.device();
     const CoreCoord grid = attributes.user_core_coord.value_or(device.compute_with_storage_grid_size());
-    const bool fp32_dest_acc_en = get_fp32_dest_acc_en(attributes.compute_kernel_config);
-    const tt::tt_metal::MathFidelity math_fidelity =
-        std::get<0>(get_compute_kernel_config_args(device.arch(), attributes.compute_kernel_config.value()));
     // With a 32-bit DST ttnn.linear adds the bias separately (see the plan), so it takes no L1 here.
-    const uint32_t fused_bias_tile_bytes = fp32_dest_acc_en ? 0 : bias_tile_bytes;
+    const uint32_t fused_bias_tile_bytes = get_fp32_dest_acc_en(attributes.compute_kernel_config) ? 0 : bias_tile_bytes;
     const UnifiedMatmulPlan gemm = plan_gemm_size(A, B, attributes);
     const uint32_t M_tiles = gemm.M_tiles;
     const uint32_t N_tiles = gemm.N_tiles;
     const tt::tt_metal::MemoryConfig& C_memory = attributes.output_mem_config;
+    const std::optional<tt::tt_metal::ShardSpec>& C_shard = C_memory.shard_spec();
 
-    const auto make_config = [&](CoreRangeSet cores,
-                                 uint32_t C_slice_M_tiles,
-                                 uint32_t C_slice_N_tiles,
-                                 tt::tt_metal::ShardOrientation orientation) {
-        MatmulUnifiedProgramConfig config = requested;
-        config.cores = std::move(cores);
-        config.C_slice_M_tiles = C_slice_M_tiles;
-        config.C_slice_N_tiles = C_slice_N_tiles;
-        config.orientation = orientation;
-        return config;
+    // ---- 1. Candidates: each natural placement with its plan ----
+    // A placement is cores, an orientation and the C slice shapes to try in order (0 x 0: the plan picks the C slice).
+    // Its plan is the first that fits L1; a placement whose plan does not tile a requested sharded output layout is
+    // dropped.
+    struct Candidate {
+        std::string name;
+        MatmulUnifiedProgramConfig config;
+        UnifiedMatmulPlan plan;
+    };
+    std::vector<Candidate> candidates;
+    const auto add_candidate = [&](const std::string& name,
+                                   const CoreRangeSet& cores,
+                                   tt::tt_metal::ShardOrientation orientation,
+                                   const std::vector<std::pair<uint32_t, uint32_t>>& C_slice_shapes) {
+        const CoreCoord device_grid = device.compute_with_storage_grid_size();
+        if (cores.bounding_box().end_coord.x >= device_grid.x || cores.bounding_box().end_coord.y >= device_grid.y) {
+            return;
+        }
+        for (const auto& [C_slice_M_tiles, C_slice_N_tiles] : C_slice_shapes) {
+            MatmulUnifiedProgramConfig config = requested;
+            config.cores = cores;
+            config.orientation = orientation;
+            config.C_slice_M_tiles = C_slice_M_tiles;
+            config.C_slice_N_tiles = C_slice_N_tiles;
+            const std::optional<UnifiedMatmulPlan> plan =
+                plan_unified_matmul(A, B, fused_bias_tile_bytes, config, attributes, std::nullopt, /*must_fit=*/false);
+            if (!plan.has_value()) {
+                continue;
+            }
+            const bool tiles_requested_layout = !C_memory.is_sharded() || C_shard.has_value() ||
+                                                plan->sharded_output_layout == C_memory.memory_layout();
+            if (tiles_requested_layout) {
+                candidates.push_back({name, std::move(config), *plan});
+            }
+            return;
+        }
+    };
+    const std::vector<std::pair<uint32_t, uint32_t>> plan_picks_C_slice = {{0, 0}};
+    // C slices of a fixed width (fixed_is_N) or height, the other dimension all of C's, then split into 2, 3, ...
+    // pieces. The last piece may be shorter (13 tiles in 4 pieces: 4, 4, 4, 1).
+    const auto shrinking_C_slices = [&](uint32_t fixed_tiles, bool fixed_is_N) {
+        std::vector<std::pair<uint32_t, uint32_t>> shapes;
+        const uint32_t free_tiles = fixed_is_N ? M_tiles : N_tiles;
+        uint32_t previous_free_slice_tiles = 0;
+        for (uint32_t pieces = 1; pieces <= free_tiles; ++pieces) {
+            const uint32_t free_slice_tiles = tt::div_up(free_tiles, pieces);
+            if (free_slice_tiles != previous_free_slice_tiles) {
+                shapes.push_back(
+                    fixed_is_N ? std::pair(free_slice_tiles, fixed_tiles) : std::pair(fixed_tiles, free_slice_tiles));
+                previous_free_slice_tiles = free_slice_tiles;
+            }
+        }
+        return shapes;
     };
     const auto rectangle = [](uint32_t columns, uint32_t rows) {
         return CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(columns - 1, rows - 1)));
     };
     constexpr tt::tt_metal::ShardOrientation ROW_MAJOR = tt::tt_metal::ShardOrientation::ROW_MAJOR;
 
-    // Each candidate is a placement plus a list of C slice shapes to try in order (0 = auto); the first that fits
-    // is the candidate's plan.
-    struct Candidate {
-        std::string name;
-        std::vector<MatmulUnifiedProgramConfig> configs;
-    };
-    std::vector<Candidate> candidates;
-    // C slices of a fixed width (fixed_is_N) or height, the other dimension all of C's, then split into 2, 3, ...
-    // pieces until a plan fits. The last piece may be shorter (13 tiles in 4 pieces: 4, 4, 4, 1).
-    const auto shrinking_C_slices =
-        [&](CoreRangeSet cores, uint32_t fixed_tiles, bool fixed_is_N, tt::tt_metal::ShardOrientation orientation) {
-            std::vector<MatmulUnifiedProgramConfig> configs;
-            const uint32_t free_tiles = fixed_is_N ? M_tiles : N_tiles;
-            uint32_t previous_free_slice_tiles = 0;
-            for (uint32_t pieces = 1; pieces <= free_tiles; ++pieces) {
-                const uint32_t free_slice_tiles = tt::div_up(free_tiles, pieces);
-                if (free_slice_tiles != previous_free_slice_tiles) {
-                    configs.push_back(
-                        fixed_is_N ? make_config(cores, free_slice_tiles, fixed_tiles, orientation)
-                                   : make_config(cores, fixed_tiles, free_slice_tiles, orientation));
-                    previous_free_slice_tiles = free_slice_tiles;
-                }
-            }
-            return configs;
-        };
-
-    const std::optional<tt::tt_metal::ShardSpec>& C_shard = C_memory.shard_spec();
     if (C_memory.is_sharded() && C_shard.has_value()) {
         // The output shard fixes the cores and the C slice.
-        candidates.push_back({"output_shard", {make_config(C_shard->grid, 0, 0, C_shard->orientation)}});
+        add_candidate("output_shard", C_shard->grid, C_shard->orientation, plan_picks_C_slice);
     } else {
         const uint32_t rows = std::min<uint32_t>(grid.y, M_tiles);
         const uint32_t columns = std::min<uint32_t>(grid.x, N_tiles);
-        candidates.push_back({"2D", {make_config(rectangle(columns, rows), 0, 0, ROW_MAJOR)}});
-        candidates.push_back({"1D_row", {make_config(rectangle(columns, 1), 0, 0, ROW_MAJOR)}});
-        candidates.push_back({"1D_column", {make_config(rectangle(1, rows), 0, 0, ROW_MAJOR)}});
+        add_candidate("2D", rectangle(columns, rows), ROW_MAJOR, plan_picks_C_slice);
+        add_candidate("1D_row", rectangle(columns, 1), ROW_MAJOR, plan_picks_C_slice);
+        add_candidate("1D_column", rectangle(1, rows), ROW_MAJOR, plan_picks_C_slice);
         // 1D over whole rows of the grid, one C slice per core: when the C slices span all of C's other dimension
         // every core needs the same A (B), which is multicast to all of them.
         const auto whole_rows = [&](uint32_t num_C_slices) {
@@ -797,20 +811,16 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
         };
         const CoreRangeSet across_N_cores = whole_rows(N_tiles);
         const CoreRangeSet across_M_cores = whole_rows(M_tiles);
-        candidates.push_back(
-            {"1D_across_N",
-             shrinking_C_slices(
-                 across_N_cores,
-                 tt::div_up(N_tiles, across_N_cores.num_cores()),
-                 /*fixed_is_N=*/true,
-                 ROW_MAJOR)});
-        candidates.push_back(
-            {"1D_across_M",
-             shrinking_C_slices(
-                 across_M_cores,
-                 tt::div_up(M_tiles, across_M_cores.num_cores()),
-                 /*fixed_is_N=*/false,
-                 ROW_MAJOR)});
+        add_candidate(
+            "1D_across_N",
+            across_N_cores,
+            ROW_MAJOR,
+            shrinking_C_slices(tt::div_up(N_tiles, across_N_cores.num_cores()), /*fixed_is_N=*/true));
+        add_candidate(
+            "1D_across_M",
+            across_M_cores,
+            ROW_MAJOR,
+            shrinking_C_slices(tt::div_up(M_tiles, across_M_cores.num_cores()), /*fixed_is_N=*/false));
         // Keep a sharded operand where it is: an L1 shard can then be bound in place, and a DRAM shard is read by
         // the core next to its bank (the cores listed in bank order, which the C slice walk follows).
         const auto dram_bank_cores = [&]() {
@@ -821,62 +831,48 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
             }
             return CoreRangeSet(std::move(cores));
         };
-        const tt::tt_metal::TensorMemoryLayout A_layout = A.memory_config().memory_layout();
-        const tt::tt_metal::TensorMemoryLayout B_layout = B.memory_config().memory_layout();
-        if (A.is_sharded() && A_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
-            const CoreRangeSet cores = A.memory_config().is_dram() ? dram_bank_cores() : A.shard_spec()->grid;
+        if (A.is_sharded() && A.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
             const uint32_t A_shard_M_tiles = A.shard_spec()->shape[0] / TILE_HEIGHT;
-            candidates.push_back(
-                {"A_shard_rows",
-                 shrinking_C_slices(cores, A_shard_M_tiles, /*fixed_is_N=*/false, A.shard_spec()->orientation)});
+            add_candidate(
+                "A_shard_rows",
+                A.memory_config().is_dram() ? dram_bank_cores() : A.shard_spec()->grid,
+                A.shard_spec()->orientation,
+                shrinking_C_slices(A_shard_M_tiles, /*fixed_is_N=*/false));
         }
-        if (B.is_sharded() && B_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
-            const CoreRangeSet cores = B.memory_config().is_dram() ? dram_bank_cores() : B.shard_spec()->grid;
+        if (B.is_sharded() && B.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
             const uint32_t B_shard_N_tiles = B.shard_spec()->shape[1] / TILE_WIDTH;
-            candidates.push_back(
-                {"B_shard_columns",
-                 shrinking_C_slices(cores, B_shard_N_tiles, /*fixed_is_N=*/true, B.shard_spec()->orientation)});
+            add_candidate(
+                "B_shard_columns",
+                B.memory_config().is_dram() ? dram_bank_cores() : B.shard_spec()->grid,
+                B.shard_spec()->orientation,
+                shrinking_C_slices(B_shard_N_tiles, /*fixed_is_N=*/true));
         }
     }
 
+    // ---- 2. Choose: the candidate with the lowest estimated cycles (the first on a tie) ----
+    const tt::tt_metal::MathFidelity math_fidelity =
+        std::get<0>(get_compute_kernel_config_args(device.arch(), attributes.compute_kernel_config.value()));
     std::optional<MatmulUnifiedProgramConfig> best;
     std::pair<double, double> best_estimate;
     for (const Candidate& candidate : candidates) {
-        for (const MatmulUnifiedProgramConfig& config : candidate.configs) {
-            if (config.cores.bounding_box().end_coord.x >= device.compute_with_storage_grid_size().x ||
-                config.cores.bounding_box().end_coord.y >= device.compute_with_storage_grid_size().y) {
-                break;
-            }
-            const std::optional<UnifiedMatmulPlan> plan =
-                plan_unified_matmul(A, B, fused_bias_tile_bytes, config, attributes, std::nullopt, /*must_fit=*/false);
-            if (!plan.has_value()) {
-                continue;
-            }
-            // A sharded output takes the layout the caller asked for, which the C slices must tile.
-            if (C_memory.is_sharded() && !C_shard.has_value() &&
-                plan->sharded_output_layout != C_memory.memory_layout()) {
-                break;
-            }
-            const std::pair<double, double> estimate = estimate_plan_cycles(
-                *plan,
-                device.arch(),
-                math_fidelity,
-                A.memory_config().is_dram(),
-                B.memory_config().is_dram(),
-                C_memory.is_dram());
-            log_debug(
-                tt::LogOp,
-                "Unified matmul placement: {} with a {}x{}-tile C slice on {} cores: {:.0f} cycles",
-                candidate.name,
-                plan->C_slice_M_tiles,
-                plan->C_slice_N_tiles,
-                plan->cores.size(),
-                estimate.first);
-            if (!best.has_value() || estimate < best_estimate) {
-                best = config;
-                best_estimate = estimate;
-            }
-            break;
+        const std::pair<double, double> estimate = estimate_plan_cycles(
+            candidate.plan,
+            device.arch(),
+            math_fidelity,
+            A.memory_config().is_dram(),
+            B.memory_config().is_dram(),
+            C_memory.is_dram());
+        log_debug(
+            tt::LogOp,
+            "Unified matmul placement: {} with a {}x{}-tile C slice on {} cores: {:.0f} cycles",
+            candidate.name,
+            candidate.plan.C_slice_M_tiles,
+            candidate.plan.C_slice_N_tiles,
+            candidate.plan.cores.size(),
+            estimate.first);
+        if (!best.has_value() || estimate < best_estimate) {
+            best = candidate.config;
+            best_estimate = estimate;
         }
     }
     return best;
