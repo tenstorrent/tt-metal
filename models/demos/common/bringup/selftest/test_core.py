@@ -293,3 +293,20 @@ def test_state_keeps_every_metric_of_a_small_test(sandbox):
     led = sandbox.tasks(task("A.1", record_cmd(pcc_out=0.995, info=2.0), metrics={"pcc_*": ">= 0.99"}))
     run_gate(sandbox.spec, led, "A.1")
     assert led.state()["A.1"]["metrics"] == {"pcc_out": 0.995, "info": 2.0}
+
+
+def test_a_refused_commit_is_a_fail_not_an_uncommitted_pass(sandbox):
+    """F110: when git refuses the gate's commit (a pre-commit hook), the task is FAIL with the hook's output as the
+    reason, never PASS with its change left uncommitted (DeepSeek-V4.1 P.5: prefer-expect-error refused the commit,
+    the orchestrator crashed with P.5 marked PASS)."""
+    hook = sandbox.repo / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\necho 'prefer-expect-error: use the expect_error fixture' >&2\nexit 1\n")
+    hook.chmod(0o755)
+    (sandbox.repo / "src").mkdir()
+    (sandbox.repo / "src/impl.py").write_text("x = 1\n")
+    led = sandbox.tasks(task("A.1", record_cmd(pcc_out=0.995), metrics={"pcc_*": ">= 0.99"}, paths=["src"]))
+    res = run_gate(sandbox.spec, led, "A.1", commit=True)
+    assert res.verdict == "FAIL" and not res.commit
+    assert any("prefer-expect-error" in ln for ln in res.lines)
+    st = led.state()["A.1"]
+    assert st["status"] == "FAIL" and any("git refused the commit" in ln for ln in st["reason"])
