@@ -85,7 +85,6 @@ DB_SCHEMA = [
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
     Column("group_kt_dim", "int64", True, "configuration"),
-    Column("implied_math_format", "string", True, "configuration"),
     Column("in0_face_c_dim", "int64", True, "configuration"),
     Column("in0_face_r_dim", "int64", True, "configuration"),
     Column("in1_face_c_dim", "int64", True, "configuration"),
