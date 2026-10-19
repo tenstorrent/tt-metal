@@ -209,8 +209,8 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # overhead, which can dominate the early chunks and obscure that ramp.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug), TP-deduped KV cache.
-    (61, 11, 10): [0.376, 0.382, 0.414, 0.444, 0.472, 0.501, 0.529, 0.557, 0.598, 0.631, 0.664],
+    # (55k / code_debug), TP-deduped KV cache. CI run 39223403349 / job 117967468990.
+    (61, 11, 10): [0.324, 0.336, 0.367, 0.397, 0.426, 0.456, 0.485, 0.515, 0.553, 0.590, 0.624],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
