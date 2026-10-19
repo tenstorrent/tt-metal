@@ -933,31 +933,35 @@ def test_eltwise_unary_sfpu_relu_max_threshold(
     )
 
 
-# SfpuMode proof of concept on softsign: the four modes are four instruction sequences (two reciprocal
-# precisions x guard on/off), selected through the mode-typed calculate_softsign<SfpuMode>.
+# SfpuMode: one template parameter selects one of four instruction sequences (Precise/Approximate x
+# Strict/Relaxed) through the op's mode-typed kernel API, calculate_<op><SfpuMode>.
 _SFPU_MODES = list(SfpuMode)
 _STRICT_SFPU_MODES = [mode for mode in SfpuMode if mode.is_strict]
+_SFPU_MODE_OPS = [MathOperation.Softsign, MathOperation.Exp2, MathOperation.Reciprocal]
 
-# Finite inputs the unguarded sequence gets wrong: the reciprocal of 1 + |x| flushes to 0 once
+# Finite inputs the unguarded softsign sequence gets wrong: the reciprocal of 1 + |x| flushes to 0 once
 # |x| >= 2**126, so x * (1 / (1 + |x|)) comes out +-0 where softsign is +-1.
 _SOFTSIGN_FLUSH_BAND = [2.0**126, 1.5 * 2.0**126, 2.0**127, 3.0e38]
 
 
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    mathop=_SFPU_MODE_OPS,
     sfpu_mode=_SFPU_MODES,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_dimensions=[[64, 64]],
 )
-def test_eltwise_unary_sfpu_softsign_mode(
+def test_eltwise_unary_sfpu_mode(
     formats: list[InputOutputFormat],
+    mathop: MathOperation,
     sfpu_mode: SfpuMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    """Every SfpuMode meets softsign's tolerance on the interior domain ([-5, 5]).
+    """Every SfpuMode meets the op's tolerance on its default stimulus domain.
 
-    Relaxed modes are only defined there, so this is the one gate all four share; the
+    The domains are interior (softsign [-5, 5], exp2 inside its finite range), where
+    Relaxed modes are defined too, so this is the one gate all four modes share; the
     precision half picks the tolerance (approximate modes resolve the approximate contract).
     """
     eltwise_unary_sfpu(
@@ -965,10 +969,150 @@ def test_eltwise_unary_sfpu_softsign_mode(
         formats,
         dest_acc,
         sfpu_mode.approximation_mode,
-        MathOperation.Softsign,
+        mathop,
         FastMode.No,
         input_dimensions,
         sfpu_mode=sfpu_mode,
+    )
+
+
+# Strict-contract probes for exp2 and reciprocal (softsign has its own test below). Each table spans
+# the boundaries the Relaxed sequences are allowed to get wrong.
+_SFPU_MODE_STRICT_PROBES = {
+    # exp2: overflow at 128, the FTZ edge at -126, and in-range values either side.
+    MathOperation.Exp2: [
+        128.0,
+        127.5,
+        200.0,
+        -126.0,
+        -126.5,
+        -127.0,
+        -150.0,
+        0.0,
+        1.0,
+        -1.0,
+        10.5,
+        -10.5,
+    ],
+    # reciprocal: zeros (+-inf), huge inputs (flushed result) and ordinary values.
+    MathOperation.Reciprocal: [
+        0.0,
+        2.0**127,
+        -(2.0**127),
+        1.0e30,
+        -1.0e30,
+        1.0,
+        -1.0,
+        3.0,
+        0.5,
+        -0.25,
+        1.0e-30,
+    ],
+}
+
+
+# The exact functions behind the strict probes, for the sign of a flushed result.
+_SFPU_MODE_STRICT_REFERENCE = {
+    MathOperation.Exp2: torch.exp2,
+    MathOperation.Reciprocal: torch.reciprocal,
+}
+
+
+def _probe_inputs(spec, formats, input_dimensions):
+    """The exact src_A a probe test sends, regenerated with the driver's seed and spec."""
+    torch.manual_seed(0)
+    src_A, _, _, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=spec,
+    )
+    return src_A.to(torch.float32)
+
+
+def _canonical_nan(t):
+    """NaN payloads and signs are not part of any contract here: every NaN compares as the canonical one."""
+    return torch.where(torch.isnan(t), torch.full_like(t, float("nan")), t)
+
+
+def _sfpu_mode_strict_probe_spec(mathop, formats, dest_acc):
+    values = list(_SFPU_MODE_STRICT_PROBES[mathop])
+    if specials_safe(formats.input_format, formats.output_format, dest_acc):
+        values += [float("inf"), float("-inf"), float("nan")]
+    if negative_zero_delivered(formats.input_format, dest_acc):
+        values.append(-0.0)
+    return StimuliSpec.custom(values=values, seed=0)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    mathop=list(_SFPU_MODE_STRICT_PROBES),
+    sfpu_mode=_STRICT_SFPU_MODES,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_mode_strict_specials(
+    formats: list[InputOutputFormat],
+    mathop: MathOperation,
+    sfpu_mode: SfpuMode,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """Strict modes meet the op's special-value contract on its probe table.
+
+    The driver gates every lane on the op's tolerance against torch (inf/NaN must match
+    in kind and sign). The non-finite and zero results are then compared bit for bit, where
+    a tolerance cannot see a wrong sign or a flushed-vs-tiny value.
+    """
+    res_tensor, golden_tensor = eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        sfpu_mode.approximation_mode,
+        mathop,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_sfpu_mode_strict_probe_spec(mathop, formats, dest_acc),
+        sfpu_mode=sfpu_mode,
+    )
+
+    torch_format = format_dict[formats.output_format]
+    golden = (
+        golden_tensor.to(torch_format)
+        if isinstance(golden_tensor, torch.Tensor)
+        else torch.tensor(golden_tensor, dtype=torch_format)
+    )
+    got = res_tensor.to(torch_format)
+    exact = ~torch.isfinite(golden) | (golden == 0)
+    # A zero's sign comes from the exact result: the golden flushes subnormals to +0, the hardware to a signed
+    # zero (1 / -2**127 is -0.0 on the device).
+    src = _probe_inputs(
+        _sfpu_mode_strict_probe_spec(mathop, formats, dest_acc),
+        formats,
+        input_dimensions,
+    )
+    exact_result = _SFPU_MODE_STRICT_REFERENCE[mathop](src.double())
+    want = torch.where(
+        golden == 0,
+        torch.copysign(torch.zeros_like(golden), exact_result.to(torch_format)),
+        golden,
+    )
+    if not negative_zero_delivered(formats.input_format, dest_acc):
+        # Off the unpack-to-dest path a zero result reaches L1 as +0.0 whatever its sign in the SFPU
+        # (as -0.0 inputs arrive as +0.0), so zeros compare by value there.
+        want = torch.where(want == 0, torch.zeros_like(want), want)
+        got = torch.where(got == 0, torch.zeros_like(got), got)
+    int_format = torch.int32 if torch_format == torch.float32 else torch.int16
+    got_bits = _canonical_nan(got[exact]).contiguous().view(int_format)
+    want_bits = _canonical_nan(want[exact]).contiguous().view(int_format)
+    bad = torch.nonzero(got_bits != want_bits).flatten()
+    assert bad.numel() == 0, (
+        f"{bad.numel()} non-finite/zero lane(s) differ from torch bit for bit; first: "
+        + ", ".join(
+            f"x={src[exact][i].item():.6g} got {got[exact][i].item()} want {want[exact][i].item()}"
+            for i in bad[:8].tolist()
+        )
     )
 
 
@@ -1030,7 +1174,9 @@ def test_eltwise_unary_sfpu_softsign_strict_specials(
     )
 
     torch_format = format_dict[formats.input_format]
-    src = _softsign_probe_inputs(formats, dest_acc, input_dimensions)
+    src = _probe_inputs(
+        _softsign_strict_probe_spec(formats, dest_acc), formats, input_dimensions
+    )
     in_band = torch.isfinite(src) & (src.abs() >= 2.0**126)
     assert in_band.any(), "probe table lost its flush-band lanes"
     expected = torch.sign(src[in_band]).to(torch_format)
@@ -1054,19 +1200,6 @@ def test_eltwise_unary_sfpu_softsign_strict_specials(
         "softsign(+-0) must keep the zero's sign; got bits "
         f"{sorted(set(got_zero_bits.tolist()))}, want {sorted(set(want_zero_bits.tolist()))}"
     )
-
-
-def _softsign_probe_inputs(formats, dest_acc, input_dimensions):
-    """The exact src_A the strict-specials test sends, regenerated with the driver's seed and spec."""
-    torch.manual_seed(0)
-    src_A, _, _, _ = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=_softsign_strict_probe_spec(formats, dest_acc),
-    )
-    return src_A.to(torch.float32)
 
 
 # Cat E: the shift amount itself, which SFPU_SHIFT_AMOUNT makes reachable. The amounts are

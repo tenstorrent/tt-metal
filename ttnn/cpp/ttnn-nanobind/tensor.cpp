@@ -82,7 +82,8 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
           in-domain inputs; results outside the domain are unspecified.
         - ``ApproximateRelaxed``: the fastest sequence; same input guarantee as ``PreciseRelaxed``.
 
-        Ops that accept it take it as the ``sfpu_mode`` keyword argument (currently ``ttnn.softsign``).
+        Ops that accept it take it as the ``sfpu_mode`` keyword argument (currently ``ttnn.softsign``,
+        ``ttnn.exp2`` and ``ttnn.reciprocal``; also ``ttnn.UnaryWithParam`` for those ops).
         Supported on Wormhole and Blackhole.
     )doc");
     export_enum<TensorMemoryLayout>(m_tensor);

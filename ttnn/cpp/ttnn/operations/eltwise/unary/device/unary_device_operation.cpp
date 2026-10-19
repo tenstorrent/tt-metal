@@ -186,12 +186,13 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 
     for (const auto& op : args.op_chain) {
-        if (op.type() == operations::unary::UnaryOpType::SOFTSIGN && op.has_parameter()) {
-            // A parametrized SOFTSIGN carries an SfpuMode, which lowers to softsign_tile<SfpuMode>. That API exists
+        if (operations::unary::utils::supports_sfpu_mode(op.type()) && op.has_parameter()) {
+            // A parametrized op of this kind carries an SfpuMode, which lowers to <op>_tile<SfpuMode>. That API exists
             // for Wormhole and Blackhole only; without this the kernel dies in JIT on an undeclared ckernel::SfpuMode.
             TT_FATAL(
                 input_tensor.device()->arch() != tt::ARCH::QUASAR,
-                "Unary: SOFTSIGN with an SfpuMode is implemented for Wormhole and Blackhole only, got arch {}",
+                "Unary: {} with an SfpuMode is implemented for Wormhole and Blackhole only, got arch {}",
+                op.type(),
                 input_tensor.device()->arch());
         }
     }

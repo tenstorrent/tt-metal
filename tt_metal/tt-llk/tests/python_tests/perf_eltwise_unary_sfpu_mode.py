@@ -3,12 +3,21 @@
 
 """Cycles per tile of each SfpuMode instruction sequence.
 
-SfpuMode exists to trade accuracy and special-value handling for throughput, so the trade
-is measured here per mode rather than inferred from instruction counts. Softsign is the
-proof-of-concept op: its four modes are four distinct sequences (two reciprocal precisions
-x special-value guard on/off). Measured on Blackhole p100a, bf16, MATH_ISOLATE, TILE_LOOP:
-PreciseStrict 731.6, PreciseRelaxed 540.7 (the legacy sequence), ApproximateStrict 517.7,
-ApproximateRelaxed 325.8 cycles/tile; the Strict guard is exactly 6 instructions (192 cycles).
+SfpuMode exists to trade accuracy and special-value handling for throughput, so the trade is
+measured here per mode rather than inferred from instruction counts. Blackhole p100a, bf16 input,
+MATH_ISOLATE, TILE_LOOP (dest_acc=Yes runs the fp32-Dest sequences):
+
+    op          dest_acc  PreciseStrict  PreciseRelaxed  ApproximateStrict  ApproximateRelaxed
+    softsign    No            731.6         540.7 (L)          517.7              325.8
+    softsign    Yes           731.6         540.5 (L)          513.6              321.6
+    exp2        No            869.8 (L)     773.8              = Precise          = Precise
+    exp2        Yes           993.6 (L)     763.5              865.6              635.5
+    reciprocal  No            638.6         285.7 (L)          350.6               78.0 (L approx)
+    reciprocal  Yes           606.5         193.5 (L)          350.5               65.9 (L approx)
+
+(L) marks the mode the legacy, mode-less call runs. Reciprocal's Strict modes are slower because
+the Relaxed ones are fixed-schedule SFPLOADMACRO pipelines that overwrite each input in place, so
+the NaN guard needs a separate sfpi sequence.
 """
 
 import pytest
@@ -43,7 +52,7 @@ from helpers.test_variant_parameters import (
 )
 
 # Ops whose kernel API takes an SfpuMode.
-SFPU_MODE_OPS = [MathOperation.Softsign]
+SFPU_MODE_OPS = [MathOperation.Softsign, MathOperation.Exp2, MathOperation.Reciprocal]
 
 
 @pytest.mark.perf

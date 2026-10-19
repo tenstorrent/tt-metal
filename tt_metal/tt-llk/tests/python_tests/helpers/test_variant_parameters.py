@@ -457,7 +457,7 @@ class SFPU_SHIFT_AMOUNT(TemplateParameter):
 
 @dataclass
 class SFPU_MODE_OVERRIDE(TemplateParameter):
-    """SfpuMode for an op with a mode-typed kernel API (currently softsign).
+    """SfpuMode for an op with a mode-typed kernel API (softsign, exp2, reciprocal).
 
     A macro rather than a constexpr for the same reason as :class:`SFPU_SHIFT_AMOUNT`:
     sfpu_operations.h selects on ``#ifdef``, and every other unary test keeps the legacy
