@@ -635,3 +635,41 @@ physical worker. The known fabric-fault worker `qb2-120-p02t02` is refused
 before model access. A scheduling-only attempt `39259454295` was cancelled
 without obtaining a runner; it executed no model work.
 
+### Persistent-trace measured result
+
+Extended tracked run `39261166389` passed 17 host checks and both live tests.
+Host sampling suffix lengths 1–7 had the expected computed-token counts and
+identical repeated cached top logprobs. These raw-token prompts are contract
+tests, not qualitative evidence. Host-sampled requests still retire traces;
+the reuse improvement applies to compatible device-sampled cached requests.
+
+Tracking-disabled variant
+[39262371109](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39262371109)
+passed on `qb2-120-p03t09`, Metal `f20185936091f47452add16ab7c8ad26d8df4163`.
+Control `39261174410` used `120-qb2-p05t01`; both used workflow `6e415f0`,
+the same image, BFP8 precision, prompts and sampling parameters, with tracking
+and numerical diagnostics disabled. All seven answer texts and token counts
+matched. These are short serving measurements on different workers, not
+full-agentic runtime or accuracy measurements.
+
+| Request | Control TTFT / wall (s) | Persistent TTFT / wall (s) | Cache / computed / output tokens |
+|---|---:|---:|---:|
+| Cached repeats, median of three | 0.899124 / 1.529533 | 0.303698 / 0.936001 | 64 / 16 / 34 |
+| Growing conversation | 1.959148 / 2.925846 | 1.366650 / 2.336559 | 64 / 74 / 52 |
+| Independent cold control | 0.403568 / 0.977293 | 0.412368 / 0.988439 | 0 / 80 / 31 |
+
+Cached-repeat TTFT improved about 2.96× and wall time 1.63×; growing TTFT
+improved 1.43× and wall time 1.25×. The approximately 0.59-second saving per
+cached request corresponds to removing model/logits trace recapture.
+Repeated-request decode time remained about 0.617 versus 0.619 seconds.
+Initial cold compilation was excluded from these warmed comparisons.
+This does not establish seed removal safety or eliminate the inherited
+cold-prefill/cache numerical difference.
+
+Boundary follow-up
+[39262434626](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39262434626)
+was assigned `qb2-120-p02t02` and failed its explicit faulty-worker guard;
+the model step was skipped. It provides no numerical result. No blind
+infrastructure retry or shared runner mutation was performed; a healthy
+worker route was requested before repeating this gate.
+
