@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import torch_random, run_for_wormhole_b0, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import torch_random, run_for_wormhole_b0, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_equal
 
 
@@ -376,13 +376,14 @@ def test_tiled(
     assert_equal(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("batch_size, sentence_size, hidden_embedding_dim, vocabulary_size", [(10, 96, 2048, 128256)])
 @pytest.mark.parametrize(
-    "output_memory_layout, num_cores_x, num_cores_y",
+    "batch_size, sentence_size, hidden_embedding_dim, vocabulary_size, output_memory_layout, num_cores_x, num_cores_y",
     [
-        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, 8, 4),
-        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 6, 1),
-        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, 4, 6),
+        (10, 96, 2048, 128256, ttnn.TensorMemoryLayout.WIDTH_SHARDED, 8, 4),
+        (10, 96, 2048, 128256, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 6, 1),
+        (10, 96, 2048, 128256, ttnn.TensorMemoryLayout.BLOCK_SHARDED, 4, 6),
+        # Shard too wide for a full-row staging buffer next to it: must chunk.
+        (1, 256, 17408, 1024, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 8, 1),
     ],
 )
 @pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])

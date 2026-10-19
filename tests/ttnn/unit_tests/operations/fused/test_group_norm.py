@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 
-from models.common.utility_functions import run_for_blackhole, is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, is_wormhole_b0
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
