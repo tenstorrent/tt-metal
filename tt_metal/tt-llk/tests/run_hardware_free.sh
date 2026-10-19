@@ -26,7 +26,9 @@ COMMON=(
 pytest_exit=0
 
 export CHIP_ARCH=wormhole
-pytest "${COMMON[@]}" ../hardware_free \
+# The long pass. Cap at 8: more workers lose to startup, and the longest case is already under that.
+pytest "${COMMON[@]}" -n auto --maxprocesses=8 --dist=worksteal \
+    ../hardware_free \
     --ignore=../hardware_free/kernels/test_gathering_config.py \
     --junitxml=pytest-report-hardware-free-wormhole.xml \
     || pytest_exit=$?
