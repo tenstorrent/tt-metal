@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
-#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_placement.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/types.hpp"
 #include <ranges>
@@ -1000,8 +1000,8 @@ MatmulProgramConfig get_program_config(
         attributes.program_config.has_value() ? std::get_if<MatmulUnifiedProgramConfig>(&*attributes.program_config)
                                               : nullptr;
     if (requested != nullptr && requested->cores.num_cores() == 0) {
-        std::optional<MatmulUnifiedProgramConfig> chosen = choose_unified_placement(
-            input_tensor_a, input_tensor_b, transpose_a, transpose_b, bias_single_tile_size, attributes, *requested);
+        std::optional<MatmulUnifiedProgramConfig> chosen = ttnn::prim::qsr::choose_unified_placement(
+            input_tensor_a, input_tensor_b, bias_single_tile_size, attributes, *requested);
         TT_FATAL(
             chosen.has_value(),
             "MatmulUnifiedProgramConfig: no placement of this matmul fits L1 or the unified matmul does not support it "
@@ -1013,8 +1013,8 @@ MatmulProgramConfig get_program_config(
     }
     // Quasar takes the Quasar-native matmul wherever it runs; the legacy picker covers the rest.
     if (input_tensor_a.device()->arch() == tt::ARCH::QUASAR) {
-        std::optional<MatmulUnifiedProgramConfig> unified = choose_unified_placement(
-            input_tensor_a, input_tensor_b, transpose_a, transpose_b, bias_single_tile_size, attributes, {});
+        std::optional<MatmulUnifiedProgramConfig> unified = ttnn::prim::qsr::choose_unified_placement(
+            input_tensor_a, input_tensor_b, bias_single_tile_size, attributes, {});
         if (unified.has_value()) {
             return unified.value();
         }

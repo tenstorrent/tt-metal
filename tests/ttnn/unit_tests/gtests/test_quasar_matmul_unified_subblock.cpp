@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "gtest/gtest.h"
-#include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_unified_program_factory.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
 
 namespace {
 
