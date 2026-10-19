@@ -7,7 +7,7 @@
 #include <optional>
 
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config_types.hpp"
-#include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_unified_program_factory.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
 
 namespace ttnn::operations::experimental::quasar::matmul {
 
