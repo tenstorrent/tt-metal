@@ -438,7 +438,7 @@ GatherPlan build_gather_plan(
                     tt::tt_fabric::get_forwarding_link_indices(fabric_node(chip), fabric_node(*downstream));
                 for (uint32_t link = 0; link < L; ++link) {
                     const auto eth_core = tt::tt_fabric::get_forwarding_eth_core(
-                        fabric_node(chip), fabric_node(*downstream), links[link]);
+                        *mesh_device, fabric_node(chip), fabric_node(*downstream), links[link]);
                     const auto closest = tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(
                                              *device, eth_core, tt::tt_metal::NOC::NOC_1)
                                              .logical_coord;
