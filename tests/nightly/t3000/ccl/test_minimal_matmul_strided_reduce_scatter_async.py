@@ -843,7 +843,7 @@ def test_minimal_matmul_strided_reduce_scatter_aliased_addcmul_counter_cache_hit
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     run_minimal_matmul_strided_reduce_scatter_impl(
         mesh_device,
-        M=128,
+        M=512,
         K=256,
         N=512,
         dim=3,
