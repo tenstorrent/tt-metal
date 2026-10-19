@@ -1666,7 +1666,7 @@ def run_chunked_transformer_updated(
     seq_cache=None,
     sparse_cache_format=None,
     push_ab_chunks=(),
-    push_ab_reps=3,
+    push_ab_reps=5,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
     full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
@@ -2246,21 +2246,16 @@ def run_chunked_transformer_updated(
 
     # Sparse KV push A/B (PROTOTYPE): at the chunks in push_ab_chunks, re-run that chunk with every layer's dense
     # KVPE gather and then with the sparse push (shared layers only), alternating. Re-running a chunk rewrites the
-    # same KV and indexer keys, so the prefill itself is unaffected. The first push re-run plans on the host (timed
-    # separately); later ones reuse those plans, standing in for on-device planning.
+    # same KV and indexer keys, so the prefill itself is unaffected. Both paths run once untimed at the first A/B chunk
+    # (compiles), then alternate push_ab_reps times per chunk.
     push_ab_rows = []
 
     def _push_ab(c, kv_actual):
         mlas = [layer.mla for layer in transformer.layers]
-        planner = mlas[0].tt_ccl.get_sparse_kv_push(mlas[0].ccl_num_links)[0]
-        planner.memo, planner.memo_tag = {}, c
-        samples = {False: [], True: []}
-        plan_s = []
-        for push in (False, True) * push_ab_reps:
+
+        def run(push):
             for m in mlas:
                 m._sparse_kv_push = push
-            planner.generation = 0
-            plan0 = planner.host_seconds
             tokens = ttnn.from_torch(
                 chunk_tok_host[c],
                 device=mesh_device,
@@ -2282,23 +2277,20 @@ def run_chunked_transformer_updated(
                 index_kv_cache=tt_index_kv_cache,
             )
             ttnn.synchronize_device(mesh_device)
-            samples[push].append(time.time() - t0)
-            if push:
-                plan_s.append(planner.host_seconds - plan0)
             ttnn.deallocate(tokens)
+            return time.time() - t0
+
+        if not push_ab_rows:
+            run(False), run(True)  # compile both paths outside the measured samples
+        samples = {False: [], True: []}
+        for push in (False, True) * push_ab_reps:
+            samples[push].append(run(push))
         for m in mlas:
             m._sparse_kv_push = False
-        planner.memo, planner.memo_tag = None, None
-        planner.invalidate()
-        if not planner.on_device:
-            assert plan_s[0] > 0 and not any(plan_s[1:]), f"expected only the first push re-run to plan, got {plan_s}"
-        gather_s, cold_s, push_s = min(samples[False]), samples[True][0], min(samples[True][1:])
-        plan = plan_s[0]
-        push_ab_rows.append((c, kv_actual, gather_s, push_s, cold_s, plan))
+        push_ab_rows.append((c, kv_actual, samples[False], samples[True]))
         logger.info(
-            f"[push A/B] chunk={c} prefix={kv_actual} gather={gather_s * 1000:.1f} ms push={push_s * 1000:.1f} ms "
-            f"(first push {cold_s * 1000:.1f} ms incl. host plan {plan * 1000:.1f} ms) "
-            f"samples gather={[round(x * 1000) for x in samples[False]]} push={[round(x * 1000) for x in samples[True]]}"
+            f"[push A/B] chunk={c} prefix={kv_actual} gather={[round(x * 1000, 1) for x in samples[False]]} ms "
+            f"push={[round(x * 1000, 1) for x in samples[True]]} ms"
         )
 
     profiler.start("tt_forward")
@@ -2402,15 +2394,32 @@ def run_chunked_transformer_updated(
         iteration_chunk_times.append(chunk_times)
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
         if push_ab_rows and it == 0:
-            lines = ["prefix    gather_ms  push_ms  saved_ms  first_push_ms  host_plan_ms"]
-            for _, pre, g, pu, cold, pl in push_ab_rows:
-                lines.append(
-                    f"{pre:>8}  {g * 1000:9.1f}  {pu * 1000:7.1f}  {(g - pu) * 1000:8.1f}  {cold * 1000:13.1f}  "
-                    f"{pl * 1000:12.1f}"
+            # Same per-chunk statistics as print_duration_table (median, stddev), dense gather vs sparse push.
+            def stats(xs):
+                return statistics.median(xs), statistics.stdev(xs) if len(xs) >= 2 else 0.0
+
+            headers = ["chunk", "prefix", "gather median", "stddev", "push median", "stddev", "saved", "speedup"]
+            rows = []
+            for ci, pre, g, pu in push_ab_rows:
+                (gm, gs), (pm, ps) = stats(g), stats(pu)
+                rows.append(
+                    [
+                        f"chunk {ci}",
+                        f"{pre}",
+                        format_duration(gm),
+                        format_duration(gs),
+                        format_duration(pm),
+                        format_duration(ps),
+                        f"{(gm - pm) * 1000:+.1f} ms",
+                        f"{gm / pm:.3f}x",
+                    ]
                 )
+            widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(headers)]
+            fmt = lambda r: " | ".join(x.rjust(w) for x, w in zip(r, widths))
+            table = [fmt(headers), "-+-".join("-" * w for w in widths)] + [fmt(r) for r in rows]
             logger.info(
-                "[push A/B] per-chunk wall time, all layers (push = planned plans reused; first_push plans on host):\n"
-                + "\n".join(lines)
+                f"[push A/B] per-chunk forward time, {num_layers} layers, {push_ab_reps} samples per path "
+                f"(dense KVPE gather vs sparse KV push with on-device plan):\n" + "\n".join(table)
             )
         if determinism_check:
             # Compare the whole cache the iteration just wrote, bit-exactly. PCC rounds away a single
@@ -3160,7 +3169,8 @@ def test_glm_prefill_transformer_chunked_no_pcc(
 # whose metadata carries all 1,044,480 token ids) chunk by chunk with the dense gather, and at the checkpoint chunks
 # time that chunk again with the dense gather and with the sparse push on the shared layers (see _push_ab).
 PUSH_SWEEP_LEN = 204 * CHUNK  # 1,044,480 tokens
-PUSH_SWEEP_CHUNKS = (10, 25, 50, 100, 150, 203)  # prefix 51k, 128k, 256k, 512k, 768k, 1039k
+# Every chunk of the CI's 55k prefill (chunks 0-10), then samples up to the last 5k chunk of 1,044,480 tokens.
+PUSH_SWEEP_CHUNKS = tuple(range(11)) + (15, 20, 25, 30, 40, 50, 60, 80, 100, 125, 150, 175, 203)
 
 
 @pytest.mark.parametrize("num_layers", [78], ids=["L78"])
