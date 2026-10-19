@@ -75,6 +75,11 @@ measured on (`MEASURED_ON_SWEEP` in `test_sfpu_accuracy_budget.py`). The isinf/i
 and threshold predicates have no registered domain, so those sweeps are their only gate;
 `Signbit`, `ReluMin` and `ReluMax` are driven by the exhaustive sweep as well.
 
+On Wormhole and Blackhole no functional driver sweeps a `Float16` input or output, so
+nothing in CI gates the `Float16` rows there: the binary ones, and the unary rows on
+the tolerance metric. They stay in the table as the last measurement, and a stale one
+fails no test; re-measure before relying on one.
+
 `Float32` has 2^32 values and one device run holds 2^16, so it cannot be enumerated. The
 sweep strides the format's total order instead. Every binade holds the same number of
 representable values, so each gets an equal share: one run reaches 261 binades from 0 to
@@ -218,9 +223,8 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
 
 - **No number is a guess.** The trailing comment on a row is the measurement it came
   from. A budget may only be *raised* by re-measuring and updating that comment in the
-  same change. From #57527, `llk-sfpu-ulp-budget-guard` fails a pull request that raises
-  one without it; the `ulp-budget-raise-approved` label is the override, and it still
-  reports which rows it admitted without a fresh measurement.
+  same change. `python3 helpers/ulp_budget_diff.py diff --base <old.yaml> --head
+  <new.yaml>` lists every cell a change loosens and whether its row was re-measured.
 - **Most specific key wins.** A row's key fields are `in`, `out`, `approx`, `dest` and
   `arch`, all optional. Two rows matching one variant equally specifically are an
   authoring error, not a tie-break, and the loader refuses them.
@@ -252,7 +256,8 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
 
 Two ways, and they mean different things:
 
-- **No row in the table** — the op resolves to today's tolerance and the sweep skips it.
+- **No row in the table** — the op resolves to today's tolerance and the sweep does not
+  collect it.
   Fine as an interim state; from #57520, `test_every_unary_op_is_enrolled_or_excused`
   fails until you pick one of these two deliberately.
 - **`sfpu_domains._UNARY_OPS_NOT_SWEPT`** — the op cannot be swept at all. Say why in a
@@ -276,12 +281,21 @@ does not fail on them, because such a block is hand-maintained by design.
   between, recompile.
 - **The sweep is marked `accuracy`**, which every LLK workflow deselects. Run it by name
   or by `-m accuracy`. `nightly` would *not* have kept it out of `llk-e2e`.
-- **`--ulp-emit` widens the op set** from the ops with a step budget to every unary op
-  with a key line in the table, whatever its rows say. The key line is the enrolment,
-  so an op on tolerance everywhere is re-measured and an op with no block is not swept
-  at all (step 2 adds the block first). Pass the flag to the **producer too** -- without
-  it the producer collects the narrow gating set and the consumer fails on missing
-  ELFs, not on budgets.
+- **Both runs take the same op set**: every unary op with a key line in the table,
+  whatever its rows say. The key line is the enrolment, so an op on tolerance everywhere
+  is measured on every run and held to the figures its rows record by the headroom
+  report, and an op with no block is not swept at all (step 2 adds the block first).
+  `--ulp-emit` changes what is written, not what is collected, so the producer and the
+  consumer build the same set with or without it.
+- **A plain gate run does not judge tolerance cells.** It fails a gated cell over its
+  budget and *skips* a tolerance cell, with the measured maximum in the skip reason. To
+  hold those cells to the figures their rows record, measure and compare:
+
+  ```bash
+  CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py -n auto --ulp-measure=ulp.jsonl
+  python3 helpers/ulp_budget_diff.py headroom \
+    --table helpers/sfpu_accuracy_budget.yaml --measured ulp.jsonl
+  ```
 - **`CHIP_ARCH` must be set**, and `--ulp-emit` refuses to run on anything but
   Wormhole, because `_render` does not emit `arch` and the rows would be badged wrongly.
 

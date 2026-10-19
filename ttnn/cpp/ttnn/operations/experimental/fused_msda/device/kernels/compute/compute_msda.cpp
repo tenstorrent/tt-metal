@@ -9,11 +9,13 @@
 // them. Solving one point ahead of the reduction is what keeps both busy.
 //
 // Reader contract (fused_msda_reader_common.hpp):
-//   * geom / offset / attn tiles: column 0 holds one query per row, bf16 0 past
-//     v_rows; columns 1..31 are zeroed once per CB slot.
+//   * geom / offset / attn tiles: column 0 holds one query per row, 0 past
+//     v_rows (float32 in geom_x/geom_y under float32 reference points, bf16
+//     otherwise); columns 1..31 are zeroed once per CB slot.
 //   * input_tile: rows that are in range and in bounds hold the gathered value
-//     stick; every other row is zeroed. This kernel builds the scalar and so
-//     cannot mask an out-of-bounds corner itself.
+//     stick; every other row is zeroed. This kernel builds the scalar from the
+//     fractions alone, with no bounds information, so it cannot mask an
+//     out-of-bounds corner itself.
 //
 // fp32_dest_acc_en is required. See msda_geometry.hpp.
 
@@ -24,6 +26,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/tilize.h"
 #include "api/dataflow/circular_buffer.h"
 
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/compute/msda_geometry.hpp"
@@ -48,6 +51,11 @@ constexpr uint32_t frac_y_cb_index = get_compile_time_arg_val(12);
 constexpr uint32_t NUM_LEVELS = get_compile_time_arg_val(13);
 constexpr uint32_t NUM_POINTS = get_compile_time_arg_val(14);
 constexpr bool FROM_OFFSETS = get_compile_time_arg_val(15) != 0;
+// Row-major staging (see fused_msda_reader_common.hpp): the reader hands over a
+// point's four corners as one row-major block, tilized here into tiled_cb.
+constexpr bool RM_STAGING = get_compile_time_arg_val(16) != 0;
+constexpr uint32_t tiled_cb_index = get_compile_time_arg_val(17);
+constexpr uint32_t mul_cb_index = RM_STAGING ? tiled_cb_index : input_cb_index;
 
 constexpr uint32_t POINTS_PER_BLOCK = NUM_LEVELS * NUM_POINTS;
 
@@ -120,38 +128,60 @@ void kernel_main() {
                 solve_geometry(j + 1);
             }
 
-            bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(input_cb_index, scalar_cb_index);
-            srca_cb = input_cb_index;
+            if constexpr (RM_STAGING) {
+                // Tilize all four corners in one pass; the packer must not
+                // accumulate into tiled_cb.
+                CircularBuffer tiled_cb(tiled_cb_index);
+                pack_reconfig_l1_acc(0);
+                tilize_init(input_cb_index, 4 * n_d_tiles, tiled_cb_index);
+                input_cb.wait_front(4 * n_d_tiles);
+                tiled_cb.reserve_back(4 * n_d_tiles);
+                tilize_block(input_cb_index, 4 * n_d_tiles, tiled_cb_index);
+                tiled_cb.push_back(4 * n_d_tiles);
+                input_cb.pop_front(4 * n_d_tiles);
+                tilize_uninit(input_cb_index, tiled_cb_index);
+            }
 
+            bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(mul_cb_index, scalar_cb_index);
+            srca_cb = mul_cb_index;
+            CircularBuffer mul_cb(mul_cb_index);
+            if constexpr (RM_STAGING) {
+                mul_cb.wait_front(4 * n_d_tiles);
+            }
+            // out[k] += input_c[k] * scalar_c (COL broadcast) over the four
+            // corners of every point. The scalar is per query row and
+            // independent of D, so one scalar tile serves all n_d_tiles.
             for (uint32_t c = 0; c < 4; ++c) {
-                // The block's first corner overwrites the accumulator; every
-                // other corner of every other point accumulates into it.
-                // solve_geometry left this at 0.
+                // The block's first corner overwrites the accumulator; all
+                // later corners and points accumulate into it.
                 pack_reconfig_l1_acc((j == 0 && c == 0) ? 0 : 1);
-
-                input_cb.wait_front(n_d_tiles);
+                if constexpr (!RM_STAGING) {
+                    mul_cb.wait_front(n_d_tiles);
+                }
                 scalar_cb.wait_front(1);
-
+                const uint32_t first = RM_STAGING ? c * n_d_tiles : 0;
                 for (uint32_t k = 0; k < n_d_tiles; ++k) {
                     tile_regs_acquire();
-                    mul_tiles_bcast<BroadcastType::COL>(input_cb_index, scalar_cb_index, k, 0, 0);
+                    mul_tiles_bcast<BroadcastType::COL>(mul_cb_index, scalar_cb_index, first + k, 0, 0);
                     tile_regs_commit();
-
                     tile_regs_wait();
                     // out_of_order_output=true so each iteration packs to an
                     // explicit slot (= k); the L1-acc mode then decides
                     // overwrite vs accumulate. The default would auto-advance
                     // the write pointer and clobber L1 past the block after the
-                    // first group.
+                    // first corner.
                     pack_tile<true>(0, output_cb_index, k);
                     tile_regs_release();
                 }
-
-                input_cb.pop_front(n_d_tiles);
+                if constexpr (!RM_STAGING) {
+                    mul_cb.pop_front(n_d_tiles);
+                }
                 scalar_cb.pop_front(1);
             }
+            if constexpr (RM_STAGING) {
+                mul_cb.pop_front(4 * n_d_tiles);
+            }
         }
-
         pack_reconfig_l1_acc(0);
         output_cb.push_back(n_d_tiles);
     }
