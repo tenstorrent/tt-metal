@@ -905,16 +905,26 @@ void validate_fabric_configs(
 
 void ControlPlane::adopt_local_mesh_fabric_config() {
     // Each rank/process (tt-run launches one MPI rank per mesh, each with its own TT_MESH_ID) owns a
-    // single mesh, so build for that mesh's resolved config, not the raw process-wide override.
-    // MeshGraph::get_fabric_config() applies the precedence MGD per-mesh config > SetFabricConfig override
-    // > dim_types default, so single-config runs are unchanged. No-op when a rank owns several meshes
-    // (single-host multi-mesh testing). MetalEnvImpl aligns its runtime config to this (and warns if the
-    // two disagree), so the env and the control plane agree on exactly one config per process.
+    // single mesh, so build for that mesh's *explicitly-configured* config, not the raw process-wide
+    // override. Only an explicit source adopts here -- a per-mesh fabric_config declared in the MGD, or a
+    // process-wide SetFabricConfig override threaded into the mesh graph. A dim_types-derived default
+    // (is_explicit == false; always a 2D-family config) is deliberately NOT adopted: it must not flip a
+    // process that never requested fabric (e.g. a single-card run, or any auto-discovered graph, where the
+    // override is std::nullopt) from DISABLED to FABRIC_2D and force an unwanted fabric bring-up. Leaving
+    // fabric_config_ untouched in that case keeps single-config / no-fabric runs on exactly the config they
+    // asked for. No-op when a rank owns several meshes (single-host multi-mesh testing). MetalEnvImpl
+    // aligns its runtime config to this, so the env and the control plane agree on one config per process.
     if (this->mesh_graph_ == nullptr || this->local_mesh_binding_.mesh_ids.size() != 1) {
         return;
     }
     const auto local_mesh = this->local_mesh_binding_.mesh_ids.front();
-    const auto resolved = this->mesh_graph_->get_fabric_config(local_mesh);
+    const auto explicit_config = this->mesh_graph_->get_explicit_fabric_config(local_mesh);
+    if (!explicit_config.has_value()) {
+        // No explicitly-requested config for this mesh; keep the process-wide fabric config (the
+        // SetFabricConfig override, DISABLED by default). Never let a derived default force fabric on.
+        return;
+    }
+    const auto resolved = *explicit_config;
     if (resolved != this->fabric_config_ && this->fabric_config_ != FabricConfig::DISABLED) {
         log_critical(
             tt::LogFabric,

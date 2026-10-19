@@ -487,6 +487,12 @@ void MeshGraph::initialize_from_mgd(
         // Record the resolved per-mesh config (explicit override, or the dim_types-derived default) so the
         // control plane and tests can see each mesh's routing config.
         this->mesh_fabric_config_[mesh_id] = resolved.config;
+        // Separately record only explicitly-requested configs (is_explicit == mesh_fabric_config has a
+        // value) so consumers can distinguish a declared/overridden config from a derived default and avoid
+        // forcing fabric on from a mere default. See MeshGraph::get_explicit_fabric_config.
+        if (mesh_fabric_config.has_value()) {
+            this->explicit_mesh_fabric_config_[mesh_id] = *mesh_fabric_config;
+        }
 
         // A 1D fabric config is single-mesh only: 1D routing has no inter-mesh story. Reject an
         // explicitly-requested 1D config (declared per-mesh in the MGD or set process-wide) on an MGD with
@@ -946,6 +952,14 @@ std::vector<MeshId> MeshGraph::get_mesh_ids() const {
 FabricConfig MeshGraph::get_fabric_config(MeshId mesh_id) const {
     const auto it = this->mesh_fabric_config_.find(mesh_id);
     TT_FATAL(it != this->mesh_fabric_config_.end(), "MeshGraph: no resolved FabricConfig for mesh {}", *mesh_id);
+    return it->second;
+}
+
+std::optional<FabricConfig> MeshGraph::get_explicit_fabric_config(MeshId mesh_id) const {
+    const auto it = this->explicit_mesh_fabric_config_.find(mesh_id);
+    if (it == this->explicit_mesh_fabric_config_.end()) {
+        return std::nullopt;
+    }
     return it->second;
 }
 
