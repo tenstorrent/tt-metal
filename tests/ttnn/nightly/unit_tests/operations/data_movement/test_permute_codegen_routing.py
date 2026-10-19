@@ -125,3 +125,89 @@ def test_permute_codegen_program_key_is_frontier_invariant(device, shape, kwargs
 
 
 # --- Off-grid regressions (hand-added; edit here, not the emitter) ---
+
+
+def _brimful_row_invariant_case(device):
+    """A row-invariant permute whose deepest CB plan fills the per-core L1 budget.
+
+    The CB holds 2 * batch slots of one stick, so a stick of an eighth of the budget fits the
+    deepest batch with about a page of slack, and any L1 tensor lowers the plan to a shallower
+    batch. total_bytes_per_bank is already net of the allocator base the static CB region starts at.
+    """
+    budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
+    stick_bytes = (budget // 8 - 128) // 128 * 128
+    return [3, 4, stick_bytes // 2], {"dims": [1, 0, 2]}
+
+
+def _resident_l1_tensor(device):
+    return ttnn.from_torch(
+        torch.zeros([1, 1, 2048, 4096], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+
+def test_permute_codegen_row_invariant_plan_yields_to_a_live_l1_buffer(device):
+    # L1 tensors allocate downward from the top of L1 and static CBs stack upward from the allocator
+    # base, so a co-resident L1 tensor is a hard ceiling on the CB: a batch taken from the static
+    # window fails program creation instead of building a shallower plan.
+    shape, kwargs = _brimful_row_invariant_case(device)
+    xt = ttnn.from_torch(
+        _make_input(shape, ttnn.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    golden = ttnn.to_torch(_force_native(xt, **kwargs))
+    resident = _resident_l1_tensor(device)
+    try:
+        assert_equal(golden, ttnn.to_torch(_force_codegen(xt, **kwargs)))
+    finally:
+        ttnn.deallocate(resident)
+
+
+def test_permute_codegen_row_invariant_replans_when_l1_fills_after_the_first_dispatch(device):
+    # Program::validate_circular_buffer_region re-reads the lowest occupied L1 address on every
+    # enqueue, cache hit included. The batch derived from that frontier is a cache-key field
+    # (manifest: frontier_derived), so the second dispatch misses and rebuilds a shallower plan
+    # instead of reusing one that was legal only on a clear frontier; the same field is why the
+    # op cannot be captured into a trace.
+    shape, kwargs = _brimful_row_invariant_case(device)
+    xt = ttnn.from_torch(
+        _make_input(shape, ttnn.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    golden = ttnn.to_torch(_force_native(xt, **kwargs))
+    assert_equal(golden, ttnn.to_torch(_force_codegen(xt, **kwargs)))
+    resident = _resident_l1_tensor(device)
+    entries_before = device.num_program_cache_entries()
+    try:
+        assert_equal(golden, ttnn.to_torch(_force_codegen(xt, **kwargs)))
+        msg = "the lowered frontier did not re-key the program cache, so the second dispatch reused the deep plan"
+        assert device.num_program_cache_entries() > entries_before, msg
+    finally:
+        ttnn.deallocate(resident)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1 << 20}], indirect=True)
+def test_permute_codegen_row_invariant_traces_when_l1_is_allocated_before_warmup(device):
+    # The batch is a cache-key field, so capture only finds its program when warm-up saw the same
+    # frontier: L1 that lives through capture has to be allocated before the warm-up call.
+    shape, kwargs = _brimful_row_invariant_case(device)
+    xt = ttnn.from_torch(
+        _make_input(shape, ttnn.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    golden = ttnn.to_torch(_force_native(xt, **kwargs))
+    resident = _resident_l1_tensor(device)
+    trace_id = None
+    try:
+        assert_equal(golden, ttnn.to_torch(_force_codegen(xt, **kwargs)))
+        entries_before = device.num_program_cache_entries()
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        traced = _force_codegen(xt, **kwargs)
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        assert device.num_program_cache_entries() == entries_before, "capture compiled a program warm-up had not cached"
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        assert_equal(golden, ttnn.to_torch(traced))
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(device, trace_id)
+        ttnn.deallocate(resident)
