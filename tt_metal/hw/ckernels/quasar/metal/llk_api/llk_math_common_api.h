@@ -110,7 +110,8 @@ inline void llk_math_wait_for_dest_available() {
 /**
  * @brief Signals that the current destination section is done.
  * After math is done, posts to the MATH_PACK semaphore so the packer can proceed; on the unpack-to-dest path it then
- * gets UNPACK_MATH, releasing the unpacker's count for this section.
+ * gets UNPACK_MATH, releasing the unpacker's count for this section. SyncHalf: flips this thread's section base in
+ * both paths, so under unpack-to-dest the SFPU follows the bank the unpacker wrote.
  * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
@@ -128,7 +129,7 @@ inline void llk_math_dest_section_done() {
         // No stall before the get: the post above already waited for MATH and SFPU, and nothing ran in between.
         _llk_sync_get_(semaphore::UNPACK_MATH);
     }
-    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
+    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
         _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
     }
 }
@@ -143,13 +144,7 @@ inline void llk_math_dest_section_done() {
  */
 inline void llk_math_pack_sync_init() {
     _llk_math_pack_sync_init_<DST_SYNC_MODE>();
-
-    if constexpr (UnpackToDestEn) {
-        constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
-        _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
-        // DEST occupancy: unpack posts, pack gets; the unpacker's only gate, see llk_unpack_wait_for_dest_available.
-        _llk_sync_init_(semaphore::UNPACK_PACK, N, 0);
-    }
+    // UNPACK_MATH / UNPACK_PACK are seeded by the unpack thread in llk_unpack_hw_configure, their first poster.
 }
 
 // Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.

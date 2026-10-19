@@ -15,11 +15,11 @@ using namespace ckernel::trisc;
 /**
  * @brief Reset the unpack thread's DEST bank tracking to bank 0 at the start of a program.
  *
- * Unpack owns the DEST section base in the unpack-to-dest path: it is the DEST producer (UNP_DEST), so it programs the
- * per-TRISC section base itself rather than letting the math middleman set it on its behalf. TriscID::Unpack selects the
- * same SEC slot the UNP_DEST client reads, regardless of which TRISC this code is compiled for. This establishes the
- * bank-0 base; the section handshake's @ref _llk_sync_advance_dest_section_ flips it per section in SyncHalf
- * (per-section sequence at @ref _llk_unpack_unary_operand_to_dest_init_).
+ * The unpacker places sections through the UNP_DEST tile index counter, not through a DEST_TARGET_REG_CFG_MATH_SEC
+ * register: those bases are consulted for math-issued instructions only, a write from the unpack thread does not move
+ * UNPACR_DEST (emulator, 2026-10-05). The bank therefore lives in this thread's dest_register_offset, and the placers
+ * add it, converted to tiles, to every DEST tile index. This zeroes it; @ref _llk_unpack_dest_section_advance_ toggles
+ * it per section in SyncHalf (per-section sequence at @ref _llk_unpack_unary_operand_to_dest_init_).
  *
  * @note Call once per program before the first @ref _llk_unpack_unary_operand_to_dest_init_, never from a per-op init: op writers may
  *       re-run the per-op init inside their tile loop, and a reset there would pin unpack to bank 0 while pack keeps
@@ -30,7 +30,34 @@ using namespace ckernel::trisc;
 inline void _llk_unpack_dest_init_()
 {
     _reset_dest_register_offset_();
-    _set_dest_section_base_<to_underlying(TriscID::Unpack)>(_get_dest_buffer_base_());
+}
+
+/**
+ * @brief Move the unpack thread to the other DEST bank after a SyncHalf section.
+ *
+ * Only this thread's dest_register_offset changes; the placers fold it into the next DEST tile index. No config write
+ * and no drain: instructions already issued carry the old index, the toggle only affects indices computed from here on.
+ *
+ * @tparam EN_32BIT_DEST: Sizes the flip, bank-1 base at row 256 when true (32-bit DEST), 512 when false. Must match
+ *         what the pack thread uses, or the two sides address different halves.
+ */
+template <bool EN_32BIT_DEST>
+inline void _llk_unpack_dest_section_advance_()
+{
+    _update_dest_register_offset_<EN_32BIT_DEST>();
+}
+
+/**
+ * @brief The current DEST bank base of this thread, in 32x32-tile units of the UNP_DEST tile index counter.
+ *
+ * dest_register_offset is kept in DEST rows (0, 256 or 512); a 32x32 tile spans 1 << get_dest_tile_size_log2 rows, the
+ * same stride @ref _set_dst_write_addr_ uses on the math thread, so the two sides agree on where bank 1 starts. The
+ * shift assumes full 32x32 tiles: the UNP_DEST tile counter steps in buffer-descriptor tiles, and a tiny-tile operand
+ * is described in one-face tiles, which would put bank 1 at the wrong rows. The API init asserts the shape.
+ */
+inline std::uint32_t _llk_unpack_dest_bank_tile_offset_()
+{
+    return _get_dest_buffer_base_() >> get_dest_tile_size_log2(DstTileShape::Tile32x32);
 }
 
 /**
@@ -76,14 +103,16 @@ inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t bu
  *       @ref _llk_math_pack_sync_init_ covers MATH_PACK only, so also call @ref _llk_sync_init_ for semaphore::UNPACK_MATH
  *       and semaphore::UNPACK_PACK, each with max N (1 for SyncFull, 2 for SyncHalf) and value 0. Per section, T1 waits on
  *       UNPACK_MATH (@ref _llk_sync_wait_), does its work, posts MATH_PACK (@ref _llk_sync_post_) and gets UNPACK_MATH
- *       (@ref _llk_sync_get_). T1 never flips the section base (unpack owns it, see @ref _llk_unpack_dest_init_).
+ *       (@ref _llk_sync_get_). SyncHalf: T1 flips its own section base (@ref _llk_sync_advance_dest_section_) so its
+ *       SFPU work follows the bank the unpacker wrote.
  * @note Pack thread (T2) contract: per section, behind the packer drain, get UNPACK_PACK (frees the bank for the unpack
- *       thread, T0) and then MATH_PACK; SyncHalf: flip the pack section base (@ref _llk_sync_advance_dest_section_).
+ *       thread, T0) and then MATH_PACK; SyncHalf: toggle the bank and reprogram the packer's source address offset
+ *       (@ref _set_packer_dest_registers_), as the regular path does. DEST_TARGET_REG_CFG_MATH_SEC2 does not move PACR.
  * @note @ref _llk_unpack_dest_init_ must have run once on this thread before the first call. Per section on this
  *       thread: @ref _llk_sync_wait_ STALL_ON_MAX on UNPACK_PACK (a DEST bank is free), any number of
  *       @ref _llk_unpack_unary_operand_to_dest_tile_ / @ref _llk_unpack_unary_operand_to_dest_block_, then, behind an
- *       UNPACK0 drain, @ref _llk_sync_post_ UNPACK_PACK and UNPACK_MATH in that order; SyncHalf: flip the section base
- *       (@ref _llk_sync_advance_dest_section_). UNPACK_PACK alone is the unpacker's gate: UNPACK_MATH and MATH_PACK
+ *       UNPACK0 drain, @ref _llk_sync_post_ UNPACK_PACK and UNPACK_MATH in that order; SyncHalf:
+ *       @ref _llk_unpack_dest_section_advance_. UNPACK_PACK alone is the unpacker's gate: UNPACK_MATH and MATH_PACK
  *       each below N would still admit a third section into a two-bank DEST (tt-metal #58903). tt-metal runs this
  *       sequence in tile_regs_acquire / tile_regs_commit (llk_unpack_wait_for_dest_available /
  *       llk_unpack_dest_section_done, quasar llk_unpack_common_api.h).
@@ -109,9 +138,10 @@ inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc
  */
 inline void _llk_unpack_unary_operand_to_dest_tile_(const std::uint32_t l1_tile_idx, const std::uint32_t dst_tile_idx)
 {
-    // UNP_DEST is driven off the UNP_A bank's counters.
+    // UNP_DEST is driven off the UNP_A bank's counters. The DEST bank is part of the tile index (see
+    // _llk_unpack_dest_bank_tile_offset_), not of a section base register.
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx);
-    TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, dst_tile_idx);
+    TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, _llk_unpack_dest_bank_tile_offset_() + dst_tile_idx);
     ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 }
 
@@ -136,8 +166,9 @@ inline void _llk_unpack_unary_operand_to_dest_block_(
     const std::uint32_t l1_tile_idx, const std::uint32_t dst_tile_idx, const std::uint32_t num_tiles, const std::uint32_t l1_tile_stride = 1)
 {
     // UNP_DEST is driven off the UNP_A bank's counters. The DEST counter auto-increments per tile; the L1 counter is set
-    // per tile, since consecutive tiles of a strided buffer are l1_tile_stride entries apart.
-    TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, dst_tile_idx);
+    // per tile, since consecutive tiles of a strided buffer are l1_tile_stride entries apart. The DEST bank is part of
+    // the tile index (see _llk_unpack_dest_bank_tile_offset_), not of a section base register.
+    TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, _llk_unpack_dest_bank_tile_offset_() + dst_tile_idx);
     for (std::uint32_t i = 0; i < num_tiles; i++)
     {
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx + i * l1_tile_stride);
