@@ -266,6 +266,37 @@ or device process has been started by this experiment.
 
 # Completed lifetime and growing-context evidence
 
+## Standard-Harbor bootstrap provenance
+
+The seeded Astropy inference ref is
+`5c53b2ffca0b8857b700872a6635206155922414`; unseeded is
+`c94227c39636b6b102f21695f1d2ec0d486b975b`. Only the CI-nightly task list
+and, in the latter branch, the SWE request seed differ from the initial
+experimental profile. Server seed9472 remains set in both arms.
+
+- 39240243118 failed before model access because an abbreviated inference
+  SHA was interpreted as a branch by actions/checkout. Subsequent dispatches
+  use full SHAs.
+- 39240553380 reached server readiness, but the client failed because
+  run.py requires its repository working directory for VERSION. The run
+  was cancelled after source inspection also identified the need for a
+  host-accessible bind address for Harbor task containers. No task result.
+  Its artifact directory contains stale earlier test files and is not
+  usable as new correctness evidence.
+- 39240897270 passed the device-free client/cache preflight on
+  qb2-120-p05t05.
+- 39241097259 was cancelled after discovering the working-directory issue,
+  before accepting any task result.
+- 39241180817 uses Metal `0aa4df2867dc3c8b709e04a8c6f089234033c524`,
+  workflow `fe31b8a`, full seeded inference SHA, cache off. The workflow
+  now separates client progress, preserves old output outside the current
+  results directory, records precision.json, and runs the client from its
+  own repository directory. All four planned arms reuse the same image.
+
+These are experiment-entrypoint failures, not model accuracy failures.
+Only this experiment's runs/containers were stopped; baseline Shield
+39221429342 and other users' work were not modified.
+
 Remote runs 39238204679 (qb2-120-p03t09) and 39238201191
 (qb2-120-p01t03) passed concurrently on distinct machines, using Metal
 7d5c3e5cb8438989e36a6a35c704f1154f9a4584 and workflow 38d4d6f.
