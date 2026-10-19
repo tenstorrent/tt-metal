@@ -171,6 +171,10 @@ class WanTransformerBlock(Module):
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
+        # Set by a quant config: the norms write the inputs of to_qkv, cross to_q and ff1 in this dtype (the
+        # all-gather-matmuls then gather it); None = their own output dtype
+        self.projection_input_dtype = None
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "ffn.net.0.proj", "ffn.ff1")
         rename_substate(state, "ffn.net.2", "ffn.ff2")
@@ -219,7 +223,10 @@ class WanTransformerBlock(Module):
         c_gate_msa_1B1D = ttnn.typecast(c_gate_msa_1B1D, dtype=ttnn.bfloat16)
 
         spatial_normed_1BND = self.norm1(
-            spatial_1BND, dynamic_weight=(1.0 + scale_msa_1B1D), dynamic_bias=shift_msa_1B1D
+            spatial_1BND,
+            dynamic_weight=(1.0 + scale_msa_1B1D),
+            dynamic_bias=shift_msa_1B1D,
+            dtype=self.projection_input_dtype,
         )
 
         # Self attention on spatial with fused residual addcmul
@@ -236,7 +243,7 @@ class WanTransformerBlock(Module):
         )
 
         # Cross attention on prompt
-        spatial_normed_1BND = self.norm2(spatial_1BND)
+        spatial_normed_1BND = self.norm2(spatial_1BND, dtype=self.projection_input_dtype)
 
         attn_output_1BND = self.attn2(
             spatial_1BND=spatial_normed_1BND,
@@ -250,7 +257,10 @@ class WanTransformerBlock(Module):
 
         # Feed Forward
         spatial_normed_1BND = self.norm3(
-            spatial_1BND, dynamic_weight=(1.0 + c_scale_msa_1B1D), dynamic_bias=c_shift_msa_1B1D
+            spatial_1BND,
+            dynamic_weight=(1.0 + c_scale_msa_1B1D),
+            dynamic_bias=c_shift_msa_1B1D,
+            dtype=self.projection_input_dtype,
         )
 
         if self.ccl_manager.topology == ttnn.Topology.Linear:
@@ -268,6 +278,7 @@ class WanTransformerBlock(Module):
             self.ffn_dim // self.parallel_config.tensor_parallel.factor,
             self.dim,
             self.mesh_device.compute_with_storage_grid_size(),
+            fp32_dest_acc=self.ff_compute_kernel_config.fp32_dest_acc_en,
         ):
             spatial_ff_1BND = self.ffn(
                 spatial_normed_1BND,
