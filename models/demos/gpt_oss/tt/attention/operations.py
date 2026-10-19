@@ -2,10 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 import ttnn
 
 from .weights import AttentionWeights
+
+ENV_DETERMINISTIC_PREFILL_ALLREDUCE = "GPT_OSS_DETERMINISTIC_PREFILL_ALLREDUCE"
+
+
+def deterministic_prefill_allreduce():
+    """True when GPT_OSS_DETERMINISTIC_PREFILL_ALLREDUCE=1 (read on every call; off by default).
+
+    The prefill attention all-reduce then runs as one ttnn.all_reduce instead of MeshConfig.allreduce
+    (reduce_scatter_minimal_async + all_gather_async on the CCLManager's semaphores). Inside the full model on a
+    Blackhole 1x4 ring that async pair leaves device 0's copy of the reduced output stale in a few tiles of every call,
+    so the TP replicas of the residual stream drift apart and two prefills of the same prompt do not give bit-identical
+    logits. ttnn.all_reduce (as used by the decode attention and the MoE) is bit-reproducible; with the real weights
+    on a QuietBox 2 it costs no measurable prefill time at 128 to 4096 tokens (tests/unit/test_prefill_determinism.py).
+    """
+    return os.environ.get(ENV_DETERMINISTIC_PREFILL_ALLREDUCE, "0").strip() == "1"
 
 
 def apply_qkv_projection(hidden_states, weights: AttentionWeights):
@@ -266,10 +282,20 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
         Tensor after allreduce (if TP > 1) or original tensor
     """
     if mesh_config.tp > 1:
-        tensor_allreduced = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=mesh_config.tp_axis)
-        # ``mesh_config.allreduce`` now frees its input internally between
-        # reduce_scatter and all_gather to keep peak DRAM within bounds for
-        # long-context prefill; don't deallocate again here.
+        if deterministic_prefill_allreduce():
+            tensor_allreduced = ttnn.all_reduce(
+                tensor,
+                num_links=ccl_manager.num_links,
+                topology=ccl_manager.topology,
+                cluster_axis=mesh_config.tp_axis,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            tensor.deallocate(True)
+        else:
+            tensor_allreduced = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=mesh_config.tp_axis)
+            # ``mesh_config.allreduce`` now frees its input internally between
+            # reduce_scatter and all_gather to keep peak DRAM within bounds for
+            # long-context prefill; don't deallocate again here.
         tensor = tensor_allreduced
 
         # Remove padding added in weights.py for tile-aligned CCL operations.
