@@ -12,6 +12,7 @@
 // ownership is per key-head group (h % rf == 0), so a caller must hold ALL Nv heads of a user (the op cannot check
 // ctrl contents).
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
+#include "api/debug/kernel_profiler.hpp"  // zones compile to nothing unless the build defines PROFILE_KERNEL
 
 using namespace gdn_step_df;
 
@@ -109,49 +110,52 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
     const bool hold = (blk == hold_sentinel);
 
     // ---- window: win[1 - par] <- rebuilt rows (or the held user's rows copied through)
-    if (hold) {
-        bounce.reserve_back(Ch);
-        for (uint32_t c = 0; c < Ch; ++c) {
-            if (!owns(c)) {
-                continue;
+    {
+        DeviceZoneScopedN("wr_win");
+        if (hold) {
+            bounce.reserve_back(Ch);
+            for (uint32_t c = 0; c < Ch; ++c) {
+                if (!owns(c)) {
+                    continue;
+                }
+                const uint32_t page = u * Ct + chunk_col(c);
+                if (par) {
+                    read_tiles_at(wb_acc, bounce, noc, page, 1, c);
+                } else {
+                    read_tiles_at(wa_acc, bounce, noc, page, 1, c);
+                }
             }
-            const uint32_t page = u * Ct + chunk_col(c);
-            if (par) {
-                read_tiles_at(wb_acc, bounce, noc, page, 1, c);
-            } else {
-                read_tiles_at(wa_acc, bounce, noc, page, 1, c);
+            noc.async_read_barrier();
+            bounce.push_back(Ch);
+            bounce.wait_front(Ch);
+            for (uint32_t c = 0; c < Ch; ++c) {
+                if (!owns(c)) {
+                    continue;
+                }
+                const uint32_t page = u * Ct + chunk_col(c);
+                if (par) {
+                    write_whole_tile(wa_acc, bounce, noc, page, c);
+                } else {
+                    write_whole_tile(wb_acc, bounce, noc, page, c);
+                }
             }
-        }
-        noc.async_read_barrier();
-        bounce.push_back(Ch);
-        bounce.wait_front(Ch);
-        for (uint32_t c = 0; c < Ch; ++c) {
-            if (!owns(c)) {
-                continue;
-            }
-            const uint32_t page = u * Ct + chunk_col(c);
-            if (par) {
-                write_whole_tile(wa_acc, bounce, noc, page, c);
-            } else {
-                write_whole_tile(wb_acc, bounce, noc, page, c);
-            }
-        }
-        noc.async_write_barrier();
-        bounce.pop_front(Ch);
-        wout.wait_front(Ch);  // drain the compute's window tiles without writing them
-        wout.pop_front(Ch);
-    } else {
-        for (uint32_t c = 0; c < Ch; ++c) {
-            if (!owns(c)) {
-                wout.wait_front(1);
-                wout.pop_front(1);
-                continue;
-            }
-            const uint32_t page = u * Ct + chunk_col(c);
-            if (par) {
-                write_rows(wa_acc, wout, noc, page, 1, 0, Lw_w);
-            } else {
-                write_rows(wb_acc, wout, noc, page, 1, 0, Lw_w);
+            noc.async_write_barrier();
+            bounce.pop_front(Ch);
+            wout.wait_front(Ch);  // drain the compute's window tiles without writing them
+            wout.pop_front(Ch);
+        } else {
+            for (uint32_t c = 0; c < Ch; ++c) {
+                if (!owns(c)) {
+                    wout.wait_front(1);
+                    wout.pop_front(1);
+                    continue;
+                }
+                const uint32_t page = u * Ct + chunk_col(c);
+                if (par) {
+                    write_rows(wa_acc, wout, noc, page, 1, 0, Lw_w);
+                } else {
+                    write_rows(wb_acc, wout, noc, page, 1, 0, Lw_w);
+                }
             }
         }
     }
@@ -191,7 +195,11 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
     {
         const uint32_t entry = hnew.get_entry_size();
         for (uint32_t t = 0; t < T; ++t) {
-            hnew.wait_front(KV);
+            {
+                DeviceZoneScopedN("wr_wait_hnew");
+                hnew.wait_front(KV);
+            }
+            DeviceZoneScopedN("wr_ring");
             if (!hold) {
                 const uint32_t page0 = (t * BH + bh) * KV;
                 for (uint32_t i = 0; i < KV; ++i) {
@@ -204,6 +212,7 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
     }
 
     // ---- the user's T output rows of the head's Vt output tiles
+    DeviceZoneScopedN("wr_out");
     if constexpr ((T % 2) == 0) {
         write_rows(out_acc, out, noc, tr * out_w_tiles + h * Vt, Vt, r0, T);
     } else {

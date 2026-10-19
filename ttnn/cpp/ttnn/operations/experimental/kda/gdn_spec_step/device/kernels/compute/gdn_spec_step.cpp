@@ -18,6 +18,7 @@
 // GDN_FAST / GDN_FP32_STATE select gdn_decode_step_conv_fast.cpp's arithmetic instead (gates on the reader, hnew
 // packed from the state add's DST tile; fp32_state: SFPU decay / add on UnpackToDest operands, see the factory).
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/compute/gdn_step_helpers.hpp"
+#include "api/debug/kernel_profiler.hpp"  // zones compile to nothing unless the build defines PROFILE_KERNEL
 
 #ifndef GDN_FAST
 #define GDN_FAST 0
@@ -430,10 +431,13 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
 
     // zs = silu(z) first: it needs only the small early reads, so it overlaps the reader's bulk window / projection /
     // tap reads
-    z_in.wait_front(Vt);
-    silu_tiles(dfb::z_in, dfb::zs, zs, Vt);
-    z_in.pop_front(Vt);
-    zs.wait_front(Vt);
+    {
+        DeviceZoneScopedN("c_silu");
+        z_in.wait_front(Vt);
+        silu_tiles(dfb::z_in, dfb::zs, zs, Vt);
+        z_in.pop_front(Vt);
+        zs.wait_front(Vt);
+    }
 #if !GDN_FAST
     // the T gate pairs (plain mode: one-hot gathers + SFPU sigmoid / softplus / exp); FAST: the reader delivers
     // beta_t[t] / dec[t] as ready fp32 scalar tiles
@@ -451,160 +455,177 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
 
     // ---- A. window rebuild, shifted conv operands, 4-tap causal conv + SiLU, placement -- phased so every matmul /
     //      broadcast init and format reconfig happens once per phase and DST carries 4-8 tiles per acquire
-    src_in.wait_front(2 * Ch);
-    sel.wait_front(3 + K);
-    // A1: W_c = WO_W @ win_c + WO_N @ qkv_c -> wc[c] (compute) and wout[c] (writer), bf16 (exact one-hot gathers)
-    wc.reserve_back(Ch);
-    wout.reserve_back(Ch);
-    pack_reconfig_data_format(dfb::wc);
-    reconfig_data_format<SrcOrder::Reverse>(dfb::sel, dfb::src_in);
-    matmul_init(dfb::sel, dfb::src_in);
+    {
+        DeviceZoneScopedN("c_wait_src");
+        src_in.wait_front(2 * Ch);
+        sel.wait_front(3 + K);
+    }
+    {
+        DeviceZoneScopedN("c_A");
+        // A1: W_c = WO_W @ win_c + WO_N @ qkv_c -> wc[c] (compute) and wout[c] (writer), bf16 (exact one-hot gathers)
+        wc.reserve_back(Ch);
+        wout.reserve_back(Ch);
+        pack_reconfig_data_format(dfb::wc);
+        reconfig_data_format<SrcOrder::Reverse>(dfb::sel, dfb::src_in);
+        matmul_init(dfb::sel, dfb::src_in);
 #pragma GCC unroll 1  // code size: the kernel binaries must fit the 69 KB kernel config buffer
-    for (uint32_t c0 = 0; c0 < Ch; c0 += 4) {
-        const uint32_t n = (Ch - c0) < 4 ? (Ch - c0) : 4;
-        tile_regs_acquire();
+        for (uint32_t c0 = 0; c0 < Ch; c0 += 4) {
+            const uint32_t n = (Ch - c0) < 4 ? (Ch - c0) : 4;
+            tile_regs_acquire();
 #pragma GCC unroll 1
-        for (uint32_t i = 0; i < n; ++i) {
-            matmul_tiles(dfb::sel, dfb::src_in, 0, c0 + i, i);
-            matmul_tiles(dfb::sel, dfb::src_in, 1, Ch + c0 + i, i);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t i = 0; i < n; ++i) {
-            pack_tile(i, dfb::wc, c0 + i);
-            pack_tile(i, dfb::wout, c0 + i);
-        }
-        tile_regs_release();
-    }
-    wc.push_back(Ch);
-    wout.push_back(Ch);
-    src_in.pop_front(2 * Ch);
-    wc.wait_front(Ch);
-    // A2: shift[c*K + j] = SH_j @ W_c  (row r0+t = W[t+j]; bf16, exact), one chunk = K DST tiles per acquire
-    //     (fp32 DST under the half-DST sync holds 4 tiles: indices >= 4 corrupt the half the packer is draining)
-    shift.reserve_back(Ch * K);
-    pack_reconfig_data_format(dfb::shift);
-    reconfig_data_format<SrcOrder::Reverse>(dfb::sel, dfb::wc);
-    matmul_init(dfb::sel, dfb::wc);
-#pragma GCC unroll 1
-    for (uint32_t c = 0; c < Ch; ++c) {
-        tile_regs_acquire();
-#pragma GCC unroll 1
-        for (uint32_t j = 0; j < K; ++j) {
-            matmul_tiles(dfb::sel, dfb::wc, 2 + j, c, j);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t j = 0; j < K; ++j) {
-            pack_tile(j, dfb::shift, c * K + j);
-        }
-        tile_regs_release();
-    }
-    shift.push_back(Ch * K);
-    wc.pop_front(Ch);
-    shift.wait_front(Ch * K);
-    // A3: cv[c] = silu(sum_j shift_j * tap_j) in gdn_decode_step_conv.cpp's causal_conv_silu_packed op order
-    //     (DST_j = shift_j * tap_j, DST_0 += DST_1..3 on the SFPU, silu), one chunk per acquire (4 DST tiles)
-    taps.wait_front(Ch);
-    cv.reserve_back(Ch);
-    pack_reconfig_data_format(dfb::cv);
-    reconfig_data_format(dfb::shift, dfb::taps);
-    mul_bcast_rows_init(dfb::shift, dfb::taps);
-#pragma GCC unroll 1
-    for (uint32_t c = 0; c < Ch; ++c) {
-        tile_regs_acquire();
-#pragma GCC unroll 1
-        for (uint32_t j = 0; j < K; ++j) {
-            mul_tiles_bcast_rows(dfb::shift, dfb::taps, c * K + j, c, j, j);
-        }
-        // SFPU ops with literal DST indices: loop-variable indices trip the TT GCC SFPU synth pass (ICE in
-        // rvtt_synth_renumber) in this body
-        add_binary_tile_init();
-        if constexpr (K == 4) {
-            add_binary_tile(0, 1, 0);
-            add_binary_tile(0, 2, 0);
-            add_binary_tile(0, 3, 0);
-        } else {
-            for (uint32_t j = 1; j < K; ++j) {
-                add_binary_tile(0, j, 0);
+            for (uint32_t i = 0; i < n; ++i) {
+                matmul_tiles(dfb::sel, dfb::src_in, 0, c0 + i, i);
+                matmul_tiles(dfb::sel, dfb::src_in, 1, Ch + c0 + i, i);
             }
+            tile_regs_commit();
+            tile_regs_wait();
+#pragma GCC unroll 1
+            for (uint32_t i = 0; i < n; ++i) {
+                pack_tile(i, dfb::wc, c0 + i);
+                pack_tile(i, dfb::wout, c0 + i);
+            }
+            tile_regs_release();
         }
-        silu_tile_init();
-        silu_tile(0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::cv, c);
-        tile_regs_release();
-    }
-    cv.push_back(Ch);
-    shift.pop_front(Ch * K);
-    taps.pop_front(Ch);
-    cv.wait_front(Ch);
-    // A4: qc | kc | vc [c] = P @ cv[c] -- the conv values cross a one-hot matmul as in the plain kernel's scatter_conv
-    //     (same operand roles: bf16 one-hot A, fp32 conv B); required for bit-identity with it
-    qc.reserve_back(Kt);
-    kc.reserve_back(Kt);
-    vc.reserve_back(Vt);
-    pack_reconfig_data_format(qc_id);
-    reconfig_data_format<SrcOrder::Reverse>(dfb::sel, dfb::cv);
-    matmul_init(dfb::sel, dfb::cv);
+        wc.push_back(Ch);
+        wout.push_back(Ch);
+        src_in.pop_front(2 * Ch);
+        wc.wait_front(Ch);
+        // A2: shift[c*K + j] = SH_j @ W_c  (row r0+t = W[t+j]; bf16, exact), one chunk = K DST tiles per acquire
+        //     (fp32 DST under the half-DST sync holds 4 tiles: indices >= 4 corrupt the half the packer is draining)
+        shift.reserve_back(Ch * K);
+        pack_reconfig_data_format(dfb::shift);
+        reconfig_data_format<SrcOrder::Reverse>(dfb::sel, dfb::wc);
+        matmul_init(dfb::sel, dfb::wc);
+#pragma GCC unroll 1
+        for (uint32_t c = 0; c < Ch; ++c) {
+            tile_regs_acquire();
+#pragma GCC unroll 1
+            for (uint32_t j = 0; j < K; ++j) {
+                matmul_tiles(dfb::sel, dfb::wc, 2 + j, c, j);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+#pragma GCC unroll 1
+            for (uint32_t j = 0; j < K; ++j) {
+                pack_tile(j, dfb::shift, c * K + j);
+            }
+            tile_regs_release();
+        }
+        shift.push_back(Ch * K);
+        wc.pop_front(Ch);
+        shift.wait_front(Ch * K);
+        // A3: cv[c] = silu(sum_j shift_j * tap_j) in gdn_decode_step_conv.cpp's causal_conv_silu_packed op order
+        //     (DST_j = shift_j * tap_j, DST_0 += DST_1..3 on the SFPU, silu), one chunk per acquire (4 DST tiles)
+        taps.wait_front(Ch);
+        cv.reserve_back(Ch);
+        pack_reconfig_data_format(dfb::cv);
+        reconfig_data_format(dfb::shift, dfb::taps);
+        mul_bcast_rows_init(dfb::shift, dfb::taps);
+#pragma GCC unroll 1
+        for (uint32_t c = 0; c < Ch; ++c) {
+            tile_regs_acquire();
+#pragma GCC unroll 1
+            for (uint32_t j = 0; j < K; ++j) {
+                mul_tiles_bcast_rows(dfb::shift, dfb::taps, c * K + j, c, j, j);
+            }
+            // SFPU ops with literal DST indices: loop-variable indices trip the TT GCC SFPU synth pass (ICE in
+            // rvtt_synth_renumber) in this body
+            add_binary_tile_init();
+            if constexpr (K == 4) {
+                add_binary_tile(0, 1, 0);
+                add_binary_tile(0, 2, 0);
+                add_binary_tile(0, 3, 0);
+            } else {
+                for (uint32_t j = 1; j < K; ++j) {
+                    add_binary_tile(0, j, 0);
+                }
+            }
+            silu_tile_init();
+            silu_tile(0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, dfb::cv, c);
+            tile_regs_release();
+        }
+        cv.push_back(Ch);
+        shift.pop_front(Ch * K);
+        taps.pop_front(Ch);
+        cv.wait_front(Ch);
+        // A4: qc | kc | vc [c] = P @ cv[c] -- the conv values cross a one-hot matmul as in the plain kernel's
+        // scatter_conv
+        //     (same operand roles: bf16 one-hot A, fp32 conv B); required for bit-identity with it
+        qc.reserve_back(Kt);
+        kc.reserve_back(Kt);
+        vc.reserve_back(Vt);
+        pack_reconfig_data_format(qc_id);
+        reconfig_data_format<SrcOrder::Reverse>(dfb::sel, dfb::cv);
+        matmul_init(dfb::sel, dfb::cv);
 #pragma GCC unroll 1  // code size: the kernel binaries must fit the 69 KB kernel config buffer
-    for (uint32_t c0 = 0; c0 < Ch; c0 += 4) {
-        const uint32_t n = (Ch - c0) < 4 ? (Ch - c0) : 4;
-        tile_regs_acquire();
+        for (uint32_t c0 = 0; c0 < Ch; c0 += 4) {
+            const uint32_t n = (Ch - c0) < 4 ? (Ch - c0) : 4;
+            tile_regs_acquire();
 #pragma GCC unroll 1
-        for (uint32_t i = 0; i < n; ++i) {
-            matmul_tiles(dfb::sel, dfb::cv, 2 + K, c0 + i, i);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
+            for (uint32_t i = 0; i < n; ++i) {
+                matmul_tiles(dfb::sel, dfb::cv, 2 + K, c0 + i, i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
 #pragma GCC unroll 1
-        for (uint32_t i = 0; i < n; ++i) {
-            const uint32_t c = c0 + i;
-            const uint32_t dst_id = (c < Kt) ? qc_id : ((c < 2 * Kt) ? kc_id : vc_id);
-            const uint32_t dst_i = (c < Kt) ? c : ((c < 2 * Kt) ? (c - Kt) : (c - 2 * Kt));
-            pack_tile(i, dst_id, dst_i);
+            for (uint32_t i = 0; i < n; ++i) {
+                const uint32_t c = c0 + i;
+                const uint32_t dst_id = (c < Kt) ? qc_id : ((c < 2 * Kt) ? kc_id : vc_id);
+                const uint32_t dst_i = (c < Kt) ? c : ((c < 2 * Kt) ? (c - Kt) : (c - 2 * Kt));
+                pack_tile(i, dst_id, dst_i);
+            }
+            tile_regs_release();
         }
-        tile_regs_release();
+        qc.push_back(Kt);
+        kc.push_back(Kt);
+        vc.push_back(Vt);
+        cv.pop_front(Ch);
+        sel.pop_front(3 + K);
     }
-    qc.push_back(Kt);
-    kc.push_back(Kt);
-    vc.push_back(Vt);
-    cv.pop_front(Ch);
-    sel.pop_front(3 + K);
 
     // ---- B. row-batched pre for the user's T rows
-    mask_T.wait_front(1);
-    qc.wait_front(Kt);
-    kc.wait_front(Kt);
-    vc.wait_front(Vt);
-    // k, v row-batched; then the q row sums of squares once into `stats` (kept through the token loop): qn_t itself is
-    // formed per token with the e_t mask, exactly the plain kernel's inverse_l2(mask) + scale_rows, so
-    // o_t = qn_t @ S_t has only the token's row non-zero
-    l2norm_rows<Kt>(dfb::kc, dfb::mask_T, dfb::kn, kn, tmp, stats, scratch, inv, kOneBits);
-    scale_rows(dfb::vc, dfb::mask_T, dfb::vm, vm, Vt);
-    square_tiles(dfb::qc, dfb::tmp, tmp, Kt);
-    reduce_rows(Kt);
-    stats.wait_front(1);
-    kc.pop_front(Kt);
-    vc.pop_front(Vt);
-    mask_T.pop_front(1);
-    kn.wait_front(Kt);
-    vm.wait_front(Vt);
-    transpose_tiles(dfb::kn, dfb::kt, kt, Kt);
-    kt.wait_front(Kt);
+    {
+        DeviceZoneScopedN("c_B");
+        mask_T.wait_front(1);
+        qc.wait_front(Kt);
+        kc.wait_front(Kt);
+        vc.wait_front(Vt);
+        // k, v row-batched; then the q row sums of squares once into `stats` (kept through the token loop): qn_t itself
+        // is formed per token with the e_t mask, exactly the plain kernel's inverse_l2(mask) + scale_rows, so o_t =
+        // qn_t @ S_t has only the token's row non-zero
+        l2norm_rows<Kt>(dfb::kc, dfb::mask_T, dfb::kn, kn, tmp, stats, scratch, inv, kOneBits);
+        scale_rows(dfb::vc, dfb::mask_T, dfb::vm, vm, Vt);
+        square_tiles(dfb::qc, dfb::tmp, tmp, Kt);
+        reduce_rows(Kt);
+        stats.wait_front(1);
+        kc.pop_front(Kt);
+        vc.pop_front(Vt);
+        mask_T.pop_front(1);
+        kn.wait_front(Kt);
+        vm.wait_front(Vt);
+        transpose_tiles(dfb::kn, dfb::kt, kt, Kt);
+        kt.wait_front(Kt);
+    }
 
     // ---- C. T serial delta-rule steps, state in L1
-    state_in.wait_front(KV);
+    {
+        DeviceZoneScopedN("c_wait_state");
+        state_in.wait_front(KV);
+    }
 #pragma GCC unroll 1  // code size: the kernel binaries must fit the 69 KB kernel config buffer
     for (uint32_t t = 0; t < T; ++t) {
         const bool first = (t == 0);
         const bool last = (t + 1 == T);
-        e_t.wait_front(1);
-        dec.wait_front(1);
-        beta_t.wait_front(1);
+        {
+            DeviceZoneScopedN("c_wait_gate");
+            e_t.wait_front(1);
+            dec.wait_front(1);
+            beta_t.wait_front(1);
+        }
+        DeviceZoneScopedN("c_tok");
         // eb = e_t * beta_t : column tile carrying beta at row r0 + t (0 elsewhere)
         scale_rows(dfb::e_t, dfb::beta_t, dfb::eb, eb, 1);  // beta_t is all-equal: column 0 broadcast == elementwise
         beta_t.pop_front(1);
@@ -700,6 +721,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
     stats.pop_front(1);
 
     // ---- D. row-batched post: out = rmsnorm(acc) * w * silu(z)
+    DeviceZoneScopedN("c_D");
     DataflowBuffer& acc_fin = ((T - 1) & 1u) ? acc_b : acc_a;
     const uint32_t acc_fin_id = ((T - 1) & 1u) ? acc_b_id : acc_a_id;
     acc_fin.wait_front(Vt);
