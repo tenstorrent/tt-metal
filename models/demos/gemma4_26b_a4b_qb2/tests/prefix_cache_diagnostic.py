@@ -22,6 +22,9 @@ def compare_paths(generator, tokens, table, cache, original, start):
     length = tokens.shape[-1]
     replay_start = start or (length - 1) // 32 * 32
     values = {"original": generator._read_logits(original).flatten().clone()}
+    # The eager numerical probes compile other model paths. Do not retain a
+    # serving trace across those diagnostic-only persistent allocations.
+    generator._release_trace()
     # Each arm overwrites the replayed interval causally. Prefix rows before
     # replay_start remain unchanged; stale later rows are masked until replaced.
     for position in range(replay_start, length):
