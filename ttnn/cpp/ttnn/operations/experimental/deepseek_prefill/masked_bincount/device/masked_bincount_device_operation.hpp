@@ -9,6 +9,8 @@
 
 #include "masked_bincount_device_operation_types.hpp"
 
+#include <variant>
+
 namespace ttnn::experimental::prim {
 
 struct MaskedBincountDeviceOperation {

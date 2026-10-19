@@ -24,13 +24,16 @@ from tools.tracy.process_model_log import get_latest_ops_log_filename
 # the test inside a subprocess since UMD does not allow multiple subprocesses opening the device at the same time.
 # The demo subprocess is its own pytest session, so it would otherwise inherit the 300 s default from pytest.ini.
 # Llama 3.3-70B on a 4-chip Blackhole box spends ~3 min compiling profiler kernels before the first prefill, so give
-# the inner run the 600 s this test used to have as a whole, and this test 900 s (the budget the pipeline yaml already
-# asks for with --timeout 900; the marker takes precedence over the command line, so that value never applied).
+# the inner run the 600 s this test used to have as a whole. This test itself gets 1350 s: it was 900 s (the budget
+# the pipeline yaml already asks for with --timeout 900; the marker takes precedence over the command line, so that
+# value never applied), scaled with the Llama 3.1-8B wh_n150 leg budget going from 20 to 30 minutes. On a slow N150
+# VM episode the tracy post-processing after the demo exits can take several minutes on its own (vm-115, 2026-10-02:
+# demo 321 s, post-processing still running at 900 s), and that part is outside the inner run's own timeout.
 INNER_DEMO_TIMEOUT_S = 600
 
 
 @pytest.mark.no_reset_default_device
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(1350)
 @pytest.mark.parametrize("export_measurements", [True, False])
 @pytest.mark.parametrize("batch_size", [1, 32])
 @pytest.mark.parametrize("data_parallel", [1, 2, 4, 8])

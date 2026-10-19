@@ -15,6 +15,7 @@
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/work_split.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
@@ -82,11 +83,7 @@ uint32_t estimate_interm_tile_size(
 }
 
 uint32_t get_max_l1_space(const ttnn::Tensor& input_tensor_a) {
-    auto* device = input_tensor_a.device();
-    auto lowest_address = device->lowest_occupied_compute_l1_address();
-    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-    max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    return max_l1_space;
+    return static_cast<uint32_t>(ttnn::operations::core::available_program_l1_capacity(input_tensor_a.device()));
 }
 
 bool is_input_batched(const ttnn::Shape& shape) {
@@ -391,21 +388,21 @@ void move_common_entries(
 void get_optimal_dram_bank_to_reader_assignment(
     const tt::tt_metal::distributed::MeshDevice& device,
     std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
-    CoreRangeSet& all_worker_cores,
+    tt::tt_metal::CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc) {
     all_worker_cores_ordered = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
-    std::set<CoreRange> all_cores_set;
+    std::set<tt::tt_metal::CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
-        all_cores_set.insert(CoreRange(worker_core));
+        all_cores_set.insert(tt::tt_metal::CoreRange(worker_core));
     }
-    all_worker_cores = CoreRangeSet(all_cores_set);
+    all_worker_cores = tt::tt_metal::CoreRangeSet(all_cores_set);
 }
 
 std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
-    const CoreRangeSet& secondary_reader_excluded_cores) {
+    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores) {
     validate_num_workers_per_dram_bank(workers_per_bank);
 
     const auto primary_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);

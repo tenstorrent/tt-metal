@@ -112,6 +112,24 @@ void max_block_sfpi(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_ti
     cb_out.push_back(num_tiles);
 }
 
+// Pushes num_tiles zero tiles to out_cb, made as x - x from the front tile of like_cb (which stays).
+void zero_block(uint32_t like_cb, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_like(like_cb);
+    CircularBuffer cb_out(out_cb);
+    sub_init(like_cb, like_cb);
+    cb_like.wait_front(1);
+    cb_out.reserve_back(num_tiles);
+    tile_regs_acquire();
+    sub_tiles(like_cb, like_cb, 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        pack_tile(0, out_cb);
+    }
+    tile_regs_release();
+    cb_out.push_back(num_tiles);
+}
+
 /**
  * out_cb = eltwise_max(in0, in1)
  */
@@ -1648,7 +1666,9 @@ void sdpa_inner_loop(
     const bool is_balanced = false,
     const bool use_zigzag_balancing = false,
     const bool is_last_ring_iter = true,
-    const ChunkedContext& chunked = {}) {
+    const ChunkedContext& chunked = {},
+    // RING only: padded multicast slots the reader runs after this core's Q chunks; their K/V are drained.
+    const uint32_t padded_q_slots = 0) {
     // Parameter-stable CB locals. Aliases (cb_sum_A/B, cb_max_A/B, cb_out_im_A/B) are
     // std::swap-mutated below, so they use inline CircularBuffer(alias).method() at the call
     // sites instead. cb_out is constructed conditionally near its consumer (cur.out target).
@@ -1662,6 +1682,15 @@ void sdpa_inner_loop(
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
+    // RING: absolute K-tile index of a local K chunk's start. Chunked: non-monotonic local->abs map.
+    auto ring_kv_global_start_tile = [&](uint32_t k_chunk) -> uint32_t {
+        if constexpr (chunked_enabled) {
+            return kv_global_tile_for_local<true, 0, chunked_chunk_size_t, chunked_q_local_padded_Nt>(
+                ring_id, k_chunk * Sk_chunk_t);
+        } else {
+            return local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+        }
+    };
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
         uint32_t q_start_tile = 0;    // First tile of Q chunk (tile units, both STANDARD and RING)
@@ -1737,14 +1766,7 @@ void sdpa_inner_loop(
             uint32_t kv_global_start_tile = 0;  // RING only: abs K-tile index of this k_chunk's start
             if constexpr (sdpa_type == RING) {
                 const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
-                // Global index into the padded KV tensor. Chunked: non-monotonic local→abs map.
-                if constexpr (chunked_enabled) {
-                    kv_global_start_tile =
-                        kv_global_tile_for_local<true, 0, chunked_chunk_size_t, chunked_q_local_padded_Nt>(
-                            ring_id, k_chunk * Sk_chunk_t);
-                } else {
-                    kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
-                }
+                kv_global_start_tile = ring_kv_global_start_tile(k_chunk);
                 if (!kv_chunk_is_joint && (kv_global_start_tile >= logical_nt)) {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
                     continue;
@@ -2126,6 +2148,25 @@ void sdpa_inner_loop(
     }
 
     if constexpr (sdpa_type == RING) {
+        // Padded multicast slots: the reader pushes every K/V entry it receives so this core's CBs advance with
+        // the injector's. Drain them with the same skips as a real Q chunk, before the phase-alignment dummy.
+        for (uint32_t slot = 0; slot < padded_q_slots; ++slot) {
+            const uint32_t q_flat = padded_slot_flat_q<false>({}, iter_q_start, q_per_core, q_per_core + slot, 1);
+            const uint32_t q_chunk = remap_q_index(q_flat, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
+            if (is_balanced && (q_chunk < q_num_chunks / 2)) {
+                continue;
+            }
+            for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
+                if (k_chunk < num_local_k_chunks && ring_kv_global_start_tile(k_chunk) >= logical_nt) {
+                    continue;
+                }
+                KV_chunks_processed_in_iter++;
+                cb_k_in_obj.wait_front(k_chunk_tiles);
+                cb_v_in_obj.wait_front(v_chunk_tiles);
+                cb_k_in_obj.pop_front(k_chunk_tiles);
+                cb_v_in_obj.pop_front(v_chunk_tiles);
+            }
+        }
         if (KV_chunks_processed_in_iter % 2 == 0) {
             cb_k_in_obj.wait_front(k_chunk_tiles);
             cb_v_in_obj.wait_front(v_chunk_tiles);
@@ -2467,7 +2508,8 @@ void sdpa_ring(
     const bool skip_first_half_q,
     const bool is_last_ring_iter,
     const bool use_zigzag_balancing = false,
-    const ChunkedContext& chunked = {}) {
+    const ChunkedContext& chunked = {},
+    const uint32_t padded_q_slots = 0) {
     sdpa_inner_loop<
         RING,
         cb_qk_im,
@@ -2547,5 +2589,6 @@ void sdpa_ring(
         skip_first_half_q,
         use_zigzag_balancing,
         is_last_ring_iter,
-        chunked);
+        chunked,
+        padded_q_slots);
 }

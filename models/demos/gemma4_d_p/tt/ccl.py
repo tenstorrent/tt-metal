@@ -3,7 +3,6 @@
 
 import os
 
-import torch
 from loguru import logger
 
 import ttnn
@@ -124,22 +123,19 @@ class CCLManager:
 
         Distinct ``key`` values isolate receive buffers. ``seq`` is the full cache
         capacity for dense attention and the halo size for sliding attention.
-        ``n_kv_local`` is the per-device head count; allocation uses
-        ``n_kv_local * tp_degree`` heads, sharded across TP columns and replicated
-        across CP rows. The op overwrites valid entries and masks invalid ones,
-        so the scratch buffer needs no re-zeroing.
+        ``n_kv_local`` is the per-device head count (this device's TP shard); each
+        device holds a zero-filled ``[1, n_kv_local, seq, head_dim]``. The op
+        overwrites valid entries and masks invalid ones, so the scratch buffer needs
+        no re-zeroing.
         """
-        mesh_config = self.mesh_config
-        n_kv_global = n_kv_local * mesh_config.tp_degree
-        cache_key = (key, n_kv_global, seq, head_dim, str(dtype), str(memory_config))
+        cache_key = (key, n_kv_local, seq, head_dim, str(dtype), str(memory_config))
         if cache_key not in self._ring_gather_buffers:
-            self._ring_gather_buffers[cache_key] = ttnn.from_torch(
-                torch.zeros(1, n_kv_global, seq, head_dim),
+            self._ring_gather_buffers[cache_key] = ttnn.zeros(
+                [1, n_kv_local, seq, head_dim],
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=memory_config,
-                mesh_mapper=mesh_config.shard_mapper(tensor_dim=1),
             )
         return self._ring_gather_buffers[cache_key]
 
@@ -306,3 +302,60 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
         )
         tensor.deallocate(True)
     return gathered
+
+
+def ccl_partition_rows(tensor, mesh_config):
+    """Keep this TP device's 1/TP of the rows of a TP-replicated tensor."""
+    if mesh_config is None or mesh_config.tp_degree <= 1:
+        return tensor
+    return ttnn.mesh_partition(tensor, dim=2, cluster_axis=mesh_config.tp_axis)
+
+
+# Tallest reduce-scatter input (rows per device) on the tuned transport: chunk 4096 at CP8.
+_MAX_TUNED_REDUCE_SCATTER_IN_ROWS = 512
+# Four workers per link with short syncs suit short slabs; the automatic choice is better for taller ones.
+_SHORT_SLAB_REDUCE_SCATTER_TRANSPORT = dict(num_workers_per_link=4, chunks_per_sync=2, num_buffers_per_channel=2)
+# Tallest reduce-scatter output kept in L1: 256 rows per device (chunk 8192 at CP8 x TP4).
+_MAX_L1_REDUCE_SCATTER_OUT_ROWS = 256
+
+
+def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None):
+    """Sum row-parallel projection partials across TP and keep this device's 1/TP of the rows.
+
+    With ccl_allgather(dim=2) this is an all-reduce split around the norms and residual adds, which then run on
+    1/TP of the rows.
+    """
+    if mesh_config is None or mesh_config.tp_degree <= 1:
+        return tensor
+    if memory_config is None:
+        # The norm after it reads the result straight from L1. Taller outputs stay in DRAM, where they cannot clash
+        # with the next matmul's circular buffers.
+        out_rows = tensor.padded_shape[-2] // mesh_config.tp_degree
+        memory_config = (
+            ttnn.L1_MEMORY_CONFIG if out_rows <= _MAX_L1_REDUCE_SCATTER_OUT_ROWS else ttnn.DRAM_MEMORY_CONFIG
+        )
+    if ccl_async_enabled():
+        result = ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            persistent_output_buffers=None,
+            dim=2,
+            multi_device_global_semaphore=ccl_manager.get_rs_semaphore(),
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            num_links=ccl_manager.num_links,
+            cluster_axis=mesh_config.tp_axis,
+            memory_config=memory_config,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ccl_manager.topology,
+            chunks_per_sync=ccl_chunks_per_sync(),
+            num_workers_per_link=ccl_num_workers_per_link(),
+            num_buffers_per_channel=ccl_num_buffers_per_channel(),
+        )
+    else:
+        transport = {}
+        if tensor.padded_shape[-2] <= _MAX_TUNED_REDUCE_SCATTER_IN_ROWS:
+            transport = dict(num_links=ccl_manager.num_links, **_SHORT_SLAB_REDUCE_SCATTER_TRANSPORT)
+        result = ttnn.reduce_scatter(
+            tensor, dim=2, cluster_axis=mesh_config.tp_axis, memory_config=memory_config, **transport
+        )
+    tensor.deallocate(True)
+    return result

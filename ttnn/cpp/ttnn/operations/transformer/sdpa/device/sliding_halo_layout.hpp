@@ -11,9 +11,9 @@
 
 namespace ttnn::operations::transformer::sdpa::ring_joint {
 
-// Each Q segment needs its cyclic predecessor tail; rotated Q can need two tails. A halo wider than one Q
-// slab is split across several predecessors (hops), each shipping the tail of its own slab into a
-// disjoint, oldest-first block of the same compact buffer.
+// Each Q segment needs its cyclic predecessor tail in its own halo slot; rotated Q can need two. A halo
+// wider than one Q slab is split across several predecessors (hops), each shipping the tail of its own
+// slab into a disjoint, oldest-first block of the slot.
 struct ChunkedSlidingHaloLayout {
     uint32_t q_local_tile_rows = 0;
     uint32_t halo_tile_rows = 0;
@@ -22,6 +22,8 @@ struct ChunkedSlidingHaloLayout {
     // Circular sliding KV cache slab count; 0 = unbounded (see sliding_window_work_plan.hpp).
     uint32_t circular_kv_slab_count = 0;
     uint32_t q_start_tile = 0;
+    // halo_tile_rows-sized slots in the compact buffer; block-cyclic Q that wraps a slab needs two.
+    uint32_t halo_slot_count = 1;
 
     bool uses_neighbor_halo() const;
     // What `source_device` sends to the receiver `hop` positions ahead (1 = the immediate neighbour).
@@ -30,9 +32,9 @@ struct ChunkedSlidingHaloLayout {
     // slab, which is a local cache read, so that hop is excluded.
     uint32_t remote_hop_count() const;
     // Rows shipped by hop `hop` (1-based), and the first compact-buffer row that `source_device`'s
-    // payload lands in on the receiver `hop` positions ahead.
+    // payload lands in on the receiver `hop` positions ahead, in halo slot `slot`.
     uint32_t hop_rows(uint32_t hop) const;
-    uint32_t dest_row(uint32_t source_device, uint32_t hop) const;
+    uint32_t dest_row(uint32_t source_device, uint32_t hop, uint32_t slot = 0) const;
     // Every hop carries a whole slab into a source-keyed block, so a multicast can serve several
     // receivers (see chunked_sliding_halo_source_keyed).
     bool source_keyed() const;
@@ -51,9 +53,9 @@ struct ChunkedSlidingHaloExchange {
     uint32_t distance = 1;
 };
 
-// The exchanges `source_device` sends, in kernel order. Multicast (allowed and source-keyed layout): at
-// most two, forward to the receivers ahead of the source and backward to those that wrap past its end,
-// on a ring too, where that crosses fewer links than forwarding round the wrap. Otherwise unicast: one
+// The exchanges `source_device` sends, in kernel order. Multicast (allowed, source-keyed layout, one halo
+// slot): at most two, forward to the receivers ahead of the source and backward to those that wrap past its
+// end, on a ring too, where that crosses fewer links than forwarding round the wrap. Otherwise unicast: one
 // per remote hop; on a linear topology a hop whose receiver wraps the ring travels backward.
 std::vector<ChunkedSlidingHaloExchange> plan_chunked_sliding_halo_exchanges(
     const ChunkedSlidingHaloLayout& layout, uint32_t source_device, bool linear_topology, bool allow_multicast);
@@ -65,6 +67,7 @@ ChunkedSlidingHaloLayout build_chunked_sliding_halo_layout(
     uint32_t tile_height,
     uint32_t ring_size,
     uint32_t logical_k_tile_rows,
+    uint32_t halo_buffer_tile_rows,
     uint32_t circular_kv_slab_count = 0,
     std::optional<uint32_t> q_start_tile = std::nullopt);
 

@@ -21,7 +21,8 @@
 #include "internal/tt-2xx/quasar/overlay/llk_intf_api.hpp"
 #include "internal/tt-2xx/quasar/overlay/rocc_instructions.hpp"
 
-FORCE_INLINE void dfb_finish_single_implicit_read_producer(DataflowBuffer& dfb) {
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+FORCE_INLINE void dfb_finish_single_implicit_read_producer(DataflowBuffer<Pap, Cap>& dfb) {
     LocalDFBInterface& iface = get_local_dfb_interface(dfb.get_id());
 
     // State after exactly one commit_implicit_read() from a fresh DataflowBuffer.
@@ -45,8 +46,9 @@ FORCE_INLINE void dfb_finish_single_implicit_read_producer(DataflowBuffer& dfb) 
     };
 
     while (read_actual_slot0() < expected_slot0) {
-        const uint64_t tack  = CMDBUF_TR_ACK_TRID(OVERLAY_RD_CMD_BUF, tail_txn_id);
-        const uint64_t tiles = CMDBUF_READ_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, tail_txn_id);
+        const uint64_t tack = __builtin_riscv_ttrocc_cmdbuf_tr_ack_trid(OVERLAY_RD_CMD_BUF, tail_txn_id);
+        const uint64_t tiles =
+            __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_tr_ack_tr_id(OVERLAY_RD_CMD_BUF, tail_txn_id);
         if (tack == 0 && tiles > 0) {
             break;
         }
@@ -57,7 +59,8 @@ FORCE_INLINE void dfb_finish_single_implicit_read_producer(DataflowBuffer& dfb) 
     } else {
         const uint16_t global_threshold = iface.threshold;
         while (read_actual_slot0() < expected_slot0) {
-            const uint64_t tiles = CMDBUF_READ_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, tail_txn_id);
+            const uint64_t tiles =
+                __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_tr_ack_tr_id(OVERLAY_RD_CMD_BUF, tail_txn_id);
             if (tiles > 0 && tiles < global_threshold) {
                 break;
             }

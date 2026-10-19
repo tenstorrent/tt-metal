@@ -41,7 +41,7 @@ void py_module_types(nb::module_& mod) {
                uint32_t max_socket_page_size_bytes,
                std::unique_ptr<ttnn::distributed::TensorToMesh> mapper,
                std::optional<tt::tt_metal::distributed::MeshComposerConfig> composer_config,
-               std::optional<CoreRange> worker_cores,
+               std::optional<tt::tt_metal::CoreRange> worker_cores,
                std::optional<tt::tt_metal::CoreCoord> metadata_master_core,
                uint32_t metadata_size_bytes,
                bool parallel_host_read,

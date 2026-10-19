@@ -35,7 +35,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_out0 = 0;  // same as cb_id_in0
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
-    const DataFormat data_format = get_dataformat(cb_id_out0);
     const auto sq = TensorAccessor(q_args, q_tensor_addr);
     const auto sk = TensorAccessor(k_args, k_tensor_addr);
     const auto sv = TensorAccessor(v_args, v_tensor_addr);

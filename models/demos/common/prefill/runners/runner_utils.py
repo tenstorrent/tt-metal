@@ -17,7 +17,7 @@ def _create_fabric_router_config(max_payload_size):
 
 
 def open_mesh_device(
-    mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0, trace_region_size: int = 0
+    mesh_shape: tuple, max_payload_size: int, l1_small_size: int = 0, trace_region_size: int = 0
 ) -> ttnn.MeshDevice:
     sp = mesh_shape[0]
     fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
@@ -39,7 +39,7 @@ def open_mesh_device(
     logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
 
     fabric_router_config = _create_fabric_router_config(
-        max_payload_size=model_cfg.FABRIC_PAYLOAD_SIZE,
+        max_payload_size=max_payload_size,
     )
 
     ttnn.set_fabric_config(
@@ -162,6 +162,17 @@ def resolve_trace_dir(path) -> Path:
     if len(subs) != 1:
         raise FileNotFoundError(f"no metadata.json in {path} or a unique subdir (found {len(subs)} candidates)")
     return subs[0]
+
+
+def load_trace_golden_span(trace_dir) -> tuple:
+    import json
+
+    with open(Path(trace_dir) / "metadata.json") as f:
+        md = json.load(f)
+    rows = md.get("capture_rows")
+    if rows is not None:
+        return int(rows[0]), int(rows[1])
+    return 0, int(md.get("n_prompt_tokens") or len(md["token_ids"]))
 
 
 def load_trace_token_ids(trace_dir, total_len=None) -> list:
