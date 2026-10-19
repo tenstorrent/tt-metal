@@ -424,6 +424,25 @@ inline __attribute__((always_inline)) void init_rd_cmd_buf(uint64_t my_xy) {
         NOC_OVERLAY_MAX_BYTES_IN_PACKET);
 }
 
+// Kernels that use DFB implicit sync tag their NOC traffic with a DFB transaction id, and the id stays in this core's
+// command buffers after the kernel returns. Firmware calls this right before every kernel starts, so a kernel's
+// untagged traffic is never counted against a DFB trid whose interrupt state is still armed from an earlier program,
+// even if that program's kernel did not run to completion (tt-metal#59923).
+inline __attribute__((always_inline)) void reset_cmd_buf_trids() {
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_WR_SENT_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_WR_SENT_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
+}
+
 inline __attribute__((always_inline)) void init_at_cmd_buf(uint64_t my_xy, uint32_t atomic_ret_val) {
     __builtin_riscv_ttrocc_scmdbuf_reset();
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
