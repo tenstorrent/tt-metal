@@ -31,6 +31,7 @@ from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor, Tracer, traced_function
 from ...utils.video import YuvVideoExport, export_video_audio, export_video_audio_yuv
+from ...utils.watchdog import run_with_stall_watchdog
 from .pipeline_ltx import (
     SPATIAL_COMPRESSION,
     TEMPORAL_COMPRESSION,
@@ -401,6 +402,7 @@ class LTXDistilledPipeline(LTXPipeline):
         capture_all: bool = False,
         in_capture_pass: bool = False,
         capture_traced: bool = False,
+        warmup_capture: bool | None = None,
     ) -> None:
         """Compile both stages' programs. Both stages use variant 0 (distilled doesn't
         swap weights — only the sequence length differs); ``stages=("s1",)`` skips s2.
@@ -419,7 +421,14 @@ class LTXDistilledPipeline(LTXPipeline):
         skipped). The audio vocoder captures its trace with prep_run=False and lazily initializes device
         statics on first dispatch; a dispatch-skipped capture-only run would leave it half-initialized
         and crash the real run. So skip audio decode here — the real warmup initializes and captures it
-        cleanly, its small kernel set compiling in-window."""
+        cleanly, its small kernel set compiling in-window.
+
+        ``warmup_capture`` (default: env ``LTX_WARMUP_CAPTURE``, on) captures the warmed DiT trace
+        families and the Gemma encode trace as the last step of warmup, so gen#0 replays instead of
+        capturing (~26-31 s DiT + 2-3 s Gemma on the 4x8). A worker that warms in several calls (IC-LoRA:
+        base family, then the s*_ref family) passes ``warmup_capture=False`` to all but the last call:
+        trace io allocated after a capture lands in its activation region. The families of the deferred
+        calls stay pending and the last call captures them all."""
         assert height % 64 == 0 and width % 64 == 0, f"H/W must be div by 64 (got {height}x{width})"
         assert num_frames > 0, f"num_frames must be > 0 (got {num_frames})"
         valid = {"s1", "s2", "s1_ref", "s2_ref"}
@@ -757,7 +766,13 @@ class LTXDistilledPipeline(LTXPipeline):
                 logger.info("LTX_ITER_FAST=1: skipping warmup audio decode (gen#0 decodes eagerly)")
             else:
                 logger.info("warmup audio decode (on-device, eager)")
-                self._warmup_audio_decode(torch.zeros(1, als.frames, self.in_channels), num_frames)
+                # Bounded: a stall with no kernel-build progress ends the worker for a restart instead of
+                # holding it forever (exabox job 137104); a raised fault is retried once in-process.
+                run_with_stall_watchdog(
+                    lambda: self._warmup_audio_decode(torch.zeros(1, als.frames, self.in_channels), num_frames),
+                    name="warmup audio decode",
+                    stall_s=float(os.environ.get("LTX_AUDIO_WARMUP_STALL_S", "600")),
+                )
                 if self._traced:
                     logger.info("warmup audio decode (capture pass)")
                     self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=self.fps)
@@ -809,7 +824,158 @@ class LTXDistilledPipeline(LTXPipeline):
         if self._traced and not self.dynamic_load and os.environ.get("LTX_VIDEO_ONLY", "0") in ("1", "true", "True"):
             self._prepare_vae()
 
+        # Last, after every eager warmup and held allocation: the same order gen#0 captured in.
+        if (
+            self._traced
+            and not self.dynamic_load
+            and not iter_fast
+            and not skip_dit_warmup
+            and not in_capture_pass
+            and not capture_traced
+            and not _env_on("LTX_ITER_FAST")
+        ):
+            self._warmup_capture_pending = getattr(self, "_warmup_capture_pending", []) + [
+                dict(
+                    num_frames=num_frames,
+                    height=height,
+                    width=width,
+                    stages=tuple(stages),
+                    ref_num_frames=ref_num_frames,
+                    kf_anchors=kf_anchors,
+                    i2v_families=i2v_families,
+                )
+            ]
+            if _env_on("LTX_WARMUP_CAPTURE", "1") if warmup_capture is None else warmup_capture:
+                self._capture_warmup_traces()
+            else:
+                logger.info("warmup trace capture deferred to a later warmup_buffers call")
+
         logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
+
+    def _capture_warmup_traces(self) -> None:
+        """Capture every pending DiT trace family the way generate() would on gen#0, then the Gemma
+        encode trace (generate()'s last step on gen#0). The dummy inputs only fix shapes and code paths;
+        each real gen copies its own values into the baked buffers before replaying."""
+        pending, self._warmup_capture_pending = getattr(self, "_warmup_capture_pending", []), []
+        if not pending:
+            return
+        eager = {s.strip() for s in os.environ.get("LTX_GEN_EAGER_STAGES", "").split(",") if s.strip()}
+        t0 = time.time()
+        for w in pending:
+            stages = w["stages"]
+            families = [("s1", "s2", w["kf_anchors"], self._device_resident(None) and not w["kf_anchors"], False)]
+            if w["i2v_families"]:
+                families.append(("s1", "s2", [0], False, False))
+            if "s1_ref" in stages or "s2_ref" in stages:
+                families.append(("s1_ref", "s2_ref", None, False, True))
+            for key1, key2, anchors, resident, ref in families:
+                self._capture_warmup_family(
+                    w["num_frames"],
+                    w["height"],
+                    w["width"],
+                    s1_on=key1 in stages and "s1" not in eager,
+                    s2_on=key2 in stages and "s2" not in eager,
+                    keys=(key1, key2),
+                    anchors=anchors,
+                    resident=resident,
+                    ref_num_frames=w["ref_num_frames"] if ref else None,
+                )
+        t_dit = time.time() - t0
+        self.gemma_encoder_pair.open_trace_gate()
+        self.gemma_encoder_pair.capture_trace()
+        logger.info(
+            f"warmup trace capture: DiT {t_dit:.1f}s, Gemma {time.time() - t0 - t_dit:.1f}s "
+            f"({len(pending)} warmup call(s))"
+        )
+
+    def _capture_warmup_family(
+        self, num_frames, height, width, *, s1_on, s2_on, keys, anchors, resident, ref_num_frames
+    ) -> None:
+        """One trace family, mirroring generate()'s stage-1 / transition / stage-2 calls."""
+        s1_h, s1_w = height // 2, width // 2
+
+        def conds(h, w):
+            if not anchors:
+                return None
+            _, lh, lw = latent_grid(num_frames, h, w)
+            return [(a, torch.zeros(1, self.in_channels, 1, lh, lw), 1.0) for a in anchors]
+
+        def ref_dummy(h, w):
+            if ref_num_frames is None:
+                return None
+            _, lh, lw = latent_grid(num_frames, h, w)
+            return torch.zeros(1, self.in_channels, latent_grid(ref_num_frames, h, w)[0], lh, lw)
+
+        if self._device_prompt_handoff:
+            v_p = a_p = None
+            prompts = dict(device_prompts=True)
+        else:
+            v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
+            a_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.audio_dim)
+            prompts = {}
+        resident = resident and s1_on and s2_on
+        logger.info(
+            f"warmup trace capture {keys[0] if s1_on else '-'}/{keys[1] if s2_on else '-'}: "
+            f"{num_frames}f@{height}x{width}{' frame-0 pin' if anchors == [0] else ''}"
+            f"{' device-resident' if resident else ''}"
+        )
+        s1_audio = upsampled_dev = None
+        if s1_on:
+            s1_video, s1_audio = self._denoise_no_guidance(
+                v_p,
+                a_p,
+                num_frames=num_frames,
+                height=s1_h,
+                width=s1_w,
+                sigma_values=DISTILLED_SIGMA_VALUES,
+                seed=0,
+                image_conds=conds(s1_h, s1_w),
+                ref_latent=ref_dummy(s1_h, s1_w),
+                traced=True,
+                trace_key=keys[0],
+                return_device_video=resident,
+                **prompts,
+            )
+            if resident:
+                self._ensure_upsampler_frames(num_frames)
+                self._prepare_upsampler()
+                upsampled_dev = self._run_stage_transition(
+                    s1_video,
+                    num_frames=num_frames,
+                    s1_height=s1_h,
+                    s1_width=s1_w,
+                    height=height,
+                    width=width,
+                    seed=0,
+                    traced=True,
+                )
+        if s2_on:
+            latent_frames, lh, lw = latent_grid(num_frames, height, width)
+            if s1_audio is None:
+                als = AudioLatentShape.from_video_pixel_shape(
+                    VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=self.fps)
+                )
+                s1_audio = torch.zeros(1, als.frames, self.in_channels)
+            self._denoise_no_guidance(
+                v_p,
+                a_p,
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                sigma_values=STAGE_2_DISTILLED_SIGMA_VALUES,
+                seed=0,
+                initial_video_latent=(
+                    None if upsampled_dev is not None else torch.zeros(1, latent_frames * lh * lw, self.in_channels)
+                ),
+                initial_video_latent_device=upsampled_dev,
+                initial_audio_latent=s1_audio.unsqueeze(0) if s1_audio.dim() == 2 else s1_audio,
+                reuse_prompt=s1_on and os.environ.get("LTX_S2_PROMPT_REUSE", "1") == "1",
+                image_conds=conds(height, width),
+                ref_latent=ref_dummy(height, width),
+                traced=True,
+                trace_key=keys[1],
+                **prompts,
+            )
 
     def _prepare_stage_statics(
         self,

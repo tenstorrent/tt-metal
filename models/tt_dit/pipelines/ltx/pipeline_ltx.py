@@ -512,6 +512,7 @@ class LTXPipeline:
         if self.vae_decoder is not None:
             self.vae_decoder.release_trace()
         self._trace_state.clear()
+        self._warmup_capture_pending = []
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
 
