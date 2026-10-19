@@ -260,6 +260,30 @@ def save_figure(fig, out_path: Path, dpi: int) -> None:
     plt.close(fig)
 
 
+def legacy_mode() -> bool:
+    """LONG_MATMUL_MODE=legacy: reproduce how the published results were measured and analysed."""
+    return os.environ.get("LONG_MATMUL_MODE") == "legacy"
+
+
+def whole_run_value(row: Mapping[str, str], column: str, legacy: bool) -> float:
+    """A charge or energy column of program_intervals.csv, for the whole run.
+
+    Those columns cover the trimmed telemetry window (window_s), while a FLOP count covers the
+    whole run (algo_time_s_reported). Updated mode scales the value up to the whole run so
+    pJ/FLOP is not biased low by the trim; legacy mode uses the window value, as the published
+    analysis did. Returns NaN if anything needed is missing or not finite.
+    """
+    try:
+        value = float(row[column])
+        if legacy:
+            return value
+        window_s = float(row["window_s"])
+        run_s = float(row["algo_time_s_reported"])
+    except (KeyError, ValueError):
+        return float("nan")
+    return value * run_s / window_s if window_s > 0 else float("nan")
+
+
 def environ_with(overrides: Mapping[str, str]) -> Dict[str, str]:
     env = dict(os.environ)
     env.update(overrides)

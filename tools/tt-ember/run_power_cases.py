@@ -49,7 +49,6 @@ from __future__ import annotations
 import argparse
 import csv
 import math
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -73,10 +72,12 @@ from common import (
     reset_hardware,
     run_settings,
     check_long_matmul_device,
+    legacy_mode,
     misplaced_options,
     run_status,
     save_figure,
     shell_join,
+    whole_run_value,
 )
 from compare_cases import build_grid_order, grouped_bar_chart
 
@@ -198,7 +199,7 @@ ENGINE_ABLATIONS: List[Tuple[str, str, str]] = [
 PJ_PER_J = 1e12
 
 # LONG_MATMUL_MODE, the same switch long_matmul and parser.py read (see long_matmul's README).
-LEGACY_MODE = os.environ.get("LONG_MATMUL_MODE") == "legacy"
+LEGACY_MODE = legacy_mode()
 
 
 @dataclass
@@ -240,25 +241,6 @@ class Runs:
             return {row["grid"]: row for row in csv.DictReader(f)}
 
 
-def _whole_run_value(row: Dict[str, str], column: str) -> float:
-    """A charge or energy column of program_intervals.csv, for the whole run.
-
-    Those columns cover the trimmed telemetry window (window_s), while the FLOP count covers the
-    whole run (algo_time_s_reported). Updated mode scales the value up to the whole run so
-    pJ/FLOP is not biased low by the trim; legacy mode uses the window value, as the published
-    analysis did. Returns NaN if anything needed is missing or not finite.
-    """
-    try:
-        value = float(row[column])
-        if LEGACY_MODE:
-            return value
-        window_s = float(row["window_s"])
-        run_s = float(row["algo_time_s_reported"])
-    except (KeyError, ValueError):
-        return float("nan")
-    return value * run_s / window_s if window_s > 0 else float("nan")
-
-
 def compute_energy_by_engine(runs: Runs, op: str) -> Optional[Dict[str, Dict[str, float]]]:
     """Dynamic energy [J] per engine (reader/writer/compute) for one op's case sweep, per grid:
     (all-active dynamic avg charge - idle-case dynamic avg charge) x V_core. Returns None if the
@@ -283,8 +265,8 @@ def compute_energy_by_engine(runs: Runs, op: str) -> Optional[Dict[str, Dict[str
                 vcore = float(active_row["avg_vcore_v"])
             except (KeyError, ValueError):
                 vcore = float("nan")
-            active_as = _whole_run_value(active_row, "dynamic_charge_avg_as")
-            idle_as = _whole_run_value(idle[grid], "dynamic_charge_avg_as")
+            active_as = whole_run_value(active_row, "dynamic_charge_avg_as", LEGACY_MODE)
+            idle_as = whole_run_value(idle[grid], "dynamic_charge_avg_as", LEGACY_MODE)
             energy_j = (active_as - idle_as) * vcore
             if not math.isfinite(energy_j):
                 print(f"{note_prefix} note: {engine} at {grid} has no finite value, skipping", flush=True)
@@ -346,7 +328,7 @@ def compute_energy_per_flop_per_core(
             continue
         per_grid: Dict[str, float] = {}
         for grid, row in rows.items():
-            energy_j = _whole_run_value(row, "energy_j_vi")
+            energy_j = whole_run_value(row, "energy_j_vi", LEGACY_MODE)
             try:
                 cores = float(row["cores"])
             except (KeyError, ValueError):
@@ -563,7 +545,7 @@ def compute_total_energy_per_flop_by_op(
             continue
         per_grid: Dict[str, float] = {}
         for grid, row in rows.items():
-            energy_j = _whole_run_value(row, "energy_j_vi")
+            energy_j = whole_run_value(row, "energy_j_vi", LEGACY_MODE)
             if not math.isfinite(energy_j):
                 continue
             per_grid[grid] = energy_j / flops * PJ_PER_J
