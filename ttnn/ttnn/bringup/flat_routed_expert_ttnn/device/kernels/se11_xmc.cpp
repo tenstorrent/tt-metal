@@ -263,10 +263,6 @@ void kernel_main() {
             } else {
                 while (!ncrisc_noc_nonposted_writes_sent(noc_index)) {
                 }
-#ifdef XMC_POSTED
-                while (!ncrisc_noc_posted_writes_sent(noc_index)) {
-                }
-#endif
             }
             *word = sent + n;
             // One linked chain per rectangle (a linked chain must keep one destination set; its last piece is
@@ -294,36 +290,13 @@ void kernel_main() {
                         }
                         continue;
 #endif
-#ifdef XMC_UNLINKED  // (MIMO_FL_XMC_UNLINKED: no linked chains - an open chain holds the NoC path, so other traffic
-                     // from this core on the same NoC, e.g. x reads with MIMO_FL_XRD_NOC=0, could deadlock with it)
-                        const bool last = true;
-#else
                         const bool last = k + 1 == n && m + 1 == m1;  // the chain ends before the next rectangle's
-#endif
-#ifdef XMC_POSTED  // (probe MIMO_FL_XMC_POSTED: posted multicasts - no per-destination acks back to this core)
-                        static_assert(noc_mode != DM_DYNAMIC_NOC, "XMC_POSTED: dedicated NoC mode");
-                        while (!noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
-                        }
-                        ncrisc_noc_fast_write_any_len<noc_mode>(
-                            noc_index,
-                            write_cmd_buf,
-                            src + (m * SE_SBT + (i + k) * kblk) * tb,
-                            rects[q] | (dst + m * piece),
-                            piece,
-                            NOC_MULTICAST_WRITE_VC,
-                            true,
-                            !last,
-                            ndest[q],
-                            true,
-                            true);
-#else
                         noc_async_write_multicast(
                             src + (m * SE_SBT + (i + k) * kblk) * tb,
                             rects[q] | (dst + m * piece),
                             piece,
                             ndest[q],
                             !last);
-#endif
                     }
                 }
 #ifdef XMC_CHAIN  // the heads' arrival counts move once this batch is acknowledged (chain_retire, in batch order)
@@ -332,30 +305,11 @@ void kernel_main() {
                 chain_retire(XMC_CHAIN_DEPTH);
                 continue;
 #endif
-#ifdef XMC_POSTED  // (the count follows the data on the same route and VC, posted as well)
-                ncrisc_noc_fast_write_any_len<noc_mode>(
-                    noc_index,
-                    write_reg_cmd_buf,
-                    reinterpret_cast<uint32_t>(word),
-                    rects[q] | xarr_addr,
-                    4,
-                    NOC_MULTICAST_WRITE_VC,
-                    true,
-                    false,
-                    ndest[q],
-                    true,
-                    true);
-#else
                 noc_semaphore_set_multicast(reinterpret_cast<uint32_t>(word), rects[q] | xarr_addr, ndest[q]);
-#endif
             }
             sent += n;
             i += n;
             noc_async_writes_flushed();
-#ifdef XMC_POSTED  // (the source slots are reused: the posted pieces must have left too)
-            while (!ncrisc_noc_posted_writes_sent(noc_index)) {
-            }
-#endif
         }
 #ifdef XMC_FWD
         if (own) {  // forward it to the other primary (its slot ob % fw_slots, once freed there)

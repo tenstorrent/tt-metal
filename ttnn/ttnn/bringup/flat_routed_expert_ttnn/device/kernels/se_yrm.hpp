@@ -28,13 +28,8 @@ struct SeYRmWriter {
 #else
     static constexpr uint8_t yvc = 2;
 #endif
-    // The y writes' NoC (SE_YRM_NOC; default this RISC's): e.g. NOC1 from the NOC0 down-weight reader (dynamic-NoC
-    // mode, MIMO_FL_Y_NOC1) - the y writes off the x multicast's NoC (flat expert NOC0 wedge, TS_HANG_WORKLOG.md)
-#ifdef SE_YRM_NOC
-    static constexpr uint8_t ynoc = SE_YRM_NOC;
-#else
+    // the y writes' NoC: this RISC's
     static constexpr uint8_t ynoc = noc_index;
-#endif
     static_assert(rows >= 1 && trid0 + rows <= 16);
     InterleavedAddrGen<true> yg;
     uint32_t col_off;

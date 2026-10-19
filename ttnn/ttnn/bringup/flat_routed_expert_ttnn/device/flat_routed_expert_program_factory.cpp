@@ -219,7 +219,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         TT_FATAL(
             !x_once && !x_two && !p.xfwd && p.nh >= 1,
             "flat x chains: one primary per rectangle (no x_once / X2 / XFWD)");
-        bool rv_noc1 = !(p.drisc && cstr(pr.drisc_xnoc) && std::atoi(cstr(pr.drisc_xnoc)));
+        bool rv_noc1 = true;
         if (lo.x_fwd_noc >= 0 || x_fwd_nc) {  // (the forwarding NoC: no multicast now)
             rv_noc1 = xo.noc1;
         }
@@ -715,16 +715,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     // DRISC mode (flat_drisc.hpp): the DRAM cores' persistent senders read and forward the gate/up weights; the
     // readers only post each call's job (se_drisc_go.cpp)
     const uint32_t drisc_base = p.drisc ? flat_drisc_base() : 0;
-    // perf probe MIMO_FL_DRISC_XNOC=1 (DRISC mode): the x relays' multicast on NOC1 (x reads on NOC0) and the gate/up
-    // receivers on NOC0, off the DRISCs' NOC0 weight writes. Much slower (M 512 78 -> 122 us / expert: the relays sit
-    // for NOC0 multicast)
-    const char* xnoc_env = cstr(pr.drisc_xnoc);
-    const bool xswap = p.drisc && xnoc_env != nullptr && std::atoi(xnoc_env) != 0;
-    // MIMO_FL_XMC_NOC1=1: only the x relays move (multicast + helper sends on NOC1, x reads on NOC0); the gate/up
-    // receivers stay on NOC1 - the multicast off the NoC the DRISC alt tiles' weight writes must use (NOC0: their NOC1
-    // NIU is the bank's NOC2AXI endpoint), whose mix with a third NOC0 class wedges NOC0 (TS_HANG_WORKLOG.md)
-    const bool xmc1 = xswap || (cstr(pr.xmc_noc1) && std::atoi(cstr(pr.xmc_noc1)) != 0);
-    const NOC x_rd_noc = xmc1 ? NOC::NOC_0 : NOC::NOC_1, x_mc_noc = xmc1 ? NOC::NOC_1 : NOC::NOC_0;
+    // x reads on NOC1, the relays' multicast (x path 0) on NOC0
+    const NOC x_rd_noc = NOC::NOC_1, x_mc_noc = NOC::NOC_0;
     // (probe MIMO_FL_XRD_DYN=1: the relays' kernels in dynamic-NoC mode - per-RISC command buffers and counters - so
     // their x reads and multicasts may share a NoC, e.g. MIMO_FL_XRD_NOC=0)
     const NOC_MODE x_mode = cstr(pr.xrd_dyn) ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC;
@@ -905,12 +897,6 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         Defines xrd_def = with(dyn_def, {{"SE_SBT", sbt}, {"XHELP_SMALL", "1"}});
         if (indexed) {
             xrd_def["XRD_INDEXED"] = "1";
-            // (probe MIMO_FL_XIDX_ALL=1: the whole call's token index read once into the relay's arena instead of one
-            // small read + barrier per sub-block; no gain measured: K3 E1 / E12 / E56 within 0.1%)
-            const char* xa = cstr(pr.xidx_all);
-            if (xa != nullptr && std::atoi(xa) != 0) {
-                xrd_def["XRD_IDX_ALL"] = "1";
-            }
         }
         // perf probes (read at program build; not in the program hash, so a process uses one setting):
         // MIMO_FL_XRD_SKIP=n: the relays read no x rows from DRAM (garbage tiles), MIMO_FL_XRD_BATCH: chunks per read
@@ -1003,12 +989,6 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         if (cstr(pr.xmc_nodata)) {
             xmc_def["XMC_NODATA"] = "1";
         }
-        if (cstr(pr.xmc_posted)) {  // (probe: posted x multicasts - no per-destination acks)
-            xmc_def["XMC_POSTED"] = "1";
-        }
-        if (cstr(pr.xmc_unlinked)) {  // (probe: the x multicasts without linked chains)
-            xmc_def["XMC_UNLINKED"] = "1";
-        }
         if (x_chain) {  // (no multicast: unicast into the chain head(s))
             xmc_def["XMC_CHAIN"] = "1";
             if (x_chain_mode >= 2) {
@@ -1083,7 +1063,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             }
             if (indexed) {
                 xr.a(AddrSrc::TokenIndex);
-                xr.a(AddrSrc::Arena, p.ti_off);  // (XRD_IDX_ALL: the call's token index, read once)
+                xr.a(AddrSrc::Arena, p.ti_off);  // (unused since the XRD_IDX_ALL probe went: the args keep their order)
             }
             if (xhelp_all) {  // helper j: super-blocks g % NH == j; the primary none (its kernel idles off small M)
                 xr = Args{};
@@ -1099,8 +1079,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 Args xm;
                 const uint32_t hxy = x_chain ? pk(p.gu[x_head[k]]) : 0;  // (x chains: the chain head)
                 xm.a(AddrSrc::Arena, p.x_off)
-                    .lit(x_chain ? hxy : pk(xmc1 ? CoreCoord(x1, y1) : CoreCoord(x0, y0)))  // (NOC1: the far corner)
-                    .lit(x_chain ? hxy : pk(xmc1 ? CoreCoord(x0, y0) : CoreCoord(x1, y1)))
+                    .lit(x_chain ? hxy : pk(CoreCoord(x0, y0)))
+                    .lit(x_chain ? hxy : pk(CoreCoord(x1, y1)))
                     .lit(
                         x_chain_mode >= 2 ? static_cast<uint32_t>(x_heads[k].size())
                                           : (x_chain ? 1u : (x1 - x0 + 1) * (y1 - y0 + 1)))
@@ -1117,9 +1097,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                          p.group_rect ? ((idx * MTG) | ((idx + 1) * MTG << 8)) : 0});
                 if (x_once || x_two) {  // the second rectangle this primary multicasts into (se11_xmc.cpp RT 11-13)
                     const auto [u0, u1, v0, v1] = p.rects[x_two ? 1 - k : 1];
-                    xm.lit((u1 - u0 + 1) * (v1 - v0 + 1))
-                        .lit(pk(xmc1 ? CoreCoord(u1, v1) : CoreCoord(u0, v0)))
-                        .lit(pk(xmc1 ? CoreCoord(u0, v0) : CoreCoord(u1, v1)));
+                    xm.lit((u1 - u0 + 1) * (v1 - v0 + 1)).lit(pk(CoreCoord(u0, v0))).lit(pk(CoreCoord(u1, v1)));
                 } else {
                     xm.lits({0, 0, 0});
                 }
@@ -1212,7 +1190,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             "flat layout x_pieces {}: pieces of a {} B x block must be 16 B aligned",
             x_pieces,
             x_bytes);
-        NOC recv_noc = xswap ? NOC::NOC_0 : NOC::NOC_1;
+        NOC recv_noc = NOC::NOC_1;
         if (x_chain && lo.x_fwd_noc >= 0) {  // (x chains: the forwarding NoC is free)
             recv_noc = xo.noc1 ? NOC::NOC_1 : NOC::NOC_0;
         }
@@ -1346,15 +1324,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // carries the larger down weight stream, H 7168 / 6144 bf16 x + h at M 2048 +7 / +6%
         const char* ync_env = cstr(pr.y_nc);
         const bool y_nc = yrm && p.nsg == 1 && (ync_env ? std::atoi(ync_env) != 0 : !p.rdown);
-        // MIMO_FL_Y_NOC1=1 (with the NCRISC's y writes): those writes on the other NoC than its down-weight reads -
-        // the y traffic off the x relays' multicast NoC (NOC0), whose mix with the DRISC NOC0 weight writes and the
-        // multicast wedges NOC0 (TS_HANG_WORKLOG.md); both down kernels in dynamic-NoC mode (per-RISC command buffers)
-        const bool y_other = y_nc && cstr(pr.y_noc1) && std::atoi(cstr(pr.y_noc1)) != 0;
-        const NOC_MODE dn_mode = y_other ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC;
+        const NOC_MODE dn_mode = NOC_MODE::DM_DEDICATED_NOC;
         Defines ync = y_nc ? Defines{{"SE_Y_NC", "1"}} : Defines{};
-        if (y_other) {
-            ync["SE_YRM_NOC"] = dn_noc0 ? "0" : "1";
-        }
         auto plus = [](Defines a, const Defines& b) {
             a.insert(b.begin(), b.end());
             return a;

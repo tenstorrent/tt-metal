@@ -77,7 +77,6 @@ FlatProbes FlatProbes::from_env() {
     p.drisc_stream_split = read("MIMO_FL_DRISC_STREAM_SPLIT");
     p.drisc_tiles = read("MIMO_FL_DRISC_TILES");
     p.drisc_ub = read("MIMO_FL_DRISC_UB");
-    p.drisc_xnoc = read("MIMO_FL_DRISC_XNOC");
     p.dump_rt = read("MIMO_FL_DUMP_RT");
     p.dw_rot = read("MIMO_FL_DW_ROT");
     p.dyn_pull = read("MIMO_FL_DYN_PULL");
@@ -106,8 +105,6 @@ FlatProbes FlatProbes::from_env() {
     p.rdn_hi = read("MIMO_FL_RDN_HI");
     p.rdown = read("MIMO_FL_RDOWN");
     p.rd_samecol = read("MIMO_FL_RD_SAMECOL");
-    p.relay_help = read("MIMO_FL_RELAY_HELP");
-    p.relay_prim = read("MIMO_FL_RELAY_PRIM");
     p.rm_chunks = read("MIMO_FL_RM_CHUNKS");
     p.sb_slots = read("MIMO_FL_SB_SLOTS");
     p.se_dbg = read("MIMO_FL_SE_DBG");
@@ -122,11 +119,7 @@ FlatProbes FlatProbes::from_env() {
     p.xfwd = read("MIMO_FL_XFWD");
     p.xhelp_all = read("MIMO_FL_XHELP_ALL");
     p.xhelp_noc0 = read("MIMO_FL_XHELP_NOC0");
-    p.xidx_all = read("MIMO_FL_XIDX_ALL");
-    p.xmc_noc1 = read("MIMO_FL_XMC_NOC1");
     p.xmc_nodata = read("MIMO_FL_XMC_NODATA");
-    p.xmc_posted = read("MIMO_FL_XMC_POSTED");
-    p.xmc_unlinked = read("MIMO_FL_XMC_UNLINKED");
     p.xprim_only = read("MIMO_FL_XPRIM_ONLY");
     p.xrd_batch = read("MIMO_FL_XRD_BATCH");
     p.xrd_big = read("MIMO_FL_XRD_BIG");
@@ -145,7 +138,6 @@ FlatProbes FlatProbes::from_env() {
     p.yrm_self = read("MIMO_FL_YRM_SELF");
     p.yrm_vc = read("MIMO_FL_YRM_VC");
     p.y_nc = read("MIMO_FL_Y_NC");
-    p.y_noc1 = read("MIMO_FL_Y_NOC1");
     p.zones = read("MIMO_FL_ZONES");
     return p;
 }

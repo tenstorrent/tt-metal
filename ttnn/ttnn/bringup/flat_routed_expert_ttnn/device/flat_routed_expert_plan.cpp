@@ -19,29 +19,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt_stl/assert.hpp>
 
-namespace {
-// "x,y;x,y" -> 4 values (the relay overrides); false on anything else
-bool parse_two_cells(const char* s, uint32_t (&v)[4]) {
-    uint32_t n = 0;
-    const char* q = s;
-    while (*q) {
-        char* end = nullptr;
-        const unsigned long x = std::strtoul(q, &end, 10);
-        if (end == q || n == 4) {
-            return false;
-        }
-        v[n++] = static_cast<uint32_t>(x);
-        if (*end == ',' || *end == ';') {
-            ++end;
-        } else if (*end) {
-            return false;
-        }
-        q = end;
-    }
-    return n == 4;
-}
-}  // namespace
-
 namespace ttnn::operations::bringup::flat_routed_expert {
 
 namespace plan_detail {
@@ -764,44 +741,12 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         };
         const uint32_t rx_w = rd_samecol ? 0 : 1, rx_e = rd_samecol ? east : east + 1;
         p.relays = {first_free(rx_w, {4, 5, 3, 6, 2, 7}), first_free(rx_e, {3, 4, 2, 5, 1, 6})};
-        // MIMO_FL_RELAY_PRIM="x,y;x,y" (west, east): the two primary relays on these free cells instead - e.g. next to
-        // each rectangle's far corner, where a NOC1 multicast (MIMO_FL_XMC_NOC1) starts: GLM-Flash 12 x 10 "6,9;11,8"
-        if (const char* rp = cstr(pr.relay_prim)) {
-            uint32_t v[4] = {0, 0, 0, 0};
-            TT_FATAL(parse_two_cells(rp, v), "MIMO_FL_RELAY_PRIM: \"x,y;x,y\", got \"{}\"", rp);
-            TT_FATAL(v[0] != v[2] || v[1] != v[3], "MIMO_FL_RELAY_PRIM: the two primaries on one cell");
-            for (uint32_t k = 0; k < 2; ++k) {
-                TT_FATAL(
-                    v[2 * k] < grid.x && v[2 * k + 1] < grid.y && !taken.contains({v[2 * k], v[2 * k + 1]}),
-                    "MIMO_FL_RELAY_PRIM: cell {},{} is taken or off the grid",
-                    v[2 * k],
-                    v[2 * k + 1]);
-                p.relays[k] = Core(v[2 * k], v[2 * k + 1]);
-            }
-        }
         for (const auto& c : p.relays) {
             taken.insert({c.x, c.y});
-        }
-        // MIMO_FL_RELAY_HELP="x,y;x,y" (west, east; one helper each, layout.x_helpers 1): the helpers on these free
-        // cells - next to moved primaries (MIMO_FL_RELAY_PRIM), so their sends to the primary stay short on its NoC
-        uint32_t hv[4] = {0, 0, 0, 0}, hn = 0;
-        if (const char* hp = cstr(pr.relay_help)) {
-            TT_FATAL(parse_two_cells(hp, hv), "MIMO_FL_RELAY_HELP: \"x,y;x,y\", got \"{}\"", hp);
-            TT_FATAL(p.nh == 1, "MIMO_FL_RELAY_HELP: one helper per rectangle (layout.x_helpers 1)");
-            TT_FATAL(hv[0] != hv[2] || hv[1] != hv[3], "MIMO_FL_RELAY_HELP: the two helpers on one cell");
-            hn = 4;
         }
         for (uint32_t j = 0; j < p.nh; ++j) {  // helpers: relay NR + NR j + k is rectangle k's j-th helper
             Core a = first_free(rx_w, {5, 3, 6, 2, 7, 1, 8, 0, 9});
             Core b = first_free(rx_e, {4, 2, 5, 1, 6, 0, 7, 8, 9});
-            if (hn == 4) {
-                TT_FATAL(
-                    !taken.contains({hv[0], hv[1]}) && !taken.contains({hv[2], hv[3]}) && hv[0] < grid.x &&
-                        hv[2] < grid.x && hv[1] < grid.y && hv[3] < grid.y,
-                    "MIMO_FL_RELAY_HELP: a cell is taken or off the grid");
-                a = Core(hv[0], hv[1]);
-                b = Core(hv[2], hv[3]);
-            }
             p.relays.push_back(a);
             p.relays.push_back(b);
             taken.insert({a.x, a.y});
@@ -1206,9 +1151,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     p.xfwd = cstr(pr.xfwd) && std::atoi(cstr(pr.xfwd)) != 0 && p.nsg == 1 && p.rects.size() == 2 && !p.group_rect;
     p.fw_off = p.land_off + al(p.nh * p.land_slots * p.mt * p.sbt * p.x_tile);
     p.ti_off = p.fw_off + (p.xfwd ? al(p.fw_slots * p.mt * p.sbt * p.x_tile) : 0);
-    // (MIMO_FL_XIDX_ALL=1: room for the call's token index; no gain measured - K3 E1 / E12 / E56 within 0.1%)
-    const bool xidx_all = cstr(pr.xidx_all) && std::atoi(cstr(pr.xidx_all)) != 0;
-    const uint32_t relay_bytes = p.ti_off + (xidx_all ? al(4 * p.m) : 0);
+    const uint32_t relay_bytes = p.ti_off;
     TT_FATAL(relay_bytes <= L1_BANK, "flat_routed_expert: relay arena does not fit");
     p.arena_tiles = std::max({gu_bytes, dn_bytes, relay_bytes, p.rd_off}) / 2048;
     p.vstride = 1 + p.nh;

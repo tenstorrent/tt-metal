@@ -80,7 +80,6 @@ struct FlatProbes {
     std::optional<std::string> drisc_stream_split;  // MIMO_FL_DRISC_STREAM_SPLIT
     std::optional<std::string> drisc_tiles;         // MIMO_FL_DRISC_TILES
     std::optional<std::string> drisc_ub;            // MIMO_FL_DRISC_UB
-    std::optional<std::string> drisc_xnoc;          // MIMO_FL_DRISC_XNOC
     std::optional<std::string> dump_rt;             // MIMO_FL_DUMP_RT (debug output)
     std::optional<std::string> dw_rot;              // MIMO_FL_DW_ROT
     std::optional<std::string> dyn_pull;            // MIMO_FL_DYN_PULL
@@ -109,8 +108,6 @@ struct FlatProbes {
     std::optional<std::string> rdn_hi;              // MIMO_FL_RDN_HI
     std::optional<std::string> rdown;               // MIMO_FL_RDOWN
     std::optional<std::string> rd_samecol;          // MIMO_FL_RD_SAMECOL
-    std::optional<std::string> relay_help;          // MIMO_FL_RELAY_HELP
-    std::optional<std::string> relay_prim;          // MIMO_FL_RELAY_PRIM
     std::optional<std::string> rm_chunks;           // MIMO_FL_RM_CHUNKS
     std::optional<std::string> sb_slots;            // MIMO_FL_SB_SLOTS
     std::optional<std::string> se_dbg;              // MIMO_FL_SE_DBG (debug output)
@@ -125,11 +122,7 @@ struct FlatProbes {
     std::optional<std::string> xfwd;                // MIMO_FL_XFWD
     std::optional<std::string> xhelp_all;           // MIMO_FL_XHELP_ALL
     std::optional<std::string> xhelp_noc0;          // MIMO_FL_XHELP_NOC0
-    std::optional<std::string> xidx_all;            // MIMO_FL_XIDX_ALL
-    std::optional<std::string> xmc_noc1;            // MIMO_FL_XMC_NOC1
     std::optional<std::string> xmc_nodata;          // MIMO_FL_XMC_NODATA
-    std::optional<std::string> xmc_posted;          // MIMO_FL_XMC_POSTED
-    std::optional<std::string> xmc_unlinked;        // MIMO_FL_XMC_UNLINKED
     std::optional<std::string> xprim_only;          // MIMO_FL_XPRIM_ONLY
     std::optional<std::string> xrd_batch;           // MIMO_FL_XRD_BATCH
     std::optional<std::string> xrd_big;             // MIMO_FL_XRD_BIG
@@ -148,7 +141,6 @@ struct FlatProbes {
     std::optional<std::string> yrm_self;            // MIMO_FL_YRM_SELF
     std::optional<std::string> yrm_vc;              // MIMO_FL_YRM_VC
     std::optional<std::string> y_nc;                // MIMO_FL_Y_NC
-    std::optional<std::string> y_noc1;              // MIMO_FL_Y_NOC1
     std::optional<std::string> zones;               // MIMO_FL_ZONES (debug output)
     static FlatProbes from_env();
 };
