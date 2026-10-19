@@ -137,13 +137,15 @@ def print_l1_small_buffers(device, name):
 def adjust_shapes_for_testing(config, mesh_device, tile_align_width: bool = True):
     """Scale TP dimension for smaller meshes. sp_dim (per-device seq len) is always correct.
 
+    The TP extent is read along config.ccl_config["TP_AXIS"] (mesh axis 1 by default).
+
     `tile_align_width` rounds the model dim up so the per-device width (config.dim / n_tp_devices) is
     a multiple of 32. An L1-sharded gate input needs that -- a shard width must be whole tiles -- so
     it is the default, and it is a no-op for every model whose per-device width already is (only
     GPT-OSS is not: 2880 -> 720/device, 22.5 tiles). Pass False when the input is DRAM-interleaved,
     where TILE_LAYOUT padding covers the ragged width and the test can hold the deployed dim exactly.
     """
-    _, n_tp_devices = mesh_device.shape
+    n_tp_devices = mesh_device.shape[config.ccl_config.get("TP_AXIS", 1)]
     if n_tp_devices != 4:
         config.dim = config.dim // (4 // n_tp_devices)
     if tile_align_width:
@@ -154,7 +156,8 @@ def adjust_shapes_for_testing(config, mesh_device, tile_align_width: bool = True
 def get_input_mem_config(config, mesh_shape):
     shard_height = (config.sp_dim + config.num_cores - 1) // config.num_cores
     shard_height = ((shard_height + 31) // 32) * 32
-    shard_width = (config.dim + mesh_shape[1] - 1) // mesh_shape[1]
+    n_tp_devices = mesh_shape[config.ccl_config.get("TP_AXIS", 1)]
+    shard_width = (config.dim + n_tp_devices - 1) // n_tp_devices
     return ttnn.create_sharded_memory_config(
         shape=(shard_height, shard_width),
         core_grid=config.core_grid,
