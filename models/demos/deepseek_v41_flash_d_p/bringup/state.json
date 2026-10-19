@@ -7837,12 +7837,36 @@
    }
   ],
   "attempt": 1,
-  "reason": [
-   "apply P.6 or not? A/B table at /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/ab/P.6/table.md; the gate with the change on would PASS; then: python -m models.demos.common.bringup.orchestrator decide --task P.6 --accept|--reject --spec /localdev/dnijemcevic/tt-metal2/models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml, and resume"
+  "attempts": 0,
+  "duration_s": 860.0,
+  "history": [
+   {
+    "s": 860.0,
+    "status": "PASS",
+    "t": "2026-10-19T06:31:42"
+   }
   ],
+  "last_run": "2026-10-19T06:31:42",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/P.6.log",
+  "metrics": {
+   "device_ms_total": 618.16,
+   "host_transfers_per_layer": 0,
+   "pcc_layer_L00": 0.9996838304979632,
+   "pcc_layer_L01": 0.9994147731185893,
+   "pcc_layer_L02": 0.9984801365618869,
+   "pcc_layer_L03": 0.9965066629306931,
+   "pcc_layer_L14": 0.9976895892942444,
+   "pcc_layer_L20": 0.999690056432743,
+   "pcc_layer_L21": 0.998034361106267,
+   "pcc_layer_L24": 0.9997889322339085,
+   "pcc_state_min": 0.9977344902089783
+  },
+  "rc": 0,
+  "reason": [],
   "role": "perf",
-  "status": "TODO",
-  "waiting": "apply P.6 or not? A/B table at /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/ab/P.6/table.md; the gate with the change on would PASS; then: python -m models.demos.common.bringup.orchestrator decide --task P.6 --accept|--reject --spec /localdev/dnijemcevic/tt-metal2/models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml, and resume"
+  "started": "2026-10-19T06:17:22",
+  "status": "PASS",
+  "waiting": null
  },
  "P.7": {
   "ab": {
