@@ -176,7 +176,8 @@ class MuseGlimmerModel:
         tokens = tokens.reshape(-1)
         s_real = tokens.shape[0]
         assert 0 < s_real <= a.max_prefill_len, f"prompt length {s_real} > max_prefill_len {a.max_prefill_len}"
-        s = max(128, -(-s_real // 128) * 128)
+        # Multiple of the 256-row prefill SDPA Q chunk: a partial last Q chunk gives wrong sliding-window rows.
+        s = 128 if s_real <= 128 else -(-s_real // 256) * 256
         assert s <= a.max_seq_len, f"padded prefill length {s} exceeds max_seq_len {a.max_seq_len}"
         pad_id = a.pad_token_id if a.pad_token_id is not None else 0
         padded = torch.full((1, s), pad_id, dtype=torch.int64)

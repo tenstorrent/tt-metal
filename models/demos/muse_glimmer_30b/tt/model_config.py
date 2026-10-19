@@ -162,7 +162,7 @@ class MuseGlimmerModelArgs:
         assert self.num_attention_heads % self.tp == 0, "heads not divisible by tp"
         assert self.hidden_size % self.tp == 0, "hidden not divisible by tp"
         assert self.n_layers <= self.num_hidden_layers
-        assert self.max_seq_len % 128 == 0, f"max_seq_len must be a multiple of 128, got {self.max_seq_len}"
+        assert self.max_seq_len % 256 == 0, f"max_seq_len must be a multiple of 256, got {self.max_seq_len}"
         assert (
             self.max_seq_len <= self.max_position_embeddings
         ), f"max_seq_len {self.max_seq_len} exceeds max_position_embeddings {self.max_position_embeddings}"
@@ -232,7 +232,8 @@ class MuseGlimmerModelArgs:
 
     @property
     def sdpa_scale(self) -> float:
-        return self.qk_scale_factor / math.sqrt(self.head_dim)
+        # Exact float32: chunked SDPA binds scale as a no-convert float32 and rejects other doubles.
+        return float(torch.tensor(self.qk_scale_factor / math.sqrt(self.head_dim), dtype=torch.float32))
 
     @property
     def max_num_blocks_per_user(self) -> int:

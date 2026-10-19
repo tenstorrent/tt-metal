@@ -151,7 +151,7 @@ def test_muse_glimmer_isl(mesh_device, tp, isl):
     ckpt = checkpoint_dir()
     tokenizer = load_tokenizer(ckpt)
     prompt = _isl_prompt(tokenizer, isl)
-    max_seq_len = min(-(-(len(prompt) + _MAX_NEW_TOKENS) // 128) * 128, _MAX_CONTEXT)
+    max_seq_len = min(-(-(len(prompt) + _MAX_NEW_TOKENS) // 256) * 256, _MAX_CONTEXT)
     args = MuseGlimmerModelArgs.from_checkpoint(
         ckpt, mesh_device=sm, max_batch_size=1, max_seq_len=max_seq_len, max_prefill_len=max_seq_len
     )

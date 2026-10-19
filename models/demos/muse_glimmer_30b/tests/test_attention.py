@@ -27,7 +27,7 @@ mesh_fabric = mesh_test_params()
 
 def _setup(mesh_device, layer_idx):
     args = MuseGlimmerModelArgs.from_checkpoint(
-        mesh_device=mesh_device, num_layers=4, max_batch_size=4, max_seq_len=8192, max_prefill_len=8192
+        mesh_device=mesh_device, num_layers=4, max_batch_size=4, max_seq_len=4608, max_prefill_len=4096
     )
     sd = args.load_layer_state_dict(layer_idx)
     ccl = MuseCCL(mesh_device)
@@ -93,7 +93,7 @@ def _run_prefill(mesh_device, tp, layer_idx, seq_len, user_id=0):
 @pytest.mark.timeout(1800)
 @mesh_fabric
 @pytest.mark.parametrize("layer_idx", [0, 3], ids=["sliding_rope", "full_nope"])
-@pytest.mark.parametrize("seq_len", [128, 4096, 8064])  # 8064: not a multiple of the 256-row SDPA Q chunk
+@pytest.mark.parametrize("seq_len", [128, 4096])
 def test_attention_prefill(mesh_device, tp, layer_idx, seq_len):
     _run_prefill(mesh_device, tp, layer_idx, seq_len)
 
@@ -101,9 +101,9 @@ def test_attention_prefill(mesh_device, tp, layer_idx, seq_len):
 @pytest.mark.timeout(1800)
 @mesh_fabric
 @pytest.mark.parametrize("layer_idx", [0, 3], ids=["sliding_rope", "full_nope"])
-@pytest.mark.parametrize("seq_len", [4096, 3456])
+@pytest.mark.parametrize("seq_len", [4096, 3328])
 def test_attention_prefill_chunked(mesh_device, tp, layer_idx, seq_len, monkeypatch):
-    """Long-prompt paths (gemma4 chunked SDPA) forced at short lengths; 3456 has a padded tail chunk,
+    """Long-prompt paths (gemma4 chunked SDPA) forced at short lengths; 3328 has a short tail chunk,
     user 1 checks the page-table row slice."""
     monkeypatch.setattr(attention_mod, "PREFILL_SDPA_MAX_SEQ", 1024)
     monkeypatch.setattr(gemma4_ops, "PREFILL_CHUNK_SIZE", 1024)

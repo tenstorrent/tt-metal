@@ -283,9 +283,6 @@ def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None):
     k_chunk = max(32, min(k_chunk, seq_len))
     q_chunk = (q_chunk // 32) * 32
     k_chunk = (k_chunk // 32) * 32
-    # A partial last Q chunk gives wrong rows in sliding-window prefill SDPA (e.g. seq 8064 with q_chunk 256).
-    while q_chunk > 32 and seq_len % q_chunk:
-        q_chunk -= 32
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid,
         q_chunk_size=q_chunk,
@@ -338,8 +335,6 @@ def chunked_prefill_sdpa(
             When the cache matches this layer's own view (Option A / single pool) no
             override is passed and behavior is byte-identical to before.
     """
-    # The op binds scale as a no-convert float32: a double not exactly representable in float32 fails arg matching.
-    scale = float(torch.tensor(scale, dtype=torch.float32))
     seq_len = tt_q.shape[-2]
     nh = tt_q.shape[1]
     # Geometry override: reconcile an HMA-shared paged buffer whose declared shape is
