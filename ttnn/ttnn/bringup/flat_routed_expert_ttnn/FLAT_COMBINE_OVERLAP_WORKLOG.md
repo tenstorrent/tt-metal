@@ -1408,3 +1408,24 @@ GLM-5.3-Flash S 640, separate layout (7 ports + 12 accumulators), the 16 busiest
   flat finishes ~630 us later fused than alone (packed S 640: rows landed by 4729 vs flat alone 4096). Next: why.
 - Model: the block allocates its arena per call; the ops between that and the fused op (planner, dispatch prep,
   dispatch) must fit their static CBs below it - allocate the arena right before the fused op, then size it to all of L1.
+
+### Landing pool: per-call demand-sized rings (2026-10-19, for Galaxy stages)
+Why: the rings were (N - 1) x D slots per accumulator. On 8 x 4 (31 sources) the depth the credit round trip needs
+(above: 6-8 on 2 x 4) is 1.8 MB per accumulator at K3's 7 KB rows - it cannot fit; and equal rings waste slots on cold
+sources under skew. Now each accumulator has a pool of PSL slots (what the arena leaves, capped at depth x (N - 1)),
+carved per call: every source with rows here gets 1 slot (the per-ring deadlock argument holds), half the rest in equal
+shares, half in proportion to its rows (at most its rows; largest remainders). The accumulators publish each source's
+(base, depth, call tag) to the home port that returns that source's credits; the port forwards it with the same path as
+the credit snapshots; a source's rows wait for their ring's layout (rings restart each call - every call drains).
+Pool L1 no longer grows with N; the planner is unchanged (the accumulators carve from want[], already in the plan).
+| combine alone / fused, us (u / s / p) | fixed rings | landing pool |
+| S 256, avg 2 per source | 556 / 1230, 645 / 1354, 1345 / 2223 | 554 / 1231, 637 / 1351, 1168 / 2217 |
+| S 640, avg 2 | 1335 / 1468, 1567 / 1734, 3288 / 4753 | 1343 / 1464, 1517 / 1703, 2926 / 4744 |
+| S 640, avg 7 (full L1) | 1113 / 1359, 1270 / 1714, 2713 / 4741 | 1136 / 1356, 1271 / 1707, 2726 / 4745 |
+Carving: all-proportional made Zipf-spread worse (S 256 avg 3: 682 vs 585 us; the hot rings deepened past their links'
+rate while the rest starved); capped proportional 667; half equal 621 (kept); floors without largest remainders left
+near-equal shares at 1 slot (S 640 avg 2 uniform 1658 vs 1335). Rel err unchanged (2.4e-3), K3 / V4.1 / acc-on-ports
+unchanged or better (acc on ports S 640: fused 1366 / 1736 / 4811 vs 1522 / 1784 / 4823 with the plan-sized arena).
+Bug found on the way (pre-existing): the accumulator granted its local ring (rows homed on its own chip) in batches of
+4, so a local ring under 4 slots never refilled - the first call deadlocked once the pool left exactly the 2 reserved
+slots. Batches now min(4, QL), and the separate layout reserves 8 local slots (the fused one already did).

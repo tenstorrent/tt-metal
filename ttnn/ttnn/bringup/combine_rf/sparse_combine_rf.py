@@ -9,17 +9,19 @@ route tables are dimension-ordered, Y then X, the same paths), and it lands stra
 
 Cores per chip: a port core per (direction, link) (one fabric connection each) and A accumulator cores (the same
 logical cores on every chip).
-  accumulator o:  a ring of D slots per source chip (N - 1 rings). A row of home token t goes to accumulator
-                  o = t % A over link (o + s + h) % L: fixed per (accumulator, source, home), so each ring has exactly
-                  one producer, port (s, first hop(s -> h), that link). D comes from the L1 budget (the arena left
-                  after the accumulator's CBs), capped at `depth`: the rings' L1 is (N - 1) D slots whatever the link
-                  count (it was N L D, which a 16- or 32-chip Galaxy cannot hold at any useful depth).
+  accumulator o:  a landing pool of PSL slots (the arena left after the accumulator's CBs, capped at depth x (N - 1)),
+                  carved per call into one ring per source chip by that call's demand: a source with rows here gets one
+                  slot, the rest in proportion to its rows (at most its rows). The pool's L1 does not grow with N (a
+                  Galaxy's 31 sources at a useful fixed depth would not fit), and a hot source gets the slots. A row of
+                  home token t goes to accumulator o = t % A over link (o + s + h) % L: fixed per (accumulator, source,
+                  home), so each ring has exactly one producer, port (s, first hop(s -> h), that link).
   port (s, d, l): injects its rows; holds a credit counter per (home, accumulator) ring it feeds; returns the credits
                   of rows its own chip's accumulators consumed from sources whose first hop back is d (atomic incs,
-                  multi-hop through the fabric as well).
+                  multi-hop through the fabric as well), and forwards those sources their rings' layouts (base, depth)
+                  for the call, which its accumulators publish at their start.
 Sinks never wait on anything but their own compute, so every row in the fabric has a slot reserved at its sink and the
-fabric always drains. Counters are cumulative across calls (ring positions continue), so calls need no barrier: an
-accumulator only takes its expected count from each ring, a later call's rows wait in the ring.
+fabric always drains. Counters are cumulative across calls; a ring's slots restart each call (every call drains, and a
+source's rows wait for this call's layout from the home, so a call never lands in another call's carving).
 """
 
 import os
@@ -289,8 +291,9 @@ _ACC_COMPUTE_W = (
 assert _ACC_COMPUTE_W.count("cb_pop_front(cb_w, 1)") == 2 and "mul_tiles_bcast_scalar" in _ACC_COMPUTE_W
 assert "end marker" in _ACC_COMPUTE_W and "__DEVPLAN__ || r < n_rows" in _ACC_COMPUTE_W
 
-# per-core L1 area (state_layout): credits / used / returned per (home, accumulator) (N x AP words each), the collector
-# counts (512 B), MISC (2 KB), HDRS (N x NH routed headers, then NH credit snapshots), then the rings
+# per-core L1 area (state_layout): credits / used / returned per (home, accumulator), the ring layouts received (at a
+# source's ports) and to forward (at a home's ports), the rings' first count this call (N x AP words each), the collector
+# counts (512 B), MISC (2 KB), HDRS (N x NH routed headers, then NH credit snapshots), then the landing pool
 NH_, HSZ_ = 8, 128
 MISC_BYTES = 2048
 # MISC words: 1 returned so far; 100 calls; 101 base; 112.. scratch; 128.. landed (writers); 192.. profile; 208..
@@ -300,15 +303,27 @@ M_RTOT, M_RDONE, M_TAKEN = 256, 288, 320
 
 
 def state_layout(N, A):
-    """Byte offsets of the state block: CRED, USED, RET, CNT (collector counts), MISC, HDRS, RINGS (its end)."""
+    """Byte offsets of the state block: CRED, USED, RET, CNT (collector counts), MISC, HDRS, RINGS (its end; the
+    landing pool starts there), and LAYR / LAYO / U0 (state_layout_ext)."""
+    CRED, USED, RET, _, _, _, CNT, MISC, HDRS, RINGS = _state(N, A)
+    return CRED, USED, RET, CNT, MISC, HDRS, RINGS
+
+
+def state_layout_ext(N, A):
+    """LAYR (layouts received per (home, accumulator) at a source port), LAYO (per (source, accumulator), written by the
+    home's accumulators, forwarded by its port), U0 (a source port's used count per ring at this call's start)."""
+    return _state(N, A)[3:6]
+
+
+def _state(N, A):
     al = lambda v: (v + 63) // 64 * 64  # noqa: E731
     AP = (A + 3) // 4 * 4
     rw = al(4 * N * AP)
-    CRED, USED, RET, CNT = 0, rw, 2 * rw, 3 * rw
+    CRED, USED, RET, LAYR, LAYO, U0, CNT = (i * rw for i in range(7))
     MISC = CNT + 512
     HDRS = MISC + MISC_BYTES
     RINGS = al(HDRS + N * NH_ * HSZ_ + NH_ * 4 * AP)
-    return CRED, USED, RET, CNT, MISC, HDRS, RINGS
+    return CRED, USED, RET, LAYR, LAYO, U0, CNT, MISC, HDRS, RINGS
 
 
 _RF_SENDER = r"""
@@ -321,14 +336,14 @@ using namespace tt::tt_fabric;
 constexpr uint32_t cb_inj = get_compile_time_arg_val(0);
 constexpr uint32_t row_bytes = get_compile_time_arg_val(1);
 constexpr uint32_t SLOT = get_compile_time_arg_val(2);
-constexpr uint32_t D = get_compile_time_arg_val(3);  // ring slots per source chip at each accumulator
+constexpr uint32_t PSL = get_compile_time_arg_val(3);  // landing pool slots at each accumulator (carved per call)
 constexpr uint32_t A = get_compile_time_arg_val(4);
 constexpr uint32_t AP = (A + 3) / 4 * 4;  // credit words per home (16-byte aligned arrays: they travel as NoC writes)
 constexpr uint32_t N = get_compile_time_arg_val(5);
 constexpr uint32_t L = get_compile_time_arg_val(6);
 constexpr uint32_t ISLOT = get_compile_time_arg_val(7);
 constexpr uint32_t CRED = __CRED__, USED = __USED__, RET = __RET__, MISC = __MISC__, HDRS = __HDRS__,
-                   RINGS = __RINGS__;
+                   RINGS = __RINGS__, LAYR = __LAYR__, LAYO = __LAYO__, U0 = __U0__;
 constexpr uint32_t PROF = __PROF__;
 constexpr uint32_t CRED_THR = __CREDTHR__;  // rows consumed from a source before its credits go back (or when idle)
 constexpr uint32_t PACE = __PACE__;
@@ -460,6 +475,22 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* rdone = misc + __MRDONE__;  // rows covered by the last snapshot sent per source chip
     const uint32_t ret0 = misc[1];
     uint32_t returned = ret0;
+    // the landing pools' rings this call (layout words: tag << 24 | base << 12 | depth, tag = this call's 1..255): a
+    // home's accumulators carve their pools by this call's demand and publish each source's ring to the home port that
+    // returns that source's credits (LAYO), which forwards them to the source's port (LAYR). A row waits for its ring's
+    // layout; its slot is base + (rows sent on the ring this call) % depth. Rings are empty at a call's start (every
+    // call drains), so the cumulative credit counts still hold: room = depth + cred - used.
+    volatile tt_l1_ptr uint32_t* lay_r = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + LAYR);
+    volatile tt_l1_ptr uint32_t* lay_o = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + LAYO);
+    volatile tt_l1_ptr uint32_t* u0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + U0);
+    const uint32_t calls_ = misc[104] + 1;
+    misc[104] = calls_;
+    const uint32_t tag = (calls_ - 1) % 255 + 1;
+    for (uint32_t ci = 0; ci < N * AP; ++ci) u0[ci] = used[ci];
+    uint32_t lay_pend = 0;  // (sources whose layouts this port still forwards: bit s)
+    for (uint32_t s = 0; s < N; ++s) {
+        if (sx[s]) lay_pend |= 1u << s;
+    }
     uint32_t inj_done = 0, sent = 0, pend_inj = 0, unflushed = 0;
     uint32_t p_idle = 0, p_cred = 0, p_slot = 0, p_flush = 0, n_credpk = 0, n_blocked = 0, n_empty = 0, p_send = 0;
     uint32_t p_book = 0, p_blk = 0, n_iter = 0;  // (TPROF: bookkeeping per pass, passes spent blocked on a full ring)
@@ -501,6 +532,28 @@ void kernel_main() {
             p_cred += get_timestamp_32b() - t0;
         }
     };
+    // forward each source's ring layouts once every accumulator that returns its credits here has published them
+    auto send_layouts = [&]() {
+        for (uint32_t s = 0; s < N && lay_pend; ++s) {
+            if (!(lay_pend >> s & 1)) continue;
+            bool ok = true;
+            for (uint32_t o = 0; o < A && ok; ++o) {
+                if (NL > 1 || (o + s + me) % L == lnk) ok = (lay_o[s * AP + o] >> 24) == tag;
+            }
+            if (!ok) continue;
+            if (unflushed >= NH) flush();
+            const uint32_t rot = sent % NH;
+            volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cstage + rot * 4 * AP);
+            for (uint32_t o = 0; o < A; ++o) st[o] = lay_o[s * AP + o];
+            auto* h = hdr_at(s, rot);
+            h->to_noc_unicast_write(NocUnicastCommandHeader{get_noc_addr(sx[s], sy[s], area + LAYR + 4 * me * AP)}, 4 * AP);
+            conn.wait_for_empty_write_slot();
+            conn.send_current_slot_non_blocking(cstage + rot * 4 * AP, 4 * AP, reinterpret_cast<uint32_t>(h));
+            ++sent;
+            ++unflushed;
+            lay_pend &= ~(1u << s);
+        }
+    };
     auto any_ret = [&]() {
         uint32_t t = 0;
         for (uint32_t s = 0; s < N; ++s) t += rtot[s];
@@ -508,7 +561,7 @@ void kernel_main() {
     };
     const uint32_t tstart = get_timestamp_32b();
 
-    while (inj_done < n_inj || returned - ret0 < n_ret || fused_more()) {
+    while (inj_done < n_inj || returned - ret0 < n_ret || fused_more() || lay_pend) {
         bool did = false, blk = false, sent_row = false;
         const uint32_t it0 = get_timestamp_32b();
         const uint32_t c0 = p_cred;
@@ -519,6 +572,7 @@ void kernel_main() {
         const uint32_t tot = any_ret();
         const bool pending = tot != returned;
         if (pending && unflushed < NH) give_back(false);
+        if (lay_pend) send_layouts();
         p_book += get_timestamp_32b() - it0 - (p_cred - c0);
         while (unflushed + P <= NH && inj_done < n_inj && cb_pages_available_at_front(cb_inj, pend_inj + 1)) {
             if (PACE && get_timestamp_32b() - tstart < inj_done * pace) break;
@@ -527,14 +581,14 @@ void kernel_main() {
             if (src >= ilim) src -= get_local_cb_interface(cb_inj).fifo_size;
             const uint32_t hdr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + LASTPB)[0];
             const uint32_t home = hdr & 0xFF, t = (hdr >> 8) & 0xFFFF, o = t % A, ci = home * AP + o;
-            const uint32_t u = used[ci];
-            if (D + cred[ci] - u < 1) {
+            const uint32_t u = used[ci], lw = lay_r[ci], dep = lw & 0xFFF;
+            if ((lw >> 24) != tag || dep + cred[ci] - u < 1) {  // (its ring's layout not here yet, or the ring full)
                 ++n_blocked;
                 blk = true;
                 break;
             }
             const uint32_t ts0 = get_timestamp_32b();
-            const uint32_t dst = area + RINGS + ((me - (me > home)) * D + u % D) * SLOT;  // (my ring at home's acc)
+            const uint32_t dst = area + RINGS + (((lw >> 12) & 0xFFF) + (u - u0[ci]) % dep) * SLOT;  // (my ring there)
             auto& cn = conn_of(NL > 1 ? (o + me + home) % L : 0);
             for (uint32_t pc = 0; pc < P; ++pc) {
                 const uint32_t pb = (pc + 1 == P ? row_bytes - pc * PD : PD) + 32;
@@ -616,13 +670,13 @@ constexpr uint32_t cb_meta = get_compile_time_arg_val(1);
 constexpr uint32_t cb_tab = get_compile_time_arg_val(2);
 constexpr uint32_t row_bytes = get_compile_time_arg_val(3);
 constexpr uint32_t SLOT = get_compile_time_arg_val(4);
-constexpr uint32_t D = get_compile_time_arg_val(5);
+constexpr uint32_t PSL = get_compile_time_arg_val(5);  // landing pool slots (one ring per source, carved per call)
 constexpr uint32_t A = get_compile_time_arg_val(6);
 constexpr uint32_t AP = (A + 3) / 4 * 4;
 constexpr uint32_t NT = get_compile_time_arg_val(7);
 constexpr uint32_t N = get_compile_time_arg_val(8);
 constexpr uint32_t L = get_compile_time_arg_val(9);
-constexpr uint32_t RET = __RET__, MISC = __MISC__, RINGS = __RINGS__;
+constexpr uint32_t RET = __RET__, MISC = __MISC__, RINGS = __RINGS__, LAYO = __LAYO__;
 constexpr uint32_t PROF = __PROF__;
 constexpr uint32_t ABL = __ABL__;
 constexpr uint32_t P = __P__, PD = __PD__, PS = __PS__;
@@ -666,6 +720,56 @@ void kernel_main() {
     constexpr uint32_t TCH = 256;
     volatile tt_l1_ptr uint32_t* misc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC);
     volatile tt_l1_ptr uint32_t* taken = misc + __MTAKEN__;  // per ring (source chip), cumulative
+    // the landing pool, carved for this call: every source with rows here gets one slot, the rest in proportion to its
+    // rows (at most its rows); each source's ring (tag << 24 | base << 12 | depth) goes to the home port that returns
+    // its credits, which forwards it to the source (the source's rows wait for it)
+    const uint32_t calls_ = misc[105] + 1;
+    misc[105] = calls_;
+    const uint32_t tag = (calls_ - 1) % 255 + 1;
+    uint32_t rbase[N], rdep[N], t0[N];
+    {
+        uint32_t nz = 0, tw = 0;
+        for (uint32_t k = 0; k < N; ++k) {
+            if (k != hc && want[k]) {
+                ++nz;
+                tw += want[k];
+            }
+        }
+        // half the extra slots in equal shares, half in proportion to the rows (all proportional deepened the hot
+        // rings past their links' rate and starved the rest: Zipf-spread combine +14%); largest remainders hand out
+        // every slot (floors alone left near-equal shares at one slot each)
+        const uint32_t eq = nz ? (PSL - nz) / 2 / nz : 0, extra = PSL - nz - eq * nz;
+        uint32_t rem[N], left = extra;
+        for (uint32_t k = 0; k < N; ++k) {
+            rdep[k] = 0;
+            rem[k] = 0;
+            if (k != hc && want[k]) {
+                const uint64_t q = static_cast<uint64_t>(extra) * want[k];
+                rdep[k] = 1 + eq + static_cast<uint32_t>(q / tw);
+                rem[k] = static_cast<uint32_t>(q % tw);
+                left -= rdep[k] - 1 - eq;
+            }
+        }
+        for (; left; --left) {
+            uint32_t bk = N;
+            for (uint32_t k = 0; k < N; ++k) {
+                if (rdep[k] && (bk == N || rem[k] > rem[bk])) bk = k;
+            }
+            if (bk == N) break;
+            ++rdep[bk];
+            rem[bk] = 0;
+        }
+        uint32_t b = 0;
+        for (uint32_t k = 0; k < N; ++k) {
+            const uint32_t d = rdep[k] < want[k] ? rdep[k] : want[k];  // (no more slots than rows)
+            rbase[k] = b;
+            rdep[k] = d;
+            b += d;
+            t0[k] = taken[k];
+            if (k != hc && px[k]) noc_inline_dw_write(get_noc_addr(px[k], py[k], area + LAYO + 4 * (k * AP + me)), tag << 24 | rbase[k] << 12 | d);
+        }
+    }
+    auto ring_slot = [&](uint32_t k, uint32_t tk) { return area + RINGS + (rbase[k] + (tk - t0[k]) % rdep[k]) * SLOT; };
     constexpr uint32_t WGT = __L1__;  // (gate weights: with the L1 hand-off, from each row's trailer)
     auto push_w = [&](uint32_t wb) {
         if constexpr (WGT) {
@@ -761,7 +865,8 @@ void kernel_main() {
         ++li;
         ++done;
         const uint32_t g = li + QL < n_local ? li + QL : n_local;
-        if (g > lgranted && (g - lgranted >= 4 || g == n_local)) lgrant_to(g);
+        // (grants in batches of up to 4 - at most the ring: a batch larger than QL never fills, and the writers stall)
+        if (g > lgranted && (g - lgranted >= (QL < 4 ? QL : 4) || g == n_local)) lgrant_to(g);
         return true;
     };
     auto peek_local = [&]() -> uint32_t {  // the next local row's token, if every writer landed it (else ~0)
@@ -774,7 +879,7 @@ void kernel_main() {
         return (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(LB + (li % QL) * SLOT + LASTPB)[0] >> 8) & 0xFFFF;
     };
     auto peek_ring = [&](uint32_t k) -> uint32_t {  // source k's next row's token, if all its pieces landed (else ~0)
-        const uint32_t s = area + RINGS + ((k - (k > hc)) * D + taken[k] % D) * SLOT;
+        const uint32_t s = ring_slot(k, taken[k]);
         for (uint32_t pc = 0; pc < P; ++pc) {
             volatile tt_l1_ptr uint32_t* tp =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
@@ -784,7 +889,7 @@ void kernel_main() {
     };
     auto take_ring = [&](uint32_t k) -> bool {  // the next row of source k's ring, if all its pieces landed
         const uint32_t tk = taken[k];
-        const uint32_t s = area + RINGS + ((k - (k > hc)) * D + tk % D) * SLOT;
+        const uint32_t s = ring_slot(k, tk);
         for (uint32_t pc = 0; pc < P; ++pc) {
             volatile tt_l1_ptr uint32_t* tp =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
@@ -992,6 +1097,7 @@ def sparse_combine_rf_prepare(
     assert N <= 32 and A <= 16, (N, A)
     AP = (A + 3) // 4 * 4
     CRED, USED, RET, CNT, MISC, HDRS, RINGS = state_layout(N, A)
+    LAYR, LAYO, U0 = state_layout_ext(N, A)
     run_cells = dict(ports={k: (c.x, c.y) for k, c in port_core.items()}, accs=[(c.x, c.y) for c in acc_cores])
     virt = lambda c: mesh_device.worker_core_from_logical_core(c)
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
@@ -1040,15 +1146,20 @@ def sparse_combine_rf_prepare(
         QP0 = inj_slots
         # (fused: room kept for an 8-slot local ring and a 32-slot injection ring; what is left after the rings
         # grows them, below)
-        keep = (8 + min(32, QP0)) * ISLOT if FUSED else (2 * ISLOT if l1 else 0)
-        fit = (arena_bytes - RINGS - acc_cbs - keep) // ((N - 1) * SLOT)
-        D = min(depth, fit)
+        keep = (8 + min(32, QP0)) * ISLOT if FUSED else (8 * ISLOT if l1 else 0)
+        fit = (arena_bytes - RINGS - acc_cbs - keep) // SLOT
+        PSL = min(depth * (N - 1), fit)
     else:
-        D = depth
-    D = D if ring_depth is None else int(ring_depth)
-    assert D >= 1, f"combine: no room for one ring slot per source chip ({N - 1} x {SLOT} B)"
+        PSL = depth * (N - 1)
+    # the landing pool: PSL slots per accumulator, carved into one ring per source per call by that call's demand
+    # (every source with rows gets at least one slot - the per-ring deadlock argument holds - the rest in proportion
+    # to its rows); depth = the pool's average per source
+    PSL = PSL if ring_depth is None else int(ring_depth) * (N - 1)
+    assert PSL >= N - 1, f"combine: no room for one landing slot per source chip ({N - 1} x {SLOT} B)"
+    assert PSL < 4096, "combine: a ring's base / depth are 12-bit fields"
+    D = PSL // (N - 1)
     QP = inj_slots  # a port's L1 hand-off injection ring (its own region, no rings there)
-    acc_area = RINGS + (N - 1) * D * SLOT
+    acc_area = RINGS + PSL * SLOT
     if FUSED and arena is not None:  # (local ring up to 16 slots, then the injection ring up to QP, from what is left)
         a_end = al(acc_area) + acc_cbs
         QL_F = min(16, (arena_bytes - a_end - min(32, QP) * ISLOT) // ISLOT)
@@ -1149,6 +1260,9 @@ def sparse_combine_rf_prepare(
         "__MISC__": str(MISC),
         "__HDRS__": str(HDRS),
         "__RINGS__": str(RINGS),
+        "__LAYR__": str(LAYR),
+        "__LAYO__": str(LAYO),
+        "__U0__": str(U0),
         "__PROF__": str(int(prof)),
         "__ABL__": pr.abl,
         "__INJB__": str(inj_b),
@@ -1400,7 +1514,7 @@ def sparse_combine_rf_prepare(
                 for kk in range(N):  # per source chip: its ring's count and the port returning its credits
                     s = (kk // C, kk % C)
                     w = want[(ch, i)][kk]
-                    if s != ch and (devplan is not None or w):  # (device plan: the plan decides the counts)
+                    if s != ch:  # (every source: its ring's layout goes out through that port even with no rows)
                         v = virt(port_core[(ch, fh(ch, s), link_of(i, kk, idx(ch), L))])
                         args += [0 if devplan is not None else w, v.x, v.y]
                     else:
@@ -1431,7 +1545,7 @@ def sparse_combine_rf_prepare(
                     kernel_source=srcs["ps"],
                     source_type=st,
                     core_ranges=pset,
-                    compile_time_args=[CB_INJ, row_bytes, SLOT, D, A, N, L, ISLOT] + (o_ct if FUSED else []),
+                    compile_time_args=[CB_INJ, row_bytes, SLOT, PSL, A, N, L, ISLOT] + (o_ct if FUSED else []),
                     runtime_args=ps_rt,
                     config=dm("RISCV_0", NOC1),
                 ),
@@ -1439,7 +1553,7 @@ def sparse_combine_rf_prepare(
                     kernel_source=srcs["ar"],
                     source_type=st,
                     core_ranges=aset,
-                    compile_time_args=[CB_ROW, CB_META, CB_TAB, row_bytes, SLOT, D, A, NT, N, L] + y_ct + t_ct,
+                    compile_time_args=[CB_ROW, CB_META, CB_TAB, row_bytes, SLOT, PSL, A, NT, N, L] + y_ct + t_ct,
                     runtime_args=ar_rt,
                     config=dm("RISCV_1", NOC0),
                 ),
@@ -1484,7 +1598,7 @@ def sparse_combine_rf_prepare(
     trl = [pc * PS + (row_bytes - pc * PD if pc + 1 == NP else PD) for pc in range(NP)]
     zero_runs = {c: [(0, RINGS, 0, 1)] for c in used_cores}
     for c in acc_cores:
-        zero_runs[(c.x, c.y)] = [(0, RINGS, 0, 1)] + [(RINGS + t, 32, SLOT, (N - 1) * D) for t in trl]
+        zero_runs[(c.x, c.y)] = [(0, RINGS, 0, 1)] + [(RINGS + t, 32, SLOT, PSL) for t in trl]
 
     run.build = build
     run.build_l1 = build_l1
@@ -1495,7 +1609,8 @@ def sparse_combine_rf_prepare(
     run.counts = dict(n_inj={k: len(v) for k, v in inj.items()}, n_ret=n_ret)
     run.cells = run_cells
     run.depth = D
-    run.l1 = dict(acc_area=acc_area, port_area=port_area, rings=(N - 1) * D * SLOT, state=RINGS, slot=SLOT, inj=QP)
+    run.pool = PSL
+    run.l1 = dict(acc_area=acc_area, port_area=port_area, rings=PSL * SLOT, state=RINGS, slot=SLOT, inj=QP)
     run.zero_runs = zero_runs
     run.dbg = dbg_t
     return run
