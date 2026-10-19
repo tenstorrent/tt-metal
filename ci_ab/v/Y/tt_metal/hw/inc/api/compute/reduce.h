@@ -196,11 +196,24 @@ ALWI void reduce_tile(
 }
 
 #ifdef ARCH_BLACKHOLE
-// A BFP tile starts with its exponent section, so the block call cannot step the data unpacker from tile to tile and
-// pays a stride write per call; unpack and math take the same path from the compile-time data format.
+// Unpack and math must take the same path, so both decide from compile-time constants. A BFP tile starts with its exponent
+// section, so the block call cannot step the data unpacker from tile to tile. The held scaler of a row sum costs time where the
+// math binds: from HiFi3, and at HiFi2 with fp32 data.
+template <PoolType reduce_type, ReduceDim reduce_dim, bool pow2_scaler>
 ALWI bool reduce_block_tile_by_tile(std::uint32_t icb) {
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
-    return IS_BFP_FORMAT(unpack_src_format[get_operand_id(icb)]);
+    const std::uint32_t data_format = unpack_src_format[get_operand_id(icb)];
+    if (IS_BFP_FORMAT(data_format)) {
+        return true;
+    }
+    if constexpr (reduce_dim == ReduceDim::REDUCE_ROW && reduce_type != PoolType::MAX) {
+        constexpr std::uint32_t phases =
+            static_cast<std::uint32_t>(reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY));
+        return phases >= static_cast<std::uint32_t>(MathFidelity::HiFi3) ||
+               (phases == static_cast<std::uint32_t>(MathFidelity::HiFi2) &&
+                masked_data_format(data_format) == static_cast<std::uint32_t>(DataFormat::Float32));
+    }
+    return false;
 #else
     return true;
 #endif
@@ -253,7 +266,7 @@ ALWI void reduce_block(
     std::uint32_t ntiles,
     std::uint32_t idst_stride = 1) {
 #ifdef ARCH_BLACKHOLE
-    if (!reduce_block_tile_by_tile(icb)) {
+    if (!reduce_block_tile_by_tile<reduce_type, reduce_dim, pow2_scaler>(icb)) {
         MATH((llk_math_reduce_block<
               reduce_type,
               reduce_dim,

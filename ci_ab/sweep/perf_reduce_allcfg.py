@@ -48,7 +48,7 @@ class CI_RED(TemplateParameter):
     sync_full: int = 0
     call_ct: int = 0
     k_per_out: int = 1
-    bfp: int = 0
+    api_tiles: int = 0
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
@@ -60,7 +60,7 @@ class CI_RED(TemplateParameter):
                 ("SYNC_FULL", self.sync_full),
                 ("CT", self.call_ct),
                 ("K", self.k_per_out),
-                ("BFP", self.bfp),
+                ("API_TILES", self.api_tiles),
             )
         )
 
@@ -77,7 +77,9 @@ def _cfgs():
     out = []
 
     def add(s, fi, fo, dacc, dim, pool, fid, ci=None):
-        ci = replace(ci or CI_RED(), bfp=int(fi in (B8, B4)))
+        held = dim == ReduceDimension.Row and pool != ReducePool.Max
+        slow_hold = held and (fid in (FID.HiFi3, FID.HiFi4) or (fid == FID.HiFi2 and fi == F32))
+        ci = replace(ci or CI_RED(), api_tiles=int(fi in (B8, B4) or slow_hold))
         out.append((s, fi, fo, dacc, dim, pool, fid, ci))
 
     pairs = [(a, b) for a in (B16, F16, F32, B8) for b in (B16, F16, F32, B8)]

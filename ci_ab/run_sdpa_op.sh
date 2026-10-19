@@ -29,7 +29,7 @@ declare -A ES; r=0; fail=0
 for blk in 1 2; do for a in H Y Y2 Y2 Y H; do
   r=$((r+1)); src=${a%2}; [[ $src == H ]] && src=head; use $a $src
   o=$OUT/${a}_r$r; mkdir -p $o; t0=$(date +%s)
-  timeout -s INT -k 60 1800 python3 -m tracy -r -p --no-web-server -o $o $S/opl/run_nodes.py > $o.log 2>&1; rc=$?
+  OUT_HASH=$OUT/hash_${a}_r$r.tsv timeout -s INT -k 60 1800 python3 -m tracy -r -p --no-web-server -o $o $S/opl/run_nodes.py > $o.log 2>&1; rc=$?
   echo "== run $r $a rc=$rc $(( $(date +%s) - t0 )) s: $(grep -aE '[0-9]+ (passed|failed)' $o.log | tail -1)"
   [[ $rc -ne 0 ]] && { fail=1; grep -a -m5 -E '^(FAILED|ERROR)|Error' $o.log | cut -c1-200; }
   python3 $S/opl/sum_op19.py $o $a $r
@@ -41,5 +41,8 @@ gs=ok; for a in H Y Y2; do [[ $(uniq1 "${ES[$a]}") == 1 ]] || gs=UNSTABLE; done
 gx=$([[ $(one "${ES[Y]}") == $(one "${ES[Y2]}") ]] && echo ok || echo DIFF)
 gd=$([[ $(one "${ES[H]}") != $(one "${ES[Y]}") && -n $OBJ ]] && echo ok || echo VOID)
 echo "== GUARD stable=$gs Y_vs_Y2=$gx H_vs_Y=$gd"
+for p in "H_r1 H_r6" "Y_r2 Y_r5" "H_r1 Y_r2" "H_r1 Y2_r3"; do set -- $p
+  echo "== outputs $1 vs $2: $(paste <(cut -f2 $OUT/hash_$1.tsv) <(cut -f2 $OUT/hash_$2.tsv) | awk '{n++; if ($1==$2) s++} END {print s+0" identical of "n+0}')"
+done
 use H head
 echo "== DONE $(date -u +%FT%TZ) fail=$fail"

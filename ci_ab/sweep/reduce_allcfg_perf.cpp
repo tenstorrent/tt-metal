@@ -30,8 +30,8 @@ using namespace ckernel;
 static constexpr DstSync DST_SYNC                = CI_SYNC_FULL ? DstSync::SyncFull : DstSync::SyncHalf;
 static constexpr std::uint32_t MAX_TILES_DEST    = (is_fp32_dest_acc_en ? 4 : 8) * (CI_SYNC_FULL ? 2 : 1);
 static constexpr std::uint32_t CT                = CI_CT == 0 ? 1 : CI_CT;
-// Side 3 models the compute API, which sends BFP blocks tile by tile
-static constexpr bool BLOCK_CALL                 = CI_CT != 0 && CI_REDUCE_HEAD && !(CI_REDUCE_HEAD == 3 && CI_BFP);
+// Side 3 models the compute API, which sends BFP blocks and the HiFi held-scaler row sums tile by tile
+static constexpr bool BLOCK_CALL                 = CI_CT != 0 && CI_REDUCE_HEAD && !(CI_REDUCE_HEAD == 3 && CI_API_TILES);
 static constexpr std::uint32_t TILES_PER_OUTPUT  = CI_K;
 static constexpr std::uint32_t TILES_PER_SECTION = MAX_TILES_DEST * TILES_PER_OUTPUT;
 static constexpr std::uint32_t DST_STRIDE        = CI_K > 1 ? 0 : 1;

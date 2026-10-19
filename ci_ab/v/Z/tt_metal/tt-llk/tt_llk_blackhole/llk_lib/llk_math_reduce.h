@@ -462,7 +462,7 @@ inline void _llk_math_reduce_block_(
             while (num_tiles > 0)
             {
                 const std::uint32_t chunk = num_tiles < REDUCE_BLOCK_MAX_TILES ? num_tiles : REDUCE_BLOCK_MAX_TILES;
-                const auto pool_tile = [&]()
+                for (std::uint32_t tile = 0; tile < chunk; tile++)
                 {
                     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst);
                     // The init's MVMUL record, with the source release narrowed to the data bank (SrcB)
@@ -479,16 +479,10 @@ inline void _llk_math_reduce_block_(
                         lltt::replay(replay_start, 7);
                         TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_3, 0);
                     }
-                    dst += dst_stride;
-                };
-                for (std::uint32_t tile = 1; tile < chunk; tile++)
-                {
-                    pool_tile();
                     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                    dst += dst_stride;
                 }
-                // The last counter reset also releases the scaler: a separate CLEARDVALID costs the math-bound HiFi path a cycle a call
-                pool_tile();
-                TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                TTI_CLEARDVALID(p_setrwc::CLR_A, 0);
                 num_tiles -= chunk;
             }
             return;
