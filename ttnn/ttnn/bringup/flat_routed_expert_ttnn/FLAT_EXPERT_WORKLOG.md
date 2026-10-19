@@ -1084,3 +1084,33 @@ full-L1 arena leaves no room for its sum check).
 The combine costs 0.6-2.3% on uniform and spread (fused / flat) except GLM-Flash S 640 spread (5.8%) and packed S 640
 / S 256 (16% / 8%): the gap to the floor is the flat expert's own. GLM-Flash spread S 640: flat alone 1.33x the floor
 (the hot experts' 4738 rows on one chip's grid).
+
+### GLM-Flash uniform: why the flat expert is at ~82-86% of the floor (2026-10-19, one chip, pure DRISC 64 gate/up + 32 down)
+test_flat_balanced_sweep.py (now takes layout_from_env(): the harness's MIMO_FL_CMB_DRISC=1 DRISC_DUAL=0 DRISC_PURE=1
+ND=32 NH=1; the plan: 64 gate/up, 32 down, 4 relays), M 58 / 145 (S 256 / 640 uniform), E 36, us per call; floor
+weights 996 + x 33 / 84 + y 33 / 84. Recipe: /localdev/mstaletovic/flat90/run.sh <tag> [probes].
+| variant | M 58 | M 145 |
+| base (y to DRAM) | 1208 | 1436 |
+| NO_MATH | 1210 | 1430 |
+| YRM_NOWRITE (no y: the fused case, floor 1029 / 1080) | 1199 | 1322 |
+| + XRD_SKIP (weights only) | 1198 | 1288 |
+| XRD_SKIP | 1202 | 1289 |
+| W_NOREAD (weights forwarded, not read) | 1044 | 1285 |
+| W_NOFWD (read, not forwarded) | 1182 | 1433 |
+| read only (W_NOFWD + XRD_SKIP + YRM_NOWRITE) | 1036 | 1089 |
+| H_NODATA | 1201 | 1417 |
+| E 18 (base / no y) | 621 / 606 | 744 / 693 |
+| no y + DRISC_DMA_MAX 4 / 8 | 1199 / 1200 | 1356 / 1367 |
+| no y + DRISC_UB 2 / 4 (blocks per DMA unit) | 1122 / 1158 | 1394 / 1385 |
+| no y + DRISC_ALT_DMA_MAX 1 / ALT_BURST 4 / XHELP_NOC0 | 1389 / 1288 / 1199 | 1485 / 1418 / 1320 |
+| X_RESIDENT | hang (triage: flat90/xres_triage.txt) | |
+- Not compute (NO_MATH unchanged). No y: 14 / 65 us fixed + 32.9 / 34.9 us an expert (floor 28.6 / 30.0): ~87% of 512 GB/s
+  in steady state at both M, plus a pipeline tail at M 145.
+- The DRAM reads alone run at 96% (read only 1036); forwarding alone near the floor too (W_NOREAD 1044); both on one
+  tile: 1198 = 16 tiles x ~26.6 GB/s - the per-tile DMA-in + NoC-write-out loop (~600 of ~830 cycles a 13.8 KB block
+  fixed), the "one tile ~28 GB/s" ceiling. Single-block units (pure DRISC: one job per tile) pay it per block: UB 2
+  takes M 58 to 1122 (92% of the fused floor), but M 145 to 1394 (+5%: half the slots in flight, NS = room / (UB blk)).
+- M 145 also: x reads cost 147 us against 84 of floor (the x relays' NOC1 reads vs each bank's NOC1-endpoint DRISC
+  tile), and the 65 us tail (the last experts' gate/up -> down after their weights).
+Options: UB chosen per call from the rows (runtime, like the ALT_MAXCNT switch), or UB 2 with the slot room kept; the
+bank's third tile as a forwarder (if free); the tail / x port at M 145.

@@ -48,6 +48,7 @@ DRAM_GBS, FLOP_CYC, N_COMPUTE, N_GRID = 512.0, 4096, 64 + 26, 110
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_flat_balanced_sweep(device):
     from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+    from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import layout_from_env
 
     torch.manual_seed(0)
     W = [[(torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02) for _ in range(E)]]
@@ -77,8 +78,17 @@ def test_flat_balanced_sweep(device):
             pin=1,
             x_bf16=XBF16,
             h_bf16=HBF16,
+            layout=layout_from_env(),  # (a bench: the MIMO_FL_* recipe names, e.g. the pure DRISC layout)
         )
     del W
+    if not UNIFIED:  # (the plan's roles: what the layout resolved to)
+        pl = op.plan
+        print(
+            f"[sweep] plan: gate/up {len(pl['gu'])} cores (units nu {pl['nu']}, hg {pl['hg']}), down {len(pl['down'])} cores "
+            f"(nd {pl['nd']}), y writers {len(pl['y_writers'])}, relays {len(pl['relays'])}, tensix readers "
+            f"{len(pl.get('tensix_readers', []))}, drisc {pl['drisc']} dual {pl['dual']}, gu idle {len(pl['gu_idle'])}",
+            flush=True,
+        )
     x = rm(torch.randn(T, H).to(torch.bfloat16) * 0.3, ttnn.bfloat16)
 
     rt = ttnn.device.IsProgramRealtimeProfilerActive()
