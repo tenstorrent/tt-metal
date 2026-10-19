@@ -256,6 +256,13 @@ class Gemma4ForCausalLM:
     ):
         on_host = self._select_sampling_mode(sampling_params)
         continuation = start_pos is not None and bool(torch.any(torch.as_tensor(start_pos) != 0))
+        if os.environ.get("GEMMA4_PREFIX_CACHING_EXPERIMENT") == "1":
+            total = int(torch.as_tensor(prompt_lens).sum())
+            cached = 0 if start_pos is None else int(torch.as_tensor(start_pos).sum())
+            print(
+                f"PREFIX_CACHE_PREFILL total_tokens={total} cached_tokens={cached} computed_tokens={total - cached}",
+                flush=True,
+            )
         gen = self.generator
         counts = None
         if not on_host:

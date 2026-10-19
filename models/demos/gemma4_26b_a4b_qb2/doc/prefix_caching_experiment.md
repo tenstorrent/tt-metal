@@ -98,3 +98,12 @@ preserving compiled libraries and plugin revision. No image build is performed.
 The existing workflow filename is reused only on that isolated branch so GitHub
 can dispatch it without changing the default branch. It runs host contracts first,
 then the full 30-layer server at physical B1 and the focused API cases.
+
+Remote run [39226809560](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39226809560)
+used Metal `57552912e65862378d9cade7b21c52e57d9451da`, workflow `daa02d5`,
+runner `120-qb2-p05t01`. All 11 host contracts passed in 2.22 seconds. Server
+startup failed before opening devices: `/mnt/MLPerf/huggingface/hub` was not
+writable by the image user. This is infrastructure setup evidence, not model
+correctness or performance evidence. The workflow now checks the runner-local
+Shield pinned checkpoint cache identified in successful run 39217198324, mounts
+it read-only when present, and otherwise uses a writable experiment-specific cache.

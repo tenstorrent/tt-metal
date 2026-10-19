@@ -117,3 +117,20 @@ def test_live_cached_suffix_matches_cold_host_logits(gemma_server_url, length, r
         gemma_server_url, [{**divergent, "cache_salt": salt + "-divergent-control"}], token_ids=True
     )[0]
     assert sampled_ids(cached_divergent) == sampled_ids(cold_divergent)
+
+
+def test_live_growing_context(gemma_server_url, record_property):
+    salt = f"gemma-growing-{uuid4()}"
+    for length in (1025, 1057, 1153, 1281):
+        request = {
+            "prompt": [100 + i % 71 for i in range(length)],
+            "max_tokens": 8,
+            "temperature": 0,
+        }
+        started = perf_counter()
+        cached = completions(gemma_server_url, [{**request, "cache_salt": salt}])[0]
+        record_property(f"growing_{length}_cached_wall_seconds", perf_counter() - started)
+        started = perf_counter()
+        cold = completions(gemma_server_url, [{**request, "cache_salt": f"{salt}-cold-{length}"}])[0]
+        record_property(f"growing_{length}_cold_wall_seconds", perf_counter() - started)
+        assert cached["choices"][0]["text"] == cold["choices"][0]["text"]
