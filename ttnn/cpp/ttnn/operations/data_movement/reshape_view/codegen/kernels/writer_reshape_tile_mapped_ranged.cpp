@@ -10,36 +10,14 @@
 // a page never write the same byte and every padding byte is zeroed by exactly one of them. The scratch offset equals
 // the page offset, so source and destination stay congruent for the NoC write.
 #include <cstdint>
-#include <limits>
 
 #include "api/core_local_mem.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "ttnn/operations/data_movement/reshape_view/codegen/kernels/riscv_copy.h"
+#include "ttnn/operations/data_movement/reshape_view/codegen/kernels/segment_map.h"
 
-using namespace tt::data_movement::common;
 using namespace codegen_kernels;
-
-struct SegmentMapData {
-    uint32_t input_page_index;
-    uint32_t input_page_offset;
-    uint32_t output_page_offset;
-    uint32_t num_elements;
-};
-
-// Segments congruent modulo 16 bytes go through the NoC and are ordered by the async_write_barrier before the tile
-// write-out. The rest are RISC copies; a NoC barrier does not order those stores, so the write-out drains the last
-// one first. Returns the last RISC store so far.
-template <uint32_t tile_bytes>
-FORCE_INLINE uint32_t copy_segment(Noc noc, uint32_t dst, uint32_t src, uint32_t bytes, uint32_t last_store) {
-    if ((dst & OFFSET_16) == (src & OFFSET_16)) {
-        tt_memmove<false, true, false, tile_bytes>(noc, dst, src, bytes);
-        return last_store;
-    }
-    return riscv_copy_elements(dst, src, bytes);
-}
 
 void kernel_main() {
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
@@ -65,7 +43,6 @@ void kernel_main() {
     const CoreLocalMem<uint8_t> output_mem(output_l1);
 
     bool have_input = false;
-    uint32_t input_l1 = 0;
     for (uint32_t row = start_row; row < end_row; ++row) {
         // Segments cover only logical datums; the range's padding must not inherit the previous row's bytes.
         noc.async_write_zeros(output_scratch, tile_bytes);
@@ -77,35 +54,8 @@ void kernel_main() {
         const uint32_t output_page = segments[0].input_page_index;
         const uint32_t range_start = segments[0].input_page_offset;
         const uint32_t range_bytes = segments[0].output_page_offset;
-        uint32_t previous_page = std::numeric_limits<uint32_t>::max();
-        uint32_t last_store = 0;
-
-        for (uint32_t index = 1; index < max_entries; ++index) {
-            if (segments[index].num_elements == 0) {
-                continue;
-            }
-            if (segments[index].input_page_index != previous_page) {
-                if (have_input) {
-                    noc.async_writes_flushed();
-                    input_buffer.pop_front(1);
-                }
-                input_buffer.wait_front(1);
-                invalidate_l1_cache();
-                input_l1 = input_buffer.get_read_ptr();
-                previous_page = segments[index].input_page_index;
-                have_input = true;
-            }
-            last_store = copy_segment<tile_bytes>(
-                noc,
-                output_l1 + segments[index].output_page_offset * element_bytes,
-                input_l1 + segments[index].input_page_offset * element_bytes,
-                segments[index].num_elements * element_bytes,
-                last_store);
-        }
-        noc.async_write_barrier();
-        if (last_store != 0) {
-            drain_stores(last_store);
-        }
+        assemble_segments<tile_bytes, max_entries, element_bytes>(
+            noc, input_buffer, segments, 1, output_l1, have_input);
         noc.async_write<NocOptions::DEFAULT, tile_bytes>(
             output_mem,
             output_accessor,

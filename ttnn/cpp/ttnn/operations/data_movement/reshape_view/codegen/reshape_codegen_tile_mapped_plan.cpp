@@ -15,6 +15,8 @@
 #include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_shape.hpp"
+
 namespace ttnn::operations::data_movement::reshape_codegen {
 
 namespace {
@@ -37,32 +39,6 @@ constexpr uint64_t kRowLaunchNs = 34;
 constexpr uint64_t kMinGainNs = 1500;
 constexpr std::array<uint32_t, 2> kPipelinedDepths = {8, 4};
 constexpr size_t kLayoutCacheEntries = 64;
-
-struct Shape3 {
-    uint64_t c = 1;
-    uint64_t h = 1;
-    uint64_t w = 1;
-};
-
-std::optional<Shape3> normalize(const ttnn::Shape& shape) {
-    if (shape.rank() == 0) {
-        return std::nullopt;
-    }
-    for (size_t i = 0; i < shape.rank(); ++i) {
-        if (shape[i] == 0) {
-            return std::nullopt;
-        }
-    }
-    Shape3 out;
-    out.w = shape[-1];
-    if (shape.rank() >= 2) {
-        out.h = shape[-2];
-    }
-    for (size_t i = 0; i + 2 < shape.rank(); ++i) {
-        out.c *= shape[i];
-    }
-    return out;
-}
 
 uint64_t tile_pages(const Shape3& s) { return s.c * tt::div_up(s.h, kTileDim) * tt::div_up(s.w, kTileDim); }
 

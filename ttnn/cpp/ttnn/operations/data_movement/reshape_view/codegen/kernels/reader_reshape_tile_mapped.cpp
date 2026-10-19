@@ -13,13 +13,9 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "ttnn/operations/data_movement/reshape_view/codegen/kernels/segment_map.h"
 
-struct SegmentMapData {
-    uint32_t input_page_index;
-    uint32_t input_page_offset;
-    uint32_t output_page_offset;
-    uint32_t num_elements;
-};
+using codegen_kernels::SegmentMapData;
 
 void kernel_main() {
     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
