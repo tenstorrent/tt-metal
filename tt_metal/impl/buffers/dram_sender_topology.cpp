@@ -119,16 +119,16 @@ std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<Co
     return bases;
 }
 
-void write_dram_sender_l1(
+void write_dram_core_l1(
     const distributed::MeshDevice& mesh_device,
     IDevice* device,
-    const CoreCoord& sender_logical,
+    const CoreCoord& dram_logical,
     DeviceAddr local_addr,
     std::span<const std::byte> bytes) {
     auto& metal_ctx = MetalContext::instance(mesh_device.impl().get_context_id());
     const uint64_t write_addr =
         metal_ctx.hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) + static_cast<uint64_t>(local_addr);
-    const CoreCoord virtual_core = device->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
+    const CoreCoord virtual_core = device->virtual_core_from_logical_core(dram_logical, CoreType::DRAM);
     metal_ctx.get_cluster().write_core(device->id(), tt_cxy_pair(device->id(), virtual_core), bytes, write_addr);
 }
 

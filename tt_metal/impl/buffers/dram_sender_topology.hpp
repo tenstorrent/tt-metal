@@ -67,17 +67,17 @@ void validate_dram_senders_across_mesh(
 // source for those and for a consumer's own slab accounting.
 std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<CoreCoord, CoreRangeSet>>& mapping);
 
-// Write `bytes` into DRAM-logical sender core `sender_logical`'s own L1 on `device`, at DRISC-L1
-// address `local_addr`.
+// Write `bytes` into DRAM-logical core `dram_logical`'s own L1 on `device`, at DRISC-L1 address
+// `local_addr`: a sender's state, or a DRAM receiver's config page.
 //
 // Host writes to a DRAM core's L1 go over NOC and need the DRAM-L1 NOC offset added on top of the
 // local address -- worker L1 has local == NOC space, so a worker-side write does not, and forgetting
-// it here lands the bytes somewhere harmless-looking instead of failing. The sender's virtual coord
+// it here lands the bytes somewhere harmless-looking instead of failing. The core's virtual coord
 // is resolved per device because DRAM harvesting can place it differently on each.
-void write_dram_sender_l1(
+void write_dram_core_l1(
     const distributed::MeshDevice& mesh_device,
     IDevice* device,
-    const CoreCoord& sender_logical,
+    const CoreCoord& dram_logical,
     DeviceAddr local_addr,
     std::span<const std::byte> bytes);
 

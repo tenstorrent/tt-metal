@@ -7,6 +7,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_device_view_impl.hpp"
 #include "distributed/mesh_command_queue_base.hpp"
+#include "impl/buffers/dram_receiver_config_page.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
 #include "impl/buffers/global_circular_buffer_impl.hpp"
@@ -83,6 +84,8 @@ struct PrefetcherArchTraits {
     std::optional<uint32_t> gddr_subchannels_per_bank;
     // Whether QuasarTensorPrefetcherConfig::stage_ring_bytes caps the stage ring.
     bool stage_ring_capped;
+    // Distance between consecutive receivers' credit counters in a sender's state.
+    uint32_t credit_stride_bytes;
     // Receiver-contiguous batched delivery only: K-row-major tensors and streaming are rejected.
     bool receiver_contiguous_batched_only;
     bool supports_prefetcher_pipes;
@@ -96,6 +99,7 @@ constexpr PrefetcherArchTraits kBlackholeTraits{
     .transport = RequestTransportKind::H2DSocket,
     .gddr_subchannels_per_bank = 3,
     .stage_ring_capped = false,
+    .credit_stride_bytes = 2 * sizeof(uint32_t),
     .receiver_contiguous_batched_only = false,
     .supports_prefetcher_pipes = true,
     .port_complete = true,
@@ -107,6 +111,7 @@ constexpr PrefetcherArchTraits kQuasarTraits{
     .transport = RequestTransportKind::Tl1Ring,
     .gddr_subchannels_per_bank = std::nullopt,
     .stage_ring_capped = true,
+    .credit_stride_bytes = kDramReceiverCreditStrideBytes,
     .receiver_contiguous_batched_only = true,
     .supports_prefetcher_pipes = false,
     .port_complete = false,

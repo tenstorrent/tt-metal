@@ -55,6 +55,17 @@ GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
     BufferType buffer_type = BufferType::L1,
     bool support_multi_receiver_shards = false);
 
+// Quasar form, whose receivers are DRAM cores (CCEs) rather than worker cores. Each bank's sender is
+// its DRAM view's CCE; `bank_to_dram_receivers` names each bank's receivers as DRAM-logical coords, in
+// the order of that sender's receiver table and slab indices. Every receiver must be a different CCE
+// from every other receiver and from every sender, counting two logical coords that name one CCE as
+// the same. Each receiver gets its FIFO and config page in its DRISC L1 receiver zone, at one offset
+// on every CCE. The CoreRangeSet overload throws on Quasar and this one off Quasar.
+GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
+    distributed::MeshDevice& mesh_device,
+    const std::vector<std::pair<uint32_t, std::vector<CoreCoord>>>& bank_to_dram_receivers,
+    uint32_t size);
+
 // Sender domain of a GlobalCircularBuffer. Returns SenderCoreType::Worker for GCBs created
 // via the worker-sender path, SenderCoreType::Dram for those from
 // CreateGlobalCircularBufferForTensorPrefetcher.
