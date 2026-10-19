@@ -228,8 +228,7 @@ static_assert(
 // ---- Wire codes shared with the producer and the host decoder --------------------------------------
 //
 // Codes MUST match spsc_packet.h's PP_* -- asserted in spsc_marker_decode.hpp, which is the one place that
-// sees both headers -- and kernel_profiler_streaming.hpp's ppfmt (inlined there because the JIT build lacks the
-// spsc_packet.h include path).
+// sees both headers.
 
 // Producer tail-publish batch (kernel_profiler_streaming.hpp publish_tail_batched): the published TAIL can lag
 // true ring occupancy by up to this many words between fenced publishes -- drainer-invisible occupancy
@@ -241,16 +240,24 @@ static_assert(
 // a real producer cost over 16 -- and producer overhead outranks the knee here by policy.
 static constexpr std::uint32_t SPSC_PUBLISH_BATCH_WORDS = 16;
 
-static constexpr std::uint32_t SPSC_TYPE_ZONE_L = 4;      // >3.2 s zone: id | end_lo | end_hi | dur_lo | dur_hi
-static constexpr std::uint32_t SPSC_TYPE_STICKY_TIMER = 9;
-static constexpr std::uint32_t SPSC_TIMER_HI_MASK = 0x7FFFFFFu;  // the 27-bit low field of word0
-
-// Marker ids are the FULL 27 bits. The mask was 0xFFFF once, and that truncation was invisible: markers rendered
-// perfectly and only their NAMES could not be resolved. Any change to the id width has to be made in every packer
-// at once: ppfmt in kernel_profiler_streaming.hpp and pp_* in spsc_packet.h.
-// DATA is 3 + N words: word0 is shaped like a zone marker (type | 27-bit id), the length lives in word2.
-static constexpr std::uint32_t SPSC_TYPE_DATA = 10;
-static constexpr std::uint32_t SPSC_DATA_SIZE_SHIFT = 25;
+// Wire encode, duplicated from spsc_packet.h.
+struct ppfmt {
+    static constexpr uint32_t TYPE_SHIFT = 27;
+    static constexpr uint32_t LOW27_MASK = 0x7FFFFFFu;
+    // This wire's own type space, spsc_packet.h's: never pass a hostdevcommon PacketTypes value through.
+    static constexpr uint32_t T_STICKY_PROG = 8u;       // PP_STICKY_PROG
+    static constexpr uint32_t T_STICKY_PROG_EXT = 14u;  // PP_STICKY_PROG_EXT
+    static constexpr uint32_t T_STICKY_TIMER = 9u;      // PP_STICKY_TIMER
+    static constexpr uint32_t T_RECORD = 15u;           // PP_RECORD
+    static constexpr uint32_t w0(uint32_t type, uint32_t low27) { return (type << TYPE_SHIFT) | (low27 & LOW27_MASK); }
+    static constexpr uint32_t LENGTH_SHIFT = 20u;  // PP_LENGTH_SHIFT
+    static constexpr uint32_t LENGTH_MASK = 0x7Fu;
+    static constexpr uint32_t record_w0(uint32_t body_words) {
+        return (T_RECORD << TYPE_SHIFT) | (body_words << LENGTH_SHIFT);
+    }
+    // A stall's record is a zone's medium one: the stall's end as its time, then its start's distance back.
+    static constexpr uint32_t STALL_BODY_WORDS = 2;
+};
 
 // Words in a staging/ring slot. A slot must hold the PACKED image of a span, which can be LARGER than the
 // raw span it replaces: the raw layout needs no pads (lane r starts at prefix + ctrl + r*ring, inherently

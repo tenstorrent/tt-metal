@@ -18,6 +18,7 @@ set(HW_JIT_API_HEADERS
     inc/api/debug/pause.h
     inc/api/debug/timing_perturbation.h
     inc/api/debug/device_print.h
+    inc/api/debug/device_publish.h
     inc/api/debug/dprint_pages.h
     inc/api/debug/dprint_tensix.h
     inc/api/debug/dprint_tile.h
@@ -239,6 +240,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/profiler_common.h
     inc/hostdev/profiler_zone_id.h
     inc/hostdev/realtime_profiler_msgs.h
+    inc/hostdev/record_site.h
     inc/hostdev/remote_dfb_constants.h
     inc/hostdev/remote_dfb_config_layout.h
     inc/hostdev/streaming_profiler_common.h
@@ -279,6 +281,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/dataflow/dataflow_cmd_bufs.h
     inc/internal/dataflow/noc_address_backend_xy.h
     inc/internal/debug/assert_common.h
+    inc/internal/debug/device_publish.h
     inc/internal/debug/dprint_buffer.h
     inc/internal/debug/fw_debug.h
     inc/internal/debug/noc_zero_guard.h

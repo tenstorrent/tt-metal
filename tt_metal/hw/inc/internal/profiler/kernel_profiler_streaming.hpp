@@ -6,8 +6,8 @@
 // L1 and a resident relay empties it; a full ring blocks the producer, so the stream is lossless. Per
 // RISC r: storage profiler_data_buffer[r].data[0..PROFILER_L1_VECTOR_SIZE), tail = control[SPSC_RING_TAIL_0 + r]
 // (producer), head = control[SPSC_RING_HEAD_0 + r] (relay); both are monotonic word counts, index = count %
-// capacity. PP_* wire types and the SpscControlBuffer slots are owned here; ControlBuffer/PacketTypes belong
-// to the DRAM backend, and sharing a control word breaks both.
+// capacity. The wire types (ppfmt) and SpscControlBuffer slots are its own, in hostdev/streaming_profiler_common.h;
+// ControlBuffer/PacketTypes belong to the DRAM backend, and sharing a control word breaks both.
 //
 // SELECTION: this header is reached ONLY through api/debug/kernel_profiler.hpp, which includes it when
 // the JIT build defines PROFILE_STREAMING (TT_METAL_STREAMING_PROFILER=1, jit_build/build.cpp). Without that
@@ -87,10 +87,10 @@ inline constexpr bool PROFILER_VALIDATES_ZONE = false;
 constexpr int WALL_CLOCK_HIGH_INDEX = 2;  // WALL_CLOCK_H, the snapshot; 1 is the live half
 constexpr int WALL_CLOCK_LOW_INDEX = 0;
 
-volatile tt_l1_ptr uint32_t* profiler_control_buffer =
+volatile tt_l1_ptr uint32_t* const profiler_control_buffer =
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.control_vector));
 
-volatile tt_l1_ptr profiler_msg_buffer_t* profiler_data_buffer =
+volatile tt_l1_ptr profiler_msg_buffer_t* const profiler_data_buffer =
     reinterpret_cast<volatile tt_l1_ptr profiler_msg_buffer_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.buffer));
 
 constexpr uint32_t myRiscID = PROCESSOR_INDEX;
@@ -105,63 +105,39 @@ static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in 
 
 constexpr uint32_t PROFILER_STALL_ZONE_ID = TT_ZONE_STALL_ID;
 
-// Wire encode, duplicated from spsc_packet.h because the JIT build lacks that include path. word0 = type(5) |
-// low27, the low27 carrying a 16-bit zone id (hostdev/profiler_zone_id.h: the id is an address the host
-// rebases at image load, so it reaches here as a plain register value, never a compile-time constant). A zone
-// ships whole at close: a 2-word ZONE_S when its end is within 2^16 cycles of the lane cursor
-// and its duration fits 16 bits, else a 3-word ZONE_ATOMIC (id | end timer_low | duration) that re-anchors
-// the cursor, or a 5-word ZONE_L when the duration overflows 32 bits. Lane identity and the timer's high half
-// are host-reconstructed from stickies.
-struct ppfmt {
-    static constexpr uint32_t TYPE_SHIFT = 27;
-    static constexpr uint32_t TYPE_MASK = 0x1Fu;
-    static constexpr uint32_t LOW27_MASK = 0x7FFFFFFu;
-    // This wire's own type space: never pass a hostdevcommon PacketTypes value through, and never reuse
-    // a retired value (11 = ZONE_TOTAL).
-    static constexpr uint32_t T_ZONE_ATOMIC = 2u;       // PP_ZONE_ATOMIC (3 words: id | end_lo | duration)
-    static constexpr uint32_t T_ZONE_S = 3u;            // PP_ZONE_S (2 words: id | end_delta16<<16 | dur16)
-    static constexpr uint32_t T_ZONE_L = 4u;            // PP_ZONE_L (5 words: id | end_lo | end_hi | dur_lo | dur_hi)
-    static constexpr uint32_t T_STICKY_PROG = 8u;       // PP_STICKY_PROG
-    static constexpr uint32_t T_STICKY_PROG_EXT = 14u;  // PP_STICKY_PROG_EXT
-    static constexpr uint32_t T_STICKY_TIMER = 9u;      // PP_STICKY_TIMER
-    static constexpr uint32_t T_DATA = 10u;             // PP_DATA
-    static constexpr uint32_t T_EVENT = 12u;            // PP_EVENT
-    static constexpr uint32_t DATA_SIZE_SHIFT = 25u;    // PP_DATA_SIZE_SHIFT (in word2)
-    static constexpr uint32_t DATA_SIZE_MASK = 0x7Fu;   // PP_DATA_SIZE_MASK
-    static inline uint32_t w0(uint32_t type, uint32_t low27) {
-        return ((type & TYPE_MASK) << TYPE_SHIFT) | (low27 & LOW27_MASK);
-    }
-    static inline uint32_t zone_atomic_w0(uint32_t id) { return w0(T_ZONE_ATOMIC, id & LOW27_MASK); }
-    static inline uint32_t zone_s_w0(uint32_t id) { return w0(T_ZONE_S, id & LOW27_MASK); }
-    static inline uint32_t data_w0(uint32_t id) { return w0(T_DATA, id & LOW27_MASK); }
-    static inline uint32_t data_w2(uint32_t size_words) { return (size_words & DATA_SIZE_MASK) << DATA_SIZE_SHIFT; }
-    static inline uint32_t event_w0(uint32_t id) { return w0(T_EVENT, id & LOW27_MASK); }
-};
-
-static constexpr uint32_t SPSC_MARKER_WORDS = 2;
-
 // Last high half emitted in a STICKY_TIMER; ~0 forces a fresh sticky on a launch's first marker.
 [[maybe_unused]] static uint32_t g_prev_timer_hi = 0xFFFFFFFFu;
 [[maybe_unused]] static uint32_t g_prog_pending =
     0xFFFFFFFFu;  // validators: the runtime id awaiting the launch's publish
 
-// Lane cursor: the end of the last S/ATOMIC zone, mirrored exactly by the decoder. hi = ~0 is invalid (no S
-// can match it, so the next zone ships ATOMIC and re-anchors both sides).
-[[maybe_unused]] static uint32_t g_cursor_lo = 0;
-[[maybe_unused]] static uint32_t g_cursor_hi = 0xFFFFFFFFu;
+struct PendingStall {
+    uint32_t start_hi = 0xFFFFFFFFu, start_lo = 0, end_hi = 0, end_lo = 0;
+};
 
-// Producer-cached relay head. The head only advances, so a stale copy is conservative; the fast path compares
-// against this word and reaches L1 once per drained batch. 0 is the safe floor.
-[[maybe_unused]] static uint32_t g_head_cache = 0;
+// The write index past which the smallest reservation no longer fits, from a cached copy of the relay's head. The head
+// only advances, so a stale copy is conservative; the fast path compares against this word and reaches L1 once per
+// drained batch. 0 is the safe floor.
+//
+// It and the pending stall are the RISC's, shared by its firmware and kernels, so a stall one of them waited out is
+// written by whichever records next. A kernel build takes both from its firmware ELF, as it does wIndex.
+#if !defined(KERNEL_BUILD)
+uint32_t g_room_end __attribute__((used)) = 0;
+PendingStall g_stall __attribute__((used));
+#else
+extern uint32_t g_room_end;
+extern PendingStall g_stall;
+#endif
 
 // Reading L snapshots the high half into WALL_CLOCK_H and H returns it, so the order is the protocol. Measured on
 // Blackhole (Tensix and DRISC): the snapshot holds only while the H load follows the L load immediately, so these two
 // loads must stay adjacent. Another RISC's L read landing in that gap across a 2^32 boundary puts a marker ~3.2 s in
-// the future, at ~1e-9 per read, which is cheaper than a retry branch here.
+// the future, at ~1e-9 per read, which is cheaper than a retry branch here. One asm statement holds them together:
+// as two volatile loads, a spill could still be scheduled between them.
 FORCE_INLINE void read_wall_clock(uint32_t& hi, uint32_t& lo) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    lo = p_reg[WALL_CLOCK_LOW_INDEX];
-    hi = p_reg[WALL_CLOCK_HIGH_INDEX];
+    asm volatile("lw %0, %2\n\tlw %1, %3"
+                 : "=&r"(lo), "=r"(hi)
+                 : "m"(p_reg[WALL_CLOCK_LOW_INDEX]), "m"(p_reg[WALL_CLOCK_HIGH_INDEX]));
 }
 
 FORCE_INLINE void publish_tail() {
@@ -200,9 +176,27 @@ FORCE_INLINE void publish_tail_batched(uint32_t words_written) {
     }
 }
 
-FORCE_INLINE void ring_write_word(uint32_t v) {
-    profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] = v;
+FORCE_INLINE void ring_write_word(uint32_t word) {
+    profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] = word;
     wIndex++;
+}
+
+// Whether `words` words from write index `index` lie before the ring's end, so they store as one block from
+// ring_slots(index); otherwise they go through ring_write_word, which wraps.
+FORCE_INLINE bool ring_fits_before_end(uint32_t index, uint32_t words) {
+    return index % RING_CAPACITY <= RING_CAPACITY - words;
+}
+FORCE_INLINE volatile tt_l1_ptr uint32_t* ring_slots(uint32_t index) {
+    return &profiler_data_buffer[myRiscID].data[index % RING_CAPACITY];
+}
+
+using AliasingWord __attribute__((may_alias)) = uint32_t;
+
+// Copies words into the ring one at a time, so they may wrap.
+__attribute__((noinline, cold)) void ring_copy_words(const AliasingWord* from, uint32_t words) {
+    for (uint32_t k = 0; k < words; ++k) {
+        ring_write_word(from[k]);
+    }
 }
 
 // The high half moves about once per 3.2 s, so test before storing; every caller's room reservation already
@@ -212,23 +206,25 @@ FORCE_INLINE void ring_write_sticky_timer(uint32_t hi) {
         profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] = ppfmt::w0(ppfmt::T_STICKY_TIMER, hi);
         wIndex++;
         g_prev_timer_hi = hi;
-        // Every lane re-anchors its cursor within one high-word period, so a decoder that lost frames waits at most
-        // that long for an absolute zone.
-        g_cursor_hi = 0xFFFFFFFFu;
         publish_state(STATE_TIMER_INDEX, hi);
     }
 }
 
-// ZONE_ATOMIC packet size: word0 (type|id) + end timer_low + 32-bit duration.
-static constexpr uint32_t SPSC_ATOMIC_ZONE_WORDS = 3;
+// This ELF's copy of the lane's cursor, the time of its last short or medium record of a call site with a short form
+// (internal/debug/device_publish.h), which the decoder keeps too. A high word of kUnset is no cursor, which no short
+// record matches.
+[[maybe_unused]] static uint32_t g_cursor_lo = 0;
+[[maybe_unused]] static uint32_t g_cursor_hi = 0xFFFFFFFFu;
 
-// A stall zone writes into a ring that is by definition full, so its words come from a reserve ordinary
-// markers may not fill into; the open writes nothing, so the reserve covers one ZONE_ATOMIC plus the
-// STICKY_TIMER a stall straddling a timer_hi tick needs.
-constexpr uint32_t STALL_CLOSE_WORDS = SPSC_ATOMIC_ZONE_WORDS + 1;
-constexpr uint32_t STALL_RESERVE_WORDS = STALL_CLOSE_WORDS;
+// A stall writes into a ring that is by definition full, so its words come from a reserve ordinary records may not fill
+// into: the timer's high word, word 0 and the stall's body.
+constexpr uint32_t STALL_RESERVE_WORDS = 2 + ppfmt::STALL_BODY_WORDS;
 constexpr uint32_t RING_USABLE = RING_CAPACITY - STALL_RESERVE_WORDS;
 static_assert(RING_USABLE > STALL_RESERVE_WORDS, "the ring is too small to carry a stall reserve");
+
+// Every check reserves at least a zone record's longest packet (word 0, the time's two words and the start's 64-bit
+// distance), so the commonest check compares wIndex itself.
+constexpr uint32_t MIN_RESERVE_WORDS = 5;
 
 #if defined(PROFILE_INLINE_ENABLED)
 #define PROFILER_INLINE_ATTR inline __attribute__((always_inline))
@@ -236,115 +232,77 @@ static_assert(RING_USABLE > STALL_RESERVE_WORDS, "the ring is too small to carry
 #define PROFILER_INLINE_ATTR __attribute__((noinline))
 #endif
 
-// Written straight into the reserve with no room check: ring_ensure_room() from here would recurse through
-// another stall scope. A stall of 2^32 cycles or more saturates its duration, because the reserve has no room for a
-// ZONE_L. A 3.2 s wait is a wedged relay, not a measurement.
-PROFILER_INLINE_ATTR void stall_zone_close(uint32_t start_hi, uint32_t start_lo) {
-    uint32_t hi, lo;
-    read_wall_clock(hi, lo);
-    const uint32_t lo_d = lo - start_lo;
-    const uint32_t hi_d = hi - start_hi - (lo < start_lo);
-    const uint32_t dur = lo_d | (0u - static_cast<uint32_t>(hi_d != 0));
+// The pending stall, straight into the reserve its wait left room for, as a zone's medium record
+// (internal/debug/device_publish.h) at the stall's call site, which has no ELF entry: the end is the record's time and
+// the start a 32-bit distance back. A stall of 2^32 cycles or more saturates it, because the reserve has no room for a
+// full record. A 3.2 s wait is a wedged relay, not a measurement.
+FORCE_INLINE void write_pending_stall() {
+    const uint32_t hi = g_stall.end_hi, lo = g_stall.end_lo;
+    const uint32_t lo_d = lo - g_stall.start_lo;
+    const uint32_t hi_d = hi - g_stall.start_hi - (lo < g_stall.start_lo);
+    const uint32_t duration = lo_d | (0u - static_cast<uint32_t>(hi_d != 0));
     ring_write_sticky_timer(hi);
-    ring_write_word(ppfmt::zone_atomic_w0(PROFILER_STALL_ZONE_ID));
+    ring_write_word(ppfmt::record_w0(ppfmt::STALL_BODY_WORDS) | PROFILER_STALL_ZONE_ID);
     ring_write_word(lo);
-    ring_write_word(dur);
-    g_cursor_lo = lo;  // a ZONE_ATOMIC on the wire moves the decoder's cursor, so it must move ours
-    g_cursor_hi = hi;
-    // Unconditional publish: this zone is the back-pressure signal, and the path already paid a full stall.
+    ring_write_word(duration);
+    g_stall.start_hi = 0xFFFFFFFFu;
+    // The stall is the back-pressure signal and its wait already cost a full stall, so it publishes at once.
     publish_tail();
 }
 
-// Like profileScope, but closes through stall_zone_close(), which writes into the reserve.
-struct profileScopeStall {
-    uint32_t start_hi, start_lo;
-    FORCE_INLINE profileScopeStall() { read_wall_clock(start_hi, start_lo); }
-    FORCE_INLINE ~profileScopeStall() { stall_zone_close(start_hi, start_lo); }
-};
-
-// Out of line so there is one copy rather than one per zone site. Waits for the caller's words and the zone's
-// own closing half, so the reserve is whole again for the next stall.
-__attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
+// The caller read its time first, so its record goes into the stream before the stall, and a stall never sits inside
+// the zone it interrupted. After a wait the cached head looks full, so the next record's room check comes back here and
+// writes the stall first.
+__attribute__((noinline, cold)) void ring_ensure_room_slow(uint32_t nwords) {
+    // Invalidate before the refresh: the relay's head write-back arrives over the NoC, which the core's L1 read cache
+    // does not observe.
+    invalidate_l1_cache();
+    const uint32_t head = profiler_control_buffer[HEAD_INDEX];
+    g_room_end = head + (RING_USABLE - MIN_RESERVE_WORDS);
+    if (g_stall.start_hi != 0xFFFFFFFFu) {
+        write_pending_stall();
+    }
+    if ((wIndex - head) <= (RING_USABLE - nwords)) {
+        return;
+    }
     if constexpr (myRiscID < SPSC_STALL_COUNT_MAX) {
         profiler_control_buffer[SPSC_STALL_COUNT_0 + myRiscID]++;
     }
-    profileScopeStall stall;
+    read_wall_clock(g_stall.start_hi, g_stall.start_lo);
     // The relay can only free words up to the published tail, so waiting on unpublished words deadlocks.
     publish_tail();
-    while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_USABLE - nwords - STALL_CLOSE_WORDS)) {
+    while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_USABLE - nwords - STALL_RESERVE_WORDS)) {
         invalidate_l1_cache();  // re-read the relay-updated head (and the arm flag)
         if (!profiler_control_buffer[PROFILER_ARMED]) {
             break;  // nobody drains this ring (or teardown disarmed it): overwrite rather than wait
         }
     }
-    g_head_cache = profiler_control_buffer[HEAD_INDEX];
+    read_wall_clock(g_stall.end_hi, g_stall.end_lo);
+    g_room_end = wIndex - RING_CAPACITY;
 }
 
-// One local compare against the cached head, bound RING_USABLE (the difference to capacity is the reserve).
+// One local compare against the cached room end, signed because wIndex can pass it by a record.
 FORCE_INLINE void ring_ensure_room(uint32_t nwords) {
-    if (__builtin_expect((wIndex - g_head_cache) > (RING_USABLE - nwords), 0)) {
-        // Invalidate before the refresh: the relay's head write-back arrives over the NoC, which the core's L1 read
-        // cache does not observe.
-        invalidate_l1_cache();
-        g_head_cache = profiler_control_buffer[HEAD_INDEX];
-        if ((wIndex - g_head_cache) > (RING_USABLE - nwords)) {
-            ring_ensure_room_slow(nwords);
-        }
+    const uint32_t reserve = std::max(nwords, MIN_RESERVE_WORDS);
+    if (__builtin_expect(static_cast<int32_t>(wIndex + (reserve - MIN_RESERVE_WORDS) - g_room_end) > 0, 0)) {
+        ring_ensure_room_slow(reserve);
     }
 }
 
-// ZONE_L packet size: word0 (type|id) + end_lo + end_hi + dur_lo + dur_hi.
-static constexpr uint32_t SPSC_ZONE_L_WORDS = 5;
-constexpr uint32_t ZONE_CLOSE_WORDS = std::max(SPSC_ATOMIC_ZONE_WORDS + 1, SPSC_ZONE_L_WORDS);
-
-// Duration >= 2^32 cycles (~3.2 s), which the 32-bit duration word cannot carry: one ZONE_L packet of two full
-// 64-bit values; no sticky, cursor untouched on both sides. The decoder normalizes it to a START/END pair
-// whose in-the-past START trips the order-regression diagnostic once, kept as visibility: a >3.2 s on-device
-// zone is a wedge. Out of line: the always_inline zone sites can never take it.
-__attribute__((noinline)) void mark_zone_long(
-    uint32_t timer_id, uint32_t start_hi, uint32_t start_lo, uint32_t end_hi, uint32_t end_lo) {
-    ring_ensure_room(SPSC_ZONE_L_WORDS);
-    const uint32_t dur_lo = end_lo - start_lo;
-    const uint32_t dur_hi = end_hi - start_hi - (end_lo < start_lo);
-    ring_write_word(ppfmt::w0(ppfmt::T_ZONE_L, timer_id));
-    ring_write_word(end_lo);
-    ring_write_word(end_hi);
-    ring_write_word(dur_lo);
-    ring_write_word(dur_hi);
-    publish_tail();
-}
-
-// One 3-word packet per zone with the start the scope object carried. Room is reserved before the end clock
-// is read so a stall elongates the zone it happened inside; otherwise the packet would carry a pre-stall end
-// yet sit after the stall zone.
-PROFILER_INLINE_ATTR void mark_zone_close(uint32_t timer_id, uint32_t start_hi, uint32_t start_lo) {
-    ring_ensure_room(ZONE_CLOSE_WORDS);
-    uint32_t hi, lo;
-    read_wall_clock(hi, lo);
-    const uint32_t lo_d = lo - start_lo;
-    const uint32_t hi_d = hi - start_hi - (lo < start_lo);
-    // One OR-tree into one branch: cursor delta and duration both fit 16 bits and neither subtract borrowed; an
-    // invalid cursor (hi = ~0) fails via c_hi_d. Fall-through because it is the dominant case on a dense lane.
-    const uint32_t c_lo_d = lo - g_cursor_lo;
-    if (__builtin_expect((((c_lo_d | lo_d) >> 16) | (hi ^ g_cursor_hi) | hi_d) == 0, 1)) {
-        ring_write_word(ppfmt::zone_s_w0(timer_id));
-        ring_write_word((c_lo_d << 16) | lo_d);
-        g_cursor_lo = lo;
-        g_cursor_hi = hi;
-        publish_tail_batched(2);
-        return;
+// Writes one record timed now, which Writer builds from `header`, its call site's word 0, and `inputs`. The clock is
+// read before the room check, so a stall the check waits out follows the record rather than lengthening it.
+template <typename Writer, bool kImmediately = false, typename... Inputs>
+PROFILER_INLINE_ATTR void publish_with(uint32_t header, Inputs... inputs) {
+    uint32_t time_hi, time_lo;
+    read_wall_clock(time_hi, time_lo);
+    ring_ensure_room(Writer::kMaxWords);
+    const uint32_t start = wIndex;
+    Writer::write(header, time_hi, time_lo, inputs...);
+    if constexpr (kImmediately) {
+        publish_tail();
+    } else {
+        publish_tail_batched(wIndex - start);
     }
-    if (__builtin_expect(hi_d != 0, 0)) {
-        mark_zone_long(timer_id, start_hi, start_lo, hi, lo);
-        return;
-    }
-    ring_write_sticky_timer(hi);
-    ring_write_word(ppfmt::zone_atomic_w0(timer_id));
-    ring_write_word(lo);
-    ring_write_word(lo_d);
-    g_cursor_lo = lo;  // ZONE_ATOMIC re-anchors the cursor (decoder: cursor = sticky_hi<<32 | end_lo)
-    g_cursor_hi = hi;
-    publish_tail_batched(SPSC_ATOMIC_ZONE_WORDS + 1);
 }
 
 // DeviceZoneSetCounter hook: the runtime host-id goes in band as a STICKY_PROG the host forward-fills onto
@@ -382,6 +340,7 @@ FORCE_INLINE void set_profiler_zone_valid(bool condition) {
         // the decoder sees, so invalidate it.
         wIndex = profiler_control_buffer[TAIL_INDEX];
         g_cursor_hi = 0xFFFFFFFFu;
+        g_stall.start_hi = 0xFFFFFFFFu;
     }
 }
 
@@ -397,7 +356,7 @@ __attribute__((noinline)) void init_profiler(
 
     // Fresh STICKY_TIMER on this launch's first marker (guards the idle-launch rewind).
     g_prev_timer_hi = 0xFFFFFFFFu;
-    // After a rewind the decoder's cursor is not where ours is; invalidate so the first zone re-anchors.
+    // After a rewind the decoder's cursor is not where ours is; drop ours so the first record isn't short.
     g_cursor_hi = 0xFFFFFFFFu;
 
     // Validators defer publishing until DeviceValidateProfiler resolves the launch.
@@ -418,37 +377,11 @@ __attribute__((noinline)) void init_profiler(
 #endif
 }
 
-__attribute__((noinline)) void finish_profiler() { publish_tail(); }
-
-// The constructor touches nothing but the wall clock; the whole zone ships at close with the start as member
-// state, 8 B per open zone. Hold exactly these two words: anything more is register pressure across the user
-// code inside the zone, and a globals-maxed kernel on the 192-256 B loader stack floor gets tight around
-// 10-20 open zones (see stackCanaryScope). Site is the type TT_ZONE_DEFINE_ID declares at the zone site; its
-// id() is two instructions at the close, so the id is carried by the type, not by a member.
-template <typename Site>
-struct profileScope {
-    uint32_t start_hi, start_lo;
-    FORCE_INLINE profileScope() { read_wall_clock(start_hi, start_lo); }
-    FORCE_INLINE ~profileScope() { mark_zone_close(Site::id(), start_hi, start_lo); }
-};
-
-// profileScope gated on a bool evaluated once at entry; false reads no clock and writes nothing. A constant argument
-// folds to the plain zone or to no code.
-template <typename Site>
-struct profileScopeIf {
-    bool on;
-    uint32_t start_hi, start_lo;
-    FORCE_INLINE profileScopeIf(bool active) : on(active) {
-        if (on) {
-            read_wall_clock(start_hi, start_lo);
-        }
-    }
-    FORCE_INLINE ~profileScopeIf() {
-        if (on) {
-            mark_zone_close(Site::id(), start_hi, start_lo);
-        }
-    }
-};
+// The slow room check, asked for no room, only writes a stall still pending.
+__attribute__((noinline)) void finish_profiler() {
+    ring_ensure_room_slow(0);
+    publish_tail();
+}
 
 // Lifecycle only, no markers. Every kernel must be wrapped or nothing it records is published.
 struct profileScopeLifecycle {
@@ -456,50 +389,27 @@ struct profileScopeLifecycle {
     FORCE_INLINE ~profileScopeLifecycle() { finish_profiler(); }
 };
 
-// Tag, timestamp, payload; the length is self-describing (word2), bounded by the 7-bit length field. Same
-// reserve-before-clock-read ordering as mark_zone_close.
-template <typename... Args>
-PROFILER_INLINE_ATTR void time_stamped_data(uint32_t data_id, uint64_t data, Args... trailers) {
-    constexpr uint32_t total_data_count = 1 + sizeof...(trailers);
-    static_assert(2 * total_data_count <= ppfmt::DATA_SIZE_MASK, "payload overflows PP_DATA's 7-bit length field");
+}  // namespace kernel_profiler
 
-    ring_ensure_room(1 + 3 + 2 * total_data_count);
-    uint32_t hi, lo;
-    read_wall_clock(hi, lo);
-    ring_write_sticky_timer(hi);
-    ring_write_word(ppfmt::data_w0(data_id));
-    ring_write_word(lo);
-    ring_write_word(ppfmt::data_w2(2 * total_data_count));
-    ring_write_word(data >> 32);
-    ring_write_word((data << 32) >> 32);
-    ((ring_write_word(trailers >> 32), ring_write_word((trailers << 32) >> 32)), ...);
-    publish_tail_batched(1 + 3 + 2 * total_data_count);
-}
+#include "noc_event_profiler.hpp"
+#include "perf_counters.hpp"
+#include "internal/profiler/synchronization_event_profiler.hpp"
+#include "internal/debug/device_publish.h"
 
-// PP_EVENT point marker: compile-time event, 2 words, no payload.
-PROFILER_INLINE_ATTR void record_event(uint32_t data_id) {
-    ring_ensure_room(SPSC_MARKER_WORDS + 1);
-    uint32_t hi, lo;
-    read_wall_clock(hi, lo);
-    ring_write_sticky_timer(hi);
-    ring_write_word(ppfmt::event_w0(data_id));
-    ring_write_word(lo);
-    publish_tail_batched(SPSC_MARKER_WORDS + 1);
-}
+namespace kernel_profiler {
 
 // Watcher-off net for a globals-heavy kernel whose loader-guaranteed stack floor is only MEM_*_STACK_MIN_SIZE
-// (192-256 B): plant one word at __stack_base when the kernel zone opens, check it at close, emit a named
-// PP_EVENT if frame data overwrote it. The pattern is the watcher's stack_usage_pattern on purpose, so an
+// (192-256 B): plant one word at __stack_base when the kernel zone opens, check it at close, publish a
+// STACK-OVERFLOW event if frame data overwrote it. The pattern is the watcher's stack_usage_pattern on purpose, so an
 // intact canary reads as painted-and-unused to measure_stack_usage(). Compiled out for firmware
 // (__stack_base is a kernel-link symbol) and active ERISC (stack guarded by -Werror=stack-usage).
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_ERISC)
-TT_ZONE_DEFINE_ID(STACK_CANARY_DEAD_ID, "STACK-OVERFLOW");
 constexpr uint32_t STACK_CANARY_PATTERN = 0xBABABABA;  // == watcher stack_usage_pattern
 struct stackCanaryScope {
     FORCE_INLINE stackCanaryScope() { ::__stack_base[0] = STACK_CANARY_PATTERN; }
     FORCE_INLINE ~stackCanaryScope() {
         if (__builtin_expect(::__stack_base[0] != STACK_CANARY_PATTERN, 0)) {
-            record_event(STACK_CANARY_DEAD_ID::id());
+            DevicePublish<sp::EventMetadata{"STACK-OVERFLOW"_s}>();
         }
     }
 };
@@ -507,34 +417,38 @@ struct stackCanaryScope {
 struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floor to watch
 #endif
 
+// A zone gated on a bool evaluated once at entry: false reads no clock and writes nothing, and a constant argument
+// folds to the plain zone or to no code. Its open state is only its 8-byte start, since more would be register pressure
+// across the user code inside the zone, and a globals-maxed kernel on the 192-256 B loader stack floor already gets
+// tight around 10-20 open zones.
+template <typename Site, auto kMetadata>
+struct profileScope {
+    bool on;
+    sp::Timestamp start;
+    FORCE_INLINE profileScope(bool active) : on(active) {
+        if (on) {
+            start = sp::Timestamp::now();
+        }
+    }
+    FORCE_INLINE ~profileScope() {
+        if (on) {
+            Site::template publish<kMetadata>(records::ZoneStart{start});
+        }
+    }
+};
+
 }  // namespace kernel_profiler
 
-#include "noc_event_profiler.hpp"
-#include "perf_counters.hpp"
-#include "internal/profiler/synchronization_event_profiler.hpp"
+#define DeviceZoneScopedNIf(name, active)                                                                         \
+    kernel_profiler::profileScope<DevicePublishSite, ::kernel_profiler::sp::ZoneMetadata{TT_RECORD_STRING(name)}> \
+        zone{active};
 
-#define DeviceZoneScopedN(name)    \
-    TT_ZONE_DEFINE_ID(hash, name); \
-    kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
+#define DeviceZoneScopedN(name) DeviceZoneScopedNIf(name, true)
 
-#define DeviceZoneScopedNIf(name, active) \
-    TT_ZONE_DEFINE_ID(hash, name);        \
-    kernel_profiler::profileScopeIf<hash> zone = kernel_profiler::profileScopeIf<hash>(active);
+#define DeviceTimestampedData(name, data) \
+    DevicePublish<::kernel_profiler::sp::TimestampedDataMetadata{TT_RECORD_STRING(name)}>(static_cast<uint64_t>(data))
 
-// DeviceTimestampedData carries a payload; DeviceRecordEvent is a bare 2-word marker. Both have a compile-time
-// tag and an ELF-resolvable name. The DRAM backend's DeviceRecordEvent takes a runtime uint16 id; here the wire
-// names every point marker from the ELF, so the argument is a compile-time name like the other macros'.
-#define DeviceTimestampedData(name, data)                     \
-    {                                                         \
-        TT_ZONE_DEFINE_ID(hash, name);                        \
-        kernel_profiler::time_stamped_data(hash::id(), data); \
-    }
-
-#define DeviceRecordEvent(name)                    \
-    {                                              \
-        TT_ZONE_DEFINE_ID(hash, name);             \
-        kernel_profiler::record_event(hash::id()); \
-    }
+#define DeviceRecordEvent(name) DevicePublish<::kernel_profiler::sp::EventMetadata{TT_RECORD_STRING(name)}>()
 
 #define DeviceValidateProfiler(condition) kernel_profiler::set_profiler_zone_valid(condition);
 
