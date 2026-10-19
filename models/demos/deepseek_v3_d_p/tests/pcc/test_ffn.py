@@ -51,11 +51,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ids=["isl_5k", "isl_5k-k3-33792-situ", "isl_5k-v4-18432-clamped"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, tp_axis",
     [
         pytest.param(
             (1, 4),
             torus_x_device_params(),
+            1,
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="torus-x-1x4",
@@ -65,14 +66,25 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             (2, 4),
             fabric2d_device_params(),
             2,
+            1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
+        ),
+        # The same LoudBox, transposed: TP=4 on mesh axis 0, as when SP moves to axis 1.
+        pytest.param(
+            (4, 2),
+            fabric2d_device_params(),
+            2,
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2-tp0",
         ),
         # BH Galaxy, the production shape.
         pytest.param(
             (8, 4),
             torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
             2,
+            1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
@@ -86,6 +98,7 @@ def test_ffn_pcc(
     hidden_dim: int,
     activation: str,
     num_links: int,
+    tp_axis: int,
 ):
     """
     Test TtFfn PCC against TorchExpert reference.
@@ -115,7 +128,7 @@ def test_ffn_pcc(
     clamp_limit = DeepSeekV4ProConfig.SWIGLU_LIMIT
     gate_up_scale = 4.5 if is_clamped else 1.0
 
-    topology = per_axis_topology(device_params["fabric_config"])[1]
+    topology = per_axis_topology(device_params["fabric_config"])[tp_axis]
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
     logger.debug(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
@@ -123,8 +136,8 @@ def test_ffn_pcc(
 
     signpost(f"FFN PCC test - {mesh_shape=} {batch_seq_len=} {hidden_dim=} {activation=} {num_links=} {topology=}")
 
-    actual_num_links = get_num_links(mesh_device, cluster_axis=1)
-    logger.debug(f"Available ethernet links along mesh columns: {actual_num_links}")
+    actual_num_links = get_num_links(mesh_device, cluster_axis=tp_axis)
+    logger.debug(f"Available ethernet links along the TP axis: {actual_num_links}")
     logger.debug(f"Using num_links={num_links}, topology={topology}")
 
     # Create PyTorch reference model with FFN dimensions
@@ -156,6 +169,7 @@ def test_ffn_pcc(
         weights_dtype=weights_dtype,
         activation=activation,
         clamped_silu_glu_limit=clamp_limit,
+        tp_axis=tp_axis,
         **situ_betas,
     )
 
@@ -185,18 +199,20 @@ def test_ffn_pcc(
     logger.debug("Converting TTNN output to torch for comparison")
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1) if tp_axis == 1 else (-1, 0)
+        ),
     )
     logger.debug(f"TTNN output converted to torch: {tt_output_torch.shape}")
 
-    # The input is replicated across mesh ROWS (only the TP axis, dim 1, is sharded), so composing
-    # dim 0 stacks mesh_shape[0] copies of the same result. Tile the reference to match rather than
+    # The input is replicated across the non-TP axis (only the TP axis is sharded), so composing
+    # dim 0 stacks mesh_shape[1 - tp_axis] copies of the same result. Tile the reference to match rather than
     # slicing off one copy: a row that diverged would then still show up in the PCC. No-op on a
     # single-row mesh, which is what every non-Galaxy param here is.
     #
     # Tile once and only once -- at K3's 3200x7168 each fp32 copy is ~92 MB, ~734 MB tiled across a
     # Galaxy's 8 rows, in a test that is already multi-gigabyte on the host.
-    torch_reference = torch_output.repeat(mesh_shape[0], 1)
+    torch_reference = torch_output.repeat(mesh_shape[1 - tp_axis], 1)
 
     logger.debug("Comparing outputs with PCC")
     pcc_passed, pcc_message = assert_with_pcc(

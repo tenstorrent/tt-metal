@@ -222,6 +222,13 @@ def ep_mesh_dims(sp_axis: int = 0) -> tuple[int, int]:
     return (1, 0) if sp_axis == 0 else (0, 1)
 
 
+def mesh_shard_dims(dim: int, axis: int) -> tuple:
+    """ShardTensor2dMesh dims that shard tensor dim ``dim`` over mesh axis ``axis`` and replicate over
+    the other axis: (None, dim) for axis=1, (dim, None) for axis=0."""
+    assert axis in (0, 1), f"axis must be 0 or 1, got {axis}"
+    return (None, dim) if axis == 1 else (dim, None)
+
+
 class ExpertMapping:
     """
     Encapsulates expert-to-device mapping logic for MoE weight distribution.
