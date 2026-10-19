@@ -107,6 +107,15 @@ Three device samples use real-time profiler timestamps: the maximum per-chip spa
 
 Results, individual samples, and per-chip timestamps are saved after each case to `investigations/gemma4_varlen_perf/results.json`. The [initial comparison](../../../../investigations/gemma4_varlen_perf/baseline_2026-10-19.csv) and [sample distributions](../../../../investigations/gemma4_varlen_perf/baseline_2026-10-19.json) are checked in. Set `GEMMA4_PERF_OUTPUT` to retain separate runs, `GEMMA4_PERF_PREFIXES=0` for a short initial-prefix comparison, or `GEMMA4_PERF_REPEATS` / `GEMMA4_PERF_DEVICE_REPEATS` to change sample counts. The default run also primes six long histories in each layout; this setup time is not part of the reported latency.
 
+After the global tuning fix at `be99be86ffd`, the [comparison rerun](../../../../investigations/gemma4_varlen_perf_global_tuned/comparison.csv) measured the following full-model device times in milliseconds, shown as legacy → packed. Both paths were remeasured with six resident slots; [individual samples](../../../../investigations/gemma4_varlen_perf_global_tuned/measurements.json) are retained.
+
+| Requests | No cached prefix | 253,952-token prefix |
+|---|---:|---:|
+| 1 × 8192 | 111.4 → 129.4 | 277.4 → 296.6 |
+| 1 × 1600 | 111.2 → 104.5 | 272.5 → 249.2 |
+| 4 × 1600 | 444.9 → 136.9 | 1094.1 → 717.2 |
+| 256, 512, 768, 1024, 1536, 2048 | 667.7 → 142.7 | 1644.7 → 465.8 |
+
 Run the end-to-end hardware check, which starts both the runner and producer:
 
 ```bash
