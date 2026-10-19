@@ -159,7 +159,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     matmul/matmul.cpp
     matmul/device/matmul_device_operation.cpp
     matmul/device/config/matmul_program_config.cpp
-    matmul/device/config/matmul_unified_auto_config.cpp
+    matmul/device/config/matmul_unified_placement.cpp
     matmul/device/utilities/matmul_utilities.cpp
     matmul/device/sparse/sparse_matmul_device_operation.cpp
     matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp

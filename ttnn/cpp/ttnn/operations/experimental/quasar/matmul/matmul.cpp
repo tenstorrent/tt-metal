@@ -229,13 +229,17 @@ static ttnn::Tensor bound_matmul(
         auto bias_data_format = datatype_to_dataformat_converter(bias.value().dtype());
         bias_single_tile_size = tt::tile_size(bias_data_format);
     }
-    MatmulProgramConfig chosen_program_config = get_program_config(
-        input_tensor_a,
-        input_tensor_b,
-        parameters.transpose_a,
-        parameters.transpose_b,
-        bias_single_tile_size,
-        matmul_struct);
+    // An explicit config is taken as given here; a unified one without cores gets its placement from the op, on the
+    // operands after the transposes and reshape below.
+    MatmulProgramConfig chosen_program_config = parameters.program_config.has_value()
+                                                    ? parameters.program_config.value()
+                                                    : get_program_config(
+                                                          input_tensor_a,
+                                                          input_tensor_b,
+                                                          parameters.transpose_a,
+                                                          parameters.transpose_b,
+                                                          bias_single_tile_size,
+                                                          matmul_struct);
     //----------------------------------------------------------------------------------------------
 
     // Decide if we need to manually transpose or if the program config will handle it
@@ -247,9 +251,11 @@ static ttnn::Tensor bound_matmul(
     bool needs_manual_transpose_b = parameters.transpose_b && needs_manual_transpose;
     if (!parameters.program_config.has_value() &&
         std::holds_alternative<MatmulUnifiedProgramConfig>(chosen_program_config)) {
-        // The auto-config chose the unified matmul, which fuses the activation; keep the choice so the op does not
-        // choose again.
-        parameters.program_config = chosen_program_config;
+        // The auto-config chose the unified matmul: keep the choice so the op does not choose again, and fuse the
+        // activation instead of running it after the op.
+        MatmulUnifiedProgramConfig unified = std::get<MatmulUnifiedProgramConfig>(chosen_program_config);
+        unified.fused_activation = parameters.user_fused_activation;
+        parameters.program_config = unified;
         parameters.user_fused_activation = std::nullopt;
     }
 
