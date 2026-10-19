@@ -35,6 +35,10 @@ struct PermuteRmCbPlan {
 // `slot_bytes` fits in `l1_budget`; nullopt when even a single-stick turn does not fit.
 std::optional<PermuteRmCbPlan> plan_permute_rm_cb(uint32_t slot_bytes, uint64_t l1_budget);
 
+// CB slot of the row-invariant path: the larger aligned page of the input buffer and of the output spec.
+// Needs only the output spec, so the gate and the program hash can size it before the output exists.
+uint32_t permute_rm_slot_bytes(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
+
 // L1 bytes the blocked kernels hold in CBs for one core. The block edge is the tile edge, so this
 // does not scale with the budget and the gate can only accept or reject it.
 uint64_t permute_blocked_cb_bytes(uint32_t element_size);

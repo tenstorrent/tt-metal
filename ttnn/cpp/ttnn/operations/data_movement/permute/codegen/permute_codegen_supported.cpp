@@ -10,11 +10,8 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/data_movement/permute/codegen/permute_codegen_program_factory.hpp"
 
@@ -58,16 +55,12 @@ bool geometry_fits(
     const uint32_t element_size = input.element_size();
     const uint32_t last_output_axis = dims[rank - kWidthAxisFromEnd];
 
-    const auto& allocator = input.device()->allocator();
-    const uint64_t out_alignment = allocator->get_alignment(output_mem_config.buffer_type());
     const tt::tt_metal::TensorSpec output_spec = permute_output_spec(input, dims, output_mem_config);
-    const uint64_t in_page = input.buffer()->aligned_page_size();
-    const uint64_t out_page = tt::round_up(uint64_t{output_spec.compute_page_size_bytes()}, out_alignment);
 
     const uint64_t l1_budget = ttnn::prim::permute_cb_l1_budget(input, output_spec);
     if (last_output_axis == rank - kWidthAxisFromEnd) {
-        const auto slot_bytes = static_cast<uint32_t>(std::max(in_page, out_page));
-        return ttnn::prim::plan_permute_rm_cb(slot_bytes, l1_budget).has_value();
+        return ttnn::prim::plan_permute_rm_cb(ttnn::prim::permute_rm_slot_bytes(input, output_spec), l1_budget)
+            .has_value();
     }
     return ttnn::prim::permute_blocked_cb_bytes(element_size) <= l1_budget;
 }

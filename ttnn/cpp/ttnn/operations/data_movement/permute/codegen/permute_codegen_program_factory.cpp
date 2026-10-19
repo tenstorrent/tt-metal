@@ -104,23 +104,17 @@ std::vector<uint32_t> row_strides(const std::vector<uint32_t>& shape) {
     return strides;
 }
 
-uint64_t l1_bytes_per_bank(const TensorSpec& spec, MeshDevice& device) {
+uint64_t spec_l1_bytes_per_bank(const TensorSpec& spec, MeshDevice& device) {
     if (spec.memory_config().buffer_type() != BufferType::L1) {
         return 0;
     }
     const auto& allocator = device.allocator();
-    const ttnn::Shape& shape = spec.logical_shape();
-    const uint64_t pages = shape.volume() / shape[shape.rank() - kPermuteWidthAxisFromEnd];
-    const uint64_t alignment = allocator->get_alignment(BufferType::L1);
-    const uint64_t banks = allocator->get_num_banks(BufferType::L1);
-    return tt::div_up(pages, banks) * tt::round_up(uint64_t{spec.compute_page_size_bytes()}, alignment);
+    return spec.compute_consumed_memory_bytes_per_bank(
+        allocator->get_alignment(BufferType::L1), allocator->get_num_banks(BufferType::L1));
 }
 
-uint32_t row_invariant_slot_bytes(const Tensor& input, const TensorSpec& output_spec) {
-    const uint64_t out_alignment =
-        input.device()->allocator()->get_alignment(output_spec.memory_config().buffer_type());
-    const uint64_t out_page = tt::round_up(uint64_t{output_spec.compute_page_size_bytes()}, out_alignment);
-    return static_cast<uint32_t>(std::max<uint64_t>(input.buffer()->aligned_page_size(), out_page));
+uint64_t input_l1_bytes_per_bank(const Tensor& input) {
+    return input.memory_config().buffer_type() == BufferType::L1 ? input.buffer()->aligned_size_per_bank() : 0;
 }
 
 KernelDescriptor make_kernel(const CoreRangeSet& cores) {
@@ -165,8 +159,7 @@ ProgramDescriptor build_row_invariant(
     const uint32_t row_axes = static_cast<uint32_t>(input_shape.size()) - kPermuteWidthAxisFromEnd;
     const uint32_t stick_bytes = width * input.element_size();
     const uint32_t src_page = static_cast<uint32_t>(src_buffer->aligned_page_size());
-    const uint32_t dst_page = static_cast<uint32_t>(dst_buffer->aligned_page_size());
-    const uint32_t slot_bytes = std::max(src_page, dst_page);
+    const uint32_t slot_bytes = permute_rm_slot_bytes(input, output.tensor_spec());
     const uint32_t num_sticks = static_cast<uint32_t>(input.logical_shape().volume() / width);
 
     const std::optional<PermuteRmCbPlan> planned =
@@ -355,10 +348,20 @@ ProgramDescriptor build_blocked(
 
 }  // namespace
 
+uint32_t permute_rm_slot_bytes(const Tensor& input, const TensorSpec& output_spec) {
+    // With one bank per page, the per-bank footprint is exactly one aligned page.
+    const ttnn::Shape& shape = output_spec.logical_shape();
+    const uint64_t output_pages =
+        std::max<uint64_t>(shape.volume() / std::max<uint32_t>(shape[shape.rank() - kPermuteWidthAxisFromEnd], 1), 1);
+    const uint64_t out_page = output_spec.compute_consumed_memory_bytes_per_bank(
+        input.device()->allocator()->get_alignment(output_spec.memory_config().buffer_type()), output_pages);
+    return static_cast<uint32_t>(std::max<uint64_t>(input.buffer()->aligned_page_size(), out_page));
+}
+
 uint64_t permute_cb_l1_budget(const Tensor& input, const TensorSpec& output_spec) {
     MeshDevice* device = input.device();
     const uint64_t window = device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    const uint64_t operands = l1_bytes_per_bank(input.tensor_spec(), *device) + l1_bytes_per_bank(output_spec, *device);
+    const uint64_t operands = input_l1_bytes_per_bank(input) + spec_l1_bytes_per_bank(output_spec, *device);
     return window > operands ? window - operands : 0;
 }
 
@@ -374,8 +377,7 @@ uint64_t permute_live_cb_l1_budget(const Tensor& input, const TensorSpec& output
 }
 
 std::optional<PermuteRmCbPlan> permute_rm_cb_plan(const Tensor& input, const TensorSpec& output_spec) {
-    return plan_permute_rm_cb(
-        row_invariant_slot_bytes(input, output_spec), permute_live_cb_l1_budget(input, output_spec));
+    return plan_permute_rm_cb(permute_rm_slot_bytes(input, output_spec), permute_live_cb_l1_budget(input, output_spec));
 }
 
 std::optional<PermuteRmCbPlan> plan_permute_rm_cb(uint32_t slot_bytes, uint64_t l1_budget) {

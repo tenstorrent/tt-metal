@@ -323,7 +323,9 @@ ttnn::Tensor permute(
 
     const auto normalized_dims = detail::normalize_permute_dims(input_tensor, dims);
     const MemoryConfig output_mem_config = memory_config.value_or(input_tensor.memory_config());
-    if (operations::data_movement::codegen_supported_on_arch(input_tensor) &&
+    // An identity permutation is answered from host state by native; codegen would copy the tensor.
+    if (!detail::is_permute_nop(input_tensor, normalized_dims) &&
+        operations::data_movement::codegen_supported_on_arch(input_tensor) &&
         permute_codegen::supported_by_codegen(input_tensor, normalized_dims, output_mem_config) &&
         !permute_codegen::is_demoted(input_tensor, normalized_dims)) {
         return detail::permute_via_codegen(input_tensor, normalized_dims, output_mem_config);
