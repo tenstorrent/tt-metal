@@ -26,6 +26,7 @@ class _Gemma4SamplingGenerator(SamplingGenerator):
 
     _feedback_tokens = None
     _public_tokens = None
+    advance_feedback_seed = False
 
     def bind_public_tokens(self, tokens, public_tokens):
         self._feedback_tokens = tokens
@@ -41,6 +42,8 @@ class _Gemma4SamplingGenerator(SamplingGenerator):
         )
 
     def _run_sampling(self, logits, *, penalties_on, tt_out_tok, count_tokens=True):
+        if self.advance_feedback_seed and tt_out_tok is self._feedback_tokens:
+            ttnn.plus_one(self.tt_sampling.seeds_tt_tensor)
         output = super()._run_sampling(
             logits, penalties_on=penalties_on, tt_out_tok=tt_out_tok, count_tokens=count_tokens
         )
@@ -162,7 +165,7 @@ class Gemma4Generator:
         """Set request sampling state before binding/capturing a decode trace.
 
         Per-slot parameter lists use the common sampler's 32-lane padding.
-        Device-owned seeds advance in the model trace, so the common sampler's
+        Device-owned seeds advance in the feedback sampling trace, so the common sampler's
         host request-seed manager remains inactive. Optional seed offsets restore
         that device increment sequence when a scheduler rebuilds the batch.
         """
@@ -171,6 +174,7 @@ class Gemma4Generator:
             self._release_trace()
         temperatures = params.temperature if isinstance(params.temperature, list) else [params.temperature]
         self.sampled_mode = any(value != 0.0 for value in temperatures)
+        self.sampler.advance_feedback_seed = self.sampled_mode
         if getattr(self, "prefill_prepared", None) is not None and (
             self.host_sampling
             or self.sampled_mode
@@ -234,6 +238,7 @@ class Gemma4Generator:
             self.output_buffer = None
         self.sampler.reset_trace()
         if self.trace_id is not None:
+            self.counters["decode_releases"] = self.counters.get("decode_releases", 0) + 1
             ttnn.release_trace(self.mesh, self.trace_id)
             self.trace_id = None
         self._trace_returns_logits = False
@@ -452,7 +457,7 @@ class Gemma4Generator:
         for start, length in zip(starts, prompt_lens):
             if int(start) != start or not 0 <= start < length <= min(tokens.shape[1], self.model.max_seq_len):
                 raise ValueError("Invalid logical prefill interval")
-        table = self._upload_page_tables(page_table)
+        table = None
         outputs = []
         suffix_lengths = []
         for row, (slot, start, length) in enumerate(zip(slots, starts, prompt_lens)):
@@ -461,7 +466,7 @@ class Gemma4Generator:
             suffix_lengths.append(suffix_length)
             trace_suffix = (
                 os.getenv("GEMMA4_PREFIX_TRACE_SUFFIX") == "1"
-                and len(slots) == 1 and slot == 0 and start > 0 and suffix_length >= 8
+                and len(slots) == 1 and slot == 0 and start > 0
                 and not return_all_logits
                 and all(isinstance(t, torch.Tensor) and t.shape[0] == 1 for t in self._tables(page_table))
             )
@@ -473,10 +478,10 @@ class Gemma4Generator:
                         tokens[:, position : position + 1], torch.tensor([position]),
                         page_table=page_table, kv_cache=kv_cache, return_logits=True,
                     )
-                # The trace owns padded output storage; retain an independent
-                # logical row across subsequent trace release/rebinding.
-                logits = ttnn.clone(traced[:, :, :1, :])
+                logits = self._copy_prefix_logits(traced)
             else:
+                if table is None:
+                    table = self._upload_page_tables(page_table)
                 ids = self.model.upload(
                     tokens[row : row + 1, start:length].reshape(1, 1, 1, suffix_length).int(),
                     ttnn.uint32,
@@ -546,9 +551,12 @@ class Gemma4Generator:
         )
         ttnn.plus_one(self.positions, skip_negative_entries=True)
         ttnn.plus_one(self.cache_positions, skip_negative_entries=True)
-        if self.sampled_mode and not self._trace_returns_logits:
-            ttnn.plus_one(self.sampler.tt_sampling.seeds_tt_tensor)
         return self._sampler_logits(logits)
+
+    def _copy_prefix_logits(self, logits):
+        ttnn.slice(logits, starts=(0, 0, 0, 0), ends=tuple(self.prefix_logits.shape),
+                   steps=(1, 1, 1, 1), output_tensor=self.prefix_logits)
+        return self.prefix_logits
 
     @staticmethod
     def _tables(page_table):
@@ -598,22 +606,23 @@ class Gemma4Generator:
         )
         self.public_tokens_view = ttnn.reshape(self.public_tokens, (batch,))
         self.sampler.bind_public_tokens(self.tokens, self.public_tokens)
+        self.prefix_logits = self.model.upload(torch.zeros(1, 1, batch, self.model.config.vocab_size // 4))
 
     def _format_tokens(self):
         self.sampler.format_public_tokens()
 
     def _capture(self, *, return_logits=False):
-        self._trace_returns_logits = return_logits
+        self._trace_returns_logits = False
         self._trace_sampled_mode = self.sampled_mode
-        if not return_logits:
-            self._format_tokens()
+        self._format_tokens()
         initial_tokens = ttnn.clone(self.tokens)
         initial_positions = ttnn.clone(self.positions)
         initial_cache_positions = ttnn.clone(self.cache_positions)
-        initial_seeds = None if return_logits else ttnn.clone(self.sampler.tt_sampling.seeds_tt_tensor)
+        initial_seeds = ttnn.clone(self.sampler.tt_sampling.seeds_tt_tensor)
         warmed = self._forward()
-        if not return_logits:
-            self.sampler.precompile(warmed, tt_out_tok=self.tokens)
+        self._copy_prefix_logits(warmed)
+        self._sampler_logits(self.prefix_logits)
+        self.sampler.precompile(warmed, tt_out_tok=self.tokens)
         ttnn.copy(initial_tokens, self.tokens)
         ttnn.copy(initial_positions, self.positions)
         ttnn.copy(initial_cache_positions, self.cache_positions)
@@ -623,9 +632,8 @@ class Gemma4Generator:
         self.trace_id = ttnn.begin_trace_capture(self.mesh, cq_id=0)
         self.trace_logits = self._forward()
         ttnn.end_trace_capture(self.mesh, self.trace_id, cq_id=0)
-        if not return_logits:
-            self.sampler.capture_trace(self.trace_logits, tt_out_tok=self.tokens, skip_precompile=True)
-            self._capture_prefill()
+        self.sampler.capture_trace(self.trace_logits, tt_out_tok=self.tokens, skip_precompile=True)
+        self._capture_prefill()
         ttnn.copy(initial_tokens, self.tokens)
         ttnn.copy(initial_positions, self.positions)
         ttnn.copy(initial_cache_positions, self.cache_positions)
@@ -633,7 +641,8 @@ class Gemma4Generator:
             ttnn.copy(initial_seeds, self.sampler.tt_sampling.seeds_tt_tensor)
         ttnn.synchronize_device(self.mesh)
         self.counters["decode_captures"] = self.counters.get("decode_captures", 0) + 1
-        print("LOGITS_TRACE_READY" if return_logits else "SPLIT_TRACE_READY", flush=True)
+        print(f"SPLIT_TRACE_READY id={self.trace_id} captures={self.counters['decode_captures']} "
+              f"releases={self.counters.get('decode_releases', 0)}", flush=True)
 
     def decode_forward(
         self,
@@ -654,7 +663,6 @@ class Gemma4Generator:
         batch = len(start_pos)
         binding_changed = (
             self.trace_id is None
-            or self._trace_returns_logits != return_logits
             or kv_cache is not self.cache
             or batch != self.batch
             or self._table_shapes(page_table) != self._table_shapes(self.table)
@@ -690,17 +698,17 @@ class Gemma4Generator:
                 pos[0, :batch] = start_pos
                 self._copy(pos, self.positions, "position_refreshes")
                 self._copy(start_pos.int(), self.cache_positions, "cache_position_refreshes")
-        output = self._replay()
+        output = self._replay(return_logits=return_logits)
         if return_logits:
             return output
         if self.host_sampling:
             self._format_tokens()
         return self.public_tokens_view
 
-    def _replay(self):
+    def _replay(self, *, return_logits=False):
         ttnn.execute_trace(self.mesh, self.trace_id, cq_id=0, blocking=False)
         self.counters["model_replays"] = self.counters.get("model_replays", 0) + 1
-        if self._trace_returns_logits:
+        if return_logits:
             self.last_log_probs = None
             return self.trace_logits
         if self.host_sampling:

@@ -106,6 +106,7 @@ def test_traced_suffix_uses_explicit_tokens_without_sampling(monkeypatch):
     generator.model = SimpleNamespace(max_seq_len=2048, config=SimpleNamespace(vocab_size=16))
     generator._upload_page_tables = lambda value: value
     generator.decode_forward = Mock(return_value=torch.zeros(1, 1, 32, 4))
+    generator._copy_prefix_logits = lambda value: value[:, :, :1, :].clone()
     cache, table = object(), torch.tensor([[7, 9]])
     generator.prefill_forward(
         torch.arange(63).reshape(1, 63), page_table=table, kv_cache=cache, prompt_lens=[63], start_pos=[32]
@@ -133,6 +134,20 @@ def _metric_totals(url):
         assert values, f"Metric missing: {metric}"
         totals[metric] = sum(values)
     return totals
+
+
+def test_logits_replay_does_not_sample(monkeypatch):
+    generator = object.__new__(Gemma4Generator)
+    generator.mesh, generator.trace_id = object(), 42
+    generator.trace_logits = object()
+    generator.counters = {}
+    generator.sampler = Mock()
+    execute = Mock()
+    monkeypatch.setattr(ttnn, "execute_trace", execute)
+    assert generator._replay(return_logits=True) is generator.trace_logits
+    execute.assert_called_once_with(generator.mesh, 42, cq_id=0, blocking=False)
+    generator.sampler.sample.assert_not_called()
+    assert generator.counters["model_replays"] == 1
 
 
 def _cache_hits(url):

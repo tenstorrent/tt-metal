@@ -32,6 +32,7 @@ class Gemma4ForCausalLM:
         self._eager_prefill_key = None
         self._eager_decode_trace_id = None
         self._pending_eager_prefill_key = None
+        self._prefix_decode_trace_id = None
         self.allow_host_sampling = os.environ.get("GEMMA4_26B_ALLOW_HOST_SAMPLING") == "1"
 
     def embed_input_ids(self, input_ids):
@@ -301,7 +302,20 @@ class Gemma4ForCausalLM:
         if not reuse_eager:
             self._eager_prefill_key = None
             self._eager_decode_trace_id = None
-        reuse_request = reuse_prefill or reuse_eager
+        reuse_prefix = (
+            continuation
+            and not on_host
+            and os.environ.get("GEMMA4_PREFIX_TRACE_SUFFIX") == "1"
+            and len(prompt_lens) == 1
+            and gen.cache is kv_cache
+            and gen.trace_id is not None
+            and gen.batch == 1
+            and gen.active_slots == (0,)
+            and gen._table_shapes(tables) == gen._table_shapes(gen.table)
+            and gen.can_reuse_serving_decode(sampling_params, allow_eager_prefill=True)
+        )
+        self._prefix_decode_trace_id = None
+        reuse_request = reuse_prefill or reuse_eager or reuse_prefix
         if on_host:
             gen._release_trace()
         else:
@@ -345,6 +359,10 @@ class Gemma4ForCausalLM:
             return self._read_host_logits(logits, len(prompt_lens))
         output = gen.sample_prefill(logits)
         host = ttnn.to_torch(ttnn.get_device_tensors(output)[0]).reshape(-1)
+        if continuation and gen.trace_id is not None:
+            self._prefix_decode_trace_id = gen.trace_id
+            print(f"PREFIX_TRACE_STATE id={gen.trace_id} captures={gen.counters.get('decode_captures', 0)} "
+                  f"releases={gen.counters.get('decode_releases', 0)}", flush=True)
         self._pending_eager_prefill_key = eager_key
         return host[: len(prompt_lens)].reshape(-1, 1)
 
@@ -389,14 +407,19 @@ class Gemma4ForCausalLM:
             seed_offsets = None
             if output_token_counts is not None:
                 counts = self._output_counts(output_token_counts, tokens.shape[0])
-                # Prefill uses the base seed; _forward increments before each
+                # Prefill uses the base seed; feedback sampling increments before each
                 # decode sample. The last generated token is this step's input.
                 seed_offsets = (counts - 1).clamp_min(0)
             if signature != self._sampling_signature:
                 eager_decode = self._has_eager_decode_trace()
+                prefix_decode = (
+                    self._prefix_decode_trace_id is not None
+                    and self._prefix_decode_trace_id == gen.trace_id
+                    and gen.cache is kv_cache
+                )
                 reuse_trace = (
-                    getattr(gen, "prefill_prepared", None) is not None or eager_decode
-                ) and gen.can_reuse_serving_decode(sampling_params, allow_eager_prefill=eager_decode)
+                    getattr(gen, "prefill_prepared", None) is not None or eager_decode or prefix_decode
+                ) and gen.can_reuse_serving_decode(sampling_params, allow_eager_prefill=eager_decode or prefix_decode)
                 gen.configure_sampling(
                     sampling_params, prompt_tokens=prompt_tokens, seed_offsets=seed_offsets, _reuse_trace=reuse_trace
                 )
