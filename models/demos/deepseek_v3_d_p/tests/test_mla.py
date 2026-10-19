@@ -742,7 +742,7 @@ def _run_chunked_prefill(
     cache_shard_dims = [None, None]
     cache_shard_dims[sp_axis] = 2
     if tp_shard_kv:
-        # A mapper can't split dim 2 over both axes, so TP rides a leading dim (see tp_stripe_major_cache).
+        # A mapper can't split dim 2 over both axes, so TP rides dim 1.
         cache_shard_dims[tp_axis] = 1
 
     # ---- preload the prior prefix (trace or random) into each slot, block-cyclic ----
@@ -766,7 +766,6 @@ def _run_chunked_prefill(
                 kv_prior[:, config.kv_lora_rank :] = torch.stack([pe[:, : d // 2], pe[:, d // 2 :]], dim=-1).reshape(
                     pe.shape[0], d
                 )
-            # Dedup is block-cyclic over sp*tp: build linear rank order, then give TP its leading dim.
             stripes = sp * tp if tp_shard_kv else sp
             bc = blockcyclic_cache_host(kv_prior, stripes, chunk_size_global, seq_len_cache, kvpe_dim)[0, 0]
             cache_host[u] = tp_stripe_major_cache(bc, sp, tp) if tp_shard_kv else bc.unsqueeze(0)

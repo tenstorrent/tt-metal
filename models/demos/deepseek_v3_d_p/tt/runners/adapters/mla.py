@@ -160,7 +160,6 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
-            # None keeps the model's derivation (sparse always dedups, dense does not); True opts dense in.
             tp_shard_kv=True if self._dense_tp_shard_kv(params) else None,
         )
         return TtPrefillRuntime(

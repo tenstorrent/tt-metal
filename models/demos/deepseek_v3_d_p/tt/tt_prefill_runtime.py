@@ -105,7 +105,7 @@ class TtPrefillRuntimeConfig:
     # ~2*(MoE layers) host load/clear round-trips per replay. Set False (PREFILL_OVERLAP_SHARED_EXPERT=0) to
     # capture the forward as ONE trace segment (no per-chunk swaps -> faster replay); costs the overlap.
     overlap_shared_expert_with_dispatch: bool = True
-    # KV dedup; must match the cache allocation. None keeps ttMLA's derivation (sparse dedups, dense does not).
+    # KV dedup, must match the cache allocation. None: sparse dedups, dense does not.
     tp_shard_kv: Optional[bool] = None
 
     @property

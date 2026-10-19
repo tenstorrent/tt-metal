@@ -123,8 +123,8 @@ def _dram_bytes(mesh_device):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
 @pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
-@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
-def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layers, tp_shard_kv):
+def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layers):
+    tp_shard_kv = True
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_1M if num_layers >= DEEP_TRACE_FROM else TRACE_100K)
     if checkpoint is None or trace is None:

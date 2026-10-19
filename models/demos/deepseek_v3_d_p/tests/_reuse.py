@@ -66,7 +66,7 @@ class _Registry:
         return self.device
 
     def acquire_transformer(self, transformer_cls, mesh_device, variant, config, **ctor_kwargs):
-        # The KV layout is switched on a built model, so it must not force a second build.
+        # Switched on the built model, so it is not part of the cache key.
         tp_shard_kv = ctor_kwargs.pop("tp_shard_kv", None)
         key = (
             id(mesh_device),

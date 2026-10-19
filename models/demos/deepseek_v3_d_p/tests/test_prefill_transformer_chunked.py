@@ -209,36 +209,12 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # overhead, which can dominate the early chunks and obscure that ramp.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut eight times. Last re-cut: CI run 38480868957 / job 115586663557, where the traced MoE
-    # runs the routed expert overlapped with combine_fabric2d, ~27-54 ms less per chunk than main's
-    # centre (CI run 37730295536 / job 113160290655).
-    (61, 11, 10): [
-        0.321,
-        0.335,
-        0.367,
-        0.397,
-        0.432,
-        0.461,
-        0.490,
-        0.526,
-        0.569,
-        0.607,
-        0.641,
-    ],
+    # (55k / code_debug), TP-deduped KV cache.
+    (61, 11, 10): [0.376, 0.382, 0.414, 0.444, 0.472, 0.501, 0.529, 0.557, 0.598, 0.631, 0.664],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # 55k / code_debug: per-chunk medians over nine post-warmup iterations on a Galaxy with
-    # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%. Re-cut from the same run
-    # as the traced table (CI run 37730295536 / job 113160290655).
-    (61, 11, 10): [0.380, 0.384, 0.415, 0.439, 0.479, 0.509, 0.531, 0.560, 0.604, 0.634, 0.670],
-}
-# tp_sharded (dense KV dedup) legs of the same CI configs.
-KIMI_TP_SHARDED_TRACED_BASELINE_CHUNK_TIMES_S = {
-    (61, 11, 10): [0.376, 0.382, 0.414, 0.444, 0.472, 0.501, 0.529, 0.557, 0.598, 0.631, 0.664],
-}
-KIMI_TP_SHARDED_UNTRACED_BASELINE_CHUNK_TIMES_S = {
+    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations.
     (61, 11, 10): [0.391, 0.389, 0.416, 0.446, 0.475, 0.504, 0.532, 0.561, 0.601, 0.634, 0.666],
 }
 
@@ -1264,7 +1240,6 @@ _PADDED_MODES = ["notrace", "traced"]
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi_k2_7"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
@@ -1278,7 +1253,6 @@ def test_kimi_prefill_transformer_chunked_padded(
     splits,
     num_links,
     mode,
-    tp_shard_kv,
 ):
     """Padded/rotated chunked prefill, traced vs untraced (see _PADDED_MODES). Both modes exercise
     padding-aware MoE over the same `splits` and assert per-layer KV-cache PCC against the golden, so
@@ -1300,7 +1274,7 @@ def test_kimi_prefill_transformer_chunked_padded(
         *common,
         routing_use_l1_small_for_semaphores=True,
         mode="traced" if mode == "traced" else "scalar",
-        tp_shard_kv=tp_shard_kv,
+        tp_shard_kv=True,
     )
 
 
@@ -1842,7 +1816,7 @@ def run_chunked_transformer_updated(
     # max_seq_len / rope_scaling in place would leak into every later test of the same variant in the same
     # session. Deep-copy first, as test_prefill_block_loop.py does for the same reason.
     config = copy.deepcopy(config)
-    # None derives it from the variant (sparse dedups); dense opts in explicitly.
+    # None: sparse dedups, dense does not.
     tp_shard_kv = resolve_has_indexer(config) if tp_shard_kv is None else tp_shard_kv
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
     config.max_seq_len = seq_cache
@@ -2354,7 +2328,7 @@ def run_chunked_transformer_updated(
             # flipped element in num_layers x seq x kvpe; torch.equal does not. The cache is the right
             # surface because it is what every later chunk attends to, so a write landing out of order
             # inside the replay shows up here even when the final hidden state looks fine.
-            cache_now, _ = gather_cache_natural(tt_kvpe_cache.storage, mesh_device)
+            cache_now, _ = gather_cache_natural(tt_kvpe_cache.storage, mesh_device, tp_shard_kv)
             if det_baseline is None:
                 det_baseline = cache_now
                 logger.info(f"[determinism] iter {it} baseline KV cache {tuple(cache_now.shape)}")
@@ -2588,9 +2562,7 @@ def run_chunked_transformer_updated(
     assert not perf_failures, "chunk timing out of baseline tolerance:\n  " + "\n  ".join(perf_failures)
 
 
-def kimi_chunked_perf_gate(
-    use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin=None, tp_shard_kv=False
-):
+def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin=None):
     """Resolve the chunked-Kimi perf gate for one parametrization: returns
     ``(baseline_chunk_times_s, margin)`` for run_chunked_transformer_updated.
 
@@ -2605,18 +2577,13 @@ def kimi_chunked_perf_gate(
                      cache); any preload depth stays record-only.
 
     `perf_margin` overrides the mode default when not None, so a caller can still pin a band explicitly.
-    `tp_shard_kv` selects the dedup tables; an all-zero row is uncalibrated and stays record-only.
     """
-    if tp_shard_kv:
-        traced = KIMI_TP_SHARDED_TRACED_BASELINE_CHUNK_TIMES_S
-        untraced = KIMI_TP_SHARDED_UNTRACED_BASELINE_CHUNK_TIMES_S
-    else:
-        traced, untraced = KIMI_TRACED_BASELINE_CHUNK_TIMES_S, KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S
-    table, default_margin = (traced, TRACED_PERF_MARGIN) if use_trace else (untraced, UNTRACED_PERF_MARGIN)
+    table, default_margin = (
+        (KIMI_TRACED_BASELINE_CHUNK_TIMES_S, TRACED_PERF_MARGIN)
+        if use_trace
+        else (KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S, UNTRACED_PERF_MARGIN)
+    )
     baseline = table.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
-    if baseline is not None and not any(baseline):
-        logger.info("[perf gate] uncalibrated (all-zero) Kimi baseline; record-only, fill it from the medians")
-        baseline = None
     return baseline, (default_margin if perf_margin is None else perf_margin)
 
 
@@ -2714,7 +2681,6 @@ def glm_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_is
     reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label. "
     "DS_PERF_IGNORE_POWER=1 runs it anyway, for bring-up only",
 )
-@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked_perf(
     variant,
@@ -2729,7 +2695,6 @@ def test_kimi_prefill_transformer_chunked_perf(
     perf_margin,
     use_trace,
     preload_isl,
-    tp_shard_kv,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
@@ -2738,7 +2703,7 @@ def test_kimi_prefill_transformer_chunked_perf(
     # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). Both
     # modes are gated, each against its own table and its own band -- see kimi_chunked_perf_gate.
     baseline_chunk_times_s, perf_margin = kimi_chunked_perf_gate(
-        use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin, tp_shard_kv
+        use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin
     )
     run_chunked_transformer_updated(
         variant,
@@ -2757,7 +2722,7 @@ def test_kimi_prefill_transformer_chunked_perf(
         preload_isl=preload_isl,
         check_pcc=False,  # timing only — accuracy lives in test_kimi_prefill_transformer_chunked
         use_trace=use_trace,
-        tp_shard_kv=tp_shard_kv,
+        tp_shard_kv=True,
     )
 
 
@@ -2849,6 +2814,7 @@ def test_kimi_prefill_transformer_chunked(
         preload_isl=preload_isl,
         check_pcc=True,  # this test exists for the KV PCC; the timing table is incidental
         use_trace=use_trace,
+        tp_shard_kv=True,
     )
 
 
@@ -2937,6 +2903,7 @@ def test_kimi_k3_prefill_transformer_chunked(
         check_pcc=True,
         use_trace=use_trace,
         determinism_check=determinism_check,
+        tp_shard_kv=True,
     )
 
 
@@ -3162,7 +3129,7 @@ def run_chunked_transformer_padded_trace(
 
     has_indexer = resolve_has_indexer(config)
     cache_format = MlaKvCacheFormat.BF16_RM if has_indexer else MlaKvCacheFormat.BFP8_TILE
-    # None derives it like ttMLA does (sparse always dedups).
+    # None: sparse dedups, dense does not.
     kv_dedup = has_indexer if tp_shard_kv is None else tp_shard_kv
 
     # Real-token cache, pad tail off the end (mirror run_chunked_transformer_padded).

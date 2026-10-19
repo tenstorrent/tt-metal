@@ -141,7 +141,6 @@ if [ -n "${PREFILL_NUM_USERS:-}" ]; then
   NUM_USERS=${PREFILL_NUM_USERS}
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_NUM_USERS=${NUM_USERS};"
 fi
-# Dense KV dedup; only the runner reads it.
 if [ -n "${PREFILL_TP_SHARD_KV:-}" ]; then
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_TP_SHARD_KV=${PREFILL_TP_SHARD_KV};"
 fi

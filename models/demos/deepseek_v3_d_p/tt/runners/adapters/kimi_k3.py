@@ -51,8 +51,9 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # from the Kimi family; inert for the MLA-only tests but correct if a runtime is ever built.
     routing_use_l1_small_for_semaphores = True
 
-    # Dedups only the MLA layers' KVPE cache; the KDA state slabs have no token axis.
+    # Dedups the MLA KV cache only. PREFILL_TP_SHARD_KV=0 rolls back to the TP-replicated cache.
     supports_tp_shard_kv = True
+    tp_shard_kv_default = True
 
     # --- test metadata ---
     hf_repo_id = "moonshotai/Kimi-K3"
@@ -340,7 +341,6 @@ class KimiK3Adapter(MLAPrefillAdapter):
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
-            # Same predicate as allocate_kv_cache, so the cache and its reader cannot disagree.
             tp_shard_kv=True if self._dense_tp_shard_kv(params) else None,
         )
         return TtKimiK3Runtime(
