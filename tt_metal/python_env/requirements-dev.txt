@@ -98,7 +98,7 @@ Pillow==12.3.0
 jupyterlab==4.5.9
 ipywidgets==8.1.1
 bokeh==3.8.2
-click==8.1.7
+click==8.4.2  # CI test branch: transformers 5.19.0 needs huggingface-hub>=1.31, which needs click>=8.4.2
 dash==2.15.0
 pandas==2.3.3
 plotly==5.18.0
