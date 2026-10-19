@@ -286,7 +286,9 @@ class LMHead(LightweightModule):
             memory_config=(
                 self.args.model_config.get(
                     "LM_HEAD_OUTPUT_MEMCFG",
-                    ttnn.DRAM_MEMORY_CONFIG if self.padded_vocab_size > 131072 else ttnn.L1_MEMORY_CONFIG,
+                    ttnn.DRAM_MEMORY_CONFIG
+                    if self.padded_vocab_size // self.num_devices > 131072
+                    else ttnn.L1_MEMORY_CONFIG,
                 )
                 if not use_prefetcher
                 else ttnn.DRAM_MEMORY_CONFIG
