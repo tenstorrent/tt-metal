@@ -247,6 +247,30 @@ ROUTE_LOG = None
 TIME_FLAT = False
 
 
+_HOOKS = []
+_HOOK_CALLS = [0]
+
+
+def moe_hooks():
+    """GLM_HANG_HOOKS=<file.py> (hang hunting only): a module whose before_moe(ctx) / after_moe(ctx, y) run around every
+    routed-experts call, ts and ag (extra ops, host gaps, syncs, L1 garbage: tests/hang/std_hooks.py); loaded once."""
+    if not _HOOKS:
+        path, mod = os.environ.get("GLM_HANG_HOOKS"), None
+        if path:
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location("glm_hang_hooks", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        _HOOKS.append(mod)
+    return _HOOKS[0]
+
+
+def hook_ctx(mesh, layer, mode, x, idx, wts):
+    _HOOK_CALLS[0] += 1
+    return {"mesh": mesh, "layer": layer, "mode": mode, "call": _HOOK_CALLS[0], "x": x, "idx": idx, "wts": wts}
+
+
 class TtExpertsAg:
     """GLM routed experts on the all-gather MoE ops; the same call as tt/experts.py:TtExperts."""
 
@@ -347,6 +371,21 @@ class TtExpertsAg:
         return idx, wts
 
     def __call__(self, x, dense=None, idx=None, wts=None, split=False, full_mesh=False):
+        hk = moe_hooks()
+        ctx = hook_ctx(self.mesh, self.layer, "ag", x, idx, wts) if hk else None
+        if hk and hasattr(hk, "before_moe"):
+            hk.before_moe(ctx)
+        op0 = ttnn._ttnn.get_device_operation_id()
+        out = self._call(x, dense=dense, idx=idx, wts=wts, split=split, full_mesh=full_mesh)
+        if hk and hasattr(hk, "after_moe"):
+            hk.after_moe(ctx, out)
+        if (
+            os.environ.get("GLM_TS_OPLOG") == "1"
+        ):  # (device op ids per layer's call: maps a triage's hung op id to a layer)
+            print(f"[ag-op] layer {self.layer}: ops {op0}..{ttnn._ttnn.get_device_operation_id() - 1}", flush=True)
+        return out
+
+    def _call(self, x, dense=None, idx=None, wts=None, split=False, full_mesh=False):
         """x [1,1,S,H] replicated; routing as dense [1,1,S,E] or (idx, wts) [1,1,S,K] -> experts_out [1,1,S,H] bf16
         replicated. split: x and the routing are mesh row r's share [r S/R, (r+1) S/R) (on every chip of the row); the
         output is this chip's rows [r S/R + c S/(R C), + S/(R C)) (the split residual layout). full_mesh (with split):

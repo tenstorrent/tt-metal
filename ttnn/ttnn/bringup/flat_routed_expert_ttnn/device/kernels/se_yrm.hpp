@@ -28,6 +28,13 @@ struct SeYRmWriter {
 #else
     static constexpr uint8_t yvc = 2;
 #endif
+    // The y writes' NoC (SE_YRM_NOC; default this RISC's): e.g. NOC1 from the NOC0 down-weight reader (dynamic-NoC
+    // mode, MIMO_FL_Y_NOC1) - the y writes off the x multicast's NoC (flat expert NOC0 wedge, TS_HANG_WORKLOG.md)
+#ifdef SE_YRM_NOC
+    static constexpr uint8_t ynoc = SE_YRM_NOC;
+#else
+    static constexpr uint8_t ynoc = noc_index;
+#endif
     static_assert(rows >= 1 && trid0 + rows <= 16);
     InterleavedAddrGen<true> yg;
     uint32_t col_off;
@@ -167,11 +174,11 @@ struct SeYRmWriter {
                 ++cnt[d];
                 noc_async_write_one_packet_with_trid(
                     src + i * seg,
-                    get_noc_addr(dx[d], dy[d], slot + col_off),
+                    get_noc_addr(dx[d], dy[d], slot + col_off, ynoc),
                     seg,
                     trid,
                     write_cmd_buf,
-                    noc_index,
+                    ynoc,
                     yvc);
                 if (col_off == 0) {
                     volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + i * 32);
@@ -182,11 +189,11 @@ struct SeYRmWriter {
                     tr[7] = 1;
                     noc_async_write_one_packet_with_trid(
                         stage + i * 32,
-                        get_noc_addr(dx[d], dy[d], slot + ht * 64),
+                        get_noc_addr(dx[d], dy[d], slot + ht * 64, ynoc),
                         32,
                         trid,
                         write_cmd_buf,
-                        noc_index,
+                        ynoc,
                         yvc);
                 }
             }
@@ -204,18 +211,18 @@ struct SeYRmWriter {
         for (uint32_t i = 0; i < n; ++i) {
             noc_async_write_one_packet_with_trid(
                 src + i * seg,
-                get_noc_addr(my_x[noc_index], my_y[noc_index], src + i * seg),
+                get_noc_addr(my_x[ynoc], my_y[ynoc], src + i * seg, ynoc),
                 seg,
                 trid,
                 write_cmd_buf,
-                noc_index,
+                ynoc,
                 yvc);
         }
         (void)row0;
 #elif !defined(SE_YRM_NOWRITE)  // (perf probe: no y writes)
         for (uint32_t i = 0; i < n; ++i) {
             noc_async_write_one_packet_with_trid(
-                src + i * seg, get_noc_addr(row0 + i, yg, col_off), seg, trid, write_cmd_buf, noc_index, yvc);
+                src + i * seg, get_noc_addr(row0 + i, yg, col_off, ynoc), seg, trid, write_cmd_buf, ynoc, yvc);
         }
 #else
         (void)src, (void)n, (void)row0, (void)trid;
@@ -238,14 +245,14 @@ struct SeYRmWriter {
     // experts completed by it (0 or 1).
     uint32_t retire(const SeDyn& dyn) {
 #ifdef SE_Y_L1
-        if (uret == uiss || !ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid0 + uret % rows)) {
+        if (uret == uiss || !ncrisc_noc_nonposted_write_with_transaction_id_flushed(ynoc, trid0 + uret % rows)) {
             return 0;
         }
         {
             const uint8_t* tc = tcnt[uret % rows];
             for (uint32_t d = 0; d < nd; ++d) {
                 if (tc[d]) {
-                    noc_semaphore_inc(get_noc_addr(dx[d], dy[d], dland[d] + 4 * widx), tc[d]);
+                    noc_semaphore_inc(get_noc_addr(dx[d], dy[d], dland[d] + 4 * widx, ynoc), tc[d], ynoc);
                 }
             }
         }
@@ -257,7 +264,7 @@ struct SeYRmWriter {
         cb_pop_front(out_cb, pcd);
 #else
         if (retired == issued ||
-            !ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid0 + retired % rows)) {
+            !ncrisc_noc_nonposted_write_with_transaction_id_flushed(ynoc, trid0 + retired % rows)) {
             return 0;
         }
         cb_pop_front(out_cb, pcd);

@@ -94,6 +94,39 @@ void kernel_main() {
         return lo;
     };
     uint32_t sent = 0;
+#ifdef XMC_CHAIN
+#ifdef XMC_CHAIN_HEADS
+    const uint32_t x_heads = dests;                                             // (column chains: one head per column)
+    auto x_head = [&](uint32_t hd) { return get_arg_val<uint32_t>(a1 + hd); };  // (RT 2: the list's first arg)
+#else
+    constexpr uint32_t x_heads = 1;
+    auto x_head = [&](uint32_t) { return a0; };
+#endif
+#ifndef XMC_CHAIN_DEPTH
+#define XMC_CHAIN_DEPTH 4  // batches of head writes in flight (transaction ids 1..DEPTH)
+#endif
+    // Batch b's head writes carry transaction id 1 + b % DEPTH; once they are acknowledged the heads' XARR move by
+    // that batch's pieces, in batch order (a head counts a contiguous prefix).
+    uint32_t cb_iss = 0, cb_done = 0, cb_n[XMC_CHAIN_DEPTH];
+    auto chain_retire = [&](uint32_t keep) {  // retire acknowledged batches; block while more than `keep` are out
+        // (the write command buffer drained first: an id's outstanding count only covers requests the NIU has taken -
+        // right after issuing, the last write can still sit in the command buffer and the id reads "done" early)
+        while (cb_done < cb_iss && !noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
+        }
+        while (cb_done < cb_iss && (cb_iss - cb_done > keep || ncrisc_noc_nonposted_write_with_transaction_id_flushed(
+                                                                   noc_index, 1 + cb_done % XMC_CHAIN_DEPTH))) {
+            while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, 1 + cb_done % XMC_CHAIN_DEPTH)) {
+            }
+            for (uint32_t hd = 0; hd < x_heads; ++hd) {
+                const uint32_t hxy = x_head(hd);
+                noc_semaphore_inc(
+                    get_noc_addr(hxy >> 16, hxy & 0xFFFF, xarr_addr),
+                    cb_n[cb_done % XMC_CHAIN_DEPTH] * XMC_CHAIN_PIECES);
+            }
+            ++cb_done;
+        }
+    };
+#endif
 #ifdef XMC_FWD
     // x read once (MIMO_FL_XFWD): this rectangle's relays read / tilize the super-blocks g with g % 2 == XMC_FWD_K
     // (helpers sharing them as before, in this half's own order n = g / 2); this primary multicasts them here and
@@ -155,12 +188,23 @@ void kernel_main() {
         if (from_helper) {
             ZW("XMC_HELP");
             constexpr uint32_t help_sem[4] = {4, 7, 8, 10};
+#ifdef XMC_CHAIN
+            while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])) < hb + 1) {
+                invalidate_l1_cache();
+                chain_retire(XMC_CHAIN_DEPTH);  // (waiting: count acknowledged batches into the heads' XARR)
+            }
+#endif
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])), hb + 1);
             src = get_arg_val<uint32_t>(15) +
                   (hh * get_arg_val<uint32_t>(16) + hb % get_arg_val<uint32_t>(16)) * sb_tiles * tb;
         } else {
             {
                 ZW("XMC_SB");
+#ifdef XMC_CHAIN
+                while (!cb_pages_available_at_front(sb_cb, sb_tiles)) {
+                    chain_retire(XMC_CHAIN_DEPTH);  // (waiting: count acknowledged batches into the heads' XARR)
+                }
+#endif
                 cb_wait_front(sb_cb, sb_tiles);
             }
             src = get_read_ptr(sb_cb);
@@ -168,6 +212,11 @@ void kernel_main() {
 #else
         {
             ZW("XMC_SB");
+#ifdef XMC_CHAIN
+            while (!cb_pages_available_at_front(sb_cb, sb_tiles)) {
+                chain_retire(XMC_CHAIN_DEPTH);  // (waiting: count acknowledged batches into the heads' XARR)
+            }
+#endif
             cb_wait_front(sb_cb, sb_tiles);
         }
         const uint32_t src = get_read_ptr(sb_cb);
@@ -187,6 +236,16 @@ void kernel_main() {
 #endif
             if (!n) {
                 ZW("XMC_CRED");
+#ifdef XMC_CHAIN
+                // Batches in flight are only counted into the heads' XARR on retirement: every wait retires the
+                // acknowledged ones, else a compute that needs the whole ring (row passes: all Ht / KBLK blocks of a
+                // sub-block resident, GLM-5.3 24 of 24) never sees the last batch and never frees one (deadlock)
+                while (gidx(sent) >= min_freed() + x_slots) {
+                    invalidate_l1_cache();
+                    chain_retire(XMC_CHAIN_DEPTH);
+                }
+                continue;
+#endif
 #ifdef XMC_WHOLE_SB
                 while (gidx(sent + (per_sb - 1 - i)) >= min_freed() + x_slots) {
 #else
@@ -219,6 +278,22 @@ void kernel_main() {
                     continue;
 #endif
                     for (uint32_t m = m0; m < m1; ++m) {
+#ifdef XMC_CHAIN  // (MIMO_FL_X_CHAIN: no multicast - unicast into the rectangle's chain head(s); the gate/up cores
+                  // forward along the chains, se5_recv.cpp. One head: RT 1; column chains: RT 3 heads listed from
+                  // the arg RT 2 names)
+                        if (k == 0 && m == m0) {
+                            chain_retire(XMC_CHAIN_DEPTH - 1);  // (room for this batch's id)
+                        }
+                        for (uint32_t hd = 0; hd < x_heads; ++hd) {
+                            const uint32_t hxy = x_head(hd);
+                            noc_async_write_one_packet_with_trid(
+                                src + (m * SE_SBT + (i + k) * kblk) * tb,
+                                get_noc_addr(hxy >> 16, hxy & 0xFFFF, dst + m * piece),
+                                piece,
+                                1 + cb_iss % XMC_CHAIN_DEPTH);
+                        }
+                        continue;
+#endif
 #ifdef XMC_UNLINKED  // (MIMO_FL_XMC_UNLINKED: no linked chains - an open chain holds the NoC path, so other traffic
                      // from this core on the same NoC, e.g. x reads with MIMO_FL_XRD_NOC=0, could deadlock with it)
                         const bool last = true;
@@ -251,6 +326,12 @@ void kernel_main() {
 #endif
                     }
                 }
+#ifdef XMC_CHAIN  // the heads' arrival counts move once this batch is acknowledged (chain_retire, in batch order)
+                cb_n[cb_iss % XMC_CHAIN_DEPTH] = n;
+                ++cb_iss;
+                chain_retire(XMC_CHAIN_DEPTH);
+                continue;
+#endif
 #ifdef XMC_POSTED  // (the count follows the data on the same route and VC, posted as well)
                 ncrisc_noc_fast_write_any_len<noc_mode>(
                     noc_index,
@@ -300,6 +381,10 @@ void kernel_main() {
         cb_pop_front(sb_cb, sb_tiles);
 #endif
     }
+#ifdef XMC_CHAIN
+    chain_retire(0);
+    noc_async_write_set_trid(0);
+#endif
     noc_async_write_barrier();
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();

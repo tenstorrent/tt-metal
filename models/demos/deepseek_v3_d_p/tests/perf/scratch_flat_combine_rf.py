@@ -176,7 +176,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
     rows, counts, regions, n_rows, busiest = _routing(routing)
     floor = busiest * H * 2 / 1e6 / LINK_GBPS * 1e3
     plan = op.plan
-    writers = len(plan["down"]) + (len(plan["rdn"]) if plan["rdown"] else 0)
+    writers = len(plan["y_writers"])
     grid0 = mesh_device.compute_with_storage_grid_size()
     # (DRISC: only the reader cells that still run Tensix readers / the launcher are taken; the rest go to combine)
     rd_key = "tensix_readers" if "tensix_readers" in plan else "readers"
@@ -279,7 +279,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
     L1 = os.environ.get("FC_L1") == "1"  # y rows straight from the down cores into the combine's L1 (no y in DRAM)
     l1 = None
     if L1:
-        wcores = [tuple(c) for c in plan["down"]] + ([tuple(c) for c in plan["rdn"]] if plan["rdown"] else [])
+        wcores = [tuple(c) for c in plan["y_writers"]]  # (the factory's writer order: reader tails, then down)
         wcrs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in wcores])
         words_t = ttnn.from_torch(  # the writers' grants / grant bases / table page / trailer stages
             torch.zeros(len(wcores) * 192, 16, dtype=torch.int32),

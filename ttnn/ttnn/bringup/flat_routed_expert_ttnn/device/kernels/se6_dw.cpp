@@ -183,4 +183,8 @@ void kernel_main() {
 #endif
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();
+#ifdef SE_YRM_NOC  // (the y writes / landed increments on the other NoC: dynamic-NoC mode, MIMO_FL_Y_NOC1)
+    noc_async_full_barrier(SE_YRM_NOC);
+    noc_async_write_set_trid(0, SE_YRM_NOC);
+#endif
 }

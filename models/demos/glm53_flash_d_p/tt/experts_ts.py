@@ -19,11 +19,19 @@ Needs fabric_payload_bytes >= 8224 (a 8192 B token row + the combine's 32 B trai
 
 from __future__ import annotations
 
+import json
 import os
 
 import ttnn
 from models.demos.glm53_flash_d_p.tt.experts import LazyExpertWeights
-from models.demos.glm53_flash_d_p.tt.experts_ag import _dram, all_gather_rows, default_gids, flat_cache_dir
+from models.demos.glm53_flash_d_p.tt.experts_ag import (
+    _dram,
+    all_gather_rows,
+    default_gids,
+    flat_cache_dir,
+    hook_ctx,
+    moe_hooks,
+)
 
 # the routed experts' plan: DRISC-only weight readers, 32 down cores (128 output tile columns, 4 a core), one x helper
 # (a second one costs ~104 KB of every core's arena (1208 vs 1104 KB): in the whole model the dispatch's 103 KB
@@ -143,6 +151,8 @@ class TtExpertsTs:
                 rows_cap=-(-n * s * min(self.K, self.epc) // 32) * 32 + 32 * self.epc,
                 routed_only=True,
                 flat_env=FLAT_ENV,
+                # (hang hunting: block variants, e.g. {"acc_on_ports": false} or {"deterministic": true})
+                **json.loads(os.environ.get("GLM_TS_BLOCK_OPTS", "{}")),
             )
             logger.info(f"GLM experts ts: arena at {hit.arena_addr} (L1 below it: the dispatch manifest, the CBs)")
             if os.environ.get("GLM_TS_L1_REPORT") == "1":  # (debug: the L1 buffers the model holds besides the arena)
@@ -197,7 +207,18 @@ class TtExpertsTs:
         blk = self._block(s)
         x2 = ttnn.reshape(x, [s, self.H])
         t2 = _t.perf_counter()
+        hk = moe_hooks()
+        ctx = hook_ctx(self.mesh, self.layer, "ts", x, idx, wts) if hk else None
+        if hk and hasattr(hk, "before_moe"):  # (hang hunting: GLM_HANG_HOOKS)
+            hk.before_moe(ctx)
+        op0 = ttnn._ttnn.get_device_operation_id()
         y = blk.routed(x2, ttnn.reshape(idx, [s, self.K]), ttnn.reshape(wts, [s, self.K]), self.flat)
+        if hk and hasattr(hk, "after_moe"):
+            hk.after_moe(ctx, y)
+        if (
+            os.environ.get("GLM_TS_OPLOG") == "1"
+        ):  # (device op ids per layer's call: maps a triage's hung op id to a layer)
+            print(f"[ts-op] layer {self.layer}: ops {op0}..{ttnn._ttnn.get_device_operation_id() - 1}", flush=True)
         if os.environ.get("K3_HOST_LOG") == "1":
             h = _HOST.setdefault("t", [0.0, 0.0, 0.0, 0])
             h[0] += t1 - t0

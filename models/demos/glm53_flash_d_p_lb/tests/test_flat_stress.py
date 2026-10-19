@@ -154,6 +154,7 @@ def test_flat_stress(mesh_device):
     )
     gold = {}  # (regime, pattern) -> the pair's first output (TILE), kept on device
     pinned, marker, n_checked = [], None, 0
+    pmark = {}
     t0 = time.time()
     for it in range(ITERS):
         r = REGIMES[(it // BLOCK) % len(REGIMES)]
@@ -166,6 +167,7 @@ def test_flat_stress(mesh_device):
             ne = ttnn.ne(gold[(r, ci)], y, dtype=ttnn.bfloat16)
             mk = ttnn.max(ttnn.multiply(ne, c["mask"]))
             marker = mk if marker is None else ttnn.maximum(marker, mk)
+            pmark[ci] = mk if ci not in pmark else ttnn.maximum(pmark[ci], mk)  # (per pattern: which one diverged)
             ttnn.deallocate(ne)
             ttnn.deallocate(y)
             n_checked += 1
@@ -195,9 +197,16 @@ def test_flat_stress(mesh_device):
                 f"[stress] {it + 1:,} / {ITERS:,} calls (block {_rname(r)}), {n_checked:,} compared, "
                 f"{(it + 1) / dt:.0f} calls/s, {dt / 60:.1f} min, mismatch marker per chip {vals}"
             )
+            if vals and max(vals) != 0.0:
+                for pi, t in pmark.items():
+                    pv = [float(ttnn.to_torch(x).item()) for x in ttnn.get_device_tensors(t)]
+                    logger.info(f"[stress] mismatch pattern {cases[pi]['kind']}: per chip {pv}")
             assert not vals or max(vals) == 0.0, f"non-deterministic output in regime {_rname(r)}: per chip {vals}"
             if marker is not None:
                 ttnn.deallocate(marker)
+            for t in pmark.values():
+                ttnn.deallocate(t)
+            pmark = {}
             marker = None
     logger.info(
         f"[stress] PASS: {ITERS:,} mesh calls ({ITERS * n_dev:,} chip calls), {n_checked:,} compared bit-exact over "

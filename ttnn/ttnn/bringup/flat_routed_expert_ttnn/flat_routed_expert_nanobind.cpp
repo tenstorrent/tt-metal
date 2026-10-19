@@ -4,6 +4,9 @@
 
 #include "flat_routed_expert_nanobind.hpp"
 
+#include <map>
+#include <set>
+
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
@@ -126,6 +129,36 @@ nb::dict plan_dict(
         d["rdn"] = rdn;
         d["d_succ"] = succ;
         d["col0s"] = p->col0s;
+    }
+    {  // the y writers in the program factory's order (a writer's index in the combine's L1 hand-off): the reader
+       // tails (by pair-set count, then non-DRISC / DRISC slots), then the down cores grouped by column width
+        std::vector<tt::tt_metal::CoreCoord> yw;
+        const auto rg_at = [&](uint32_t r) { return p->rgs.empty() ? p->rg : p->rgs[r]; };
+        if (p->rdown) {
+            std::set<uint32_t> rgk;
+            for (const auto& [r, t] : p->rdn) {
+                rgk.insert(rg_at(r));
+            }
+            for (const uint32_t k : rgk) {
+                for (const bool dual_set : {false, true}) {
+                    for (const auto& [r, t] : p->rdn) {
+                        if ((p->dual && p->drisc_slot(r)) == dual_set && rg_at(r) == k) {
+                            yw.push_back(p->readers[r]);
+                        }
+                    }
+                }
+            }
+        }
+        std::map<uint32_t, std::vector<uint32_t>> dgroups;
+        for (uint32_t i = 0; i < p->down.size(); ++i) {
+            dgroups[p->pcds[i]].push_back(i);
+        }
+        for (const auto& [pw, ds] : dgroups) {
+            for (const uint32_t i : ds) {
+                yw.push_back(p->down[i]);
+            }
+        }
+        d["y_writers"] = cores(yw);
     }
     return d;
 }

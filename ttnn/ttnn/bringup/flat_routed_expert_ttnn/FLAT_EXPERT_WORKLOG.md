@@ -1050,3 +1050,15 @@ In the overlap (K3 harness, accumulators on ports): NH 2 flat alone packed 5592 
 chip's combine links then show: fused / flat 1.039 -> 1.082); uniform / spread unchanged. K3 block: NH 2 neutral
 (traced 3312), now its default with acc_on_ports. Next levers: gate/up block shape (taller blocks: fewer weight unpacks
 per FLOP), down cores at the next granularity step, the hot chip's combine link time.
+
+### x delivery: unicast snakes by default (2026-10-19, TS_HANG_WORKLOG.md waves 9-14)
+The relay's linked NOC0 multicast into the gate/up rectangle wedged NOC0 beside the DRISC weight writes and DRAM
+traffic (a hardware hang, reproduced by a traffic-only probe). Default now (program factory XPath): each primary
+unicasts its blocks into one snake head per rectangle; the gate/up cores forward them along the snake (down a column,
+wrapping, one column over) with a dedicated NCRISC forwarder (se5_xfwd.cpp, NOC0, 4 cut-through pieces, 3 in
+flight); the receiver BRISC (NOC1) only consumes. Multicast stays as MIMO_FL_X_CHAIN=0, and where the plan has no
+full rectangles / one primary per rectangle. Perf vs the multicast (fused flat + combine, us): GLM-Flash S 256 / S
+640, K3, V4.1-Flash within +1.0 .. -4.4% (V4.1 packed -4.4%); GLM-5.3 flat alone M 512 / 1024 -4.8 / -3.0%. Whole
+model GLM-Flash traced chunk neutral (S 256 244.2 -> 244.4 ms, S 640 479.4 -> 479.1 ms). Bugs on the way: the
+receiver's end count lagging (forwarder never ended), the relay counting a batch only on retirement (GLM-5.3's full
+24-of-24 x ring deadlocked), ids polled before the command buffer drained (stale x, 1 in ~1e5 calls).

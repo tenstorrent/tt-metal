@@ -341,19 +341,30 @@ void kernel_main() {
         if (x_cons < x_pub && cb_pages_reservable_at_back(x_cb, (x_slots - (x_pub - x_cons) + 1) * x_blk)) {
             ++x_cons;  // compute has consumed one more block
         }
+#ifdef SE_X_FWD_NC  // (the NCRISC forwarder, se5_xfwd.cpp, does the forwarding and the freed reports from this count)
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SE_X_FWD_NC_CONS)) = x_cons;
+#endif
         // Chain links keep up to LINK_DEPTH blocks in flight, each tagged with its own NoC transaction id and completed
         // in order (write acknowledged -> successor's counter); one block per round trip only reached ~13 GB/s.
         for (uint32_t k = 0; k < nsucc; ++k) {
             // x_iss / x_fwd count pieces: each piece is forwarded as soon as it has arrived (cut-through), once the
             // successor has freed the block's slot.
             const uint32_t trid0 = 1 + 8 * k;  // successor 0: ids 1..6, successor 1: ids 9..14
+#ifdef SE_X_FWD_DEPTH                          // (MIMO_FL_X_FWD_DEPTH: one successor only - ids 1..DEPTH, up to 14)
+            constexpr uint32_t x_depth = SE_X_FWD_DEPTH;
+#else
             constexpr uint32_t x_depth = 6;
+#endif
             constexpr uint32_t piece = x_bytes / xp;
             while (x_iss[k] < arrived_p && x_iss[k] - x_fwd[k] < x_depth &&
                    (x_iss[k] / xp < x_slots || *s_free[k] >= x_iss[k] / xp + 1 - x_slots)) {
                 const uint32_t off = ((x_iss[k] / xp) % x_slots) * x_bytes + (x_iss[k] % xp) * piece;
                 write_trid(x_ring + off, s_ring[k] + off, piece, trid0 + x_iss[k] % x_depth);
                 ++x_iss[k];
+            }
+            // (the write command buffer drained first: an id's outstanding count only covers requests the NIU has
+            // taken - right after issuing, the last write can still sit in the command buffer and the id reads "done")
+            while (x_fwd[k] < x_iss[k] && !noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
             }
             while (x_fwd[k] < x_iss[k] &&
                    ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid0 + x_fwd[k] % x_depth)) {
@@ -369,6 +380,8 @@ void kernel_main() {
             write_trid(h_all_addr + off, succ_hall + off, h_piece_bytes, 1 + link_depth + h_iss % link_depth);
             ++h_iss;
         }
+        while (h_fwd < h_iss && !noc_cmd_buf_ready(noc_index, write_cmd_buf)) {  // (as for x above)
+        }
         while (h_fwd < h_iss &&
                ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, 1 + link_depth + h_fwd % link_depth)) {
             noc_semaphore_inc(succ_harr, 1);
@@ -381,8 +394,20 @@ void kernel_main() {
         }
         // Counter reports are atomic increments of the delta: on Blackhole an inline write first waits for every
         // outstanding write to leave L1, which serialized the chain behind its own block writes.
-#ifdef SE_X_RELAY
+#ifdef SE_X_FWD_NC
+        if (false) {
+#elif defined(SE_X_RELAY)
+#ifdef SE_X_CHAIN
+        // (MIMO_FL_X_CHAIN: the relay feeds only the chain head; a core with a predecessor reports to it - SFREE or,
+        // as its predecessor's second successor, WORD: RT 19 - and only the head reports to the relay)
+        if (freed > x_rep && pxy) {
+            noc_semaphore_inc(pred_sfree, freed - x_rep);
+            x_rep = freed;
+        }
+        if (freed > x_rep && !pxy) {
+#else
         if (freed > x_rep) {
+#endif
             const uint32_t rxy = get_arg_val<uint32_t>(11);
             noc_semaphore_inc(get_noc_addr(rxy >> 16, rxy & 0xFFFF, get_arg_val<uint32_t>(12)), freed - x_rep);
 #ifdef SE_X_RELAY2
@@ -566,6 +591,19 @@ void kernel_main() {
         }
 #endif
     }
+#ifdef SE_X_FWD_NC  // (every block consumed: the forwarder ends once it has forwarded / reported them all)
+    // x_cons follows compute at most a block a loop pass, so the loop can end (all h sent) with it short of the call's
+    // blocks; the end count must be the total (the forwarder ends at fwd == (end - 1) x pieces: a short count left it
+    // spinning past it - a 1-in-13k whole-model hang - or would end it before the successor has every block)
+    for (const uint32_t x_total = num_v * x_per_v; x_cons < x_total;) {
+        invalidate_l1_cache();
+        if (cb_pages_reservable_at_back(x_cb, (x_slots - (x_pub - x_cons) + 1) * x_blk)) {
+            ++x_cons;
+        }
+    }
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SE_X_FWD_NC_CONS)) = x_cons;
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SE_X_FWD_NC_END)) = x_cons + 1;
+#endif
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     // the write command buffer's packet tag back to transaction ID 0: the next program's plain writes (implicit ID

@@ -118,7 +118,10 @@ def test_layer_perf(mesh_device):
             row["trace_ms"] = round((time.perf_counter() - t0) / iters * 1e3, 3)
             ttnn.release_trace(mesh_device, tr)
             ttnn.deallocate(yt)
-            print(f"[lp] L{i} traced replay {row['trace_ms']:.2f} ms per call (eager wall {row['wall_ms']:.2f})", flush=True)
+            print(
+                f"[lp] L{i} traced replay {row['trace_ms']:.2f} ms per call (eager wall {row['wall_ms']:.2f})",
+                flush=True,
+            )
         if rt:
             profiler.enable(mesh_device, ops=True, calls=True, rt=True)
             try:
@@ -132,7 +135,9 @@ def test_layer_perf(mesh_device):
                 with open(f"{os.environ['GLM_LP_CALLS']}.L{i}.json", "w") as f:
                     json.dump(calls, f, default=str)
             chip_ns, step_ns, op_ns = defaultdict(float), defaultdict(lambda: defaultdict(float)), defaultdict(float)
-            step_op = defaultdict(lambda: defaultdict(lambda: [0.0, 0]))  # step -> op -> [ms on the busiest chip, calls]
+            step_op = defaultdict(
+                lambda: defaultdict(lambda: [0.0, 0])
+            )  # step -> op -> [ms on the busiest chip, calls]
             for c in calls:
                 step = c["key"].split(".", 1)[-1]
                 for chip, ns in c["ns_dev"].items():
@@ -277,8 +282,7 @@ def test_chunk_perf(mesh_device):
             steps = {st: max(v.values()) / 1e6 for (l2, st), v in per.items() if l2 == li}
             top = sorted(steps.items(), key=lambda kv: -kv[1])[:4]
             print(
-                f"[cp]   L{li}: {max(lay[li].values()) / 1e6:6.2f} ms  "
-                + "  ".join(f"{k} {v:.2f}" for k, v in top),
+                f"[cp]   L{li}: {max(lay[li].values()) / 1e6:6.2f} ms  " + "  ".join(f"{k} {v:.2f}" for k, v in top),
                 flush=True,
             )
     if os.environ.get("BRINGUP_TRACE_REGION_BYTES"):
@@ -287,11 +291,15 @@ def test_chunk_perf(mesh_device):
         ttnn.end_trace_capture(mesh_device, tr, cq_id=0)
         ttnn.execute_trace(mesh_device, tr, cq_id=0, blocking=True)
         same = torch.equal(host(yt), ref)
+        titers = int(os.environ.get("GLM_CP_TRACE_ITERS", iters))  # (replays of the chunk: a stress run, host free)
         t0 = time.perf_counter()
-        for _ in range(iters):
+        for i in range(titers):
             ttnn.execute_trace(mesh_device, tr, cq_id=0, blocking=False)
+            if (i + 1) % 100 == 0:
+                ttnn.synchronize_device(mesh_device)
+                print(f"[cp] traced replays {i + 1} / {titers}, {time.perf_counter() - t0:.0f} s", flush=True)
         ttnn.synchronize_device(mesh_device)
-        traced = (time.perf_counter() - t0) / iters * 1e3
+        traced = (time.perf_counter() - t0) / titers * 1e3
         ttnn.release_trace(mesh_device, tr)
         ttnn.deallocate(yt)
         print(

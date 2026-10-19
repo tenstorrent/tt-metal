@@ -153,9 +153,157 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     TT_FATAL(
         !x_two || (NR == 2 && p.nsg == 1 && !p.group_rect && !x_once),
         "MIMO_FL_X2: two rectangles, one subgrid, no M-groups by rectangle, not with MIMO_FL_X1");
+    // x delivery. Default: unicast snakes whenever the plan allows them (one primary per rectangle, rectangles full of
+    // gate/up cores, no X1 / X2 / XFWD) - no multicast: the NOC0 wedge of the relay's multicast into the gate/up
+    // rectangle beside the DRISC weight writes and DRAM traffic (TS_HANG_WORKLOG.md); else the linked multicast. Each
+    // primary unicasts its blocks into its rectangle's snake head(s); the gate/up cores forward them along the snake
+    // (down a column, wrapping inside the rectangle, one column over, on down), each piece once its successor has freed
+    // the block's slot. Snakes 1 (2: the relay writes every block twice - GLM-5.3 M 1024 238.7 vs 205.5 us / expert,
+    // multicast 211.5), 4 cut-through pieces, the forwarder on the gate/up NCRISC (se5_xfwd.cpp) on NOC0 with 3 pieces
+    // in flight, the receiver (se5_recv.cpp, BRISC) on NOC1. Fused flat + combine vs the multicast: K3 / GLM-Flash /
+    // V4.1-Flash within -4.4 .. +0.8%.
+    // Probe overrides (env, read at program build): MIMO_FL_X_CHAIN = 0 multicast, 1 tree (trunk along the relay's row
+    // + every column, se5_recv's two-successor chain), 2 column chains (the relay feeds every column head), 3 snakes;
+    // MIMO_FL_X_CHAIN_SNAKES, MIMO_FL_X_PIECES, MIMO_FL_X_FWD_NC (modes 2 / 3), MIMO_FL_X_CHAIN_NOC (the forwarding
+    // NoC), MIMO_FL_X_FWD_DEPTH (pieces in flight, one successor).
+    struct XPath {
+        uint32_t mode = 0, snakes = 1, pieces = 1, fwd_depth = 0;
+        bool fwd_nc = false, noc1 = false;
+    } xo;
+    {
+        const auto env = [](const char* k, uint32_t dflt) {
+            const char* v = std::getenv(k);
+            return v != nullptr ? static_cast<uint32_t>(std::atoi(v)) : dflt;
+        };
+        bool full = true;
+        for (uint32_t k = 0; k < NR; ++k) {
+            const auto [x0, x1, y0, y1] = p.rects[k];
+            full = full && rect_cores[k].size() == (x1 - x0 + 1) * (y1 - y0 + 1);
+        }
+        const bool can = !x_once && !x_two && !p.xfwd && p.nh >= 1 && full;
+        xo.mode = env("MIMO_FL_X_CHAIN", can ? 3 : 0);
+        TT_FATAL(xo.mode <= 3, "MIMO_FL_X_CHAIN={}: modes 1 (tree), 2 (column chains), 3 (snakes)", xo.mode);
+        if (xo.mode != 0) {
+            const auto aligned = [&](uint32_t n) { return x_bytes % n == 0 && (x_bytes / n) % 16 == 0; };
+            xo.snakes = env("MIMO_FL_X_CHAIN_SNAKES", 1);
+            xo.pieces = env("MIMO_FL_X_PIECES", xo.mode >= 2 ? (aligned(4) ? 4 : (aligned(2) ? 2 : 1)) : 1);
+            xo.fwd_nc = xo.mode >= 2 && env("MIMO_FL_X_FWD_NC", 1) != 0;
+            xo.noc1 = env("MIMO_FL_X_CHAIN_NOC", 0) != 0;
+            xo.fwd_depth = env("MIMO_FL_X_FWD_DEPTH", xo.fwd_nc ? 3 : 0);  // (0: se5_recv's default, 6)
+            TT_FATAL(
+                xo.fwd_depth == 0 || (xo.mode >= 2 && xo.fwd_depth <= 14),
+                "MIMO_FL_X_FWD_DEPTH={}: 1..14, one successor",
+                xo.fwd_depth);
+        }
+        log_info(
+            tt::LogOp,
+            "flat_routed_expert: x {} (snakes {} pieces {} NCRISC forwarder {} NOC{} depth {})",
+            xo.mode == 0   ? "multicast"
+            : xo.mode == 1 ? "unicast tree"
+            : xo.mode == 2 ? "unicast column chains"
+                           : "unicast snakes",
+            xo.snakes,
+            xo.pieces,
+            xo.fwd_nc,
+            xo.noc1 ? 1 : 0,
+            xo.fwd_depth);
+    }
+    const uint32_t x_chain_mode = xo.mode, x_pieces = xo.pieces;
+    const bool x_chain = x_chain_mode != 0, x_fwd_nc = xo.fwd_nc;
+    struct XLink {
+        uint32_t pred = 0, succ0 = 0, succ1 = 0;
+        bool second = false;  // its predecessor's second successor (reports to WORD there, else SFREE)
+    };
+    std::vector<XLink> xlink(ngu);
+    std::vector<uint32_t> x_head(NR, 0);             // each rectangle's chain head (gate/up index)
+    std::vector<std::vector<uint32_t>> x_heads(NR);  // column chains: every column's head (gate/up index)
+    if (x_chain) {
+        TT_FATAL(
+            !x_once && !x_two && !p.xfwd && p.nh >= 1,
+            "MIMO_FL_X_CHAIN: one primary per rectangle (no X1 / X2 / XFWD)");
+        bool rv_noc1 = !(p.drisc && std::getenv("MIMO_FL_DRISC_XNOC") && std::atoi(std::getenv("MIMO_FL_DRISC_XNOC")));
+        if (std::getenv("MIMO_FL_X_CHAIN_NOC") || x_fwd_nc) {  // (the forwarding NoC: no multicast now)
+            rv_noc1 = xo.noc1;
+        }
+        const int d = rv_noc1 ? -1 : 1;  // NOC1: west / north; NOC0: east / south
+        for (uint32_t k = 0; k < NR; ++k) {
+            const auto [x0, x1, y0, y1] = p.rects[k];
+            std::map<std::pair<uint32_t, uint32_t>, uint32_t> at;
+            for (uint32_t ci : rect_cores[k]) {
+                at[{p.gu[ci].x, p.gu[ci].y}] = ci;
+            }
+            const uint32_t W = x1 - x0 + 1, H = y1 - y0 + 1;
+            TT_FATAL(at.size() == W * H, "MIMO_FL_X_CHAIN: rectangle {} is not full of gate/up cores", k);
+            const uint32_t yr = std::clamp<uint32_t>(p.relays[k].y, y0, y1);
+            auto col_y = [&](uint32_t i) {  // the i-th row of a column's chain from the trunk row, wrapping
+                return y0 + static_cast<uint32_t>(((int(yr - y0) + d * int(i)) % int(H) + int(H)) % int(H));
+            };
+            auto trunk_x = [&](uint32_t i) { return d < 0 ? x1 - i : x0 + i; };
+            x_head[k] = at.at({trunk_x(0), yr});
+            if (x_chain_mode == 3) {
+                // snakes (MIMO_FL_X_CHAIN_SNAKES, default 1): each covers a run of columns - down a column (wrapping
+                // inside the rectangle, one NoC hop a step), one column over, on down from that row - every core
+                // forwards once; the relay feeds every snake's head
+                const uint32_t ns = xo.snakes;
+                TT_FATAL(ns >= 1 && ns <= W, "MIMO_FL_X_CHAIN_SNAKES={}: 1..{} (the rectangle's columns)", ns, W);
+                for (uint32_t g = 0; g < ns; ++g) {
+                    const uint32_t c0 = g * W / ns, c1 = (g + 1) * W / ns;  // trunk-order columns [c0, c1)
+                    std::vector<uint32_t> seq;
+                    uint32_t row = yr;
+                    for (uint32_t i = c0; i < c1; ++i) {
+                        for (uint32_t r = 0; r < H; ++r) {
+                            const uint32_t y =
+                                y0 + static_cast<uint32_t>(((int(row - y0) + d * int(r)) % int(H) + int(H)) % int(H));
+                            seq.push_back(at.at({trunk_x(i), y}));
+                            if (r + 1 == H) {
+                                row = y;  // the next column starts on this row
+                            }
+                        }
+                    }
+                    x_heads[k].push_back(seq.front());
+                    for (size_t j = 0; j < seq.size(); ++j) {
+                        XLink& l = xlink[seq[j]];
+                        l.pred = j ? pk(p.gu[seq[j - 1]]) : 0;
+                        l.succ0 = j + 1 < seq.size() ? pk(p.gu[seq[j + 1]]) : 0;
+                    }
+                }
+                continue;
+            }
+            for (uint32_t i = 0; i < W; ++i) {
+                x_heads[k].push_back(at.at({trunk_x(i), yr}));
+            }
+            for (uint32_t i = 0; i < W; ++i) {
+                const uint32_t x = trunk_x(i);
+                for (uint32_t r = 0; r < H; ++r) {
+                    XLink& l = xlink[at.at({x, col_y(r)})];
+                    if (r + 1 < H) {
+                        l.succ0 = pk(p.gu[at.at({x, col_y(r + 1)})]);
+                    }
+                    if (r > 0) {
+                        l.pred = pk(p.gu[at.at({x, col_y(r - 1)})]);
+                    }
+                    if (x_chain_mode == 2) {  // (no trunk: every column head is fed by the relay)
+                        continue;
+                    }
+                    if (r == 0 && i + 1 < W) {
+                        l.succ1 = pk(p.gu[at.at({trunk_x(i + 1), yr})]);
+                    }
+                    if (r == 0 && i > 0) {
+                        l.pred = pk(p.gu[at.at({trunk_x(i - 1), yr})]);
+                        l.second = true;
+                    }
+                }
+            }
+        }
+    }
     auto word_rel = [&](uint32_t ci) {
         if (x_once || x_two) {
             return 4 * ci;  // every gate/up core's word on rectangle 0's primary
+        }
+        if (x_chain) {  // (only chain heads report to the relay: the tree's one head, or each column's)
+            const auto& hs = x_heads[p.rect_of(p.gu[ci])];
+            const auto it = std::find(hs.begin(), hs.end(), ci);
+            return x_chain_mode >= 2 && it != hs.end() ? 4 * static_cast<uint32_t>(it - hs.begin()) : 0u;
         }
         const auto& rc = rect_cores[p.rect_of(p.gu[ci])];
         return 4 * static_cast<uint32_t>(std::find(rc.begin(), rc.end(), ci) - rc.begin());
@@ -559,7 +707,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     // for NOC0 multicast)
     const char* xnoc_env = std::getenv("MIMO_FL_DRISC_XNOC");
     const bool xswap = p.drisc && xnoc_env != nullptr && std::atoi(xnoc_env) != 0;
-    const NOC x_rd_noc = xswap ? NOC::NOC_0 : NOC::NOC_1, x_mc_noc = xswap ? NOC::NOC_1 : NOC::NOC_0;
+    // MIMO_FL_XMC_NOC1=1: only the x relays move (multicast + helper sends on NOC1, x reads on NOC0); the gate/up
+    // receivers stay on NOC1 - the multicast off the NoC the DRISC alt tiles' weight writes must use (NOC0: their NOC1
+    // NIU is the bank's NOC2AXI endpoint), whose mix with a third NOC0 class wedges NOC0 (TS_HANG_WORKLOG.md)
+    const bool xmc1 = xswap || (std::getenv("MIMO_FL_XMC_NOC1") && std::atoi(std::getenv("MIMO_FL_XMC_NOC1")) != 0);
+    const NOC x_rd_noc = xmc1 ? NOC::NOC_0 : NOC::NOC_1, x_mc_noc = xmc1 ? NOC::NOC_1 : NOC::NOC_0;
     // (probe MIMO_FL_XRD_DYN=1: the relays' kernels in dynamic-NoC mode - per-RISC command buffers and counters - so
     // their x reads and multicasts may share a NoC, e.g. MIMO_FL_XRD_NOC=0)
     const NOC_MODE x_mode = std::getenv("MIMO_FL_XRD_DYN") ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC;
@@ -846,6 +998,18 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         if (std::getenv("MIMO_FL_XMC_UNLINKED")) {  // (probe: the x multicasts without linked chains)
             xmc_def["XMC_UNLINKED"] = "1";
         }
+        if (x_chain) {  // (no multicast: unicast into the chain head(s))
+            xmc_def["XMC_CHAIN"] = "1";
+            if (x_chain_mode >= 2) {
+                xmc_def["XMC_CHAIN_HEADS"] = "1";
+            }
+            xmc_def["XMC_CHAIN_PIECES"] = std::to_string(x_pieces);
+            if (const char* dd = std::getenv("MIMO_FL_X_CHAIN_DEPTH")) {  // (relay: head-write batches in flight, 1..8)
+                const int d = std::atoi(dd);
+                TT_FATAL(d >= 1 && d <= 8, "MIMO_FL_X_CHAIN_DEPTH={}: 1..8", d);
+                xmc_def["XMC_CHAIN_DEPTH"] = std::to_string(d);
+            }
+        }
         if (xhelp_all) {
             xmc_def["XMC_HELP_ALL"] = "1";
         }
@@ -922,12 +1086,18 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             SetRuntimeArgs(program, ktz, rl, std::vector<uint32_t>{rl_sb(idx)});
             if (idx < NR) {
                 Args xm;
+                const uint32_t hxy = x_chain ? pk(p.gu[x_head[k]]) : 0;  // (MIMO_FL_X_CHAIN: the chain head)
                 xm.a(AddrSrc::Arena, p.x_off)
-                    .lit(pk(xswap ? CoreCoord(x1, y1) : CoreCoord(x0, y0)))  // (NOC1 multicast: start is the far corner)
-                    .lit(pk(xswap ? CoreCoord(x0, y0) : CoreCoord(x1, y1)))
-                    .lit((x1 - x0 + 1) * (y1 - y0 + 1))
+                    .lit(x_chain ? hxy : pk(xmc1 ? CoreCoord(x1, y1) : CoreCoord(x0, y0)))  // (NOC1: the far corner)
+                    .lit(x_chain ? hxy : pk(xmc1 ? CoreCoord(x0, y0) : CoreCoord(x1, y1)))
+                    .lit(
+                        x_chain_mode >= 2 ? static_cast<uint32_t>(x_heads[k].size())
+                                          : (x_chain ? 1u : (x1 - x0 + 1) * (y1 - y0 + 1)))
                     .a(AddrSrc::Words)
-                    .lit(x_once || x_two ? ngu : static_cast<uint32_t>(rect_cores[k].size()))
+                    .lit(
+                        x_chain_mode >= 2
+                            ? static_cast<uint32_t>(x_heads[k].size())
+                            : (x_chain ? 1u : (x_once || x_two ? ngu : static_cast<uint32_t>(rect_cores[k].size()))))
                     .lits(
                         {V * p.nsb,
                          x_two && k == 1 ? 3u : XARR,
@@ -937,8 +1107,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 if (x_once || x_two) {  // the second rectangle this primary multicasts into (se11_xmc.cpp RT 11-13)
                     const auto [u0, u1, v0, v1] = p.rects[x_two ? 1 - k : 1];
                     xm.lit((u1 - u0 + 1) * (v1 - v0 + 1))
-                        .lit(pk(xswap ? CoreCoord(u1, v1) : CoreCoord(u0, v0)))
-                        .lit(pk(xswap ? CoreCoord(u0, v0) : CoreCoord(u1, v1)));
+                        .lit(pk(xmc1 ? CoreCoord(u1, v1) : CoreCoord(u0, v0)))
+                        .lit(pk(xmc1 ? CoreCoord(u0, v0) : CoreCoord(u1, v1)));
                 } else {
                     xm.lits({0, 0, 0});
                 }
@@ -952,6 +1122,12 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 xm.cat(dyn).lits(sgx(k));
                 if (p.xfwd) {  // the forward ring, the other primary, the ring's slots (se11_xmc.cpp XMC_FWD)
                     xm.a(AddrSrc::Arena, p.fw_off).lit(pk(p.relays[1 - idx])).lit(p.fw_slots);
+                }
+                if (x_chain_mode >= 2) {  // (the column / snake heads, listed from the arg RT 2 names)
+                    xm.v[2] = static_cast<uint32_t>(xm.v.size());
+                    for (uint32_t ci : x_heads[k]) {
+                        xm.lit(pk(p.gu[ci]));
+                    }
                 }
                 add_rt(kxms[p.xfwd ? idx : 0], rl, xm);
             } else {
@@ -980,6 +1156,22 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // (tests/ttnn/unit_tests/operations/noc_hang_probe, op_skeleton); with these writes on NOC1 it never did.
         // DRISC mode: the DRISC slots' receivers count their grants locally (SE_DRISC), the others credit their reader
         Defines recv_def = with(dyn_def, {{"SE_GU_ONLY", "1"}, {"SE_X_RELAY", "1"}, {"SE_NO_PARTNER", "1"}});
+        // debug probe MIMO_FL_SE_DBG=1: the receivers / x forwarders DPRINT their counters every 4M loop passes
+        const bool se_dbg = std::getenv("MIMO_FL_SE_DBG") != nullptr;
+        if (se_dbg) {
+            recv_def["SE_DBG"] = "1";
+        }
+        if (x_chain) {
+            recv_def["SE_X_CHAIN"] = "1";
+            if (x_fwd_nc) {  // (consumed count / end marker for the forwarder: semaphores 2 / 3, free on gate/up cores)
+                recv_def["SE_X_FWD_NC"] = "1";
+                recv_def["SE_X_FWD_NC_CONS"] = "2";
+                recv_def["SE_X_FWD_NC_END"] = "3";
+            }
+            if (xo.fwd_depth) {  // (snakes / column chains: one successor)
+                recv_def["SE_X_FWD_DEPTH"] = std::to_string(xo.fwd_depth);
+            }
+        }
         if (p.nu) {  // 16-column units: the h run from K-tile cg NU / 2, half tiles at the ends
             recv_def["SE_HG_NU"] = std::to_string(p.nu);
             recv_def["SE_HPC"] = std::to_string(p.hpc);
@@ -1001,10 +1193,22 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             (rd_of[ci] != ~0u && p.drisc_slot(rd_of[ci]) ? gu_d : gu_t).push_back(p.gu[ci]);
         }
         const std::vector<uint32_t> recv_ct = {
-            0,         x_blk,   1,    p.slot, E * p.nk_gu, V,        p.ring_g, 16,    1,     3,      2,    MTG,
-            p.h_tile,  ngu_sg,  DATA, HARR,   GO,          DONE,     KBLK,     HARR,  SFREE, p.hbuf, XARR, HFREE,
-            p.x_slots, x_bytes, S,    NP,     HSFREE,      H_PIECES, p.nk_gu,  GATH1, GATH2, 1,      G,    E};
-        const NOC recv_noc = xswap ? NOC::NOC_0 : NOC::NOC_1;
+            0,         x_blk,   1,    p.slot, E * p.nk_gu, V,        p.ring_g, 16,    1,     3,        2,    MTG,
+            p.h_tile,  ngu_sg,  DATA, HARR,   GO,          DONE,     KBLK,     HARR,  SFREE, p.hbuf,   XARR, HFREE,
+            p.x_slots, x_bytes, S,    NP,     HSFREE,      H_PIECES, p.nk_gu,  GATH1, GATH2, x_pieces, G,    E};
+        TT_FATAL(
+            x_pieces >= 1 && x_bytes % x_pieces == 0 && (x_bytes / x_pieces) % 16 == 0,
+            "MIMO_FL_X_PIECES={}: pieces of a {} B x block must be 16 B aligned",
+            x_pieces,
+            x_bytes);
+        NOC recv_noc = xswap ? NOC::NOC_0 : NOC::NOC_1;
+        if (x_chain && std::getenv("MIMO_FL_X_CHAIN_NOC")) {  // (x chains: the forwarding NoC is free)
+            recv_noc = xo.noc1 ? NOC::NOC_1 : NOC::NOC_0;
+        }
+        const NOC xfwd_noc = xo.noc1 ? NOC::NOC_1 : NOC::NOC_0;
+        if (x_fwd_nc) {
+            recv_noc = xfwd_noc == NOC::NOC_0 ? NOC::NOC_1 : NOC::NOC_0;
+        }
         const KernelHandle kr_t =
             gu_t.empty() ? 0 : dm("se5_recv.cpp", gu_t, DataMovementProcessor::RISCV_0, recv_noc, recv_ct, recv_def);
         Defines recv_d_def = recv_def;
@@ -1018,6 +1222,14 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         const KernelHandle kr_d =
             gu_d.empty() ? 0
                          : dm("se5_recv.cpp", gu_d, DataMovementProcessor::RISCV_0, recv_noc, recv_ct, recv_d_def);
+        const uint32_t xfwd_depth = xo.fwd_depth ? xo.fwd_depth : 6;
+        const KernelHandle kxf = x_fwd_nc ? dm("se5_xfwd.cpp",
+                                               p.gu,
+                                               DataMovementProcessor::RISCV_1,
+                                               xfwd_noc,
+                                               {p.x_slots, x_bytes, x_pieces, XARR, SFREE, 2, 3, xfwd_depth},
+                                               se_dbg ? Defines{{"SE_DBG", "1"}} : Defines{})
+                                          : 0;
         // perf probe (read at program build): MIMO_FL_GU_FULL_SYNC=1 - fp32 gate/up in a full-sync DST (8 tiles: the
         // whole MT x 2 NP sub-block in one K loop, no row passes; pack no longer overlaps math, once per sub-block)
         const bool gu_full_sync = p.gu_fp32 && p.gu_rp && (p.gu_full_sync || std::getenv("MIMO_FL_GU_FULL_SYNC"));
@@ -1071,17 +1283,28 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                     .lit(coord_sg[sg])
                     .lit(GATH)
                     .a(AddrSrc::Arena, p.x_off)
-                    .lits({0, 0, 0})
+                    .lits({0, x_fwd_nc ? 0u : xlink[ci].pred, x_fwd_nc ? 0u : xlink[ci].succ0})  // (x chain links)
                     .lit(pk(p.relays[x_once || x_two ? 0 : p.rect_of(gc)]))
                     .a(AddrSrc::Words, word_rel(ci))
                     .a(AddrSrc::Arena, p.h_off)
                     .lit(j % G)
                     .lit(x_two ? pk(p.relays[1]) : 0)  // (RT 15: X2, the second primary for the freed reports)
-                    .lits({2, 3, 0, SFREE, WORD})
+                    .lits({2, 3, xlink[ci].succ1, xlink[ci].second ? WORD : SFREE, WORD})
                     .lits(head_xy_sg[sg])
                     .cat(dyn)
                     .lits(sgx(sg));
                 add_rt(dr ? kr_d : kr_t, gc, a);
+                if (x_fwd_nc) {  // x ring, predecessor (+ its free word's sem), successor, relay + this core's word
+                                 // there
+                    Args f;
+                    f.a(AddrSrc::Arena, p.x_off)
+                        .lit(xlink[ci].pred)
+                        .lit(xlink[ci].second ? WORD : SFREE)
+                        .lit(xlink[ci].succ0)
+                        .lit(pk(p.relays[p.rect_of(gc)]))
+                        .a(AddrSrc::Words, word_rel(ci));
+                    add_rt(kxf, gc, f);
+                }
                 const uint32_t cg_ = (p.ps0.empty() ? (r % p.n_rd_sg) * p.rg : p.ps0[r]) + j / G;
                 SetRuntimeArgs(program, kc, gc, std::vector<uint32_t>{j % G, (cg_ * p.nu) & 1u});
             }
@@ -1112,7 +1335,15 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // carries the larger down weight stream, H 7168 / 6144 bf16 x + h at M 2048 +7 / +6%
         const char* ync_env = std::getenv("MIMO_FL_Y_NC");
         const bool y_nc = yrm && p.nsg == 1 && (ync_env ? std::atoi(ync_env) != 0 : !p.rdown);
-        const Defines ync = y_nc ? Defines{{"SE_Y_NC", "1"}} : Defines{};
+        // MIMO_FL_Y_NOC1=1 (with the NCRISC's y writes): those writes on the other NoC than its down-weight reads -
+        // the y traffic off the x relays' multicast NoC (NOC0), whose mix with the DRISC NOC0 weight writes and the
+        // multicast wedges NOC0 (TS_HANG_WORKLOG.md); both down kernels in dynamic-NoC mode (per-RISC command buffers)
+        const bool y_other = y_nc && std::getenv("MIMO_FL_Y_NOC1") && std::atoi(std::getenv("MIMO_FL_Y_NOC1")) != 0;
+        const NOC_MODE dn_mode = y_other ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC;
+        Defines ync = y_nc ? Defines{{"SE_Y_NC", "1"}} : Defines{};
+        if (y_other) {
+            ync["SE_YRM_NOC"] = dn_noc0 ? "0" : "1";
+        }
         auto plus = [](Defines a, const Defines& b) {
             a.insert(b.begin(), b.end());
             return a;
@@ -1125,7 +1356,10 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                {2,     p.h_tiles, p.h_tile, H_PIECES, 16, out,    V,   S,  ngu_sg, p.nd_sg + p.n_rdn,
                 HARR,  HSFREE,    GATH,     DONE,     GO, p.hbuf, MTD, pw, Ht,     GATH,
                 GATH1, GATH2,     E},
-               plus(plus(yrm_def(with(dyn_def, {{"SE_E2E", "1"}}), pw), ync), y_nc ? Defines{} : cmb_def));
+               plus(
+                   plus(yrm_def(with(dyn_def, {{"SE_E2E", "1"}}), pw), y_nc ? Defines{{"SE_Y_NC", "1"}} : Defines{}),
+                   y_nc ? Defines{} : cmb_def),
+               dn_mode);
         const auto kw =
             dm("se6_dw.cpp",
                cores,
@@ -1150,7 +1384,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                    plus(
                        y_nc ? plus(plus(yrm_def(dyn_def, pw), ync), cmb_def) : dyn_def,
                        p.dw_rot ? Defines{{"SE_DW_ROT", std::to_string(banks)}} : Defines{}),
-                   Defines{{"SE_DW_RING", std::to_string(ring)}}));
+                   Defines{{"SE_DW_RING", std::to_string(ring)}}),
+               dn_mode);
         const auto kc =
             cp("se6_dcompute.cpp",
                cores,
