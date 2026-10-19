@@ -620,4 +620,6 @@ def test_zero_padded_kv_cache_tp_deduped(mesh_device, use_tensor_args):
         windows=windows,
         tp_shard_kv=True,
     )
-    assert mesh_device.num_program_cache_entries() == cache_entries_before + 1
+    # layer_idx is hashed, slot and valid_global are not.
+    num_layers_used = len({layer_idx for _slot, layer_idx in windows})
+    assert mesh_device.num_program_cache_entries() == cache_entries_before + num_layers_used
