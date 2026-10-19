@@ -24,7 +24,7 @@ operations:
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "SUM"
         unpacker: "ReduceUnpacker"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
         indexes:
           in0: {count: 16}
           in1: {count: 16, step: 0}

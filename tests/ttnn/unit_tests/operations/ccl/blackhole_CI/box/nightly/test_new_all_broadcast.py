@@ -9,7 +9,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
+from tt_py_test_utils_common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
 from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
 

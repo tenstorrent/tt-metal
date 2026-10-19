@@ -589,12 +589,23 @@ def test_full_tensor_info_captured(device, mode):
 
     # Find tensor nodes and verify they have full info
     found_tensor_with_full_info = False
+    found_l1_device_tensor = False
     for node in captured_graph:
         if node["node_type"] == "tensor":
             params = node["params"]
             # Check for required fields
             assert "tensor_id" in params
             assert "shape" in params
+
+            # Readers must not mistake a host tensor's missing buffer type for DRAM
+            assert params.get("storage_type") in ("HOST", "DEVICE")
+            if params["storage_type"] == "DEVICE":
+                assert "memory_config" in params
+                assert isinstance(params["buffer_type"], int)
+                found_l1_device_tensor |= params["buffer_type"] == ttnn.BufferType.L1.value
+            else:
+                assert "buffer_type" not in params
+                assert "memory_config" not in params
 
             # Check for extended tensor info (dtype, layout)
             if "dtype" in params:
@@ -610,6 +621,7 @@ def test_full_tensor_info_captured(device, mode):
                     assert isinstance(params["address"], (int, str))
 
     assert found_tensor_with_full_info, "Expected at least one tensor with full info"
+    assert found_l1_device_tensor, "Expected the L1 device tensor to record buffer_type L1"
 
 
 @pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])

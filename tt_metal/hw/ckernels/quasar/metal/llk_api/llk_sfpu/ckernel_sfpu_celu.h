@@ -16,6 +16,10 @@ inline void celu_init() { math::_reset_counters_<p_setrwc::SET_ABD_F>(); }
 
 // celu(x) = x for x>=0, alpha*(exp(x/alpha)-1) for x<0
 
+// The param0 the generated celu kernel is fitted for, as FP32 bits; any other param0 runs the stock kernel.
+inline constexpr std::uint32_t celu_bf16_param0_bits = 0x3f800000u;
+// The param1 the generated celu kernel is fitted for, as FP32 bits; any other param1 runs the stock kernel.
+inline constexpr std::uint32_t celu_bf16_param1_bits = 0x3f800000u;
 // Whether BF16 DEST runs the generated celu kernel as one call over the whole tile.
 inline constexpr bool celu_bf16_whole_tile = false;
 

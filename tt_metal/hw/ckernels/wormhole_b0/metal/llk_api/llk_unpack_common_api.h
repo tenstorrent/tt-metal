@@ -197,15 +197,16 @@ inline void llk_unpack_reconfig_data_format_srca(
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
 
-    if (should_reconfigure_cbs(srca_old_operand, srca_new_operand)) {
-        llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(srca_new_operand);
-    } else if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {
+    if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {
         llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(srca_new_operand);
     } else if (
         get_operand_face_r_dim(old_srca_operand_id) != get_operand_face_r_dim(new_srca_operand_id) ||
         get_operand_num_faces(old_srca_operand_id) != get_operand_num_faces(new_srca_operand_id)) {
+        // A geometry change needs the face geometry reprogrammed, whether or not the format changed too.
         llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, p_dim_stride_target::FACE_ROW_MAJOR, skip_int8>(
             srca_new_operand);
+    } else if (should_reconfigure_cbs(srca_old_operand, srca_new_operand)) {
+        llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(srca_new_operand);
     }
 }
 
@@ -227,15 +228,16 @@ inline void llk_unpack_reconfig_data_format_srcb(
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
-    if (should_reconfigure_cbs(srcb_old_operand, srcb_new_operand)) {
-        llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(srcb_new_operand);
-    } else if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {
+    if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {
         llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(srcb_new_operand);
     } else if (
         get_operand_face_r_dim(old_srcb_operand_id) != get_operand_face_r_dim(new_srcb_operand_id) ||
         get_operand_num_faces(old_srcb_operand_id) != get_operand_num_faces(new_srcb_operand_id)) {
+        // A geometry change needs the face geometry reprogrammed, whether or not the format changed too.
         llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, p_dim_stride_target::FACE_ROW_MAJOR, skip_int8>(
             srcb_new_operand);
+    } else if (should_reconfigure_cbs(srcb_old_operand, srcb_new_operand)) {
+        llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(srcb_new_operand);
     }
 }
 
@@ -362,3 +364,14 @@ inline void llk_unpack_set_srcb_dummy_valid() {
     SAN_HOOK(unsupported());
     _llk_unpack_set_srcb_dummy_valid_();
 }
+
+/**
+ * Unpack-thread halves of tile_regs_acquire / tile_regs_commit. No-ops on this architecture: its unpack-to-dest path
+ * (_llk_unpack_A_ with unpack_to_dest) synchronizes with math per tile on the UNPACK_TO_DEST semaphore inside the
+ * LLKs, so there is no section-level unpack handshake for these to run. Quasar's unpack-to-dest path gives them a
+ * body.
+ */
+inline void llk_unpack_wait_for_dest_available() {}
+
+template <bool EN_32BIT_DEST>
+inline void llk_unpack_dest_section_done() {}

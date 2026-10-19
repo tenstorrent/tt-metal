@@ -19,13 +19,18 @@ inline void celu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 bool bf16_dest_celu();
 template <int ITERATIONS>
 void calculate_celu_bf16();
+// The param0 the generated celu kernel is fitted for, as FP32 bits; any other param0 runs the stock kernel.
+inline constexpr std::uint32_t celu_bf16_param0_bits = 0x3f800000u;
+// The param1 the generated celu kernel is fitted for, as FP32 bits; any other param1 runs the stock kernel.
+inline constexpr std::uint32_t celu_bf16_param1_bits = 0x3f800000u;
 // Whether BF16 DEST runs the generated celu kernel as one call over the whole tile.
 inline constexpr bool celu_bf16_whole_tile = true;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_celu(std::uint32_t param0, std::uint32_t param1) {
     if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
-        if (bf16_dest_celu() && param0 == 0x3f800000u && param1 == 0x3f800000u) {
+        if (bf16_dest_celu() && param0 == ckernel::sfpu::celu_bf16_param0_bits &&
+            param1 == ckernel::sfpu::celu_bf16_param1_bits) {
             calculate_celu_bf16<ITERATIONS>();
             return;
         }

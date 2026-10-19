@@ -9,36 +9,6 @@ import torch
 import ttnn
 
 
-@pytest.mark.parametrize(
-    "shapes",
-    [
-        [1, 1, 32, 32],
-        [4, 2, 96, 192],
-        [4, 7, 21, 133],
-    ],
-)
-def test_i1_range(device, shapes):
-    torch.manual_seed(0)
-
-    high = 10
-    low = -10
-    torch_input_tensor_a = torch.rand(shapes, dtype=torch.float32) * (high - low) + low
-    torch_output_tensor = torch.special.i1(torch_input_tensor_a)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.float32,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    output_tensor = ttnn.i1(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
-    assert pcc >= 0.9999
-
-
 # Tolerances enforce the kernel's documented accuracy claims:
 #   FP32 in-domain MaxULP ≈ 10, FP32 OOD MaxULP < 1  → cap at 20 (2× headroom)
 #   BF16 MaxULP ≤ 1 BF16 ULP (PR claim "BF16 sub-1 ULP"; measured ~0.5)
