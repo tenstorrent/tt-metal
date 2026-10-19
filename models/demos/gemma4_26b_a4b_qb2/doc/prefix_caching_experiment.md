@@ -717,3 +717,13 @@ remaining boundary check, retaining the unconditional faulty-worker guard.
 The one-off health bypass is removed. No shared workflow or runner state is
 modified; only the existing experiment workflow branch changes.
 
+The standard-pool boundary attempt
+[39272725522](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39272725522)
+used Metal `f20185936091f47452add16ab7c8ad26d8df4163`, workflow `9f1bdd2`,
+but still selected `qb2-120-p02t02`. The unconditional guard refused it
+before checkout or model/device access. Thus `pipeline-perf` does not
+exclude that worker. No additional routing guesses are planned; the new
+variant's boundary gate needs operator-provided healthy routing or repair.
+The earlier traced-suffix candidate retains its existing boundary evidence.
+Only the full5 SWE run remained active after this guarded refusal.
+
