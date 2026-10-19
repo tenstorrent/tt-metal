@@ -69,8 +69,8 @@ Optional environment:
 - `QSR_AETHER_LOCK`: shared lock base, qualified by reservation host as in `run_test.sh`.
 - `QSR_AETHER_HOST`: remote Aether host (default `soc-l-12`).
 - `TT_METAL_LLK_ASSERTS=1`: enable device assertions and
-  `TT_METAL_WATCHER=1` for local execution. The current queue request does not
-  transport these optional variables.
+  `TT_METAL_WATCHER=1`. Queue jobs carry them, like any other `TT_METAL_*` or
+  `TT_LLK_*` variable in your environment, to the build and the card run.
 
 ## Sealed silicon queue execution
 
