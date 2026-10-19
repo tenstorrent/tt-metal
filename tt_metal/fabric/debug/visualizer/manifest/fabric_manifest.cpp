@@ -496,6 +496,7 @@ json make_vocabulary_json() {
     json out;
     out["categories"] = enum_names_json<manifest::FieldCategory>();
     out["kinds"] = kind_names_json(std::type_identity<manifest::Content>{});
+    out["z_port_roles"] = enum_names_json<ZPortRole>();
     return out;
 }
 

@@ -44,7 +44,7 @@ The types at L1 addresses come from the struct layouts in `fabric_struct_layouts
 | `manifest_version`, `kind` | `1` and `"fabric_manifest"` |
 | `run` | Architecture, fabric, reliability, tensix and UDM configs, host rank, MPI rank and world size, `written_at` |
 | `fabric_context` | Topology, packet header, payload and channel buffer sizes, the route buffer size, `multi_txq` |
-| `vocabulary` | Every field `category` and `kind` |
+| `vocabulary` | Every field `category` and `kind`, and every chip `z_port_role` |
 | `archs.<arch>.areas` | L1 areas the architecture fixes: heartbeat, telemetry, routing table, go and launch messages, Ethernet firmware mailbox |
 | `archs.<arch>.types` | Every struct a schema names, with its size and members in order |
 | `enums` | Every enum a schema names, with its values |
@@ -161,6 +161,7 @@ names what to update. By kind of change:
 | New struct in L1 | The build, when a field's content names a struct with no `StructLayout`; the writer, when its schema does not resolve | A `StructLayout<T>` and an entry in `DescribedStructs` (`fabric_struct_layouts.hpp`) |
 | New enum | The writer, when a schema names it | An entry in `DescribedEnums` (`fabric_struct_layouts.hpp`) |
 | New enum value | Nothing for enums enchantum reads; the build for `EDMStatus` | `FABRIC_MANIFEST_EDM_STATUSES` for `EDMStatus` |
+| New or renamed field category, field kind or Z port role | The schema check, on the name in `vocabulary` | Its list in `fabric_manifest_schema.json` (`category`, `kind` or `z_port_role`) |
 | New computed fact | Nothing | The model, the collector or chip pass, the writer, the tests, a paragraph above, and the schema |
 | A change to the JSON's shape | The schema check | `fabric_manifest_schema.json` |
 | A field table or unrecorded list change | `ManifestDocs.UpToDate` | Regenerate `FIELDS.md` (below) |
