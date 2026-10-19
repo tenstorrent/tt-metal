@@ -32,7 +32,7 @@ import torch
 import ttnn
 
 from . import ccl
-from .common import DRAM, TP_AXIS, compute_config, tp_sum
+from .common import DRAM, TP_AXIS, attn_compute_config, compute_config, tp_sum
 from .exact_mm import ExactMatmul
 from .norm import TtDistributedRmsNorm
 from .quant import fp8_qdq
@@ -58,7 +58,8 @@ class TtAttnInProj:
             blocks.append(w)
         assert hidden % (32 * tp) == 0, f"hidden {hidden} does not split into tiles over TP {tp}"
         self.mesh, self.cols, self.width = mesh, cols, start
-        self.ckc = compute_config(mesh)
+        self.ckc = compute_config(mesh)  # ExactMatmul (comparison path): its exactness needs MATMUL_FIDELITY
+        self.attn_ckc = attn_compute_config(mesh)  # the fpu linear: ATTN_FIDELITY (P.7)
         w_t = torch.cat(blocks, dim=0).t().contiguous()  # [H, width]
         assert torch.equal(w_t.bfloat16().float(), w_t.float()), "fp8 weights must be bf16-exact"
         self.exact = settings.get("ATTN_IN_MM") == "exact"
@@ -83,7 +84,7 @@ class TtAttnInProj:
         else:
             # CCL_IMPL=fabric_bf16 (P.6): the partial in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
             pdt = ccl.partial_dtype(self.mesh) if settings.get("HC_TP_SUM") == "gather_add" else ttnn.float32
-            part = ttnn.linear(xq, self.weight, dtype=pdt, compute_kernel_config=self.ckc, memory_config=DRAM)
+            part = ttnn.linear(xq, self.weight, dtype=pdt, compute_kernel_config=self.attn_ckc, memory_config=DRAM)
         out = tp_sum(self.mesh, part)
         ttnn.deallocate(part)
         return out

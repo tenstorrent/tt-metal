@@ -58,7 +58,7 @@ import torch
 import ttnn
 
 from . import ccl
-from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, sum_cols
+from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, compute_config, sum_cols
 from .quant import fp8_qdq, round_tf32
 from .rope import RopeTable, deinterleave_perm, deinterleave_tail, rope_heads
 from .served import CacheSlab, DeviceScalars, alloc_served
@@ -342,7 +342,7 @@ class TtWindowAttention:
         assert self.heads % g.tp == 0 and self.groups % g.tp == 0, (self.heads, self.groups, g.tp)
         self.h_l, self.g_l = self.heads // g.tp, self.groups // g.tp
         self.hpg = self.heads // self.groups  # heads per wo_a group
-        self.ckc = compute_config(mesh)
+        self.ckc = attn_compute_config(mesh)  # wq_b, sparse_sdpa, wo_a, wo_b: ATTN_FIDELITY (P.7)
         self.scale = self.d**-0.5
         self.sdpa = settings.get("WINDOW_SDPA")
         self.high_precision = self.sdpa == "high_precision"
@@ -388,7 +388,7 @@ class TtWindowAttention:
                 memory_config=DRAM,
                 mesh_mapper=_mapper(mesh, (None, 1)),
             )
-            self.window = tables.exact(self.h_l, self.d, int(settings.get("WINDOW_PIECES")), self.ckc)
+            self.window = tables.exact(self.h_l, self.d, int(settings.get("WINDOW_PIECES")), compute_config(mesh))
         else:
             self.sink = _upload(mesh, sink, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
 
