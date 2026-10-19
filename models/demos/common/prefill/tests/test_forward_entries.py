@@ -11,10 +11,13 @@ import pytest
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotate_chunk_tokens
 from models.demos.common.prefill.forward_entries import (
     EMPTY_ENTRY,
+    INVALID_SLOT,
+    MAX_FORWARD_CHUNKS,
     SHUTDOWN_WORD,
     WARMUP_WORD,
     PrefillEntry,
     decode_forward_metadata,
+    forward_metadata_words,
     metadata_size_bytes,
     pack_forward_metadata,
     packed_forward_refusals,
@@ -32,8 +35,28 @@ def as_int32_words(metadata: bytes) -> list:
     return list(struct.unpack(f"<{len(metadata) // 4}i", metadata))
 
 
-def test_metadata_size_bytes():
-    assert [metadata_size_bytes(f) for f in (1, 2, 4, 8)] == [12, 24, 48, 96]
+def test_metadata_size_bytes(expect_error):
+    assert [metadata_size_bytes(f) for f in (1, 2, 4, MAX_FORWARD_CHUNKS)] == [12, 200, 200, 200]
+    for f in (0, MAX_FORWARD_CHUNKS + 1):
+        with expect_error(ValueError, f"PREFILL_FORWARD_CHUNKS={f} outside"):
+            metadata_size_bytes(f)
+
+
+def test_batched_layout_is_prefill_batch_metadata():
+    entries = [PrefillEntry(0, 0, C), PrefillEntry(1, C, 2 * C), PrefillEntry(1, 2 * C, 2500), EMPTY]
+    expected = struct.pack("<11I", 3, 0, 0, 0, C, 1, C, 2 * C, 1, 2 * C, 2500)
+    expected += struct.pack("<3I", INVALID_SLOT, 0, 0) * (MAX_FORWARD_CHUNKS - 3)
+    assert pack_forward_metadata(entries) == expected
+    assert decode_forward_metadata(as_int32_words(expected), 4) == entries
+
+
+def test_batched_layout_rejects_bad_counts(expect_error):
+    words = as_int32_words(pack_forward_metadata([PrefillEntry(0, 0, C), EMPTY]))
+    for n in (0, 3):
+        with expect_error(ValueError, f"num_chunks={n} outside"):
+            decode_forward_metadata([n] + words[1:], 2)
+    with expect_error(ValueError, "empty entries must come after"):
+        pack_forward_metadata([EMPTY, PrefillEntry(0, 0, C)])
 
 
 def test_single_entry_is_todays_metadata():
@@ -56,20 +79,22 @@ def test_roundtrip(forward_chunks):
         assert decode_forward_metadata(as_int32_words(metadata), forward_chunks) == entries
 
 
-@pytest.mark.parametrize("forward_chunks", [1, 3, 8])
+@pytest.mark.parametrize("forward_chunks", [1, 3, 8, MAX_FORWARD_CHUNKS])
 @pytest.mark.parametrize("word", [SHUTDOWN_WORD, WARMUP_WORD])
 def test_sentinels_fill_every_word(word, forward_chunks):
     metadata = sentinel_metadata(word, forward_chunks)
     assert len(metadata) == metadata_size_bytes(forward_chunks)
-    assert as_int32_words(metadata) == [word] * (3 * forward_chunks)
+    assert as_int32_words(metadata) == [word] * (metadata_size_bytes(forward_chunks) // 4)
     entries = decode_forward_metadata(as_int32_words(metadata), forward_chunks)
     assert entries == [PrefillEntry(word, word, word)] * forward_chunks
+    # A rank forwards the sentinel it decoded over D2D.
+    assert forward_metadata_words(entries) == as_int32_words(metadata)
 
 
 def test_decode_ignores_trailing_words_and_rejects_short(expect_error):
     words = as_int32_words(pack_forward_metadata([PrefillEntry(1, 0, C), PrefillEntry(2, 0, 7)])) + [5]
     assert decode_forward_metadata(words, 2) == [PrefillEntry(1, 0, C), PrefillEntry(2, 0, 7)]
-    with expect_error(ValueError, "needs 9"):
+    with expect_error(ValueError, "needs 50"):
         decode_forward_metadata(words[:6], 3)
 
 
