@@ -125,8 +125,11 @@ def _program(words: list[str]) -> list[str]:
     return words[i:]
 
 
+COLLECT_ONLY = ("--collect-only", "--co")  # F115: lists the tests, runs none (no fixture, no device)
+
+
 def _is_direct_pytest(words: list[str]) -> bool:
-    if not words:
+    if not words or any(w in COLLECT_ONLY for w in words):
         return False
     if Path(words[0]).name == "pytest":
         return True

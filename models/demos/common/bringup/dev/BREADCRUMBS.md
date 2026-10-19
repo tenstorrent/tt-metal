@@ -1349,3 +1349,6 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   segment by the same command without the profiler variables and BRINGUP_PROFILE_WALL=1 (compile + 3 timed runs,
   chunk_wall_ms = median, chunk_wall_clean = 1); the profiled run (BRINGUP_WALL_CLEAN=1) keeps that and records its
   own as chunk_wall_ms_profiled. The A/B report runs both and shows chunk_wall_ms and profiled_programs.
+
+- F115: `pytest --collect-only` / `--co` is not a direct pytest (it lists tests, runs no fixture, opens no device).
+  DeepSeek-V4.1 P.8 attempt 1 was failed after 2h20m of passing work for one `pytest --collect-only -q`.
