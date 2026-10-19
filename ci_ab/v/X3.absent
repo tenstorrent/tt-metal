@@ -4,3 +4,4 @@ tt_metal/tt-llk/tests/sources/unpack_tilizeA_B_perf.cpp
 tt_metal/tt-llk/tests/sources/unpack_tilizeA_B_test.cpp
 tt_metal/tt-llk/tests/helpers/include/llk_tilize_bfp2_per_tile.h
 tt_metal/tt-llk/tests/helpers/include/llk_tilize_bfp_per_tile.h
+tt_metal/tt-llk/tests/helpers/include/llk_tilize_dest_runs.h
