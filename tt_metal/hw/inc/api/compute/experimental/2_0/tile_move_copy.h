@@ -4,6 +4,94 @@
 
 #pragma once
 
+#ifdef ARCH_QUASAR
+
+#include <cstdint>
+#include "api/compute/common_globals.h"
+#include "api/compute/experimental/2_0/llk_operand.h"
+#include "experimental/2_0/llk_2_0.h"  // id-free Quasar LLK API
+
+namespace ckernel {
+namespace experimental {
+
+// clang-format off
+/**
+ * Id-free datacopy init, Quasar. Programs a fresh unpack buffer descriptor whose base is `src.l1_address`
+ * (unpack TRISC) and the SrcA -> Dest datacopy MOP (math TRISC). Tiles of the following copy_tile / copy_block
+ * calls are indexed relative to that address, so call copy_init again whenever the source address changes
+ * (e.g. once per DataflowBuffer::front()) -- on Quasar every op init must precede its op anyway. No uninit.
+ *
+ * Only 16-bit float operands (Float16_b, Float16) are supported.
+ *
+ * | Param Type | Name                | Description                                       | Type        | Valid Range        | Required |
+ * |------------|---------------------|---------------------------------------------------|-------------|--------------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                         | bool        |                    | False    |
+ * | Template   | Format              | Source L1 data format (deduced from LLKOperand)   | DataFormat  | Float16_b, Float16 | True     |
+ * | Template   | Shape               | Source tile geometry (deduced from LLKOperand)    | TensorShape | N/A                | True     |
+ * | Function   | src                 | Source operand; l1_address = tile 0 of the copies | LLKOperand  | N/A                | True     |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
+ALWI void copy_init(LLKOperand<Format, Shape> src) {
+    static_assert(llk_2_0::is_supported_format(Format), "copy_init (Quasar 2.0): only Float16_b / Float16.");
+    static_assert(is_legal_tile_shape(Shape), "copy_init: illegal tile shape.");
+    UNPACK((llk_2_0::unpack_A_init<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en>(src.l1_address)));
+    MATH((llk_2_0::math_datacopy_init<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en>()));
+}
+
+// clang-format off
+/**
+ * Id-free datacopy, Quasar. Unpacks source tile `itile` (relative to the address the preceding copy_init
+ * programmed) into SrcA and copies it to Dest tile `dst_tile_index`. `src` must be the operand passed to that
+ * copy_init. Dest synchronization is outside this op: the math client must hold Dest (dest_acquire) and later
+ * release it (dest_release).
+ *
+ * | Param Type | Name           | Description                                         | Type        | Valid Range                          | Required |
+ * |------------|----------------|-----------------------------------------------------|-------------|--------------------------------------|----------|
+ * | Template   | Format         | Source L1 data format (deduced from LLKOperand)     | DataFormat  | Float16_b, Float16                   | True     |
+ * | Template   | Shape          | Source tile geometry (deduced from LLKOperand)      | TensorShape | N/A                                  | True     |
+ * | Function   | src            | Source operand (same as the preceding copy_init)    | LLKOperand  | N/A                                  | True     |
+ * | Function   | itile          | Source tile index relative to the copy_init address | uint32_t    | N/A                                  | True     |
+ * | Function   | dst_tile_index | Tile index in the Dest register                     | uint32_t    | < tiles per Dest section             | True     |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
+ALWI void copy_tile(LLKOperand<Format, Shape> /*src*/, std::uint32_t itile, std::uint32_t dst_tile_index) {
+    UNPACK((llk_2_0::unpack_A<LLKOperand<Format, Shape>::descriptor>(itile)));
+    MATH((llk_2_0::math_datacopy(dst_tile_index)));
+}
+
+// clang-format off
+/**
+ * Id-free block datacopy, Quasar: copy_tile over `ntiles` consecutive tiles (source tile start_in_tile_index+i
+ * -> Dest tile start_dst_tile_index+i). Same init and Dest-sync contract as copy_tile.
+ *
+ * | Param Type | Name                 | Description                                        | Type        | Valid Range                                 | Required |
+ * |------------|----------------------|----------------------------------------------------|-------------|---------------------------------------------|----------|
+ * | Template   | Format               | Source L1 data format (deduced from LLKOperand)    | DataFormat  | Float16_b, Float16                          | True     |
+ * | Template   | Shape                | Source tile geometry (deduced from LLKOperand)     | TensorShape | N/A                                         | True     |
+ * | Function   | src                  | Source operand (same as the preceding copy_init)   | LLKOperand  | N/A                                         | True     |
+ * | Function   | start_in_tile_index  | First source tile, relative to the copy_init address | uint32_t  | N/A                                         | True     |
+ * | Function   | start_dst_tile_index | First Dest tile                                    | uint32_t    | N/A                                         | True     |
+ * | Function   | ntiles               | Number of tiles                                    | uint32_t    | start_dst_tile_index + ntiles <= section size | True   |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
+ALWI void copy_block(
+    LLKOperand<Format, Shape> src,
+    std::uint32_t start_in_tile_index,
+    std::uint32_t start_dst_tile_index,
+    std::uint32_t ntiles) {
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        copy_tile<is_fp32_dest_acc_en>(src, start_in_tile_index + i, start_dst_tile_index + i);
+    }
+}
+
+}  // namespace experimental
+}  // namespace ckernel
+
+#else  // Blackhole
+
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
@@ -150,3 +238,5 @@ ALWI void copy_block(
 
 }  // namespace experimental
 }  // namespace ckernel
+
+#endif  // ARCH_QUASAR
