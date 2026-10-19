@@ -76,7 +76,11 @@ perf: |
   Make the change the default and never revert it when a test fails: the owner decides from the measurements. Do not
   change thresholds, goldens or frozen tests.
   Accuracy first. Before any profile, run the frozen tests of the step the change touches: the accuracy commands of
-  the gate below, in gate order, each once. If one fails and the details above give no way around it, stop at once:
+  the gate below, in gate order, each once, through
+  `python -m models.demos.common.bringup.orchestrator measure --task $task_id --part <the command's test file stem>`
+  (`--part test`: all of them; `--part <rung>` / `--part profile`: the A/B report's ladder rungs and profile). It runs
+  them exactly as the A/B report's change-on side (your switch on, its environment) and the report reuses every run
+  whose code is still the same (F116), so run them after your last code edit; a later edit makes it measure again. If one fails and the details above give no way around it, stop at once:
   do not profile, do not try settings the details do not name; append the failing metric(s) with their limits (the
   test's `FAIL <metric>: ...` lines) to `$breadcrumbs` and your final summary, and exit. Never profile a change that
   fails accuracy (testing/profile.py refuses while this task's frozen test has failed). Only when they all pass may
