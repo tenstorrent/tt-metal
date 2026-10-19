@@ -697,15 +697,17 @@ std::vector<uint32_t> read_worker_status(
 void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) {
     ASSERT_GT(get_receiver_slot_count(), 0u);
 
+    const auto& mesh_device = *fixture.get_devices().front();
     const auto test_runtime_config = build_test_runtime_config(test_case);
     ASSERT_GT(test_runtime_config.packet_payload_size_bytes, 0u);
     ASSERT_EQ(test_runtime_config.packet_payload_size_bytes % 16u, 0u);
 
     ASSERT_LE(
-        test_runtime_config.sender_channel_buffer_size_bytes, tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes())
+        test_runtime_config.sender_channel_buffer_size_bytes,
+        tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(mesh_device))
         << "Case " << test_case.name << " requested sender mux channel buffer size "
         << test_runtime_config.sender_channel_buffer_size_bytes << " but fabric limit is "
-        << tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+        << tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(mesh_device);
 
     auto routing_selection = select_routing_selection(fixture, test_case);
     if (!routing_selection.has_value()) {

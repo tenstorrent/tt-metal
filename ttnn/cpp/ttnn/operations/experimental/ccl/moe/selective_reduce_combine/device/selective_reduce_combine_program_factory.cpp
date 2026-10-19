@@ -148,7 +148,8 @@ SelectiveReduceCombineWorkerLayout compute_worker_layout(
     // In local combine mode there is no fabric packet-size constraint; use a large value so
     // the data-parallel split is driven purely by num_data_parallel_cores_attr.
     const auto fabric_max_packet_size_bytes =
-        local_combine ? std::numeric_limits<uint32_t>::max() : tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+        local_combine ? std::numeric_limits<uint32_t>::max()
+                      : tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*input_tensor.device());
     const auto input_dtype = input_tensor.dtype();
     const uint32_t max_packet_size_bytes = input_dtype == tt::tt_metal::DataType::BFLOAT16
                                                ? std::bit_floor(fabric_max_packet_size_bytes)
@@ -226,7 +227,7 @@ auto plan_mux_workers(
 
     constexpr uint8_t initial_num_buffers_per_channel = 15;
 
-    const size_t channel_buffer_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t channel_buffer_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(mesh_device);
     const auto l1_unreserved_base_address =
         mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
@@ -455,7 +456,7 @@ void append_selective_reduce_combine_to_descriptor(
     // In local combine mode, there is no fabric packet-size constraint.
     const auto fabric_max_packet_size_bytes = operation_attributes.local_combine
                                                   ? std::numeric_limits<uint32_t>::max()
-                                                  : get_tt_fabric_channel_buffer_size_bytes();
+                                                  : get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     const uint32_t max_packet_size_bytes =
         input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
