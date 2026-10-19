@@ -10,11 +10,14 @@ The same ~1.5K-token prompt is prefilled three ways on every replica, each into 
 * slot 2: a prefix-cache hit: its first ``PREFIX`` tokens are prefilled on their own, then the rest
   continues from ``start_pos = PREFIX``, reading the prefix from the cache.
 
-All three must predict the same next token with near-identical logits. Then every slot decodes greedily
-for a few steps, which reads the KV the chunks wrote; the generated text is logged and the first tokens
-must agree.
+All three must give near-identical next-token logits and pick the same next token up to a bf16 near-tie
+(a token the other run scores within ``TIE_STEPS`` bf16 steps of its best: this prompt's top two are one
+step apart). Then every slot decodes greedily from the one-shot slot's first token for a few steps, which
+reads the KV the chunks wrote; the generated text is logged and the first tokens must agree. Later chunks of the SWA layers read only the window before them from the cache; those of the
+global layers read the whole context through chunked MLA prefill on the chip that owns the slot.
 """
 
+import math
 import os
 
 import pytest
@@ -38,6 +41,14 @@ CHUNKS = (128, 256, 512, 1024)  # chunk size on replica rows 0..3
 MAX_PREFILL_CHUNK = 2048  # one-shot prefill of the whole prompt must fit in one chunk
 GREEDY_TOKENS = 8
 AGREE_TOKENS = 4
+TIE_STEPS = 2
+
+
+def near_top(logits, token):
+    """``token`` scores within TIE_STEPS bf16 steps of the best logit (ties from rounding the logits to bf16)."""
+    best = float(logits.max())
+    step = 2.0 ** (math.floor(math.log2(abs(best))) - 7)
+    return float(logits[token]) >= best - TIE_STEPS * step
 
 
 def long_prompt(tok):
@@ -84,13 +95,20 @@ def test_model_chunked_tp8_dp4(mesh_device):
         base = first[(r, 0)]
         for slot, name in ((1, f"chunks of {CHUNKS[r]}"), (2, f"prefix hit at {PREFIX}")):
             p = pcc(first[(r, slot)], base)
-            same = int(first[(r, slot)].argmax()) == int(base.argmax())
+            other = first[(r, slot)]
+            same = near_top(base, int(other.argmax())) and near_top(other, int(base.argmax()))
             worst_pcc, agree = min(worst_pcc, p), agree and same
-            logger.info(f"row {r} {name}: next-token logits PCC vs one shot {p:.5f}, same top-1 {same}")
+            top = [first[(r, k)].topk(2) for k in (0, slot)]
+            logger.info(
+                f"row {r} {name}: next-token logits PCC vs one shot {p:.5f}, same top-1 up to a tie {same}; top-2 "
+                + " vs ".join(
+                    f"{tok.decode([int(i)])!r} {float(v):.3f}" for t in top for i, v in zip(t.indices, t.values)
+                )
+            )
 
-    # ---- greedy decode from all three slots on every row
+    # ---- greedy decode from all three slots on every row, all from the one-shot slot's first token
     users = {r * 4 + s: s for r in range(DP) for s in range(3)}
-    gen_tokens = {u: [int(first[gen.locate(u)].argmax())] for u in users}
+    gen_tokens = {u: [int(first[(gen.locate(u)[0], 0)].argmax())] for u in users}
     positions = {u: n for u in users}
     for _ in range(GREEDY_TOKENS - 1):
         out = gen.decode({u: t[-1] for u, t in gen_tokens.items()}, positions)

@@ -152,12 +152,27 @@ class ReferenceDecoderLayer:
         return x
 
 
-def load_layer_weights(ckpt, cfg, layer_idx, expert_dtype=torch.bfloat16):
+class LazyExperts:
+    """Stacked expert weights, dequantized on first access (256 MXFP4 experts take ~15 s per layer)."""
+
+    def __init__(self, ckpt, layer_idx, dtype):
+        self.ckpt, self.layer_idx, self.dtype = ckpt, layer_idx, dtype
+        self._data = None
+
+    def __getitem__(self, name):
+        if self._data is None:
+            self._data = self.ckpt.experts(self.layer_idx, dtype=self.dtype)
+        return self._data[name]
+
+
+def load_layer_weights(ckpt, cfg, layer_idx, expert_dtype=torch.bfloat16, lazy_experts=False):
     w = dict(ckpt.norms(layer_idx))
     w["attn"] = ckpt.attention(layer_idx)
     if cfg.is_moe(layer_idx):
         w["router"] = ckpt.router(layer_idx)
-        w["experts"] = ckpt.experts(layer_idx, dtype=expert_dtype)
+        w["experts"] = (
+            LazyExperts(ckpt, layer_idx, expert_dtype) if lazy_experts else ckpt.experts(layer_idx, dtype=expert_dtype)
+        )
     else:
         w["mlp"] = ckpt.dense_mlp(layer_idx)
     return w

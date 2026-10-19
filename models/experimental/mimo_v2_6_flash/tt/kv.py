@@ -3,26 +3,18 @@
 
 """Paged-KV bookkeeping for one TP=8 replica: page tables and which chip owns which user.
 
-Every table maps (slot, logical block) to a physical block, where logical block ``b`` holds positions
-``b * block_size .. (b + 1) * block_size - 1``. The two layer groups use the two layouts of vLLM's hybrid
-KV cache:
+Global layers have 4 KV heads over 8 chips, so chips ``2g`` and ``2g + 1`` both serve KV head
+``g``. Instead of storing that head twice, the pair splits the users: decode slot ``s`` belongs
+to the chip with ``chip % rep == s % rep`` (``rep = tp / num_kv_heads``). Each chip only keeps
+the KV of the slots it owns, and in decode it sees position -1 for the other slots, which the
+cache update and SDPA skip. Prefill computes K/V on both chips; the non-owner's page table
+points every block of a foreign slot at one scratch block, so its writes land nowhere useful.
 
-* Global layers (``FullAttentionSpec``): every logical block of a user's context is mapped. They have 4 KV
-  heads over 8 chips, so chips ``2g`` and ``2g + 1`` both serve KV head ``g``. Instead of storing that
-  head twice, the pair splits the users: slot ``s`` belongs to the chip with ``chip % rep == s % rep``
-  (``rep = tp / num_kv_heads``). Only the owner keeps a slot's KV; the other chip's table points every
-  block of that slot at one scratch block, so its writes land nowhere useful. In decode it sees position
-  -1 for the slots it does not own, which the cache update and SDPA skip; in decode and prefill its
-  attention output for those slots is zeroed (``owner_mask``) before the row all-reduce.
-* SWA layers (``SlidingWindowSpec``): only blocks that overlap the 128-token window have to be mapped.
-  vLLM frees the blocks behind the window and points their entries at its null block. Standalone, each
-  user reuses its own physical blocks cyclically (``sliding_window_page_tables``). Either way the
-  attention kernels never read a key outside the window, so stale or null blocks are never used.
-  One KV head per chip, so the table is the same on every chip.
+Layers with ``rep == 1`` (SWA: one KV head per chip) use the same table on every chip.
 
-A cache never has fewer physical blocks than its table has entries per user: ``paged_update_cache``
-rejects a table wider than the pool. vLLM keeps that bound by trimming its tables to the pool size; the
-standalone SWA pool is sized up to the table width for the same reason (``layer_page_tables``).
+SWA layers page by absolute position as well, like vLLM's SlidingWindowSpec block tables (``SwaBlockTable``):
+block j of a slot holds positions [j * block_size, (j + 1) * block_size), but only the blocks some sliding window
+can still read are real; the others point at a scratch block.
 """
 
 import math
@@ -57,49 +49,8 @@ def page_tables(num_users, max_batch, blocks_per_user, tp, rep, seed=None):
     return tables, num_blocks + (1 if rep > 1 else 0)
 
 
-def swa_blocks_per_user(sliding_window, max_chunk, block_size):
-    """Physical blocks one user needs on a SWA layer: a prefill chunk of up to ``max_chunk`` tokens starting
-    on a block boundary, plus the window of keys before it. Decode needs fewer (the window plus one block)."""
-    return math.ceil(max_chunk / block_size) + math.ceil(sliding_window / block_size) + 1
-
-
-def sliding_window_page_tables(num_users, max_batch, logical_blocks, physical_per_user, tp, seed=None):
-    """SWA tables, int32 [tp, max_batch, logical_blocks], and blocks per chip.
-
-    Logical block ``b`` of slot ``s`` maps to the slot's ``b % physical_per_user``-th physical block. Any
-    ``physical_per_user`` consecutive logical blocks are distinct, so a chunk's writes never land on the
-    window it is about to read (see ``swa_blocks_per_user``)."""
-    num_blocks = num_users * physical_per_user
-    order = torch.arange(num_blocks, dtype=torch.int32)
-    if seed is not None:
-        order = order[torch.randperm(num_blocks, generator=torch.Generator().manual_seed(seed))]
-    tables = torch.zeros((tp, max_batch, logical_blocks), dtype=torch.int32)
-    cyclic = torch.arange(logical_blocks) % physical_per_user
-    for slot in range(num_users):
-        tables[:, slot] = order[slot * physical_per_user + cyclic]
-    return tables, num_blocks
-
-
-def layer_page_tables(
-    num_users, max_batch, max_seq_len, block_size, tp, rep, sliding_window=None, max_chunk=None, seed=None
-):
-    """Tables for one layer group: whole context for global layers, reused blocks for SWA layers.
-
-    ``max_chunk``: the longest (padded) prefill chunk the caller will run. Each SWA user gets at least the
-    blocks for one chunk plus the window, and at least its share of the table width, so the pool
-    (users x blocks per user) is never smaller than the table is wide, as ``paged_update_cache`` requires.
-    With 4 users and 4096-token chunks, that share only matters past ~17K tokens of context; at 1M it costs
-    ~17 GB per chip over 39 layers, so 1M runs go through vLLM's shared pool, not the standalone model."""
-    logical = math.ceil(max_seq_len / block_size)
-    if sliding_window is None:
-        return page_tables(num_users, max_batch, logical, tp, rep, seed)
-    assert rep == 1 and max_chunk is not None
-    per_user = max(swa_blocks_per_user(sliding_window, max_chunk, block_size), math.ceil(logical / num_users))
-    return sliding_window_page_tables(num_users, max_batch, logical, min(per_user, logical), tp, seed)
-
-
 def slot_owner_masks(tp, rep):
-    """{parity: [tp, 1, 1, 1, 1]}: 1 on the chips that own slots of that parity (prefill: one user at a time)."""
+    """{parity: [tp, 1, 1, 1, 1]}: 1 on the chips that own the slots of that parity (prefill: one user at a time)."""
     chips = torch.arange(tp)
     return {p: (chips % rep == p).to(torch.bfloat16).reshape(tp, 1, 1, 1, 1) for p in range(rep)}
 
@@ -128,3 +79,97 @@ def per_chip(plan, t, dtype, layout, device=True):
         layout=layout,
         mesh_mapper=plan.shard(0),
     )
+
+
+# Most padding a prefill chunk gets (model.prefill_padded_len rounds up to 32, then to 128 or 256 tokens).
+PREFILL_MAX_PAD = 255
+
+
+def swa_blocks_per_user(window, block_size, max_pad=PREFILL_MAX_PAD):
+    """Real SWA blocks one user can hold at once (``SwaBlockTable``), for any chunk size: a later prefill chunk keeps
+    the window before it (``window / block_size`` blocks: chunks start on a block boundary) and takes the blocks of
+    [real end - window, padded end), at most ``ceil((window + max_pad) / block_size) + 1``. Decode needs fewer (the
+    window plus the block being written)."""
+    return math.ceil(window / block_size) + math.ceil((window + max_pad) / block_size) + 1
+
+
+class SwaBlockTable:
+    """Host-side block table of the SWA layers (shared by them: every SWA layer's cache uses the same block ids).
+
+    Entry [slot, j] is the physical block of positions [j * block_size, (j + 1) * block_size) of that slot, indexed
+    by absolute position (no ring). Block 0 is a scratch block: entries no window can read point at it, so writes
+    there (a long prompt's early positions) land in it and nothing reads them back. Each user owns a pool of
+    ``blocks_per_user`` real blocks: one is taken when a position in its range is about to be written, and it goes
+    back once every later window starts past it. ``live`` keeps each slot's logical blocks that hold a real block,
+    so the bookkeeping per step is bounded by the pool, not by the context length. ``dirty`` marks changes not yet
+    copied to the device.
+
+    ``min_blocks``: the cache has at least this many blocks (the extra ones are never mapped). ``paged_update_cache``
+    rejects a page table wider than the cache, so the SWA layers' ttnn decode path (not SwaDecodeQkv) needs the pool
+    to be at least as wide as the table."""
+
+    def __init__(self, num_users, max_batch, max_blocks, block_size, window, blocks_per_user, min_blocks=0):
+        self.block_size, self.window = block_size, window
+        self.table = torch.zeros(max_batch, max_blocks, dtype=torch.int32)
+        self.num_blocks = max(1 + num_users * blocks_per_user, min_blocks)
+        self.free = {
+            u: list(range(1 + (u + 1) * blocks_per_user - 1, u * blocks_per_user, -1)) for u in range(num_users)
+        }
+        self.live = {u: set() for u in range(num_users)}
+        self.dirty = True
+
+    def _take(self, slot, lo, hi):
+        """Real blocks for positions [lo, hi) of ``slot``."""
+        for j in range(lo // self.block_size, (hi - 1) // self.block_size + 1):
+            if j not in self.live[slot]:
+                assert self.free[slot], f"slot {slot}: no free SWA block for position {j * self.block_size}"
+                self.table[slot, j] = self.free[slot].pop()
+                self.live[slot].add(j)
+                self.dirty = True
+
+    def _release(self, slot, blocks):
+        for j in blocks:
+            self.free[slot].append(int(self.table[slot, j]))
+            self.table[slot, j] = 0
+            self.live[slot].discard(j)
+            self.dirty = True
+
+    def _release_below(self, slot, pos):
+        """Give back the blocks of ``slot`` that end before the window of position ``pos`` starts."""
+        first = max(0, pos - self.window + 1) // self.block_size
+        self._release(slot, sorted(j for j in self.live[slot] if j < first))
+
+    def release_all(self, slot):
+        """Give back every block of ``slot`` (its user is done)."""
+        self._release(slot, sorted(self.live[slot]))
+
+    def prefill(self, slot, start, real_end, padded_end):
+        """Before a prefill chunk of ``slot`` writes positions [start, padded_end), real up to ``real_end``. Only
+        [real_end - window, padded_end) can be read after it (the next chunk's or decode step's window), so only
+        those blocks become real. A chunk at ``start`` 0 begins a new user; a later chunk keeps the window before
+        ``start``, which it reads (``window_blocks``)."""
+        if start == 0:
+            self.release_all(slot)  # the slot's previous user
+        else:
+            self._release_below(slot, start)
+            missing = [b for b in self.window_blocks(slot, start) if b == 0]
+            assert not missing, f"slot {slot}: the window before position {start} is not in the cache"
+        self._take(slot, max(0, real_end - self.window), padded_end)
+
+    def window_start(self, start):
+        """First position of the block-aligned keys a chunk at ``start`` reads from the cache."""
+        return max(0, start - self.window) // self.block_size * self.block_size
+
+    def window_blocks(self, slot, start):
+        """Physical blocks of positions [window_start(start), start) of ``slot``, in order."""
+        first, end = self.window_start(start) // self.block_size, start // self.block_size
+        return [int(b) for b in self.table[slot, first:end]]
+
+    def advance(self, slot, pos):
+        """Before a decode step writes position ``pos`` of ``slot``."""
+        self._release_below(slot, pos)
+        self._take(slot, pos, pos + 1)
+
+    def host_table(self, tp):
+        """[tp, max_batch, max_blocks] int32 (the same table on every chip)."""
+        return self.table.unsqueeze(0).repeat(tp, 1, 1)

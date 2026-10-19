@@ -1031,9 +1031,11 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+            input_tensor_v (ttnn.Tensor, optional): a separate paged V cache [max_blocks x nkv x block_s x head_dim_v],
+                addressed by the same page table, in place of the first head_dim_v columns of K. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor [b x nqh x s x dh].
+            ttnn.Tensor: the output tensor [b x nqh x s x head_dim_v].
 
         )doc";
 
@@ -1050,7 +1052,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("input_tensor_v").noconvert() = nb::none());
 
     const auto* const ring_distributed_doc =
         R"doc(

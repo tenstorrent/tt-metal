@@ -1,67 +1,81 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only checks of the paged-KV tables in tt/kv.py (no device needed)."""
+"""Host-side SWA block table bookkeeping (kv.SwaBlockTable) through chunked prefill and decode; no device."""
 
 import pytest
 import torch
 
-from models.experimental.mimo_v2_6_flash.tt import kv as kv_lib
+from models.experimental.mimo_v2_6_flash.tt.kv import SwaBlockTable, swa_blocks_per_user
+from models.experimental.mimo_v2_6_flash.tt.model import prefill_padded_len
 
-TP = 8
-BLOCK = 64
-WINDOW = 128
-
-
-@pytest.mark.parametrize("max_seq", [2048, 4096, 64 * 1024])
-@pytest.mark.parametrize("max_chunk", [64, 512, 4096])
-def test_sliding_window_tables_keep_window_and_chunk_apart(max_chunk, max_seq):
-    """A chunk at any block-aligned start must not write over the window it reads, nor over another user,
-    and the pool must hold at least as many blocks as the table has entries (paged_update_cache rejects
-    a wider table)."""
-    if max_chunk > max_seq:
-        pytest.skip("chunk longer than the context")
-    num_users, max_batch = 4, 32
-    logical = max_seq // BLOCK
-    tables, num_blocks = kv_lib.layer_page_tables(
-        num_users, max_batch, max_seq, BLOCK, TP, rep=1, sliding_window=WINDOW, max_chunk=max_chunk, seed=0
-    )
-    assert tables.shape == (TP, max_batch, logical)
-    assert (tables == tables[0]).all(), "SWA tables are the same on every chip"
-    assert num_blocks >= logical, f"pool of {num_blocks} blocks is narrower than the {logical}-entry table"
-    per_user = min(max(kv_lib.swa_blocks_per_user(WINDOW, max_chunk, BLOCK), -(-logical // num_users)), logical)
-    assert num_blocks == num_users * per_user
-    owned = [set(tables[0, u].tolist()) for u in range(num_users)]
-    for u in range(num_users):
-        assert len(owned[u]) == per_user
-        for v in range(u):
-            assert not owned[u] & owned[v], f"users {u} and {v} share a block"
-    for start in range(0, max_seq - max_chunk, BLOCK * 7):
-        lo = max(0, start - WINDOW + 1) // BLOCK
-        hi = -(-(start + max_chunk) // BLOCK)
-        for u in range(num_users):
-            needed = tables[0, u, lo:hi]
-            assert needed.unique().numel() == needed.numel(), f"user {u}: window + chunk at {start} alias"
+BLOCK, WINDOW, MAX_SEQ, MAX_BATCH = 64, 128, 16384, 32
 
 
-def test_global_tables_split_users_by_parity():
-    num_users, max_batch, logical = 4, 32, 16
-    rep = kv_lib.kv_replication(TP, 4)
-    tables, num_blocks = kv_lib.page_tables(num_users, max_batch, logical, TP, rep, seed=3)
-    scratch = num_blocks - 1
-    for chip in range(TP):
-        mine = kv_lib.owned_slots(num_users, rep, chip % rep)
-        used = set()
-        for slot in range(max_batch):
-            row = set(tables[chip, slot].tolist())
-            if slot in mine:
-                assert scratch not in row and not row & used
-                used |= row
-            else:
-                assert row == {scratch}
-    masks = kv_lib.slot_owner_masks(TP, rep)
-    for slot in range(num_users):
-        pos = torch.full((max_batch,), -1, dtype=torch.int32)
-        pos[slot] = 100
-        owned = kv_lib.owned_positions(pos, TP, rep)[:, slot] >= 0
-        assert torch.equal(masks[slot % rep].flatten().bool(), owned)
+def check(table, live):
+    """Every position some later window or chunk can read is in a real block, and no real block serves two
+    (slot, logical block) entries. ``live``: slot -> [(first, end)] position ranges that must be readable."""
+    owners = {}
+    for slot, ranges in live.items():
+        for first, end in ranges:
+            for j in range(first // BLOCK, (end - 1) // BLOCK + 1):
+                b = int(table.table[slot, j])
+                assert b != 0, f"slot {slot}: block {j} (positions {j * BLOCK}..) is not backed"
+    for slot in range(table.table.shape[0]):
+        for j in range(table.table.shape[1]):
+            b = int(table.table[slot, j])
+            if b:
+                assert b not in owners, f"block {b} backs both {owners[b]} and {(slot, j)}"
+                owners[b] = (slot, j)
+
+
+@pytest.mark.parametrize("chunk", [64, 128, 192, 512, 2048, 4096])
+def test_swa_table_chunked_prefill_then_decode(chunk):
+    users = 4
+    table = SwaBlockTable(users, MAX_BATCH, MAX_SEQ // BLOCK, BLOCK, WINDOW, swa_blocks_per_user(WINDOW, BLOCK))
+    lengths = [1, 200, 2049, 9001]
+    live = {}
+    for slot, n in enumerate(lengths):
+        for s in range(0, n, chunk):
+            real = min(chunk, n - s)
+            padded_end = s + prefill_padded_len(real)
+            table.prefill(slot, s, s + real, padded_end)
+            # The chunk reads the window before it and leaves the window before its end (and the padding) readable.
+            live[slot] = [(max(0, s + real - WINDOW), padded_end)]
+            if s:
+                blocks = table.window_blocks(slot, s)
+                assert len(blocks) == (s - table.window_start(s)) // BLOCK and all(blocks)
+                live[slot].append((table.window_start(s), s))
+            check(table, live)
+        live[slot] = [(max(0, n - WINDOW + 1), n)]
+    for step in range(300):
+        for slot, n in enumerate(lengths):
+            pos = n + step
+            table.advance(slot, pos)
+            live[slot] = [(max(0, pos - WINDOW + 1), pos + 1)]
+        check(table, live)
+
+
+def test_swa_table_new_user_frees_the_old_one():
+    table = SwaBlockTable(1, MAX_BATCH, MAX_SEQ // BLOCK, BLOCK, WINDOW, swa_blocks_per_user(WINDOW, BLOCK))
+    for _ in range(3):
+        for s in range(0, 4096, 1024):
+            table.prefill(0, s, s + 1024, s + 1024)
+        for pos in range(4096, 4096 + 200):
+            table.advance(0, pos)
+    assert int((table.table[0] != 0).sum()) <= swa_blocks_per_user(WINDOW, BLOCK)
+    assert torch.equal(table.table[1:], torch.zeros_like(table.table[1:]))
+
+
+def test_swa_table_reuse_after_the_context_end():
+    """A user that decoded up to the last position of the context gives every block back to the next user."""
+    blocks = swa_blocks_per_user(WINDOW, BLOCK)
+    table = SwaBlockTable(1, MAX_BATCH, MAX_SEQ // BLOCK, BLOCK, WINDOW, blocks)
+    table.prefill(0, 0, 1024, 1024)
+    for pos in range(1024, MAX_SEQ):
+        table.advance(0, pos)
+        assert len(table.live[0]) <= blocks
+    table.prefill(0, 0, 100, prefill_padded_len(100))  # a new user in the same slot
+    mapped = {j for j in range(table.table.shape[1]) if table.table[0, j]}
+    assert mapped == table.live[0] == {0, 1}
+    assert len(table.free[0]) == blocks - len(mapped)
