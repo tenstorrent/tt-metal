@@ -22,7 +22,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.all_gather_op import persistent_all_gather
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
@@ -500,7 +499,7 @@ class TtIndexerBase:
             layout=ttnn.TILE_LAYOUT,
             device=t.device(),
         )
-        return persistent_all_gather(
+        return ttnn.experimental.high_bw_all_gather(
             t,
             dim=3,
             output_tensor=self._k_all_gather_output,
@@ -543,7 +542,7 @@ class TtIndexerBase:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=t.device(),
         )
-        return persistent_all_gather(
+        return ttnn.experimental.high_bw_all_gather(
             t,
             dim=dim,
             output_tensor=self._topk_indices_all_gather_output,

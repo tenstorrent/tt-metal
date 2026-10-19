@@ -4,17 +4,17 @@
 
 #pragma once
 
-#include "fabric_all_gather_device_operation_types.hpp"
+#include "high_bw_all_gather_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"
 
 #include <tt-metalium/global_semaphore.hpp>
 
-namespace ttnn::operations::experimental::fabric_all_gather {
+namespace ttnn::operations::experimental::high_bw_all_gather {
 
-// Chip shard layout of one cached program (terms: kernels/fabric_all_gather_chunk_walk.hpp). The cache slot's first
-// page and the valid pages per outer slice are runtime values derived from it on every dispatch (host scalars) or on
-// device (metadata tensors).
+// Chip shard layout of one cached program (terms: kernels/fabric/fabric_all_gather_chunk_walk.hpp). The cache slot's
+// first page and the valid pages per outer slice are runtime values derived from it on every dispatch (host scalars) or
+// on device (metadata tensors).
 struct ChipShardPageGeometry {
     uint32_t num_outer_slices = 0;
     uint32_t pages_per_outer_slice = 0;
@@ -25,7 +25,7 @@ struct ChipShardPageGeometry {
     uint32_t pages_per_kv_slab = 0;  // valid pages per outer slice per KV slab (prefix metadata path)
 };
 
-struct FabricAllGatherFactory {
+struct HighBwAllGatherFabricFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle fabric_link_worker_reader_kernel_id{};
         tt::tt_metal::KernelHandle fabric_link_worker_sender_kernel_id{};
@@ -40,16 +40,16 @@ struct FabricAllGatherFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const FabricAllGatherParams& operation_attributes,
+        const HighBwAllGatherParams& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const FabricAllGatherInputs& tensor_args,
+        const HighBwAllGatherInputs& tensor_args,
         Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const FabricAllGatherParams& operation_attributes,
-        const FabricAllGatherInputs& tensor_args,
+        const HighBwAllGatherParams& operation_attributes,
+        const HighBwAllGatherInputs& tensor_args,
         Tensor& output_tensor);
 };
 
-}  // namespace ttnn::operations::experimental::fabric_all_gather
+}  // namespace ttnn::operations::experimental::high_bw_all_gather

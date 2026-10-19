@@ -10,7 +10,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "fabric_all_gather_chunk_walk.hpp"
 
-using namespace ttnn::operations::experimental::fabric_all_gather::chunk_walk;
+using namespace ttnn::operations::experimental::high_bw_all_gather::chunk_walk;
 
 // Read element 0 of a 1-element uint32 DRAM tensor through `landing_l1`. The host rewrites the tensor between trace
 // replays at the same address, so the data cache must be invalidated after the read.

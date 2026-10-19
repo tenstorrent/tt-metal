@@ -73,7 +73,7 @@
 
 #include <cstdint>
 
-namespace ttnn::operations::experimental::fabric_all_gather::chunk_walk {
+namespace ttnn::operations::experimental::high_bw_all_gather::chunk_walk {
 
 constexpr uint32_t kWholeChipShard = 0, kFirstLaneHalf = 1, kSecondLaneHalf = 2;
 
@@ -170,4 +170,4 @@ inline uint32_t valid_pages_from_prefix_start(
     return ((rounded < full_gathered_length ? rounded : full_gathered_length) / kv_slab) * pages_per_kv_slab;
 }
 
-}  // namespace ttnn::operations::experimental::fabric_all_gather::chunk_walk
+}  // namespace ttnn::operations::experimental::high_bw_all_gather::chunk_walk

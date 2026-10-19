@@ -277,7 +277,11 @@ def test_indexer_selection_stages_thread_runtime_metadata(monkeypatch, use_metad
         "input": logits,
         "k": 512,
         "valid_length": None if use_metadata else 768,
-        **({"valid_length_tensor": metadata, "valid_length_offset": 128} if use_metadata else {}),
+        **(
+            {"valid_length_tensor": metadata, "valid_length_offset": 128, "valid_end_tensor": None}
+            if use_metadata
+            else {}
+        ),
         "subdevice_id": subdevice_id,
         "sub_core_grids": core_grid,
     }
@@ -549,9 +553,7 @@ def test_sparse_mla_overlap_full_mesh_tp_gather_threads_external_resources(monke
         captured.update(kwargs)
         return gathered_storage
 
-    # the model picks the op from DS_ALL_GATHER_OP (tt/all_gather_op.py); both share one contract
     monkeypatch.setattr(ttnn.experimental, "high_bw_all_gather", fake_gather)
-    monkeypatch.setattr(ttnn.experimental, "fabric_all_gather", fake_gather)
     result = mla._gather_kvpe_prefix(
         cache,
         cache_batch_idx=0,

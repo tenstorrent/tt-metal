@@ -2,15 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// fabric_all_gather program factory (terms: kernels/fabric_all_gather_chunk_walk.hpp).
+// high_bw_all_gather's default program factory (legacy=True selects the unicast one).
+// Terms: kernels/fabric/fabric_all_gather_chunk_walk.hpp.
 //
 // build_gather_plan decides the rings, every fabric link worker's outgoing shards and every core's placement; the
 // kernels only walk what they are given. Rings: an axis ring or line (cluster_axis 0 / 1), a snake over the whole mesh
 // (cluster_axis None), or on a torus with both sides >= 3 two edge-disjoint Hamiltonian cycles that each own half of
 // the page lanes, so every chip uses all four neighbours.
 
-#include "fabric_all_gather_factory.hpp"
-#include "kernels/fabric_all_gather_chunk_walk.hpp"
+#include "high_bw_all_gather_fabric_factory.hpp"
+#include "kernels/fabric/fabric_all_gather_chunk_walk.hpp"
 
 #include <algorithm>
 #include <array>
@@ -29,11 +30,11 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 
-namespace ttnn::operations::experimental::fabric_all_gather {
+namespace ttnn::operations::experimental::high_bw_all_gather {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-namespace chunk_walk = ::ttnn::operations::experimental::fabric_all_gather::chunk_walk;
+namespace chunk_walk = ::ttnn::operations::experimental::high_bw_all_gather::chunk_walk;
 
 constexpr uint32_t kFabricChunkCbIndex = tt::CBIndex::c_0;
 constexpr uint32_t kReaderMetadataCbIndex = tt::CBIndex::c_1;  // the reader's metadata landing slot
@@ -46,7 +47,7 @@ constexpr uint32_t kInputRunCbPageBytes = 16;
 constexpr uint32_t kFabricChunkCbBudgetBytes = 112 * 1024;  // chunk CB per core: two CB batches
 constexpr uint32_t kMaxChunksPerCbBatch = 8;
 constexpr uint32_t kForward = 0;
-constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/fabric_all_gather/device/kernels/";
+constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/device/kernels/fabric/";
 
 using Coord = ttnn::MeshCoordinate;
 
@@ -241,7 +242,7 @@ std::pair<std::vector<Coord>, std::vector<Coord>> hamiltonian_decomposition(uint
         };
         return {to_coords(cycle_a), to_coords(cycle_b)};
     }
-    TT_THROW("fabric_all_gather: no Hamiltonian decomposition found for a {}x{} torus", rows, cols);
+    TT_THROW("high_bw_all_gather: no Hamiltonian decomposition found for a {}x{} torus", rows, cols);
 }
 
 // A link worker's downstream sends back into this chip (the opposite direction) iff it has outgoing shards; then this
@@ -268,7 +269,7 @@ std::vector<tt::tt_metal::CoreCoord> cores_in_row_major_order(const CoreRangeSet
 }
 
 GatherPlan build_gather_plan(
-    const FabricAllGatherParams& args,
+    const HighBwAllGatherParams& args,
     const Tensor& input_tensor,
     MeshDevice* mesh_device,
     const CoreRangeSet& allowed_core_ranges) {
@@ -325,10 +326,10 @@ GatherPlan build_gather_plan(
         } else {
             const uint32_t probe_links = args.num_links.value_or(1);
             const auto resolved = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-                input_tensor, std::nullopt, probe_links, axis_topology, true, "fabric_all_gather", true);
+                input_tensor, std::nullopt, probe_links, axis_topology, true, "high_bw_all_gather", true);
             TT_FATAL(
                 resolved.has_value(),
-                "fabric_all_gather: no direct-neighbour snake over the {}x{} mesh",
+                "high_bw_all_gather: no direct-neighbour snake over the {}x{} mesh",
                 mesh_rows,
                 mesh_cols);
             std::vector<Coord> snake;
@@ -392,14 +393,14 @@ GatherPlan build_gather_plan(
                     tt::tt_fabric::get_forwarding_link_indices(fabric_node(chip), fabric_node(*downstream));
                 TT_FATAL(
                     !links.empty(),
-                    "fabric_all_gather: {} -> {} is not a direct fabric neighbour (fabric config {})",
+                    "high_bw_all_gather: {} -> {} is not a direct fabric neighbour (fabric config {})",
                     chip,
                     *downstream,
                     args.fabric_config);
                 if (args.num_links.has_value()) {
                     TT_FATAL(
                         links.size() >= *args.num_links,
-                        "fabric_all_gather: {} -> {} has {} usable link(s), {} requested",
+                        "high_bw_all_gather: {} -> {} has {} usable link(s), {} requested",
                         chip,
                         *downstream,
                         links.size(),
@@ -458,13 +459,15 @@ GatherPlan build_gather_plan(
                         }
                     }
                     TT_FATAL(
-                        best.has_value(), "fabric_all_gather: the core grid {} has too few cores", allowed_core_ranges);
+                        best.has_value(),
+                        "high_bw_all_gather: the core grid {} has too few cores",
+                        allowed_core_ranges);
                     take(*best);
                     fabric_link_workers[fabric_link_worker_index(ring, direction, link, L)] =
                         FabricLinkWorker{*best, true, links[link]};
                     log_debug(
                         tt::LogOp,
-                        "fabric_all_gather: chip {} ring {} direction {} link {} worker {} eth {}",
+                        "high_bw_all_gather: chip {} ring {} direction {} link {} worker {} eth {}",
                         chip,
                         ring,
                         direction,
@@ -481,7 +484,7 @@ GatherPlan build_gather_plan(
             auto it = std::find_if(allowed_cores.begin(), allowed_cores.end(), is_free);
             TT_FATAL(
                 it != allowed_cores.end(),
-                "fabric_all_gather: the core grid {} has too few cores",
+                "high_bw_all_gather: the core grid {} has too few cores",
                 allowed_core_ranges);
             take(*it);
             fabric_link_worker.core = *it;
@@ -500,19 +503,19 @@ GatherPlan build_gather_plan(
             auto it = std::find_if(local_copy_core_order.begin(), local_copy_core_order.end(), is_free);
             TT_FATAL(
                 it != local_copy_core_order.end(),
-                "fabric_all_gather: the core grid {} has too few cores",
+                "high_bw_all_gather: the core grid {} has too few cores",
                 allowed_core_ranges);
             take(*it);
             plan.local_copy_cores[chip_index].push_back(*it);
-            log_debug(tt::LogOp, "fabric_all_gather: chip {} local copy core {} at {}", chip, link, *it);
+            log_debug(tt::LogOp, "high_bw_all_gather: chip {} local copy core {} at {}", chip, link, *it);
         }
     }
     return plan;
 }
 
-// Outer slices and pages per outer slice of the chip shard (see kernels/fabric_all_gather_chunk_walk.hpp).
+// Outer slices and pages per outer slice of the chip shard (see kernels/fabric/fabric_all_gather_chunk_walk.hpp).
 ChipShardPageGeometry derive_shard_page_geometry(
-    const FabricAllGatherParams& args, const FabricAllGatherInputs& tensor_args, bool selected_batch) {
+    const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args, bool selected_batch) {
     const auto& input = tensor_args.input_tensor;
     const auto& shape = input.padded_shape();
     const int32_t tensor_rank = static_cast<int32_t>(shape.rank());
@@ -521,7 +524,7 @@ ChipShardPageGeometry derive_shard_page_geometry(
     const auto tile_spec = tile ? input.tensor_spec().tile() : tt::tt_metal::Tile();
     TT_FATAL(
         tile || dim < tensor_rank - 1,
-        "fabric_all_gather: a ROW_MAJOR gather along the innermost dim (partial pages) is not supported");
+        "high_bw_all_gather: a ROW_MAJOR gather along the innermost dim (partial pages) is not supported");
     // the length of dim i, counted in pages
     auto length_in_pages = [&](int32_t i) -> uint32_t {
         const uint32_t dim_length = (i == 0 && selected_batch) ? 1u : shape[i];
@@ -549,7 +552,7 @@ ChipShardPageGeometry derive_shard_page_geometry(
     geometry.pages_per_cache_slot = selected_batch ? num_pages / shape[0] : num_pages;
     TT_FATAL(
         geometry.num_outer_slices * geometry.pages_per_outer_slice == geometry.pages_per_cache_slot,
-        "fabric_all_gather: page geometry {} x {} does not cover the {} pages of a cache slot (shape {}, dim {})",
+        "high_bw_all_gather: page geometry {} x {} does not cover the {} pages of a cache slot (shape {}, dim {})",
         geometry.num_outer_slices,
         geometry.pages_per_outer_slice,
         geometry.pages_per_cache_slot,
@@ -564,12 +567,12 @@ ChipShardPageGeometry derive_shard_page_geometry(
         const uint32_t full_gathered_length = shape[dim] * args.num_devices;
         TT_FATAL(
             full_gathered_length % args.gathered_slab_global == 0,
-            "fabric_all_gather: gathered_slab_global {} must divide the full gathered length {}",
+            "high_bw_all_gather: gathered_slab_global {} must divide the full gathered length {}",
             args.gathered_slab_global,
             full_gathered_length);
         TT_FATAL(
             (args.gathered_slab_global / args.num_devices) % geometry.gather_dim_elements_per_page == 0,
-            "fabric_all_gather: the per-chip KV slab {} must be a multiple of the {} elements a page spans along dim "
+            "high_bw_all_gather: the per-chip KV slab {} must be a multiple of the {} elements a page spans along dim "
             "{}",
             args.gathered_slab_global / args.num_devices,
             geometry.gather_dim_elements_per_page,
@@ -577,7 +580,7 @@ ChipShardPageGeometry derive_shard_page_geometry(
         const uint32_t num_kv_slabs = full_gathered_length / args.gathered_slab_global;
         TT_FATAL(
             geometry.pages_per_outer_slice % num_kv_slabs == 0,
-            "fabric_all_gather: {} pages per outer slice do not split into {} KV slabs",
+            "high_bw_all_gather: {} pages per outer slice do not split into {} KV slabs",
             geometry.pages_per_outer_slice,
             num_kv_slabs);
         geometry.pages_per_kv_slab = geometry.pages_per_outer_slice / num_kv_slabs;
@@ -585,33 +588,33 @@ ChipShardPageGeometry derive_shard_page_geometry(
     return geometry;
 }
 
-uint32_t host_valid_pages_per_outer_slice(const FabricAllGatherParams& args, const ChipShardPageGeometry& geometry) {
+uint32_t host_valid_pages_per_outer_slice(const HighBwAllGatherParams& args, const ChipShardPageGeometry& geometry) {
     if (!args.gathered_dim_size.has_value()) {
         return geometry.pages_per_outer_slice;
     }
     const uint64_t valid_local_length = *args.gathered_dim_size / args.num_devices;
     TT_FATAL(
         valid_local_length % geometry.gather_dim_elements_per_page == 0,
-        "fabric_all_gather: the valid length {} per chip must be a multiple of the {} elements a page spans (tile "
+        "high_bw_all_gather: the valid length {} per chip must be a multiple of the {} elements a page spans (tile "
         "alignment)",
         valid_local_length,
         geometry.gather_dim_elements_per_page);
     const uint64_t pages = valid_local_length * geometry.pages_per_outer_slice;
     TT_FATAL(
         pages % geometry.local_gather_dim_length == 0,
-        "fabric_all_gather: gathered_dim_size {} does not cover whole pages",
+        "high_bw_all_gather: gathered_dim_size {} does not cover whole pages",
         *args.gathered_dim_size);
     return static_cast<uint32_t>(pages / geometry.local_gather_dim_length);
 }
 
-uint32_t host_cache_slot_first_page(const FabricAllGatherParams& args, const ChipShardPageGeometry& geometry) {
+uint32_t host_cache_slot_first_page(const HighBwAllGatherParams& args, const ChipShardPageGeometry& geometry) {
     return args.input_batch_index.value_or(0) * geometry.pages_per_cache_slot;
 }
 
-// Common args 8..15 of every kernel (read by read_shard_geometry in kernels/fabric_all_gather_common.hpp).
+// Common args 8..15 of every kernel (read by read_shard_geometry in kernels/fabric/fabric_all_gather_common.hpp).
 std::vector<uint32_t> geometry_args(
-    const FabricAllGatherParams& args,
-    const FabricAllGatherInputs& tensor_args,
+    const HighBwAllGatherParams& args,
+    const HighBwAllGatherInputs& tensor_args,
     const ChipShardPageGeometry& geometry) {
     return {
         tensor_args.has_gathered_prefix_metadata() ? tensor_args.gathered_prefix_tensor->buffer()->address() : 0u,
@@ -625,8 +628,8 @@ std::vector<uint32_t> geometry_args(
 }
 
 std::vector<uint32_t> reader_common_args(
-    const FabricAllGatherParams& args,
-    const FabricAllGatherInputs& tensor_args,
+    const HighBwAllGatherParams& args,
+    const HighBwAllGatherInputs& tensor_args,
     const Tensor& output,
     const ChipShardPageGeometry& geometry,
     uint32_t shards_arrived_counter_address) {
@@ -645,8 +648,8 @@ std::vector<uint32_t> reader_common_args(
 }
 
 std::vector<uint32_t> writer_common_args(
-    const FabricAllGatherParams& args,
-    const FabricAllGatherInputs& tensor_args,
+    const HighBwAllGatherParams& args,
+    const HighBwAllGatherInputs& tensor_args,
     const Tensor& output,
     const ChipShardPageGeometry& geometry,
     uint32_t shards_arrived_counter_address,
@@ -658,17 +661,17 @@ std::vector<uint32_t> writer_common_args(
     return common_args;
 }
 
-CoreRangeSet resolve_available_worker_cores(MeshDevice* mesh_device, const FabricAllGatherParams& args) {
+CoreRangeSet resolve_fabric_worker_cores(MeshDevice* mesh_device, const HighBwAllGatherParams& args) {
     TT_FATAL(
         mesh_device->get_active_sub_device_manager_id() == args.subdevice_manager_id,
-        "fabric_all_gather active subdevice manager changed from {} to {} during operation dispatch",
+        "high_bw_all_gather active subdevice manager changed from {} to {} during operation dispatch",
         args.subdevice_manager_id,
         mesh_device->get_active_sub_device_manager_id());
     const auto subdevice_id = args.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     const auto subdevice_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
     TT_FATAL(
         subdevice_cores.contains(args.resolved_worker_core_grid),
-        "fabric_all_gather resolved worker grid {} must be fully contained in TENSIX subdevice {} cores {}",
+        "high_bw_all_gather resolved worker grid {} must be fully contained in TENSIX subdevice {} cores {}",
         args.resolved_worker_core_grid,
         subdevice_id,
         subdevice_cores);
@@ -681,7 +684,7 @@ void validate_semaphore_core_coverage(
     const auto& cores = std::get<0>(attributes);
     TT_FATAL(
         cores.contains(required_cores),
-        "fabric_all_gather {} cores {} must cover all of the op's cores {}",
+        "high_bw_all_gather {} cores {} must cover all of the op's cores {}",
         name,
         cores,
         required_cores);
@@ -699,16 +702,16 @@ CoreRangeSet to_range_set(const std::vector<tt::tt_metal::CoreCoord>& cores) {
 
 using namespace CMAKE_UNIQUE_NAMESPACE;
 
-FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_mesh_workload(
-    const FabricAllGatherParams& args,
+HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactory::create_mesh_workload(
+    const HighBwAllGatherParams& args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const FabricAllGatherInputs& tensor_args,
+    const HighBwAllGatherInputs& tensor_args,
     Tensor& output_tensor) {
     const auto& input = tensor_args.input_tensor;
     auto* mesh_device = input.device();
     const uint32_t mesh_cols = mesh_device->shape()[1];
     const auto subdevice_id = args.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    const auto available_cores = resolve_available_worker_cores(mesh_device, args);
+    const auto available_cores = resolve_fabric_worker_cores(mesh_device, args);
 
     const GatherPlan plan = build_gather_plan(args, input, mesh_device, available_cores);
     const bool selected_batch = args.input_batch_index.has_value() || tensor_args.has_batch_index_metadata();
@@ -752,7 +755,7 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
     const uint32_t owned_lane_stride = plan.num_rings * L;
     TT_FATAL(
         owned_lane_stride <= num_dram_banks,
-        "fabric_all_gather: {} rings x {} links exceed the {} page lanes (one per DRAM bank)",
+        "high_bw_all_gather: {} rings x {} links exceed the {} page lanes (one per DRAM bank)",
         plan.num_rings,
         L,
         num_dram_banks);
@@ -880,7 +883,7 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
             TT_FATAL(
                 tt::tt_metal::CreateSemaphore(program, fabric_link_worker_core_set, 0) ==
                     blocks_converted_semaphore + c,
-                "fabric_all_gather: blocks-converted semaphores must have consecutive ids");
+                "high_bw_all_gather: blocks-converted semaphores must have consecutive ids");
         }
         const std::string dir(kKernelDir);
         const auto fabric_link_worker_reader_id = tt::tt_metal::CreateKernel(
@@ -1016,10 +1019,10 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
-void FabricAllGatherFactory::override_runtime_arguments(
+void HighBwAllGatherFabricFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const FabricAllGatherParams& args,
-    const FabricAllGatherInputs& tensor_args,
+    const HighBwAllGatherParams& args,
+    const HighBwAllGatherInputs& tensor_args,
     Tensor& output_tensor) {
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared = cached_workload.shared_variables.at(coordinate_range);
@@ -1055,4 +1058,4 @@ void FabricAllGatherFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::fabric_all_gather
+}  // namespace ttnn::operations::experimental::high_bw_all_gather

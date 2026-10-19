@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.experimental.fabric_all_gather, bit-exact against a torch reference on every chip.
+"""ttnn.experimental.high_bw_all_gather (the fabric program, and the deprecated legacy=True program), bit-exact against a
+torch reference on every chip.
 
 Every output is preallocated and pre-filled with random bytes, so a case also checks what the op must leave untouched.
 Covered: TILE and ROW_MAJOR, interleaved and ND-sharded DRAM input into an interleaved DRAM output, every cluster_axis
@@ -51,6 +52,7 @@ TORUS_14K = pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_XY, 14
 MESH = pytest.mark.parametrize("mesh_device", [_system_mesh()], indirect=True)
 LAYOUTS = pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
 INPUT_MEMORY = pytest.mark.parametrize("nd_sharded", [False, True], ids=["interleaved", "nd_sharded"])
+PROGRAMS = pytest.mark.parametrize("legacy", [False, True], ids=["fabric", "legacy"])
 
 
 def _random(shape, dtype):
@@ -88,8 +90,10 @@ def _skip_singleton(mesh_device, cluster_axis):
         pytest.skip(f"cluster_axis {cluster_axis} is a singleton on mesh {tuple(mesh_device.shape)}")
 
 
-def _input(mesh_device, host, dtype, layout, mapper, nd_sharded):
-    memory_config = _nd_sharded_dram(mesh_device, host.shape[-1]) if nd_sharded else ttnn.DRAM_MEMORY_CONFIG
+def _input(mesh_device, host, dtype, layout, mapper, nd_sharded, local_width=None):
+    """local_width: each chip's innermost length (the host tensor's, unless the gather is along it)."""
+    width = local_width or host.shape[-1]
+    memory_config = _nd_sharded_dram(mesh_device, width) if nd_sharded else ttnn.DRAM_MEMORY_CONFIG
     return ttnn.from_torch(
         host, dtype=dtype, layout=layout, device=mesh_device, memory_config=memory_config, mesh_mapper=mapper
     )
@@ -119,7 +123,7 @@ def _check(out, expected, what):
 
 def _gather(mesh_device, inp, out, **kw):
     kw.setdefault("num_links", NUM_LINKS)
-    result = ttnn.experimental.fabric_all_gather(inp, output_tensor=out, **kw)
+    result = ttnn.experimental.high_bw_all_gather(inp, output_tensor=out, **kw)
     ttnn.synchronize_device(mesh_device)
     return result
 
@@ -133,6 +137,7 @@ _GATHER_CASES = [
     pytest.param(ttnn.TILE_LAYOUT, 1, id="tile-dim1"),
     pytest.param(ttnn.ROW_MAJOR_LAYOUT, 2, id="row_major-dim2"),
     pytest.param(ttnn.ROW_MAJOR_LAYOUT, 1, id="row_major-dim1"),
+    pytest.param(ttnn.ROW_MAJOR_LAYOUT, 3, id="row_major-dim3"),  # partial pages: always the legacy program
 ]
 
 
@@ -142,7 +147,8 @@ _GATHER_CASES = [
 @INPUT_MEMORY
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32], ids=["bf16", "uint32"])
 @pytest.mark.parametrize("layout,dim", _GATHER_CASES)
-def test_gather(mesh_device, cluster_axis, nd_sharded, dtype, layout, dim):
+@PROGRAMS
+def test_gather(mesh_device, cluster_axis, nd_sharded, dtype, layout, dim, legacy):
     """Every chip ends with the whole gathered tensor. The second call is a program-cache hit on new input and output
     buffers, so the cached program must take its addresses from the call."""
     _skip_singleton(mesh_device, cluster_axis)
@@ -153,9 +159,9 @@ def test_gather(mesh_device, cluster_axis, nd_sharded, dtype, layout, dim):
     gathered[dim] *= G
     for call in range(2):
         host = _random(gathered, dtype)
-        inp = _input(mesh_device, host, dtype, layout, mapper(dim), nd_sharded)
+        inp = _input(mesh_device, host, dtype, layout, mapper(dim), nd_sharded, local_width=local[-1])
         out, _ = _output(mesh_device, gathered, dtype, layout)
-        result = _gather(mesh_device, inp, out, dim=dim, cluster_axis=cluster_axis)
+        result = _gather(mesh_device, inp, out, dim=dim, cluster_axis=cluster_axis, legacy=legacy)
         assert result.buffer_address() == out.buffer_address(), "the op must return the preallocated output"
         _check(out, host, f"call {call}")
 
@@ -222,7 +228,8 @@ def _slot_expected(expected, host, G, slot, extent):
 @pytest.mark.parametrize("cluster_axis", [1, None], ids=["axis1", "full_mesh"])
 @INPUT_MEMORY
 @LAYOUTS
-def test_slot_select_partial_extent(mesh_device, cluster_axis, nd_sharded, layout):
+@PROGRAMS
+def test_slot_select_partial_extent(mesh_device, cluster_axis, nd_sharded, layout, legacy):
     """input_batch_index + gathered_dim_size: one slot, a block-cyclic prefix; the output's other rows keep their bytes
     across calls (earlier, longer calls leave their rows in place)."""
     _skip_singleton(mesh_device, cluster_axis)
@@ -238,6 +245,7 @@ def test_slot_select_partial_extent(mesh_device, cluster_axis, nd_sharded, layou
             cluster_axis=cluster_axis,
             input_batch_index=slot,
             gathered_dim_size=extent,
+            legacy=legacy,
         )
         expected = _slot_expected(expected, host, G, slot, extent)
         _check(out, expected, f"slot {slot} extent {extent}")
@@ -252,7 +260,7 @@ def test_tile_extent_must_be_tile_aligned(mesh_device, expect_error):
     inp = _input(mesh_device, host, ttnn.bfloat16, ttnn.TILE_LAYOUT, mapper(2), nd_sharded=False)
     out, _ = _output(mesh_device, (1, 1, 64 * G, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT)
     with expect_error(RuntimeError, "tile alignment"):
-        ttnn.experimental.fabric_all_gather(
+        ttnn.experimental.high_bw_all_gather(
             inp, dim=2, output_tensor=out, cluster_axis=None, num_links=NUM_LINKS, gathered_dim_size=16 * G
         )
 
@@ -282,7 +290,7 @@ def test_metadata_traced(mesh_device, layout):
     user, prefix = scalar(0, mesh_device), scalar(0, mesh_device)
 
     def issue():
-        ttnn.experimental.fabric_all_gather(
+        ttnn.experimental.high_bw_all_gather(
             inp,
             dim=2,
             output_tensor=out,
@@ -385,7 +393,7 @@ def test_external_semaphores_must_be_l1_small(mesh_device, expect_error):
     grid = _full_grid(mesh_device)
     ready, data_valid = (ttnn.create_global_semaphore(mesh_device, grid, 0, ttnn.BufferType.L1) for _ in range(2))
     with expect_error(RuntimeError, "external semaphores must use buffer type"):
-        ttnn.experimental.fabric_all_gather(
+        ttnn.experimental.high_bw_all_gather(
             inp,
             dim=2,
             output_tensor=out,
@@ -417,7 +425,7 @@ def test_subdevice_external_semaphores(mesh_device, layout):
     sd = ttnn.SubDeviceId(1)
     try:
         for slot, extent in [(1, 32 * G), (2, KV_ROWS * G)]:
-            ttnn.experimental.fabric_all_gather(
+            ttnn.experimental.high_bw_all_gather(
                 inp,
                 dim=2,
                 output_tensor=out,
