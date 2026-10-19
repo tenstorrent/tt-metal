@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
     build_mtp_generation_select,
     build_sp_rank_tensor,
 )
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
@@ -618,50 +619,56 @@ class TtPrefillTransformer(LightweightModule):
             )
         indexer_indices = seed_indexer_indices if reuse else None
         self.last_indexer_indices = None
-        for i, layer in enumerate(self.layers):
-            signpost(f"forward_layer_{i}_start")
-            mode = self.indexer_types[self.first_layer_idx + i] if reuse else "full"
-            inject = indexer_indices if (reuse and mode == "shared") else None
-            ret = layer(
-                h,
-                rope_tensors,
-                kvpe_cache,
-                cache_layer_idx=i,
-                return_intermediates=return_intermediates,
-                d2h_service=d2h_service,
-                metadata_msg=metadata_msg,
-                on_layer_complete=on_layer_complete,
-                on_layer_hidden=on_layer_hidden,
-                actual_start=actual_start,
-                actual_end=actual_end,
-                cache_user_id=cache_user_id,
-                actual_isl=actual_isl,
-                padding_side=self.padding_side,
-                indexer_indices=inject,
-                return_indexer_indices=reuse,
-                index_kv_cache=index_kv_cache,
-                metadata=metadata,
-            )
-            if reuse:
-                h, _, new_idx = ret
-                if mode == "full":
-                    # Keep the full layer's indices alive through every shared consumer. TP sequence
-                    # shards own their top-k allocation; reference replacement releases it when no
-                    # consumer holds it. Gathered outputs can alias persistent scratch, so do not
-                    # explicitly deallocate the old tensor (it may back new_idx as well).
-                    indexer_indices = new_idx
-            else:
-                h, _ = ret
-            signpost(f"forward_layer_{i}_end")
-            if self.kv_only_last_layer and i == len(self.layers) - 1:
-                # Last layer was kv-only: KV cache filled, migration callback fired, no hidden state
-                # produced. Nothing more to run or snapshot; the populated cache is the output.
-                return intermediates
-            if return_intermediates:
-                ttnn.synchronize_device(self.mesh_device)
-                intermediates[f"layer_{i}"] = self._to_host(h)
-            if read_profiler:
-                ttnn.ReadDeviceProfiler(self.mesh_device)
+        # Consecutive layers of one chunk: a dense tp_shard_kv MLA layer prefetches the next layer's TP latent during its
+        # SDPA. Nothing prefetches past this loop's last attention layer: a kv_only last layer runs no attention, and the
+        # MTP cache slots (after the trunk's) are filled after the chain closes.
+        with get_tt_ccl(self.mesh_device).tp_latent_prefetch_chain(
+            stop_layer=len(self.layers) - (1 if self.kv_only_last_layer else 0)
+        ):
+            for i, layer in enumerate(self.layers):
+                signpost(f"forward_layer_{i}_start")
+                mode = self.indexer_types[self.first_layer_idx + i] if reuse else "full"
+                inject = indexer_indices if (reuse and mode == "shared") else None
+                ret = layer(
+                    h,
+                    rope_tensors,
+                    kvpe_cache,
+                    cache_layer_idx=i,
+                    return_intermediates=return_intermediates,
+                    d2h_service=d2h_service,
+                    metadata_msg=metadata_msg,
+                    on_layer_complete=on_layer_complete,
+                    on_layer_hidden=on_layer_hidden,
+                    actual_start=actual_start,
+                    actual_end=actual_end,
+                    cache_user_id=cache_user_id,
+                    actual_isl=actual_isl,
+                    padding_side=self.padding_side,
+                    indexer_indices=inject,
+                    return_indexer_indices=reuse,
+                    index_kv_cache=index_kv_cache,
+                    metadata=metadata,
+                )
+                if reuse:
+                    h, _, new_idx = ret
+                    if mode == "full":
+                        # Keep the full layer's indices alive through every shared consumer. TP sequence
+                        # shards own their top-k allocation; reference replacement releases it when no
+                        # consumer holds it. Gathered outputs can alias persistent scratch, so do not
+                        # explicitly deallocate the old tensor (it may back new_idx as well).
+                        indexer_indices = new_idx
+                else:
+                    h, _ = ret
+                signpost(f"forward_layer_{i}_end")
+                if self.kv_only_last_layer and i == len(self.layers) - 1:
+                    # Last layer was kv-only: KV cache filled, migration callback fired, no hidden state
+                    # produced. Nothing more to run or snapshot; the populated cache is the output.
+                    return intermediates
+                if return_intermediates:
+                    ttnn.synchronize_device(self.mesh_device)
+                    intermediates[f"layer_{i}"] = self._to_host(h)
+                if read_profiler:
+                    ttnn.ReadDeviceProfiler(self.mesh_device)
         if self.forwards_indexer_indices:
             self.last_indexer_indices = indexer_indices
         # Drop the held reference. Python reference counting releases owned top-k allocations after

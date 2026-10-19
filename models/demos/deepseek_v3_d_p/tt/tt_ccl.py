@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 from dataclasses import dataclass
 from typing import Optional
 
@@ -46,6 +47,20 @@ class SparseMlaOverlapResources:
     data_valid_semaphore: object
 
 
+@dataclass(frozen=True)
+class TpLatentPrefetchResources:
+    """Sub-device split for prefetching the next MLA layer's TP latent during this layer's ring_joint SDPA: the SDPA
+    sub-device (its compute grid plus its ring all-gather workers) and the cores it leaves idle, which run the TP
+    gather. The two use different fabric axes (SP ring vs TP)."""
+
+    manager_id: object
+    sdpa_subdevice_id: ttnn.SubDeviceId
+    gather_subdevice_id: ttnn.SubDeviceId
+    gather_core_grid: ttnn.CoreRangeSet
+    ready_semaphore: object
+    data_valid_semaphore: object
+
+
 # Tensix grid each profile requires. Every profile gives the KV gather the worker row right below the Ethernet row
 # (logical row 0, the full width) and top-k the other nine rows. Blackhole has all its Ethernet cores in one row and
 # harvests only columns, so that row holds a core directly below every Ethernet core on every chip,
@@ -69,9 +84,10 @@ def get_tt_ccl(mesh_device: ttnn.MeshDevice) -> "TT_CCL":
 
 
 def clear_tt_ccl_cache():
-    """Release registered sparse-MLA managers, then clear the cache (for testing)."""
+    """Release the registered sparse-MLA and TP latent prefetch managers, then clear the cache (for testing)."""
     for tt_ccl in _tt_ccl_cache.values():
         tt_ccl.release_sparse_mla_overlap_manager()
+        tt_ccl.release_tp_latent_prefetch_manager()
     _tt_ccl_cache.clear()
 
 
@@ -183,6 +199,13 @@ class TT_CCL:
         # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
         self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
 
+        # Dense tp_shard_kv: the sub-device split that prefetches the next MLA layer's TP latent during this layer's
+        # SDPA, and the host-side key of the prefetch the next layer may consume (None: nothing prefetched).
+        self.tp_latent_prefetch_resources: TpLatentPrefetchResources | None = None
+        self.tp_latent_prefetched = None
+        # (chain id, stop_layer) while a caller runs consecutive MLA layers of one chunk (tp_latent_prefetch_chain).
+        self.tp_latent_chain = None
+        self._tp_latent_chain_count = 0
         # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, shared by every
         # MoE layer. Created on first use; see get_combine_overlap_semaphores.
         self.combine_overlap_semaphores = None
@@ -368,6 +391,102 @@ class TT_CCL:
         self.mesh_device.remove_sub_device_manager(resources.manager_id)
         self.sparse_mla_overlap_resources = None
 
+    def get_tp_latent_prefetch_resources(self, ring_ccl_cores: int) -> TpLatentPrefetchResources:
+        """Create or return the SDPA / TP-gather sub-device split.
+
+        ring_joint SDPA computes on the grid minus its last column and places its ring_ccl_cores all-gather workers
+        column-major from the top of that column (ring_attention_ccl_core_grid_offset); the rest of the column is idle
+        during the SDPA and becomes the gather sub-device. Created outside the forward and any trace capture; the
+        gather's semaphore pair is zeroed and synchronized before first use."""
+        existing = self.tp_latent_prefetch_resources
+        if existing is not None:
+            return existing
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        col = grid.x - 1
+        assert self.ring_attention_ccl_core_grid_offset == (col, 0), (
+            f"TP latent prefetch assumes the ring SDPA's all-gather workers start at ({col}, 0), got "
+            f"{self.ring_attention_ccl_core_grid_offset}"
+        )
+        assert 0 < ring_ccl_cores < grid.y, f"no idle cores left in column {col}: {ring_ccl_cores} of {grid.y} used"
+        sdpa_core_grid = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(col - 1, grid.y - 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(col, 0), ttnn.CoreCoord(col, ring_ccl_cores - 1)),
+            ]
+        )
+        gather_core_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(col, ring_ccl_cores), ttnn.CoreCoord(col, grid.y - 1))]
+        )
+        manager_id = self.mesh_device.create_sub_device_manager(
+            [ttnn.SubDevice([sdpa_core_grid]), ttnn.SubDevice([gather_core_grid])],
+            0,
+        )
+        try:
+            l1_small_view = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1_SMALL)
+            semaphore_buffer_type = (
+                ttnn.BufferType.L1_SMALL if l1_small_view.total_bytes_per_bank > 0 else ttnn.BufferType.L1
+            )
+            ready_semaphore = ttnn.create_global_semaphore(self.mesh_device, gather_core_grid, 0, semaphore_buffer_type)
+            data_valid_semaphore = ttnn.create_global_semaphore(
+                self.mesh_device, gather_core_grid, 0, semaphore_buffer_type
+            )
+            ttnn.synchronize_device(self.mesh_device)
+        except Exception:
+            self.mesh_device.remove_sub_device_manager(manager_id)
+            raise
+        self.tp_latent_prefetch_resources = TpLatentPrefetchResources(
+            manager_id=manager_id,
+            sdpa_subdevice_id=ttnn.SubDeviceId(0),
+            gather_subdevice_id=ttnn.SubDeviceId(1),
+            gather_core_grid=gather_core_grid,
+            ready_semaphore=ready_semaphore,
+            data_valid_semaphore=data_valid_semaphore,
+        )
+        logger.info(
+            f"TP latent prefetch: SDPA={sdpa_core_grid.num_cores()} cores, TP gather={gather_core_grid.num_cores()} cores"
+        )
+        return self.tp_latent_prefetch_resources
+
+    @contextlib.contextmanager
+    def tp_latent_prefetch_chain(self, stop_layer=None):
+        """Scope in which a dense tp_shard_kv MLA layer prefetches the next cache layer's TP latent during its SDPA.
+
+        The caller promises that, inside the scope, the MLA forwards on this mesh are consecutive cache layers of one
+        chunk of one user with unchanged metadata, as a transformer forward over its layers is. The host cannot see
+        metadata values, so a prefetch is consumed only inside the scope that made it: entering or leaving one drops any
+        pending prefetch. No prefetch targets cache layer stop_layer or beyond (e.g. a kv_only last layer, which runs no
+        attention). Outside any scope, every layer gathers its own latent serially."""
+        previous = self.tp_latent_chain
+        self._tp_latent_chain_count += 1
+        self.tp_latent_chain = (self._tp_latent_chain_count, stop_layer)
+        self.tp_latent_prefetched = None
+        try:
+            yield
+        finally:
+            self.tp_latent_chain = previous
+            self.tp_latent_prefetched = None
+
+    def reset_tp_latent_prefetch_semaphores(self) -> None:
+        """Drain and restore the prefetch gather's semaphores after an aborted overlap region."""
+        resources = self.tp_latent_prefetch_resources
+        if resources is None:
+            return
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.reset_global_semaphore_value(resources.ready_semaphore, 0)
+        ttnn.reset_global_semaphore_value(resources.data_valid_semaphore, 0)
+        ttnn.synchronize_device(self.mesh_device)
+
+    def release_tp_latent_prefetch_manager(self) -> None:
+        """Idempotently drain, reset, and unregister the TP latent prefetch resources before mesh close."""
+        resources = self.tp_latent_prefetch_resources
+        if resources is None:
+            return
+        self.mesh_device.clear_loaded_sub_device_manager()
+        self.reset_tp_latent_prefetch_semaphores()
+        self.mesh_device.remove_sub_device_manager(resources.manager_id)
+        self.tp_latent_prefetch_resources = None
+        self.tp_latent_prefetched = None
+
     def get_mla_ring_attention_buffers(
         self,
         *,
@@ -477,16 +596,16 @@ class TT_CCL:
             )
         return self.mla_chunked_kv_buffers[key]
 
-    def get_mla_tp_latent_slot(self, *, seq_len, kvpe_dim, sp_axis, tp_axis, dtype=ttnn.bfloat8_b):
+    def get_mla_tp_latent_slot(self, *, seq_len, kvpe_dim, sp_axis, tp_axis, index=0):
         """One user/layer slot of the latent cache, TP-gathered from a TP-deduped cache into the TP-replicated
         layout (SP-sharded on dim 2, global row c*chunk + s*chunk_local + t*region + r at local row
-        c*chunk_local + t*region + r). Unrolled-V expands V from it and ring_joint reads its K from it. Shared by
-        every layer: each layer's gather overwrites it before its expansion and SDPA, which run in queue order.
-        Zero-filled so the rows past the gathered extent that the expansion and SDPA read (K-chunk rounding)
-        start finite."""
+        c*chunk_local + t*region + r). Unrolled-V expands V from it and ring_joint reads its K from it. Two of them,
+        by layer parity (index): layer L reads slot L % 2 while the next layer's latent is prefetched into the other
+        one during L's SDPA. Zero-filled so the rows past the gathered extent that the expansion and SDPA read
+        (K-chunk rounding) start finite."""
         import torch
 
-        key = ("tp_latent_slot", seq_len, kvpe_dim, sp_axis, tp_axis, dtype)
+        key = ("tp_latent_slot", seq_len, kvpe_dim, sp_axis, tp_axis, index)
         if key not in self.mla_chunked_kv_buffers:
             shard_dims = [None, None]
             shard_dims[sp_axis] = 2
@@ -494,7 +613,7 @@ class TT_CCL:
                 torch.zeros(1, 1, seq_len, kvpe_dim, dtype=torch.bfloat16),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=dtype,
+                dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims

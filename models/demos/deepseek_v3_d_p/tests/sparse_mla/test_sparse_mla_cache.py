@@ -12,6 +12,7 @@ The `matches_config` test is host-only (no device); the build→cache-only→PCC
 mesh so the dense 128-head epilogue fits (TP=1 overflows L1).
 """
 
+import contextlib
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -203,8 +204,15 @@ def test_glm53_persistent_indexer_indices_are_replaced_without_deallocation(monk
     transformer.padding_side = "right"
     transformer.kv_only_last_layer = False
     transformer.is_last_rank = False
+    transformer.mesh_device = object()
 
     monkeypatch.setattr(transformer_module, "signpost", lambda *args, **kwargs: None)
+    # The layer loop opens a TP latent prefetch chain (dense tp_shard_kv only); a no-op scope here.
+    monkeypatch.setattr(
+        transformer_module,
+        "get_tt_ccl",
+        lambda mesh_device: SimpleNamespace(tp_latent_prefetch_chain=lambda stop_layer=None: contextlib.nullcontext()),
+    )
     monkeypatch.setattr(
         ttnn,
         "deallocate",
@@ -861,7 +869,7 @@ def test_glm53_sparse_mla_overlap_matches_serial(
         )
         ttnn.synchronize_device(mesh_device)
     finally:
-        mla.release_sparse_mla_overlap_manager()
+        mla.release_overlap_managers()
 
     for run, overlapped in (("cold", overlapped_cold), ("warm", overlapped_warm)):
         passed, pcc = comp_pcc(serial, overlapped, 0.999)
@@ -972,7 +980,7 @@ def test_glm53_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
         assert mesh_device.num_program_cache_entries() == cached_entries
     finally:
         mla._sparse_mla_overlap = resources
-        mla.release_sparse_mla_overlap_manager()
+        mla.release_overlap_managers()
 
     for run_name, actual_chunks in (("cold", overlapped_cold), ("warm", overlapped_warm)):
         for chunk_idx, (expected, actual) in enumerate(zip(serial, actual_chunks)):

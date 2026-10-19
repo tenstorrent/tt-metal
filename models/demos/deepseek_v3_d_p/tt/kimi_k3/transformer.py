@@ -517,31 +517,37 @@ class TtKimiK3Transformer(LightweightModule):
 
         # Eager chunks build the KDA bounds once and share them across the KDA layers.
         kda_chunk = K3KdaChunk(actual_start, actual_end) if metadata is None else None
+        # Consecutive layers of one chunk: a dense tp_shard_kv MLA layer prefetches the next MLA layer's TP latent during
+        # its SDPA. A kv_only last layer (always MLA) runs no attention, so nothing prefetches for it.
+        prefetch_chain = get_tt_ccl(self.mesh_device).tp_latent_prefetch_chain(
+            stop_layer=self.schedule.num_mla_layers - 1 if self.kv_only_last_layer else None
+        )
         try:
-            for local_idx, layer in enumerate(self.layers):
-                ctx = K3AttnContext(
-                    rope_tensors=rope_tensors,
-                    kvpe_cache=kvpe_cache,
-                    cache_layer_idx=self.schedule.kv_slot(local_idx),
-                    cache_user_id=cache_user_id,
-                    actual_start=actual_start,
-                    actual_end=actual_end,
-                    metadata=metadata,
-                    kda_chunk=kda_chunk,
-                )
-                layer.forward(
-                    residual,
-                    ctx,
-                    d2h_service=d2h_service,
-                    metadata_msg=metadata_msg,
-                    on_layer_complete=on_layer_complete,
-                    actual_end=actual_end,
-                    actual_isl=actual_isl,
-                    padding_side=padding_side,
-                    attn_input_tap=attn_input_tap,
-                )
-                if layer_tap is not None and not layer.kv_only:
-                    layer_tap(local_idx, residual.current())
+            with prefetch_chain:
+                for local_idx, layer in enumerate(self.layers):
+                    ctx = K3AttnContext(
+                        rope_tensors=rope_tensors,
+                        kvpe_cache=kvpe_cache,
+                        cache_layer_idx=self.schedule.kv_slot(local_idx),
+                        cache_user_id=cache_user_id,
+                        actual_start=actual_start,
+                        actual_end=actual_end,
+                        metadata=metadata,
+                        kda_chunk=kda_chunk,
+                    )
+                    layer.forward(
+                        residual,
+                        ctx,
+                        d2h_service=d2h_service,
+                        metadata_msg=metadata_msg,
+                        on_layer_complete=on_layer_complete,
+                        actual_end=actual_end,
+                        actual_isl=actual_isl,
+                        padding_side=padding_side,
+                        attn_input_tap=attn_input_tap,
+                    )
+                    if layer_tap is not None and not layer.kv_only:
+                        layer_tap(local_idx, residual.current())
         finally:
             if kda_chunk is not None:
                 kda_chunk.release()

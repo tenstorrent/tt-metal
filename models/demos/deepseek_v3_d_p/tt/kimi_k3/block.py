@@ -174,12 +174,20 @@ class TtKimiK3Block(LightweightModule):
         ffn = getattr(self, "ffn", None)
         if ffn is not None and hasattr(ffn, "set_trace_controller"):
             ffn.set_trace_controller(controller)
+        # A dense MLA layer on the TP-sharded cache loads a sub-device manager around its SDPA (the TP latent
+        # prefetch), so its capture is split there too. KDA layers have no MLA.
+        mla = getattr(self.attention, "mla", None)
+        if mla is not None and hasattr(mla, "set_trace_controller"):
+            mla.set_trace_controller(controller)
 
     def release_sub_device_managers(self):
-        """Drop this block's MoE overlap sub-device manager before mesh close (no-op for a dense FFN)."""
+        """Drop this block's overlap sub-device managers (MoE, MLA's TP latent prefetch) before mesh close."""
         ffn = getattr(self, "ffn", None)
         if ffn is not None and hasattr(ffn, "release_sub_device_manager"):
             ffn.release_sub_device_manager()
+        mla = getattr(self.attention, "mla", None)
+        if mla is not None and hasattr(mla, "release_overlap_managers"):
+            mla.release_overlap_managers()
 
     def forward(
         self,
