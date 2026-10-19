@@ -1,0 +1,6 @@
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_reduce.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_reduce.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_reduce_block.h
+tt_metal/tt-llk/tests/sources/reduce_block_test.cpp
+tt_metal/tt-llk/tests/sources/reduce_block_perf.cpp
+tt_metal/tt-llk/tests/helpers/include/ci_reduce_side.h
