@@ -452,6 +452,7 @@ class ColParallelLinear(Module):
                     fuse_swiglu=self.fuse_swiglu,
                     use_addcmul=addcmul_a is not None,
                     force_transpose=force_transpose,
+                    fp32_dest_acc=(compute_kernel_config or self.compute_config).fp32_dest_acc_en,
                 )
 
             tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
@@ -772,7 +773,14 @@ class RowParallelLinear(Module):
         if mmrs_config is not None:
             mmrs_params = mmrs_config.get_params(core_grid, self.ccl_manager.num_links, M=M)
         else:
-            mmrs_params = get_fused_mmrs_config(M, K, N, core_grid, self.ccl_manager.num_links)
+            mmrs_params = get_fused_mmrs_config(
+                M,
+                K,
+                N,
+                core_grid,
+                self.ccl_manager.num_links,
+                fp32_dest_acc=(compute_kernel_config or self.compute_config).fp32_dest_acc_en,
+            )
         use_l1_handoff = mmrs_params["mm_window_blocks"] is not None
         _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
             input_tensor=[x, x_second] if x_second is not None else x,

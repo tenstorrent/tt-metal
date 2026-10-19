@@ -87,6 +87,19 @@ VBENCH_GATE = {
         ],
         # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
         [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, "all_bf8_lofi"],
+        # WH on 4x8 with the bf8 / LoFi config tuned for it
+        [
+            (4, 8),
+            (4, 8),
+            1,
+            0,
+            4,
+            False,
+            ring_params_req_exact_devices,
+            ttnn.Topology.Ring,
+            True,
+            "wh_galaxy_bf8_lofi",
+        ],
     ],
     ids=[
         "2x2_sp0tp1",
@@ -97,6 +110,7 @@ VBENCH_GATE = {
         "line_bh_4x8_sp1tp0",
         "bh_4x32sp1tp0",
         "2x4_sp0tp1_bf8_lofi",
+        "wh_4x8_sp1tp0_bf8_lofi",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -188,7 +202,7 @@ def test_pipeline_performance(
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
-    limits = timing_limits(model_type, mesh_device.shape, height, topology)
+    limits = timing_limits(model_type, mesh_device.shape, height, topology, quant_config_name)
     assert limits is not None, f"No timing limits for {model_type} on {mesh_device.shape} at {height}p"
     # Upper limits double as the CI report targets.
     expected_metrics = {k: upper for k, (_, upper) in limits.items()}
@@ -229,11 +243,12 @@ def test_pipeline_performance(
         qc = getattr(QuantConfig, quant_config_name)()
         set_quant_config(pipeline, qc)
 
-    # Warmup run (not timed)
+    # Warmup run (not timed). The pipeline's allocation run compiled the programs of the model as built; a quant
+    # config changes them, so it needs a warmup as well.
     logger.info("Running warmup iteration...")
 
     with benchmark_profiler("run", iteration=0):
-        if traced:
+        if traced or quant_config_name is not None:
             with torch.no_grad():
                 pipeline(
                     prompts=[prompts[0]],
