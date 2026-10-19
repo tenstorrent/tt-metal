@@ -5,6 +5,7 @@
 """Turns the per-round raw measurements into the results document. Pure; no device, no ttnn."""
 
 import stats
+from ops import CONTROL
 
 SCHEMA = "dm-perf-compare:v1"
 
@@ -86,7 +87,8 @@ def measure_noise(control_before, control_after, control_ids):
 def build(calls_doc, raw, meta):
     """`raw`: time runs per label (`before`, `after_default`, `after`, `ctl_before`, `ctl_after`: one
     worker JSON or None per round; `after_default` and `before` both run the default only, so Q1
-    compares like with like, `after` runs every implementation for Q2), `device`: per round `{(impl, call index): {"ns", "ops"}}`, `control_ids`.
+    compares like with like, `after` runs every implementation plus the control copy of the default
+    for Q2), `device`: per round `{(impl, call index): {"ns", "ops"}}`, `control_ids`.
     """
     noise = measure_noise(raw["time"]["ctl_before"], raw["time"]["ctl_after"], raw["control_ids"])
     noise_pct = noise["noise_pct"]
@@ -94,10 +96,11 @@ def build(calls_doc, raw, meta):
     for index, call in enumerate(calls_doc["calls"]):
         cid = call["id"]
         before = {"default": series(raw["time"]["before"], cid, "default")}
-        after = {impl: series(raw["time"]["after"], cid, impl) for impl in ("default", "native", "codegen")}
+        after = {impl: series(raw["time"]["after"], cid, impl) for impl in ("default", "native", "codegen", CONTROL)}
         after_solo = series(raw["time"]["after_default"], cid, "default")
         q1 = _comparison(before["default"], after_solo, noise_pct)
         q2 = {impl: _comparison(after["default"], after[impl], noise_pct) for impl in ("native", "codegen")}
+        q2_control = _comparison(after["default"], after[CONTROL], noise_pct)
         beaten_by = [i for i, c in q2.items() if c["comparable"] and c["verdict"] == "faster"]
         device = {}
         for impl in ("default", "native", "codegen"):
@@ -119,6 +122,7 @@ def build(calls_doc, raw, meta):
                 "after_default_only": after_solo,
                 "q1": q1,
                 "q2": q2,
+                "q2_control": q2_control,
                 "fastest_option_used": None if not any(c["comparable"] for c in q2.values()) else not beaten_by,
                 "beaten_by": beaten_by,
                 "device": device,
@@ -141,4 +145,9 @@ def _summary(rows):
     for row in rows:
         used = row["fastest_option_used"]
         q2["not comparable" if used is None else "default fastest" if used else "beaten"] += 1
-    return {"q1": q1, "q1_geomean_pct": stats.geomean_change_pct(changes), "q2": q2}
+    # Two identical callables through the Q2 rule: anything but "no change" is a false flag.
+    q2_control = {"faster": 0, "slower": 0, "no change": 0, "not comparable": 0}
+    for row in rows:
+        control = row["q2_control"]
+        q2_control[control["verdict"] if control["comparable"] else "not comparable"] += 1
+    return {"q1": q1, "q1_geomean_pct": stats.geomean_change_pct(changes), "q2": q2, "q2_control": q2_control}

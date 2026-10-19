@@ -23,7 +23,8 @@ Each tree is a built tt-metal checkout; the script runs each side's processes wi
 ## Method
 
 - 5 rounds, after one discarded priming pair. A round runs fresh processes: before (default only),
-  after (default only), then after again with `default`, `native` and `codegen`. The first two
+  after (default only), then after again with `default`, `native`, `codegen` and `default_b` (the
+  default measured a second time: Q2's own A-vs-A control, reported as `q2_control`). The first two
   feed Q1 and alternate order between rounds; the third feeds Q2. Q1 compares like with like
   because a process that also runs the forced entries leaves caches and allocator in another state
   (measured: about +4% on the same default call).

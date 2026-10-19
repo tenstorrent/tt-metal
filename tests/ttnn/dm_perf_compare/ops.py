@@ -14,6 +14,9 @@ import re
 import zlib
 
 IMPLS = ("default", "native", "codegen")
+# The default entry measured a second time inside the same process as the three above. Comparing it
+# with `default` through the Q2 rule shows how often that rule flags two identical callables.
+CONTROL = "default_b"
 
 # Defaults of the public entry's optional arguments. A forced entry that does not accept an argument
 # is still comparable when the call passes that argument's default; any other value is a different
@@ -69,6 +72,7 @@ class OpAdapter:
         module = ttnn._ttnn.operations.data_movement
         self.entries = {
             "default": getattr(ttnn, op, None),
+            CONTROL: getattr(ttnn, op, None),
             "native": getattr(module, f"{op}_force_native", None),
             "codegen": getattr(module, f"{op}_force_codegen", None),
         }
@@ -146,5 +150,5 @@ class OpAdapter:
         fn = self.entries[impl]
         if fn is None:
             raise Refused(f"{self.op} has no {impl} entry")
-        taken = kwargs if impl == "default" else split_call_args(kwargs, self.accepts[impl])
+        taken = kwargs if impl in ("default", CONTROL) else split_call_args(kwargs, self.accepts[impl])
         return lambda: fn(x, **taken)

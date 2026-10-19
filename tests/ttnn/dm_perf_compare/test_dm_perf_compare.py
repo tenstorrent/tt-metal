@@ -102,7 +102,7 @@ def test_csv_reduction(tmp_path):
     assert profile_csv.find_csv(str(tmp_path)) == str(path)
 
 
-def results_for(after_default, after_native, before=100.0, digest_native="d"):
+def results_for(after_default, after_native, before=100.0, digest_native="d", control=None):
     cid = "c"
     doc = {
         "calls": [{"id": cid, "shape": [1], "dtype": "bfloat16", "layout": "tile", "memory_config": "DRAM", "args": {}}]
@@ -122,7 +122,14 @@ def results_for(after_default, after_native, before=100.0, digest_native="d"):
         "time": {
             "before": run(None, {"default": (before, "d")}),
             "after_default": run(None, {"default": (after_default, "d")}),
-            "after": run(None, {"default": (after_default, "d"), "native": (after_native, digest_native)}),
+            "after": run(
+                None,
+                {
+                    "default": (after_default, "d"),
+                    "native": (after_native, digest_native),
+                    "default_b": (after_default if control is None else control, "d"),
+                },
+            ),
             "ctl_before": run(None, {"default": (100.0, "d")}),
             "ctl_after": run(None, {"default": (100.0, "d")}),
         },
@@ -157,3 +164,12 @@ def test_default_uses_from_device_ops():
     assert compare._default_uses(device) == "native"
     device["default"]["ops"] = ["X"]
     assert compare._default_uses(device) == "other: X"
+
+
+def test_q2_control_counts_false_flags():
+    clean = results_for(after_default=100.0, after_native=100.0)
+    assert clean["calls"][0]["q2_control"]["verdict"] == "no change"
+    assert clean["summary"]["q2_control"]["no change"] == 1
+    flagged = results_for(after_default=100.0, after_native=100.0, control=80.0)
+    assert flagged["calls"][0]["q2_control"]["verdict"] == "faster"
+    assert flagged["summary"]["q2_control"]["faster"] == 1

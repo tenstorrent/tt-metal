@@ -10,8 +10,8 @@
 
 Per round, fresh processes measure time per call with the profiler off: before and after run the
 default only (Q1, order alternating between rounds), then after runs the default and both forced
-implementations (Q2). A control pair of the after build against itself, on a few calls,
-sets the noise band. A device-profiler pass over the after build then adds device time and the
+implementations and a second copy of the default (Q2 and its A-vs-A control). A control pair of the
+after build against itself, on a few calls, sets the noise band. A device-profiler pass over the after build then adds device time and the
 device ops each implementation dispatches. This script only spawns processes and needs no ttnn.
 """
 
@@ -29,7 +29,7 @@ sys.path.insert(0, HERE)
 import calls as calls_mod  # noqa: E402
 import compare  # noqa: E402
 import profile_csv  # noqa: E402
-from ops import IMPLS  # noqa: E402
+from ops import CONTROL, IMPLS  # noqa: E402
 
 WORKER = os.path.join(HERE, "worker.py")
 PROCESS_TIMEOUT_S = 1800
@@ -150,7 +150,7 @@ def main(argv):
     everything = list(range(count))
     control = calls_mod.control_indices(count, args.control_calls)
     control_ids = [doc["calls"][i]["id"] for i in control]
-    after_impls = list(IMPLS)
+    after_impls = [*IMPLS, CONTROL]
 
     raw = {
         "time": {"before": [], "after_default": [], "after": [], "ctl_before": [], "ctl_after": []},
@@ -203,7 +203,10 @@ def main(argv):
     with open(args.out, "w") as f:
         json.dump(results, f, indent=1)
     summary = results["summary"]
-    log("noise %.2f%%  q1 %s  q2 %s" % (results["noise"]["noise_pct"], summary["q1"], summary["q2"]))
+    log(
+        "noise %.2f%%  q1 %s  q2 %s  q2 control %s"
+        % (results["noise"]["noise_pct"], summary["q1"], summary["q2"], summary["q2_control"])
+    )
     log("skipped/failed entries: %d" % len(results["skipped"]))
 
 

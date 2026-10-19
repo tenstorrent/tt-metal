@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import calls as calls_mod  # noqa: E402
 import profile_csv  # noqa: E402
-from ops import IMPLS, OpAdapter, Refused  # noqa: E402
+from ops import CONTROL, IMPLS, OpAdapter, Refused  # noqa: E402
 
 MAX_ERROR_CHARS = 160
 
@@ -41,7 +41,7 @@ def digest(ttnn, torch, out):
 
 def failure(impl, exc):
     """A refused forced entry is a skip; anything else is an error."""
-    kind = "refused" if impl != "default" and isinstance(exc, (Refused, RuntimeError)) else "error"
+    kind = "refused" if impl not in ("default", CONTROL) and isinstance(exc, (Refused, RuntimeError)) else "error"
     return {"status": kind, "error": first_line(exc)}
 
 
