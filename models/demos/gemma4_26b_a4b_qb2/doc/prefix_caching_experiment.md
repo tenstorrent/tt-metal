@@ -608,3 +608,30 @@ upload; commit `400585ae5a90787e5135a9bb139e66cdca32dfc6` supplies the bound
 table and retires traces before eager numerical probes compile other paths.
 Production diagnostics remain disabled; the tracecheck suite is unaffected.
 
+Persistent variant run [39260126298](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39260126298)
+passed 17 host checks and the tracked chat test on `120-qb2-p05t01`, the
+same worker as the control. Metal was `400585ae5a90787e5135a9bb139e66cdca32dfc6`.
+All seven answer texts matched the control. Cached repeats and the growing
+conversation retained `MeshTraceId(0)` with one capture and zero releases.
+The independent cold request still retired that trace and produced a second
+capture; this is not generator-wide trace-lifetime compliance. The tracked
+test took 87.427 seconds including compilation: comparison with the control's
+90.486 seconds is not a performance claim.
+
+Two independent follow-ups use the same existing image and workflow `6e415f0`:
+
+- [39261166389](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39261166389),
+  Metal `f20185936091f47452add16ab7c8ad26d8df4163`, on `qb2-120-p03t09`:
+  extended allocation-tracked chat and host-sampling suffix lengths 1–7.
+- [39261174410](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39261174410),
+  Metal `d92bc6e087a5003c5f11d61cac79cd5bf9deb963`, on `120-qb2-p05t01`:
+  tracking-disabled old-implementation timing control with per-request
+  wall, TTFT, cache, computed-token and output counters. A matching variant
+  timing run follows correctness acceptance.
+
+The full5 standard Harbor control `39255759103` remains active on
+`qb2-120-p01t03` after its real-inference gate. These jobs do not share a
+physical worker. The known fabric-fault worker `qb2-120-p02t02` is refused
+before model access. A scheduling-only attempt `39259454295` was cancelled
+without obtaining a runner; it executed no model work.
+
