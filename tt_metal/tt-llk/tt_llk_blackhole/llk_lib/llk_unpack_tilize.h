@@ -41,6 +41,20 @@ inline void load_block_replay_half()
             TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
         });
 }
+
+// Whole-tile UNPACRs to consecutive DEST tiles: the L1 side restarts at each tile's base address, the DEST side Z walks on.
+template <std::uint32_t base_address_reg>
+inline void unpack_to_dest_run(const std::uint32_t num_tiles)
+{
+#pragma GCC unroll 0
+    for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+    {
+        TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, base_address_reg);
+        // Also the one instruction between the config write and the UNPACR that consumes it
+        TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b0001);
+        ckernel::ckernel_template::run();
+    }
+}
 } // namespace llk_unpack_tilize_detail
 
 /**
@@ -500,6 +514,72 @@ inline void _llk_unpack_tilize_block_(
 
     // Switch unpacker config context
     switch_config_context_from(context);
+}
+
+// A row of four-face tiles unpacked to dest: each run of up to dest_section_tiles tiles takes one DEST slot handshake and one
+// context, as _llk_math_eltwise_unary_datacopy_block_ takes them on the math thread; a run of one tile takes _llk_unpack_tilize_.
+inline void _llk_unpack_tilize_dest_block_(
+    const std::uint32_t base_address,
+    const std::uint32_t first_tile_index,
+    const std::uint32_t num_tiles,
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t unpack_dst_format,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t num_faces,
+    const bool narrow_tile,
+    const std::uint32_t dest_section_tiles)
+{
+    LLK_ASSERT(num_tiles > 0 && dest_section_tiles > 0, "A block and a run have at least one tile");
+    LLK_ASSERT(ckernel::unpacker::is_32bit_input(unpack_src_format, unpack_dst_format) && num_faces == 4, "DEST runs take four-face 32-bit tiles");
+
+    const std::uint32_t tile_offset_16B = SCALE_DATUM_SIZE(unpack_src_format, 1) << (narrow_tile ? 0 : 1);
+    TT_SETDMAREG(0, LOWER_HALFWORD(tile_offset_16B), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(tile_offset_16B), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
+
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    for (std::uint32_t tile = 0; tile < num_tiles;)
+    {
+        const std::uint32_t run_tiles = (num_tiles - tile < dest_section_tiles) ? num_tiles - tile : dest_section_tiles;
+        if (run_tiles == 1)
+        {
+            _llk_unpack_tilize_(base_address, first_tile_index + tile, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
+            ++tile;
+            continue;
+        }
+        const std::uint32_t address = base_address + (first_tile_index + tile) * tile_offset_16B;
+        LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
+        LLK_ASSERT(is_valid_L1_address(address + (run_tiles - 1) * tile_offset_16B), "L1 address of the last tile must be in valid L1 memory region");
+
+        std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+        TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
+        std::uint32_t context = unp_cfg_context;
+        while (__builtin_expect(contexts_in_use >= 2, 0))
+        {
+            contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+        }
+        // The run adds the advance before every tile, the first one included
+        cfg[(0 == context) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address - tile_offset_16B;
+        semaphore_post(semaphore::UNPACK_SYNC);
+
+        set_dst_write_addr<true>(context, unpack_src_format);
+        wait_for_dest_available();
+        TTI_STALLWAIT(p_stall::STALL_UNPACK | p_stall::STALL_CFG, p_stall::TRISC_CFG);
+        if (0 == context)
+        {
+            llk_unpack_tilize_detail::unpack_to_dest_run<THCON_SEC0_REG3_Base_address_ADDR32>(run_tiles);
+        }
+        else
+        {
+            llk_unpack_tilize_detail::unpack_to_dest_run<THCON_SEC0_REG3_Base_cntx1_address_ADDR32>(run_tiles);
+        }
+
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        unpack_to_dest_tile_done(context, unpack_src_format);
+        switch_config_context_from(context);
+        tile += run_tiles;
+    }
 }
 
 /**

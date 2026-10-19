@@ -130,9 +130,15 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index) {
  * @param operand          Input circular buffer / operand index.
  * @param block_c_tiles    Number of column tiles in the block.
  * @param input_tile_index Starting tile index within the input (defaults to 0).
+ * @param dest_section_tiles Tiles per DEST section of a caller whose math thread takes each section's unpack to dest tiles
+ *                           with llk_math_eltwise_unary_datacopy_block; 0 for one handshake per tile.
  */
 inline void llk_unpack_tilize_block(
-    std::uint32_t operand, std::uint32_t block_c_tiles, std::uint32_t input_tile_index = 0, const bool per_tile = false) {
+    std::uint32_t operand,
+    std::uint32_t block_c_tiles,
+    std::uint32_t input_tile_index = 0,
+    const bool per_tile = false,
+    const std::uint32_t dest_section_tiles = 0) {
     // Not sure if input_tile_index can be arbitrary but it works for moving across rows of files,
     // i.e. input_tile_index % block_c_tiles == 0
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -146,7 +152,11 @@ inline void llk_unpack_tilize_block(
         }
         return;
     }
-    if (per_tile) {
+    // As llk_math_eltwise_unary_datacopy_block decides: four-face 32-bit tiles on a 32-bit DEST take one handshake per run
+    const bool dest_runs = DST_ACCUM_MODE && dest_section_tiles > 0 &&
+                           ckernel::unpacker::is_32bit_input(unpack_src_format[operand_id], unpack_dst_format[operand_id]) &&
+                           get_operand_num_faces(operand_id) == 4;
+    if (per_tile && !dest_runs) {
         for (std::uint32_t tile = 0; tile < block_c_tiles; tile++) {
             llk_unpack_tilize(operand, input_tile_index + tile);
         }
@@ -165,15 +175,28 @@ inline void llk_unpack_tilize_block(
         StateDiscard<std::uint32_t>(block_c_tiles)));
 
     WAYPOINT("UPTW");
-    _llk_unpack_tilize_block_(
-        base_address,
-        input_tile_index,
-        block_c_tiles,
-        unpack_src_format[operand_id],
-        unpack_dst_format[operand_id],
-        get_operand_face_r_dim(operand_id),
-        get_operand_num_faces(operand_id),
-        get_operand_narrow_tile(operand_id));
+    if (dest_runs) {
+        _llk_unpack_tilize_dest_block_(
+            base_address,
+            input_tile_index,
+            block_c_tiles,
+            unpack_src_format[operand_id],
+            unpack_dst_format[operand_id],
+            get_operand_face_r_dim(operand_id),
+            get_operand_num_faces(operand_id),
+            get_operand_narrow_tile(operand_id),
+            dest_section_tiles);
+    } else {
+        _llk_unpack_tilize_block_(
+            base_address,
+            input_tile_index,
+            block_c_tiles,
+            unpack_src_format[operand_id],
+            unpack_dst_format[operand_id],
+            get_operand_face_r_dim(operand_id),
+            get_operand_num_faces(operand_id),
+            get_operand_narrow_tile(operand_id));
+    }
     WAYPOINT("UPTD");
 }
 

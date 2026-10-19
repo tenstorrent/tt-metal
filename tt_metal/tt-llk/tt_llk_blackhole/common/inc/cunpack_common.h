@@ -1065,13 +1065,17 @@ inline void unpack_to_dest_tile_done(std::uint32_t &context_id, const std::uint3
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4); // re-enable address bit swizzle
 }
 
+// tile_z_step: one channel 1 Z step per 32x32 DEST tile (four faces), so whole-tile UNPACRs walk consecutive DEST tiles.
+template <bool tile_z_step = false>
 inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint32_t &unpack_dst_format)
 {
     std::uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId)); // Apply fixed offset of 4*16 to dest address
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0);                                         // Disable address bit swizzle
-    // Set unpacker Z-stride to the canonical baseline for unpack_dst_format. Paired with
+    // Set unpacker Z-stride from the canonical baseline for unpack_dst_format. Paired with
     // unpack_to_dest_tile_done's canonical restore; no GPR snapshot of the prior value.
-    TT_SETDMAREG(0, LOWER_HALFWORD(canonical_unpA_z_stride(unpack_dst_format) << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
+    constexpr std::uint32_t z_faces = tile_z_step ? 4 : 1;
+    TT_SETDMAREG(
+        0, LOWER_HALFWORD((z_faces * canonical_unpA_z_stride(unpack_dst_format)) << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
     TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     if (context_id == 0)
     {

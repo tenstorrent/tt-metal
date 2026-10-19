@@ -210,25 +210,25 @@ ALWI void tilize_block(
             icb, block, ocb, input_tile_index, output_tile_index);
         return;
     }
-    // A BFP output packs one tile per call, so the block unpack gains nothing there and loses at some widths.
-    UNPACK((llk_unpack_tilize_block(
-        icb, block, input_tile_index, IS_BFP_FORMAT(unpack_src_format[get_operand_id(ocb)]))));
-
     // One DEST section per run of tiles that fits it, so the release is paid once per run
     const uint32_t section_tiles = tilize_detail::dest_section_tiles<is_fp32_dest_acc_en>(icb);
+
+    // A BFP output packs one tile per call, so the block unpack gains nothing there and loses at some widths.
+    // Unpack to DEST takes one DEST slot handshake per section on both threads.
+    UNPACK((llk_unpack_tilize_block(
+        icb, block, input_tile_index, IS_BFP_FORMAT(unpack_src_format[get_operand_id(ocb)]), section_tiles)));
+
     for (uint32_t t = 0; t < block; t += section_tiles) {
         const uint32_t ntiles = (block - t < section_tiles) ? block - t : section_tiles;
 
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
 
-        for (uint32_t i = 0; i < ntiles; i++) {
-            MATH((llk_math_eltwise_unary_datacopy<
-                  DataCopyType::A2D,
-                  is_fp32_dest_acc_en,
-                  BroadcastType::NONE,
-                  UnpackToDestEn>(i, icb)));
-        }
+        MATH((llk_math_eltwise_unary_datacopy_block<
+              DataCopyType::A2D,
+              is_fp32_dest_acc_en,
+              BroadcastType::NONE,
+              UnpackToDestEn>(0, ntiles, icb)));
         PACK((llk_pack_tilize_block<is_fp32_dest_acc_en>(0, ocb, ntiles, t + output_tile_index, icb)));
 
         MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
