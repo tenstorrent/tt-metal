@@ -151,6 +151,9 @@ inline void llk_pack_dest_section_done() {
         static_assert(
             EN_32BIT_DEST == DST_ACCUM_MODE,
             "unpack-to-dest: EN_32BIT_DEST must equal DST_ACCUM_MODE, the stride the unpack side flips banks with");
+        // Both gets behind the PACK0 drain. UNPACK_PACK first: it frees the bank for the unpacker, which is the count
+        // llk_unpack_wait_for_dest_available stalls on; MATH_PACK then lets math forward the next section.
+        _llk_sync_get_<p_stall::PACK0>(semaphore::UNPACK_PACK);
         _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
         if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
             _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::PACK0>();
