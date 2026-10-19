@@ -576,6 +576,7 @@ void run_source_inject_test(BaseFabricFixture* fixture, SourceInjectCoverage cov
                 0};
             const size_t connection_count_index = sender_runtime_args.size() - 1;
             const uint32_t connection_count = append_routing_plane_connection_manager_rt_args(
+                *device,
                 candidate->source,
                 connection_directions,
                 {},

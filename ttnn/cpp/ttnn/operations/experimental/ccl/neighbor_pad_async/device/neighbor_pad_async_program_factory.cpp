@@ -482,8 +482,8 @@ ProgramDescriptor build_program_descriptor_at(
         // the completion semaphore. DRAM write ordering is guaranteed by synchronize_device()
         // before the next op dispatch.
         w_t_total = outer_dim_size + t_front_pad;
-        w_rows_per_link = w_t_total / pad2_num_links;   // reused as t_per_link
-        w_extra_rows = w_t_total % pad2_num_links;       // reused as t_extra
+        w_rows_per_link = w_t_total / pad2_num_links;  // reused as t_per_link
+        w_extra_rows = w_t_total % pad2_num_links;     // reused as t_extra
     }
 
     // Compute H fabric unicast route configuration (for compile-time args)
@@ -603,7 +603,7 @@ ProgramDescriptor build_program_descriptor_at(
             std::vector<uint32_t> writer_rt_args = {
                 (operation_attributes.dim > 0)
                     ? writer_link_offset_start_id * output_halo_dim_size + t_front_pad_stick_offset
-                    : outer_dim_size - 1,  // outer_dim_offset_start_id
+                    : outer_dim_size - 1,                                             // outer_dim_offset_start_id
                 h_writer_stick_start,                                                 // stick_start_id
                 input_halo_dim_size,                                                  // input_halo_dim_size
                 output_halo_dim_size,                                                 // output_halo_dim_size
@@ -649,7 +649,7 @@ ProgramDescriptor build_program_descriptor_at(
                     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                     const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                     tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                        src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
+                        *mesh_device, src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
                 }
             } else {
                 writer_rt_args.push_back(forward_coord.has_value());
@@ -658,7 +658,7 @@ ProgramDescriptor build_program_descriptor_at(
                     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                     const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                     tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                        src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
+                        *mesh_device, src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
                 }
                 writer_rt_args.push_back(false);
             }
@@ -928,18 +928,18 @@ ProgramDescriptor build_program_descriptor_at(
                 // outer_dim_offset_start_id is unused for W writer two-pass path but kept for
                 // arg index compatibility with the H writer path in the same kernel binary.
                 std::vector<uint32_t> w_writer_rt_args = {
-                    0,                              // outer_dim_offset_start_id (unused by W two-pass)
-                    0,                              // stick_start_id
-                    input_halo_dim_size,            // input_halo_dim_size (unused by W writer)
-                    output_num_sticks_per_halo_dim, // output_halo_dim_size = W'
+                    0,                                 // outer_dim_offset_start_id (unused by W two-pass)
+                    0,                                 // stick_start_id
+                    input_halo_dim_size,               // input_halo_dim_size (unused by W writer)
+                    output_num_sticks_per_halo_dim,    // output_halo_dim_size = W'
                     w_t_count * output_halo_dim_size,  // outer_dim_size (unused by W two-pass, kept for compat)
                     w_direction ? operation_attributes.pad2_right : operation_attributes.pad2_left,  // padding
-                    operation_attributes.pad2_left,  // padding_left
-                    1,                               // num_sticks_to_read
-                    1,                               // num_sticks_per_halo_dim
-                    w_virtual_core.x,                // neighbor_sem_noc0_x
-                    w_virtual_core.y,                // neighbor_sem_noc0_y
-                    true,                            // use_barrier_semaphore (W-axis startup barrier)
+                    operation_attributes.pad2_left,                                                  // padding_left
+                    1,                 // num_sticks_to_read
+                    1,                 // num_sticks_per_halo_dim
+                    w_virtual_core.x,  // neighbor_sem_noc0_x
+                    w_virtual_core.y,  // neighbor_sem_noc0_y
+                    true,              // use_barrier_semaphore (W-axis startup barrier)
                     w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].x,   // barrier_sem_noc0_x (opp dir)
                     w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].y};  // barrier_sem_noc0_y
                 // No Phase 2 signal targets (W writers don't signal further)
@@ -967,7 +967,13 @@ ProgramDescriptor build_program_descriptor_at(
                         const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                         const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(w_backward_coord.value());
                         tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                            src_fabric_node_id, dst_fabric_node_id, w_link, desc, w_core, w_writer_rt_args);
+                            *mesh_device,
+                            src_fabric_node_id,
+                            dst_fabric_node_id,
+                            w_link,
+                            desc,
+                            w_core,
+                            w_writer_rt_args);
                     }
                 } else {
                     w_writer_rt_args.push_back(w_forward_coord.has_value());
@@ -975,17 +981,23 @@ ProgramDescriptor build_program_descriptor_at(
                         const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                         const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(w_forward_coord.value());
                         tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                            src_fabric_node_id, dst_fabric_node_id, w_link, desc, w_core, w_writer_rt_args);
+                            *mesh_device,
+                            src_fabric_node_id,
+                            dst_fabric_node_id,
+                            w_link,
+                            desc,
+                            w_core,
+                            w_writer_rt_args);
                     }
                     w_writer_rt_args.push_back(false);
                 }
                 // W writer two-pass args (appended after fabric connection args, read by kernel)
-                w_writer_rt_args.push_back(w_t_start);                          // w2_t_start
-                w_writer_rt_args.push_back(w_t_count);                          // w2_t_count
-                w_writer_rt_args.push_back(operation_attributes.padding_left);  // w2_h_pad_top
-                w_writer_rt_args.push_back(input_halo_dim_size);                // w2_h_in
-                w_writer_rt_args.push_back(operation_attributes.padding_right); // w2_h_pad_bot
-                w_writer_rt_args.push_back(output_halo_dim_size);               // w2_h_out
+                w_writer_rt_args.push_back(w_t_start);                           // w2_t_start
+                w_writer_rt_args.push_back(w_t_count);                           // w2_t_count
+                w_writer_rt_args.push_back(operation_attributes.padding_left);   // w2_h_pad_top
+                w_writer_rt_args.push_back(input_halo_dim_size);                 // w2_h_in
+                w_writer_rt_args.push_back(operation_attributes.padding_right);  // w2_h_pad_bot
+                w_writer_rt_args.push_back(output_halo_dim_size);                // w2_h_out
                 emplace_u32_runtime_args(w_writer_kernel, w_core, w_writer_rt_args);
             }
         }

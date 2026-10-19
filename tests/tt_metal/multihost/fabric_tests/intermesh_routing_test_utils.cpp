@@ -152,7 +152,13 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
         *dst_fabric_node_id.mesh_id};
 
     tt_fabric::append_fabric_connection_rt_args(
-        src_fabric_node_id, dst_fabric_node_id, 0, sender_program, {sender_logical_core}, sender_runtime_args);
+        *sender_device,
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        0,
+        sender_program,
+        {sender_logical_core},
+        sender_runtime_args);
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Run sender program
@@ -357,7 +363,13 @@ void run_mcast_sender_step(
     sender_runtime_args.insert(sender_runtime_args.end(), mcast_header_rtas.begin(), mcast_header_rtas.end());
 
     tt_fabric::append_fabric_connection_rt_args(
-        mcast_sender_node, mcast_start_node, 0, mcast_send_program, {sender_logical_core}, sender_runtime_args);
+        *sender_device,
+        mcast_sender_node,
+        mcast_start_node,
+        0,
+        mcast_send_program,
+        {sender_logical_core},
+        sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(mcast_send_program, mcast_send_kernel, sender_logical_core, sender_runtime_args);
 
