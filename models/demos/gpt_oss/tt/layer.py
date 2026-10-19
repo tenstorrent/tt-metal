@@ -121,6 +121,62 @@ class DecoderLayer:
             )
             ccl_manager.get_decode_partial(hf_config.hidden_size)
             ccl_manager.get_decode_router_out()
+        # Batched decode (one 32-token tile per device, dense MoE; batched_decode.py): BF16 residual width-sharded in L1,
+        # sharded RMSNorms, one-op all-reduces of the attention and MoE partial sums.
+        self.batched_decode = not self.fused_decode and self.mlp.dense_decode
+        if self.batched_decode:
+            from .batched_decode import residual_memory_config
+
+            self.residual_memory_config = residual_memory_config(mesh_device, hf_config.hidden_size)
+            self.decode_all_reduce = ccl_manager.get_batched_decode_all_reduce(
+                hf_config.hidden_size, mesh_config.tp_axis
+            )
+            self.self_attn.decode_returns_partial = True
+            from .batched_decode import BatchedOProj, BatchedQKV
+
+            self.self_attn.batched_qkv = BatchedQKV(
+                mesh_device, self.self_attn.weights.wqkv, self.self_attn.config.head_dim
+            )
+            self.self_attn.batched_oproj = BatchedOProj(
+                mesh_device, self.self_attn.weights.o_proj, self.self_attn.weights.o_proj_bias, hf_config.hidden_size
+            )
+            self.mlp.experts.decode_all_reduce = self.decode_all_reduce
+
+    def _batched_decode_forward(self, hidden_states, position_embeddings, position_idx, page_table, kv_cache):
+        """Batched decode: sharded norm -> attention -> one-op all-reduce -> residual add -> sharded norm -> MoE
+        (all-reduced inside) -> residual add. Returns the BF16 residual in the width-sharded layout."""
+        if hidden_states.memory_config() != self.residual_memory_config or hidden_states.dtype != ttnn.bfloat16:
+            # First layer: the embedding output enters the residual layout.
+            embeddings = hidden_states
+            hidden_states = ttnn.to_memory_config(embeddings, self.residual_memory_config, dtype=ttnn.bfloat16)
+            embeddings.deallocate(True)
+        residual = hidden_states
+        # The DRAM-sharded QKV (batched_decode.BatchedQKV) reshards the normed shards straight into its input layout.
+        attn_in = self.input_layernorm.forward_sharded(hidden_states)
+        attn_partial = self.self_attn(
+            attn_in,
+            rope_mats=position_embeddings,
+            position_idx=position_idx,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            is_decode=True,
+        )
+        attn_in.deallocate(True)
+        attn_out = self.decode_all_reduce(attn_partial, "attn")
+        hidden_states = ttnn.add(residual, attn_out, memory_config=self.residual_memory_config, dtype=ttnn.bfloat16)
+        attn_out.deallocate(True)
+        residual.deallocate(True)
+
+        residual = hidden_states
+        normed = self.post_attention_layernorm.forward_sharded(hidden_states)
+        mlp_in = ttnn.to_memory_config(normed, ttnn.L1_MEMORY_CONFIG)
+        normed.deallocate(True)
+        mlp_out = self.mlp(mlp_in, is_decode=True)
+        mlp_in.deallocate(True)
+        hidden_states = ttnn.add(residual, mlp_out, memory_config=self.residual_memory_config, dtype=ttnn.bfloat16)
+        mlp_out.deallocate(True)
+        residual.deallocate(True)
+        return hidden_states
 
     def set_decode_next_norm(self, norm, is_last_layer, lm_head_fused=False):
         """Fused decode: the layer's last boundary applies the next RMSNorm (the next layer's input norm, or the
@@ -129,6 +185,11 @@ class DecoderLayer:
         self.next_norm_gamma = self.boundary.flat_gamma(norm)
         self.is_last_layer = is_last_layer
         self.lm_head_fused = lm_head_fused
+
+    # DFlash (models/demos/gpt_oss/tt/dflash/capture.py): callable(tensor, rows_split=False) receiving this layer's
+    # prefill input residual (the previous layer's output); rows_split: the sequence-parallel prefill's residual, each
+    # device holding its S / TP rows.
+    capture_input = None
 
     def _consumer_input(self, pending):
         """The input of a boundary's consumer op: the pending boundary itself when it runs fused into that op
@@ -209,6 +270,8 @@ class DecoderLayer:
         the post-attention norm the router runs on the local rows and the experts' input is gathered as bf8
         (MLP.prefill_sequence_parallel)."""
         cluster_axis = self.self_attn.mesh_config.tp_axis
+        if self.capture_input is not None:  # DFlash: the previous layer's output, split by rows over the mesh row
+            self.capture_input(residual, rows_split=True)
         if residual.shape[-2] * self.self_attn.mesh_config.tp > 32 * 1024:
             # As in __call__: reallocate the residual to limit DRAM fragmentation on long prefills.
             residual = ttnn.move(residual)
@@ -258,6 +321,8 @@ class DecoderLayer:
         if sequence_parallel:
             assert not is_decode and batch_size == 1
             return self._prefill_forward_sp(hidden_states, position_embeddings, page_table, kv_cache, user_id)
+        if is_decode and self.batched_decode:
+            return self._batched_decode_forward(hidden_states, position_embeddings, position_idx, page_table, kv_cache)
 
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
@@ -266,6 +331,8 @@ class DecoderLayer:
 
         # hidden_states: [1, 1, tokens/num_rows, hidden_size/num_columns]
         # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
+        if self.capture_input is not None:  # DFlash: the previous layer's output, one row per token
+            self.capture_input(hidden_states)
         residual = hidden_states
         hidden_states_post_norm = self.input_layernorm(hidden_states)
 

@@ -48,6 +48,7 @@ def prefill_forward(
     user_id=0,
     batch_size=1,
     sequence_parallel=False,
+    fused_decode=False,
 ):
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).
@@ -68,6 +69,8 @@ def prefill_forward(
         position_idx: Position indices (unused in prefill)
         page_table: Page table for paged attention (optional)
         ccl_manager: Communication manager
+        fused_decode: the model runs the fused decode path (gpt-oss-20b on QuietBox 2): the output all-reduce is
+            ttnn.all_reduce (apply_allreduce use_all_reduce)
 
     Returns:
         Attention output [batch, seq_len, hidden_size]
@@ -231,5 +234,5 @@ def prefill_forward(
             ),
         )
         tt_sdpa_out.deallocate(True)
-        tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
+        tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size, use_all_reduce=fused_decode)
     return tt_out_result

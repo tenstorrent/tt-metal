@@ -9,7 +9,7 @@
 #include <cstddef>
 #include <set>
 #include <utility>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include <tt_stl/assert.hpp>
 
@@ -30,7 +30,8 @@ tt::tt_metal::CoreRangeSet merge_disjoint_ranges(std::vector<tt::tt_metal::CoreR
     return result.merge_ranges();
 }
 
-std::pair<uint32_t, uint32_t> virt_coord(const tt::tt_metal::IDevice& device, const tt::tt_metal::CoreCoord& logical) {
+std::pair<uint32_t, uint32_t> virt_coord(
+    const tt::tt_metal::distributed::MeshDevice& device, const tt::tt_metal::CoreCoord& logical) {
     const auto worker = device.worker_core_from_logical_core(logical);
     return {static_cast<uint32_t>(worker.x), static_cast<uint32_t>(worker.y)};
 }
@@ -51,7 +52,7 @@ uint32_t mcast_flags(const McastConfig& cfg) {
 
 void append_sender_coords(
     std::vector<uint32_t>& args,
-    const tt::tt_metal::IDevice& device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     const std::vector<tt::tt_metal::CoreCoord>& senders) {
     namespace wire = dataflow_kernel_lib::mcast_wire;
     const auto start = args.size();
@@ -183,7 +184,7 @@ McastImpl::Group::Group(
 }
 
 void McastImpl::Group::prepare_(
-    const tt::tt_metal::IDevice& device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     const McastConfig& cfg,
     dataflow_kernel_lib::TransferMode transfer_mode,
     const CoreRangeSet* handshake_cores) const {
@@ -266,7 +267,7 @@ McastImpl::Group::PreparedMulticast McastImpl::Group::prepare_multicast_(
 }
 
 McastImpl::Group::PreparedChain McastImpl::Group::prepare_chain_(
-    const tt::tt_metal::IDevice& device, PreparedState& state) const {
+    const tt::tt_metal::distributed::MeshDevice& device, PreparedState& state) const {
     PreparedChain chain;
     chain.order.push_back(senders_.front());
     // Logical row-major order across every receiver range, sender first.
@@ -380,7 +381,8 @@ std::vector<uint32_t> McastImpl::Group::runtime_args(
     return args;
 }
 
-McastImpl::McastImpl(const tt::tt_metal::IDevice& device, const McastConfig& cfg) : device_(device), cfg_(cfg) {}
+McastImpl::McastImpl(const tt::tt_metal::distributed::MeshDevice& device, const McastConfig& cfg) :
+    device_(device), cfg_(cfg) {}
 
 void McastImpl::add_group(
     const CoreRangeSet& receivers, std::vector<CoreCoord> senders, std::optional<uint32_t> ack_count_override) {
