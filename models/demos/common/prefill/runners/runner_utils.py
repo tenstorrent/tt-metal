@@ -220,7 +220,7 @@ def _snap_counts_to_starts(counts, valid_starts, num_layers):
 
 
 def compute_layer_split(
-    num_layers: int, num_ranks: int, valid_starts=None, mtp_levels: int = 0
+    num_layers: int, num_ranks: int, valid_starts=None, mtp_levels: int = 0, remainder_last: bool = False
 ) -> list[tuple[int, int]]:
     override = os.environ.get("PREFILL_PP_LAYER_COUNTS")
     if override:
@@ -232,7 +232,8 @@ def compute_layer_split(
             )
     else:
         base, rem = divmod(num_layers + mtp_levels, num_ranks)
-        counts = [base + (1 if r >= num_ranks - rem else 0) for r in range(num_ranks)]
+        extra = range(num_ranks - rem, num_ranks) if remainder_last else range(rem)
+        counts = [base + (1 if r in extra else 0) for r in range(num_ranks)]
         counts[-1] -= mtp_levels
         if counts[-1] < 1:
             raise ValueError(
