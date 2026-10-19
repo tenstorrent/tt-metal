@@ -71,6 +71,11 @@ void reset_state(std::uint32_t& counter)
 int main()
 {
     disable_branch_prediction();
+    {
+        volatile std::uint32_t* cfg = ckernel::get_cfg_pointer();
+        cfg[DISABLE_RISC_BP_Disable_trisc_ADDR32] |= DISABLE_RISC_BP_Disable_trisc_MASK;
+        cfg[RISC_PREFETCH_CTRL_Enable_Trisc_ADDR32] &= ~RISC_PREFETCH_CTRL_Enable_Trisc_MASK;
+    }
 
     std::uint32_t counter = 0;
 
