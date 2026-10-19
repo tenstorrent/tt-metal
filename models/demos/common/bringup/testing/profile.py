@@ -269,7 +269,9 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
 
     run()  # compile and fill the program cache: performance is measured warm only
     if os.environ.get("BRINGUP_PROFILE_WALL") == "1":  # F114: the clean wall run (device profiler off), nothing else
-        assert not os.environ.get(profiler.PROFILER_ENV), f"BRINGUP_PROFILE_WALL=1 runs without {profiler.PROFILER_ENV}"
+        assert not os.environ.get(
+            "TT_METAL_DEVICE_PROFILER"
+        ), "BRINGUP_PROFILE_WALL=1 runs with the device profiler off"
         walls = []
         for _ in range(WALL_RUNS):
             reload()
