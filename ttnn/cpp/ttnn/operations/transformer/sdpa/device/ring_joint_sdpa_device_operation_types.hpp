@@ -190,8 +190,15 @@ struct RingJointSDPAInputs {
 
     // Global real-token count (metadata path only); attention stops at the tile holding the last real token.
     std::optional<Tensor> kv_valid_end;
+    // MLA expanded K: W_UK per head, [1, NH, nope, latent] bf8 TILE DRAM (wkv_b1 as stored; 128 x 512 for Kimi). K
+    // stays the shared latent [c_kv (latent) | k_pe]; the kernels expand K_h = [c_kv @ W_UK_h^T | k_pe] per K chunk, so
+    // Q is the un-absorbed [q_nope | q_pe] and QK runs at Q's (narrower) head dim. Latent K keeps its own width on
+    // every data-movement path. Head pairs only: each head's two Q chunks sit on two cores, which split the expansion.
+    std::optional<Tensor> k_expand_weight;
 
     bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
+
+    bool has_k_expand() const { return k_expand_weight.has_value(); }
 
     bool has_logical_n_tensor() const { return logical_n_tensor.has_value(); }
 

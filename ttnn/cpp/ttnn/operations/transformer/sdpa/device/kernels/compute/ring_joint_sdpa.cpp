@@ -99,6 +99,15 @@ void kernel_main() {
     // through cb_kv_pad_derived from the reader; the compile-time values are the placeholder's.
     constexpr bool has_logical_n_tensor = get_compile_time_arg_val(47) == 1;
     constexpr bool has_logical_l_tensor = get_compile_time_arg_val(48) == 1;
+    // Slots 49-52, expanded K (k_expand_weight): Q / QK width DHt_qk; DHt stays the latent K's, whose no-PE part is
+    // kexp_latent_tiles tile rows. The core's head pair splits the expansion: W_UK's wuk_tiles (this core's rows of
+    // its head's W_UK) arrive in cb_wuk with the Q push and leave with the Q pop.
+    constexpr bool k_expand = get_compile_time_arg_val(49) == 1;
+    constexpr uint32_t DHt_qk = get_compile_time_arg_val(50);
+    constexpr uint32_t wuk_tiles = get_compile_time_arg_val(51);
+    constexpr uint32_t kexp_latent_tiles = get_compile_time_arg_val(52);
+    // sdpa_expand_k_chunk's half of the no-PE rows (Q's width past the latent's PE part) over the latent's columns.
+    static_assert(!k_expand || wuk_tiles == (DHt_qk - (DHt - kexp_latent_tiles)) / 2 * kexp_latent_tiles);
     constexpr bool has_logical_length_tensor = has_logical_n_tensor || has_logical_l_tensor;
     uint32_t logical_lt = logical_lt_compile;
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
@@ -174,17 +183,18 @@ void kernel_main() {
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
 
-    constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
+    constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt_qk;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     // Compute fixed slot 39: trace-safe KV-pad derivation flag. Slots 40/41 are the sharded-joint scalars
-    // (joint_is_sharded, logical_lt); the rank mapping (42-45), the bounded sliding KV slab count (46), and
-    // the logical-length transport flags (47-48) are declared above, so the CB block starts at 49.
+    // (joint_is_sharded, logical_lt); the rank mapping (42-45), the bounded sliding KV slab count (46), the
+    // logical-length transport flags (47-48), and the expanded-K scalars (49-52) are declared above, so the CB block
+    // starts at 53.
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(39) == 1;
-    constexpr uint32_t cb_arg_offset = 49;
+    constexpr uint32_t cb_arg_offset = 53;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -213,6 +223,10 @@ void kernel_main() {
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 22);
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 23);
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 24);
+    constexpr uint32_t cb_wuk = get_compile_time_arg_val(cb_arg_offset + 25);
+    constexpr uint32_t cb_kexp = get_compile_time_arg_val(cb_arg_offset + 26);
+    constexpr uint32_t cb_kexp_own = get_compile_time_arg_val(cb_arg_offset + 27);
+    constexpr uint32_t cb_kexp_peer = get_compile_time_arg_val(cb_arg_offset + 28);
 
     // Maximum owned chunk count (base plus one remainder unit), or zero for static scheduling. The factory
     // appends only the remainder unit's starting flat ID per active ordinal.
@@ -236,6 +250,13 @@ void kernel_main() {
         (!rotated_q_split_enabled && !(has_sliding_window && seg_accum_enabled) && use_streaming_compute));
     // The K split never runs with the rotated split, so its runtime arg takes the rotated block's slot.
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
+    // Expanded-K head pairs: this core's rank, the last runtime arg (after the K-split band). Pairs run without the
+    // rotated split and segmented accumulation (the host refuses both).
+    static_assert(!k_expand || (!rotated_q_split_enabled && !seg_accum_enabled));
+    // Only the streaming path expands K (sdpa_expand_k_chunk); the fp32 path reads DHt-wide K.
+    static_assert(!k_expand || use_streaming_compute, "expanded K needs the streaming compute path");
+    [[maybe_unused]] const uint32_t k_expand_rank =
+        k_expand ? get_arg_val<uint32_t>(rotated_args_base + (ksplit_enabled ? 1 : 0)) : 0;
     const bool ksplit_active = ksplit_enabled && q_per_core == 1;
     const bool seg_active = seg_accum_enabled && q_per_core == 1;
     bool seg_state_valid = false;
@@ -650,7 +671,14 @@ void kernel_main() {
                 rotated_q_split_enabled,
                 dense_causal_skip,
                 kv_region_Nt,
-                (GROUPED_KV_SOURCE_COUNT > 1)>(
+                (GROUPED_KV_SOURCE_COUNT > 1),
+                DHt_qk,
+                k_expand ? cb_kexp : INVALID_CB,
+                k_expand ? cb_wuk : INVALID_CB,
+                k_expand ? kexp_latent_tiles : 0,
+                k_expand ? wuk_tiles : 0,
+                k_expand ? cb_kexp_own : INVALID_CB,
+                k_expand ? cb_kexp_peer : INVALID_CB>(
                 // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
                 // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
                 rotated_q_split_enabled ? 0u : global_q_start,
@@ -688,7 +716,8 @@ void kernel_main() {
                 packed_sources ? packed_source_ids : nullptr,
                 packed_sources ? source_group_size : 0,
                 packed_schedule.rows(ring_iter),
-                padded_q_slots);
+                padded_q_slots,
+                k_expand_rank);
             if constexpr (has_sliding_window && ksplit_enabled) {
                 // Sliding bands split the unit's work plan, which can be shorter than the band count near the
                 // sequence start: an empty band stages no state.
@@ -798,7 +827,7 @@ void kernel_main() {
         if (seg_active) {
             // The reader pushes Q with this core's first K chunk; no ring iteration popped it.
             if (seen_active_iter) {
-                sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
+                sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt_qk);
             }
             ASSERT(seg_state_valid);
             constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -828,7 +857,10 @@ void kernel_main() {
             constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
             // The reader pushes Q with this core's first K chunk.
             if (seen_active_iter) {
-                sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
+                sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt_qk);
+                if constexpr (k_expand) {
+                    sdpa_cb_pop_front_out_of_line(cb_wuk, wuk_tiles);
+                }
             }
             if (ksplit_idx != ksplit_count - 1) {
                 // Sender: leave the state in half A, where the reducer reads it, and signal the writer. An empty
