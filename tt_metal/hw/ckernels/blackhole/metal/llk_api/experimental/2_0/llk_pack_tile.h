@@ -116,5 +116,5 @@ inline void llk_pack_reconfig_data_format() {
         tile_size,
         DESC.shape.total_col_dim(),
         DESC.shape.total_num_faces(),
-        false /* partial_face */);
+        DESC.shape.face_r_dim < ckernel::FACE_R_DIM /* partial_face */);
 }

@@ -13,6 +13,7 @@ import ttnn
 from tt_py_test_utils_common.utility_functions import (
     comp_pcc,
     is_blackhole,
+    is_wormhole_b0,
     skip_for_slow_dispatch,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics, assert_equal
@@ -149,6 +150,67 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
             check_frobenius=False,
             check_ulp=False,
         )
+
+
+@pytest.mark.skipif(is_wormhole_b0(), reason="Wormhole fix in a separate PR")
+@pytest.mark.parametrize("tile_h", [4, 8, 16, 32])
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("k", [32, 64])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+def test_tiny_tiles_bfloat_output(device, tile_h, out_dtype, k, fp32_dest_acc_en):
+    """Matmul with a short-tile block-float output.
+
+    A block-float tile carries one 16-byte exponent section per face, or a single one when the faces are
+    shorter than 16 rows (8x32 / 4x32). The matmul kernel reconfigures the packer to the output format before
+    packing it (k=64 also accumulates the partials in L1 first), so the reconfigure has to set the packer's
+    partial-face flag from the output's face height.
+    """
+    torch.manual_seed(0)
+    m, n = 64, 64
+    in0 = torch.randn((1, 1, m, k), dtype=torch.bfloat16)
+    in1 = torch.randn((1, 1, k, n), dtype=torch.bfloat16)
+    in0_t = ttnn.from_torch(
+        in0, tile=ttnn.Tile((tile_h, 32)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    in1_t = ttnn.from_torch(in1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    per_core_M = m // tile_h
+    per_core_N = n // 32
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=per_core_N,
+        out_block_h=per_core_M // 2,
+        out_block_w=per_core_N,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=True,
+    )
+    output_t = ttnn.matmul(
+        in0_t,
+        in1_t,
+        program_config=program_config,
+        dtype=out_dtype,
+        output_tile=ttnn.Tile((tile_h, 32)),
+        compute_kernel_config=compute_kernel_config,
+    )
+    assert_numeric_metrics(
+        in0.float() @ in1.float(),
+        ttnn.to_torch(output_t).float(),
+        # bfloat4_b keeps 3 mantissa bits: 0.984-0.986 on every tile shape here; the misplaced layout gives about 0.
+        pcc_threshold=0.999 if out_dtype == ttnn.bfloat8_b else 0.97,
+        check_allclose=False,
+        check_frobenius=False,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("n", [1])
