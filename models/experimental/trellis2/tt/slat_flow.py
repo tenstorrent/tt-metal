@@ -89,7 +89,8 @@ class TtSLatFlow(Module):
             h = ttnn.typecast(h, ttnn.float32)
         for block, mod in zip(self.blocks, self.modulation(t)):
             h = block(h, mod, context, tables)
-        return self.out_layer(_norm_in(self.final_norm(h)))
+        out_dtype = ttnn.float32 if self.precision.fp32_output else None
+        return self.out_layer(_norm_in(self.final_norm(h)), dtype=out_dtype)
 
     def forward(self, feats: torch.Tensor, t: torch.Tensor, cond: torch.Tensor, tables: DeviceTables) -> torch.Tensor:
         """Torch in, torch out (for tests): feats [N, C_in], t [1], cond [1, L, 1024] -> [N, 32]."""

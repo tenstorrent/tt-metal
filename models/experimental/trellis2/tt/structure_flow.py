@@ -40,6 +40,9 @@ class Precision:
     sdpa_hifi4_fp32_acc: bool = True  # SDPA at HiFi4 with fp32 dest accumulation (off: HiFi2, bf16 acc)
     linear_hifi4: bool = True  # every Linear at HiFi4 (off: HiFi2; both accumulate in fp32)
     fp32_residual: bool = True  # keep the residual stream x in fp32 between blocks (off: bf16)
+    fp32_output: bool = (
+        True  # SLat only: out_layer writes fp32 (off: bf16, fails G2 free-running: CFG 7.5 amplifies it)
+    )
 
 
 def _norm_in(x: ttnn.Tensor) -> ttnn.Tensor:

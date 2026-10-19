@@ -25,6 +25,7 @@ from models.experimental.trellis2.reference import slat_flow_host as slat
 from models.experimental.trellis2.reference import structure_flow_host as host
 from models.experimental.trellis2.tests import goldens
 from models.experimental.trellis2.tt.slat_flow import TtSLatFlow
+from models.experimental.trellis2.tt.structure_flow import Precision
 
 SINGLE_PASS_PCC = 0.999
 LAST_CALL_PCC = 0.988
@@ -34,8 +35,8 @@ PAD_AGREEMENT_PCC = 0.9999
 pytestmark = pytest.mark.skipif(goldens.missing_reason() is not None, reason=goldens.missing_reason() or "")
 
 
-def _model(mesh_device) -> TtSLatFlow:
-    model = TtSLatFlow(mesh_device=mesh_device, in_channels=32)
+def _model(mesh_device, precision: Precision = Precision()) -> TtSLatFlow:
+    model = TtSLatFlow(mesh_device=mesh_device, in_channels=32, precision=precision)
     model.load_torch_state_dict(host.load_state_dict(f"{goldens.weights_dir()}/{slat.SHAPE_CKPT}"))
     return model
 
