@@ -145,3 +145,5 @@ two users: unchanged PCCs.
   compiled; wall 11.36 ms/step): 435 ops, 10.93 ms device per step, duplicate ids 0; top op classes: AccumulationDeviceOperation 2.64 ms x8, MatmulDeviceOperation 1.66 ms x13, UnaryDeviceOperation 1.44 ms x12, SparseMatmulDeviceOperation 1.11 ms x2, BinaryNgDeviceOperation 0.96 ms x92, TernaryDeviceOperation 0.63 ms x38, FillPadDeviceOperation 0.55 ms x30
   (files `doc/functional_decoder/tracy/layer3_dsa_moe/`). The earlier forced-sparse seeding also collided: sparse_sdpa
   shares compute_streaming.hpp with the dense prefill kernel.
+- Checkpoint after the review fixes: local `arg/glm53_flash` @ 8e965d64e72 (code + docs), upstream
+  `origin/arg/glm-53-flash` @ ab2653dbbf5 (code + tests only, pre-commit green). Second stage review requested.
