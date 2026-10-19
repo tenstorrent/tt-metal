@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * @file
+ * @brief Describe, encode, and issue Blackhole address-counter updates.
+ */
+
 #pragma once
 
 #include <cstddef>
@@ -12,23 +17,24 @@
 #include "ckernel.h"
 #include "llk_assert.h"
 
+/** @brief Address counters for unpackers and packers on the issuing Tensix thread. */
 namespace hal::counters::adc
 {
 
 /** @brief Select address counters belonging to either unpacker or all four packers. */
 enum class Client : std::uint8_t
 {
-    Unpacker0 = 0x1,
-    Unpacker1 = 0x2,
-    Packers   = 0x4
+    Unpacker0 = 0x1, ///< Counter set for unpacker 0.
+    Unpacker1 = 0x2, ///< Counter set for unpacker 1.
+    Packers   = 0x4  ///< Counter set shared by all four packers.
 };
 
 /** @brief Select the effect on each explicitly supplied counter. */
 enum class Action : std::uint8_t
 {
-    Set,            // Replace both the live counter and its carry/reset shadow.
-    Increment,      // Increment the live counter; preserve its shadow.
-    AdvanceAndReset // Increment the shadow, then copy it to the live counter.
+    Set,            ///< Assign the supplied value to both the live counter and its carriage-return (CR) shadow.
+    Increment,      ///< Add the supplied value to the live counter; preserve its CR shadow.
+    AdvanceAndReset ///< Add the supplied value to the CR shadow, then copy the updated shadow to the live counter.
 };
 
 /**
@@ -39,15 +45,29 @@ enum class Action : std::uint8_t
  */
 struct Value
 {
-    std::uint32_t value = 0;
-    bool selected       = false;
+    std::uint32_t value = 0;     ///< Assignment or increment, interpreted according to AddrCounter::action.
+    bool selected       = false; ///< Whether this counter participates in the update, including when its value is zero.
 
+    /** @brief Omit a counter from the update, preserving its live value and CR shadow. */
     constexpr Value() = default;
 
+    /**
+     * @brief Select a counter and supply its assignment or increment.
+     *
+     * @param value: Unsigned assignment or increment; zero still selects the counter.
+     * @note Construction stores the value without checking its range. Range checks are deferred
+     *       to the descriptor's encoding or issue operation.
+     */
     constexpr __attribute__((always_inline)) Value(const std::uint32_t value) : value(value), selected(true)
     {
     }
 
+    /**
+     * @brief Reject GPR-sourced counter updates at compile time.
+     *
+     * @tparam Index: Source GPR type index.
+     * @note Every instantiation fails: Blackhole REG2FLOP is unsupported because of hardware issues.
+     */
     template <std::uint32_t Index>
     constexpr Value(const hal::Gpr<Index>)
     {
@@ -58,10 +78,10 @@ struct Value
 /** @brief Sparse X/Y/Z/W values for one address-counter channel. */
 struct Channel
 {
-    Value x {};
-    Value y {};
-    Value z {};
-    Value w {};
+    Value x {}; ///< X assignment or increment; omitted by default.
+    Value y {}; ///< Y assignment or increment; omitted by default.
+    Value z {}; ///< Z assignment or increment; omitted by default.
+    Value w {}; ///< W assignment or increment; omitted by default.
 };
 
 /**
@@ -75,22 +95,36 @@ struct Channel
  * unpacker channel0 addresses input and channel1 addresses output; packer channel0 addresses
  * Dst input and channel1 addresses L1 output. All four packers share the Packers counters.
  *
+ * @note Set assigns both live counters and their CR shadows. Increment preserves the shadows.
+ *       Independent assignment to a CR shadow alone and thread overrides are not supported.
+ *
  * @code
  * constexpr AddrCounter matmul = AddrCounter {
  *     .channel0 = {.x = 10, .y = 20},
  *     .channel1 = {.y = 0},
  * }.for_clients<Client::Unpacker0, Client::Unpacker1>();
  * set<matmul>();
+ *
+ * constexpr AddrCounter reset_xy = AddrCounter {
+ *     .channel0 = {.x = 0, .y = 0},
+ * }.for_clients<Client::Unpacker0>();
+ * constexpr auto reset_xy_word = reset_xy.operation();
  * @endcode
  */
 struct AddrCounter
 {
-    Action action = Action::Set;
-    Channel channel0 {};
-    Channel channel1 {};
-    std::uint8_t clients = 0;
+    Action action = Action::Set; ///< Effect applied to every selected counter.
+    Channel channel0 {};         ///< Sparse assignments or increments for channel 0.
+    Channel channel1 {};         ///< Sparse assignments or increments for channel 1.
+    std::uint8_t clients = 0;    ///< Destination client bitmask; populate with for_clients() before encoding or issuing.
 
-    /** @brief Return the same descriptor with its destination client mask replaced. */
+    /**
+     * @brief Copy the descriptor with a new destination client set.
+     *
+     * @tparam Clients: One or more valid Client enumerators receiving the same update.
+     * @return A copy with its client mask replaced; the original descriptor is unchanged.
+     * @note An empty pack or an invalid enumerator is rejected at compile time.
+     */
     template <Client... Clients>
     [[nodiscard]] constexpr __attribute__((always_inline)) AddrCounter for_clients() const
     {
@@ -104,9 +138,14 @@ struct AddrCounter
     /**
      * @brief Encode exactly one instruction without issuing it.
      *
-     * Constant descriptors use the same instruction selection as set<Descriptor>(). Descriptions
-     * needing multiple instructions are rejected. At runtime, values must fit the instruction
-     * selected by the supplied fields; enable LLK assertions to diagnose invalid values.
+     * During constant evaluation, selection follows set<Descriptor>(). Otherwise, selection uses
+     * only the action and supplied fields, as in the runtime set() overload.
+     *
+     * @return One encoded 32-bit Tensix instruction, suitable for an instruction emitter or MOP slot.
+     * @note Supply valid clients and action, select at least one counter, and supply values that
+     *       fit the selected instruction. Use set<Descriptor>() for updates needing multiple instructions.
+     * @note Invalid values and multi-instruction updates are rejected during constant evaluation.
+     *       Runtime checks use LLK_ASSERT; the preconditions still apply when assertions are disabled.
      */
     [[nodiscard]] constexpr std::uint32_t operation() const;
 };
@@ -114,42 +153,69 @@ struct AddrCounter
 namespace detail
 {
 
-inline constexpr std::uint8_t EmptyClientMask = 0;
+inline constexpr std::uint8_t EmptyClientMask = 0; ///< No destination clients selected.
+/** @brief Bitmask of all supported unpacker and packer clients. */
 inline constexpr std::uint8_t AllClientsMask =
     static_cast<std::uint8_t>(Client::Unpacker0) | static_cast<std::uint8_t>(Client::Unpacker1) | static_cast<std::uint8_t>(Client::Packers);
-inline constexpr std::uint8_t EmptyCounterMask = 0;
-// Within an X/Y group, bit 0 selects Channel0 X and bit 2 selects Channel1 X.
+inline constexpr std::uint8_t EmptyCounterMask = 0; ///< No counters selected within a group.
+/** @brief X/Y group mask selecting channel 0 X at bit 0 and channel 1 X at bit 2. */
 inline constexpr std::uint8_t BothXChannelsMask = 0b0101;
 
-inline constexpr std::uint32_t PackedCounterValueMax = 0x7u;
-inline constexpr std::uint32_t DualXCounterValueMax  = 0x3ffu;
-inline constexpr std::uint32_t SingleCounterValueMax = 0xffffu;
+inline constexpr std::uint32_t PackedCounterValueMax    = 0x7u;    ///< Maximum three-bit packed assignment or increment.
+inline constexpr std::uint32_t DualXCounterValueMax     = 0x3ffu;  ///< Maximum ten-bit X value in SETADCXX.
+inline constexpr std::uint32_t SingleXCounterValueMax   = 0xffffu; ///< Maximum SETADC X value without a thread override.
+inline constexpr std::uint32_t SingleYZWCounterValueMax = 0x1fffu; ///< Maximum value stored by a thirteen-bit Y, Z, or W counter.
 
+/** @brief Four counter slots in either the X/Y or Z/W instruction group. */
 struct Group
 {
-    Value fields[4]; // Channel0 first dimension, Channel0 second, Channel1 first, Channel1 second.
+    Value fields[4]; ///< Channel 0 first/second dimension, followed by channel 1 first/second dimension.
 
+    /**
+     * @brief Encode field presence independently of the supplied values.
+     *
+     * @return A four-bit mask whose bit i selects fields[i]; explicitly supplied zeroes remain selected.
+     */
     inline __attribute__((always_inline)) constexpr std::uint8_t mask() const
     {
         return fields[0].selected | (fields[1].selected << 1) | (fields[2].selected << 2) | (fields[3].selected << 3);
     }
 
+    /**
+     * @brief Read a slot's value, encoding omitted slots as zero.
+     *
+     * @param index: Slot index in [0, 3].
+     * @return The supplied value for a selected slot, or zero for an omitted slot.
+     */
     inline __attribute__((always_inline)) constexpr std::uint32_t value(const std::size_t index) const
     {
         return fields[index].selected ? fields[index].value : 0;
     }
 };
 
+/** @brief Instruction sequence with capacity for one SETADC per counter across both channels. */
 struct Sequence
 {
-    std::uint32_t words[8] {};
-    std::size_t count = 0;
+    std::uint32_t words[8] {}; ///< Encoded instructions in issue order; only the first count entries are used.
+    std::size_t count = 0;     ///< Number of encoded instructions, in [0, 8].
 
+    /**
+     * @brief Append one encoded instruction.
+     *
+     * @param word: Instruction word to issue after the current sequence.
+     * @note Ensure words has space for one more instruction.
+     */
     constexpr void append(const std::uint32_t word)
     {
         words[count++] = word;
     }
 
+    /**
+     * @brief Append another sequence without changing its instruction order.
+     *
+     * @param other: Sequence to append; must not refer to this object.
+     * @note Keep the combined count within the capacity of words.
+     */
     constexpr void append(const Sequence& other)
     {
         for (std::size_t i = 0; i < other.count; ++i)
@@ -159,11 +225,24 @@ struct Sequence
     }
 };
 
+/**
+ * @brief Test whether a group selects exactly one counter.
+ *
+ * @param mask: Counter-selection mask.
+ * @return True if exactly one bit is set; false for an empty or multi-counter mask.
+ */
 inline __attribute__((always_inline)) constexpr bool single_bit(const std::uint8_t mask)
 {
     return mask != EmptyCounterMask && (mask & (mask - 1)) == EmptyCounterMask;
 }
 
+/**
+ * @brief Check descriptor structure before selecting instructions.
+ *
+ * @param descriptor: Update to validate.
+ * @return True if the clients and action are valid and at least one counter is selected.
+ * @note Value ranges are checked separately by the selected instruction encoders.
+ */
 inline __attribute__((always_inline)) constexpr bool is_valid(const AddrCounter& descriptor)
 {
     return descriptor.clients != EmptyClientMask && descriptor.clients <= AllClientsMask &&
@@ -172,6 +251,13 @@ inline __attribute__((always_inline)) constexpr bool is_valid(const AddrCounter&
             descriptor.channel1.x.selected || descriptor.channel1.y.selected || descriptor.channel1.z.selected || descriptor.channel1.w.selected);
 }
 
+/**
+ * @brief Reject an invalid constant expression or diagnose an invalid runtime request.
+ *
+ * @param valid: Condition required by the descriptor or instruction encoding.
+ * @note False makes constant evaluation fail. Runtime checking uses LLK_ASSERT and is omitted
+ *       when LLK assertions are disabled; callers must still satisfy the condition.
+ */
 inline __attribute__((always_inline)) constexpr void require(const bool valid)
 {
     if (!valid)
@@ -189,16 +275,36 @@ inline __attribute__((always_inline)) constexpr void require(const bool valid)
     }
 }
 
+/**
+ * @brief Encode a full-width assignment to one counter with SETADC.
+ *
+ * @param clients: Destination client bitmask.
+ * @param zw: True for the Z/W group; false for X/Y.
+ * @param index: Group slot in [0, 3], identifying the channel and dimension.
+ * @param value: Assignment in [0, 65535] for X or [0, 8191] for Y/Z/W; thread-override bits are excluded.
+ * @return The encoded SETADC instruction.
+ */
 inline __attribute__((always_inline)) constexpr std::uint32_t single(
     const std::uint8_t clients, const bool zw, const std::size_t index, const std::uint32_t value)
 {
     const auto channel   = static_cast<std::uint32_t>(index / 2);
     const auto dimension = static_cast<std::uint32_t>((zw ? 2 : 0) + index % 2);
-    // The top two bits accepted by the raw macro select a thread, not a counter value.
-    require(value <= SingleCounterValueMax && TT_SETADC_VALID(clients, channel, dimension, value));
+    // SETADC's top two operand bits select a thread; Y/Z/W storage is narrower still.
+    const auto value_max = dimension == 0 ? SingleXCounterValueMax : SingleYZWCounterValueMax;
+    require(value <= value_max && TT_SETADC_VALID(clients, channel, dimension, value));
     return TT_OP_SETADC(clients, channel, dimension, value);
 }
 
+/**
+ * @brief Encode both X assignments with SETADCXX, placing X1 before X0 in the operand encoding.
+ *
+ * @param clients: Destination client bitmask.
+ * @param group: X/Y group supplying channel 0 X and channel 1 X; Y fields are ignored.
+ * @return The encoded SETADCXX instruction.
+ * @note Select both X counters and supply each value in [0, 1023].
+ *       SETADCXX also writes both X CR shadows, as modeled by the
+ *       [Blackhole simulator](https://github.com/tenstorrent/ttsim/blob/464814f86583af9def3cf1643e58236ead759ae9/src/tensix.cpp#L3501-L3512).
+ */
 inline __attribute__((always_inline)) constexpr std::uint32_t xx(const std::uint8_t clients, const Group& group)
 {
     // SETADCXX takes Channel1 first, then Channel0.
@@ -206,6 +312,17 @@ inline __attribute__((always_inline)) constexpr std::uint32_t xx(const std::uint
     return TT_OP_SETADCXX(clients, group.value(2), group.value(0));
 }
 
+/**
+ * @brief Encode one three-bit packed set, live increment, or CR advance-and-reload instruction.
+ *
+ * @param clients: Destination client bitmask.
+ * @param zw: True for the Z/W group; false for X/Y.
+ * @param action: Select SETADCXY/ZW, INCADCXY/ZW, or ADDRCRXY/ZW.
+ * @param group: Counter selection and values; each selected value must be in [0, 7].
+ * @return The encoded instruction for the requested group and action.
+ * @note Set and AdvanceAndReset use a write mask. Increment has no mask: omitted slots encode
+ *       zero increments, preserving their live counters and CR shadows.
+ */
 inline __attribute__((always_inline)) constexpr std::uint32_t packed(const std::uint8_t clients, const bool zw, const Action action, const Group& group)
 {
     const auto a    = group.value(0);
@@ -226,7 +343,16 @@ inline __attribute__((always_inline)) constexpr std::uint32_t packed(const std::
     return zw ? TT_OP_ADDRCRZW(clients, d, c, b, a, mask) : TT_OP_ADDRCRXY(clients, d, c, b, a, mask);
 }
 
-/** @brief Encode one SETADC for a singleton, otherwise one masked packed set. */
+/**
+ * @brief Encode one SETADC for a singleton, otherwise one masked packed set.
+ *
+ * @param clients: Destination client bitmask.
+ * @param zw: True for the Z/W group; false for X/Y.
+ * @param group: Nonempty counter selection.
+ * @return One encoded SETADC or SETADCXY/ZW instruction.
+ * @note Supply singleton X values in [0, 65535] or Y/Z/W values in [0, 8191].
+ *       Supply every value in a multi-counter group in [0, 7].
+ */
 inline __attribute__((always_inline)) constexpr std::uint32_t set_group(const std::uint8_t clients, const bool zw, const Group& group)
 {
     if (single_bit(group.mask()))
@@ -242,7 +368,16 @@ inline __attribute__((always_inline)) constexpr std::uint32_t set_group(const st
     return packed(clients, zw, Action::Set, group);
 }
 
-/** @brief Select one runtime instruction using only the action and supplied fields. */
+/**
+ * @brief Select one runtime instruction using only the action and supplied fields.
+ *
+ * @param clients: Destination client bitmask.
+ * @param zw: True for the Z/W group; false for X/Y.
+ * @param action: Counter effect to encode.
+ * @param group: Nonempty counter selection with values fitting the selected instruction.
+ * @return One encoded instruction; a Set of X0 and X1 alone uses SETADCXX.
+ * @note Runtime values never trigger a fallback to a different instruction or a split sequence.
+ */
 inline constexpr __attribute__((always_inline)) std::uint32_t runtime_operation(
     const std::uint8_t clients, const bool zw, const Action action, const Group& group)
 {
@@ -253,7 +388,15 @@ inline constexpr __attribute__((always_inline)) std::uint32_t runtime_operation(
     return !zw && group.mask() == BothXChannelsMask ? xx(clients, group) : set_group(clients, zw, group);
 }
 
-/** @brief Pack every small constant assignment together; use SETADC for larger values. */
+/**
+ * @brief Pack every small constant assignment together; use SETADC for larger values.
+ *
+ * @param clients: Destination client bitmask.
+ * @param zw: True for the Z/W group; false for X/Y.
+ * @param group: Counter assignments in [0, 65535] for X or [0, 8191] for Y/Z/W.
+ * @return Wide singleton writes followed by at most one instruction for values in [0, 7].
+ * @note Empty groups produce an empty sequence. SETADCXX is considered separately by plan_group().
+ */
 constexpr Sequence constant_sets(const std::uint8_t clients, const bool zw, const Group& group)
 {
     Sequence result;
@@ -279,6 +422,17 @@ constexpr Sequence constant_sets(const std::uint8_t clients, const bool zw, cons
     return result;
 }
 
+/**
+ * @brief Plan the instructions for one X/Y or Z/W group.
+ *
+ * @param clients: Destination client bitmask.
+ * @param zw: True for the Z/W group; false for X/Y.
+ * @param action: Counter effect to encode.
+ * @param group: Sparse counter values for the selected group.
+ * @return An empty sequence for an omitted group, otherwise the instructions implementing the update.
+ * @note Constant Set updates use the fewest instructions, preferring SETADCXX on equal counts.
+ *       Runtime updates, Increment, and AdvanceAndReset use one instruction per nonempty group.
+ */
 constexpr Sequence plan_group(const std::uint8_t clients, const bool zw, const Action action, const Group& group)
 {
     Sequence result;
@@ -317,6 +471,13 @@ constexpr Sequence plan_group(const std::uint8_t clients, const bool zw, const A
     return result;
 }
 
+/**
+ * @brief Validate and plan an entire counter update without issuing instructions.
+ *
+ * @param descriptor: Sparse counter update and destination clients.
+ * @return The X/Y sequence followed by the Z/W sequence, containing at most eight instructions.
+ * @note No supported instruction spans both groups, so their instruction counts add.
+ */
 constexpr Sequence plan(const AddrCounter& descriptor)
 {
     require(is_valid(descriptor));
@@ -327,12 +488,23 @@ constexpr Sequence plan(const AddrCounter& descriptor)
     return result;
 }
 
+/**
+ * @brief Issue one compile-time instruction through TTI_INSN.
+ *
+ * @tparam Word: Validated 32-bit instruction encoding.
+ */
 template <std::uint32_t Word>
 inline __attribute__((always_inline)) void emit()
 {
     TTI_INSN(Word);
 }
 
+/**
+ * @brief Issue selected words of a compile-time descriptor in index order.
+ *
+ * @tparam Descriptor: Valid counter update whose plan is evaluated at compile time.
+ * @tparam Indices: Valid zero-based instruction indices, normally the entire planned sequence.
+ */
 template <auto Descriptor, std::size_t... Indices>
 inline __attribute__((always_inline)) void emit(const std::index_sequence<Indices...>)
 {
@@ -340,6 +512,15 @@ inline __attribute__((always_inline)) void emit(const std::index_sequence<Indice
     (emit<sequence.words[Indices]>(), ...);
 }
 
+/**
+ * @brief Issue one runtime-encoded instruction for a nonempty counter group.
+ *
+ * @tparam ZW: True for the Z/W group; false for X/Y.
+ * @param clients: Destination client bitmask.
+ * @param action: Counter effect to issue.
+ * @param group: Sparse values satisfying runtime_operation()'s encoding limits.
+ * @note An empty group issues nothing; a nonempty group is written through TT_INSN.
+ */
 template <bool ZW>
 inline __attribute__((always_inline)) void emit_runtime(const std::uint8_t clients, const Action action, const Group& group)
 {
@@ -359,12 +540,16 @@ inline constexpr __attribute__((always_inline)) std::uint32_t AddrCounter::opera
 }
 
 /**
- * @brief Issue a constant descriptor using the fewest supported instructions.
+ * @brief Issue a compile-time counter update using immediate instructions.
  *
  * @tparam Descriptor: Sparse assignments and client mask; action selects set, increment, or carriage return.
- * @note Set may combine three-bit packed writes, ten-bit SETADCXX writes, and sixteen-bit SETADC
- *       writes. Increment and carriage-return values must fit three bits. REG2FLOP is never used.
- *       When minimum-length set sequences tie, prefer SETADCXX for the two selected X counters.
+ * @note Select at least one valid client and one counter, and supply a valid action.
+ *       Supply Set values in [0, 65535] for X or [0, 8191] for Y/Z/W.
+ *       Supply Increment and AdvanceAndReset values in [0, 7].
+ * @note Invalid descriptors are rejected at compile time. Set uses the fewest supported instructions,
+ *       combining three-bit packed writes, ten-bit SETADCXX writes, and dimension-limited SETADC writes.
+ *       Equal instruction counts favor SETADCXX for two selected X counters. X/Y instructions
+ *       precede Z/W instructions. REG2FLOP and thread overrides are not used.
  */
 template <auto Descriptor>
 inline __attribute__((always_inline)) void set()
@@ -378,10 +563,18 @@ inline __attribute__((always_inline)) void set()
  * @brief Issue a runtime-valued descriptor through the instruction buffer.
  *
  * @param descriptor: Sparse assignments and client mask, with values fitting the selected instructions.
- * @note Supply constant action, clients, and field presence for selection to fold away. A singleton
- *       uses sixteen-bit SETADC, X0+X1 alone uses ten-bit SETADCXX, and other sets use three-bit
- *       SETADCXY/ZW. Larger values needing SETADC must be supplied as separate singleton descriptors.
- *       Enable LLK assertions for range checks. Thread overrides are not supported.
+ * @note Prefer set<Descriptor>() when values are constant: it validates and splits updates at compile time.
+ *       For example, channel0 = {.x = 10, .y = 2} needs two instructions and is rejected by this overload's
+ *       LLK_ASSERT checks, whereas set<Descriptor>() issues both instructions.
+ * @note Select at least one valid client and one counter, and supply a valid action. Within each
+ *       X/Y or Z/W group, supply singleton Set values in [0, 65535] for X or [0, 8191] for Y/Z/W,
+ *       a Set of X0+X1 alone in [0, 1023] per X, and other Set selections in [0, 7] per value.
+ *       Supply Increment and AdvanceAndReset values in [0, 7].
+ * @note Issues one instruction per nonempty group, X/Y before Z/W. Supply constant action, clients,
+ *       and field presence to let selection fold away. Values do not trigger instruction splitting:
+ *       wider assignments requiring SETADC must be supplied as separate singleton descriptors.
+ *       Validation uses LLK_ASSERT; the preconditions still apply when assertions are disabled.
+ *       Thread overrides are not supported.
  */
 inline __attribute__((always_inline)) void set(const AddrCounter descriptor)
 {
