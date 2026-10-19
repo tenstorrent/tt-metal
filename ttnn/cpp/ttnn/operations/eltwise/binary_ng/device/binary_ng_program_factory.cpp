@@ -1400,16 +1400,21 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const bool block_pack =
         block_kernel &&
         (block_tiles >= 16 || std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) != OpConfig::FpuBinaryOp::MUL);
-    const bool block_unpack_mixed =
+    const auto bf16_or_bfp8 = [](tt::DataFormat f) {
+        return f == tt::DataFormat::Float16_b || f == tt::DataFormat::Bfp8_b;
+    };
+    const bool block_unpack =
         arch == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
-        std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
-        std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) != OpConfig::FpuBinaryOp::MUL &&
-        !has_operand_activations && !has_post_activations && num_tiles_per_cycle > 1 &&
-        compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
-        a_data_format == tt::DataFormat::Bfp8_b &&
-        (b_data_format == tt::DataFormat::Float16_b || b_data_format == tt::DataFormat::Bfp8_b) &&
-        (c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Bfp8_b) && block_tiles >= 4;
-    if (block_pack || block_unpack_mixed) {
+        std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) && !has_operand_activations &&
+        !has_post_activations && num_tiles_per_cycle > 1 &&
+        compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast && bf16_or_bfp8(a_data_format) &&
+        bf16_or_bfp8(b_data_format) && bf16_or_bfp8(c_data_format) &&
+        // a bf16 and a bfp8_b operand add or subtract unpack bound (the 8-bit stall), so the whole-tile wait shows below 16 tiles
+        block_tiles >= ((a_data_format != b_data_format &&
+                         std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) != OpConfig::FpuBinaryOp::MUL)
+                            ? 16u
+                            : 4u);
+    if (block_pack || block_unpack) {
         compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
     }
     if (block_pack) {
