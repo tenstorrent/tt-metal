@@ -262,6 +262,7 @@ class SFTTrainer:
                 ttml.autograd.AutoContext.get_instance().reset_graph()
 
             if self._grad_sync_axes:
+                ttnn.synchronize_device(ttml.autograd.AutoContext.get_instance().get_device())
                 ttml.sync_gradients(self.model.parameters(), axis_names=self._grad_sync_axes)
 
             for cb in list(self._callbacks):

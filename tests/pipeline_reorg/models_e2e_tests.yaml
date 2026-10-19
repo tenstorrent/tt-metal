@@ -1978,6 +1978,19 @@
   team: train
   budget_type: e2e
 
+- name: Galaxy Deepseek MoE 16B TP=8 DP=4 train e2e tests
+  cmd: |
+    tt-train/scripts/ci/run_galaxy_e2e.sh deepseek_moe_16b_tp8_dp4
+  model: "[tt-train] deepseek_moe_16b_tp8_dp4"
+  skus:
+    bh_sc1_high_power:
+      timeout: 75
+      tier: 3
+      release_ready: false
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  budget_type: e2e
+
 - name: Galaxy Llama 8B TP=8 DDP=4 train e2e tests
   cmd: |
     tt-train/scripts/ci/run_galaxy_e2e.sh llama_8b_tp8_ddp4_shakespeare
