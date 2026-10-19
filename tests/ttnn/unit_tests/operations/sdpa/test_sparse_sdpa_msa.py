@@ -222,6 +222,60 @@ def test_msa_native_kv_cache_gqa_group_boundary(device):
     _assert_kv_cache_parity(device, q, k, v, indices, kv_dtype=ttnn.bfloat8_b)
 
 
+def _rect(x0, y0, x1, y1):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1))})
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("enable_kv_block_cache", [False, True], ids=["stream", "kv_cache"])
+@pytest.mark.parametrize("causal", [False, True], ids=["noncausal", "causal"])
+def test_msa_native_sub_core_grids_bit_identical(device, enable_kv_block_cache, causal):
+    # sub_core_grids only moves the contiguous work split onto another rectangle of cores: a sub-rectangle at a non-zero
+    # origin (the compute side of a sub-device carve that leaves the bottom rows and the first column to a
+    # collective) must reproduce the full-grid output bit for bit. The rectangle is hashed: each one is its own
+    # program and a repeat on it hits that program.
+    grid = device.compute_with_storage_grid_size()
+    d, H, n_kv, S, nblk = _D, 64, 4, 320, 24
+    T = nblk * BLK_KV
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk=16, d=d, causal=causal, seed=41)
+    kw = dict(kv_dtype=ttnn.bfloat8_b, enable_kv_block_cache=enable_kv_block_cache)
+    if causal:
+        kw["chunk_start_idx"] = 0
+    device.clear_program_cache()
+    full = run_op_msa_native(q, k, v, indices, device, **kw)
+    entries = device.num_program_cache_entries()
+    rects = [_rect(0, 0, grid.x - 1, grid.y - 3), _rect(1, 1, grid.x - 1, grid.y - 3)]
+    for rect in rects:
+        sub = run_op_msa_native(q, k, v, indices, device, sub_core_grids=rect, **kw)
+        assert torch.equal(full, sub), f"sub_core_grids {rect} is not byte-identical to the full grid"
+    assert device.num_program_cache_entries() == entries + len(rects), "each rectangle is its own program"
+    again = run_op_msa_native(q, k, v, indices, device, sub_core_grids=rects[-1], **kw)
+    assert device.num_program_cache_entries() == entries + len(rects), "a repeat on a rectangle must hit"
+    assert torch.equal(full, again)
+    gold = sparse_attention_ref_msa(q, k, v, indices, d**-0.5, causal=causal)
+    assert pcc(full, gold) > DEVICE_PCC
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("bad", ["two_ranges", "past_grid"], ids=["two_ranges", "past_grid"])
+def test_msa_native_sub_core_grids_rejected(device, bad, expect_error):
+    grid = device.compute_with_storage_grid_size()
+    d, H, S, nblk = _D, 16, 8, 16
+    T = nblk * BLK_KV
+    q, k, v, indices = make_msa_inputs(H, 1, S, T, 16, d, causal=False, seed=1)
+    if bad == "two_ranges":
+        rect = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(grid.x - 1, 2)),
+            }
+        )
+    else:
+        rect = _rect(0, 0, grid.x, grid.y - 1)
+    with expect_error(RuntimeError, "sub_core_grids"):
+        run_op_msa_native(q, k, v, indices, device, sub_core_grids=rect)
+
+
 @run_for_blackhole()
 def test_msa_native_kv_cache_program_cache(device):
     # Off and on differ in CB layout and kernel constants, so they are distinct programs, and a repeated on call

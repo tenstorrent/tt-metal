@@ -193,6 +193,7 @@ def run_msa(
     compute_kernel_config=None,
     cache_batch_idx=None,
     kv_len=None,
+    sub_core_grids=None,
 ):
     """Run indexer_score_msa (raw dot, constant `scale` gate, per-group planes) and return torch.
 
@@ -204,6 +205,8 @@ def run_msa(
         persistent["cache_batch_idx"] = cache_batch_idx
     if kv_len is not None:
         persistent["kv_len"] = kv_len
+    if sub_core_grids is not None:
+        persistent["sub_core_grids"] = sub_core_grids
     out = ttnn.experimental.indexer_score_msa(
         to_device(q, device, dtype=q_dtype),
         to_device(k, device, dtype=k_dtype),
@@ -668,6 +671,51 @@ def test_indexer_score_msa_compute_paths(device, q_chunk, k_chunk, head_group):
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)  # MSA's constant gate = scale
     ref = indexer_score_msa_ref(q, k, w_scale, chunk_start)
     assert_indexer_match(out, ref, sq, t)
+
+
+def _rect(x0, y0, x1, y1):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1))})
+
+
+def test_indexer_score_msa_sub_core_grids_bit_identical(device):
+    """sub_core_grids plans the banded schedule over a rectangle at a non-zero origin (the compute sub-device
+    of a carve that keeps the bottom rows for a collective): the scores must equal the full grid's bit for
+    bit. The rectangle is hashed, so each one is its own program and a repeat on it hits that program."""
+    grid = device.compute_with_storage_grid_size()
+    heads, num_groups, dim, sq, t = 4, 4, GLX_DIM, 256, 4096
+    chunk_start, scale = 1024, GLX_DIM**-0.5
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    common = dict(scale=scale, num_groups=num_groups, block_size=BLOCK_POOL_BS, program_config=cfg)
+    device.clear_program_cache()
+    full = run_msa(q, k, chunk_start, device, **common)
+    entries = device.num_program_cache_entries()
+    rects = [_rect(0, 0, grid.x - 1, grid.y - 3), _rect(1, 1, grid.x - 1, grid.y - 3)]
+    for rect in rects:
+        sub = run_msa(q, k, chunk_start, device, sub_core_grids=rect, **common)
+        assert torch.equal(full, sub), f"sub_core_grids {rect} is not bit-identical to the full grid"
+    assert device.num_program_cache_entries() == entries + len(rects), "each rectangle is its own program"
+    again = run_msa(q, k, chunk_start, device, sub_core_grids=rects[-1], **common)
+    assert device.num_program_cache_entries() == entries + len(rects), "a repeat on a rectangle must hit"
+    assert torch.equal(full, again)
+
+
+@pytest.mark.parametrize("bad", ["two_ranges", "past_grid"], ids=["two_ranges", "past_grid"])
+def test_indexer_score_msa_sub_core_grids_rejected(device, bad, expect_error):
+    grid = device.compute_with_storage_grid_size()
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+    q, k, _ = make_inputs(MINI["heads"], MINI["dim"], MINI["sq"], MINI["t"])
+    if bad == "two_ranges":
+        rect = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(grid.x - 1, 2)),
+            }
+        )
+    else:
+        rect = _rect(0, 0, grid.x, grid.y - 1)
+    with expect_error(RuntimeError, "sub_core_grids"):
+        run_msa(q, k, 128, device, program_config=cfg, sub_core_grids=rect)
 
 
 def test_indexer_score_dsa_msa_differ(device):

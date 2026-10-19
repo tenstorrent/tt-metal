@@ -487,6 +487,9 @@ void bind_sdpa(nb::module_& mod) {
                 a later query on the same core is read from L1 instead of DRAM; output is byte-identical either
                 way. The slot count is sized per call from the free L1 (an estimate, not a reservation) and baked
                 into the program, so a trace replays the count it captured unchecked. Default False.
+            sub_core_grids (ttnn.CoreRangeSet, optional): one rectangle of worker cores; default the whole compute
+                grid. Lets the op share the chip with a collective on the other cores (sub-device overlap). The
+                work split is the same contiguous partition over the rectangle's cores; the output is unchanged.
 
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
@@ -508,7 +511,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none(),
-        nb::arg("enable_kv_block_cache") = false);
+        nb::arg("enable_kv_block_cache") = false,
+        nb::arg("sub_core_grids") = nb::none());
 
     const auto* const chunked_doc =
         R"doc(
