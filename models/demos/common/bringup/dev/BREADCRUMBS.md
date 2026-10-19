@@ -1363,3 +1363,10 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F117 (owner rule, 2026-10-19): weights at the checkpoint's own width (agents' rule 7): fp4 -> bfp4, fp8 -> bfp8,
   16-bit -> bf16 in the shipped defaults; the exact wider format (bfp8 / bf16) in max_precision where the narrow one
   is lossy. DeepSeek-V4.1 had widened every fp8 weight to bf16 at load (2x memory and DRAM traffic).
+
+- F114b / F119 (2026-10-19): the clean wall run times WALL_RUNS = 12 chunks and takes the median after WALL_WARM = 4
+  (chunk_wall_ms_spread records the rest's range); the harness's golden-input uploads at layer gaps (a subset's
+  non-contiguous layers) are timed apart (chunk_wall_gap_ms) and subtracted (an approximation when device-bound: the
+  device may run queued work during an upload). DeepSeek-V4.1 P.8: 3-run medians gave 861 (new, still warming: the
+  experts + combine program keys its cache on buffer addresses) vs 785 (old); 25 runs: ~546 vs ~845; the gap uploads
+  were ~280 ms of every run.
