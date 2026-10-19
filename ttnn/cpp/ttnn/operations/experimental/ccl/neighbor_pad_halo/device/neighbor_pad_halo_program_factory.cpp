@@ -349,6 +349,7 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
         // num_buffers per channel: 4 (np_num_buffers) is the measured 2x4 sweet spot (+~3pp). The mux's map goes in
         // program-local L1 (placed below, once the mux cores are known); its addresses are offsets until then.
         auto mux_cfg = tt::tt_fabric::FabricMuxConfig(
+            *mesh_device,
             /*num_full_size_channels=*/static_cast<uint8_t>(num_w_workers),
             /*num_header_only_channels=*/0,
             /*num_buffers_full_size_channel=*/np_num_buffers,
@@ -447,7 +448,8 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
                     const auto src_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                     const auto dst_id =
                         mesh_device->get_fabric_node_id(w_dir ? w_backward_coord.value() : w_forward_coord.value());
-                    auto mux_rt = mux_cfg.get_fabric_mux_run_time_args(src_id, dst_id, w_link, program, {mux_lc});
+                    auto mux_rt =
+                        mux_cfg.get_fabric_mux_run_time_args(*mesh_device, src_id, dst_id, w_link, program, {mux_lc});
                     SetRuntimeArgs(program, mux_kernel_id, {mux_lc}, mux_rt);
                 }
                 // Termination master = worker 0 of this (link,dir) group.
@@ -1264,7 +1266,13 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
         // The mux's map goes in program-local L1 (placed below, once the mux cores are known).
         auto hmux_cfg = tt::tt_fabric::FabricMuxConfig(
-            static_cast<uint8_t>(num_h_workers), 0, np_num_buffers, 0, mux_buf_size, /*base_l1_address=*/0);
+            *mesh_device,
+            static_cast<uint8_t>(num_h_workers),
+            0,
+            np_num_buffers,
+            0,
+            mux_buf_size,
+            /*base_l1_address=*/0);
 
         const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/";
         std::set<CoreRange> hw_crs, hm_crs;
@@ -1363,7 +1371,8 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     const auto src_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                     const auto dst_id =
                         mesh_device->get_fabric_node_id(dir ? backward_coord.value() : forward_coord.value());
-                    auto mux_rt = hmux_cfg.get_fabric_mux_run_time_args(src_id, dst_id, link, program, {mux_lc});
+                    auto mux_rt =
+                        hmux_cfg.get_fabric_mux_run_time_args(*mesh_device, src_id, dst_id, link, program, {mux_lc});
                     SetRuntimeArgs(program, hmux_kernel_id, {mux_lc}, mux_rt);
                 }
                 CoreCoord term_master_vc =

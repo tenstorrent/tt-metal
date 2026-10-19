@@ -420,6 +420,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     // The mux's map goes in program-local L1 rather than at a fixed address, so it stays clear of persistent L1
     // (PrefetcherPipe rings) on the mux cores. Its addresses are offsets until the mux publishes the map's base.
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        *mesh_device,
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
@@ -564,11 +565,11 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
                     if (dir) {  // forward
                         const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                         mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                            src_node_id, dst_node_id, link, desc, mux_logical_core);
+                            *mesh_device, src_node_id, dst_node_id, link, desc, mux_logical_core);
                     } else {
                         const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                         mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                            src_node_id, dst_node_id, link, desc, mux_logical_core);
+                            *mesh_device, src_node_id, dst_node_id, link, desc, mux_logical_core);
                     }
                     desc.kernels[mux_kernel_index.value()].runtime_args.emplace_back(
                         mux_logical_core, std::move(mux_rt_args));

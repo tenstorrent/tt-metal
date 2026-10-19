@@ -679,6 +679,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // The mux's map goes in program-local L1 (a circular buffer on the mux cores), so it stays clear of persistent
     // L1 there; its addresses are offsets until the mux publishes the map's base.
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        *device,
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_per_channel,
@@ -854,6 +855,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         tt::tt_metal::CoreRangeSet fsdp_mux_core_range_set = tt::tt_metal::CoreRangeSet(fsdp_mux_core_ranges);
 
         fsdp_mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+            *device,
             num_full_size_channels,
             num_header_only_channels,
             num_buffers_per_channel,
@@ -1245,11 +1247,11 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             if (dir) {  // forward
                 const auto dst_node_id = device->get_fabric_node_id(backward_coord.value());
                 mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                    src_node_id, dst_node_id, link, desc, mux_logical_core);
+                    *device, src_node_id, dst_node_id, link, desc, mux_logical_core);
             } else {
                 const auto dst_node_id = device->get_fabric_node_id(forward_coord.value());
                 mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                    src_node_id, dst_node_id, link, desc, mux_logical_core);
+                    *device, src_node_id, dst_node_id, link, desc, mux_logical_core);
             }
             desc.kernels[kMuxKernelIdx].emplace_runtime_args(mux_logical_core, as_runtime_args(mux_rt_args));
         }
@@ -1271,12 +1273,12 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
                     const auto dst_node_id = device->get_fabric_node_id(fsdp_backward_coord.value());
                     fsdp_mux_rt_args =
                         fsdp_mux_kernel_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                            src_node_id, dst_node_id, link, desc, fsdp_mux_logical_core);
+                            *device, src_node_id, dst_node_id, link, desc, fsdp_mux_logical_core);
                 } else {
                     const auto dst_node_id = device->get_fabric_node_id(fsdp_forward_coord.value());
                     fsdp_mux_rt_args =
                         fsdp_mux_kernel_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                            src_node_id, dst_node_id, link, desc, fsdp_mux_logical_core);
+                            *device, src_node_id, dst_node_id, link, desc, fsdp_mux_logical_core);
                 }
                 desc.kernels[kFsdpMuxKernelIdx].emplace_runtime_args(
                     fsdp_mux_logical_core, as_runtime_args(fsdp_mux_rt_args));

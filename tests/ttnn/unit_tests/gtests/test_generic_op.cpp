@@ -1055,14 +1055,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
     Tensor device_output_tensor_2 = ttnn::create_device_tensor(device_input_tensor_2.tensor_spec(), this->device_);
 
     // Update both per-core and common runtime args with new addresses
-    program_descriptor.kernels[0].runtime_args[0].second = {
-        device_input_tensor_2.buffer()->address(), num_tiles, 0};
-    program_descriptor.kernels[0].common_runtime_args = {
-        device_input_tensor_2.buffer()->address(), num_tiles, 0};
-    program_descriptor.kernels[1].runtime_args[0].second = {
-        device_output_tensor_2.buffer()->address(), num_tiles, 0};
-    program_descriptor.kernels[1].common_runtime_args = {
-        device_output_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[0].runtime_args[0].second = {device_input_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[0].common_runtime_args = {device_input_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[1].runtime_args[0].second = {device_output_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[1].common_runtime_args = {device_output_tensor_2.buffer()->address(), num_tiles, 0};
 
     ttnn::generic_op(std::vector{device_input_tensor_2, device_output_tensor_2}, program_descriptor);
     Tensor golden_2 = ttnn::exp(device_input_tensor_2);
@@ -1328,6 +1324,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         // The mux map goes in program-local L1 on this device's mux cores, so the config's addresses are offsets.
         // The writer waits for the address the mux publishes and adds it to them.
         tt::tt_fabric::FabricMuxConfig mux_config(
+            *mesh_device_,
             1,  // num_workers_per_direction
             0,  // num_header_only_channels
             1,  // num_buffers_per_channel
@@ -1482,12 +1479,12 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         if (has_forward) {
             const auto dst_node_id = mesh_device_->get_fabric_node_id(MeshCoordinate(0, ring_index + 1));
             fwd_mux_rt = mux_config.get_fabric_mux_run_time_args<ProgramDescriptor>(
-                src_node_id, dst_node_id, 0, program_desc, mux_fwd_core);
+                *mesh_device_, src_node_id, dst_node_id, 0, program_desc, mux_fwd_core);
         }
         if (has_backward) {
             const auto dst_node_id = mesh_device_->get_fabric_node_id(MeshCoordinate(0, ring_index - 1));
             bwd_mux_rt = mux_config.get_fabric_mux_run_time_args<ProgramDescriptor>(
-                src_node_id, dst_node_id, 0, program_desc, mux_bwd_core);
+                *mesh_device_, src_node_id, dst_node_id, 0, program_desc, mux_bwd_core);
         }
 
         // Kernel Descriptors

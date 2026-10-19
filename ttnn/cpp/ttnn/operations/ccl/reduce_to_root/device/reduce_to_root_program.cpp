@@ -85,7 +85,7 @@ inline void fabric_mux_ct_args(
     std::vector<uint32_t>& worker_ct_args) {
     worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));  // fabric_mux_num_buffers_per_channel
     worker_ct_args.push_back(
-        mux_kernel_config.get_buffer_size_bytes(channel_type));        // fabric_mux_channel_buffer_size_bytes
+        mux_kernel_config.get_buffer_size_bytes(channel_type));  // fabric_mux_channel_buffer_size_bytes
     // A mux in program-local L1 publishes its map's address in a semaphore, which its clients wait on in place of the
     // status word; every other mux address is then an offset from that address.
     worker_ct_args.push_back(
@@ -217,7 +217,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     uint32_t head_dim_v = input_num_tiles * tile_width;
     // auto q_shape = {1, 1, 8, 512} ; //{1, B, PNH, DH};
     // auto k_shape = {1, 8, 256, 512}; //{B, NKV, S, DH};
-    uint32_t PNH = 8;  // q_shape[2],
+    uint32_t PNH = 8;                            // q_shape[2],
     uint32_t DH = input_num_tiles * tile_width;  // k_shape[3];
     uint32_t DHt = DH / tile_width;
     uint32_t vDHt = use_mla ? head_dim_v / tile_width : DHt;
@@ -493,7 +493,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     // The mux's map goes in program-local L1 (a circular buffer on the mux cores), so it stays clear of persistent
     // L1 there; its addresses are offsets until the mux publishes the map's base.
     tt::tt_fabric::FabricMuxConfig mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
-        num_workers_per_direction, 0, 2, 0, buffer_size_bytes_full_size_channel, /*base_l1_address=*/0);
+        *mesh_device, num_workers_per_direction, 0, 2, 0, buffer_size_bytes_full_size_channel, /*base_l1_address=*/0);
     mux_kernel_config.place_in_program_local_l1(program, mux_core_range_set);
 
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
@@ -710,7 +710,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                 const auto src_node_id = mesh_device->get_fabric_node_id(send_coord);
                 const auto dst_node_id = mesh_device->get_fabric_node_id(receive_coord);
                 mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link_idx, program, {mux_logical_core});
+                    *mesh_device, src_node_id, dst_node_id, link_idx, program, {mux_logical_core});
                 tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
             }
         }

@@ -50,6 +50,7 @@ auto launch_mux_workers(
     // L1 there, and the program's L1 validation keeps it below L1 buffers such as carried semaphores (#56769). Its
     // addresses are offsets until the mux publishes the map's base.
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        mesh_device,
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
@@ -95,7 +96,7 @@ auto launch_mux_workers(
 
             const auto dst_node_id = mesh_device.get_fabric_node_id(neighbor_coord);
             auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                src_node_id, dst_node_id, link, desc, mux_logical_core);
+                mesh_device, src_node_id, dst_node_id, link, desc, mux_logical_core);
             tt::tt_metal::KernelDescriptor::RTArgList mux_args;
             mux_args.append(mux_rt_args);
             mux_kernel.emplace_runtime_args(mux_logical_core, mux_args);
