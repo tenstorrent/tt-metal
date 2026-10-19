@@ -1,0 +1,345 @@
+[
+  {
+    "complete": true,
+    "started_at": "2026-10-19T09:44:13.631905+00:00",
+    "git_revision": "4992bcbe35dddd76f6e804b80ef078dfd30acb1a",
+    "git_dirty": true,
+    "model": "google/gemma-4-31B-it",
+    "layers": 60,
+    "mesh": [
+      8,
+      4
+    ],
+    "chunk_size": 8192,
+    "cache_capacity": 262144,
+    "num_users": 1,
+    "prefixes": [
+      0,
+      253952
+    ],
+    "device_metric": "max per-chip first-program-start to last-program-end span; includes device op gaps",
+    "wall_metric": "host token packing/upload, metadata/RoPE staging, trace replay and synchronize; excludes sockets",
+    "baseline": "one legacy 8192-padded forward per request; packed uses one shared 8192-row forward",
+    "repeats": 7,
+    "device_repeats": 3,
+    "source": "investigations/gemma4_global_tuning_fix/results.json",
+    "results": [
+      {
+        "path": "legacy",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 0,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 111052.69161864468,
+          "min": 110966.55587194803,
+          "max": 111058.0599751569,
+          "samples": [
+            110966.55587194803,
+            111058.0599751569,
+            111052.69161864468
+          ]
+        },
+        "replay_host_us": {
+          "median": 113758.9999998454,
+          "min": 113630.37599949166,
+          "max": 113950.94901672564,
+          "samples": [
+            113758.9999998454,
+            113630.37599949166,
+            113738.0089785438,
+            113950.94901672564,
+            113739.51999121346,
+            113944.27900086157,
+            113836.39700943604
+          ]
+        },
+        "wall_us": {
+          "median": 117505.12101571076,
+          "min": 115732.12698567659,
+          "max": 119763.82799912244,
+          "samples": [
+            116155.32499854453,
+            115732.12698567659,
+            117505.12101571076,
+            118310.3360235691,
+            119763.82799912244,
+            118102.72198636085,
+            117205.21800452843
+          ]
+        },
+        "device_us_per_token": 13.556236769854086,
+        "wall_us_per_token": 14.34388684273813,
+        "profile": {
+          "chip_id": 16,
+          "span_ms": 111.0730810953435,
+          "summed_program_ms": 110.6676470631305,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 15.107938635376568,
+            "other_collectives": 27.259105507258226,
+            "matmuls": 46.186776652944644,
+            "typecast": 0.4682496960490168,
+            "kv_update": 0.8983304374142091,
+            "sliding_sdpa": 14.137371777146258,
+            "global_sdpa": 6.609874356941593
+          }
+        }
+      },
+      {
+        "path": "legacy",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 253952,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 275278.6459775124,
+          "min": 273604.22537282016,
+          "max": 277190.57839846076,
+          "samples": [
+            275278.6459775124,
+            273604.22537282016,
+            277190.57839846076
+          ]
+        },
+        "replay_host_us": {
+          "median": 292504.77501773275,
+          "min": 285928.363999119,
+          "max": 293874.99098083936,
+          "samples": [
+            285928.363999119,
+            292291.72301711515,
+            292504.77501773275,
+            290582.05397450365,
+            293420.21598131396,
+            293874.99098083936,
+            293014.9949970655
+          ]
+        },
+        "wall_us": {
+          "median": 297161.980997771,
+          "min": 289610.75900588185,
+          "max": 298814.80400217697,
+          "samples": [
+            289610.75900588185,
+            293648.701015627,
+            296310.2459907532,
+            297161.980997771,
+            297480.2809767425,
+            297439.8499936797,
+            298814.80400217697
+          ]
+        },
+        "device_us_per_token": 33.60335033905181,
+        "wall_us_per_token": 36.27465588351697,
+        "profile": {
+          "chip_id": 6,
+          "span_ms": 274.8961091486342,
+          "summed_program_ms": 274.4895324816511,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 15.061832250792762,
+            "other_collectives": 31.85846386102615,
+            "matmuls": 46.1064909254066,
+            "typecast": 0.46803820450069394,
+            "kv_update": 0.9158445387036002,
+            "sliding_sdpa": 20.097413878903897,
+            "global_sdpa": 159.9814488223174
+          }
+        }
+      },
+      {
+        "path": "packed",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 0,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 129329.5587109,
+          "min": 129273.92432831453,
+          "max": 129402.12591132287,
+          "samples": [
+            129402.12591132287,
+            129273.92432831453,
+            129329.5587109
+          ]
+        },
+        "replay_host_us": {
+          "median": 132070.86399779655,
+          "min": 132014.4689816516,
+          "max": 132168.1599947624,
+          "samples": [
+            132137.6539999619,
+            132070.86399779655,
+            132014.4689816516,
+            132168.1599947624,
+            132073.83899134584,
+            132062.43101740256,
+            132025.72602313012
+          ]
+        },
+        "wall_us": {
+          "median": 140794.85399997793,
+          "min": 139066.22701324522,
+          "max": 154237.4130222015,
+          "samples": [
+            143203.61797581427,
+            154237.4130222015,
+            140368.74199518934,
+            140794.85399997793,
+            141511.89700351097,
+            139066.22701324522,
+            139341.0419987049
+          ]
+        },
+        "device_us_per_token": 15.78729964732666,
+        "wall_us_per_token": 17.18687182616918,
+        "output_comparison": {
+          "pcc": 0.9949097037315369,
+          "rmse": 0.012453915056075465,
+          "relative_rmse": 0.10137252758437579,
+          "squared_error_sum": 6830.6337890625,
+          "reference_squared_sum": 664692.0,
+          "numel": 44040192
+        },
+        "device_speedup_vs_legacy": 0.8586798928687991,
+        "wall_speedup_vs_legacy": 0.8345839189245452,
+        "profile": {
+          "chip_id": 8,
+          "span_ms": 129.18472121026,
+          "summed_program_ms": 128.78420476198,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "copies": 110,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 15.097035585215979,
+            "other_collectives": 26.719264426527523,
+            "matmuls": 46.10455593025241,
+            "copies": 0.9474519405840345,
+            "typecast": 1.410782370601885,
+            "kv_update": 1.511285926565897,
+            "sliding_sdpa": 30.483122597379776,
+            "global_sdpa": 6.5107059848524855
+          }
+        }
+      },
+      {
+        "path": "packed",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 253952,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 293008.3747609431,
+          "min": 292865.81948557077,
+          "max": 293058.4035961444,
+          "samples": [
+            292865.81948557077,
+            293008.3747609431,
+            293058.4035961444
+          ]
+        },
+        "replay_host_us": {
+          "median": 309742.87900608033,
+          "min": 303922.1889921464,
+          "max": 310574.3030027952,
+          "samples": [
+            303922.1889921464,
+            309742.87900608033,
+            308400.1730021555,
+            309996.6319859959,
+            309858.13299776055,
+            309080.5799874943,
+            310574.3030027952
+          ]
+        },
+        "wall_us": {
+          "median": 314532.5540099293,
+          "min": 308097.2759926226,
+          "max": 318791.8399926275,
+          "samples": [
+            308097.2759926226,
+            311089.5209829323,
+            312265.2639867738,
+            315335.135004716,
+            316161.7220030166,
+            318791.8399926275,
+            314532.5540099293
+          ]
+        },
+        "device_us_per_token": 35.76762387218544,
+        "wall_us_per_token": 38.3950871594152,
+        "output_comparison": {
+          "pcc": 0.9951929450035095,
+          "rmse": 0.010342729017795017,
+          "relative_rmse": 0.09797111610582449,
+          "squared_error_sum": 4711.0693359375,
+          "reference_squared_sum": 490821.28125,
+          "numel": 44040192
+        },
+        "device_speedup_vs_legacy": 0.9394907097863812,
+        "wall_speedup_vs_legacy": 0.9447733699081275,
+        "profile": {
+          "chip_id": 6,
+          "span_ms": 293.2692170109978,
+          "summed_program_ms": 292.85967293390183,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "copies": 110,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 15.102455250792787,
+            "other_collectives": 30.095607438968106,
+            "matmuls": 46.11277093113219,
+            "copies": 0.9942927583750826,
+            "typecast": 1.3658197637728313,
+            "kv_update": 1.4884695052255008,
+            "sliding_sdpa": 34.30794090909453,
+            "global_sdpa": 163.39231637654078
+          }
+        }
+      }
+    ]
+  }
+]

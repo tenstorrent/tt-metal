@@ -1,0 +1,233 @@
+{
+  "base_revision": "4992bcbe35dddd76f6e804b80ef078dfd30acb1a",
+  "policy": "Use ring_sdpa_chunk_sizes for global attention when the per-rank Q slab is divisible by 128; otherwise retain the previous striped configuration.",
+  "full_chunk_global_config": {
+    "chunk_size": 8192,
+    "cp": 8,
+    "tp": 4,
+    "q_chunk": 96,
+    "k_chunk": 256,
+    "max_k_splits": 1,
+    "segmented_accumulation": true
+  },
+  "performance_report": "measurements.json",
+  "performance_note": "Measured before narrowing the policy to 128-row-aligned local slabs. Both variants select identical configs for the measured 8192-token requests.",
+  "tests": [
+    {
+      "nodeid": "models/demos/gemma4_d_p/tests/unit/test_prefill_configs.py",
+      "passed": 45,
+      "seconds": 5.69
+    },
+    {
+      "nodeid": "models/demos/gemma4_d_p/tests/test_packed_prefill.py::test_packed_prefill_runner[blackhole-8x4]",
+      "passed": 1,
+      "seconds": 66.07,
+      "min_pcc": 0.98,
+      "additional_request_lengths": [
+        3840,
+        4352,
+        2816,
+        5376
+      ]
+    },
+    {
+      "nodeid": "models/demos/gemma4_d_p/demo/prefill_perf.py::test_prefill_single_request_comparison[blackhole-8x4]",
+      "passed": 1,
+      "numerical_metrics_are_diagnostic": true
+    },
+    {
+      "nodeid": "models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_packed_traced[blackhole-ctx_256k-chunk8192-text-8x4]",
+      "passed": 1,
+      "seconds": 231.79
+    }
+  ],
+  "rejected_policy": {
+    "description": "Apply legacy global tuning to all sizes with quarter-slab Q rounded up to a tile for slabs <=512 rows.",
+    "failure": "Synthetic request length 4352 failed the unchanged PCC >=0.98 check.",
+    "pcc": 0.9794040964179873,
+    "previous_policy_control": "Passed all expanded synthetic schedules.",
+    "resolution": "Preserve previous tuning for intermediate 256-token lengths and retain the failing case in the regression test."
+  },
+  "full_checkpoint_validation": {
+    "passed": true,
+    "model": "google/gemma-4-31B-it",
+    "layers": 60,
+    "chunk_size": 8192,
+    "context_len": 262144,
+    "reference": "fixed-placement request isolation; legacy ring_mla for the 256k continuation",
+    "measurements": [
+      {
+        "case": "mixed trace/eager",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 559898.375,
+        "numel": 44040192
+      },
+      {
+        "case": "isolated batch 0 PrefillSegment(slot_id=0, actual_start=0, actual_end=256)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 26549.68359375,
+        "numel": 1376256
+      },
+      {
+        "case": "isolated batch 1 PrefillSegment(slot_id=0, actual_start=256, actual_end=768)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 48514.890625,
+        "numel": 2752512
+      },
+      {
+        "case": "isolated batch 2 PrefillSegment(slot_id=0, actual_start=0, actual_end=2048)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 185995.765625,
+        "numel": 11010048
+      },
+      {
+        "case": "isolated batch 0 PrefillSegment(slot_id=1, actual_start=0, actual_end=512)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 41034.62109375,
+        "numel": 2752512
+      },
+      {
+        "case": "isolated batch 2 PrefillSegment(slot_id=1, actual_start=0, actual_end=1536)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 122664.21875,
+        "numel": 8257536
+      },
+      {
+        "case": "isolated batch 3 PrefillSegment(slot_id=1, actual_start=0, actual_end=1600)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 130532.8203125,
+        "numel": 8601600
+      },
+      {
+        "case": "isolated batch 0 PrefillSegment(slot_id=2, actual_start=0, actual_end=768)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 57601.7734375,
+        "numel": 4128768
+      },
+      {
+        "case": "isolated batch 1 PrefillSegment(slot_id=2, actual_start=768, actual_end=1024)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 15242.365234375,
+        "numel": 1376256
+      },
+      {
+        "case": "isolated batch 2 PrefillSegment(slot_id=2, actual_start=0, actual_end=1024)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 70667.1484375,
+        "numel": 5505024
+      },
+      {
+        "case": "isolated batch 0 PrefillSegment(slot_id=3, actual_start=0, actual_end=1024)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 69683.6875,
+        "numel": 5505024
+      },
+      {
+        "case": "isolated batch 2 PrefillSegment(slot_id=3, actual_start=0, actual_end=768)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 54673.72265625,
+        "numel": 4128768
+      },
+      {
+        "case": "isolated batch 0 PrefillSegment(slot_id=4, actual_start=0, actual_end=1536)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 95906.640625,
+        "numel": 8257536
+      },
+      {
+        "case": "isolated batch 2 PrefillSegment(slot_id=4, actual_start=0, actual_end=512)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 38499.69921875,
+        "numel": 2752512
+      },
+      {
+        "case": "isolated batch 3 PrefillSegment(slot_id=4, actual_start=0, actual_end=257)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 22538.078125,
+        "numel": 1381632
+      },
+      {
+        "case": "isolated batch 0 PrefillSegment(slot_id=5, actual_start=0, actual_end=2048)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 124387.0703125,
+        "numel": 11010048
+      },
+      {
+        "case": "isolated batch 1 PrefillSegment(slot_id=5, actual_start=2048, actual_end=2816)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 49904.1484375,
+        "numel": 4128768
+      },
+      {
+        "case": "isolated batch 2 PrefillSegment(slot_id=5, actual_start=0, actual_end=256)",
+        "pcc": 1.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "squared_error_sum": 0.0,
+        "reference_squared_sum": 26889.1875,
+        "numel": 1376256
+      },
+      {
+        "case": "packed 262144-token continuation",
+        "pcc": 0.9927457571029663,
+        "rmse": 0.012822582634695556,
+        "relative_rmse": 0.12158201641664025,
+        "squared_error_sum": 3620.513916015625,
+        "reference_squared_sum": 244924.109375,
+        "numel": 22020096
+      }
+    ],
+    "request_segments": 248
+  }
+}

@@ -4,7 +4,7 @@
 """Per-request striped attention inside a shared projection batch."""
 
 import ttnn
-from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_prefill_program_config
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_prefill_program_config, ring_sdpa_chunk_sizes
 
 
 def _rows(tensor, start, length):
@@ -53,7 +53,14 @@ def striped_prefill_attention(attention, q, k, v, requests, compute_config):
             size for size in ((256, 128, 64, 32) if global_attention else (32,)) if cache_k.shape[2] % size == 0
         )
         grid = ccl.compute_grid_size
-        splits = 3 if query.shape[1] * (local_length // q_chunk) * 3 <= (grid.x - 1) * grid.y else 1
+        num_cores = (grid.x - 1) * grid.y
+        splits = 3 if query.shape[1] * (local_length // q_chunk) * 3 <= num_cores else 1
+        segmented = False
+        # Keep ragged slabs on divisor-Q tuning; legacy's policy is validated on 128-row-aligned slabs.
+        if global_attention and local_length % 128 == 0:
+            q_chunk, _, splits, segmented = ring_sdpa_chunk_sizes(
+                local_length, sliding=False, num_heads=query.shape[1], num_cores=num_cores
+            )
         config = ring_prefill_program_config(
             mesh.device,
             ccl,
@@ -62,6 +69,7 @@ def striped_prefill_attention(attention, q, k, v, requests, compute_config):
             k_chunk,
             max_k_splits=splits,
             matmul_math_fidelity=ttnn.MathFidelity.LoFi if global_attention else ttnn.MathFidelity.HiFi2,
+            segmented_accumulation=segmented,
         )
         key = "striped_global" if global_attention else "striped_sliding_k"
         gather_k = ccl.get_ring_gather_buffer(

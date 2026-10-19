@@ -111,6 +111,8 @@ def test_packed_prefill_runner(mesh_device, monkeypatch):
         [(0, 256, 512), (2, 768, 256), (5, 2048, 768)],
         [(5 - i, 0, length) for i, length in enumerate((256, 512, 768, 1024, 1536, 2048))],
         [(1, 0, 1600), (4, 0, 257)],
+        [(0, 0, 3840), (1, 0, 4352)],
+        [(2, 0, 2816), (3, 0, 5376)],
     ]
     total_requests = 0
     try:
