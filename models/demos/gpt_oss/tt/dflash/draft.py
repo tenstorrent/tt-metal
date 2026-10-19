@@ -13,6 +13,7 @@ sequence), the prompt context (add_prompt_context: the prompt's target features 
 ttnn ops, once per prompt) and the per-round device inputs."""
 
 import json
+import os
 from pathlib import Path
 
 import torch
@@ -23,9 +24,15 @@ from models.tt_transformers.tt.load_checkpoints import reverse_permute, reverse_
 TILE = ttnn.TILE_SIZE
 ROWS = 32  # one tile of rows: the per-round inputs hold the block's 8 rows
 DRAFT_ID = "z-lab/gpt-oss-20b-DFlash"
+# a local directory with the drafter's checkpoint, used instead of the HF cache (CI: the shared HF cache is read-only
+# and offline, so the job downloads the drafter into its own cache: tests/pipeline_reorg/models_e2e_tests.yaml)
+DRAFT_PATH_ENV = "DFLASH_DRAFT_PATH"
 
 
 def draft_snapshot():
+    """The drafter's checkpoint directory: $DFLASH_DRAFT_PATH if set, else the HF cache (downloaded on first use)."""
+    if os.getenv(DRAFT_PATH_ENV):
+        return Path(os.environ[DRAFT_PATH_ENV])
     from huggingface_hub import snapshot_download
 
     return Path(snapshot_download(DRAFT_ID))

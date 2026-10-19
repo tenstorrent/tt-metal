@@ -945,6 +945,9 @@
 - name: GPT-OSS 20B DFlash accuracy tests
   cmd: |
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
+    # the drafter is not in the shared HF cache (read-only, offline here): download it into a job-local cache
+    DFLASH_DRAFT_PATH=$(HF_HUB_OFFLINE=0 HF_HUB_CACHE=/tmp/dflash_hf python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download('z-lab/gpt-oss-20b-DFlash'))")
+    export DFLASH_DRAFT_PATH
     pytest models/demos/gpt_oss/tests/test_dflash.py -k isl_1k --timeout 1800
   model: gpt-oss-20b
   model_family: GPT-OSS
