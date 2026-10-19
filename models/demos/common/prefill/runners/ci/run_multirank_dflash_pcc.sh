@@ -80,8 +80,11 @@ DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
 #      Every one of these stays overridable -- the manifest is applied with setdefault.
 case "${MODEL}" in
   kimi27) MANIFEST="${MANIFEST_DIR}/kimi27_dflash.json" ;;
+  # Kimi-K3 with RadixArk's DSpark drafter. Same knobs as its verifier manifest plus PREFILL_DFLASH; the
+  # drafter partial rides the AttnRes handoff as one more plane, so the D2D FIFO keeps its default.
+  kimi_k3) MANIFEST="${MANIFEST_DIR}/kimi_k3_dspark.json" ;;
   *)
-    echo "unknown model key '${MODEL}' (expected kimi27 -- only Kimi-K2.7 ships a drafter)" >&2
+    echo "unknown model key '${MODEL}' (expected kimi27 or kimi_k3 -- only those ship a drafter)" >&2
     exit 2
     ;;
 esac
@@ -103,6 +106,11 @@ case "${CONFIG}" in
   sc1|sc2|sc4) ;;
   *) echo "unknown config '${CONFIG}' (expected sc1, sc2 or sc4)" >&2; exit 2 ;;
 esac
+# Kimi-K3 runs all 93 layers, which need four galaxies: the drafter taps go up to layer 83.
+if [ "${MODEL}" = kimi_k3 ] && [ "${CONFIG}" != sc4 ]; then
+  echo "kimi_k3 runs sc4 only" >&2
+  exit 2
+fi
 
 # The manifest count is the sc4 ceiling; every other SKU overrides it down -- sc1 puts all 61 layers on
 # one rank and holds far fewer users. The export has to be explicit: the rank shell receives a fixed
