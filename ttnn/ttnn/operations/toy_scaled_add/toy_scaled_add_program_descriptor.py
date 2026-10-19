@@ -12,7 +12,7 @@ Two programs, picked by how a / b / out are placed:
 
 gamma, when given, is interleaved and holds one tile-row ([..., 1, W]); every core loads it once.
 
-Arguments follow kernels/toy_scaled_add_args.hpp: what changes between calls (buffer addresses, alpha)
+Arguments follow device/kernels/toy_scaled_add_args.hpp: what changes between calls (buffer addresses, alpha)
 is in common runtime args, the work split is in per-core runtime args, and gamma's tensor accessor
 args are always passed (a placeholder without gamma) so later compile-time offsets never move.
 """
@@ -25,11 +25,12 @@ from pathlib import Path
 
 import ttnn
 
-KERNEL_DIR = Path(__file__).parent / "kernels"
+# The C++ op's kernels (root-relative, as its program factory names them): the generic version runs the same files.
+KERNEL_DIR = Path("ttnn/cpp/ttnn/operations/toy_scaled_add/device/kernels")
 
 TILE = 32
 
-# kernels/toy_scaled_add_args.hpp
+# device/kernels/toy_scaled_add_args.hpp
 CB_A = 0
 CB_B = 1
 CB_OUT = 2
@@ -85,7 +86,7 @@ def compute_config(compute_kernel_config, *tensors: ttnn.Tensor) -> ttnn.Compute
 
 
 def _leading_ct_args(width_tiles: int) -> list[int]:
-    """The compile-time args every kernel starts with (ct_arg in kernels/toy_scaled_add_args.hpp): the tiles per
+    """The compile-time args every kernel starts with (ct_arg in device/kernels/toy_scaled_add_args.hpp): the tiles per
     row. A kernel's tensor accessor args follow them."""
     return [width_tiles]
 

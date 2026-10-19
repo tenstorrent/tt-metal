@@ -13,9 +13,12 @@ set_target_properties(
             api
 )
 
-# The kernels stay with the Python package (ttnn/ttnn/operations/toy_scaled_add/kernels); this directory
-# holds the argument schema they and the program factory include.
-file(GLOB_RECURSE kernels device/kernels/*.hpp)
+# The kernels and the args header they share with the program factory.
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+)
 
 target_sources(
     ttnn_op_toy_scaled_add
@@ -41,15 +44,6 @@ install(
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/toy_scaled_add
         COMPONENT ttnn-runtime
-)
-
-# The program factory launches the kernels by their root-relative path; install them at that same path.
-file(GLOB toy_scaled_add_kernels ${PROJECT_SOURCE_DIR}/ttnn/ttnn/operations/toy_scaled_add/kernels/*.cpp)
-install(
-    FILES
-        ${toy_scaled_add_kernels}
-    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/ttnn/operations/toy_scaled_add/kernels
-    COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_toy_scaled_add FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
