@@ -15,6 +15,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.dev.layer0_run_analysis import (
     RunWriter,
     analyze,
     call_summary,
+    distributions,
     error_sums,
     load_run,
 )
@@ -62,3 +63,27 @@ def test_interrupted_run_reports_only_finished_calls(tmp_path) -> None:
     run = load_run(tmp_path)
     assert len(run["token_sums"]) == 2048 and len(run["state_sums"]) == 1 and not run["complete"]
     assert json.loads((tmp_path / "state_tokens.json").read_text()) == [2048]
+
+
+def test_distributions_hand_values() -> None:
+    # 4 tokens with golden norms 1, 1, 2, 2 and error norms 0.1, 0.2, 0.2, 0.8
+    t = np.array([[0.01, 1, 1, 1], [0.04, 1, 1, 1], [0.04, 4, 4, 4], [0.64, 4, 4, 4]], dtype=np.float64)
+    s = np.zeros((4, HEADS, 4))
+    s[..., 1] = 1.0
+    s[..., 0] = np.array([0.1, 0.2, 0.4, 0.8])[:, None] ** 2  # every head doubles its error each snapshot
+    s[3, 6, 0] = 0.9**2  # head 6 is the worst at the end
+    s[1, 5, 0] = 0.95**2  # head 5 peaks early, then recovers
+    d = distributions(t, s, [100_000, 200_000, 300_000, 400_000], floor=1e-9, windows=(1, 2))
+    own = d["overall"]["token"]["own_norm"]  # 0.1, 0.2, 0.1, 0.4
+    assert own["max"] == pytest.approx(0.4) and own["argmax"] == 3
+    assert own["p50"] == pytest.approx(0.15)
+    assert d["overall"]["token"]["span_rms"]["max"] == pytest.approx(0.8 / np.sqrt(2.5))  # RMS norm √2.5
+    pairs = d["token_windows"]["2"]
+    assert pairs["end"] == [2, 4] and pairs["own_norm"]["max"] == pytest.approx([0.2, 0.4])
+    assert pairs["own_norm"]["argmax"] == [1, 3]
+    assert pairs["span_rms"]["max"] == pytest.approx([0.2, 0.8 / np.sqrt(4)])  # window RMS norms 1 and 2
+    assert d["state_over_position"]["p50"] == pytest.approx([0.1, 0.2, 0.4, 0.8])
+    assert d["overall"]["state_final"]["worst3"][0] == [6, pytest.approx(0.9)]
+    assert d["overall"]["state_worst_snapshot"]["worst3"][0] == [5, pytest.approx(0.95)]
+    assert d["drift_per_100k_tokens"]["state_p50"]["whole"] == pytest.approx(2.0)
+    assert d["drift_per_100k_tokens"]["state_p50"]["second_half"] == pytest.approx(2.0)

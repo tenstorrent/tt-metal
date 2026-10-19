@@ -12,7 +12,10 @@ every implementation is scored with the same definitions:
 * gain ``⟨actual, golden⟩ / ⟨golden, golden⟩``: the least-squares scale of the golden in the actual output,
   below 1 when the output is too small (PCC is blind to it);
 * per head and snapshot: recurrent-state NRMSE and gain; the pooled state over heads, with and without the
-  slowest-decaying head 6; per-head means over snapshots.
+  slowest-decaying head 6; per-head means over snapshots;
+* distributions: token-error percentiles (p50/p90/p95/p99, worst) per call and per 64k window and over the run,
+  relative to each token's own norm and to the span's RMS norm; per-head state percentiles over heads per snapshot,
+  at the final snapshot and over each head's worst snapshot; drift per 100k tokens; tail spread p99 / median.
 
 Run directory layout::
 
@@ -163,15 +166,15 @@ def load_run(run_dir: Path) -> dict:
     }
 
 
-def analyze(run: dict, first_call: int = 5120) -> dict:
+def analyze(run: dict, first_call: int = 5120, windows: tuple[int, ...] = (5120, 65536)) -> dict:
     """Every metric of one run; JSON-serializable."""
     t = run["token_sums"]
     s = run["state_sums"]
     tokens = len(t)
     whole = t.sum(0)
-    windows = np.add.reduceat(t, np.arange(0, tokens, WINDOW), axis=0)
-    window_nrmse = _ratio(windows[:, 0], windows[:, 1])
-    window_gain = windows[:, 2] / windows[:, 1]
+    window_sums = np.add.reduceat(t, np.arange(0, tokens, WINDOW), axis=0)
+    window_nrmse = _ratio(window_sums[:, 0], window_sums[:, 1])
+    window_gain = window_sums[:, 2] / window_sums[:, 1]
     golden_norm = np.sqrt(t[:, 1])
     floor = 0.01 * float(np.median(golden_norm))
     token_nrmse = np.sqrt(t[:, 0]) / np.maximum(golden_norm, floor)
@@ -229,8 +232,110 @@ def analyze(run: dict, first_call: int = 5120) -> dict:
             "head_gain": {str(h): head_gain[:, h].tolist() for h in LONG_MEMORY_HEADS},
             "head_nrmse_mean_all": head_mean.tolist(),
         },
+        "distributions": distributions(t, s, run["state_tokens"], floor, windows),
     }
     return result
+
+
+PERCENTILES = (50, 90, 95, 99)
+DRIFT_TOKENS = 100_000
+
+
+def _spread(values: np.ndarray, with_max: bool) -> dict:
+    """Percentiles of ``values`` along the last axis (and the maximum with its index), as lists or floats."""
+    out = {f"p{p}": np.percentile(values, p, axis=-1) for p in PERCENTILES}
+    if with_max:
+        out["max"] = values.max(-1)
+        out["argmax"] = values.argmax(-1)
+    return {k: v.tolist() for k, v in out.items()}
+
+
+def _token_level(t: np.ndarray, floor: float, start: int = 0) -> dict:
+    """Token-error distribution of one span: per-token error relative to the token's own golden norm (floored)
+    and to the span's RMS golden norm, with the span's pooled NRMSE and gain."""
+    error = np.sqrt(t[:, 0])
+    own = _spread(error / np.maximum(np.sqrt(t[:, 1]), floor), with_max=True)
+    span_rms = _spread(error / np.sqrt(t[:, 1].mean()), with_max=True)
+    for level in (own, span_rms):
+        level["argmax"] += start
+    whole = t.sum(0)
+    return {
+        "own_norm": own,
+        "span_rms": span_rms,
+        "pooled": float(_ratio(whole[0], whole[1])),
+        "gain": float(whole[2] / whole[1]),
+    }
+
+
+def _drift(position: np.ndarray, value: np.ndarray) -> dict:
+    """Growth factor per ``DRIFT_TOKENS`` of a positive series: exp of the least-squares slope of log(value)
+    over position, fitted over the whole run and over its second half (a plateau shows as a factor near 1);
+    None where a span has fewer than two points."""
+    half = len(position) // 2
+    fit = lambda x, y: float(np.exp(np.polyfit(x, np.log(y), 1)[0] * DRIFT_TOKENS)) if len(x) > 1 else None
+    return {"whole": fit(position, value), "second_half": fit(position[half:], value[half:])}
+
+
+def distributions(
+    t: np.ndarray, s: np.ndarray, state_tokens: list[int], floor: float, windows: tuple[int, ...]
+) -> dict:
+    """Percentile view of token and per-head state error, per window over position and over the whole run.
+
+    Token error per window: percentiles and the worst token, relative to each token's own golden norm and to the
+    window's RMS golden norm. State per snapshot: percentiles over heads and the three worst heads; overall both
+    at the final snapshot and for each head's worst snapshot. Drift and tail spread (p99 / median) are taken from
+    the first window size, gain from the pooled sums.
+    """
+    tokens = len(t)
+    per_window = {}
+    for size in windows:
+        spans = [_token_level(t[a : a + size], floor, a) for a in range(0, tokens, size)]
+        merged = {
+            "end": [min(a + size, tokens) for a in range(0, tokens, size)],
+            "pooled": [w["pooled"] for w in spans],
+            "gain": [w["gain"] for w in spans],
+        }
+        for norm in ("own_norm", "span_rms"):
+            merged[norm] = {k: [w[norm][k] for w in spans] for k in spans[0][norm]}
+        per_window[str(size)] = merged
+
+    head = _ratio(s[..., 0], s[..., 1])  # [snapshots, heads]
+    worst3 = np.argsort(-head, axis=1)[:, :3]
+    state_over_position = _spread(head, with_max=False)
+    state_over_position["worst3"] = [[[int(h), float(head[i, h])] for h in row] for i, row in enumerate(worst3)]
+
+    def heads_level(values: np.ndarray) -> dict:
+        level = {k: float(v) for k, v in _spread(values, with_max=False).items()}
+        level["worst3"] = [[int(h), float(values[h])] for h in np.argsort(-values)[:3]]
+        return level
+
+    calls = per_window[str(windows[0])]
+    end = np.asarray(calls["end"], dtype=np.float64)
+    own = calls["own_norm"]
+    drift = {f"token_{k}": _drift(end, np.asarray(own[k])) for k in (*(f"p{p}" for p in PERCENTILES), "max")}
+    drift["token_pooled"] = _drift(end, np.asarray(calls["pooled"]))
+    state_end = np.asarray(state_tokens, dtype=np.float64)
+    drift.update(
+        {f"state_{k}": _drift(state_end, np.asarray(v)) for k, v in state_over_position.items() if k[0] == "p"}
+    )
+
+    overall = _token_level(t, floor)
+    for norm in ("own_norm", "span_rms"):
+        overall[norm] = {k: v if isinstance(v, int) else float(v) for k, v in overall[norm].items()}
+    return {
+        "percentiles": list(PERCENTILES),
+        "token_floor": floor,
+        "token_windows": per_window,
+        "state_over_position": {"tokens": state_tokens, **state_over_position},
+        "overall": {
+            "token": overall,
+            "token_tail_spread": overall["own_norm"]["p99"] / overall["own_norm"]["p50"],
+            "state_final": heads_level(head[-1]),
+            "state_worst_snapshot": heads_level(head.max(0)),
+        },
+        "tail_spread_over_position": (np.asarray(own["p99"]) / np.asarray(own["p50"])).tolist(),
+        "drift_per_100k_tokens": drift,
+    }
 
 
 HEADLINE = (
