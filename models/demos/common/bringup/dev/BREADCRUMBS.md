@@ -1321,3 +1321,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F109: a task waiting for a person no longer stops the run when other runnable tasks exist and the waiting task has
   nothing uncommitted in the tree (another task's commit would take it along); its dependents stay blocked. Owner:
   run P.5 regardless of the P.4 decision.
+
+- F110: a gate whose commit git refuses (a pre-commit hook) is FAIL with the hook's output as its reason, not PASS
+  with the change uncommitted. DeepSeek-V4.1 P.5: prefer-expect-error refused the accept gate's commit, the
+  orchestrator crashed with P.5 marked PASS.
