@@ -9,9 +9,9 @@ What changed in this release is in `RELEASE_NOTES.md`.
 
 | | |
 |---|---|
-| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-1fa9922-84b529b` |
+| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-9bf06a9-84b529b` |
 | Size | 22.4 GB on disk (5.7 GB compressed), built 2026-10-19 |
-| tt-metal | `1fa9922c4b17cd1b81dea18b26a12320355f6d51` |
+| tt-metal | `9bf06a94a0311c26fd89a545b9ba62bee10edd37` |
 | tt-inference-server | `84b529b9afdeaa12c230523c1c90ed2c307b18bf` |
 | vllm-tt-plugin | `ff71d290df8e95e5e956d49ba860478db2cb034c` |
 | vLLM | 0.31.0 (torch 2.11.0+cpu, transformers 5.12.1) |
@@ -74,7 +74,7 @@ It is 131,584 by default and 262,144 in the 16-user long-context spec.
 `docker run` pulls it on first use.
 
 ```bash
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-1fa9922-84b529b
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-9bf06a9-84b529b
 docker pull $IMAGE
 ```
 
@@ -85,7 +85,7 @@ export CKPT=/path/to/deepseek-v41-flash        # the checkpoint (read-only for t
 export CACHE=/path/to/dsv41_cache              # weights/ and kernels/, reused across starts
 export STATE=/path/to/dsv41_state              # scratch dirs the server writes to
 export SPEC=$PWD/assets/runtime_spec_b16_k5_262144_vision.json   # run from models/demos/blackhole/deepseek_v41_flash/ in tt-metal
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-1fa9922-84b529b
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-9bf06a9-84b529b
 
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
 
