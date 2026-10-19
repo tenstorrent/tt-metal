@@ -4,8 +4,17 @@
 import pytest
 import test_eltwise_binary_sfpu as _func
 from helpers.constraints import distinct_dest_accumulation_modes
-from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
-from helpers.param_config import parametrize
+from helpers.format_config import DataFormat
+from helpers.llk_params import (
+    ApproximationMode,
+)
+from helpers.llk_params import BroadcastType as LlkBroadcastType
+from helpers.llk_params import (
+    DestAccumulation,
+    DstRoundingMode,
+    MathOperation,
+)
+from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 
 _PERF_AXES = dict(
@@ -19,23 +28,6 @@ _PERF_AXES = dict(
 _ATAN2_PERF_AXES = {
     **_PERF_AXES,
     "approx_mode": [ApproximationMode.Yes, ApproximationMode.No],
-}
-
-_PERF_EXCLUDED_MATHOPS = {
-    # TODO(#58145): profiler register pressure prevents a production-equivalent build.
-    MathOperation.SfpuDivInt32,
-    MathOperation.SfpuDivInt32Floor,
-}
-
-# A functional sweep dict shared below becomes perf cases, times the run types.
-# Narrow it here when a point should stay functional-only, as with the ops below.
-_INT_UNIFORM_PERF_SWEEP = {
-    **_func.INT_UNIFORM_SWEEP,
-    "mathop": [
-        mathop
-        for mathop in _func.INT_UNIFORM_SWEEP["mathop"]
-        if mathop not in _PERF_EXCLUDED_MATHOPS
-    ],
 }
 
 
@@ -92,6 +84,120 @@ def test_perf_eltwise_binary_sfpu_float(
         dest_acc,
         mathop,
         bcast_dim,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+# NearestEven only. Default is already the float sweep, and a second Default row duplicates its key.
+_BF16_RNE_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    bcast_dim=[LlkBroadcastType.None_],
+    mathop=[
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
+        MathOperation.SfpuElwrsub,
+    ],
+    dest_acc=[DestAccumulation.No],
+    dst_rounding=[DstRoundingMode.NearestEven],
+)
+
+
+@pytest.mark.perf
+@parametrize(
+    **_BF16_RNE_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_bf16_rne(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    bcast_dim,
+    dst_rounding,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_float(
+        formats,
+        dest_acc,
+        mathop,
+        bcast_dim,
+        dst_rounding_mode=dst_rounding,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+# [64, 32] is one in0/in1 pair: one result tile, production depth 1.
+# [128, 32] is two pairs: sharded depth 2. Add and mul only.
+_SHALLOW_SWEEP = dict(
+    formats=input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float32],
+        same=True,
+    ),
+    bcast_dim=[LlkBroadcastType.None_],
+    mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwmul],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 32], [128, 32]],
+)
+
+
+@pytest.mark.perf
+@parametrize(
+    **_distinct_dest_acc(_SHALLOW_SWEEP),
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_float_shallow(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    bcast_dim,
+    input_dimensions,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_float(
+        formats,
+        dest_acc,
+        mathop,
+        bcast_dim,
+        input_dimensions=input_dimensions,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.MIXED_FORMAT_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_mixed_format(
+    perf_report,
+    formats,
+    mathop,
+    dest_acc,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_mixed_format(
+        formats,
+        mathop,
+        dest_acc,
         **_perf_kwargs(
             perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
         ),
@@ -358,7 +464,7 @@ def test_perf_eltwise_binary_sfpu_bitwise(
 
 @pytest.mark.perf
 @parametrize(
-    **_INT_UNIFORM_PERF_SWEEP,
+    **_func.INT_UNIFORM_SWEEP,
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_int_uniform(
@@ -480,6 +586,30 @@ def test_perf_eltwise_binary_sfpu_bcast(
         bcast_dim,
         mathop,
         dest_acc,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.QUANT_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_quant(
+    perf_report,
+    mathop,
+    sign_magnitude,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_quant(
+        mathop,
+        sign_magnitude,
         **_perf_kwargs(
             perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
         ),

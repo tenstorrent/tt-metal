@@ -130,13 +130,11 @@ void kernel_main() {
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
-#if !SRC_BCAST
+#if !SRC_BCAST && !SRC_SHARDED
                             cb_src.reserve_back(onetile);
-#if !SRC_SHARDED
                             noc.async_read(
                                 src, cb_src, src_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
                             noc.async_read_barrier();
-#endif
                             cb_src.push_back(onetile);
 #endif
 #if !SRC_BCAST_B && !SRC_SHARDED_B

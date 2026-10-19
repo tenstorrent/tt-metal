@@ -165,6 +165,12 @@ bool bf16_dest_softplus();
 template <int ITERATIONS>
 void calculate_softplus_bf16();
 void init_softplus_bf16();
+// The param0 the generated softplus kernel is fitted for, as FP32 bits; any other param0 runs the stock kernel.
+inline constexpr std::uint32_t softplus_bf16_param0_bits = 0x3f800000u;
+// The param1 the generated softplus kernel is fitted for, as FP32 bits; any other param1 runs the stock kernel.
+inline constexpr std::uint32_t softplus_bf16_param1_bits = 0x3f800000u;
+// The param2 the generated softplus kernel is fitted for, as FP32 bits; any other param2 runs the stock kernel.
+inline constexpr std::uint32_t softplus_bf16_param2_bits = 0x41a00000u;
 // Whether BF16 DEST runs the generated softplus kernel as one call over the whole tile.
 inline constexpr bool softplus_bf16_whole_tile = true;
 // Sets up the generated BF16 softplus kernel for the instance it serves.
@@ -178,7 +184,8 @@ inline void softplus_bf16_tile_init() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
     if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
-        if (bf16_dest_softplus() && param0 == 0x3f800000u && param1 == 0x3f800000u && param2 == 0x41a00000u) {
+        if (bf16_dest_softplus() && param0 == ckernel::sfpu::softplus_bf16_param0_bits &&
+            param1 == ckernel::sfpu::softplus_bf16_param1_bits && param2 == ckernel::sfpu::softplus_bf16_param2_bits) {
             calculate_softplus_bf16<ITERATIONS>();
             return;
         }

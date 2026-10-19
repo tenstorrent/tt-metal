@@ -123,6 +123,12 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
  *       vConstNeg1/LREG11 == -1.0, re-established per launch by @ref _init_sfpu_config_reg_, so there
  *       is no op-specific init step to pair with.
  */
+// The param0 the generated softplus kernel is fitted for, as FP32 bits; any other param0 runs the stock kernel.
+inline constexpr std::uint32_t softplus_bf16_param0_bits = 0x3f800000u;
+// The param1 the generated softplus kernel is fitted for, as FP32 bits; any other param1 runs the stock kernel.
+inline constexpr std::uint32_t softplus_bf16_param1_bits = 0x3f800000u;
+// The param2 the generated softplus kernel is fitted for, as FP32 bits; any other param2 runs the stock kernel.
+inline constexpr std::uint32_t softplus_bf16_param2_bits = 0x41a00000u;
 // Whether BF16 DEST runs the generated softplus kernel as one call over the whole tile.
 inline constexpr bool softplus_bf16_whole_tile = false;
 // The stock softplus kernel needs no BF16 setup.
