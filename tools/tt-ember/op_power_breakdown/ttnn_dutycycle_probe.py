@@ -15,24 +15,18 @@ sample interval to far above it. If the duty cycle is already high, dynamic powe
 across sizes and the original per-op numbers stand. If power climbs with call duration, the
 short-call measurements were diluted and by how much.
 
-Emits tt-ember's summary rows, so it is driven by unmodified auto.py.
+Emits tt-ember's summary rows (with ttnn_ops_workload.py's helpers), so it is driven by
+unmodified auto.py, like the workload. It runs on device 0.
 """
 import argparse
-import os
 import sys
 import time
-from datetime import datetime
 
-if not os.environ.get("TT_METAL_HOME"):
-    sys.stderr.write("TT_METAL_HOME is not set.\n")
-    raise SystemExit(2)
+# Checks TT_METAL_HOME and imports ttnn and torch.
+import ttnn_ops_workload as wl  # noqa: E402
 
-import torch  # noqa: E402
-import ttnn  # noqa: E402
-
-
-def now_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+torch = wl.torch
+ttnn = wl.ttnn
 
 
 def build_cases(device):
@@ -55,54 +49,26 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target-seconds", type=float, default=4.0)
     ap.add_argument("--pause-seconds", type=float, default=5.0)
-    ap.add_argument("--device-id", type=int, default=0)
     args = ap.parse_args()
 
     print("=== Duty-cycle probe: power vs per-call duration ===", flush=True)
-    device = ttnn.open_device(device_id=args.device_id)
+    device = ttnn.open_device(device_id=0)
     rows = []
     try:
         for idx, (name, fn, flops) in enumerate(build_cases(device), start=1):
             if idx > 1:
                 time.sleep(args.pause_seconds)
 
-            fn()
-            ttnn.synchronize_device(device)
-            t0 = time.perf_counter()
-            for _ in range(3):
-                fn()
-            ttnn.synchronize_device(device)
-            per_iter = (time.perf_counter() - t0) / 3
-            iters = max(1, int(args.target_seconds / per_iter))
-
+            iters = max(1, int(args.target_seconds / wl.time_call(fn, device)))
             print(f"# OP {idx} {name} iters={iters} flops_per_iter={flops}", flush=True)
-            ttnn.synchronize_device(device)
-            start = now_str()
-            t0 = time.perf_counter()
-            for _ in range(iters):
-                fn()
-            ttnn.synchronize_device(device)
-            elapsed = time.perf_counter() - t0
-            end = now_str()
-
+            elapsed, start, end = wl.run_interval(fn, device, iters)
             tflops = (flops * iters / elapsed / 1e12) if flops else 0.0
-            rows.append((idx, iters, elapsed, tflops, elapsed / iters * 1000.0, start, end))
+            rows.append((idx, iters, elapsed, tflops, start, end))
             print(f"# DONE {name}: {elapsed/iters*1e6:.1f} us/call over {iters} iters", flush=True)
     finally:
         ttnn.close_device(device)
 
-    print()
-    print(
-        f"{'Grid':>8} {'Cores':>7} {'Iters':>10} {'Time [s]':>12} {'TFLOPS':>10} "
-        f"{'Per iter [ms]':>16} {'Start Time':>27} {'End Time':>27}"
-    )
-    for idx, iters, elapsed, tflops, per_iter_ms, start, end in rows:
-        print(
-            f"{f'{idx}x1':>8} {idx:>7} {iters:>10} {elapsed:>12.6f} {tflops:>10.2f} "
-            f"{per_iter_ms:>16.6f} {start:>27} {end:>27}"
-        )
-    print()
-    print("Test Passed")
+    wl.emit_summary_rows(rows)
     return 0
 
 
