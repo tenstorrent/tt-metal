@@ -65,7 +65,10 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
     monkeypatch.setenv("TT_V41_CHUNK", str(chunk))
     monkeypatch.setenv("TT_V41_LAYERS", ",".join(str(l) for l in layers))
     trace_prefill = os.environ.get("V41_GEN_TRACE_PREFILL", "0") == "1"
-    monkeypatch.setenv("TT_V41_TRACE_PREFILL_LENGTHS", str(prompt) if trace_prefill else "")
+    if trace_prefill:
+        monkeypatch.setenv("TT_V41_TRACE_PREFILL_LENGTHS", str(prompt))
+    elif "TT_V41_TRACE_PREFILL_LENGTHS" not in os.environ:  # an explicit list in the environment is kept
+        monkeypatch.setenv("TT_V41_TRACE_PREFILL_LENGTHS", "")
     if resolve_checkpoint() is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
     max_seq_len = prompt + steps + 64

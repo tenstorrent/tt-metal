@@ -53,6 +53,7 @@ PREFILL_SLOTS = "TT_V41_PREFILL_SLOTS"  # prefill states (default 2): requests p
 # lengths run eagerly, or are captured on their first request when ``TT_V41_TRACE_PREFILL_ON_MISS=1``.
 TRACE_PREFILL_LENGTHS = "TT_V41_TRACE_PREFILL_LENGTHS"
 TRACE_PREFILL_ON_MISS = "TT_V41_TRACE_PREFILL_ON_MISS"
+TRACE_PREFILL_SLACK = "TT_V41_TRACE_PREFILL_SLACK"  # also capture each listed length +- this many tokens (1)
 # ``TT_V41_PREFILL_GENERIC=1`` (transformer.PREFILL_GENERIC): the prefill states are position-generic and the trace
 # phase captures one ``V41GenericPrefillTrace`` per state (one capture per score-width bucket), so prompts of any
 # length longer than one chunk replay captures for every chunk but the final one. The per-length captures above
@@ -125,7 +126,12 @@ class DeepseekV41ForCausalLM:
         self.prefill_buffers: dict = {}
         self.prefill_traced = False
         spec = os.environ.get(TRACE_PREFILL_LENGTHS, "").strip()
-        self.trace_lengths = sorted({int(x) for x in spec.split(",") if x.strip()})
+        listed = sorted({int(x) for x in spec.split(",") if x.strip()})
+        # each listed length and its neighbours: the benchmark's synthetic prompts miss a registered length by a
+        # token now and then (a quarter of the requests at some points, each paying an eager
+        # final chunk of 1.7 s), and a capture is exact in its valid length
+        slack = int(os.environ.get(TRACE_PREFILL_SLACK, "1"))
+        self.trace_lengths = sorted({n + d for n in listed for d in range(-slack, slack + 1)})
         # with the generic trace, lengths past one chunk get their final chunk captured (generic in its start)
         # instead of a per-length capture of every chunk
         self.trace_on_miss = os.environ.get(TRACE_PREFILL_ON_MISS, "0") == "1"
