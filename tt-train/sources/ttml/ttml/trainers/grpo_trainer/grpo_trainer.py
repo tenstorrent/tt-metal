@@ -27,7 +27,6 @@ import ttnn
 from ttml import checkpointing
 from ttml.common.schedulers import CosineAnnealingScheduler, LinearScheduler, SequentialScheduler
 from ttml.common.utils import (
-    build_causal_mask,
     create_optimizer,
     deallocate_tensors,
     resolve_pad_token_id,
@@ -1492,7 +1491,7 @@ class GRPOTrainer:
         )
         # Per-device row count after sharding: correct for DDP, FSDP and single device alike.
         B_local = int(x.shape()[0])
-        logits = self.model(x, build_causal_mask(Tp, device=True))
+        logits = self.model(x, None)
         tgt = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._dp_mapper)
         nlog = ttml.ops.loss.cross_entropy_loss(logits, tgt, ttml.ops.ReduceType.NONE)
         return ttml.ops.reshape.reshape(nlog, [B_local, Tp])
