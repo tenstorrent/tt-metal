@@ -1023,7 +1023,8 @@ def get_dispatch_input_mesh_mapper(mesh_device, sp_axis: int):
     """
     Create mesh mapper for dispatch input tensors (x, weights, indices).
 
-    These tensors are sharded across the SP axis and replicated across EP ranks.
+    These tensors are sharded across the SP axis and replicated across EP ranks: tensor dim 0
+    (dispatch_group_size) goes on mesh axis `sp_axis`.
 
     Args:
         mesh_device: TTNN mesh device
@@ -1032,10 +1033,11 @@ def get_dispatch_input_mesh_mapper(mesh_device, sp_axis: int):
     Returns:
         ShardTensor2dMesh mapper configured for dispatch inputs
     """
+    assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
     return ttnn.ShardTensor2dMesh(
         mesh_device,
         mesh_shape=mesh_device.shape,
-        dims=(sp_axis, None),
+        dims=(0, None) if sp_axis == 0 else (None, 0),
     )
 
 
