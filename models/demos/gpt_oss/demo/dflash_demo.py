@@ -11,7 +11,7 @@ one small result per round.
 Prompt: a chat-template user turn with the book of models/tt_transformers/demo/sample_prompts/input_data_long_128k.json
 (Frankenstein, Gutenberg #84) and that file's question about it, the book cut to the requested prompt length; past its
 end (130,752 tokens) a second book follows (Pride and Prejudice, Gutenberg #1342). Both are downloaded on first use
-(the demo skips without network access). The chat template's "Current date" line is pinned (PROMPT_DATE): the
+(without network access the demo skips; under CI it fails). The chat template's "Current date" line is pinned (PROMPT_DATE): the
 answer, and with it the drafts accepted per round, would otherwise change from day to day.
 
     pytest models/demos/gpt_oss/demo/dflash_demo.py -k "isl_1k"   # isl_256 .. isl_128k
@@ -19,6 +19,7 @@ answer, and with it the drafts accepted per round, would otherwise change from d
 
 import datetime
 import json
+import os
 import time
 from pathlib import Path
 
@@ -97,13 +98,27 @@ def build_dflash(mesh_device, max_seq_len):
     return DFlashRunner(generator, model[0], page_table, kv_cache, draft), tokenizer
 
 
+def _no_book(reason):
+    """A prompt book could not be downloaded: skipped locally, a failure under CI (where a skip would pass silently)."""
+    (pytest.fail if os.getenv("CI") == "true" else pytest.skip)(reason)
+
+
+def fetch_books(isl):
+    """Download (or find in the cache) the books an isl-token prompt needs, before the model is loaded."""
+    (text,), _ = load_inputs(str(PROMPT_FILE), 1, instruct=True)
+    if not text[len("```") : text.rindex("```")]:
+        _no_book("the prompt's book could not be downloaded (gutenberg.org)")
+    if isl > 100_000 and not load_and_cache_context(SECOND_BOOK, PROMPT_CACHE):  # (the first book is 101,749 tokens)
+        _no_book(f"the second book could not be downloaded ({SECOND_BOOK})")
+
+
 def book_prompt(tokenizer, isl):
     """isl token ids: a chat-template user turn ```book``` + the prompt file's question, the book cut to fit."""
     (question,) = [u["prompt"] for u in json.load(open(PROMPT_FILE))]
     (text,), _ = load_inputs(str(PROMPT_FILE), 1, instruct=True)
     book = text[len("```") : text.rindex("```")]
     if not book:
-        pytest.skip("the prompt's book could not be downloaded (gutenberg.org)")
+        _no_book("the prompt's book could not be downloaded (gutenberg.org)")
     mark = "XQXSENTINELXQX"
     chat = tokenizer.apply_chat_template(
         [{"role": "user", "content": "```" + mark + "```\n\n" + question}],
@@ -117,7 +132,7 @@ def book_prompt(tokenizer, isl):
     if n_book > len(book_ids):
         second = load_and_cache_context(SECOND_BOOK, PROMPT_CACHE)
         if not second:
-            pytest.skip(f"the second book could not be downloaded ({SECOND_BOOK})")
+            _no_book(f"the second book could not be downloaded ({SECOND_BOOK})")
         book_ids += tokenizer.encode(second, add_special_tokens=False)
     assert 0 <= n_book <= len(book_ids), f"ISL {isl}: the prompt holds {len(pre) + len(post)} + {len(book_ids)} tokens"
     return pre + book_ids[:n_book] + post
@@ -134,19 +149,22 @@ def run_dflash(runner, prompt_ids, new_tokens, window=DRAFT_WINDOW):
     toks, accept, timing = runner.generate(prompt_ids, new_tokens, first=first)
     rounds_s = sum(sum(r) for r in timing["rounds"])
     logger.info(f"DFlash: {len(toks)} tokens in {time.perf_counter() - t:.2f} s")
-    return toks[:new_tokens], accept, rounds_s
+    assert accept, "no DFlash round ran (the prefill's token ended the generation)"
+    return toks, accept, rounds_s
 
 
 ISLS = {"256": 256, "512": 512, "1k": 1024, "2k": 2048, "4k": 4096, "8k": 8192, "16k": 16384, "32k": 32768}
 ISLS |= {"64k": 65536, "128k": 130752}  # (130752 + 256 new tokens fit the 131072-position KV cache)
-# perf regression guard: ms per round at most (TEMPORARY, set from the measurements below)
-MAX_ROUND_MS = {isl: 99.0 for isl in ISLS.values()}
+# perf regression guard: ms per round at most = 1.2 x the measured round time (QuietBox 2, 2026-10-19: 4.842, 4.749,
+# 4.967, 4.957, 4.923, 5.074, 5.162, 5.474, 5.921, 6.739 ms at 256 .. 130752), rounded up to 0.1 ms
+MAX_ROUND_MS = dict(zip(ISLS.values(), [5.9, 5.7, 6.0, 6.0, 6.0, 6.1, 6.2, 6.6, 7.2, 8.1]))
 
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("isl", list(ISLS.values()), ids=[f"isl_{k}" for k in ISLS])
 @parametrize_dflash_mesh()
 def test_dflash_demo(mesh_device, device_params, isl):
+    fetch_books(isl)
     max_seq_len = max(4096, 1 << (isl + NEW_TOKENS + 15).bit_length())
     runner, tokenizer = build_dflash(mesh_device, max_seq_len)
     prompt_ids = book_prompt(tokenizer, isl)

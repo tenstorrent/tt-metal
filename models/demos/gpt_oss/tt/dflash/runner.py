@@ -6,8 +6,8 @@
 Per round, all on device: the drafter's draft pass (dflash/fused_draft.py) writes [last token, 7 drafts] into the verify
 pass's token input; the 8-row verify pass (dflash/verify.py) computes the target's argmax for every row, the acceptance,
 and the next round's drafter / verify / context inputs; the context pass adds the accepted rows' target features to the
-drafter's K / V cache. The host reads one [block, argmaxes] result per round. The three passes are one trace (one per
-round) after one eager compile pass (capture_traces).
+drafter's K / V cache. The host reads one [block, argmaxes] result per round. The three passes are captured as one
+trace, replayed once per round, after one eager compile pass (capture_traces).
 """
 
 import time
@@ -51,13 +51,13 @@ class DFlashRunner:
         self.fused.context()
 
     def capture_traces(self):
-        """Capture the round trace: draft, verify and context passes in one trace (after one eager generate; as three
-        traces the first program of each pass started 11-16 us late, its dispatch not overlapped with the previous
-        trace's end: 4.835 -> 4.805 ms per round at ISL 256, 4.971 -> 4.941 at 4K). A replayed trace writes to its
+        """Capture the round trace: the draft, verify and context passes in one trace (one trace instead of one per
+        pass: each pass's first program then dispatches while the previous pass runs). A replayed trace writes to its
         intermediates' addresses, which are free again once the capture ends: a buffer allocated after the capture and
-        alive at a replay can be overwritten, so every program is compiled first, and prefill re-captures the traces
-        when a prompt compiled new programs (see prefill)."""
+        alive at a replay can be overwritten, so every program is compiled first, and prefill re-captures the trace
+        when a prompt compiled new programs (see prefill). A trace captured before is released first."""
         mesh = self.model.mesh_device
+        self.release_traces()
         self.compile()
         tid = ttnn.begin_trace_capture(mesh, cq_id=0)
         self.fused.forward()
@@ -67,12 +67,16 @@ class DFlashRunner:
         self.round_trace = tid
 
     def release_traces(self):
+        """Release the round trace (after the device has finished every queued replay)."""
         if self.round_trace is not None:
+            ttnn.synchronize_device(self.model.mesh_device)
             ttnn.release_trace(self.model.mesh_device, self.round_trace)
         self.round_trace = None
 
     def set_draft_window(self, w):
-        """The drafter's attention window (0: none, the checkpoint's setting); call with no traces captured."""
+        """The drafter's attention window (0: none, the checkpoint's setting); call with no trace captured (a captured
+        trace keeps the window it was captured with)."""
+        assert self.round_trace is None, "set_draft_window: release_traces() first"
         self.draft.window = w or None
         self.fused.set_window(w)
 
@@ -88,9 +92,8 @@ class DFlashRunner:
         if self.round_trace is not None and mesh.num_program_cache_entries() != n0:
             logger.warning(
                 f"DFlash: prompt length {len(prompt_ids)} compiled new prefill programs after the trace capture; "
-                "re-capturing the traces"
+                "re-capturing the round trace"
             )
-            self.release_traces()
             self.capture_traces()
             first = self._prefill(prompt_ids)
         return first
@@ -163,8 +166,9 @@ class DFlashRunner:
     def _generate_traced(self, ids, L, max_new_tokens):
         """Traced rounds, extends ids in place; returns (per-round accepted counts, per-round wall times). Every round's
         inputs are written on device by the previous verify pass, so the next round is queued before this round's
-        result is read whenever this round cannot end the generation (it adds at most block tokens): the host's read
-        round trip overlaps the next round instead of idling the device between rounds."""
+        result is read whenever this round cannot reach max_new_tokens (it adds at most block tokens): the host's read
+        round trip overlaps the next round instead of idling the device between rounds. If an EOS ends the generation
+        instead, the round queued behind it is waited for and its result dropped."""
         B = self.draft.block
         accept, rounds = [], []
         if len(ids) - L >= max_new_tokens or set(ids[L:]) & self.eos_ids:
@@ -187,7 +191,7 @@ class DFlashRunner:
             ids += d[:k] + [post[k]]
             accept.append(k + 1)
             now = time.perf_counter()
-            rounds.append((now - t, 0.0, 0.0))
+            rounds.append((now - t, 0.0, 0.0))  # (the eager path's (passes, read, context) split; traced: all wall)
             t = now
             if len(ids) - L >= max_new_tokens or set(ids[L:]) & self.eos_ids:
                 break

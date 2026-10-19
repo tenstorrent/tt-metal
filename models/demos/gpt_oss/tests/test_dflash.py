@@ -19,6 +19,7 @@ from models.demos.gpt_oss.demo.dflash_demo import (
     NEW_TOKENS,
     book_prompt,
     build_dflash,
+    fetch_books,
     parametrize_dflash_mesh,
     run_dflash,
 )
@@ -50,6 +51,7 @@ def plain_greedy_next(runner, token, pos):
 @pytest.mark.parametrize("isl", list(ISLS.values()), ids=[f"isl_{k}" for k in ISLS])
 @parametrize_dflash_mesh()
 def test_dflash_accuracy(mesh_device, device_params, isl):
+    fetch_books(isl)
     runner, tokenizer = build_dflash(mesh_device, max(4096, 1 << (isl + NEW_TOKENS + 15).bit_length()))
     prompt_ids = book_prompt(tokenizer, isl)
     try:
