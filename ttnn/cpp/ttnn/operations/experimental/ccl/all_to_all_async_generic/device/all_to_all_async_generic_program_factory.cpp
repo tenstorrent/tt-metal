@@ -840,6 +840,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
                     connection_link = common_links[link];
                 }
                 tt::tt_fabric::add_fabric_mux_v2_to_program(
+                    *device,
                     desc,
                     mux_config,
                     mux_cores[link][direction_group],
@@ -1069,6 +1070,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
             }
             sender_writer_rt_args.push_back(static_cast<uint32_t>(connection_nodes.size()));
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                *device,
                 sender_device_fabric_node_id,
                 connection_nodes,
                 connection_links,
@@ -1088,6 +1090,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
 
             if (with_forward) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
+                    *device,
                     sender_device_fabric_node_id,
                     device->get_fabric_node_id(forward_coord.value()),
                     link,
@@ -1099,6 +1102,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
             sender_writer_rt_args.push_back(with_backward);
             if (with_backward) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
+                    *device,
                     sender_device_fabric_node_id,
                     device->get_fabric_node_id(backward_coord.value()),
                     link,

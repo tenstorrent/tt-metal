@@ -296,7 +296,14 @@ tt::tt_metal::ProgramDescriptor build_broadcast_descriptor_at(
         }
 
         tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-            sender_fabric_node_id, dst_nodes, {link}, desc, worker_sender_writer_kernel_id, core, writer_rt_args);
+            *mesh_device,
+            sender_fabric_node_id,
+            dst_nodes,
+            {link},
+            desc,
+            worker_sender_writer_kernel_id,
+            core,
+            writer_rt_args);
 
         ttnn::ccl::emplace_runtime_args_with_leading_buffers(
             desc.kernels[worker_sender_writer_kernel_id], core, {tensor_return_value.buffer()}, writer_rt_args);
