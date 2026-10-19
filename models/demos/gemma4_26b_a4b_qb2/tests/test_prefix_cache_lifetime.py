@@ -22,6 +22,20 @@ def test_live_trace_chat_transitions(gemma_server_url, record_property):
         "In one short sentence, explain why a dictionary or hash table is useful here."
     )}]
     salt = f"trace-chat-{uuid4()}"
+    for _ in range(32):
+        tokenized = httpx.post(
+            f"{gemma_server_url}/tokenize",
+            json={"model": "google/gemma-4-26B-A4B-it", "messages": messages,
+                  "add_generation_prompt": True, "chat_template_kwargs": {"enable_thinking": False}},
+            timeout=60,
+        )
+        tokenized.raise_for_status()
+        if 16 <= tokenized.json()["count"] % 32 <= 24:
+            break
+        messages[0]["content"] += " Thanks."
+    else:
+        pytest.fail("Could not select a prompt with a traced partial-page suffix")
+    record_property("rendered_prompt_tokens", tokenized.json()["count"])
 
     def chat(history, cache_salt):
         response = httpx.post(
