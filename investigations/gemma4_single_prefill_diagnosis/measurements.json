@@ -1,0 +1,1366 @@
+[
+  {
+    "complete": true,
+    "started_at": "2026-10-19T09:15:42.967586+00:00",
+    "git_revision": "3d19910c295d768b31d7d1a484eada8e0bfa0e73",
+    "git_dirty": true,
+    "model": "google/gemma-4-31B-it",
+    "layers": 60,
+    "mesh": [
+      8,
+      4
+    ],
+    "chunk_size": 8192,
+    "cache_capacity": 262144,
+    "num_users": 1,
+    "prefixes": [
+      0,
+      253952
+    ],
+    "device_metric": "max per-chip first-program-start to last-program-end span; includes device op gaps",
+    "wall_metric": "host token packing/upload, metadata/RoPE staging, trace replay and synchronize; excludes sockets",
+    "baseline": "one legacy 8192-padded forward per request; packed uses one shared 8192-row forward",
+    "repeats": 7,
+    "device_repeats": 3,
+    "source": "investigations/gemma4_single_prefill_8192/results.json",
+    "results": [
+      {
+        "path": "legacy",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 0,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 110961.97653079266,
+          "min": 110845.13137929079,
+          "max": 110980.49088401975,
+          "samples": [
+            110980.49088401975,
+            110961.97653079266,
+            110845.13137929079
+          ]
+        },
+        "replay_host_us": {
+          "median": 113705.33501030877,
+          "min": 113677.54300590605,
+          "max": 113796.74301133491,
+          "samples": [
+            113773.25802459382,
+            113684.34299947694,
+            113796.74301133491,
+            113729.450997198,
+            113679.8869993072,
+            113705.33501030877,
+            113677.54300590605
+          ]
+        },
+        "wall_us": {
+          "median": 117883.0880089663,
+          "min": 115767.29599619284,
+          "max": 120923.27501159161,
+          "samples": [
+            115767.29599619284,
+            115811.34199514054,
+            117726.56100220047,
+            117883.0880089663,
+            118254.4780021999,
+            118007.44500942528,
+            120923.27501159161
+          ]
+        },
+        "device_us_per_token": 13.545163150731526,
+        "wall_us_per_token": 14.390025391719519,
+        "profile": {
+          "chip_id": 11,
+          "span_ms": 110.82493110997295,
+          "summed_program_ms": 110.42248559743695,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 14.998517205918306,
+            "other_collectives": 27.186838971077343,
+            "matmuls": 46.07862929678472,
+            "typecast": 0.4687480157157822,
+            "kv_update": 0.9418746663420255,
+            "sliding_sdpa": 15.443011243586666,
+            "global_sdpa": 5.3048661980121
+          }
+        }
+      },
+      {
+        "path": "legacy",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 253952,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 273983.8533923945,
+          "min": 273631.0871892944,
+          "max": 274375.9511848884,
+          "samples": [
+            273983.8533923945,
+            274375.9511848884,
+            273631.0871892944
+          ]
+        },
+        "replay_host_us": {
+          "median": 293135.1550214458,
+          "min": 285513.136012014,
+          "max": 295469.0570186358,
+          "samples": [
+            285513.136012014,
+            291352.3959869053,
+            292907.21198776737,
+            293979.27899844944,
+            295469.0570186358,
+            293135.1550214458,
+            293701.3299961109
+          ]
+        },
+        "wall_us": {
+          "median": 297025.2550148871,
+          "min": 289373.35099908523,
+          "max": 307409.0200243518,
+          "samples": [
+            289373.35099908523,
+            296916.01000376977,
+            307409.0200243518,
+            294361.5459953435,
+            297157.2839887813,
+            297025.2550148871,
+            297751.0600176174
+          ]
+        },
+        "device_us_per_token": 33.44529460356378,
+        "wall_us_per_token": 36.25796570005946,
+        "profile": {
+          "chip_id": 6,
+          "span_ms": 275.56051053012686,
+          "summed_program_ms": 275.15588631712365,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 15.08234544711427,
+            "other_collectives": 30.96728747218792,
+            "matmuls": 46.09970696473438,
+            "typecast": 0.46747010298186653,
+            "kv_update": 0.910668367995144,
+            "sliding_sdpa": 21.675720194284423,
+            "global_sdpa": 159.95268776782564
+          }
+        }
+      },
+      {
+        "path": "packed",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 0,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 130064.43944272501,
+          "min": 130048.31477078912,
+          "max": 130166.44560173988,
+          "samples": [
+            130064.43944272501,
+            130166.44560173988,
+            130048.31477078912
+          ]
+        },
+        "replay_host_us": {
+          "median": 132967.3639847897,
+          "min": 132912.34098142013,
+          "max": 132997.27902631275,
+          "samples": [
+            132912.34098142013,
+            132928.8870037999,
+            132967.3639847897,
+            132978.801993886,
+            132967.75400522165,
+            132938.40101687238,
+            132997.27902631275
+          ]
+        },
+        "wall_us": {
+          "median": 138077.2429984063,
+          "min": 136429.57800766453,
+          "max": 155963.73798325658,
+          "samples": [
+            136647.31598692015,
+            136429.57800766453,
+            138037.92401449755,
+            138077.2429984063,
+            155963.73798325658,
+            140827.28198263794,
+            140738.66899707355
+          ]
+        },
+        "device_us_per_token": 15.877006767910768,
+        "wall_us_per_token": 16.855132201953893,
+        "output_comparison": {
+          "pcc": 0.9951320290565491,
+          "rmse": 0.012144488012597404,
+          "relative_rmse": 0.09885384961370587,
+          "squared_error_sum": 6495.42578125,
+          "reference_squared_sum": 664692.0,
+          "numel": 44040192
+        },
+        "profile": {
+          "chip_id": 6,
+          "span_ms": 130.09895299202944,
+          "summed_program_ms": 129.66732286854744,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "copies": 110,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 15.09482321775489,
+            "other_collectives": 26.80122022550956,
+            "matmuls": 46.19751801989847,
+            "copies": 0.9553942683382759,
+            "typecast": 1.368919957731395,
+            "kv_update": 1.475337674639239,
+            "sliding_sdpa": 30.40354335019978,
+            "global_sdpa": 7.370566154475824
+          }
+        }
+      },
+      {
+        "path": "packed",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 253952,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 331664.08612132,
+          "min": 331511.5443327629,
+          "max": 331897.4108985421,
+          "samples": [
+            331511.5443327629,
+            331897.4108985421,
+            331664.08612132
+          ]
+        },
+        "replay_host_us": {
+          "median": 340750.42902259156,
+          "min": 340020.42800420895,
+          "max": 340833.1249956973,
+          "samples": [
+            340020.42800420895,
+            340290.5659750104,
+            340764.56099865027,
+            340399.9909933191,
+            340750.42902259156,
+            340833.1249956973,
+            340797.45001508854
+          ]
+        },
+        "wall_us": {
+          "median": 347894.9179989286,
+          "min": 343757.9180172179,
+          "max": 350410.39300267585,
+          "samples": [
+            344778.7470067851,
+            343757.9180172179,
+            347085.8179789502,
+            348417.2159805894,
+            348625.5809839349,
+            347894.9179989286,
+            350410.39300267585
+          ]
+        },
+        "device_us_per_token": 40.48633863785645,
+        "wall_us_per_token": 42.467641357291086,
+        "output_comparison": {
+          "pcc": 0.9530279636383057,
+          "rmse": 0.034468646442168994,
+          "relative_rmse": 0.3265029719705725,
+          "squared_error_sum": 52323.60546875,
+          "reference_squared_sum": 490821.28125,
+          "numel": 44040192
+        },
+        "profile": {
+          "chip_id": 31,
+          "span_ms": 332.1202754092256,
+          "summed_program_ms": 331.68732046541373,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "copies": 110,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 15.021029164709999,
+            "other_collectives": 28.84750678180518,
+            "matmuls": 46.10764925098678,
+            "copies": 0.960646675681912,
+            "typecast": 1.36629290254065,
+            "kv_update": 1.4407448236472715,
+            "sliding_sdpa": 32.413943288240574,
+            "global_sdpa": 205.52950757780138
+          }
+        }
+      }
+    ]
+  },
+  {
+    "complete": true,
+    "started_at": "2026-10-19T09:19:20.922686+00:00",
+    "git_revision": "3d19910c295d768b31d7d1a484eada8e0bfa0e73",
+    "git_dirty": true,
+    "model": "google/gemma-4-31B-it",
+    "layers": 60,
+    "mesh": [
+      8,
+      4
+    ],
+    "chunk_size": 4096,
+    "cache_capacity": 262144,
+    "num_users": 1,
+    "prefixes": [
+      0,
+      258048
+    ],
+    "device_metric": "max per-chip first-program-start to last-program-end span; includes device op gaps",
+    "wall_metric": "host token packing/upload, metadata/RoPE staging, trace replay and synchronize; excludes sockets",
+    "baseline": "one legacy 4096-padded forward per request; packed uses one shared 4096-row forward",
+    "repeats": 7,
+    "device_repeats": 3,
+    "source": "investigations/gemma4_single_prefill_4096/results.json",
+    "results": [
+      {
+        "path": "legacy",
+        "case": "single_4096",
+        "request_lengths": [
+          4096
+        ],
+        "prefix": 0,
+        "real_tokens": 4096,
+        "projection_rows": 4096,
+        "device_us": {
+          "median": 75099.23859283449,
+          "min": 75091.85056281202,
+          "max": 75144.16778689665,
+          "samples": [
+            75144.16778689665,
+            75099.23859283449,
+            75091.85056281202
+          ]
+        },
+        "replay_host_us": {
+          "median": 76372.61800118722,
+          "min": 76300.86998688057,
+          "max": 76476.925984025,
+          "samples": [
+            76339.75901990198,
+            76465.58902342804,
+            76372.61800118722,
+            76346.14800917916,
+            76476.925984025,
+            76300.86998688057,
+            76443.41498962604
+          ]
+        },
+        "wall_us": {
+          "median": 79821.76198856905,
+          "min": 78674.0799958352,
+          "max": 80327.4440113455,
+          "samples": [
+            80099.6909965761,
+            78674.0799958352,
+            79603.40200224891,
+            80229.16602203622,
+            80327.4440113455,
+            79821.76198856905,
+            79780.7390044909
+          ]
+        },
+        "device_us_per_token": 18.334775047078733,
+        "wall_us_per_token": 19.48773486049049,
+        "profile": {
+          "chip_id": 31,
+          "span_ms": 75.17684758766106,
+          "summed_program_ms": 74.69162357964349,
+          "program_counts": {
+            "other": 1223,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 10.548049156877106,
+            "other_collectives": 16.394015258681097,
+            "matmuls": 34.54837144905431,
+            "typecast": 0.3030570400127071,
+            "kv_update": 0.5646166368639399,
+            "sliding_sdpa": 9.922850445631022,
+            "global_sdpa": 2.410663592523308
+          }
+        }
+      },
+      {
+        "path": "legacy",
+        "case": "single_4096",
+        "request_lengths": [
+          4096
+        ],
+        "prefix": 258048,
+        "real_tokens": 4096,
+        "projection_rows": 4096,
+        "device_us": {
+          "median": 144514.15580308146,
+          "min": 144368.88998889748,
+          "max": 145801.84396089846,
+          "samples": [
+            144368.88998889748,
+            144514.15580308146,
+            145801.84396089846
+          ]
+        },
+        "replay_host_us": {
+          "median": 151684.4959987793,
+          "min": 149738.09002549388,
+          "max": 152392.82400580123,
+          "samples": [
+            149738.09002549388,
+            151474.79900042526,
+            151684.4959987793,
+            152392.82400580123,
+            151622.26199754514,
+            152022.71597809158,
+            151937.22600815818
+          ]
+        },
+        "wall_us": {
+          "median": 155391.99899649248,
+          "min": 152924.01501210406,
+          "max": 159865.09699723683,
+          "samples": [
+            152924.01501210406,
+            153887.71900325082,
+            155391.99899649248,
+            155481.96499003097,
+            155479.72099739127,
+            154076.26400701702,
+            159865.09699723683
+          ]
+        },
+        "device_us_per_token": 35.281776319111685,
+        "wall_us_per_token": 37.937499755003046,
+        "profile": {
+          "chip_id": 31,
+          "span_ms": 145.65092618761005,
+          "summed_program_ms": 145.1656325492815,
+          "program_counts": {
+            "other": 1223,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 10.540760937401073,
+            "other_collectives": 17.670123303166637,
+            "matmuls": 34.55795820954412,
+            "typecast": 0.30368741655240494,
+            "kv_update": 0.5571298969265412,
+            "sliding_sdpa": 11.675479449996716,
+            "global_sdpa": 69.860493335694
+          }
+        }
+      },
+      {
+        "path": "packed",
+        "case": "single_4096",
+        "request_lengths": [
+          4096
+        ],
+        "prefix": 0,
+        "real_tokens": 4096,
+        "projection_rows": 4096,
+        "device_us": {
+          "median": 83069.61029951251,
+          "min": 83066.74939547968,
+          "max": 83077.69279678239,
+          "samples": [
+            83077.69279678239,
+            83069.61029951251,
+            83066.74939547968
+          ]
+        },
+        "replay_host_us": {
+          "median": 84284.30298226885,
+          "min": 84214.86901352182,
+          "max": 84360.69800518453,
+          "samples": [
+            84360.69800518453,
+            84284.30298226885,
+            84214.86901352182,
+            84251.37400627136,
+            84303.00201871432,
+            84273.95802573301,
+            84335.23098938167
+          ]
+        },
+        "wall_us": {
+          "median": 89027.21898630261,
+          "min": 87021.91401971504,
+          "max": 89849.46898999624,
+          "samples": [
+            87021.91401971504,
+            87115.76499626972,
+            89027.21898630261,
+            89225.53801676258,
+            89849.46898999624,
+            89145.17602534033,
+            88655.46798915602
+          ]
+        },
+        "device_us_per_token": 20.28066657702942,
+        "wall_us_per_token": 21.735160885327787,
+        "output_comparison": {
+          "pcc": 0.9960514903068542,
+          "rmse": 0.011559696070020553,
+          "relative_rmse": 0.08878582241437667,
+          "squared_error_sum": 2942.469970703125,
+          "reference_squared_sum": 373271.46875,
+          "numel": 22020096
+        },
+        "profile": {
+          "chip_id": 5,
+          "span_ms": 83.11991923652268,
+          "summed_program_ms": 82.65394840733313,
+          "program_counts": {
+            "other": 1223,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "copies": 110,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 10.53500264378022,
+            "other_collectives": 17.29229744094868,
+            "matmuls": 33.64413252856813,
+            "copies": 0.5601858784300477,
+            "typecast": 0.8275725896324965,
+            "kv_update": 1.022730059367829,
+            "sliding_sdpa": 16.301935355782362,
+            "global_sdpa": 2.4700919108233745
+          }
+        }
+      },
+      {
+        "path": "packed",
+        "case": "single_4096",
+        "request_lengths": [
+          4096
+        ],
+        "prefix": 258048,
+        "real_tokens": 4096,
+        "projection_rows": 4096,
+        "device_us": {
+          "median": 153686.65792211483,
+          "min": 153539.18598606295,
+          "max": 153752.03732288157,
+          "samples": [
+            153539.18598606295,
+            153752.03732288157,
+            153686.65792211483
+          ]
+        },
+        "replay_host_us": {
+          "median": 160760.04598289728,
+          "min": 158658.06600777432,
+          "max": 161141.21201098897,
+          "samples": [
+            158658.06600777432,
+            160158.3989977371,
+            160742.1390071977,
+            160760.04598289728,
+            160763.75200645998,
+            161141.21201098897,
+            160819.4860164076
+          ]
+        },
+        "wall_us": {
+          "median": 165419.8360047303,
+          "min": 162112.8380065784,
+          "max": 167027.9129757546,
+          "samples": [
+            167027.9129757546,
+            162112.8380065784,
+            165008.86701396666,
+            164873.37200669572,
+            165419.8360047303,
+            165964.2969898414,
+            166087.4340159353
+          ]
+        },
+        "device_us_per_token": 37.521156719266315,
+        "wall_us_per_token": 40.38570214959236,
+        "output_comparison": {
+          "pcc": 0.9961027503013611,
+          "rmse": 0.00934708732700595,
+          "relative_rmse": 0.08822126823488584,
+          "squared_error_sum": 1923.8526611328125,
+          "reference_squared_sum": 247186.765625,
+          "numel": 22020096
+        },
+        "profile": {
+          "chip_id": 5,
+          "span_ms": 153.51509426368085,
+          "summed_program_ms": 153.04891899114563,
+          "program_counts": {
+            "other": 1223,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "copies": 110,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 10.58140609811015,
+            "other_collectives": 17.81180798241388,
+            "matmuls": 33.6079897598377,
+            "copies": 0.572095444057248,
+            "typecast": 0.8110563820948871,
+            "kv_update": 1.0092160579184795,
+            "sliding_sdpa": 18.36986720560599,
+            "global_sdpa": 70.28548006110728
+          }
+        }
+      }
+    ]
+  },
+  {
+    "complete": true,
+    "started_at": "2026-10-19T09:22:53.583089+00:00",
+    "git_revision": "3d19910c295d768b31d7d1a484eada8e0bfa0e73",
+    "git_dirty": true,
+    "model": "google/gemma-4-31B-it",
+    "layers": 60,
+    "mesh": [
+      8,
+      4
+    ],
+    "chunk_size": 8192,
+    "cache_capacity": 262144,
+    "num_users": 1,
+    "prefixes": [
+      0,
+      253952
+    ],
+    "device_metric": "max per-chip first-program-start to last-program-end span; includes device op gaps",
+    "wall_metric": "host token packing/upload, metadata/RoPE staging, trace replay and synchronize; excludes sockets",
+    "baseline": "one legacy 8192-padded forward per request; packed uses one shared 8192-row forward",
+    "repeats": 7,
+    "device_repeats": 3,
+    "source": "investigations/gemma4_single_prefill_diagnosis/global_legacy/results.json",
+    "results": [
+      {
+        "path": "legacy",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 0,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 111035.96286574789,
+          "min": 110757.24433029369,
+          "max": 111188.08050097567,
+          "samples": [
+            111188.08050097567,
+            110757.24433029369,
+            111035.96286574789
+          ]
+        },
+        "replay_host_us": {
+          "median": 113717.75399311446,
+          "min": 113626.4460219536,
+          "max": 113927.21999436617,
+          "samples": [
+            113720.0070079416,
+            113628.66999115795,
+            113927.21999436617,
+            113792.67700249329,
+            113626.4460219536,
+            113654.76899663918,
+            113717.75399311446
+          ]
+        },
+        "wall_us": {
+          "median": 117642.7959871944,
+          "min": 115688.0870112218,
+          "max": 118258.16301279701,
+          "samples": [
+            116115.52099930122,
+            115688.0870112218,
+            118222.11899561808,
+            117642.7959871944,
+            118258.16301279701,
+            117585.63900366426,
+            117916.5690264199
+          ]
+        },
+        "device_us_per_token": 13.55419468576024,
+        "wall_us_per_token": 14.360692869530567,
+        "profile": {
+          "chip_id": 8,
+          "span_ms": 110.86045081106741,
+          "summed_program_ms": 110.43442852073133,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 15.104192312675329,
+            "other_collectives": 26.929720332275142,
+            "matmuls": 46.09713745219373,
+            "typecast": 0.46694325107175405,
+            "kv_update": 0.9325709395153632,
+            "sliding_sdpa": 14.28853607577853,
+            "global_sdpa": 6.61532815722148
+          }
+        }
+      },
+      {
+        "path": "legacy",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 253952,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 275937.8799081219,
+          "min": 275650.8310081255,
+          "max": 276887.41700469656,
+          "samples": [
+            276887.41700469656,
+            275937.8799081219,
+            275650.8310081255
+          ]
+        },
+        "replay_host_us": {
+          "median": 294725.98200663924,
+          "min": 287684.49899507686,
+          "max": 295320.13897551224,
+          "samples": [
+            287684.49899507686,
+            292883.03200155497,
+            294249.75300207734,
+            295093.2749954518,
+            295320.13897551224,
+            294725.98200663924,
+            294923.2300161384
+          ]
+        },
+        "wall_us": {
+          "median": 296352.8959953692,
+          "min": 292270.7780089695,
+          "max": 298569.5900279097,
+          "samples": [
+            292270.7780089695,
+            293284.6079929732,
+            296617.50499508344,
+            295156.16002026945,
+            296352.8959953692,
+            297769.5629815571,
+            298569.5900279097
+          ]
+        },
+        "device_us_per_token": 33.68382323097191,
+        "wall_us_per_token": 36.175890624434714,
+        "profile": {
+          "chip_id": 11,
+          "span_ms": 275.7305762068738,
+          "summed_program_ms": 275.30561566359006,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 14.996622135145152,
+            "other_collectives": 31.124037567786043,
+            "matmuls": 46.03756922633522,
+            "typecast": 0.4670391155969094,
+            "kv_update": 0.9348782322165671,
+            "sliding_sdpa": 20.482981000941272,
+            "global_sdpa": 161.26248838556893
+          }
+        }
+      },
+      {
+        "path": "packed",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 0,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 129106.26562912206,
+          "min": 129071.9028587129,
+          "max": 129242.77611766655,
+          "samples": [
+            129242.77611766655,
+            129106.26562912206,
+            129071.9028587129
+          ]
+        },
+        "replay_host_us": {
+          "median": 131992.33199702576,
+          "min": 131954.10501793958,
+          "max": 132013.22499662638,
+          "samples": [
+            132013.22499662638,
+            131954.10501793958,
+            132000.89600286447,
+            131966.9740041718,
+            131992.33199702576,
+            131964.23099725507,
+            132010.4699989315
+          ]
+        },
+        "wall_us": {
+          "median": 137821.9679754693,
+          "min": 135652.18399162404,
+          "max": 142952.60701328516,
+          "samples": [
+            137160.5489985086,
+            135652.18399162404,
+            137821.9679754693,
+            137783.59899879433,
+            142952.60701328516,
+            138983.07899944484,
+            138406.01898846216
+          ]
+        },
+        "device_us_per_token": 15.76004219105494,
+        "wall_us_per_token": 16.82397070013053,
+        "output_comparison": {
+          "pcc": 0.9949097037315369,
+          "rmse": 0.012453915056075465,
+          "relative_rmse": 0.10137252758437579,
+          "squared_error_sum": 6830.6337890625,
+          "reference_squared_sum": 664692.0,
+          "numel": 44040192
+        },
+        "device_speedup_vs_legacy": 0.8600354314694227,
+        "wall_speedup_vs_legacy": 0.8535852282136432,
+        "profile": {
+          "chip_id": 25,
+          "span_ms": 129.13205099451173,
+          "summed_program_ms": 128.74822203801764,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "copies": 110,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 15.05504380234463,
+            "other_collectives": 26.961485128839726,
+            "matmuls": 46.07620582876852,
+            "copies": 0.9835067475147709,
+            "typecast": 1.4197614368187945,
+            "kv_update": 1.5061292668215134,
+            "sliding_sdpa": 30.183785851732154,
+            "global_sdpa": 6.562303975177541
+          }
+        }
+      },
+      {
+        "path": "packed",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 253952,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 293153.5938144704,
+          "min": 292855.44546628825,
+          "max": 293417.356144057,
+          "samples": [
+            293417.356144057,
+            293153.5938144704,
+            292855.44546628825
+          ]
+        },
+        "replay_host_us": {
+          "median": 309390.75400237925,
+          "min": 304851.45599232055,
+          "max": 310979.961999692,
+          "samples": [
+            304851.45599232055,
+            310718.03701343015,
+            309188.59998928383,
+            309770.64699982293,
+            309328.50000681356,
+            309390.75400237925,
+            310979.961999692
+          ]
+        },
+        "wall_us": {
+          "median": 313252.85098864697,
+          "min": 307959.62500269525,
+          "max": 316490.7949976623,
+          "samples": [
+            307959.62500269525,
+            313252.85098864697,
+            314062.8520050086,
+            313176.6760197934,
+            312386.82399271056,
+            313983.002997702,
+            316490.7949976623
+          ]
+        },
+        "device_us_per_token": 35.78535080743047,
+        "wall_us_per_token": 38.23887341170007,
+        "output_comparison": {
+          "pcc": 0.9951929450035095,
+          "rmse": 0.010342729017795017,
+          "relative_rmse": 0.09797111610582449,
+          "squared_error_sum": 4711.0693359375,
+          "reference_squared_sum": 490821.28125,
+          "numel": 44040192
+        },
+        "device_speedup_vs_legacy": 0.9412740820184388,
+        "wall_speedup_vs_legacy": 0.9460501159368848,
+        "profile": {
+          "chip_id": 31,
+          "span_ms": 293.23208996715687,
+          "summed_program_ms": 292.84553575721714,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "copies": 110,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 15.11978268988191,
+            "other_collectives": 32.33302734727861,
+            "matmuls": 46.04925360030371,
+            "copies": 0.9960598368091775,
+            "typecast": 1.359942013145847,
+            "kv_update": 1.4313396225449488,
+            "sliding_sdpa": 31.97580596507921,
+            "global_sdpa": 163.58032468217368
+          }
+        }
+      }
+    ]
+  },
+  {
+    "complete": true,
+    "started_at": "2026-10-19T09:26:00.291217+00:00",
+    "git_revision": "3d19910c295d768b31d7d1a484eada8e0bfa0e73",
+    "git_dirty": true,
+    "model": "google/gemma-4-31B-it",
+    "layers": 60,
+    "mesh": [
+      8,
+      4
+    ],
+    "chunk_size": 8192,
+    "cache_capacity": 262144,
+    "num_users": 1,
+    "prefixes": [
+      0,
+      253952
+    ],
+    "device_metric": "max per-chip first-program-start to last-program-end span; includes device op gaps",
+    "wall_metric": "host token packing/upload, metadata/RoPE staging, trace replay and synchronize; excludes sockets",
+    "baseline": "one legacy 8192-padded forward per request; packed uses one shared 8192-row forward",
+    "repeats": 7,
+    "device_repeats": 3,
+    "source": "investigations/gemma4_single_prefill_diagnosis/swa_k128/results.json",
+    "results": [
+      {
+        "path": "legacy",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 0,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 111118.93754158592,
+          "min": 110999.48482741405,
+          "max": 111215.50949172895,
+          "samples": [
+            111215.50949172895,
+            111118.93754158592,
+            110999.48482741405
+          ]
+        },
+        "replay_host_us": {
+          "median": 113800.0969949644,
+          "min": 113609.00799627416,
+          "max": 113847.09799312986,
+          "samples": [
+            113675.37901969627,
+            113800.0969949644,
+            113834.5180079341,
+            113609.529013047,
+            113609.00799627416,
+            113806.76599219441,
+            113847.09799312986
+          ]
+        },
+        "wall_us": {
+          "median": 117827.54200976342,
+          "min": 117258.96401912905,
+          "max": 117925.11001112871,
+          "samples": [
+            117663.4150033351,
+            117258.96401912905,
+            117659.35801668093,
+            117925.11001112871,
+            117827.54200976342,
+            117851.28799965605,
+            117838.2979996968
+          ]
+        },
+        "device_us_per_token": 13.564323430369376,
+        "wall_us_per_token": 14.383244874238699,
+        "profile": {
+          "chip_id": 15,
+          "span_ms": 111.06893535336302,
+          "summed_program_ms": 110.66283197134891,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 15.128626712775711,
+            "other_collectives": 27.03650619354085,
+            "matmuls": 46.06895808161426,
+            "typecast": 0.47018742502347405,
+            "kv_update": 0.9416637308620333,
+            "sliding_sdpa": 15.70993196025373,
+            "global_sdpa": 5.3069578672788635
+          }
+        }
+      },
+      {
+        "path": "legacy",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 253952,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 275919.74240942165,
+          "min": 275328.3761000715,
+          "max": 275996.6825363115,
+          "samples": [
+            275919.74240942165,
+            275328.3761000715,
+            275996.6825363115
+          ]
+        },
+        "replay_host_us": {
+          "median": 294112.7219819464,
+          "min": 287978.5380209796,
+          "max": 294960.209983401,
+          "samples": [
+            287978.5380209796,
+            293875.6239891518,
+            294112.7219819464,
+            294295.2970042825,
+            293765.7379952725,
+            294308.826996712,
+            294960.209983401
+          ]
+        },
+        "wall_us": {
+          "median": 297315.27299736626,
+          "min": 290054.16901782155,
+          "max": 338303.5269798711,
+          "samples": [
+            290054.16901782155,
+            294337.81100669876,
+            297691.49102503434,
+            297315.27299736626,
+            338303.5269798711,
+            297099.99801707454,
+            299296.59198387526
+          ]
+        },
+        "device_us_per_token": 33.681609180837604,
+        "wall_us_per_token": 36.29336828581131,
+        "profile": {
+          "chip_id": 7,
+          "span_ms": 276.58624561218875,
+          "summed_program_ms": 276.17770429746935,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 15.065864311603855,
+            "other_collectives": 32.08918946023716,
+            "matmuls": 46.06509323003411,
+            "typecast": 0.4708263615492625,
+            "kv_update": 0.9335142226582568,
+            "sliding_sdpa": 20.80168045938365,
+            "global_sdpa": 160.75153625200306
+          }
+        }
+      },
+      {
+        "path": "packed",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 0,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 128505.91870991622,
+          "min": 128429.79263984485,
+          "max": 128602.09231066729,
+          "samples": [
+            128505.91870991622,
+            128429.79263984485,
+            128602.09231066729
+          ]
+        },
+        "replay_host_us": {
+          "median": 130971.51098190807,
+          "min": 130881.28497474827,
+          "max": 131032.8830149956,
+          "samples": [
+            131032.8830149956,
+            130973.26300339773,
+            130972.16101596132,
+            130971.51098190807,
+            130927.36300313845,
+            130881.28497474827,
+            130959.42200743593
+          ]
+        },
+        "wall_us": {
+          "median": 137838.98000838235,
+          "min": 134600.5949890241,
+          "max": 151992.32200393453,
+          "samples": [
+            134600.5949890241,
+            151992.32200393453,
+            137838.98000838235,
+            142140.5400033109,
+            137838.24900747277,
+            137961.30497939885,
+            137551.56702245586
+          ]
+        },
+        "device_us_per_token": 15.68675765501907,
+        "wall_us_per_token": 16.826047364304486,
+        "output_comparison": {
+          "pcc": 0.994946300983429,
+          "rmse": 0.012364858585384771,
+          "relative_rmse": 0.10064762465296744,
+          "squared_error_sum": 6733.29296875,
+          "reference_squared_sum": 664692.0,
+          "numel": 44040192
+        },
+        "device_speedup_vs_legacy": 0.8646989855184887,
+        "wall_speedup_vs_legacy": 0.854820182234358,
+        "profile": {
+          "chip_id": 29,
+          "span_ms": 128.55801545180174,
+          "summed_program_ms": 128.22437969274299,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "copies": 110,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 15.327127867395928,
+            "other_collectives": 27.501917515707156,
+            "matmuls": 46.10257700944375,
+            "copies": 1.212056294856865,
+            "typecast": 1.47967497661107,
+            "kv_update": 1.5400298282397045,
+            "sliding_sdpa": 27.66112576096537,
+            "global_sdpa": 7.399870439523132
+          }
+        }
+      },
+      {
+        "path": "packed",
+        "case": "single_8192",
+        "request_lengths": [
+          8192
+        ],
+        "prefix": 253952,
+        "real_tokens": 8192,
+        "projection_rows": 8192,
+        "device_us": {
+          "median": 330184.8726206361,
+          "min": 330180.67195194366,
+          "max": 330228.1461446388,
+          "samples": [
+            330184.8726206361,
+            330228.1461446388,
+            330180.67195194366
+          ]
+        },
+        "replay_host_us": {
+          "median": 339185.297023505,
+          "min": 338872.5849799812,
+          "max": 339320.90099551715,
+          "samples": [
+            338872.5849799812,
+            339012.8560131416,
+            339185.297023505,
+            339310.2550180629,
+            339246.3190248236,
+            339320.90099551715,
+            339078.08500225656
+          ]
+        },
+        "wall_us": {
+          "median": 346035.48000450246,
+          "min": 342776.4750085771,
+          "max": 374545.53999123164,
+          "samples": [
+            370904.11700773984,
+            342776.4750085771,
+            346035.48000450246,
+            374545.53999123164,
+            346067.44899065234,
+            345992.3659975175,
+            345712.5540007837
+          ]
+        },
+        "device_us_per_token": 40.30577058357374,
+        "wall_us_per_token": 42.24065918023712,
+        "output_comparison": {
+          "pcc": 0.9515533447265625,
+          "rmse": 0.03494224175304129,
+          "relative_rmse": 0.3309890859457924,
+          "squared_error_sum": 53771.32421875,
+          "reference_squared_sum": 490821.28125,
+          "numel": 44040192
+        },
+        "device_speedup_vs_legacy": 0.8356522823698165,
+        "wall_speedup_vs_legacy": 0.8592045907936889,
+        "profile": {
+          "chip_id": 4,
+          "span_ms": 330.65117004796537,
+          "summed_program_ms": 330.33751411665924,
+          "program_counts": {
+            "other": 1163,
+            "other_collectives": 242,
+            "matmuls": 300,
+            "copies": 110,
+            "typecast": 110,
+            "kv_update": 110,
+            "sliding_sdpa": 50,
+            "global_sdpa": 10
+          },
+          "category_ms": {
+            "other": 15.105060200563761,
+            "other_collectives": 28.682863659822367,
+            "matmuls": 46.22557287563356,
+            "copies": 0.9516122259764813,
+            "typecast": 1.428876855786019,
+            "kv_update": 1.5120189812587457,
+            "sliding_sdpa": 30.90045589410502,
+            "global_sdpa": 205.5310534235133
+          }
+        }
+      }
+    ]
+  }
+]

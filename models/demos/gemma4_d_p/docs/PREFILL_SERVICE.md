@@ -58,7 +58,36 @@ This loads all 60 layers and allocates six 256k slots. It checks 17 mixed reques
 
 The test also extends one prompt to 256k in 6144-token pieces, batching 512- and 1536-token requests alongside it. Its final output is compared with legacy 8192-token chunked prefill using the same checkpoint and token history, requiring PCC ≥ 0.98 and relative RMSE < 0.21. Results are written to `packed_prefill.json` in the pytest temporary directory. The test allows two hours for cold weight loading and kernel compilation. The short synthetic test provides the separate Hugging Face comparison.
 
-Compare full-model steady-state prefill performance, using the same environment above:
+Compare one full chunk through legacy and striped prefill, using the same environment above:
+
+```bash
+GEMMA4_PERF_CHUNK_SIZE=8192 pytest 'models/demos/gemma4_d_p/demo/prefill_perf.py::test_prefill_single_request_comparison[blackhole-8x4]' -sv
+```
+
+The default chunk size is 8192; change `GEMMA4_PERF_CHUNK_SIZE` to a multiple of 1024, such as 4096. Both paths process the same real tokens through all 60 layers with one resident KV slot. The default cached prefixes are 0 and `floor((262144 - chunk_size) / chunk_size) * chunk_size`, aligned to the legacy chunk boundaries. Cache capacity rounds up to a complete chunk. `GEMMA4_PERF_PREFIXES=0` measures only the initial chunk. Device time, wall time, speedups, and output PCC/relative RMSE are reported, with striped outputs restored to natural token order before comparison. Numerical metrics are diagnostic; this performance test checks finite outputs and timing integrity, while the packed sanity test above provides numerical acceptance checks.
+
+Results are saved to `investigations/gemma4_single_prefill_<chunk_size>/results.json`; `GEMMA4_PERF_OUTPUT` overrides the directory. Set `GEMMA4_PERF_PROFILE_PROGRAMS=1` to collect an additional replay with kernel source names and individual program timestamps on the chip with the longest execution span. That diagnostic replay is separate from the latency samples.
+
+The initial single-request investigation (2026-10-19, model revision `3d19910c295`) measured 111.0 → 130.1 ms at prefix 0 and 274.0 → 331.7 ms at prefix 253952, legacy → striped. At chunk 4096 the corresponding measurements were 75.1 → 83.1 ms and 144.5 → 153.7 ms. [Recorded samples and program breakdowns](../../../../investigations/gemma4_single_prefill_diagnosis/measurements.json) include the baseline and isolated tuning experiments.
+
+For chunk 8192, one diagnostic replay gave the following sums of device-program durations on the chip with the longest full-pass span. These are attribution samples, separate from the latency medians above.
+
+| Component | Prefix 0: legacy / striped (ms) | Prefix 253952: legacy / striped (ms) |
+| --- | ---: | ---: |
+| 10 global attention layers | 5.3 / 7.4 | 160.0 / 205.5 |
+| 50 sliding attention layers | 15.4 / 30.4 | 21.7 / 32.4 |
+| Projection and MLP matmuls | 46.1 / 46.2 | 46.1 / 46.1 |
+| Copies, KV typecasts and updates | 1.4 / 3.8 | 1.4 / 3.8 |
+
+The global settings differ: legacy uses Q=96, K=256, one K split, and segmented accumulation; striped uses Q=128, K=256, one K split, and ordinary accumulation. Q=96 produces 88 head/query work units versus 64 at Q=128 on the 110-core compute grid. An isolated override applying legacy's global settings to striped ownership reduced the long-prefix full pass from 331.7 to 293.2 ms. It also raised output PCC against legacy from 0.9530 to 0.9952 (the initial-prefix PCC was already about 0.995). This performance test reports that numerical gap without treating its pass as an equivalence qualification.
+
+Sliding attention loses locality under stripes. At this aligned long prefix, the current halo range calculation requests 7840 remote KV token rows per rank per KV head with stripe=32 and K=32, versus legacy's 1024-row boundary halo. Those are received-row counts, not an estimate of aggregate fabric-link bytes. Increasing K to 128 raises the striped receive count to 8064 and therefore trades coarser compute blocks against slightly more transfer padding. Separately, the full-request slices copy 110 L1 K/V tensors into DRAM; subsequent typecasts and cache updates also cost more. Their combined additional cost is about 2.4 ms per pass. The common matmuls are essentially unchanged, and a single full request has no cross-request weight-sharing benefit.
+
+Changing only sliding K to 128 measured 128.5 ms at prefix 0 and 330.2 ms at prefix 253952, saving about 1.6 and 1.5 ms respectively. It did not resolve the long-prefix numerical gap (PCC 0.9516). Global tuning was the more effective change in these experiments.
+
+The [diagnostic plugin](../../../../investigations/gemma4_single_prefill_diagnosis/config_override.py) isolates tuning changes from the default implementation. To reproduce the global override, add `PYTHONPATH=investigations/gemma4_single_prefill_diagnosis:.`, `GEMMA4_PERF_VARIANT=global_legacy`, a distinct `GEMMA4_PERF_OUTPUT`, and `-p config_override` to the single-request command. Use variant `swa_k128` to change only sliding K. The [summary helper](../../../../investigations/gemma4_single_prefill_diagnosis/summarize.py) compacts raw results and groups the diagnostic program timings by kernel source.
+
+Compare full-model steady-state prefill performance across multiple batch shapes:
 
 ```bash
 pytest 'models/demos/gemma4_d_p/demo/prefill_perf.py::test_prefill_packed_perf[blackhole-8x4]' -sv
