@@ -55,7 +55,7 @@ while ! curl --max-time 2 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; do
     sleep 5
 done
 status=0
-timeout 1800 python -m pytest "$model_dir/tests/test_prefix_caching.py" -k live \
+timeout 1800 python -m pytest "$model_dir/tests/test_prefix_caching.py" -k live_decode_contract \
     --gemma-server-url http://127.0.0.1:8000 --junitxml "$results/live.xml" -x -v || status=$?
 if [ "$status" -eq 124 ]; then
     timeout 120 python tools/tt-triage.py --llm-output \

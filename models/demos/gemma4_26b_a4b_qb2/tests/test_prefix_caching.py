@@ -73,16 +73,23 @@ def test_host_sampling_forwards_cached_prefix():
     generator.configure_sampling.assert_not_called()
 
 
-def _cache_hits(url):
+def _metric_totals(url):
     response = httpx.get(f"{url}/metrics", timeout=30)
     response.raise_for_status()
-    values = [
-        float(line.rsplit(" ", 1)[1])
-        for line in response.text.splitlines()
-        if line.startswith("vllm:prefix_cache_hits_total")
-    ]
-    assert values, "Prefix-cache hit counter missing"
-    return sum(values)
+    totals = {}
+    for metric in (
+        "prefix_cache_hits_total",
+        "time_to_first_token_seconds_sum",
+        "request_prefill_kv_computed_tokens_sum",
+    ):
+        values = [float(line.rsplit(" ", 1)[1]) for line in response.text.splitlines() if line.startswith(f"vllm:{metric}{{")]
+        assert values, f"Metric missing: {metric}"
+        totals[metric] = sum(values)
+    return totals
+
+
+def _cache_hits(url):
+    return _metric_totals(url)["prefix_cache_hits_total"]
 
 
 @pytest.mark.parametrize("length", [33, 63, 65, 1023, 1025, 1057])
@@ -137,3 +144,38 @@ def test_live_growing_context(gemma_server_url, record_property):
         cold = completions(gemma_server_url, [{**request, "cache_salt": f"{salt}-cold-{length}"}])[0]
         record_property(f"growing_{length}_cold_wall_seconds", perf_counter() - started)
         assert cached["choices"][0]["text"] == cold["choices"][0]["text"]
+
+
+@pytest.mark.parametrize("length", [33, 63, 65, 1023, 1025, 1057])
+def test_live_decode_contract_and_warmed_timing(gemma_server_url, length, record_property):
+    """Diagnostic contract, not a replacement for cold-prefill parity above.
+
+    The remote server probe asserts full-vocabulary same-cache decode parity
+    on the first cold/warm requests. Later identical requests skip that probe.
+    """
+    request = {"prompt": [100 + i % 71 for i in range(length)], "max_tokens": 1, "logprobs": 5}
+    salt = f"decode-contract-{length}-{uuid4()}"
+    cold = completions(gemma_server_url, [{**request, "cache_salt": salt}], token_ids=True)[0]
+    hits = _cache_hits(gemma_server_url)
+    warm = completions(gemma_server_url, [{**request, "cache_salt": salt}], token_ids=True)[0]
+    assert _cache_hits(gemma_server_url) > hits
+    record_property("cold_prefill_equal", sampled_ids(cold) == sampled_ids(warm))
+    record_property("cold_response", json.dumps(cold))
+    record_property("cached_response", json.dumps(warm))
+    for repeat in range(3):
+        before = _metric_totals(gemma_server_url)
+        started = perf_counter()
+        cold = completions(gemma_server_url, [{**request, "cache_salt": f"{salt}-cold-{repeat}"}], token_ids=True)[0]
+        record_property(f"repeat_{repeat}_cold_seconds", perf_counter() - started)
+        middle = _metric_totals(gemma_server_url)
+        started = perf_counter()
+        cached = completions(gemma_server_url, [{**request, "cache_salt": salt}], token_ids=True)[0]
+        record_property(f"repeat_{repeat}_cached_seconds", perf_counter() - started)
+        after = _metric_totals(gemma_server_url)
+        for name in before:
+            record_property(f"repeat_{repeat}_cold_{name}", middle[name] - before[name])
+            record_property(f"repeat_{repeat}_cached_{name}", after[name] - middle[name])
+        computed = "request_prefill_kv_computed_tokens_sum"
+        assert middle[computed] - before[computed] == length
+        assert after[computed] - middle[computed] == length - (length - 1) // 32 * 32
+        assert sampled_ids(cached) == sampled_ids(warm), "Cached repeat changed greedy output"

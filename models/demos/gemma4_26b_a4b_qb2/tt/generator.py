@@ -472,7 +472,7 @@ class Gemma4Generator:
                 return_all_logits=return_all_logits,
                 start_pos=start,
             )
-            if os.getenv("GEMMA4_PREFIX_DIAGNOSE") == "1" and length == 33:
+            if os.getenv("GEMMA4_PREFIX_DIAGNOSE") == "1":
                 from models.demos.gemma4_26b_a4b_qb2.tests.prefix_cache_diagnostic import compare_paths
 
                 compare_paths(self, tokens[row : row + 1], table, kv_cache, logits, start)

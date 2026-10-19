@@ -131,6 +131,28 @@ The failed worker's standard infrastructure cleanup reclaimed 913.7 GB of Docker
 storage; the experiment did not issue broad cleanup or reset commands.
 # Remote correctness finding and diagnostic follow-up
 
+Follow-up [39233122287](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39233122287)
+on Metal `be19cbffcc745b04836cf26c98cc04e897da204f`, workflow `7436b68`,
+completed with the expected cold-parity failure. Ordinary decode and
+continuation on identical cold prefix KV were exactly equal over the entire
+vocabulary (maximum and RMS difference zero). Warm HMA continuation also
+exactly matched its ordinary-decode replay. Cold prefill versus ordinary
+decode differed by maximum 5.12890625 and RMS 0.8913413 logits. The cold
+winner was 128 (8.5625 versus token 130 at 8.125); decode/continuation chose
+130 (9.4375 versus 128 at 8.5625). This is not a near-tie explanation.
+Full logits and JSON summaries are retained as CI artifacts. These results
+prove only the one-token replay contract, not all cache lifetimes or accuracy.
+
+The next focused run retains the original strict cold-parity test unchanged
+but selects a separately named decode-contract diagnostic. It compares
+token-major ordinary decode with layer-major continuation for 1/31-token
+suffixes at page/window boundaries, and compares scheduler-reused KV with
+the cold-cache decode reference. Full-vocabulary equality is required there.
+Three later cold/cached pairs per shape bypass diagnostic replay after
+warmup, recording wall time, server TTFT, cache hits, and computed prefill
+tokens. A passing decode-contract test must not be described as passing
+cold-prefill equality or agentic accuracy. No seed has been removed.
+
 Run [39230676369](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39230676369)
 used Metal `c56f74cc7f93165dbfcfe1a1e1202c0b4dbc6fa4` and workflow `75a859e`.
 All 11 host contracts passed. The full 30-layer physical-B1 server started,
