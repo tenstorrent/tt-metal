@@ -23,6 +23,7 @@ use() {  # use <arm>
   while read -r rel; do
     [[ -f $S/v/$v/$rel ]] || continue
     cp "$S/v/$v/$rel" "/work/$rel"; for p in ${PK[$rel]}; do cp "$S/v/$v/$rel" "$p"; done
+    if [[ -z ${PK[$rel]} && $rel == tt_metal/* && -d $SP/ttnn/tt_metal ]]; then mkdir -p "$SP/ttnn/$(dirname $rel)"; cp "$S/v/$v/$rel" "$SP/ttnn/$rel"; fi
   done < $S/files.txt
   export TT_METAL_CACHE=$OUT/cache_$1; mkdir -p $TT_METAL_CACHE
 }
