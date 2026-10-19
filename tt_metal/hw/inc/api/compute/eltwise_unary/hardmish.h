@@ -35,6 +35,10 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void hardmish_tile(uint32_t idst) {
+    MATH(if constexpr (ckernel::sfpu::hardmish_bf16_whole_tile && !DST_ACCUM_MODE) {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, hardmish, (APPROX, 32, DST_ACCUM_MODE), idst, VectorMode::None);
+        return;
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, hardmish, (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE), idst, VectorMode::RC));
 }

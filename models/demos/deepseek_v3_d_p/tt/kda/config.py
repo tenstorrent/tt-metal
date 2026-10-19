@@ -30,6 +30,15 @@ KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
 # The decay gate stays in interleaved L1 from its projection until chunk preparation has read it when its share of
 # each worker core fits this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_DECAY_L1_BYTES_PER_CORE = 48 * 1024
+# The convolution's Q, K and V stay in interleaved L1 until chunk preparation reads them when each core's share fits
+# this budget (96 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM. LoudBox SP2xTP4 holds four
+# times the rows per device (384 KiB per core), so it keeps them in DRAM, as before the fusion: its perf gate measures
+# the DRAM placement, and only Galaxy's measures the L1 one.
+KDA_QKV_L1_BYTES_PER_CORE = 112 * 1024
+# The QKV convolution's fabric history exchange (qkv_causal_conv1d_silu_layout.hpp): a persistent buffer of
+# predecessor, carry, outgoing and end rows, three rows each, and its entry, predecessor and carry semaphores.
+KDA_HISTORY_EXCHANGE_ROWS = 12
+KDA_HISTORY_EXCHANGE_SEMAPHORES = 3
 # The gated norm's output stays in interleaved L1 until the output projection reads it when each core's share fits
 # this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_NORM_OUTPUT_L1_BYTES_PER_CORE = 48 * 1024
@@ -185,7 +194,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
             # Galaxy SP8xTP4 at T=5120: 136 us instead of 184 us for the 1.6 MB-per-chip summary gather.
             high_bw_prefix_gather=active_seq_len_local == _TUNED_PROJECTION_ROWS,
         ),
-        qkv_channel_chunk_size=512,
+        qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,

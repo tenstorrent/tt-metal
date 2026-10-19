@@ -32,6 +32,8 @@ bool bf16_dest_hardmish();
 template <int ITERATIONS>
 void calculate_hardmish_bf16();
 void init_hardmish_bf16();
+// Whether BF16 DEST runs the generated hardmish kernel as one call over the whole tile.
+inline constexpr bool hardmish_bf16_whole_tile = true;
 // Sets up the generated BF16 hardmish kernel for the instance it serves.
 template <bool bf16_kernel>
 inline void hardmish_bf16_tile_init() {
@@ -42,7 +44,7 @@ inline void hardmish_bf16_tile_init() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void hardmish() {
-    if constexpr (!is_fp32_dest_acc_en) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
         if (bf16_dest_hardmish()) {
             calculate_hardmish_bf16<ITERATIONS>();
             return;

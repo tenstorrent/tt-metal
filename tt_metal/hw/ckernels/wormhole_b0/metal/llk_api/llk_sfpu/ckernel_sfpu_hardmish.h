@@ -28,6 +28,8 @@ namespace sfpu {
 // so the final multiply produces exact 0 or exact x at transitions.
 inline void hardmish_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
+// Whether BF16 DEST runs the generated hardmish kernel as one call over the whole tile.
+inline constexpr bool hardmish_bf16_whole_tile = false;
 // The stock hardmish kernel needs no BF16 setup.
 template <bool bf16_kernel>
 inline void hardmish_bf16_tile_init() {}
