@@ -64,11 +64,17 @@ void RelaySender::set_credit_latency_sampling(bool enabled) {
     std::lock_guard<std::mutex> lock(latency_mutex_);
     sampling_ = enabled;
     pending_samples_.clear();
+    pending_release_samples_.clear();
 }
 
 std::vector<uint64_t> RelaySender::take_credit_latencies_ns() {
     std::lock_guard<std::mutex> lock(latency_mutex_);
     return std::move(latencies_ns_);
+}
+
+std::vector<uint64_t> RelaySender::take_release_latencies_ns() {
+    std::lock_guard<std::mutex> lock(latency_mutex_);
+    return std::move(release_latencies_ns_);
 }
 
 bool RelaySender::poll() {
@@ -94,6 +100,10 @@ bool RelaySender::poll() {
         while (!pending_samples_.empty() && pending_samples_.front().total <= credited) {
             latencies_ns_.push_back(now - pending_samples_.front().sent_ns);
             pending_samples_.pop_front();
+        }
+        while (!pending_release_samples_.empty() && pending_release_samples_.front().total <= released) {
+            release_latencies_ns_.push_back(now - pending_release_samples_.front().sent_ns);
+            pending_release_samples_.pop_front();
         }
     }
 
@@ -127,8 +137,12 @@ bool RelaySender::poll() {
     unforwarded_.store(static_cast<uint32_t>(available - awaiting_pop - n), std::memory_order_release);
     if (sampling_) {
         std::lock_guard<std::mutex> lock(latency_mutex_);
+        const Sample sample{.total = total, .sent_ns = now_ns()};
         if (pending_samples_.size() < kMaxPendingSamples) {
-            pending_samples_.push_back(Sample{.total = total, .sent_ns = now_ns()});
+            pending_samples_.push_back(sample);
+        }
+        if (pending_release_samples_.size() < kMaxPendingSamples) {
+            pending_release_samples_.push_back(sample);
         }
     }
     return true;
@@ -150,6 +164,17 @@ RelayReceiver::RelayReceiver(
     TT_FATAL(geom_.page_size != 0 && geom_.num_pages != 0, "RelayReceiver needs a non-empty ring geometry");
 }
 
+void RelayReceiver::set_drain_latency_sampling(bool enabled) {
+    std::lock_guard<std::mutex> lock(latency_mutex_);
+    sampling_ = enabled;
+    pending_samples_.clear();
+}
+
+std::vector<uint64_t> RelayReceiver::take_drain_latencies_ns() {
+    std::lock_guard<std::mutex> lock(latency_mutex_);
+    return std::move(latencies_ns_);
+}
+
 bool RelayReceiver::poll() {
     PollMark mark{polls_};
     bool progress = false;
@@ -160,6 +185,14 @@ bool RelayReceiver::poll() {
     consumed_bytes_ += acked_wire - last_acked_wire_;
     last_acked_wire_ = acked_wire;
     const uint64_t consumed_pages = consumed_bytes_ / geom_.page_size;
+    if (sampling_) {
+        std::lock_guard<std::mutex> lock(latency_mutex_);
+        const uint64_t now = now_ns();
+        while (!pending_samples_.empty() && pending_samples_.front().total <= consumed_pages) {
+            latencies_ns_.push_back(now - pending_samples_.front().published_ns);
+            pending_samples_.pop_front();
+        }
+    }
     // A two-sided transport needs this to know which ring pages it may receive
     // into again; a one-sided one only uses it to bound a sanity check.
     transport_.set_consumed(consumed_pages);
@@ -185,6 +218,12 @@ bool RelayReceiver::poll() {
                 e.what());
         }
         arrived_.store(delivered, std::memory_order_release);
+        if (sampling_) {
+            std::lock_guard<std::mutex> lock(latency_mutex_);
+            if (pending_samples_.size() < kMaxPendingSamples) {
+                pending_samples_.push_back(Sample{.total = delivered, .published_ns = now_ns()});
+            }
+        }
         progress = true;
     }
 
