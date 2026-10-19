@@ -114,6 +114,10 @@ void Tensor::set_value(const ttnn::Tensor& value) {
     m_value.set_tensor(value);
 }
 
+void Tensor::assign(const ttnn::Tensor& value) {
+    m_value.assign(value);
+}
+
 void Tensor::set_grad(const ttnn::Tensor& grad) {
     if (core::is_tensor_initialized(grad)) {
         auto grad_shape = grad.logical_shape();
