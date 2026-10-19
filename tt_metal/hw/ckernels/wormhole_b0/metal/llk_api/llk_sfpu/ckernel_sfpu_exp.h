@@ -612,6 +612,7 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+            TTI_SFPNOP;  // no WH SFPU scoreboard: SFP_STOCH_RND must not read LREG0 the cycle after SFPMAD writes it
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
             TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG1, 5);  // lreg[1] = lreg[0] << 15
             TTI_SFPSETSGN(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // lreg[0] preserves sign, copies e/m from lreg[1]
