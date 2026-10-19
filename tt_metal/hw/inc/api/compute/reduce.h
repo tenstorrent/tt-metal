@@ -195,6 +195,18 @@ ALWI void reduce_tile(
 #endif
 }
 
+#ifdef ARCH_BLACKHOLE
+// A BFP tile starts with its exponent section, so the block call cannot step the data unpacker from tile to tile and
+// pays a stride write per call; unpack and math take the same path from the compile-time data format.
+ALWI bool reduce_block_tile_by_tile(std::uint32_t icb) {
+#if defined(TRISC_MATH) || defined(TRISC_UNPACK)
+    return IS_BFP_FORMAT(unpack_src_format[get_operand_id(icb)]);
+#else
+    return true;
+#endif
+}
+#endif
+
 // clang-format off
 /**
  * Performs a reduction operation *B = reduce(A)* on `ntiles` consecutive tiles from the input CB, writing the
@@ -241,19 +253,21 @@ ALWI void reduce_block(
     std::uint32_t ntiles,
     std::uint32_t idst_stride = 1) {
 #ifdef ARCH_BLACKHOLE
-    MATH((llk_math_reduce_block<
-          reduce_type,
-          reduce_dim,
-          is_fp32_dest_acc_en,
-          reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(
-        icb, icb_scaler, start_idst, ntiles, idst_stride)));
-    UNPACK((llk_unpack_AB_reduce_block<reduce_type, reduce_dim>(icb, icb_scaler, start_itile, itile_scaler, ntiles)));
-#else
+    if (!reduce_block_tile_by_tile(icb)) {
+        MATH((llk_math_reduce_block<
+              reduce_type,
+              reduce_dim,
+              is_fp32_dest_acc_en,
+              reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(
+            icb, icb_scaler, start_idst, ntiles, idst_stride)));
+        UNPACK((llk_unpack_AB_reduce_block<reduce_type, reduce_dim>(icb, icb_scaler, start_itile, itile_scaler, ntiles)));
+        return;
+    }
+#endif
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         reduce_tile<reduce_type, reduce_dim, is_fp32_dest_acc_en, pow2_scaler>(
             icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i * idst_stride);
     }
-#endif
 }
 
 // clang-format off
