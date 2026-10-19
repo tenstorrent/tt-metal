@@ -7,6 +7,7 @@ from models.demos.blackhole.qwen36.tt.attention.config import AttentionConfig
 from models.demos.blackhole.qwen36.tt.attention.decode import decode_forward
 from models.demos.blackhole.qwen36.tt.attention.prefill import prefill_forward
 from models.demos.blackhole.qwen36.tt.attention.weights import load_attention_weights
+from models.demos.blackhole.qwen36.tt.mlp import exact_profile_fidelity
 
 
 class Qwen36GatedAttention:
@@ -21,15 +22,20 @@ class Qwen36GatedAttention:
         self.device = mesh_device
         self.config = config
 
-        self.weights = load_attention_weights(mesh_device, state_dict, tensor_cache_path)
+        self.weights = load_attention_weights(
+            mesh_device, state_dict, tensor_cache_path, weight_dtype=getattr(config, "weight_dtype", None)
+        )
 
+        # LoFi as shipped; HiFi2 under QWEN36_EXACT_PROFILE=1 (config.exact_profile: bf16 weights need the
+        # bf16-operand fidelity). The SDPA inside the experimental kernel is HiFi2 + fp32 acc either way.
+        fidelity = exact_profile_fidelity(config)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=fidelity,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=fidelity,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )

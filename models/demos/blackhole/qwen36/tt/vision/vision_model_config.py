@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 from loguru import logger
 
@@ -27,6 +28,10 @@ class VisionModelArgs(ModelArgs):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # QWEN36_EXACT_PROFILE=1 (default off): the vision blocks keep their weights at the dtype they are built
+        # with (bf16 from Qwen36Model.init_vision_model(dtype=ttnn.bfloat16)) instead of the bfp8 / bfp4 literals
+        # and skip the bfp8 typecasts around the SDPA (vision_attention.py / vision_mlp.py).
+        self.exact_profile = os.environ.get("QWEN36_EXACT_PROFILE") == "1"
 
         # The vision tower is always tensor-parallel (Megatron-style): the
         # vision blocks shard their weights across the mesh devices along

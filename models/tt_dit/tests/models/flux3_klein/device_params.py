@@ -54,3 +54,9 @@ single_device_params_flux3_klein = {"l1_small_size": L1_SMALL_SIZE}
 
 # Prompt encoder: fabric + req-exact, no L1_SMALL (it has no conv2d).
 prompt_encoder_params_flux3_klein = line_params_req_exact_devices
+
+# Prompt upsampler (M9): ONE chip, the qwen36 single-device parameters (demo/vision_demo.py DEVICE_PARAMS): L1_SMALL
+# 24576 for the Gated DeltaNet prefill conv1d, two command queues, a 256 MiB trace region for the prefill chunk trace
+# + the decode trace; NO fabric (a 1-device mesh of a multi-chip box must not initialise it) and no require_exact. The
+# same dict is ``pipelines/flux3_klein/upsampler.py::PUP_DEVICE_PARAMS`` (asserted equal by the upsampler test).
+PUP_DEVICE_PARAMS = {"l1_small_size": 24576, "num_command_queues": 2, "trace_region_size": 268435456}

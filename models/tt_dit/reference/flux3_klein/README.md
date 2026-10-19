@@ -27,12 +27,14 @@ it never imports ttnn. It runs on CPU and on CUDA.
 | `text_encoder.py` | `src/flux3/text_encoder.py` | `TextEncoder(device=...)` defaults to CUDA when available, else CPU. The layer taps, padding and position handling are untouched; this file is the contract the device text encoder must meet. |
 | `checkpoint.py` | `src/flux3/checkpoint.py` | keeps `safetensors_file`, `checkpoint_keys`, `is_flow_map`, `load_checkpoint` / `_load_safetensors` (exact key match, floating tensors cast to `dtype`, integer buffers kept as stored). Dropped: the torch distributed checkpoint reader, `swap_linears` and the FP8 / NVFP4 quantized-linear paths (`fp8.py`, `nvfp4.py` are not vendored). A non-safetensors path raises `FileNotFoundError`; pointing at `variants/fp8r` or `variants/nvfp4` fails the key match with the `.weight_scale` keys listed as unexpected. |
 | `bbox.py` | `src/flux3/bbox.py` | none (needed to replay box records and for a future layout mode). |
+| `pup.py` | `src/flux3/pup.py` | `from flux3 import bbox` -> `from . import bbox`; the three engine environment defaults (`HF_HUB_OFFLINE`, `VLLM_USE_FLASHINFER_SAMPLER`, `VLLM_USE_DEEP_GEMM`) move from module import into `Upsampler.__init__` so importing the sizing (`reference_size`, `policy_reference`), the constants (`STOP_TOKENS`, `SAMPLING`, `PRESENCE_PENALTY`, `I2I_SCAFFOLD`, `MAX_REFERENCES`) and the prompt scaffolding has no side effect. The vLLM `Upsampler` class and `main()` stay as the documented reference (lazy `vllm` / `transformers` imports; never run here: the device port is `pipelines/flux3_klein/upsampler.py`). |
+| `pup_prompts.json` | `src/flux3/pup_prompts.json` | none (byte-equal to the pup weights' `system_prompts.json`; the fallback `pup.py` reads when a checkpoint ships none). |
 | `constants.py` | new (Tenstorrent) | the model and sampler constants, each with the upstream file:line it comes from, importable without torch. |
 | `examples/` | `examples/**/*.json` | the 32 generation records (`model`, `prompt` as the DiT saw it, `input_prompt`, `boxes`, size, `steps`, `guidance`, `seed`) and the 4 `inputs/*.json` files (two records, `balloons_boxes.json`, `cactus_boxes.json`), same relative layout, copied unchanged apart from a trailing newline the repo's end-of-file-fixer added to 18 of them. The PNGs (57 MB) are not vendored (`check-large-files` 500 KB); the GPU goldens rendered from these records live on the model share. |
 
-Not vendored: `generate.py` (safety checks, upsampler orchestration, EXIF), `safety.py`, `pup.py` (the prompt upsampler
-is a separate device component built on the Qwen3 demo), `fp8.py`, `nvfp4.py`, `scripts/` (CLI, Gradio demo), and
-every `vllm` / `gradio` dependency.
+Not vendored: `generate.py` (safety checks, upsampler orchestration, EXIF: the upsampler rule of its lines 52-63 is
+reproduced in `pipelines/flux3_klein/pipeline_flux3_klein.py::resolve_caption`), `safety.py`, `fp8.py`, `nvfp4.py`,
+`scripts/` (CLI, Gradio demo), and every `vllm` / `gradio` dependency.
 
 ## Licenses
 

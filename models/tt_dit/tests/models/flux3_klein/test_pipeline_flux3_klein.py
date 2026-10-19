@@ -116,8 +116,10 @@ from ....pipelines.flux3_klein.pipeline_flux3_klein import (
     Flux3KleinPipeline,
     Flux3KleinRequest,
     Flux3KleinResult,
+    caption_seed,
     make_noise,
     noise_sha256,
+    resolve_caption,
     to_pil,
 )
 from ....pipelines.flux3_klein.policy import REFERENCES_REASON, admit
@@ -440,6 +442,85 @@ def test_request_resolve(expect_error) -> None:
     logger.info(f"RESULT noise matches {checked} golden record(s)")
     if not checked:
         pytest.skip(f"no seed-7 64x64 golden under {GOLDENS_ENV} to compare the noise hash against")
+
+
+def test_pipeline_upsampler_hook(expect_error) -> None:
+    """P7 (M9, host): ``resolve_caption`` = ``generate.py:52-63`` through the request fields, with a stub upsampler
+    (no device): a finished caption passes through untouched (0 calls), the recorded knitted no-pup table is
+    reproduced byte for byte, an upsampled request carries the stub's caption, a ``ValueError`` from the upsampler
+    falls back to the prompt as typed, ``prompt_upsampling=False`` is the identity, a malformed box fails
+    ``resolve()`` before anything else, and the result dataclass carries the record fields."""
+    from ....reference.flux3_klein import bbox
+    from .common import load_record
+
+    calls: list[tuple] = []
+
+    def stub(prompt, images, boxes):
+        calls.append((prompt, len(images), boxes))
+        return "CAPTION"
+
+    # a finished upsampler answer (balloons record: boxes cited as <id>s) -> never upsampled, byte-equal
+    balloons = load_record("distilled", "balloons")
+    assert bbox.is_finished(balloons["prompt"]) and not bbox.is_finished(balloons["input_prompt"])
+    resolved = Flux3KleinRequest(prompt=balloons["prompt"], model="distilled").resolve()
+    assert resolve_caption(resolved, stub) == (balloons["prompt"], False) and calls == []
+    # the no-pup box table (generate.py:63): the knitted record IS input_prompt + to_canvas(boxes)
+    knitted = load_record("base_vs_distilled", "knitted_distilled")
+    resolved = Flux3KleinRequest(
+        prompt=knitted["input_prompt"], model="distilled", boxes=tuple(knitted["boxes"]), prompt_upsampling=False
+    ).resolve()
+    assert resolve_caption(resolved, stub) == (knitted["prompt"], False) and calls == []
+    assert resolved.boxes == tuple(knitted["boxes"])
+    # upsampled with the stub: the stub sees the raw prompt, the images and the 0-1 boxes
+    resolved = Flux3KleinRequest(prompt="A man walking with his dog, afternoon sun", model="distilled").resolve()
+    assert resolve_caption(resolved, stub) == ("CAPTION", True)
+    assert calls == [("A man walking with his dog, afternoon sun", 0, None)]
+    from PIL import Image
+
+    resolved = Flux3KleinRequest(
+        prompt=balloons["input_prompt"],
+        model="distilled",
+        boxes=tuple(balloons["boxes"]),
+        images=(Image.new("RGB", (1024, 1024)),),
+    ).resolve()
+    assert resolve_caption(resolved, stub) == ("CAPTION", True)
+    assert calls[-1] == (balloons["input_prompt"], 1, list(balloons["boxes"]))
+    # no upsampler attached (every recorded-caption gate) and prompt_upsampling=False: the identity
+    assert resolve_caption(resolved, None) == (
+        f"{balloons['input_prompt']} {json.dumps(bbox.to_canvas(list(balloons['boxes'])), ensure_ascii=False)}",
+        False,
+    )
+    plain = Flux3KleinRequest(prompt="x", prompt_upsampling=False).resolve()
+    assert resolve_caption(plain, stub) == ("x", False) and len(calls) == 2
+
+    # a ValueError from the upsampler (generate.py:59-61): the prompt as typed, upsampled False
+    def refusing(prompt, images, boxes):
+        raise ValueError("the upsampler takes at most 10 references")
+
+    assert resolve_caption(Flux3KleinRequest(prompt="raw").resolve(), refusing) == ("raw", False)
+    # a malformed box fails resolve() on the host
+    with expect_error(ValueError, "neither bbox"):
+        Flux3KleinRequest(prompt="x", boxes=({"id": "obj_1", "desc": "d"},)).resolve()
+    with expect_error(ValueError, "a box is"):
+        Flux3KleinRequest(prompt="x", boxes=({"id": "obj_1", "bbox": [0.1, 0.2, 0.3]},)).resolve()
+    # the record fields on the result
+    fields = Flux3KleinResult.__dataclass_fields__
+    assert {"input_prompt", "caption", "upsampled", "boxes"} <= set(fields)
+    assert fields["upsampled"].default is False and fields["boxes"].default is None
+    # the seed of an unseeded request (generate.py:73): sha256 of the CAPTION the DiT sees, derived after the
+    # upsampler by generate(); resolve() keeps None, an explicit seed is kept as it is (M9 fixer)
+    import hashlib
+
+    assert Flux3KleinRequest(prompt="x").resolve().seed is None
+    assert Flux3KleinRequest(prompt="x", seed=7).resolve().seed == 7
+    man_dog = load_record("distilled", "man_dog")
+    expected = int(hashlib.sha256(man_dog["prompt"].encode()).hexdigest(), 16) % 2**32
+    assert caption_seed(man_dog["prompt"]) == expected and 0 <= expected < 2**32
+    assert caption_seed(man_dog["prompt"]) != caption_seed(man_dog["input_prompt"])
+    logger.info(
+        f"RESULT upsampler hook: {len(calls)} stub calls, pass-through / table / fallback rows exact; unseeded "
+        f"man_dog caption seed {expected}"
+    )
 
 
 # --- P1 / P2 / P3 / P4: device ------------------------------------------------------------------------------------------------------

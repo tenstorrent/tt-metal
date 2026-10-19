@@ -52,7 +52,8 @@ tests/models/flux3_klein/
 ├── test_transformer_flux3_klein.py        # whole DiT (mode_blocks / single_blocks / all_blocks ids), Tracy profile
 ├── test_vae_flux3_klein.py                # decode on vae/, ae.safetensors == vae/ tensor equality, encode PCC
 ├── test_text_encoder_flux3_klein.py       # 8-tap concat vs the HF Qwen3-VL text path, padded rows included
-├── test_upsampler_flux3_klein.py          # prompt-upsampler smoke, system-prompt vendoring equality
+├── test_upsampler_flux3_klein.py          # prompt upsampler: host input / sizing / sampler / vendoring rows, 1-chip caption gates
+├── pup_oracle.py                          # not a test: the CPU bf16 oracle of the upsampler (its CLI caches captions + tie audit)
 ├── test_pipeline_flux3_klein.py           # e2e T2I and 1-/2-reference edit; opt-in PSNR gate against goldens
 ├── test_performance_flux3_klein.py        # BenchmarkProfiler wall-clock, PERF_THRESHOLDS
 ├── run_flux3_klein_tests.sh               # local sweep runner
@@ -72,7 +73,7 @@ tests/models/flux3_klein/
 | pipeline | `pipeline.py::Pipeline.generate`, `generate.py:65-77` | `pipelines/flux3_klein/pipeline_flux3_klein.py`: `Flux3KleinRequest` (BFL field names, `images` up to 10) -> `references.prepare_references` (host sizing) -> `policy.admit` (host) -> device text encoder -> device VAE encode of the references -> traced denoise (`Flux3KleinDenoiser.denoise_on_device`) -> device VAE decode -> the reference `to_pil` and the single-reference crop-back; both DiTs, the text encoder, the VAE decoder and the VAE encoder resident on the 4x8 ring |
 | references | `pipeline.py:129-180`: `reference_canvas` / `prepare_reference` / `prepare_multi_reference` / `default_size`; `generate.py:65-77` | `pipelines/flux3_klein/references.py`, the reference's expressions verbatim (see "References (edit)" below); bit-exact against the vendored functions in `test_references_flux3_klein.py` |
 | sampler | `sampling.py`: `t = alpha*t / (1 + (alpha-1)*t)` over `linspace(1, 0, steps+1)`; flow-map step with `timesteps_ref = schedule[i+1]`; fp32 latent state | `pipelines/flux3_klein/scheduler.py`; the fp32 Euler update runs on device inside the traced step |
-| prompt upsampler | `flux-3-image-klein-pup` (Qwen3.5-9B fine-tune, Apache-2.0); greedy with presence penalty | `pipelines/flux3_klein/upsampler.py` wrapping `models/demos/blackhole/qwen36` on a Galaxy submesh |
+| prompt upsampler | `pup.py` (vendored): `flux-3-image-klein-pup` (Qwen3.5-9B fine-tune, Apache-2.0) under vLLM, greedy with presence penalty 1.5 (text-to-image) / 0 (edits), stop on `<\|im_end\|>` / `<\|endoftext\|>`, max 3584 new tokens, up to 10 references sized by `policy_reference` (LANCZOS to a per-count pixel budget, JPEG q92), system prompts `t2i` / `i2i` / `t2i_bbox` / `i2i_bbox`, boxes through `bbox.plan` / `reconcile`; `generate.py:52-63` decides when it runs | `pipelines/flux3_klein/upsampler.py`: `build_pup_inputs` (the reference's host recipe: the same `policy_reference`, chat template with `enable_thinking=False`, processor / tokenizer ids), `Flux3KleinUpsampler` (the `models/demos/blackhole/qwen36` single-device model on ONE chip, a `(1, 1)` mesh opened WITHOUT fabric, `enable_mtp=False`, `QWEN36_EXACT_PROFILE=1` = bf16 weights; chunked prefill trace, the vision tower for edits (one tower call per reference, the token rows concatenated in attachment order: references of different sizes have different token counts), `Generator` decode trace; host `presence_greedy` = vLLM's rule at temperature 0), `finish_caption` (stop id stripped, `bbox.reconcile`); `Flux3KleinUpsamplerSubprocess` runs it in its own process for the demo (the ring cannot share a process); the pipeline's `resolve_caption` = `generate.py:52-63` (pass-through of a finished caption, fallback to the prompt as typed on a refusal, box table when not upsampled) |
 
 ## References (edit)
 
@@ -127,6 +128,7 @@ threshold would still catch is noted next to it in the test.
 | VAE encode (references) | fp32 encoder, fp32 BatchNorm statistics, tokens cast to bf16 (`pipeline.py:93`) | `Flux2VaeEncoder` (`models/vae/encoder_flux2.py`, built from the shipped `vae.py` blocks): bf16 weights and activations, the input image quantized to bf16 (`uint8 / 127.5 - 1` rounded to 8 mantissa bits), convolutions (incl. the stride-2 `padding=(0, 1, 0, 1)` downsample = `F.pad(x, (0, 1, 0, 1))` + stride-2 conv) and GroupNorms HiFi4 fp32-accumulated on Blackhole, the mid-block attention as the decoder's; the BatchNorm normalize `(z - mean) * inv_std` in fp32 on device with `inv_std = 1 / sqrt(var + 1e-4)` computed in fp32 on the host, then one bf16 cast of the tokens (the reference's rounding structure). No bf8 / fp16 | encode `pcc > 0.999` vs the CPU reference `AutoEncoder.encode` of the same prepared image (PLAN M6), `rel_rmse <= ENCODE_RMSE` (frozen at the first measurement, `test_vae_flux3_klein.py`); ids exact; second encode bit-equal; traced == eager and a trace replayed on another image == its eager encode. Device measurement pending: the first device session hung at its first op (wedged b03u02); on a healthy mesh (b04u02) the shipped conv slice table then threw at the level-2 downsample (`TT_FATAL ... slices (8) exceeds the maximum allowed (4)`, fixed by capping every Klein slice entry at ttnn's `ceil(output_width / 32)`, `vae_flux3_klein.klein_conv_slices` / `VaeDownsample2d`), and b04u02 wedged (PCIe 25) before the capped encoder could be measured; `ENCODE_RMSE` is `None` = log only until the first measurement. The downsample conv alone measured pcc 0.999995 / rel_rmse 0.0034 vs torch (`DOWNSAMPLE_PCC` 0.9999) |
 | PIL conversion | `to_pil`: `((x.clamp(-1, 1) + 1) * 127.5).to(uint8)`, truncation toward zero | the same expression on the host (not `utils/tensor.float_to_uint8`, a different rounding path) | PSNR compares like with like |
 | rendered image | GPU bf16 render of the same seed and recorded prompt | full device pipeline | PSNR against our own GPU render (proposed `>= 30 dB`, calibrated by the GPU-render-vs-shipped-PNG band); the shipped `examples/` PNGs are the calibration band, not the gate |
+| prompt upsampler | bf16 Qwen3.5-9B fine-tune under vLLM (bf16 matmuls, fp32 logits, fp32 Gated DeltaNet state), greedy with presence penalty 1.5 (t2i) / 0 (i2i), stop 248046 / 248044, max 3584 new tokens within `max_model_len` 8192 (a prompt of 8192+ tokens is refused, a shorter one generates `min(3584, 8192 - prompt)`) | the `qwen36` single-device path under `QWEN36_EXACT_PROFILE=1`: bf16 weights (no bfp8 / bfp4), bf16 activations and KV cache, HiFi2 with fp32 accumulation for the text MLP / GDN / attention projection matmuls and the lm_head (the shipped LoFi is the bfp8 / bfp4 fidelity; HiFi2 is the DiT's exact-profile matmul, switched with the profile), the experimental attention SDPA HiFi2 fp32-acc and the delta-rule kernels HiFi2 / HiFi4 as shipped; residual deviations from vLLM's math, measured by the audit, not changed: the 4-tap depthwise conv1d of the GDN prefill kernel keeps its LoFi config (`models/experimental/gated_attention_gated_deltanet`, outside the switch) and the DeltaNet recurrent state is bf16 on device (HF `mamba_ssm_dtype` fp32); bf16 logits read to the host and penalised / argmaxed in fp32 by the same `presence_greedy` the CPU oracle uses; the same `new_token_budget` cap as vLLM | per recorded case (`test_upsampler_flux3_klein.py` U1-U3): exact caption preferred; else token-F1 >= 0.9 vs the record (PLAN M9; calibration: BFL's own base vs distilled records of the same input sit at 0.67 / 0.90 / 0.94 / 0.998 and 1.0 x 9, `logs/m9_designer_host_facts.log:56-68`, so the records are not a deterministic oracle); below that, exact vs the CPU bf16 oracle on the same token ids (`pup_oracle.py`; a missing oracle FAILS the row with "run the oracle"), else F1 >= 0.9 vs the oracle AND the teacher-forced tie audit passed (`TIE_GAP`, frozen at the first measurement: not yet measured, so this tier cannot pass yet); an oracle-tier pass is reported as a pytest warning, never silently |
 
 Everything in the baseline is exact with respect to this contract. Changes that are faster but not bit-identical
 (bf8 operands with fp32 accumulation, the strided all-gather matmul, streaming SDPA) sit in a decision bucket and
@@ -175,14 +177,37 @@ export FLUX3_KLEIN_OUT=/path/for/renders                    # PNGs land here, ne
 export FLUX3_KLEIN_VAE_ORACLE_CACHE=/path/for/cpu/decodes     # optional: CPU reference decodes (~11 s each on a node CPU)
 export FLUX3_KLEIN_SAMPLING_ORACLE_CACHE=/path/for/cpu/samples  # optional: CPU reference sampling on device text (~9 min)
 
-# Command-line demo (flags as upstream scripts/cli.py). The prompt must already be an upsampled caption until the
-# prompt upsampler is on device; --record replays a shipped example (prompt, model, seed, references from its json).
-python models/tt_dit/pipelines/flux3_klein/demo_flux3_klein.py "<upsampled caption>" --model base --seed 7 --out out/t2i.png
-python models/tt_dit/pipelines/flux3_klein/demo_flux3_klein.py "<upsampled caption>" --model distilled \
-    --image dog.png --image mug.png --out out/edit.png                           # up to 10 references
-python models/tt_dit/pipelines/flux3_klein/demo_flux3_klein.py --record reference/examples/distilled/3_bandana.json --out out/bandana.png
+# Command-line demo (flags as upstream scripts/cli.py). The prompt is upsampled by default: the prompt upsampler runs
+# FIRST in a subprocess on one chip (its own fabric-less (1, 1) mesh; the 4x8 ring opens afterwards), a finished
+# caption passes through, --no-pup skips it; --record replays a shipped example's RECORDED caption (model, seed,
+# references from its json; the records are vendored under models/tt_dit/reference/flux3_klein/examples/, their PNGs
+# only in the BFL clone $FLUX3_KLEIN_REFERENCE/examples/), --record ... --pup upsamples the record's input_prompt on
+# device instead; --boxes takes the 0-1 layout boxes of the API; without --seed the seed is sha256(caption) % 2**32
+# of the caption the DiT sees (upstream generate.py:73; the sidecar records it); every render writes a replayable
+# <out>.json record next to the image.
+python models/tt_dit/pipelines/flux3_klein/demo_flux3_klein.py "A man walking with his dog, afternoon sun" --model base --seed 7 --out out/t2i.png
+python models/tt_dit/pipelines/flux3_klein/demo_flux3_klein.py "put a red bandana around the dog's neck" --model distilled \
+    --image dog.png --out out/edit.png                                             # up to 10 references
+python models/tt_dit/pipelines/flux3_klein/demo_flux3_klein.py "<finished caption>" --no-pup --model distilled --out out/caption.png
+python models/tt_dit/pipelines/flux3_klein/demo_flux3_klein.py --record $FLUX3_KLEIN_REFERENCE/examples/distilled/3_bandana.json --out out/bandana.png
+python models/tt_dit/pipelines/flux3_klein/demo_flux3_klein.py --record models/tt_dit/reference/flux3_klein/examples/distilled/man_dog.json --pup --out out/man_dog_pup.png
 # A structurally invalid request (side not a multiple of 16 or over 4096, > 10 references, a size whose VAE levels are
 # not tile-aligned) is refused on the host (exit 3, "REFUSED: ... budget ...") before any device call; no token budget.
+
+# The prompt upsampler alone (what the demo's subprocess runs): one chip, no fabric, bf16 weights (the wrapper sets
+# QWEN36_EXACT_PROFILE=1, HF_MODEL and TT_CACHE_PATH=$TT_DIT_CACHE_DIR/flux3_klein_pup itself; the first run writes
+# the 18.8 GB bf16 tensor cache). Exit 4 = the request was refused (the demo then uses the prompt as typed).
+python -m models.tt_dit.pipelines.flux3_klein.upsampler --prompt "A man walking with his dog, afternoon sun" --out out/man_dog.json
+python -m models.tt_dit.pipelines.flux3_klein.upsampler --prompt "put a red bandana around the dog's neck" --image dog.png --out out/bandana.json
+# Its gates: host rows (inputs == the reference recipe, sizing bit-exact vs the BFL clone, the vLLM sampler rule,
+# vendoring), then the recorded cases on one chip (exact / token-F1 >= 0.9 vs the record, else the CPU oracle)
+pytest models/tt_dit/tests/models/flux3_klein/test_upsampler_flux3_klein.py -k "not bh_" -v
+pytest models/tt_dit/tests/models/flux3_klein/test_upsampler_flux3_klein.py -k "bh_1x1_nofabric and (caption_t2i or determinism)" --timeout=7200
+pytest models/tt_dit/tests/models/flux3_klein/test_upsampler_flux3_klein.py -k "bh_1x1_nofabric and (caption_bbox or caption_i2i)" --timeout=7200
+# The CPU bf16 oracle of a case (the proper reference of a caption that misses the record; minutes per caption on a
+# node CPU, cached under $FLUX3_KLEIN_PUP_ORACLE_CACHE, else $FLUX3_KLEIN_OUT/pup_oracle; --teacher-force adds the
+# per-position tie audit the U5 rows read)
+python -m models.tt_dit.tests.models.flux3_klein.pup_oracle --case distilled/man_dog --teacher-force --threads 40
 
 # Text-to-image with the device text encoder, both checkpoints resident, Galaxy 4x8 (SP4 x TP8, ring).
 # Expected: base passes; distilled is a strict XFAIL against the CPU reference on the same device text (precision
@@ -219,11 +244,14 @@ pytest models/tt_dit/tests/models/flux3_klein/test_vae_flux3_klein.py -k "decode
 pytest models/tt_dit/tests/models/flux3_klein/test_transformer_flux3_klein.py -k "base_real and bh_4x8_ring" --timeout=6000
 
 # Host-only gates (no device): packing, scheduler, vendored reference, reference sizing + admission policy, the
-# Klein conv DRAM slice table against ttnn's ceil(output_width / 32) bound, the GroupNorm grid rule
+# Klein conv DRAM slice table against ttnn's ceil(output_width / 32) bound, the GroupNorm grid rule, the upsampler's
+# host rows and the pipeline's pass-through hook
 pytest models/tt_dit/tests/models/flux3_klein/test_packing_flux3_klein.py \
        models/tt_dit/tests/models/flux3_klein/test_scheduler_flux3_klein.py \
        models/tt_dit/tests/models/flux3_klein/test_references_flux3_klein.py \
        models/tt_dit/tests/models/flux3_klein/test_vae_flux3_klein.py -k "not bh_4x8_ring and not 1x1"
+pytest models/tt_dit/tests/models/flux3_klein/test_upsampler_flux3_klein.py -k "not bh_"
+pytest models/tt_dit/tests/models/flux3_klein/test_pipeline_flux3_klein.py -k "upsampler_hook or request_resolve"
 ```
 
 The reference images of the example cases (`examples/inputs/{1,2,3}.png`) are not vendored; the tests find them in

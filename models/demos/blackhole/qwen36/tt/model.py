@@ -196,7 +196,8 @@ class Qwen36Model:
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
             preprocess=lambda t: t.T.contiguous(),  # [dim, vocab_size]
-            dtype=ttnn.bfloat8_b,
+            # bfloat8_b as shipped; args.weight_dtype (bf16) under QWEN36_EXACT_PROFILE=1.
+            dtype=args.weight_dtype if getattr(args, "exact_profile", False) else ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -533,6 +534,17 @@ class Qwen36Model:
         argmax only has to rank candidates, and at bf16 4.7-5.5% of draft rejections at 8k/32k were
         EXACT ties in the drafter's own logits, i.e. tokens thrown away to a rounding coin flip."""
         kw, ccl_kw = {}, {}
+        if out_dtype is None and getattr(self.args, "exact_profile", False):
+            # QWEN36_EXACT_PROFILE=1: bf16 lm_head weight, HiFi2 with fp32 dest accumulation (the exact-profile
+            # matmul), logits still bf16 (vLLM's lm_head is a bf16 matmul with fp32 accumulation, cast to fp32 after).
+            kw = dict(
+                compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                    self.device.arch(),
+                    math_fidelity=ttnn.MathFidelity.HiFi2,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=False,
+                )
+            )
         if out_dtype is not None:
             # HiFi2 matches the bfloat8_b weight; fp32 dest accumulation is what actually keeps the
             # extra bits. packer_l1_acc is off simply because that is the combination measured.

@@ -16,6 +16,11 @@ class GDNConfig:
     k_dim: int
     v_dim: int
     long_prefill_chunk_size: int = 128
+    # Projection weight dtype (qkv / in_proj_a / in_proj_b / in_proj_z / out_proj and their fused copies); None = the
+    # shipped bfloat8_b. args.weight_dtype (bf16) under QWEN36_EXACT_PROFILE=1.
+    weight_dtype: object = None
+    # QWEN36_EXACT_PROFILE=1: HiFi2 projections (bf16 operands) instead of the shipped LoFi.
+    exact_profile: bool = False
 
     @classmethod
     def from_args(cls, args) -> "GDNConfig":
@@ -29,4 +34,6 @@ class GDNConfig:
             q_dim=args.linear_q_dim,
             k_dim=args.linear_k_dim,
             v_dim=args.linear_v_dim,
+            weight_dtype=args.weight_dtype if getattr(args, "exact_profile", False) else None,
+            exact_profile=bool(getattr(args, "exact_profile", False)),
         )

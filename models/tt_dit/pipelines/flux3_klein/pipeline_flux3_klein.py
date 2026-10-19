@@ -8,6 +8,13 @@ Pipeline.generate`` with every model stage on device (design records ``docs/M6_M
 
 Stages per request (``pipeline.py:55-83``, ``generate.py:65-77``), host work limited to the request schema, the
 reference sizing, noise, ids and the PNG:
+  0. :func:`resolve_caption` (``generate.py:52-63``, M9): a finished upsampler answer (no boxes and a box table fully
+     cited as ``<id>`` s, ``bbox.is_finished``) goes to the DiT as it is; otherwise, with ``prompt_upsampling`` and an
+     ``upsampler`` attached to the pipeline (``Flux3KleinUpsampler`` / its subprocess client / a test stub, anything
+     with ``__call__(prompt, images, boxes) -> str``), the prompt is upsampled on the pup's own chip BEFORE any Klein
+     device work; a ``ValueError`` from the upsampler falls back to the prompt as typed; with boxes and no upsampling
+     the ``to_canvas`` table is appended to the prompt. No upsampler attached (the default, every recorded-caption
+     gate) = the prompt is the caption.
   1. :meth:`Flux3KleinRequest.resolve` (the ``generate.py:36-42`` defaults and checks, then the reference sizing of
      ``references.prepare_references`` = ``generate.py:65-72``: one reference fitted under 4 MiP and padded to the
      16-px grid, several each under 1 MiP; the canvas defaults to the first PREPARED reference's size, else 1024 x
@@ -65,6 +72,7 @@ reason.
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -78,12 +86,13 @@ from ...encoders.qwen3vl.loader_flux3_klein import build_flux3_klein_text_encode
 from ...models.transformers.flux3_klein.transformer_flux3_klein import Flux3KleinTransformer
 from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
+from ...reference.flux3_klein import bbox
 from ...utils import cache, tensor
 from .denoise_flux3_klein import Flux3KleinDenoiser, Flux3KleinDenoiseRequest, Flux3KleinPreparedRequest
 from .packing import FLUX3_KLEIN_IN_CHANNELS, FLUX3_KLEIN_MAX_REFERENCES, image_ids, latent_shape, padded_length
 from .policy import Admission, Flux3KleinAdmissionError, admit
 from .prompt_encoder import Flux3KleinPromptEncoder
-from .references import TOO_MANY_REFERENCES, CropBox, PreparedReferences, prepare_references
+from .references import TOO_MANY_REFERENCES, CropBox, PreparedReferences, open_image, prepare_references
 from .scheduler import FLUX3_KLEIN_ALPHA, FLUX3_KLEIN_GUIDANCE, FLUX3_KLEIN_STEPS
 from .vae_encode_flux3_klein import (
     Flux3KleinVaeEncode,
@@ -132,16 +141,22 @@ def to_pil(image: torch.Tensor):
 class Flux3KleinRequest:
     """One request with BFL's field names (``generate.py`` / the API schema). ``width`` / ``height`` default to
     ``None`` = ``default_size(references)`` (the first prepared reference's size, else 1024 x 1024). ``images`` holds
-    up to ``FLUX3_KLEIN_MAX_REFERENCES`` references as ``PIL.Image.Image`` s or paths. ``text_override`` (tests only)
-    replaces the device text encoder with recorded encodings: ``((tokens, ids), (null_tokens, null_ids) | None)``;
-    ``image_cond_override`` (tests only) replaces the device VAE encoder with recorded ``(cond_tokens, cond_ids)`` whose
-    row count must equal the prepared references' token count."""
+    up to ``FLUX3_KLEIN_MAX_REFERENCES`` references as ``PIL.Image.Image`` s or paths. ``seed`` ``None`` (the default)
+    is ``generate.py:73``: ``sha256(caption) % 2**32`` of the caption the DiT sees (computed after the upsampler, so
+    the same prompt renders the same image as upstream's CLI without ``--seed``; ``caption_seed``), reported on the
+    result. ``prompt`` is the prompt as typed (the API's ``prompt``); ``prompt_upsampling`` (``pup``, on by default as upstream) lets the pipeline's
+    upsampler expand it unless it is already a finished caption; ``boxes`` are the layout boxes of the API (0-1
+    ``[y_min, x_min, y_max, x_max]`` rows with ``id`` / ``desc`` / ``bbox`` or ``from`` / ``src_bbox`` / ``tgt_bbox``),
+    validated through ``bbox.to_canvas`` on the host. ``text_override`` (tests only) replaces the device text encoder
+    with recorded encodings: ``((tokens, ids), (null_tokens, null_ids) | None)``; ``image_cond_override`` (tests only)
+    replaces the device VAE encoder with recorded ``(cond_tokens, cond_ids)`` whose row count must equal the prepared
+    references' token count."""
 
     prompt: str
     model: str = "base"
     width: int | None = None
     height: int | None = None
-    seed: int = 0
+    seed: int | None = None
     steps: int | None = None
     guidance: float | None = None
     images: tuple = ()
@@ -149,6 +164,8 @@ class Flux3KleinRequest:
     output_format: str = "png"
     text_override: tuple | None = None
     image_cond_override: CondPair | None = None
+    prompt_upsampling: bool = True
+    boxes: tuple | None = None
 
     def resolve(self) -> Flux3KleinResolved:
         """``generate.py:36-42``: ``steps = steps or defaults``; ``guidance = defaults if None``; a flow-map model
@@ -159,6 +176,9 @@ class Flux3KleinRequest:
             raise ValueError(f"unknown model {self.model!r}; expected one of {tuple(MODELS)}")
         if len(self.images) > FLUX3_KLEIN_MAX_REFERENCES:
             raise ValueError(TOO_MANY_REFERENCES)
+        boxes = tuple(dict(box) for box in self.boxes) if self.boxes else None
+        if boxes:
+            bbox.to_canvas(list(boxes))  # a malformed box raises ValueError here, before anything else
         defaults = MODELS[self.model]
         flow_map = defaults["guidance"] is None
         if flow_map and self.guidance not in (None, 1.0):
@@ -199,7 +219,7 @@ class Flux3KleinRequest:
             flow_map=flow_map,
             width=width,
             height=height,
-            seed=int(self.seed),
+            seed=None if self.seed is None else int(self.seed),
             steps=int(steps),
             guidance=None if flow_map else guidance,
             images=tuple(self.images),
@@ -209,17 +229,21 @@ class Flux3KleinRequest:
             image_cond_override=self.image_cond_override,
             prepared=prepared,
             crop=prepared.crop,
+            prompt_upsampling=bool(self.prompt_upsampling),
+            boxes=boxes,
         )
 
 
 @dataclass(frozen=True)
 class Flux3KleinResolved:
     prompt: str
+    """The prompt as typed (``input_prompt`` of the record); the caption the DiT sees comes from ``resolve_caption``."""
     model: str
     flow_map: bool
     width: int
     height: int
-    seed: int
+    seed: int | None
+    """``None`` until ``generate()`` derives it from the caption (``caption_seed``)."""
     steps: int
     guidance: float | None
     images: tuple
@@ -232,7 +256,41 @@ class Flux3KleinResolved:
     crop: CropBox | None = None
     """The single-reference crop-back box applied to the decoded image (``generate.py:76-77``)."""
     text_length: int | None = None
-    """The padded text length (a multiple of 80) once the tokenizer has seen the prompt; ``None`` before."""
+    """The padded text length (a multiple of 80) once the tokenizer has seen the caption; ``None`` before."""
+    prompt_upsampling: bool = True
+    boxes: tuple | None = None
+    """The 0-1 layout boxes (validated), or ``None``."""
+
+
+def caption_seed(caption: str) -> int:
+    """``generate.py:73``: the seed of an unseeded request, ``int(sha256(caption).hexdigest(), 16) % 2**32`` of the
+    caption the DiT sees (the upsampler's answer, the prompt + box table, or the prompt itself)."""
+    return int(hashlib.sha256(caption.encode()).hexdigest(), 16) % 2**32
+
+
+def resolve_caption(resolved: Flux3KleinResolved, upsampler) -> tuple[str, bool]:
+    """``generate.py:52-63`` verbatim: ``(caption, upsampled)``. A finished upsampler answer (``not boxes and
+    bbox.is_finished(prompt)``) is used as it is; otherwise ``prompt_upsampling`` with an ``upsampler`` runs it on
+    the ORIGINAL images (the pup's own ``policy_reference`` sizing is independent of the DiT's) and the boxes; a
+    ``ValueError`` from the upsampler (too many references, an aspect over 200:1, a prompt over its cap) is logged
+    and the prompt as typed is used; with boxes and no upsampling the ``to_canvas`` table is appended."""
+    boxes = list(resolved.boxes) if resolved.boxes else None
+    finished = not boxes and bbox.is_finished(resolved.prompt)
+    use_pup = bool(resolved.prompt_upsampling) and upsampler is not None and not finished
+    caption = None
+    if use_pup:
+        try:
+            caption = upsampler(resolved.prompt, [open_image(image) for image in resolved.images], boxes)
+        except ValueError as error:
+            logger.warning(f"upsampling skipped: {error}")
+            use_pup = False
+    if caption is None:
+        caption = (
+            f"{resolved.prompt.rstrip()} {json.dumps(bbox.to_canvas(boxes), ensure_ascii=False)}"
+            if boxes
+            else resolved.prompt
+        )
+    return caption, use_pup
 
 
 @dataclass
@@ -258,6 +316,15 @@ class Flux3KleinResult:
     """``(width, height)`` of every prepared reference."""
     crop: CropBox | None = None
     """The crop-back box applied to ``image`` (``None`` when nothing was cropped)."""
+    input_prompt: str = ""
+    """The prompt as typed (the record's ``input_prompt``)."""
+    caption: str = ""
+    """The caption the DiT saw (the record's ``prompt``): the upsampler's answer, the prompt + box table, or the
+    prompt itself."""
+    upsampled: bool = False
+    """Whether the upsampler produced ``caption`` (the record's ``upsampled``)."""
+    boxes: tuple | None = None
+    """The request's 0-1 boxes (the record's ``boxes``)."""
 
 
 # --- weights ---------------------------------------------------------------------------------------------------------------
@@ -351,9 +418,12 @@ class Flux3KleinPipeline:
         text_encoder_fsdp: bool = True,
         max_live_traces: int = 1,
         warmup_size: tuple[int, int] | None = (1024, 1024),
+        upsampler=None,
     ) -> None:
         if not resident:
             raise ValueError("at least one resident variant is required")
+        self.upsampler = upsampler
+        """Anything with ``__call__(prompt, images, boxes) -> str`` (``resolve_caption``); ``None`` = no upsampling."""
         for variant in resident:
             if variant not in MODELS:
                 raise ValueError(f"unknown variant {variant!r}")
@@ -564,11 +634,17 @@ class Flux3KleinPipeline:
         resolved = request.resolve()
         if resolved.model not in self._denoisers:
             raise ValueError(f"model {resolved.model!r} is not resident (resident: {self._resident})")
+        # 0. the caption (generate.py:52-63): the upsampler runs on its own chip before any Klein device work.
+        t0 = time.time()
+        caption, upsampled = resolve_caption(resolved, self.upsampler)
+        upsample_s = time.time() - t0
         if resolved.text_override is not None:
             text_length = int(resolved.text_override[0][0].shape[0])
         else:
-            text_length = self.text_length(resolved.prompt)
-        resolved = replace(resolved, text_length=text_length)
+            text_length = self.text_length(caption)
+        # generate.py:73: an unseeded request hashes the caption (after the upsampler), as upstream's CLI.
+        seed = resolved.seed if resolved.seed is not None else caption_seed(caption)
+        resolved = replace(resolved, text_length=text_length, seed=seed)
         admission = admit(resolved, self._shape)
         if not admission.ok:
             # Nothing has touched the device for this request: no upload, no encode, no slot allocation.
@@ -584,7 +660,7 @@ class Flux3KleinPipeline:
         if resolved.text_override is not None:
             text, null = resolved.text_override
         else:
-            text = self._encode(resolved.prompt)
+            text = self._encode(caption)
             null = None if resolved.flow_map else self._null_text
         encode_s = time.time() - t0
 
@@ -660,6 +736,7 @@ class Flux3KleinPipeline:
         to_host_s = time.time() - t0
 
         timings = {
+            "upsample_s": upsample_s,
             "encode_s": encode_s,
             "encode_refs_s": encode_refs_s,
             "prepare_s": prepare_s,
@@ -674,8 +751,9 @@ class Flux3KleinPipeline:
         references = prepared_refs.sizes if prepared_refs is not None else ()
         logger.info(
             f"RECORD generate[{resolved.model}] {resolved.width}x{resolved.height} seed {resolved.seed} steps "
-            f"{resolved.steps} guidance {resolved.guidance} text L {text_length} references {list(references)} "
-            f"cond rows {0 if image_cond is None else int(image_cond[0].shape[0])} crop {resolved.crop}: encode "
+            f"{resolved.steps} guidance {resolved.guidance} upsampled {upsampled} caption L {text_length} references "
+            f"{list(references)} cond rows {0 if image_cond is None else int(image_cond[0].shape[0])} crop "
+            f"{resolved.crop}: upsample {upsample_s:.3f}s encode "
             f"{encode_s:.3f}s encode_refs {encode_refs_s:.3f}s prepare {prepare_s:.3f}s vae_capture {vae_capture_s:.3f}s "
             f"denoise {denoise_s:.3f}s decode {decode_s:.3f}s to_host {to_host_s:.3f}s total {timings['total_s']:.3f}s "
             f"(denoise trace captured {timings['trace_captured']}, vae trace captured {timings['vae_trace_captured']}); "
@@ -696,6 +774,10 @@ class Flux3KleinPipeline:
             image_cond=image_cond,
             references=tuple(references),
             crop=resolved.crop,
+            input_prompt=resolved.prompt,
+            caption=caption,
+            upsampled=upsampled,
+            boxes=resolved.boxes,
         )
 
     def close(self) -> None:
@@ -726,6 +808,8 @@ __all__ = [
     "load_flux3_klein_transformer_weights",
     "make_noise",
     "noise_sha256",
+    "caption_seed",
+    "resolve_caption",
     "to_pil",
     "transformer_cache_key",
 ]

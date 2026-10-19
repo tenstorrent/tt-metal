@@ -127,11 +127,16 @@ class Qwen36ModelArgs(ModelArgs):
         self.moe_decoder_sparse_step = getattr(text_config, "decoder_sparse_step", 1) or 1
         self.mlp_only_layers = set(getattr(text_config, "mlp_only_layers", None) or [])
 
+        # QWEN36_EXACT_PROFILE=1 (default off): bf16 weights everywhere instead of the shipped bfp8 / bfp4
+        # profile (MLP, GDN and attention projections, lm_head, vision tower) and no bfp8 typecasts around the
+        # vision SDPA. The tensor cache then lands in tensor_cache_bf16 (weight_cache_path), so the shipped bfp8
+        # cache and every default code path are untouched while the switch is off.
+        self.exact_profile = os.environ.get("QWEN36_EXACT_PROFILE") == "1"
         # Lazy import for CPU-only testing.
         if mesh_device is not None:
             import ttnn
 
-            self.weight_dtype = ttnn.bfloat8_b
+            self.weight_dtype = ttnn.bfloat16 if self.exact_profile else ttnn.bfloat8_b
             self.act_dtype = ttnn.bfloat16
         else:
             self.weight_dtype = None
