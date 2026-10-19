@@ -279,8 +279,9 @@ void kernel_main() {
 #endif
     constexpr bool last_subblock_padded = last_subblock_w_valid < out_subblock_w;
 #if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
-    constexpr bool mm_out_block_pack = llk_matmul_block_pack<MATH_FIDELITY, in0_block_w, mm_out_dfb_id>();
-    constexpr bool mm_partials_block_pack = llk_matmul_block_pack<MATH_FIDELITY, in0_block_w, mm_partials_dfb_id>();
+    constexpr bool mm_out_block_pack = llk_matmul_block_pack<MATH_FIDELITY, in0_block_w, mm_out_dfb_id, MM_THROTTLE>();
+    constexpr bool mm_partials_block_pack =
+        llk_matmul_block_pack<MATH_FIDELITY, in0_block_w, mm_partials_dfb_id, MM_THROTTLE>();
 #else
     constexpr bool mm_out_block_pack = false;
     constexpr bool mm_partials_block_pack = false;
