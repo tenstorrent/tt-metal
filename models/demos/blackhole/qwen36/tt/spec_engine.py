@@ -1567,6 +1567,47 @@ class MTPSpecEngine:
         else:
             self._prefill_row(slot, prompt, row)
 
+    def _reconcile_fresh_rows(self, fresh_now, start_pos):
+        """Make every fresh row's prefilled length equal to the position its first verify starts at.
+
+        A fresh row's first verify carries start_pos = vLLM's num_computed_tokens = the prompt length. vLLM pads a
+        new request whose prefix-cache hit leaves exactly ONE uncached token to 1 + K scheduled tokens ("pad new
+        decode requests to uniform spec decoding size", placeholder drafts [-1] * K that update_from_output rolls
+        back as rejected), and the runner turns that into prompt_lens = num_computed_tokens + 1 + K: the row was
+        prefilled over K tokens past the prompt (whatever sat in the token buffer). The durable GDN state cannot
+        un-read tokens, so the row is prefilled again at the true length: the stored prompt cut at start_pos with the
+        same vLLM start_pos (the cached blocks are the request's; the GDN snapshots the long prefill saved are keyed by
+        the real tokens, so the re-prefill usually resumes from one). The paged KV and drafter KV past the prompt are
+        rewritten by the first verify / drafter steps. A start_pos ABOVE the prefilled length is a prompt the engine
+        never saw: raise. Returns ``fresh_now`` with the corrected lengths (``_fresh`` is updated by the re-prefill)."""
+        out = dict(fresh_now)
+        for u, Tp in sorted(fresh_now.items()):
+            sp = int(start_pos[u])
+            if sp == Tp:
+                continue
+            if sp > Tp or sp <= 0:
+                raise ValueError(
+                    f"[spec_engine] slot {u}: first verify at start_pos {sp} but the row was prefilled with {Tp} "
+                    f"tokens; the engine never saw tokens [{Tp}, {sp}) (a partial prompt is not supported)"
+                )
+            if u not in self._prompts:
+                raise RuntimeError(f"[spec_engine] slot {u}: prefilled {Tp} tokens, verify at {sp}, no stored prompt")
+            prompt, row, *rest = self._prompts[u]
+            vstart = rest[0] if rest else None
+            if vstart is not None and vstart >= sp:
+                raise ValueError(
+                    f"[spec_engine] slot {u}: vLLM start_pos {vstart} of the prefill is not below the prompt length "
+                    f"{sp} (prefilled {Tp})"
+                )
+            logger.warning(
+                f"[spec_engine] slot {u}: prefilled {Tp} tokens but the first verify starts at {sp}: the last {Tp - sp} "
+                f"prefill token(s) were not part of the prompt (vLLM pad_spec_decode placeholders); re-prefilling the "
+                f"row with {sp} tokens (vLLM start_pos {vstart})"
+            )
+            self._prefill_row(u, prompt[:sp], row, start_pos=vstart)
+            out[u] = self._fresh[u]
+        return out
+
     def _capture_last_row(self, feed, i, slot):
         """feed row i -> self._last_hidden[slot], fixed-shape programs only (a per-length slice would
         compile per prompt length). Exact like _set_anchor."""
@@ -1658,6 +1699,9 @@ class MTPSpecEngine:
         ), "verify window past the paged KV capacity"
 
         fresh_now = {u: Tp for u, Tp in self._fresh.items() if act[u]}
+        if fresh_now:
+            # a row prefilled past its prompt (vLLM pad_spec_decode placeholders) is re-prefilled at the true length
+            fresh_now = self._reconcile_fresh_rows(fresh_now, start_pos)
         if fresh_now and self.fast_join:
             # QWEN36_SPEC_FAST_JOIN=1: seed the fresh rows' ring slot 0 / E_prev in place, then verify them in THIS
             # replay as 0-draft rows at mi = 0 next to the running rows (one forward for the whole step).
