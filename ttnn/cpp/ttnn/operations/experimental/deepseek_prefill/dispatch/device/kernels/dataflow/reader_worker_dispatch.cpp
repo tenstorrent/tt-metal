@@ -488,6 +488,6 @@ void kernel_main() {
     cb_push_back(cb_plan_id, 1);
 
     // next_turn_sem.up() is a non-posted atomic. If its response lands after the next kernel on this RISC has
-    // snapshotted the NoC counters, that kernel's atomic barrier never completes.
+    // snapshotted the NoC counters, that kernel's atomic barrier can hang or return before its own atomics land.
     noc.async_atomic_barrier();
 }
