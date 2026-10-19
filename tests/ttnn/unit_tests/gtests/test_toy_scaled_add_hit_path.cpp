@@ -197,10 +197,15 @@ TEST_F(ToyScaledAddHitPath, HeightShardedHitWritesOnlyCommonArgsAndShardAddresse
             }
             ++shard_backed;
             const auto& indices = circular_buffer->buffer_indices();
-            const Tensor& backing = indices.contains(cb::A) ? hit.a : indices.contains(cb::B) ? hit.b : hit.out;
+            const Tensor* backing = &hit.out;
+            if (indices.contains(cb::A)) {
+                backing = &hit.a;
+            } else if (indices.contains(cb::B)) {
+                backing = &hit.b;
+            }
             EXPECT_EQ(
                 GetCircularBufferConfig(program, circular_buffer->id()).globally_allocated_address(),
-                backing.buffer()->address());
+                backing->buffer()->address());
         }
         EXPECT_EQ(shard_backed, 3u);
     }
