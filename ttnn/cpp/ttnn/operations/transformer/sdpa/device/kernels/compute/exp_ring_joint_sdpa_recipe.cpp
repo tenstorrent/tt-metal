@@ -138,7 +138,8 @@ void kernel_main() {
                 primary_rows,
                 joint_rows,
                 !seen_active_iter,
-                ring_iter == last_active_ring_iter);
+                ring_iter == last_active_ring_iter,
+                0);  // the exp ring reader never pads
             seen_active_iter = true;
         }
     }

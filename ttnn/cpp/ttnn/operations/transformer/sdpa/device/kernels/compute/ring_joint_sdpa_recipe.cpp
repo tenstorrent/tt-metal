@@ -90,6 +90,8 @@ void kernel_main() {
     uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
     argidx += 4;  // KV-pad Q mapping (rotation is rejected)
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    // The reader's multicast loop count; slots past this core's own Q chunks are padding (their K/V are drained).
+    const uint32_t padded_q_slots = get_arg_val<uint32_t>(argidx++) - (global_q_end - global_q_start);
 
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
@@ -197,6 +199,7 @@ void kernel_main() {
             primary_rows,
             joint_rows,
             is_first_active_iter,
-            is_last_ring_iter);
+            is_last_ring_iter,
+            padded_q_slots);
     }
 }
