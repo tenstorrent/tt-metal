@@ -131,3 +131,56 @@ def test_chunked_flash_mla_prefill_separate_v(device, cache_dtype, chunk, functi
         assert got.shape == expected.shape, (got.shape, expected.shape)
         passing, message = comp_pcc(expected, got, 0.999)
         assert passing, f"chunk at {start}: {message}"
+
+
+@pytest.mark.parametrize("chunk", [64, 128])
+def test_chunked_flash_mla_prefill_start_tensor(device, chunk, function_level_defaults, reset_seeds):
+    """chunk_start_idx_tensor: the chunk's start read from a device tensor gives the same output as the scalar start,
+    and one program serves every start (the scalar start is part of the program cache key)."""
+    import torch
+
+    nh, dk, dv, block, seq = 16, 192, 128, 64, 1024
+    num_blocks = seq // block
+    q = torch.randn(1, nh, seq, dk)
+    perm = torch.randperm(num_blocks)
+    k_cache, v_cache = (
+        ttnn.from_torch(
+            torch.randn(num_blocks, 1, block, d), device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+        )
+        for d in (dk, dv)
+    )
+    # The flexible path reads the whole page table row as one stick: a multiple of 8 int32 entries.
+    page_table = ttnn.from_torch(perm.reshape(1, -1).to(torch.int32), device=device, dtype=ttnn.int32)
+    kwargs = dict(
+        scale=dk**-0.5,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=chunk,
+            k_chunk_size=chunk,
+            exp_approx_mode=False,
+        ),
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False, packer_l1_acc=False
+        ),
+        input_tensor_v=v_cache,
+    )
+    programs = None
+    for start in range(chunk, seq, chunk):
+        q_chunk = ttnn.from_torch(
+            q[:, :, start : start + chunk], device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+        scalar = ttnn.to_torch(
+            ttnn.transformer.chunked_flash_mla_prefill(q_chunk, k_cache, dv, page_table, start, **kwargs)
+        )
+        start_tt = ttnn.from_torch(torch.tensor([start], dtype=torch.int32), device=device, dtype=ttnn.int32)
+        before = device.num_program_cache_entries()
+        runtime = ttnn.to_torch(
+            ttnn.transformer.chunked_flash_mla_prefill(
+                q_chunk, k_cache, dv, page_table, chunk_start_idx_tensor=start_tt, **kwargs
+            )
+        )
+        if programs is None:
+            programs = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == before, f"chunk at {start} compiled a new program"
+        assert torch.equal(scalar, runtime), f"chunk at {start}: tensor start differs from the scalar start"

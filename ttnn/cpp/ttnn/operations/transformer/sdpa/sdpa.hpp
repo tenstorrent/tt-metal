@@ -203,17 +203,20 @@ ttnn::Tensor flash_mla_prefill(
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
+/// Exactly one of chunk_start_idx (scalar, part of the program cache key) and chunk_start_idx_tensor (device int32
+/// [1], read at runtime: one program for every start, as chunked_scaled_dot_product_attention's flexible overload).
 ttnn::Tensor chunked_flash_mla_prefill(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     uint32_t head_dim_v,
     const ttnn::Tensor& page_table_tensor,
-    int64_t chunk_start_idx,
+    std::optional<int64_t> chunk_start_idx,
     std::optional<float> scale = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<ttnn::Tensor>& input_tensor_v = std::nullopt);
+    const std::optional<ttnn::Tensor>& input_tensor_v = std::nullopt,
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor = std::nullopt);
 
 ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,

@@ -319,3 +319,32 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
     assert worst["vs_oneshot"] > 0.995 and worst["vs_oneshot_delta"] > 0.99, worst
     assert worst_kv["k"] > 0.999 and worst_kv["v"] > 0.999, worst_kv
     assert worst_kv["v_pad"] == 0.0, "V padding columns must stay zero"
+
+
+@pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("layer_idx", [1, 5])
+def test_prefill_programs_do_not_key_on_start(mesh_device, layer_idx):
+    """Chunks of one padded length at new starts, in a new slot and on new blocks compile no new program: what lets
+    vLLM serving prefill between decode trace replays (a program compiled after a capture keeps buffers the replays
+    overwrite). The first user's chunks cover every start alignment of a 128-token chunk (window blocks and SDPA chunk
+    size); the second user's chunks reach starts the first never did."""
+    cfg, ckpt = load_config_and_ckpt()
+    dims = cfg.attention_dims(layer_idx)
+    weights = ref.load_layer_weights(ckpt, cfg, layer_idx)
+    row = Row(dp_submeshes(mesh_device)[0], cfg, layer_idx, weights, dims, 0)
+    device = row.plan.mesh_device
+
+    def prefill_user(slot, length, chunk=128):
+        x = (torch.randn(length, cfg.hidden_size) * HIDDEN_STD).bfloat16().float()
+        for s in range(0, length, chunk):
+            out, _ = row.prefill("chunked", x[s : s + chunk], slot, s)
+            out.deallocate(True)
+        ttnn.synchronize_device(device)
+
+    prefill_user(0, 640)
+    entries = device.num_program_cache_entries()
+    prefill_user(1, 1536)
+    new = device.num_program_cache_entries() - entries
+    logger.info(f"layer {layer_idx}: {entries} programs after the first user, {new} new for the second")
+    assert new == 0, f"{new} prefill programs keyed on the start, slot or blocks"
