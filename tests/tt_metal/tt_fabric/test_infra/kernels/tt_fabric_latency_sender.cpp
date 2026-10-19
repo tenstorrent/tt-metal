@@ -4,6 +4,9 @@
 
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#ifdef FABRIC2_WORKER
+#include "tt_metal/fabric/hw/inc/fabric2/fabric2_worker_adapter.hpp"
+#endif
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -53,7 +56,11 @@ void kernel_main() {
     }
 
     // Build fabric connection
+#ifdef FABRIC2_WORKER
+    auto fabric_connection = tt::tt_fabric::fabric2::Fabric2WorkerSender::build_from_args(arg_idx);  // Fabric 2.0 worker adapter
+#else
     auto fabric_connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+#endif
 
     fabric_connection.open();
 
