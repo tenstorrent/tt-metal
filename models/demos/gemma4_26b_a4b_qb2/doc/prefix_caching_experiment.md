@@ -88,3 +88,13 @@ python -m pytest models/demos/gemma4_26b_a4b_qb2/tests/test_prefix_caching.py -k
 Use the supplied Docker image and exact experimental refs. The server must set
 `GEMMA4_PREFIX_CACHING_EXPERIMENT=1` and `--enable-prefix-caching`; leave chunked
 prefill disabled. No local execution of these commands is permitted.
+
+The user explicitly authorized iterative Actions runs in `tenstorrent/tt-agentic-bringup-qb2`;
+final release validation must use Shield main. A narrow workflow on new QB2 branch
+`mvasiljevic/gemma4-prefix-cache-ci` invokes the model-owned
+`tests/run_prefix_cache_ci.sh` in the supplied prebuilt image. It binds only this
+model directory from the exact experimental Metal ref over the image's source,
+preserving compiled libraries and plugin revision. No image build is performed.
+The existing workflow filename is reused only on that isolated branch so GitHub
+can dispatch it without changing the default branch. It runs host contracts first,
+then the full 30-layer server at physical B1 and the focused API cases.
