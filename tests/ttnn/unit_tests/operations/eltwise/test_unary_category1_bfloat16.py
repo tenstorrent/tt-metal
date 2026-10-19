@@ -578,6 +578,35 @@ def test_exp2_allclose(device):
     assert_allclose(actual_result=result, expected_result=golden, atol=8.5e-39, rtol=0)
 
 
+def test_exp2_special_values(device):
+    """exp2 saturation and infinity handling, which the bfloat16 sweeps replace with 0 (see #44507).
+
+    | Input                    | Expected                                   |
+    |--------------------------|--------------------------------------------|
+    | -inf                     | 0                                          |
+    | -127                     | 0 (golden 2^-127 is subnormal; device FTZ) |
+    | -126                     | 2^-126, smallest normal (ULP ≤ 1)          |
+    | 0, ±1, ±10, 127          | ULP ≤ 1                                    |
+    | 128, +inf                | +inf                                       |
+
+    NaN is excluded: ttnn.bfloat16 host-side packing turns NaN into +inf before
+    the tensor reaches the device, so NaN propagation can't be tested at this dtype.
+    """
+    input_tensor = torch.tensor(
+        [0.0, 1.0, -1.0, 10.0, -10.0, 127.0, -126.0, float("inf"), -float("inf"), 128.0, -127.0],
+        dtype=torch.bfloat16,
+    )
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = flush_subnormal_values_to_zero(golden_function(input_tensor, device=device))
+
+    result = ttnn.to_torch(ttnn.exp2(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
+
+
 @pytest.mark.parametrize(
     "low, high, expected_atol, expected_rtol",
     [
@@ -932,6 +961,222 @@ def test_rsqrt_bf16_unflushed_zero_and_subnormal_inputs(device):
         value = stored(torch.tensor([word], dtype=torch.int32).to(torch.int16).view(torch.bfloat16))
         for first, last in ranges:
             ok |= (bits >= first) & (bits <= last) & (actual == value)
+    assert ok.all(), (
+        f"{(~ok).sum().item()} of {ok.numel()} inputs off torch and stock; first input 0x{bits[~ok][0].item():04x} "
+        f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"
+    )
+
+
+def test_rsqrt_bf16_bfloat8_b(device):
+    """bfloat8_b in and out. The SFPU reads Bfp8_b data in DEST as BF16, so this runs the BF16 kernel, as the
+    BF16 cases do. The result must correlate with torch's on the input as stored to PCC 0.999, as upstream's
+    bfloat8_b unary cases require.
+    """
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole", "wormhole_b0"):
+        pytest.skip(f"ttnn.rsqrt keeps its stock kernel on {board}")
+    torch.manual_seed(0)
+    x = torch.empty(1, 1, 64, 64).uniform_(1.0, 100.0).to(torch.bfloat16)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    stored = ttnn.to_torch(tt_x).to(torch.float64).flatten()
+    output = ttnn.rsqrt(tt_x)
+    assert output.dtype == ttnn.bfloat8_b
+    actual = ttnn.to_torch(output).to(torch.float64).flatten()
+    golden = ttnn.get_golden_function(ttnn.rsqrt)(stored).to(torch.float64)
+    pcc = torch.corrcoef(torch.stack([actual, golden]))[0, 1].item()
+    assert pcc >= 0.999, f"PCC {pcc:.6f} against torch"
+
+
+def test_rsqrt_bf16_exhaustive_inputs(device):
+    """All 65,536 BF16 inputs through ttnn.rsqrt, the call TT-NN users make.
+
+    Each must store torch's float64 result (torch.rsqrt(x)) as the BF16 pack stores it (NaN as an
+    infinity, a result below the smallest normal, or within 2^-12 above it, as 0), a finite word within
+    STEPS BF16 steps of it, or the word STOCK lists for that input on the board, as
+    {word: [(first input, last input), ...]} over the input bits. SKIP lists the inputs this case does
+    not judge, which the LLK sweep checks against its own golden: where torch's float64 formula misses
+    the exact result (a cancellation), where the kernel departs from torch by its spec, and NaN inputs
+    whose stock word varies with the payload.
+    """
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole", "wormhole_b0"):
+        pytest.skip(f"ttnn.rsqrt keeps its stock kernel on {board}")
+    STOCK = {
+        "blackhole": {
+            0x5FB3: [(0x007F, 0x007F)],
+            0x5FB4: [(0x007D, 0x007E)],
+            0x5FB5: [(0x007B, 0x007C)],
+            0x5FB6: [(0x0078, 0x007A)],
+            0x5FB7: [(0x0076, 0x0077)],
+            0x5FB8: [(0x0074, 0x0075)],
+            0x5FB9: [(0x0071, 0x0073)],
+            0x5FBA: [(0x006F, 0x0070)],
+            0x5FBB: [(0x006D, 0x006E)],
+            0x5FBC: [(0x006A, 0x006C)],
+            0x5FBD: [(0x0068, 0x0069)],
+            0x5FBE: [(0x0066, 0x0067)],
+            0x5FBF: [(0x0063, 0x0065)],
+            0x5FC0: [(0x0061, 0x0062)],
+            0x5FC1: [(0x005E, 0x0060)],
+            0x5FC2: [(0x005C, 0x005D)],
+            0x5FC3: [(0x005A, 0x005B)],
+            0x5FC4: [(0x0057, 0x0059)],
+            0x5FC5: [(0x0055, 0x0056)],
+            0x5FC6: [(0x0053, 0x0054)],
+            0x5FC7: [(0x0050, 0x0052)],
+            0x5FC8: [(0x004E, 0x004F)],
+            0x5FC9: [(0x004C, 0x004D)],
+            0x5FCA: [(0x0049, 0x004B)],
+            0x5FCB: [(0x0047, 0x0048)],
+            0x5FCC: [(0x0045, 0x0046)],
+            0x5FCD: [(0x0042, 0x0044)],
+            0x5FCE: [(0x0040, 0x0041)],
+            0x5FCF: [(0x003E, 0x003F)],
+            0x5FD0: [(0x003B, 0x003D)],
+            0x5FD1: [(0x0039, 0x003A)],
+            0x5FD2: [(0x0037, 0x0038)],
+            0x5FD3: [(0x0034, 0x0036)],
+            0x5FD4: [(0x0032, 0x0033)],
+            0x5FD5: [(0x0030, 0x0031)],
+            0x5FD6: [(0x002D, 0x002F)],
+            0x5FD7: [(0x002B, 0x002C)],
+            0x5FD8: [(0x0029, 0x002A)],
+            0x5FD9: [(0x0026, 0x0028)],
+            0x5FDA: [(0x0024, 0x0025)],
+            0x5FDB: [(0x0022, 0x0023)],
+            0x5FDC: [(0x0021, 0x0021)],
+            0x5FDD: [(0x0020, 0x0020)],
+            0x5FDE: [(0x001F, 0x001F)],
+            0x5FDF: [(0x001E, 0x001E)],
+            0x5FE0: [(0x001C, 0x001D)],
+            0x5FE1: [(0x001B, 0x001B)],
+            0x5FE2: [(0x001A, 0x001A)],
+            0x5FE3: [(0x0019, 0x0019)],
+            0x5FE4: [(0x0018, 0x0018)],
+            0x5FE5: [(0x0017, 0x0017)],
+            0x5FE6: [(0x0015, 0x0016)],
+            0x5FE7: [(0x0014, 0x0014)],
+            0x5FE8: [(0x0013, 0x0013)],
+            0x5FE9: [(0x0012, 0x0012)],
+            0x5FEA: [(0x0011, 0x0011)],
+            0x5FEB: [(0x000F, 0x0010)],
+            0x5FEC: [(0x000E, 0x000E)],
+            0x5FED: [(0x000D, 0x000D)],
+            0x5FEE: [(0x000C, 0x000C)],
+            0x5FEF: [(0x000B, 0x000B)],
+            0x5FF0: [(0x000A, 0x000A)],
+            0x5FF1: [(0x0008, 0x0008)],
+            0x5FF2: [(0x0007, 0x0007)],
+            0x5FF3: [(0x0006, 0x0006)],
+            0x5FF4: [(0x0005, 0x0005)],
+            0x5FF5: [(0x0004, 0x0004)],
+            0x5FF6: [(0x0003, 0x0003)],
+            0x5FF7: [(0x0001, 0x0002)],
+        },
+        "wormhole_b0": {
+            0x5FB3: [(0x007F, 0x007F)],
+            0x5FB4: [(0x007D, 0x007E)],
+            0x5FB5: [(0x007B, 0x007C)],
+            0x5FB6: [(0x0078, 0x007A)],
+            0x5FB7: [(0x0076, 0x0077)],
+            0x5FB8: [(0x0074, 0x0075)],
+            0x5FB9: [(0x0071, 0x0073)],
+            0x5FBA: [(0x006F, 0x0070)],
+            0x5FBB: [(0x006D, 0x006E)],
+            0x5FBC: [(0x006A, 0x006C)],
+            0x5FBD: [(0x0068, 0x0069)],
+            0x5FBE: [(0x0066, 0x0067)],
+            0x5FBF: [(0x0063, 0x0065)],
+            0x5FC0: [(0x0061, 0x0062)],
+            0x5FC1: [(0x005E, 0x0060)],
+            0x5FC2: [(0x005C, 0x005D)],
+            0x5FC3: [(0x005A, 0x005B)],
+            0x5FC4: [(0x0057, 0x0059)],
+            0x5FC5: [(0x0055, 0x0056)],
+            0x5FC6: [(0x0053, 0x0054)],
+            0x5FC7: [(0x0050, 0x0052)],
+            0x5FC8: [(0x004E, 0x004F)],
+            0x5FC9: [(0x004C, 0x004D)],
+            0x5FCA: [(0x0049, 0x004B)],
+            0x5FCB: [(0x0047, 0x0048)],
+            0x5FCC: [(0x0045, 0x0046)],
+            0x5FCD: [(0x0042, 0x0044)],
+            0x5FCE: [(0x0040, 0x0041)],
+            0x5FCF: [(0x003E, 0x003F)],
+            0x5FD0: [(0x003B, 0x003D)],
+            0x5FD1: [(0x0039, 0x003A)],
+            0x5FD2: [(0x0037, 0x0038)],
+            0x5FD3: [(0x0034, 0x0036)],
+            0x5FD4: [(0x0032, 0x0033)],
+            0x5FD5: [(0x0030, 0x0031)],
+            0x5FD6: [(0x002D, 0x002F)],
+            0x5FD7: [(0x002B, 0x002C)],
+            0x5FD8: [(0x0029, 0x002A)],
+            0x5FD9: [(0x0026, 0x0028)],
+            0x5FDA: [(0x0024, 0x0025)],
+            0x5FDB: [(0x0022, 0x0023)],
+            0x5FDC: [(0x0021, 0x0021)],
+            0x5FDD: [(0x0020, 0x0020)],
+            0x5FDE: [(0x001F, 0x001F)],
+            0x5FDF: [(0x001E, 0x001E)],
+            0x5FE0: [(0x001C, 0x001D)],
+            0x5FE1: [(0x001B, 0x001B)],
+            0x5FE2: [(0x001A, 0x001A)],
+            0x5FE3: [(0x0019, 0x0019)],
+            0x5FE4: [(0x0018, 0x0018)],
+            0x5FE5: [(0x0017, 0x0017)],
+            0x5FE6: [(0x0015, 0x0016)],
+            0x5FE7: [(0x0014, 0x0014)],
+            0x5FE8: [(0x0013, 0x0013)],
+            0x5FE9: [(0x0012, 0x0012)],
+            0x5FEA: [(0x0011, 0x0011)],
+            0x5FEB: [(0x000F, 0x0010)],
+            0x5FEC: [(0x000E, 0x000E)],
+            0x5FED: [(0x000D, 0x000D)],
+            0x5FEE: [(0x000C, 0x000C)],
+            0x5FEF: [(0x000B, 0x000B)],
+            0x5FF0: [(0x000A, 0x000A)],
+            0x5FF1: [(0x0008, 0x0008)],
+            0x5FF2: [(0x0007, 0x0007)],
+            0x5FF3: [(0x0006, 0x0006)],
+            0x5FF4: [(0x0005, 0x0005)],
+            0x5FF5: [(0x0004, 0x0004)],
+            0x5FF6: [(0x0003, 0x0003)],
+            0x5FF7: [(0x0001, 0x0002)],
+        },
+    }
+    STEPS = 1
+    SKIP = [(0x0001, 0x007F), (0x8000, 0x8000)]
+    bits = torch.arange(1 << 16, dtype=torch.int32)
+    x = bits.to(torch.int16).view(torch.bfloat16).reshape(1, 1, 256, 256)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tiny = torch.finfo(torch.bfloat16).tiny
+
+    def stored(t):
+        t = t.to(torch.bfloat16).to(torch.float64).flatten()
+        return torch.where(t.abs() < tiny, torch.zeros_like(t), t)
+
+    def ordered(t):
+        # BF16 words in value order, so that adjacent finite values differ by one step.
+        words = t.to(torch.bfloat16).view(torch.int16).to(torch.int32)
+        return torch.where(words < 0, -(words & 0x7FFF), words)
+
+    actual = stored(ttnn.to_torch(ttnn.rsqrt(tt_x)))
+    x = x.flatten().to(torch.float64)
+    reference = (torch.rsqrt(x)).to(torch.float64).flatten()
+    expected = stored(reference)
+    finite = torch.isfinite(expected) & torch.isfinite(actual)
+    ok = (actual == expected) | (finite & ((ordered(actual) - ordered(expected)).abs() <= STEPS))
+    # A NaN result reaches L1 as a NaN or as an infinity of either sign.
+    ok |= torch.isnan(reference) & (torch.isnan(actual) | torch.isinf(actual))
+    # The SFPU flushes a result below the smallest normal, or within 2^-12 above it, to 0.
+    ok |= (actual == 0) & (reference.abs() < tiny * (1 + 2.0**-12))
+    for word, ranges in STOCK.get(board, {}).items():
+        value = stored(torch.tensor([word], dtype=torch.int32).to(torch.int16).view(torch.bfloat16))
+        for first, last in ranges:
+            ok |= (bits >= first) & (bits <= last) & ((actual == value) | (torch.isnan(actual) & torch.isnan(value)))
+    for first, last in SKIP:
+        ok |= (bits >= first) & (bits <= last)
     assert ok.all(), (
         f"{(~ok).sum().item()} of {ok.numel()} inputs off torch and stock; first input 0x{bits[~ok][0].item():04x} "
         f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"

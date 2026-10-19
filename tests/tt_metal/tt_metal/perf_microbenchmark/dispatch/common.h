@@ -1023,27 +1023,34 @@ inline tt_metal::KernelHandle create_sd_cq_kernel(
             .defines = defines});
 }
 
-// Quasar simulator exposes only 64 MB as physical DRAM memory; addresses above this alias back into the same physical
-// space even though the bank is configured as 1 GB. Code that places data in DRAM on Quasar must keep it within this 64
-// MB window to avoid aliasing collisions.
-static constexpr uint32_t QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE = 1u << 26;  // 64 MB
+// The Quasar 1x3, 2x3 and 2x3_DISPATCH emulators back 64 MiB of DRAM per channel. Their soc descriptors declare
+// 1 GiB, but an offset at or above 64 MiB wraps onto the low 64 MiB. tt-metal clamps the descriptor's DRAM size to
+// 64 MiB on these models (qa_emulator_models.hpp), so the allocator, dram_size_per_channel() and both watchers see
+// 64 MiB on every run. Test code that places DRAM data by hand must still stay below 64 MiB itself.
+static constexpr uint32_t QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE = 1u << 26;  // 64 MiB
 
-// DRAM addresses and sizes for the command queue on the Quasar simulator. Issue queue (8 MB) and completion queue (8
-// MB) sit at [48, 56) and [56, 64) MB respectively, exactly reaching the physical DRAM window size limit.
-static constexpr uint32_t QUASAR_SIMULATION_ISSUE_QUEUE_BASE = 0x3000000u;  // 48 MB
-static constexpr uint32_t QUASAR_SIMULATION_ISSUE_QUEUE_SIZE = 0x800000;    // 8 MB
+// DRAM addresses and sizes for the command queue on the Quasar simulator. Issue queue (8 MiB) and completion queue
+// (8 MiB) sit at [48, 56) and [56, 64) MiB, ending at the top of the emulator's 64 MiB DRAM channel.
+static constexpr uint32_t QUASAR_SIMULATION_ISSUE_QUEUE_BASE = 0x3000000u;  // 48 MiB
+static constexpr uint32_t QUASAR_SIMULATION_ISSUE_QUEUE_SIZE = 0x800000;    // 8 MiB
 static constexpr uint32_t QUASAR_SIMULATION_COMPLETION_QUEUE_BASE =
-    QUASAR_SIMULATION_ISSUE_QUEUE_BASE + QUASAR_SIMULATION_ISSUE_QUEUE_SIZE;   // 56 MB
-static constexpr uint32_t QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE = 0x800000;  // 8 MB
+    QUASAR_SIMULATION_ISSUE_QUEUE_BASE + QUASAR_SIMULATION_ISSUE_QUEUE_SIZE;   // 56 MiB
+static constexpr uint32_t QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE = 0x800000;  // 8 MiB
 static_assert(
     QUASAR_SIMULATION_COMPLETION_QUEUE_BASE + QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE <=
         QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE,
-    "CQ overruns Quasar simulator physical DRAM window");
+    "CQ overruns the Quasar emulator's 64 MiB DRAM channel");
 
 inline bool is_quasar_sim() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     return rtoptions.get_simulator_enabled() &&
            tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
+}
+
+// The qsr.s1 chiplet model (grendel_qsr1 ATT map): only the four corner Tensix tiles of its 8x4 grid are live.
+inline bool is_quasar_sparse_sim() {
+    const auto att_map = tt::tt_metal::MetalContext::instance().rtoptions().get_noc_att_map();
+    return is_quasar_sim() && att_map.has_value() && *att_map == "grendel_qsr1";
 }
 
 // Honour an explicit TT_METAL_DRAM_BACKED_CQ value, otherwise retain the DRAM-backed default required by the Quasar
@@ -1182,6 +1189,11 @@ protected:
     }
 
     CoreRange worker_range(const CoreCoord& first_worker, bool multi_core = true) const {
+        if (Common::is_quasar_sparse_sim()) {
+            // The qsr.s1 model exposes only the four corner tiles of an 8x4 grid: a multi-tile rectangle
+            // contains stub tiles that never acknowledge, so keep the multicast destination a single tile.
+            return CoreRange{first_worker, first_worker};
+        }
         if (Common::is_quasar_sim()) {
             const CoreCoord worker_grid = device_->compute_with_storage_grid_size();
             const CoreCoord last_worker = multi_core ? CoreCoord{worker_grid.x - 1, worker_grid.y - 1} : first_worker;
@@ -1193,7 +1205,7 @@ protected:
 
     // SD (slow dispatch) issue + completion queue sizes. Must fit in one device's hugepage slot
     // (MAX_DEV_CHANNEL_SIZE = 256 MB) on WH/BH; an even 50/50 split gives 128 MB each. Quasar's default
-    // DRAM-backed policy uses fixed 8 MB queues in its 64 MB physical-DRAM window. An explicit
+    // DRAM-backed policy uses fixed 8 MiB queues at the top of the emulator's 64 MiB DRAM channel. An explicit
     // TT_METAL_DRAM_BACKED_CQ=0 uses the same mapped-host split as WH/BH.
     uint32_t sd_issue_queue_size() const {
         return Common::is_quasar_cq_dram_backed() ? QUASAR_SIMULATION_ISSUE_QUEUE_SIZE
@@ -1414,7 +1426,10 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
     const tt_metal::NOC upstream_noc =
         (device_->arch() == tt::ARCH::QUASAR) ? tt_metal::NOC::NOC_0 : tt_metal::NOC::NOC_1;
     const auto upstream_virtual = device_->virtual_noc0_coordinate(upstream_noc, phys_spoof);
-    const auto downstream_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, CoreCoord{0, 0});
+    // The slow-dispatch harness has no downstream and no dispatch_s. Name the dispatcher's own tile
+    // for both instead of the {0,0} / (255,255) placeholders: the CQ kernels latch these coordinates
+    // at entry, and a placeholder has no address-map entry under ATT (the resolver traps on it).
+    const auto downstream_virtual = my_virtual;
 
     const bool cq_dram_backed = Common::is_quasar_cq_dram_backed();
     const std::string is_cq_dram_backed = cq_dram_backed ? "1" : "0";
@@ -1510,8 +1525,8 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual.y)},
         {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual.x)},
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
-        {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
-        {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_virtual.x)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_virtual.y)},
         {"IS_D_VARIANT", "1"},
         {"IS_H_VARIANT", "1"},
     };
@@ -1557,8 +1572,8 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"UPSTREAM_NOC_Y", std::to_string(my_virtual.y)},
         {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual.x)},
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
-        {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
-        {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_virtual.x)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_virtual.y)},
         {"DOWNSTREAM_CB_BASE", std::to_string(dispatch_cb_base)},
         {"DOWNSTREAM_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
         {"DOWNSTREAM_CB_PAGES", std::to_string(dispatch_cb_pages)},

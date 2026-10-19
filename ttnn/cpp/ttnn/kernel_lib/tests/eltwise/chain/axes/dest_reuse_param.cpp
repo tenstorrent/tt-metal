@@ -37,11 +37,16 @@ void kernel_main() {
     static_assert(
         ReconfigDisabled::reconfig_srca_dfb == NO_PREV_DFB && ReconfigDisabled::reconfig_srcb_dfb == NO_PREV_DFB);
 
+    DataflowBuffer cb_a_obj(cb_a);
+    DataflowBuffer cb_b_obj(cb_b);
+    DataflowBuffer cb_c_obj(cb_c);
+    DataflowBuffer cb_out_obj(cb_out);
+
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
     eltwise_chain(
         IterationShape::tiles(n),
-        BinaryFpu<BinaryFpuOp::Add, input(cb_a), input(cb_b)>{},
-        DestReuseBinary<OP, input(cb_c), R>{},
-        PackTile<output(cb_out)>{});
+        BinaryFpu<BinaryFpuOp::Add, input(cb_a), input(cb_b)>{cb_a_obj, cb_b_obj},
+        DestReuseBinary<OP, input(cb_c), R>{cb_c_obj},
+        PackTile<output(cb_out)>{cb_out_obj});
 }
