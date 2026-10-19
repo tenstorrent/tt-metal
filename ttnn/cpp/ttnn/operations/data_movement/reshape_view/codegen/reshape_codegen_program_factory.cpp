@@ -19,6 +19,7 @@
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_plan.hpp"
+#include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_mapped_plan.hpp"
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_rows_plan.hpp"
 
 namespace ttnn::prim {
@@ -35,6 +36,9 @@ constexpr uint32_t kCbRing = tt::CBIndex::c_2;
 constexpr uint32_t kCbZero = tt::CBIndex::c_3;
 // Datums per face row; a tile-row run never crosses a face boundary, so the writer copies face rows.
 constexpr uint32_t kFaceWidth = 16;
+constexpr uint32_t kCbMap = tt::CBIndex::c_0;
+constexpr uint32_t kCbMappedInput = tt::CBIndex::c_1;
+constexpr uint32_t kCbScratch = tt::CBIndex::c_2;
 
 std::string op_kernel(const char* name) { return std::string(kKernelDir) + "/" + name; }
 
@@ -121,6 +125,71 @@ ProgramDescriptor build_tile_rows(
     return desc;
 }
 
+ProgramDescriptor build_tile_mapped(
+    const rcg::TileMappedLayout& layout,
+    uint32_t input_depth,
+    uint32_t tile_bytes,
+    const Tensor& input,
+    Buffer* map_buf,
+    Tensor& output,
+    const CoreRangeSet& grid) {
+    ProgramDescriptor desc;
+    const auto fmt = datatype_to_dataformat_converter(input.dtype());
+    Buffer* in_buf = input.buffer();
+    Buffer* out_buf = output.buffer();
+    const auto [num_cores, all_cores, group1, group2, rows1, rows2] = split_work_to_cores(grid, layout.num_rows, false);
+
+    desc.cbs.push_back(make_cb(kCbMap, tt::DataFormat::UInt32, layout.page_bytes(), 1, all_cores));
+    desc.cbs.push_back(make_cb(kCbMappedInput, fmt, tile_bytes, input_depth, all_cores));
+    desc.cbs.push_back(make_cb(kCbScratch, fmt, tile_bytes, 1, all_cores));
+
+    KernelDescriptor reader;
+    reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader.core_ranges = all_cores;
+    if (input_depth > 1) {
+        // Half-depth batches keep a slot free for the tile the writer still holds across rows.
+        reader.kernel_source = op_kernel("reader_reshape_tile_mapped_pipelined.cpp");
+        reader.compile_time_args = {
+            layout.page_bytes(), tile_bytes, kCbMap, kCbMappedInput, input_depth / 2, input_depth};
+    } else {
+        reader.kernel_source = op_kernel("reader_reshape_tile_mapped.cpp");
+        reader.compile_time_args = {layout.page_bytes(), tile_bytes, kCbMap, kCbMappedInput};
+    }
+    TensorAccessorArgs(*map_buf).append_to(reader.compile_time_args);
+    TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
+    reader.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer;
+    writer.kernel_source =
+        op_kernel(layout.sliced ? "writer_reshape_tile_mapped_ranged.cpp" : "writer_reshape_tile_mapped.cpp");
+    writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer.core_ranges = all_cores;
+    writer.compile_time_args = {
+        tile_bytes,
+        layout.entries_per_page,
+        static_cast<uint32_t>(input.element_size()),
+        kCbMap,
+        kCbMappedInput,
+        kCbScratch};
+    TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
+    writer.config = WriterConfigDescriptor{};
+
+    reader.emplace_common_runtime_args({in_buf, map_buf});
+    writer.emplace_common_runtime_args({out_buf});
+    const auto cores = corerange_to_cores(all_cores, num_cores, false);
+    uint32_t start = 0;
+    for (const auto& core : cores) {
+        const uint32_t end = start + (group1.contains(core) ? rows1 : rows2);
+        reader.emplace_runtime_args(core, {start, end});
+        writer.emplace_runtime_args(core, {start, end});
+        start = end;
+    }
+
+    desc.kernels.push_back(std::move(reader));
+    desc.kernels.push_back(std::move(writer));
+    return desc;
+}
+
 // ~Tensor force-frees its device buffer, so the table is held through a shared Tensor the workload owns. It lives
 // in interleaved DRAM, one table row per page.
 std::shared_ptr<Tensor> upload_table(
@@ -161,12 +230,12 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_wo
     const uint32_t tile_bytes =
         input.tensor_spec().tile().get_tile_size(datatype_to_dataformat_converter(input.dtype()));
 
-    // Routing already sent calls with no fitting plan to native, so only the forced entry reaches this error.
+    // Selection sends a call here unless the segment map is the live choice, so a call nothing fits reaches the error.
     const auto chosen = rcg::live_tile_rows_choice(input, out_shape, operation_attributes.plan.tile_rows);
     TT_FATAL(
         chosen.has_value(),
-        "ReshapeCodegen: no tile-row plan fits the {} B of L1 free per core below the lowest L1 allocation; free L1 "
-        "tensors or use the native reshape",
+        "ReshapeCodegen: neither a tile-row plan nor the segment map fits the {} B of L1 free per core below the "
+        "lowest L1 allocation; free L1 tensors or use the native reshape",
         ttnn::operations::data_movement::get_max_l1_space(input));
     auto plan = rcg::build_tile_rows_plan(in_shape, out_shape, *chosen);
     const rcg::TileRowsLayout layout = plan.layout;
@@ -181,6 +250,48 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_wo
         plan_owner,
         build_tile_rows(
             layout, chosen->staged_batches, tile_bytes, input, plan_owner->buffer(), tensor_return_value, grid),
+        tensor_coords);
+}
+
+tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileMappedProgramFactory::create_workload_descriptor(
+    const ReshapeCodegenParams& operation_attributes,
+    const ReshapeCodegenInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    const Tensor& input = tensor_args.input;
+    const auto grid = rcg::reshape_core_grid(input, operation_attributes.sub_core_grids);
+    const auto num_cores = static_cast<uint32_t>(grid.num_cores());
+    const uint32_t tile_bytes =
+        input.tensor_spec().tile().get_tile_size(datatype_to_dataformat_converter(input.dtype()));
+
+    // Serves the segment-map route and the fallback for tile-rows plans that do not fit live L1.
+    const auto chosen =
+        rcg::live_tile_choice(input, operation_attributes.logical_output_shape, num_cores, operation_attributes.plan);
+    const auto* mapped = chosen.has_value() ? std::get_if<rcg::TileMappedChoice>(&*chosen) : nullptr;
+    TT_FATAL(
+        mapped != nullptr,
+        "ReshapeCodegen: no segment map fits the {} B of L1 free per core below the lowest L1 allocation; free L1 "
+        "tensors or use the native reshape",
+        ttnn::operations::data_movement::get_max_l1_space(input));
+    const rcg::TileMappedLayout& layout = mapped->layout;
+    TT_FATAL(
+        tensor_return_value.buffer()->num_pages() == layout.num_output_pages,
+        "Reshape output has {} tiles, the segment map expects {}",
+        tensor_return_value.buffer()->num_pages(),
+        layout.num_output_pages);
+
+    auto plan = rcg::build_tile_mapped_plan(
+        input.logical_shape(),
+        operation_attributes.logical_output_shape,
+        static_cast<uint32_t>(input.element_size()),
+        tile_bytes,
+        num_cores,
+        layout.sliced);
+    const auto map_owner = upload_table(std::move(plan.table), layout.num_rows, layout.page_words(), input);
+    return table_workload(
+        map_owner,
+        build_tile_mapped(
+            layout, mapped->input_depth, tile_bytes, input, map_owner->buffer(), tensor_return_value, grid),
         tensor_coords);
 }
 

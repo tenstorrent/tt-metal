@@ -10,6 +10,14 @@
 
 namespace ttnn::operations::data_movement::reshape_codegen {
 
+namespace {
+
+uint32_t tile_bytes_of(const Tensor& input) {
+    return input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
+}
+
+}  // namespace
+
 tt::tt_metal::TensorSpec output_spec(
     const Tensor& input, const ttnn::Shape& logical_output_shape, const tt::tt_metal::MemoryConfig& output_mem_config) {
     return tt::tt_metal::TensorSpec(
@@ -48,32 +56,45 @@ uint64_t static_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& o
     return budget;
 }
 
-uint64_t pending_output_l1_bytes(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec) {
-    // require_constructible: output_spec is the spec the op allocates, so a failure to build it is a bug, not a
-    // reason to reserve nothing and route a call the factory then rejects.
-    return get_pending_l1_output_reservation(
-        input,
-        output_spec.padded_shape(),
-        output_spec.memory_config(),
-        output_spec.data_type(),
-        output_spec.layout(),
-        /*require_constructible=*/true);
-}
-
 std::optional<TileRowsChoice> live_tile_rows_choice(
-    const Tensor& input,
-    const ttnn::Shape& logical_output_shape,
-    const TileRowsChoice& planned,
-    uint64_t reserved_l1_bytes) {
-    const uint32_t tile_bytes =
-        input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
-    const uint64_t max_l1 = get_max_l1_space(input);
-    const uint64_t free_l1 = max_l1 > reserved_l1_bytes ? max_l1 - reserved_l1_bytes : 0;
+    const Tensor& input, const ttnn::Shape& logical_output_shape, const TileRowsChoice& planned) {
+    const uint32_t tile_bytes = tile_bytes_of(input);
+    const uint64_t free_l1 = get_max_l1_space(input);
     const auto fits = [&](const TileRowsChoice& choice) { return tile_rows_l1_bytes(choice, tile_bytes) <= free_l1; };
     if (fits(planned)) {
         return planned;
     }
     return plan_tile_rows_fitting(input.logical_shape(), logical_output_shape, fits);
+}
+
+std::optional<TileMappedChoice> fit_tile_mapped(
+    const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores, uint64_t l1_budget) {
+    const uint32_t tile_bytes = tile_bytes_of(input);
+    const auto layout = tile_mapped_layout(
+        input.logical_shape(),
+        logical_output_shape,
+        static_cast<uint32_t>(input.element_size()),
+        tile_bytes,
+        grid_cores,
+        l1_budget);
+    if (!layout.has_value()) {
+        return std::nullopt;
+    }
+    return TileMappedChoice{.layout = *layout, .input_depth = tile_mapped_input_depth(*layout, tile_bytes, l1_budget)};
+}
+
+std::optional<TileChoice> live_tile_choice(
+    const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores, const LaunchPlan& planned) {
+    const uint64_t free_l1 = get_max_l1_space(input);
+    if (planned.tile_route == TileRoute::TileRows) {
+        if (auto rows = live_tile_rows_choice(input, logical_output_shape, planned.tile_rows)) {
+            return TileChoice{std::move(*rows)};
+        }
+    }
+    if (auto mapped = fit_tile_mapped(input, logical_output_shape, grid_cores, free_l1)) {
+        return TileChoice{std::move(*mapped)};
+    }
+    return std::nullopt;
 }
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen

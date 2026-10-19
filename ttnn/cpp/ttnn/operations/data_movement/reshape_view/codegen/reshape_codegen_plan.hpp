@@ -6,19 +6,36 @@
 
 #include <cstdint>
 #include <optional>
+#include <variant>
 
 #include <tt-metalium/core_coord.hpp>
 
+#include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_mapped_plan.hpp"
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_rows_plan.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::data_movement::reshape_codegen {
 
-// What the entry planned for one call: the full plan. A program-cache miss builds from it instead of planning again
-// unless it no longer fits live L1 (live_tile_rows_choice).
+// A segment map fitted to a budget: the layout and its input CB depth.
+struct TileMappedChoice {
+    TileMappedLayout layout;
+    uint32_t input_depth = 0;
+};
+
+// The TILE program a call runs. Tile rows needs both widths to be multiples of 32; the segment map takes any widths.
+enum class TileRoute : uint32_t { TileRows = 0, TileMapped = 1 };
+
+// What the entry planned for one call. A program-cache miss builds from it instead of planning again; live L1 then
+// picks the plan's size (live_tile_choice).
 struct LaunchPlan {
+    // TILE: the route, with the full tile-rows plan when it takes tile rows. The segment map is planned from the
+    // shapes alone.
+    TileRoute tile_route = TileRoute::TileRows;
     TileRowsChoice tile_rows;
 };
+
+// A TILE program fitted to a budget, one alternative per TileRoute.
+using TileChoice = std::variant<TileRowsChoice, TileMappedChoice>;
 
 // Cores the op may use: `sub_core_grids` if given, else the device's compute grid.
 tt::tt_metal::CoreRangeSet reshape_core_grid(
@@ -29,22 +46,27 @@ tt::tt_metal::TensorSpec output_spec(
     const Tensor& input, const ttnn::Shape& logical_output_shape, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 // L1 window independent of live occupancy: the L1 bank (allocator range less L1_SMALL) minus the per-bank footprint
-// of the input and output when they live in L1. Routing and validation gate on the smallest plan fitting it; which
-// plan the program is built with is live_tile_rows_choice's decision.
+// of the input and output when they live in L1. Routing and validation gate on the smallest plan fitting it, so the
+// route never moves with live occupancy; which plan the program is built with is live_tile_choice's decision.
 uint64_t static_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
 
-// Per-core L1 the output takes once allocated; 0 unless it lives in L1.
-uint64_t pending_output_l1_bytes(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
-
-// The plan the program is built with: `planned` when its buffers fit the L1 free below the lowest live allocation
-// less `reserved_l1_bytes`, else the first smaller plan that does (plan_tile_rows_fitting); nullopt when none does.
-// The program hash and the program factory call it after the output is allocated, with nothing allocating L1 between
-// them, so the plan the hash keys is the plan the factory builds. Routing calls it before that allocation with the
-// output reserved, so a call it admits has a plan at program creation.
+// The plan the program is built with: `planned` when its buffers fit the L1 free below the lowest live allocation,
+// else the first smaller plan that does (plan_tile_rows_fitting); nullopt when none does. The program hash and the
+// program factory call it after the output is allocated, with nothing allocating L1 between them, so the plan the
+// hash keys is the plan the factory builds.
 std::optional<TileRowsChoice> live_tile_rows_choice(
-    const Tensor& input,
-    const ttnn::Shape& logical_output_shape,
-    const TileRowsChoice& planned,
-    uint64_t reserved_l1_bytes = 0);
+    const Tensor& input, const ttnn::Shape& logical_output_shape, const TileRowsChoice& planned);
+
+// The program of `planned.tile_route` sized to the L1 free below the lowest live allocation: the largest tile-rows
+// plan (live_tile_rows_choice), or the segment map, sliced where slicing pays off and fits, with the deepest input CB
+// that fits. When no tile-rows plan fits, the segment map: its smallest plan holds one map row and two tiles, no more
+// than native's tiled reshape, so routing need not look at live L1. nullopt when nothing fits. Same contract as
+// live_tile_rows_choice.
+std::optional<TileChoice> live_tile_choice(
+    const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores, const LaunchPlan& planned);
+
+// The segment map fitted to `l1_budget`, nullopt when it exceeds its size caps or does not fit with one input slot.
+std::optional<TileMappedChoice> fit_tile_mapped(
+    const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores, uint64_t l1_budget);
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen

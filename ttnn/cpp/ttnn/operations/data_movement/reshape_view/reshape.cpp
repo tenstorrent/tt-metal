@@ -753,8 +753,7 @@ ttnn::Tensor reshape_dispatch(
     }
     if (impl == ReshapeImpl::ROUTED && operations::data_movement::codegen_supported_on_arch(tensor) &&
         codegen_can_serve(tensor, logical_shape, padded_shape, pad_value, mem_config, sub_core_grid) &&
-        !reshape_codegen::is_demoted(tensor, logical_shape, mem_config, sub_core_grid) &&
-        reshape_codegen::codegen_cb_plan_fits_live_l1(tensor, logical_shape, mem_config, sub_core_grid)) {
+        !reshape_codegen::is_demoted(tensor, logical_shape, mem_config, sub_core_grid)) {
         return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid);
     }
     if (logical_shape.volume() != tensor.logical_volume()) {

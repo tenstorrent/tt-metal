@@ -79,6 +79,12 @@ _PATHS = [
     ("tile_rows_int32", [1, 64, 1024], [1, 64, 8, 128], ttnn.int32, ttnn.TILE_LAYOUT),
     ("tile_rows_uint32", [1, 64, 1024], [1, 64, 8, 128], ttnn.uint32, ttnn.TILE_LAYOUT),
     ("tile_rows_uint16", [1, 64, 1024], [1, 64, 8, 128], ttnn.uint16, ttnn.TILE_LAYOUT),
+    # Segment map: a width that is not a multiple of 32.
+    ("tile_mapped_bf16", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ("tile_mapped_fp32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.float32, ttnn.TILE_LAYOUT),
+    # Sliced segment map: 4 output tiles on a grid of 21 or more cores, each reading 32 source tiles, so every output
+    # tile is cut into ranges written by different cores.
+    ("tile_mapped_sliced", [1, 1, 4, 1000], [1, 1, 125, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
 ]
 
 
@@ -92,11 +98,10 @@ def test_reshape_codegen_bit_exact(device, path, in_shape, out_shape, dtype, lay
     _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
 
 
-@pytest.mark.parametrize(
-    "path,in_shape,out_shape,dtype,layout",
-    [p for p in _PATHS if p[0] == "tile_rows"],
-    ids=["tile_rows"],
-)
+_KEYED = [p for p in _PATHS if p[0] in ("tile_rows", "tile_mapped_fp32", "tile_mapped_sliced")]
+
+
+@pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
 def test_reshape_codegen_sub_core_grids(device, path, in_shape, out_shape, dtype, layout):
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, layout, _DRAM)
@@ -141,8 +146,8 @@ def test_reshape_codegen_edge_shapes(device, case, in_shape, out_shape, dtype):
     _assert_bits(padded, codegen.cpu().to_torch_with_padded_shape(), dtype)
 
 
-# (id, in shape, out shape, dtype, layout, expected route). Shapes outside the tile-rows scope, and shapes
-# is_demoted sends back, run native.
+# (id, in shape, out shape, dtype, layout, expected route). Demotion is decided by the TILE program routing takes:
+# tile rows where it beats native, the segment map on widths that are not multiples of 32. Row-major runs native.
 _ROUTES = [
     # Head split: batching cuts source reads 32x.
     ("tile_rows", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
@@ -151,8 +156,8 @@ _ROUTES = [
     # Width change: tile rows saves only 2x the reads on far fewer cores.
     ("tile_width_native", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
     ("tile_width_uint16", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.uint16, ttnn.TILE_LAYOUT, "codegen"),
-    # A width that is not a multiple of 32 is not a tile-row permutation.
-    ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
+    # A width that is not a multiple of 32 takes the segment map.
+    ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
     ("row_major", [512, 256], [1024, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native"),
 ]
 
@@ -170,11 +175,7 @@ def test_reshape_codegen_routing(device, case, in_shape, out_shape, dtype, layou
     assert device.num_program_cache_entries() == entries, f"auto did not take {route}"
 
 
-@pytest.mark.parametrize(
-    "path,in_shape,out_shape,dtype,layout",
-    [p for p in _PATHS if p[0] == "tile_rows"],
-    ids=["tile_rows"],
-)
+@pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
 def test_reshape_codegen_cache_hit_new_addresses(device, path, in_shape, out_shape, dtype, layout):
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, layout, _DRAM)
@@ -284,23 +285,25 @@ def test_reshape_codegen_shrinks_plan_under_l1_pressure(device):
     assert device.num_program_cache_entries() == entries + 1
 
 
-def test_reshape_codegen_routes_native_when_no_plan_fits_l1(device, expect_error):
-    # The same head split's smallest plan takes 173 KiB per core, so with 128 KiB free no plan fits: auto must run
-    # native, while the forced entry still refuses.
+def test_reshape_codegen_falls_back_to_segment_map_when_no_tile_row_plan_fits_l1(device):
+    # The same head split's smallest tile-row plan takes 173 KiB per core, so with 128 KiB free the program factory
+    # builds the segment map instead: a new program, which auto takes as well.
     in_shape, out_shape, dtype = [1, 256, 4096], [1, 256, 32, 128], ttnn.float32
     source = _make(in_shape, dtype)
     expected = source.reshape(out_shape)
     x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
+    _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    entries = device.num_program_cache_entries()
     hog = _l1_hog_leaving(device, 128 * 1024)
+    _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    assert device.num_program_cache_entries() == entries + 1
     _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
-    with expect_error(RuntimeError, "no tile-row plan fits"):
-        _force_codegen(x, out_shape, memory_config=_DRAM)
+    assert device.num_program_cache_entries() == entries + 1
     ttnn.deallocate(hog)
 
 
 _OUT_OF_SCOPE = [
     ("bfloat8_b", [1, 1, 64, 128], [1, 1, 128, 64], ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-    ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
     ("row_major", [512, 256], [1024, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
 ]
 
