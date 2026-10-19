@@ -1,21 +1,22 @@
 # DeepSeek-V4.1-Flash on Blackhole Galaxy: release notes
 
-## This release: image `0.24.0-8cfe120-84b529b` (vLLM 0.31.0)
+## This release: image `0.24.0-1fa9922-84b529b` (vLLM 0.31.0)
 
 | | |
 |---|---|
-| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-8cfe120-84b529b` |
-| tt-metal | `8cfe12076693518d989cd20b4c2233fc5c0f077a` (branch `ssinghal/dsv4p1`; the image was built from this commit, later commits change documentation only) |
+| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-1fa9922-84b529b` |
+| tt-metal | `1fa9922c4b17cd1b81dea18b26a12320355f6d51` (branch `ssinghal/dsv4p1`; the image was built from this commit, later commits change documentation only) |
 | tt-inference-server | `84b529b9afdeaa12c230523c1c90ed2c307b18bf` (branch `ssinghal/dsv4p1`; the catalog carries the production defaults, see below) |
 | vllm-tt-plugin | `ff71d290df8e95e5e956d49ba860478db2cb034c` (branch `ssinghal/dsv4p1`) |
 | Stack | vLLM 0.31.0, torch 2.11.0+cpu, transformers 5.12.1 |
-| Previous image | `0.24.0-c9cfb00-ffd1a57` (vLLM 0.31.0; before it `0.24.0-799a223-ffd1a57`) |
-| Build | an overlay on the previous image (`0.24.0-c9cfb00-ffd1a57`): the compiled tt-metal (C++), the Python environment and the vLLM install are reused unchanged (no file outside `models/` differs in tt-metal between `3dce07e3792` and this commit); `models/` and the plugin package are replaced from the commits above, the tt-inference-server tree is unchanged. |
+| Previous image | `0.24.0-8cfe120-84b529b` (vLLM 0.31.0; before it `0.24.0-c9cfb00-ffd1a57` and `0.24.0-799a223-ffd1a57`) |
+| Build | an overlay on the previous image (`0.24.0-8cfe120-84b529b`): the compiled tt-metal (C++), the Python environment, the vLLM install, the plugin and the tt-inference-server tree are reused unchanged; only `models/` is replaced (one file of the DeepSeek-V4.1-Flash model code differs from the previous image: `tt/prefix_cache.py`). |
 
 ## What changed since `0.24.0-799a223-ffd1a57`
 
-New since `0.24.0-c9cfb00-ffd1a57`: the small prefill context at 1,048,576 tokens, the shared sampler in the speculative verify rounds (`DSV41_SHARED_SAMPLER_SPEC`, default 1), and the catalog defaults of tt-inference-server (a launch without a runtime spec serves 16 users at 262,144 tokens with prefix caching, chunk budget 4,096 and k = 5; `--impl deepseek-v41-flash-1m` serves 4 users at 1,048,576 tokens). The other items below are in both images.
+New since `0.24.0-8cfe120-84b529b`: the prefix-cache snapshot reads the kv table in row pieces (below). New since `0.24.0-c9cfb00-ffd1a57`: the small prefill context at 1,048,576 tokens, the shared sampler in the speculative verify rounds (`DSV41_SHARED_SAMPLER_SPEC`, default 1), and the catalog defaults of tt-inference-server (a launch without a runtime spec serves 16 users at 262,144 tokens with prefix caching, chunk budget 4,096 and k = 5; `--impl deepseek-v41-flash-1m` serves 4 users at 1,048,576 tokens). The other items below are in both images.
 
+- **Prefix-cache snapshot no longer needs one large DRAM buffer (4 users / 1,048,576 tokens).** The snapshot at 524,288 tokens of a long prompt sliced the kv table of each source layer on the device as one buffer (512 MiB, 64 MiB per bank) while the largest free DRAM block of the 1M build is about 41 MiB: the server stopped with a device out-of-memory error (`TT_FATAL`) about 14 minutes into a 1,000,000-token prompt, i.e. for any prompt that reaches 524,288 tokens with APC on. The slice is now read in row pieces of at most 16 MiB (`SNAP_PIECE_MIB`, `tt/prefix_cache.py`). Prompts of 1,000,028 tokens complete; a 599,955-token prompt asked twice restores the 524,288-token snapshot in 7.6-8.7 s.
 - **Plain decode is fixed.** A server without speculative decoding used the fused decode-indexer backend and answered wrongly at 16 users (GSM8K 85.67 % at 131,072 tokens, 80.59 % at 262,144). Plain decode now uses the matmul backend up to 262,144 index entries, like the speculative servers (`DSV41_IDX_SWITCH` default 262144 for every launch). See "Known issues" for how this was verified.
 - **Prefix caching (APC) and chunked prefill, on by default in the 262,144 / 1,048,576-token specs.** They start the server with APC on and a token budget of 4,096 per step (`_noapc` copies switch it off). Shared-prefix bursts get their first token about 3x sooner at 16 users / 262,144 tokens, and a 32k-token prompt no longer stops decoding for 33 s (9 s). The 131,072-token specs are unchanged (APC off, budget 67,584; APC is wrong with the unsharded prefill-indexer layout of those sizes).
 - **Sampling uses the shared tt_transformers sampler**, in plain decode (`DSV41_SHARED_SAMPLER`) and in the speculative verify rounds (`DSV41_SHARED_SAMPLER_SPEC`), both default 1; 0 selects the previous full-vocabulary sampler. It takes the top 32 candidates of the vocabulary per step: `top_k` above 32 is clamped to 32 and "no top_k" (the model card's recommended sampling: temperature 1.0, top_p 0.95 or 1.0) means the top-32 of the vocabulary (logged once at the first such request); candidates are bf16 roundings of the logits. Greedy rows (temperature 0 / `top_k` 1) stay the exact argmax and seeds keep their meaning. Sampler time per step: 1.2-1.9 ms against 1.5-3.6 ms (ours, top-k / full vocabulary) in plain decode, and 1.85 ms against 2.3 / 8.5 ms per verify round at 16 users.
@@ -119,6 +120,22 @@ GSM8K 8-shot (`dsv41_gsm8k_cot`, all 1319 questions, tt-inference-server `evals`
 
 The 16-user 262,144-token server scores about 2 points lower than the other configurations (about 3 standard errors, reproduced on a second run). It passes the workflow's gate (within 5 % of the model card's 93.0). Checks made to find the cause: vision on or off makes no difference (131,072 tokens: 95.38 % with, 95.22 % without; 262,144 tokens: 93.5 % with, 93.18 % without and with the column-sharded RoPE tables switched off), the new code is not the cause at the default context (95.22 % at 131,072 tokens on this image), and 163,840 tokens scored 94.54 %. **The cause of this 2-point gap is not identified** (the speculative servers already run the matmul decode indexer; a plain-decode server on the fused indexer scored lower, see "Known issues"). The 262,144-token server passes every functional test and has the speed of the default configuration.
 
+## Release-candidate checks on `0.24.0-1fa9922-84b529b`
+
+Each configuration was served once; spec decode k = 5, APC on, token budget 4,096, vision on.
+
+| Check | 16 users / 262,144 | 4 users / 1,048,576 |
+|---|---|---|
+| Serving API (23 checks), overload, many images | 23/23, pass | 23/23, pass |
+| 16-concurrent image stress, 48 random images (number / both colours) | 48/48, 48/48 | 48/48, 46/48 |
+| GSM8K 8-shot, 256 questions, full concurrency | 96.5 % / 97.3 % | not rerun on this image (98.0 / 98.4 / 98.0 % on `0.24.0-8cfe120-84b529b`, same model code except the snapshot read) |
+| APC prefix sweep, needle at the middle, 2k-100k tokens | correct cold and on both hits; at 100k: 116 s cold, 44 s hit | correct on `0.24.0-8cfe120-84b529b` (100k: 169 s cold, 61 s hit) |
+| Prompt of 1,000,028 tokens, 128 output tokens | not applicable | completes: TTFT 1711 s, TPOT 98 ms |
+| Prompt of 599,955 tokens asked cold, then twice with another closing question | not applicable | 4817 each time; TTFT 1010 s cold, 138 s and 137 s on the hits (restore at 524,288 tokens: 7.6-8.7 s) |
+| Short prompt (about 700 tokens in, 256 out): TTFT / TPOT at 1, 2, 4, 8, 16 requests | 0.74 s / 28.7 ms, 0.89 s / 35.7, 1.08 s / 34.2, 1.29 s / 42.6, 1.69 s / 57.7 | 0.60 s / 32.4 ms, 0.74 s / 35.6, 0.84 s / 37.4 (1, 2, 4 requests) |
+
+Against the benchmark baseline of `0.24.0-8cfe120-84b529b` (same config) every short-prompt row is within 15 % (largest: +10 % TTFT and TPOT at 2 requests, 16 users; `bench_compare.py`).
+
 ## Testing done on this image
 
 Each configuration was served once and every test ran against that one server (no restarts between tests). Scripts: `tools/serving_tests/` (README there).
@@ -156,6 +173,9 @@ Serving-API suite and overload test passed on the 4-user / 1,048,576-token serve
 
 ## Known issues
 
+- **Decode is slower with a deep context.** Single-request TPOT is 23 ms at 16k tokens, about 66-76 ms at 32k-131k, 74 ms at 250k (16 users) and 98 ms at 1M (4 users): every decode and verify step scores the whole index. A column-sharded decode indexer is in test (not in this image).
+- **Concurrent long prompts are prefilled one after another and the decode steps of the other users wait between prefill pieces.** 16 simultaneous 250,000-token prompts took 5,035 s (first token 320 s + about 312 s per request) with a TPOT of about 10 s; 4 simultaneous 1,000,000-token prompts took 6,751 s with about 13.7 s per token.
+- **Prefix caching and the 4,096-token budget trade first-token time for decode stalls at high concurrency:** against the same image without them, 16 concurrent requests wait 15-24 % longer for the first token at 1,024-16,384-token prompts (TPOT is lower for long prompts). At one request, TPOT of 8k-10k-token prompts was 46 ms with APC on against about 30 ms with it off in the default sweep; a direct test (same prompt cold and as cache hits) shows no difference between cold and hit decode, so the cause is not found.
 - **Plain decode on the previous image `0.24.0-799a223-ffd1a57` answered wrongly at 16 users (GSM8K 85.67 % at 131,072 tokens, 80.59 % at 262,144 tokens; speculation 95.2 % and 93.5 %).** Cause: servers without a speculative config used the fused decode-indexer backend (default switch 65,536 entries); speculative servers ran matmul. With the matmul backend plain decode scored 95.22 % and 94.47 %. This image makes matmul the default up to 262,144 index entries for plain decode too, and it was verified on plain-decode servers of this image (no speculative config, no environment override): **95.83 %** at 16 users / 131,072 tokens and **93.40 %** at 262,144 tokens (workflow, flexible-extract; the old default scored 85.67 % and 80.59 %). The fused backend is still in the code (it is selected above 262,144 entries and by `DSV41_IDX_BACKEND=fused`) and still answers wrongly at 4 users per mesh row; why is not understood. Ruled out: the plain-decode RoPE change (the old fused RoPE kernel scores 74.68 %), the sampler (0.02-0.04 % mismatch against a CPU reference at the same random numbers), request admission, vision.
 - **16 users at 262,144 tokens score about 2 points lower on GSM8K** (93.5 % against 95.2-95.4 % at 131,072 tokens), cause not identified (see "Accuracy"). The 131,072-token configuration is no longer a default; it stays available where that accuracy matters.
 - **Prefix caching (APC) at 16 users / 131,072 tokens answers worse: sampled GSM8K 89.1 % and 87.5 % with APC and the large token budget, 88.7 % and 88.3 % with APC and the 4,096 budget, against 95.3 % and 98.0 % without APC and 97.3 % with only the 4,096 budget (chunked prefill).** So APC causes it, chunked prefill does not. The 131,072-token configuration does not shard the prefill indexer, the same unsharded key layout in which the restore is wrong with `DSV41_PIDX_SHARD=0` at 262,144 tokens (next item); the shipped APC specs (262,144 and 1,048,576 tokens) use the sharded layout and score 95.6-98.4 %. The cause inside the unsharded layout is not found. There is no APC spec for 131,072 tokens in the assets; do not enable APC (`DSV41_APC=1`) with the 131,072-token specs or with `DSV41_PIDX_SHARD=0`.
@@ -171,8 +191,8 @@ Serving-API suite and overload test passed on the 4-user / 1,048,576-token serve
 
 ## Tests still to run
 
-- **Decode speed at deep context.** The benchmarks above use prompts of about 700 tokens. TPOT with 32k, 100k and 200k tokens already in the context (262,144-token and 1M servers) has not been measured. The needle tests check retrieval, not speed.
-- **A prompt close to the context limit.** The longest prompt run is 100,020 tokens. A prompt of about 1,000,000 tokens (4 users, 1,048,576 context) and one of about 250,000 tokens (16 users, 262,144 context) have not been run. The 1M prefill is estimated at about 12 minutes.
+- **Decode speed at deep context:** measured with single requests (see Known issues); the numbers in the sweeps of the baseline reports (`tt-serving-qualification` skill) carry the rest.
+- **A prompt close to the context limit:** run on this image (4 users: 1,000,028 tokens, TTFT 1711 s; 16 users: 250,029 tokens, TTFT 311 s, TPOT 74 ms). The 1M prefill takes about 28 minutes, not the earlier estimate of 12.
 - **Request controls under speculation, tested on 8 live servers of this image (16 users / 262,144, 4 users / 524,288 and 1,048,576, text and vision, APC on and off):** every server gave the same answers: `logprobs`, structured output, `logit_bias`, `bad_words`, `allowed_token_ids`, `min_tokens` and `min_p` are refused with HTTP 400 and an explanatory message (`n > 1` with greedy sampling also 400); frequency / presence / repetition penalty, `top_k` / `top_p`, `seed`, `stop`, `max_tokens` and streaming return 200, and a batch of 4 penalty plus 4 plain requests at once answered all 8 correctly. No request produced a 5xx. (The earlier reading of the platform code that `min_p` is served without speculation was wrong.)
 
 ## Not in this release
