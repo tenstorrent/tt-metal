@@ -197,6 +197,9 @@ class BatchedDraft:
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
         self.argmax = _Argmax(target.lm_head_weight.shape[-1], target.vocab_size)
+        # the drafter's LM head on a BFP4 copy of the target's with BF8 rows: 0.89 -> 0.52 ms per pass, live-like
+        # acceptance on a fixed text 3.07 (BF16 rows x BF8 weight: 3.05 / 3.10 in two runs)
+        self.lm_head = ttnn.typecast(target.lm_head_weight, ttnn.bfloat4_b)
 
     # -- pieces ----------------------------------------------------------------------------------------------------
     def _linear(self, x, w, bias=None):
@@ -219,7 +222,8 @@ class BatchedDraft:
 
     def _rows_qk(self, qkv, L, cos, sin, with_q):
         """[1, 1, rows, qkv] projection -> the same with K (and Q) head-normed and rotated, every row at its own
-        position: a head split, the norms and RoPE in the prefill layout, the heads joined again."""
+        position: a head split, the norms and RoPE in the prefill layout, the heads joined again. with_q: also
+        returns the rotated Q heads [1, heads, rows, hd]."""
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
             num_heads=self.nq,
@@ -229,18 +233,22 @@ class BatchedDraft:
         )
         trans = self.rope.get_both_trans_mats()["prefill"]
         parts = []
-        for t, w, rotate in ((q, L["q_norm"], with_q), (k, L["k_norm"], True), (v, None, False)):
+        q_rows = None
+        for j, (t, w, rotate) in enumerate(((q, L["q_norm"], with_q), (k, L["k_norm"], True), (v, None, False))):
             if rotate:
                 n = ttnn.rms_norm(t, epsilon=self.eps, weight=w, compute_kernel_config=self.ck)
                 t.deallocate(True)
                 t = ttnn.experimental.rotary_embedding_llama(n, cos, sin, trans, is_decode_mode=False)
                 n.deallocate(True)
             parts.append(ttnn.experimental.nlp_concat_heads(t, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-            t.deallocate(True)
+            if j == 0 and with_q:
+                q_rows = t
+            else:
+                t.deallocate(True)
         out = ttnn.concat(parts, dim=-1)
         for t in parts:
             t.deallocate(True)
-        return out
+        return (out, q_rows) if with_q else out
 
     def _step_write(self, li, qkv, i, pos):
         """Step i of a prepared [1, 1, rows, qkv]: its heads (Q on cores 0-31) and the K / V cache write. Returns Q."""
@@ -326,34 +334,38 @@ class BatchedDraft:
             x = ttnn.rms_norm(h, epsilon=self.eps, weight=L["ln1"], compute_kernel_config=self.ck)
             qkv = self._linear(x, L["qkv"], L["qkv_b"])
             x.deallocate(True)
-            qkv2 = self._rows_qk(qkv, L, *rot, with_q=True)
+            qkv2, q_rows = self._rows_qk(qkv, L, *rot, with_q=True)
             qkv.deallocate(True)
-            qs = [self._step_write(li, qkv2, i, pos[i]) for i in range(self.block)]  # every step's K/V first
+            for i in range(self.block):  # every step's K/V first
+                self._step_write(li, qkv2, i, pos[i]).deallocate(True)
             qkv2.deallocate(True)
             kc, vc = self.caches[li]
-            outs = []
-            for i in range(self.block):
-                attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                    qs[i],
-                    kc,
-                    vc,
-                    cur_pos_tensor=bound,
-                    page_table_tensor=self.page_table,
-                    scale=self.hd**-0.5,
-                    sliding_window_size=self.window,
-                    program_config=self.sdpa_pc,
-                    compute_kernel_config=self.ck,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                qs[i].deallocate(True)
-                outs.append(attn)
-            # [1, rows, heads, hd] -> [1, heads, rows, hd] -> [1, 1, rows, heads * hd]
-            attn = ttnn.concat(outs, dim=1)
-            for t in outs:
-                t.deallocate(True)
-            perm = ttnn.permute(attn, (0, 2, 1, 3))
+            # block attention: a user's 8 rows see the same positions (start .. start + 7, not causal), so they go in as
+            # 8 x heads query heads of one decode SDPA (order [head, row]: each K/V head's queries stay contiguous) and
+            # every user's K/V is read once per layer, not once per row
+            t = ttnn.reshape(q_rows, [self.nq, self.block, U32, self.hd])
+            packed = ttnn.permute(t, (2, 0, 1, 3))  # [user, head, row, hd]
+            q_rows.deallocate(True)
+            attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                ttnn.reshape(packed, [1, U32, self.nq * self.block, self.hd]),
+                kc,
+                vc,
+                cur_pos_tensor=bound,
+                page_table_tensor=self.page_table,
+                scale=self.hd**-0.5,
+                sliding_window_size=self.window,
+                program_config=self.sdpa_pc,
+                compute_kernel_config=self.ck,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            packed.deallocate(True)
+            perm = ttnn.permute(
+                ttnn.reshape(attn, [U32, self.nq, self.block, self.hd]), (1, 2, 0, 3)
+            )  # [head, row, user]
             attn.deallocate(True)
-            heads = ttnn.experimental.nlp_concat_heads(perm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            heads = ttnn.experimental.nlp_concat_heads(
+                ttnn.reshape(perm, [1, self.nq, self.rows, self.hd]), memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
             perm.deallocate(True)
             partial = self._linear(heads, L["o"])
             heads.deallocate(True)
@@ -384,8 +396,10 @@ class BatchedDraft:
             h = h2
         x = ttnn.rms_norm(h, epsilon=self.eps, weight=self.norm, compute_kernel_config=self.ck)
         h.deallocate(True)
-        logits = ttnn.linear(x, self.target.lm_head_weight, dtype=ttnn.bfloat16)
+        x8 = ttnn.typecast(x, ttnn.bfloat8_b)
         x.deallocate(True)
+        logits = ttnn.matmul(x8, self.lm_head, dtype=ttnn.bfloat16)
+        x8.deallocate(True)
         out = self.argmax.device(logits)
         logits.deallocate(True)
         return out
