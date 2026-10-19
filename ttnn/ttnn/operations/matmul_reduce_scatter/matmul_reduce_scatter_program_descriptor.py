@@ -91,7 +91,29 @@ ARRIVAL_INC_PER_WAVE = int(os.environ.get("MRS_INC_PER_WAVE", 1))
 # fabric). 1 chunk (the default whenever the shape fits) is the unchunked op, byte-identical. env MRS_CHUNKS="n_m,n_n":
 # perf experiments only (the test hook _FORCE_CHUNKS does the same)
 ZONE_SETS = int(os.environ.get("MRS_ZONE_SETS", 2))
-MAX_AUTO_CHUNKS = 1024  # auto chunk search: the most chunks tried before giving up (NotImplementedError)
+MAX_AUTO_CHUNKS = 256  # auto chunk search: the most chunks a candidate may have (else NotImplementedError)
+# Auto split (only when 1 chunk misses L1): "model" plans every distinct candidate up to MAX_AUTO_CHUNKS and keeps the
+# one chunk_cost_us() rates fastest; "fewest" keeps the first candidate that fits (fewest chunks, inner axis first).
+# Measured (QB2 1x4 ring, traced, generated/mrs_sweep): "fewest" picks Wan2.2 FF2 720p 3x1 (2.44 ms; best 4x1, 2.11
+# ms) and 8192x4096x8192 1x4 (11.5 ms; best 8x4, 3.17 ms); "model" picks 4x1 and 8x4. env: perf experiments only
+AUTO_CHUNK_POLICY = os.environ.get("MRS_AUTO_CHUNKS", "model")
+# K-block cap of a chunked plan: each chunk re-walks Kt / kb K-steps per entry, and a K-step has a fixed cost (~1.4 us
+# resident, ~2.1 us stream, fitted below), so a chunked plan prefers the longer K-block (measured, kb cap 32 vs 16:
+# Kimi o_proj 1x4 chunks 160 vs 182 us, 2x2 210 vs 231; Wan 8x4 2.18 vs 2.52 ms; 8192x4096x8192 8x4 3.17 vs 3.35 ms;
+# 1 chunk keeps KB_MAX: Kimi 1x1 127 vs 122 us at 32). env: perf experiments only
+KB_MAX_CHUNKED = int(os.environ.get("MRS_KB_MAX_CHUNKED", 32))
+# chunk_cost_us() constants, least-squares fit (mean |log error| 0.13, 222 traced configs of the three sweep shapes):
+# compute = padded per-core tiles x Kt x 32 cycles (HiFi2) at COST_FPU_EFF of the clock, plus COST_STEP_US per K-step
+# (COST_STEP_STREAM_US under the stream regime, which multicasts both operands every step); DRAM = the operand traffic
+# at COST_DRAM_GBPS; transport = COST_HANDOFF_US per (core, sending entry) handoff of one port; the call takes the
+# largest of the three plus COST_FLOOR_US
+COST_FPU_EFF = 0.93
+COST_STEP_US = 1.4
+COST_STEP_STREAM_US = 2.1
+COST_HANDOFF_US = 0.29
+COST_DRAM_GBPS = 200
+COST_FLOOR_US = 8.0
+CLOCK_MHZ = 1350
 # The per-mesh staging tensor (cb_finished + zones) is sized "exact": each call plans as if no staging were allocated,
 # and the cached tensor is reallocated whenever its size differs. "grow" keeps the old grow-only cache: the allocated
 # size is a floor in every later plan's footprint, so after one large call (Wan 720p, P = 44: 880 KiB of staging) the
@@ -437,7 +459,7 @@ def footprint(
     return a + w + hold + staging + STAGE_TILE_BYTES  # + the zero tile (CB_ZERO)
 
 
-def choose_k_block(Kt, budget, force_resident, **geo):
+def choose_k_block(Kt, budget, force_resident, kb_max=None, **geo):
     """(resident, kb, depth): resident with the preferred kb | Kt (largest <= KB_MAX, then smaller, then larger), kb >=
     min(Kt, KB_MIN_RESIDENT), at the first RESIDENT_STREAM_DEPTHS depth where any such kb fits; else stream with the
     preferred kb | Kt that fits (depth: None, the stream regime's DEPTH_IN0 / DEPTH_IN1). force_resident (test hook)
@@ -450,16 +472,17 @@ def choose_k_block(Kt, budget, force_resident, **geo):
         out = [d for d in range(min(Kt, cap), 0, -1) if Kt % d == 0]
         return out + [d for d in range(cap + 1, Kt + 1) if Kt % d == 0]
 
+    kb_max = KB_MAX if kb_max is None else kb_max
     if force_resident is not False:
         for depth in RESIDENT_STREAM_DEPTHS:
-            for kb in divisors(KB_MAX * geo["waves_of"][True]["n"]):
+            for kb in divisors(kb_max * geo["waves_of"][True]["n"]):
                 if kb < min(Kt, KB_MIN_RESIDENT):
                     continue
                 if footprint(kb, True, depth=depth, Kt=Kt, **geo) <= budget:
                     return True, kb, depth
         if force_resident is True:
             raise ValueError("matmul_reduce_scatter: the resident cross-block operand does not fit L1 for this shape")
-    for kb in divisors(KB_MAX):
+    for kb in divisors(kb_max):
         if footprint(kb, False, Kt=Kt, **geo) <= budget:
             return False, kb, None
     raise NotImplementedError(
@@ -555,7 +578,9 @@ def plan_chunk_geometry(
         staging_floor_tiles=staging_floor,
         zone_sets=zone_sets,
     )
-    resident, kb, depth = choose_k_block(Kt, budget, force_resident, **geo)
+    resident, kb, depth = choose_k_block(
+        Kt, budget, force_resident, kb_max=KB_MAX if n_m * n_n == 1 else KB_MAX_CHUNKED, **geo
+    )
     if os.environ.get("MRS_KB"):  # perf experiments only: cap the K-block (largest divisor of Kt <= MRS_KB)
         kb = max(d for d in range(1, kb + 1) if Kt % d == 0 and d <= int(os.environ["MRS_KB"]))
     super_block, depths = super_block_plan(Kt, kb, resident, depth, budget, geo)
@@ -580,6 +605,28 @@ def plan_chunk_geometry(
         P=waves["P"],  # slot tiles: every hold / finished / zone slot holds one wave
         footprint=footprint(kb, resident, depth=depth, Kt=Kt, depths=depths, **geo),
     )
+
+
+def chunk_cost_us(pl, *, G, L, Mt, Kt, Nt, tA, tW, scatter_dim):
+    """Estimated traced latency (us) of plan `pl` (plan_chunk_geometry): the largest of compute, DRAM and transport
+    (constants above) plus the program floor. Only ranks the auto split's candidates."""
+    n_m, n_n = pl["n_m"], pl["n_n"]
+    C = n_m * n_n
+    cores = pl["gd"]["grid_m"] * pl["gd"]["grid_n"]
+    steps = C * G * pl["waves"]["n"] * (Kt // pl["kb"])
+    step_us = COST_STEP_US if pl["resident"] else COST_STEP_STREAM_US
+    compute = C * G * pl["P"] * pl["waves"]["n"] * Kt * 32 / CLOCK_MHZ / COST_FPU_EFF + step_us * steps
+    a_bytes, w_bytes = Mt * Kt * tA, Kt * Nt * tW
+    if scatter_dim == -1:  # A shared by every block (resident: once), W columns per block (re-read per m chunk)
+        traffic = (a_bytes if pl["resident"] else G * n_n * a_bytes) + n_m * w_bytes
+    else:  # W shared by every block, A rows per block (re-read per n chunk)
+        traffic = (w_bytes if pl["resident"] else G * n_m * w_bytes) + n_n * a_bytes
+    dram = traffic / (COST_DRAM_GBPS * 1e3)
+    transport = COST_HANDOFF_US * C * (G - 1) * cores / L
+    return COST_FLOOR_US + max(compute, dram, transport)
+
+
+_PLAN_CACHE = {}  # auto split per (shape, dtypes, group, mesh grid, budget, knobs): the search plans many candidates
 
 
 def _place_ports(strip, gx, gy, L):
@@ -819,17 +866,41 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         pl = plan_chunk_geometry(*forced, **plan_args)
     else:
         pl = None
-        for n_m, n_n in chunk_candidates(block_m, block_n, scatter_dim):
-            try:
-                pl = plan_chunk_geometry(n_m, n_n, **plan_args)
-                break
-            except NotImplementedError:
-                continue
-        if pl is None:
-            raise NotImplementedError(
-                f"matmul_reduce_scatter: no split of the {block_m}x{block_n}-tile block into <= {MAX_AUTO_CHUNKS} "
-                "chunks fits L1"
+        try:
+            pl = plan_chunk_geometry(1, 1, **plan_args)  # whatever fits unchunked keeps its plan
+        except NotImplementedError:
+            key = (
+                tuple(sorted((k, v) for k, v in plan_args.items() if k != "force_resident")),
+                force_resident,
+                AUTO_CHUNK_POLICY,
+                ZONE_SETS,
+                KB_MAX_CHUNKED,
             )
+            if key in _PLAN_CACHE:
+                pl = plan_chunk_geometry(*_PLAN_CACHE[key], **plan_args)
+            else:
+                cost_args = dict(G=G, L=L, Mt=Mt, Kt=Kt, Nt=Nt, tA=tA, tW=tW, scatter_dim=scatter_dim)
+                best = None
+                for n_m, n_n in chunk_candidates(block_m, block_n, scatter_dim):
+                    if n_m * n_n == 1:
+                        continue
+                    try:
+                        cand = plan_chunk_geometry(n_m, n_n, **plan_args)
+                    except (NotImplementedError, ValueError):
+                        continue
+                    if AUTO_CHUNK_POLICY == "fewest":
+                        best = (0.0, cand)
+                        break
+                    cost = chunk_cost_us(cand, **cost_args)
+                    if best is None or cost < best[0]:
+                        best = (cost, cand)
+                if best is None:
+                    raise NotImplementedError(
+                        f"matmul_reduce_scatter: no split of the {block_m}x{block_n}-tile block into <= "
+                        f"{MAX_AUTO_CHUNKS} chunks fits L1"
+                    )
+                pl = best[1]
+                _PLAN_CACHE[key] = (pl["n_m"], pl["n_n"])
     gd, resident, kb, P = pl["gd"], pl["resident"], pl["kb"], pl["P"]
     chips_sched, slots, waves = pl["sched"], pl["slots"], pl["waves"]
     hooks._LAST_PLAN = {
