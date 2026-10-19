@@ -533,7 +533,7 @@ def _run_moe_compute_single_card_test(
         ), f"output shape {tuple(actual.shape)}, golden {tuple(expected.shape)}"
         assert bool(torch.isfinite(actual).all()), f"{int((~torch.isfinite(actual)).sum())} non-finite output values"
         relative_l2 = torch.linalg.vector_norm(actual - expected) / torch.linalg.vector_norm(expected).clamp_min(1e-8)
-        logger.info(f"Structured weights combine relative L2: {float(relative_l2):.8f}")
+        logger.debug(f"Structured weights combine relative L2: {float(relative_l2):.8f}")
         assert relative_l2 < 0.03, f"relative L2 {float(relative_l2):.6f} >= 0.03"
 
     def deallocate_l1_moe_compute_outputs(output_tensors):
