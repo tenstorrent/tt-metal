@@ -612,6 +612,12 @@ _grid_config_lookup = {
     (12, 8): grid_12_8_configs,
 }
 
+# Blockings measured with bf16 DEST accumulation (fp32_dest_acc_en=False), keyed like _grid_config_lookup. The bf16
+# DEST holds 8 tiles instead of 4, so their subblocks can be too large for an fp32-DEST matmul: only matmuls whose
+# compute config accumulates in bf16 look here, before the shared tables. Filled by register_matmul_configs(...,
+# fp32_dest_acc=False).
+_bf16_dest_grid_config_lookup: dict[tuple[int, int], dict] = {}
+
 
 def _lookup_nearest_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, tp_factor: int):
     """Return the blocking config from the grid's lookup table whose (M, K, N) is
@@ -665,7 +671,9 @@ def _lookup_nearest_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, t
     return (Mb, Kb, Nb, sb) if sb is not None else (Mb, Kb, Nb)
 
 
-def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1):
+def get_matmul_config(
+    M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1, fp32_dest_acc=True
+):
     """Get the matmul config for the given shape and core grid.
 
     Args:
@@ -676,6 +684,8 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
         default_block_size: The default block size to use if no config is found.
         use_heuristic: Whether to use the heuristic blocking algorithm.
         num_k_shards: The number of shards. If set, we will use the nearest blocking algorithm.
+        fp32_dest_acc: The fp32_dest_acc_en of the matmul's compute config. When False, blockings registered for
+            bf16 DEST take precedence.
 
         Algorithm order:
             - Default block size
@@ -696,8 +706,10 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     config_tuple = None
     grid_x = getattr(core_grid, "x", None)
     grid_y = getattr(core_grid, "y", None)
+    if not fp32_dest_acc:
+        config_tuple = _bf16_dest_grid_config_lookup.get((grid_x, grid_y), {}).get((M, K, N))
     grid_dict = _grid_config_lookup.get((grid_x, grid_y))
-    if grid_dict is not None:
+    if config_tuple is None and grid_dict is not None:
         config_tuple = grid_dict.get((M, K, N))
         if config_tuple is None:
             near = _same_m_per_core_match(grid_dict, M, K, N, grid_x)
@@ -816,6 +828,7 @@ def get_agmm_config(
     fuse_swiglu=False,
     use_addcmul=False,
     force_transpose=True,
+    fp32_dest_acc=True,
 ):
     """Resolve (core_grid, MinimalMatmulConfig, num_workers_per_link) for
     `all_gather_minimal_matmul_async`.
@@ -823,7 +836,8 @@ def get_agmm_config(
     Precedence -- anything measured or explicit wins, bit-for-bit identical to the legacy path:
       1. An explicit `core_grid` or `default_block_size` from the caller.
       2. A swept `(M, K, N)` table entry for the legacy grid (`_grid_config_lookup`, i.e.
-         `grid_12_9_configs` and entries added via `register_matmul_configs`).
+         `grid_12_9_configs` and entries added via `register_matmul_configs`); with
+         `fp32_dest_acc=False` (the op's compute config), entries registered for bf16 DEST first.
       3. The v3 rule engine (`utils/agmm_rules.py`) -- picks the worker grid (orientation-aware)
          and blocking; blind-validated within 5% of swept optimum on ~96% of shapes. Blackhole
          only; the rules were fitted against Blackhole L1 and fabric parameters. Skipped when
@@ -850,8 +864,10 @@ def get_agmm_config(
     _legacy_table = _grid_config_lookup.get((legacy_grid.x, legacy_grid.y), {})
     m_cores = legacy_grid.x if transpose_core_grid else legacy_grid.y
     table_hit = (M, K, N) in _legacy_table or _same_m_per_core_match(_legacy_table, M, K, N, m_cores) is not None
+    if not fp32_dest_acc:
+        table_hit = table_hit or (M, K, N) in _bf16_dest_grid_config_lookup.get((legacy_grid.x, legacy_grid.y), {})
     if core_grid is not None or default_block_size is not None or use_heuristic or table_hit:
-        config = get_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic)
+        config = get_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic, fp32_dest_acc=fp32_dest_acc)
         return legacy_grid, config, legacy_workers
 
     v3 = None
@@ -1096,16 +1112,21 @@ fused_mmrs_configs = {
     },
 }
 
+# Fused MM+RS configs measured with bf16 DEST accumulation, keyed like fused_mmrs_configs and consulted first by
+# matmuls whose compute config accumulates in bf16 (see _bf16_dest_grid_config_lookup).
+_bf16_dest_fused_mmrs_configs: dict = {}
+
 
 _logged_mmrs_rule_signatures = set()
 
 
-def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
+def get_fused_mmrs_config(M, K, N, device_core_grid, num_links, fp32_dest_acc=True):
     """Resolve the fused MM+RS parameter dict for a shape.
 
     Precedence -- anything measured or explicit wins:
       1. A swept ``(M, K, N)`` table entry (``fused_mmrs_configs``, including entries added via
-         ``register_fused_mmrs_configs``).
+         ``register_fused_mmrs_configs``); with ``fp32_dest_acc=False`` (the op's compute config),
+         entries registered for bf16 DEST first.
       2. The v2.3 rule engine (`utils/mmrs_rules.py`) -- always the 12x8 matmul grid with the
          reduce-scatter above it; blind-validated within 5% of the swept optimum on ~90% of
          shapes across five ff2 families. Blackhole 12x10 only; the rules were fitted against
@@ -1118,7 +1139,7 @@ def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
     with `sweep_mm_block_sizes.py` (use case ``mmrs``) and paste the winner into
     ``fused_mmrs_configs`` (or register it from a model table) to override the rules permanently.
     """
-    config = _resolve_fused_mmrs_config(M, K, N, device_core_grid, log=True)
+    config = _resolve_fused_mmrs_config(M, K, N, device_core_grid, log=True, fp32_dest_acc=fp32_dest_acc)
 
     if config is None:
         log_warning(
@@ -1130,7 +1151,7 @@ def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
     return config.get_params(device_core_grid, num_links, M=M)
 
 
-def _resolve_fused_mmrs_config(M, K, N, device_core_grid, *, log):
+def _resolve_fused_mmrs_config(M, K, N, device_core_grid, *, log, fp32_dest_acc=True):
     """Precedences 1 and 2 of `get_fused_mmrs_config` -- a swept table entry, then the rule engine.
 
     Returns None when only `default_fused_mmrs_config` would serve the shape. Factored out so that
@@ -1139,6 +1160,10 @@ def _resolve_fused_mmrs_config(M, K, N, device_core_grid, *, log):
 
     `log` gates the rule-hit info line, so the predicate stays free of side effects.
     """
+    if not fp32_dest_acc:
+        config = _bf16_dest_fused_mmrs_configs.get(device_core_grid, {}).get((M, K, N))
+        if config is not None:
+            return config
     config = fused_mmrs_configs.get(device_core_grid, {}).get((M, K, N))
     if config is not None:
         return config
@@ -1165,7 +1190,7 @@ def _resolve_fused_mmrs_config(M, K, N, device_core_grid, *, log):
     return None
 
 
-def resolves_fused_mmrs_config(M, K, N, device_core_grid) -> bool:
+def resolves_fused_mmrs_config(M, K, N, device_core_grid, fp32_dest_acc=True) -> bool:
     """Whether a *measured or rule-derived* fused MM+RS blocking exists for this shape and grid.
 
     False means `get_fused_mmrs_config` would fall back to `default_fused_mmrs_config`, which is
@@ -1175,12 +1200,13 @@ def resolves_fused_mmrs_config(M, K, N, device_core_grid) -> bool:
     Both resolution sources are architecture-dependent: the table is keyed by the device core grid,
     and the rule engine is Blackhole-only. So the answer has to be computed from the *actual*
     `device_core_grid` and can never be inferred from (M, K, N) alone -- doing so is how Wormhole
-    silently ran every ff2 on the warned default.
+    silently ran every ff2 on the warned default. Pass the op's `fp32_dest_acc` as for
+    `get_fused_mmrs_config`.
     """
-    return _resolve_fused_mmrs_config(M, K, N, device_core_grid, log=False) is not None
+    return _resolve_fused_mmrs_config(M, K, N, device_core_grid, log=False, fp32_dest_acc=fp32_dest_acc) is not None
 
 
-def register_matmul_configs(configs: dict) -> None:
+def register_matmul_configs(configs: dict, *, fp32_dest_acc: bool = True) -> None:
     """Register additional matmul block-size configs from external models.
 
     Args:
@@ -1189,6 +1215,10 @@ def register_matmul_configs(configs: dict) -> None:
             Config tuple format: ``(M_block, K_block, N_block)`` or
             ``(M_block, K_block, N_block, (sub_h, sub_w))``.
             When subblock is omitted, the default ``(2, 2)`` is used.
+        fp32_dest_acc: False registers blockings measured with bf16 DEST accumulation, whose subblocks may
+            exceed what an fp32-DEST matmul allows. Only lookups given ``fp32_dest_acc=False`` consult them: the
+            all-gather-matmul path of ColParallelLinear, RowParallelLinear.forward_fused_addcmul and the
+            fused-addcmul output projection of the Wan self-attention.
 
     Example::
 
@@ -1212,15 +1242,19 @@ def register_matmul_configs(configs: dict) -> None:
         if target is None:
             msg = f"Unknown grid key {grid_key!r}, expected one of {list(grid_map)}"
             raise ValueError(msg)
+        if not fp32_dest_acc:
+            target = _bf16_dest_grid_config_lookup.setdefault(tuple(int(v) for v in grid_key.split("x")), {})
         target.update(entries)
 
 
-def register_fused_mmrs_configs(configs: dict) -> None:
+def register_fused_mmrs_configs(configs: dict, *, fp32_dest_acc: bool = True) -> None:
     """Register additional fused matmul+reduce-scatter configs.
 
     Args:
         configs: Mapping from ``ttnn.CoreCoord`` to dict of
             ``(M,K,N)`` -> :class:`FusedMMRSConfig`.
+        fp32_dest_acc: False registers configs measured with bf16 DEST accumulation, used only by matmuls with
+            ``fp32_dest_acc_en=False`` (see ``register_matmul_configs``).
 
     Example::
 
@@ -1232,8 +1266,9 @@ def register_fused_mmrs_configs(configs: dict) -> None:
             },
         })
     """
+    tables = fused_mmrs_configs if fp32_dest_acc else _bf16_dest_fused_mmrs_configs
     for core_grid, entries in configs.items():
-        fused_mmrs_configs.setdefault(core_grid, {}).update(entries)
+        tables.setdefault(core_grid, {}).update(entries)
 
 
 # ===================================================================== Fabric-bound all-gather-matmul

@@ -19,6 +19,8 @@ from loguru import logger
 
 import ttnn
 
+from ...utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, register_matmul_configs
+
 # ---------------------------------------------------------------------------
 # Config dataclasses
 # ---------------------------------------------------------------------------
@@ -41,6 +43,8 @@ class SDPAQuantConfig:
     input_dtype: ttnn.DataType | None = None  # None = no cast
     math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     fp32_dest_acc: bool = False
+    # (q_chunk, k_chunk), e.g. larger K chunks that fit L1 with bfloat8_b K / V; None = the model's chunk sizes
+    chunk_size: tuple[int, int] | None = None
 
 
 @dataclass
@@ -48,7 +52,7 @@ class QuantConfig:
     """Per-component quantization and compute precision configuration.
 
     Each transformer block has 7 linear layers and 1 ring SDPA (self-attention).
-    Cross-attention SDPA stays at default settings.
+    Cross-attention SDPA stays at default settings, except for its input dtype.
     """
 
     # Self-attention projections
@@ -66,6 +70,23 @@ class QuantConfig:
 
     # Ring SDPA (self-attention only; cross-attention stays default)
     ring_sdpa: SDPAQuantConfig = field(default_factory=SDPAQuantConfig)
+
+    # Cross-attention SDPA Q / K / V dtype (the K / V are cast once, when computed); None = no cast
+    cross_sdpa_input_dtype: ttnn.DataType | None = None
+
+    # dtype the norms write the inputs of to_qkv, cross to_q and ff1 in, and the attention outputs are cast to before
+    # concat_heads (the inputs of to_out): the all-gather-matmuls then gather it. Their outputs stay bf16. None = no
+    # cast. With LoFi projections, bfloat8_b here also keeps CFG batching on (see apply_quant_config).
+    projection_input_dtype: ttnn.DataType | None = None
+
+    # dtype ff1 writes the FFN intermediate (ff2's input) in; ff2's output stays bf16. None = ff1's own.
+    ffn_intermediate_dtype: ttnn.DataType | None = None
+
+    # Blockings swept with this config for matmuls that accumulate in bf16 DEST, in the format of
+    # register_matmul_configs and register_fused_mmrs_configs; apply_quant_config registers them with
+    # fp32_dest_acc=False, so no fp32-DEST matmul uses them. Once registered, they stay for the process.
+    bf16_dest_matmul_configs: dict = field(default_factory=dict)
+    bf16_dest_fused_mmrs_configs: dict = field(default_factory=dict)
 
     @staticmethod
     def default() -> QuantConfig:
@@ -150,6 +171,62 @@ class QuantConfig:
             ring_sdpa=sc,
         )
 
+    @staticmethod
+    def wh_galaxy_bf8_lofi() -> QuantConfig:
+        """bfloat8_b weights and activations with LoFi matmuls, as tuned on WH Galaxy 4x8 (CFG batching).
+
+        - bf8 weights, except the two output projections: the fused addcmul of the self-attention one needs bf16
+          weights, and the cross-attention one keeps bf16 weights as measured and quality-checked (bf8 untested).
+        - The norms write the projection inputs in bf8, and ff1 writes the FFN intermediate in bf8; the projection
+          outputs and the residual stream stay bf16.
+        - LoFi matmuls accumulating in bf16 DEST, with blockings swept for it at 480p (8-tile subblocks) and reused at
+          720p, where they beat the generic default.
+        - Ring SDPA: bf8 Q / K / V and (128, 1024) chunks, which fit L1 with bf8 K / V; its matmuls stay HiFi2
+          (LoFi there degrades I2V). Cross-attention SDPA: bf8 Q / K / V.
+        """
+        lc = LinearQuantConfig(
+            weight_dtype=ttnn.bfloat8_b,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc=False,
+        )
+        lc_out = LinearQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc=False)
+        return QuantConfig(
+            self_attn_qkv=lc,
+            self_attn_out=lc_out,
+            cross_attn_q=lc,
+            cross_attn_kv=lc,
+            cross_attn_out=lc_out,
+            ffn_ff1=lc,
+            ffn_ff2=lc,
+            ring_sdpa=SDPAQuantConfig(
+                input_dtype=ttnn.bfloat8_b,
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                fp32_dest_acc=False,
+                chunk_size=(128, 1024),
+            ),
+            cross_sdpa_input_dtype=ttnn.bfloat8_b,
+            projection_input_dtype=ttnn.bfloat8_b,
+            ffn_intermediate_dtype=ttnn.bfloat8_b,
+            bf16_dest_matmul_configs={
+                # CFG-batched rows per device (SP=8, TP=4): 8192 at 480p, 18944 at 720p; 8x8 all-gather-matmul grid
+                "8x8": {
+                    (8192, 5120, 3840): (16, 10, 10, (4, 2)),  # to_qkv
+                    (8192, 5120, 3456): (16, 8, 14, (4, 2)),  # ff1 + GELU
+                    (8192, 5120, 1280): (16, 8, 5, (8, 1)),  # to_out + addcmul; cross to_q, to_out
+                    (18944, 5120, 3840): (16, 10, 10, (4, 2)),
+                    (18944, 5120, 3456): (16, 8, 14, (4, 2)),
+                    (18944, 5120, 1280): (16, 8, 5, (8, 1)),
+                }
+            },
+            bf16_dest_fused_mmrs_configs={
+                ttnn.CoreCoord(8, 9): {
+                    # ff2 + addcmul, matmul on 8x7: 4129.9 us at 480p
+                    (8192, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 8, 3, 10, 4, 2, None, 1),
+                    (18944, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 8, 3, 10, 4, 2, None, 1),
+                }
+            },
+        )
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -204,7 +281,9 @@ def _needs_separate_cfg_passes(config: QuantConfig) -> bool:
         config.ffn_ff1,
         config.ffn_ff2,
     )
-    return any(lc.math_fidelity == ttnn.MathFidelity.LoFi for lc in linears)
+    # only bf8 projection inputs are known to run CFG-batched LoFi projections without a hang
+    bf8_inputs = config.projection_input_dtype == ttnn.bfloat8_b
+    return not bf8_inputs and any(lc.math_fidelity == ttnn.MathFidelity.LoFi for lc in linears)
 
 
 # ---------------------------------------------------------------------------
@@ -231,19 +310,27 @@ def apply_quant_config(model, config: QuantConfig) -> None:
     - Cross-attn matmuls: block.attn2.mm_compute_kernel_config
     - Cross-attn output: block.attn2.to_out.compute_config
     - FFN: block.ff_compute_kernel_config
-    - Ring SDPA: block.attn1.sdpa_compute_kernel_config
+    - Ring SDPA: block.attn1.sdpa_compute_kernel_config, block.attn1.set_ring_sdpa_config
+    - Cross-attn SDPA input dtype: block.attn2
+    - Projection input dtype: the block's norms, the attention outputs, pin_output_bf16 on those projections
+    - FFN intermediate dtype: block.ffn.intermediate_dtype
     """
     arch = model.mesh_device.arch()
     n_blocks = len(model.blocks)
 
     logger.info(f"Applying quant config to {n_blocks} transformer blocks")
 
-    # Workaround: with CFG batching (8192 rows per device at 480p on WH Galaxy 4x8), LoFi projections hang in the
-    # bias add of a projection all-gather-matmul (one core's unpacker and math wait on each other), so such configs
-    # run the CFG passes as two forwards.
+    # Workaround: with CFG batching (8192 rows per device at 480p on WH Galaxy 4x8), LoFi projections on bf16
+    # activations hang in the bias add of a projection all-gather-matmul (one core's unpacker and math wait on each
+    # other); bf8 projection inputs do not. Such configs run the CFG passes as two forwards.
     model.cfg_batch = model.cfg_batch_requested and not _needs_separate_cfg_passes(config)
     if model.cfg_batch_requested and not model.cfg_batch:
-        logger.warning("LoFi projections: running the CFG passes as two forwards")
+        logger.warning("LoFi projections on bf16 activations: running the CFG passes as two forwards")
+
+    if config.bf16_dest_matmul_configs:
+        register_matmul_configs(config.bf16_dest_matmul_configs, fp32_dest_acc=False)
+    if config.bf16_dest_fused_mmrs_configs:
+        register_fused_mmrs_configs(config.bf16_dest_fused_mmrs_configs, fp32_dest_acc=False)
 
     for idx, block in enumerate(model.blocks):
         # Self-attention linears
@@ -272,6 +359,22 @@ def apply_quant_config(model, config: QuantConfig) -> None:
         block.attn1.sdpa_compute_kernel_config = _make_sdpa_compute_config(arch, config.ring_sdpa)
         if config.ring_sdpa.input_dtype is not None:
             block.attn1._sdpa_input_dtype = config.ring_sdpa.input_dtype
+        if config.ring_sdpa.chunk_size is not None:
+            block.attn1.set_ring_sdpa_config(chunk_size=config.ring_sdpa.chunk_size)
+
+        # Cross-attention SDPA input dtype
+        if config.cross_sdpa_input_dtype is not None:
+            block.attn2._sdpa_input_dtype = config.cross_sdpa_input_dtype
+
+        # Inputs of the all-gathered projections, and the FFN intermediate
+        if config.projection_input_dtype is not None:
+            block.projection_input_dtype = config.projection_input_dtype
+            block.attn1.projection_input_dtype = config.projection_input_dtype
+            block.attn2.projection_input_dtype = config.projection_input_dtype
+            for linear in (block.attn1.to_qkv, block.attn1.to_out, block.attn2.to_q, block.attn2.to_out, block.ffn.ff1):
+                linear.pin_output_bf16 = True
+        if config.ffn_intermediate_dtype is not None:
+            block.ffn.intermediate_dtype = config.ffn_intermediate_dtype
 
     # Log summary
     weight_dtypes = set()

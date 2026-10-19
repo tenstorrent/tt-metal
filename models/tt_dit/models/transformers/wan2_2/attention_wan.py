@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....layers.linear import ColParallelLinear, LoRAColParallelLinear
+from ....layers.linear import ColParallelLinear, LoRAColParallelLinear, resolve_output_dtype
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
@@ -155,31 +155,19 @@ class WanAttention(Module):
             ),
             self.default_sdpa_chunk_size,
         )
-
-        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=ring_sdpa_chunk_size[0],
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
+        self.ring_sdpa_chunk_size = ring_sdpa_chunk_size
 
         # With CFG batching, self-attention folds the cond and uncond passes into the head dim and runs one
         # ring SDPA with twice the heads. Its workers take the full width and leave the last row to the CCL:
         # on WH 4x8 480p the 2 x 10 heads x 16 Q chunks split evenly over 8x8 workers (5 per core), while
         # 7x9 leaves some cores one chunk more (22.39 vs 24.08 ms per block).
         self.fold_sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
-        self.fold_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.fold_sdpa_worker_grid,
-            q_chunk_size=ring_sdpa_chunk_size[0],
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-        self.fold_dummy_joint_input = bf16_tensor(
-            torch.zeros((1, 2 * self.n_local_heads, 0, self.head_dim)), device=mesh_device
-        )
-
         self.use_exp_ring_sdpa = (
             self.parallel_config.tensor_parallel.factor == 4 and self.parallel_config.sequence_parallel.factor == 32
+        )
+        self.set_ring_sdpa_config()
+        self.fold_dummy_joint_input = bf16_tensor(
+            torch.zeros((1, 2 * self.n_local_heads, 0, self.head_dim)), device=mesh_device
         )
 
         if self.use_exp_ring_sdpa:
@@ -214,6 +202,34 @@ class WanAttention(Module):
             math_approx_mode=True,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
+        )
+
+        # Set by a quant config: the attention output is cast to this dtype before concat_heads (half the data to
+        # move when it is bfloat8_b), so that to_out all-gathers it in that dtype. None = no cast.
+        self.projection_input_dtype = None
+        # Set by a quant config: the SDPA input dtype (the norms write Q / K in it; V, or the cross-attention K / V,
+        # are cast). None = no cast.
+        self._sdpa_input_dtype = None
+
+    def set_ring_sdpa_config(self, *, chunk_size: tuple[int, int] | None = None) -> None:
+        """(Re)build the ring SDPA program configs.
+
+        chunk_size: (q_chunk, k_chunk); None = the sdpa_chunk_size_map entry. A quant config with bfloat8_b K / V can
+            fit larger K chunks in L1.
+        """
+        if self.use_exp_ring_sdpa:
+            assert chunk_size is None, "the experimental ring SDPA has its own config"
+        q_chunk, k_chunk = chunk_size or self.ring_sdpa_chunk_size
+        config_args = dict(
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=False,  # NOTE: False is more correct
+        )
+        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.sdpa_worker_grid, **config_args
+        )
+        self.fold_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.fold_sdpa_worker_grid, **config_args
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -304,6 +320,10 @@ class WanAttention(Module):
             kv = (ks[0], vs[0])
         else:
             kv = (_fold_heads(ttnn.concat(ks, dim=2)), _fold_heads(ttnn.concat(vs, dim=2)))
+        sdpa_input_dtype = self._sdpa_input_dtype
+        if sdpa_input_dtype is not None:
+            # cast once, before caching
+            kv = tuple(ttnn.typecast(t, sdpa_input_dtype) for t in kv)
         if self._cross_kv_cache_enabled:
             self._cross_kv_cache[key] = (prompts, kv)
         return kv
@@ -339,11 +359,15 @@ class WanAttention(Module):
         else:
             weight = to_out.weight.data
 
+        compute_kernel_config = compute_kernel_config or to_out.compute_config
+        if to_out.pin_output_bf16:
+            dtype = resolve_output_dtype(dtype, x)
+
         if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
-            matmul_config = get_matmul_config(M, K, N, core_grid)
+            matmul_config = get_matmul_config(M, K, N, core_grid, fp32_dest_acc=compute_kernel_config.fp32_dest_acc_en)
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
                 x.shape, 3, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
@@ -356,7 +380,7 @@ class WanAttention(Module):
                 weight_tensor=weight,
                 bias_tensor=to_out.bias.data if to_out.bias is not None else None,
                 config=matmul_config,
-                compute_kernel_config=compute_kernel_config or to_out.compute_config,
+                compute_kernel_config=compute_kernel_config,
                 persistent_output_buffer=ag_persistent_buffer,
                 multi_device_global_semaphore=ag_global_semaphores,
                 num_links=self.ccl_manager.num_links,
@@ -374,7 +398,9 @@ class WanAttention(Module):
         else:
             M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
             core_grid = self.mesh_device.compute_with_storage_grid_size()
-            matmul_config = get_matmul_config(M, K, N_out, core_grid)
+            matmul_config = get_matmul_config(
+                M, K, N_out, core_grid, fp32_dest_acc=compute_kernel_config.fp32_dest_acc_en
+            )
 
             output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
                 x,
@@ -384,7 +410,7 @@ class WanAttention(Module):
                 addcmul_gate,
                 bias_tensor=to_out.bias.data if to_out.bias is not None else None,
                 config=matmul_config,
-                compute_kernel_config=compute_kernel_config or to_out.compute_config,
+                compute_kernel_config=compute_kernel_config,
                 dtype=dtype,
             )
         return output
@@ -457,10 +483,11 @@ class WanAttention(Module):
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        # Set norm output dtype to the input dtype required for ring self-attn.
-        sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
+        # Set norm output dtype to the input dtype required for ring self-attn, or for cross-attn (its K / V are cast
+        # when computed).
+        sdpa_input_dtype = self._sdpa_input_dtype
         use_ring_sdpa = self.parallel_config.sequence_parallel.factor > 1
-        norm_output_dtype = sdpa_input_dtype if (use_ring_sdpa and prompt_1BLP is None) else None
+        norm_output_dtype = sdpa_input_dtype if (use_ring_sdpa or prompt_1BLP is not None) else None
 
         if self.is_self:
             # Fused QKV matmul with split output for self-attention
@@ -611,6 +638,9 @@ class WanAttention(Module):
             # [1, 2H, n, E] -> [1, H, 2n, E]: per head, the cond rows and then the uncond rows, like the input
             _, h2, n, e = spatial_BHNE.shape
             spatial_BHNE = ttnn.reshape(spatial_BHNE, (1, h2 // 2, 2 * n, e))
+        if self.projection_input_dtype is not None and spatial_BHNE.dtype != self.projection_input_dtype:
+            # before concat_heads, a pure copy: it then moves the narrower dtype
+            spatial_BHNE = ttnn.typecast(spatial_BHNE, self.projection_input_dtype)
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
