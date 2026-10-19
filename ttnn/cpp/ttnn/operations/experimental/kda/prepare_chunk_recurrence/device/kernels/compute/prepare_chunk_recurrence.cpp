@@ -197,8 +197,9 @@ void exponential_tiles(DFB0& in, DFB1& o, uint32_t n) {
 
 // Complement-form decay: dl carries expm1(G_last) = exp(G_last) - 1. For long-memory channels exp(G_last) lies so
 // close to 1 that BF16 keeps almost none of the forgotten fraction 1 - exp(G_last) (exactly none within 2^-9); the
-// complement keeps its relative precision. recurrent_chunk_scan applies S + (dl * S + update).
-template <typename DFB0, typename DFB1>
+// complement keeps its relative precision. recurrent_chunk_scan applies S + (dl * S + update). Mode and Iterations
+// select the rows computed, as in exponential_tiles.
+template <VectorMode Mode, int Iterations, typename DFB0, typename DFB1>
 void expm1_tiles(DFB0& in, DFB1& o, uint32_t n) {
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
@@ -212,7 +213,7 @@ void expm1_tiles(DFB0& in, DFB1& o, uint32_t n) {
         tile_regs_acquire();
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             copy_tile(in_id, block_start + tile, tile);
-            expm1_tile<false>(tile);
+            expm1_tile<false, DST_ACCUM_MODE, Iterations>(tile, Mode);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -661,11 +662,12 @@ void prepare_scan_and_pairwise_inputs(
     pack_reconfig_data_format(kd.get_id(), k_beta_pairwise.get_id());
 }
 
-// expm1(G_last) from the replicated G_last rows, of which the transpose to dl reads row 0.
+// expm1(G_last) from the replicated G_last rows, of which the transpose to dl reads row 0, so only the face rows
+// holding it are computed (two SFPU iterations, as for exp(G_last/2)).
 template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2>
 void prepare_final_decay_rows(DFB0& g_last, DFB1& anchor_decay, DFB2& final_decay_rows) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
-    expm1_tiles(g_last, final_decay_rows, chunk_key_tiles);
+    expm1_tiles<VectorMode::R, 2>(g_last, final_decay_rows, chunk_key_tiles);
     final_decay_rows.wait_front(chunk_key_tiles);
     g_last.pop_front(chunk_key_tiles);
     anchor_decay.pop_front(chunk_key_tiles);  // its last consumer
