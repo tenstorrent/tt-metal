@@ -225,3 +225,17 @@ def test_hit_on_block_boundaries_never_resumes_at_start(start, fake_ttnn):
     s = (_plan(cache, tokens, start) or (0,))[0]
     assert s == {127: 0, 128: 0, 129: 128, 255: 128, 256: 128}[start]
     assert s <= max(start - 1, 0)  # the drafter slot s-1 must fuse a token inside the cached span
+
+
+def test_mid_prompt_segment_ending_on_a_chunk_boundary_skips_logits(fake_ttnn):
+    Tp = 4096 + 600
+    tokens = _prompt(Tp)
+    cache = _cache()
+    # cold request (start_pos 0): the last full-chunk boundary 4096 is a save point -> segment [0, 4096) = 2 chunks, tail 0
+    out, calls, plan, captured, *_ = _run(Tp, cache, trace_lengths=(600,), start=0, tokens=tokens)
+    assert plan[0] == 0 and plan[2] == [4096]
+    assert not any(c[0] == "last_logits" for c in calls[: [c[0] for c in calls].index("replay")])  # mid segment: none
+    assert cache.stats["saves"] == 1 and cache._positions == [4096]
+    reps = [c for c in calls if c[0] == "replay"]
+    assert [(r[3], r[5], r[6]) for r in reps] == [(600, 4096, True)]
+    assert [c[1:] for c in calls if c[0] == "chunks"] == [(2, 0, 0, True, False)]

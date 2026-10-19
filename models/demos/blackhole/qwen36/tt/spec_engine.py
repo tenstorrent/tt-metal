@@ -1379,6 +1379,10 @@ class MTPSpecEngine:
             prompt, pt_rec, b, num_full, chunk, tail, on_chunk=on_chunk, run_tail=False, start=a, reset_gdn=not carry
         )
         if tail == 0:
+            if (
+                not final
+            ):  # on_chunk already saw the last chunk in the replay loop; a mid-prompt segment has no logits use
+                return torch.zeros(0)
             # Exact multiple: the last chunk's output gives the logits and the slot b-1 feed row.
             logits = model._masked_bucket_logits_tp(model._chunked_trace_output, chunk, chunk)
             on_chunk(model._chunked_trace_output, cs - chunk, chunk)
