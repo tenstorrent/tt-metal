@@ -23,7 +23,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from models.experimental.gated_attention_gated_deltanet.torch_functional.delta_rule_ops import (
     l2_norm,
     recurrent_gated_delta_rule,
@@ -616,6 +616,19 @@ def test_compute_kernel_config_contract(device, expect_error, make_program_confi
         with expect_error(RuntimeError, "HiFi4 with fp32 destination accumulation"):
             _run_with_compute_config(device, tensors, const_tiles, pc, ttnn.WormholeComputeKernelConfig(**kwargs))
             pytest.fail(f"{name} was accepted; the op must reject arithmetic other than the one it was validated at")
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="chunk_gated_delta_rule is Blackhole-only")
+@pytest.mark.parametrize("chunk_size", [48, 96, 128])
+def test_chunk_size_contract(device, expect_error, chunk_size):
+    """The kernels are validated at one and two tile rows per chunk; any other chunk_size, a multiple of
+    32 or not, is rejected."""
+    (q, k, v, g, beta), (eye, tril, ones, masks) = _small_inputs(device)
+    with expect_error(RuntimeError, "chunk_size must be 32 or 64"):
+        ttnn.transformer.chunk_gated_delta_rule(
+            q, k, v, g, beta, chunk_size=chunk_size, eye=eye, tril=tril, ones=ones, masks=masks
+        )
+        pytest.fail(f"chunk_size {chunk_size} was accepted; the op supports 32 and 64 only")
 
 
 # --------------------------------------------------------------------------------------------
