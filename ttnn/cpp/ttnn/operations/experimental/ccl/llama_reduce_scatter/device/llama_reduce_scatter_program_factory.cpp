@@ -308,7 +308,7 @@ std::tuple<CoreRangeSet, CoreRangeSet> LlamaReduceScatterDeviceOperation::get_rs
         ncores_input = ((ncores_input + num_devices - 1) / num_devices) * num_devices;
     }
     uint32_t input_shard_cores_per_device = ncores_input / num_devices;
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*input_tensor.device());
     size_t packet_size_bytes =
         input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -437,8 +437,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0)));
 
-
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     size_t packet_size_bytes =
         input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
     uint32_t num_pages_per_packet = packet_size_bytes / input_page_size;

@@ -35,7 +35,8 @@ class ControlPlane;
 class FabricNodeId;
 enum class RoutingDirection;
 struct FabricEriscDatamoverConfig;
-size_t get_tt_fabric_channel_buffer_size_bytes();
+// Maximum buffer size of one full-size fabric channel in `mesh_device`'s context.
+size_t get_tt_fabric_channel_buffer_size_bytes(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 size_t get_tt_fabric_packet_header_size_bytes();
 size_t get_tt_fabric_max_payload_size_bytes();
 

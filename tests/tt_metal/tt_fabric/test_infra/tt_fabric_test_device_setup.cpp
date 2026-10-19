@@ -158,7 +158,7 @@ void FabricConnectionManager::process(
 
             const uint8_t num_buffers_full_size_channel = BUFFERS_PER_CHANNEL;
             const uint8_t num_buffers_header_only_channel = BUFFERS_PER_CHANNEL;
-            const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+            const size_t buffer_size_bytes_full_size_channel = device_info_provider->get_channel_buffer_size_bytes();
             const size_t mux_base_l1_address = device_info_provider->get_l1_unreserved_base();
 
             // Create the mux config

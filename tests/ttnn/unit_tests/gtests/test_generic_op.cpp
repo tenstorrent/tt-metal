@@ -1231,7 +1231,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     // Configuration - hardcoded for this test case
     // =========================================================================
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::BFLOAT16);
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device_);
     const uint32_t page_size = tensor_spec.compute_page_size_bytes();
     const uint32_t num_pages_per_packet = static_cast<uint32_t>(packet_size_bytes / page_size);
     const uint32_t num_tiles_to_write_per_packet = std::min(4u, num_pages_per_packet);
