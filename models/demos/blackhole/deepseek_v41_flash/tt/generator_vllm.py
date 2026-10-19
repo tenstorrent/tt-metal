@@ -561,9 +561,11 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             )  # next proposal per physical slot (the last round / the seeding)
             self.spec_last = torch.full((self.B,), -1, dtype=torch.long)  # the committed token those drafts continue
             self.spec_has = torch.zeros(self.B, dtype=torch.bool)
-            # speculation applies to requests with ISL <= DSV41_VLLM_SPEC_ISL_MAX (default 32k): longer requests of the same server run plain (draftless rounds / ordinary decode steps)
+            # speculation applies to requests with ISL <= DSV41_VLLM_SPEC_ISL_MAX: longer requests of the same server run plain (draftless rounds / ordinary decode steps). Default: no limit below the
+            # context of the build (the server only starts speculating when max_model_len fits the spec runners; it used to be 32768, so every deeper prompt decoded plain: 66-74 ms per token at
+            # 32k-250k and 98 ms at 1M, while speculating takes ~31 ms at 32k-250k)
             self.spec_ok = torch.ones(self.B, dtype=torch.bool)
-            self.spec_isl_max = int(os.environ.get("DSV41_VLLM_SPEC_ISL_MAX", "32768"))
+            self.spec_isl_max = int(os.environ.get("DSV41_VLLM_SPEC_ISL_MAX", str(1 << 30)))
             self.spec_stats = {"rounds": 0, "accepted": 0, "rows": 0}
         self.sample_stats = {"rows": 0}
         self.vision = self.vbook = None  # image input (init_vision, DSV41_VISION=1)
