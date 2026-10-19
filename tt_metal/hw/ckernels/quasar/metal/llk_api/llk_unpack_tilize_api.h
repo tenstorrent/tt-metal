@@ -17,8 +17,10 @@
 /**
  * @brief Initializes the unpacker for tilize operations on Quasar.
  *
- * Configures UNP_A stride registers and programs the MOP for tilizing
- * block_ct_dim tiles from row-major L1 data into face format in SrcA.
+ * Configures UNP_A stride registers and programs the MOP to tilize a full row of full_ct_dim tiles from
+ * row-major L1 data into face format in SrcA per llk_unpack_tilize_block call (#42757). The MOP sets a SrcA
+ * dvalid per tile, so math still consumes tile by tile and the unpacker back-pressures on the SrcA banks;
+ * batching only takes the per-tile issue off the unpack RISC.
  *
  * The operand gets a BFD id allocated from the unpack partition (Unp0 / UNPACR0) and its table
  * entry is programmed here; the DFB id is used only to fetch buffer info, never as the BFD id.
@@ -26,11 +28,9 @@
  * applies.
  *
  * @param operand       The input dataflow buffer identifier.
- * @param full_ct_dim   Number of tiles in a full row of the input tensor.
- * @param block_ct_dim  Number of tiles per MOP invocation (defaults to 1).
+ * @param full_ct_dim   Number of tiles in a full row of the input tensor, the row llk_unpack_tilize_block tilizes.
  */
-inline void llk_unpack_tilize_init(
-    const std::uint32_t operand, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim = 1) {
+inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint32_t full_ct_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
@@ -42,24 +42,26 @@ inline void llk_unpack_tilize_init(
 
     if (tensor_shape.total_num_faces() == NUM_FACES) {
         const std::uint8_t bfd_id = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
-        _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(bfd_id, full_ct_dim, block_ct_dim, tensor_shape);
+        _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
+            bfd_id, full_ct_dim, full_ct_dim /*block_ct_dim*/, tensor_shape);
     } else {
         const std::uint8_t bfd_id =
             llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(
                 operand_id);
         _llk_unpack_tilize_strided_init_small_faces_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
-            bfd_id, tensor_shape, full_ct_dim, block_ct_dim);
+            bfd_id, tensor_shape, full_ct_dim, full_ct_dim /*block_ct_dim*/);
     }
 }
 
 /**
- * @brief Tilizes a block of tiles from L1 row-major layout into SrcA.
+ * @brief Tilizes one row of block_c_tiles tiles from L1 row-major layout into SrcA in a single MOP run.
  *
- * Computes the L1 face index from the DFB read position and the input
- * tile index, then runs the MOP configured by llk_unpack_tilize_init.
+ * Computes the L1 face index from the DFB read position and the input tile index, then runs the MOP
+ * configured by llk_unpack_tilize_init, which sized it to full_ct_dim tiles: block_c_tiles must be that
+ * full_ct_dim.
  *
  * @param operand          The input dataflow buffer identifier.
- * @param block_c_tiles    Number of tiles in one block row (must match BLOCK_CT_DIM from init).
+ * @param block_c_tiles    Number of tiles in one block row (the init's full_ct_dim).
  * @param input_tile_index Starting tile index (encodes row offset via block_c_tiles stride).
  */
 inline void llk_unpack_tilize_block(
@@ -88,25 +90,22 @@ inline void llk_unpack_tilize_block(
     const std::uint32_t l1_index_per_entry =  // l1_index steps per entry
         entry_size_16B / (face_row_16B * tensor_shape.num_faces_c_dim);
 
-    // TODO (SK) #42757: Remove ct_dim loop when block_ct_dim unpacking optimization implemented.
-    // BLOCK_CT_DIM is currently hardcoded to 1 in tilize_init (see compute/tilize.h), so the MOP
-    // emits one SrcA dvalid per invocation. Loop to match the per-tile math consumption same
-    // structural pattern as BH/WH llk_unpack_tilize_block
     const std::uint32_t block = input_tile_index / block_c_tiles;
     const std::uint32_t offset = input_tile_index % block_c_tiles;
     const std::uint32_t l1_base_idx =
         rd_entry_idx * l1_index_per_entry + block * (block_c_tiles * tensor_shape.total_row_dim());
 
-    if (tensor_shape.total_num_faces() == NUM_FACES) {
-        _llk_unpack_tilize_set_src_offset_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx);
-    }
+    // The MOP walks the row through the source Z counter, so the last tile has to stay within the 11 bits the src
+    // face index carries, the bound the per-tile loop used to assert on every tile.
+    LLK_ASSERT(offset + block_c_tiles <= (1u << 11), "tile row exceeds the 11 bits the src face index can carry");
 
-    for (std::uint32_t t = 0; t < block_c_tiles; t++) {
-        if (tensor_shape.total_num_faces() == NUM_FACES) {
-            _llk_unpack_tilize_<p_unpacr::UNP_A>(t + offset);
-        } else {
-            _llk_unpack_tilize_strided_small_faces_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx + t + offset);
-        }
+    if (tensor_shape.total_num_faces() == NUM_FACES) {
+        // The previous row's run may still be reading TILIZE_SRC_ADDR_OFFSET: drain UNPACK0 before rewriting it.
+        _llk_stall_cfg_on_<p_stall::UNPACK0>();
+        _llk_unpack_tilize_set_src_offset_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx);
+        _llk_unpack_tilize_<p_unpacr::UNP_A>(offset);
+    } else {
+        _llk_unpack_tilize_strided_small_faces_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx + offset);
     }
 }
 
