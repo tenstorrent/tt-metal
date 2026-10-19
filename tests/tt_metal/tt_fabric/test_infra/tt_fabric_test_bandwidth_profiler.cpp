@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <tt_stl/reflection.hpp>
 #include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_profiler.hpp"
 
@@ -244,7 +245,11 @@ void BandwidthProfiler::convert_core_cycles_to_direction_cycles(
             // Add cycles to each (direction, link_id) pair this core sends to
             // Only one core per device should send in each (direction, link) combination
             for (const auto& [direction, link_id] : core_direction_links) {
-                if (device_direction_cycles_[device_node_id][direction].contains(link_id)) {
+                if (device_direction_cycles_[device_node_id][direction].contains(link_id) && std::getenv("TT_FABRIC2") != nullptr) {
+                    // Fabric 2.0 benches run several sender cores on one link: they run concurrently, so the
+                    // (direction, link) duration is the slowest core's.
+                    core_cycles = std::max(core_cycles, device_direction_cycles_[device_node_id][direction][link_id]);
+                } else if (device_direction_cycles_[device_node_id][direction].contains(link_id)) {
                     TT_THROW(
                         "Multiple cores on device {} are sending traffic in direction {} on link {}. "
                         "Only one core per device should send in each (direction, link) combination.",

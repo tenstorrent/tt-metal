@@ -192,7 +192,19 @@ public:
     SenderPayloadBuffer(uint32_t physical_base_address, uint32_t virtual_total_size, uint32_t payload_size) :
         StreamingBuffer(physical_base_address, virtual_total_size, payload_size) {}
 
+#ifdef FABRIC2_WORKER
+    // Fabric 2.0 pull injection: the DRISC reads the payload from this buffer after the request was posted, so
+    // the sender cycles through `phys_slots` physical copies instead of refilling one (see set_physical_slots).
+    uint32_t phys_slots_ = 1, phys_index_ = 0;
+    void set_physical_slots(uint32_t n) { phys_slots_ = n; }
+    uint32_t get_physical_address() const { return base_address_ + phys_index_ * payload_size_; }
+    void advance() {
+        StreamingBuffer::advance();
+        phys_index_ = (phys_index_ + 1 == phys_slots_) ? 0u : phys_index_ + 1;
+    }
+#else
     uint32_t get_physical_address() const { return base_address_; }
+#endif
 
     void fill_data(uint32_t start_value) {
         SequentialDataPattern::fill(get_physical_address(), this->payload_size_, start_value);
@@ -771,8 +783,15 @@ struct LineSyncConfig {
     void global_sync_start() {
         for (uint8_t i = 0; i < num_connections_; i++) {
             connection_manager_->template wait_for_empty_write_slot<false>(connection_ptrs_[i], connection_indices_[i]);
+#ifdef FABRIC2_WORKER
+            // Fabric 2.0 direct injection: the packet is written when the x280 grants a slot, inside the adapter's
+            // calls; this core then spins on the sync semaphore, so the send must serve the grant first (blocking).
+            connection_manager_->template send_header_flush_blocking<false>(
+                connection_ptrs_[i], connection_indices_[i], (uint32_t)packet_header);
+#else
             connection_manager_->template send_header_non_blocking<false>(
                 connection_ptrs_[i], connection_indices_[i], (uint32_t)packet_header);
+#endif
         }
     }
 
@@ -1061,13 +1080,20 @@ struct SenderKernelTrafficConfig {
         noc_ops_.parse_and_setup(this, arg_idx);
     }
 
-    void setup_payload_buffer(uint32_t payload_buffer_address, uint32_t payload_buffer_size) {
+    void setup_payload_buffer(uint32_t payload_buffer_address, uint32_t payload_buffer_size, uint32_t phys_slots = 1) {
         if (payload_size_bytes > 0) {
             payload_buffer_ = new (payload_buffer_storage.data())
                 SenderPayloadBuffer(payload_buffer_address, payload_buffer_size, this->payload_size_bytes);
+#ifdef FABRIC2_WORKER
+            payload_buffer_->set_physical_slots(phys_slots);
+            for (uint8_t k = 0; k < num_connections_; ++k) {
+                static_cast<EdmSenderT*>(connection_ptrs_[k])->limit_outstanding(phys_slots - 1);
+            }
+#endif
         } else {
             payload_buffer_ = nullptr;
         }
+        (void)phys_slots;
     }
 
     bool has_packets_to_send() const { return num_packets_processed < metadata.num_packets; }
@@ -1527,6 +1553,7 @@ struct SenderKernelMemoryMap {
         return addr;
     }
 
+    bool payload_buffer_fits(uint32_t size) const { return curr_payload_buffer_address_ + size < highest_usable_address_; }
     uint32_t get_payload_buffer_address(uint32_t size) {
         uint32_t addr = curr_payload_buffer_address_;
         ASSERT(addr + size < highest_usable_address_);
@@ -1764,9 +1791,19 @@ private:
             // this virtual size is used to keep track of the physical buffer on the receiver side
             // on the sender side, the physical buffer will only be the size of the payload
             uint32_t payload_buffer_size = metadata.payload_buffer_size;
+#ifdef FABRIC2_WORKER
+            // Pull injection: up to 64 physical payload copies per config (fewer when L1 is short), and at most
+            // slots-1 requests outstanding so a copy is never refilled before the DRISC pulled it.
+            const uint32_t psize = traffic_config_ptrs[i]->payload_size_bytes;
+            uint32_t slots = 64;
+            while (slots > 1 && !this->memory_map.payload_buffer_fits(psize * slots)) slots /= 2;
+            uint32_t payload_buffer_address = this->memory_map.get_payload_buffer_address(psize * slots);
+            traffic_config_ptrs[i]->setup_payload_buffer(payload_buffer_address, payload_buffer_size, slots);
+#else
             uint32_t payload_buffer_address =
                 this->memory_map.get_payload_buffer_address(traffic_config_ptrs[i]->payload_size_bytes);
             traffic_config_ptrs[i]->setup_payload_buffer(payload_buffer_address, payload_buffer_size);
+#endif
         }
     };
 };

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <tt_stl/reflection.hpp>
 #include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.hpp"
 
@@ -367,7 +368,12 @@ void TestContext::profile_results(const TestConfig& config) {
     }
     bandwidth_results_manager_->add_summary(config, bandwidth_profiler_->get_latest_summary());
 
-    if (!latest_results.empty()) {
+    if (std::getenv("TT_FABRIC2") != nullptr || std::getenv("TT_FABRIC_CSV_ALL_ROWS") != nullptr) {
+        // Fabric 2.0 (and golden runs of the stock fabric): every (device, direction, link) row goes to the csv.
+        for (const auto& result : latest_results) {
+            bandwidth_results_manager_->append_to_csv(config, result);
+        }
+    } else if (!latest_results.empty()) {
         bandwidth_results_manager_->append_to_csv(config, latest_results.back());
     }
 }
@@ -536,6 +542,11 @@ void TestContext::update_memory_maps(const tt::tt_fabric::fabric_tests::Allocato
     auto l1_unreserved_base = fixture_->get_l1_unreserved_base();
     auto l1_unreserved_size = fixture_->get_l1_unreserved_size();
     auto l1_alignment = fixture_->get_l1_alignment();
+    if (std::getenv("TT_FABRIC2") != nullptr) {
+        // Fabric 2.0 pull injection keeps per-connection request line rings in the top 32 KiB of worker L1
+        // (fabric2_abi.hpp kWorkerReqRingRegionBytes): the harness memory maps stay below it.
+        l1_unreserved_size -= 32768;
+    }
 
     sender_memory_map_ =
         tt::tt_fabric::fabric_tests::SenderMemoryMap(l1_unreserved_base, l1_unreserved_size, l1_alignment);

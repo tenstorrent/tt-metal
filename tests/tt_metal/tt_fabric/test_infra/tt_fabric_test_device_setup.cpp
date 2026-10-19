@@ -1555,9 +1555,11 @@ void TestDevice::create_latency_sender_kernel(
         rt_args.push_back(dest_node.mesh_id.get());
     }
 
-    // Add fabric connection args
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        fabric_node_id_, dest_node, link_idx, program_handle_, {core}, rt_args);
+    // Add fabric connection args (Fabric 2.0: the plugin provisions the connection when TT_FABRIC2 is set)
+    if (!fabric2_connection_hook(fabric_node_id_, dest_node, link_idx, program_handle_, core, rt_args)) {
+        tt::tt_fabric::append_fabric_connection_rt_args(
+            fabric_node_id_, dest_node, link_idx, program_handle_, {core}, rt_args);
+    }
 
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear = {
         {semaphore_address, sender_memory_map_->get_local_sync_region_size()}};
@@ -1658,9 +1660,11 @@ void TestDevice::create_latency_responder_kernel(
         rt_args.push_back(sender_node.mesh_id.get());
     }
 
-    // Add fabric connection args (back to sender)
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        fabric_node_id_, sender_node, link_idx, program_handle_, {core}, rt_args);
+    // Add fabric connection args (back to sender; Fabric 2.0: the plugin provisions the connection when TT_FABRIC2 is set)
+    if (!fabric2_connection_hook(fabric_node_id_, sender_node, link_idx, program_handle_, core, rt_args)) {
+        tt::tt_fabric::append_fabric_connection_rt_args(
+            fabric_node_id_, sender_node, link_idx, program_handle_, {core}, rt_args);
+    }
 
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear = {
         {semaphore_address, sender_memory_map_->get_local_sync_region_size()}};
