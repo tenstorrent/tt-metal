@@ -405,8 +405,8 @@ TEST_F(Mesh1x2CommOpsTest, TestScatterFullyTiled) {
 }
 
 // synchronize_gradients decides per mesh axis whether a gradient is reduced by reading the parameter's label through
-// is_sharded_on_axis, and trusts the all_reduce result's own label afterwards (the relabel-by-index it used to apply
-// is gone). On the 1x2 mesh axis 1 is the only axis with more than one device.
+// is_sharded_on_axis, and trusts the all_reduce result's own label afterwards. On the 1x2 mesh axis 1 is the only axis
+// with more than one device.
 namespace {
 
 using MeshMapperConfig = ttnn::distributed::MeshMapperConfig;
@@ -501,9 +501,9 @@ TEST_F(Mesh1x2CommOpsTest, SynchronizeGradientsNDGradientIsAveragedAndReadsRepli
 }
 
 TEST_F(Mesh1x2CommOpsTest, IsShardedOnAxisReadsTensorParallelShardsPerAxis) {
-    // A TP weight sharded on dim 3 along axis 1, spelled N-D and collapsed, reads as sharded on axis 1 only; the
-    // collapsed spelling read as not sharded on axis 1 before this change. A label that does not cover the mesh is
-    // refused rather than guessed. A reduction request over the size-1 axis 0 is a no-op (synchronize_tensor's early
+    // A TP weight sharded on dim 3 along axis 1, spelled N-D and collapsed, reads as sharded on axis 1 only. A label
+    // that does not cover the mesh is refused rather than guessed. A reduction request over the size-1 axis 0 is a
+    // no-op (synchronize_tensor's early
     // return) and leaves the TP shard alone.
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> weight = xt::zeros<float>({1U, 1U, 32U, 64U});

@@ -124,7 +124,7 @@ def _per_axis_placements(placements: Optional[List[Any]], n_axes: int, what: str
 
     ``None`` (no topology: unit mesh / older ttnn) and the collapsed ``{N}, [Replicate]`` both mean replicated
     everywhere. Any other length mismatch -- a collapsed Shard, or a label for a different mesh -- raises: guessing
-    all-Replicate here is what used to redistribute one device's shard as if it were the full tensor.
+    all-Replicate would redistribute one device's shard as if it were the full tensor.
     """
     if placements is None:
         return [ttnn.PlacementReplicate()] * n_axes
