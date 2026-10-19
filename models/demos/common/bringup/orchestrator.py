@@ -1314,13 +1314,27 @@ class Orchestrator:
             sides = []
         code = self.ab_code_key(task)
         kinds = {n: k for n, k, _, _ in self.ab_items(task)}
+        # F121: when max precision pins every switch to one side's values, the gate's frozen tests are that side's:
+        # they run once, there, and the other side shows the same result (they cannot see the change)
+        shared = self.gate_tests_side(task) if len(sides) == 2 and self.switches_pinned(task) else None
         try:
             for side, env in sides:
-                for n, r in self.ab_measure(task, side, env, base, code).items():
+                parts = None
+                if shared and side != shared:
+                    parts = [n for n, k in kinds.items() if k != "test"]
+                for n, r in self.ab_measure(task, side, env, base, code, only=parts).items():
                     if kinds[n] == "profile":
                         rec["profile"][side] = r
                     else:
                         rec["tests" if kinds[n] == "test" else "ladder"].setdefault(n, {})[side] = r
+            if shared:
+                other = "new" if shared == "old" else "old"
+                for n, r in rec["tests"].items():
+                    if shared in r:
+                        r[other] = dict(r[shared], shared=f"the {shared} side's run: max precision pins every switch")
+                rec["note"] = (rec["note"] + "; " if rec["note"] else "") + (
+                    f"frozen tests ran once ({shared} side): max precision pins every switch, so they cannot see the change"
+                )
         except InfraStop as e:
             rec["note"] = f"stopped early: {e.sig} (reset the board; `decide --task {tid} --rerun` measures again)"
         same = [
@@ -1383,7 +1397,7 @@ class Orchestrator:
         items = kept.get("items", {}) if kept.get("version") == 2 else {}
         out = {}
         for name, kind, cmd, extra in self.ab_items(task):
-            if only and name not in only and kind not in only:
+            if only is not None and name not in only and kind not in only:
                 continue
             stamp = {"code": code, "env": env, "cmd": cmd, "extra": extra}
             label = f"  [{tid}] A/B {'on' if side == 'new' else 'off'}: {name}"
@@ -1581,6 +1595,14 @@ class Orchestrator:
             metrics.update({k: v["value"] for k, v in M.load(tid, src / name).items()})
         how = f"frozen tests from {tests_from}, ladder and profile from {side}" if tests_side == "old" else str(side)
         return {"metrics": metrics, "source": how}
+
+    def switches_pinned(self, task: dict) -> bool:
+        """F121: max precision names a value for every switch of the pick (the frozen tests cannot see the change)."""
+        ab = task.get("ab") or {}
+        names = set(model_precision.switch_env(self.spec, ab.get("env") or {})[0])
+        names |= set(model_precision.switch_env(self.spec, ab.get("change") or {})[0])
+        mp = dict(model_precision.overrides(self.spec)) if self.spec.get("tests.component_max_precision") else {}
+        return bool(names) and names <= set(mp)
 
     def gate_tests_side(self, task: dict) -> str | None:
         """F120: the gate's frozen tests run at the model's max precision, and after the accept the switch's 'on' values
