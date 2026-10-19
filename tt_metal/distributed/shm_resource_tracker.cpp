@@ -37,20 +37,25 @@ pid_t extract_pid_from_manifest_name(const std::string& filename) {
 }
 
 pid_t extract_pid_from_shm_name(const std::string& filename) {
-    // Expected format: tt_{prefix}_{pid}_{counter}
+    // Expected format: tt_{prefix}_{pid}_{random}_{counter}, as generate_shm_name() builds it.
+    // The prefix may contain '_', so find the PID from the end.
     if (!filename.starts_with("tt_")) {
         return 0;
     }
-    auto first = filename.find('_', 3);
-    if (first == std::string::npos) {
+    auto counter_sep = filename.rfind('_');
+    if (counter_sep == std::string::npos || counter_sep <= 2) {
         return 0;
     }
-    auto second = filename.find('_', first + 1);
-    if (second == std::string::npos) {
+    auto random_sep = filename.rfind('_', counter_sep - 1);
+    if (random_sep == std::string::npos || random_sep <= 2) {
+        return 0;
+    }
+    auto pid_sep = filename.rfind('_', random_sep - 1);
+    if (pid_sep == std::string::npos || pid_sep <= 2) {
         return 0;
     }
     try {
-        return static_cast<pid_t>(std::stol(filename.substr(first + 1, second - first - 1)));
+        return static_cast<pid_t>(std::stol(filename.substr(pid_sep + 1, random_sep - pid_sep - 1)));
     } catch (...) {
         return 0;
     }
@@ -244,7 +249,7 @@ void ShmResourceTracker::cleanup_stale_resources() {
         }
 
         // Check for orphaned shm objects from dead processes
-        // Pattern: tt_{h2d|d2h}_{pid}_{counter}
+        // Pattern: tt_{prefix}_{pid}_{random}_{counter}
         pid_t shm_pid = extract_pid_from_shm_name(name);
         if (shm_pid > 0 && shm_pid != my_pid && !is_pid_alive(shm_pid)) {
             stale_shm_names.push_back(name);
