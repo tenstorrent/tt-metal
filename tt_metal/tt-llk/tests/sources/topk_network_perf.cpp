@@ -73,7 +73,7 @@ inline void topk_network_call()
     }
     else if constexpr (TOPK_NETWORK_OP == 1)
     {
-        _bitonic_topk_merge<true, is_fp32_dest_acc_en, TOPK_IDIR != 0, TOPK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER>(0, TOPK_K);
+        _bitonic_topk_merge<true, is_fp32_dest_acc_en, TOPK_IDIR != 0, TOPK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER, 16, TOPK_K>(0);
     }
     else
     {

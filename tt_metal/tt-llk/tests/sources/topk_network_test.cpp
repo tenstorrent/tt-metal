@@ -195,11 +195,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 dest_sync,
                 is_fp32_dest_acc_en,
                 calculate_bitonic_topk_merge,
-                (APPROX, is_fp32_dest_acc_en, TOPK_IDIR, TOPK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER, 16),
+                (APPROX, is_fp32_dest_acc_en, TOPK_IDIR, TOPK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER, 16, TOPK_K),
                 dst_index,
                 vector_mode,
-                0 /* m_iter */,
-                TOPK_K);
+                0 /* m_iter */);
             SFPU_UNARY_CALL(
                 dest_sync,
                 is_fp32_dest_acc_en,

@@ -335,13 +335,13 @@ void top_k() {
                 copy_tile(index_transposed_dfb_index, right_ind, index_dest_end);
 
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-                ckernel::topk_merge<
+                ckernel::topk_merge<K,
                     /*idir=*/false,
                     stable_sort,
                     DST_ACCUM_MODE,
                     /*fused=*/false,
                     /*rank_stamped=*/false,
-                    ckernel::TopkTieOrder::Descending>(0, m_iter, K);
+                    ckernel::TopkTieOrder::Descending>(0, m_iter);
                 // sort within the larger 32 values
                 ckernel::topk_rebuild<
                     stable_sort,
@@ -507,8 +507,8 @@ void top_k_fused_32b_dest() {
                     topk_fused_raw16::fuse_raw16_slab<largest, topk_fused_raw16::Zeros::Keep>,
                     0,
                     VectorMode::RC_custom)));
-                ckernel::topk_merge</*idir=*/false, /*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
-                    0, m_iter, K);
+                ckernel::topk_merge<K, /*idir=*/false, /*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
+                    0, m_iter);
                 ckernel::topk_rebuild</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
                     0, (uint32_t)a, m_iter, K, logk, true);
                 MATH((_llk_math_eltwise_unary_sfpu_params_(

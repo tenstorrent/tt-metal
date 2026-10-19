@@ -1830,9 +1830,12 @@ template <
     bool FUSED             = false,
     bool RANK_STAMPED      = false,
     TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
-    std::uint32_t TAG_BITS = 16>
-inline void _bitonic_topk_merge(const int m_iter, const int k)
+    std::uint32_t TAG_BITS = 16,
+    std::uint32_t K>
+inline void _bitonic_topk_merge(const int m_iter)
 {
+    static_assert(K > 0, "K is the merge's run length");
+    constexpr int k = static_cast<int>(K);
     static_assert(RANK_STAMPED || TAG_BITS == 16, "TAG_BITS applies to the rank-stamped mode only");
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
     topk_uint16_clear_value_tiles_high_bits();
@@ -1864,7 +1867,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
 
     // The counter walk below pays only when every m_iter of this K takes it (dist a multiple of 8, more than 16 group
     // words a quadrant); for smaller K each group is addressed on its own, which costs the RISC less.
-    if (const int kq = k > 32 ? 32 : k; ((kq & 7) != 0) || (2 * kq * (FUSED ? 4 : 8) <= 128))
+    if constexpr (constexpr int kq = k > 32 ? 32 : k; ((kq & 7) != 0) || (2 * kq * (FUSED ? 4 : 8) <= 128))
     {
         std::uint32_t dst_addr_offset = 0;
         for (int face = 0; face < 2; face++)

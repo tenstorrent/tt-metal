@@ -237,12 +237,12 @@ void process_tiles(
             // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
             if (largest) {
                 ckernel::
-                    topk_merge</*idir=*/false, stable_sort, DST_ACCUM_MODE, fused, /*rank_stamped=*/false, tie_order>(
-                        0, m_iter, K);
+                    topk_merge<K, /*idir=*/false, stable_sort, DST_ACCUM_MODE, fused, /*rank_stamped=*/false, tie_order>(
+                        0, m_iter);
             } else {
                 ckernel::
-                    topk_merge</*idir=*/true, stable_sort, DST_ACCUM_MODE, fused, /*rank_stamped=*/false, tie_order>(
-                        0, m_iter, K);
+                    topk_merge<K, /*idir=*/true, stable_sort, DST_ACCUM_MODE, fused, /*rank_stamped=*/false, tie_order>(
+                        0, m_iter);
             }
 
             tile_regs_commit();
