@@ -465,7 +465,7 @@ def get_label(image_path):
 
 def get_batch(data_loader, resolution=224):
     loaded_images = next(data_loader)
-    images = None
+    images = []
     labels = []
     transform = transforms.Compose(
         [
@@ -483,12 +483,8 @@ def get_batch(data_loader, resolution=224):
         if img.mode == "L":
             img = img.convert(mode="RGB")
         img = transform(img)
-        img = torch.unsqueeze(img, 0)
-
-        if images is None:
-            images = img
-        else:
-            images = torch.cat((images, img), dim=0)
+        images.append(img)
+    images = torch.stack(images, dim=0)
     return images, labels
 
 
