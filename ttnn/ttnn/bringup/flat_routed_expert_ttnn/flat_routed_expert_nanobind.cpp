@@ -10,6 +10,8 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/map.h>
+#include <nanobind/stl/string.h>
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/global_semaphore.hpp>
@@ -92,6 +94,16 @@ nb::dict plan_dict(
     d["gu_rp"] = p->gu_rp;
     d["gu_l1acc"] = p->gu_l1acc;
     d["arena_tiles"] = p->arena_tiles;
+    // (per-role arena offsets, bytes: gate/up x ring at x_off .. h_local at hl_off; down h at h_off, out at o_off;
+    // Tensix readers' rings end at rd_off; relays' staging ends at ti_off)
+    d["role_offsets"] = std::map<std::string, uint32_t>{
+        {"x_off", p->x_off},
+        {"p_off", p->p_off},
+        {"hl_off", p->hl_off},
+        {"rd_off", p->rd_off},
+        {"h_off", p->h_off},
+        {"o_off", p->o_off},
+        {"ti_off", p->ti_off}};
     d["coords"] = cores(p->coords);
     d["readers"] = cores(p->readers);
     d["gu"] = cores(p->gu);

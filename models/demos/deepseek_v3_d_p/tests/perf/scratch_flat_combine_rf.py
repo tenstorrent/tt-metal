@@ -289,6 +289,10 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
         ),
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+    if "role_offsets" in plan:  # (what each flat role uses of the arena: the rest of every core's L1 is free)
+        logger.info(
+            f"{routing}: flat role offsets (KB) " + ", ".join(f"{k} {v >> 10}" for k, v in plan["role_offsets"].items())
+        )
     depth = int(os.environ.get("FC_D", "4"))
     # (the device planner's accumulator count must be the combine's: FC_NACC accumulators then, else up to 16)
     n_acc = int(os.environ.get("FC_NACC", "15")) if DEVPLAN else 16
