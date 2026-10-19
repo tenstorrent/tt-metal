@@ -174,6 +174,15 @@ ProgramDescriptor recipe_compute_program(
         add_cb(index, q_tiles, state_bytes, state_format);
     }
     add_cb(14, q_tiles, state_bytes, state_format);
+    // RESEARCH (fused FP32 prototype, bench-only env TT_SDPA_FFP32=1): BALANCED/ACCURATE fused K chunks
+    // (recipe_fused_fp32.hpp). CB 29: -e0-e1 in K's format (BF16 K only); CB 30: the split reference maxima.
+    const char* ffp_env = std::getenv("TT_SDPA_FFP32");
+    const bool ffp32 = fp32 && ffp_env != nullptr && ffp_env[0] == '1' && kv_format == tt::DataFormat::Float16_b &&
+                       recipe_subblock_width(k_tiles) >= 2;
+    if (ffp32) {
+        add_cb(29, recipe_subblock_width(k_tiles), kv_bytes, kv_format);
+        add_cb(30, q_tiles, 2048, tt::DataFormat::Float16_b);
+    }
     if (fused) {
         // CB 31: a check unit's saturation verdict tile in the fused chunks.
         add_cb(31, 1, 2048, tt::DataFormat::Float16_b);
@@ -227,6 +236,27 @@ ProgramDescriptor recipe_compute_program(
     }
     if (fused) {
         compute.defines.emplace_back("SDPA_RECIPE_FUSED", "1");
+    }
+    if (ffp32) {
+        compute.defines.emplace_back("SDPA_RECIPE_FFP32", "1");
+    }
+    // RESEARCH: bench-only extra kernel defines, "NAME[=VALUE];NAME2..." (e.g. FFP_QUAD;FFP_QK_FID=MathFidelity::HiFi3).
+    if (const char* extra = std::getenv("TT_SDPA_EXTRA_DEFINES"); extra != nullptr) {
+        std::string all(extra);
+        size_t start = 0;
+        while (start < all.size()) {
+            size_t end = all.find(';', start);
+            if (end == std::string::npos) {
+                end = all.size();
+            }
+            const std::string item = all.substr(start, end - start);
+            if (!item.empty()) {
+                const size_t eq = item.find('=');
+                compute.defines.emplace_back(
+                    item.substr(0, eq), eq == std::string::npos ? std::string("1") : item.substr(eq + 1));
+            }
+            start = end + 1;
+        }
     }
     if (vd != d_tiles) {
         compute.defines.emplace_back("SDPA_RECIPE_V_DHT", std::to_string(vd));

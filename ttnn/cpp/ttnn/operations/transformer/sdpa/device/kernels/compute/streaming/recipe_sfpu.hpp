@@ -72,17 +72,26 @@ inline void calculate_sdpa_exp_correction() {
 // Nonpositive-logit grid: trade exponent range for 10 fraction bits
 // in the fast-exp macro's signed-magnitude INT16 encoding. Values below about
 // -21.45 after scaling are zeroed by packer ReLU. This is not a general exp.
+// Research (fused FP32 prototype): a 9-fraction-bit grid (step 2^-9 octave) spans 63 octaves, [-21.5, +22.9] nat
+// around 0, so a fused chunk's P may exceed 1 (scores above the reference max). Same mean factor K.
+#if (defined(SDPA_RECIPE_FFP32) && !defined(FFP_GRID10)) || defined(FFP_GRID9)
+constexpr float kSdpaGridSteps = 512.0f;
+constexpr uint32_t kSdpaGridShift = 14;
+#else
+constexpr float kSdpaGridSteps = 1024.0f;
+constexpr uint32_t kSdpaGridShift = 13;
+#endif
 template <uint32_t scale_fp32>
 inline void init_sdpa_exp_grid() {
-    constexpr float a = 1024.0f * 1.4426950408889634f * __builtin_bit_cast(float, scale_fp32);
-    constexpr float b = 31.0f * 1024.0f - 4.0f * (32512.0f - 32500.818359375f);
+    constexpr float a = kSdpaGridSteps * 1.4426950408889634f * __builtin_bit_cast(float, scale_fp32);
+    constexpr float b = 31.0f * kSdpaGridSteps - (kSdpaGridSteps / 256.0f) * (32512.0f - 32500.818359375f);
     TTI_SFPLOADI(0, 0xA, sdpa_lo16(a));
     TTI_SFPLOADI(0, 0x8, sdpa_hi16(a));
     TTI_SFPCONFIG(0, 12, 0);
     TTI_SFPLOADI(0, 0xA, sdpa_lo16(b));
     TTI_SFPLOADI(0, 0x8, sdpa_hi16(b));
     TTI_SFPCONFIG(0, 13, 0);
-    TTI_SFPLOADI(0, 0xA, 13);
+    TTI_SFPLOADI(0, 0xA, kSdpaGridShift);
     TTI_SFPLOADI(0, 0x8, 0);
     TTI_SFPCONFIG(0, 14, 0);
 }
@@ -141,6 +150,44 @@ inline void restore_sdpa_grid_macro_instructions() {
 template <int iterations, bool accurate>
 inline void calculate_sdpa_exp_refine_loadmacro() {
     static_assert(iterations % 2 == 0);
+#ifdef FFP_QUAD
+    // Research (balanced-frontier): minimax quadratic in place of BALANCED's cubic (ripple +-0.345% vs +-0.237%),
+    // same mean level (K); two MADs fewer per row pair (8 instead of 10 SFPU issues).
+    if constexpr (!accurate) {
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(SDPA_SFPU_ADDR_MOD_6);
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(SDPA_SFPU_ADDR_MOD_7);
+        constexpr float q2 = 1.852119366802e+28f;
+        constexpr float q1 = -5.501756027717e+28f;
+        constexpr float q0 = 1.154751922200e+29f;
+        TTI_SFPLOADI(6, 0xA, sdpa_lo16(q2));
+        TTI_SFPLOADI(6, 0x8, sdpa_hi16(q2));
+        TTI_SFPLOADI(0, 0xA, sdpa_lo16(q1));
+        TTI_SFPLOADI(0, 0x8, sdpa_hi16(q1));
+        TTI_SFPCONFIG(0, 12, 0);
+        TTI_SFPLOADI(0, 0xA, sdpa_lo16(q0));
+        TTI_SFPLOADI(0, 0x8, sdpa_hi16(q0));
+        TTI_SFPCONFIG(0, 13, 0);
+        TTI_SFPMUL(4, 0, p_sfpu::LCONST_0, 13, 0);
+        TTI_SFPMUL(5, 0, p_sfpu::LCONST_0, 14, 0);
+        TTI_REPLAY(8, 8, 1, 1);
+        TTI_SFPLOADMACRO(6, 0, SDPA_SFPU_ADDR_MOD_6, 0);
+        TTI_SFPLOADMACRO(7, 0, SDPA_SFPU_ADDR_MOD_6, 2);
+        TTI_SFPMAD(2, 6, 12, 4, 0);
+        TTI_SFPMAD(3, 6, 12, 5, 0);
+        TTI_SFPMAD(2, 4, 13, 4, 0);
+        TTI_SFPMAD(3, 5, 13, 5, 0);
+        TTI_SFPLOADMACRO(8, 0, SDPA_SFPU_ADDR_MOD_6, 0);
+        TTI_SFPLOADMACRO(13, 0, SDPA_SFPU_ADDR_MOD_7, 2);
+#pragma GCC unroll 8
+        for (int i = 2; i < iterations; i += 2) {
+            lltt::replay(8, 8);
+        }
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        return;
+    }
+#endif
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_6);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_7);
     constexpr float a = accurate ? -8.01081703839006e27f : -8.106702647031e27f;

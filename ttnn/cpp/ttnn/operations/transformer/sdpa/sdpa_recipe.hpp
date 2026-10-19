@@ -62,6 +62,7 @@ uint64_t recipe_drop_fused(tt::tt_metal::ProgramDescriptor::CBDescriptors& cbs, 
     }
     cbs.erase(std::remove_if(cbs.begin(), cbs.end(), recipe_fused_cb), cbs.end());
     std::erase_if(defines, named("SDPA_RECIPE_FUSED"));
+    std::erase_if(defines, named("SDPA_RECIPE_FFP32"));
     return freed;
 }
 

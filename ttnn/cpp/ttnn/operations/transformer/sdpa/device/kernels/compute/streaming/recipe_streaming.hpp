@@ -51,6 +51,14 @@ ALWI void recipe_recip_first_column_wh() {
 #include "fp32_state.hpp"
 #endif
 
+// Research knob (fused FP32 prototype): QK fidelity of the FP32 recipes (BALANCED's default HiFi4).
+#ifndef FFP_QK_FID
+#define FFP_QK_FID MathFidelity::HiFi4
+#endif
+#if defined(SDPA_RECIPE_FFP32) && defined(SDPA_RECIPE_FP32) && !defined(ARCH_WORMHOLE) && \
+    (!defined(SDPA_RECIPE_MASK) || defined(SDPA_RECIPE_KRANGE))
+#define SDPA_RECIPE_FFP32_ACTIVE 1
+#endif
 struct AccumulatorHalf {
     uint32_t sum, max, out;
 };
@@ -384,7 +392,7 @@ void blocked_matmul_and_pack(
 #ifndef SDPA_RECIPE_ACCURATE
         if constexpr (transpose) {
             UNPACK((llk_unpack_AB_matmul(in0_cb, in1_cb, in0_index, in1_index, subblock_w, subblock_h, matmul_stride)));
-            MATH((llk_math_matmul_no_mop<MathFidelity::HiFi4, MM_THROTTLE>(
+            MATH((llk_math_matmul_no_mop<FFP_QK_FID, MM_THROTTLE>(
                 in0_cb, in1_cb, dst_index, subblock_w, subblock_h)));
         } else
 #endif
@@ -693,7 +701,9 @@ SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
     // One batch per QK subblock column group (the subblock width divides the K chunk).
     constexpr uint32_t score_batch = SDPA_RECIPE_QK_W;
     static_assert(score_batch == 1 || score_batch == 2 || score_batch == 4);
-    CircularBuffer(max_cb).wait_front((q_subblock + 1) * tiles_per_row);
+    if (wait_max) {
+        CircularBuffer(max_cb).wait_front((q_subblock + 1) * tiles_per_row);
+    }
     if (global_col_base == 0) {
         sdpa_subtract_max_l1(inout_cb, max_cb, max_row_base, cols_in_row);
     }
@@ -1320,6 +1330,7 @@ static __attribute__((noinline, noclone)) void recipe_add_attn_mask(uint32_t row
 #endif
 
 #include "recipe_fused_chunk.hpp"
+#include "recipe_fused_fp32.hpp"
 
 /**
  * One K-chunk iteration of the streaming SDPA algorithm (v2 — no row buffers).
@@ -1441,6 +1452,30 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         TTI_SFPCONFIG(0, 13, 0);
     })
 #endif
+#ifdef SDPA_RECIPE_FFP32_ACTIVE
+    if (!is_first_iter && !recipe_chunk_masked()) {
+        sdpa_fused_fp32_chunk<
+            Sq_chunk_t,
+            Sk_chunk_t,
+            DHt,
+            vDHt,
+            scale_fp32,
+            qkt_subblock_w,
+            qktv_subblock_w,
+            cb_q_in,
+            cb_kt_in,
+            cb_v_in,
+            cb_qkt_im,
+            cb_identity_scale_in,
+            cb_exp_max_diff,
+            cb_col_identity,
+            cb_recip_scratch,
+            cb_normalized_out,
+            independent_q_release>(prev, cur, is_last_iter, release_q);
+        return true;
+    }
+    ffp_ref_valid = false;
+#endif
 #if defined(SDPA_RECIPE_FUSED_ACTIVE) && !defined(ARCH_WORMHOLE)
     if (!is_first_iter && !recipe_chunk_masked()) {
         sdpa_fused_chunk<
@@ -1492,7 +1527,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         recipe_mm_init(cb_q_in, cb_kt_in, true, actual_sbw, cur_qk_h, in0_block_w);
 #ifdef SDPA_RECIPE_FP32
 #ifndef SDPA_RECIPE_ACCURATE
-        MATH((llk_math_matmul_init_no_mop<MathFidelity::HiFi4, MM_THROTTLE>(
+        MATH((llk_math_matmul_init_no_mop<FFP_QK_FID, MM_THROTTLE>(
             cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h)));
 #endif
 #endif
@@ -1536,7 +1571,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                     recipe_mm_reinit(cb_q_in, cb_kt_in, true, actual_sbw, cur_qk_h, in0_block_w);
 #ifdef SDPA_RECIPE_FP32
 #ifndef SDPA_RECIPE_ACCURATE
-                    MATH((llk_math_matmul_reinit_no_mop<MathFidelity::HiFi4, MM_THROTTLE>(
+                    MATH((llk_math_matmul_reinit_no_mop<FFP_QK_FID, MM_THROTTLE>(
                         cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h)));
 #endif
 #endif
@@ -2450,6 +2485,9 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
 #ifdef SDPA_RECIPE_FP32
         // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
         if (!is_first) {
+#ifdef SDPA_RECIPE_FFP32_ACTIVE
+            if (!fused)
+#endif
             sdpa_cb_pop_front_out_of_line(prev.max, Sq_chunk_t);
             if (!sdpa_skip_prev_sum_pop) {
                 sdpa_cb_pop_front_out_of_line(prev.sum, Sq_chunk_t);
@@ -2470,7 +2508,11 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
 
         if (is_last) {
 #ifdef SDPA_RECIPE_FP32
+#ifdef SDPA_RECIPE_FFP32_ACTIVE
+            sdpa_cb_pop_front_out_of_line(fused ? prev.max : cur.max, Sq_chunk_t);
+#else
             sdpa_cb_pop_front_out_of_line(cur.max, Sq_chunk_t);
+#endif
 #else
             sdpa_cb_pop_front_out_of_line(fused ? prev.max : cur.max, Sq_chunk_t);
 #endif
@@ -2481,6 +2523,11 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
             }
 #endif
             std::swap(prev, cur);
+#ifdef SDPA_RECIPE_FFP32_ACTIVE
+            if (fused) {
+                std::swap(prev.max, cur.max);  // the reference stays in place
+            }
+#endif
 #ifndef SDPA_RECIPE_FP32
             prev.out = cb_out_im_A;
             cur.out = cb_out_im_B;
