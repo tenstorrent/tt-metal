@@ -1234,9 +1234,8 @@ class MTPSpecEngine:
 
         logits_dev = None
         if self.fast_prefill and self.prefill_recorded and self.recorded_prefill:
-            logits_dev = self._prefill_fast(
-                slot, prompt_list, prompt, pt_row, Tp, _on_chunk, captured_row, plan=plan, mtp_prompt=mtp_prompt
-            )
+            fast_kw = {} if plan is None else dict(plan=plan, mtp_prompt=mtp_prompt)
+            logits_dev = self._prefill_fast(slot, prompt_list, prompt, pt_row, Tp, _on_chunk, captured_row, **fast_kw)
         if logits_dev is None and self.B == 1 and self.prefill_recorded and self.recorded_prefill:
             pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)  # MTP chunk fill keeps the nb-wide pt_row
             logits_dev = model.prefill_traced_chunked(prompt, pt_rec, Tp, on_chunk=_on_chunk)
@@ -1367,8 +1366,15 @@ class MTPSpecEngine:
         pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)
         cs = a + num_full * chunk
         tail_tr = model._short_trace_for(tail) if tail >= 3 else None
-        # Full chunks by replay (with on_chunk). The tail is run here (never by run_tail=True, whose tail slice ignores
-        # `start`).
+        # Full chunks by replay (with on_chunk). For a > 0 the tail is run here, never by run_tail=True (its tail slice
+        # ignores `start`).
+        if a == 0 and tail > 0 and tail_tr is None:
+            # The uncached long-prompt path: the chunk trace replays every full chunk and the eager masked-bucket tail
+            # runs inside it (its tail slice is right for start == 0).
+            logits = model._prefill_traced_chunked_tp(
+                prompt, pt_rec, b, num_full, chunk, tail, on_chunk=on_chunk, run_tail=True
+            )
+            return self._read_replicated_logits(logits)
         model._prefill_traced_chunked_tp(
             prompt, pt_rec, b, num_full, chunk, tail, on_chunk=on_chunk, run_tail=False, start=a, reset_gdn=not carry
         )
@@ -1438,7 +1444,10 @@ class MTPSpecEngine:
         prompt, row, *rest = self._prompts[slot]
         logger.info(f"[spec_engine] re-prefill engine row {slot} ({len(prompt)} tokens)")
         # Same vLLM start_pos as the original prefill (its cached blocks are still the request's).
-        self._prefill_row(slot, prompt, row, start_pos=rest[0] if rest else None)
+        if rest:
+            self._prefill_row(slot, prompt, row, start_pos=rest[0])
+        else:
+            self._prefill_row(slot, prompt, row)
 
     def _capture_last_row(self, feed, i, slot):
         """feed row i -> self._last_hidden[slot], fixed-shape programs only (a per-length slice would

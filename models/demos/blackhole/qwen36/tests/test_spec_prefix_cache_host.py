@@ -107,7 +107,7 @@ def _engine_with_fake_model(plan_ret):
     e._offered, e._no_draft, e._speculated, e._withheld_streak = set(), set(), set(), {}
     e._parked, e._prompts, e._fresh_dirty = {}, {}, set()
     e._last_hidden, e._scratch_block, e.model = [None, None], 10_000, model
-    e.prefill_recorded = False
+    e.prefill_recorded, e.recorded_prefill, e.fast_prefill, e._phys = False, False, False, [0, 1]
     return e, row, seen
 
 
@@ -120,7 +120,7 @@ def test_engine_threads_start_pos_and_replays_it(expect_error):
     assert e._prompts[1][2] == 192
     # _reprefill replays with the same start_pos
     calls = []
-    e.prefill = lambda slot, prompt, r, start_pos=None: calls.append((slot, start_pos))
+    e._prefill_row = lambda slot, prompt, r, start_pos=None: calls.append((slot, start_pos))
     e._reprefill(1)
     assert calls == [(1, 192)]
 
@@ -132,7 +132,7 @@ def test_engine_without_start_pos_is_unchanged(expect_error):
     assert "plan_args" not in seen and seen["pfs"][2] == {}
     assert len(e._prompts[0]) == 2
     calls = []
-    e.prefill = lambda slot, prompt, r, **kw: calls.append(kw)
+    e._prefill_row = lambda slot, prompt, r, **kw: calls.append(kw)
     e._reprefill(0)
     assert calls == [{}]
 
