@@ -19,22 +19,23 @@ from typing import Dict, List, Optional, Tuple
 
 import matplotlib
 
-from common import run_status, whole_run_value
-from compare_cases import grouped_bar_chart
+from common import PJ_PER_J, run_status, save_figure, whole_run_value
+from compare_cases import build_grid_order, grouped_bar_chart
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
 
-# POWER_CASE -> (subdir name, legend label). See long_matmul's README for what each case does. Case 3 (reader AND compute
-# both idle) is not in the default sweep below -- it's a two-variable case, and the three
-# single-variable ablations already isolate each engine's own contribution to dynamic power.
+# POWER_CASE -> (subdir name, legend label). See long_matmul's README for what each case does, and
+# sweeps/*.yaml for which cases each config runs. Case 3 (reader AND compute both idle) is in
+# none of them -- it's a two-variable case, and the three single-variable ablations already
+# isolate each engine's own contribution to dynamic power.
 # Case 5 (LONG_MATMUL_DISABLE_WRITER) is the writer's idle case, symmetric with case 2 (compute idle)
 # and case 4 (reader idle): all three compare "full real work" against "zero real work" for
 # exactly one engine, with the other two held identical (real, 100% write amplification) on
 # both sides. Case 0 ("regular", write amplification off) was used as the writer stand-in
-# before case 5 existed -- kept available (not in the default set) since it answers a different,
+# before case 5 existed -- the published Fig. 1 still uses it -- and it answers a different,
 # still useful question: the marginal cost of turning on 100% write amplification specifically,
 # as opposed to the writer's full on/off contribution.
 POWER_CASE_SPECS: Dict[int, Tuple[str, str]] = {
@@ -45,7 +46,6 @@ POWER_CASE_SPECS: Dict[int, Tuple[str, str]] = {
     4: ("reader_idle2", "Reader idle"),
     5: ("writer_idle", "Writer idle"),
 }
-SUBDIR_TO_POWER_CASE: Dict[str, int] = {subdir: case for case, (subdir, _label) in POWER_CASE_SPECS.items()}
 
 # Which per-tile instruction the compute kernel runs (LONG_MATMUL_OP, see long_matmul's
 # kernels/compute/compute.cpp).
@@ -106,8 +106,6 @@ ENGINE_ABLATIONS: List[Tuple[str, str, str]] = [
     ("compute", "compute_idle", "Compute"),
 ]
 
-PJ_PER_J = 1e12
-
 
 @dataclass
 class Runs:
@@ -121,9 +119,22 @@ class Runs:
     # LONG_MATMUL_MODE=legacy: use the published analysis (see common.whole_run_value)
     legacy: bool
 
+    def complete_run(self, rel: str) -> bool:
+        """Whether <output_root>/<rel> is a complete run of this sweep, with its settings."""
+        settings = self.settings_by_run.get(rel)
+        return settings is not None and run_status(self.output_root / rel, settings) == "done"
+
     def complete(self, op: str, subdir: str) -> bool:
-        settings = self.settings_by_run.get(f"{op}/{subdir}")
-        return settings is not None and run_status(self.output_root / op / subdir, settings) == "done"
+        return self.complete_run(f"{op}/{subdir}")
+
+    def grid_order(self, pairs: List[Tuple[str, str]]) -> List[str]:
+        """Every grid in the complete runs among (op, subdir) pairs, ordered by core count."""
+        rows_by_case: Dict[str, List[Dict[str, str]]] = {}
+        for op, subdir in pairs:
+            if self.complete(op, subdir):
+                with (self.output_root / op / subdir / "program_intervals.csv").open(newline="") as f:
+                    rows_by_case[f"{op}/{subdir}"] = list(csv.DictReader(f))
+        return build_grid_order(rows_by_case)
 
     def rows(self, op: str, subdir: str, note_prefix: str) -> Optional[Dict[str, Dict[str, str]]]:
         """program_intervals.csv of op/subdir by grid, or None (with a note) if that run is not a
@@ -319,9 +330,7 @@ def plot_energy_by_engine_stacked(
     ax.set_title("Total dynamic energy by engine (reader / writer / compute), per grid")
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
+    save_figure(fig, out_path, dpi)
     print(f"Wrote: {out_path}", flush=True)
 
 
@@ -419,9 +428,7 @@ def plot_cross_op_stacked_by_engine(
     ax.set_ylabel(ylabel)
     ax.set_title(f"{title}, per grid, per op ({' vs '.join(ops_with_data)})")
     ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
+    save_figure(fig, out_path, dpi)
     print(f"Wrote: {out_path}", flush=True)
 
 

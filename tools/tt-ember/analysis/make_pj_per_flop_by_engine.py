@@ -18,13 +18,11 @@ Charge -> energy -> pJ/FLOP the same way as make_pj_per_flop.py:
     energy_J  = charge_as * avg_vcore_v
     pJ/FLOP   = energy_J / (2 * M * N * K * iterations) * 1e12
 
-Caveat on the writer row: no POWER_CASE in this sweep genuinely idles the writer (that needs
-LONG_MATMUL_DISABLE_WRITER=1, not captured here). `regular` (write amplification 0%) is used as
-the writer-idle stand-in, on the assumption that turning off write amplification is the closest
-available proxy for "writer not doing extra work". This isolates the cost of the write-amplified
-path specifically, not the writer engine's total contribution (the writer still performs its one
+The writer row uses `regular` (write amplification 0%) on purpose, to reproduce the published
+Fig. 1, which was made before POWER_CASE=5 (`writer_idle`) existed. It isolates the cost of the
+write-amplified path, not the writer's total contribution (the writer still performs its one
 real write per output tile in `regular`) -- read it as "cost of 100% write amplification", not
-"cost of writing at all".
+"cost of writing at all". The energy_by_engine steps in run_sweep.py use `writer_idle` instead.
 
 Uses dynamic *peak* charge (not average), per request: peak-based ablation subtracts two
 single-sample-driven peak values from different runs, which is a valid arithmetic operation but
@@ -34,16 +32,15 @@ elsewhere in this directory.
 
 Examples
 --------
-    ./make_pj_per_flop_by_engine.py out_fig1/matmul --label "Wormhole n300" \\
+    python3 analysis/make_pj_per_flop_by_engine.py out_fig1/matmul --label "Wormhole n300" \\
         --seq 1024 --hidden 2048 --k 2048 --iters 160
 
-    ./make_pj_per_flop_by_engine.py out_fig1/matmul --label "Wormhole n300" \\
+    python3 analysis/make_pj_per_flop_by_engine.py out_fig1/matmul --label "Wormhole n300" \\
         --compare /path/to/blackhole_run/matmul --compare-label "Blackhole p100a" \\
         --seq 1024 --hidden 2048 --k 2048 --iters 160
 """
 import argparse
 import csv
-import os
 import sys
 from pathlib import Path
 
@@ -55,7 +52,7 @@ import matplotlib.pyplot as plt
 
 # common.py lives one directory up.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from common import whole_run_value  # noqa: E402
+from common import PJ_PER_J, add_mode_argument, find_case_csv, save_figure, whole_run_value  # noqa: E402
 
 ENGINES = [
     ("reader", "Reader (writer_amp - reader_idle2)"),
@@ -66,15 +63,6 @@ ENGINES = [
 REQUIRED_CASES = ["regular", "writer_amp", "compute_idle", "reader_idle2"]
 
 
-def find_csv(root: Path, case: str) -> Path | None:
-    """Accept either a tt-ember output root (<root>/<case>/program_intervals.csv) or a
-    directory of flat per-case CSVs (<root>/<case>.csv)."""
-    for cand in (root / case / "program_intervals.csv", root / f"{case}.csv"):
-        if cand.exists():
-            return cand
-    return None
-
-
 def load_rows(path: Path) -> dict:
     rows = {}
     for r in csv.DictReader(open(path)):
@@ -82,10 +70,10 @@ def load_rows(path: Path) -> dict:
     return rows
 
 
-def per_engine_pj_per_flop(root: Path, flops: float, legacy: bool) -> dict:
+def per_engine_pj_per_flop(root: Path, flops: float, legacy: bool) -> tuple[dict[str, dict[str, float]], list[str]]:
     cases = {}
     for name in REQUIRED_CASES:
-        p = find_csv(root, name)
+        p = find_case_csv(root, name)
         if p is None:
             raise SystemExit(f"no CSV for case '{name}' under {root}")
         cases[name] = load_rows(p)
@@ -101,7 +89,7 @@ def per_engine_pj_per_flop(root: Path, flops: float, legacy: bool) -> dict:
         def ablate(idle_case):
             idle_as = whole_run_value(cases[idle_case][g], "dynamic_charge_peak_as", legacy)
             energy_j = (wa_as - idle_as) * vcore
-            return energy_j / flops * 1e12
+            return energy_j / flops * PJ_PER_J
 
         per_engine["reader"][g] = ablate("reader_idle2")
         per_engine["compute"][g] = ablate("compute_idle")
@@ -121,7 +109,7 @@ def grid_order(grids_by_dataset):
 
 def chart(datasets, ylim, out_path, subtitle, dpi=150):
     n = len(datasets)
-    fig, axes = plt.subplots(n, 1, figsize=(max(10, 14), 6 * n), squeeze=False)
+    fig, axes = plt.subplots(n, 1, figsize=(14, 6 * n), squeeze=False)
     for ax, (label, per_engine, grids) in zip(axes[:, 0], datasets):
         x = np.arange(len(grids))
         width = 0.8 / len(ENGINES)
@@ -136,9 +124,7 @@ def chart(datasets, ylim, out_path, subtitle, dpi=150):
         ax.set_ylim(0, ylim)
         ax.legend()
         ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
+    save_figure(fig, out_path, dpi)
     print(f"Wrote: {out_path}")
 
 
@@ -157,13 +143,7 @@ def main():
         action="store_true",
         help="Include the first interval; its baseline is one-sided and unreliable.",
     )
-    ap.add_argument(
-        "--mode",
-        choices=("updated", "legacy"),
-        default=os.environ.get("LONG_MATMUL_MODE") or "updated",
-        help="updated scales energy from the trimmed window to the whole run, as the FLOP count is; "
-        "legacy uses the window value, as the published figures did. Default: $LONG_MATMUL_MODE, else updated",
-    )
+    add_mode_argument(ap)
     ap.add_argument("--dpi", type=int, default=150)
     ap.add_argument("--out", type=Path, default=Path("pj_per_flop_by_engine.png"))
     args = ap.parse_args()

@@ -94,7 +94,7 @@ python3 run_sweep.py --config sweeps/paper_fig1_stage_breakdown.yaml \
 | `paper_fig2_blocked.yaml` | Fig. 2 | `POWER_CASE` 0, block 1x1 vs 2x4 |
 | `crossop.yaml` | cross-op sweep (not in the paper) | cases 5, 1, 2, 4 × seven ops |
 | `decoder_block.yaml` | Table 4, Figs. 3–4 | `op_power_breakdown/ttnn_ops_workload.py` |
-| `prefill.yaml` | the original `run_all.py` prefill measurement | `POWER_CASE` 0 |
+| `prefill.yaml` | one shape of the former `run_all.py` prefill sweep | `POWER_CASE` 0 |
 
 Runs land in `<output-root>/<op>/<case>[_b<M>x<N>]/` (or `<output-root>/<subdir>/` for the
 ttnn workload), so every analysis script also works on output produced by hand with `auto.py`.
@@ -151,19 +151,25 @@ python3 parser.py \
 Runs every measurement of a sweep by invoking `auto.py` once per run, then the analyses. Before
 each run it issues a hardware reset via `tt-smi -r` and waits for the device to re-initialize,
 ensuring a clean thermal and electrical baseline; with `aiclk_mhz` set in the config it re-pins
-the Blackhole clock after every reset (see `aiclk/`). Stops immediately if any reset or run fails.
+the Blackhole clock after every reset (see `aiclk/`), and records it in `run_complete.json`.
+Whether the pin survives tt-metal opening the device is not checked; confirm it once with
+`python3 aiclk/set_aiclk.py --watch 30` while a run is going. Stops immediately if any reset or
+run fails.
 
 - A run is skipped once it is complete: `auto.py` writes `run_complete.json` into the run
   directory only after the parser succeeded, recording the app arguments, the workload
   environment variables (including `LONG_MATMUL_MODE`, `TT_METAL_DEVICE_PROFILER`,
   `TT_METAL_WATCHER` and `TT_METAL_DPRINT_CORES`) and the telemetry settings. So an interrupted
-  sweep resumes, and a run made with different settings stops the sweep instead of being mixed
-  in; use another `--output-root`, or `--force` to re-run.
-- The analyses read only runs complete with this sweep's settings.
+  sweep resumes, and a run made with different settings stops the sweep, before the first reset,
+  instead of being mixed in; use another `--output-root`, or `--force` to re-run.
+- The analyses read only runs complete with this sweep's settings; a step whose inputs include
+  another run is skipped with a note. The exception is `compare_runs`, which overlays every run
+  under `<op>/`.
 - `--dry-run` prints every command without touching the board; `--analyses-only` regenerates the
-  charts from existing runs.
-- Every command and its environment goes to `<output-root>/sweep.log`; the config, the tt-metal
-  commit and the board list go to `<output-root>/PROVENANCE.md`.
+  charts from existing runs. For `long_matmul` it still needs `--app-exe`, which `run_complete.json` records.
+- Every command, the resets and the environment go to `<output-root>/sweep.log`. The first run
+  that actually executes writes the config, the tt-metal commit and the board list to
+  `<output-root>/PROVENANCE.md`; resumed or `--analyses-only` invocations leave it alone.
 
 A config is a YAML mapping:
 
@@ -182,9 +188,10 @@ runs:
 analyses: [compare_cases, energy_by_engine, energy_per_flop_by_engine, pj_per_flop_by_engine, pj_per_flop]
 ```
 
-The four `long_matmul` configs under `sweeps/` set `mode: legacy` so they recreate the published
-results; see `long_matmul`'s README for what `updated` changes. Leave `mode` out for new
-measurements.
+The configs under `sweeps/` set `mode: legacy` so they recreate the published results (for
+`decoder_block.yaml`, the 12-op list of Table 4); see `long_matmul`'s README and
+`op_power_breakdown/README.md` for what `updated` changes. Leave `mode` out for new
+measurements. Unknown keys and analysis options are rejected when the config is loaded.
 
 Analysis steps: `compare_cases` (grouped bar charts per case), `energy_by_engine` and
 `energy_per_flop_by_engine` (reader/writer/compute ablation against `writer_amp`, average

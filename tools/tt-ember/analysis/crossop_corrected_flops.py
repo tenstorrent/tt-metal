@@ -29,7 +29,7 @@ in tt-ember is modified.
 """
 import argparse
 import csv
-import os
+import math
 import sys
 from pathlib import Path
 
@@ -41,14 +41,13 @@ import matplotlib.pyplot as plt
 
 # common.py lives one directory up.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from common import whole_run_value  # noqa: E402
+import power_cases as pc  # noqa: E402
+from common import add_mode_argument, save_figure, whole_run_value  # noqa: E402
 
-# Engine -> the ablation case whose absence isolates it, matching analysis/power_cases.py's
-# ENGINE_ABLATIONS so the two charts decompose energy the same way.
-ALL_ACTIVE = "writer_amp"
-ENGINES = [("reader", "reader_idle2"), ("writer", "writer_idle"), ("compute", "compute_idle")]
-
-OPS = ["matmul", "add", "silu", "exp", "sigmoid", "gelu", "recip"]
+# Engine -> the ablation case whose absence isolates it: power_cases' ENGINE_ABLATIONS, so the
+# two charts decompose energy the same way.
+ALL_ACTIVE = pc.ALL_ACTIVE_CASE
+ENGINES = [(engine, idle_case) for engine, idle_case, _label in pc.ENGINE_ABLATIONS]
 
 # FLOPs per element for the non-matmul ops, i.e. w above. matmul is handled exactly and is not
 # listed. sigmoid is counted as exp + add + reciprocal; silu adds the multiply by x; gelu is
@@ -100,39 +99,48 @@ def energy_by_engine(op_root: Path, legacy: bool):
     return per_engine, measured
 
 
+def residual(per_engine, measured_j: float, grid: str) -> float:
+    """Sum of the engine ablations over the measured dynamic energy; NaN when that is not
+    positive (legacy mode floors dynamic current at 0)."""
+    if not (math.isfinite(measured_j) and measured_j > 0):
+        return float("nan")
+    return sum(pg.get(grid, 0.0) for pg in per_engine.values()) / measured_j
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("output_root", type=Path)
     ap.add_argument("--app-args", nargs=4, type=int, required=True, metavar=("M", "N", "K", "ITERS"))
-    ap.add_argument("--board", default="Blackhole p100a")
-    ap.add_argument("--out", type=Path, default=None)
     ap.add_argument(
-        "--mode",
-        choices=("updated", "legacy"),
-        default=os.environ.get("LONG_MATMUL_MODE") or "updated",
-        help="updated scales energy from the trimmed window to the whole run, as the FLOP count is; "
-        "legacy uses the window value, as the published figures did. Default: $LONG_MATMUL_MODE, else updated",
+        "--ops",
+        nargs="+",
+        choices=pc.ALL_OPS,
+        default=pc.ALL_OPS,
+        help="Ops to read under the output root (run_sweep.py passes the sweep's). Default: all seven",
     )
+    ap.add_argument("--board", default="", help="Board name for the chart title, e.g. 'Blackhole p100a'")
+    ap.add_argument("--out", type=Path, default=None)
+    add_mode_argument(ap)
     ap.add_argument("--dpi", type=int, default=150)
     args = ap.parse_args()
     M, N, K, iters = args.app_args
 
     data, resid = {}, {}
-    for op in OPS:
+    for op in args.ops:
         per_engine, measured = energy_by_engine(args.output_root / op, args.mode == "legacy")
         if not per_engine:
             print(f"note: no data for '{op}', skipping")
             continue
         f = op_flops(op, M, N, K, iters)
-        data[op] = {e: {g: j / f * 1e12 for g, j in pg.items()} for e, pg in per_engine.items()}
+        data[op] = {e: {g: j / f * pc.PJ_PER_J for g, j in pg.items()} for e, pg in per_engine.items()}
         # How far the three ablations are from accounting for the measured dynamic energy. The
         # engines overlap in time, so they are not strictly additive; printing the residual
         # keeps that visible instead of hidden inside a normalised stack.
-        resid[op] = {g: sum(pg.get(g, 0.0) for pg in per_engine.values()) / measured[g] for g in measured}
+        resid[op] = {g: residual(per_engine, measured[g], g) for g in measured}
     if not data:
         raise SystemExit("no op data found under " + str(args.output_root))
 
-    ops = [o for o in OPS if o in data]
+    ops = [o for o in args.ops if o in data]
     grids = [g for g in load(args.output_root / ops[0] / ALL_ACTIVE / "program_intervals.csv")]
 
     print(f"{'op':9s} {'FLOPs/interval':>15s} {'x vs matmul':>11s} " f"{'pJ/FLOP (last grid)':>20s} {'Sum/meas':>9s}")
@@ -141,13 +149,16 @@ def main():
         f = op_flops(op, M, N, K, iters)
         last = grids[-1]
         tot = sum(data[op][e].get(last, 0.0) for e, _ in ENGINES if e in data[op])
-        print(f"{op:9s} {f:15.4g} {mm/f:11.1f} {tot:20.1f} " f"{np.mean(list(resid[op].values())):9.2f}")
+        print(f"{op:9s} {f:15.4g} {mm/f:11.1f} {tot:20.1f} " f"{np.nanmean(list(resid[op].values())):9.2f}")
 
     x = np.arange(len(grids))
     width = 0.8 / len(ops)
     colours = {"reader": "C0", "writer": "C1", "compute": "C2"}
     hatches = ["", "//", "xx", "\\\\", "..", "OO", "**"]
 
+    # A cheap op's engine ablation can come out below zero (noise); a log-axis stack cannot show
+    # it, so it is clipped to 0 and reported, as in the power_cases charts.
+    clipped = []
     fig, ax = plt.subplots(figsize=(max(14, len(grids) * 1.15), 7))
     for i, op in enumerate(ops):
         offset = (i - (len(ops) - 1) / 2) * width
@@ -155,7 +166,7 @@ def main():
         for engine, _ in ENGINES:
             if engine not in data[op]:
                 continue
-            v = np.array([data[op][engine].get(g, np.nan) for g in grids])
+            v = np.array(pc.clip_negative(data[op][engine], grids, f"{op}/{engine}", "pJ/FLOP", clipped))
             ax.bar(
                 x + offset,
                 v,
@@ -167,6 +178,7 @@ def main():
                 linewidth=0.3,
             )
             bottom += np.nan_to_num(v)
+    pc.report_clipped(clipped, "corrected cross-op chart")
 
     ax.set_yscale("log")
     ax.set_xticks(x)
@@ -174,7 +186,8 @@ def main():
     ax.set_xlabel("Grid size (core combination)")
     ax.set_ylabel("Energy per FLOP [pJ], log scale")
     ax.set_title(
-        f"Energy per FLOP by engine, per grid, per op - {args.board}, each op on its own FLOP count\n"
+        f"Energy per FLOP by engine, per grid, per op{' - ' + args.board if args.board else ''}, "
+        "each op on its own FLOP count\n"
         f"matmul is exact (2*32^3 per tile op); the rest use the per-element conventions in "
         f"FLOPS_PER_ELEM, so their ratios are convention-dependent"
     )
@@ -187,13 +200,10 @@ def main():
     ]
     labels += ops
     ax.legend(handles, labels, fontsize=8, ncol=2, loc="upper right")
-    fig.tight_layout()
     out = args.out or (
         args.output_root / "figures" / "cross_op" / "energy_per_flop_by_engine_stacked_cross_op_corrected.png"
     )
-    out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=args.dpi)
-    plt.close(fig)
+    save_figure(fig, out, args.dpi)
     print(f"Wrote: {out}")
 
 

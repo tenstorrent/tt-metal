@@ -13,7 +13,7 @@ the comparison iso-clock, so what is left is the architecture: NoC width, core c
 Uses the ARC FORCE_AICLK message (0x33) through tt_umd's TTDevice.arc_msg. The force has to be
 re-applied after anything that resets the chip, and possibly after a tt-metal process opens the
 device -- tt-metal asks the ARC for the busy power state on open, which is what normally ramps
-the clock to 1350. Whether the force survives that is exactly what --verify checks, so always
+the clock to 1350. Whether the force survives that is what --watch shows, run alongside the workload, so
 confirm against a running workload rather than trusting the value read at idle.
 """
 import argparse
@@ -24,8 +24,6 @@ import tt_umd
 
 FORCE_AICLK = 0x33  # blackhole::ArcMessageType::FORCE_AICLK
 AICLK_GO_BUSY = 0x52
-# Passing 0 releases the override and returns the chip to firmware-managed clocking.
-RELEASE = 0
 
 
 def open_device(device_id: int):
