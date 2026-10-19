@@ -5,6 +5,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_collector.hpp"
 
 #include <fmt/format.h>
+#include <hostdevcommon/fabric_common.h>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <algorithm>
@@ -242,10 +243,14 @@ std::string arg_name(const manifest::NamedArg& arg, const FieldIndex& index) {
 }
 
 // `field`, with its content's address, stream id or value filled in from `arg`, the value of its source. An L1 address
-// of 0 is a buffer the builder did not allocate (FabricRouterDiagnosticBufferMap::BufferRegion::is_enabled).
+// of 0 is a buffer the builder did not allocate (FabricRouterDiagnosticBufferMap::BufferRegion::is_enabled), and
+// k_unused_stream_id a stream register it did not allocate.
 manifest::Field make_field(const ManifestRouterInputs& inputs, const manifest::RouterField& field, uint32_t arg) {
     const std::string_view key = field.key.value;
-    if (std::holds_alternative<manifest::content::L1>(field.content.value) && arg == 0) {
+    const bool unallocated =
+        (std::holds_alternative<manifest::content::L1>(field.content.value) && arg == 0) ||
+        (std::holds_alternative<manifest::content::Stream>(field.content.value) && arg == k_unused_stream_id);
+    if (unallocated) {
         return {.key = key, .category = field.category.value, .content = std::nullopt};
     }
     manifest::Content content = field.content.value;
@@ -357,10 +362,14 @@ struct ChannelContext {
     const uint32_t channel_buffer_size;
 };
 
-// The stream register the kernel is fed under `name`.
-manifest::content::Stream fed_stream(const ManifestRouterInputs& inputs, const std::string& name) {
-    return {
-        .stream_id = emitted_value(inputs.kernel.named_ct_args, name),
+// The stream register the kernel is fed under `name`, or null when the builder did not allocate one.
+std::optional<manifest::content::Stream> fed_stream(const ManifestRouterInputs& inputs, const std::string& name) {
+    const uint32_t stream_id = emitted_value(inputs.kernel.named_ct_args, name);
+    if (stream_id == k_unused_stream_id) {
+        return std::nullopt;
+    }
+    return manifest::content::Stream{
+        .stream_id = stream_id,
         .reg = manifest::StreamRegister::BUF_SPACE_AVAILABLE,
         .type = layout::type_of<uint32_t>(),
     };

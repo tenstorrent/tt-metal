@@ -86,8 +86,9 @@ struct CounterRef {
     uint32_t index = 0;
 };
 
-// Credits are held in a stream register or in an element of an L1 counter array.
-using CreditRef = std::variant<content::Stream, CounterRef>;
+// Credits are held in a stream register or in an element of an L1 counter array. The register is null when the
+// builder did not allocate one, which the kernel is fed as k_unused_stream_id.
+using CreditRef = std::variant<std::optional<content::Stream>, CounterRef>;
 
 // A router on the same chip and routing plane, named by the direction it faces.
 struct SiblingRouterRef {
@@ -186,8 +187,8 @@ struct Field {
     std::string_view key;
     // Tag used for logical grouping of information in decode / visualizer.
     FieldCategory category = FieldCategory::LIFECYCLE;
-    // Underlying content that the value the kernel is fed points to. Null when the field is a buffer the builder did
-    // not allocate, which the kernel is fed as address 0.
+    // Underlying content that the value the kernel is fed points to. Null when the field is a buffer or stream
+    // register the builder did not allocate, which the kernel is fed as address 0 or k_unused_stream_id.
     std::optional<Content> content;
 };
 

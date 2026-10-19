@@ -597,14 +597,16 @@ const std::set<std::string> k_region_keys = {"address", "size", "schema", "clear
 const std::set<std::string> k_array_region_keys = {
     "address", "size", "num_elements", "size_per_element", "schema", "cleared_by_host"};
 
-// Stream ids past the hardware's registers are the builder's "not allocated" sentinel.
+// A stream register the builder did not allocate is null.
 void expect_stream(const json& stream, bool must_be_allocated) {
+    if (stream.is_null()) {
+        EXPECT_FALSE(must_be_allocated);
+        return;
+    }
     EXPECT_EQ(keys_of(stream), (std::set<std::string>{"stream_id", "register", "schema"}));
     EXPECT_EQ(stream.at("register"), lower_enum_name(manifest::StreamRegister::BUF_SPACE_AVAILABLE));
     EXPECT_EQ(stream.at("schema"), "u32");
-    if (must_be_allocated) {
-        EXPECT_LT(stream.at("stream_id").get<uint32_t>(), StreamRegAssignments::num_eth_stream_registers);
-    }
+    EXPECT_LT(stream.at("stream_id").get<uint32_t>(), StreamRegAssignments::num_eth_stream_registers);
 }
 
 // On L1 counters, a credit is the sender's own element of the router's counter array, which is indexed by the
@@ -723,10 +725,12 @@ void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size, bool act
 }
 
 // A field is written as its table entry says: its category and kind, then a region, a stream register or a value.
-// Only an L1 field can be null, as a buffer the builder did not allocate.
+// Only an L1 or stream field can be null, as a buffer or register the builder did not allocate.
 void expect_field(const json& entry, const manifest::RouterField& field) {
     if (entry.is_null()) {
-        EXPECT_TRUE(std::holds_alternative<manifest::content::L1>(field.content.value));
+        EXPECT_TRUE(
+            std::holds_alternative<manifest::content::L1>(field.content.value) ||
+            std::holds_alternative<manifest::content::Stream>(field.content.value));
         return;
     }
     EXPECT_EQ(entry.at("category"), lower_enum_name(field.category.value));
@@ -744,10 +748,7 @@ void expect_field(const json& entry, const manifest::RouterField& field) {
                 keys.insert({"stream_id", "register", "schema"});
                 EXPECT_EQ(entry.at("register"), lower_enum_name(stream.reg));
                 EXPECT_EQ(entry.at("schema"), schema_name(stream.type));
-                const auto stream_id = entry.at("stream_id").get<uint32_t>();
-                EXPECT_TRUE(
-                    stream_id < StreamRegAssignments::num_eth_stream_registers || stream_id == k_unused_stream_id)
-                    << stream_id;
+                EXPECT_LT(entry.at("stream_id").get<uint32_t>(), StreamRegAssignments::num_eth_stream_registers);
             },
             [&](const manifest::content::Number&) {
                 keys.insert("value");
