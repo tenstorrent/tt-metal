@@ -8,7 +8,7 @@ import torch
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
 from models.demos.llama_3p1_8b_d_p.tt.attention import FullCausalAttention, _validate_device_tensor
-from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
+from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig, tp_topology
 from models.demos.llama_3p1_8b_d_p.tt.decoder import DecoderLayer
 from models.demos.llama_3p1_8b_d_p.tt.input import validate_chunk_range
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN, DEFAULT_NUM_USERS
@@ -244,9 +244,9 @@ class PrefillModel:
         self.attention.validate_request(
             kv_cache, slot_idx=slot_idx, layer_idx=0, actual_start=actual_start, actual_end=actual_end
         )
-        topology = ttnn.get_usable_topology(kv_cache.k, topology=ttnn.Topology.Ring, cluster_axis=layout.tp_axis)
-        if topology != ttnn.Topology.Ring:
-            raise RuntimeError(f"prefill requires a live TP ring; TTNN selected {topology}")
+        topology = ttnn.get_usable_topology(kv_cache.k, topology=tp_topology(), cluster_axis=layout.tp_axis)
+        if topology != tp_topology():
+            raise RuntimeError(f"prefill requires a live TP {tp_topology()}; TTNN selected {topology}")
         # Invalidate downstream layers too: a restart that fails after an early layer must
         # not leave the previous prompt's suffix advertised as a valid continuation.
         kv_cache.truncate_prefix(slot_idx, actual_start)
