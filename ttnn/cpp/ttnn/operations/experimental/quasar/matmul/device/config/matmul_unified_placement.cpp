@@ -33,7 +33,35 @@ struct ArchCostModel {
     double C_slice_cycles;             // fixed cost per C slice: handshakes and pipeline fill
 };
 
-// The part of the shorter costs that the buffering does not hide behind the longest one.
+constexpr ArchCostModel WORMHOLE_COST_MODEL{
+    .tile_matmul_cycles = 16.0,
+    .tile_pack_cycles = 16.0,
+    .noc_read_bytes_per_cycle = 32.0,
+    .noc_write_bytes_per_cycle = 32.0,
+    .dram_bytes_per_cycle = 256.0,
+    .C_slice_cycles = 1000.0,
+};
+
+constexpr ArchCostModel BLACKHOLE_COST_MODEL{
+    .tile_matmul_cycles = 16.0,
+    .tile_pack_cycles = 16.0,
+    .noc_read_bytes_per_cycle = 64.0,
+    .noc_write_bytes_per_cycle = 64.0,
+    .dram_bytes_per_cycle = 380.0,
+    .C_slice_cycles = 1000.0,
+};
+
+constexpr ArchCostModel QUASAR_COST_MODEL{
+    .tile_matmul_cycles = 16.0,
+    .tile_pack_cycles = 16.0,
+    .noc_read_bytes_per_cycle = 128.0,
+    .noc_write_bytes_per_cycle = 128.0,
+    .dram_bytes_per_cycle = 512.0,
+    .C_slice_cycles = 2000.0,
+};
+
+// The part of the shorter costs that the buffering does not hide behind the longest one. Set by hand, not
+// measured: with 0, plans that tie on the longest cost tie overall (decode with A in DRAM then took 8 cores over 32).
 constexpr double UNHIDDEN_FRACTION = 0.25;
 
 // Estimated device cycles of a plan: the largest of the busiest core's compute and data movement and the device's
@@ -45,9 +73,9 @@ double estimate_plan_cycles(
     bool A_in_dram,
     bool B_in_dram,
     bool C_in_dram) {
-    const ArchCostModel model = arch == tt::ARCH::QUASAR      ? ArchCostModel{16.0, 16.0, 128.0, 128.0, 512.0, 2000.0}
-                                : arch == tt::ARCH::BLACKHOLE ? ArchCostModel{16.0, 16.0, 64.0, 64.0, 380.0, 1000.0}
-                                                              : ArchCostModel{16.0, 16.0, 32.0, 32.0, 256.0, 1000.0};
+    const ArchCostModel& model = arch == tt::ARCH::QUASAR      ? QUASAR_COST_MODEL
+                                 : arch == tt::ARCH::BLACKHOLE ? BLACKHOLE_COST_MODEL
+                                                               : WORMHOLE_COST_MODEL;
     const uint32_t fidelity_phases = math_fidelity == tt::tt_metal::MathFidelity::LoFi    ? 1
                                      : math_fidelity == tt::tt_metal::MathFidelity::HiFi2 ? 2
                                      : math_fidelity == tt::tt_metal::MathFidelity::HiFi3 ? 3
@@ -102,14 +130,15 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
         requested.C_slice_M_tiles == 0 && requested.C_slice_N_tiles == 0,
         "MatmulUnifiedProgramConfig: with no cores the C slice is chosen with the placement; leave C_slice_M_tiles and "
         "C_slice_N_tiles at 0");
-    // What the unified kernels do not do; the legacy picker takes these.
-    const tt::tt_metal::Tile::TileShape full_tile = {TILE_HEIGHT, TILE_WIDTH};
-    const bool output_tile_is_full =
-        !attributes.output_tile.has_value() || attributes.output_tile->get_tile_shape() == full_tile;
+    // What the unified kernels do not do; the legacy picker takes these. Tiny tiles (any tile but 32x32) are out;
+    // tensor dims need not be tile multiples.
+    const tt::tt_metal::Tile::TileShape tile_32x32 = {TILE_HEIGHT, TILE_WIDTH};
+    const bool output_tile_is_32x32 =
+        !attributes.output_tile.has_value() || attributes.output_tile->get_tile_shape() == tile_32x32;
     if (transpose_a || transpose_b || attributes.untilize_out || attributes.global_cb.has_value() ||
-        attributes.sub_device_id.has_value() || A.tensor_spec().tile().get_tile_shape() != full_tile ||
-        B.tensor_spec().tile().get_tile_shape() != full_tile || !output_tile_is_full || A.logical_shape().rank() < 2 ||
-        B.logical_shape().rank() < 2) {
+        attributes.sub_device_id.has_value() || A.tensor_spec().tile().get_tile_shape() != tile_32x32 ||
+        B.tensor_spec().tile().get_tile_shape() != tile_32x32 || !output_tile_is_32x32 ||
+        A.logical_shape().rank() < 2 || B.logical_shape().rank() < 2) {
         return std::nullopt;
     }
 
