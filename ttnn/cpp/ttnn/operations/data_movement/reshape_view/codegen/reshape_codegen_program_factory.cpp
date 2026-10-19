@@ -493,15 +493,15 @@ tt::tt_metal::ProgramDescriptor ReshapeCodegenProgramFactory::create_descriptor(
     const auto& plan = operation_attributes.plan;
     const auto grid = rcg::reshape_core_grid(input, operation_attributes.sub_core_grids);
     if (input.layout() == Layout::TILE) {
-        // Selection sends a TILE reshape here for the LCM route only. Routing already sent calls with no fitting
-        // program to native, so only the forced entry reaches this error.
+        // Selection sends a TILE reshape here on the LCM route unless the segment map is the live choice, so a call
+        // nothing fits reaches the error.
         const auto chosen =
             rcg::live_tile_choice(input, operation_attributes.logical_output_shape, grid.num_cores(), plan);
         const auto* lcm = chosen.has_value() ? std::get_if<rcg::TilePlan>(&*chosen) : nullptr;
         TT_FATAL(
             lcm != nullptr,
-            "ReshapeCodegen: no LCM tile plan fits the {} B of L1 free per core below the lowest L1 allocation; free "
-            "L1 tensors or use the native reshape",
+            "ReshapeCodegen: neither the LCM tile plan nor the segment map fits the {} B of L1 free per core below "
+            "the lowest L1 allocation; free L1 tensors or use the native reshape",
             ttnn::operations::data_movement::get_max_l1_space(input));
         TT_FATAL(
             tensor_return_value.buffer()->aligned_page_size() == lcm->out_page_bytes,
@@ -515,7 +515,6 @@ tt::tt_metal::ProgramDescriptor ReshapeCodegenProgramFactory::create_descriptor(
         "Reshape output page {} differs from the page the plan assumed",
         out_aligned_page);
 
-    // Routing already sent calls with no fitting program to native, so only the forced entry reaches this error.
     const auto chosen = rcg::live_rm_choice(
         input,
         operation_attributes.logical_output_shape,
@@ -546,12 +545,12 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_wo
     const uint32_t tile_bytes =
         input.tensor_spec().tile().get_tile_size(datatype_to_dataformat_converter(input.dtype()));
 
-    // Routing already sent calls with no fitting plan to native, so only the forced entry reaches this error.
+    // Selection sends a call here unless the segment map is the live choice, so a call nothing fits reaches the error.
     const auto chosen = rcg::live_tile_rows_choice(input, out_shape, operation_attributes.plan.tile_rows);
     TT_FATAL(
         chosen.has_value(),
-        "ReshapeCodegen: no tile-row plan fits the {} B of L1 free per core below the lowest L1 allocation; free L1 "
-        "tensors or use the native reshape",
+        "ReshapeCodegen: neither a tile-row plan nor the segment map fits the {} B of L1 free per core below the "
+        "lowest L1 allocation; free L1 tensors or use the native reshape",
         ttnn::operations::data_movement::get_max_l1_space(input));
     auto plan = rcg::build_tile_rows_plan(in_shape, out_shape, *chosen);
     const rcg::TileRowsLayout layout = plan.layout;
@@ -580,7 +579,7 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileMappedProgramFactory::create_
     const uint32_t tile_bytes =
         input.tensor_spec().tile().get_tile_size(datatype_to_dataformat_converter(input.dtype()));
 
-    // Routing already sent calls with no fitting map to native, so only the forced entry reaches this error.
+    // Serves the segment-map route and the fallback for tile-rows and LCM plans that do not fit live L1.
     const auto chosen =
         rcg::live_tile_choice(input, operation_attributes.logical_output_shape, num_cores, operation_attributes.plan);
     const auto* mapped = chosen.has_value() ? std::get_if<rcg::TileMappedChoice>(&*chosen) : nullptr;

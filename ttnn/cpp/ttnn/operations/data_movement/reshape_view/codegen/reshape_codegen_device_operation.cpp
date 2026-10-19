@@ -28,10 +28,17 @@ ReshapeCodegenDeviceOperation::program_factory_t ReshapeCodegenDeviceOperation::
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     namespace rcg = ttnn::operations::data_movement::reshape_codegen;
     if (tensor_args.input.layout() == Layout::TILE) {
-        switch (operation_attributes.plan.tile_route) {
-            case rcg::TileRoute::TileRows: return ReshapeCodegenTileRowsProgramFactory{};
-            case rcg::TileRoute::TileMapped: return ReshapeCodegenTileMappedProgramFactory{};
-            case rcg::TileRoute::Lcm: break;
+        // The live choice, not the planned route: a tile-rows or LCM call too big for live L1 runs the segment map.
+        const auto chosen = rcg::live_tile_choice(
+            tensor_args.input,
+            operation_attributes.logical_output_shape,
+            rcg::reshape_core_grid(tensor_args.input, operation_attributes.sub_core_grids).num_cores(),
+            operation_attributes.plan);
+        if (chosen.has_value() && std::holds_alternative<rcg::TileMappedChoice>(*chosen)) {
+            return ReshapeCodegenTileMappedProgramFactory{};
+        }
+        if (operation_attributes.plan.tile_route == rcg::TileRoute::TileRows) {
+            return ReshapeCodegenTileRowsProgramFactory{};
         }
     }
     return ReshapeCodegenProgramFactory{};
@@ -89,8 +96,9 @@ ReshapeCodegenDeviceOperation::tensor_return_value_t ReshapeCodegenDeviceOperati
 
 // With the full plan fitting, the hashed rung or depth is the same constant on every call, so calls share programs
 // exactly as the attributes and tensor args alone would key them. Under L1 pressure the hashed values step along fixed
-// ladders (tile-row rungs, LCM write batches, segment-map input depths, power-of-two stick pushes, slab batches), so the key changes only when the frontier crosses
-// a rung. A call no plan fits hashes rung 0, which never has an entry: it misses and the program factory raises.
+// ladders (tile-row rungs, LCM write batches, segment-map input depths, power-of-two stick pushes, slab batches), so
+// the key changes only when the frontier crosses a rung, or when a tile-rows or LCM call falls back to the segment
+// map. A call no plan fits hashes rung 0, which never has an entry: it misses and the program factory raises.
 ttsl::hash::hash_t ReshapeCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& plan = operation_attributes.plan;
@@ -103,9 +111,11 @@ ttsl::hash::hash_t ReshapeCodegenDeviceOperation::compute_program_hash(
             plan);
         // Tile rows: rung and staging depth. LCM: output CB depth and write batch. Segment map: slicing and input
         // CB depth.
+        size_t program = 0;
         uint32_t first = 0;
         uint32_t second = 0;
         if (chosen.has_value()) {
+            program = chosen->index();
             if (const auto* rows = std::get_if<rcg::TileRowsChoice>(&*chosen)) {
                 first = rows->max_in;
                 second = rows->staged_batches;
@@ -119,7 +129,7 @@ ttsl::hash::hash_t ReshapeCodegenDeviceOperation::compute_program_hash(
             }
         }
         return ttsl::hash::hash_objects_with_default_seed(
-            operation_attributes, tensor_args, plan.tile_route, first, second);
+            operation_attributes, tensor_args, plan.tile_route, program, first, second);
     }
     const auto chosen = rcg::live_rm_choice(
         tensor_args.input,

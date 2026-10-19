@@ -149,34 +149,25 @@ tt::tt_metal::TensorSpec output_spec(
 uint32_t output_aligned_page(const Tensor& input, const tt::tt_metal::TensorSpec& spec);
 
 // L1 window independent of live occupancy: the L1 bank (allocator range less L1_SMALL) minus the per-bank footprint
-// of the input and output when they live in L1. Routing and validation gate on the smallest plan fitting it; which
-// plan the program is built with is live_tile_choice's or live_rm_choice's decision.
+// of the input and output when they live in L1. Routing and validation gate on the smallest plan fitting it, so the
+// route never moves with live occupancy; which plan the program is built with is live_tile_choice's or
+// live_rm_choice's decision.
 uint64_t static_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
 
-// Per-core L1 the output takes once allocated; 0 unless it lives in L1.
-uint64_t pending_output_l1_bytes(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
-
-// The plan the program is built with: `planned` when its buffers fit the L1 free below the lowest live allocation
-// less `reserved_l1_bytes`, else the first smaller plan that does (plan_tile_rows_fitting); nullopt when none does.
-// The program hash and the program factory call it after the output is allocated, with nothing allocating L1 between
-// them, so the plan the hash keys is the plan the factory builds. Routing calls it before that allocation with the
-// output reserved, so a call it admits has a plan at program creation.
+// The plan the program is built with: `planned` when its buffers fit the L1 free below the lowest live allocation,
+// else the first smaller plan that does (plan_tile_rows_fitting); nullopt when none does. The program hash and the
+// program factory call it after the output is allocated, with nothing allocating L1 between them, so the plan the
+// hash keys is the plan the factory builds.
 std::optional<TileRowsChoice> live_tile_rows_choice(
-    const Tensor& input,
-    const ttnn::Shape& logical_output_shape,
-    const TileRowsChoice& planned,
-    uint64_t reserved_l1_bytes = 0);
+    const Tensor& input, const ttnn::Shape& logical_output_shape, const TileRowsChoice& planned);
 
-// The program of `planned.tile_route` sized to the L1 free below the lowest live allocation less `reserved_l1_bytes`:
-// the largest tile-rows plan (live_tile_rows_choice), the LCM plan with the largest write batch and deepest output CB,
-// or the segment map, sliced where slicing pays off and fits, with the deepest input CB that fits; nullopt when none
-// does. Same contract as live_tile_rows_choice.
+// The program of `planned.tile_route` sized to the L1 free below the lowest live allocation: the largest tile-rows
+// plan (live_tile_rows_choice), the LCM plan with the largest write batch and deepest output CB, or the segment map,
+// sliced where slicing pays off and fits, with the deepest input CB that fits. When no tile-rows or LCM plan fits, the
+// segment map: its smallest plan holds one map row and two tiles, no more than native's tiled reshape, so routing
+// need not look at live L1. nullopt when nothing fits. Same contract as live_tile_rows_choice.
 std::optional<TileChoice> live_tile_choice(
-    const Tensor& input,
-    const ttnn::Shape& logical_output_shape,
-    uint32_t grid_cores,
-    const LaunchPlan& planned,
-    uint64_t reserved_l1_bytes = 0);
+    const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores, const LaunchPlan& planned);
 
 // The LCM kernel untilizes and re-tilizes through the compute engine, which round-trips only 32-bit datums
 // unchanged: bf16 NaN comes back as Inf.
@@ -211,15 +202,13 @@ std::optional<RmArbitraryPlan> rm_arbitrary_geometry(
 std::optional<RmArbitraryPlan> fit_rm_arbitrary(RmArbitraryPlan plan, uint64_t l1_budget);
 
 // The row-major program the factory builds: the stick program at the deepest CB that fits the L1 free below the
-// lowest live allocation less `reserved_l1_bytes`, else the slab program at the largest batch that does; nullopt
-// when neither fits. Same contract as live_tile_rows_choice: the program hash and the factory call it after the
-// output is allocated, routing calls it before with the output reserved.
+// lowest live allocation, else the slab program at the largest batch that does; nullopt when neither fits. Same
+// contract as live_tile_rows_choice.
 std::optional<RmChoice> live_rm_choice(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     tt::tt_metal::BufferType output_buffer,
     uint32_t grid_cores,
-    const LaunchPlan& planned,
-    uint64_t reserved_l1_bytes = 0);
+    const LaunchPlan& planned);
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen

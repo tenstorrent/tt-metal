@@ -43,23 +43,16 @@ bool supported_by_codegen(const Tensor& input, const ttnn::Shape& logical_output
 // TILE: the program taken against the static window does not beat native's tiled reshape. Tile rows wins when the
 // full plan cuts reads 8x, saves 16+ reads per output tile, or copies whole face halves over more than one native
 // round; LCM when its tiles cost under 6x native's per round; the segment map on widths that are not multiples of 32.
-// TILE depends on shapes and static device geometry only. ROW_MAJOR: rm_native_faster's stick-size rule, taken only
-// while the stick program fits the static L1 window and native's scratch fits both that window and the L1 free once
-// the output is allocated. Never true for uint16: native rejects it, so demoting would fail the call.
+// Tile rows and LCM win only while the segment map they fall back to is within its size caps.
+// ROW_MAJOR: the smallest stick or slab plan needs more L1 than native's smallest footprint, or rm_native_faster's
+// stick-size rule, taken only while the stick program and native's scratch both fit the static L1 window. Depends on
+// shapes and static device geometry only, never live L1. Never true for uint16: native rejects it, so demoting would
+// fail the call.
 bool is_demoted(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
-
-// Live-L1 routing gate, for a call supported_by_codegen: whether the smallest plan fits the L1 free once the output
-// is allocated. Native sizes its scratch to live L1, so routing sends a false call there instead of to the program
-// factory's no-plan error. Never consulted by validate or the forced entry.
-bool codegen_cb_plan_fits_live_l1(
-    const Tensor& input,
-    const ttnn::Shape& logical_output_shape,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
 // The static plan for a supported call; the program factory shrinks it to live L1. Raises with unsupported_reason's
 // text otherwise. Built by prim::reshape_codegen.
