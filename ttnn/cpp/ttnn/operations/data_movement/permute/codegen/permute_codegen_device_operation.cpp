@@ -32,30 +32,6 @@ PermuteCodegenDeviceOperation::program_factory_t PermuteCodegenDeviceOperation::
     return PermuteCodegenProgramFactory{};
 }
 
-// The row-invariant CB plan is read from the live L1 frontier, so it is hashed; a hit on a stale
-// depth would overrun the CB region. The hash runs before validation, so the plan is only read once
-// the input is a valid device tensor and dims is a permutation of at least two axes.
-ttsl::hash::hash_t PermuteCodegenDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const Tensor& input = tensor_args.input;
-    const uint32_t rank = input.logical_shape().rank();
-    const auto dims = active_dims(operation_attributes, rank);
-    PermuteRmCbPlan plan;
-    if (input.storage_type() == ttnn::StorageType::DEVICE && input.buffer() != nullptr &&
-        rank >= kPermuteHeightAxisFromEnd &&
-        ttnn::operations::data_movement::permute_codegen::is_valid_permutation(dims, rank) &&
-        dims[rank - kPermuteWidthAxisFromEnd] == rank - kPermuteWidthAxisFromEnd) {
-        plan = permute_rm_cb_plan(input, compute_output_specs(operation_attributes, tensor_args))
-                   .value_or(PermuteRmCbPlan{});
-    }
-    return ttsl::hash::hash_objects_with_default_seed(
-        ttsl::hash::type_hash<PermuteCodegenDeviceOperation>,
-        operation_attributes,
-        tensor_args,
-        plan.batch,
-        plan.depth);
-}
-
 void PermuteCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input = tensor_args.input;
@@ -118,8 +94,10 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> PermuteCodegenDeviceO
 PermuteCodegenDeviceOperation::tensor_return_value_t permute_codegen(
     const Tensor& input, const PermuteCodegenParams& params, std::optional<Tensor> optional_output_tensor) {
     using OperationType = PermuteCodegenDeviceOperation;
+    PermuteCodegenParams keyed = params;
+    keyed.rm_cb_batch = permute_live_rm_cb_batch(input, params.output_mem_config, params.dims);
     return ttnn::device_operation::launch<OperationType>(
-        params,
+        keyed,
         OperationType::tensor_args_t{.input = input, .optional_output_tensor = std::move(optional_output_tensor)});
 }
 

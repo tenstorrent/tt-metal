@@ -232,11 +232,6 @@ ttnn::Tensor permute_via_codegen(
     const ttsl::SmallVector<uint32_t>& normalized_dims,
     const MemoryConfig& mem_config) {
     ttnn::prim::PermuteCodegenParams params;
-    TT_FATAL(
-        normalized_dims.size() <= ttnn::prim::kPermuteCodegenMaxDims,
-        "Permute codegen supports rank up to {}, got {}",
-        ttnn::prim::kPermuteCodegenMaxDims,
-        normalized_dims.size());
     std::copy(normalized_dims.cbegin(), normalized_dims.cend(), params.dims.begin());
     params.output_mem_config = mem_config;
     return ttnn::prim::permute_codegen(input_tensor, params);

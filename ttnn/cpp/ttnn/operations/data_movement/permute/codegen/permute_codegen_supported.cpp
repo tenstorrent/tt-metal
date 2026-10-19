@@ -6,9 +6,7 @@
 
 #include <algorithm>
 #include <iterator>
-#include <numeric>
 #include <utility>
-#include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/constants.hpp>
@@ -55,11 +53,9 @@ bool geometry_fits(
     const uint32_t element_size = input.element_size();
     const uint32_t last_output_axis = dims[rank - kWidthAxisFromEnd];
 
-    const tt::tt_metal::TensorSpec output_spec = permute_output_spec(input, dims, output_mem_config);
-
-    const uint64_t l1_budget = ttnn::prim::permute_cb_l1_budget(input, output_spec);
+    const uint64_t l1_budget = ttnn::prim::permute_cb_l1_budget(input);
     if (last_output_axis == rank - kWidthAxisFromEnd) {
-        return ttnn::prim::plan_permute_rm_cb(ttnn::prim::permute_rm_slot_bytes(input, output_spec), l1_budget)
+        return ttnn::prim::plan_permute_rm_cb(ttnn::prim::permute_rm_slot_bytes(input, output_mem_config), l1_budget)
             .has_value();
     }
     return ttnn::prim::permute_blocked_cb_bytes(element_size) <= l1_budget;
@@ -68,9 +64,17 @@ bool geometry_fits(
 }  // namespace
 
 bool is_valid_permutation(const ttsl::SmallVector<uint32_t>& dims, uint32_t rank) {
-    std::vector<uint32_t> identity(rank);
-    std::iota(identity.begin(), identity.end(), 0);
-    return dims.size() == rank && std::is_permutation(dims.cbegin(), dims.cend(), identity.cbegin());
+    if (dims.size() != rank || rank > kMaxRank) {
+        return false;
+    }
+    uint32_t seen = 0;
+    for (const uint32_t d : dims) {
+        if (d >= rank) {
+            return false;
+        }
+        seen |= uint32_t{1} << d;
+    }
+    return seen == (uint32_t{1} << rank) - 1;
 }
 
 bool supported_by_codegen(
@@ -85,8 +89,7 @@ bool supported_by_codegen(
     if (input.memory_config().is_sharded() || output_mem_config.is_sharded()) {
         return false;
     }
-    // The hash plans the CB before the output exists, the factory after; an L1 output would move the live frontier
-    // between them.
+    // The CB budget accounts for an L1 input only; an L1 output would take a share it does not subtract.
     if (output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1) {
         return false;
     }

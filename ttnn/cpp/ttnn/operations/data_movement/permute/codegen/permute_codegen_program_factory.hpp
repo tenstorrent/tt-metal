@@ -35,31 +35,36 @@ struct PermuteRmCbPlan {
 // `slot_bytes` fits in `l1_budget`; nullopt when even a single-stick turn does not fit.
 std::optional<PermuteRmCbPlan> plan_permute_rm_cb(uint32_t slot_bytes, uint64_t l1_budget);
 
-// CB slot of the row-invariant path: the larger aligned page of the input buffer and of the output spec.
-// Needs only the output spec, so the gate and the program hash can size it before the output exists.
-uint32_t permute_rm_slot_bytes(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
+// CB slot of the row-invariant path: the larger aligned stick of the input buffer and of the output.
+// The last axis is unchanged, so it follows from the input and the output buffer type alone.
+uint32_t permute_rm_slot_bytes(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 // L1 bytes the blocked kernels hold in CBs for one core. The block edge is the tile edge, so this
 // does not scale with the budget and the gate can only accept or reject it.
 uint64_t permute_blocked_cb_bytes(uint32_t element_size);
 
 // Per-core L1 the CBs may use: the window above the allocator base, less the per-bank share of an
-// interleaved-L1 input or output. Depends only on device and operand specs, so it is the static
-// bound the support gate checks.
-uint64_t permute_cb_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
+// interleaved-L1 input. Depends only on device and input spec, so it is the static answer the
+// support gate gives; the factory plans against permute_live_cb_l1_budget instead.
+uint64_t permute_cb_l1_budget(const Tensor& input);
 
-// The static budget clamped to the L1 left below the lowest occupied address right now. This is
-// what sizes the row-invariant CB, so the descriptor also depends on the live allocator state.
-uint64_t permute_live_cb_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
+// permute_cb_l1_budget further clamped to the lowest occupied compute L1 address, which program
+// enqueue re-checks the CB region against on every call.
+uint64_t permute_live_cb_l1_budget(const Tensor& input);
 
-// Row-invariant CB plan under the live budget; nullopt when even a single-stick turn does not fit.
-// The factory and the program hash both read it, so the cache key tracks the plan the factory builds.
-std::optional<PermuteRmCbPlan> permute_rm_cb_plan(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
+// Row-invariant batch the live frontier allows, or 0 when nothing fits, the last axis moves, or the
+// tensor is not a device tensor yet (validation reports that).
+uint32_t permute_live_rm_cb_batch(
+    const Tensor& input,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::array<uint32_t, kPermuteCodegenMaxDims>& dims);
 
 struct PermuteCodegenParams {
     // Zero-padded past the input rank.
     std::array<uint32_t, kPermuteCodegenMaxDims> dims{};
     tt::tt_metal::MemoryConfig output_mem_config;
+    // Derived from the live L1 frontier before dispatch so a changed frontier misses the program cache.
+    uint32_t rm_cb_batch = 0;
 };
 
 struct PermuteCodegenInputs {

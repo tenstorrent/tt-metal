@@ -104,15 +104,6 @@ std::vector<uint32_t> row_strides(const std::vector<uint32_t>& shape) {
     return strides;
 }
 
-uint64_t spec_l1_bytes_per_bank(const TensorSpec& spec, MeshDevice& device) {
-    if (spec.memory_config().buffer_type() != BufferType::L1) {
-        return 0;
-    }
-    const auto& allocator = device.allocator();
-    return spec.compute_consumed_memory_bytes_per_bank(
-        allocator->get_alignment(BufferType::L1), allocator->get_num_banks(BufferType::L1));
-}
-
 uint64_t input_l1_bytes_per_bank(const Tensor& input) {
     return input.memory_config().buffer_type() == BufferType::L1 ? input.buffer()->aligned_size_per_bank() : 0;
 }
@@ -152,26 +143,23 @@ ProgramDescriptor build_row_invariant(
     const Tensor& output,
     const std::vector<uint32_t>& input_shape,
     const std::vector<uint32_t>& dims,
-    const std::vector<uint32_t>& output_shape) {
+    const std::vector<uint32_t>& output_shape,
+    uint32_t cb_batch) {
+    TT_FATAL(cb_batch > 0, "Permute codegen row-invariant CB does not fit below the lowest occupied L1 address");
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
     const uint32_t width = input_shape[input_shape.size() - kPermuteWidthAxisFromEnd];
     const uint32_t row_axes = static_cast<uint32_t>(input_shape.size()) - kPermuteWidthAxisFromEnd;
     const uint32_t stick_bytes = width * input.element_size();
     const uint32_t src_page = static_cast<uint32_t>(src_buffer->aligned_page_size());
-    const uint32_t slot_bytes = permute_rm_slot_bytes(input, output.tensor_spec());
+    const uint32_t slot_bytes = permute_rm_slot_bytes(input, output.memory_config());
     const uint32_t num_sticks = static_cast<uint32_t>(input.logical_shape().volume() / width);
-
-    const std::optional<PermuteRmCbPlan> planned =
-        plan_permute_rm_cb(slot_bytes, permute_live_cb_l1_budget(input, output.tensor_spec()));
-    TT_FATAL(planned.has_value(), "Permute codegen row-invariant CB does not fit in the L1 left free");
-    const PermuteRmCbPlan cb_plan = *planned;
 
     const CoreSplit split = split_work(input, num_sticks);
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
 
     ProgramDescriptor desc;
-    desc.cbs.push_back(make_cb(kCbIn, cb_data_format, slot_bytes, cb_plan.depth, split.all_cores));
+    desc.cbs.push_back(make_cb(kCbIn, cb_data_format, slot_bytes, kPermuteRmCbTurns * cb_batch, split.all_cores));
 
     KernelDescriptor reader = make_kernel(split.all_cores);
     reader.kernel_source = kReaderStickUnified;
@@ -182,7 +170,7 @@ ProgramDescriptor build_row_invariant(
         {"stick_bytes", stick_bytes},
         {"aligned_page_size", src_page},
         {"seq_id", kSeqIdentity},
-        {"batch", cb_plan.batch},
+        {"batch", cb_batch},
         // The shared reader reads every mode's named args even where the branch is discarded, and the
         // discarded pad branch still instantiates a fill templated on elem_size (2 or 4 bytes only).
         {"nabatch", kSingleBatch},
@@ -203,7 +191,7 @@ ProgramDescriptor build_row_invariant(
     writer.named_compile_time_args = {
         {"cb_id", kCbIn},
         {"write_size", stick_bytes},
-        {"batch", cb_plan.batch},
+        {"batch", cb_batch},
     };
     writer.config = WriterConfigDescriptor{};
 
@@ -348,36 +336,52 @@ ProgramDescriptor build_blocked(
 
 }  // namespace
 
-uint32_t permute_rm_slot_bytes(const Tensor& input, const TensorSpec& output_spec) {
-    // With one bank per page, the per-bank footprint is exactly one aligned page.
-    const ttnn::Shape& shape = output_spec.logical_shape();
-    const uint64_t output_pages =
-        std::max<uint64_t>(shape.volume() / std::max<uint32_t>(shape[shape.rank() - kPermuteWidthAxisFromEnd], 1), 1);
-    const uint64_t out_page = output_spec.compute_consumed_memory_bytes_per_bank(
-        input.device()->allocator()->get_alignment(output_spec.memory_config().buffer_type()), output_pages);
-    return static_cast<uint32_t>(std::max<uint64_t>(input.buffer()->aligned_page_size(), out_page));
+uint32_t permute_rm_slot_bytes(const Tensor& input, const MemoryConfig& output_mem_config) {
+    const ttnn::Shape& shape = input.logical_shape();
+    const uint32_t stick_bytes = shape[shape.rank() - kPermuteWidthAxisFromEnd] * input.element_size();
+    const uint32_t output_alignment = input.device()->allocator()->get_alignment(output_mem_config.buffer_type());
+    return std::max(
+        static_cast<uint32_t>(input.buffer()->aligned_page_size()), tt::round_up(stick_bytes, output_alignment));
 }
 
-uint64_t permute_cb_l1_budget(const Tensor& input, const TensorSpec& output_spec) {
+uint64_t permute_cb_l1_budget(const Tensor& input) {
     MeshDevice* device = input.device();
     const uint64_t window = device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    const uint64_t operands = input_l1_bytes_per_bank(input) + spec_l1_bytes_per_bank(output_spec, *device);
+    const uint64_t operands = input_l1_bytes_per_bank(input);
     return window > operands ? window - operands : 0;
 }
 
-uint64_t permute_live_cb_l1_budget(const Tensor& input, const TensorSpec& output_spec) {
+uint64_t permute_live_cb_l1_budget(const Tensor& input) {
     MeshDevice* device = input.device();
-    uint64_t budget = permute_cb_l1_budget(input, output_spec);
-    if (const auto lowest_l1_buffer = device->lowest_occupied_compute_l1_address(); lowest_l1_buffer.has_value()) {
-        const uint64_t base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-        const uint64_t frontier = lowest_l1_buffer.value();
-        budget = std::min(budget, frontier > base ? frontier - base : 0);
+    const uint64_t base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint64_t window = device->l1_size_per_core() - base;
+    if (const auto lowest = device->lowest_occupied_compute_l1_address(); lowest.has_value()) {
+        const uint64_t frontier = static_cast<uint64_t>(*lowest);
+        window = std::min(window, frontier > base ? frontier - base : 0);
     }
-    return budget;
+    const uint64_t operands = input_l1_bytes_per_bank(input);
+    return window > operands ? window - operands : 0;
 }
 
-std::optional<PermuteRmCbPlan> permute_rm_cb_plan(const Tensor& input, const TensorSpec& output_spec) {
-    return plan_permute_rm_cb(permute_rm_slot_bytes(input, output_spec), permute_live_cb_l1_budget(input, output_spec));
+uint32_t permute_live_rm_cb_batch(
+    const Tensor& input,
+    const MemoryConfig& output_mem_config,
+    const std::array<uint32_t, kPermuteCodegenMaxDims>& dims) {
+    // Runs before validation, so a tensor that validation will reject must not be dereferenced here.
+    if (input.storage_type() != StorageType::DEVICE || input.buffer() == nullptr) {
+        return 0;
+    }
+    const uint32_t rank = input.logical_shape().rank();
+    if (rank < kPermuteHeightAxisFromEnd || rank > kPermuteCodegenMaxDims) {
+        return 0;
+    }
+    // Only the row-invariant path sizes its CB from the batch; keying it elsewhere splits the cache for nothing.
+    if (dims[rank - kPermuteWidthAxisFromEnd] != rank - kPermuteWidthAxisFromEnd) {
+        return 0;
+    }
+    const std::optional<PermuteRmCbPlan> plan =
+        plan_permute_rm_cb(permute_rm_slot_bytes(input, output_mem_config), permute_live_cb_l1_budget(input));
+    return plan.has_value() ? plan->batch : 0;
 }
 
 std::optional<PermuteRmCbPlan> plan_permute_rm_cb(uint32_t slot_bytes, uint64_t l1_budget) {
@@ -407,8 +411,10 @@ ProgramDescriptor PermuteCodegenProgramFactory::create_descriptor(
     const std::vector<uint32_t> output_shape = shape_vector(tensor_return_value.logical_shape());
 
     const bool width_axis_fixed = dims[rank - kPermuteWidthAxisFromEnd] == rank - kPermuteWidthAxisFromEnd;
-    return width_axis_fixed ? build_row_invariant(input, tensor_return_value, input_shape, dims, output_shape)
-                            : build_blocked(input, tensor_return_value, input_shape, dims, output_shape);
+    return width_axis_fixed
+               ? build_row_invariant(
+                     input, tensor_return_value, input_shape, dims, output_shape, operation_attributes.rm_cb_batch)
+               : build_blocked(input, tensor_return_value, input_shape, dims, output_shape);
 }
 
 }  // namespace ttnn::prim
