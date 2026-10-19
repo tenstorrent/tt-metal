@@ -11,7 +11,6 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "internal/tensor/transfer_noc_addr.h"
 #include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
@@ -36,11 +35,10 @@ void kernel_main() {
         return;
     }
 
-    // Raw: DRAM bank-relative base for direct bank reads.
-    const uint32_t in1_tensor_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::in1));
+    // in1 / bias are DRAM-sharded: read by bank (this reader's dram_bank_id) at offsets into each tensor.
+    const auto in1_accessor = TensorAccessor(tensor::in1);
 #ifdef FUSE_BIAS
-    // Raw: DRAM bank-relative base for direct bank reads.
-    const uint32_t in3_tensor_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::bias));
+    const auto bias_accessor = TensorAccessor(tensor::bias);
 #endif
     const uint32_t dram_bank_id = get_arg(args::dram_bank_id);
     const uint32_t vc = get_arg(args::vc);
@@ -95,9 +93,9 @@ void kernel_main() {
     uint32_t l1_write_addr_in1;
     uint32_t l1_read_addr_in1 = 0;
 
-    const AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+    const BankView dram_bank(in1_accessor);
     noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = vc});
+        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .offset_bytes = 0}, NocOptVals{.vc = vc});
 
 #ifdef ARCH_GRAYSKULL
     for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -110,7 +108,7 @@ void kernel_main() {
                 dram_bank,
                 CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 in1_page_size,
-                {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
+                {.bank_id = dram_bank_id, .offset_bytes = l1_read_addr_in1},
                 {},
                 NocOptVals{.vc = vc});
             l1_read_addr_in1 += in1_page_size;
@@ -142,7 +140,7 @@ void kernel_main() {
             const uint32_t source_tile =
                 (block * k_rows_per_block + row) * bank_row_stride_tiles + shard_column_offset_tiles;
             const uint32_t read_size = tiles_per_k_row * in1_tile_size_bytes;
-            const uint32_t read_address = in1_tensor_addr + source_tile * in1_tile_size_bytes;
+            const uint32_t read_offset = source_tile * in1_tile_size_bytes;
             // A split reader's row may exceed one NoC burst (e.g. the LM
             // head). Use its real compile-time bound so the read helper
             // packetizes it and accounts for every response under this TRID.
@@ -150,7 +148,7 @@ void kernel_main() {
                 dram_bank,
                 CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 read_size,
-                {.bank_id = dram_bank_id, .addr = read_address},
+                {.bank_id = dram_bank_id, .offset_bytes = read_offset},
                 {},
                 NocOptVals{.vc = vc, .trid = curr_block_trid});
             l1_write_addr_in1 += read_size;
@@ -161,7 +159,7 @@ void kernel_main() {
                 dram_bank,
                 CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 in1_page_size,
-                {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
+                {.bank_id = dram_bank_id, .offset_bytes = l1_read_addr_in1},
                 {},
                 NocOptVals{.vc = vc, .trid = curr_block_trid});
             l1_read_addr_in1 += in1_page_size;
@@ -203,15 +201,16 @@ void kernel_main() {
     constexpr uint32_t in3_tile_size_bytes = (in3_num_pages * in3_page_size) / reader_width_tiles;
     l1_read_addr_in3 = dram_reader_index * reader_width_tiles * in3_tile_size_bytes;
 #endif
+    const BankView bias_bank(bias_accessor);
     noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-        dram_bank, in3_page_size, {.bank_id = dram_bank_id, .addr = in3_tensor_addr}, NocOptVals{.vc = vc});
+        bias_bank, in3_page_size, {.bank_id = dram_bank_id, .offset_bytes = 0}, NocOptVals{.vc = vc});
 
     for (uint32_t h = 0; h < in3_num_pages; ++h) {
         noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-            dram_bank,
+            bias_bank,
             CoreLocalMem<uint32_t>(l1_write_addr_in3),
             in3_page_size,
-            {.bank_id = dram_bank_id, .addr = in3_tensor_addr + l1_read_addr_in3},
+            {.bank_id = dram_bank_id, .offset_bytes = l1_read_addr_in3},
             {},
             NocOptVals{.vc = vc});
         l1_read_addr_in3 += in3_page_size;

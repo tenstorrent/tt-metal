@@ -812,4 +812,13 @@ struct ShardView {
         return accessor.get_shard_noc_addr(shard_id, offset, noc);
     }
 };
+
+// Addresses the tensor by allocator bank: `{.bank_id, .offset_bytes}` names offset_bytes into the tensor's region of
+// bank bank_id (an L1 bank's worker core, or a DRAM bank; the tensor's memory type picks which). Use it where the
+// kernel already works in banks (e.g. a host-computed bank id per transfer) rather than pages or shards.
+template <typename Accessor>
+struct BankView {
+    const Accessor& accessor;
+    explicit BankView(const Accessor& acc) : accessor(acc) {}
+};
 // NOLINTEND(misc-unused-parameters)

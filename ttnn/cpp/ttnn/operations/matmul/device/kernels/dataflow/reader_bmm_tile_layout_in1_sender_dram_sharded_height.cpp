@@ -17,7 +17,6 @@
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/local_tensor_accessor.h"
-#include "internal/tensor/transfer_noc_addr.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -27,8 +26,8 @@ void kernel_main() {
         return;
     }
 
-    // Raw: DRAM bank-relative base for AllocatorBank.
-    const uint32_t in1_tensor_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::in1));
+    // in1 is DRAM height-sharded: read by bank (this reader's dram_bank_id) at offsets into the tensor.
+    const auto in1_accessor = TensorAccessor(tensor::in1);
     const uint32_t dram_bank_id = get_arg(args::dram_bank_id);
     const uint32_t vc = get_arg(args::vc);
 
@@ -61,7 +60,7 @@ void kernel_main() {
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);  // Local output buffer (compute writes here)
     // DRAM read setup
-    const AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+    const BankView dram_bank(in1_accessor);
 #ifdef FUSE_BIAS
     // Push [1, N] bias once (broadcast over this core's batches).
     // TensorAccessor: bias is interleaved DRAM; dram_bank_id is the HEIGHT_SHARDED in1 bank.
@@ -98,7 +97,7 @@ void kernel_main() {
                     dram_bank,
                     dfb_in1,
                     read_size,
-                    {.bank_id = dram_bank_id, .addr = in1_tensor_addr + in1_batch_offset + curr_dram_offset},
+                    {.bank_id = dram_bank_id, .offset_bytes = in1_batch_offset + curr_dram_offset},
                     {.offset_bytes = dfb_write_offset});
                 dfb_write_offset += read_size;
                 curr_dram_offset += read_size;
