@@ -284,7 +284,7 @@ inline void _llk_unpack_tilize_(
         const std::uint32_t context = unp_cfg_context;
 
         // Wait for a free context (up to 2 tiles in flight)
-        while (contexts_in_use >= 2)
+        while (__builtin_expect(contexts_in_use >= 2, 0))
         {
             contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
         }
@@ -363,7 +363,7 @@ inline void _llk_unpack_tilize_(
         std::uint32_t context = unp_cfg_context;
 
         // Wait for free context
-        while (contexts_in_use >= 2)
+        while (__builtin_expect(contexts_in_use >= 2, 0))
         {
             contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
         }
@@ -468,7 +468,7 @@ inline void _llk_unpack_tilize_block_(
     std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
     TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
     std::uint32_t context = unp_cfg_context;
-    while (contexts_in_use >= 2)
+    while (__builtin_expect(contexts_in_use >= 2, 0))
     {
         contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
     }
