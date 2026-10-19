@@ -630,8 +630,8 @@ void RunFullBarrierWritesSingleCore(
     fixture->RunProgram(mesh_device, workload);
     ReadMeshDeviceProfilerResults(*mesh_device);
 
-    for (IDevice* device : mesh_device->get_devices()) {
-        EXPECT_FALSE(fixture->has_unflushed_write_issue(device->id(), writer_virtual, 0))
+    for (auto device_id : mesh_device->get_device_ids()) {
+        EXPECT_FALSE(fixture->has_unflushed_write_issue(device_id, writer_virtual, 0))
             << "A full barrier must flush pending writes by kernel end; the FULL_BARRIER host mapping was not "
                "applied so the writes were falsely reported as unflushed.";
     }
@@ -686,8 +686,8 @@ void RunAtomicBarrierWritesSingleCore(
     fixture->RunProgram(mesh_device, workload);
     ReadMeshDeviceProfilerResults(*mesh_device);
 
-    for (IDevice* device : mesh_device->get_devices()) {
-        EXPECT_TRUE(fixture->has_unflushed_write_issue(device->id(), writer_virtual, 0))
+    for (auto device_id : mesh_device->get_device_ids()) {
+        EXPECT_TRUE(fixture->has_unflushed_write_issue(device_id, writer_virtual, 0))
             << "An atomic barrier must not flush pending writes (writes use a NIU counter separate from atomics); "
                "the writes should still be reported as unflushed at kernel end.";
     }
@@ -1073,7 +1073,7 @@ private:
         // start_debug_dump_thread() clears the stop flag, so the thread is live again after this.
         // Must cover EVERY device the thread originally covered (profiler_initializer.cpp launches it with all of
         // them): a device left out stops being drained, and later tests running on it see no events at all.
-        tt::tt_metal::LaunchIntervalBasedProfilerReadThread(devices_);
+        tt::tt_metal::LaunchIntervalBasedProfilerReadThread(tt::tt_metal::MetalContext::instance(), devices_);
     }
 
     std::vector<tt::tt_metal::IDevice*> devices_;

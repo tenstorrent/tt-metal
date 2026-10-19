@@ -43,7 +43,6 @@ from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathOperation,
     PerfRunType,
     UnpackerEngine,
@@ -68,7 +67,6 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
@@ -150,8 +148,8 @@ QUASAR_APPROX_CAPABLE_OPS = (
 #   approx_mode             ApproximationMode.Yes on QUASAR_APPROX_CAPABLE_OPS only
 #   dest_acc                override the format-derived Dest width (fp32 Dest for
 #                           a 16-bit format, for example)
-#   dest_sync / implied_math_format  Quasar-only kernel knobs (default Half / Yes,
-#                           the perf-mode pins of the functional suite)
+#   dest_sync               Quasar-only kernel knob (default Half,
+#                           the perf-mode pin of the functional suite)
 #   extra_undefined_ranges  override the red "undefined domain" plot shading
 #   name                    custom test id — the plot filename and the -k selector
 #                           (defaults to "<Op>-<fmt>", or "<Op>-<fmt>-approx" when
@@ -178,7 +176,6 @@ class Case:
     # Advanced overrides — defaults are derived from `fmt`.
     dest_acc: Optional[DestAccumulation] = None
     dest_sync: DestSync = DestSync.Half
-    implied_math_format: ImpliedMathFormat = ImpliedMathFormat.Yes
     input_dimensions: Optional[List[int]] = None
     extra_undefined_ranges: Optional[List[Tuple[float, float]]] = None
     # ulp_sweep only: sweep a range too large for one run in batches of this
@@ -392,7 +389,6 @@ def run_case(case: Case) -> bool:
                 PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
                 MATH_OP(mathop=mathop),
                 APPROX_MODE(case.approx_mode),
-                IMPLIED_MATH_FORMAT(case.implied_math_format),
                 DATA_COPY_TYPE(DataCopyType.A2D),
                 UNPACKER_ENGINE_SEL(
                     UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
@@ -549,7 +545,7 @@ def run_case(case: Case) -> bool:
         f"{variant.sfpu_dst.name} → pack {variant.pack_src.name} → out "
         f"{formats.output_format.name}\n"
         f"dest_acc={dest_acc.name}  |  approx={case.approx_mode.name}  |  "
-        f"{case.dest_sync.name}  |  implied_math_format={case.implied_math_format.name}"
+        f"{case.dest_sync.name}"
         f"  |  {spec.distribution.name.lower()}, {x.size} points"
     )
     plot_and_print(

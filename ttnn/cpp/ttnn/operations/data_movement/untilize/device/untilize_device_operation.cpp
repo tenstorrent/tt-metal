@@ -57,7 +57,8 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
     // Need to debug this to work on wide tensors that are higher than a single tile
     const auto& tile_shape = tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tensor_width = tensor.padded_shape()[-1];
-    uint32_t tensor_height = tensor.physical_volume() / tensor_width;
+    // tensor_width is 0 for a zero-width input; the height is 0 there in any case.
+    uint32_t tensor_height = tensor_width == 0 ? 0 : tensor.physical_volume() / tensor_width;
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
     uint32_t num_tiles_per_row = tensor_width / tile_width;
@@ -86,7 +87,8 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_a = tensor_args.input;
 
     uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
-    uint32_t tensor_height = input_tensor_a.physical_volume() / tensor_width;
+    // tensor_width is 0 for a zero-width input; the height is 0 there in any case.
+    uint32_t tensor_height = tensor_width == 0 ? 0 : input_tensor_a.physical_volume() / tensor_width;
 
     bool input_is_sharded = input_tensor_a.is_sharded();
     bool output_is_sharded = operation_attributes.output_mem_config.is_sharded();
@@ -120,8 +122,11 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         // when the tensor is one tile row tall. Taller tensors deadlock in the writer's wait_front
         // rather than failing, so reject them here. `get_pf_type` holds the same restriction for the
         // non-sub-core column-parallel factory this one derives from.
+        // The restriction protects a kernel that never runs for an empty input - there is no work
+        // to parallelize and no program is built - so a height of 0 is allowed through. It can only
+        // be 0 when the volume is 0, so this does not loosen anything for a non-empty tensor.
         TT_FATAL(
-            tensor_height == input_tensor_a.tensor_spec().tile().get_tile_shape()[0],
+            tensor_height == 0 || tensor_height == input_tensor_a.tensor_spec().tile().get_tile_shape()[0],
             "sub_core_grid untilize only supports tensors one tile row tall, got height {} with tile height {}",
             tensor_height,
             input_tensor_a.tensor_spec().tile().get_tile_shape()[0]);
@@ -336,7 +341,8 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     }
 
     uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
-    uint32_t tensor_height = input_tensor_a.physical_volume() / tensor_width;
+    // tensor_width is 0 for a zero-width input; the height is 0 there in any case.
+    uint32_t tensor_height = tensor_width == 0 ? 0 : input_tensor_a.physical_volume() / tensor_width;
 
     const auto& tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];

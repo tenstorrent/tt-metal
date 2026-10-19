@@ -62,11 +62,15 @@ void reduce_rm_reader() {
 
     // Scaler entry — pushed once, used by every compute reduce() call.
     const float scaler_f = __builtin_bit_cast(float, scaler_bits);
+    // Count along the reduced axis. An H reduce stages full TILE_HEIGHT slabs, so every row counts.
     const uint32_t scaler_valid_for_reduce = []() -> uint32_t {
-        if constexpr (REDUCE_OP == ckernel::PoolType::SUM) {
+        if constexpr (DIM == ckernel::ReduceDim::REDUCE_COL) {
+            return tt::constants::TILE_HEIGHT;
+        } else if constexpr (REDUCE_OP == ckernel::PoolType::SUM) {
             return tt::constants::TILE_WIDTH;
+        } else {
+            return (W_logical < tt::constants::TILE_WIDTH) ? W_logical : tt::constants::TILE_WIDTH;
         }
-        return (W_logical < tt::constants::TILE_WIDTH) ? W_logical : tt::constants::TILE_WIDTH;
     }();
     dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, DIM>(scaler_f, scaler_valid_for_reduce);
 

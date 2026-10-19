@@ -39,7 +39,9 @@ ttnn::device_operation::MeshWorkloadArtifacts ChronologicalSelectionsFactory::cr
         .tensor_parameters =
             {{.unique_id = sn, .spec = actual_start.tensor_spec()}, {.unique_id = on, .spec = out.tensor_spec()}},
         .work_units =
-            {{.name = "main", .kernels = {kernel}, .target_nodes = CoreRangeSet({CoreRange({0, 0}, {0, 0})})}},
+            {{.name = "main",
+              .kernels = {kernel},
+              .target_nodes = tt::tt_metal::CoreRangeSet({tt::tt_metal::CoreRange({0, 0}, {0, 0})})}},
     };
     ProgramRunArgs run;
     run.tensor_args = {{sn, actual_start}, {on, out}};
