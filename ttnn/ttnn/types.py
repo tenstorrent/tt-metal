@@ -118,6 +118,7 @@ get_cb_address = ttnn._ttnn.program_descriptor.get_cb_address
 UnpackToDestMode = ttnn._ttnn.program_descriptor.UnpackToDestMode
 FaceGeometry = ttnn._ttnn.program_descriptor.FaceGeometry
 compute_program_descriptor_hash = ttnn._ttnn.operations.generic.compute_program_descriptor_hash
+freeze_program_hashes = ttnn._ttnn.operations.generic.freeze_program_hashes
 
 # Metal 2.0 program spec types (the ttnn.generic_op spec overload)
 UnpackMode = ttnn._ttnn.program_spec.UnpackMode

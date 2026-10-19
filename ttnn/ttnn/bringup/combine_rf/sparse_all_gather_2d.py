@@ -874,6 +874,7 @@ def sparse_all_gather_2d(
     if dkey is not None:
         if len(_DESC_CACHE) >= 256:  # (bounded: callers with per-call buffers at ever new addresses)
             _DESC_CACHE.pop(next(iter(_DESC_CACHE)))
+        ttnn.freeze_program_hashes(mesh_desc)  # (hash stored once: not re-hashed per call)
         _DESC_CACHE[dkey] = (mesh_device, mesh_desc)
     return ttnn.generic_op(([] if extra is None else list(extra[0])) + [plan_tensor, output], mesh_desc)
 

@@ -62,10 +62,13 @@ def l1_zero_program(mesh_device, runs_by_core):
             core_ranges=crs,
             compile_time_args=[],
             runtime_args=rt,
-            config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default),
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+            ),
         )
     ]
     R, C = tuple(mesh_device.shape)
     desc = ttnn.MeshProgramDescriptor()
     desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(R - 1, C - 1))] = program
+    ttnn.freeze_program_hashes(desc)  # (hash stored once: not re-hashed per call)
     return desc

@@ -254,6 +254,7 @@ def dispatch_prep_prepare(
         k = tuple(int(t.buffer_address()) for t in ts)
         if state.get("key") != k:
             state["key"], state["desc"] = k, build(jr, own, xbuf, route)
+            ttnn.freeze_program_hashes(state["desc"])  # (hash stored once: not re-hashed per call)
         return ttnn.generic_op(ts, state["desc"])
 
     run.programs = lambda jr, own, xbuf, route: build(jr, own, xbuf, route, per_chip=True)
@@ -317,6 +318,7 @@ def own_rows_copy_prepare(mesh_device, *, S, n_copy=4, batch=8, row0=8):
         k = (int(own.buffer_address()), int(buf.buffer_address()))
         if state.get("key") != k:
             state["key"], state["desc"] = k, build(own, buf)
+            ttnn.freeze_program_hashes(state["desc"])  # (hash stored once: not re-hashed per call)
         return ttnn.generic_op([own, buf], state["desc"])
 
     return run

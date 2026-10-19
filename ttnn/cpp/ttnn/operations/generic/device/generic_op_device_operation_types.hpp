@@ -31,10 +31,14 @@ struct SpecProgram {
 // selects the program factory.
 struct operation_attributes_t {
     std::variant<tt::tt_metal::experimental::MeshProgramDescriptor, SpecProgram> program;
+    // The caller's descriptor, used in place of `program` (generic_op(io_tensors, mesh_program_descriptor)): the
+    // caller holds it for the whole launch, so a call need not copy every kernel's sources and runtime args.
+    const tt::tt_metal::experimental::MeshProgramDescriptor* mesh_program_ref = nullptr;
 
-    bool is_spec() const { return std::holds_alternative<SpecProgram>(program); }
+    bool is_spec() const { return mesh_program_ref == nullptr && std::holds_alternative<SpecProgram>(program); }
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor() const {
-        return std::get<tt::tt_metal::experimental::MeshProgramDescriptor>(program);
+        return mesh_program_ref != nullptr ? *mesh_program_ref
+                                           : std::get<tt::tt_metal::experimental::MeshProgramDescriptor>(program);
     }
     const SpecProgram& spec_program() const { return std::get<SpecProgram>(program); }
 

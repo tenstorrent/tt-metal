@@ -1429,3 +1429,25 @@ unchanged or better (acc on ports S 640: fused 1366 / 1736 / 4811 vs 1522 / 1784
 Bug found on the way (pre-existing): the accumulator granted its local ring (rows homed on its own chip) in batches of
 4, so a local ring under 4 slots never refilled - the first call deadlocked once the pool left exactly the 2 reserved
 slots. Batches now min(4, QL), and the separate layout reserves 8 local slots (the fused one already did).
+
+### Block host time, untraced (2026-10-19, GLM-5.3-Flash on the token-split block, 2 x 4, uniform)
+Why: untraced, the block's host enqueue has to stay under its device time. Measured (zz_scratch_experts_ts.py
+GLM_TS_PROF=1 GLM_TS_HOST=1): host enqueue with an idle device (sync before each call), back-to-back untraced, traced.
+cProfile's "4.2 ms" was its own overhead; the real host time was 2.42 ms against 2.54 ms of device at chunk 5120 and
+1.71 ms at chunk 2048 (host bound there). py-spy --native: the fused flat + combine op was 0.2 ms of it (a hit passes an
+empty descriptor; every address is in its cache key, so nothing is patched - common runtime args would not help); the
+rest was the six small generic_ops around it and ttnn's routing ops:
+- generic_op copied the caller's MeshProgramDescriptor into its attributes (every kernel's source text and per-core
+  runtime args, 8 chips), re-hashed it all (sources, compile-time args, ranges) every call, and on a hit copied each
+  chip's descriptor again (create_descriptor by value) only to apply its runtime args. Now the attributes reference the
+  caller's descriptor, a hit applies the args from it in place (GenericMeshDescriptorFactory::find_descriptor), and the
+  cached descriptors store their hash once (ttnn.freeze_program_hashes at each cache insert).
+- gather_routing ran to_layout x 2, bitcast and concat (which transposes): one routing_pack generic_op now.
+| host ms per call | before | generic_op fix | + routing_pack |
+| enqueue, idle device | 2.42 | 1.64 | 1.32 |
+| routing gather / planner / dispatch prep / arena + zero | 0.5 / 0.2 / 0.5 / 0.2 | 0.4 / 0.1 / 0.1 / 0.1 | 0.14 / 0.08 / 0.13 / 0.12 |
+| dispatch / experts + combine / tilize | 0.35 / 0.2 / 0.3 | 0.3 / 0.2 / 0.2 | 0.26 / 0.15 / 0.16 |
+Device unchanged (traced 2.54 ms at 5120, 1.71 at 2048); untraced back-to-back = traced at both chunks now. Outputs
+identical (rel L2 vs CPU / vs ag to 4 digits). Left: ~70-150 us per program on 8 chips (enqueue + per-core args) - the
+next step is fewer programs, not cheaper ones. Tried: keeping arena_fits()'s allocation for alloc_arena (one arena
+allocation a call, 2 -> 1): the routing ops' static CBs then clash with the arena - reverted.

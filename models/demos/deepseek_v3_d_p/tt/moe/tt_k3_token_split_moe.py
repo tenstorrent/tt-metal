@@ -38,6 +38,7 @@ from ttnn.bringup.combine_rf.layout_ops import layout_op_prepare
 from ttnn.bringup.combine_rf.lin2d import glu_weight, lin2d_prepare
 from ttnn.bringup.combine_rf.lin2d import upload_stacked as lin2d_upload
 from ttnn.bringup.combine_rf.router_topk import router_topk_prepare
+from ttnn.bringup.combine_rf.routing_pack import routing_pack_prepare
 from ttnn.bringup.combine_rf.sparse_all_gather_2d import (
     ensure_semaphores,
     manifest_spec,
@@ -657,6 +658,19 @@ class TtK3TokenSplitMoE:
         joint rows (wts None)."""
         if wts is None:
             both = ids
+        elif ids.layout == ttnn.TILE_LAYOUT and wts.layout == ttnn.TILE_LAYOUT and wts.dtype == ttnn.bfloat16:
+            # (one generic_op: ttnn's untilizes, bitcast and concat were four ops and ~0.3 ms of host)
+            want = [int(ids.shape[0]), 2 * int(ids.shape[1])]
+            both = getattr(self, "_rg_in", None) if self.routed_only else None
+            if both is None or not both.is_allocated() or list(both.shape) != want:
+                both = ttnn.allocate_tensor_on_device(
+                    ttnn.Shape(want), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
+                )
+                if self.routed_only:  # (one input buffer: the gather's descriptor keys on its address)
+                    self._rg_in = both
+            if getattr(self, "_rpack", None) is None:
+                self._rpack = routing_pack_prepare(self.mesh)
+            self._rpack(ids, wts, both)
         else:
             ids_rm = ttnn.to_layout(ids, ttnn.ROW_MAJOR_LAYOUT)
             w = wts if wts.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(wts, ttnn.ROW_MAJOR_LAYOUT)
@@ -669,7 +683,8 @@ class TtK3TokenSplitMoE:
                 ttnn.Shape([1, 1, N * S, 2 * K]), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
             )
             self.rcopy(both, buf)
-            ttnn.deallocate(both)
+            if both is not getattr(self, "_rg_in", None):
+                ttnn.deallocate(both)
             man = ttnn.allocate_tensor_on_device(*manifest_spec(self.mesh, S, num_links=2, torus=self.torus))
             sparse_all_gather_2d(buf, self.route_all, num_links=2, manifest=man, torus=self.torus)
             ttnn.deallocate(man)
@@ -691,10 +706,12 @@ class TtK3TokenSplitMoE:
             g = fabric_all_gather(
                 both, cluster_axis=None, topology=ttnn.Topology.Linear, num_links=1, dim=0, extra=extra, output=out
             )
-            ttnn.deallocate(both)
+            if both is not getattr(self, "_rg_in", None):
+                ttnn.deallocate(both)
             return g, g
         a = ttnn.all_gather(both, dim=0, cluster_axis=1)
-        ttnn.deallocate(both)
+        if both is not getattr(self, "_rg_in", None):
+            ttnn.deallocate(both)
         g = ttnn.all_gather(a, dim=0, cluster_axis=0)
         ttnn.deallocate(a)
         return g, g
@@ -716,6 +733,7 @@ class TtK3TokenSplitMoE:
                 pd.semaphores = list(pp.semaphores)
                 pd.kernels = list(pp.kernels) + list(pu.kernels)
                 md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = pd
+            ttnn.freeze_program_hashes(md)  # (hash stored once: not re-hashed per call)
             self._plan_merged = {"key": k, "desc": md}
         ttnn.generic_op([gi, gw, x, x_rm] + self.planner.tensors, self._plan_merged["desc"])
         return self.planner.outs, x_rm
@@ -772,6 +790,7 @@ class TtK3TokenSplitMoE:
                     pd.cbs = list(pu.cbs) + list(pr.cbs)
                     pd.kernels = list(pu.kernels) + list(pr.kernels)
                     md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = pd
+                ttnn.freeze_program_hashes(md)  # (hash stored once: not re-hashed per call)
                 if self.routed_only and len(cache) < 512:
                     cache[k] = md
             self._prep_merged = {"key": k, "desc": md}
@@ -1134,7 +1153,7 @@ class TtK3TokenSplitMoE:
 
                         logger.info(
                             "K3 routed host ms per call: "
-                            + " ".join(f"{k} {1e3 * v / st['n']:.1f}" for k, v in st.items() if k != "n")
+                            + " ".join(f"{k} {1e3 * v / st['n']:.2f}" for k, v in st.items() if k != "n")
                         )
 
         gi, _ = self.gather_routing(ids, wts)

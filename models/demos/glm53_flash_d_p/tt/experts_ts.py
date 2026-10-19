@@ -221,8 +221,8 @@ class TtExpertsTs:
                 from loguru import logger
 
                 logger.info(
-                    f"GLM ts host ms per call: x gather {1e3 * h[0] / h[3]:.1f}, block lookup + reshape "
-                    f"{1e3 * h[1] / h[3]:.1f}, routed {1e3 * h[2] / h[3]:.1f}"
+                    f"GLM ts host ms per call: x gather {1e3 * h[0] / h[3]:.2f}, block lookup + reshape "
+                    f"{1e3 * h[1] / h[3]:.2f}, routed {1e3 * h[2] / h[3]:.2f}"
                 )
         for t in tmp:
             ttnn.deallocate(t)

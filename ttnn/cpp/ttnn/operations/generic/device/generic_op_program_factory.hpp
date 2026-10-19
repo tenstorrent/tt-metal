@@ -19,6 +19,11 @@ struct GenericMeshDescriptorFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+
+    // The descriptor create_descriptor would copy for this coordinate (nullptr: none covers it): a cache hit applies
+    // its runtime args in place.
+    static const tt::tt_metal::ProgramDescriptor* find_descriptor(
+        const operation_attributes_t& operation_attributes, const ttnn::MeshCoordinate& mesh_dispatch_coordinate);
 };
 
 }  // namespace ttnn::operations::generic::program

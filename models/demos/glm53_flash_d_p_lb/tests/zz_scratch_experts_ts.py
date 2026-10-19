@@ -140,5 +140,70 @@ def test_experts_ts(mesh_device):
                 f"TS host {(t1 - t0) / 5 * 1e3:.1f} ms per call (dispatch only), {(_t.perf_counter() - t0) / 5 * 1e3:.1f} with the sync"
             )
             pstats.Stats(pr).sort_stats("cumulative").print_stats(30)
+            if os.environ.get("GLM_TS_HOST") == "1":  # host enqueue vs untraced device vs traced, per call
+                from models.demos.glm53_flash_d_p.tt import experts_ts as _ets
+
+                call = lambda: ttnn.deallocate(ts(xd, idx=idd, wts=wd, split=True, full_mesh=True))  # noqa: E731
+                for b in _ets._BLOCKS.values():  # (K3_HOST_LOG: per-stage means over the isolated calls only)
+                    b.__dict__.pop("_host", None)
+                _ets._HOST.clear()
+                iso = []
+                for _ in range(84):  # host time with an idle device (no queue back-pressure)
+                    ttnn.synchronize_device(mesh_device)
+                    s0 = _t.perf_counter()
+                    call()
+                    iso.append(_t.perf_counter() - s0)
+                ttnn.synchronize_device(mesh_device)
+                iso.sort()
+                t0 = _t.perf_counter()
+                for _ in range(200):
+                    call()
+                t1 = _t.perf_counter()
+                ttnn.synchronize_device(mesh_device)
+                t2 = _t.perf_counter()
+                tr = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                yt = ts(xd, idx=idd, wts=wd, split=True, full_mesh=True)
+                ttnn.end_trace_capture(mesh_device, tr, cq_id=0)
+                ttnn.execute_trace(mesh_device, tr, cq_id=0, blocking=True)
+                t3 = _t.perf_counter()
+                for _ in range(200):
+                    ttnn.execute_trace(mesh_device, tr, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+                t4 = _t.perf_counter()
+                ttnn.release_trace(mesh_device, tr)
+                ttnn.deallocate(yt)
+                logger.info(
+                    f"TS host: enqueue with an idle device {1e3 * iso[len(iso) // 2]:.2f} ms median "
+                    f"({1e3 * iso[0]:.2f} min); back-to-back untraced {1e3 * (t2 - t0) / 200:.2f} ms per call "
+                    f"(host loop {1e3 * (t1 - t0) / 200:.2f}, final sync {1e3 * (t2 - t1):.1f} ms); "
+                    f"traced replay {1e3 * (t4 - t3) / 200:.2f} ms per call"
+                )
+                spy = os.environ.get("GLM_TS_SPY")  # (py-spy --native over isolated calls)
+                if spy:
+                    import signal
+                    import subprocess
+
+                    p = subprocess.Popen(
+                        [
+                            "py-spy",
+                            "record",
+                            "--native",
+                            "--format",
+                            "raw",
+                            "-r",
+                            "200",
+                            "-o",
+                            spy,
+                            "-p",
+                            str(os.getpid()),
+                        ]
+                    )
+                    _t.sleep(2)
+                    for _ in range(300):
+                        ttnn.synchronize_device(mesh_device)
+                        call()
+                    ttnn.synchronize_device(mesh_device)
+                    p.send_signal(signal.SIGINT)
+                    p.wait(timeout=120)
         assert torch.isfinite(outs["ts"]).all()
         assert _pcc(outs["ts"][rows], ref) > 0.98

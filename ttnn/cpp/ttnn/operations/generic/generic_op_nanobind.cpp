@@ -95,6 +95,22 @@ void bind_generic_operation(nb::module_& mod) {
         )pbdoc");
 
     mod.def(
+        "freeze_program_hashes",
+        [](tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
+            for (auto& [range, desc] : mesh_program_descriptor.mesh_programs) {
+                if (!desc.custom_program_hash) {
+                    desc.custom_program_hash = compute_program_descriptor_hash(desc);
+                }
+            }
+        },
+        nb::arg("mesh_program_descriptor"),
+        R"pbdoc(
+            Store each program's structural hash in its custom_program_hash (where not set), in place: a
+            descriptor reused across generic_op calls is then not re-hashed (kernel sources, compile-time args,
+            core ranges) on every call. Only for a final descriptor - a later structural change is not seen.
+        )pbdoc");
+
+    mod.def(
         "compute_program_spec_hash",
         &compute_program_spec_hash,
         nb::arg("spec"),

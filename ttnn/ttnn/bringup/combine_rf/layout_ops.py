@@ -121,7 +121,9 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
     ex = {(c.x, c.y) for c in exclude}  # (cores left to another op merged into the same program)
     cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in ex]
     st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
-    dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc)  # noqa: E731
+    dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
+        processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
+    )  # noqa: E731
     comp = _COMPUTE.replace("__KIND__", kind)
     if kind == "tilize":
         comp = comp.replace('#include "api/compute/tilize.h"\n', '#include "api/compute/tilize.h"\n')
@@ -132,7 +134,9 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
     P = pages_per_row
     out_mc = out_memory_config or ttnn.DRAM_MEMORY_CONFIG  # (e.g. a block-sharded L1 output: the accessor handles it)
 
-    def build(src, dst, rows, W, per_chip=False):  # (untilize, row0_of (mesh row, column) -> the first dst row: per chip)
+    def build(
+        src, dst, rows, W, per_chip=False
+    ):  # (untilize, row0_of (mesh row, column) -> the first dst row: per chip)
         Wt, nt = W // 32, rows // 32
         assert (W * 2 // P) % (cw * 64) == 0, "a CW-tile chunk must not straddle pages"
         assert rows % 32 == 0 and Wt % cw == 0
@@ -140,14 +144,18 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
         per = {i: units[i :: len(cores)] for i in range(len(cores))}
         used = [i for i in range(len(cores)) if per[i]]
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(cores[i], cores[i]) for i in used])
+
         def args(row0):
             rd_rt, wr_rt, cp_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for i in used:
                 c_ = cores[i]
                 rd_rt[c_.x][c_.y] = [int(src.buffer_address()), len(per[i])] + per[i]
-                wr_rt[c_.x][c_.y] = [int(dst.buffer_address()), len(per[i])] + ([row0] if kind == "untilize" else []) + per[i]
+                wr_rt[c_.x][c_.y] = (
+                    [int(dst.buffer_address()), len(per[i])] + ([row0] if kind == "untilize" else []) + per[i]
+                )
                 cp_rt[c_.x][c_.y] = [len(per[i])]
             return rd_rt, wr_rt, cp_rt
+
         s_ct = list(ttnn.TensorAccessorArgs(src).get_compile_time_args())
         d_ct = list(ttnn.TensorAccessorArgs(dst).get_compile_time_args())
         if kind == "tilize":
@@ -162,18 +170,42 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
             rd_rt, wr_rt, cp_rt = args(row0)
             program = ttnn.ProgramDescriptor()
             program.cbs = [
-                ttnn.CBDescriptor(total_size=2 * cw * 2048, core_ranges=crs,
-                                  format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.bfloat16, 2048)]),
-                ttnn.CBDescriptor(total_size=2 * cw * 2048, core_ranges=crs,
-                                  format_descriptors=[ttnn.CBFormatDescriptor(16, ttnn.bfloat16, 2048)]),
+                ttnn.CBDescriptor(
+                    total_size=2 * cw * 2048,
+                    core_ranges=crs,
+                    format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.bfloat16, 2048)],
+                ),
+                ttnn.CBDescriptor(
+                    total_size=2 * cw * 2048,
+                    core_ranges=crs,
+                    format_descriptors=[ttnn.CBFormatDescriptor(16, ttnn.bfloat16, 2048)],
+                ),
             ]
             program.kernels = [
-                ttnn.KernelDescriptor(kernel_source=rd_src, source_type=st, core_ranges=crs, compile_time_args=rd_ct,
-                                      runtime_args=rd_rt, config=dm("RISCV_1", ttnn.NOC.NOC_0 if swap else ttnn.NOC.RISCV_1_default)),
-                ttnn.KernelDescriptor(kernel_source=wr_src, source_type=st, core_ranges=crs, compile_time_args=wr_ct,
-                                      runtime_args=wr_rt, config=dm("RISCV_0", ttnn.NOC.NOC_1 if swap else ttnn.NOC.RISCV_0_default)),
-                ttnn.KernelDescriptor(kernel_source=comp, source_type=st, core_ranges=crs, compile_time_args=[cw],
-                                      runtime_args=cp_rt, config=ttnn.ComputeConfigDescriptor()),
+                ttnn.KernelDescriptor(
+                    kernel_source=rd_src,
+                    source_type=st,
+                    core_ranges=crs,
+                    compile_time_args=rd_ct,
+                    runtime_args=rd_rt,
+                    config=dm("RISCV_1", ttnn.NOC.NOC_0 if swap else ttnn.NOC.RISCV_1_default),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=wr_src,
+                    source_type=st,
+                    core_ranges=crs,
+                    compile_time_args=wr_ct,
+                    runtime_args=wr_rt,
+                    config=dm("RISCV_0", ttnn.NOC.NOC_1 if swap else ttnn.NOC.RISCV_0_default),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=comp,
+                    source_type=st,
+                    core_ranges=crs,
+                    compile_time_args=[cw],
+                    runtime_args=cp_rt,
+                    config=ttnn.ComputeConfigDescriptor(),
+                ),
             ]
             return program
 
@@ -182,11 +214,15 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
             return {(r, c): program_for(row0_of(r, c) if row0_of else 0) for r in range(R) for c in range(C)}
         mesh_desc = ttnn.MeshProgramDescriptor()
         if row0_of is None:
-            mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(R - 1, C - 1))] = program_for(0)
+            mesh_desc[
+                ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(R - 1, C - 1))
+            ] = program_for(0)
         else:
             for r in range(R):
                 for c in range(C):
-                    mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program_for(row0_of(r, c))
+                    mesh_desc[
+                        ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))
+                    ] = program_for(row0_of(r, c))
         return mesh_desc
 
     def run(src, dst=None):
@@ -194,12 +230,21 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
         rows, W = int(src.shape[-2]), int(src.shape[-1])
         if kind == "tilize":  # (src [rows * P, W / P])
             rows, W = rows // P, W * P
-            dst = ttnn.allocate_tensor_on_device(ttnn.Shape([rows, W]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, out_mc)
+            dst = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([rows, W]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, out_mc
+            )
         elif dst is None:
-            dst = ttnn.allocate_tensor_on_device(ttnn.Shape([rows * P, W // P]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG)
+            dst = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([rows * P, W // P]),
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
+                mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
         k = (int(src.buffer_address()), int(dst.buffer_address()), rows, W)
         if state.get("key") != k:
             state["key"], state["desc"] = k, build(src, dst, rows, W)
+            ttnn.freeze_program_hashes(state["desc"])  # (hash stored once: not re-hashed per call)
         ttnn.generic_op([src, dst], state["desc"])
         return dst
 

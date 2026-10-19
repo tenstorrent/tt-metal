@@ -306,6 +306,7 @@ from ttnn.types import (
     UnpackToDestMode,
     FaceGeometry,
     compute_program_descriptor_hash,
+    freeze_program_hashes,
     UnpackMode,
     Precision,
     DFBEndpointType,

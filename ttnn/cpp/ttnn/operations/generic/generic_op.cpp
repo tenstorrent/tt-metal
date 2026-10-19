@@ -11,7 +11,7 @@ Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
     return ttnn::prim::generic_op(
-        io_tensors, ttnn::operations::generic::operation_attributes_t{.program = mesh_program_descriptor});
+        io_tensors, ttnn::operations::generic::operation_attributes_t{.mesh_program_ref = &mesh_program_descriptor});
 }
 
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {

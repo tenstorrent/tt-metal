@@ -34,4 +34,13 @@ tt::tt_metal::ProgramDescriptor GenericMeshDescriptorFactory::create_descriptor(
         mesh_programs.size());
     return mesh_programs.front().second;
 }
+const tt::tt_metal::ProgramDescriptor* GenericMeshDescriptorFactory::find_descriptor(
+    const operation_attributes_t& operation_attributes, const ttnn::MeshCoordinate& mesh_dispatch_coordinate) {
+    for (const auto& [range, desc] : operation_attributes.mesh_program_descriptor().mesh_programs) {
+        if (range.contains(mesh_dispatch_coordinate)) {
+            return &desc;
+        }
+    }
+    return nullptr;
+}
 }  // namespace ttnn::operations::generic::program

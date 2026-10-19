@@ -758,9 +758,18 @@ public:
 #endif
                     } else {
                         const ttnn::MeshCoordinate mesh_coord = coordinate_range.start_coord();
-                        const std::optional<ttnn::MeshCoordinate> mesh_dispatch_coordinate(mesh_coord);
-                        auto desc = invoke_per_coord(attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
-                        tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+                        if constexpr (requires { DescriptorFactory::find_descriptor(attrs, mesh_coord); }) {
+                            // (a factory whose attributes hold the descriptors: apply in place, no rebuild / copy)
+                            if (const tt::tt_metal::ProgramDescriptor* desc =
+                                    DescriptorFactory::find_descriptor(attrs, mesh_coord)) {
+                                tt::tt_metal::apply_descriptor_runtime_args(program, *desc);
+                            }
+                        } else {
+                            const std::optional<ttnn::MeshCoordinate> mesh_dispatch_coordinate(mesh_coord);
+                            auto desc =
+                                invoke_per_coord(attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
+                            tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+                        }
                     }
                 }
             }

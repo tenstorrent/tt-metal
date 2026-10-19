@@ -1337,6 +1337,7 @@ def combine_planner_prepare(
         k = (int(ids.buffer_address()), int(wts.buffer_address()))
         if state.get("key") != k:
             state["key"], state["desc"] = k, build(ids, wts)
+            ttnn.freeze_program_hashes(state["desc"])  # (hash stored once: not re-hashed per call)
         ttnn.generic_op(
             [ids, wts, outs["counts"], outs["regions"], outs["token_index"], outs["table"], outs["plan"]], state["desc"]
         )
