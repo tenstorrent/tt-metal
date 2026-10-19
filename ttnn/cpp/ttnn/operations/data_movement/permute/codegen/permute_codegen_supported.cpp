@@ -60,17 +60,12 @@ bool geometry_fits(
     const uint32_t rank = shape.rank();
     const uint32_t element_size = input.element_size();
     const uint32_t last_output_axis = dims[rank - kWidthAxisFromEnd];
-    const uint64_t in_row_bytes = static_cast<uint64_t>(shape[rank - kWidthAxisFromEnd]) * element_size;
-    const uint64_t out_row_bytes = static_cast<uint64_t>(shape[last_output_axis]) * element_size;
 
     const auto& allocator = input.device()->allocator();
     const uint64_t out_alignment = allocator->get_alignment(output_mem_config.buffer_type());
     const tt::tt_metal::TensorSpec output_spec = permute_output_spec(input, dims, output_mem_config);
     const uint64_t in_page = input.buffer()->aligned_page_size();
     const uint64_t out_page = tt::round_up(uint64_t{output_spec.compute_page_size_bytes()}, out_alignment);
-    if (in_page < in_row_bytes || out_page < out_row_bytes) {
-        return false;
-    }
 
     const uint64_t l1_budget = ttnn::prim::permute_cb_l1_budget(input, output_spec);
     if (last_output_axis == rank - kWidthAxisFromEnd) {
@@ -98,6 +93,11 @@ bool supported_by_codegen(
     }
     // Neither end of the copy is addressed through a shard map.
     if (input.memory_config().is_sharded() || output_mem_config.is_sharded()) {
+        return false;
+    }
+    // The hash plans the CB before the output exists, the factory after; an L1 output would move the live frontier
+    // between them.
+    if (output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1) {
         return false;
     }
     const ttnn::Shape& shape = input.logical_shape();

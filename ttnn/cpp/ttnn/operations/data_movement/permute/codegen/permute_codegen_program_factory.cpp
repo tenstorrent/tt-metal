@@ -29,16 +29,16 @@ namespace ttnn::prim {
 
 namespace {
 
-constexpr const char* kSharedReaderPath =
+constexpr const char* kReaderStickUnified =
     "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/reader_stick_interleaved_unified.cpp";
-constexpr const char* kRowInvariantWriterPath =
+constexpr const char* kWriterRowInvariant =
     "ttnn/cpp/ttnn/operations/data_movement/permute/codegen/kernels/writer_permute_rm_interleaved.cpp";
-constexpr const char* kBlockedReaderPath =
+constexpr const char* kReaderBlocked =
     "ttnn/cpp/ttnn/operations/data_movement/permute/codegen/kernels/reader_permute_rm_blocked.cpp";
-constexpr const char* kBlockedComputePath =
-    "ttnn/cpp/ttnn/operations/data_movement/permute/codegen/kernels/compute_permute_xw_rm.cpp";
-constexpr const char* kBlockedWriterPath =
+constexpr const char* kWriterBlocked =
     "ttnn/cpp/ttnn/operations/data_movement/permute/codegen/kernels/writer_permute_rm_blocked.cpp";
+constexpr const char* kComputeBlocked =
+    "ttnn/cpp/ttnn/operations/data_movement/permute/codegen/kernels/compute_permute_xw_rm.cpp";
 
 // MODE_SEQUENCED and SEQ_IDENTITY, see common/kernels/codegen/sequencers.h.
 constexpr uint32_t kModeSequenced = 4;
@@ -123,9 +123,8 @@ uint32_t row_invariant_slot_bytes(const Tensor& input, const TensorSpec& output_
     return static_cast<uint32_t>(std::max<uint64_t>(input.buffer()->aligned_page_size(), out_page));
 }
 
-KernelDescriptor make_kernel(const char* source, const CoreRangeSet& cores) {
+KernelDescriptor make_kernel(const CoreRangeSet& cores) {
     KernelDescriptor kernel;
-    kernel.kernel_source = source;
     kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     kernel.core_ranges = cores;
     return kernel;
@@ -179,7 +178,8 @@ ProgramDescriptor build_row_invariant(
     ProgramDescriptor desc;
     desc.cbs.push_back(make_cb(kCbIn, cb_data_format, slot_bytes, cb_plan.depth, split.all_cores));
 
-    KernelDescriptor reader = make_kernel(kSharedReaderPath, split.all_cores);
+    KernelDescriptor reader = make_kernel(split.all_cores);
+    reader.kernel_source = kReaderStickUnified;
     TensorAccessorArgs(*src_buffer).append_to(reader.compile_time_args);
     reader.named_compile_time_args = {
         {"mode", kModeSequenced},
@@ -201,7 +201,8 @@ ProgramDescriptor build_row_invariant(
     };
     reader.config = ReaderConfigDescriptor{};
 
-    KernelDescriptor writer = make_kernel(kRowInvariantWriterPath, split.all_cores);
+    KernelDescriptor writer = make_kernel(split.all_cores);
+    writer.kernel_source = kWriterRowInvariant;
     TensorAccessorArgs(*dst_buffer).append_to(writer.compile_time_args);
     writer.named_compile_time_args = {
         {"cb_id", kCbIn},
@@ -276,7 +277,8 @@ ProgramDescriptor build_blocked(
     desc.cbs.push_back(make_cb(kCbTile, cb_data_format, tile_cb_page, kBlockedTileDepth, split.all_cores));
     desc.cbs.push_back(make_cb(kCbOut, cb_data_format, out_cb_page, kBlockedOutDepth, split.all_cores));
 
-    KernelDescriptor reader = make_kernel(kBlockedReaderPath, split.all_cores);
+    KernelDescriptor reader = make_kernel(split.all_cores);
+    reader.kernel_source = kReaderBlocked;
     TensorAccessorArgs(*src_buffer).append_to(reader.compile_time_args);
     reader.named_compile_time_args = {
         {"N", rank},
@@ -293,7 +295,8 @@ ProgramDescriptor build_blocked(
     };
     reader.config = ReaderConfigDescriptor{};
 
-    KernelDescriptor writer = make_kernel(kBlockedWriterPath, split.all_cores);
+    KernelDescriptor writer = make_kernel(split.all_cores);
+    writer.kernel_source = kWriterBlocked;
     TensorAccessorArgs(*dst_buffer).append_to(writer.compile_time_args);
     writer.named_compile_time_args = {
         {"N", rank},
@@ -311,7 +314,8 @@ ProgramDescriptor build_blocked(
     };
     writer.config = WriterConfigDescriptor{};
 
-    KernelDescriptor compute = make_kernel(kBlockedComputePath, split.all_cores);
+    KernelDescriptor compute = make_kernel(split.all_cores);
+    compute.kernel_source = kComputeBlocked;
     compute.named_compile_time_args = {{"x_block_size", kXBlock}, {"w_block_size", kWBlock}};
     compute.config = ComputeConfigDescriptor{.fp32_dest_acc_en = element_size == kBytesPerWideElement};
 
