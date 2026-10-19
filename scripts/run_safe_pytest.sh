@@ -745,8 +745,35 @@ if [[ "$PRECOMPILE" == true ]]; then
     grep -a '^UP_FRONT_INLINE:\|^UP_FRONT_COLLECT:' "$PYTEST_STDOUT_LOG" 2>/dev/null | sed 's/^/PRECOMPILE: /' >&2
 fi
 
+# Active Ethernet cores that did not return to base firmware. On Blackhole, a process built with
+# kernel asserts (--dev) leaves ERISC0 halted at teardown; Metal logs it and exits 0, and every
+# later fabric mesh open times out on those cores until a board reset. The run itself may pass,
+# so check its output and reset here rather than marking the device clean.
+ETH_STUCK=false
+if [[ "$SIM_MODE" == false ]] && grep -aqE \
+    "Skipping RISC reset on device [0-9]+ during teardown|Timed out while waiting for active ethernet core" \
+    "$PYTEST_STDOUT_LOG" 2>/dev/null; then
+    ETH_STUCK=true
+fi
+
+# Clear the dirty flag, resetting first if the run left Ethernet cores stuck.
+_clear_dirty_flag() {
+    if [[ "$ETH_STUCK" == true ]]; then
+        echo "SAFE_PYTEST: Active Ethernet cores stuck after the run, resetting device..."
+        if tt-smi -r; then
+            sleep 2
+            rm -f "$DIRTY_FLAG"
+            echo "SAFE_PYTEST: Device reset complete"
+        else
+            echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty"
+        fi
+    else
+        rm -f "$DIRTY_FLAG"
+    fi
+}
+
 if [[ $EXIT_CODE -eq 0 && ! -s "$TRIAGE_LOG" ]]; then
-    rm -f "$DIRTY_FLAG"
+    _clear_dirty_flag
     rm -f "$TRIAGE_LOG"
     rm -f "$PYTEST_STDOUT_LOG"
     emit_profiler_csv
@@ -787,7 +814,8 @@ fi
 
 # Only reset device when the failure might have left it dirty.
 # Hangs and crashes corrupt device state. Normal test failures (PCC mismatch,
-# assertion errors) and collection errors don't touch the device.
+# assertion errors) and collection errors don't touch the device, except for
+# stuck Ethernet cores (ETH_STUCK above), which reset on every exit path.
 if [[ "$IS_HANG" == true ]]; then
     if [[ "$SIM_MODE" == false ]]; then
         echo "SAFE_PYTEST: Resetting device..."
@@ -827,7 +855,7 @@ if [[ "$IS_HANG" == true ]]; then
     exit 2
 fi
 
-rm -f "$DIRTY_FLAG"
+_clear_dirty_flag
 rm -f "$TRIAGE_LOG"
 rm -f "$PYTEST_STDOUT_LOG"
 # Note: $EXIT_CODE here is pytest's internal exit code (e.g. 1 = test failure,
