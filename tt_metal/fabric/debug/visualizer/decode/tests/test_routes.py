@@ -175,6 +175,7 @@ def router(peer):
 
 # A 4x1 column whose Z express chords skip a row.
 MESH_MANIFEST = {
+    "vocabulary": {"z_port_roles": ["none", "intermesh_boundary", "express_chord"]},
     "meshes": {
         "M0": {
             "shape": [4, 1],
@@ -220,6 +221,12 @@ class GetMeshViewTest(unittest.TestCase):
     def test_a_missing_mesh_is_named(self):
         with self.assertRaisesRegex(ManifestError, r"meshes\.M7"):
             get_mesh_view(MESH_MANIFEST, "M7")
+
+    def test_a_z_port_role_the_rules_dont_know_is_refused_even_if_no_chip_has_it(self):
+        manifest = copy.deepcopy(MESH_MANIFEST)
+        manifest["vocabulary"]["z_port_roles"].append("x_express_chord")
+        with self.assertRaisesRegex(ManifestError, r"vocabulary\.z_port_roles names .*'x_express_chord'"):
+            get_mesh_view(manifest, "M0")
 
     def test_a_local_chip_the_z_rule_cannot_read_is_refused(self):
         cases = {
