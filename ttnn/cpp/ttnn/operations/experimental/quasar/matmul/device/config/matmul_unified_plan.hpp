@@ -89,9 +89,13 @@ struct UnifiedMatmulPlan {
     std::vector<tt::tt_metal::CoreCoord> cores;
     uint32_t max_C_slices_per_core = 0;  // sizes the DFBs and gates partials aliasing
 
-    // Borrowed operand: its L1 shard on each active core is bound as the DFB itself, no copy.
-    // Needs batch 1, one C slice per core, and a shard grid in assignment order. C also needs one
-    // compute thread: with several, each thread owns every N-th C_slice entry, not the shard's tile order.
+    // Borrowable: the operand's L1 shard on each active core matches the C slice (batch 1, one C slice per core, a
+    // shard grid in assignment order; C also needs one compute thread: with several, each thread owns every N-th
+    // C_slice entry, not the shard's tile order). Borrowed: also nothing padded, so the shard is bound as the DFB
+    // itself, no copy (A: and one K chunk covers K; C: and the subblocks span the C slice width).
+    bool A_shard_borrowable = false;
+    bool B_shard_borrowable = false;
+    bool C_shard_borrowable = false;
     bool borrow_A = false;
     bool borrow_B = false;
     bool borrow_C = false;
