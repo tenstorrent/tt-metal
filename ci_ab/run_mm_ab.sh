@@ -2,7 +2,7 @@
 # Scratch, not for merge. #58817 bmm regression attribution: the 14 device files of each arm (ci_ab/v/<arm>) copied into
 # the checkout and the installed package before each run, fresh JIT cache per arm; arms M (main 7208b885b33), H (head
 # 4f1e6db5716), H2 (A/A copy of H), B1 (7751048e2ca, first #58817 commit on main), Ht (H, ttsync unpack off), Hr (H, row MOP off), Htm (Ht and Hr, and the bmm pack-format argument Invalid);
-# order M H X1 X2 X3 X4 Htm H2 then reversed (X1 ttsync off + format Invalid, X2 row MOP off + Invalid, X3 ttsync and row MOP off, X4 format Invalid only).
+# order M H F H2 then reversed; F = H plus the HiFi2 one-tile main-form key (branch mvlahovic/mm-hifi2-1x1). Guard: H == H2, H != M, H != F.
 set +e +o pipefail
 cd /work; export TT_METAL_HOME=/work TRACY_NO_WEB_SERVER=1 MM_N=${MM_N:-12}
 S=/work/ci_ab; OUT=/work/generated/mm_ab; rm -rf $OUT; mkdir -p $OUT
@@ -24,7 +24,7 @@ elfsum() {
   done | sort | md5sum | cut -c1-12
 }
 declare -A ES; r=0; fail=0
-for a in M H X1 X2 X3 X4 Htm H2 H2 Htm X4 X3 X2 X1 H M; do
+for a in M H F H2 H2 F H M; do
   r=$((r+1)); src=${a%2}; use $a $src
   o=$OUT/${a}_r$r; mkdir -p $o; t0=$(date +%s)
   timeout -s INT -k 60 1800 python3 -m tracy -r -p --no-web-server -o $o $S/mm_ci.py > $o.log 2>&1; rc=$?
@@ -36,9 +36,9 @@ for a in M H X1 X2 X3 X4 Htm H2 H2 Htm X4 X3 X2 X1 H M; do
 done
 uniq1() { echo $1 | tr ' ' '\n' | grep . | sort -u | wc -l; }
 one() { echo $1 | tr ' ' '\n' | grep . | head -1; }
-gs=ok; for a in M H H2 X1 X2 X3 X4 Htm; do [[ $(uniq1 "${ES[$a]}") == 1 ]] || gs=UNSTABLE; done
+gs=ok; for a in M H H2 F; do [[ $(uniq1 "${ES[$a]}") == 1 ]] || gs=UNSTABLE; done
 gx=$([[ $(one "${ES[H]}") == $(one "${ES[H2]}") ]] && echo ok || echo DIFF)
-gd=ok; for a in M X1 X2 X3 X4 Htm; do [[ $(one "${ES[H]}") != $(one "${ES[$a]}") && -n $OBJ ]] || gd=VOID; done
+gd=ok; for a in M F; do [[ $(one "${ES[H]}") != $(one "${ES[$a]}") && -n $OBJ ]] || gd=VOID; done
 echo "== GUARD stable=$gs H_vs_H2=$gx H_vs_M_Ht_Hr=$gd"
 use H H
 echo "== DONE $(date -u +%FT%TZ) fail=$fail"
