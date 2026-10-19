@@ -72,7 +72,7 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
         handle.llk_metadata = LLKMetadataFromScratchpad(*scratchpad_spec);
         if (scratchpad_spec->advanced_options.allow_multi_kernel_binding) {
-            handle.shared_allocation_id = scratchpad_spec->unique_id.get();
+            handle.shared_allocation_identifier = scratchpad_spec->unique_id;
         }
         // handle.allocated_address stays 0 until allocate_scratchpads runs.
         out.handles.push_back(std::move(handle));

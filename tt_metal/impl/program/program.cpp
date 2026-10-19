@@ -2234,13 +2234,13 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
         std::vector<std::pair<Kernel*, ScratchpadBindingHandle*>> bindings;
     };
     std::vector<ScratchpadAllocation> allocations;
-    std::unordered_map<std::string, size_t> shared_allocations;
+    std::unordered_map<experimental::ScratchpadSpecName, size_t> shared_allocations;
     for (auto& kernels_of_core_type : this->kernels_) {
         for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
             for (auto& handle : kernel->scratchpad_binding_handles()) {
                 size_t index = allocations.size();
-                if (handle.shared_allocation_id) {
-                    auto [it, inserted] = shared_allocations.try_emplace(*handle.shared_allocation_id, index);
+                if (handle.shared_allocation_identifier) {
+                    auto [it, inserted] = shared_allocations.try_emplace(*handle.shared_allocation_identifier, index);
                     index = it->second;
                 }
                 if (index == allocations.size()) {

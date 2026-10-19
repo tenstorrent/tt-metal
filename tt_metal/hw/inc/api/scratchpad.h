@@ -212,8 +212,8 @@ struct noc_traits_t<Scratchpad<T>> {
     }
     template <Noc::AddressType address_type>
     static auto dst_addr_mcast(const Scratchpad<T>&, const Noc&, const dst_args_mcast_type&) {
-        // A scratchpad binding grants access to local L1 only, even when shared across local kernels.
-        // It does not grant access to scratchpads on other nodes for multicast writes.
+        // A scratchpad is private to one kernel instance per node, so multicasting into it would be
+        // writing into other kernels' private memory. Revisit only if a real use case appears.
         static_assert(false, "Scratchpad cannot be used as a NoC multicast destination");
     }
 };

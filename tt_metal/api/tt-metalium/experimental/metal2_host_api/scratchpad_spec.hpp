@@ -29,10 +29,9 @@ namespace tt::tt_metal::experimental {
 // The template argument is the element type the kernel views the region as.
 //
 // KERNEL BINDING: By default, a scratchpad instance is private to a single kernel
-//   instance. It is legal for more than one KernelSpec to bind to the same
-//   ScratchpadSpec only if they occupy disjoint node sets, unless
-//   advanced_options.allow_multi_kernel_binding is enabled. With that option,
-//   kernels on the same node share its backing memory and must synchronize access.
+//   instance (this can be overriden via allow_multi_kernel_binding in the advanced
+//   options). It is legal for more than one KernelSpec to bind to the same
+//   ScratchpadSpec only if they occupy disjoint node sets.
 //
 // LIFETIME: Program-scope. The backing memory is allocated for the Program's
 //   execution lifetime, alongside DFBs (and from the same region of L1).
