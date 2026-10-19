@@ -1197,6 +1197,19 @@ def test_auto_placement_sharded_inputs(device, auto):
     _check(out, _golden(a, b))
 
 
+def test_auto_placement_activation_runs_once_with_vector_B(device):
+    """A vector B becomes a column only after matmul picks its config, so on Quasar the op picks the unified matmul
+    for the column; the activation must still run once."""
+    M, K = TILE, 2 * TILE
+    torch.manual_seed(37)
+    a, b = (torch.randn(1, 1, M, K) * 0.1).to(torch.bfloat16), _randn(K)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out = ttnn.experimental.quasar.matmul(a_t, b_t, activation="gelu", compute_kernel_config=_hifi4(device))
+    golden = torch.nn.functional.gelu(_golden(a, b))
+    _check(ttnn.to_torch(out).reshape(golden.shape), golden)
+
+
 def test_auto_placement_rejects_a_C_slice(device, expect_error):
     a_t = ttnn.from_torch(_randn(1, 1, 64, 64), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     b_t = ttnn.from_torch(_randn(1, 1, 64, 64), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
