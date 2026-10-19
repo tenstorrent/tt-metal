@@ -15,8 +15,7 @@ split-reader halves of one op; they differ only in ``reader_id``). Compile-time 
   * grid batching factor 7 (``batch_output_channels``: the 7 height points of each BEV
     cell in one stick), grid_hw 576 -> grid [1, 1, 576, 14] after the reshape            [H]
   * grid HEIGHT_SHARDED, 32 sticks per core on the 5x4 grid (and the interleaved->sharded
-    copy ``128759`` that put it there; 28-B logical rows, stored at the 32-B L1-aligned
-    page size)                                                                        [H/M]
+    copy that put it there; 28-B logical rows)                                        [H/M]
   * output [1, 1, 576, 1792] float32 ROW_MAJOR, sharded like the grid (32, 1792)          [H]
 
 The precomputed grid is made on host with ``ttnn.prepare_grid_sample_grid`` from a

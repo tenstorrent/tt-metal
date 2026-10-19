@@ -695,7 +695,7 @@ def test_grid_sample_sharded_batched(
 def test_grid_sample_sharded_unaligned_shard_width(
     device, input_shape, grid_shape, grid_batching_factor, mode, use_precomputed_grid, grid_dtype
 ):
-    """Sharded grid whose shard row is not a multiple of the L1 alignment (e.g. 14 bf16 = 28 B)."""
+    """Sharded grid whose shard row is not a multiple of the L1 alignment."""
     torch.manual_seed(0)
 
     batch_size, channels, height, width = input_shape
