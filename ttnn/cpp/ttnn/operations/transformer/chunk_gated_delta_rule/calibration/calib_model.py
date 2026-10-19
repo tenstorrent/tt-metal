@@ -190,8 +190,10 @@ def main():
         for r in fused:
             cand = 1 if r["PL"] == 2 else 0
             share = (r["num"] / r["den"]) if r["PL"] == 2 else -1.0
+            # Pin the captured placement too: a row-major (--rl 0) row's geometry may also have a row-local layout.
+            placement = -1 if r["PL"] == 2 else r["PL"]
             got = _t.chunk_gdn_fused_geometry(
-                gx, gy, r["BH"], r.get("NC", 64), r.get("vt", 4), r["nv"], r["np"], r["nbuf"], cand, share
+                gx, gy, r["BH"], r.get("NC", 64), r.get("vt", 4), r["nv"], r["np"], r["nbuf"], cand, share, placement
             )
             t, _ = t_fused(r)
             d = abs(got[4] - t)

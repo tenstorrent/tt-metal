@@ -474,6 +474,28 @@ def test_constrained_choice_mirror(grid, bh, fixed):
         assert nbuf == fnb
 
 
+@pytest.mark.parametrize("fixed", [(1, 2, 2), (2, 2, 3), (2, 4, 2), (4, 1, 2)], ids=lambda v: "nv%d_np%d_d%d" % v)
+@pytest.mark.parametrize("bh", [4, 12, 16])
+def test_pinned_placement(bh, fixed, expect_error):
+    """fixed_placement prices a pinned per-head geometry in the placement asked for: row-major even where a
+    row-local layout exists (what calib_model.py --check needs for an --rl 0 capture), at a T no lower than
+    the row-local one, and free (-1) is the unpinned choice."""
+    gx, gy = 11, 10
+    fnv, fnp, fnb = fixed
+    if not _t.chunk_gdn_fused_row_local_feasible(gx, gy, bh, fnv, fnp):
+        pytest.skip("no row-local layout to override")
+    args = (gx, gy, bh, 16, VT, fnv, fnp, fnb, PER_HEAD, -1.0)
+    free = _t.chunk_gdn_fused_geometry(*args)
+    assert _t.chunk_gdn_fused_geometry(*args, -1) == free
+    local = _t.chunk_gdn_fused_geometry(*args, 1)
+    major = _t.chunk_gdn_fused_geometry(*args, 0)
+    assert local == free and local[2] == 1, (local, free)
+    assert major[:4] == (fnv, fnp, 0, fnb), major
+    assert major[4] >= local[4], (major, local)
+    with expect_error(RuntimeError, "fixed_placement must be -1"):
+        _t.chunk_gdn_fused_geometry(*args, 2)
+
+
 # ---------------------------------------------------------------------------------------------
 # The factory's own core map, on every grid
 # ---------------------------------------------------------------------------------------------

@@ -324,7 +324,12 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
            uint32_t fixed_np,
            uint32_t fixed_nbuf,
            uint32_t candidates,
-           float fixed_share) {
+           float fixed_share,
+           int32_t fixed_placement) {
+            TT_FATAL(
+                fixed_placement >= -1 && fixed_placement <= 1,
+                "chunk_gdn_fused_geometry: fixed_placement must be -1 (free), 0 (row-major) or 1 (row-local) (got {})",
+                fixed_placement);
             const auto c = ttnn::prim::choose_fused_geometry(
                 grid_x,
                 grid_y,
@@ -335,7 +340,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 fixed_np,
                 fixed_nbuf,
                 static_cast<ttnn::prim::FusedCandidates>(static_cast<uint8_t>(candidates)),
-                fixed_share);
+                fixed_share,
+                fixed_placement);
             return std::make_tuple(
                 c.nv, c.np, c.placement, c.nbuf, c.t_fused_us, c.t_phased_us, c.fused_pays, c.pool_extra_num);
         },
@@ -349,6 +355,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("fixed_nbuf") = 0,
         nb::arg("candidates") = static_cast<uint32_t>(ttnn::prim::FusedCandidates::Both),
         nb::arg("fixed_share") = -1.0f,
+        nb::arg("fixed_placement") = -1,
         R"doc(Fused prep->scan geometry the op picks for (grid_x, grid_y, BH, NC, Vt) when the fused
         program config leaves it free (fixed_nv / fixed_np / fixed_nbuf = a pinned num_receivers /
         num_producers / handoff_depth, 0 = free; fixed_share = a pinned pool_extra_share, < 0 = free):
@@ -356,7 +363,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         means no fused geometry fits the grid; pool_extra_num / np is the extras' share of the items of a
         pool with extras (0 otherwise). candidates: 0 = NP producers per head (what producer_pool=False
         resolves to), 1 = the producer pool (placement 2, np = the pool size; what producer_pool=True
-        resolves to), 2 = both (what producer_pool=None and the op's default dispatch resolve to).)doc");
+        resolves to), 2 = both (what producer_pool=None and the op's default dispatch resolve to).
+        fixed_placement: -1 = free, 0 = row-major, 1 = row-local; a pinned per-head placement excludes
+        the pool.)doc");
     mod.def(
         "chunk_gdn_fused_row_local_feasible",
         &ttnn::prim::fused_row_local_feasible,

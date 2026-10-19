@@ -9,7 +9,8 @@ For each BH: the free pick (NV, NP or P, placement, depth, share, T model), then
 it: the per-head geometries at each NV (the model's NP there and its neighbours, both depths) and the pools (NV 1/2,
 the share around the model's, both depths). Every number comes from the binding (the C++ model), so this is exactly
 what the op decides between. With --collected, the measured op of any matching row is shown next to the model's T.
-With --emit-rows, the near-ties that have no measurement yet are printed as a rows file for calib_batch.sh: measure
+With --emit-rows, the near-ties that have no measurement yet are printed as a rows file for calib_batch.sh (the
+report then goes to stderr, so stdout redirects straight into the rows file): measure
 those, then compare the pick against them (a pick within noise of its runner-up is fine; a runner-up that measures
 clearly faster means a constant is off).
 """
@@ -36,6 +37,7 @@ def main():
     ap.add_argument("--method", default="FORWARD_SUBSTITUTION")
     ap.add_argument("--iters", type=int, default=5)
     a = ap.parse_args()
+    report = sys.stderr if a.emit_rows else sys.stdout
     gx, gy = (int(v) for v in a.grid.split("x"))
     NC = a.T // 32
     measured = {}
@@ -50,7 +52,7 @@ def main():
         pick = _t.chunk_gdn_fused_geometry(gx, gy, bh, NC, a.vt)
         nv, np_, pl, d, t_pick, t_ph, pays, num = pick
         if nv == 0:
-            print(f"BH={bh}: no fused geometry fits {a.grid}; phased {t_ph:.0f}")
+            print(f"BH={bh}: no fused geometry fits {a.grid}; phased {t_ph:.0f}", file=report)
             continue
         cands = {}
 
@@ -87,15 +89,18 @@ def main():
             if pl == 2
             else f"{'row-local' if pl == 1 else 'row-major'} NV{nv} NP{np_} d{d}"
         )
-        print(f"\nBH={bh}: pick {desc(nv, np_, pl, d, num)}  T {t_pick:.1f} us (phased {t_ph:.0f}, fused pays: {pays})")
-        print(f"   {'candidate':40s} {'model':>7s} {'vs pick':>8s} {'measured':>18s}")
+        print(
+            f"\nBH={bh}: pick {desc(nv, np_, pl, d, num)}  T {t_pick:.1f} us (phased {t_ph:.0f}, fused pays: {pays})",
+            file=report,
+        )
+        print(f"   {'candidate':40s} {'model':>7s} {'vs pick':>8s} {'measured':>18s}", file=report)
         for key, t in sorted(cands.items(), key=lambda kv: kv[1]):
             if t > t_pick * (1 + a.within):
                 continue
             m = measured.get((bh,) + key)
             ms = ", ".join(f"{v:.1f}" for v in m) if m else "-"
             mark = "  <= pick" if key == (nv, np_, pl, d, num) else ""
-            print(f"   {desc(*key):40s} {t:7.1f} {(t / t_pick - 1) * 100:+7.1f}% {ms:>18s}{mark}")
+            print(f"   {desc(*key):40s} {t:7.1f} {(t / t_pick - 1) * 100:+7.1f}% {ms:>18s}{mark}", file=report)
             if a.emit_rows and not m:
                 cnv, cnp, cpl, cd, cnum = key
                 args = f"--method {a.method} --T {a.T} --d {a.vt * 32} --iters {a.iters} --hk {hk} --hv {bh}"

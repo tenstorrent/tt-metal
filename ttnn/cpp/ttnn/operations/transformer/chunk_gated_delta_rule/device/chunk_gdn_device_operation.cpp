@@ -81,6 +81,12 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
     }
     check_gdn_gate(in.g, "g", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
     check_gdn_gate(in.beta, "beta", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
+    // The factory reads both gates with g's T: a beta of the same chunk count but fewer tokens reads past its end.
+    TT_FATAL(
+        in.g.logical_shape()[1] == in.beta.logical_shape()[1],
+        "chunk_gdn: g has T = {} tokens and beta T = {}; the gates must have the same T",
+        in.g.logical_shape()[1],
+        in.beta.logical_shape()[1]);
     check_gdn_tensor(in.eye_c, "eye_c", DataType::FLOAT32);
     check_gdn_tensor(in.tril_c, "tril_c", DataType::FLOAT32);
     check_gdn_tensor(in.ones_c, "ones_c", DataType::FLOAT32);
@@ -526,7 +532,8 @@ FusedGeometryChoice choose_fused_geometry(
     uint32_t fixed_np,
     uint32_t fixed_nbuf,
     FusedCandidates candidates,
-    float fixed_share) {
+    float fixed_share,
+    int32_t fixed_placement) {
     FusedGeometryChoice best;
     best.t_phased_us = t_phased_us(BH, NC);
     bool have = false;
@@ -595,9 +602,10 @@ FusedGeometryChoice choose_fused_geometry(
         return Vt % nv == 0 && t_step_us(Vt / nv) >= 0.0f && (fixed_nv == 0 || nv == fixed_nv);
     };
     auto np_ok = [&](uint32_t np) { return fixed_np == 0 || np == std::min(fixed_np, NC); };
+    const bool row_local_ok = fixed_placement < 0 || fixed_placement == 1;
     if (candidates != FusedCandidates::Pool) {
         for (uint32_t nv : kNvCandidates) {
-            if (!nv_ok(nv)) {
+            if (!row_local_ok || !nv_ok(nv)) {
                 continue;
             }
             for (uint32_t np = 1; np + nv <= grid_x; np++) {
@@ -610,7 +618,8 @@ FusedGeometryChoice choose_fused_geometry(
                 }
             }
         }
-        if (!have) {  // no row-local layout: the row-major fallback, penalised for its shared links
+        // No row-local layout (or row-major pinned): the row-major fallback, penalised for its shared links.
+        if (!have && fixed_placement != 1) {
             for (uint32_t nv : kNvCandidates) {
                 if (!nv_ok(nv) || nv > grid_x || BH > (grid_x / nv) * grid_y) {
                     continue;
@@ -623,7 +632,7 @@ FusedGeometryChoice choose_fused_geometry(
             }
         }
     }
-    if (candidates != FusedCandidates::PerHead) {
+    if (candidates != FusedCandidates::PerHead && fixed_placement < 0) {
         // Producer pool: P = every core the receivers leave (or the pinned size), at most one per item.
         for (uint32_t nv : kNvCandidates) {
             if (!nv_ok(nv) || BH * nv >= grid_x * grid_y) {

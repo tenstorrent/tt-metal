@@ -178,6 +178,8 @@ bool fused_pool_feasible(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t
 // fixed_nv / fixed_np / fixed_nbuf = 0 -> free; a non-zero value pins that field and the model chooses
 // the others so the pair still fits (and prefers a row-local layout for it). With the pool candidates
 // fixed_np pins the pool size and fixed_share >= 0 the extras' share (< 0 -> the model's choice).
+// fixed_placement pins a per-head placement (0 row-major, 1 row-local; < 0 -> free) and excludes the pool, so
+// the calibration can price a row-major capture whose geometry also has a row-local layout.
 FusedGeometryChoice choose_fused_geometry(
     uint32_t grid_x,
     uint32_t grid_y,
@@ -188,7 +190,8 @@ FusedGeometryChoice choose_fused_geometry(
     uint32_t fixed_np = 0,
     uint32_t fixed_nbuf = 0,
     FusedCandidates candidates = FusedCandidates::Both,
-    float fixed_share = -1.0f);
+    float fixed_share = -1.0f,
+    int32_t fixed_placement = -1);
 
 // Design D9: the fused program's core map, a pure function of its arguments (no device), shared by
 // the program factory and the nanobind geometry oracle. placement 0 = row-major 1xNV receiver

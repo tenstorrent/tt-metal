@@ -70,6 +70,12 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
     }
     check_gdn_gate(in.g, "g", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
     check_gdn_gate(in.beta, "beta", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
+    // The factory reads both gates with g's T: a beta of the same chunk count but fewer tokens reads past its end.
+    TT_FATAL(
+        in.g.logical_shape()[1] == in.beta.logical_shape()[1],
+        "chunk_gdn: g has T = {} tokens and beta T = {}; the gates must have the same T",
+        in.g.logical_shape()[1],
+        in.beta.logical_shape()[1]);
     check(in.eye_c, "eye_c", DataType::FLOAT32);
     check(in.tril_c, "tril_c", DataType::FLOAT32);
     check(in.ones_c, "ones_c", DataType::FLOAT32);

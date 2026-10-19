@@ -199,6 +199,25 @@ def test_prep_outputs_vs_torch(device, bh, nc, chunk):
         ttnn.deallocate(out)
 
 
+def test_prep_rejects_gates_of_different_length(device, expect_error):
+    """g and beta of the same chunk count but different T are refused: the prep readers address both gates
+    with g's T, so a shorter beta would be read past its end. (The public op checks the gates' shape itself;
+    this is the private prim's own guard.)"""
+    q, k, v, g, beta, _ = _make_inputs(4, 1, seed=20261019, scale=KDIM**-0.5)
+    g_t = _dev(device, _gate(g), ttnn.float32)
+    short_beta = _dev(device, _gate(beta)[:, :1], ttnn.float32)
+    with expect_error(RuntimeError, "the gates must have the same T"):
+        _t.chunk_gdn_prep(
+            _dev(device, q, ttnn.bfloat16),
+            _dev(device, k, ttnn.bfloat16),
+            _dev(device, v, ttnn.bfloat16),
+            g_t,
+            short_beta,
+            *_const_tiles(device),
+            chunk_size=CHUNK,
+        )
+
+
 # ---------------------------------------------------------------------------
 # (2) scan prim vs torch, with torch-built (exact fp32) intermediates
 # ---------------------------------------------------------------------------
