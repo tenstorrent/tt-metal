@@ -124,6 +124,7 @@ class MiniMaxH3Attention(Module):
         sol_dense_prefix: bool = True,
         sol_mode: str = "gather",
         sol_fused: bool = False,
+        sol_mask_reuse: int = 1,
     ) -> None:
         super().__init__()
 
@@ -140,6 +141,8 @@ class MiniMaxH3Attention(Module):
         self.sol_fused = (
             sol_fused  # fused pre-pass (sol_prepass_fused.SolPrepassFused) instead of the ttnn-op SolPrepass
         )
+        # E10: reuse each layer's block mask from its previous sparse call for N-1 calls (fused pre-pass only; 1 = off).
+        self.sol_mask_reuse = sol_mask_reuse
         self.sol_active = False
         self._sol_logical_n: int | None = None
         self.sol_sink_tokens = 0
@@ -532,6 +535,10 @@ class MiniMaxH3Attention(Module):
                 # compaction generates the pooled-column bias on device, so the fused producer skips the ~87 MB bias write
                 **({"emit_bias": self.sol_mode != "compact"} if self.sol_fused else {}),
             )
+        if self.sol_mask_reuse > 1 and not self.sol_fused:
+            raise ValueError("sol_mask_reuse > 1 needs the fused pre-pass (sol_fused=True)")
+        if self.sol_fused:
+            self._sol_prepass.mask_reuse = int(self.sol_mask_reuse)
         scale = self.head_dim**-0.5
         self._sol_prepass.prepare(geo, self.sol_sink_tokens, scale)
         out = self._sol_prepass(q_BHNE, k_BHNE, v_BHNE, scale=scale, report_density=self.sol_report_density)
@@ -556,6 +563,11 @@ class MiniMaxH3Attention(Module):
                 )
             kwargs["sol_mode"] = "compact"
         return kwargs
+
+    def sol_reset_mask_reuse(self) -> None:
+        """Drop the block mask held for reuse, so the next sparse call routes afresh (start of every generation)."""
+        if self._sol_prepass is not None and hasattr(self._sol_prepass, "reset_mask_reuse"):
+            self._sol_prepass.reset_mask_reuse()
 
     # ------------------------------------------------------------------ forward
 

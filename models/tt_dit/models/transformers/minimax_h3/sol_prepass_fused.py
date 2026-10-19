@@ -144,6 +144,7 @@ class SolPrepassFused:
         emit_chunk_union: bool = False,
         debug_moments: bool = False,
         units_per_shard: bool | None = None,
+        mask_reuse: int = 1,
     ):
         # "compact" (tier 3, DESIGN_BLOCK_COMPACT.md) consumes the gather-form block mask: same outputs as "gather".
         # emit_chunk_union=True additionally writes the (Q chunk x K chunk) union row as "chunk_union" (dormant option).
@@ -174,6 +175,13 @@ class SolPrepassFused:
         )
         self.route_units: tuple[int, int] | None = None  # (unit count, units_per_shard) of the last built route program
         self.math_fidelity = math_fidelity if math_fidelity is not None else ttnn.MathFidelity.HiFi4
+        # E10 mask reuse: N > 1 keeps the route outputs (block mask, bias, union) of a call and reuses them for the next
+        # N-1 calls, skipping the route program; the pool program and the two gathers still run every call because the
+        # ring op's correction term needs the current block means. 1 (default) = route every call (committed behaviour).
+        self.mask_reuse = int(mask_reuse)
+        self._held_route: tuple | None = None  # (mask, bias, union) of the last routed call, while mask_reuse > 1
+        self._reuse_left = 0  # calls the held route may still serve
+        self.last_mask_reused = False  # whether the last call reused the held mask (diagnostics)
         self._state: dict | None = None
         self._key = None
         self.last_density: float | None = None
@@ -250,6 +258,12 @@ class SolPrepassFused:
         self._state = st
         self.geo = geo
         self._key = key
+        self.reset_mask_reuse()  # a held mask belongs to the previous geometry
+
+    def reset_mask_reuse(self) -> None:
+        """Drop the held route outputs: the next call routes afresh (call at the start of every generation)."""
+        self._held_route = None
+        self._reuse_left = 0
 
     def _cores(self):
         g = self.mesh_device.compute_with_storage_grid_size()
@@ -503,7 +517,17 @@ class SolPrepassFused:
         vc = self.ccl_manager.all_gather(vc_local, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
         ttnn.deallocate(kc_local)
         ttnn.deallocate(vc_local)
-        mask, bias, union = self._run_route(q_bar, kc)
+        reuse = self.mask_reuse > 1 and self._held_route is not None and self._reuse_left > 0
+        if reuse:
+            mask, bias, union = self._held_route
+            self._reuse_left -= 1
+            self.host_times["route"] = {"alloc": 0.0, "patch": 0.0, "launch": 0.0}
+        else:
+            mask, bias, union = self._run_route(q_bar, kc)
+            if self.mask_reuse > 1:
+                self._held_route = (mask, bias, union)  # the references keep the DRAM buffers alive across calls
+                self._reuse_left = self.mask_reuse - 1
+        self.last_mask_reused = reuse
         if report_density:
             host = ttnn.to_torch(
                 mask,

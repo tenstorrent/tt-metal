@@ -4,8 +4,10 @@
 
 """End-to-end dense vs Sol-Attn generation with the paper's step/layer gating, same seed and prompt.
 
-Configs come from SOL_E2E_CONFIGS, ';'-separated: `dense` or `sol:<tau>:<dense_steps>:<dense_layers>[:<end_step>[:dp0[:chunk]]]`
-(`dp0` = prefix query rows sparse like kijai's default instead of dense like NVlabs).
+Configs come from SOL_E2E_CONFIGS, ';'-separated: `dense` or
+`sol:<tau>:<dense_steps>:<dense_layers>[:<end_step>[:dp0[:<mode>[:fused[:maskreuse<N>]]]]]`
+(`dp0` = prefix query rows sparse like kijai's default instead of dense like NVlabs; `maskreuse<N>` = E10, each layer
+reuses its block mask from the previous sparse step for N-1 steps, fused pre-pass only).
 `dense_steps` = number of leading denoising forwards run dense (paper: first 20 % of steps -> 10 of 49),
 `dense_layers` = number of leading transformer layers kept dense at every step (NVlabs H3 policy: 2),
 `end_step` = first forward after which attention is dense again (kijai end_percent; default: never).
@@ -58,12 +60,14 @@ def _parse(cfg: str) -> dict:
     dense_prefix = parts[5] != "dp0" if len(parts) > 5 and parts[5] else True
     mode = parts[6] if len(parts) > 6 and parts[6] else "gather"
     fused = len(parts) > 7 and parts[7] == "fused"  # sol-video's fused scoring step instead of the ttnn pre-pass
+    mask_reuse = int(parts[8][len("maskreuse") :]) if len(parts) > 8 and parts[8].startswith("maskreuse") else 1
     label = (
         f"sol_tau{tau:g}_ds{dense_steps}_dl{dense_layers}"
         + (f"_end{end_step}" if end_step < 10**9 else "")
         + ("" if dense_prefix else "_dp0")
         + ("" if mode == "gather" else f"_{mode}")
         + ("_fused" if fused else "")
+        + (f"_maskreuse{mask_reuse}" if mask_reuse > 1 else "")
     )
     return {
         "label": label,
@@ -75,6 +79,7 @@ def _parse(cfg: str) -> dict:
         "dense_prefix": dense_prefix,
         "mode": mode,
         "fused": fused,
+        "mask_reuse": mask_reuse,
     }
 
 
@@ -150,6 +155,7 @@ def test_sol_e2e(mesh_device, reset_seeds):
         for attn in attns:
             attn.sol_logical_n = int(layout.sequence_length)
             attn.sol_sink_tokens = video_start
+            attn.sol_reset_mask_reuse()  # E10: a new generation never reuses the previous one's mask
         state["step"] = -1
         return orig_denoise(self, transformer, layout, *args, **kwargs)
 
@@ -254,6 +260,7 @@ def test_sol_e2e(mesh_device, reset_seeds):
                     attn.sol_mode = cfg["mode"]
                     attn._sol_prepass = None  # rebuild with this tau
                     attn.sol_fused = cfg.get("fused", False)
+                    attn.sol_mask_reuse = cfg.get("mask_reuse", 1)
                     attn.sol_report_density = False
             state["cfg"] = cfg
             state["warm"] = os.environ.get("SOL_E2E_WARM_SPARSE", "1") == "1"  # 0 = old behaviour (warm-up stays dense)
