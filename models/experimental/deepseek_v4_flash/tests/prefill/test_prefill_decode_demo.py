@@ -23,11 +23,11 @@ The prefill is traced and pipelined, as in ``test_full_model_prefill_demo.py``
 (tier 0 is a prompt's first chunk; each later tier reads ``DEEPSEEK_V4_PREFILL_TIER_FACTOR`` times as many entry rows
 as the one before, so a chunk's cost follows its position, not ``max_len``) replayed for every chunk of its tier,
 the replays posted ahead from a thread, each chunk's packet pushed over an H2D socket, the streams handed on
-over device-to-device sockets and the logits streamed back over a D2H socket, so the 8 stages work on 8 consecutive
-chunks at once. Every prompt's prefill perf table and summary (that demo's) are logged after its prefill, and a
-closing table covers every prompt's prefill and decode.
+over device-to-device sockets and the logits streamed back over a D2H socket, so the stages work on that many
+consecutive chunks at once. Every prompt's prefill perf table and summary (that demo's) are logged after its
+prefill, and a closing table covers every prompt's prefill and decode.
 
-Chips (Galaxy 8 x 4): eight ``1 x 4`` TP4 pipeline stages, one per mesh row, all 32 chips. Both models live on
+Chips: ``DEEPSEEK_V4_NUM_STAGES`` (default eight) ``1 x 4`` TP4 pipeline stages, one per mesh row. Both models live on
 those stages at once and are loaded once each: the prefill model is built by
 :meth:`DeepSeekV4Model.build_prefill`, one layer on each decode layer's submesh, sharing decode's routed experts,
 embedding table and ``lm_head``. Both are captured once, then every prompt alternates between the two:
@@ -77,6 +77,7 @@ runs), ``DEEPSEEK_V4_MAX_NEW_TOKENS`` (16384: thinking mode needs room for the r
 ``DEEPSEEK_V4_E2E_TEXT`` (a plain user message instead of the book prompt; ``decode_demo`` = the prompt of
 ``tests/decode/test_full_model_decode_demo.py``, exactly 128 tokens),
 ``DEEPSEEK_V4_DECODE_LAYERS`` (bring-up: first N layers in both models; the text is then gibberish, the flow is not),
+``DEEPSEEK_V4_NUM_STAGES`` (8: how many ``1 x 4`` pipeline stages are opened; the mesh is that many rows by 4),
 ``DEEPSEEK_V4_PREFILL_PROMPT`` (another prompt file), ``DEEPSEEK_V4_PREFILL_HEARTBEAT`` / ``_STALL_SECS``,
 ``DEEPSEEK_V4_E2E_MAX_INPUT`` (0 = off: keep only a prompt's first N tokens),
 ``DEEPSEEK_V4_E2E_COMPARE`` (1: also run each prompt through decode only, before its prefill, and compare the
@@ -157,7 +158,12 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 _MAX_CONTEXT = 2048  # index_topk * CSA rate: the dense CSA / no-indexer-state limit of the state commit
 # LongBench indices of the ``length == "short"`` questions the model answers correctly (of the first 20 in file order).
 _KNOWN_CORRECT_LONGBENCH = [1, 6, 21, 24, 25, 27, 39, 52]
-_NUM_STAGES = 8  # 1 x 4 TP4 stages, one per Galaxy row: decode and prefill share all 32 chips
+# DEEPSEEK_V4_NUM_STAGES (default 8): one 1x4 stage per Galaxy row, shared by decode and prefill.
+# The mesh is opened as (stages, 4) so a reshape does not change the per-device grid.
+_NUM_STAGES = _env_int("DEEPSEEK_V4_NUM_STAGES", 8)
+if _NUM_STAGES < 1:
+    raise ValueError(f"DEEPSEEK_V4_NUM_STAGES={_NUM_STAGES} must be >= 1")
+_MESH = (_NUM_STAGES, _TP_SIZE)
 _DECODE_REPLAY_AHEAD = 32  # decode steps whose traces are posted ahead of their packet (the decode demo's window)
 _LONGBENCH_FILE = Path(os.path.expanduser(os.environ.get("DEEPSEEK_V4_LONGBENCH", "~/smanoj/data.json")))
 _DEVICE_PARAMS = {
@@ -205,7 +211,7 @@ class _Result:
 @pytest.mark.timeout(86400)  # 20 long passages, prefill + decode each
 @torch.no_grad()
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"], ids=["fabric_2d"])
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=["mesh_device"], ids=["galaxy_8x4"])
+@pytest.mark.parametrize("mesh_device", [_MESH], indirect=["mesh_device"], ids=[f"galaxy_{_NUM_STAGES}x{_TP_SIZE}"])
 def test_prefill_decode_demo(mesh_device, reset_seeds) -> None:
     """The first ``DEEPSEEK_V4_DEMO_COUNT`` (20) ``length == "short"`` questions of ``data.json``, in file order,
     answered back to back by the two models (each loaded and captured once)."""
@@ -229,7 +235,7 @@ def test_prefill_decode_demo(mesh_device, reset_seeds) -> None:
 @pytest.mark.timeout(86400)  # 8 long passages, prefill + decode each
 @torch.no_grad()
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"], ids=["fabric_2d"])
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=["mesh_device"], ids=["galaxy_8x4"])
+@pytest.mark.parametrize("mesh_device", [_MESH], indirect=["mesh_device"], ids=[f"galaxy_{_NUM_STAGES}x{_TP_SIZE}"])
 def test_prefill_decode_longbench_known_correct(mesh_device, reset_seeds) -> None:
     """Accuracy regression: the ``_KNOWN_CORRECT_LONGBENCH`` questions, which the model answered correctly in
     ``test_prefill_decode_demo``'s 20-question run, must all still be answered correctly."""
@@ -479,7 +485,7 @@ def _run(
         logger.info(f"  starts : {tokenizer.decode(prompt.ids[:24])!r}")
         logger.info(f"  ends   : {tokenizer.decode(prompt.ids[-80:])!r}")
 
-    # --- the 8 x TP4 stages (all 32 chips), shared by the decode and the prefill model ---------------- #
+    # --- the TP4 stages, one per mesh row, shared by the decode and the prefill model ---------------- #
     system_config = load_system_config(mesh_device=mesh_device)
     set_active_system_config(system_config)
     num_layers = min(

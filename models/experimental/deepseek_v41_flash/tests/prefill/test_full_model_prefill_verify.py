@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Correctness check of the full V4.1 prefill: the real 40-layer checkpoint on the Galaxy against a CPU reference.
 
-It builds the model of ``test_full_model_prefill_demo.py`` with the whole stack and the head (8 x 4 Galaxy,
-``DEEPSEEK_V4_PREFILL_STAGES`` pipeline stages of ``1 x 4`` TP4 submeshes, the layers split evenly over them, bf8
+It builds the model of ``test_full_model_prefill_demo.py`` with the whole stack and the head
+(full 8 x 4 Galaxy, ``DEEPSEEK_V4_NUM_STAGES`` of its rows used as ``1 x 4`` TP4 stages, default all eight, bf8
 attention, bf4 routed experts, the Engram host lookup), runs the *same kind of prompt* through it chunk by chunk with
 the eager path, and compares with the fp32 reference of ``full_model_reference.py`` (the checkpoint's own
 ``inference/model.py``, one layer resident at a time; computed on the host beforehand and cached, so the device is not
@@ -39,7 +39,8 @@ Steps::
       models/experimental/deepseek_v41_flash/tests/prefill/test_full_model_prefill_verify.py
 
 Knobs (environment): ``DEEPSEEK_V4_VERIFY_LEN`` (2048), ``DEEPSEEK_V4_VERIFY_CHUNK`` (1024),
-``DEEPSEEK_V4_VERIFY_LAYERS`` (all; must match the reference's), ``DEEPSEEK_V4_PREFILL_STAGES`` (8),
+``DEEPSEEK_V4_VERIFY_LAYERS`` (all; must match the reference's), ``DEEPSEEK_V4_NUM_STAGES`` (8;
+``DEEPSEEK_V4_PREFILL_STAGES`` still applies when that is unset),
 ``DEEPSEEK_V4_VERIFY_REF_DIR`` (reference cache dir), ``DEEPSEEK_V4_VERIFY_GENERATE`` (0), and the floors
 ``DEEPSEEK_V4_VERIFY_LAYER_PCC`` (0.95, teacher-forced ``out - x``, every layer), ``DEEPSEEK_V4_VERIFY_PRE_MIX_ATOL``
 (0.02, teacher-forced ``pre_mix``), ``DEEPSEEK_V4_VERIFY_E2E_PCC`` (0.90, end-to-end streams, every layer),
@@ -70,6 +71,7 @@ from models.experimental.deepseek_v41_flash.tests.prefill.full_model_reference i
 from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefill_demo import (
     _ATTENTION_WEIGHT_DTYPE,
     _EXPERT_DTYPE,
+    _NUM_STAGES,
     _TP_SIZE,
 )
 from models.experimental.deepseek_v41_flash.tt.config import CACHE_DIR, DEFAULT_MODEL_DIR, load_config
@@ -113,7 +115,7 @@ _HEAD_ROWS = 256
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=["mesh_device"], ids=["galaxy_8x4"])
+@pytest.mark.parametrize("mesh_device", [(8, _TP_SIZE)], indirect=["mesh_device"], ids=["galaxy_8x4"])
 def test_full_model_prefill_verify(mesh_device, reset_seeds) -> None:
     from transformers import AutoTokenizer
 
@@ -187,7 +189,7 @@ def _run(mesh_device, progress: _Progress, AutoTokenizer) -> None:
     set_active_system_config(system_config)
     mesh_rows, mesh_cols = tuple(mesh_device.shape)
     assert mesh_cols >= _TP_SIZE
-    num_stages = _env_int("DEEPSEEK_V4_PREFILL_STAGES", 8)
+    num_stages = _NUM_STAGES
     assert 1 <= num_stages <= mesh_rows
     placement = plan_layer_placement(num_layers, num_stages, 1)
     submeshes = [

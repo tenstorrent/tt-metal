@@ -13,9 +13,33 @@ import torch
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_fp8_block, dequantize_mxfp4
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
 
-DEFAULT_MODEL_DIR = Path("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4.1-Flash").expanduser()
+DEFAULT_MODEL_DIR = Path("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4.1-Flash-1017").expanduser()
 # Converted ttnn weights: the V4-Flash cache root, one subdirectory per checkpoint, as its demos keep it.
 CACHE_DIR = os.path.join(os.environ.get("DEEPSEEK_V4_CACHE_DIR", "../cache"), DEFAULT_MODEL_DIR.name)
+# One 1x4 stage per Galaxy row. At 8 stages V4.1's 40 layers are five per stage.
+DEFAULT_NUM_STAGES = 8
+
+
+def pipeline_stage_count() -> int:
+    """How many 1xTP pipeline stages a V4.1 model, test, or demo should open.
+
+    ``DEEPSEEK_V4_NUM_STAGES`` (default :data:`DEFAULT_NUM_STAGES`). When that is unset,
+    ``DEEPSEEK_V4_PREFILL_STAGES`` still applies, so existing prefill runs keep their knob.
+    """
+    name = "DEEPSEEK_V4_NUM_STAGES"
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        name = "DEEPSEEK_V4_PREFILL_STAGES"
+        raw = os.environ.get(name, str(DEFAULT_NUM_STAGES))
+    try:
+        stages = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name}={raw!r} is not an integer") from exc
+    if stages < 1:
+        raise ValueError(f"{name}={stages} must be >= 1")
+    return stages
+
+
 # V4.1 quantizes its fp8 weights in 32x32 blocks (V4-Flash: 128x128).
 FP8_BLOCK = (32, 32)
 # HF names the V4 attention block reads; the V4 loader maps them onto ``layers.N.attn.*``.

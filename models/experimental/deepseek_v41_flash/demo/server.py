@@ -8,8 +8,9 @@ endpoints, OpenAI request and response shapes, tool calling, thinking mode, sche
 prefill (read that docstring) -- on the V4.1 decode model and :class:`DeepSeekV41PrefillModel` instead:
 
 * the engine (:class:`V41ChatEngine`) builds :class:`DeepSeekV41Model` and its ``lm_head``; its layers are split
-  evenly over the stages in contiguous runs (five per stage on eight stages), a placement the prefill model shares,
-  as in ``tests/prefill/test_prefill_decode_demo.py``;
+  evenly over the stages in contiguous runs (five per stage at the default eight), a placement the prefill model
+  shares, as in ``tests/prefill/test_prefill_decode_demo.py``. The full mesh stays open;
+  ``DEEPSEEK_V4_NUM_STAGES`` (default 8) is how many ``1 x 4`` submeshes are carved from it;
 * the prefill (:class:`_V41Prefiller`) is :meth:`DeepSeekV41Model.build_prefill` (sharing the routed experts,
   embedding, ``lm_head``, sockets and the Engram host lookup) with no CSA position bias to commit.
 
@@ -19,8 +20,9 @@ What V4.1 imposes on the serving side:
   compressed-KV page tables; their compressed KV shares pools sized for ``--total-context`` tokens (default
   ``num_users * max_context``). A step decodes one user, and switching users costs no device work: the step's packet
   names the user's slot. The scheduler interleaves the active users' steps through the stages, so up to one
-  decoding user per stage (eight) keeps every stage busy; seating and posting, trace dispatch, the H2D packet writes
-  and the D2H reads each run on their own thread (see :class:`V41ChatEngine`). Speculative decode is single-user.
+  decoding user per stage (``DEEPSEEK_V4_NUM_STAGES``, default eight) keeps every stage busy; seating and posting,
+  trace dispatch, the H2D packet writes and the D2H reads each run on their own thread (see :class:`V41ChatEngine`).
+  Speculative decode is single-user.
 * Context. ``--max-context`` is 524288 tokens by default (prompt + reply). Past
   ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries the select is two-level, in the
   traced prefill and in decode, so a prompt prefills up to ``--prefill-max-len`` (by default the whole context, at
@@ -61,7 +63,12 @@ from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefil
     _TP_SIZE,
 )
 from models.experimental.deepseek_v41_flash import encoding_dsv41
-from models.experimental.deepseek_v41_flash.tt.config import DEFAULT_MODEL_DIR, dequantized, load_config
+from models.experimental.deepseek_v41_flash.tt.config import (
+    DEFAULT_MODEL_DIR,
+    dequantized,
+    load_config,
+    pipeline_stage_count,
+)
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
 from models.experimental.deepseek_v4_flash.demo.chat_cli import ChatEngine, ChatFormat, UserSession
 from models.experimental.deepseek_v4_flash.demo.server import _Prefiller, build_parser, check_args, serve
@@ -71,7 +78,6 @@ from models.experimental.deepseek_v4_flash.tt.system_config import load_system_c
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
-_NUM_STAGES = 8  # one 1 x 4 TP4 stage per Galaxy row: V4.1's 40 layers, five on each
 _MAX_CONTEXT = 524288  # default --max-context (prompt + reply)
 # Default --prefill-max-len when a larger context is asked for: the longest traced prefill whose last position tier
 # compiled on every stage (a 524288-token tier ran out of DRAM).
@@ -131,7 +137,9 @@ class V41ChatEngine(ChatEngine):
             variant=getattr(args, "system_variant", None),
             mesh_device=mesh_device,
         ).log()
-        num_stages = getattr(args, "num_stages", _NUM_STAGES)
+        num_stages = getattr(args, "num_stages", None)
+        if num_stages is None:
+            num_stages = pipeline_stage_count()
         self.model = DeepSeekV41Model(
             config,
             loader,
@@ -307,7 +315,12 @@ def parse_args(argv: list[str] | None = None):
 
 
 def main(argv: list[str] | None = None) -> int:
-    return serve(parse_args(argv), engine_cls=V41ChatEngine, prefiller_cls=_V41Prefiller)
+    return serve(
+        parse_args(argv),
+        engine_cls=V41ChatEngine,
+        prefiller_cls=_V41Prefiller,
+        num_stages=pipeline_stage_count(),
+    )
 
 
 if __name__ == "__main__":
