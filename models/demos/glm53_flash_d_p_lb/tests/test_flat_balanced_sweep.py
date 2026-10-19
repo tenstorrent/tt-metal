@@ -86,7 +86,7 @@ def test_flat_balanced_sweep(device):
         print(
             f"[sweep] plan: gate/up {len(pl['gu'])} cores (units nu {pl['nu']}, hg {pl['hg']}), down {len(pl['down'])} cores "
             f"(nd {pl['nd']}), y writers {len(pl['y_writers'])}, relays {len(pl['relays'])}, tensix readers "
-            f"{len(pl.get('tensix_readers', []))}, drisc {pl['drisc']} dual {pl['dual']}, gu idle {len(pl['gu_idle'])}",
+            f"{len(pl.get('tensix_readers', []))}, drisc {pl['drisc']} dual {pl['dual']}, gu idle {len(pl['gu_idle'])}, x slots {pl['x_slots']}",
             flush=True,
         )
     x = rm(torch.randn(T, H).to(torch.bfloat16) * 0.3, ttnn.bfloat16)

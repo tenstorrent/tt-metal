@@ -1159,3 +1159,13 @@ Not yet measured beside the DRISC weight stream (NOC1 = the DRISC tile 1 port; t
   TT_FATAL, must divide 4). Likely the DRAM side: the weight stream near the practical peak (read only ~492 GB/s)
   leaves the latency-bound x gathers (7% of the bytes) queued. Next: x priority at the DRAM (MPFE), or x read further
   ahead (relay buffering), with UB 2.
+- x priority / read-ahead with UB 2 (one chip, no y, M 58 / 145 us; UB 2 default weights 1122 / 1394): x reads on
+  NOC0 with their port first (MPFE 1,7,1 / 3,7,3) 1138 / 1389, 1136 / 1399; relay RM_CHUNKS 8 1120 / 1383; gate/up x
+  ring 32 slots 1121 / 1390 (SB_SLOTS 6: relay arena does not fit) - neither helps. The GDDR port weights (DRISC
+  port, NOC0 endpoint, NOC1 endpoint) do: 1,1,7 1127 / 1305, 1,1,5 1119 / 1301 (best), 1,1,3 1116 / 1310, 2,1,7
+  1149 / 1338, 1,0,7 1179 / 1386, 7,1,1 1129 / 1429; UB 1 + 1,1,7 1222 / 1310 - the free tile's own port held back
+  vs the NOC1 endpoint (tile 1's DMA and the x reads together). Fused harness (8 chips): UB 2 + 1,1,5 S 256 uniform /
+  spread fused 1229 -> 1192, 1349 -> 1303 (-3%), S 640 1362 -> 1500, 1700 -> 1837 (+10%: the combine hidden 98 -> 85%).
+  S 640 uniform: UB 2 alone fused 1531 (flat 1403), 1,1,5 alone 1391 (flat 1319), UB 2 + 1,0,5 1564, + 1,5,5 1543 -
+  UB 2 is what hurts the fused S 640 (not the weights). Net: no default change; per-call UB (rows <= ~100: UB 2) would
+  take S 256 -3% and leave S 640.
