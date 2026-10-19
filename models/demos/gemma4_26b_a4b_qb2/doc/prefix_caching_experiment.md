@@ -549,3 +549,38 @@ image (one build, subsequently reused). No build has been dispatched yet.
 The tested plugin ref to retain is
 `0a76258e14ca7237067ca9a22ec02e257bee570a`.
 
+### Independent review and trace-lifetime follow-up
+
+Independent source/artifact review returned **more-work-needed** before
+release qualification. It confirmed repeated `LOGITS_TRACE_READY` /
+`SPLIT_TRACE_READY` transitions in lifetime server logs: suffix logits mode
+and device-sampled decode mode retire and recapture the model trace. The
+adapter also reconfigures sampling at request boundaries in a way that
+retires traces. Allocation warnings at traced-boundary server.log:491 and
+lifetime server.log:641 require tracker-enabled evidence. The whitespace
+raw-completion repeat test also needs a prompt-correct chat control.
+
+Diagnostic control
+[39258199619](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39258199619)
+uses Metal `3d9f4f016e34c912f1c82039c56c96e59fb4ba6a`, new branch
+`mvasiljevic/gemma4-prefix-trace-lifetime`, on `120-qb2-p05t01`.
+It changes tests only, enabling allocation tracking with allocation
+tracebacks and program-cache allocations included. The chat test renders
+the instruct template, selects a partial-page suffix of 16–24 tokens,
+checks meaningful output, repeats device-sampled requests, grows the
+conversation, and includes an independent cold control.
+
+Candidate
+[39258540816](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39258540816)
+uses Metal `3b8e197545fbd9d703a577ddfd8b5d12b84bf7da`, new branch
+`mvasiljevic/gemma4-prefix-persistent-trace`, with the same tracked check.
+This model-only variant moves seed advancement from model replay into
+feedback sampling, retains the model trace for logits-only suffixes,
+prepares suffix output storage before capture, avoids an unused page-table
+upload, and retains compatible adapter sampling state across cached
+requests. It adds no broad allocation exemptions. Trace IDs and capture /
+release counters are logged. Both results remain pending; these changes
+are not promoted to the clean full5 candidate. The current full5 control
+continues unchanged, and final image construction is held pending the
+safety and repeatability evidence.
+
