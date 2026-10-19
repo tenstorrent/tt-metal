@@ -11,9 +11,12 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.attention.operations import (
+    PREFILL_SDPA_MAX_SEQ,
     _paged_fill_cache,
     apply_rope,
     apply_rope_decode_peruser,
+    chunked_prefill_sdpa,
+    chunked_prefill_sdpa_sliding,
     concat_heads,
     prefill_sdpa_program_config,
     split_qkv_heads_decode,
@@ -198,16 +201,24 @@ class MuseGlimmerAttention:
             ttnn.fill_cache(v_cache, vf, batch_idx=user_id)
 
         seq_len = x.shape[-2]
-        sdpa = ttnn.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            is_causal=True,
-            scale=a.sdpa_scale,
-            sliding_window_size=self.sliding_window,
-            program_config=prefill_sdpa_program_config(a.head_dim, seq_len, self.sliding_window),
-            compute_kernel_config=self.sdpa_cfg,
-        )
+        if seq_len > PREFILL_SDPA_MAX_SEQ:
+            # Non-chunked prefill SDPA is wrong past 2^15 query rows: use gemma4's chunked paths instead.
+            if self.is_sliding:
+                sdpa = chunked_prefill_sdpa_sliding(q, k, v, self.sliding_window, a.head_dim, scale=a.sdpa_scale)
+            else:
+                assert page_table is not None, "prefill longer than 32768 tokens needs a paged KV cache"
+                sdpa = chunked_prefill_sdpa(q, k_cache, v_cache, page_table, user_id, a.head_dim, scale=a.sdpa_scale)
+        else:
+            sdpa = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=True,
+                scale=a.sdpa_scale,
+                sliding_window_size=self.sliding_window,
+                program_config=prefill_sdpa_program_config(a.head_dim, seq_len, self.sliding_window),
+                compute_kernel_config=self.sdpa_cfg,
+            )
         for t in (q, k, v):
             t.deallocate(True)
 

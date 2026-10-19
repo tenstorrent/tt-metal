@@ -8,6 +8,8 @@ import pytest
 import torch
 from loguru import logger
 
+import models.demos.gemma4.tt.attention.operations as gemma4_ops
+import models.demos.muse_glimmer_30b.tt.attention as attention_mod
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.muse_glimmer_30b.reference.model import Attention, RotaryEmbedding, build_attention_mask
@@ -25,7 +27,7 @@ mesh_fabric = mesh_test_params()
 
 def _setup(mesh_device, layer_idx):
     args = MuseGlimmerModelArgs.from_checkpoint(
-        mesh_device=mesh_device, num_layers=4, max_batch_size=4, max_seq_len=4608, max_prefill_len=4096
+        mesh_device=mesh_device, num_layers=4, max_batch_size=4, max_seq_len=8192, max_prefill_len=8192
     )
     sd = args.load_layer_state_dict(layer_idx)
     ccl = MuseCCL(mesh_device)
@@ -66,11 +68,7 @@ def _page_table(args, num_users):
     return torch.arange(num_users * nb, dtype=torch.int32).reshape(num_users, nb)
 
 
-@pytest.mark.timeout(1800)
-@mesh_fabric
-@pytest.mark.parametrize("layer_idx", [0, 3], ids=["sliding_rope", "full_nope"])
-@pytest.mark.parametrize("seq_len", [128, 4096])
-def test_attention_prefill(mesh_device, tp, layer_idx, seq_len):
+def _run_prefill(mesh_device, tp, layer_idx, seq_len, user_id=0):
     sub = skip_and_submesh(mesh_device, tp)
     args, cfg, ccl, tt_attn, ref = _setup(sub, layer_idx)
     torch.manual_seed(0)
@@ -84,12 +82,33 @@ def test_attention_prefill(mesh_device, tp, layer_idx, seq_len):
     pt = _to_dev(_page_table(args, args.max_batch_size), sub, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
     tt_x = _to_dev(x.unsqueeze(0), sub, ttnn.bfloat16, ttnn.TILE_LAYOUT)
 
-    tt_out = tt_attn.forward_prefill(tt_x, rope, kv_cache, pt, user_id=0)
+    tt_out = tt_attn.forward_prefill(tt_x, rope, kv_cache, pt, user_id=user_id)
     out = _read(tt_out, sub).reshape(1, seq_len, args.hidden_size).float()
 
     passing, pcc = comp_pcc(ref_out, out, PCC_THRESHOLD)
-    logger.info(f"prefill layer={layer_idx} S={seq_len} PCC: {pcc}")
+    logger.info(f"prefill layer={layer_idx} S={seq_len} user={user_id} PCC: {pcc}")
     assert passing, f"PCC {pcc} < {PCC_THRESHOLD}"
+
+
+@pytest.mark.timeout(1800)
+@mesh_fabric
+@pytest.mark.parametrize("layer_idx", [0, 3], ids=["sliding_rope", "full_nope"])
+@pytest.mark.parametrize("seq_len", [128, 4096, 8064])  # 8064: not a multiple of the 256-row SDPA Q chunk
+def test_attention_prefill(mesh_device, tp, layer_idx, seq_len):
+    _run_prefill(mesh_device, tp, layer_idx, seq_len)
+
+
+@pytest.mark.timeout(1800)
+@mesh_fabric
+@pytest.mark.parametrize("layer_idx", [0, 3], ids=["sliding_rope", "full_nope"])
+@pytest.mark.parametrize("seq_len", [4096, 3456])
+def test_attention_prefill_chunked(mesh_device, tp, layer_idx, seq_len, monkeypatch):
+    """Long-prompt paths (gemma4 chunked SDPA) forced at short lengths; 3456 has a padded tail chunk,
+    user 1 checks the page-table row slice."""
+    monkeypatch.setattr(attention_mod, "PREFILL_SDPA_MAX_SEQ", 1024)
+    monkeypatch.setattr(gemma4_ops, "PREFILL_CHUNK_SIZE", 1024)
+    monkeypatch.setattr(gemma4_ops, "PREFILL_SLIDING_CHUNK_SIZE", 1024)
+    _run_prefill(mesh_device, tp, layer_idx, seq_len, user_id=1)
 
 
 @pytest.mark.timeout(1800)

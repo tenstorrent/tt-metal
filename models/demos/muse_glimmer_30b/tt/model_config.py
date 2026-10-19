@@ -163,6 +163,9 @@ class MuseGlimmerModelArgs:
         assert self.hidden_size % self.tp == 0, "hidden not divisible by tp"
         assert self.n_layers <= self.num_hidden_layers
         assert self.max_seq_len % 128 == 0, f"max_seq_len must be a multiple of 128, got {self.max_seq_len}"
+        assert (
+            self.max_seq_len <= self.max_position_embeddings
+        ), f"max_seq_len {self.max_seq_len} exceeds max_position_embeddings {self.max_position_embeddings}"
         self.max_prefill_len = min(self.max_prefill_len, self.max_seq_len)
         _ = self.intermediate_local  # divisibility asserts
 
