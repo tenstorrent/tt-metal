@@ -110,8 +110,6 @@ void kernel_main() {
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
-    bool reuse_in0_block = false;
-
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
@@ -141,14 +139,8 @@ void kernel_main() {
                     current_subblock_h,
                     current_subblock_w);
 
-                if (k_block == K_num_blocks - 1 && n_block_iter < N_blocks_per_core - 1) {
-                    reuse_in0_block = true;
-                }
-                if (!reuse_in0_block) {
-                    cb_in0.pop_front(in0_block_num_tiles);
-                }
+                cb_in0.pop_front(in0_block_num_tiles);
                 cb_in1.pop_front(in1_block_num_tiles);
-                reuse_in0_block = false;
                 if (k_block == 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }

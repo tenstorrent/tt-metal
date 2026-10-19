@@ -71,9 +71,6 @@ void kernel_main() {
 
     in0_valid_semaphore.set(VALID);
 
-    bool k_forward = true;
-    bool reuse_block = false;
-
     uint32_t cols[N_block_tiles];
     uint32_t width = 0;
     DeferredBlockWrite<M_block_tiles, N_block_tiles> deferred;
@@ -84,8 +81,6 @@ void kernel_main() {
         uint32_t current_M_block_tiles = m_tile_end - m_tile;
         uint32_t current_block_bytes = current_M_block_tiles * K_block_tiles * in0_tile_size;
 
-        reuse_block = false;
-        k_forward = true;
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
             if constexpr (is_output_writer) {
                 block_columns<N_block_tiles, piece_tiles, ring_size, subblock_w>(
@@ -93,18 +88,13 @@ void kernel_main() {
             }
             bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
 
-            for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+            for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 if constexpr (is_output_writer) {
-                    if (deferred.pending && k_block_iter == defer_write_k_block) {
+                    if (deferred.pending && k_block == defer_write_k_block) {
                         deferred.write(out_writer, cb_out_id, M_tiles, N_tiles, out_tile_size);
                     }
                 }
 
-                if (reuse_block && k_block_iter == 0) {
-                    reuse_block = false;
-                    continue;
-                }
-                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_in0.reserve_back(in0_block_num_tiles);
 
                 uint32_t in0_start_address = cb_in0.get_write_ptr();
@@ -144,9 +134,6 @@ void kernel_main() {
                     in0_valid_semaphore.relay_unicast(noc, in0_receiver_semaphore, in0_dest_noc_x, in0_dest_noc_y);
                 }
             }
-
-            k_forward = !k_forward;
-            reuse_block = true;
 
             if constexpr (is_output_writer) {
                 if (is_last_block || is_injector_core) {

@@ -81,8 +81,6 @@ void kernel_main() {
 
     constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
 
-    bool k_forward = true;
-
     uint32_t cols[N_block_tiles];
     uint32_t width = 0;
     DeferredBlockWrite<M_block_tiles, N_block_tiles> deferred;
@@ -91,22 +89,19 @@ void kernel_main() {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
 
-        k_forward = true;
-
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
             const bool any_real = block_columns<N_block_tiles, piece_tiles, ring_size, subblock_w>(
                 n_block_iter, stripe_order, stripe_tiles, chain_offset, chain_width, cols, width);
             const uint32_t forward_row_bytes = any_real ? width * in1_tile_size : 0;
             bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
 
-            for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+            for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 if constexpr (is_output_writer) {
-                    if (deferred.pending && k_block_iter == defer_write_k_block) {
+                    if (deferred.pending && k_block == defer_write_k_block) {
                         deferred.write(out_writer, cb_out_id, M_tiles, N_tiles, out_tile_size);
                     }
                 }
 
-                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_in1.reserve_back(in1_block_num_tiles);
 
                 uint32_t in1_start_address = cb_in1.get_write_ptr();
@@ -158,8 +153,6 @@ void kernel_main() {
                     in1_valid_semaphore.relay_unicast(noc, in1_receiver_semaphore, in1_dest_noc_x, in1_dest_noc_y);
                 }
             }
-
-            k_forward = !k_forward;
 
             if constexpr (is_output_writer) {
                 if (is_last_block || is_injector_core) {
