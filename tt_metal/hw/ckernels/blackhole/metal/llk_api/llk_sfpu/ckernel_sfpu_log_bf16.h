@@ -16,22 +16,23 @@ struct LogBf16Config {
 
 namespace ckernel::sfpu {
 
-// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
+// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format, as BF16 for
+// Float16_b and the block formats sharing its exponent.
 inline bool bf16_dest_log() {
 #if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
-    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
+    const std::uint32_t format = ckernel::math::src_zero_flag_srcb_fmt;
+    return format == static_cast<std::uint32_t>(DataFormat::Float16_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp4_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp2_b);
 #else
     return false;
 #endif
 }
-template <int ITERATIONS = 8>
+template <int ITERATIONS = 32>
 inline void calculate_log_bf16() {
-    ckernel::sfpu::bf16::calculate_log_fused<ckernel::sfpu::LogBf16Config, ITERATIONS>();
+    ckernel::sfpu::bf16::log::calculate_log_fused<ckernel::sfpu::LogBf16Config, ITERATIONS>();
 }
-inline void init_log_bf16() {
-    if (bf16_dest_log()) {
-        ckernel::sfpu::bf16::init_log_fused<ckernel::sfpu::LogBf16Config>();
-    }
-}
+inline void init_log_bf16() { ckernel::sfpu::bf16::log::init_log_fused<ckernel::sfpu::LogBf16Config>(); }
 
 }  // namespace ckernel::sfpu

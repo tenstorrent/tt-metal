@@ -7,10 +7,9 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 
-namespace ckernel::sfpu::bf16
+namespace ckernel::sfpu::bf16::log
 {
-constexpr std::uint32_t kLogFusedHold    = ADDR_MOD_3;
-constexpr std::uint32_t kLogFusedAdvance = ADDR_MOD_2;
+constexpr std::uint32_t kLogFusedHold = ADDR_MOD_3;
 
 template <std::uint32_t Register, std::uint32_t Bits>
 inline void log_fused_load_constant()
@@ -76,11 +75,15 @@ inline void calculate_log_fused()
     // FP32 -> BF16 reads no VB; ttsim rejects a nonzero one, so VB is L0.
     TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG3,
                       sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B); // fp32 -> bf16 RNE
-    TTI_SFPSTORE(p_sfpu::LREG3, 0, kLogFusedAdvance, 0);     // dest += 2
+    TTI_SFPSTORE(p_sfpu::LREG3, 0, kLogFusedHold, 0);
+    // DEST is addressed only through the hold mode, which every SFPU init leaves at zero and no FPU
+    // op sets; the counter steps to the next row outside the record, so the replay keeps its length.
+    TTI_INCRWC(0, 2, 0, 0);
 #pragma GCC unroll 8
     for (int row = 1; row < Iterations; ++row)
     {
         TTI_REPLAY(0, Config::kBodySlots, 0, 0);
+        TTI_INCRWC(0, 2, 0, 0);
     }
 }
-} // namespace ckernel::sfpu::bf16
+} // namespace ckernel::sfpu::bf16::log
