@@ -68,8 +68,8 @@ FORCE_INLINE void seed_summary_pair(DFB& buffer, Noc& noc, uint32_t value_block)
     buffer.push_back(tile_count);
 }
 
-// Two constant FP32 tiles for the complement-form update: a 32x32 identity, the basis of each chunk's decay
-// diagonal, then a zero tile.
+// Two constant FP32 tiles: a 32x32 identity, which the packed head summary subtracts to publish E = A - I, then a
+// zero tile.
 FORCE_INLINE void seed_identity_and_zero_tiles(DataflowBuffer& buffer, Noc& noc) {
     constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
     buffer.reserve_back(2);
