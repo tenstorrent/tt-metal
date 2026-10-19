@@ -125,7 +125,7 @@ That prints the table and writes three figures into `out_ops/block_n150/Figures/
 | `op_power_breakdown.png` | three panels over one op axis: pJ/FLOP (log scale), mJ/pass, dynamic W |
 | `op_energy_normalised.png` | two panels: energy per FLOP and energy per byte touched (log scale), with each op's arithmetic intensity |
 
-tt-ember's own 15 figures are written alongside. Most of them plot against *core count*, which
+tt-ember's own 13 figures are written alongside. Most of them plot against *core count*, which
 this workload repurposes as an op index, so only `telemetry_overview.png` is meaningful from
 that set — it shows the 12 ops as plateaus separated by idle gaps, which is a good sanity check
 that the run is well formed.
