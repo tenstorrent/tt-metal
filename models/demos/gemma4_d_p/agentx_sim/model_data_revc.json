@@ -37,13 +37,13 @@
   "The last chunk of every prompt is padded to the unit (fixed trace shapes)."
  ],
  "calibration": {
-  "_note": "Silicon replays of three AgentX slices (bh-glx-110-d06u02, main 836bf0b + the batched prefill runtime, 2026-10-14): device time per step over this model (scale) and host time per step (busy minus trace replay), per scheduler: unit x budget, keyed by unit for one request per step and 'batched' for 2k lanes. The batched entry (bh-glx-120-c05u08, 2026-10-15) is fitted to the 12,837 serving steps of seven AgentX slice replays, each step's lanes rebuilt from the demo's step log: device time per component (dense incl. fixed, global attention per lane count, sliding attention), host time per lane count, and gap_ms, the scheduler's time between steps (admit, plan, log), which the replay's busy time leaves out but the clock does not (the unbatched factors absorb it).",
+  "_note": "Silicon replays of three AgentX slices (bh-glx-110-d06u02, main 836bf0b + the batched prefill runtime, 2026-10-14): device time per step over this model (scale) and host time per step (busy minus trace replay), per scheduler: unit x budget, keyed by unit for one request per step and 'batched' for 2k lanes. The batched entry (bh-glx-120-c05u08, 2026-10-15) is fitted to the 12,837 serving steps of seven AgentX slice replays, each step's lanes rebuilt from the demo's step log: device time per component (dense incl. fixed, global attention per lane count, sliding attention), host time per lane count, and gap_ms, the scheduler's time between steps (admit, plan, log), which the replay's busy time leaves out but the clock does not (the unbatched factors absorb it). The 8192 / 4096 scales were refit on 2026-10-18 for the projection fidelity a server uses (LoFi from 512 rows per device; the 10-14 replays ran every projection at HiFi2): each is the old scale times the LoFi / HiFi2 step-time ratio, measured on bh-glx-120-b08u02 on two of those slices at both fidelities (8192: 0.942, 0.943; 4096: 0.980, 0.980). 2048 and the batched lanes run at HiFi2 either way.",
   "8192": {
-   "scale": 1.125,
+   "scale": 1.060,
    "host_ms": 3.3
   },
   "4096": {
-   "scale": 1.057,
+   "scale": 1.036,
    "host_ms": 3.3
   },
   "2048": {
