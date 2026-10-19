@@ -6,7 +6,9 @@
 
 One method for every question: per round, compare two sides' best-of-N times; the call's change is
 the median of the per-round changes; it counts as faster/slower only when it clears the noise
-measured on the same machine and the rounds agree on the direction.
+measured on the same machine and the rounds agree on the direction. Host time on shared CI
+machines moves tens of percent between identical runs, so verdicts use device time and host time
+is only reported against its measured resolution.
 """
 
 import math
@@ -16,8 +18,12 @@ import statistics
 # calls (tens of microseconds) moved 2-3% between runs of identical builds, so below this a
 # "change" is not worth reporting whatever the control said.
 MIN_NOISE_PCT = 3.0
-# Above this the control pair itself was disturbed (the host was busy in some rounds), so a "no
-# change" or "default is fastest" answer from that run proves nothing.
+# Device time of identical kernels moved under 1.5% (median) between processes, 4.6% at worst, so
+# a few percent is the resolution worth claiming. Kept apart from the host floor because the two
+# measure different things and may be tuned separately.
+DEVICE_MIN_PCT = 3.0
+# Above this the device control itself was disturbed, so a "no change" or "default is fastest"
+# answer from that run proves nothing.
 MAX_NOISE_PCT = 5.0
 # Share of rounds that must point the same way as the median for the call to count.
 AGREE_FRACTION = 0.8
@@ -37,14 +43,14 @@ def per_round_changes(before, after):
     return [change_pct(b, a) for b, a in zip(before, after) if b is not None and a is not None and b > 0]
 
 
-def noise_pct(control_changes):
+def noise_pct(control_changes, floor=MIN_NOISE_PCT):
     """Noise band from A-vs-A pairs: `control_changes` maps a control call to its per-round changes.
 
     The largest per-call median is used rather than the spread of rounds, because the verdict
     compares a per-call median against it.
     """
     medians = [abs(median(changes)) for changes in control_changes.values() if changes]
-    return max([MIN_NOISE_PCT] + medians)
+    return max([floor] + medians)
 
 
 def rounds_agree(changes, direction):

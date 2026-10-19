@@ -70,12 +70,6 @@ def test_call_file_validation_and_ids():
         calls.parse_calls({**doc, "calls": [{**doc["calls"][0], "dtype": "fp64"}]})
 
 
-def test_control_indices_spread():
-    assert calls.control_indices(10, 4) == [0, 3, 6, 9]
-    assert calls.control_indices(2, 4) == [0, 1]
-    assert calls.control_indices(5, 0) == []
-
-
 def test_forced_entry_argument_filter():
     accepts = {"input_tensor", "repeat_dims", "memory_config"}
     assert ops.split_call_args({"repeat_dims": [1], "optional_output_tensor": None}, accepts) == {"repeat_dims": [1]}
@@ -103,14 +97,24 @@ def test_csv_reduction(tmp_path):
     assert profile_csv.find_csv(str(tmp_path)) == str(path)
 
 
-def results_for(after_default, after_native, before=100.0, digest_native="d", control=None, device_ns=None):
+def results_for(
+    after_default,
+    after_native,
+    before=100.0,
+    digest_native="d",
+    control=None,
+    device_ns=None,
+    device_before_ns=None,
+    host_ctl=100.0,
+):
+    """Host times are scalars per run; device values may be a scalar or one value per round."""
     cid = "c"
     doc = {
         "calls": [{"id": cid, "shape": [1], "dtype": "bfloat16", "layout": "tile", "memory_config": "DRAM", "args": {}}]
     }
     rounds = 5
 
-    def run(label_values, impl_values):
+    def run(impl_values):
         out = []
         for r in range(rounds):
             entry = {"calls": {cid: {"results": {}}}}
@@ -119,34 +123,61 @@ def results_for(after_default, after_native, before=100.0, digest_native="d", co
             out.append(entry)
         return out
 
+    def device(values):
+        per_round = {impl: v if isinstance(v, list) else [v] * rounds for impl, v in (values or {}).items()}
+        return [{(impl, 0): {"ns": ns[r], "ops": [impl]} for impl, ns in per_round.items()} for r in range(rounds)]
+
     raw = {
         "time": {
-            "before": run(None, {"default": (before, "d")}),
-            "after_default": run(None, {"default": (after_default, "d")}),
+            "before": run({"default": (before, "d")}),
+            "after_default": run({"default": (after_default, "d")}),
             "after": run(
-                None,
                 {
                     "default": (after_default, "d"),
                     "native": (after_native, digest_native),
                     "default_b": (after_default if control is None else control, "d"),
-                },
+                }
             ),
-            "ctl_before": run(None, {"default": (100.0, "d")}),
-            "ctl_after": run(None, {"default": (100.0, "d")}),
+            "ctl_before": run({"default": (100.0, "d")}),
+            "ctl_after": run({"default": (host_ctl, "d")}),
         },
-        "device": [
-            {(impl, 0): {"ns": ns, "ops": [impl]} for impl, ns in (device_ns or {}).items()} for _ in range(rounds)
-        ],
-        "control_ids": [cid],
+        "device": {"before": device(device_before_ns), "after": device(device_ns)},
     }
     return compare.build(doc, raw, {"op": "t"})
 
 
 def test_build_flags_slower_and_beaten_default():
     device = {"default": 1200.0, "native": 800.0, "codegen": 1200.0}
-    row = results_for(after_default=120.0, after_native=80.0, device_ns=device)["calls"][0]
+    row = results_for(after_default=120.0, after_native=80.0, device_ns=device, device_before_ns={"default": 1000.0})[
+        "calls"
+    ][0]
     assert row["q1"]["verdict"] == "slower"
     assert row["fastest_option_used"] is False
+    assert row["beaten_by"] == ["native"]
+
+
+def test_q1_ignores_host_change_when_device_time_matches():
+    same = {"default": 1000.0}
+    result = results_for(after_default=150.0, after_native=150.0, device_ns=same, device_before_ns=same)
+    row = result["calls"][0]
+    assert row["q1"]["verdict"] == "no change"
+    assert row["q1_host"]["moved"] is True
+    assert result["summary"]["q1_host_moved"] == 1
+    # The same host change under a run whose control moved more is below the resolution.
+    noisy = results_for(after_default=120.0, after_native=120.0, device_ns=same, device_before_ns=same, host_ctl=140.0)
+    assert noisy["calls"][0]["q1_host"]["moved"] is False
+
+
+def test_q1_without_before_device_time_is_not_comparable():
+    row = results_for(after_default=100.0, after_native=100.0, device_ns={"default": 1000.0})["calls"][0]
+    assert row["q1"] == {"comparable": False, "reason": "no device time"}
+
+
+def test_q2_uses_the_device_band_not_the_host_resolution():
+    device = {"default": 1000.0, "native": 800.0, "codegen": 1000.0}
+    row = results_for(
+        after_default=100.0, after_native=100.0, host_ctl=170.0, device_ns=device, device_before_ns={"default": 1000.0}
+    )["calls"][0]
     assert row["beaten_by"] == ["native"]
 
 
@@ -166,7 +197,13 @@ def test_q2_without_device_time_is_not_comparable():
 
 
 def test_build_output_mismatch_is_not_comparable():
-    result = results_for(after_default=100.0, after_native=50.0, digest_native="other")
+    result = results_for(
+        after_default=100.0,
+        after_native=50.0,
+        digest_native="other",
+        device_ns={"default": 1000.0},
+        device_before_ns={"default": 1000.0},
+    )
     row = result["calls"][0]
     assert row["q2"]["native"] == {"comparable": False, "reason": "output differs"}
     assert row["q2"]["codegen"]["comparable"] is False
@@ -194,9 +231,22 @@ def test_q2_control_counts_false_flags():
     assert flagged["summary"]["q2_control"]["faster"] == 1
 
 
-def test_noisy_control_is_marked_unreliable():
-    assert results_for(after_default=100.0, after_native=100.0)["noise"]["reliable"] is True
-    assert stats.noise_pct({"c": [-12.0, -11.0, -10.0, 0.0, 0.0]}) > stats.MAX_NOISE_PCT
+def test_disagreeing_device_rounds_are_marked_unreliable():
+    steady = {"default": 1000.0, "native": 1000.0, "codegen": 1000.0}
+    result = results_for(after_default=100.0, after_native=100.0, device_ns=steady, device_before_ns=steady)
+    assert result["noise"]["reliable"] is True
+    assert result["noise"]["device_band_pct"] == stats.DEVICE_MIN_PCT
+    jumpy = {"default": [1000.0, 1100.0, 1000.0, 1100.0, 1000.0]}
+    result = results_for(after_default=100.0, after_native=100.0, device_ns=jumpy, device_before_ns=steady)
+    # Adjacent changes are +10, -9.09, +10, -9.09: the median of their absolute values.
+    assert result["noise"]["device_band_pct"] == pytest.approx(9.545, abs=0.01)
+    assert result["noise"]["reliable"] is False
+
+
+def test_host_resolution_comes_from_the_control_over_all_calls():
+    same = {"default": 1000.0}
+    result = results_for(after_default=100.0, after_native=100.0, host_ctl=130.0, device_ns=same, device_before_ns=same)
+    assert result["noise"]["host_resolution_pct"] == pytest.approx(30.0)
 
 
 def test_committed_sweep_samples_parse():

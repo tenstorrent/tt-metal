@@ -8,11 +8,13 @@
     python tests/ttnn/dm_perf_compare/run.py --calls calls/repeat_smoke.json \\
         --before-tree <build of the merge-base> --after-tree <build of the change> --out results.json
 
-Per round, fresh processes measure time per call with the profiler off: before and after run the
-default only (Q1, order alternating between rounds), then after runs the default and both forced
-implementations and a second copy of the default (Q2 and its A-vs-A control). A control pair of the
-after build against itself, on a few calls, sets the noise band. A device-profiler pass over the after build then adds device time and the
-device ops each implementation dispatches. This script only spawns processes and needs no ttnn.
+Per round, fresh processes measure host time per call with the profiler off: before and after run
+the default only (order alternating between rounds), then after runs the default and both forced
+implementations and a second copy of the default. A control pair of the after build against itself,
+on every call, sets the host resolution. Device-profiler passes then give device time and the device
+ops dispatched: the before build runs the default only, the after build every implementation, order
+alternating between rounds. Q1 and Q2 are judged on device time; host time is detail. This script
+only spawns processes and needs no ttnn.
 """
 
 import argparse
@@ -114,10 +116,10 @@ class Runner:
         ]
         return self.spawn(tree_name, label, argv)
 
-    def device_pass(self, label):
+    def device_pass(self, tree_name, label, impls):
         prof = os.path.join(self.work, f"prof-{label}")
         shutil.rmtree(prof, ignore_errors=True)
-        argv = ["--pass", "device", "--reps", str(self.args.device_reps)]
+        argv = ["--pass", "device", "--impls", ",".join(impls), "--reps", str(self.args.device_reps)]
         prefix = ("-m", "tracy", "-p", "-r", "-o", prof, "-n", "dmperf")
         # tracy takes the first non-flag token as the program, so the worker path must follow the flags.
         env = {
@@ -127,7 +129,7 @@ class Runner:
             "PROFILER_OUTPUT_DIR": prof + "/reports",
             "PROFILER_LOGS_DIR": prof + "/logs",
         }
-        result = self.spawn("after", label, argv, python_prefix=prefix, extra_env=env)
+        result = self.spawn(tree_name, label, argv, python_prefix=prefix, extra_env=env)
         csv_path = profile_csv.find_csv(prof)
         if result is None or csv_path is None:
             return {}
@@ -149,7 +151,6 @@ def main(argv):
     parser.add_argument("--reps", type=int, default=30, help="timed repetitions per call, best kept")
     parser.add_argument("--device-reps", type=int, default=10)
     parser.add_argument("--device-rounds", type=int, default=None, help="default: same as --rounds")
-    parser.add_argument("--control-calls", type=int, default=4)
     parser.add_argument("--no-prime", action="store_true", help="skip the discarded first pair of processes")
     parser.add_argument("--no-device", action="store_true")
     args = parser.parse_args(argv)
@@ -159,14 +160,11 @@ def main(argv):
     runner = Runner(args, doc)
     count = len(doc["calls"])
     everything = list(range(count))
-    control = calls_mod.control_indices(count, args.control_calls)
-    control_ids = [doc["calls"][i]["id"] for i in control]
     after_impls = [*IMPLS, CONTROL]
 
     raw = {
         "time": {"before": [], "after_default": [], "after": [], "ctl_before": [], "ctl_after": []},
-        "device": [],
-        "control_ids": control_ids,
+        "device": {"before": [], "after": []},
     }
     if not args.no_prime:
         # The first processes after idle run slower (cold kernel cache, card not at clocks); keeping
@@ -189,12 +187,14 @@ def main(argv):
             raw["time"][label].append(runner.time_pass(tree, f"{label}-r{rnd}", impls, everything, rnd))
         ctl_pair = (("ctl_before", "after"), ("ctl_after", "after"))
         for label, tree in ctl_pair if first_is_before else reversed(ctl_pair):
-            raw["time"][label].append(runner.time_pass(tree, f"{label}-r{rnd}", ["default"], control, rnd))
+            raw["time"][label].append(runner.time_pass(tree, f"{label}-r{rnd}", ["default"], everything, rnd))
 
     if not args.no_device:
         for rnd in range(args.device_rounds or args.rounds):
             log("device round %d" % (rnd + 1))
-            raw["device"].append(runner.device_pass(f"device-r{rnd}"))
+            sides = (("before", ["default"]), ("after", IMPLS))
+            for side, impls in sides if rnd % 2 == 0 else reversed(sides):
+                raw["device"][side].append(runner.device_pass(side, f"device-{side}-r{rnd}", impls))
 
     side_runs = {
         "before": raw["time"]["before"],
@@ -215,21 +215,28 @@ def main(argv):
             "warmup": args.warmup,
             "reps": args.reps,
             "device_reps": args.device_reps,
-            "control_calls": args.control_calls,
         },
     }
     results = compare.build(doc, raw, meta)
     with open(args.out, "w") as f:
         json.dump(results, f, indent=1)
     summary = results["summary"]
+    noise = results["noise"]
     log(
-        "noise %.2f%%  q1 %s  q2 %s  q2 control %s"
-        % (results["noise"]["noise_pct"], summary["q1"], summary["q2"], summary["q2_control"])
+        "device band %.2f%%  host resolution %.1f%%  q1 %s  q1 host moved %d  q2 %s  q2 control %s"
+        % (
+            noise["device_band_pct"],
+            noise["host_resolution_pct"],
+            summary["q1"],
+            summary["q1_host_moved"],
+            summary["q2"],
+            summary["q2_control"],
+        )
     )
-    if not results["noise"]["reliable"]:
+    if not noise["reliable"]:
         log(
-            "WARNING: noise %.1f%% is above %.1f%%; the control pair was disturbed, rerun"
-            % (results["noise"]["noise_pct"], stats.MAX_NOISE_PCT)
+            "WARNING: device band %.1f%% is above %.1f%%; device rounds disagreed, rerun"
+            % (noise["device_band_pct"], stats.MAX_NOISE_PCT)
         )
     log("skipped/failed entries: %d" % len(results["skipped"]))
     if not all(tree_ok.values()):
