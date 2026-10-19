@@ -27,7 +27,7 @@ use() {  # use <arm>
   export TT_METAL_CACHE=$OUT/cache_$1; mkdir -p $TT_METAL_CACHE
 }
 python3 -m pytest --collect-only -q -p no:cacheprovider -o addopts= tests/ttnn/unit_tests/operations/data_movement/test_tz_ol.py 2>&1 | tail -8 | cut -c1-200
-use M; timeout 900 python3 -m pytest -q -p no:cacheprovider -o addopts= "$(head -1 /work/ci_ab/ol/nodes.txt)" > /tmp/dry.txt 2>&1; echo "== dry run rc=$?"; tail -25 /tmp/dry.txt | cut -c1-250
+use ${DRY_ARM:-M}; timeout 900 python3 -m pytest -q -p no:cacheprovider -o addopts= "$(head -1 /work/ci_ab/ol/nodes.txt)" > /tmp/dry.txt 2>&1; echo "== dry run ${DRY_ARM:-M} rc=$?"; grep -a -v "^  File" /tmp/dry.txt | grep -a -i -E "error|throw|fatal|what|abort|fail" | head -30 | cut -c1-300
 elfsum() { for e in $(ls $1/*/kernels/*/*/trisc*/*.elf 2>/dev/null | grep -i tiliz); do $OBJ -O binary -j .text "$e" /tmp/e.bin 2>/dev/null && md5sum < /tmp/e.bin | cut -c1-10; done | sort | md5sum | cut -c1-10; }
 RV=$(echo $1 | tr ' ' '\n' | tac | tr '\n' ' ')
 r=0
