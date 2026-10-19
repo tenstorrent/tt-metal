@@ -36,15 +36,16 @@ copies and page-table bookkeeping. TTFT is dominated by the per-32-token `sparse
 export TT_METAL_HOME=<tt-metal build> PYTHONPATH=<this tt-metal checkout> MESH_DEVICE="(4,8)" HF_HUB_OFFLINE=1
 cd <this tt-metal checkout>   # the model's kernel sources resolve against the working directory first
 vllm serve /path/to/MiMo-V2.6-Flash-MOPD --served-model-name XiaomiMiMo/MiMo-V2.6-Flash-MOPD --trust-remote-code \
-  --data-parallel-size 4 --api-server-count 1 --max-num-seqs 4 --max-model-len 32768 --block-size 64 \
+  --data-parallel-size 4 --max-num-seqs 4 --max-model-len 32768 --block-size 64 \
   --enable-chunked-prefill --max-num-batched-tokens 2048 --enable-prefix-caching \
   --reasoning-parser mimo --tool-call-parser mimo --enable-auto-tool-choice \
   --additional-config '{"tt": {"trace_mode": "decode_only", "trace_region_size": 150000000, "l1_small_size": 65536, "dispatch_core_axis": "col"}}'
 ```
 
 - `--max-num-seqs` is per lane (16 users in total). `--block-size 64` is required.
-- `--api-server-count 1`: without it vLLM starts one API server per DP rank, and each extra one rejects the
-  plugin's structured-output setting (plugin fix in progress).
+- vLLM starts one API server per DP rank (4) by default; that needs plugin 11dc5a9 or later (before it, every
+  extra API server rejected the plugin's structured-output setting and `--api-server-count 1` was required).
+  Checked: 24 concurrent completions, a chat and 4 JSON-schema requests over the 4 API servers all succeed.
 - `MIMO_KV_GB_PER_CHIP` (default 6) caps the KV pool per lane; `MIMO_MODEL_PATH` / `MIMO_TT_CACHE` as for the tests.
 - Clients on this host should use `127.0.0.1`: it has no `localhost` entry in /etc/hosts, and the async OpenAI
   client times out resolving it.
