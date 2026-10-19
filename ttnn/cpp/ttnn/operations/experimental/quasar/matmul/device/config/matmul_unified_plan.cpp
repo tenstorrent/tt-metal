@@ -501,7 +501,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
 
     // ---- C slice ----
     // Each core's share of C: the output shard when C is sharded, else M / N split over the bounding box of
-    // the cores. An explicit or shard-derived C slice is taken as is; an auto one is the largest piece of the
+    // the cores. An explicit or shard-derived C slice is taken as is; an auto one is the largest C slice of the
     // share that fits L1 (#57884).
     const std::optional<tt::tt_metal::ShardSpec>& C_shard =
         output.has_value() ? output->memory_config().shard_spec() : attributes.output_mem_config.shard_spec();
@@ -538,8 +538,8 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         }
         plan = std::move(*fixed);
     } else {
-        // Candidates are divisor pieces of the share, largest area first (ties: wider). The first that fits
-        // wins, except one that fits only with K_chunk_tiles == 1 yields to a smaller piece with a longer K
+        // Candidates are C slices whose dims divide the share's, largest area first (ties: wider). The first that fits
+        // wins, except one that fits only with K_chunk_tiles == 1 yields to a smaller C slice with a longer K
         // chunk and more work per L1 fill (C slice tiles x K chunk); the whole share is never shrunk if it fits.
         const auto divisors_descending = [](uint32_t n, bool fixed) {
             std::vector<uint32_t> out;
@@ -580,8 +580,8 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         }
         TT_FATAL(
             best.has_value() || !must_fit,
-            "MatmulUnifiedProgramConfig: no piece of the {}x{}-tile per-core share of C fits L1 (budget {} B, max DFB "
-            "extent {} B)",
+            "MatmulUnifiedProgramConfig: no C slice of the {}x{}-tile per-core share of C fits L1 (budget {} B, max "
+            "DFB extent {} B)",
             share_M_tiles,
             share_N_tiles,
             l1_budget,
@@ -773,18 +773,20 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
             return;
         }
     };
-    // C slices of a fixed width (fixed_is_N) or height, the other dimension all of C's, then split into 2, 3, ...
-    // pieces. The last piece may be shorter (13 tiles in 4 pieces: 4, 4, 4, 1).
-    const auto shrinking_C_slices = [&](uint32_t fixed_tiles, bool fixed_is_N) {
+    // A 1D placement gives each core a strip of C: strip_width_tiles columns (strip_is_columns) or rows, over all of
+    // C's other dimension. The C slice shapes to try for it, largest first: the whole strip as one C slice, then the
+    // strip cut into 2, 3, ... C slices along its length, the last possibly shorter (13 tiles in 4: 4, 4, 4, 1).
+    const auto C_slice_shapes_for_strip = [&](uint32_t strip_width_tiles, bool strip_is_columns) {
         std::vector<std::pair<uint32_t, uint32_t>> shapes;
-        const uint32_t free_tiles = fixed_is_N ? M_tiles : N_tiles;
-        uint32_t previous_free_slice_tiles = 0;
-        for (uint32_t pieces = 1; pieces <= free_tiles; ++pieces) {
-            const uint32_t free_slice_tiles = tt::div_up(free_tiles, pieces);
-            if (free_slice_tiles != previous_free_slice_tiles) {
+        const uint32_t strip_length_tiles = strip_is_columns ? M_tiles : N_tiles;
+        uint32_t previous_C_slice_length_tiles = 0;
+        for (uint32_t C_slices_per_strip = 1; C_slices_per_strip <= strip_length_tiles; ++C_slices_per_strip) {
+            const uint32_t C_slice_length_tiles = tt::div_up(strip_length_tiles, C_slices_per_strip);
+            if (C_slice_length_tiles != previous_C_slice_length_tiles) {
                 shapes.push_back(
-                    fixed_is_N ? std::pair(free_slice_tiles, fixed_tiles) : std::pair(fixed_tiles, free_slice_tiles));
-                previous_free_slice_tiles = free_slice_tiles;
+                    strip_is_columns ? std::pair(C_slice_length_tiles, strip_width_tiles)
+                                     : std::pair(strip_width_tiles, C_slice_length_tiles));
+                previous_C_slice_length_tiles = C_slice_length_tiles;
             }
         }
         return shapes;
@@ -813,12 +815,12 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
             "1D_across_N",
             across_N_cores,
             ROW_MAJOR,
-            shrinking_C_slices(tt::div_up(N_tiles, across_N_cores.num_cores()), /*fixed_is_N=*/true));
+            C_slice_shapes_for_strip(tt::div_up(N_tiles, across_N_cores.num_cores()), /*strip_is_columns=*/true));
         add_candidate(
             "1D_across_M",
             across_M_cores,
             ROW_MAJOR,
-            shrinking_C_slices(tt::div_up(M_tiles, across_M_cores.num_cores()), /*fixed_is_N=*/false));
+            C_slice_shapes_for_strip(tt::div_up(M_tiles, across_M_cores.num_cores()), /*strip_is_columns=*/false));
         // Keep a sharded operand where it is: an L1 shard can then be bound in place, and a DRAM shard is read by
         // the core next to its bank (the cores listed in bank order, which the C slice walk follows).
         const auto dram_bank_cores = [&]() {
@@ -835,7 +837,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
                 "A_shard_rows",
                 A.memory_config().is_dram() ? dram_bank_cores() : A.shard_spec()->grid,
                 A.shard_spec()->orientation,
-                shrinking_C_slices(A_shard_M_tiles, /*fixed_is_N=*/false));
+                C_slice_shapes_for_strip(A_shard_M_tiles, /*strip_is_columns=*/false));
         }
         if (B.is_sharded() && B.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
             const uint32_t B_shard_N_tiles = B.shard_spec()->shape[1] / TILE_WIDTH;
@@ -843,7 +845,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
                 "B_shard_columns",
                 B.memory_config().is_dram() ? dram_bank_cores() : B.shard_spec()->grid,
                 B.shard_spec()->orientation,
-                shrinking_C_slices(B_shard_N_tiles, /*fixed_is_N=*/true));
+                C_slice_shapes_for_strip(B_shard_N_tiles, /*strip_is_columns=*/true));
         }
     }
 
