@@ -259,8 +259,8 @@ void py_module_types(nb::module_& mod) {
         .def(
             "__init__",
             [](m2::DataMovementHardwareConfig* self, std::optional<DM1XX> config_1xx, std::optional<DM2XX> config_2xx) {
-                new (self) m2::DataMovementHardwareConfig{
-                    .config_1xx = std::move(config_1xx), .config_2xx = std::move(config_2xx)};
+                new (self)
+                    m2::DataMovementHardwareConfig{.config_1xx = config_1xx, .config_2xx = std::move(config_2xx)};
             },
             nb::arg("config_1xx") = nb::none(),
             nb::arg("config_2xx") = nb::none())
@@ -295,8 +295,8 @@ void py_module_types(nb::module_& mod) {
                     .enable_32_bit_dest = enable_32_bit_dest,
                     .double_buffer_dest = double_buffer_dest,
                     .unpack_modes = std::move(unpack_modes),
-                    .config_1xx = std::move(config_1xx),
-                    .config_2xx = std::move(config_2xx)};
+                    .config_1xx = config_1xx,
+                    .config_2xx = config_2xx};
             },
             nb::arg("fpu_math_fidelity") = tt::tt_metal::MathFidelity::HiFi4,
             nb::arg("sfpu_precision_mode") = tt::tt_metal::Precision::Precise,
