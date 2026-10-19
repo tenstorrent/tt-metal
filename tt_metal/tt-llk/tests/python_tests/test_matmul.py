@@ -31,6 +31,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATMUL_ROW_MOP,
+    MATMUL_FORM_KEYS,
     MATMUL_STREAM_NARROW,
     MATMUL_UNPACK_TTSYNC,
     NUM_FACES,
@@ -170,6 +171,7 @@ def test_matmul(
             *MATMUL_STREAM_NARROW.for_block(
                 formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim
             ),
+            *MATMUL_FORM_KEYS.for_block(formats, matmul_dims.kt_dim),
         ],
         runtimes=[
             NUM_FACES(),
@@ -361,6 +363,7 @@ def test_matmul_full_sync(math_fidelity, formats, dims):
                 matmul_dims.ct_dim,
                 matmul_dims.rt_dim,
             ),
+            *MATMUL_FORM_KEYS.for_block(formats, matmul_dims.kt_dim),
         ],
         runtimes=[
             NUM_FACES(),

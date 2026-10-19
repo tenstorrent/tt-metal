@@ -13,6 +13,7 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
+#include "llk_matmul_forms.h"
 #include "llk_unpack_common.h"
 
 using namespace ckernel;
@@ -92,7 +93,8 @@ inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
     const std::uint32_t unpB_src_format,
     const std::uint32_t dest_max_tiles)
 {
-    return dest_max_tiles > 8 && ((ct_dim >= rt_dim) ? _llk_unpack_AB_matmul_narrow_format_(unpA_src_format) : _llk_unpack_AB_matmul_narrow_format_(unpB_src_format));
+    return dest_max_tiles > 8 &&
+           ((ct_dim >= rt_dim) ? _llk_unpack_AB_matmul_narrow_format_(unpA_src_format) : _llk_unpack_AB_matmul_narrow_format_(unpB_src_format));
 }
 
 /**
@@ -491,15 +493,16 @@ inline void _llk_unpack_AB_matmul_uninit_()
 }
 
 /**
- * @brief The hoist_rows argument of @ref _llk_unpack_AB_matmul_ for a kernel's fidelity and sync mode.
+ * @brief The hoist_rows argument of @ref _llk_unpack_AB_matmul_ for the keys a kernel fixes at compile time.
  *
- * With HiFi4 and one DEST section the math and pack bound every block, so a shorter unpack call only moves their
- * hand-off; those kernels keep the per-row form.
+ * Where the composed run is bound by the pack, a shorter unpack call only moves the hand-off between the threads and
+ * can lose; @ref matmul_default_form holds the measured choice.
  */
-template <MathFidelity math_fidelity, DstSync dst_sync>
+template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid>
 constexpr bool unpack_AB_matmul_hoist_rows()
 {
-    return !(math_fidelity == MathFidelity::HiFi4 && dst_sync == DstSync::SyncFull);
+    constexpr char form = matmul_default_form<math_fidelity, dst_sync, fp32_dest, kt_per_section, out_format>();
+    return form == 'h' || form == 'R';
 }
 
 /**

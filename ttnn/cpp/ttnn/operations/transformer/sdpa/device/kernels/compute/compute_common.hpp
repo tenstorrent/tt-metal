@@ -1053,10 +1053,20 @@ __attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb,
     cb_out.push_back(num_tiles);
 }
 
+// The format a matmul packs to, which picks its default unpack and math forms on Blackhole.
+template <uint32_t cb>
+constexpr DataFormat sdpa_pack_format() {
+#ifdef ARCH_BLACKHOLE
+    return static_cast<DataFormat>(unpack_src_format[cb]);
+#else
+    return DataFormat::Invalid;
+#endif
+}
+
 /**
  * out_cb = in0_cb @ in1_cb
  */
-template <bool row_mop = false>
+template <bool row_mop = false, uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid>
 ALWI void matmul_blocks(
     const uint32_t& in0_cb,
     const uint32_t& in1_cb,
@@ -1084,7 +1094,7 @@ ALWI void matmul_blocks(
     CircularBuffer cb_mask(mask_cb);
     CircularBuffer cb_zero(zero_cb);
 
-    matmul_block_init<row_mop>(
+    matmul_block_init<row_mop, false, kt_per_section, out_format>(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     const uint32_t output_num_tiles = M * N;
@@ -1111,7 +1121,7 @@ ALWI void matmul_blocks(
             uint32_t in1_index = in1_index_offset;
 
             for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                matmul_block<row_mop>(
+                matmul_block<row_mop, false, kt_per_section, out_format>(
                     in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
                 in0_index++;
                 in1_index += N;
@@ -1125,7 +1135,8 @@ ALWI void matmul_blocks(
                     add_tiles(zero_cb, mask_cb, 0, i, i);
                 }
                 reconfig_data_format(in1_cb, in0_cb);
-                matmul_block_init<row_mop>(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
+                matmul_block_init<row_mop, false, kt_per_section, out_format>(
+                    in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -1796,7 +1807,7 @@ void sdpa_inner_loop(
              */
             reconfig_data_format(cb_k_in, cb_q_in);
             pack_reconfig_data_format(cb_qk_im);
-            matmul_blocks<qk_row_mop>(
+            matmul_blocks<qk_row_mop, DHt, sdpa_pack_format<cb_qk_im>()>(
                 cb_q_in,
                 cb_k_in,
                 cb_qk_im,

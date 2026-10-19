@@ -267,6 +267,13 @@ void kernel_main() {
     constexpr uint32_t mm_out_cb_id = fuse_bias ? matmul_partials_cb : untilize_mode_out_cb_id;
 
     constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
+#ifdef ARCH_BLACKHOLE
+    // the format each DEST section is packed to: the partials until the last inner block
+    constexpr DataFormat mm_pack_format =
+        static_cast<DataFormat>(unpack_src_format[in0_num_blocks_w > 1 ? matmul_partials_cb : mm_out_cb_id]);
+#else
+    constexpr DataFormat mm_pack_format = DataFormat::Invalid;
+#endif
 
     constexpr uint32_t in0_num_subblocks_read_last =
         (split_reader && !split_reader_cb_shared) ? reader_num_h_subblocks / 2 : 0;
@@ -303,7 +310,7 @@ void kernel_main() {
     DataflowBuffer dfb_untilize_mode_out(untilize_mode_out_cb_id);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
-    matmul_block_init<row_mop>(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    matmul_block_init<row_mop, false, in0_block_w, mm_pack_format>(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
@@ -350,7 +357,7 @@ void kernel_main() {
                                 in0_num_subblocks_read_last);
                         }
                         reconfig_data_format(in0_pretilize_cb_id, in1_cb_id, in0_pretilize_cb_id, in0_cb_id);
-                        matmul_block_init<row_mop>(
+                        matmul_block_init<row_mop, false, in0_block_w, mm_pack_format>(
                             in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                     }
                 } else {
@@ -403,7 +410,7 @@ void kernel_main() {
                     }
 
                     reconfig_data_format(in0_cb_id, in1_cb_id, in0_cb_id, mm_in0_cb_id);
-                    matmul_block_init<row_mop>(
+                    matmul_block_init<row_mop, false, in0_block_w, mm_pack_format>(
                         mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
 
@@ -449,7 +456,7 @@ void kernel_main() {
                             dfb_matmul_partials.pop_front(out_subblock_num_tiles);
                             // Reconfigure srcA back
                             reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
-                            matmul_block_init<row_mop>(
+                            matmul_block_init<row_mop, false, in0_block_w, mm_pack_format>(
                                 mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                         } else {
                             // just acquire
@@ -466,7 +473,7 @@ void kernel_main() {
                             // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                             // accumulation is done by iterating matmul_block across inner dim
                             // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
-                            matmul_block<row_mop>(
+                            matmul_block<row_mop, false, in0_block_w, mm_pack_format>(
                                 mm_in0_cb_id,
                                 in1_cb_id,
                                 in0_index,
