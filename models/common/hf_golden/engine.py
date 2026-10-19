@@ -182,6 +182,8 @@ class LayerwiseGolden:
     hf_repo: str = ""
     recipe: Recipe = Recipe()
     trust_remote_code: bool = False
+    # A tokenizer that is remote code although the model is not (Kimi-K2.7's tiktoken one): token cache and prefix.
+    remote_tokenizer: bool = False
     checkpoint_prefix: str | None = None  # backbone prefix in the checkpoint; default: its module path in the model
     lm_head_prefix: str | None = None  # lm_head prefix in the checkpoint; default: its module path in the model
     # Attention kernels the upstream model computes correctly. A model whose sinks (or other terms) only the eager
@@ -355,14 +357,16 @@ class LayerwiseGolden:
         print(f"[weights] {args.hf_repo} @ {revision}", flush=True)
         pinned = None if revision == "local" else revision
         hub = hub_kwargs(args.hf_repo, pinned)  # config, tokenizer, remote code: from the copy on disk if there is one
-        tok_path = token_cache(args.hf_repo, args.root, args.text or args.root / TEXT, **hub)
+        tok_remote = dict(trust_remote_code=True) if self.trust_remote_code or self.remote_tokenizer else {}
+        tok_path = token_cache(args.hf_repo, args.root, args.text or args.root / TEXT, **tok_remote, **hub)
         token_ids = load_file(str(tok_path))["token_ids"]
         assert args.isl <= token_ids.numel(), f"isl {args.isl} > {token_ids.numel()} tokens in {tok_path}"
         prefix_ids = []
         if args.prefix:
             from transformers import AutoTokenizer
 
-            prefix_ids = AutoTokenizer.from_pretrained(args.hf_repo, **hub)(args.prefix, add_special_tokens=False)
+            tok = AutoTokenizer.from_pretrained(args.hf_repo, **tok_remote, **hub)
+            prefix_ids = tok(args.prefix, add_special_tokens=False)
             prefix_ids = prefix_ids["input_ids"]
             token_ids = torch.cat([torch.tensor(prefix_ids, dtype=token_ids.dtype), token_ids])
         input_ids = token_ids[: args.isl].long().unsqueeze(0).to(device)

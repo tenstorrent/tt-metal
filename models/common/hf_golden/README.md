@@ -27,6 +27,7 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_muse_glimmer_30b.py` | meta-models/Muse-Glimmer-30B | transformers `muse_glimmer` (text backbone), needs transformers >= 5.17 |
 | `generate_golden_hy3.py` | tencent/Hy3 | transformers `hy_v3` (GQA + MoE) |
 | `generate_golden_hy4_preview.py` | tencent/Hy4-preview | transformers `hy_v4` (DSA + sinks + IHC), needs transformers >= 5.17 |
+| `generate_golden_kimi_k2_7_code.py` | moonshotai/Kimi-K2.7-Code | transformers `kimi_k25` (DeepseekV3 text model), INT4 experts dequantized, needs transformers >= 5.17 |
 | `generate_golden_whole_model.py` | Qwen/Qwen3.8-27B, Llama-3.1-8B, Mistral-Medium-3.5 | whole model, one forward (see below) |
 
 Not covered yet:
@@ -55,6 +56,14 @@ cached weights, 107 GB GPU peak, 36 GB on disk. Runs are deterministic, but NOT 
 router's fp32 logit matmul rounds differently by row count (max 1.6e-5 at layer 1), which flips a few top-8 picks
 and grows with depth (at isl 10240 vs the first 10240 rows of isl 56320: 96-99.8% of expert picks agree, last-layer
 hidden PCC 0.974). Compare routing as sets, with a tolerance.
+
+**Kimi-K2.7-Code:** `[BOS]` prefix (wikitext ppl at isl 10240 over the same 10100 tokens: 2.897 `[BOS]`, 2.937 raw,
+3.200 chat). The tokenizer is remote code on tiktoken, which reads even local files through `blobfile`: add
+`--with blobfile` to the overlay. Routed experts are compressed-tensors INT4 (group 32), dequantized bit-identically
+to compressed_tensors 0.17 (checked at run time on the first MoE layer). transformers' MLA cache already holds the
+latent (normed c_kv and roped k_pe), so it is stored as is. isl 56320 with `--prefill-chunk 5120`: 2.2 min, 54 GB GPU
+peak, 64 GB on disk (38 GB trimmed to 28 layers); its first 10240 rows equal the isl 10240 run bit for bit (426/426
+tensors).
 
 **MiniMax-M3 at long ISL:** the upstream lightning indexer builds a whole [4, N, N] fp32 score matrix (~105 GB peak at
 isl 56320 with its masked copy). `HF_GOLDEN_INDEXER_CHUNK=4096` builds it 4096 query rows at a time (~4 GB); every op
