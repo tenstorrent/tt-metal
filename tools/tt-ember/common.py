@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Helpers shared by auto.py and the sweep scripts (run_all.py, run_power_cases.py)."""
+"""Helpers shared by auto.py, run_sweep.py and the analysis scripts."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ RESET_COOLDOWN_S = 10
 # run as done only if this file exists and records the same settings it is about to use.
 RUN_COMPLETE_FILE = "run_complete.json"
 
-# Default --trim-ms. run_power_cases.py uses 1 ms instead: the published POWER_CASE results were
+# Default --trim-ms. run_sweep.py uses 1 ms instead: the published POWER_CASE results were
 # made with it, and changing it would change them.
 DEFAULT_TRIM_MS = 6.0
 POWER_CASES_TRIM_MS = 1.0
@@ -168,9 +168,12 @@ def auto_py_command(
     slot_ms: int,
     device_id: Optional[int],
     trim_ms: float,
+    python_exe: Optional[str] = None,
 ) -> List[str]:
+    """python_exe, if given, runs auto.py and is passed on for the parser; otherwise both use
+    the Python running this script."""
     cmd: List[str] = [
-        sys.executable,
+        python_exe or sys.executable,
         str(auto_script),
         "--telemetry-exe",
         str(telemetry_exe),
@@ -195,8 +198,29 @@ def auto_py_command(
     ]
     if device_id is not None:
         cmd += ["--device-id", str(device_id)]
+    if python_exe:
+        cmd += ["--python-exe", python_exe]
     # --app-args must be last: auto.py passes everything after it to the app.
     return cmd + ["--app-args"] + [str(a) for a in app_args]
+
+
+def whole_run_value(row: Mapping[str, str], column: str, legacy: bool) -> float:
+    """A charge or energy column of program_intervals.csv, for the whole run.
+
+    Those columns cover the trimmed telemetry window (window_s), while a FLOP count covers the
+    whole run (algo_time_s_reported). Updated mode scales the value up to the whole run so
+    pJ/FLOP is not biased low by the trim; legacy mode uses the window value, as the published
+    analysis did. Returns NaN if anything needed is missing or not finite.
+    """
+    try:
+        value = float(row[column])
+        if legacy:
+            return value
+        window_s = float(row["window_s"])
+        run_s = float(row["algo_time_s_reported"])
+    except (KeyError, ValueError):
+        return float("nan")
+    return value * run_s / window_s if window_s > 0 else float("nan")
 
 
 def environ_with(overrides: Mapping[str, str]) -> Dict[str, str]:

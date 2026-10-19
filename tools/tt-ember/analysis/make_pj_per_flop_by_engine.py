@@ -43,6 +43,8 @@ Examples
 """
 import argparse
 import csv
+import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +52,10 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+# common.py lives one directory up.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from common import whole_run_value  # noqa: E402
 
 ENGINES = [
     ("reader", "Reader (writer_amp - reader_idle2)"),
@@ -76,7 +82,7 @@ def load_rows(path: Path) -> dict:
     return rows
 
 
-def per_engine_pj_per_flop(root: Path, flops: float) -> dict:
+def per_engine_pj_per_flop(root: Path, flops: float, legacy: bool) -> dict:
     cases = {}
     for name in REQUIRED_CASES:
         p = find_csv(root, name)
@@ -90,10 +96,10 @@ def per_engine_pj_per_flop(root: Path, flops: float) -> dict:
     for g in grids:
         wa = cases["writer_amp"][g]
         vcore = float(wa["avg_vcore_v"])
-        wa_as = float(wa["dynamic_charge_peak_as"])
+        wa_as = whole_run_value(wa, "dynamic_charge_peak_as", legacy)
 
         def ablate(idle_case):
-            idle_as = float(cases[idle_case][g]["dynamic_charge_peak_as"])
+            idle_as = whole_run_value(cases[idle_case][g], "dynamic_charge_peak_as", legacy)
             energy_j = (wa_as - idle_as) * vcore
             return energy_j / flops * 1e12
 
@@ -151,6 +157,13 @@ def main():
         action="store_true",
         help="Include the first interval; its baseline is one-sided and unreliable.",
     )
+    ap.add_argument(
+        "--mode",
+        choices=("updated", "legacy"),
+        default=os.environ.get("LONG_MATMUL_MODE") or "updated",
+        help="updated scales energy from the trimmed window to the whole run, as the FLOP count is; "
+        "legacy uses the window value, as the published figures did. Default: $LONG_MATMUL_MODE, else updated",
+    )
     ap.add_argument("--dpi", type=int, default=150)
     ap.add_argument("--out", type=Path, default=Path("pj_per_flop_by_engine.png"))
     args = ap.parse_args()
@@ -164,7 +177,7 @@ def main():
 
     datasets = []
     for root, label in [(args.run, args.label)] + ([(args.compare, args.compare_label)] if args.compare else []):
-        per_engine, grids = per_engine_pj_per_flop(root, flops)
+        per_engine, grids = per_engine_pj_per_flop(root, flops, args.mode == "legacy")
         if not args.keep_first_grid and grids:
             grids = grids[1:]
         datasets.append((label, per_engine, grids))

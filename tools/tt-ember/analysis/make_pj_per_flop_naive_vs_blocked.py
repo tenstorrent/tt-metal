@@ -11,6 +11,8 @@ kernel reuses tiles.
 """
 import argparse
 import csv
+import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +20,10 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+# common.py lives one directory up.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from common import whole_run_value  # noqa: E402
 
 LABELS = (
     "Naive, no tile reuse (2.00 tile reads per multiply)",
@@ -47,6 +53,13 @@ def main():
         action="store_true",
         help="Include the first interval; its baseline is one-sided and unreliable.",
     )
+    ap.add_argument(
+        "--mode",
+        choices=("updated", "legacy"),
+        default=os.environ.get("LONG_MATMUL_MODE") or "updated",
+        help="updated scales energy from the trimmed window to the whole run, as the FLOP count is; "
+        "legacy uses the window value, as the published figures did. Default: $LONG_MATMUL_MODE, else updated",
+    )
     ap.add_argument("--dpi", type=int, default=150)
     ap.add_argument("--out", type=Path, default=Path("pj_per_flop_naive_vs_blocked.png"))
     args = ap.parse_args()
@@ -61,7 +74,8 @@ def main():
     if not args.keep_first_grid:
         grids = grids[1:]
     series = [
-        (label, {g: float(run[g]["energy_j_vi"]) / flops * 1e12 for g in grids}) for run, label in zip(runs, LABELS)
+        (label, {g: whole_run_value(run[g], "energy_j_vi", args.mode == "legacy") / flops * 1e12 for g in grids})
+        for run, label in zip(runs, LABELS)
     ]
     x = np.arange(len(grids))
     width = 0.8 / len(series)

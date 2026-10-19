@@ -29,6 +29,8 @@ in tt-ember is modified.
 """
 import argparse
 import csv
+import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -36,6 +38,10 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+# common.py lives one directory up.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from common import whole_run_value  # noqa: E402
 
 # Engine -> the ablation case whose absence isolates it, matching analysis/power_cases.py's
 # ENGINE_ABLATIONS so the two charts decompose energy the same way.
@@ -69,7 +75,7 @@ def load(csv_path: Path):
         return {r["grid"]: r for r in csv.DictReader(f)}
 
 
-def energy_by_engine(op_root: Path):
+def energy_by_engine(op_root: Path, legacy: bool):
     """Dynamic energy [J] per engine per grid: (all-active - engine-idle) charge x V_core."""
     active = load(op_root / ALL_ACTIVE / "program_intervals.csv")
     if active is None:
@@ -80,11 +86,17 @@ def energy_by_engine(op_root: Path):
         if idle is None:
             continue
         per_engine[engine] = {
-            g: (float(r["dynamic_charge_avg_as"]) - float(idle[g]["dynamic_charge_avg_as"])) * float(r["avg_vcore_v"])
+            g: (
+                whole_run_value(r, "dynamic_charge_avg_as", legacy)
+                - whole_run_value(idle[g], "dynamic_charge_avg_as", legacy)
+            )
+            * float(r["avg_vcore_v"])
             for g, r in active.items()
             if g in idle
         }
-    measured = {g: float(r["dynamic_charge_avg_as"]) * float(r["avg_vcore_v"]) for g, r in active.items()}
+    measured = {
+        g: whole_run_value(r, "dynamic_charge_avg_as", legacy) * float(r["avg_vcore_v"]) for g, r in active.items()
+    }
     return per_engine, measured
 
 
@@ -94,13 +106,20 @@ def main():
     ap.add_argument("--app-args", nargs=4, type=int, required=True, metavar=("M", "N", "K", "ITERS"))
     ap.add_argument("--board", default="Blackhole p100a")
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument(
+        "--mode",
+        choices=("updated", "legacy"),
+        default=os.environ.get("LONG_MATMUL_MODE") or "updated",
+        help="updated scales energy from the trimmed window to the whole run, as the FLOP count is; "
+        "legacy uses the window value, as the published figures did. Default: $LONG_MATMUL_MODE, else updated",
+    )
     ap.add_argument("--dpi", type=int, default=150)
     args = ap.parse_args()
     M, N, K, iters = args.app_args
 
     data, resid = {}, {}
     for op in OPS:
-        per_engine, measured = energy_by_engine(args.output_root / op)
+        per_engine, measured = energy_by_engine(args.output_root / op, args.mode == "legacy")
         if not per_engine:
             print(f"note: no data for '{op}', skipping")
             continue
