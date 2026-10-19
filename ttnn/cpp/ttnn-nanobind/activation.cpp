@@ -60,8 +60,8 @@ void py_module(nb::module_& mod) {
             "__init__",
             [](UnaryWithParam* t, UnaryOpType op_type, tt::tt_metal::SfpuMode sfpu_mode) {
                 TT_FATAL(
-                    op_type == UnaryOpType::SOFTSIGN,
-                    "UnaryWithParam: an SfpuMode is supported for SOFTSIGN only, got {}",
+                    ttnn::operations::unary::utils::supports_sfpu_mode(op_type),
+                    "UnaryWithParam: {} does not take an SfpuMode (supported: SOFTSIGN, EXP2, RECIP)",
                     op_type);
                 new (t) UnaryWithParam{op_type, static_cast<float>(sfpu_mode)};
             },

@@ -11,6 +11,7 @@
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
+#include "sfpu_mode.h"
 #include "lltt.h"
 using namespace sfpi;
 
@@ -383,9 +384,44 @@ sfpi_inline void sfpu_reciprocal_init() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+// Strict full-tile reciprocal: the SFPARECIP seed refined by Newton steps (sfpu_reciprocal_iter), plus the one
+// special value the hardware gets wrong: SFPARECIP returns 0 for NaN, which the Relaxed pipelines store.
+// Row by row in sfpi, because the SFPLOADMACRO pipelines overwrite each input before a guard could test it.
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void _calculate_reciprocal_strict_() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat out;
+        if constexpr (APPROXIMATE) {
+            out = sfpu_reciprocal_iter<0>(in);
+        } else {
+            out = sfpu_reciprocal_iter<2>(in);
+            if constexpr (!is_fp32_dest_acc_en) {
+                out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
+            }
+        }
+        v_if(sfpi::is_nan(in)) { out = in; }
+        v_endif;
+        sfpi::dst_reg[0] = out;
+        sfpi::dst_reg++;
+    }
+}
+
+// Full-tile reciprocal per SfpuMode (Blackhole):
+//   ApproximateRelaxed  SFPARECIP alone, 7-bit, 1 cycle per row     (_calculate_reciprocal_fast_7b_)
+//   PreciseRelaxed      bf16 Dest: SFPARECIP + LSB Newton correction (_calculate_reciprocal_fast_8b_3c_)
+//                       fp32 Dest: SFPARECIP + cubic correction      (_calculate_reciprocal_fast_24b_5c_)
+//   ApproximateStrict   SFPARECIP alone, NaN-guarded, in sfpi       (_calculate_reciprocal_strict_)
+//   PreciseStrict       SFPARECIP + 2 Newton steps, NaN-guarded     (_calculate_reciprocal_strict_)
+// Both: +-0 -> +-inf, +-inf -> +-0, |x| >= 2**126 -> +-0 (SFPARECIP flushes; the result is subnormal except at
+// exactly 2**126). Strict adds NaN -> NaN; Relaxed returns 0 for NaN and the caller vouches for no NaN input.
+// The legacy APPROXIMATION_MODE entry points are the Relaxed pipelines.
+template <SfpuMode MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_reciprocal() {
-    if constexpr (APPROXIMATION_MODE) {
+    if constexpr (is_strict(MODE)) {
+        _calculate_reciprocal_strict_<is_approximate(MODE), is_fp32_dest_acc_en, ITERATIONS>();
+    } else if constexpr (is_approximate(MODE)) {
         _calculate_reciprocal_fast_7b_(ITERATIONS);
     } else if constexpr (is_fp32_dest_acc_en) {
         _calculate_reciprocal_fast_24b_5c_(ITERATIONS);
@@ -394,7 +430,7 @@ inline void calculate_reciprocal() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <SfpuMode MODE, bool is_fp32_dest_acc_en>
 void recip_init() {
     // Full-tile reciprocal owns the shared LOADMACRO/Misc configuration and, for precise FP32,
     // SFPU replay slots 0-5. Reinitialize another SFPU macro/replay owner before using it again.
@@ -409,13 +445,26 @@ void recip_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
-    if constexpr (APPROXIMATION_MODE) {
+    if constexpr (is_strict(MODE)) {
+        // The strict sfpi sequence needs only the Newton constant above.
+    } else if constexpr (is_approximate(MODE)) {
         _init_reciprocal_fast_7b_();
     } else if constexpr (is_fp32_dest_acc_en) {
         _init_reciprocal_fast_24b_5c_();
     } else {
         _init_reciprocal_fast_8b_3c_();
     }
+}
+
+// Legacy entry points: APPROXIMATION_MODE picks one of the Relaxed pipelines, as before.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void calculate_reciprocal() {
+    calculate_reciprocal<make_sfpu_mode(APPROXIMATION_MODE, false /*strict*/), is_fp32_dest_acc_en, ITERATIONS>();
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+void recip_init() {
+    recip_init<make_sfpu_mode(APPROXIMATION_MODE, false /*strict*/), is_fp32_dest_acc_en>();
 }
 
 }  // namespace sfpu
