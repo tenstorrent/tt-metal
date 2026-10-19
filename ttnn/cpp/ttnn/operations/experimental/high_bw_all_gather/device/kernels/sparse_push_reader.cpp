@@ -11,7 +11,8 @@
 //
 // Stream page layout (one page per link): word 0 = number of streams; stream words start at byte 64. The link's
 // four senders (E, W, N, S) share the page; each takes only streams whose first fabric hop leaves in its direction
-// (rows for this chip go to the E sender), and skips the rest without reading their rows.
+// (rows for this chip go to the E sender), and skips the rest without reading their rows. When a (link, direction)
+// channel has K workers behind a fabric mux, worker k of K takes every K-th packet of the channel's streams.
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -45,6 +46,8 @@ void kernel_main() {
     const uint32_t link = get_arg_val<uint32_t>(0);
     const uint32_t dir = get_arg_val<uint32_t>(1);
     const uint32_t my_rank = get_arg_val<uint32_t>(2);
+    const uint32_t sub = get_arg_val<uint32_t>(3);        // this worker's index within its channel
+    const uint32_t sub_count = get_arg_val<uint32_t>(4);  // workers per channel
     constexpr uint32_t dest_chip_ids[] = DEST_CHIP_ID;
     constexpr uint32_t dest_mesh_ids[] = DEST_MESH_ID;
     auto mine = [&](uint32_t dest) {
@@ -101,6 +104,7 @@ void kernel_main() {
             batched = 0;
         }
     };
+    uint32_t packet_turn = 0;  // channel-wide packet index modulo sub_count
     for (uint32_t s = 0; s < num_streams; ++s) {
         const uint32_t dest = next_word();
         const uint32_t base = next_word();
@@ -112,6 +116,12 @@ void kernel_main() {
         for (uint32_t j = 0; j * pages_per_packet < count; ++j) {
             const uint32_t n =
                 count - j * pages_per_packet < pages_per_packet ? count - j * pages_per_packet : pages_per_packet;
+            const bool take = packet_turn == sub;
+            packet_turn = packet_turn + 1 == sub_count ? 0 : packet_turn + 1;
+            if (!take) {
+                cursor += n;
+                continue;
+            }
             cb_reserve_back(kData, batched + 1);
             cb_reserve_back(kMeta, batched + 1);
             const uint32_t data_l1 = get_write_ptr(kData) + batched * pages_per_packet * page_bytes;
