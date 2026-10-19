@@ -51,7 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
     constexpr std::uint32_t TILE_STRIDE = TILE_SIZE_UNPACK_A;
 #endif
-    const bool holds_scaler = reduce_block_holds_scaler<POOL_TYPE, REDUCE_DIM>(DEFAULT_TENSOR_SHAPE, formats.unpack_A_src);
+    constexpr bool holds_scaler = reduce_block_holds_scaler<POOL_TYPE, REDUCE_DIM>(DEFAULT_TENSOR_SHAPE);
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -129,7 +129,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
-    const bool holds_scaler = reduce_block_holds_scaler<POOL_TYPE, REDUCE_DIM>(DEFAULT_TENSOR_SHAPE, formats.unpack_A_src);
+    constexpr bool holds_scaler = reduce_block_holds_scaler<POOL_TYPE, REDUCE_DIM>(DEFAULT_TENSOR_SHAPE);
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -173,7 +173,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     else
                     {
                         _llk_math_reduce_block_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
-                            (call - section) / TILES_PER_OUTPUT, n, DST_STRIDE, DEFAULT_TENSOR_SHAPE, formats.unpack_A_src);
+                            (call - section) / TILES_PER_OUTPUT, n, DST_STRIDE, DEFAULT_TENSOR_SHAPE);
                     }
                 }
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)

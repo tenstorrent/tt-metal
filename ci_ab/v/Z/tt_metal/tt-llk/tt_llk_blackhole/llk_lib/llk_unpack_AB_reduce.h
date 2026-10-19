@@ -209,16 +209,11 @@ inline void _llk_unpack_AB_reduce_block_(
 {
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_reduce_block_", tensor_shape);
 
-    const std::uint32_t faces = tensor_shape.total_num_faces();
-    const bool contiguous     = tile_stride_16B * 16 == SCALE_DATUM_SIZE(unpack_src_format, faces * tensor_shape.face_r_dim * FACE_C_DIM);
-    const bool holds_scaler   = reduce_block_holds_scaler<pool_type, reduce_dim>(tensor_shape, unpack_src_format);
-    // BFP data never holds the scaler (llk_reduce_block.h), so the math runs tile by tile; a non-contiguous block that
-    // does not hold it gains nothing from the strided path
-    if (num_tiles < 2 || (!contiguous && !holds_scaler))
+    if (num_tiles < 2)
     {
-        for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+        if (num_tiles == 1)
         {
-            _llk_unpack_AB_reduce_<pool_type, reduce_dim>(address_a + tile * tile_stride_16B, address_b);
+            _llk_unpack_AB_reduce_<pool_type, reduce_dim>(address_a, address_b);
         }
         return;
     }
@@ -227,6 +222,10 @@ inline void _llk_unpack_AB_reduce_block_(
     constexpr bool swap_operands       = (reduce_dim == ReduceDim::REDUCE_ROW) && (pool_type != PoolType::MAX);
     constexpr std::uint32_t data_unp   = swap_operands ? p_setadc::UNP_B : p_setadc::UNP_A;
     constexpr std::uint32_t scaler_unp = swap_operands ? p_setadc::UNP_A : p_setadc::UNP_B;
+
+    const bool holds_scaler   = reduce_block_holds_scaler<pool_type, reduce_dim>(tensor_shape);
+    const std::uint32_t faces = tensor_shape.total_num_faces();
+    const bool contiguous     = tile_stride_16B * 16 == SCALE_DATUM_SIZE(unpack_src_format, faces * tensor_shape.face_r_dim * FACE_C_DIM);
 
     if (!contiguous)
     {
