@@ -18,8 +18,9 @@ and your own edit with::
         --model distilled --image dog.png --seed 7 --out out/edit.png
 
 Several ``--out`` renders in one process reuse the captured traces; pass ``--prompt-file`` for a long caption.
-A request over the measured capacity of the mesh is refused on the host before anything touches the device
-(``policy.py``), reported as ``REFUSED`` with the budget that was exceeded, exit code 3.
+A structurally invalid request (a side that is not a multiple of 16 or over 4096, more than 10 references, a size
+whose VAE levels are not tile-aligned) is refused on the host before anything touches the device (``policy.py``),
+reported as ``REFUSED`` with the check that failed, exit code 3. There is no token budget: any admitted size runs.
 """
 
 from __future__ import annotations

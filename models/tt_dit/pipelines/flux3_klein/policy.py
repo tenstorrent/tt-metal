@@ -13,12 +13,12 @@ Checks, in order: canvas sides (multiples of 16 inside ``[MIN_SIDE, MAX_SIDE]``,
 references at most ``FLUX3_KLEIN_MAX_REFERENCES`` (``pipeline.py:27``); every reference's four VAE encoder levels
 tile-aligned (the plain ``ttnn.group_norm`` reduces over whole 32-row tiles, so a level whose ``H * W`` is not a
 multiple of 32 would fold padding rows into the statistics; ``budget="reference_size"``), the canvas likewise
-(``budget="canvas_size"``); text at most ``FLUX3_KLEIN_MAX_TEXT_LENGTH`` tokens; and the per-sample token total
-``image + image_cond + text`` against ``max_total_tokens``, the LARGEST MEASURED bucket of the mesh (the number is a
-measured row with its log cite in ``measured_buckets`` or it is not in the table). The worst case the API admits
-structurally (4096 x 4096 + 10 references of <= 1 MP + 4096 text = 65536 + 40960 + 4096 = 110,592 tokens per sample)
-is therefore refused with ``budget="total_tokens"`` until M10 measures it bucket by bucket. The device-allocation
-recovery (c) and the mock-cluster test (d) are M10 items.
+(``budget="canvas_size"``); text at most ``FLUX3_KLEIN_MAX_TEXT_LENGTH`` tokens. These are the model's own
+structural limits. There is NO token budget: the measured-bucket gate (``max_total_tokens``, refusing any request
+larger than the biggest bucket that had run on the ring) was removed on 2026-10-19 by the user's decision; a request
+of any admitted shape goes to the device, and a device allocation failure surfaces as the ttnn exception. The
+``measured`` dict still reports ``total_tokens`` (image + image_cond + text per sample) for logging. The structural
+worst case is 4096 x 4096 + 10 references of <= 1 MP + 4096 text = 65536 + 40960 + 4096 = 110,592 tokens per sample.
 """
 
 from __future__ import annotations
@@ -55,39 +55,16 @@ class Flux3KleinCapacity:
     min_side: int = MIN_SIDE
     max_references: int = FLUX3_KLEIN_MAX_REFERENCES
     max_text_length: int = FLUX3_KLEIN_MAX_TEXT_LENGTH
-    max_total_tokens: int | None = None
-    """Per-sample single-stage rows (image + image_cond + text) of the LARGEST MEASURED bucket; ``None`` = no token
-    budget (an unlisted mesh)."""
-    measured_buckets: tuple[str, ...] = ()
-    """Documentation: the measured rows that set ``max_total_tokens``, with their log cites."""
 
 
 CAPACITY: dict[tuple[int, int], Flux3KleinCapacity] = {
-    # (4, 8) ring: the largest bucket that has run on the ring with its DRAM / TRACE line in a log. M7 shipped the
-    # T2I 1024 row (4096 image + 320 text = 4416 per sample, + 80 null text for the base CFG pair):
-    # logs/m4_fix_full_4x8.log:619 (DRAM 190.6 MB/bank after capture, TRACE 25.6 MB base / 13.0 distilled),
-    # logs/m67_builder_pipeline_4x8.log:94 (3.41 GB/chip residency).
-    # M8 (fixer, 2026-10-17 23:5x): raised to the 2-reference bucket 4096 + 8192 + 320 = 12608 (distilled/2_3_mugprint,
-    # two 1024x1024 references), measured on the ring through the M4 denoise method with the real distilled DiT:
-    # logs/m8_verifier_numerics_denoise_refs_4x8.log:1912 (final pcc 0.999552 / rel_rmse 0.0301 vs the golden, teacher-
-    # forced floor 0.998987 at :1904) with TRACE 1,859,584 of 8,003,584 B per bank (23.2 %) and DRAM 204.7 MB per bank
-    # after capture (the RECORD line after :1907); the 1-reference bucket 8512 ran through the full Flux3KleinPipeline
-    # with everything resident: DRAM 513.1 MB/bank = 4.11 GB/chip, TRACE 2,121,728 B/bank
-    # (logs/m8_verifier_device_probe_4x8_run3.log:351-354). The 12608 bucket's own line through the pipeline process
-    # (test_edit_golden_inputs[distilled-2_3_mugprint]) is the next device session's; the denoise-process numbers are
-    # the interim evidence (same slots, same traces, 9 MB/bank more than the 1-reference bucket).
-    (4, 8): Flux3KleinCapacity(
-        mesh_shape=(4, 8),
-        max_total_tokens=12608,
-        measured_buckets=(
-            "t2i 1024 (4096 + 320, base +80 null): logs/m4_fix_full_4x8.log:619, logs/m67_builder_pipeline_4x8.log:94",
-            "1 ref 1024 (4096 + 4096 + 320 = 8512, distilled/3_bandana) through Flux3KleinPipeline: "
-            "logs/m8_verifier_device_probe_4x8_run3.log:351-354 (DRAM 513.1 MB/bank, TRACE 2,121,728 B/bank); denoise "
-            "method logs/m8_verifier_numerics_denoise_refs_4x8.log:2258",
-            "2 refs 1024 (4096 + 8192 + 320 = 12608, distilled/2_3_mugprint) through the denoiser (M4 method): "
-            "logs/m8_verifier_numerics_denoise_refs_4x8.log:1904,1912 (TRACE 1,859,584 B/bank, DRAM 204.7 MB/bank)",
-        ),
-    ),
+    # (4, 8) ring: structural limits only (no token budget, see the module docstring). Footprints measured so far,
+    # for reference: T2I 1024 (4096 + 320 tokens) DRAM 190.6 MB/bank after capture, TRACE 25.6 MB base / 13.0 MB
+    # distilled (logs/m4_fix_full_4x8.log:619), 3.41 GB/chip residency (logs/m67_builder_pipeline_4x8.log:94);
+    # 1 ref 1024 (8512 tokens) through the full pipeline DRAM 513.1 MB/bank = 4.11 GB/chip, TRACE 2,121,728 B/bank
+    # (logs/m8_verifier_device_probe_4x8_run3.log:351-354); 2 refs 1024 (12608 tokens) through the denoiser TRACE
+    # 1,859,584 B/bank, DRAM 204.7 MB/bank (logs/m8_verifier_numerics_denoise_refs_4x8.log:1904,1912).
+    (4, 8): Flux3KleinCapacity(mesh_shape=(4, 8)),
 }
 
 
@@ -150,7 +127,6 @@ def admit(resolved: Flux3KleinResolved, mesh_shape: tuple[int, int]) -> Admissio
         "samples": 1 if resolved.flow_map else 2,
         "width": width,
         "height": height,
-        "max_total_tokens": cap.max_total_tokens,
     }
     for name, side in (("width", width), ("height", height)):
         if side % r:
@@ -177,14 +153,6 @@ def admit(resolved: Flux3KleinResolved, mesh_shape: tuple[int, int]) -> Admissio
         )
     if text_length is not None and text_length > cap.max_text_length:
         return Admission(False, f"text length {text_length} > {cap.max_text_length}", "text_length", measured)
-    if cap.max_total_tokens is not None and measured["total_tokens"] > cap.max_total_tokens:
-        return Admission(
-            False,
-            f"total tokens {measured['total_tokens']} per sample exceed the measured capacity {cap.max_total_tokens} "
-            f"of mesh {cap.mesh_shape}",
-            "total_tokens",
-            measured,
-        )
     return Admission(True, None, None, measured)
 
 

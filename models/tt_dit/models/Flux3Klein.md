@@ -96,13 +96,12 @@ held bit-exact against the vendored copy on the example inputs and ten synthetic
 * **Admission** (`policy.py`, host, before any device work): sides multiples of 16 in [64, 4096]; at most 10
   references; every VAE level of each prepared reference and of the canvas tile-aligned (`H W` a multiple of 32 at the
   full, /2, /4 and /8 resolutions: the plain `ttnn.group_norm` reduces over whole tiles; a 1008x1008 canvas, /8 level
-  15876 rows, is refused with `budget="reference_size"` / `"canvas_size"`); text <= 4096 tokens; and the per-sample
-  token total `image + image_cond + text` at most the largest MEASURED bucket of the mesh (`CAPACITY[(4, 8)]
-  .max_total_tokens`, with its log cites in `measured_buckets`). The structural worst case, 4096x4096 + 10 references +
-  4096 text = 110,592 tokens per sample, is refused with `budget="total_tokens"` until a measured row admits it; a
-  refused request has allocated nothing on the device and makes zero calls into any device entry point
-  (`test_admission_before_device`, `DeviceCallCounter`). The measured bucket is 12608 tokens per sample (1024x1024
-  + two 1024x1024 references + 320 text; `policy.CAPACITY`).
+  15876 rows, is refused with `budget="reference_size"` / `"canvas_size"`); text <= 4096 tokens. There is no token
+  budget (removed 2026-10-19): every structurally valid request goes to the device, up to the worst case 4096x4096 +
+  10 references + 4096 text = 110,592 tokens per sample, and a device allocation failure surfaces as the ttnn
+  exception. A refused request has allocated nothing on the device and makes zero calls into any device entry point
+  (`test_admission_before_device`, `DeviceCallCounter`). Footprints measured so far: T2I 1024 3.41 GB/chip resident,
+  1 ref 1024 (8512 tokens) 4.11 GB/chip, 2 refs 1024 (12608 tokens) +9 MB/bank over that (`policy.CAPACITY` comment).
 * **Which inputs are accepted**: the tile rule admits a prepared reference or canvas only when `(H/16)(W/16)` is a
   multiple of 8, i.e. the /8 VAE level has a whole number of 32-row tiles. It accepts 1024x1024, 896x1120, 1344x768,
   768x1344, 512x512, 2048x2048 and 64x64, but REFUSES many sizes BFL's sizing produces for ordinary photos: a single
@@ -182,7 +181,8 @@ python models/tt_dit/pipelines/flux3_klein/demo_flux3_klein.py "<upsampled capti
 python models/tt_dit/pipelines/flux3_klein/demo_flux3_klein.py "<upsampled caption>" --model distilled \
     --image dog.png --image mug.png --out out/edit.png                           # up to 10 references
 python models/tt_dit/pipelines/flux3_klein/demo_flux3_klein.py --record reference/examples/distilled/3_bandana.json --out out/bandana.png
-# A request over the measured capacity is refused on the host (exit 3, "REFUSED: ... budget ...") before any device call.
+# A structurally invalid request (side not a multiple of 16 or over 4096, > 10 references, a size whose VAE levels are
+# not tile-aligned) is refused on the host (exit 3, "REFUSED: ... budget ...") before any device call; no token budget.
 
 # Text-to-image with the device text encoder, both checkpoints resident, Galaxy 4x8 (SP4 x TP8, ring).
 # Expected: base passes; distilled is a strict XFAIL against the CPU reference on the same device text (precision
