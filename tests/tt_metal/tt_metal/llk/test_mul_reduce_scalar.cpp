@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <map>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -49,6 +50,16 @@ struct MulReduceScalarConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     uint32_t seed = 12345;
     bool accumulate_in_one_tile = false;
+    // Reduction scale. The op applies it twice (see the golden below), so the
+    // documented contract is result = scaler^2 * sum(A * B).
+    float scaler = 1.0f;
+    // Native fp32 DEST. The reduce tail is templated on DST_ACCUM_MODE, so this
+    // selects a different instantiation of the whole op. Inputs stay bfloat16; only
+    // DEST and the output CB widen.
+    bool fp32_dest_acc = false;
+    // Full-sync DEST changes DST_SYNC_MODE, which the op threads into its SFPU fills.
+    // The fp32 cases set both together, as blaze couples them.
+    bool dst_full_sync = false;
     float rel_tol = 0.01f;
 };
 
@@ -58,6 +69,8 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
 
     // bfloat16: 2 bytes per element; a 16x32 tiny tile is half a full tile.
     const uint32_t tile_byte_size = 2 * config.tile_height * tt::constants::TILE_WIDTH;
+    const tt::DataFormat out_format = config.fp32_dest_acc ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const uint32_t out_tile_byte_size = config.fp32_dest_acc ? 2 * tile_byte_size : tile_byte_size;
     const tt::tt_metal::Tile cb_tile({config.tile_height, tt::constants::TILE_WIDTH});
     const bool tiny_tile = (config.tile_height != tt::constants::TILE_HEIGHT);
 
@@ -69,8 +82,8 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
     auto src1_dram_buffer = distributed::MeshBuffer::create(input_global_config, input_local_config, &mesh_device);
 
     auto dst_dram_buffer = distributed::MeshBuffer::create(
-        distributed::ReplicatedBufferConfig{.size = tile_byte_size},
-        {.page_size = tile_byte_size, .buffer_type = tt_metal::BufferType::DRAM},
+        distributed::ReplicatedBufferConfig{.size = out_tile_byte_size},
+        {.page_size = out_tile_byte_size, .buffer_type = tt_metal::BufferType::DRAM},
         &mesh_device);
 
     uint32_t cb_tiles = std::max(8u, config.num_tiles);
@@ -82,8 +95,8 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
         tt_metal::CircularBufferConfig(cb_size, {{tt::CBIndex::c_1, tt::DataFormat::Float16_b}})
             .set_page_size(tt::CBIndex::c_1, tile_byte_size);
     tt_metal::CircularBufferConfig cb_out_config =
-        tt_metal::CircularBufferConfig(cb_size, {{tt::CBIndex::c_16, tt::DataFormat::Float16_b}})
-            .set_page_size(tt::CBIndex::c_16, tile_byte_size);
+        tt_metal::CircularBufferConfig(cb_tiles * out_tile_byte_size, {{tt::CBIndex::c_16, out_format}})
+            .set_page_size(tt::CBIndex::c_16, out_tile_byte_size);
     if (tiny_tile) {
         // Advertise the 16x32 tile geometry so the compute kernel derives
         // num_faces=2 from the operand CBs via get_operand_num_faces().
@@ -121,7 +134,12 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/mul_reduce_scalar.cpp",
         core,
-        tt_metal::ComputeConfig{.math_fidelity = config.math_fidelity, .compile_args = {}, .defines = compute_defines});
+        tt_metal::ComputeConfig{
+            .math_fidelity = config.math_fidelity,
+            .fp32_dest_acc_en = config.fp32_dest_acc,
+            .dst_full_sync_en = config.dst_full_sync,
+            .compile_args = {},
+            .defines = compute_defines});
 
     SetRuntimeArgs(
         program,
@@ -131,7 +149,7 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
 
     SetRuntimeArgs(program, unary_writer_kernel, core, {dst_dram_buffer->address(), 0, 1});
 
-    SetRuntimeArgs(program, mul_reduce_kernel, core, {config.num_tiles});
+    SetRuntimeArgs(program, mul_reduce_kernel, core, {config.num_tiles, std::bit_cast<uint32_t>(config.scaler)});
 
     uint32_t byte_size = config.num_tiles * tile_byte_size;
     auto packed_input0 = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
@@ -162,14 +180,22 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
         float val1 = static_cast<float>(std::bit_cast<bfloat16>(u16_src1_vec[i]));
         golden_scalar += val0 * val1;
     }
+    // The scaler sits in SrcB for both GAPOOL passes (column accumulate and final
+    // collapse), so it multiplies the result twice.
+    golden_scalar *= config.scaler * config.scaler;
 
-    auto u16_result_vec = u16_from_u32_vector(result_vec);
-    float device_scalar = static_cast<float>(std::bit_cast<bfloat16>(u16_result_vec[0]));
+    // The reduced scalar lives in element [0] of the output tile, in the output CB's
+    // format: raw fp32 with native fp32 DEST, otherwise the low bfloat16 of word 0.
+    float device_scalar = config.fp32_dest_acc
+                              ? std::bit_cast<float>(result_vec[0])
+                              : static_cast<float>(std::bit_cast<bfloat16>(u16_from_u32_vector(result_vec)[0]));
 
     log_info(
         LogTest,
-        "num_tiles={}: Golden={}, Device={}, Diff={}",
+        "num_tiles={}, scaler={}, fp32_dest_acc={}: Golden={}, Device={}, Diff={}",
         config.num_tiles,
+        config.scaler,
+        config.fp32_dest_acc,
         golden_scalar,
         device_scalar,
         std::abs(device_scalar - golden_scalar));
@@ -226,6 +252,34 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(1, 2, 3, 7, 8),
     [](const testing::TestParamInfo<int>& info) {
         return "MulReduceScalar_16x32_" + std::to_string(info.param) + "_Tiles";
+    });
+
+// The scaler lands on the result twice (scaler^2 * sum), the contract mul_reduce_scalar.h documents and the
+// deepseek rmsnorm caller relies on (it passes 1/sqrt(N) for a mean). One value either side of 1.0 pins the
+// square: a single-application golden would be off by a factor of scaler. Both values also run on fp32 DEST,
+// since the scaler arrives through an SFPU fill whose access width is selected by DST_ACCUM_MODE.
+class MulReduceScalarScalerTest : public LLKMeshDeviceSingleCardFixture,
+                                  public testing::WithParamInterface<MulReduceScalarConfig> {};
+
+TEST_P(MulReduceScalarScalerTest, MulReduceScalarScaler) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP()
+            << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+    }
+    ASSERT_TRUE(run_mul_reduce_scalar_test(this->device(), GetParam()));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MulReduceScalarScalerTests,
+    MulReduceScalarScalerTest,
+    testing::Values(
+        MulReduceScalarConfig{.num_tiles = 4, .scaler = 2.0f},
+        MulReduceScalarConfig{.num_tiles = 4, .scaler = 0.5f},
+        MulReduceScalarConfig{.num_tiles = 4, .scaler = 2.0f, .fp32_dest_acc = true, .dst_full_sync = true},
+        MulReduceScalarConfig{.num_tiles = 4, .scaler = 0.5f, .fp32_dest_acc = true, .dst_full_sync = true}),
+    [](const testing::TestParamInfo<MulReduceScalarConfig>& info) {
+        return std::string("MulReduceScalar_Scaler_") + (info.param.scaler == 2.0f ? "2" : "0p5") +
+               (info.param.fp32_dest_acc ? "_fp32dest" : "");
     });
 
 // One-tile accumulation, parametrized past the 8-tile DEST capacity.

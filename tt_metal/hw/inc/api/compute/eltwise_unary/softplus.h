@@ -15,18 +15,19 @@ namespace ckernel {
 // clang-format off
 /**
  * Performs element-wise computation of softplus (`1/beta * log(1 + exp(beta * x))`) on each element
- * of a tile in DST register at index tile_index. Any input value greater than the provided threshold
- * with return itself. The DST register buffer must be in acquired state via *acquire_dst* call. This
- * call is blocking and is only available on the compute engine.
+ * of a tile in DST register at index tile_index. Elements for which `beta * x` exceeds the provided
+ * threshold are returned unchanged (linear region), matching torch.nn.functional.softplus; the
+ * predicate is on `beta * x`, not on x. The DST register buffer must be in acquired state via
+ * *acquire_dst* call. This call is blocking and is only available on the compute engine.
  *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index      | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | beta            | Beta used in softplus calculation                                          | uint32_t | Greater than 0                                        | True     |
- * | beta_reciprocal | Reciprocal of beta (1/beta) used in softplus calculation                   | uint32_t | Greater than 0                                        | True     |
- * | threshold       | Threshold used in softplus calculation                                     | uint32_t | Greater than 0                                        | True     |
+ * | beta            | Beta used in softplus calculation, as the fp32 bit pattern of the float    | uint32_t | Greater than 0                                        | True     |
+ * | beta_reciprocal | Reciprocal of beta (1/beta), as the fp32 bit pattern of the float          | uint32_t | Greater than 0                                        | True     |
+ * | threshold       | Linear-region threshold on beta * x, as the fp32 bit pattern of the float  | uint32_t | Greater than 0                                        | True     |
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>

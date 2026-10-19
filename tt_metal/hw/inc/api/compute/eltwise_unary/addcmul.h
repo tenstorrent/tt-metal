@@ -33,8 +33,8 @@ namespace ckernel {
  * | idst0    | Index of the tile in DST register buffer (first input)        | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst1    | Index of the tile in DST register buffer (second input)       | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst2    | Index of the tile in DST register buffer (third input)        | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | value    | Scalar constant multiplier                                    | uint32_t | Any valid value                                       | True     |
  * | odst     | Index of the tile in DST register buffer (output)             | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | value    | Scalar multiplier (fp32 bit pattern of the float)             | uint32_t | Any valid value                                       | True     |
  */
 // clang-format on
 template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>

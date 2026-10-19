@@ -9,6 +9,7 @@
 
 void kernel_main() {
     const uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    const float scaler = __builtin_bit_cast(float, get_arg_val<uint32_t>(1 /*arg_idx*/));
 
     CircularBuffer cb0(tt::CBIndex::c_0);    // Input A
     CircularBuffer cb1(tt::CBIndex::c_1);    // Input B
@@ -31,7 +32,7 @@ void kernel_main() {
 
     // Perform fused multiply + reduce scalar
     ckernel::mul_reduce_scalar_tile<REDUCE_OP, DST_ACCUM_MODE, ACCUMULATE_IN_ONE_TILE>(
-        tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16, num_tiles);
+        tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16, num_tiles, scaler);
 
     tile_regs_commit();
     tile_regs_wait();
