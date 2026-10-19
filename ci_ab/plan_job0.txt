@@ -1,0 +1,11 @@
+# job 0
+b1 M ids/job0.txt all
+b1 H ids/job0.txt all
+b1 F4 ids/job0.txt all
+b1 H2 ids/job0.txt all
+wc H_wc ids/job0.txt all wc
+wc F4_wc ids/job0.txt all wc
+b2 H2 ids/job0.txt all
+b2 F4 ids/job0.txt all
+b2 H ids/job0.txt all
+b2 M ids/job0.txt all
