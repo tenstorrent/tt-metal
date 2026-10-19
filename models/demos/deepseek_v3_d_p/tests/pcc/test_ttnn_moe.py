@@ -75,7 +75,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
-from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, mesh_cache_key
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBOOK_TRACE, load_trace_gate_input
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -267,7 +267,7 @@ def run_model(
     # Every dim that shapes a cached tensor goes in the key unconditionally: filenames carry dtype
     # and layout but not shape, so a colliding key is a silent wrong-weights load.
     moe_cache_dir = Path(
-        f"{_moe_cache_base}/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_"
+        f"{_moe_cache_base}/{num_routed_experts}experts_{mesh_cache_key(mesh_device.shape, mesh_config.sp_axis)}mesh_"
         f"{emb_dim}emb_{hidden_dim}hid_{routed_emb}rout_{shared_hidden}sh_{weights_type}"
     )
     moe_cache_dir.mkdir(parents=True, exist_ok=True)

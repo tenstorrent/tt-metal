@@ -641,14 +641,15 @@ def default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
     return None
 
 
-# Per-axis CCL topology. Mesh dim 0 = rows = "Y" = sp_axis; dim 1 = cols = "X" = tp_axis.
+# Per-axis CCL topology, indexed by mesh axis: dim 0 = rows = "Y", dim 1 = cols = "X". SP and TP can sit on
+# either axis, so callers pick their entry with [sp_axis] / [tp_axis] (see resolve_per_axis_topology).
 # A torus fabric physically wraps a given axis; Ring is only valid on a wrapped axis (otherwise the
 # collective hangs forever on a wrap link the fabric does not service — get_usable_topology() keeps
 # Ring because the coords span the axis). Reading the *active* fabric config keeps the returned
 # topology consistent with whatever was opened, so a (descriptor, fabric, topology) mismatch can't
 # silently ask Ring on an unwrapped axis.
 _FABRIC_PER_AXIS_TOPOLOGY = {
-    # fabric_config: (sp_topology [dim 0 / Y], tp_topology [dim 1 / X])
+    # fabric_config: (dim 0 / Y topology, dim 1 / X topology)
     ttnn.FabricConfig.FABRIC_2D_TORUS_X: (ttnn.Topology.Linear, ttnn.Topology.Ring),
     ttnn.FabricConfig.FABRIC_2D_TORUS_Y: (ttnn.Topology.Ring, ttnn.Topology.Linear),
     ttnn.FabricConfig.FABRIC_2D_TORUS_XY: (ttnn.Topology.Ring, ttnn.Topology.Ring),
@@ -659,12 +660,12 @@ _FABRIC_PER_AXIS_TOPOLOGY = {
 def per_axis_topology(
     fabric_config: Optional[ttnn.FabricConfig] = None,
 ) -> tuple[ttnn.Topology, ttnn.Topology]:
-    """Return the per-axis CCL topology ``(sp_topology, tp_topology)`` for the fabric.
+    """Return the per-axis CCL topology ``(dim0_topology, dim1_topology)`` for the fabric.
 
-    ``sp_topology`` drives cluster_axis=0 (rows / Y) collectives, ``tp_topology`` drives
-    cluster_axis=1 (cols / X). Ring is returned only for an axis the fabric physically wraps; every
-    other axis is Linear. When ``fabric_config`` is None the currently-active fabric is queried so
-    the result always matches the opened fabric.
+    Entry ``i`` drives cluster_axis=i collectives (0 = rows / Y, 1 = cols / X), so the SP and TP
+    topologies are ``result[sp_axis]`` and ``result[tp_axis]``. Ring is returned only for an axis the
+    fabric physically wraps; every other axis is Linear. When ``fabric_config`` is None the
+    currently-active fabric is queried so the result always matches the opened fabric.
     """
     if fabric_config is None:
         fabric_config = ttnn.get_fabric_config()
@@ -701,10 +702,9 @@ def resolve_per_axis_topology(topology, sp_axis: int, tp_axis: int):
     if isinstance(topology, tuple):
         if len(topology) != 2:
             raise ValueError(f"a per-axis topology tuple must be (dim0, dim1), got {topology}")
-        # Unpacking the (dim0, dim1) tuple as (sp, tp) is only correct at sp_axis=0/tp_axis=1.
-        if sp_axis != 0 or tp_axis != 1:
-            raise ValueError("per-axis topology tuple assumes sp_axis=0, tp_axis=1")
-        return topology
+        if {sp_axis, tp_axis} != {0, 1}:
+            raise ValueError(f"sp_axis and tp_axis must be 0 and 1 in some order, got {sp_axis=}, {tp_axis=}")
+        return topology[sp_axis], topology[tp_axis]
     return topology, topology
 
 
