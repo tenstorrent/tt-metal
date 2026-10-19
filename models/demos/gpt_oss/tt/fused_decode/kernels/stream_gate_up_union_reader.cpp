@@ -139,4 +139,7 @@ void kernel_main() {
         cb_push_back(cb_w, kt);
         trid_to_wait = trid_to_wait == num_buffers ? 1 : trid_to_wait + 1;
     }
+#ifdef MOE_PRED
+    noc_async_atomic_barrier();  // read_pred's notification to the hub (issued early: overlaps the weight stream)
+#endif
 }

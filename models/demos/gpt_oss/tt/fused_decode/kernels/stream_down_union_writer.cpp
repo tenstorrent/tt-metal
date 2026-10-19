@@ -163,6 +163,6 @@ void kernel_main() {
     noc_async_write_barrier();
     if constexpr (notify) {
         noc_semaphore_inc(get_noc_addr(notify_x, notify_y, get_semaphore(notify_sem)), 1);
-        noc_async_atomic_barrier();
     }
+    noc_async_atomic_barrier();  // (also read_pred's notification to the hub)
 }
