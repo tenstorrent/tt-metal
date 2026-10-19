@@ -20,7 +20,7 @@ m2::ProgramRunArgs build_run_args(const operation_attributes_t& attrs, const ten
         TT_FATAL(
             io_index < tensor_args.io_tensors.size(),
             "tensor argument '{}' maps to io_tensors index {}, but only {} io tensors were supplied",
-            tensor_parameter_name,
+            *tensor_parameter_name,
             io_index,
             tensor_args.io_tensors.size());
         run_args.tensor_args.emplace(
