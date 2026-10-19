@@ -275,6 +275,19 @@ ALWI void reduce_block(
         UNPACK((llk_unpack_AB_reduce_block<reduce_type, reduce_dim>(icb, icb_scaler, start_itile, itile_scaler, ntiles)));
         return;
     }
+    if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
+        // The math block does not depend on the data format; only the unpacker steps a BFP block tile by tile.
+        MATH((llk_math_reduce_block<
+              reduce_type,
+              reduce_dim,
+              is_fp32_dest_acc_en,
+              reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(
+            icb, icb_scaler, start_idst, ntiles, idst_stride)));
+        for (std::uint32_t i = 0; i < ntiles; ++i) {
+            UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, start_itile + i, itile_scaler)));
+        }
+        return;
+    }
 #endif
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         reduce_tile<reduce_type, reduce_dim, is_fp32_dest_acc_en, pow2_scaler>(
