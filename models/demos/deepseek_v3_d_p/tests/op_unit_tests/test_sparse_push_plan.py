@@ -4,6 +4,7 @@
 """PROTOTYPE ttnn.experimental.sparse_push_plan: the on-device sparse KV push plan must match the host planner
 (sparse_kv_push.build_plan_host) bit-for-bit, and its table must hold the bitmap and counts the owners read."""
 
+import os
 import statistics
 import time
 
@@ -99,6 +100,16 @@ def test_sparse_push_plan_matches_host(mesh_device, max_rows, prefix):
             "compact": np.array_equal(got_compact[d], want_compact[d]),
         }
         bad += [(d, k) for k, ok in checks.items() if not ok]
+    if os.environ.get("SPARSE_PUSH_PLAN_TIMING"):
+        # Header words 3..8: core-0 wall-clock stamps at start / scatter / reduce / assemble / own rewrite / all done.
+        d = np.diff(tbl[:, 3:9].astype(np.int64), axis=1) % (1 << 32)
+        names = ["scatter", "reduce", "assemble", "rewrite(core0)", "rewrite tail"]
+        logger.info(
+            "SPARSE_PUSH_PLAN phases (k cycles, max over chips): "
+            + ", ".join(f"{n}={d[:, i].max() / 1e3:.1f}" for i, n in enumerate(names))
+            + f", total={d.sum(1).max() / 1e3:.1f}"
+            + f", reduce reads (core0)={((tbl[0, 9].astype(np.int64) - tbl[0, 4]) % (1 << 32)) / 1e3:.1f}"
+        )
     logger.info(
         f"SPARSE_PUSH_PLAN max_rows={max_rows} prefix={prefix}: {statistics.median(samples) * 1e6:.0f} us "
         f"(median of {len(samples)}, host-timed), mismatches={bad[:8]}"
