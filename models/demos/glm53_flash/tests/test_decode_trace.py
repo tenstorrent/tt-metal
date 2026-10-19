@@ -60,13 +60,11 @@ def test_traced_decode_vs_dump(mesh_device, layer_idx):
     streams_dev = ttnn.from_torch(
         _packed_host(x_in[:, :1], 1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh_device
     )
-    pos_dev = ttnn.from_torch(
-        torch.tensor([S], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
-    )
+    dp = dec.make_decode_positions([S])
 
     # 1) prefill, capture the decode trace on a dummy token (state advances by 2 dummy tokens)
     dec.prefill_forward(host_streams_to_device(x_in, mesh_device), user=0, seq_len=S)
-    trace_id, out_dev, _ = dec.capture_decode_trace(streams_dev, pos_dev)
+    trace_id, out_dev, _ = dec.capture_decode_trace(streams_dev, dp)
 
     # 2) reset the state by re-prefilling (cache pages are rewritten, KDA state replaced in place)
     y = dec.prefill_forward(host_streams_to_device(x_in, mesh_device), user=0, seq_len=S)
@@ -80,12 +78,7 @@ def test_traced_decode_vs_dump(mesh_device, layer_idx):
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(_packed_host(d["x_in"], 1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), streams_dev
         )
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(
-                torch.tensor([d["position"]], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
-            ),
-            pos_dev,
-        )
+        dec.update_decode_positions(dp, [d["position"]])
         dec.replay_decode(trace_id)
         p_d = pcc(d["x_out"], device_streams_to_host(out_dev, 4, 1))
         logger.info(f"  traced decode step {step} (pos {d['position']}): pcc {p_d:.6f}")
@@ -137,13 +130,8 @@ def test_two_users_decode_vs_hf(mesh_device, layer_idx):
                 )
             y_hf.append(yu)
         xin = torch.cat(toks, dim=1)  # [1, B=2, 4, 4096]: row b = user b
-        pos = ttnn.from_torch(
-            torch.tensor([L + step for L in lens], dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-        )
-        yd = dec.decode_forward(host_streams_to_device(xin, mesh_device, pad_to=2), positions=pos)
+        dp = dec.make_decode_positions([L + step for L in lens])
+        yd = dec.decode_forward(host_streams_to_device(xin, mesh_device, pad_to=2), positions=dp)
         out = device_streams_to_host(yd, 4, 2)  # [1, 2, 4, 4096]
         for u in range(2):
             p_d = pcc(y_hf[u], out[:, u : u + 1])

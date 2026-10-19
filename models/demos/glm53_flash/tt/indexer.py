@@ -13,12 +13,16 @@ HF semantics (index_kpool = 4, index_topk = 2048, always_select_tail):
     + the incomplete tail tokens 4*floor((s+1)/4) .. s (<= 3 ids), -1 elsewhere.
 For s < 2048 every visible token is selected and the attention is exact (the dense path).
 
-Device composite (design 5.3 / 8.3):
-  * pooled keys live in a per-layer cache ``pool_cache [max_batch*pool_blocks, 1, 32, 128]`` bf16
-    TILE (paged view, identity page table; user u's pools are contiguous) and are also readable as
-    ``[max_batch, 1, pools_per_user, 128]`` for ``indexer_score_dsa(cache_batch_idx=u)``;
-  * the raw ``k`` and gate logits of the last 3 tokens are kept per user in a 4-slot ring
-    (slot = position % 4) so decode can finish the pool that the new token completes;
+Device composite (design 5.3 / 8.3). The index state is maintained on EVERY append (dense and
+sparse prefill, dense and sparse decode) so a user can cross the 2048 boundary on the dense path:
+  * pooled keys: paged cache ``pool_cache [max_batch*pool_blocks, 1, 32, 128]`` bf16 TILE with an
+    identity page table (user u's pools are contiguous); viewed ``[max_batch, 1, pools, 128]`` for
+    ``indexer_score_dsa(cache_batch_idx=u)``;
+  * raw rings: the k and gate logits of the current pool's tokens live in one 32-row block per user
+    (``ring_k`` / ``ring_g`` ``[max_batch, 1, 32, 128]``, row = position % 4). Decode writes the new
+    token's row with ``paged_update_cache(update_idxs=position % 4)`` and then rewrites pool
+    ``position // 4`` from rows 0..3: while that pool is incomplete it is not selectable
+    (4*(a//4)+3 > a), and the write at a % 4 == 3 is the exact pooled key;
   * scoring: ``ttnn.experimental.indexer_score_dsa(key_compression_ratio=4)`` (causal by pool);
   * selection: the pool scores are repeated 4x along the key axis and
     ``ttnn.experimental.topk_large_indices(k=2048)`` returns TOKEN ids directly (ties inside a
@@ -55,18 +59,30 @@ def _compute(device, fidelity=ttnn.MathFidelity.HiFi4, fp32_acc=True, packer_l1_
     )
 
 
+def height_shard_rows(device, rows: ttnn.Tensor) -> ttnn.Tensor:
+    """[1, B, 1, W] -> height-sharded on B cores (the paged_update_cache input contract)."""
+    B, W = rows.shape[1], rows.shape[-1]
+    grid = device.compute_with_storage_grid_size()
+    cfg = ttnn.create_sharded_memory_config(
+        shape=(TILE, W),
+        core_grid=ttnn.num_cores_to_corerangeset(B, grid, row_wise=True),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return ttnn.to_memory_config(rows, cfg)
+
+
 class TtIndexCache:
-    """Per-layer pooled-key cache + raw tail rings for ``max_batch`` users."""
+    """Per-layer pooled-key cache + raw rings for ``max_batch`` users."""
 
     def __init__(self, device, cfg: GLM53FlashConfig, *, max_batch: int, max_seq_len: int):
         self.device = device
         self.D = cfg.index_head_dim
         self.P = cfg.index_kpool
         self.max_batch = max_batch
-        self.pools_per_user = -(-max_seq_len // self.P)
-        self.pools_per_user = -(-self.pools_per_user // TILE) * TILE  # tile-aligned rows per user
+        pools = -(-max_seq_len // self.P)
+        self.pools_per_user = -(-pools // TILE) * TILE  # tile-aligned rows per user
         self.pool_blocks = self.pools_per_user // TILE
-        # paged view for row writes; the same buffer viewed [B,1,pools,D] for scoring
         self.pool_cache = ttnn.zeros(
             (max_batch * self.pool_blocks, 1, TILE, self.D),
             dtype=ttnn.bfloat16,
@@ -76,22 +92,53 @@ class TtIndexCache:
         )
         pt = torch.arange(max_batch * self.pool_blocks, dtype=torch.int32).reshape(max_batch, self.pool_blocks)
         self.page_table = ttnn.from_torch(pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        # raw tail rings: k and gate logits of the last tokens, slot = position % P
-        self.tail_k = ttnn.zeros(
-            (max_batch, 1, self.P, self.D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        # raw rings: one 32-row block per user, row = position % P (rows >= P unused)
+        self.ring_k = ttnn.zeros(
+            (max_batch, 1, TILE, self.D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
-        self.tail_g = ttnn.zeros(
-            (max_batch, 1, self.P, self.D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        self.ring_g = ttnn.zeros(
+            (max_batch, 1, TILE, self.D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
+        self.ring_page_table = ttnn.from_torch(
+            torch.arange(max_batch, dtype=torch.int32).reshape(max_batch, 1),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+
+    def pools_batched(self) -> ttnn.Tensor:
+        """[max_batch, 1, pools_per_user, D] view for scoring (taken after the latest writes)."""
+        return ttnn.reshape(self.pool_cache, [self.max_batch, 1, self.pools_per_user, self.D])
 
     def write_pools(self, pooled: ttnn.Tensor, user: int):
         """pooled [1,1,n_pad,D] bf16 (n_pad % 32 == 0) -> pools [0, n_pad) of ``user``."""
         ttnn.experimental.paged_fill_cache(self.pool_cache, pooled, self.page_table, batch_idx=user)
 
-    def update_pool(self, pooled_sharded: ttnn.Tensor, pool_ids: ttnn.Tensor):
-        """pooled [1,B,1(32),D] height-sharded on B cores; pool_ids [B] int32 (row to write per user)."""
+    def update_pools(self, pooled_rows: ttnn.Tensor, pool_ids: ttnn.Tensor):
+        """pooled_rows [1,B,1,D] (one row per user slot), pool_ids [B] int32 -> pool rows (all users)."""
+        sh = height_shard_rows(self.device, pooled_rows)
         ttnn.experimental.paged_update_cache(
-            self.pool_cache, pooled_sharded, update_idxs_tensor=pool_ids, page_table=self.page_table
+            self.pool_cache, sh, update_idxs_tensor=pool_ids, page_table=self.page_table
+        )
+        ttnn.deallocate(sh)
+
+    def write_ring_rows(
+        self, k_rows: ttnn.Tensor, g_rows: ttnn.Tensor, slots: ttnn.Tensor, page_table: ttnn.Tensor | None = None
+    ):
+        """k_rows/g_rows [1,N,1,D] bf16, slots [N] int32 (position % P). Row n goes to ring block
+        ``page_table[n, 0]`` (default: user n), row ``slots[n]``."""
+        pt = self.ring_page_table if page_table is None else page_table
+        for ring, rows in ((self.ring_k, k_rows), (self.ring_g, g_rows)):
+            sh = height_shard_rows(self.device, rows)
+            ttnn.experimental.paged_update_cache(ring, sh, update_idxs_tensor=slots, page_table=pt)
+            ttnn.deallocate(sh)
+
+    def rings(self) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Rows 0..P-1 of every user's rings: ([B,1,P,D], [B,1,P,D])."""
+        B = self.max_batch
+        return (
+            ttnn.slice(self.ring_k, [0, 0, 0, 0], [B, 1, self.P, self.D]),
+            ttnn.slice(self.ring_g, [0, 0, 0, 0], [B, 1, self.P, self.D]),
         )
 
 
@@ -119,6 +166,7 @@ class TtDSAIndexer(LightweightModule):
         self.hifi2 = _compute(device, ttnn.MathFidelity.HiFi2, packer_l1_acc=True)
         self.fp32 = _compute(device)
         self.score_cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+        self._const_cache: dict[tuple, ttnn.Tensor] = {}
 
     # ------------------------------------------------------------- stems
     def keys_and_gates(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -128,15 +176,24 @@ class TtDSAIndexer(LightweightModule):
         g = ttnn.linear(x, self.w_gate, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         return k, g
 
+    def _pool_groups(self, kp: ttnn.Tensor, gp: ttnn.Tensor) -> ttnn.Tensor:
+        """kp, gp [X, n, P, D] bf16 -> pooled [X, n, 1, D] bf16 (softmax over the P tokens of a pool)."""
+        kf = ttnn.typecast(kp, ttnn.float32)
+        logits = ttnn.add(ttnn.typecast(gp, ttnn.float32), self.ape)  # + ape[j] per in-pool position
+        prob = ttnn.softmax(logits, dim=-2, compute_kernel_config=self.fp32)
+        pooled = ttnn.sum(ttnn.multiply(prob, kf), dim=-2, keepdim=True)
+        return ttnn.typecast(pooled, ttnn.bfloat16)
+
     def pool(self, k: ttnn.Tensor, g: ttnn.Tensor) -> ttnn.Tensor:
         """k, g [1,1,n*P,D] (complete pools only) -> pooled keys [1,1,n,D] bf16."""
         n = k.shape[-2] // self.P
-        kp = ttnn.reshape(ttnn.typecast(k, ttnn.float32), [1, n, self.P, self.D])
-        gp = ttnn.reshape(ttnn.typecast(g, ttnn.float32), [1, n, self.P, self.D])
-        logits = ttnn.add(gp, self.ape)  # [1,n,P,D] (+ ape[j] per in-pool position)
-        prob = ttnn.softmax(logits, dim=-2, compute_kernel_config=self.fp32)  # over the P tokens of each pool
-        pooled = ttnn.sum(ttnn.multiply(prob, kp), dim=-2, keepdim=True)  # [1,n,1,D]
-        return ttnn.typecast(ttnn.reshape(pooled, [1, 1, n, self.D]), ttnn.bfloat16)
+        pooled = self._pool_groups(ttnn.reshape(k, [1, n, self.P, self.D]), ttnn.reshape(g, [1, n, self.P, self.D]))
+        return ttnn.reshape(pooled, [1, 1, n, self.D])
+
+    def pool_rings(self, ring_k: ttnn.Tensor, ring_g: ttnn.Tensor) -> ttnn.Tensor:
+        """ring_k, ring_g [B,1,P,D] -> pooled rows [1,B,1,D] bf16 (one pooled key per user)."""
+        B = ring_k.shape[0]
+        return ttnn.reshape(self._pool_groups(ring_k, ring_g), [1, B, 1, self.D])
 
     def queries_and_weights(self, x: ttnn.Tensor, q_resid: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """-> q [1,Hi,T,D] bf16 (scale folded), w [1,1,T,Hi] bf16 (n_heads^-0.5 folded)."""
@@ -145,6 +202,59 @@ class TtDSAIndexer(LightweightModule):
         q = ttnn.transpose(ttnn.reshape(q, [1, T, self.Hi, self.D]), 1, 2)  # [1,Hi,T,D]
         w = ttnn.linear(x, self.w_weights, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,Hi]
         return q, w
+
+    # ------------------------------------------------------- maintenance
+    def maintain_prefill(self, x: ttnn.Tensor, cache: TtIndexCache, user: int, seq_len: int):
+        """Write the complete pools of a chunk from position 0 and the current pool's tail rows."""
+        P, D = self.P, self.D
+        k_idx, g_idx = self.keys_and_gates(x)  # [1,1,T_pad,D]
+        n_pools = seq_len // P
+        if n_pools > 0:
+            n_pad = -(-n_pools // TILE) * TILE
+            pooled = self.pool(
+                ttnn.slice(k_idx, [0, 0, 0, 0], [1, 1, n_pools * P, D]),
+                ttnn.slice(g_idx, [0, 0, 0, 0], [1, 1, n_pools * P, D]),
+            )
+            if n_pad != n_pools:
+                pooled = ttnn.pad(pooled, [(0, 0), (0, 0), (0, n_pad - n_pools), (0, 0)], value=0.0)
+            cache.write_pools(pooled, user)
+        tail = seq_len - n_pools * P
+        if tail:
+            # rows n_pools*P .. seq_len-1 -> ring block of `user`, slots (pos % P) = 0..tail-1
+            k_rows = ttnn.reshape(ttnn.slice(k_idx, [0, 0, n_pools * P, 0], [1, 1, seq_len, D]), [1, tail, 1, D])
+            g_rows = ttnn.reshape(ttnn.slice(g_idx, [0, 0, n_pools * P, 0], [1, 1, seq_len, D]), [1, tail, 1, D])
+            slots = ttnn.from_torch(
+                torch.arange(tail, dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
+            pt = ttnn.from_torch(
+                torch.full((tail, 1), user, dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
+            cache.write_ring_rows(k_rows, g_rows, slots, page_table=pt)
+        ttnn.deallocate(k_idx)
+        ttnn.deallocate(g_idx)
+
+    def maintain_decode(self, x: ttnn.Tensor, cache: TtIndexCache, pool_ids: ttnn.Tensor, ring_slots: ttnn.Tensor):
+        """Batched, trace-safe: x [1,1,B,4096] (token at position a per user), pool_ids = a // P,
+        ring_slots = a % P ([B] int32 device tensors). Writes the ring rows, then pool a // P."""
+        B = x.shape[-2]
+        k_idx, g_idx = self.keys_and_gates(x)  # [1,1,B,D]
+        cache.write_ring_rows(
+            ttnn.reshape(k_idx, [1, B, 1, self.D]), ttnn.reshape(g_idx, [1, B, 1, self.D]), ring_slots
+        )
+        ttnn.deallocate(k_idx)
+        ttnn.deallocate(g_idx)
+        rk, rg = cache.rings()  # [B,1,P,D]
+        pooled = self.pool_rings(rk, rg)  # [1,B,1,D]
+        ttnn.deallocate(rk)
+        ttnn.deallocate(rg)
+        cache.update_pools(pooled, pool_ids)
+        ttnn.deallocate(pooled)
 
     # ---------------------------------------------------------- selection
     def select(
@@ -164,11 +274,9 @@ class TtDSAIndexer(LightweightModule):
         # kv_len*P tokens, and a decode query at position a may sit in a block starting at a - a%32 >= 4*pools.
         # The spare rows are causally invisible to the real query (pool p visible iff 4p+3 <= a).
         kv_len = min(cache.pools_per_user, max(TILE, -(-(num_pools_valid + 1) // TILE) * TILE))
-        # batched [B,1,pools,D] view of the paged pool cache, taken after the latest writes
-        pools_batched = ttnn.reshape(cache.pool_cache, [cache.max_batch, 1, cache.pools_per_user, cache.D])
         scores = ttnn.experimental.indexer_score_dsa(
             q,
-            pools_batched,
+            cache.pools_batched(),
             w,
             chunk_start_idx=query_start,
             key_compression_ratio=self.P,
@@ -184,7 +292,7 @@ class TtDSAIndexer(LightweightModule):
         for t in (scores, scores_rm, expanded):
             if t.is_allocated():
                 ttnn.deallocate(t)
-        tail = self._tail_ids(T, query_start)  # [1,1,T,P-1] uint32
+        tail = self._tail_ids(T, query_start)  # [1,1,T,P-1] uint32 (cached per geometry)
         width = self.cfg.index_topk + self.P - 1
         pad = (-width) % 128
         parts = [top, tail]
@@ -192,26 +300,31 @@ class TtDSAIndexer(LightweightModule):
             parts.append(self._sentinels(T, pad))
         idx = ttnn.concat(parts, dim=-1)
         ttnn.deallocate(top)
-        ttnn.deallocate(tail)
         return idx
 
     def _tail_ids(self, T: int, query_start: int) -> ttnn.Tensor:
         """Token ids of the incomplete tail pool of each query (position a = query_start + s):
-        4*floor((a+1)/4) + j for j < (a+1) % 4, else the sentinel. int32 arithmetic on device
-        with -1 as the sentinel (bit-identical to 0xFFFFFFFF after the uint32 reinterpretation)."""
-        P = self.P
-        rows = torch.arange(T, dtype=torch.int32).reshape(1, 1, T, 1) + query_start  # a
-        base = (rows + 1) // P * P
-        ids = torch.stack([base + j for j in range(P - 1)], dim=-1).reshape(1, 1, T, P - 1)
-        valid = ids <= rows
-        ids = torch.where(valid, ids.to(torch.int64), torch.full_like(ids, SENTINEL, dtype=torch.int64))
-        # host-built from the (static) chunk geometry: query_start and T are program shape, not data
-        return ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        4*floor((a+1)/4) + j for j < (a+1) % 4, else the sentinel. Built once per (T, query_start)
+        geometry from host ints (chunk geometry, not data) and cached on device."""
+        key = ("tail", T, query_start)
+        if key not in self._const_cache:
+            P = self.P
+            rows = torch.arange(T, dtype=torch.int64).reshape(1, 1, T, 1) + query_start  # a
+            base = (rows + 1) // P * P
+            ids = torch.stack([base + j for j in range(P - 1)], dim=-1).reshape(1, 1, T, P - 1)
+            ids = torch.where(ids <= rows, ids, torch.full_like(ids, SENTINEL))
+            self._const_cache[key] = ttnn.from_torch(
+                ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+            )
+        return self._const_cache[key]
 
     def _sentinels(self, T: int, n: int) -> ttnn.Tensor:
-        return ttnn.from_torch(
-            torch.full((1, 1, T, n), SENTINEL, dtype=torch.int64),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-        )
+        key = ("sentinel", T, n)
+        if key not in self._const_cache:
+            self._const_cache[key] = ttnn.from_torch(
+                torch.full((1, 1, T, n), SENTINEL, dtype=torch.int64),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
+        return self._const_cache[key]

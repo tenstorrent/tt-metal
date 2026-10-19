@@ -40,7 +40,7 @@ Residual convention: HF `[B, S, 4, 4096]` <-> packed `[1, 1, B*S, 16384]` (`host
 | `test_moe.py` | layer 4 MoE, T=32 / 256 | router sets identical 32/32, 255/256; output 0.99993 / 0.99995 |
 | `test_dsa.py` | layer 3 MLA, T=96 / 1000 + 3 decode | prefill 0.99964 / 0.99961, latent cache 0.99997, decode 0.9991-0.9999 |
 | `test_decoder_layer.py` | full layers 0 / 3 / 4 vs HF dump, T=256 + 4 decode; T=200 non-aligned live HF | 0.99984 / 0.99992 / 0.99997 prefill, 0.9999 decode; 0.99980 / 0.99993 |
-| `test_decode_trace.py` | traced decode replay (layers 0/3/4); two users (100 + 37 tokens, slots) | replay == eager (0.9999); per-user 0.9998-0.99998 |
+| `test_decode_trace.py` | traced decode replay vs the HF dump (layers 0/3/4); two users (100 + 37 tokens, slots) | replay PCC 0.9999 (same as the eager run of the same steps); per-user 0.9998-0.99998 |
 | `test_dsa_sparse.py` | layer 3 at 4097 tokens (sparse path) + decode 4097..4100 | prefill 0.99977 (selected rows 0.99990), decode 0.9999 |
 | `test_determinism.py` | layers 0, 3: repeated prefill and traced-decode replay, `throw_exception_on_fallback` raised | bit-identical outputs, no host fallback |
 | watcher | `TT_METAL_WATCHER=10` on the layer-3 dump test (`~/ashai/glm53/_logs/watcher_layer3`) | PASSED, 10 dumps, no watcher exceptions |

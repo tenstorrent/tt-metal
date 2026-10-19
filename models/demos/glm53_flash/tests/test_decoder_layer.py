@@ -17,7 +17,6 @@ import pytest
 import torch
 from loguru import logger
 
-import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
 from models.demos.glm53_flash.reference.hf_layer_reference import build_layer, load_config
 from models.demos.glm53_flash.tests.utils import pcc
@@ -59,13 +58,8 @@ def test_layer_prefill_decode_vs_dump(mesh_device, layer_idx):
 
     for step in range(4):
         d = torch.load(DUMP / f"layer{layer_idx}_decode{step}.pt")
-        pos = ttnn.from_torch(
-            torch.tensor([d["position"]], dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-        )
-        yd = dec.decode_forward(host_streams_to_device(d["x_in"], mesh_device, pad_to=1), positions=pos)
+        dp = dec.make_decode_positions([d["position"]])
+        yd = dec.decode_forward(host_streams_to_device(d["x_in"], mesh_device, pad_to=1), positions=dp)
         p_d = pcc(d["x_out"], device_streams_to_host(yd, 4, 1))
         logger.info(f"  decode step {step} (pos {d['position']}): pcc {p_d:.6f}")
         assert p_d > 0.995
@@ -102,13 +96,8 @@ def test_layer_nonaligned_vs_hf(mesh_device, layer_idx, seq_len):
         xt = x[:, seq_len + step : seq_len + step + 1]
         with torch.no_grad():
             y_hf_d, _ = hf(xt, attention_mask=torch.ones(1, 1, dtype=torch.bool), past_key_values=cache, use_cache=True)
-        pos = ttnn.from_torch(
-            torch.tensor([seq_len + step], dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-        )
-        yd = dec.decode_forward(host_streams_to_device(xt, mesh_device, pad_to=1), positions=pos)
+        dp = dec.make_decode_positions([seq_len + step])
+        yd = dec.decode_forward(host_streams_to_device(xt, mesh_device, pad_to=1), positions=dp)
         p_d = pcc(y_hf_d, device_streams_to_host(yd, 4, 1))
         logger.info(f"  decode step {step} (pos {seq_len + step}): pcc {p_d:.6f}")
         assert p_d > 0.995

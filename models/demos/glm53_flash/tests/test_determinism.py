@@ -51,14 +51,9 @@ def test_repeat_determinism_and_no_fallback(mesh_device, layer_idx):
 
     d0 = torch.load(DUMP / f"layer{layer_idx}_decode0.pt")
     streams_dev = host_streams_to_device(d0["x_in"], mesh_device, pad_to=1)
-    pos_dev = ttnn.from_torch(
-        torch.tensor([d0["position"]], dtype=torch.int32),
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-    )
+    dp = dec.make_decode_positions([d0["position"]])
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        trace_id, out_dev, _ = dec.capture_decode_trace(streams_dev, pos_dev)
+        trace_id, out_dev, _ = dec.capture_decode_trace(streams_dev, dp)
     # replaying the same token twice from the same state: reset the state by re-prefilling, then replay
     results = []
     for _ in range(2):

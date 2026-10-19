@@ -93,3 +93,37 @@ Stage: tt-model-bringup stage 1 (functional decoder, 1x1 mesh) = design Phase 1.
   `doc/functional_decoder/tracy/layer4_kda_moe/`):
   - prefill: 1002 ops, 293.4 ms device per pass (wall 297.8 ms, S=1024); top op classes: SparseMatmulDeviceOperation 183.29 ms x64, UnaryDeviceOperation 45.46 ms x167, BinaryNgDeviceOperation 17.32 ms x152, SliceDeviceOperation 14.10 ms x194, PermuteDeviceOperation 9.96 ms x16, FastReduceNCDeviceOperation 6.91 ms x32
   - decode: 1250 ops, 9.6 ms device per step (3 traced steps summed 28.7 ms; wall 11.08 ms/step); top op classes: AccumulationDeviceOperation 1.76 ms x5, UnaryDeviceOperation 1.47 ms x17, BinaryNgDeviceOperation 1.26 ms x110, SparseMatmulDeviceOperation 1.11 ms x2, MatmulDeviceOperation 0.99 ms x11, TernaryDeviceOperation 0.61 ms x38
+
+## 2026-10-19 (evening): stage review 1 -> fixes
+
+Independent stage review (fresh subagent, read-only) returned `more-work-needed`: P1 sparse-decode pool bookkeeping
+(pool (a+1)//4-1 rewritten every step = the previous COMPLETE pool corrupted from a ring that already holds the new
+token; a host simulation showed 230 corrupted pool reads over 40 steps), P1 the dense paths never maintained the
+pooled-key index (a short prompt decoded past 2048 would score an empty index), P2s: decode perf table from an
+incomplete profiler buffer (1250 rows for 3x471 ops), no layer-3 decode table, contract claimed 16384 untested,
+dense decode silently valid past 2048 under trace, identity-only page tables, batch coverage 2.
+
+Fixes (`tt/indexer.py`, `tt/dsa.py`, `tt/functional_decoder.py`, `tt/decoder_layer.py`):
+- pool written each decode step = `position // 4` (not selectable until complete; exact at `a % 4 == 3`); raw
+  k/gate rings are 32-row paged blocks per user written with `paged_update_cache(update_idxs=position % 4)`;
+  the index is maintained on EVERY prefill and decode (dense and sparse) from batched, trace-safe ops driven by
+  three persistent [B] int32 inputs (`DecodePositions`: position, position // 4, position % 4 + host values);
+  `FunctionalDecoder.make_decode_positions / update_decode_positions`; sparse path auto-selected from the host
+  values; `capture_decode_trace` refuses DSA decoders with max_seq_len > 2048 unless `allow_sparse_range`.
+- page tables: any unique [max_batch, blocks] mapping; `user_rows_rm` gathers the user's blocks in table order.
+- router bias is a broadcast [1,1,1,E] row; TtKDA no longer keeps the raw torch weights; indexer tail/sentinel
+  constants cached per geometry (uploaded once); hf_layer_reference: `--random-ids` prompts and the HF indexer's
+  selected ids (`index_ids`) recorded via a forward hook.
+New references (random token ids, CPU): R4097 (layers 0-4, 12 decode steps), R2040 (layers 0-3, 24 steps),
+R16385 (layers 0-3, 2 steps; layer 3 prefill 48 s on the host).
+New tests (`tests/test_dsa_long.py`, `tests/test_batch8.py`, log `_logs/tests_long_batch8.log`):
+- selection vs HF (R4097, 12 steps 4097..4108): layer PCC 0.9997-0.99997; TT/HF selected-id sets 98.0-99.2 %
+  common per step (bf16 indexer scores vs fp32: boundary pools); pooled-key cache after 12 steps vs host
+  recomputation 0.999994 (worst of the last 8 rows 0.99999).
+- dense->sparse transition (R2040, slot 1 of 2, permuted page table): prefill 0.99988; decode 2040..2063 all
+  >= 0.99962 (dense 2040-2047, sparse 2048-2063, tails 0/1/2/3 covered).
+- 16K (R16385): sparse prefill S=16385 PCC 0.99906 (last 2048 rows 0.99982), decode 16385/16386 0.99996/0.99995.
+- 8 users (layers 3 and 4, lengths 100/37/64/1/200/33/96/129, permuted page table): prefill >= 0.9968 (the
+  1-token user), 3 decode steps worst per-user 0.99938 (layer 3) / 0.99936 (layer 4).
+Regression after the refactor (`_logs/regress_dsa_refactor.log`): dense DSA T=96, sparse 4097, traced layer 3,
+two users: unchanged PCCs.

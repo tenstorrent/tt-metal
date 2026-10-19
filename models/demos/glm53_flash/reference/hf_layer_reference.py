@@ -102,8 +102,9 @@ def load_config(snapshot: Path):
     cfg = AutoConfig.from_pretrained(str(snapshot))
     text = cfg.text_config
     # The checkpoint's config.json names the DSA layers "deepseek_sparse_attention"; the modeling
-    # code keys its mask mapping on "indexed_attention". Normalize so a layer-level run matches
-    # what from_pretrained produces.
+    # code's Glm5NextTextModel.forward keys its mask mapping on "indexed_attention" (the config
+    # __post_init__ only renames "full_attention"). A layer-level run needs the same key, so
+    # normalize here; the decoder layer itself only distinguishes "linear_attention" from the rest.
     text.layer_types = ["indexed_attention" if t != "linear_attention" else t for t in text.layer_types]
     return cfg, text
 
@@ -162,15 +163,23 @@ def run_layers(
     out_dir.mkdir(parents=True, exist_ok=True)
     torch.save({"prompt_ids": prompt_ids, "x0": x}, out_dir / "prefill_input.pt")
     modules = {}
+    index_ids: dict[int, list] = {}
     topk = None
     for li in layers:
         t0 = time.time()
         layer, sd = build_layer(snapshot, text_config, li, headers)
         modules[li] = layer
+        idx_mod = getattr(layer.self_attn, "indexer", None)
+        if idx_mod is not None:
+            # the layer returns topk_indices only for "shared" successors; record the indexer output directly
+            index_ids[li] = []
+            idx_mod.register_forward_hook(lambda m, i, o, li=li: index_ids[li].append(o.detach().clone()))
         (out_dir / f"layer{li}_weight_stats.json").write_text(json.dumps(layer_stats(sd), indent=1))
         x_in = x
         x, topk = layer(x, attention_mask=mask, past_key_values=cache, use_cache=True, prev_topk_indices=topk)
         rec = {"x_in": x_in, "x_out": x, "topk_indices": topk}
+        if li in index_ids:
+            rec["index_ids"] = index_ids[li][-1]  # [B, S, W] int32, -1 = unused slot
         rec.update(_cache_snapshot(cache, li))
         torch.save(rec, out_dir / f"layer{li}_prefill.pt")
         print(f"layer {li} prefill T={T}: {time.time() - t0:.1f}s  out std {x.float().std():.4f}", flush=True)
@@ -188,6 +197,8 @@ def run_layers(
                 x, attention_mask=mask_d, past_key_values=cache, use_cache=True, prev_topk_indices=topk
             )
             rec = {"token": tok, "position": T + step, "x_in": x_in, "x_out": x, "topk_indices": topk}
+            if li in index_ids:
+                rec["index_ids"] = index_ids[li][-1]
             rec.update(_cache_snapshot(cache, li))
             torch.save(rec, out_dir / f"layer{li}_decode{step}.pt")
         print(f"decode step {step} (pos {T + step}) done", flush=True)
@@ -219,6 +230,13 @@ def main():
     ap.add_argument("--prompt", type=str, default="The capital of France is Paris. The theory of general relativity")
     ap.add_argument("--seq-len", type=int, default=None, help="repeat/truncate the prompt to this many tokens")
     ap.add_argument("--num-decode", type=int, default=3)
+    ap.add_argument(
+        "--random-ids",
+        type=int,
+        default=None,
+        metavar="SEED",
+        help="use uniformly random token ids of --seq-len (non-repetitive) instead of repeating --prompt",
+    )
     ap.add_argument("--out", type=Path, default=Path("bringup/references/glm53_flash"))
     args = ap.parse_args()
 
@@ -227,10 +245,15 @@ def main():
     snapshot = args.snapshot or default_snapshot_dir()
     cfg, text = load_config(snapshot)
     tok = AutoTokenizer.from_pretrained(str(snapshot))
-    ids = tok(args.prompt, return_tensors="pt").input_ids
-    if args.seq_len is not None:
-        reps = (args.seq_len + ids.shape[1] - 1) // ids.shape[1]
-        ids = ids.repeat(1, reps)[:, : args.seq_len]
+    if args.random_ids is not None:
+        assert args.seq_len is not None, "--random-ids needs --seq-len"
+        g = torch.Generator().manual_seed(args.random_ids)
+        ids = torch.randint(0, text.vocab_size, (1, args.seq_len), generator=g)
+    else:
+        ids = tok(args.prompt, return_tensors="pt").input_ids
+        if args.seq_len is not None:
+            reps = (args.seq_len + ids.shape[1] - 1) // ids.shape[1]
+            ids = ids.repeat(1, reps)[:, : args.seq_len]
     layers = [int(x) for x in args.layers.split(",")]
     assert layers[0] == 0 and layers == list(range(layers[0], layers[-1] + 1)), "layers must be 0..N"
     print(f"snapshot {snapshot}\nprompt tokens {ids.shape}", flush=True)
