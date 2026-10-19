@@ -396,6 +396,14 @@ tool call. Harbor omits that failed-format response's usage and reports
 Both cached arms passed this one task. Their different turn/output counts
 prevent interpreting the shorter unseeded run as an isolated speed effect.
 
+Standard mini-swe also embeds host `uname` in its user prompt. Completed
+seeded/cached worker reports Linux7.0.0-38; unseeded/cached reports
+Linux7.0.0-34. Thus these standard task runs use the same task/image/config
+but not byte-identical complete prompts. This is another confound for
+causal seed/runtime comparisons. The focused synthetic timing controls
+used identical token inputs and are unaffected. No prompt was changed
+mid-study to conceal or remove this difference.
+
 Remote runs 39238204679 (qb2-120-p03t09) and 39238201191
 (qb2-120-p01t03) passed concurrently on distinct machines, using Metal
 7d5c3e5cb8438989e36a6a35c704f1154f9a4584 and workflow 38d4d6f.
