@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Shared pieces of the ring_joint cache-read tests on (8,4): the GQA shapes, the block-cyclic chunk builders and
-gather, the dense SDPA configs, and the 1-element uint32 scalars the metadata path reads on-device."""
+gather, and the 1-element uint32 scalars the metadata path reads on-device."""
 
 import torch
 
@@ -56,22 +56,6 @@ def make_q_chunk(q, kv_actual, mesh_device, chunk_local, on_device=True):
     twin for copy_host_to_device_tensor (re-targeting a traced Q slab in place)."""
     idx = bc_index(kv_actual, mesh_device.shape[0], chunk_local)
     return _shard(q[:, :, idx, :], mesh_device, ttnn.bfloat16, on_device)
-
-
-def sdpa_configs(mesh_device):
-    """The M3 dense SDPA program / compute configs (minimax3_gqa_causal_perf in
-    tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py)."""
-    grid = mesh_device.compute_with_storage_grid_size()
-    prog = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
-        q_chunk_size=128,
-        k_chunk_size=512,
-        exp_approx_mode=False,
-    )
-    kcfg = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
-    )
-    return prog, kcfg
 
 
 def gather_chunk(out, kv_actual, mesh_device, chunk_local):
