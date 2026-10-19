@@ -22,9 +22,11 @@
 // RUN: not %{diagnose} %t/operand-outside.cpp 2>&1 | FileCheck %s --check-prefix=GPR_ADDR
 // RUN: not %{diagnose} %t/operand-crossing-Bits128.cpp 2>&1 | FileCheck %s --check-prefix=GPR_SPAN
 // RUN: not %{diagnose} %t/anchor-direct-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_GPR
-// RUN: not %{diagnose} %t/wrcfg-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_ALIGN
+// RUN: not %{diagnose} %t/wrcfg-misaligned.cpp -DCFG_TEST_FIELD=Base_cntx1_address 2>&1 | FileCheck %s --check-prefix=WRCFG_ALIGN
+// RUN: not %{diagnose} %t/wrcfg-misaligned.cpp -DCFG_TEST_FIELD=Base_cntx2_address 2>&1 | FileCheck %s --check-prefix=WRCFG_ALIGN
 // RUN: not %{diagnose} %t/wrcfg-index.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_INDEX
-// RUN: not %{diagnose} %t/wrcfg-source-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_SOURCE_ALIGN
+// RUN: not %{diagnose} %t/wrcfg-source-misaligned.cpp -DCFG_TEST_GPR=5 2>&1 | FileCheck %s --check-prefix=WRCFG_SOURCE_ALIGN
+// RUN: not %{diagnose} %t/wrcfg-source-misaligned.cpp -DCFG_TEST_GPR=6 2>&1 | FileCheck %s --check-prefix=WRCFG_SOURCE_ALIGN
 // RUN: not %{diagnose} %t/scalar-static.cpp -DCFG_TEST_SIZE=Bits32 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
 // RUN: not %{diagnose} %t/scalar-static.cpp -DCFG_TEST_SIZE=Bits128 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
 // RUN: not %{diagnose} %t/scalar-runtime.cpp -DCFG_TEST_SIZE=Bits32 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
@@ -204,7 +206,7 @@ void probe()
 
 void probe()
 {
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_cntx1_address, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<8>());
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].CFG_TEST_FIELD, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<8>());
 }
 
 //--- wrcfg-index.cpp
@@ -220,7 +222,8 @@ void probe()
 
 void probe()
 {
-    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<5>()));
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::from_gpr<cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<CFG_TEST_GPR>()));
 }
 
 //--- scalar-static.cpp

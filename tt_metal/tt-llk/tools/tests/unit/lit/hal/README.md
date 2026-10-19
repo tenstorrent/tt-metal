@@ -18,14 +18,16 @@ operations. Read the two C++ bodies to see the expected behavior.
 Tests write `objdump -drz` output to a text file, then pass it to
 `%{blackhole_compare_codegen}`. The script reads one adjacent function/reference
 pair at a time, in either order, and compares from each section start through its
-final `ret`, including instruction bytes and operands.
+first `ret`, including instruction bytes and operands.
 Local branch destinations are already encoded in these instructions, so their
 `R_RISCV_BRANCH` records are ignored. Other relocation types, targets, and addends
 are compared.
 
-Keep these test wrappers to one final `ret` and assembler-resolved local branches.
-If a future test needs another function shape or unresolved branch targets,
-extend the comparison helper when adding that test.
+Runtime tests check that HAL calls inline to straight-line `TT_*`/`TTI_*`
+instructions, so keep each test wrapper branch-free with a single `ret`.
+Instructions after the first `ret` (for example, an early-return cold path) are
+not compared. If a future test needs branches or another function shape, extend
+the comparison helper when adding that test.
 
 The comparison checks that the public API inlines and folds to the same code as
 the explicit operations, including the absence of extra calls, instructions, or
