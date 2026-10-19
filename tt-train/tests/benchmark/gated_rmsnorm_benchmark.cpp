@@ -199,6 +199,7 @@ double median(std::vector<double> samples) {
 ArmResults time_arms(const Case& c, const Inputs& in, ttnn::distributed::MeshDevice* device) {
     using namespace ttml::benchmark_utils;
     std::vector<Saved> saved;
+    saved.reserve(kArms.size());
     for (const auto arm : kArms) {
         saved.push_back(run_forward(arm, c, in).saved);
     }
