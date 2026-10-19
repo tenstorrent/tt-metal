@@ -176,6 +176,10 @@ class TT_CCL:
         # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
         self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
 
+        # PROTOTYPE sparse KVPE push: one host planner (its plan is reused by every layer fed the same
+        # indices) and one caller-owned ready/done semaphore pair, created on first use.
+        self.sparse_kv_push = None
+
         # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, shared by every
         # MoE layer. Created on first use; see get_combine_overlap_semaphores.
         self.combine_overlap_semaphores = None
@@ -436,6 +440,20 @@ class TT_CCL:
                 ),
             )
         return self.mla_chunked_kv_buffers[key]
+
+    def get_sparse_kv_push(self, links: int):
+        """(planner, ready_semaphore, done_semaphore) for the sparse KVPE push; layers run serially and share them."""
+        if self.sparse_kv_push is None:
+            from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner
+
+            l1_small = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank > 0
+            buffer_type = ttnn.BufferType.L1_SMALL if l1_small else ttnn.BufferType.L1
+            sems = [
+                ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0, buffer_type) for _ in range(2)
+            ]
+            ttnn.synchronize_device(self.mesh_device)
+            self.sparse_kv_push = (SparseKvPushPlanner(self.mesh_device, links), *sems)
+        return self.sparse_kv_push
 
     def get_mla_sparse_kv_gather_buffer(self, *, seq_len, row_width, dtype, layout):
         """Return the full-capacity output scratch for sparse MLA's SP KV-prefix gather.

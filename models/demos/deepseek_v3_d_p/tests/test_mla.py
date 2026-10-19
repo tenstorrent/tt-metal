@@ -72,6 +72,7 @@ def run_mla_inference(
     is_chunked=False,
     active_seq_len=None,
     actual_start=None,
+    mla_kwargs=None,
 ):
     """
     Utility function to run MLA inference without host comparison.
@@ -121,6 +122,7 @@ def run_mla_inference(
         active_seq_len=active_seq_len,
         layer_num=1,
         sparse_kv_cache_format=tt_kvpe_cache.format,
+        **(mla_kwargs or {}),
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     index_kv_cache = None
