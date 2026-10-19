@@ -9,6 +9,8 @@
 // pair becomes the tensor::src binding, the positional runtime args become named ones, and the scratch
 // page size is reconstructed from the scratchpad's total size (size_in_bytes / num_trids). The
 // TRID-tagged transfer pipeline and its slot state machine are untouched.
+// With I2S_BANK_RUNS (whole pages from a DRAM-interleaved tensor) the shard is instead read one run of
+// pages per DRAM bank into the scratchpad, and the sticks are placed with local reads.
 // Forked rather than converted in place because the legacy file is still bound by factories on the
 // legacy positional-arg API.
 //
@@ -40,13 +42,74 @@ void kernel_main() {
 
     Noc noc;
     // dfb::in — this core's row-major shard.
-    // scratch::scratch — the alignment staging area.
+    // scratch::scratch — the alignment staging area (the per-bank staging area under I2S_BANK_RUNS).
     DataflowBuffer dfb_in(dfb::in);
     Scratchpad<uint8_t> scratch_pad(scratch::scratch);
 
     const auto s0 = TensorAccessor(tensor::src);
     uint32_t stick_id = start_id;
     dfb_in.reserve_back(block_height);
+#ifdef I2S_BANK_RUNS
+    {
+        (void)stick_id;
+        (void)aligned;
+        (void)aligned_input_width_offset_bytes;
+        (void)aligned_block_width_bytes;
+        (void)aligned_offset;
+        (void)num_trids;
+        constexpr uint32_t page_stride = I2S_BANK_RUNS_PAGE_STRIDE;
+        // One DRAM read per bank per pass (a bank's pages of this shard sit back to back, page_stride apart), then
+        // each stick is placed with a local L1->L1 read.
+        constexpr uint32_t num_banks = NUM_DRAM_BANKS;
+        constexpr uint32_t dram_align = interleaved_addr_gen::get_allocator_alignment<true>();
+        const uint32_t scratch_base = scratch_pad.get_base_address();
+        // DRAM reads need the L1 destination aligned like the source; skip ahead to the first aligned byte.
+        const uint32_t skew = ((scratch_base + dram_align - 1) & ~(dram_align - 1)) - scratch_base;
+        const uint32_t pass_sticks =
+            (scratch_pad.size_in_bytes() - skew) / page_stride;  // factory sizes this >= num_banks
+
+        UnicastEndpoint self_ep;
+        const uint32_t my_noc_x = my_x[noc.get_noc_id()];
+        const uint32_t my_noc_y = my_y[noc.get_noc_id()];
+        uint32_t first[num_banks];
+        uint32_t count[num_banks];
+        uint32_t stage_off[num_banks];
+        for (uint32_t done = 0; done < block_height; done += pass_sticks) {
+            const uint32_t first_stick = start_id + done;
+            const uint32_t end_stick =
+                first_stick + ((block_height - done < pass_sticks) ? (block_height - done) : pass_sticks);
+            uint32_t off = skew;
+            for (uint32_t b = 0; b < num_banks; ++b) {
+                // First stick of this pass in bank b; every num_banks-th stick after it is in the same bank.
+                const uint32_t f = first_stick + (b + num_banks - first_stick % num_banks) % num_banks;
+                const uint32_t c = (f < end_stick) ? (end_stick - 1 - f) / num_banks + 1 : 0;
+                first[b] = f;
+                count[b] = c;
+                stage_off[b] = off;
+                if (c) {
+                    noc.async_read(s0, scratch_pad, c * page_stride, {.page_id = f}, {.offset_bytes = off});
+                }
+                off += c * page_stride;
+            }
+            noc.async_read_barrier();
+            for (uint32_t b = 0; b < num_banks; ++b) {
+                uint32_t src = scratch_base + stage_off[b];
+                uint32_t dest_off = (first[b] - start_id) * padded_block_width_bytes;
+                for (uint32_t k = 0; k < count[b]; ++k) {
+                    noc.async_read(
+                        self_ep,
+                        dfb_in,
+                        block_width_bytes,
+                        {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = src},
+                        {.offset_bytes = dest_off});
+                    src += page_stride;
+                    dest_off += num_banks * padded_block_width_bytes;
+                }
+            }
+            noc.async_read_barrier();
+        }
+    }
+#else
     if (aligned) {
         uint32_t dest_off = 0;
         for (uint32_t h = 0; h < block_height; ++h) {
@@ -129,6 +192,7 @@ void kernel_main() {
             }
         }
     }
+#endif
     // Reset the sticky NOC_PACKET_TAG register for downstream untagged reads
     UnicastEndpoint self_ep;
     noc.set_async_read_state<NocOptions::TXN_ID>(
