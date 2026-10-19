@@ -380,6 +380,13 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        self.norm_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=program_config.output_projection_math_fidelity,
@@ -587,7 +594,7 @@ class ttKDA:
             config.num_heads,
             epsilon=config.norm_eps,
             memory_config=self.norm_output_memory_config,
-            compute_kernel_config=self.kda_compute_config,
+            compute_kernel_config=self.norm_compute_config,
             output_dtype=self.gated_rms_output_dtype,
             gate_column_offset=output_gate_offset,
         )
@@ -629,7 +636,7 @@ class ttKDA:
             program = merged
         return io, program
 
-    def _reduce_scatter(self, output: ttnn.Tensor) -> ttnn.Tensor:
+    def _reduce_scatter(self, output: ttnn.Tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor:
         """The TP reduction of the output projection's partial sums."""
         if self.tensor_parallel_size > 1:
             cluster_axis = self._tp_cluster_axis
@@ -639,7 +646,7 @@ class ttKDA:
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                 num_links=self.tt_ccl.get_num_links(cluster_axis),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=memory_config,
                 topology=self.tp_ccl_topology,
                 cluster_axis=cluster_axis,
             )
@@ -744,6 +751,7 @@ class ttKDA:
             ttnn.deallocate(output_gate)
         else:
             output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
+        ttnn.deallocate(result.output)
         # The norm read the output gate, the projection's last columns in use.
         ttnn.deallocate(inputs.projected)
         if self.carry_with_output_projection:
@@ -757,9 +765,13 @@ class ttKDA:
             )
             final_state = result.final_state.run(lambda: self._output_projection(normed, output))
             ttnn.deallocate(normed)
-            output = self._reduce_scatter(output)
-            if output.dtype != ttnn.bfloat16:
-                output = ttnn.typecast(output, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if self.partial_output_dtype == ttnn.bfloat16:
+                output = self._reduce_scatter(output)
+            else:
+                # The reduced bfloat8_b rows land in L1 and the cast writes the BF16 output to DRAM.
+                reduced = self._reduce_scatter(output, ttnn.L1_MEMORY_CONFIG)
+                output = ttnn.typecast(reduced, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(reduced)
         else:
             output, final_state = self._project_output(output), result.final_state
         return output, KdaState(recurrent=final_state, convolution=new_convolution)

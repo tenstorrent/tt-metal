@@ -94,14 +94,17 @@ FORCE_INLINE void write_identity_summary(
     noc.async_write_barrier();
 }
 
-template <uint32_t Kt, uint32_t Vt, uint32_t VtFull, bool PackedHead>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t VtFull, bool PackedHead, bool EmitOutputs>
 FORCE_INLINE void write_summary(
     uint32_t head,
     uint32_t value_block,
     uint32_t group,
     uint32_t split_group,
     uint32_t split_in_group,
-    bool local_split) {
+    bool local_split,
+    uint32_t num_chunks,
+    uint32_t valid_chunks,
+    uint32_t reset_chunk) {
     // A packed head binds final_state to the packed output too, so B lands at b_column of the same rows.
     const auto head_a_accessor = TensorAccessor(tensor::output);
     const auto head_b_accessor = TensorAccessor(tensor::final_state);
@@ -122,9 +125,28 @@ FORCE_INLINE void write_summary(
     const uint32_t a_column = value_block * Vt;
     const uint32_t b_column = (PackedHead ? Kt : 0) + value_block * Vt;
 
+    if constexpr (EmitOutputs) {
+        // Each chunk's base and sensitivity rows as compute publishes them; the split head's rows follow the chunk
+        // before the restart, as compute publishes them there.
+        const auto base_accessor = TensorAccessor(tensor::base);
+        const auto sensitivity_accessor = TensorAccessor(tensor::sensitivity);
+        DataflowBuffer chunk_base(dfb::chunk_base);
+        DataflowBuffer chunk_sensitivity(dfb::chunk_sensitivity);
+        for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
+            const uint32_t chunk_row = (head * num_chunks + chunk) * Ct * VtFull;
+            write_value_slice<Ct, Vt, VtFull, Ct>(base_accessor, chunk_base, noc, chunk_row, value_block * Vt);
+            write_value_slice<Ct, Vt, VtFull, Ct>(
+                sensitivity_accessor, chunk_sensitivity, noc, chunk_row, value_block * Vt);
+            if (straddles && reset_chunk != 0 && chunk + 1 == reset_chunk) {
+                write_value_slice<Kt, Vt, row_stride, 1>(head_a_accessor, split_head_a, noc, row_base, a_column);
+                write_value_slice<Kt, Vt, row_stride, 1>(head_b_accessor, split_head_b, noc, row_base, b_column);
+            }
+        }
+    }
+
     // With one group per head a local split always straddles it (head_rows is a positive tile count below the
     // group), so a packed head is always active; the identity is written only when the rank has no valid chunk.
-    if (head_active) {
+    if (head_active && !(EmitOutputs && straddles)) {
         // Split-head buffers hold one tile-row each. Drain the same packets
         // compute publishes instead of waiting for a full matrix to fit.
         if (straddles) {
@@ -145,6 +167,16 @@ FORCE_INLINE void write_summary(
             write_value_slice<Kt, Vt, VtFull, Kt>(tail_a_accessor, full_a, noc, row_base, a_column);
             write_value_slice<Kt, Vt, VtFull, Kt>(tail_b_accessor, full_b, noc, row_base, b_column);
         }
+    }
+
+    if constexpr (EmitOutputs) {
+        // The last segment's transform in FP32, at this value block's columns of [BH, K, V].
+        DataflowBuffer final_a(dfb::final_a);
+        DataflowBuffer final_b(dfb::final_b);
+        const uint32_t state_row = head * Kt * VtFull;
+        write_value_slice<Kt, Vt, VtFull, Kt>(TensorAccessor(tensor::final_a), final_a, noc, state_row, a_column);
+        write_value_slice<Kt, Vt, VtFull, Kt>(
+            TensorAccessor(tensor::final_b), final_b, noc, state_row, value_block * Vt);
     }
 }
 
@@ -248,6 +280,7 @@ template <
     uint32_t Vt_full,
     uint32_t summary,
     uint32_t packed_head,
+    uint32_t emit_outputs,
     uint32_t late_on_writer,
     uint32_t has_actual_end>
 TT_KERNEL void writer(
@@ -281,13 +314,16 @@ TT_KERNEL void writer(
         }
     }
     if constexpr (summary) {
-        write_summary<Kt, Vt, Vt_full, packed_head != 0>(
+        write_summary<Ct, Kt, Vt, Vt_full, packed_head != 0, emit_outputs != 0>(
             head,
             value_block,
             group,
             topology.split_group(groups),
             topology.split_in_group(groups),
-            topology.has_valid_tail());
+            topology.has_valid_tail(),
+            num_chunks,
+            valid_chunks,
+            topology.reset_chunk(group, groups));
     } else {
         uint32_t final_head = head;
         if constexpr (has_actual_end) {

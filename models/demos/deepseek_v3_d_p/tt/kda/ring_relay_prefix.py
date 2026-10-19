@@ -451,6 +451,8 @@ class RingRelayPrefix:
         self.notify_sems = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(self.heads_per_link)]
         # The matmul runs at the affine prefix's fidelity, accumulating in an FP32 DST.
         self.compute_config = ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity, fp32_dest_acc_en=True)
+        # Where the entry states land for their reader (the chunk scan, or the entry correction's many cores).
+        self.entry_memory_config = ttnn.DRAM_MEMORY_CONFIG
         ttnn.synchronize_device(mesh_device)
 
     def __call__(self, packed, initial_state, actual_start, companion=None):
@@ -464,7 +466,7 @@ class RingRelayPrefix:
         state_tiles = kt * kt
         state_shape = ttnn.Shape([self.batch_heads, kt * 32, kt * 32])
         entry = ttnn.allocate_tensor_on_device(
-            state_shape, ttnn.float32, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+            state_shape, ttnn.float32, ttnn.TILE_LAYOUT, mesh, self.entry_memory_config
         )
         final = ttnn.allocate_tensor_on_device(
             state_shape, ttnn.float32, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG

@@ -27,6 +27,13 @@ struct RecurrentChunkScanParams {
     // SUMMARY with one group per head only: write the head transform as one [1, BH, K, K+V] tensor of [A | B]
     // rows, the identity where the rank has no head, and no tail.
     bool packed_head = false;
+    // SUMMARY with a packed head only: also write each chunk's zero-seeded output (base, [BH, NC, 32, V]) and its
+    // sensitivity to the segment's entry state (M = F(I) - F(0), [BH, NC, 32, K]), both BF16, and the final segment's
+    // transform in FLOAT32 (A, B: [BH, K, V] each), so a chunk's output is base + M @ entry and the rank's final
+    // state is A @ entry + B, with no second sequential pass.
+    bool emit_outputs = false;
+    // Memory of the emitted base and sensitivity (default: output_mem_config), e.g. sharded on their consumers.
+    std::optional<tt::tt_metal::MemoryConfig> emit_mem_config = std::nullopt;
     uint32_t sequence_parallel_axis;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;

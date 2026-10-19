@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     l1_when_it_fits,
     preparation_bytes,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.entry_correction_program import EntryCorrection
 from models.demos.deepseek_v3_d_p.tt.kda.final_carry_program import FinalCarryProgram, fabric_wraps_axis
 from models.demos.deepseek_v3_d_p.tt.kda.ring_relay_prefix import RingRelayPrefix
 
@@ -461,22 +462,27 @@ def _scan_sp_grouped_chunks(
     prefix_companion=None,
     carry_companion=None,
     defer_final_carry: bool = False,
+    correction: EntryCorrection | None = None,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
     )
+    correct = correction is not None and groups == 1 and ring_relay is not None
     if groups == 1:
         # One group per head: the summary writes the packed transform the prefix gathers (the identity for a rank
-        # without a head), and the group enters at the rank's own entry state.
-        (packed,) = ttnn.experimental.kda.summarize_chunk_recurrence(
+        # without a head), and the group enters at the rank's own entry state. With the entry correction it also
+        # leaves each chunk's output terms, so no second pass over the chunks follows the prefix.
+        packed, *emitted = ttnn.experimental.kda.summarize_chunk_recurrence(
             *grouped.as_kernel_args(),
             groups_per_head=groups,
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=sequence_parallel_axis,
-            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+            memory_config=correction.memory_config if correct else KDA_OUTPUT_MEMORY_CONFIG,
             compute_kernel_config=compute_config.preparation,
             packed_head=True,
+            emit_outputs=correct,
+            emit_memory_config=correction.terms_memory_config if correct else None,
         )
         if ring_relay is not None:
             group_entry_states, prefix_final_state = ring_relay(
@@ -528,16 +534,22 @@ def _scan_sp_grouped_chunks(
             memory_config=KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
             compute_kernel_config=compute_config.affine_prefix,
         )
-    scan = _scan_chunks(
-        grouped,
-        group_entry_states,
-        prefix_final_state,
-        groups_per_head=groups,
-        actual_start=actual_start,
-        actual_end=actual_end,
-        sequence_parallel_axis=sequence_parallel_axis,
-        compute_config=compute_config.scan,
-    )
+    if correct:
+        output, rank_final = correction(*emitted, group_entry_states, prefix_final_state, actual_start, actual_end)
+        for tensor in (*emitted, group_entry_states):
+            ttnn.deallocate(tensor)
+        scan = RecurrenceResult(output=output, final_state=rank_final)
+    else:
+        scan = _scan_chunks(
+            grouped,
+            group_entry_states,
+            prefix_final_state,
+            groups_per_head=groups,
+            actual_start=actual_start,
+            actual_end=actual_end,
+            sequence_parallel_axis=sequence_parallel_axis,
+            compute_config=compute_config.scan,
+        )
     output = ttnn.reshape(
         scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
     )
@@ -722,6 +734,7 @@ class KDARecurrence:
         # sends the final state on to the first); the final carry then runs as its own program.
         self._ring_relay = None
         self._relay_final_carry = None
+        self._entry_correction = None
         if (
             self._sequence_parallel
             and program_config.ring_relay_prefix
@@ -744,6 +757,21 @@ class KDARecurrence:
                 cores=ring_relay_cores,
             )
             self._relay_final_carry = _RelayFinalCarry(device, sequence_parallel_axis, links)
+            if program_config.entry_correction:
+                grid = device.compute_with_storage_grid_size()
+                columns = grid.x
+                self._entry_correction = EntryCorrection(
+                    device,
+                    sequence_parallel_axis=sequence_parallel_axis,
+                    batch_heads=batch * heads,
+                    num_chunks=local_rows // KDA_CHUNK_SIZE,
+                    key_dim=key_dim,
+                    local_rows=local_rows,
+                    cores=[ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(columns)],
+                    math_fidelity=program_config.scan_math_fidelity,
+                )
+                # Every correction core reads its head's entry state: L1 spares those DRAM reads.
+                self._ring_relay.entry_memory_config = ttnn.L1_MEMORY_CONFIG
         if self._sequence_parallel:
             self._execute = self._run_sp
         elif grouped:
@@ -953,4 +981,5 @@ class KDARecurrence:
             prefix_companion=prefix_companion,
             carry_companion=carry_companion,
             defer_final_carry=defer_final_carry,
+            correction=self._entry_correction,
         )
