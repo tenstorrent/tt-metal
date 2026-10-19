@@ -122,7 +122,10 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     per block) and each owner derives what to push from it on device.
                 push_max_rows: PROTOTYPE. Row capacity the plan tables were built for.
                 push_part: PROTOTYPE. With plan tables: 0 pushes every needed row, 1 only rows before the
-                    plan's chunk start (prefix, e.g. prefetched during the previous layer), 2 only the rest.
+                    plan's chunk start (prefix, e.g. prefetched during the previous layer), 2 only the rest,
+                    3 resume: the part-1 packets an earlier stopped part-1 push did not send, then part 2.
+                push_progress_tensor: PROTOTYPE. Per-device uint32 [1, 1, workers, 16] packets sent per sender by
+                    an early-stopped part-1 push (fused into sparse_sdpa); read by push_part 3.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -149,7 +152,8 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("push_runs_tensor") = nb::none(),
         nb::arg("push_stripe_chunk") = 0,
         nb::arg("push_max_rows") = 0,
-        nb::arg("push_part") = 0);
+        nb::arg("push_part") = 0,
+        nb::arg("push_progress_tensor") = nb::none());
 
     ttnn::bind_function<"sparse_push_plan", "ttnn.experimental.">(
         mod,

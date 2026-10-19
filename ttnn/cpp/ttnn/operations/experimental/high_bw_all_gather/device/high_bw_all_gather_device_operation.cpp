@@ -571,7 +571,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const std::optional<Tensor>& push_runs_tensor,
     uint32_t push_stripe_chunk,
     uint32_t push_max_rows,
-    uint32_t push_part) {
+    uint32_t push_part,
+    const std::optional<Tensor>& push_progress_tensor) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -685,7 +686,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .gathered_prefix_tensor = gathered_prefix_tensor,
             .window_start_tensor = window_start_tensor,
             .progress_tensor = progress_tensor,
-            .push_runs_tensor = push_runs_tensor}};
+            .push_runs_tensor = push_runs_tensor,
+            .push_progress_tensor = push_progress_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
@@ -716,7 +718,8 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& push_runs_tensor,
     uint32_t push_stripe_chunk,
     uint32_t push_max_rows,
-    uint32_t push_part) {
+    uint32_t push_part,
+    const std::optional<Tensor>& push_progress_tensor) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -741,7 +744,8 @@ Tensor high_bw_all_gather(
         push_runs_tensor,
         push_stripe_chunk,
         push_max_rows,
-        push_part);
+        push_part,
+        push_progress_tensor);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }

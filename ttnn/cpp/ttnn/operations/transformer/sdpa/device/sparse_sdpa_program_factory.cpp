@@ -352,12 +352,28 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_desc.common_runtime_args.insert(reader_desc.common_runtime_args.end(), reader_crt.begin(), reader_crt.end());
     writer_desc.common_runtime_args.insert(writer_desc.common_runtime_args.end(), writer_crt.begin(), writer_crt.end());
 
+    // Fused push: each writer tells every push sender when it is done (quit semaphore, the program's first).
+    std::vector<uint32_t> push_senders;
+    if (attrs.fused_push.has_value()) {
+        writer_desc.defines.emplace_back("SPARSE_PUSH_QUIT_SEM", "0");
+        const auto senders = sparse_sdpa_push_worker_cores(*attrs.fused_push);
+        push_senders.push_back(senders.size());
+        for (const auto& c : senders) {
+            const auto phys = device->worker_core_from_logical_core(c);
+            push_senders.push_back(phys.x);
+            push_senders.push_back(phys.y);
+        }
+    }
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
         reader_desc.emplace_runtime_args(core, {tok_start, tok_count});
-        writer_desc.emplace_runtime_args(core, {tok_start, tok_count});
+        tt::tt_metal::KernelDescriptor::RTArgList writer_rt;
+        writer_rt.push_back(tok_start);
+        writer_rt.push_back(tok_count);
+        writer_rt.append(push_senders);
+        writer_desc.emplace_runtime_args(core, writer_rt);
         compute_desc.emplace_runtime_args(core, {tok_start, tok_count});
     }
 

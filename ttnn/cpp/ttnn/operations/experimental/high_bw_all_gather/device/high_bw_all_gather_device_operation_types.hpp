@@ -117,6 +117,8 @@ struct HighBwAllGatherInputs {
     // PROTOTYPE sparse push: per-device uint32 [1, 1, workers, words] run lists. Selects HighBwSparsePushFactory.
     std::optional<Tensor> push_runs_tensor{std::nullopt};
     bool has_push_runs() const { return push_runs_tensor.has_value(); }
+    // PROTOTYPE: per-device uint32 [1, 1, workers, 16] packets-sent counts (see push_part 3).
+    std::optional<Tensor> push_progress_tensor{std::nullopt};
 };
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather

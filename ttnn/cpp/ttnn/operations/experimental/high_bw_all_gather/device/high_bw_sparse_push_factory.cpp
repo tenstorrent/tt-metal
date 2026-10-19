@@ -191,7 +191,10 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
                 SparsePushPlanLayout::kOwnerOff,
                 SparsePushPlanLayout::kBitmapOff,
                 SparsePushPlanLayout::kOwnerPrefixOff,
-                operation_attributes.push_part};
+                operation_attributes.push_part,
+                0u,  // quit semaphore: the standalone push never stops early
+                0u,
+                tensor_args.push_progress_tensor.has_value() ? 1u : 0u};
         } else {
             reader_ct = {
                 page_bytes,
@@ -208,6 +211,9 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
         tt::tt_metal::TensorAccessorArgs(runs_tensor.buffer()).append_to(reader_ct);
         if (batch_from_meta) {
             tt::tt_metal::TensorAccessorArgs(tensor_args.input_batch_index_tensor->buffer()).append_to(reader_ct);
+        }
+        if (from_table && tensor_args.push_progress_tensor.has_value()) {
+            tt::tt_metal::TensorAccessorArgs(tensor_args.push_progress_tensor->buffer()).append_to(reader_ct);
         }
         std::vector<uint32_t> writer_ct = {page_bytes, num_devices, my_rank, workers, packet_bytes, links};
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct);
@@ -249,7 +255,9 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
              batch_from_meta ? tensor_args.input_batch_index_tensor->buffer()->address() : 0u,
              operation_attributes.batch_slot_num_layers,
              operation_attributes.batch_slot_layer_idx,
-             operation_attributes.input_batch_index.value_or(0)});
+             operation_attributes.input_batch_index.value_or(0),
+             tensor_args.push_progress_tensor.has_value() ? tensor_args.push_progress_tensor->buffer()->address()
+                                                          : 0u});
         tt::tt_metal::SetCommonRuntimeArgs(
             program, writer, {output_tensor.buffer()->address(), ready_sem.address(), done_sem.address()});
 
@@ -280,7 +288,7 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
             const uint32_t c = w / senders_per_channel, k = w % senders_per_channel;
             const uint32_t link = c / kDirections, dir = c % kDirections;
             tt::tt_metal::SetRuntimeArgs(
-                program, reader, worker_cores[w], {link, dir, my_rank, k, senders_per_channel, links});
+                program, reader, worker_cores[w], {link, dir, my_rank, k, senders_per_channel, links, w});
             std::vector<uint32_t> writer_rt = {
                 w, dir, link, k, static_cast<uint32_t>(sync_core.x), static_cast<uint32_t>(sync_core.y)};
             for (uint32_t other = 0; other < workers; ++other) {
@@ -340,6 +348,8 @@ void HighBwSparsePushFactory::override_runtime_arguments(
         reader[3] = operation_attributes.batch_slot_num_layers;
         reader[4] = operation_attributes.batch_slot_layer_idx;
         reader[5] = operation_attributes.input_batch_index.value_or(0);
+        reader[6] =
+            tensor_args.push_progress_tensor.has_value() ? tensor_args.push_progress_tensor->buffer()->address() : 0u;
         auto& writer = tt::tt_metal::GetCommonRuntimeArgs(program, vars.writer_kernel_id);
         writer[0] = output_tensor.buffer()->address();
         writer[1] = operation_attributes.ready_semaphore->address();

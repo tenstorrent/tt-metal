@@ -20,6 +20,7 @@ set(TTNN_OP_TRANSFORMER_SRCS
     sdpa/sdpa.cpp
     sdpa/device/sparse_sdpa_device_operation.cpp
     sdpa/device/sparse_sdpa_program_factory.cpp
+    sdpa/device/sparse_sdpa_fused_push_factory.cpp
     sdpa/sparse_sdpa.cpp
     sdpa/device/sparse_sdpa_msa_device_operation.cpp
     sdpa/device/sparse_sdpa_msa_program_factory.cpp

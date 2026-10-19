@@ -968,6 +968,11 @@ def test_sparse_overlap_device_plan(mesh_device):
     user, start = scalar(0), scalar(prefix_tokens)
     manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([sdpa_grid]), ttnn.SubDevice([gather_grid])], 0)
     sems = [ttnn.create_global_semaphore(mesh_device, gather_grid, 0, ttnn.BufferType.L1_SMALL) for _ in range(2)]
+    full_grid = _cols(0, grid.x - 1)
+    full_sems = [ttnn.create_global_semaphore(mesh_device, full_grid, 0, ttnn.BufferType.L1_SMALL) for _ in range(2)]
+    progress = ttnn.from_torch(
+        torch.zeros(1, 1, 4 * links * 2, 16, dtype=torch.int32), dtype=ttnn.uint32, mesh_mapper=replicate, **common
+    )
     ttnn.synchronize_device(mesh_device)
 
     def gather_kw(layer_slot):
@@ -1003,7 +1008,8 @@ def test_sparse_overlap_device_plan(mesh_device):
     lines = [
         f"GLM-5.3 real top-k, fp8, chunk {chunk_global}, prefix {prefix_tokens} tokens, on-device plan (8x4 TORUS_XY)",
         f"{'layer':>5} | {'today: sdpa + gather = total':>30} | {'serial push: plan/3 + push + sdpa':>34} | "
-        f"{'overlap: plan/3 + sdpa||prefix + remainder':>44}{'saved':>8}",
+        f"{'overlap: plan/3 + sdpa||prefix + remainder':>44}{'saved':>8} | "
+        f"{'fused: plan/3 + sdpa+prefix + resume':>38}{'saved':>8}",
     ]
     last = None
     for layer in layers:
@@ -1090,15 +1096,96 @@ def test_sparse_overlap_device_plan(mesh_device):
         finally:
             ttnn.synchronize_device(mesh_device)
             mesh_device.clear_loaded_sub_device_manager()
+        # Fused: sparse_sdpa on columns 0-7 with layer L+1's prefix push in the same program on 8-11 (no sub-devices),
+        # stopping when attention is done; then the resume push of whatever it did not send, plus the remainder.
+        fused = lambda: ttnn.transformer.sparse_sdpa(
+            q,
+            compact[0],
+            compact_idx,
+            V_DIM,
+            kv_format=_KV_FORMATS[kv_fmt][0],
+            scale=K_DIM**-0.5,
+            k_chunk_size=128,
+            sub_core_grids=sdpa_grid,
+            push_input=cache,
+            push_table=tables,
+            push_output=compact[1],
+            push_progress=progress,
+            push_stripe_chunk=stripe_chunk,
+            push_max_rows=cache_tokens,
+            push_batch_index=1,
+            push_num_links=links,
+            push_ready_semaphore=full_sems[0],
+            push_data_valid_semaphore=full_sems[1],
+            push_core_grid=gather_grid,
+        )
+        resume = lambda: ttnn.experimental.high_bw_all_gather(
+            cache,
+            dim=2,
+            output_tensor=compact[1],
+            cluster_axis=None,
+            num_links=links,
+            input_batch_index=1,
+            push_runs_tensor=tables,
+            push_stripe_chunk=stripe_chunk,
+            push_max_rows=cache_tokens,
+            push_part=3,
+            push_progress_tensor=progress,
+            ready_semaphore=full_sems[0],
+            data_valid_semaphore=full_sems[1],
+        )
+        t_fused = timed(fused)
+        t_fused_pair = timed(lambda: (fused(), resume()))
+        t_resume = t_fused_pair - t_fused
+        sent = ttnn.to_torch(progress, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[:, 0, :, 0]
+        logger.info(f"layer {layer}: fused prefix packets sent per sender (chip 0): {sent[0].tolist()}")
+        ttnn.deallocate(compact[1])
+        compact[1] = _zero_kv_buffer(mesh_device, buffer_rows, kv_fmt)
+        fused()
+        prog = ttnn.to_torch(progress, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[:, 0, :, :3]
+        resume()
+        if os.environ.get("FUSED_DEBUG"):
+            ref = _zero_kv_buffer(mesh_device, buffer_rows, kv_fmt)
+            ttnn.experimental.high_bw_all_gather(
+                cache,
+                dim=2,
+                output_tensor=ref,
+                cluster_axis=None,
+                num_links=links,
+                input_batch_index=1,
+                push_runs_tensor=tables,
+                push_stripe_chunk=stripe_chunk,
+                push_max_rows=cache_tokens,
+                push_part=0,
+                ready_semaphore=full_sems[0],
+                data_valid_semaphore=full_sems[1],
+            )
+            raw = (
+                lambda t: ttnn.to_torch(
+                    ttnn.typecast(t, ttnn.bfloat16), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+                )[0, 0]
+                .contiguous()
+                .view(torch.int16)
+            )
+            got, want = raw(compact[1]), raw(ref)
+            bad = (got != want).any(-1).nonzero().flatten()
+            logger.info(
+                f"layer {layer} FUSED_DEBUG chip0: {bad.numel()} mismatched rows, first {bad[:16].tolist()}; "
+                f"progress [sent, finished, turn] {prog[0].tolist()}"
+            )
+            ttnn.deallocate(ref)
         sdpa_today = lambda: _sparse_sdpa(q, dense_out, idx_natural, s_local * TP, kv_fmt)
         t_sdpa = timed(sdpa_today)
         today = t_sdpa + t_gather
+        fused_total = t_plan / 3 + t_fused + t_resume
         serial = t_plan / 3 + t_push + t_sdpa_sub
         new = t_plan / 3 + t_overlap + t_rem
         lines.append(
             f"{layer:>5} | {t_sdpa:>8.0f} + {t_gather:>7.0f} = {today:>7.0f}  | "
             f"{t_plan / 3:>6.0f} + {t_push:>6.0f} + {t_sdpa_sub:>6.0f} = {serial:>6.0f} | "
-            f"{t_plan / 3:>6.0f} + {t_overlap:>12.0f} + {t_rem:>9.0f} = {new:>7.0f} {100 * (today - new) / today:>6.1f}%"
+            f"{t_plan / 3:>6.0f} + {t_overlap:>12.0f} + {t_rem:>9.0f} = {new:>7.0f} {100 * (today - new) / today:>6.1f}% | "
+            f"{t_plan / 3:>6.0f} + {t_fused:>12.0f} + {t_resume:>8.0f} = {fused_total:>7.0f} "
+            f"{100 * (today - fused_total) / today:>6.1f}%"
         )
         last = (sdpa_today, compact_idx)
     logger.info("\n" + "\n".join(lines))
@@ -1114,4 +1201,4 @@ def test_sparse_overlap_device_plan(mesh_device):
         ),
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
     )
-    assert torch.equal(out_dense, out_compact), "prefix + remainder push differs from the dense-gather path"
+    assert torch.equal(out_dense, out_compact), "fused prefix push + resume differs from the dense-gather path"

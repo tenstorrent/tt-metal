@@ -1901,8 +1901,10 @@ class ttMLA:
         planner, ready_sem, done_sem = self.tt_ccl.get_sparse_kv_push(self.ccl_num_links)
         storage = kvpe_cache.storage
         plan, push_buffer = self._sparse_push_plan(indices, kvpe_cache, seq_len_local, kv_actual_isl, self.layer_idx)
-        # The prefix rows were pushed during the previous layer's sparse_sdpa when it holds the same plan.
-        part = 2 if planner.prefetched.pop(self.layer_idx, None) is plan else 0
+        # The previous layer's sparse_sdpa pushed (some of) the prefix rows when it holds the same plan: resume from
+        # its progress (the rest of the prefix, if it stopped early, then the current chunk's rows).
+        prefetched = planner.prefetched.pop(self.layer_idx, None) is plan
+        part = 3 if prefetched else 0
         compact = ttnn.experimental.high_bw_all_gather(
             storage,
             dim=2,
@@ -1913,6 +1915,7 @@ class ttMLA:
             push_runs_tensor=plan.streams,
             **plan.push_kwargs,
             push_part=part,
+            push_progress_tensor=planner.progress() if prefetched else None,
             ready_semaphore=ready_sem,
             data_valid_semaphore=done_sem,
         )
@@ -1947,7 +1950,7 @@ class ttMLA:
         return plan, push_buffer
 
     def _next_layer_prefetch(self, plan, kvpe_cache, cache_batch_idx):
-        """Callable that pushes the next layer's prefix rows on the gather sub-device, or None."""
+        """sparse_sdpa arguments that fuse the next layer's prefix push into this layer's attention, or None."""
         resources = self._push_prefetch
         if resources is None or not self._sparse_kv_push or not plan.split_prefix:
             return None
@@ -1958,25 +1961,22 @@ class ttMLA:
         dense = self._sparse_kv_gather_buffer
         buffer = planner.push_buffer(nxt % 2, planner.buffer_rows(dense.shape[2], -(-row_bytes // 64) * 64), dense)
 
-        def run():
-            ttnn.experimental.high_bw_all_gather(
-                storage,
-                dim=2,
-                output_tensor=buffer,
-                cluster_axis=None,
-                subdevice_id=resources.gather_subdevice_id,
-                sub_core_grids=resources.gather_core_grid,
-                num_links=self.ccl_num_links,
-                input_batch_index=cache_batch_idx + 1 if storage.shape[0] > 1 else None,
-                push_runs_tensor=plan.streams,
-                **plan.push_kwargs,
-                push_part=1,
-                ready_semaphore=resources.ready_semaphore,
-                data_valid_semaphore=resources.data_valid_semaphore,
-            )
-            planner.prefetched[nxt] = plan
-
-        return resources, run
+        planner.prefetched[nxt] = plan
+        # Attention keeps the 80-core grid; the push senders and fabric muxes run on the other 40 in the same program.
+        return dict(
+            sub_core_grids=resources.topk_core_grid,
+            push_input=storage,
+            push_table=plan.streams,
+            push_output=buffer,
+            push_progress=planner.progress(),
+            push_stripe_chunk=plan.push_kwargs["push_stripe_chunk"],
+            push_max_rows=plan.push_kwargs["push_max_rows"],
+            push_batch_index=cache_batch_idx + 1 if storage.shape[0] > 1 else 0,
+            push_num_links=self.ccl_num_links,
+            push_ready_semaphore=resources.ready_semaphore,
+            push_data_valid_semaphore=resources.data_valid_semaphore,
+            push_core_grid=resources.gather_core_grid,
+        )
 
     def _prepare_sparse_kv_prefix(
         self,
@@ -2422,24 +2422,8 @@ class ttMLA:
             cache_batch_idx=cache_batch_idx,
             **grid,
         )
-        if overlap is None:
-            out = sdpa()
-        else:
-            # sparse_sdpa on the 80-core sub-device while `run` pushes the next layer's prefix on the other 40.
-            resources, run = overlap
-            trace_controller = getattr(self, "_trace_controller", None)
-            if trace_controller is not None:
-                trace_controller.sub_device_load(resources.manager_id)
-            else:
-                self.mesh_device.load_sub_device_manager(resources.manager_id)
-            try:
-                out = sdpa(subdevice_id=resources.topk_subdevice_id, sub_core_grids=resources.topk_core_grid)
-                run()
-            finally:
-                if trace_controller is not None:
-                    trace_controller.sub_device_clear()
-                else:
-                    self.mesh_device.clear_loaded_sub_device_manager()
+        # `overlap`: the next layer's prefix push, fused into this sparse_sdpa program (see _next_layer_prefetch).
+        out = sdpa(**(overlap or {}))
         ttnn.deallocate(q_rm)
         if idx is not indices:
             ttnn.deallocate(idx)

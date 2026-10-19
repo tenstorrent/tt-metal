@@ -43,7 +43,16 @@ struct SparsePushPlanLayout {
     uint32_t counts_off = 0;
     uint32_t pages = 0;
 
-    static SparsePushPlanLayout make(uint32_t max_rows, uint32_t stripe_chunk);
+    static SparsePushPlanLayout make(uint32_t max_rows, uint32_t stripe_chunk) {
+        auto round_up = [](uint32_t x, uint32_t m) { return (x + m - 1) / m * m; };
+        SparsePushPlanLayout l;
+        l.bitmap_words = max_rows / 32;
+        l.num_blocks = max_rows / stripe_chunk;
+        l.prefix_off = round_up(kBitmapOff + l.bitmap_words, 16);
+        l.counts_off = round_up(l.prefix_off + (l.bitmap_words + 3) / 4, 16);
+        l.pages = round_up(l.counts_off + l.num_blocks, kPageWords) / kPageWords;
+        return l;
+    }
 };
 
 struct SparsePushPlanParams {

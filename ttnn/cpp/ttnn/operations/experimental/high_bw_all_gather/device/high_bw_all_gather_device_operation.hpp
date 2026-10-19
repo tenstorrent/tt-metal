@@ -74,6 +74,7 @@ Tensor high_bw_all_gather(
     // of push_max_rows rows (stripe_chunk rows per block-cyclic block) instead of host-built run lists.
     uint32_t push_stripe_chunk = 0,
     uint32_t push_max_rows = 0,
-    uint32_t push_part = 0);
+    uint32_t push_part = 0,
+    const std::optional<Tensor>& push_progress_tensor = std::nullopt);
 
 }  // namespace ttnn::prim
