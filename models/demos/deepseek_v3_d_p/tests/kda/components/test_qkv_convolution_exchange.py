@@ -22,11 +22,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
-    fabric2d_device_params,
-    fabric_1d_device_params,
-    torus_x_device_params,
-)
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
 from models.demos.deepseek_v3_d_p.tt.kda.kda import _HistoryExchange
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -87,8 +83,16 @@ _LOUDBOX = _mesh((2, 4), 0, fabric_1d_device_params(), "mesh-2x4", "loudbox-SP2x
 # Each system's ids start with it, so its CI job selects them with -k.
 _MESHES = [
     _LOUDBOX,
-    # QuietBox: an SP4 ring on a 1D torus and SP2 on a 2D fabric.
-    _mesh((1, 4), 1, torus_x_device_params(), "ring", "quietbox-SP4-axis1-ring", _COVERAGE),
+    # QuietBox: an SP4 ring and SP2 on a 2D fabric. The ring's SP axis turns at every chip, which a 2D multicast
+    # cannot follow, so it runs on a 1D ring fabric, whose routing plane follows the turns.
+    _mesh(
+        (1, 4),
+        1,
+        fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING),
+        "ring",
+        "quietbox-SP4-axis1-ring",
+        _COVERAGE,
+    ),
     _mesh((2, 2), 0, fabric2d_device_params(), "mesh-2x2", "quietbox-SP2xTP2-fabric-2d", _COVERAGE),
 ]
 
