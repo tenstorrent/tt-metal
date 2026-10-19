@@ -420,6 +420,62 @@ The uname confound is therefore between seed groups, not this cache pair.
 Random sampling and divergent trajectories still prevent attributing the
 full wall-time/quality difference to caching from one sample per arm.
 
+### Seeded, cache off: final control
+
+Run39246694017 passed official reward1.0, no terminal agent exception.
+Agent3042.632s, client wall3104s, trial3093.849s. Server totals:
+93 requests (92 stop, one repetition finish), input/computed2,204,852,
+cached0, output63,417; TTFT1776.696s, decode1253.430s. Four malformed
+tool calls were recovered. Harbor reports only2,066,712 input/57,880 output;
+server counters include the discarded/error-corrected responses.
+
+The seeded pair's canonical initial system/user messages have identical
+SHA256 `dfb94c33d44e031d768ef129bc8d46e3ab113007ce503701cb3bea18271d850d`.
+Their first response is also identical (1125 prompt/279 completion tokens,
+same reproduction-script tool call). Later trajectories diverge. Both cache
+pairs therefore have matched initial prompts; the host-kernel prompt
+difference applies to comparisons between seed groups.
+
+## Consolidated exploratory standard-Harbor result
+
+All four runs completed on distinct workers; no experiment job remains active.
+All used the exact model overlay, BFP8 release policy and same prebuilt image.
+Client wall includes agent/dependency setup and verification, excludes server
+startup. These are cold-server task runs, not warmed microbenchmarks; initial
+program/trace compilation is included in request timing.
+
+| Request seed9472 | Cache | Reward | Agent min | Client wall min | Server requests | Input tokens | Cached tokens | Computed prefill | Output tokens |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Present | Off | 1 | 50.71 | 51.73 | 93 | 2,204,852 | 0 | 2,204,852 | 63,417 |
+| Present | On | 1 | 21.73 | 22.73 | 59 | 1,004,807 | 987,008 | 17,799 | 42,830 |
+| Absent | Off | 0 | 40.47 | 41.48 | 77 | 2,098,765 | 0 | 2,098,765 | 36,459 |
+| Absent | On | 1 | 11.70 | 12.70 | 35 | 521,676 | 512,064 | 9,612 | 21,260 |
+
+| Seed/cache | TTFT sum seconds | Mean TTFT seconds | Decode seconds | Decode output tokens/s, excluding first token per request |
+| --- | --- | --- | --- | --- |
+| Present/off | 1776.696 | 19.104 | 1253.430 | 50.52 |
+| Present/on | 451.250 | 7.648 | 842.080 | 50.79 |
+| Absent/off | 1699.761 | 22.075 | 718.462 | 50.64 |
+| Absent/on | 279.138 | 7.975 | 415.620 | 51.07 |
+
+The cached trajectories were shorter and computed dramatically fewer prefill
+tokens, but also used fewer requests/output tokens. Their total wall ratios
+are not isolated cache-kernel speedups. The matched warmed synthetic tests
+provide clean evidence: 127-token suffix caching loses at4K, wins1.42x at8K
+and2.71x at16K. The separate shared-batch variant is slower than traced suffix
+replay and is not the measured agentic candidate.
+
+Both cached settings passed this one real task, including the no-request-seed
+setting. That is evidence of feasibility, not sufficient evidence to remove
+the fixed seed or claim broad accuracy. Cold-prefill numerical equality is
+still not satisfied; caching follows the proven ordinary-decode contract.
+Before promotion, carry `GEMMA4_PREFIX_TRACE_SUFFIX=1` explicitly in the
+candidate profile, preserve exact source/image/dependency provenance, and
+run the requested GPQA10/Terminal5/SWE5 gates through Shield main. Additional
+unseeded trials are needed to assess variability. No production PR was
+modified, no local tests/builds/servers/devices were run, and no final Shield
+qualification was dispatched by this experiment.
+
 Remote runs 39238204679 (qb2-120-p03t09) and 39238201191
 (qb2-120-p01t03) passed concurrently on distinct machines, using Metal
 7d5c3e5cb8438989e36a6a35c704f1154f9a4584 and workflow 38d4d6f.
