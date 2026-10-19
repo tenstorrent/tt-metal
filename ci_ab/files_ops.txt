@@ -1,0 +1,5 @@
+tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_topk.h
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_common_funcs.hpp
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_final.cpp
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local_tree_merge.cpp
