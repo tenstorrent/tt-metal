@@ -21,8 +21,9 @@
 
 namespace tt::tt_metal::experimental {
 
-namespace {
-std::atomic<uint64_t> next_tensor_prefetcher_factory_id{1};
+uint64_t next_tensor_prefetcher_factory_id() {
+    static std::atomic<uint64_t> next_id{1};
+    return next_id.fetch_add(1, std::memory_order_relaxed);
 }
 
 std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
@@ -32,6 +33,11 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
     TT_FATAL(!bank_to_receivers.empty(), "CreatePrefetcherPipesForTensorPrefetcher requires at least one DRAM bank");
     const auto* mesh_device = space.get_device();
     TT_FATAL(mesh_device != nullptr, "CreatePrefetcherPipesForTensorPrefetcher requires a live space");
+    if (space.l1_source() == PrefetcherPipeL1Source::DramReceiverZone) {
+        TT_THROW(
+            "This space's receivers are DRAM cores: pass each bank's receiver CCEs as ordered DRAM-logical coords to "
+            "the CreatePrefetcherPipesForTensorPrefetcher overload that takes bank_to_dram_receivers");
+    }
 
     // Multi-receiver shards (the legacy interleaved layout) force one sender per bank; the
     // receiver-contiguous layout that disallows them is what lets a bank use two senders.
@@ -64,7 +70,7 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
     // carries slab numbering, which each pipe now holds itself.
     std::vector<PrefetcherPipe> pipes;
     pipes.reserve(mapping.size());
-    const uint64_t factory_id = next_tensor_prefetcher_factory_id.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t factory_id = next_tensor_prefetcher_factory_id();
     for (size_t s = 0; s < mapping.size(); ++s) {
         const auto& [sender_logical, receivers] = mapping[s];
         pipes.push_back(space.impl().create_dram_sender_pipe(

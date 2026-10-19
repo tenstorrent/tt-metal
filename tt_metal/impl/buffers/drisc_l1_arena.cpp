@@ -22,18 +22,22 @@ DriscL1Arena::DriscL1Arena(ContextId context_id) {
 
     unreserved_base_ = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     drisc_unreserved_size_ = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const bool has_receiver_zone = hal.get_arch() == tt::ARCH::QUASAR;
+    sender_state_zone_size_ = has_receiver_zone ? kQuasarSenderStateZoneSize : kSenderStateZoneSize;
+    receiver_zone_size_ = has_receiver_zone ? kQuasarReceiverZoneSize : 0;
     TT_FATAL(
-        kSenderStateZoneSize < drisc_unreserved_size_,
-        "DRISC L1 sender-state zone ({} B) must leave room for the above-zone kernel working region "
-        "(unreserved size: {} B)",
-        kSenderStateZoneSize,
+        sender_state_zone_size_ + receiver_zone_size_ < drisc_unreserved_size_,
+        "DRISC L1 sender-state zone ({} B) and receiver zone ({} B) must leave room for the above-zone kernel "
+        "working region (unreserved size: {} B)",
+        sender_state_zone_size_,
+        receiver_zone_size_,
         drisc_unreserved_size_);
 }
 
 DriscL1Arena::DriscL1Arena(DeviceAddr zone_base, uint32_t zone_size) :
     unreserved_base_(zone_base),
     drisc_unreserved_size_(zone_size),
-    zone_size_(zone_size),
+    sender_state_zone_size_(zone_size),
     endpoint_l1_(EndpointL1::Shared) {}
 
 std::shared_ptr<DriscL1Arena> DriscL1Arena::for_dispatch_engine(DeviceAddr zone_base, uint32_t zone_size) {
@@ -42,18 +46,31 @@ std::shared_ptr<DriscL1Arena> DriscL1Arena::for_dispatch_engine(DeviceAddr zone_
 }
 
 std::shared_ptr<DriscL1Allocation> DriscL1Arena::allocate_on(const CoreCoord& core, uint32_t size, uint32_t alignment) {
+    return allocate_impl(core, unreserved_base_, sender_state_zone_size_, size, alignment);
+}
+
+std::shared_ptr<DriscL1Allocation> DriscL1Arena::allocate(uint32_t size, uint32_t alignment) {
+    return allocate_impl(/*core=*/std::nullopt, unreserved_base_, sender_state_zone_size_, size, alignment);
+}
+
+std::shared_ptr<DriscL1Allocation> DriscL1Arena::allocate_receiver(uint32_t size, uint32_t alignment) {
+    TT_FATAL(receiver_zone_size_ > 0, "This architecture's DRISC L1 arena has no receiver zone");
+    return allocate_impl(/*core=*/std::nullopt, receiver_zone_base(), receiver_zone_size_, size, alignment);
+}
+
+std::shared_ptr<DriscL1Allocation> DriscL1Arena::allocate_impl(
+    std::optional<CoreCoord> core, DeviceAddr zone_begin, uint32_t zone_size, uint32_t size, uint32_t alignment) {
     TT_FATAL(size > 0, "DriscL1Arena allocation requires size > 0");
     TT_FATAL(alignment > 0 && (alignment & (alignment - 1)) == 0, "alignment must be a power of two");
 
     const uint32_t aligned_size = tt::align(size, alignment);
-    const DeviceAddr zone_begin = unreserved_base_;
-    const DeviceAddr zone_end = unreserved_base_ + zone_size_;
+    const DeviceAddr zone_end = zone_begin + zone_size;
 
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // First-fit over the ranges on this core; ranges on other cores may share addresses. live_ is
-    // sorted ascending by base, so a single forward pass that steps past every overlap lands on the
-    // lowest free candidate.
+    // First-fit over the ranges sharing an L1 with this one; ranges on other cores may share
+    // addresses. live_ is sorted ascending by base, so a single forward pass that steps past every
+    // overlap lands on the lowest free candidate.
     DeviceAddr candidate = tt::align(zone_begin, alignment);
     for (const LiveRange& range : live_) {
         if (!same_l1(range.core, core)) {
@@ -77,17 +94,16 @@ std::shared_ptr<DriscL1Allocation> DriscL1Arena::allocate_on(const CoreCoord& co
     }
 
     TT_THROW(
-        "DRISC L1 sender zone full: requested {} B (aligned {} B) on DRAM sender core ({}, {}); zone is {} B "
-        "starting at 0x{:x}",
+        "DRISC L1 {} zone full: requested {} B (aligned {} B) {}; zone is {} B starting at 0x{:x}",
+        zone_begin == unreserved_base_ ? "sender-state" : "receiver",
         size,
         aligned_size,
-        core.x,
-        core.y,
-        zone_size_,
+        core.has_value() ? fmt::format("on DRAM sender core ({}, {})", core->x, core->y) : "on every DRAM core",
+        zone_size,
         zone_begin);
 }
 
-void DriscL1Arena::release(DeviceAddr base, uint32_t size, const CoreCoord& core) {
+void DriscL1Arena::release(DeviceAddr base, uint32_t size, const std::optional<CoreCoord>& core) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = std::lower_bound(
         live_.begin(), live_.end(), base, [](const LiveRange& range, DeviceAddr val) { return range.base < val; });

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -38,34 +39,42 @@ public:
 
 private:
     friend class DriscL1Arena;
-    DriscL1Allocation(std::weak_ptr<DriscL1Arena> arena, DeviceAddr base, uint32_t size, const CoreCoord& core) :
+    DriscL1Allocation(
+        std::weak_ptr<DriscL1Arena> arena, DeviceAddr base, uint32_t size, const std::optional<CoreCoord>& core) :
         arena_(std::move(arena)), base_(base), size_(size), core_(core) {}
 
     std::weak_ptr<DriscL1Arena> arena_;
     DeviceAddr base_;
     uint32_t size_;
-    CoreCoord core_;
+    // The one core it occupies; unset when it is reserved on every core.
+    std::optional<CoreCoord> core_;
 };
 
 // Per-mesh, per-DRAM-bank arena for the DRISC L1 region above UNRESERVED.
 //
 // Layout:
-//   [UNRESERVED, UNRESERVED + kSenderStateZoneSize)   — fixed zone this arena hands out
+//   [UNRESERVED, + sender_state_zone_size())          — fixed zone this arena hands out
 //                                                 to DRAM-sender state
 //                                                 (PrefetcherPipe sender config
-//                                                 pages).
-//   [UNRESERVED + kSenderStateZoneSize, END)          — kernel working region for any
+//                                                 pages, and the sender state of
+//                                                 GCBs whose receivers are DRAM
+//                                                 cores).
+//   [receiver_zone_base(), + receiver_zone_size())    — Quasar only: receiver config
+//                                                 pages and FIFOs of GCBs whose
+//                                                 receivers are DRAM cores.
+//   [kernel_working_region_base(), END)               — kernel working region for any
 //                                                 long-lived DRISC kernel that
-//                                                 co-exists with those senders
-//                                                 (queried via
-//                                                 kernel_working_region_base()).
+//                                                 co-exists with those senders.
 //
-// The zone is *fixed* so that allocating a sender after such a kernel has
-// started doesn't move the kernel's L1 layout: the kernel sits above the zone at
-// a stable address.
+// The zones are *fixed* so that allocating a sender after such a kernel has
+// started doesn't move the kernel's L1 layout: the kernel sits above them at
+// a stable address. Blackhole has a kSenderStateZoneSize sender-state zone and no
+// receiver zone; Quasar has kQuasarSenderStateZoneSize and kQuasarReceiverZoneSize.
 //
-// A range is reserved on a single named DRAM sender core (`allocate_on`), so two
-// ranges collide only when they are on the same core.
+// A range is reserved either on a single named DRAM sender core (`allocate_on`), so
+// two such ranges collide only when they are on the same core, or on every core
+// (`allocate`, `allocate_receiver`, for state that must sit at one offset on all of
+// them), which collides with every range in its zone.
 //
 // Where DRAM-sender endpoints run on the dispatch engine instead (for_dispatch_engine),
 // the zone is a fixed slice of that engine's L1 and every endpoint shares it: ranges
@@ -83,6 +92,8 @@ public:
     // zone is reported by kernel_working_region_size() so callers placing a
     // co-resident DRISC kernel know how much L1 they have.
     static constexpr uint32_t kSenderStateZoneSize = 1 * 1024;
+    static constexpr uint32_t kQuasarSenderStateZoneSize = 16 * 1024;
+    static constexpr uint32_t kQuasarReceiverZoneSize = 1024 * 1024;
 
     explicit DriscL1Arena(ContextId context_id);
     ~DriscL1Arena() = default;
@@ -102,14 +113,30 @@ public:
     // TT_FATAL on invalid alignment; TT_THROW on zone full.
     std::shared_ptr<DriscL1Allocation> allocate_on(const CoreCoord& core, uint32_t size, uint32_t alignment);
 
+    // Allocate `size` bytes at one offset in the sender-state zone, reserved on every DRAM core, for
+    // sender state that every bank's sender finds at the same address.
+    // TT_FATAL on invalid alignment; TT_THROW on zone full.
+    std::shared_ptr<DriscL1Allocation> allocate(uint32_t size, uint32_t alignment);
+
+    // Allocate `size` bytes at one offset in the receiver zone, reserved on every DRAM core, for a
+    // GCB whose receivers are DRAM cores. Not keyed by logical core: two logical coords can name one
+    // core. TT_FATAL when the arch has no receiver zone or on invalid alignment; TT_THROW on zone full.
+    std::shared_ptr<DriscL1Allocation> allocate_receiver(uint32_t size, uint32_t alignment);
+
+    uint32_t sender_state_zone_size() const { return sender_state_zone_size_; }
+    DeviceAddr receiver_zone_base() const { return unreserved_base_ + sender_state_zone_size_; }
+    uint32_t receiver_zone_size() const { return receiver_zone_size_; }
+
     // Fixed base for the prefetcher kernel's working region. Unchanged for
     // the device's lifetime, regardless of current arena allocations. DRAM cores only.
-    DeviceAddr kernel_working_region_base() const { return unreserved_base_ + zone_size_; }
+    DeviceAddr kernel_working_region_base() const { return receiver_zone_base() + receiver_zone_size_; }
 
     // Total DRISC L1 bytes available to the prefetcher kernel above the fixed
-    // sender-state zone. The manager uses this to size its ping-pong stage budget so
-    // changing `kSenderStateZoneSize` automatically reduces the budget. DRAM cores only.
-    uint32_t kernel_working_region_size() const { return drisc_unreserved_size_ - zone_size_; }
+    // zones. The manager uses this to size its ping-pong stage budget so
+    // growing a zone automatically reduces the budget. DRAM cores only.
+    uint32_t kernel_working_region_size() const {
+        return drisc_unreserved_size_ - sender_state_zone_size_ - receiver_zone_size_;
+    }
 
 private:
     // Whether every endpoint's ranges live in one shared L1.
@@ -119,23 +146,29 @@ private:
     DriscL1Arena(DeviceAddr zone_base, uint32_t zone_size);
 
     friend class DriscL1Allocation;
-    void release(DeviceAddr base, uint32_t size, const CoreCoord& core);
-    bool same_l1(const CoreCoord& a, const CoreCoord& b) const { return endpoint_l1_ == EndpointL1::Shared || a == b; }
+    std::shared_ptr<DriscL1Allocation> allocate_impl(
+        std::optional<CoreCoord> core, DeviceAddr zone_begin, uint32_t zone_size, uint32_t size, uint32_t alignment);
+    void release(DeviceAddr base, uint32_t size, const std::optional<CoreCoord>& core);
+    // A range reserved on every core (no core named) shares an L1 with every other range.
+    bool same_l1(const std::optional<CoreCoord>& a, const std::optional<CoreCoord>& b) const {
+        return endpoint_l1_ == EndpointL1::Shared || !a.has_value() || !b.has_value() || *a == *b;
+    }
 
     struct LiveRange {
         DeviceAddr base;
         uint32_t size;
-        // The one DRAM sender core it occupies.
-        CoreCoord core;
+        // The one DRAM sender core it occupies; unset when it is reserved on every core.
+        std::optional<CoreCoord> core;
     };
 
     DeviceAddr unreserved_base_;
     uint32_t drisc_unreserved_size_;
-    uint32_t zone_size_ = kSenderStateZoneSize;
+    uint32_t sender_state_zone_size_ = kSenderStateZoneSize;
+    uint32_t receiver_zone_size_ = 0;
     EndpointL1 endpoint_l1_ = EndpointL1::PerEndpoint;
-    // Live ranges within [unreserved_base_, unreserved_base_ + zone_size_), sorted
-    // ascending by base. First-fit allocate over the ranges on the requested core; release
-    // coalesces with neighbors implicitly via removal.
+    // Live ranges within both zones, sorted ascending by base. First-fit allocate over the
+    // ranges that share an L1 with the request; release coalesces with neighbors implicitly
+    // via removal.
     std::vector<LiveRange> live_;
     mutable std::mutex mutex_;
 };

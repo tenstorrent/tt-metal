@@ -69,9 +69,14 @@ public:
         const CoreRangeSet& cores,
         const std::function<const PrefetcherPipeConfigPages&(const distributed::MeshCoordinate&)>& pages_on) const;
 
+    // DramReceiverZone source: the receiver-zone range holding each receiver's config page and then
+    // its ring. Null for the other sources.
+    const std::shared_ptr<DriscL1Allocation>& receiver_zone_allocation() const { return receiver_zone_allocation_; }
+
 private:
     void allocate_from_arena(const CoreRangeSet& cores, uint32_t ring_size, uint32_t config_page_size);
     void allocate_from_allocator(const CoreRangeSet& cores, uint32_t ring_size, uint32_t config_page_size);
+    void allocate_from_receiver_zone(uint32_t ring_size, uint32_t config_page_size);
     void release() noexcept;
 
     distributed::MeshDevice* device_ = nullptr;
@@ -82,6 +87,8 @@ private:
     // Allocator source.
     std::shared_ptr<distributed::MeshBuffer> data_buffer_;
     std::shared_ptr<distributed::MeshBuffer> config_buffer_;
+    // DramReceiverZone source.
+    std::shared_ptr<DriscL1Allocation> receiver_zone_allocation_;
     uint32_t data_address_ = 0;
     uint32_t config_address_ = 0;
 };
@@ -122,6 +129,15 @@ public:
     uint32_t buffer_address() const { return l1().data_address(); }
     uint32_t config_address() const { return l1().config_address(); }
     PrefetcherPipeL1Source l1_source() const { return config_.l1_source; }
+    // Whether the receivers are DRAM cores (Quasar CCEs), reached by the host and by their senders
+    // through DRISC L1 addresses rather than worker L1 and the NoC.
+    bool has_dram_receivers() const { return config_.l1_source == PrefetcherPipeL1Source::DramReceiverZone; }
+    // DRAM receivers only: bytes of the per-receiver credit counters at the start of each sender's
+    // state range; the DramSenderStateBlock follows them.
+    uint32_t dram_receiver_counters_region_size() const;
+    const std::shared_ptr<DriscL1Allocation>& receiver_zone_allocation() const {
+        return l1().receiver_zone_allocation();
+    }
     uint32_t ring_size() const { return config_.ring_size; }
     uint32_t config_page_size() const { return layout_.page_size; }
     uint32_t max_receivers_per_pipe() const { return config_.max_receivers_per_pipe; }
@@ -150,6 +166,12 @@ public:
         uint32_t recv_index_base = 0,
         uint64_t tensor_prefetcher_factory_id = 0,
         uint32_t tensor_prefetcher_factory_num_pipes = 0);
+    // DRAM receivers only. `receivers` is in the sender's receiver-table order.
+    PrefetcherPipe create_dram_receiver_pipe(
+        CoreCoord dram_sender,
+        std::vector<CoreCoord> receivers,
+        uint64_t tensor_prefetcher_factory_id,
+        uint32_t tensor_prefetcher_factory_num_pipes);
 
     // Used by PrefetcherPipeImpl. `pending` holds cores claimed earlier in the same create_pipes
     // batch (validation runs before any claim is taken).
@@ -195,6 +217,9 @@ private:
     std::unordered_set<PrefetcherPipeImpl*> live_pipes_;
     std::unordered_set<CoreCoord> claimed_dram_senders_;
     std::unordered_map<CoreCoord, std::shared_ptr<DriscL1Allocation>> dram_sender_allocations_;
+    // DRAM receivers only: the one sender-state range every sender of this space shares, at one
+    // offset on every DRAM core. dram_sender_allocations_ holds it once per reserved sender.
+    std::shared_ptr<DriscL1Allocation> dram_receiver_sender_state_;
 };
 
 // Implementation of the PrefetcherPipe host object declared in
@@ -221,7 +246,9 @@ public:
         std::shared_ptr<DriscL1Allocation> drisc_config_page,
         uint32_t recv_index_base,
         uint64_t tensor_prefetcher_factory_id,
-        uint32_t tensor_prefetcher_factory_num_pipes);
+        uint32_t tensor_prefetcher_factory_num_pipes,
+        // DRAM receivers only: the receivers in receiver-table order.
+        std::vector<CoreCoord> dram_receiver_table = {});
 
     PrefetcherPipeImpl(const PrefetcherPipeImpl&) = delete;
     PrefetcherPipeImpl& operator=(const PrefetcherPipeImpl&) = delete;
@@ -265,6 +292,9 @@ public:
     // recv_index_base() + r to entry r.
     std::vector<CoreCoord> dram_sender_receiver_table() const;
     DeviceAddr sender_state_drisc_l1_base() const;
+    // DRAM receivers only: base of the sender's per-receiver pages_sent counters, which start its
+    // state range (dram_receiver_config_page.hpp).
+    DeviceAddr pages_sent_drisc_l1_base() const;
     // The DRISC L1 range that sender_state_drisc_l1_base() lies in. Shared with the space, which keeps
     // it for the sender core after the pipe is gone. Null for a worker-sender pipe.
     const std::shared_ptr<DriscL1Allocation>& sender_state_drisc_l1_allocation() const { return drisc_config_page_; }
@@ -274,6 +304,8 @@ private:
 
     void build_config_pages();
     void build_dram_sender_config_pages();
+    // DRAM receivers: writes each receiver's config page and the sender's counters and state block.
+    void build_dram_receiver_config_pages();
     // Called by the space's destructor when it is destroyed while this pipe is still alive.
     void detach_from_space() noexcept;
 
@@ -292,6 +324,7 @@ private:
     uint64_t tensor_prefetcher_factory_id_ = 0;
     uint32_t tensor_prefetcher_factory_num_pipes_ = 0;
     std::shared_ptr<DriscL1Allocation> drisc_config_page_;
+    std::vector<CoreCoord> dram_receiver_table_;
 };
 
 }  // namespace experimental

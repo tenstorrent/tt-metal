@@ -11,6 +11,8 @@
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe_dram_sender_internal.hpp"
 #include "impl/allocator/allocator.hpp"
+#include "impl/buffers/dram_receiver_config_page.hpp"
+#include "impl/buffers/dram_sender_state_block.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/context/metal_context.hpp"
@@ -167,8 +169,11 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
     device_(&device),
     config_(std::move(config)),
     // Quasar reserves lane slots up front; the active count (default 1) is raised per pipe by the
-    // first multi-thread receiver bind. WH/BH stay single-lane.
-    credit_lane_capacity_(device.arch() == tt::ARCH::QUASAR ? PREFETCHER_PIPE_MAX_CREDIT_LANES : 1u) {
+    // first multi-thread receiver bind. WH/BH stay single-lane, and so do DRAM receivers.
+    credit_lane_capacity_(
+        device.arch() == tt::ARCH::QUASAR && config_.l1_source != PrefetcherPipeL1Source::DramReceiverZone
+            ? PREFETCHER_PIPE_MAX_CREDIT_LANES
+            : 1u) {
     TT_FATAL(config_.buffer_type == BufferType::L1, "PrefetcherPipeSpace: buffer_type must be BufferType::L1");
     TT_FATAL(config_.ring_size > 0, "PrefetcherPipeSpace: ring_size must be > 0");
     const uint32_t l1_alignment = l1_alignment_for(device_);
@@ -199,15 +204,35 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
             config_.num_dram_senders > 0 ? PrefetcherPipeL1Source::Allocator : PrefetcherPipeL1Source::PersistentArena;
     }
     TT_FATAL(
-        config_.num_dram_senders == 0 || config_.l1_source == PrefetcherPipeL1Source::Allocator,
+        config_.num_dram_senders == 0 || config_.l1_source != PrefetcherPipeL1Source::PersistentArena,
         "PrefetcherPipeSpace: a space with DRAM senders ({} requested) takes its L1 from the allocator; "
         "PrefetcherPipeL1Source::PersistentArena is for worker-only spaces",
         config_.num_dram_senders);
     reservation_cores_ = config_.sender_cores.merge(config_.receiver_domain);
+    if (has_dram_receivers()) {
+        TT_FATAL(
+            config_.sender_cores.num_cores() == 0 && config_.num_dram_senders > 0,
+            "PrefetcherPipeSpace: a PrefetcherPipeL1Source::DramReceiverZone space has DRAM senders only; set "
+            "num_dram_senders and leave sender_cores empty");
+        TT_FATAL(
+            device.impl().dram_sender_placement() == DramSenderPlacement::DramCore &&
+                device.impl().drisc_l1_arena().receiver_zone_size() > 0,
+            "PrefetcherPipeSpace: PrefetcherPipeL1Source::DramReceiverZone needs DRAM cores with a DRISC L1 receiver "
+            "zone (Quasar CCEs)");
+        // receiver_domain holds DRAM-logical coords. The receiver page is the fixed
+        // dram_receiver_config_page.hpp layout, whatever max_receivers_per_pipe is; that count sizes the
+        // senders' state instead.
+        layout_ = PrefetcherPipeConfigPageLayout{.page_size = kDramReceiverConfigPageBytes};
+        return;
+    }
     // Worker-only public surface: sender_cores / receiver_domain are logical worker coordinates,
     // which the persistent arena and the L1 allocator validate against the worker grid.
     layout_ =
         compute_prefetcher_pipe_config_page_layout(config_.max_receivers_per_pipe, credit_lane_capacity_, l1_alignment);
+}
+
+uint32_t PrefetcherPipeSpaceImpl::dram_receiver_counters_region_size() const {
+    return tt::align(dram_receiver_sender_counters_bytes(config_.max_receivers_per_pipe), kDramReceiverLineBytes);
 }
 
 void PrefetcherPipeSpaceImpl::attach_l1(std::shared_ptr<PrefetcherPipeSpaceL1> l1) {
@@ -260,6 +285,8 @@ PrefetcherPipeSpaceL1::PrefetcherPipeSpaceL1(
     try {
         if (source == PrefetcherPipeL1Source::PersistentArena) {
             allocate_from_arena(cores, ring_size, config_page_size);
+        } else if (source == PrefetcherPipeL1Source::DramReceiverZone) {
+            allocate_from_receiver_zone(ring_size, config_page_size);
         } else {
             allocate_from_allocator(cores, ring_size, config_page_size);
         }
@@ -339,6 +366,16 @@ void PrefetcherPipeSpaceL1::allocate_from_allocator(
     // command queue, like the pages carved later, because earlier work may still be using this L1.
     const std::vector<uint32_t> zeros(config_buffer_->size() / sizeof(uint32_t), 0);
     distributed::EnqueueWriteMeshBuffer(command_queue(), config_buffer_, zeros, /*blocking=*/false);
+}
+
+void PrefetcherPipeSpaceL1::allocate_from_receiver_zone(uint32_t ring_size, uint32_t config_page_size) {
+    // One range at one offset on every DRAM core: each receiver's config page, then its ring. Nothing
+    // else uses this L1, so the pages are written from the host as each pipe is carved, with no
+    // template page and no command queue.
+    receiver_zone_allocation_ =
+        device_->impl().drisc_l1_arena().allocate_receiver(config_page_size + ring_size, kDramReceiverLineBytes);
+    config_address_ = checked_l1_address(receiver_zone_allocation_->addr(), "config");
+    data_address_ = checked_l1_address(receiver_zone_allocation_->addr() + config_page_size, "ring");
 }
 
 void PrefetcherPipeSpaceL1::enqueue_config_pages(
@@ -610,6 +647,19 @@ void PrefetcherPipeSpaceImpl::set_dram_sender_cores(std::span<const CoreCoord> d
     TT_FATAL(
         device_->impl().dram_sender_placement().has_value(),
         "set_dram_sender_cores: this device runs no DRAM-sender endpoints");
+    if (has_dram_receivers()) {
+        // Every sender finds its counters and state block at one offset, so one range reserved on
+        // every DRAM core serves them all: the counters first, each on its own line, then the block.
+        if (dram_receiver_sender_state_ == nullptr) {
+            dram_receiver_sender_state_ = device_->impl().drisc_l1_arena().allocate(
+                dram_receiver_counters_region_size() + dram_sender_state_block_size(config_.max_receivers_per_pipe),
+                kDramReceiverLineBytes);
+        }
+        for (const CoreCoord& sender : new_senders) {
+            dram_sender_allocations_.emplace(sender, dram_receiver_sender_state_);
+        }
+        return;
+    }
     const uint32_t alignment = config_page_alignment_for(device_);
 
     // Reserve each sender's state before a pipe on it is carved. A later carve on that sender only
@@ -710,6 +760,25 @@ PrefetcherPipe PrefetcherPipeSpaceImpl::create_dram_sender_pipe(
         tensor_prefetcher_factory_num_pipes));
 }
 
+PrefetcherPipe PrefetcherPipeSpaceImpl::create_dram_receiver_pipe(
+    CoreCoord sender,
+    std::vector<CoreCoord> receivers,
+    uint64_t tensor_prefetcher_factory_id,
+    uint32_t tensor_prefetcher_factory_num_pipes) {
+    TT_FATAL(has_dram_receivers(), "create_dram_receiver_pipe: this space's receivers are worker cores");
+    const CoreRangeSet receiver_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(receivers));
+    validate_dram_carve(sender, receiver_cores);
+    return PrefetcherPipe(std::make_unique<PrefetcherPipeImpl>(
+        *this,
+        sender,
+        receiver_cores,
+        dram_sender_allocations_.at(sender),
+        /*recv_index_base=*/0,
+        tensor_prefetcher_factory_id,
+        tensor_prefetcher_factory_num_pipes,
+        std::move(receivers)));
+}
+
 // ---------------------------------------------------------------------------------------------
 // PrefetcherPipeImpl
 // ---------------------------------------------------------------------------------------------
@@ -746,7 +815,8 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     std::shared_ptr<DriscL1Allocation> drisc_config_page,
     uint32_t recv_index_base,
     uint64_t tensor_prefetcher_factory_id,
-    uint32_t tensor_prefetcher_factory_num_pipes) :
+    uint32_t tensor_prefetcher_factory_num_pipes,
+    std::vector<CoreCoord> dram_receiver_table) :
     space_(&space),
     identity_(PrefetcherPipeIdentity{next_prefetcher_pipe_identity.fetch_add(1, std::memory_order_relaxed)}),
     sender_core_(dram_sender),
@@ -757,8 +827,12 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     recv_index_base_(recv_index_base),
     tensor_prefetcher_factory_id_(tensor_prefetcher_factory_id),
     tensor_prefetcher_factory_num_pipes_(tensor_prefetcher_factory_num_pipes),
-    drisc_config_page_(std::move(drisc_config_page)) {
+    drisc_config_page_(std::move(drisc_config_page)),
+    dram_receiver_table_(std::move(dram_receiver_table)) {
     TT_FATAL(drisc_config_page_ != nullptr, "DRAM-sender PrefetcherPipe requires reserved DRISC L1");
+    TT_FATAL(
+        space_->has_dram_receivers() == !dram_receiver_table_.empty(),
+        "A PrefetcherPipe takes an ordered receiver table exactly when its receivers are DRAM cores");
     space_->validate_dram_carve(sender_core_, receiver_cores_);
     space_->claim(receiver_cores_, *this);
     space_->claimed_dram_senders_.insert(sender_core_);
@@ -856,6 +930,9 @@ void PrefetcherPipeImpl::build_config_pages() {
 }
 
 std::vector<CoreCoord> PrefetcherPipeImpl::dram_sender_receiver_table() const {
+    if (!dram_receiver_table_.empty()) {
+        return dram_receiver_table_;
+    }
     return corerange_to_cores(receiver_cores_, /*max_cores=*/std::nullopt, /*row_wise=*/true);
 }
 
@@ -863,6 +940,10 @@ void PrefetcherPipeImpl::build_dram_sender_config_pages() {
     // A DRAM sender credits one lane per receiver, but its pages keep the space's lane stride, which is
     // what the device addresses credit slots by.
     TT_FATAL(num_credit_lanes_ == 1, "DRAM-sender PrefetcherPipes credit one lane per receiver");
+    if (space_->has_dram_receivers()) {
+        build_dram_receiver_config_pages();
+        return;
+    }
     const uint32_t l1_alignment = l1_alignment_for(space_->get_device());
     const uint32_t credit_lane_capacity = space_->credit_lane_capacity();
     const auto& layout = space_->layout();
@@ -919,7 +1000,20 @@ void PrefetcherPipeImpl::build_dram_sender_config_pages() {
 SenderCoreType PrefetcherPipeImpl::sender_core_type() const { return sender_core_type_; }
 
 DeviceAddr PrefetcherPipeImpl::sender_state_drisc_l1_base() const {
-    return drisc_config_page_ == nullptr ? 0 : drisc_config_page_->addr();
+    if (drisc_config_page_ == nullptr) {
+        return 0;
+    }
+    // With DRAM receivers the range starts with the credit counters; the state block the sender is
+    // handed follows them.
+    return drisc_config_page_->addr() +
+           (space().has_dram_receivers() ? space().dram_receiver_counters_region_size() : 0);
+}
+
+DeviceAddr PrefetcherPipeImpl::pages_sent_drisc_l1_base() const {
+    TT_FATAL(
+        drisc_config_page_ != nullptr && space().has_dram_receivers(),
+        "Only a PrefetcherPipe with DRAM receivers has a pages_sent counter block");
+    return drisc_config_page_->addr();
 }
 
 const std::vector<uint32_t>& PrefetcherPipeImpl::config_page(const CoreCoord& core) const {

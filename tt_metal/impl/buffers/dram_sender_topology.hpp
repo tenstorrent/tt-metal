@@ -122,6 +122,15 @@ void write_dram_sender_l1(
     DeviceAddr local_addr,
     std::span<const std::byte> bytes);
 
+// Write `bytes` into DRAM-logical core `dram_logical`'s own L1 on `device`, at DRISC-L1 address
+// `local_addr`, wherever the sender endpoints run: a DRAM receiver's config page.
+void write_dram_core_l1(
+    const distributed::MeshDevice& mesh_device,
+    IDevice* device,
+    const CoreCoord& dram_logical,
+    DeviceAddr local_addr,
+    std::span<const std::byte> bytes);
+
 // Package index of a DRAM core: its channel times the DRAM cores per channel, plus its subchannel. On
 // Quasar this is the CCE index cce_sram_address takes. Two logical coords can name one core.
 uint32_t package_dram_core_index(const metal_SocDescriptor& soc_desc, const CoreCoord& dram_logical);

@@ -12,6 +12,7 @@
 // prefetcher makes. The exact cores are bound here, from tt_metal/ only (TensorPrefetcherManager,
 // tests).
 //
+#include <cstdint>
 #include <span>
 
 #include <tt-metalium/core_coord.hpp>
@@ -22,5 +23,8 @@ namespace tt::tt_metal::experimental {
 // Pin sender L1 on `dram_senders` (at most space.num_dram_senders() cores) before any DRISC
 // kernel runs on them.
 void set_dram_sender_cores(PrefetcherPipeSpace& space, std::span<const CoreCoord> dram_senders);
+
+// Identity for the pipes of one CreatePrefetcherPipesForTensorPrefetcher call, never reused.
+uint64_t next_tensor_prefetcher_factory_id();
 
 }  // namespace tt::tt_metal::experimental

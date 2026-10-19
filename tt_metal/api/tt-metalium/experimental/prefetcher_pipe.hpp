@@ -160,6 +160,12 @@ enum class PrefetcherPipeL1Source : uint8_t {
     // taken on every worker core, not only the space's. Config pages are written through the
     // command queue the space was created on, so they land after the work already enqueued on it.
     Allocator,
+    // The DRISC L1 receiver zone, for a space whose receivers are DRAM cores (Quasar CCEs) rather
+    // than worker cores. One range holds each receiver's config page and then its ring, at one
+    // offset on every DRAM core; the host writes the pages directly. Such a space has no worker
+    // senders, and its pipes come from the DRAM-receiver overload of
+    // CreatePrefetcherPipesForTensorPrefetcher. Never chosen by Default.
+    DramReceiverZone,
 };
 
 /**
@@ -177,6 +183,7 @@ struct PrefetcherPipeSpaceConfig {
     // sender cores are selected and reserved by the tensor-prefetcher factory before carving.
     uint32_t num_dram_senders = 0;
     // Worker cores that may act as pipe receivers. Non-empty: every pipe has at least one receiver.
+    // With PrefetcherPipeL1Source::DramReceiverZone these are DRAM-logical coords instead.
     CoreRangeSet receiver_domain;
     // Per-core data ring size in bytes, shared by every pipe carved here. Multiple of L1 alignment.
     uint32_t ring_size = 0;
@@ -301,6 +308,16 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
     PrefetcherPipeSpace& space,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool support_multi_receiver_shards = false);
+
+// Quasar form, whose receivers are DRAM cores (CCEs) rather than worker cores. `space` must use
+// PrefetcherPipeL1Source::DramReceiverZone. Each bank's sender is its DRAM view's CCE;
+// `bank_to_dram_receivers` names each bank's receivers as DRAM-logical coords, in the order of that
+// sender's receiver table and slab indices. Every receiver must be a different CCE from every other
+// receiver and from every sender, counting two logical coords that name one CCE as the same. Each
+// receiver gets its config page and ring in its DRISC L1 receiver zone, at one offset on every CCE.
+// The CoreRangeSet overload throws on such a space and this one on any other.
+std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
+    PrefetcherPipeSpace& space, const std::vector<std::pair<uint32_t, std::vector<CoreCoord>>>& bank_to_dram_receivers);
 
 // The part of a weight the Tensor prefetcher delivers to one receiver: for a receiver-contiguous
 // weight, the shard it holds at bank-local index `bank_local_shard` of DRAM bank `bank`; for a legacy
