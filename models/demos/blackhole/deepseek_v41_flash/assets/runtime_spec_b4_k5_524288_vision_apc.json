@@ -14,7 +14,7 @@
         "device_model_spec": {
             "device": "BLACKHOLE_GALAXY",
             "max_concurrency": 4,
-            "max_context": 1048576,
+            "max_context": 524288,
             "max_tokens_all_users_override": null,
             "perf_targets_map": {},
             "default_impl": true,
@@ -22,22 +22,22 @@
             "vllm_args": {
                 "model": "deepseek-ai/DeepSeek-V4.1-Flash",
                 "block_size": "128",
-                "max_model_len": "1048576",
+                "max_model_len": "524288",
                 "max_num_seqs": "4",
-                "max_num_batched_tokens": "67584",
+                "max_num_batched_tokens": "4096",
                 "max-log-len": "32",
                 "seed": "9472",
                 "additional_config": "{\"tt\": {\"fabric_config\": \"FABRIC_1D_RING\", \"l1_small_size\": 16384, \"trace_region_size\": 650000000, \"sample_on_device_mode\": \"all\"}}",
                 "hf_config_path": "../../tt-metal/models/demos/blackhole/deepseek_v41_flash/vllm_config",
                 "tokenizer": "/ckpt",
                 "chat_template": "../../tt-metal/models/demos/blackhole/deepseek_v41_flash/vllm_config/chat_template.jinja",
-                "no-enable-prefix-caching": true,
                 "hf-overrides": "{\"architectures\":[\"TTDeepseekV41ForCausalLM\"]}",
                 "speculative_config": "{\"method\": \"custom_class\", \"model\": \"vllm_tt_plugin.model_owned_drafter\", \"num_speculative_tokens\": 5}",
                 "port": "8000",
                 "limit-mm-per-prompt": "{\"image\": 16}",
                 "mm-processor-cache-gb": 0,
-                "chat-template-content-format": "openai"
+                "chat-template-content-format": "openai",
+                "enable-prefix-caching": true
             },
             "override_tt_config": {
                 "fabric_config": "FABRIC_1D_RING",
@@ -60,7 +60,8 @@
                 "EXTRA_MODELS_DIR": "../../tt-metal/models/demos/blackhole",
                 "DSV41_BUILD_SLOTS": "0",
                 "DSV41_VISION": "1",
-                "DSV41_VLLM_CHUNK": "512"
+                "DSV41_VLLM_CHUNK": "512",
+                "DSV41_APC": "1"
             },
             "tensor_cache_timeout": 7200.0,
             "system_requirements": null,
@@ -87,11 +88,12 @@
             "TT_METAL_CACHE": "/cache/kernels",
             "EXTRA_MODELS_DIR": "../../tt-metal/models/demos/blackhole",
             "MAX_NUM_SEQS": "4",
-            "MAX_MODEL_LENGTH": "1048576",
+            "MAX_MODEL_LENGTH": "524288",
             "DSV41_VLLM_STATS_EVERY": "16",
             "DSV41_BUILD_SLOTS": "0",
             "DSV41_VISION": "1",
-            "DSV41_VLLM_CHUNK": "512"
+            "DSV41_VLLM_CHUNK": "512",
+            "DSV41_APC": "1"
         },
         "tt_metal_commit": null,
         "vllm_commit": null,
@@ -136,7 +138,7 @@
             "print_docker_cmd": false,
             "override_docker_image": null,
             "override_tt_config": null,
-            "vllm_override_args": "{\"max_num_seqs\": \"4\", \"max_model_len\": \"1048576\", \"speculative_config\": \"{\\\"method\\\": \\\"custom_class\\\", \\\"model\\\": \\\"vllm_tt_plugin.model_owned_drafter\\\", \\\"num_speculative_tokens\\\": 5}\"}",
+            "vllm_override_args": "{\"max_num_seqs\": \"4\", \"max_model_len\": \"524288\", \"speculative_config\": \"{\\\"method\\\": \\\"custom_class\\\", \\\"model\\\": \\\"vllm_tt_plugin.model_owned_drafter\\\", \\\"num_speculative_tokens\\\": 5}\"}",
             "runtime_model_spec_json": null,
             "requirements_json": null,
             "tools": "vllm",
@@ -208,7 +210,7 @@
         "print_docker_cmd": false,
         "override_docker_image": null,
         "override_tt_config": null,
-        "vllm_override_args": "{\"max_num_seqs\": \"4\", \"max_model_len\": \"1048576\", \"speculative_config\": \"{\\\"method\\\": \\\"custom_class\\\", \\\"model\\\": \\\"vllm_tt_plugin.model_owned_drafter\\\", \\\"num_speculative_tokens\\\": 5}\"}",
+        "vllm_override_args": "{\"max_num_seqs\": \"4\", \"max_model_len\": \"524288\", \"speculative_config\": \"{\\\"method\\\": \\\"custom_class\\\", \\\"model\\\": \\\"vllm_tt_plugin.model_owned_drafter\\\", \\\"num_speculative_tokens\\\": 5}\"}",
         "runtime_model_spec_json": null,
         "requirements_json": null,
         "tools": "vllm",

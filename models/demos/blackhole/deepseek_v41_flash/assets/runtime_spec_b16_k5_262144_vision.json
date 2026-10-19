@@ -24,20 +24,20 @@
                 "block_size": "128",
                 "max_model_len": "262144",
                 "max_num_seqs": "16",
-                "max_num_batched_tokens": "4096",
+                "max_num_batched_tokens": "67584",
                 "max-log-len": "32",
                 "seed": "9472",
                 "additional_config": "{\"tt\": {\"fabric_config\": \"FABRIC_1D_RING\", \"l1_small_size\": 16384, \"trace_region_size\": 800000000, \"sample_on_device_mode\": \"all\"}}",
                 "hf_config_path": "../../tt-metal/models/demos/blackhole/deepseek_v41_flash/vllm_config",
                 "tokenizer": "/ckpt",
                 "chat_template": "../../tt-metal/models/demos/blackhole/deepseek_v41_flash/vllm_config/chat_template.jinja",
+                "no-enable-prefix-caching": true,
                 "hf-overrides": "{\"architectures\":[\"TTDeepseekV41ForCausalLM\"]}",
                 "speculative_config": "{\"method\": \"custom_class\", \"model\": \"vllm_tt_plugin.model_owned_drafter\", \"num_speculative_tokens\": 5}",
                 "port": "8000",
                 "limit-mm-per-prompt": "{\"image\": 16}",
                 "mm-processor-cache-gb": 0,
-                "chat-template-content-format": "openai",
-                "enable-prefix-caching": true
+                "chat-template-content-format": "openai"
             },
             "override_tt_config": {
                 "fabric_config": "FABRIC_1D_RING",
@@ -61,8 +61,7 @@
                 "DSV41_BUILD_SLOTS": "0",
                 "DSV41_VISION": "1",
                 "DSV41_VLLM_CHUNK": "512",
-                "DSV41_SPEC_MAX_CTX": "262144",
-                "DSV41_APC": "1"
+                "DSV41_SPEC_MAX_CTX": "262144"
             },
             "tensor_cache_timeout": 7200.0,
             "system_requirements": null,
@@ -94,8 +93,7 @@
             "DSV41_BUILD_SLOTS": "0",
             "DSV41_VISION": "1",
             "DSV41_VLLM_CHUNK": "512",
-            "DSV41_SPEC_MAX_CTX": "262144",
-            "DSV41_APC": "1"
+            "DSV41_SPEC_MAX_CTX": "262144"
         },
         "tt_metal_commit": null,
         "vllm_commit": null,
