@@ -45,7 +45,7 @@ def test_max_pool2d_stem(ttnn_mesh_device, reset_seeds, c, h, hw):
     x = U.to_tt(x_nhwc.reshape(1, 1, h * w, c), mesh, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     x_seen = U.seen(x, x_nhwc, mesh).permute(0, 3, 1, 2)
 
-    out = ttnn.max_pool2d(
+    out = U.op("max_pool2d")(
         input_tensor=x,
         batch_size=1,
         input_h=h,
@@ -83,7 +83,7 @@ def test_max_pool2d_with_indices(ttnn_mesh_device, reset_seeds, h, hw):
     x_nhwc = U.torch_rand((1, h, w, c))
     x = U.to_tt(x_nhwc, mesh, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-    out, idx = ttnn.max_pool2d(
+    out, idx = U.op("max_pool2d")(
         input_tensor=x,
         batch_size=1,
         input_h=h,

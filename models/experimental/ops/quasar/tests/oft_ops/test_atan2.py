@@ -12,6 +12,9 @@ and ``where`` in tensor-scalar-scalar / tensor-scalar-tensor / tensor-tensor-ten
 Each piece is also tested on its own (``test_unary.py``, ``test_comparison.py``,
 ``test_where.py``, ``test_binary.py``).
 
+On Quasar, ``ttnn.experimental.quasar.atan2`` is a single binary_ng ``ATAN2`` op rather than
+this composite; the test checks the same result either way.
+
 ``atan`` is a polynomial approximation, so this checks PCC plus a max-abs bound.
 """
 
@@ -34,7 +37,7 @@ def test_atan2(ttnn_mesh_device, reset_seeds, shape):
     sin.view(-1)[:4] = torch.tensor([0.0, 0.0, 1.0, -1.0], dtype=torch.bfloat16)
     cos.view(-1)[:4] = torch.tensor([1.0, -1.0, 0.0, 0.0], dtype=torch.bfloat16)
 
-    out = ttnn.atan2(U.to_tt_mem(sin, mesh, "l1"), U.to_tt_mem(cos, mesh, "l1"), memory_config=ttnn.L1_MEMORY_CONFIG)
+    out = U.op("atan2")(U.to_tt_mem(sin, mesh, "l1"), U.to_tt_mem(cos, mesh, "l1"), memory_config=ttnn.L1_MEMORY_CONFIG)
 
     ref = torch.atan2(sin.float(), cos.float())
     got = U.from_tt(out, mesh).reshape(-1)[: ref.numel()].reshape(ref.shape)

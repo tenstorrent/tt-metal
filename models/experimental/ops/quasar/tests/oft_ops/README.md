@@ -96,6 +96,12 @@ pytest models/experimental/ops/quasar/tests/oft_ops/ -m emulator -v
 
 These mirror `tests/vad_variant_ops/`, whose 5x4-grid helpers `op_utils.py` re-exports:
 
+- Ops are called through `U.op(name)`, which returns the `ttnn.experimental.quasar` port on
+  Quasar and the mainline op elsewhere. Mainline factories that still build legacy
+  `DataMovementKernel`s are rejected on Quasar. Ops whose mainline factory is already
+  Metal 2.0 (unary, `intimg`, `permute`, interleaved <-> sharded) are called directly.
+- Ops with neither a port nor a Metal 2.0 factory xfail on Quasar (`U.xfail_no_quasar_port`):
+  `grid_sample`, `where` with a tensor branch, and `sharded_to_interleaved_partial`.
 - Memory configs in case tables are device-free specs: `"dram"`, `"l1"`, `("hs", shard)`.
   They are resolved with `U.resolve_memcfg(spec, mesh)`.
 - Correctness:

@@ -56,7 +56,7 @@ def test_slice(ttnn_mesh_device, reset_seeds, shape, begins, ends, layout_rm, me
     x = U.torch_rand(shape)
     layout = ttnn.ROW_MAJOR_LAYOUT if layout_rm else ttnn.TILE_LAYOUT
     tt_x = U.to_tt_mem(x, mesh, mem, layout=layout)
-    out = ttnn.slice(tt_x, list(begins), list(ends), memory_config=U.resolve_memcfg(mem, mesh))
+    out = U.op("slice")(tt_x, list(begins), list(ends), memory_config=U.resolve_memcfg(mem, mesh))
     ref = x[tuple(slice(b, e) for b, e in zip(begins, ends))]
     U.assert_shape_dtype(out, shape=ref.shape, finite=False)
     U.assert_lossless(ref, out, mesh_device=mesh)
@@ -75,7 +75,9 @@ def _run_padded_slice(mesh, shape, r0, r1, out_mem):
     x = U.torch_rand(shape)
     tt_x = U.to_tt(x, mesh)  # TILE DRAM, as the conv receives it
     _, _, w, c = shape
-    out = ttnn.experimental.padded_slice(tt_x, [0, r0, 0, 0], [1, r1, w, c], [1, 1, 1, 1], memory_config=out_mem)
+    out = U.op("padded_slice", experimental=True)(
+        tt_x, [0, r0, 0, 0], [1, r1, w, c], [1, 1, 1, 1], memory_config=out_mem
+    )
     U.assert_lossless(x[:, r0:r1].reshape(1, 1, -1, c), out, mesh_device=mesh)
 
 
@@ -113,7 +115,7 @@ def _run_slice_write(mesh, out_shape, num_slices, dtype, layout, in_mem_fn):
         tt_part = U.to_tt(part, mesh, dtype=dtype, layout=layout)
         tt_part = ttnn.to_memory_config(tt_part, in_mem_fn(r1 - r0))
         expected[:, r0:r1] = U.seen(tt_part, part, mesh)  # bfloat8_b: what the device holds
-        ttnn.experimental.slice_write(tt_part, tt_out, [0, r0, 0, 0], [n, r1, w, c], [1, 1, 1, 1])
+        U.op("slice_write", experimental=True)(tt_part, tt_out, [0, r0, 0, 0], [n, r1, w, c], [1, 1, 1, 1])
     U.assert_lossless(expected, tt_out, mesh_device=mesh)
 
 

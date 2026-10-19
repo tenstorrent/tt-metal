@@ -32,7 +32,7 @@ def _with_zeros(x):
 def test_ge_scalar(ttnn_mesh_device, reset_seeds, shape):
     mesh = ttnn_mesh_device
     y = _with_zeros(U.torch_rand(shape))
-    out = ttnn.ge(U.to_tt_mem(y, mesh, "l1"), 0.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+    out = U.op("ge")(U.to_tt_mem(y, mesh, "l1"), 0.0, memory_config=ttnn.L1_MEMORY_CONFIG)
     U.assert_lossless((y.float() >= 0).float(), out, mesh_device=mesh)
 
 
@@ -43,5 +43,7 @@ def test_logical_and(ttnn_mesh_device, reset_seeds, shape):
     # atan2 ANDs 0/1 masks; mix in non-0/1 values too since logical_and tests != 0.
     a = _with_zeros((torch.rand(shape) > 0.3).to(torch.bfloat16) * U.torch_rand(shape))
     b = (torch.rand(shape) > 0.5).to(torch.bfloat16)
-    out = ttnn.logical_and(U.to_tt_mem(a, mesh, "l1"), U.to_tt_mem(b, mesh, "l1"), memory_config=ttnn.L1_MEMORY_CONFIG)
+    out = U.op("logical_and")(
+        U.to_tt_mem(a, mesh, "l1"), U.to_tt_mem(b, mesh, "l1"), memory_config=ttnn.L1_MEMORY_CONFIG
+    )
     U.assert_lossless(((a != 0) & (b != 0)).float(), out, mesh_device=mesh)

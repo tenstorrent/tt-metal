@@ -61,7 +61,7 @@ def _run_move(mesh, shape, dt, layout_rm, in_mem, out_mem):
     layout = ttnn.ROW_MAJOR_LAYOUT if layout_rm else ttnn.TILE_LAYOUT
     tt_x = U.to_tt_mem(x, mesh, in_mem, dtype=_DT[dt], layout=layout)
     ref = U.seen(tt_x, x, mesh)  # bfloat8_b: the quantized values must survive
-    out = ttnn.to_memory_config(tt_x, U.resolve_memcfg(out_mem, mesh))
+    out = U.op("to_memory_config")(tt_x, U.resolve_memcfg(out_mem, mesh))
     U.assert_lossless(ref, out, mesh_device=mesh)
 
 
@@ -90,14 +90,21 @@ def test_to_memory_config_sharded(ttnn_mesh_device, reset_seeds, shape, dt, layo
 def test_move_sharded(ttnn_mesh_device, reset_seeds, shape, dt, shard):
     mesh = ttnn_mesh_device
     x = _rand(shape, dt)
+    # Free a buffer allocated below the input so move has somewhere to go: if the output lands
+    # on the input's own address, move returns without launching the copy kernel.
+    tt_dummy = U.to_tt_mem(x, mesh, ("hs", shard), dtype=_DT[dt])
     tt_x = U.to_tt_mem(x, mesh, ("hs", shard), dtype=_DT[dt])
-    out = ttnn.move(tt_x)
-    assert out.is_sharded()
+    input_address = tt_x.buffer_address()
+    ttnn.deallocate(tt_dummy)
+    out = U.op("move")(tt_x)
+    assert out.buffer_address() != input_address, "move did not relocate the input buffer"
+    assert out.is_sharded(), "move output lost its sharded memory layout"
     U.assert_lossless(x, out, mesh_device=mesh)
 
 
 def _run_partial_s2i(mesh, shard_mem, num_slices, slice_rows, width):
     """Each slice is height-sharded, then written into its rows of a DRAM tensor (the ortho feats)."""
+    U.xfail_no_quasar_port("sharded_to_interleaved_partial")
     total = num_slices * slice_rows
     full = U.torch_rand((1, 1, total, width))
     ortho = U.to_tt(torch.zeros(1, 1, total, width, dtype=torch.bfloat16), mesh)

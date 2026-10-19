@@ -144,6 +144,8 @@ def _run_conv(
     if act_block_h:
         conv_config.act_block_h_override = act_block_h
     if core_grid is not None:
+        # conv2d_utils rejects reshard_if_not_optimal together with override_sharding_config.
+        conv_config.reshard_if_not_optimal = False
         conv_config.override_sharding_config = True
         conv_config.core_grid = core_grid
     fidelity, approx = _CC[cc]
@@ -160,7 +162,7 @@ def _run_conv(
         else ttnn.Conv2dL1FullSliceConfig
     )
 
-    tt_out, [tt_out_h, tt_out_w] = ttnn.conv2d(
+    tt_out, [tt_out_h, tt_out_w] = U.op("conv2d")(
         input_tensor=tt_input,
         weight_tensor=ttnn.from_torch(weight, dtype=ttnn.bfloat16),
         bias_tensor=ttnn.from_torch(bias_t, dtype=ttnn.bfloat16) if bias else None,

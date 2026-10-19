@@ -53,6 +53,6 @@ def test_reshape(ttnn_mesh_device, reset_seeds, in_shape, out_shape, layout_rm, 
     x = U.torch_rand(in_shape)
     layout = ttnn.ROW_MAJOR_LAYOUT if layout_rm else ttnn.TILE_LAYOUT
     tt_x = U.to_tt_mem(x, mesh, mem, layout=layout)
-    out = ttnn.reshape(tt_x, out_shape)
+    out = U.op("reshape")(tt_x, out_shape)
     U.assert_shape_dtype(out, shape=out_shape, finite=False)
     U.assert_lossless(x.reshape(out_shape), out, mesh_device=mesh)

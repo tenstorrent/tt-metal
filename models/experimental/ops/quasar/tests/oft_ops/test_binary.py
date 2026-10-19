@@ -37,9 +37,9 @@ VOX = (1, 1, U.SLICE_ROWS, U.VOX_C)
 VOX_HS = ("hs", (U.TILE, U.VOX_C))
 
 _INPLACE = {
-    "sub_": (ttnn.sub_, lambda a, b: a - b),
-    "add_": (ttnn.add_, lambda a, b: a + b),
-    "mul_": (ttnn.mul_, lambda a, b: a * b),
+    "sub_": ("subtract_", lambda a, b: a - b),
+    "add_": ("add_", lambda a, b: a + b),
+    "mul_": ("multiply_", lambda a, b: a * b),
 }
 
 
@@ -49,7 +49,7 @@ def _run_inplace(mesh, op, shape, mem):
     b = U.torch_rand(shape, dtype=torch.float32)
     tt_a = U.to_tt_mem(a, mesh, mem, dtype=ttnn.float32)
     tt_b = U.to_tt_mem(b, mesh, mem, dtype=ttnn.float32)
-    tt_op(tt_a, tt_b)
+    U.op(tt_op)(tt_a, tt_b)
     U.assert_pcc(torch_op(a, b), tt_a, pcc=0.9999, mesh_device=mesh)
 
 
@@ -111,7 +111,7 @@ def test_add_residual_relu_sharded(ttnn_mesh_device, reset_seeds, a_shape, b_sha
     """BasicBlock ``out + identity`` with ReLU fused (PACK_RELU), model shard specs."""
     U.run_binary(
         ttnn_mesh_device,
-        ttnn.add,
+        U.op("add"),
         lambda x, y: x + y,
         a_shape,
         b_shape,
@@ -130,7 +130,7 @@ def test_add_residual_relu_sharded(ttnn_mesh_device, reset_seeds, a_shape, b_sha
 def test_add_residual_relu(ttnn_mesh_device, reset_seeds, a_shape, b_shape, a_dt, b_dt, a_mem, b_mem, out_mem):
     U.run_binary(
         ttnn_mesh_device,
-        ttnn.add,
+        U.op("add"),
         lambda x, y: x + y,
         a_shape,
         b_shape,
@@ -160,7 +160,7 @@ CHAN_SCALAR = (1, 3, 1, 1)
     ],
 )
 def test_decode_binary(ttnn_mesh_device, reset_seeds, op, a_shape, b_shape):
-    tt_op, torch_op = {"mul": (ttnn.mul, lambda x, y: x * y), "add": (ttnn.add, lambda x, y: x + y)}[op]
+    tt_op, torch_op = {"mul": (U.op("multiply"), lambda x, y: x * y), "add": (U.op("add"), lambda x, y: x + y)}[op]
     U.run_binary(ttnn_mesh_device, tt_op, torch_op, a_shape, b_shape, "bf16", "bf16", "l1", "dram", "l1", pcc=0.999)
 
 
@@ -178,7 +178,7 @@ def test_binary_scalar(ttnn_mesh_device, reset_seeds, op, shape):
     x = U.torch_rand(shape)
     tt_x = U.to_tt_mem(x, mesh, "l1")
     if op == "add":
-        out, ref = ttnn.add(tt_x, math.pi, memory_config=ttnn.L1_MEMORY_CONFIG), x.float() + math.pi
+        out, ref = U.op("add")(tt_x, math.pi, memory_config=ttnn.L1_MEMORY_CONFIG), x.float() + math.pi
     else:
-        out, ref = ttnn.subtract(tt_x, math.pi, memory_config=ttnn.L1_MEMORY_CONFIG), x.float() - math.pi
+        out, ref = U.op("subtract")(tt_x, math.pi, memory_config=ttnn.L1_MEMORY_CONFIG), x.float() - math.pi
     U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)

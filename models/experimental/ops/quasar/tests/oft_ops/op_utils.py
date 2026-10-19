@@ -117,6 +117,31 @@ EMU_MAX_ELEMS = 48 * 48 * 256
 OFT_L1_SMALL_SIZE = 32768
 
 
+# =============================================================================
+# Backend selection
+# =============================================================================
+
+
+def op(name: str, *, experimental: bool = False):
+    """The ttnn op ``name``, using its Quasar port on Quasar.
+
+    Mainline factories that still build legacy ``DataMovementKernel`` / ``ComputeKernel``
+    objects are rejected on Quasar (``tt_metal/impl/kernels/kernel.hpp``); the ports live in
+    ``ttnn.experimental.quasar``. Elsewhere the mainline op (``ttnn.<name>``, or
+    ``ttnn.experimental.<name>`` for ``experimental=True``) is used. Ops whose mainline
+    factory is already Metal 2.0 (unary, permute, intimg, interleaved<->sharded) and ops with
+    no port yet are called directly instead.
+    """
+    if is_quasar():
+        return getattr(ttnn.experimental.quasar, name)
+    return getattr(ttnn.experimental if experimental else ttnn, name)
+
+
+def xfail_no_quasar_port(op_name: str) -> None:
+    """xfail on Quasar for an op whose mainline factory builds legacy kernels and has no port yet."""
+    xfail_on_quasar(f"{op_name} has no Quasar port: its mainline factory builds legacy DataMovementKernels")
+
+
 def hs_rows(rows: int, num_cores: int = MODEL_NUM_CORES) -> int:
     """Shard height the model used for ``rows`` height-sharded over ``num_cores`` (tile-rounded)."""
     return math.ceil(rows / num_cores / TILE) * TILE

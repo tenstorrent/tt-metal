@@ -74,7 +74,7 @@ def test_linear_oft_program_config(ttnn_mesh_device, reset_seeds, shape):
         fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         mcast_in0=False,
     )
-    out = ttnn.linear(
+    out = U.op("linear")(
         tt_x,
         tt_w,
         bias=tt_b,
@@ -100,7 +100,7 @@ def test_linear_oft(ttnn_mesh_device, reset_seeds, shape):
     m = shape[2]
     x, tt_w, tt_b, ref = _inputs(mesh, m)
     tt_x = U.to_tt_mem(x, mesh, "l1", dtype=ttnn.float32)
-    out = ttnn.linear(
+    out = U.op("linear")(
         tt_x,
         tt_w,
         bias=tt_b,

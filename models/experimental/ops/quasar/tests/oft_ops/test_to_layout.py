@@ -61,7 +61,7 @@ UNTILIZE_CASES = [
 def _run_tilize(mesh, shape, dt, in_mem, out_mem):
     x = _rand(shape, dt)
     tt_x = U.to_tt_mem(x, mesh, in_mem, dtype=_DT[dt], layout=ttnn.ROW_MAJOR_LAYOUT)
-    out = ttnn.to_layout(tt_x, ttnn.TILE_LAYOUT, memory_config=U.resolve_memcfg(out_mem, mesh))
+    out = U.op("to_layout")(tt_x, ttnn.TILE_LAYOUT, memory_config=U.resolve_memcfg(out_mem, mesh))
     assert out.layout == ttnn.TILE_LAYOUT
     U.assert_lossless(x, out, mesh_device=mesh)
 
@@ -85,7 +85,7 @@ def test_to_layout_row_major(ttnn_mesh_device, reset_seeds, shape, dt, in_mem, o
     mesh = ttnn_mesh_device
     x = _rand(shape, dt)
     tt_x = U.to_tt_mem(x, mesh, in_mem, dtype=_DT[dt])
-    out = ttnn.to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT, memory_config=U.resolve_memcfg(out_mem, mesh))
+    out = U.op("to_layout")(tt_x, ttnn.ROW_MAJOR_LAYOUT, memory_config=U.resolve_memcfg(out_mem, mesh))
     assert out.layout == ttnn.ROW_MAJOR_LAYOUT
     U.assert_lossless(x, out, mesh_device=mesh)
 
@@ -108,5 +108,5 @@ def test_untilize(ttnn_mesh_device, reset_seeds, shape, mem):
     mesh = ttnn_mesh_device
     x = U.torch_rand(shape)
     tt_x = U.to_tt_mem(x, mesh, mem)
-    out = ttnn.untilize(tt_x, memory_config=U.resolve_memcfg(mem, mesh))
+    out = U.op("untilize")(tt_x, memory_config=U.resolve_memcfg(mem, mesh))
     U.assert_lossless(x, out, mesh_device=mesh)
