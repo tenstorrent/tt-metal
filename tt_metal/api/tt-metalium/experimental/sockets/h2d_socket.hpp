@@ -39,6 +39,7 @@ struct HDSocketDescriptor;
 enum class H2DMode : uint8_t {
     HOST_PUSH,    ///< Host pushes data to device via UMD TLB writes.
     DEVICE_PULL,  ///< Device pulls data from pinned host memory via PCIe NOC reads.
+    HOST_DMA,     ///< Host stages each page in pinned memory; the PCIe DMA engine copies it into device L1.
 };
 
 /**
@@ -50,6 +51,11 @@ enum class H2DMode : uint8_t {
  * - **HOST_PUSH**: The host writes data directly to device L1 memory via PCIe writes.
  * - **DEVICE_PULL**: The host writes data to pinned host memory, and the device core
  *   pulls data via PCIe NOC reads.
+ * - **HOST_DMA**: The host copies data into a pinned staging ring and the chip's PCIe DMA
+ *   engine moves it into device L1, so the host CPU issues no MMIO stores for the payload.
+ *   The device side is identical to HOST_PUSH (same kernels; data is read from L1). Falls
+ *   back to HOST_PUSH writes when the device exposes no DMA engine (mock, emulated, or a
+ *   connector process without a UMD device handle).
  *
  * Both modes require vIOMMU to be enabled on the system.
  *
@@ -315,6 +321,11 @@ private:
         const PinnedBufferInfo& bytes_acked_info,
         const PinnedBufferInfo& data_info);
     void init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device);
+    // HOST_DMA owner only: binds the pinned staging ring's IOVA and the receiver core to the
+    // UMD zero-copy DMA write. Left unset (MMIO fallback) when the device has no DMA engine.
+    void init_dma_writer(const std::shared_ptr<MeshDevice>& mesh_device);
+    // Moves one write's payload to the receiver by the mode's transport.
+    void write_payload(void* data, uint32_t num_bytes, uint64_t device_addr);
 
     // Mock owner only: alias bytes_acked_ptr_ to bytes_sent_ so the FIFO reads as drained.
     // Connectors remain context-free and do not use this path.
@@ -352,6 +363,8 @@ private:
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
     uint32_t* bytes_acked_ptr_ = nullptr;
     std::function<void(void*, uint32_t, uint64_t)> pcie_writer = nullptr;
+    // HOST_DMA: (ring_offset, num_bytes, device_addr) -> zero-copy DMA from the staging ring.
+    std::function<void(uint32_t, uint32_t, uint64_t)> dma_writer = nullptr;
     H2DMode h2d_mode_ = H2DMode::HOST_PUSH;
     std::unique_ptr<NamedShm> shm_;
     std::unique_ptr<PCIeCoreWriter> pcie_writer_instance_;

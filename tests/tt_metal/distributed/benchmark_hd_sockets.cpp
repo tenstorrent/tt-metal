@@ -82,6 +82,12 @@ const std::vector<int64_t> kD2HLatencyFifoSizes = {1024, 4096, 16384, 65536, 262
 // H2D latency FIFOs are capped at 1MB (L1).
 const std::vector<int64_t> kH2DLatencyFifoSizes = {1024, 4096, 16384, 65536, 262144, 524288, 1LL << 20};
 
+// Every H2D transfer mode; indexes the mode_index benchmark argument.
+const std::vector<int64_t> kH2DModes = {
+    static_cast<int64_t>(H2DMode::HOST_PUSH),
+    static_cast<int64_t>(H2DMode::DEVICE_PULL),
+    static_cast<int64_t>(H2DMode::HOST_DMA)};
+
 // Shared sweep parameters for ping benchmarks (D2H and H2D).
 const std::vector<int64_t> kPingPageSizes = {64};
 const std::vector<int64_t> kPingFifoSizes = {4096};
@@ -965,12 +971,12 @@ BENCHMARK(BM_D2HSocketPing)
 
 BENCHMARK(BM_H2DSocketThroughput)
     ->ArgsProduct({
-        {kHighBwChip.tray_id},                                                                   // tray_id
-        {kHighBwChip.asic_location},                                                             // asic_location
-        kThroughputPageSizes,                                                                    // page_size
-        kH2DThroughputFifoSizes,                                                                 // fifo_size
-        kThroughputTotalData,                                                                    // total_data
-        {static_cast<int64_t>(H2DMode::HOST_PUSH), static_cast<int64_t>(H2DMode::DEVICE_PULL)},  // mode_index
+        {kHighBwChip.tray_id},        // tray_id
+        {kHighBwChip.asic_location},  // asic_location
+        kThroughputPageSizes,         // page_size
+        kH2DThroughputFifoSizes,      // fifo_size
+        kThroughputTotalData,         // total_data
+        kH2DModes,                    // mode_index
     })
     ->ArgNames({"tray_id", "asic_location", "page_size", "fifo_size", "total_data", "mode_index"})
     ->UseRealTime()
@@ -979,11 +985,11 @@ BENCHMARK(BM_H2DSocketThroughput)
 
 BENCHMARK(BM_H2DSocketLatency)
     ->ArgsProduct({
-        {kHighBwChip.tray_id},                                                                   // tray_id
-        {kHighBwChip.asic_location},                                                             // asic_location
-        kLatencyPageSizes,                                                                       // page_size
-        kH2DLatencyFifoSizes,                                                                    // fifo_size
-        {static_cast<int64_t>(H2DMode::HOST_PUSH), static_cast<int64_t>(H2DMode::DEVICE_PULL)},  // mode_index
+        {kHighBwChip.tray_id},        // tray_id
+        {kHighBwChip.asic_location},  // asic_location
+        kLatencyPageSizes,            // page_size
+        kH2DLatencyFifoSizes,         // fifo_size
+        kH2DModes,                    // mode_index
     })
     ->ArgNames({"tray_id", "asic_location", "page_size", "fifo_size", "mode_index"})
     ->UseRealTime()
@@ -992,11 +998,11 @@ BENCHMARK(BM_H2DSocketLatency)
 
 BENCHMARK(BM_H2DSocketPing)
     ->ArgsProduct({
-        {kHighBwChip.tray_id},                                                                   // tray_id
-        {kHighBwChip.asic_location},                                                             // asic_location
-        kPingPageSizes,                                                                          // page_size
-        kPingFifoSizes,                                                                          // fifo_size
-        {static_cast<int64_t>(H2DMode::HOST_PUSH), static_cast<int64_t>(H2DMode::DEVICE_PULL)},  // mode_index
+        {kHighBwChip.tray_id},        // tray_id
+        {kHighBwChip.asic_location},  // asic_location
+        kPingPageSizes,               // page_size
+        kPingFifoSizes,               // fifo_size
+        kH2DModes,                    // mode_index
     })
     ->ArgNames({"tray_id", "asic_location", "page_size", "fifo_size", "mode_index"})
     ->UseRealTime()
@@ -1044,12 +1050,12 @@ BENCHMARK(BM_D2HSocketPing)
 
 BENCHMARK(BM_H2DSocketThroughput)
     ->ArgsProduct({
-        {kLowBwChip.tray_id},                                                                    // tray_id
-        {kLowBwChip.asic_location},                                                              // asic_location
-        kThroughputPageSizes,                                                                    // page_size
-        kH2DThroughputFifoSizes,                                                                 // fifo_size
-        kThroughputTotalData,                                                                    // total_data
-        {static_cast<int64_t>(H2DMode::HOST_PUSH), static_cast<int64_t>(H2DMode::DEVICE_PULL)},  // mode_index
+        {kLowBwChip.tray_id},        // tray_id
+        {kLowBwChip.asic_location},  // asic_location
+        kThroughputPageSizes,        // page_size
+        kH2DThroughputFifoSizes,     // fifo_size
+        kThroughputTotalData,        // total_data
+        kH2DModes,                   // mode_index
     })
     ->ArgNames({"tray_id", "asic_location", "page_size", "fifo_size", "total_data", "mode_index"})
     ->UseRealTime()
@@ -1058,11 +1064,11 @@ BENCHMARK(BM_H2DSocketThroughput)
 
 BENCHMARK(BM_H2DSocketLatency)
     ->ArgsProduct({
-        {kLowBwChip.tray_id},                                                                    // tray_id
-        {kLowBwChip.asic_location},                                                              // asic_location
-        kLatencyPageSizes,                                                                       // page_size
-        kH2DLatencyFifoSizes,                                                                    // fifo_size
-        {static_cast<int64_t>(H2DMode::HOST_PUSH), static_cast<int64_t>(H2DMode::DEVICE_PULL)},  // mode_index
+        {kLowBwChip.tray_id},        // tray_id
+        {kLowBwChip.asic_location},  // asic_location
+        kLatencyPageSizes,           // page_size
+        kH2DLatencyFifoSizes,        // fifo_size
+        kH2DModes,                   // mode_index
     })
     ->ArgNames({"tray_id", "asic_location", "page_size", "fifo_size", "mode_index"})
     ->UseRealTime()
@@ -1071,11 +1077,11 @@ BENCHMARK(BM_H2DSocketLatency)
 
 BENCHMARK(BM_H2DSocketPing)
     ->ArgsProduct({
-        {kLowBwChip.tray_id},                                                                    // tray_id
-        {kLowBwChip.asic_location},                                                              // asic_location
-        kPingPageSizes,                                                                          // page_size
-        kPingFifoSizes,                                                                          // fifo_size
-        {static_cast<int64_t>(H2DMode::HOST_PUSH), static_cast<int64_t>(H2DMode::DEVICE_PULL)},  // mode_index
+        {kLowBwChip.tray_id},        // tray_id
+        {kLowBwChip.asic_location},  // asic_location
+        kPingPageSizes,              // page_size
+        kPingFifoSizes,              // fifo_size
+        kH2DModes,                   // mode_index
     })
     ->ArgNames({"tray_id", "asic_location", "page_size", "fifo_size", "mode_index"})
     ->UseRealTime()

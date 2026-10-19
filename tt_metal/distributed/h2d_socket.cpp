@@ -25,6 +25,7 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-umd/io_window/io_window.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <cstdlib>
@@ -183,9 +184,9 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
 }
 
 void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t pcie_alignment) {
-    if (h2d_mode_ != H2DMode::HOST_PUSH) {
+    if (h2d_mode_ == H2DMode::DEVICE_PULL) {
         // DEVICE_PULL: data FIFO lives in pinned host memory; no device-side L1
-        // allocation needed.
+        // allocation needed. HOST_PUSH and HOST_DMA both land the ring in L1.
         write_ptr_ = 0;
         return;
     }
@@ -406,6 +407,33 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     }
 }
 
+void H2DSocket::init_dma_writer(const std::shared_ptr<MeshDevice>& mesh_device) {
+    if (h2d_mode_ != H2DMode::HOST_DMA) {
+        return;
+    }
+    auto& cluster = mesh_device->impl().metal_env().get_cluster();
+    IDevice* recv_device = mesh_device->get_device(recv_core_.device_coord);
+    const auto device_id = recv_device->id();
+    tt::umd::TTDevice* tt_device =
+        cluster.is_mock_or_emulated() ? nullptr : cluster.get_driver()->get_tt_device(device_id);
+    if (tt_device == nullptr) {
+        log_warning(
+            LogMetal,
+            "H2DSocket HOST_DMA: device {} exposes no PCIe DMA engine; payload writes fall back to MMIO.",
+            device_id);
+        return;
+    }
+    TT_FATAL(pinned_memory_ != nullptr, "H2DSocket HOST_DMA: staging ring is not pinned.");
+    const uint64_t staging_iova = pinned_memory_->get_device_addr(device_id);
+    const CoreCoord virtual_core = recv_device->virtual_core_from_logical_core(recv_core_.core_coord, CoreType::TENSIX);
+    const tt::umd::CoreCoord translated_core =
+        cluster.get_soc_desc(device_id).get_coord_at(virtual_core, tt::CoordSystem::TRANSLATED);
+    dma_writer = [tt_device, staging_iova, translated_core](
+                     uint32_t ring_offset, uint32_t num_bytes, uint64_t device_addr) {
+        tt_device->dma_write_zero_copy(staging_iova + ring_offset, device_addr, num_bytes, translated_core);
+    };
+}
+
 H2DSocket::H2DSocket(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoreCoord& recv_core,
@@ -463,6 +491,17 @@ H2DSocket::H2DSocket(
         TT_FATAL(
             bytes_acked_info.pcie_xy_enc == data_info.pcie_xy_enc,
             "Bytes_acked and data pinned memory must be mapped to the same PCIe core.");
+    } else if (h2d_mode_ == H2DMode::HOST_DMA) {
+        // Same pinned layout as DEVICE_PULL, [staging ring | bytes_acked], so the ring has an
+        // IOVA the DMA engine can read from. The device never pulls from it: data_info stays
+        // zero and the kernel reads the L1 ring exactly as in HOST_PUSH.
+        PinnedBufferInfo staging_info =
+            init_host_data_buffer(mesh_device, recv_device_range_set, pcie_alignment, shm_name);
+        bytes_acked_info = staging_info;
+        auto bytes_acked_addr = (static_cast<uint64_t>(staging_info.addr_hi) << 32 | staging_info.addr_lo) + fifo_size_;
+        bytes_acked_info.addr_hi = static_cast<uint32_t>(bytes_acked_addr >> 32);
+        bytes_acked_info.addr_lo = static_cast<uint32_t>(bytes_acked_addr & 0xFFFFFFFFull);
+        bytes_acked_ptr_ = host_buffer_.get() + (fifo_size_ / sizeof(uint32_t));
     } else {
         bytes_acked_info = init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment, shm_name);
         bytes_acked_ptr_ = host_buffer_.get();
@@ -471,6 +510,7 @@ H2DSocket::H2DSocket(
 
     write_socket_metadata(mesh_device, bytes_acked_info, data_info);
     init_receiver_tlb(mesh_device);
+    init_dma_writer(mesh_device);
 
     // Initialize the persistent connector-state struct living in SHM.
     // NamedShm::create zero-initialized the region; we stamp the version and
@@ -618,6 +658,7 @@ H2DSocket::H2DSocket(
         ll_api::kL2cpuLimBase,
         ll_api::kL2cpuLimTlbEnd);
 
+    TT_FATAL(h2d_mode_ != H2DMode::HOST_DMA, "H2DSocket: HOST_DMA is not supported for L2CPU receivers.");
     // HOST_PUSH only: the H2D FIFO writes are issued through the same window via
     // pcie_writer, so the FIFO must end inside it. Going past that boundary would
     // surface later as the window throwing "Out of bounds access" on the first
@@ -916,6 +957,24 @@ uint32_t H2DSocket::bytes_acked_snapshot() {
     return bytes_acked_;
 }
 
+void H2DSocket::write_payload(void* data, uint32_t num_bytes, uint64_t device_addr) {
+    if (h2d_mode_ == H2DMode::DEVICE_PULL) {
+        uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
+        std::memcpy(data_ptr, data, num_bytes);
+        return;
+    }
+    if (h2d_mode_ == H2DMode::HOST_DMA && dma_writer) {
+        // Stage at the ring offset the page will occupy in L1, then let the DMA engine read it
+        // from the pinned ring. UMD's DMA write returns once the engine reports completion, so
+        // the staging slot is free again when this returns.
+        std::memcpy(reinterpret_cast<uint8_t*>(host_buffer_.get()) + write_ptr_, data, num_bytes);
+        dma_writer(write_ptr_, num_bytes, device_addr);
+        return;
+    }
+    pcie_writer(data, num_bytes, device_addr);
+    tt_driver_atomics::sfence();
+}
+
 void H2DSocket::write(void* data, uint32_t num_pages) {
     validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before writing.");
@@ -924,13 +983,7 @@ void H2DSocket::write(void* data, uint32_t num_pages) {
     auto data_addr = aligned_data_buf_start_ + write_ptr_;
     this->reserve_bytes(num_bytes);
 
-    if (h2d_mode_ == H2DMode::HOST_PUSH) {
-        pcie_writer(data, num_bytes, data_addr);
-        tt_driver_atomics::sfence();
-    } else {
-        uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
-        std::memcpy(data_ptr, data, num_bytes);
-    }
+    write_payload(data, num_bytes, data_addr);
     this->push_bytes(num_bytes);
     this->notify_receiver();
 }
@@ -955,13 +1008,7 @@ bool H2DSocket::try_write_impl(void* data, uint32_t num_pages) {
     }
 
     auto data_addr = aligned_data_buf_start_ + write_ptr_;
-    if (h2d_mode_ == H2DMode::HOST_PUSH) {
-        pcie_writer(data, num_bytes, data_addr);
-        tt_driver_atomics::sfence();
-    } else {
-        uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
-        std::memcpy(data_ptr, data, num_bytes);
-    }
+    write_payload(data, num_bytes, data_addr);
     this->push_bytes(num_bytes);
     this->notify_receiver();
     return true;
@@ -984,7 +1031,7 @@ HDSocketDescriptor H2DSocket::populate_descriptor() const {
 
     HDSocketDescriptor desc;
     desc.populate_from_owner("h2d", *shm_, fifo_size_, config_buffer_address_, mesh_device_, recv_core_);
-    desc.bytes_acked_offset = (h2d_mode_ == H2DMode::DEVICE_PULL) ? fifo_size_ : 0;
+    desc.bytes_acked_offset = (h2d_mode_ == H2DMode::DEVICE_PULL || h2d_mode_ == H2DMode::HOST_DMA) ? fifo_size_ : 0;
     desc.h2d_mode = static_cast<uint32_t>(h2d_mode_);
     desc.aligned_data_buf_start = aligned_data_buf_start_;
     desc.connector_state_offset = connector_state_offset_;
@@ -1021,7 +1068,9 @@ std::unique_ptr<H2DSocket> H2DSocket::connect_from_descriptor(const HDSocketDesc
     socket->aligned_data_buf_start_ = desc.aligned_data_buf_start;
     socket->shm_ = std::make_unique<NamedShm>(NamedShm::open(desc.shm_name, desc.shm_size));
 
-    if (socket->h2d_mode_ == H2DMode::DEVICE_PULL) {
+    // HOST_DMA connectors share the owner's [staging ring | bytes_acked] layout but hold no UMD
+    // device handle, so dma_writer stays unset and their payload writes go through pcie_writer.
+    if (socket->h2d_mode_ == H2DMode::DEVICE_PULL || socket->h2d_mode_ == H2DMode::HOST_DMA) {
         socket->host_buffer_ =
             std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(socket->shm_->ptr()), [](uint32_t*) {});
         socket->bytes_acked_ptr_ =
