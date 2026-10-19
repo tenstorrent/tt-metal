@@ -131,7 +131,8 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index) {
  * @param block_c_tiles    Number of column tiles in the block.
  * @param input_tile_index Starting tile index within the input (defaults to 0).
  */
-inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles, std::uint32_t input_tile_index = 0) {
+inline void llk_unpack_tilize_block(
+    std::uint32_t operand, std::uint32_t block_c_tiles, std::uint32_t input_tile_index = 0, const bool per_tile = false) {
     // Not sure if input_tile_index can be arbitrary but it works for moving across rows of files,
     // i.e. input_tile_index % block_c_tiles == 0
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -142,6 +143,12 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
     if (block_c_tiles < 2) {
         if (block_c_tiles == 1) {
             llk_unpack_tilize(operand, input_tile_index);
+        }
+        return;
+    }
+    if (per_tile) {
+        for (std::uint32_t tile = 0; tile < block_c_tiles; tile++) {
+            llk_unpack_tilize(operand, input_tile_index + tile);
         }
         return;
     }

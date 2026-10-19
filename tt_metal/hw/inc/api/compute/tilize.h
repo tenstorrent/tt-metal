@@ -210,7 +210,9 @@ ALWI void tilize_block(
             icb, block, ocb, input_tile_index, output_tile_index);
         return;
     }
-    UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
+    // A BFP output packs one tile per call, so the block unpack gains nothing there and loses at some widths.
+    UNPACK((llk_unpack_tilize_block(
+        icb, block, input_tile_index, IS_BFP_FORMAT(unpack_src_format[get_operand_id(ocb)]))));
 
     // One DEST section per run of tiles that fits it, so the release is paid once per run
     const uint32_t section_tiles = tilize_detail::dest_section_tiles<is_fp32_dest_acc_en>(icb);
