@@ -86,7 +86,7 @@ For `:latest` the scripts run docker with `--pull=always`, so a moved tag is pic
 
 **`exabox-tools` image**
 
-The [exabox-tools-image workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/exabox-tools-image.yaml) publishes `ghcr.io/tenstorrent/tt-metal/exabox-tools` from [`dockerfile/exabox_tools/Dockerfile`](../../../dockerfile/exabox_tools/Dockerfile): the `upstream-tests-bh-glx` content plus the health-check requirements, without the test-script entrypoint. It is meant to be the one image `recover.sh`, the health check and the k8s jobs share.
+The [exabox-tools-image workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/exabox-tools-image.yaml) publishes `ghcr.io/tenstorrent/tt-metal/exabox-tools` from [`dockerfile/exabox_tools/Dockerfile`](../../../dockerfile/exabox_tools/Dockerfile): a runtime image on plain Ubuntu 22.04 with the prebuilt binaries (`build/tools`, `build/test`, `build/lib`), the SFPI toolchain and source tree the JIT kernel build reads, the ttnn wheel, and the Python packages the health check and its deploy-tier pytest import. It has no compilers, no `.git` and no CI Python stack, so it cannot rebuild tt-metal. It is meant to be the one image `recover.sh`, the health check and the k8s jobs share.
 
 Tags:
 - `exabox-tools:<git describe>` (e.g. `v0.80.0-dev20260925-49-g78b5458946e`) - one per commit. Rebuilding the same commit re-pushes it with a new digest; pin the digest if that matters.

@@ -4,7 +4,7 @@ name: Build and publish exabox-tools image
 # run_cluster_validation, fabric system health check). See dockerfile/exabox_tools/Dockerfile.
 #
 # Separate from upstream-tests.yaml so the image can be rebuilt when that workflow is red.
-# Manual dispatch only, no schedule or push trigger: every new image is a multi-GB pull on
+# Manual dispatch only, no schedule or push trigger: every new image is a GB-sized pull on
 # each host that runs a job, so it is built when someone wants one.
 #
 # Every run pushes exabox-tools:<git describe> (one per commit; rebuilding a commit
@@ -52,13 +52,26 @@ jobs:
     permissions:
       packages: write
       contents: read
-    runs-on: tt-ubuntu-2204-large-stable
+    # GitHub-hosted: the image is built on plain Ubuntu and needs apt, and build
+    # containers on the self-hosted runners cannot reach the Ubuntu mirrors.
+    runs-on: ubuntu-latest
     steps:
+      # The dev image is pulled whole as the Open MPI/tt-smi donor; the preinstalled
+      # SDKs are what make room for it.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      # Blobless: git describe needs the history and tags, not their contents. The
+      # submodules are part of the source tree the image ships.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
           fetch-depth: 0
           fetch-tags: true
+          filter: blob:none
+          submodules: recursive
       - name: Download build artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -66,7 +79,8 @@ jobs:
       - name: Extract build artifact
         run: |
           mkdir -p _tt-metal
-          tar --zstd -xf ttm_any.tar.zst -C _tt-metal/
+          tar --zstd -xf ttm_any.tar.zst -C _tt-metal/ build runtime
+          rm -f ttm_any.tar.zst
           ls -hal _tt-metal/build/tools/scaleout/run_cluster_validation
       - name: Download Python wheel
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -83,6 +97,9 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # The docker driver's classic image store does no zstd and no OCI media types.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Compute tags
         id: tags
         run: |
