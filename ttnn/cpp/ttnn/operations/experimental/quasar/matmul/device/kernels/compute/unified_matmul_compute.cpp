@@ -150,13 +150,15 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                         }
 #ifdef FUSE_BIAS
                         if (K_chunk == 0) {
-                            // Bias tile (0, n_tile + n) broadcast down every row of DST tile (m, n); it is
-                            // unpacked through SrcB, where the A slice's tiles go.
+                            // The bias tile over each subblock column, broadcast down every row of the DST tiles
+                            // in that column; it is unpacked through SrcB, where the A slice's tiles go.
                             reconfig_data_format_srcb(dfb::A_slice, dfb::bias);
                             unary_bcast_init<BroadcastType::ROW>(dfb::bias);
                             for (uint32_t m = 0; m < subblock_M_tiles; ++m) {
                                 for (uint32_t n = 0; n < subblock_N_tiles; ++n) {
-                                    unary_bcast<BroadcastType::ROW>(dfb::bias, n_tile + n, m * subblock_N_tiles + n);
+                                    const uint32_t bias_tile = n_tile + n;  // C slice column of DST tile (m, n)
+                                    const uint32_t dst_tile = m * subblock_N_tiles + n;
+                                    unary_bcast<BroadcastType::ROW>(dfb::bias, bias_tile, dst_tile);
                                 }
                             }
                             reconfig_data_format_srcb(dfb::bias, dfb::A_slice);
