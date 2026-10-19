@@ -1793,8 +1793,7 @@
 
 
 # Single-galaxy (SC1) GLM-5.3 MTP7 prefill KV accuracy, same launcher as the SC4 entry above and the
-# control for it: one rank skips the D2D union-id transport, so a failure here is MTP7 itself. Runs on the
-# high-power pool like the no-MTP SC1 leg, so the two legs' throughput compares (8 kW vs 14 kW otherwise).
+# control for it: one rank skips the D2D union-id transport, so a failure here is MTP7 itself.
 - name: "(GLM-5.3-744B) MTP7 prefill KV accuracy + perf 55k@5k, SC1"
   cmd: |
     set -euo pipefail
@@ -1821,7 +1820,7 @@
   test_tags: [glm_5_3, runner, kv_cache, mtp, glm53_trace]
   test_group: disagg_prefill
   skus:
-    bh_sc1_high_power:
+    bh_sc1:
       timeout: 120
       tier: 1
       release_ready: false
