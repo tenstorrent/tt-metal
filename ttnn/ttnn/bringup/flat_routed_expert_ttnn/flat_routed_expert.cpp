@@ -406,8 +406,11 @@ ttnn::Tensor flat_routed_expert_with_program(
     bool x_bf16,
     bool h_bf16,
     const std::vector<std::vector<uint32_t>>& l1_args,
-    const std::optional<ttnn::Tensor>& relay_words) {
+    const std::optional<ttnn::Tensor>& relay_words,
+    uint32_t math_fidelity,
+    bool weights_nk) {
     using namespace tt::tt_metal;
+    // (math_fidelity / weights_nk: as flat_routed_expert's, DeepSeek-V4.1 P.8; defaults 0 / false = the program before)
     FlatRoutedExpertConfig cfg{
         .hidden = x.logical_shape()[-1],
         .intermediate = intermediate,
@@ -421,7 +424,9 @@ ttnn::Tensor flat_routed_expert_with_program(
         .down_fp32 = down_fp32,
         .pack_stochastic_rounding = false,
         .x_bf16 = x_bf16,
-        .h_bf16 = h_bf16};
+        .h_bf16 = h_bf16,
+        .math_fidelity = math_fidelity,
+        .weights_nk = weights_nk};
     auto* device = x.device();
     // (planned before cmb_rt is set: the plan cache ignores it, and the standalone plan keeps the DRISC senders)
     const auto plan = flat_routed_expert_plan(device, cfg);
@@ -498,7 +503,9 @@ ttnn::Tensor flat_routed_expert_with_program(
         cfg.x_bf16,
         cfg.h_bf16,
         cfg.cmb_rt,
-        static_cast<uint32_t>(arena.memory_config().shard_spec()->shape[0])};
+        static_cast<uint32_t>(arena.memory_config().shard_spec()->shape[0]),
+        cfg.math_fidelity,
+        static_cast<uint32_t>(cfg.weights_nk)};
     auto result = ttnn::prim::bringup::flat_with_program(
         p,
         FlatRoutedExpertInputs{

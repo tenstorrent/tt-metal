@@ -269,7 +269,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
         as for flat_routed_expert, plus the caller's persistent arena (over the flat expert's cores and the other op's
         cells) and y ([rows, H] bf16 ROW_MAJOR, DRAM), the other op's MeshProgramDescriptor (extra_key: its cache key),
         and where the y writers report each local expert (counts[e] += 1 per writer and call at counts_addr on the
-        logical collector core; writers: the expected writer count). Returns y.
+        logical collector core; writers: the expected writer count). math_fidelity / weights_nk (DeepSeek-V4.1 P.8):
+        as for flat_routed_expert (defaults: LoFi, [K, N] weight tiles, the program before). Returns y.
         )doc",
         &fre::flat_routed_expert_with_program,
         nb::arg("dispatched_buffer").noconvert(),
@@ -297,7 +298,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("x_bf16") = false,
         nb::arg("h_bf16") = false,
         nb::arg("l1_args") = std::vector<std::vector<uint32_t>>{},
-        nb::arg("relay_words") = nb::none());
+        nb::arg("relay_words") = nb::none(),
+        nb::arg("math_fidelity") = 0,
+        nb::arg("weights_nk") = false);
     mod.def(
         "flat_routed_expert_plan",
         &plan_dict,

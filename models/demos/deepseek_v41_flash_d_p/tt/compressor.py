@@ -51,7 +51,7 @@ import ttnn
 from . import ccl
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, tp_sum
 from .norm import TtDistributedRmsNorm
-from .quant import fp4_qdq, round_tf32
+from .quant import fp4_q, native, round_tf32
 from .rope import deinterleave_perm, rope_deinterleaved
 from .served import CacheSlab, alloc_served
 from .settings import settings
@@ -264,7 +264,7 @@ class TtCompressor:
         perm, permk = deinterleave_perm(self.hd, rd), deinterleave_perm(self.idx, rd)
         tp = mesh.shape[TP_AXIS]
         self.ckc = attn_compute_config(mesh)  # [wkv | wgate] and wk: ATTN_FIDELITY (P.7)
-        self.round_x = settings.get("COMPRESSOR_X") == "round_tf32"
+        self.round_x = settings.get("COMPRESSOR_X") == "round_tf32" and not native()  # NUMERICS=native: as is
         blocks = [w["wkv"].float()[perm]] + ([w["wgate"].float()[perm]] if ratio > 1 else [])
         w_t = torch.cat(blocks, dim=0).t().contiguous()  # [H, 512 | 1024]
         hidden = w_t.shape[0]
@@ -334,7 +334,7 @@ class TtCompressor:
         n = rows // r
         cos, sin = self.rope.rows(start // r, n * self.mesh.shape[SP_AXIS])
         lr = rope_deinterleaved(latent, cos, sin)
-        ckv = fp4_qdq(lr, CKV_BLOCK, e4m3_scale=True, dtype=ttnn.bfloat16)
+        ckv = fp4_q(lr, CKV_BLOCK, e4m3_scale=True, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast
         ttnn.deallocate(lr)
         kp = self._mm(latent, self.wk)
         ttnn.deallocate(latent)
@@ -343,7 +343,7 @@ class TtCompressor:
         kr = rope_deinterleaved(kn, cos, sin)
         for t in (kn, cos, sin):
             ttnn.deallocate(t)
-        k = fp4_qdq(kr, K_BLOCK, dtype=ttnn.bfloat16)
+        k = fp4_q(kr, K_BLOCK, dtype=ttnn.bfloat16)
         ttnn.deallocate(kr)
         return ckv, k
 

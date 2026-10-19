@@ -114,7 +114,9 @@ ttnn::Tensor flat_routed_expert_with_program(
     bool x_bf16 = false,
     bool h_bf16 = false,
     const std::vector<std::vector<uint32_t>>& l1_args = {},
-    const std::optional<ttnn::Tensor>& relay_words = std::nullopt);
+    const std::optional<ttnn::Tensor>& relay_words = std::nullopt,
+    uint32_t math_fidelity = 0,
+    bool weights_nk = false);
 
 // The plan for a device / config (cached): what the weight layout and the done words need.
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
