@@ -199,7 +199,7 @@ class DecoderLayer:
         position_idx=None,
         kv_cache=None,
         indexed_rope=False,
-        entries=None,
+        chunks=None,
     ):
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
@@ -222,7 +222,7 @@ class DecoderLayer:
                     position_idx=position_idx,
                     kv_cache=kv_cache,
                     indexed_rope=indexed_rope,
-                    entries=entries,
+                    chunks=chunks,
                 )
             hidden_states_post_norm.deallocate(True)
 
@@ -240,12 +240,12 @@ class DecoderLayer:
             )
 
             with zone("mlp", COARSE):
-                # The entries' real rows drive the MoE gate/dispatch padding config. The dense layers (0-2)
+                # The chunks' real rows drive the MoE gate/dispatch padding config. The dense layers (0-2)
                 # have no router or dispatch, so DenseMLP takes no such argument.
                 hidden_states = (
                     self.mlp(hidden_states_post_norm)
                     if self.is_dense
-                    else self.mlp(hidden_states_post_norm, entries=entries)
+                    else self.mlp(hidden_states_post_norm, chunks=chunks)
                 )
             hidden_states_post_norm.deallocate(True)
 

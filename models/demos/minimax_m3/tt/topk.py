@@ -34,7 +34,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.minimax_m3.tt.prefill_entry import packed_real_rows
+from models.demos.minimax_m3.tt.prefill_chunk import packed_real_rows
 from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 from models.demos.minimax_m3.utils.general_utils import cache_file_exists, get_cache_file_name
 
@@ -160,17 +160,17 @@ class TopKRouter:
         # Custom compute configs can degrade routing quality; keep the default.
         self.compute_config = None
 
-    def build_padding_config(self, entries):
-        """Per-device ``[num_real_tokens, pad_side]`` for a forward over ``entries`` (tt/prefill_entry.py), or
+    def build_padding_config(self, chunks):
+        """Per-device ``[num_real_tokens, pad_side]`` for a forward over ``chunks`` (tt/prefill_chunk.py), or
         None when every row is real (nothing to mark).
 
         The SAME tensor must go to the gate topk AND the dispatch op — see
         route_tokens_to_experts_fused. Owned here and memoized by the per-chip counts, so a chunked
         prefill builds each distinct config once instead of per forward.
 
-        SP chip c holds each entry's rows at rotated_chunk_positions(entry.start)[c], back to back in entry
-        order. Positions increase with the local row, so each entry is right-padded on every chip; a chip
-        whose pad rows precede a later entry's real rows routes all its rows (packed_real_rows).
+        SP chip c holds each chunk's rows at rotated_chunk_positions(chunk.actual_start)[c], back to back in
+        chunk order. Positions increase with the local row, so each chunk is right-padded on every chip; a chip
+        whose pad rows precede a later chunk's real rows routes all its rows (packed_real_rows).
 
         NOTE this ends in a ttnn.from_torch, i.e. a host->device write. Fine untraced — it is memoized,
         so it costs one tiny [sp, 2] write per distinct count — but a traced runtime must derive the
@@ -179,9 +179,9 @@ class TopKRouter:
         tokens_per_chip = self.num_tokens
         sp_axis = self.mesh_config.sp_axis if self.mesh_config is not None else 0
         sp_factor = self.mesh_device.shape[sp_axis] if isinstance(self.mesh_device, ttnn.MeshDevice) else 1
-        if entries is None or not tokens_per_chip:
+        if chunks is None or not tokens_per_chip:
             return None
-        key = packed_real_rows(entries, sp_factor, tokens_per_chip // len(entries))
+        key = packed_real_rows(chunks, sp_factor, tokens_per_chip // len(chunks))
         if all(r == tokens_per_chip for r in key):
             return None  # every row is real
         if key in self._padding_config_cache:

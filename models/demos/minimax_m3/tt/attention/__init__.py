@@ -89,7 +89,7 @@ class Attention:
         position_idx=None,
         kv_cache=None,
         indexed_rope=False,
-        entries=None,
+        chunks=None,
     ):
         """
         Prefill attention forward.
@@ -99,8 +99,8 @@ class Attention:
             rope_mats: Tuple of (cos, sin) matrices for RoPE
             kv_cache: Externally-owned :class:`MiniMaxKVCache` (packed K/V/index_k), written at
                 ``self.local_layer_idx`` (the local layer).
-            entries: the forward's chunks (tt/prefill_entry.py), each a cache slot and its [start, end) token
-                range; None = one full chunk in slot 0 at position 0.
+            chunks: the forward's PrefillChunks (tt/prefill_chunk.py), each a slot_id and its
+                [actual_start, actual_end) token range; None = one full chunk in slot 0 at position 0.
 
         Returns:
             Attention output [1, 1, seq_len, hidden_size]
@@ -121,5 +121,5 @@ class Attention:
             ccl_manager=self.ccl_manager,
             layer_idx=self.local_layer_idx,
             indexed_rope=indexed_rope,
-            entries=entries,
+            chunks=chunks,
         )

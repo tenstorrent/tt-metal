@@ -14,8 +14,8 @@ Env:
   PREFILL_CHUNKED     "1" -> chunked prefill (chunk loop, cache-read path); "0" -> one-shot  [default 0]
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode)                                  [default 5120]
   PREFILL_FORWARD_TOKENS_BUDGET  tokens per forward (chunked mode): consecutive chunks of the prompt packed
-                      into one forward of PREFILL_FORWARD_TOKENS_BUDGET // PREFILL_CHUNK_SIZE entries, the last
-                      forward padded with empty entries                                [default: chunk size]
+                      into one forward of PREFILL_FORWARD_TOKENS_BUDGET // PREFILL_CHUNK_SIZE chunks, the last
+                      forward padded with empty chunks                                [default: chunk size]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement (less noise)      [default 1]
   PREFILL_SKIP_PCC    "1" -> perf only: skip the per-layer golden KV PCC (no kv_cache/ needed) [default 0]
   PREFILL_EXPECTED_TPS  whole-sequence tok/s baseline; when set, assert measured median is
@@ -109,7 +109,7 @@ from loguru import logger
 import ttnn
 from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
 from models.demos.minimax_m3.tt.moe import shared_overlap
-from models.demos.minimax_m3.tt.prefill_entry import PrefillEntry
+from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk
 from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env
 
 
@@ -462,12 +462,12 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
     last_len = total - a_last  # width of the final forward's chunks (incl pad)
 
     def prefill_forward(f):
-        # Forward f packs chunks f*fwd_chunks.. of slot 0; past the prompt's last chunk the entries are empty.
+        # Forward f packs chunks f*fwd_chunks.. of slot 0; past the prompt's last chunk the forward's chunks are empty.
         starts = [c * chunk for c in range(f * fwd_chunks, (f + 1) * fwd_chunks)]
-        entries = [PrefillEntry(0, a, min(a + chunk, n_tokens)) if a < total else PrefillEntry(0, 0, 0) for a in starts]
-        tokens = [padded[e.start : e.start + chunk] if not e.is_empty else [0] * chunk for e in entries]
-        inp = runtime.make_forward_input(tokens, [e.start for e in entries])
-        runtime.prefill_forward(inp, kv_cache, entries)
+        chunks = [PrefillChunk(0, a, min(a + chunk, n_tokens)) if a < total else PrefillChunk(0, 0, 0) for a in starts]
+        tokens = [padded[e.actual_start : e.actual_start + chunk] if not e.is_empty else [0] * chunk for e in chunks]
+        inp = runtime.make_forward_input(tokens, [e.actual_start for e in chunks])
+        runtime.prefill_forward(inp, kv_cache, chunks)
 
     def run_whole():  # cold, no mid-loop syncs — one barrier at the end
         for f in range(n_forwards):

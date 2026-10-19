@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only: packed-forward entry validation, the per-chip MoE padding counts and the packed input layout
-(tt/prefill_entry.py). A forward of F entries puts each entry's chunk_local rows back to back on every chip."""
+"""Host-only: packed-forward chunk validation, the per-chip MoE padding counts and the packed input layout
+(tt/prefill_chunk.py). A forward of F chunks puts each chunk's chunk_local rows back to back on every chip."""
 
 import random
 
@@ -13,25 +13,27 @@ from models.demos.common.prefill.chunk_layout import (
     rotated_chunk_positions,
     rotated_chunk_real_counts,
 )
-from models.demos.minimax_m3.tt.prefill_entry import (
-    PrefillEntry,
+from models.demos.minimax_m3.tt.prefill_chunk import (
+    PrefillChunk,
     pack_forward_tokens,
     packed_real_rows,
-    validate_entries,
+    validate_chunks,
 )
 
 C, SP = 1024, 8
 S = C // SP
-EMPTY = PrefillEntry(0, 0, 0)
+EMPTY = PrefillChunk(0, 0, 0)
 
 
-def brute_real_rows(entries, sp, chunk_local):
+def brute_real_rows(chunks, sp, chunk_local):
     """Leading real rows per chip from the rows' real flags; all rows when a pad row precedes a real one."""
     out = []
     for c in range(sp):
         flags = []
-        for e in entries:
-            flags += [not e.is_empty and p < e.end for p in rotated_chunk_positions(e.start, sp, chunk_local)[c]]
+        for e in chunks:
+            flags += [
+                not e.is_empty and p < e.actual_end for p in rotated_chunk_positions(e.actual_start, sp, chunk_local)[c]
+            ]
         n = sum(flags)
         out.append(n if all(flags[:n]) else len(flags))
     return tuple(out)
@@ -42,34 +44,34 @@ def test_packed_real_rows_single_entry_matches_rotated_counts(sp, chunk_local):
     chunk = sp * chunk_local
     for start in range(0, 2 * chunk + 1, 32):
         for n in (1, 31, chunk_local, chunk // 2 + 7, chunk - 1, chunk):
-            e = PrefillEntry(0, start, start + n)
+            e = PrefillChunk(0, start, start + n)
             assert packed_real_rows([e], sp, chunk_local) == tuple(rotated_chunk_real_counts(start, n, sp, chunk_local))
 
 
 CASES = {
     "all_full": [
-        PrefillEntry(0, 0, C),
-        PrefillEntry(0, C, 2 * C),
-        PrefillEntry(1, 5 * C, 6 * C),
-        PrefillEntry(2, 0, C),
+        PrefillChunk(0, 0, C),
+        PrefillChunk(0, C, 2 * C),
+        PrefillChunk(1, 5 * C, 6 * C),
+        PrefillChunk(2, 0, C),
     ],
     "partial_last": [
-        PrefillEntry(0, 0, C),
-        PrefillEntry(1, 0, C),
-        PrefillEntry(2, 2 * C, 3 * C),
-        PrefillEntry(3, 0, 300),
+        PrefillChunk(0, 0, C),
+        PrefillChunk(1, 0, C),
+        PrefillChunk(2, 2 * C, 3 * C),
+        PrefillChunk(3, 0, 300),
     ],
     "interleaved_partials": [
-        PrefillEntry(0, 0, C),
-        PrefillEntry(0, C, C + 700),
-        PrefillEntry(1, 4 * C, 5 * C),
-        PrefillEntry(2, 0, 300),
+        PrefillChunk(0, 0, C),
+        PrefillChunk(0, C, C + 700),
+        PrefillChunk(1, 4 * C, 5 * C),
+        PrefillChunk(2, 0, 300),
     ],
-    "empty_tail": [PrefillEntry(0, 2 * C, 3 * C), PrefillEntry(1, 0, 600), EMPTY, EMPTY],
+    "empty_tail": [PrefillChunk(0, 2 * C, 3 * C), PrefillChunk(1, 0, 600), EMPTY, EMPTY],
     "mid_slab": [
-        PrefillEntry(0, 2 * C + 96, 3 * C + 96),
-        PrefillEntry(0, 3 * C + 96, 3 * C + 900),
-        PrefillEntry(1, C + 512, 2 * C + 512),
+        PrefillChunk(0, 2 * C + 96, 3 * C + 96),
+        PrefillChunk(0, 3 * C + 96, 3 * C + 900),
+        PrefillChunk(1, C + 512, 2 * C + 512),
         EMPTY,
     ],
 }
@@ -77,10 +79,10 @@ CASES = {
 
 @pytest.mark.parametrize("name", CASES)
 def test_packed_real_rows(name):
-    entries = CASES[name]
-    validate_entries(entries, chunk_size=C, forward_chunks=4, num_users=4, max_seq_len=8 * C)
-    rows = packed_real_rows(entries, SP, S)
-    assert rows == brute_real_rows(entries, SP, S)
+    chunks = CASES[name]
+    validate_chunks(chunks, chunk_size=C, forward_chunks=4, num_users=4, max_seq_len=8 * C)
+    rows = packed_real_rows(chunks, SP, S)
+    assert rows == brute_real_rows(chunks, SP, S)
     if name == "all_full":
         assert rows == (4 * S,) * SP
     if name == "partial_last":
@@ -94,37 +96,37 @@ def test_packed_real_rows(name):
 def test_packed_real_rows_random():
     rng = random.Random(0)
     for _ in range(300):
-        entries = []
+        chunks = []
         for _ in range(rng.randint(1, 4)):
             start = rng.randrange(0, 4 * C, 32)
-            entries.append(PrefillEntry(len(entries), start, start + rng.choice([0, 1, 33, S, C // 2, C - 1, C])))
-        entries.sort(key=lambda e: e.is_empty)
-        assert packed_real_rows(entries, SP, S) == brute_real_rows(entries, SP, S)
+            chunks.append(PrefillChunk(len(chunks), start, start + rng.choice([0, 1, 33, S, C // 2, C - 1, C])))
+        chunks.sort(key=lambda e: e.is_empty)
+        assert packed_real_rows(chunks, SP, S) == brute_real_rows(chunks, SP, S)
 
 
-BAD = {  # name -> (entries, expected message)
-    "wrong_count": ([PrefillEntry(0, 0, C)] * 3, "holds 4 entries"),
+BAD = {  # name -> (chunks, expected message)
+    "wrong_count": ([PrefillChunk(0, 0, C)] * 3, "holds 4 chunks"),
     "split_run": (
-        [PrefillEntry(0, 0, C), PrefillEntry(1, 0, C), PrefillEntry(0, C, 2 * C), EMPTY],
+        [PrefillChunk(0, 0, C), PrefillChunk(1, 0, C), PrefillChunk(0, C, 2 * C), EMPTY],
         "two separate runs",
     ),
-    "partial_not_last": ([PrefillEntry(0, 0, 500), PrefillEntry(0, C, 2 * C), EMPTY, EMPTY], "must end its slot"),
-    "gap_in_run": ([PrefillEntry(0, 0, C), PrefillEntry(0, 2 * C, 3 * C), EMPTY, EMPTY], "does not continue"),
-    "empty_not_tail": ([PrefillEntry(0, 0, C), EMPTY, PrefillEntry(1, 0, C), EMPTY], "after an empty one"),
-    "all_empty": ([EMPTY] * 4, "at least one non-empty entry"),
-    "negative_start": ([PrefillEntry(0, -32, 32), EMPTY, EMPTY, EMPTY], "negative start"),
-    "misaligned_start": ([PrefillEntry(0, 100, 600), EMPTY, EMPTY, EMPTY], "multiple of 32"),
-    "more_than_a_chunk": ([PrefillEntry(0, 0, C + 32), EMPTY, EMPTY, EMPTY], "more than one"),
-    "cache_overflow": ([PrefillEntry(0, 7 * C + 32, 7 * C + 64), EMPTY, EMPTY, EMPTY], "exceeds the per-user cache"),
-    "slot_out_of_range": ([PrefillEntry(4, 0, C), EMPTY, EMPTY, EMPTY], "slot out of range"),
+    "partial_not_last": ([PrefillChunk(0, 0, 500), PrefillChunk(0, C, 2 * C), EMPTY, EMPTY], "must end its slot"),
+    "gap_in_run": ([PrefillChunk(0, 0, C), PrefillChunk(0, 2 * C, 3 * C), EMPTY, EMPTY], "does not continue"),
+    "empty_not_tail": ([PrefillChunk(0, 0, C), EMPTY, PrefillChunk(1, 0, C), EMPTY], "after an empty one"),
+    "all_empty": ([EMPTY] * 4, "at least one non-empty chunk"),
+    "negative_start": ([PrefillChunk(0, -32, 32), EMPTY, EMPTY, EMPTY], "negative start"),
+    "misaligned_start": ([PrefillChunk(0, 100, 600), EMPTY, EMPTY, EMPTY], "multiple of 32"),
+    "more_than_a_chunk": ([PrefillChunk(0, 0, C + 32), EMPTY, EMPTY, EMPTY], "more than one"),
+    "cache_overflow": ([PrefillChunk(0, 7 * C + 32, 7 * C + 64), EMPTY, EMPTY, EMPTY], "exceeds the per-user cache"),
+    "slot_out_of_range": ([PrefillChunk(4, 0, C), EMPTY, EMPTY, EMPTY], "slot out of range"),
 }
 
 
 @pytest.mark.parametrize("name", BAD)
-def test_validate_entries_rejects(name, expect_error):
-    entries, message = BAD[name]
+def test_validate_chunks_rejects(name, expect_error):
+    chunks, message = BAD[name]
     with expect_error(AssertionError, message):
-        validate_entries(entries, chunk_size=C, forward_chunks=4, num_users=4, max_seq_len=8 * C)
+        validate_chunks(chunks, chunk_size=C, forward_chunks=4, num_users=4, max_seq_len=8 * C)
 
 
 @pytest.mark.parametrize("starts", [[0], [0, C, 3 * C, 0], [2 * C + 96, 3 * C + 96, C + 512, 0]])

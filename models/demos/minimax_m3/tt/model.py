@@ -357,7 +357,7 @@ class Model:
         on_layer_complete=None,
         kv_cache=None,
         indexed_rope=False,
-        entries=None,
+        chunks=None,
     ):
         """
         Prefill forward pass through decoder layers and final projection.
@@ -372,7 +372,7 @@ class Model:
             rope_mats: RoPE rotation matrices [cos, sin]
             current_pos: Current position (for decode) or None (for prefill)
             kv_cache: Externally-owned MiniMaxKVCache (packed K/V/index_k), shared across layers.
-            entries: the forward's chunks (tt/prefill_entry.py); None = one chunk in slot 0 at position 0.
+            chunks: the forward's PrefillChunks (tt/prefill_chunk.py); None = one chunk in slot 0 at position 0.
 
         Returns:
             logits: Output logits
@@ -385,7 +385,7 @@ class Model:
                 position_idx=current_pos,
                 kv_cache=kv_cache,
                 indexed_rope=indexed_rope,
-                entries=entries,
+                chunks=chunks,
             )
             # Per-layer migration seam (no-op unless a pipeline supplies a callback).
             if on_layer_complete is not None:
@@ -437,13 +437,13 @@ class Model:
         skip_lm_head=False,
         on_layer_complete=None,
         indexed_rope=False,
-        entries=None,
+        chunks=None,
     ):
         """Prefill forward pass - processes full sequences.
 
-        entries: the forward's chunks (tt/prefill_entry.py), one equal block of rows each, or None for one
-        full chunk in slot 0 at position 0. Attention runs per entry against its slot; the MoE layers mask
-        the entries' pad rows (tt/topk.py).
+        chunks: the forward's PrefillChunks (tt/prefill_chunk.py), one equal block of rows each, or None for
+        one full chunk in slot 0 at position 0. Attention runs per chunk against its slot_id; the MoE layers
+        mask the chunks' pad rows (tt/topk.py).
         """
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
         seq_len = x.shape[-2]
@@ -466,7 +466,7 @@ class Model:
             skip_lm_head=skip_lm_head,
             on_layer_complete=on_layer_complete,
             indexed_rope=indexed_rope,
-            entries=entries,
+            chunks=chunks,
         )
 
         return logits

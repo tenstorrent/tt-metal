@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Packed forward through the ATTENTION LAYER, SP=8 x TP=4, dense + sparse: one forward of 4 x 1024-token chunk
-entries must match running each entry alone, in order, against an identical cache.
+chunks must match running each chunk alone, in order, against an identical cache.
 
-Each composition first fills the slots' prefixes (single-entry calls, identically in both caches), then runs the
-packed forward in one cache and the entries one by one in the other. The entries' output rows and the K / V /
-index_k caches must agree. Compositions: mixed depths, consecutive chunks of one slot, a partial last entry,
-interleaved partial entries, an empty tail (its slot's bytes stay unchanged) and two consecutive mid-slab entries
+Each composition first fills the slots' prefixes (single-chunk calls, identically in both caches), then runs the
+packed forward in one cache and the chunks one by one in the other. The chunks' output rows and the K / V /
+index_k caches must agree. Compositions: mixed depths, consecutive chunks of one slot, a partial last chunk,
+interleaved partial chunks, an empty tail (its slot's bytes stay unchanged) and two consecutive mid-slab chunks
 of one slot. Random weights, the runtime's whole-cache indexed RoPE.
 """
 
@@ -25,7 +25,7 @@ from models.demos.minimax_m3.tt.attention import Attention, AttentionConfig, all
 from models.demos.minimax_m3.tt.attention_configs import MiniMaxM3AttentionProgramConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.model import create_rope_setup
-from models.demos.minimax_m3.tt.prefill_entry import PrefillEntry, pack_forward_tokens, validate_entries
+from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk, pack_forward_tokens, validate_chunks
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 
@@ -38,50 +38,50 @@ CAP = 12 * C
 PCC = 0.998
 
 
-def chunks(start, end):
-    """Single-entry prefix fills covering [start, end) in chunk-sized steps."""
+def prefix_fills(start, end):
+    """Single-chunk prefix fills covering [start, end) in chunk-sized steps."""
     return [(a, min(a + C, end)) for a in range(start, end, C)]
 
 
-# name -> (prefix fills per slot, the forward's entries)
+# name -> (prefix fills per slot, the forward's chunks)
 CASES = {
     "mixed_depths": (
-        {1: chunks(0, 2 * C), 2: chunks(0, 8 * C), 3: chunks(0, 4 * C)},
+        {1: prefix_fills(0, 2 * C), 2: prefix_fills(0, 8 * C), 3: prefix_fills(0, 4 * C)},
         [
-            PrefillEntry(0, 0, C),
-            PrefillEntry(1, 2 * C, 3 * C),
-            PrefillEntry(2, 8 * C, 9 * C),
-            PrefillEntry(3, 4 * C, 5 * C),
+            PrefillChunk(0, 0, C),
+            PrefillChunk(1, 2 * C, 3 * C),
+            PrefillChunk(2, 8 * C, 9 * C),
+            PrefillChunk(3, 4 * C, 5 * C),
         ],
     ),
     "same_slot_run": (
-        {1: chunks(0, C)},
-        [PrefillEntry(0, 0, C), PrefillEntry(0, C, 2 * C), PrefillEntry(0, 2 * C, 3 * C), PrefillEntry(1, C, 2 * C)],
+        {1: prefix_fills(0, C)},
+        [PrefillChunk(0, 0, C), PrefillChunk(0, C, 2 * C), PrefillChunk(0, 2 * C, 3 * C), PrefillChunk(1, C, 2 * C)],
     ),
     "partial_last": (
-        {0: chunks(0, 3 * C), 2: chunks(0, 2 * C)},
+        {0: prefix_fills(0, 3 * C), 2: prefix_fills(0, 2 * C)},
         [
-            PrefillEntry(1, 0, C),
-            PrefillEntry(2, 2 * C, 3 * C),
-            PrefillEntry(0, 3 * C, 4 * C),
-            PrefillEntry(0, 4 * C, 4 * C + 300),
+            PrefillChunk(1, 0, C),
+            PrefillChunk(2, 2 * C, 3 * C),
+            PrefillChunk(0, 3 * C, 4 * C),
+            PrefillChunk(0, 4 * C, 4 * C + 300),
         ],
     ),
     "interleaved_partials": (
-        {0: chunks(0, C)},
-        [PrefillEntry(0, C, C + 700), PrefillEntry(1, 0, C), PrefillEntry(1, C, C + 333), PrefillEntry(2, 0, 300)],
+        {0: prefix_fills(0, C)},
+        [PrefillChunk(0, C, C + 700), PrefillChunk(1, 0, C), PrefillChunk(1, C, C + 333), PrefillChunk(2, 0, 300)],
     ),
     "empty_tail": (
-        {0: chunks(0, 2 * C), 3: chunks(0, 2 * C)},
-        [PrefillEntry(0, 2 * C, 3 * C), PrefillEntry(1, 0, 600), PrefillEntry(3, 0, 0), PrefillEntry(3, 0, 0)],
+        {0: prefix_fills(0, 2 * C), 3: prefix_fills(0, 2 * C)},
+        [PrefillChunk(0, 2 * C, 3 * C), PrefillChunk(1, 0, 600), PrefillChunk(3, 0, 0), PrefillChunk(3, 0, 0)],
     ),
     "mid_slab": (
-        {0: chunks(0, 2 * C + 96), 1: chunks(0, C + 512)},
+        {0: prefix_fills(0, 2 * C + 96), 1: prefix_fills(0, C + 512)},
         [
-            PrefillEntry(0, 2 * C + 96, 3 * C + 96),
-            PrefillEntry(0, 3 * C + 96, 4 * C + 96),
-            PrefillEntry(1, C + 512, 2 * C + 512),
-            PrefillEntry(2, 0, C),
+            PrefillChunk(0, 2 * C + 96, 3 * C + 96),
+            PrefillChunk(0, 3 * C + 96, 4 * C + 96),
+            PrefillChunk(1, C + 512, 2 * C + 512),
+            PrefillChunk(2, 0, C),
         ],
     ),
 }
@@ -164,21 +164,21 @@ def test_attention_packed_vs_alone(mesh_device, device_params, layer_kind, reset
 
     rope = [indexed_rope(rope_setup.cos_matrix_prefill), indexed_rope(rope_setup.sin_matrix_prefill)]
 
-    def run(x_chunks, entries, kvc):
-        """One attention forward over ``entries``; x_chunks are natural-order [C, H] rows per entry. Returns
-        the output rows per entry, natural order."""
+    def run(x_chunks, chunks, kvc):
+        """One attention forward over ``chunks``; x_chunks are natural-order [C, H] rows per chunk. Returns
+        the output rows per chunk, natural order."""
         idx = pack_forward_tokens(
-            [[k * C + i for i in range(C)] for k in range(len(entries))], [e.start for e in entries], sp
+            [[k * C + i for i in range(C)] for k in range(len(chunks))], [e.actual_start for e in chunks], sp
         )
         x = torch.cat(x_chunks)[idx].reshape(1, 1, -1, HIDDEN)
         x_tt = ttnn.from_torch(
             x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=seq_mapper
         )
-        out = attn(x_tt, rope_mats=rope, kv_cache=kvc, indexed_rope=True, entries=entries)
+        out = attn(x_tt, rope_mats=rope, kv_cache=kvc, indexed_rope=True, chunks=chunks)
         dts = ttnn.get_device_tensors(out)
-        per_chip = [compose_tp_hidden(dts, r, cols).reshape(len(entries), s, HIDDEN) for r in range(rows)]
+        per_chip = [compose_tp_hidden(dts, r, cols).reshape(len(chunks), s, HIDDEN) for r in range(rows)]
         ttnn.deallocate(out)
-        return [torch.cat([chip[k] for chip in per_chip]) for k in range(len(entries))]  # chip-major rows
+        return [torch.cat([chip[k] for chip in per_chip]) for k in range(len(chunks))]  # chip-major rows
 
     def read_cache(kvc):
         composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
@@ -193,36 +193,36 @@ def test_attention_packed_vs_alone(mesh_device, device_params, layer_kind, reset
     gen = torch.Generator().manual_seed(1)
     rand_rows = lambda: torch.randn(C, HIDDEN, generator=gen) * 0.1
     failures, worst = [], 1.0
-    for name, (prefixes, entries) in CASES.items():
-        validate_entries(entries, chunk_size=C, forward_chunks=F, num_users=USERS, max_seq_len=CAP)
+    for name, (prefixes, chunks) in CASES.items():
+        validate_chunks(chunks, chunk_size=C, forward_chunks=F, num_users=USERS, max_seq_len=CAP)
         packed_kv = allocate_kv_caches(mesh_device, num_layers=1, max_seq_len=CAP, num_users=USERS)
         alone_kv = allocate_kv_caches(mesh_device, num_layers=1, max_seq_len=CAP, num_users=USERS)
         for slot, fills in prefixes.items():
             for a, b in fills:
                 x = rand_rows()
                 for kvc in (packed_kv, alone_kv):
-                    run([x], [PrefillEntry(slot, a, b)], kvc)
+                    run([x], [PrefillChunk(slot, a, b)], kvc)
         ttnn.synchronize_device(mesh_device)
         before = read_cache(packed_kv)
 
-        xs = [rand_rows() for _ in entries]
-        packed = run(xs, entries, packed_kv)
-        alone = [None if e.is_empty else run([x], [e], alone_kv)[0] for x, e in zip(xs, entries)]
+        xs = [rand_rows() for _ in chunks]
+        packed = run(xs, chunks, packed_kv)
+        alone = [None if e.is_empty else run([x], [e], alone_kv)[0] for x, e in zip(xs, chunks)]
         ttnn.synchronize_device(mesh_device)
         after, ref = read_cache(packed_kv), read_cache(alone_kv)
 
-        for k, e in enumerate(entries):
+        for k, e in enumerate(chunks):
             if e.is_empty:
                 ok = bool(torch.all(packed[k] == 0))
-                logger.info(f"[{layer_kind}/{name}] entry {k} empty: zero rows {ok}")
+                logger.info(f"[{layer_kind}/{name}] chunk {k} empty: zero rows {ok}")
                 if not ok:
-                    failures.append(f"{name} entry {k}: empty entry rows are not zero")
+                    failures.append(f"{name} chunk {k}: empty chunk rows are not zero")
                 continue
             _, pcc = comp_pcc(alone[k], packed[k], PCC)
             worst = min(worst, pcc)
-            logger.info(f"[{layer_kind}/{name}] entry {k} {e}: out pcc={pcc:.6f}")
+            logger.info(f"[{layer_kind}/{name}] chunk {k} {e}: out pcc={pcc:.6f}")
             if pcc < PCC:
-                failures.append(f"{name} entry {k}: out pcc {pcc:.6f}")
+                failures.append(f"{name} chunk {k}: out pcc {pcc:.6f}")
         names = ("k", "v", "index_k") if is_sparse else ("k", "v")
         for cache in names:
             _, pcc = comp_pcc(ref[cache], after[cache], PCC)
@@ -232,10 +232,10 @@ def test_attention_packed_vs_alone(mesh_device, device_params, layer_kind, reset
             logger.info(f"[{layer_kind}/{name}] cache {cache}: pcc={pcc:.6f} max|diff|={diff:.4g} mean|ref|={mean:.4g}")
             if pcc < PCC:
                 failures.append(f"{name} cache {cache}: pcc {pcc:.6f}")
-        for slot in {e.slot for e in entries if e.is_empty} - {e.slot for e in entries if not e.is_empty}:
+        for slot in {e.slot_id for e in chunks if e.is_empty} - {e.slot_id for e in chunks if not e.is_empty}:
             for cache in names:
                 if not torch.equal(before[cache][slot], after[cache][slot]):
-                    failures.append(f"{name}: empty entry wrote slot {slot} ({cache})")
+                    failures.append(f"{name}: empty chunk wrote slot {slot} ({cache})")
         packed_kv.deallocate()
         alone_kv.deallocate()
 

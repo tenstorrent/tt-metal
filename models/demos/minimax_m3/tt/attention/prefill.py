@@ -5,7 +5,7 @@
 import ttnn
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
-from ..prefill_entry import PrefillEntry
+from ..prefill_chunk import PrefillChunk
 from ..residual import use_sharded_residual
 from .config import AttentionConfig, ProgramConfig
 from .dense_sp import dense_sp_attention, dense_sp_attention_nocache
@@ -42,7 +42,7 @@ def attention_forward(
     ccl_manager,
     layer_idx=0,
     indexed_rope=False,
-    entries=None,
+    chunks=None,
 ):
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).
@@ -60,11 +60,11 @@ def attention_forward(
         position_idx: Position indices (unused in prefill)
         ccl_manager: Communication manager
         layer_idx: this layer's index, for the per-layer cache write
-        entries: the forward's chunks (tt/prefill_entry.py), one equal block of rows each; None = one chunk
-            in slot 0 at position 0. Projections run once on all rows; the attention core runs per non-empty
-            entry against its slot at its start (>0 selects the cache-read paths). Empty entries (the tail)
-            get zero rows. A partial entry's pad rows follow its real rows, so causality keeps them out of the
-            real rows' attention; their K/V land past the slot's valid prefix, which later chunks overwrite.
+        chunks: the forward's PrefillChunks (tt/prefill_chunk.py), one equal block of rows each; None = one
+            chunk in slot 0 at position 0. Projections run once on all rows; the attention core runs per non-empty
+            chunk against its slot_id at its actual_start (>0 selects the cache-read paths). Empty chunks (the
+            tail) get zero rows. A partial chunk's pad rows follow its real rows, so causality keeps them out of
+            the real rows' attention; their K/V land past the slot's valid prefix, which later chunks overwrite.
 
     Returns:
         Attention output [1, 1, seq_len, hidden_size]
@@ -92,7 +92,7 @@ def attention_forward(
     # head_dim (qk_norm_type="per_head"). See the post-split block below (matches
     # transformers minimax_m3_vl: view-to-heads → q_norm/k_norm → RoPE).
 
-    def core(xqkv, hidden, entry, rows):
+    def core(xqkv, hidden, chunk, rows):
         return _attention_core(
             xqkv,
             hidden,
@@ -105,33 +105,33 @@ def attention_forward(
             program_config,
             transformation_mat,
             ccl_manager,
-            user_id=entry.slot,
+            slot_id=chunk.slot_id,
             layer_idx=layer_idx,
-            cached_len=entry.start,
+            cached_len=chunk.actual_start,
             indexed_rope=indexed_rope,
             seq_len=rows,
         )
 
-    entries = entries or [PrefillEntry(slot=0, start=0, end=seq_len)]
-    if len(entries) == 1:
-        tt_sdpa_out = core(xqkv_fused, hidden_states, entries[0], seq_len)
+    chunks = chunks or [PrefillChunk(slot_id=0, actual_start=0, actual_end=seq_len)]
+    if len(chunks) == 1:
+        tt_sdpa_out = core(xqkv_fused, hidden_states, chunks[0], seq_len)
     else:
         assert indexed_rope, "a packed forward needs the whole-cache indexed RoPE"
-        rows = seq_len // len(entries)
-        real = [e for e in entries if not e.is_empty]
+        rows = seq_len // len(chunks)
+        real = [c for c in chunks if not c.is_empty]
 
-        def entry_rows(t, k):
+        def chunk_rows(t, k):
             return ttnn.slice(t, (0, 0, k * rows, 0), (1, 1, (k + 1) * rows, t.shape[-1]))
 
         outs = [
-            core(entry_rows(xqkv_fused, k), entry_rows(hidden_states, k) if config.is_sparse else None, e, rows)
-            for k, e in enumerate(real)
+            core(chunk_rows(xqkv_fused, k), chunk_rows(hidden_states, k) if config.is_sparse else None, c, rows)
+            for k, c in enumerate(real)
         ]
         xqkv_fused.deallocate(True)
         if config.is_sparse:
             hidden_states.deallocate(True)
-        # Empty entries (the tail) get zero rows; concatenating all entries keeps one concat program per forward width.
-        empties = len(entries) - len(real)
+        # Empty chunks (the tail) get zero rows; concatenating all chunks keeps one concat program per forward width.
+        empties = len(chunks) - len(real)
         zeros = ttnn.zeros_like(outs[0]) if empties else None
         tt_sdpa_out = ttnn.concat(outs + [zeros] * empties, dim=2)
         for o in outs + ([zeros] if empties else []):
@@ -152,14 +152,15 @@ def _attention_core(
     program_config,
     transformation_mat,
     ccl_manager,
-    user_id,
+    slot_id,
     layer_idx,
     cached_len,
     indexed_rope,
     seq_len,
 ):
-    """One chunk's rows, slot ``user_id`` at position ``cached_len``: split heads -> QK-norm -> RoPE -> KV write
-    -> attention -> concat heads. Consumes xqkv_fused (and hidden_states on MSA layers)."""
+    """One chunk's rows, slot ``slot_id`` at position ``cached_len`` (the chunk's actual_start: the prefix already
+    cached): split heads -> QK-norm -> RoPE -> KV write -> attention -> concat heads. Consumes xqkv_fused (and
+    hidden_states on MSA layers)."""
     # Split into Q, K, V heads
     num_local_heads = mesh_config.shard_size(config.num_heads)
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
@@ -215,7 +216,7 @@ def _attention_core(
                 kv_cache,
                 tt_k,
                 tt_v,
-                slot_idx=user_id,
+                slot_id=slot_id,
                 layer_idx=layer_idx,
                 kv_actual=cached_len,
                 sp_axis=mesh_config.sp_axis,
@@ -249,7 +250,7 @@ def _attention_core(
                 write_index_k_chunk(
                     kv_cache,
                     tt_ik,
-                    slot_idx=user_id,
+                    slot_id=slot_id,
                     layer_idx=layer_idx,
                     kv_actual=cached_len,
                     sp_axis=mesh_config.sp_axis,
@@ -264,14 +265,14 @@ def _attention_core(
                 f"(a cold chunk reads it when shorter than the {topk_window}-token top-k window)"
             )
             # Cache-read: the current chunk attends the accumulated prefix, gathered across SP straight
-            # from this (user, layer) slot of the packed cache (msa_sp_attention_cache_read). cached_len may be
+            # from this (slot_id, layer) row of the packed cache (msa_sp_attention_cache_read). cached_len may be
             # mid-slab (a 32-aligned multi-turn resume); the read sizes the gather for the fullest rank.
-            slot = user_id * kv_cache.num_layers + layer_idx
+            cache_row = slot_id * kv_cache.num_layers + layer_idx
             tt_sdpa_out = msa_sp_attention_cache_read(
                 tt_q,
                 tt_iq,
                 kv_cache,
-                slot=slot,
+                cache_row=cache_row,
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 cached_len=cached_len,
@@ -337,7 +338,7 @@ def _attention_core(
                     compute_kernel_config=sp_kcfg,
                     scale=config.head_dim**-0.5,
                     cluster_axis=mesh_config.sp_axis,
-                    slot_idx=user_id,
+                    slot_idx=slot_id,
                     layer_idx=layer_idx,
                     num_layers=kv_cache.num_layers,
                     write_chunk=False,

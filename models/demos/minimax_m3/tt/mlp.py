@@ -213,10 +213,10 @@ class MLP:
         )
         self.ep_num_links = ccl_manager.num_links
 
-    def __call__(self, hidden_states, entries=None):
+    def __call__(self, hidden_states, chunks=None):
         """Forward (prefill): shared expert + expert-parallel routed experts.
 
-        entries: the forward's chunks (tt/prefill_entry.py), or None for all rows real. Their real-token
+        chunks: the forward's PrefillChunks (tt/prefill_chunk.py), or None for all rows real. Their real-token
         ranges drive the padding config below (see TopKRouter.build_padding_config); a wrong range silently
         drops real tokens.
 
@@ -244,7 +244,7 @@ class MLP:
         # ONE padding config per forward, shared by the gate and the EP dispatch. Built (and memoized) by
         # the router; None when every row is real. Both consumers must see the SAME tensor — the gate
         # sentinel-marks the padded rows and dispatch shortens its token loop to match. See tt/topk.py.
-        padding_config = self.router.build_padding_config(entries)
+        padding_config = self.router.build_padding_config(chunks)
         with zone("router_topk"):
             idx, wts = self.router(hidden_states, padding_config=padding_config)  # per-row top-k
         x3d = ttnn.squeeze(hidden_states, dim=0)  # [1,1,S,H] -> [1,S,H] per device
