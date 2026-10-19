@@ -165,7 +165,11 @@ constexpr bool publish_noc_count = !distributed_dispatcher && dispatch_s_enabled
 #if defined(ARCH_QUASAR) && !defined(NOC_API_V1)
 #define DISPATCH_PER_TRID_WRITE_BARRIERS
 #endif
-constexpr uint32_t dispatch_write_trids[] = {cq_trids::DEFAULT};
+// CB-sourced writes are tagged per block by dispatch_cb_reader. The inline writes that notify a dispatch_s on another
+// core are untagged, so trid 0 is only waited on in that configuration.
+constexpr uint32_t dispatch_write_trids[] = {
+    cq_trids::DISPATCH_CB_WRITE[0], cq_trids::DISPATCH_CB_WRITE[1], cq_trids::DEFAULT};
+constexpr uint32_t num_dispatch_write_trids = distributed_dispatcher ? 3 : 2;
 
 // Wait for all of dispatch_d's writes to be acked.
 FORCE_INLINE void dispatch_write_barrier() {
@@ -173,8 +177,8 @@ FORCE_INLINE void dispatch_write_barrier() {
     DeviceZoneScopedN("noc_async_write_barrier");
 #endif
 #ifdef DISPATCH_PER_TRID_WRITE_BARRIERS
-    for (uint32_t trid : dispatch_write_trids) {
-        noc_async_write_barrier_with_trid(trid, noc_index);
+    for (uint32_t i = 0; i < num_dispatch_write_trids; i++) {
+        noc_async_write_barrier_with_trid(dispatch_write_trids[i], noc_index);
     }
 #else
     noc_async_write_barrier();
@@ -184,8 +188,8 @@ FORCE_INLINE void dispatch_write_barrier() {
 // Wait for all of dispatch_d's writes to be sent, i.e. to have read their source data.
 FORCE_INLINE void dispatch_writes_flushed() {
 #ifdef DISPATCH_PER_TRID_WRITE_BARRIERS
-    for (uint32_t trid : dispatch_write_trids) {
-        noc_async_write_flushed_with_trid(trid, noc_index);
+    for (uint32_t i = 0; i < num_dispatch_write_trids; i++) {
+        noc_async_write_flushed_with_trid(dispatch_write_trids[i], noc_index);
     }
 #else
     noc_async_writes_flushed();
