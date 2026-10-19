@@ -180,7 +180,7 @@ void check_top_level(
         keys_of(manifest),
         (std::set<std::string>{
             "manifest_version", "kind", "run", "fabric_context", "vocabulary", "archs", "enums", "meshes"}));
-    EXPECT_EQ(keys_of(manifest.at("vocabulary")), (std::set<std::string>{"categories", "kinds"}));
+    EXPECT_EQ(keys_of(manifest.at("vocabulary")), (std::set<std::string>{"categories", "kinds", "z_port_roles"}));
     EXPECT_EQ(manifest.at("manifest_version"), FABRIC_MANIFEST_VERSION);
     EXPECT_EQ(manifest.at("kind"), "fabric_manifest");
     EXPECT_GE(std::filesystem::last_write_time(manifest_path), suite_start);
@@ -297,6 +297,8 @@ void check_chips(const json& manifest) {
                 chip.at("asic_id"), fmt::format("0x{:016x}", *control_plane().get_asic_id_from_fabric_node_id(node)));
             // Read from the neighbor graph, not from the builder's per-chip facts the writer uses.
             EXPECT_EQ(chip.at("z_port_role"), lower_enum_name(z_port_role(control_plane(), node)));
+            const auto& roles = manifest.at("vocabulary").at("z_port_roles");
+            EXPECT_NE(std::ranges::find(roles, chip.at("z_port_role")), roles.end()) << chip.at("z_port_role");
         }
         EXPECT_EQ(keys_of(chips), expected_keys);
     }
