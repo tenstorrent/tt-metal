@@ -31,12 +31,12 @@ use M; timeout 900 python3 -m pytest -q -p no:cacheprovider -o addopts= "$(head 
 elfsum() { for e in $(ls $1/*/kernels/*/*/trisc*/*.elf 2>/dev/null | grep -i tiliz); do $OBJ -O binary -j .text "$e" /tmp/e.bin 2>/dev/null && md5sum < /tmp/e.bin | cut -c1-10; done | sort | md5sum | cut -c1-10; }
 RV=$(echo $1 | tr ' ' '\n' | tac | tr '\n' ' ')
 r=0
-for blk in 1 2; do for a in $1 $RV; do
+for blk in ${OL_BLOCKS:-1 2}; do for a in ${OL_ARMS:-$1 $RV}; do
   r=$((r+1)); use $a; o=$OUT/${a}_r$r; mkdir -p $o; t0=$(date +%s)
   timeout -s INT -k 60 1500 python3 -m tracy -r -p --no-web-server -o $o $S/ol/run_nodes.py > $o.log 2>&1
   echo "== run $r $a rc=$? $(( $(date +%s) - t0 )) s: $(grep -aE '[0-9]+ (passed|failed)' $o.log | tail -1)"
   grep -a -m3 -E '^(FAILED|ERROR)' $o.log | cut -c1-200
-  grep -aqE '[0-9]+ passed' $o.log || { echo "== log errors $a r$r"; grep -a -m12 -E "error|Error|FATAL|THROW|Fatal" $o.log | cut -c1-300; }
+  grep -aqE '[0-9]+ passed' $o.log || { echo "== log errors $a r$r"; grep -a -B30 -m1 "Fatal Python error" $o.log | grep -a -v "^  File" | head -24 | cut -c1-300; }
   python3 $S/ol/sum_op19.py $o $a $r
   echo "RAB ELF $a r$r $(elfsum $TT_METAL_CACHE) $(ls -d $TT_METAL_CACHE/*/kernels/*/* 2>/dev/null | grep -ci tiliz) tilize builds"
 done; done
