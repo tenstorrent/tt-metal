@@ -6,6 +6,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
 #include "high_bw_all_gather.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -140,6 +141,23 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("prefix_only") = false,
         nb::arg("progress_tensor") = nb::none(),
         nb::arg("push_runs_tensor") = nb::none());
+
+    ttnn::bind_function<"sparse_push_plan", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            PROTOTYPE. On-device plan for the sparse KV push, from one requester's top-k indices (per device uint32
+            row-major [1, 1, rows, topk], 0xFFFFFFFF = masked). Returns ``[table, compact_indices]``: the plan table
+            (uint32 [1, 1, pages, 1024]) to all-gather for the owners, and the indices rewritten to slots in the
+            requester's compact buffer.
+        )doc",
+        &sparse_push_plan,
+        nb::arg("indices").noconvert(),
+        nb::kw_only(),
+        nb::arg("num_devices"),
+        nb::arg("stripe_chunk"),
+        nb::arg("max_rows"),
+        nb::arg("pages_per_packet"),
+        nb::arg("banks"));
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail

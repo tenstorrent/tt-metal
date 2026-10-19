@@ -5,6 +5,7 @@
 #include "high_bw_all_gather.hpp"
 
 #include "device/high_bw_all_gather_device_operation.hpp"
+#include "device/sparse_push_plan_device_operation.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
@@ -52,6 +53,16 @@ Tensor high_bw_all_gather(
         prefix_only,
         progress_tensor,
         push_runs_tensor);
+}
+
+std::vector<Tensor> sparse_push_plan(
+    const Tensor& indices,
+    uint32_t num_devices,
+    uint32_t stripe_chunk,
+    uint32_t max_rows,
+    uint32_t pages_per_packet,
+    uint32_t banks) {
+    return ttnn::prim::sparse_push_plan(indices, num_devices, stripe_chunk, max_rows, pages_per_packet, banks);
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
