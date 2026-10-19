@@ -9,7 +9,7 @@ import sys
 import torch
 
 import ttnn
-from models.common.utility_functions import print_diff_argmax, skip_for_blackhole
+from models.common.utility_functions import print_diff_argmax
 import pytest
 from loguru import logger
 
@@ -168,7 +168,6 @@ def test_concat_with_program_cache(
     run_concat(shapes, dim, device, layout, dtype, input_mem_config, output_mem_config)
 
 
-@skip_for_blackhole("Alignment issue on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shape, shard_shape, output_shard_shape, shard_grid",
     (

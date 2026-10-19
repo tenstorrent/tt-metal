@@ -17,7 +17,7 @@ import pytest
 import torch
 
 import ttnn
-from tt_py_test_utils_common.utility_functions import comp_pcc, tt2torch_tensor, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import comp_pcc, tt2torch_tensor
 
 
 @pytest.fixture
@@ -151,7 +151,6 @@ def _refs_sharded(A, batch, seq_len, head_dim, num_q_heads, num_kv_heads):
     return ref_q, ref_k, ref_v
 
 
-@skip_for_blackhole("L1 and Circular buffers are crashing on BH, see #12349")
 @pytest.mark.parametrize("num_q_heads, num_kv_heads", [(16, 8), (8, 8)], ids=["q_gt_kv", "q_eq_kv"])
 def test_nlp_cqkv_sharded_addr_change_on_hit(device, isolate_program_cache, num_q_heads, num_kv_heads):
     """Sharded factory: same config twice with re-allocated buffers -> 1 entry, all outputs correct.
