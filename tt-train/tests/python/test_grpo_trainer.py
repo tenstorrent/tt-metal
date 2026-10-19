@@ -188,7 +188,8 @@ def patch_llama_weight_loading(monkeypatch):
 
 
 @pytest.mark.requires_device
-def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
+@pytest.mark.parametrize("lr_scheduler_type, use_clip_grad_norm", [("constant", False), ("cosine", True)])
+def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path, lr_scheduler_type, use_clip_grad_norm):
     """One full GRPO optimizer step on a tiny random-init Llama.
 
     Asserts the loop reaches every callback hook, produces finite metrics,
@@ -227,6 +228,8 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
         max_completion_length=4,
         num_generations=2,
         warmup_steps=0,
+        lr_scheduler_type=lr_scheduler_type,
+        use_clip_grad_norm=use_clip_grad_norm,
     )
 
     tokenizer = completer.tokenizer
@@ -367,3 +370,53 @@ def test_capitals_one_by_one_equals_single_batch():
     )
 
     ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+_HOST_GRPO_CONFIG = dict(
+    epsilon=0.2,
+    per_device_train_batch_size=4,
+    num_iterations=1,
+    gradient_accumulation_steps=1,
+    logging_steps=1,
+    output_dir="",
+    checkpointing=False,
+    checkpoint_interval=999,
+    prompts_to_train=2,
+    temperature=1.0,
+    max_completion_length=4,
+    num_generations=2,
+    warmup_steps=0,
+)
+
+
+@pytest.mark.parametrize("lr_scheduler_type", ["constant", "constant_with_warmup", "cosine", "cosine_with_min_lr"])
+def test_grpo_config_accepts_trl_lr_scheduler_types(lr_scheduler_type):
+    cfg = GRPOConfig(**_HOST_GRPO_CONFIG, lr_scheduler_type=lr_scheduler_type)
+    assert cfg.lr_scheduler_type == lr_scheduler_type
+
+
+@pytest.mark.parametrize(
+    "override, message",
+    [
+        ({"lr_scheduler_type": "linear"}, "'lr_scheduler_type' must be one of"),
+        ({"min_lr_rate": 1.5}, r"'min_lr_rate' must be in \[0.0, 1.0\]"),
+        ({"use_clip_grad_norm": True, "clip_grad_norm_max_norm": 0.0}, "'clip_grad_norm_max_norm' must be > 0"),
+    ],
+)
+def test_grpo_config_rejects_invalid_lr_and_clip(expect_error, override, message):
+    with expect_error(ValueError, message):
+        GRPOConfig(**{**_HOST_GRPO_CONFIG, **override})
+
+
+def test_validate_clip_grad_norm_rejects_sharded_params(monkeypatch, expect_error):
+    from types import SimpleNamespace
+
+    from ttml.common.utils import validate_clip_grad_norm
+
+    class _Model:
+        def parameters(self):
+            return {"w": object()}
+
+    monkeypatch.setattr(ttml.Sharding, "from_tensor", lambda tensor: SimpleNamespace(is_fully_replicated=False))
+    with expect_error(ValueError, "not supported with sharded parameters"):
+        validate_clip_grad_norm(_Model())
