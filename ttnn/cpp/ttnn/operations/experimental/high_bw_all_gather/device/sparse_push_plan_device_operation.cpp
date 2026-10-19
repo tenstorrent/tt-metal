@@ -5,6 +5,7 @@
 #include "sparse_push_plan_device_operation.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <set>
 
 #include <tt-metalium/host_api.hpp>
@@ -15,8 +16,9 @@ namespace ttnn::operations::experimental::high_bw_all_gather {
 
 namespace plan_detail {
 
-constexpr uint32_t kMaxCores = 64;
-constexpr uint32_t kBlockAlign = 64;  // keeps every core's word / byte / count range 64 B aligned
+constexpr uint32_t kMaxCores = 120;
+constexpr uint32_t kBlockAlign = 16;  // keeps every core's word / byte / count range 16 B aligned for L1 reads
+constexpr uint32_t kSegments = 4;     // work units per index row
 enum PlanCb : uint32_t { kImage = 0, kRow = 1, kPre = 2, kScratch = 3 };
 
 uint32_t round_up(uint32_t x, uint32_t m) { return (x + m - 1) / m * m; }
@@ -77,11 +79,13 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
     const auto layout = SparsePushPlanLayout::make(attrs.max_rows, attrs.stripe_chunk);
     const uint32_t rows = indices.padded_shape()[2];
     const uint32_t topk = indices.padded_shape()[3];
-    const uint32_t row_bytes = topk * sizeof(uint32_t);
+    const uint32_t segs = topk % (kSegments * 16) == 0 ? kSegments : 1;  // segments stay 64 B aligned
+    const uint32_t seg_len = topk / segs;
+    const uint32_t units = rows * segs;
 
     auto* device = indices.device();
     const auto grid = device->compute_with_storage_grid_size();
-    const uint32_t cores = std::min<uint32_t>({kMaxCores, grid.x * grid.y, std::max(rows, 1u)});
+    const uint32_t cores = std::min<uint32_t>({kMaxCores, grid.x * grid.y, std::max(units, 1u)});
     const auto core_list = tt::tt_metal::grid_to_cores(cores, grid.x, grid.y, true);
     std::set<CoreRange> ranges;
     for (const auto& c : core_list) {
@@ -102,9 +106,10 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
         });
     };
     add_cb(kImage, layout.pages * SparsePushPlanLayout::kPageWords * sizeof(uint32_t));
-    add_cb(kRow, round_up(row_bytes, 64));
+    add_cb(kRow, round_up(seg_len * sizeof(uint32_t), 64));
     add_cb(kPre, round_up(layout.num_blocks * sizeof(uint32_t), 64));
-    add_cb(kScratch, round_up(blocks_per_core * (attrs.stripe_chunk / 32) * sizeof(uint32_t), 64));
+    // Reduce scratch: one slot per other core holding its copy of this core's block range.
+    add_cb(kScratch, round_up(std::max(cores - 1, 1u) * blocks_per_core * (attrs.stripe_chunk / 32) * 4, 64));
 
     auto add_semaphore = [&]() {
         const auto id = static_cast<uint32_t>(desc.semaphores.size());
@@ -133,6 +138,7 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
         arrive_sem,
         go_sem,
         SparsePushPlanLayout::kMagic,
+        seg_len,
     };
     tt::tt_metal::TensorAccessorArgs(idx_buf).append_to(ct);
     tt::tt_metal::TensorAccessorArgs(table_buf).append_to(ct);
@@ -144,6 +150,9 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
     kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     kernel.core_ranges = all_cores;
     kernel.compile_time_args = std::move(ct);
+    if (std::getenv("SPARSE_PUSH_PLAN_TIMING")) {
+        kernel.defines.emplace_back("SPARSE_PUSH_PLAN_TIMING", "1");
+    }
     kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default};
 
@@ -153,10 +162,10 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
         core_xy.push_back(phys.x);
         core_xy.push_back(phys.y);
     }
-    const uint32_t rows_per_core = (rows + cores - 1) / cores;
+    const uint32_t units_per_core = (units + cores - 1) / cores;
     for (uint32_t i = 0; i < cores; ++i) {
-        const uint32_t r0 = std::min(rows, i * rows_per_core);
-        const uint32_t r1 = std::min(rows, r0 + rows_per_core);
+        const uint32_t r0 = std::min(units, i * units_per_core);
+        const uint32_t r1 = std::min(units, r0 + units_per_core);
         tt::tt_metal::KernelDescriptor::RTArgList rt;
         rt.push_back(idx_buf);
         rt.push_back(table_buf);
@@ -164,11 +173,9 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
         rt.push_back(i);
         rt.push_back(r0);
         rt.push_back(r1 - r0);
-        rt.push_back(core_xy[0]);
-        rt.push_back(core_xy[1]);
-        rt.append(core_xy);
         kernel.emplace_runtime_args(core_list[i], rt);
     }
+    kernel.common_runtime_args = {core_xy.begin(), core_xy.end()};
     desc.kernels.push_back(std::move(kernel));
     return desc;
 }
