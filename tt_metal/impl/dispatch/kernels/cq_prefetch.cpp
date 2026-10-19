@@ -22,6 +22,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_prefetch.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_trids.hpp"
 #include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
 #include "api/debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
@@ -337,7 +338,7 @@ struct DispatchSRelayInlineState {
 
 struct PrefetchExecBufState {
     // NoC transaction ID for exec_buf DRAM reads into cmddat_q
-    static constexpr uint32_t READ_TRID = 1U;
+    static constexpr uint32_t READ_TRID = cq_trids::PREFETCH_EXEC_BUF_READ;
 
     uint32_t page_id;
     uint32_t base_addr;
@@ -585,7 +586,7 @@ FORCE_INLINE uint32_t read_from_pcie(
     noc_async_read_pcie(host_src_addr, dst_addr, size);
 #endif
     // Avoid leaking this trid to unrelated reads.
-    noc_async_read_set_trid(0U);
+    noc_async_read_set_trid(cq_trids::DEFAULT);
     pending_read_size = needed_bytes;
     pcie_read_ptr += size;
 #if ENABLE_PREFETCH_DPRINTS
@@ -666,13 +667,11 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
     static uint32_t inflight_count = 0U;
     static uint32_t inflight_head = 0U;
 
-    // NoC read transaction IDs used by the prefetcher:
-    //   0                                default
-    //   PrefetchExecBufState::READ_TRID  exec_buf DRAM reads (1)
-    //   PREFETCH_TRIDS                   in-flight fetch_q reads (2-5)
-    //   RELAY_LINEAR_TRIDS               relay_linear scratch DB halves (6-7)
-    // Keep TRIDs unique across in-flight reads so retirement barriers only wait for the oldest read.
-    static constexpr uint32_t MIN_TRID = PrefetchExecBufState::READ_TRID + 1U;
+    // In-flight fetch_q reads each get their own trid (see cq_trids.hpp for the full allocation), so retirement
+    // barriers only wait for the oldest read.
+    static_assert(
+        cq_trids::PREFETCH_FETCH_Q_READ_COUNT == tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS);
+    static constexpr uint32_t MIN_TRID = cq_trids::PREFETCH_FETCH_Q_READ_BASE;
     static constexpr std::array<uint32_t, tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS>
         PREFETCH_TRIDS = {{
             MIN_TRID,
@@ -1829,11 +1828,12 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     // DPRINT("relay_linear: cmd_ptr={} length={} read_addr={} noc_xy_addr={}\n", cmd_ptr, wlength, read_addr,
     // noc_xy_addr);
 
-    // TRIDs for the two scratch DB halves (unique from the others, see the table in fetch_q_get_cmds).
+    // TRIDs for the two scratch DB halves (unique from the others, see cq_trids.hpp).
     // Each TRID is barriered before the next read to the same half, so the max outstanding
     // per TRID is ceil(scratch_db_half_size / NOC_MAX_BURST_SIZE).
     static_assert((scratch_db_half_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE <= NOC_MAX_TRANSACTION_ID_COUNT);
-    static constexpr uint32_t RELAY_LINEAR_TRIDS[2] = {6U, 7U};
+    static constexpr uint32_t RELAY_LINEAR_TRIDS[2] = {
+        cq_trids::PREFETCH_RELAY_LINEAR_READ[0], cq_trids::PREFETCH_RELAY_LINEAR_READ[1]};
 
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
@@ -1886,7 +1886,7 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
     DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
-    noc_async_read_set_trid(0U);
+    noc_async_read_set_trid(cq_trids::DEFAULT);
 
     // Clear the host address bits this relay leaves in TARG_ADDR_MID. On-chip reads sharing read_cmd_buf do
     // not program MID, so they would inherit them.
@@ -2017,7 +2017,7 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
 
     // set transaction ID to 0 for other noc read to not use READ_TRID
     // to remove unnecessary barrier delay
-    noc_async_read_set_trid(0);
+    noc_async_read_set_trid(cq_trids::DEFAULT);
     // Ensure reads receive the updated data.
     invalidate_l1_cache();
 }
@@ -2763,7 +2763,8 @@ uint32_t process_relay_linear_h_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data
     // Each TRID is barriered before the next read to the same half, so the max outstanding
     // per TRID is ceil(scratch_db_half_size / NOC_MAX_BURST_SIZE).
     static_assert((scratch_db_half_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE <= NOC_MAX_TRANSACTION_ID_COUNT);
-    static constexpr uint32_t RELAY_LINEAR_TRIDS[2] = {6U, 7U};
+    static constexpr uint32_t RELAY_LINEAR_TRIDS[2] = {
+        cq_trids::PREFETCH_RELAY_LINEAR_READ[0], cq_trids::PREFETCH_RELAY_LINEAR_READ[1]};
 
     // First step - read into DB0
     uint32_t amt_to_read =
@@ -2812,7 +2813,7 @@ uint32_t process_relay_linear_h_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data
 
     uint32_t amt_to_write = amt_to_read;
     relay_linear_to_downstream<true>(downstream_data_ptr, scratch_write_start_addr, amt_to_write);
-    noc_async_read_set_trid(0U);
+    noc_async_read_set_trid(cq_trids::DEFAULT);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // Clear the host address bits this relay leaves in TARG_ADDR_MID. On-chip reads sharing read_cmd_buf do
