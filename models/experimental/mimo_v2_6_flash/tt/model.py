@@ -325,6 +325,8 @@ class TtMiMoModel:
                 zero_output(self.plan, self.cfg.hidden_size),
             )
         for i, layer in enumerate(self.layers):
+            if layer.attn_reduce is None and self.decode_users <= 4 and layer.can_compact_attention():
+                layer.set_compact_attention(self.plan)
             if layer.fused_norm is not None or not layer.can_fuse_norms():
                 continue
             nxt = self.layers[i + 1].input_norm if i + 1 < len(self.layers) else self.final_norm

@@ -13,6 +13,7 @@ import ttnn
 from .attention import TtMiMoAttention
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config
 from .moe import TtMiMoMoE
+from .moe_stream import ReduceExpand, is_dram_interleaved
 
 
 class TtRMSNorm:
@@ -176,6 +177,8 @@ class TtMiMoDecoderLayer:
         else:
             self.mlp = TtMiMoDenseMLP(plan, layer_idx, w.get("mlp"), cache_dir=cache_dir, weight_dtype=mlp_dtype)
         self.fused_norm = None
+        self.hidden = cfg.hidden_size
+        self.attn_reduce = None  # set_compact_attention
 
     def can_fuse_norms(self):
         return self._compact_decode() and self.mlp.reduce_expand.can_norm
@@ -193,6 +196,25 @@ class TtMiMoDecoderLayer:
             "post": (red.compact_gamma(plan, self.post_norm.torch_weight()), buffers[1], self.post_norm.eps),
             "next": (red.compact_gamma(plan, next_norm.torch_weight()), buffers[0], next_norm.eps),
         }
+
+    def can_compact_attention(self):
+        """A global layer that does not decode compactly (the dense layer 0) can still reduce its attention block on
+        the users' rows (see set_compact_attention)."""
+        return not self._compact_decode() and self.attn.split_users and self.attn.o_stream is not None
+
+    def set_compact_attention(self, plan):
+        """Decode users in rows 0-3: the attention block reduces like a compact layer's (o stream into compact rows, row
+        all-gather, ReduceExpand: chip-ordered fp32 sum, one bf16 rounding, plus the residual) instead of the o linear,
+        all_reduce and add. The chip pair splits the users by slot parity, so only one chip of each pair has a user's
+        row. The all_reduce's ring adds those rows with bf16 partial sums in an order that depends on the parity, so a
+        user's logits depended on its slot; the chip-ordered sum adds them in the same order for both parities."""
+        cfg = ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=False,
+        )
+        self.attn_reduce = ReduceExpand(plan, self.hidden, plan.tp, cfg)
 
     def _ffn(self, x, token_mask, decode=False):
         h = self.post_norm(x)
@@ -234,8 +256,26 @@ class TtMiMoDecoderLayer:
         """Decode attention block: input norm, attention (with its row all-reduce), residual add."""
         # The normed row only feeds the qkv matmul's L1 reshard: keep it in L1.
         h = self.input_norm(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-        attn = self.attn.forward_decode(h, rot_mats[self.is_swa], cur_pos, self._page_table(page_table), kv_cache)
+        compact = self.attn_reduce is not None
+        attn = self.attn.forward_decode(
+            h, rot_mats[self.is_swa], cur_pos, self._page_table(page_table), kv_cache, compact=compact
+        )
         h.deallocate(True)
+        if compact:
+            # attn: the chips' compact rows, all-gathered; x2 = x + their chip-ordered sum.
+            x2 = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, TILE, self.hidden]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                self.attn.plan.mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+            res = x if is_dram_interleaved(x) else ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            self.attn_reduce(attn, x2, residual=res)
+            if res is not x:
+                res.deallocate(True)
+            attn.deallocate(True)
+            return x2
         x2 = ttnn.add(x, attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn.deallocate(True)
         return x2
