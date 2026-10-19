@@ -13,6 +13,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <internal/fabric.hpp>
