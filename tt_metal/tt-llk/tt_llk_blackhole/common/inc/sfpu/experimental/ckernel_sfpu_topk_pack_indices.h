@@ -1,0 +1,56 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include "sfpi.h"
+
+namespace ckernel::sfpu
+{
+
+/**
+ * @brief Fuse BF16-expanded scores with supplied low-16-bit indices in FP32 DEST.
+ * @tparam K: Number of entries, 512, 1024, or 2048.
+ * @param scores: First score tile in DEST.
+ * @param indices: First raw UInt32 index tile in DEST.
+ * @param output: First packed output tile in DEST.
+ * @param score_half: For K=512, select the first or second 512-element score half.
+ * @note Use the shared SFPU params wrapper with VectorMode::RC_custom and initialize
+ *       the SFPU before calling. Load indices without numeric conversion. Output may
+ *       alias either input at the same start; other overlapping regions are unsupported.
+ *       UINT32_MAX maps to negative-infinity padding. K=512 also clears the output tail.
+ */
+template <std::uint32_t K>
+inline void _topk_xl_pack_supplied_indices_(const std::uint32_t scores, const std::uint32_t indices, const std::uint32_t output, const std::uint32_t score_half)
+{
+    static_assert(K == 512 || K == 1024 || K == 2048);
+    // Each SFPI slot addresses 32 elements (two physical DEST rows).
+    constexpr std::uint32_t tile_slots = 32;
+    constexpr std::uint32_t half_slots = tile_slots / 2;
+    const std::uint32_t score_offset   = scores * tile_slots + (K == 512 ? score_half * half_slots : 0);
+    for (std::uint32_t i = 0; i < K / 32; ++i)
+    {
+        sfpi::vInt score  = sfpi::dst_reg[score_offset].mode<sfpi::DataLayout::I32>();
+        sfpi::vInt id     = sfpi::dst_reg[indices * tile_slots].mode<sfpi::DataLayout::I32>();
+        sfpi::vInt packed = (score & 0xffff0000u) | (id & 0xffffu);
+        v_if (id == -1)
+        {
+            packed = static_cast<std::int32_t>(0xff80ffffu);
+        }
+        v_endif;
+        sfpi::dst_reg[output * tile_slots].mode<sfpi::DataLayout::I32>() = packed;
+        sfpi::dst_reg++;
+    }
+    if constexpr (K == 512)
+    {
+        for (std::uint32_t i = 0; i < half_slots; ++i)
+        {
+            sfpi::dst_reg[output * tile_slots].mode<sfpi::DataLayout::I32>() = sfpi::vInt(static_cast<std::int32_t>(0xff80ffffu));
+            sfpi::dst_reg++;
+        }
+    }
+}
+
+} // namespace ckernel::sfpu
