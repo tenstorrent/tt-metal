@@ -25,6 +25,17 @@ TABLE = {
         "owner rule: HiFi4 for every matmul (mHC projection, ...); lower only by an owner perf pick",
     ),
     "FP32_DEST_ACC": Setting(True, None, "owner rule: fp32 accumulation in every matmul / reduction"),
+    "ATTN_FIDELITY": Setting(
+        "HiFi2",
+        ("HiFi4", "HiFi2"),
+        "the attention-side matmuls' fidelity (tt/common.py:attn_compute_config; P.7, owner comparison 2026-10-18 of "
+        "Marko Staletovic's GLM-5.3 attn_fidelity HiFi2): the attention input projection [wq_a | wkv] (tt/q_a.py), "
+        "wq_b, the window / compressed sparse_sdpa programs, wo_a, wo_b (tt/attention.py), the indexer's weights_proj / "
+        "wq_b and ring score (tt/indexer.py), the compressor's [wkv | wgate] and wk (tt/compressor.py). mHC, norms, "
+        "router, experts, shared expert keep MATMUL_FIDELITY; fp32 DEST (FP32_DEST_ACC) everywhere. HiFi4 = the "
+        "bring-up precision (default, max precision); HiFi2 = GLM-5.3's (HiFi2 matmuls read ~0.28 % low, K-25), "
+        "judged end to end only",
+    ),
     "ATTN_IN_MM": Setting(
         "fpu",
         ("fpu", "exact"),
@@ -236,6 +247,7 @@ TABLE = {
 MAX_PRECISION = {
     "MATMUL_FIDELITY": "HiFi4",
     "FP32_DEST_ACC": True,
+    "ATTN_FIDELITY": "HiFi4",  # P.7: HiFi2 (GLM-5.3's attention fidelity) is judged end to end only
     "HC_TP_SUM": "gather_add",
     "HC_SINKHORN": "sfpu_fp32",  # FIX.4: the official kernel computes the Sinkhorn in fp32
     "ENGRAM_KV_QDQ": "qdq",

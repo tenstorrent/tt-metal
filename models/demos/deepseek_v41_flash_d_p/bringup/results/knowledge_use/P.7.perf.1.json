@@ -1,0 +1,69 @@
+{
+ "overseer": [],
+ "used": [
+  {
+   "id": "K-25",
+   "how": "explains the HiFi2 attention bias (bf16 sdpa operands truncated); HiFi2 kept to the attention-side configs only, experts / shared expert / mHC stay MATMUL_FIDELITY",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-42",
+   "how": "explains why q_a (fp8 x fp8 operands) is bit-identical at HiFi2: 4 significant bits fit the fidelity phases",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-16",
+   "how": "the comparison-only exact paths (ExactMatmul, window_exact) keep compute_config (HiFi4), not ATTN_FIDELITY",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "every frozen test and profile run with --no-precompile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD on every run",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-58",
+   "how": "read the profile metrics (device_ms_total, pcc_chunk_out) from generated/bringup_adhoc/P.7.json",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "which ops HiFi2 leaves bit-identical (fp8 x fp8 operands) vs biased (bf16 sdpa operands) in this model: now DS41-68"
+ ],
+ "cited_only": [
+  "DS41-68"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.7",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-18T22:27:18",
+  "head": "40c8592e869",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.7.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/common.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

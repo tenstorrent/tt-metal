@@ -29,6 +29,21 @@ def compute_config(mesh):
     )
 
 
+def attn_compute_config(mesh):
+    """The attention-side matmuls' config (P.7, owner comparison): fidelity ATTN_FIDELITY (default HiFi4), fp32
+    accumulation as everywhere (FP32_DEST_ACC). Used by the attention input projection [wq_a | wkv] (tt/q_a.py), wq_b,
+    the window / sparse sparse_sdpa, wo_a, wo_b (tt/attention.py), the indexer's weights_proj / wq_b and its ring score
+    (tt/indexer.py) and the compressor's projections (tt/compressor.py). mHC, norms, router, experts, shared expert and
+    every non-matmul op keep compute_config (MATMUL_FIDELITY)."""
+    return ttnn.init_device_compute_kernel_config(
+        mesh.arch(),
+        math_fidelity=getattr(ttnn.MathFidelity, settings.get("ATTN_FIDELITY")),
+        math_approx_mode=False,
+        fp32_dest_acc_en=bool(settings.get("FP32_DEST_ACC")),
+        packer_l1_acc=False,
+    )
+
+
 def fpu_weight(w: torch.Tensor) -> torch.Tensor:
     """An fp32 matmul weight (matmul in1) as the FPU will multiply it (load time, host). The unpacker reads fp32 at
     TF32 (10 mantissa bits) by truncation (K-30), and at HiFi4 the FPU multiplies only 9 explicit mantissa bits of
