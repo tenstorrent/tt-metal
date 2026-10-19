@@ -241,12 +241,25 @@ def test_chunk_perf(mesh_device):
     ttnn.deallocate(run())  # compile
     ttnn.synchronize_device(mesh_device)
     walls = []
+    spy = None
+    if os.environ.get("GLM_CP_SPY"):  # (py-spy --native over the eager iterations: where the host time goes)
+        import signal
+        import subprocess
+
+        spy = subprocess.Popen(
+            ["py-spy", "record", "--format", "raw", "-r", "250", "-o", os.environ["GLM_CP_SPY"], "-p", str(os.getpid())]
+            + (["--native"] if os.environ.get("GLM_CP_SPY_NATIVE") == "1" else ["--nonblocking"])
+        )
+        time.sleep(2)
     for _ in range(iters):
         t0 = time.perf_counter()
         y = run()
         ttnn.synchronize_device(mesh_device)
         walls.append((time.perf_counter() - t0) * 1e3)
         ttnn.deallocate(y)
+    if spy is not None:
+        spy.send_signal(signal.SIGINT)
+        spy.wait(timeout=300)
     y_eager = run()
     ttnn.synchronize_device(mesh_device)
     ref = host(y_eager)

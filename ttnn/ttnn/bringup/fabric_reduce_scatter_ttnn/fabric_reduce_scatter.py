@@ -523,7 +523,8 @@ def _schedule(chips, coord, j, d, ring):
     of 0 .. p-1; a line end starts every chain (lead = all), any other position relays every block (lead = 0).
     Ring: each block's partials arrive at its owner forward over a = G // 2 chips and backward over G - 1 - a, so a
     port sends a (or G - 1 - a) blocks; the first, farthest one starts its chain here (lead = 1), the rest are relays.
-    The last block a port sends is the receiver's own: forward it lands in the receiver's own slot, backward in slot G."""
+    The last block a port sends is the receiver's own: forward it lands in the receiver's own slot, backward in slot G.
+    """
     rg = chips[coord]["rings"][j]
     G, p = chips[coord]["G"], rg["p"]
     peer = rg["next"] if d == "fwd" else rg["prev"]
@@ -616,7 +617,17 @@ def create_mesh_program_descriptor(
             expect_in = _incs(relays * full, inc_every)
             send_ready = _needs_ready(chips, coord, j, d)
             rc = virt(chips[peer]["ports"][(j, _OPP[d], l)]) if send_ready else None
-            args = [scr_addr, blk_pages, lane, lanes, sem_a, sem_a if d == "fwd" else sem_b, expect_in, full, ready_addr]
+            args = [
+                scr_addr,
+                blk_pages,
+                lane,
+                lanes,
+                sem_a,
+                sem_a if d == "fwd" else sem_b,
+                expect_in,
+                full,
+                ready_addr,
+            ]
             args += [1, rc.x, rc.y] if send_ready else [0, 0, 0]
             if rg.get(f"{d}_links") and blocks:
                 pc = virt(chips[peer]["ports"][(j, d, l)])
@@ -651,8 +662,12 @@ def create_mesh_program_descriptor(
             lane, h = divmod(i, 2)
             rg = ch["rings"][lane // num_links]
             # an arrival per direction where a chain ends here: a ring always (G >= 3), a line from each side it has
-            has_f = int(rg["prev"] is not None and bool(_schedule(chips, rg["prev"], lane // num_links, "fwd", ring)[0]))
-            has_b = int(rg["next"] is not None and bool(_schedule(chips, rg["next"], lane // num_links, "bwd", ring)[0]))
+            has_f = int(
+                rg["prev"] is not None and bool(_schedule(chips, rg["prev"], lane // num_links, "fwd", ring)[0])
+            )
+            has_b = int(
+                rg["next"] is not None and bool(_schedule(chips, rg["next"], lane // num_links, "bwd", ring)[0])
+            )
             first, fstride = lane + h * lanes, 2 * lanes
             n = _chunks_per_shard(blk_pages, first, fstride, num_banks, run_pages)
             fr_rt[core.x][core.y] = [
@@ -731,7 +746,7 @@ def create_mesh_program_descriptor(
     return mesh_desc
 
 
-_SEM_CACHE, _SCRATCH_CACHE, _PLAN_CACHE = {}, {}, {}
+_SEM_CACHE, _SCRATCH_CACHE, _PLAN_CACHE, _DESC_CACHE = {}, {}, {}, {}
 
 
 def _with_final_cores(mesh_device, chips, num_links):
@@ -828,7 +843,22 @@ def fabric_reduce_scatter(
         ttnn.synchronize_device(mesh_device)  # every counter zero before any chip's first call increments a neighbour's
         _SEM_CACHE[ckey] = (mesh_device, sems)
     sems = tuple(int(ttnn.get_global_semaphore_address(s)) for s in _SEM_CACHE[ckey][1])
+    # (the descriptor of these buffers: its runtime args are their addresses; rebuilding it was ~1 ms of host a call)
+    dkey = key + (
+        tuple(int(t.buffer_address()) for t in (input_tensor, scratch, output)),
+        tuple(shape),
+        str(input_tensor.dtype),
+        sems,
+        ttnn.get_tt_fabric_max_payload_size_bytes(),
+    )
+    hit = _DESC_CACHE.get(dkey)
+    if hit is not None and hit[0] is mesh_device:
+        return ttnn.generic_op([input_tensor, scratch, output], hit[1])
     desc = create_mesh_program_descriptor(
         mesh_device, input_tensor, scratch, output, sems, chips, num_links=num_links, chips_ring=ring
     )
+    ttnn.freeze_program_hashes(desc)  # (hash stored once: not re-hashed per call)
+    if len(_DESC_CACHE) >= 256:  # (bounded: callers with per-call outputs at ever new addresses)
+        _DESC_CACHE.pop(next(iter(_DESC_CACHE)))
+    _DESC_CACHE[dkey] = (mesh_device, desc)
     return ttnn.generic_op([input_tensor, scratch, output], desc)

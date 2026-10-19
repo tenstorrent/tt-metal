@@ -928,6 +928,7 @@ def create_mesh_program_descriptor(
 
 
 _SEM_CACHE = {}
+_PLAN_CACHE, _DESC_CACHE = {}, {}
 
 
 def _shard_pages(t):
@@ -999,16 +1000,32 @@ def fabric_all_gather(
     if subdevice_id is not None and sub_core_grid is None:
         raise ValueError("fabric_all_gather: pass the sub-device's cores as sub_core_grid along with subdevice_id")
     mesh_device = input_tensor.device()
-    chips, ring = plan(
-        mesh_device,
-        cluster_axis=cluster_axis,
-        topology=topology,
-        num_links=num_links,
-        placement=placement,
-        scheme=scheme,
-        balance=balance,
-        sub_core_grid=sub_core_grid,
+    pkey = (
+        id(mesh_device),
+        cluster_axis,
+        str(topology),
+        num_links,
+        placement,
+        scheme,
+        balance,
+        None if sub_core_grid is None else str(sub_core_grid),
     )
+    hit = _PLAN_CACHE.get(pkey)  # (the plan of these options: rebuilt every call it was ~0.5 ms of host)
+    if hit is None or hit[0] is not mesh_device:
+        hit = _PLAN_CACHE[pkey] = (
+            mesh_device,
+            plan(
+                mesh_device,
+                cluster_axis=cluster_axis,
+                topology=topology,
+                num_links=num_links,
+                placement=placement,
+                scheme=scheme,
+                balance=balance,
+                sub_core_grid=sub_core_grid,
+            ),
+        )
+    chips, ring = hit[1]
     G = next(iter(chips.values()))["G"]
     _check_dram_interleaved(input_tensor, "input")
     want = output_shape(input_tensor, G, dim)
@@ -1035,6 +1052,22 @@ def fabric_all_gather(
             _SEM_CACHE[key] = (mesh_device, sems)
         sems = _SEM_CACHE[key][1]
     arrival_addr, ready_addr = (int(ttnn.get_global_semaphore_address(x)) for x in sems)
+    # (the descriptor of these buffers: its runtime args are their addresses)
+    dkey = pkey + (
+        int(input_tensor.buffer_address()),
+        int(output.buffer_address()),
+        tuple(input_tensor.shape),
+        str(input_tensor.dtype),
+        str(layout),
+        dim,
+        arrival_addr,
+        ready_addr,
+        desync,
+        ttnn.get_tt_fabric_max_payload_size_bytes(),
+    )
+    hit = _DESC_CACHE.get(dkey)
+    if hit is not None and hit[0] is mesh_device:
+        return ttnn.generic_op([input_tensor, output], hit[1])
     desc = create_mesh_program_descriptor(
         mesh_device,
         input_tensor,
@@ -1045,4 +1078,8 @@ def fabric_all_gather(
         ready_addr=ready_addr,
         desync=desync,
     )
+    ttnn.freeze_program_hashes(desc)  # (hash stored once: not re-hashed per call)
+    if len(_DESC_CACHE) >= 256:  # (bounded: callers with per-call outputs at ever new addresses)
+        _DESC_CACHE.pop(next(iter(_DESC_CACHE)))
+    _DESC_CACHE[dkey] = (mesh_device, desc)
     return ttnn.generic_op([input_tensor, output], desc)

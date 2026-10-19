@@ -1451,3 +1451,12 @@ Device unchanged (traced 2.54 ms at 5120, 1.71 at 2048); untraced back-to-back =
 identical (rel L2 vs CPU / vs ag to 4 digits). Left: ~70-150 us per program on 8 chips (enqueue + per-core args) - the
 next step is fewer programs, not cheaper ones. Tried: keeping arena_fits()'s allocation for alloc_arena (one arena
 allocation a call, 2 -> 1): the routing ops' static CBs then clash with the arena - reverted.
+Whole model (test_layer_perf.py::test_chunk_perf, real weights, ts experts, 45 layers; eager = one sync per chunk):
+| ms per chunk | eager before | + block host fix | + collective descriptor caches | traced |
+| chunk 2048 (S 256) | 580 | 501 | 357 | 243 |
+| chunk 5120 (S 640) | 583 | 493 | 477 | 476 |
+py-spy of the eager chunk after the block fix: the bringup fabric_reduce_scatter (scatter_rows: attention / shared
+expert outputs) rebuilt its plan and whole mesh descriptor in Python every call (~23% of the eager chunk), and
+fabric_all_gather_ttnn the same. Both now cache the plan and the descriptor per buffer-address set (bounded, hash
+frozen). S 640 eager = traced now; S 256 still host bound by ~2.5 ms a layer: plain ttnn op calls (59% of samples),
+mostly KDA attention's many small ops (~27%).
