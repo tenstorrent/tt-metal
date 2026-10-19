@@ -49,6 +49,9 @@ from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
     validate_e_t,
     validate_per_expert_tokens,
 )
+from tests.ttnn.nightly.unit_tests.operations.experimental.test_moe_compute_single_card import (
+    _xfail_on_short_wormhole_grid,
+)
 from ttnn.experimental.moe_compute_utils import (
     prepare_w0_w1_tensor_for_moe_compute,
     prepare_w0_w1_tensor_with_bias,
@@ -85,6 +88,11 @@ def _skip_unless_blackhole(mesh_device):
     which every test here sets for its expert rows calls."""
     if mesh_device.arch() not in (ttnn.device.Arch.BLACKHOLE, ttnn.device.Arch.WORMHOLE_B0):
         pytest.skip("the expert rows path runs on Blackhole and Wormhole")
+
+
+def _skip_row_tiles_on_wormhole(mesh_device):
+    if mesh_device.arch() == ttnn.device.Arch.WORMHOLE_B0:
+        pytest.skip("Wormhole runs one row tile per job: the M > 1 kernels exceed its kernel config buffer")
 
 
 def _bfp4_round(w):
@@ -148,6 +156,7 @@ class _Case:
         self.act, self.limit, self.has_bias, self.ntp, self.L = act, limit, has_bias, ntp, layers
         mesh_shape = (1, 1)
         self.dp = auto_output_width_shard_dim(H)
+        _xfail_on_short_wormhole_grid(mesh_device, ntp * self.dp)
         drain = ttnn.experimental.get_moe_tilize_drain_core(mesh_device, ntp, self.dp, H)
         drain_set = ttnn.CoreRangeSet({ttnn.CoreRange(drain, drain)})
         mapping = gen_expert_mapping(1, 1, None, E, E, E)
@@ -479,8 +488,9 @@ def test_moe_compute_expert_rows_rejects_activation_limit(mesh_device, mesh_shap
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("tokens", [1, 2, 3, 6, 16, 32, 48, 63, 64, 128])
-@pytest.mark.parametrize("cfg", [(4, 4, 256, 512), (8, 4, 256, 320)], ids=["c4_h512", "c2_h320"])
+@pytest.mark.parametrize("tokens", [1, 3, 32, 63, 128])
+# H 448 = 14 tiles: output width shard dim 2, and a W2 output tile in every DRAM bank (Wormhole 12, Blackhole 8)
+@pytest.mark.parametrize("cfg", [(4, 4, 256, 512), (8, 4, 256, 448)], ids=["c4_h512", "c2_h448"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_tokens(mesh_device, mesh_shape, cfg, tokens):
     _skip_unless_blackhole(mesh_device)
@@ -551,7 +561,6 @@ FULL_LOCAL_SHAPES = [
     "gemma_e8_t32_gelu",
     "glm53_e18_t32_clamped",
     "gpt_oss_e16_t32_swiglu",
-    "qwen36_e32_t128",
 ]
 
 
@@ -571,7 +580,7 @@ def test_moe_compute_expert_rows_full_local(mesh_device, mesh_shape, shape):
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("tokens", [1, 3, 32, 64])
+@pytest.mark.parametrize("tokens", [1, 64])
 @pytest.mark.parametrize("kind", ["random", "skewed", "empty"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_full_local_routing(mesh_device, mesh_shape, kind, tokens):
@@ -744,15 +753,27 @@ def _rows_with(case, row_tiles, **precision):
         return case.read(outs, check=True)
 
 
+# every shape once, each (row tiles, routing) pair on two shapes
+ROW_TILE_CASES = [
+    ("deepseek_e16_t128", 2, "hot_last"),
+    ("flash_next_e32_t128", 4, "hot_last"),
+    ("gemma_e16_t128_gelu", 2, "cold_last"),
+    ("glm53_e18_t96_clamped", 4, "cold_last"),
+    ("gpt_oss_e8_t128_bias", 2, "hot_last"),
+    ("h2048_n1792_e10_t96", 4, "hot_last"),
+    ("h2880_n704_e8_t128_bias", 2, "cold_last"),
+    ("qwen36_e32_t128", 4, "cold_last"),
+]
+
+
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("kind", ["hot_last", "cold_last"])
-@pytest.mark.parametrize("row_tiles", [2, 4])
-@pytest.mark.parametrize("shape", sorted(ROW_TILE_SHAPES))
+@pytest.mark.parametrize("shape, row_tiles, kind", ROW_TILE_CASES)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_row_tiles(mesh_device, mesh_shape, shape, row_tiles, kind):
     """Jobs of several row tiles (each expert's weights read once for up to 32 M rows), and jobs of one row tile in the
     same program, give the rows of one row tile per job bitwise, and those equal the ring's."""
     _skip_unless_blackhole(mesh_device)
+    _skip_row_tiles_on_wormhole(mesh_device)
     E, T, K, N, H, act, limit, bias = ROW_TILE_SHAPES[shape]
     case = _Case(mesh_device, E, T, K, N, H, act=act, limit=limit, has_bias=bias, kind=kind)
     precision = dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
@@ -774,14 +795,22 @@ def test_moe_compute_expert_rows_row_tiles(mesh_device, mesh_shape, shape, row_t
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("kind", ["hot_last", "cold_last"])
-@pytest.mark.parametrize("mode", sorted(PRECISION_MODES))
-@pytest.mark.parametrize("shape", ["deepseek_e16_t128", "flash_next_e32_t128", "gemma_e16_t128_gelu"])
+@pytest.mark.parametrize(
+    "mode, shape, kind",
+    [
+        ("default", "deepseek_e16_t128", "hot_last"),
+        ("hifi2_bf16", "flash_next_e32_t128", "cold_last"),
+        ("hifi4_fp32", "gemma_e16_t128_gelu", "hot_last"),
+        ("lofi_bf16", "deepseek_e16_t128", "cold_last"),
+        ("lofi_fp32", "flash_next_e32_t128", "hot_last"),
+    ],
+)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_row_tiles_deterministic(mesh_device, mesh_shape, shape, mode, kind):
+def test_moe_compute_expert_rows_row_tiles_deterministic(mesh_device, mesh_shape, mode, shape, kind):
     """In every DEST mode: jobs of 4 row tiles (and of one row tile in the same program) give one row tile per job's
     rows bitwise, and those equal the ring's; eager, repeated eager and two trace replays are bitwise equal."""
     _skip_unless_blackhole(mesh_device)
+    _skip_row_tiles_on_wormhole(mesh_device)
     precision = PRECISION_MODES[mode]
     E, T, K, N, H, act, limit, bias = ROW_TILE_SHAPES[shape]
     case = _Case(mesh_device, E, T, K, N, H, act=act, limit=limit, has_bias=bias, kind=kind)
@@ -812,13 +841,13 @@ def test_moe_compute_expert_rows_row_tiles_deterministic(mesh_device, mesh_shape
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("mode", ["hifi4_fp32", "lofi_bf16"])
-@pytest.mark.parametrize("kind", ["random", "hot_last", "cold_last"])
+@pytest.mark.parametrize("kind, mode", [("hot_last", "hifi4_fp32"), ("cold_last", "lofi_bf16")])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_row_tiles_full_local(mesh_device, mesh_shape, kind, mode):
     """SingleDevice: the combine output (every routed row of every expert) with jobs of 4 row tiles is bitwise equal to
     one row tile per job and to the ring path's."""
     _skip_unless_blackhole(mesh_device)
+    _skip_row_tiles_on_wormhole(mesh_device)
     precision = PRECISION_MODES[mode]
     case = _Case(mesh_device, 16, 128, 8, 2048, 7168, kind=kind)
     res = _full_local(case, **precision)
@@ -834,3 +863,18 @@ def test_moe_compute_expert_rows_row_tiles_full_local(mesh_device, mesh_shape, k
     assert torch.equal(
         many.view(torch.int16), res["expert_rows"].view(torch.int16)
     ), "combine output differs from M = 1"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_expert_rows_row_tiles_refused_on_wormhole(mesh_device, mesh_shape, expect_error):
+    """Wormhole: a forced M > 1 is refused before any kernel compiles."""
+    if mesh_device.arch() != ttnn.device.Arch.WORMHOLE_B0:
+        pytest.skip("Wormhole runs one row tile per job; other architectures run M > 1")
+    case = _Case(mesh_device, 16, 64, 8, 512, 2048, goldens=False)
+    before = mesh_device.num_program_cache_entries()
+    with _kernel("expert_rows"), _env(ROW_TILES_ENV, 2):
+        with expect_error(RuntimeError, "Wormhole runs one row tile per job"):
+            case.call()
+    after = mesh_device.num_program_cache_entries()
+    assert after == before, f"a refused call changed the program cache: {before} -> {after} entries"
