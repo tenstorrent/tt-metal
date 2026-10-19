@@ -910,3 +910,208 @@ def test_gather_schemes_vs_prefix(mesh_device):
         )
     logger.info("\n" + "\n".join(lines))
     mesh_device.remove_sub_device_manager(manager)
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Real 1M top-k with the on-device plan: layer L's sparse_sdpa (sub-device 0) overlapped with layer L+1's push of
+# its prefix rows (sub-device 1), then L+1's remainder push (rows of the current chunk) before its own sparse_sdpa.
+# The plan (sparse_push_plan + table all-gather) runs on the full grid and is timed separately.
+# ---------------------------------------------------------------------------------------------------------
+
+
+@run_for_blackhole()
+@_PERF
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY_GLM], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_sparse_overlap_device_plan(mesh_device):
+    from safetensors.numpy import load_file
+
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import _shard_over_mesh
+
+    if not _TRACE_1M.exists():
+        pytest.skip(f"1M GLM-5.3 trace not found at {_TRACE_1M}")
+    grid = mesh_device.compute_with_storage_grid_size()
+    if (grid.x, grid.y) != (12, 10):
+        pytest.skip(f"needs the 12x10 Galaxy grid, got {grid}")
+    kv_fmt, chunk_global = "fp8", 5120
+    sdpa_grid, gather_grid = _cols(0, 7), _cols(8, 11)
+    n_dev = mesh_device.get_num_devices()
+    links = 2
+    stripe_chunk = chunk_global // n_dev
+    s_local = chunk_global // n_dev
+    prefix_tokens = _TRACE_1M_START
+    cache_tokens = prefix_tokens + chunk_global
+    page_bytes = 704
+    pages_per_packet = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
+    buffer_rows = cache_tokens + n_dev * pages_per_packet * _DRAM_BANKS
+    layers = [int(x) for x in os.environ.get("TOPK_LAYERS", "14,58,62").split(",")]
+
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    shard_seq = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+    cache = _kv_cache(mesh_device, 2, cache_tokens, kv_fmt, shard_seq, seed=2)
+    dense_out = _zero_kv_buffer(mesh_device, cache_tokens, kv_fmt)
+    compact = [_zero_kv_buffer(mesh_device, buffer_rows, kv_fmt) for _ in range(2)]  # layer L, layer L+1
+    q = ttnn.from_torch(
+        torch.randn(1, H, n_dev * s_local, K_DIM).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        mesh_mapper=shard_seq,
+        **common,
+    )
+
+    def scalar(v):
+        return ttnn.from_torch(
+            torch.tensor([[[[v]]]], dtype=torch.int32), dtype=ttnn.uint32, mesh_mapper=replicate, **common
+        )
+
+    user, start = scalar(0), scalar(prefix_tokens)
+    manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([sdpa_grid]), ttnn.SubDevice([gather_grid])], 0)
+    sems = [ttnn.create_global_semaphore(mesh_device, gather_grid, 0, ttnn.BufferType.L1_SMALL) for _ in range(2)]
+    ttnn.synchronize_device(mesh_device)
+
+    def gather_kw(layer_slot):
+        return dict(
+            dim=2,
+            cluster_axis=None,
+            subdevice_id=ttnn.SubDeviceId(1),
+            sub_core_grids=gather_grid,
+            num_links=links,
+            input_batch_index_tensor=user,
+            batch_slot_num_layers=2,
+            batch_slot_layer_idx=layer_slot,
+            ready_semaphore=sems[0],
+            data_valid_semaphore=sems[1],
+        )
+
+    def timed(fn, n=10):
+        fn()
+        ttnn.synchronize_device(mesh_device)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        fn()
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        us = (time.perf_counter() - t0) / n * 1e6
+        ttnn.release_trace(mesh_device, tid)
+        return us
+
+    tables = None
+    lines = [
+        f"GLM-5.3 real top-k, fp8, chunk {chunk_global}, prefix {prefix_tokens} tokens, on-device plan (8x4 TORUS_XY)",
+        f"{'layer':>5} | {'today: sdpa + gather = total':>30} | {'serial push: plan/3 + push + sdpa':>34} | "
+        f"{'overlap: plan/3 + sdpa||prefix + remainder':>44}{'saved':>8}",
+    ]
+    last = None
+    for layer in layers:
+        f = _TRACE_1M / "dsa" / f"dsa_topk_indices_layer_{layer}" / "rows_00000000_00005120.safetensors"
+        natural = next(iter(load_file(str(f)).values())).astype(np.int64).reshape(n_dev, s_local, TOPK)
+        idx_natural = ttnn.from_torch(
+            torch.from_numpy(natural.reshape(1, 1, n_dev * s_local, TOPK).astype(np.int32)),
+            dtype=ttnn.uint32,
+            mesh_mapper=shard_seq,
+            **common,
+        )
+
+        def plan():
+            table, compact_idx = ttnn.experimental.sparse_push_plan(
+                idx_natural,
+                num_devices=n_dev,
+                stripe_chunk=stripe_chunk,
+                max_rows=cache_tokens,
+                pages_per_packet=pages_per_packet,
+                banks=_DRAM_BANKS,
+                chunk_start=start,
+            )
+            _shard_over_mesh(table, mesh_device)
+            ttnn.experimental.high_bw_all_gather(table, dim=2, output_tensor=tables, cluster_axis=None, num_links=links)
+            return compact_idx
+
+        if tables is None:
+            pages = ttnn.experimental.sparse_push_plan(
+                idx_natural,
+                num_devices=n_dev,
+                stripe_chunk=stripe_chunk,
+                max_rows=cache_tokens,
+                pages_per_packet=pages_per_packet,
+                banks=_DRAM_BANKS,
+            )[0].shape[2]
+            tables = ttnn.from_torch(
+                torch.zeros(1, 1, pages * n_dev, 1024, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                mesh_mapper=replicate,
+                **common,
+            )
+        compact_idx = plan()
+        t_plan = timed(plan)
+
+        def push(buf, layer_slot, part):
+            return ttnn.experimental.high_bw_all_gather(
+                cache,
+                output_tensor=buf,
+                push_runs_tensor=tables,
+                push_stripe_chunk=stripe_chunk,
+                push_max_rows=cache_tokens,
+                push_part=part,
+                **gather_kw(layer_slot),
+            )
+
+        sdpa_compact = lambda buf: ttnn.transformer.sparse_sdpa(
+            q,
+            buf,
+            compact_idx,
+            V_DIM,
+            kv_format=_KV_FORMATS[kv_fmt][0],
+            scale=K_DIM**-0.5,
+            k_chunk_size=128,
+            subdevice_id=ttnn.SubDeviceId(0),
+            sub_core_grids=sdpa_grid,
+        )
+        full_gather = lambda: ttnn.experimental.high_bw_all_gather(
+            cache,
+            output_tensor=dense_out,
+            gathered_prefix_tensor=start,
+            gathered_slab_global=chunk_global,
+            **gather_kw(1),
+        )
+        mesh_device.load_sub_device_manager(manager)
+        try:
+            push(compact[0], 0, 0)  # layer L's buffer, filled beforehand (by its own prefetch + remainder)
+            t_gather = timed(full_gather)
+            t_push = timed(lambda: push(compact[1], 1, 0))
+            t_overlap = timed(lambda: (sdpa_compact(compact[0]), push(compact[1], 1, 1)))
+            t_rem = timed(lambda: push(compact[1], 1, 2))
+            t_sdpa_sub = timed(lambda: sdpa_compact(compact[0]))
+            push(compact[1], 1, 1)
+            push(compact[1], 1, 2)
+        finally:
+            ttnn.synchronize_device(mesh_device)
+            mesh_device.clear_loaded_sub_device_manager()
+        sdpa_today = lambda: _sparse_sdpa(q, dense_out, idx_natural, s_local * TP, kv_fmt)
+        t_sdpa = timed(sdpa_today)
+        today = t_sdpa + t_gather
+        serial = t_plan / 3 + t_push + t_sdpa_sub
+        new = t_plan / 3 + t_overlap + t_rem
+        lines.append(
+            f"{layer:>5} | {t_sdpa:>8.0f} + {t_gather:>7.0f} = {today:>7.0f}  | "
+            f"{t_plan / 3:>6.0f} + {t_push:>6.0f} + {t_sdpa_sub:>6.0f} = {serial:>6.0f} | "
+            f"{t_plan / 3:>6.0f} + {t_overlap:>12.0f} + {t_rem:>9.0f} = {new:>7.0f} {100 * (today - new) / today:>6.1f}%"
+        )
+        last = (sdpa_today, compact_idx)
+    logger.info("\n" + "\n".join(lines))
+    mesh_device.remove_sub_device_manager(manager)
+
+    # Exactness on the last layer: layer L+1's buffer, filled by prefix + remainder pushes, through the device-rewritten
+    # indices equals the dense gather of layer L+1 through natural indices.
+    sdpa_today, compact_idx = last
+    out_dense = ttnn.to_torch(sdpa_today(), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+    out_compact = ttnn.to_torch(
+        ttnn.transformer.sparse_sdpa(
+            q, compact[1], compact_idx, V_DIM, kv_format=_KV_FORMATS[kv_fmt][0], scale=K_DIM**-0.5, k_chunk_size=128
+        ),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
+    )
+    assert torch.equal(out_dense, out_compact), "prefix + remainder push differs from the dense-gather path"

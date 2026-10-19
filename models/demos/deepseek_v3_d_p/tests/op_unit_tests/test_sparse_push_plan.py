@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SENTINEL, build_p
 MAGIC = 0x5350504C
 # Real GLM-5.3 top-k for the last 5120-token chunk of a 1,044,480-token prompt.
 TRACE_1M = Path("/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120")
-OWNER_OFF, BITMAP_OFF, PAGE_WORDS = 16, 64, 1024
+OWNER_OFF, OWNER_PREFIX_OFF, BITMAP_OFF, PAGE_WORDS = 32, 64, 128, 1024
 
 
 def _layout(max_rows, sc):
@@ -71,9 +71,26 @@ def test_sparse_push_plan_matches_host(mesh_device, max_rows, prefix):
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
     )
 
+    # Treat the last 5120 rows as the current chunk: the plan also records each owner's rows before it.
+    split = max_rows - 5120
+    tt_split = ttnn.from_torch(
+        torch.tensor([[[[split]]]], dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
     def run():
         return ttnn.experimental.sparse_push_plan(
-            tt_idx, num_devices=n_dev, stripe_chunk=sc, max_rows=max_rows, pages_per_packet=p, banks=banks
+            tt_idx,
+            num_devices=n_dev,
+            stripe_chunk=sc,
+            max_rows=max_rows,
+            pages_per_packet=p,
+            banks=banks,
+            chunk_start=tt_split,
         )
 
     table, compact = run()
@@ -100,20 +117,24 @@ def test_sparse_push_plan_matches_host(mesh_device, max_rows, prefix):
         want_bits = np.packbits(need.reshape(-1, 32)[:, ::-1], axis=1, bitorder="big").view(">u4").reshape(-1)
         want_counts = need.reshape(nb, sc).sum(1)
         want_owner = np.bincount(np.arange(nb) % n_dev, weights=want_counts, minlength=n_dev).astype(np.int64)
+        sb = split // sc
+        want_before = np.bincount(np.arange(sb) % n_dev, weights=want_counts[:sb], minlength=n_dev).astype(np.int64)
         # Only blocks up to the largest referenced row are written; the rest of the table may be stale.
         ab = -(-(int(v.max()) + 1) // sc) if v.size else 0
         aw = ab * (sc // 32)
         checks = {
             "header": tbl[d, 0] == MAGIC and tbl[d, 1] == n_dev and tbl[d, 2] == sc and tbl[d, 3] == ab,
             "owner_counts": np.array_equal(tbl[d, OWNER_OFF : OWNER_OFF + n_dev], want_owner),
+            "owner_prefix": tbl[d, 4] == sb
+            and np.array_equal(tbl[d, OWNER_PREFIX_OFF : OWNER_PREFIX_OFF + n_dev], want_before),
             "bitmap": np.array_equal(tbl[d, BITMAP_OFF : BITMAP_OFF + aw], want_bits[:aw].astype(np.uint32)),
             "counts": np.array_equal(tbl[d, counts_off : counts_off + ab], want_counts[:ab]),
             "compact": np.array_equal(got_compact[d], want_compact[d]),
         }
         bad += [(d, k) for k, ok in checks.items() if not ok]
     if os.environ.get("SPARSE_PUSH_PLAN_TIMING"):
-        # Header words 4..13: core-0 wall-clock stamps (see the kernel); phase deltas in k cycles, max over chips.
-        st = tbl[:, 4:14].astype(np.int64)
+        # Header words 8..17: core-0 wall-clock stamps (see the kernel); phase deltas in k cycles, max over chips.
+        st = tbl[:, 8:18].astype(np.int64)
 
         def dt(a, b):
             return ((st[:, b] - st[:, a]) % (1 << 32)).max() / 1e3

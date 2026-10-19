@@ -40,7 +40,11 @@ void kernel_main() {
     constexpr uint32_t table_pages = get_compile_time_arg_val(8);  // per requester
     constexpr uint32_t owner_off = get_compile_time_arg_val(9);
     constexpr uint32_t bitmap_off = get_compile_time_arg_val(10);
-    constexpr auto input_args = TensorAccessorArgs<11>();
+    constexpr uint32_t owner_prefix_off = get_compile_time_arg_val(11);
+    // 0: every needed row; 1: rows in blocks before the plan's split block (the chunk start); 2: the rest, continuing
+    // each run where part 1 ended.
+    constexpr uint32_t push_part = get_compile_time_arg_val(12);
+    constexpr auto input_args = TensorAccessorArgs<13>();
     constexpr auto table_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto batch_args = TensorAccessorArgs<batch_from_meta ? table_args.next_compile_time_args_offset() : 0>();
     constexpr uint32_t words_per_block = stripe_chunk / 32;
@@ -86,9 +90,10 @@ void kernel_main() {
     // kRuns holds the requester's table header and per-owner counts, then a window of its bitmap blocks.
     cb_reserve_back(kRuns, 1);
     const uint32_t header_l1 = get_write_ptr(kRuns);
-    const uint32_t blocks_l1 = header_l1 + 256;
+    const uint32_t blocks_l1 = header_l1 + 512;
     auto* header = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(header_l1);
     auto* counts = header + owner_off;
+    auto* prefix_counts = header + owner_prefix_off;
 
     uint32_t batched = 0;
     auto flush_batch = [&]() {
@@ -112,18 +117,23 @@ void kernel_main() {
             continue;
         }
         const uint32_t first_page = dest * table_pages;
-        noc_async_read(table.get_noc_addr(first_page), header_l1, (owner_off + 32) * 4);
+        noc_async_read(table.get_noc_addr(first_page), header_l1, (owner_prefix_off + 32) * 4);
         noc_async_read_barrier();
         invalidate_l1_cache();
         uint32_t base = 0;
         for (uint32_t o = 0; o < my_rank; ++o) {
             base += (counts[o] + unit - 1) / unit * unit;
         }
-        if (counts[my_rank] == 0) {
+        const uint32_t before = prefix_counts[my_rank];
+        const uint32_t part_rows =
+            push_part == 0 ? counts[my_rank] : (push_part == 1 ? before : counts[my_rank] - before);
+        if (part_rows == 0) {
             continue;
         }
 
-        uint32_t packet = 0, n = 0;
+        // Rank of this part's first row in the run; a resumed run may start mid-packet.
+        const uint32_t first_rank = push_part == 2 ? before : 0;
+        uint32_t packet = first_rank / pages_per_packet, lane0 = first_rank % pages_per_packet, n = 0;
         bool take = packet_turn == sub;
         uint32_t data_l1 = 0;
         auto open_packet = [&]() {
@@ -137,7 +147,7 @@ void kernel_main() {
             if (take) {
                 auto* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(kMeta) + batched * 16);
                 meta[0] = dest;
-                meta[1] = base + (packet % banks) + (packet / banks) * unit;
+                meta[1] = base + (packet % banks) + (packet / banks) * unit + lane0 * banks;
                 meta[2] = n;
                 if (++batched == kBatch) {
                     flush_batch();
@@ -145,6 +155,7 @@ void kernel_main() {
             }
             ++packet;
             n = 0;
+            lane0 = 0;
             packet_turn = packet_turn + 1 == sub_count ? 0 : packet_turn + 1;
             take = packet_turn == sub;
         };
@@ -152,9 +163,16 @@ void kernel_main() {
 
         // This chip's blocks: my_rank, my_rank + N, ...; block jb holds local rows [jb * sc, (jb + 1) * sc).
         const uint32_t active_blocks = header[3] < num_blocks ? header[3] : num_blocks;
-        const uint32_t my_blocks =
-            active_blocks > my_rank ? (active_blocks - my_rank + num_devices - 1) / num_devices : 0;
-        for (uint32_t jb0 = 0; jb0 < my_blocks; jb0 += kBlocksPerFill) {
+        uint32_t my_blocks = active_blocks > my_rank ? (active_blocks - my_rank + num_devices - 1) / num_devices : 0;
+        // The split block is chunk aligned, so it starts block row split / N of every owner.
+        const uint32_t split_j = header[4] / num_devices;
+        uint32_t jb_first = 0;
+        if constexpr (push_part == 1) {
+            my_blocks = my_blocks < split_j ? my_blocks : split_j;
+        } else if constexpr (push_part == 2) {
+            jb_first = split_j;
+        }
+        for (uint32_t jb0 = jb_first; jb0 < my_blocks; jb0 += kBlocksPerFill) {
             const uint32_t fill = my_blocks - jb0 < kBlocksPerFill ? my_blocks - jb0 : kBlocksPerFill;
             for (uint32_t f = 0; f < fill; ++f) {
                 const uint32_t word = bitmap_off + (my_rank + (jb0 + f) * num_devices) * words_per_block;
@@ -187,7 +205,7 @@ void kernel_main() {
                             noc_async_read(input.get_noc_addr(slot_base + row), data_l1 + n * page_bytes, page_bytes);
 #endif
                         }
-                        if (++n == pages_per_packet) {
+                        if (lane0 + ++n == pages_per_packet) {
                             close_packet();
                             open_packet();
                         }

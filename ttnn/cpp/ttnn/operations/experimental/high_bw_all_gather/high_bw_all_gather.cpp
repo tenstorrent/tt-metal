@@ -32,7 +32,8 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& progress_tensor,
     const std::optional<Tensor>& push_runs_tensor,
     uint32_t push_stripe_chunk,
-    uint32_t push_max_rows) {
+    uint32_t push_max_rows,
+    uint32_t push_part) {
     return ttnn::prim::high_bw_all_gather(
         input_tensor,
         output_tensor,
@@ -56,7 +57,8 @@ Tensor high_bw_all_gather(
         progress_tensor,
         push_runs_tensor,
         push_stripe_chunk,
-        push_max_rows);
+        push_max_rows,
+        push_part);
 }
 
 std::vector<Tensor> sparse_push_plan(
@@ -65,8 +67,10 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t stripe_chunk,
     uint32_t max_rows,
     uint32_t pages_per_packet,
-    uint32_t banks) {
-    return ttnn::prim::sparse_push_plan(indices, num_devices, stripe_chunk, max_rows, pages_per_packet, banks);
+    uint32_t banks,
+    const std::optional<Tensor>& chunk_start) {
+    return ttnn::prim::sparse_push_plan(
+        indices, num_devices, stripe_chunk, max_rows, pages_per_packet, banks, chunk_start);
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather

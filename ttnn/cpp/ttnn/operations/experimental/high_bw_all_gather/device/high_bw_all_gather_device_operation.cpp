@@ -143,6 +143,7 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         tensor_args.has_progress(),
         args.push_stripe_chunk,
         args.push_max_rows,
+        args.push_part,
         tensor_args);
 }
 
@@ -569,7 +570,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const std::optional<Tensor>& progress_tensor,
     const std::optional<Tensor>& push_runs_tensor,
     uint32_t push_stripe_chunk,
-    uint32_t push_max_rows) {
+    uint32_t push_max_rows,
+    uint32_t push_part) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -674,7 +676,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .window_max_slabs = window_max_slabs,
             .prefix_only = prefix_only,
             .push_stripe_chunk = push_stripe_chunk,
-            .push_max_rows = push_max_rows},
+            .push_max_rows = push_max_rows,
+            .push_part = push_part},
         HighBwAllGatherInputs{
             .input_tensor = input_tensor,
             .output_tensor = output_tensor,
@@ -712,7 +715,8 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& progress_tensor,
     const std::optional<Tensor>& push_runs_tensor,
     uint32_t push_stripe_chunk,
-    uint32_t push_max_rows) {
+    uint32_t push_max_rows,
+    uint32_t push_part) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -736,7 +740,8 @@ Tensor high_bw_all_gather(
         progress_tensor,
         push_runs_tensor,
         push_stripe_chunk,
-        push_max_rows);
+        push_max_rows,
+        push_part);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }

@@ -180,7 +180,7 @@ class SparseKvPushPlanner:
         logger.info(f"sparse KV push plan: {dt:.3f}s on host, up to {used} buffer rows per chip")
         return self._last
 
-    def _plan_device(self, indices, stripe_chunk, page_bytes, max_rows):
+    def _plan_device(self, indices, stripe_chunk, page_bytes, max_rows, chunk_start=None):
         n_dev = self.mesh_device.get_num_devices()
         table, compact = ttnn.experimental.sparse_push_plan(
             indices,
@@ -189,6 +189,7 @@ class SparseKvPushPlanner:
             max_rows=max_rows,
             pages_per_packet=self._pages_per_packet(page_bytes),
             banks=self.banks,
+            chunk_start=chunk_start,
         )
         _shard_over_mesh(table, self.mesh_device)
         rows = table.shape[2] * n_dev

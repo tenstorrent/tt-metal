@@ -189,7 +189,9 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
                 layout.num_blocks,
                 layout.pages,
                 SparsePushPlanLayout::kOwnerOff,
-                SparsePushPlanLayout::kBitmapOff};
+                SparsePushPlanLayout::kBitmapOff,
+                SparsePushPlanLayout::kOwnerPrefixOff,
+                operation_attributes.push_part};
         } else {
             reader_ct = {
                 page_bytes,
