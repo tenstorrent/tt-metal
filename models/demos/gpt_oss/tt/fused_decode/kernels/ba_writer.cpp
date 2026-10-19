@@ -8,7 +8,9 @@
 //   send_round of the parent's tree semaphore.
 //
 // common runtime args: [out_addr, core index table (BA_NIDX words), noc (x << 8 | y) per core (2 per word),
-// (BA_OUT_NOTIFY_N: the consumer cores' noc (x << 8 | y), 2 per word)]
+// (BA_OUT_NOTIFY_N: the consumer cores' noc (x << 8 | y), 2 per word), (BA_USER_ARG_W: the user)]
+// BA_OUT_ROWS (batch-32 verify): the root writes its packed tile's 4 rows into the rows layout [1, rows, heads, 64]
+// instead (block row r of user u = out row r BA_Q_RSTRIDE + u, kv head g's 8 heads = tile rows 8 g .. 8 g + 7).
 
 #include <stdint.h>
 
@@ -16,6 +18,10 @@
 #include "ba_common.hpp"
 #include "ckernel.h"
 #include "ckernel_defs.h"
+
+namespace {
+constexpr uint32_t rows8(uint32_t i, uint32_t f) { return ((i >> 1) * 2 + f) * 512 + (i & 1) * 256; }
+}  // namespace
 
 void kernel_main() {
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
@@ -74,9 +80,21 @@ void kernel_main() {
     if (sl.send_round < 0) {
         cb_wait_front(cb_out, 2);
         const uint32_t src = get_read_ptr(cb_out);
+#ifdef BA_OUT_ROWS
+        const uint32_t user = get_common_arg_val<uint32_t>(BA_USER_ARG_W);
+        for (uint32_t d = 0; d < 2; ++d) {
+            for (uint32_t i = 0; i < 4; ++i) {
+                const uint64_t dst = s_out.get_noc_addr(2 * ((4 * t + i) * BA_Q_RSTRIDE + user) + d);
+                for (uint32_t f = 0; f < 2; ++f) {
+                    noc_async_write(src + d * tile + rows8(i, f), dst + rows8(g, f), 256);
+                }
+            }
+        }
+#else
         for (uint32_t d = 0; d < 2; ++d) {
             noc_async_write(src + d * tile, s_out.get_noc_addr((g * Tt + t) * 2 + d), tile);
         }
+#endif
         noc_async_write_barrier();
 #ifdef BA_OUT_NOTIFY_N
         // a consumer in the same program (the drafter's o_proj, dflash/fused_draft.py): increment its semaphore

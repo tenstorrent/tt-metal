@@ -127,11 +127,16 @@ class BlockAttention:
         noc = self.noc_cores()
         return [noc[i] for i in sorted(range(len(noc)), key=lambda i: (i % self.S, i))]
 
-    def parts(self, q, k_cache, v_cache, pos, page_table, sinks, scale, wait, patch=None, out_notify=None):
+    def parts(
+        self, q, k_cache, v_cache, pos, page_table, sinks, scale, wait, patch=None, out_notify=None, user=None, out=None
+    ):
         """(kernels, cbs, io); q: the packed Q [1, nkv, Tt * 32, 64] (tile (g, t, d) at page (g Tt + t) 2 + d); pos:
         INT32 [>= M] (row r at pos[r], non-decreasing, consecutive rows within 32 positions); page_table: INT32 [*,
         blocks] (row 0 used); sinks: the heads' [heads, 32] BF16 sink tile; wait = (semaphore id, count): the QKV
-        writers' signal that q and the block's K / V rows are written."""
+        writers' signal that q and the block's K / V rows are written.
+        user = (u, users) (batch-32 verify, q_rows): the block of user u among `users`: positions pos[M u ..], page table
+        row u, Q rows (and the output, `out` in the same rows layout [1, M users, heads, 64]) row r users + u."""
+        out = self.out if out is None else out
         cap, S = CAP, self.S
         sinks = sinks if sinks is not None else self.mask_lib  # uniform: no sinks (a placeholder address)
         kv_dtype = k_cache.dtype
@@ -189,7 +194,7 @@ class BlockAttention:
         for t in (q, k_cache, v_cache, pos, page_table, sinks, self.mask_lib):
             reader_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         writer_ct = [cb_out, cb_scr2, cb_send, cb_recv, self.M, S, self.min_chunks, partial]
-        writer_ct += ttnn.TensorAccessorArgs(self.out).get_compile_time_args()
+        writer_ct += ttnn.TensorAccessorArgs(out).get_compile_time_args()
         compute_ct = [cb_q, cb_k, cb_v, cb_aux, cb_qs, cb_s, cb_p, cb_m, cb_l, cb_o, cb_ab, cb_out, cb_send, cb_recv]
         compute_ct += [cb_lacc, _f32_bits(scale), self.M, G]
         # every argument is common (no per-core runtime args: dispatch writes those core by core): each core finds its
@@ -225,7 +230,7 @@ class BlockAttention:
             pn = [(x << 8) | y for x, y in patch[2][: self.M]] + [0] * (self.M % 2)
             reader_common += [patch[0].buffer_address(), patch[1].buffer_address()]
             reader_common += [pn[w] | (pn[w + 1] << 16) for w in range(0, len(pn), 2)]
-        writer_common = [self.out.buffer_address()] + idx_words + noc_words
+        writer_common = [out.buffer_address()] + idx_words + noc_words
         defines = [("BA_WAIT_SEM", str(wait[0])), ("BA_WAIT_N", str(wait[1])), ("BA_TREE_SEM", str(TREE_SEM))]
         defines += [("BA_TQ", str(self.Tt)), ("BA_GX", str(gx))]
         defines += [("BA_NIDX", str(len(idx_words))), ("BA_CB_POS", str(cb_scr2))]
@@ -244,6 +249,12 @@ class BlockAttention:
                 ("BA_OUT_NOTIFY_ARG", str(len(writer_common))),
             ]
             writer_common += [nw[w] | (nw[w + 1] << 16) for w in range(0, len(nw), 2)]
+        if user is not None:
+            assert self.q_rows and patch is None and out_notify is None
+            defines += [("BA_USER_ARG", str(len(reader_common))), ("BA_USER_ARG_W", str(len(writer_common)))]
+            defines += [("BA_Q_RSTRIDE", str(user[1])), ("BA_OUT_ROWS", "1")]
+            reader_common.append(user[0])
+            writer_common.append(user[0])
         if self.window:  # one window for all rows
             defines.append(("BA_WINDOW", str(self.window)))
         dm = ttnn.DataMovementConfigDescriptor
@@ -279,7 +290,7 @@ class BlockAttention:
                 ),
             ),
         ]
-        io = [q, k_cache, v_cache, pos, page_table, sinks, self.mask_lib, self.out]
+        io = [q, k_cache, v_cache, pos, page_table, sinks, self.mask_lib, out]
         return kernels, cbs, [t for i, t in enumerate(io) if all(t is not u for u in io[:i])]
 
     def semaphores(self):

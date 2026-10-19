@@ -512,6 +512,60 @@ class BatchedDraft:
         return out
 
 
+class _VerifyBlockAttention:
+    """Block attention for the verify's full-attention layers (b1's dflash/block_attention.py kernels, one instance per
+    user): each user's K / V history is read once for its 8 block rows (causal within the block, sinks), not once per
+    row as 8 decode-SDPA steps do. `per_program` users run side by side in one program, each on its own
+    4 x slices cores (kv head x packed Q tile x history slice); 32 / per_program programs per layer."""
+
+    WAIT_SEM = 8  # the kernels' wait semaphore (count 0: Q and the block's K / V are written by earlier ops)
+
+    def __init__(self, mesh, users, block, n_heads, n_kv, head_dim, block_size, per_program, slices, min_chunks=4):
+        from .block_attention import BlockAttention
+
+        self.mesh, self.users, self.block, self.P = mesh, users, block, per_program
+        grid = mesh.compute_with_storage_grid_size()
+        per = BlockAttention.cores_needed(n_kv, block, slices)
+        cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
+        assert per * per_program <= len(cores) and users % per_program == 0
+        self.inst = [
+            BlockAttention(
+                mesh,
+                block,
+                n_heads,
+                n_kv,
+                head_dim,
+                block_size,
+                cores[j * per : (j + 1) * per],
+                slices,
+                q_rows=True,
+                min_chunks=min_chunks,
+            )
+            for j in range(per_program)
+        ]
+
+    def __call__(self, q, k_cache, v_cache, pos_ui, page_table, sinks, scale):
+        """q: [1, rows, heads, hd] (row 32 i + u, rotated); pos_ui: INT32 [rows] (8 u + i: start_u + i); page_table:
+        INT32 [users, blocks]. Returns the attention output in q's layout."""
+        out = ttnn.empty(list(q.shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh,
+                         memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
+        for p0 in range(0, self.users, self.P):
+            kernels, cbs, sems, io = [], [], [], []
+            for j, inst in enumerate(self.inst):
+                kk, cc, tio = inst.parts(
+                    q, k_cache, v_cache, pos_ui, page_table, sinks, scale, wait=(self.WAIT_SEM, 0),
+                    user=(p0 + j, self.users), out=out,
+                )  # fmt: skip
+                kernels += kk
+                cbs += cc
+                sems += inst.semaphores() + [
+                    ttnn.SemaphoreDescriptor(self.WAIT_SEM, ttnn.CoreType.WORKER, inst.cores, 0)
+                ]
+                io += [t for t in tio[:-1] if all(t is not u for u in io)]
+            ttnn.generic_op(io + [out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
+        return out
+
+
 class BatchedVerify:
     """The target's 256-row verify pass for 32 users on the batched decode model's layers (DecoderLayer.batched_decode):
     attention in 8 batched-decode steps, the MoE on all rows at once, norms on 32-row residual shards as the decode."""
@@ -671,6 +725,12 @@ class BatchedVerify:
             self.mesh, cfg, max_local_batch_size=users, datatype=ttnn.bfloat16, use_qk_fused=True
         )
         self.trans_qk = self.rope_qk.get_both_trans_mats()["decode"]
+        # full-attention layers: block attention (each user's K / V read once for its 8 rows), 8 users per program on 3
+        # history slices each (96 cores): 24 layers' attention at 16K context 47.9 -> 18.1 ms (16 x 1: 20.3, 4 x 6:
+        # 20.6), at 300 11.3 -> 10.9 ms
+        self.block_attn = _VerifyBlockAttention(
+            self.mesh, users, block, self.local_heads, self.local_kv_heads, hd, kv_cache[1][0].shape[2], 8, 3
+        )
         # the QKV head input's width-sharded cores (interleaved_to_sharded_partial takes a rectangle)
         self.qkv_grid = ttnn.CoreCoord(10, (self.local_heads + 2 * self.local_kv_heads) // 10)
 
@@ -773,6 +833,7 @@ class BatchedVerify:
         qkv = ttnn.linear(x, w.wqkv, bias=w.wqkv_bias, dtype=ttnn.bfloat16, compute_kernel_config=self.qkv_ck)
         x.deallocate(True)
         k_cache, v_cache = self.kv_cache[li]
+        block_attn = self.block_attn is not None and not cfg.sliding_window
         outs = []
         for i in range(self.block):
             # step i's 32 rows straight from the interleaved QKV into the width-sharded head input
@@ -794,6 +855,9 @@ class BatchedVerify:
             )
             k2.deallocate(True)
             v.deallocate(True)
+            if block_attn:  # the 8 steps' Q go to block attention together
+                outs.append(q2)
+                continue
             if not cfg.sliding_window:
                 q3 = ttnn.to_memory_config(q2, ttnn.DRAM_MEMORY_CONFIG)
                 q2.deallocate(True)
@@ -817,9 +881,15 @@ class BatchedVerify:
         qkv.deallocate(True)
         # [1, rows, heads, hd] (row 32 i + u) -> [1, heads, rows, hd] -> [1, 1, rows, heads * hd]: one concat, one
         # permute and one head concat per layer (not a reshard, a head concat and a copy per step)
-        sdpa = ttnn.concat(outs, dim=1)
+        sdpa = ttnn.concat(outs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         for t in outs:
             t.deallocate(True)
+        if block_attn:
+            q_all = sdpa
+            sdpa = self.block_attn(
+                q_all, k_cache, v_cache, pos[self.block], self.page_table, w.decode_sinks, cfg.scaling
+            )
+            q_all.deallocate(True)
         perm = ttnn.permute(sdpa, (0, 2, 1, 3))
         sdpa.deallocate(True)
         heads = ttnn.experimental.nlp_concat_heads(perm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -933,7 +1003,10 @@ class BatchedDFlashRunner:
         z = torch.zeros(users, dtype=torch.int32)
         self.d_tokens = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)
         self.v_tokens = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)
-        self.pos = [_replicate(mesh, z, ttnn.int32) for _ in range(B)]
+        # per-step positions, then (entry B) every row's position user-major (8 u + i: start_u + i, block attention)
+        self.pos = [_replicate(mesh, z, ttnn.int32) for _ in range(B)] + [
+            _replicate(mesh, torch.zeros(self.rows, dtype=torch.int32), ttnn.int32)
+        ]
         self.rot = [_replicate(mesh, z.reshape(1, users), ttnn.uint32) for _ in range(B)]
         self.bound = _replicate(mesh, z, ttnn.int32)
         self.pos_rows = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)
@@ -1035,6 +1108,7 @@ class BatchedDFlashRunner:
         for i in range(B):
             _copy(mesh, self.pos[i], st + i, ttnn.int32)
             _copy(mesh, self.rot[i], (st + i).reshape(1, U), ttnn.uint32)
+        _copy(mesh, self.pos[B], (st[:, None] + torch.arange(B)[None]).reshape(-1), ttnn.int32)
         _copy(mesh, self.bound, st + B - 1, ttnn.int32)
         _copy(mesh, self.pos_rows, (st[None] + torch.arange(B)[:, None]).reshape(1, self.rows), ttnn.uint32)
 

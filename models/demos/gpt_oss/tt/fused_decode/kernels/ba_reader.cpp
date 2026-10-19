@@ -21,6 +21,8 @@
 // common runtime args: [q_addr, k_addr, v_addr, pos_addr, pt_addr, sink_addr, mask_lib_addr, core index table
 // (BA_NIDX words, ba_common.hpp), noc (x << 8 | y) per core (2 per word), (BA_PATCH..: k_src, v_src, noc (x << 8 | y)
 // per block row (2 per word))]
+// BA_USER_ARG (batch-32 verify, dflash/batched.py): the block of user u = common arg BA_USER_ARG: its positions are
+// pos[M u .. M u + M - 1], its page table row u, its Q rows (rows layout, BA_Q_ROWS) row r = q row r BA_Q_RSTRIDE + u.
 // BA_UNIFORM: every row attends [0, pos[M - 1]] (the drafter's block; [pos[M - 1] + 1 - BA_WINDOW, ..] with a window),
 // no sinks.
 // The slices of each tile group are their own merge tree.
@@ -85,10 +87,21 @@ void kernel_main() {
 
     cb_reserve_back(cb_scr, 1);
     const uint32_t scr = get_write_ptr(cb_scr);  // [pos page | page-table row]
+#ifdef BA_USER_ARG
+    const uint32_t user = get_common_arg_val<uint32_t>(BA_USER_ARG);
+    // this user's M positions: the 64-byte aligned window holding them
+    const uint32_t pos_off = user * M * 4, pos_a = pos_off & ~63u;
+    noc_async_read(s_pos.get_noc_addr(0) + pos_a, scr, 64);
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    volatile tt_l1_ptr int32_t* pos = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr + (pos_off - pos_a));
+#else
+    constexpr uint32_t user = 0;
     noc_async_read(s_pos.get_noc_addr(0), scr, pos_page_bytes);
     noc_async_read_barrier();
     invalidate_l1_cache();
     volatile tt_l1_ptr int32_t* pos = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr);
+#endif
     {
         // the positions to this core's writer (BA_CB_POS): one DRAM read of them per core, not two
         cb_reserve_back(BA_CB_POS, 1);
@@ -141,7 +154,7 @@ void kernel_main() {
     const uint32_t e0 = sl.c_lo * 32 / block, e1 = (sl.c_hi * 32 - 1) / block + 1;
     const uint32_t a0 = (e0 * 4) & ~63u;
     const uint32_t a1 = (e1 * 4 + 63) & ~63u;
-    noc_async_read(s_pt.get_noc_addr(0) + a0, scr + 256, (a1 < pt_page_bytes ? a1 : pt_page_bytes) - a0);
+    noc_async_read(s_pt.get_noc_addr(user) + a0, scr + 256, (a1 < pt_page_bytes ? a1 : pt_page_bytes) - a0);
     noc_async_read_barrier();
     const uint32_t pt_first = a0 / 4;  // the first entry read (pt[] below indexes entries from it)
     const uint32_t nc = sl.c_hi - sl.c_lo;
@@ -267,7 +280,11 @@ void kernel_main() {
         // rows 8 i .. 8 i + 7 = row 4 t + i's heads 8 g .. 8 g + 7 (256-byte segments per 16-column half f)
         for (uint32_t d = 0; d < 2; ++d) {
             for (uint32_t i = 0; i < 4; ++i) {
+#ifdef BA_Q_RSTRIDE
+                const uint64_t src = s_q.get_noc_addr(2 * ((4 * t + i) * BA_Q_RSTRIDE + user) + d);
+#else
                 const uint64_t src = s_q.get_noc_addr(2 * (4 * t + i) + d);
+#endif
                 for (uint32_t f = 0; f < 2; ++f) {
                     noc_async_read(src + rows8(g, f), ql1 + d * tile + rows8(i, f), 256);
                 }
