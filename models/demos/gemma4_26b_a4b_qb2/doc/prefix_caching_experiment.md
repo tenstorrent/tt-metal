@@ -351,6 +351,21 @@ new seeded inference ref. It explicitly waits for a nonzero server prompt
 counter before additional parallel arms may launch. Standard agent behavior,
 task, timeout, sampling and repetition settings are unchanged.
 
+The repaired bootstrap passed the explicit nonzero server prompt-token
+gate. The remaining controls were then dispatched, using workflow666769b
+(only an additional stale-PID ownership guard relative to ca53de0):
+
+| Request seed9472 | Prefix caching | Repaired run | Runner |
+| --- | --- | --- | --- |
+| Present | Off | 39246694017 | qb2-120-p01t03 |
+| Present | On | 39247598502 | qb2-120-p03t09 |
+| Absent | Off | 39247602550 | qb2-120-p02t02 |
+| Absent | On | 39247606568 | 120-qb2-p05t01 |
+
+All use Metal7fe17051c4417a01ab7d72d414731145edd6f010 and the same
+repaired dependencies. Real inference is confirmed for the bootstrap;
+task reward, errors and trajectory remain pending, not inferred from CI status.
+
 Remote runs 39238204679 (qb2-120-p03t09) and 39238201191
 (qb2-120-p01t03) passed concurrently on distinct machines, using Metal
 7d5c3e5cb8438989e36a6a35c704f1154f9a4584 and workflow 38d4d6f.
