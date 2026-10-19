@@ -203,6 +203,51 @@ def test_condense_remaps_gdn_before_decode_in_both_sampling_modes(monkeypatch, s
     assert events == [("remap", slot_remap), ("decode", slot_remap, 8)]
 
 
+def test_deferred_decode_payload_passes_through_bucketing(monkeypatch):
+    # The plugin's deferred grammar decode must reach Generator unchanged, and
+    # the sampler must stay keyed to the bucket width whose padded logits the
+    # payload carries.
+    Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
+    from models.tt_transformers.tt.generator import Generator
+
+    buckets = []
+    forwarded = []
+    payload = object()
+    sampling = SimpleNamespace(set_trace_bucket=buckets.append)
+    model = SimpleNamespace(num_devices=4, args=SimpleNamespace(max_batch_size=8), sampling=sampling)
+    wrapper = Qwen36ForCausalLM.__new__(Qwen36ForCausalLM)
+    wrapper.model = [model]
+    wrapper.data_parallel = 1  # read by Generator.__del__
+
+    def fake_decode(self, *args, **kwargs):
+        forwarded.append(kwargs)
+        return payload
+
+    monkeypatch.setenv("TT_DECODE_BUCKETING", "1")
+    monkeypatch.setattr(Generator, "decode_forward", fake_decode)
+    tokens, positions = _padded_decode_batch(3, 8)
+
+    result = Qwen36ForCausalLM.decode_forward(
+        wrapper,
+        tokens=tokens,
+        start_pos=positions,
+        page_table=None,
+        kv_cache=None,
+        read_from_device=False,
+        defer_device_sampling=True,
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
+    )
+
+    assert result is payload
+    assert forwarded[0]["defer_device_sampling"] is True
+    assert "sampling_params" not in forwarded[0]
+    assert forwarded[0]["tokens"].shape[0] == 4
+    assert buckets == [4]
+
+
 def test_unsupported_device_sampling_fails_at_startup(expect_error, monkeypatch):
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
     model = SimpleNamespace(

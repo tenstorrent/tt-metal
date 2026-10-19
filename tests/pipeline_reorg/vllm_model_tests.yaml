@@ -401,6 +401,29 @@
   team: models
   budget_type: vllm
 
+- name: "Qwen3.6-27B (device grammar, batch=8)"
+  model: Qwen/Qwen3.6-27B
+  coherence-test: true
+  structured-output: true
+  expect-device-grammar: true
+  server-timeout: 35
+  benchmark-timeout: 10
+  mesh-device: P150x4
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 1073741824, "l1_small_size": 24576}'
+  server-default-top-k: 32
+  additional-server-args: "--max_num_seqs 8 --max_model_len 65536 --no-async-scheduling"
+  default-chat-template-kwargs: '{"enable_thinking": false}'
+  extra-env: "VLLM_LOGGING_LEVEL=DEBUG"
+  multimodal: false
+  skus:
+    bh_quietbox_2:
+      timeout: 65
+      tier: 1
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+  budget_type: vllm
+
 # ── GPT-OSS ────────────────────────────────────────────────────────
 
 - name: "GPT-OSS-120B (low-latency)"

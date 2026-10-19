@@ -55,10 +55,15 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
 
     # supports_async_decode=False: async decode assumes on-device token/position continuity, which
     # corrupts Qwen's GDN scan. supports_sample_on_device=True: on-device sampling is decode-only.
+    # supports_device_grammar=True: decode_forward defers to Generator, whose deferred payload and
+    # sample_deferred_decode implement the plugin's device grammar contract; bucketed logits are
+    # padded to the sampler width, so the full-batch mask applies to every bucket.
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,
         "supports_sample_on_device": True,
+        "supports_device_grammar": True,
+        "max_device_top_k": 32,
     }
 
     def _validate_device_sampling_request(self, requested):

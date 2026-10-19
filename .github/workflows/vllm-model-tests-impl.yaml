@@ -693,6 +693,18 @@ jobs:
               || { echo '❌ Structured output failed (correct_rate(%) != 100.0)'; exit 1; }
             echo '✅ Structured output passed'
 
+      - name: 🔍 Check device grammar sampling was used
+        if: ${{ matrix.test-group.expect-device-grammar }}
+        run: |
+          # Host grammar sampling also passes the correct_rate gate, so require
+          # the plugin's device-path debug line (needs VLLM_LOGGING_LEVEL=DEBUG).
+          steps=$(grep -c 'TT device grammar sampling active' "${FILE_SERVER_LOG}" || true)
+          if [ "${steps}" -eq 0 ]; then
+            echo '❌ No device grammar sampling step in the server log; structured output ran on host'
+            exit 1
+          fi
+          echo "✅ Device grammar sampling active in ${steps} logged steps"
+
       - name: 🖼️ Run multimodal test
         if: ${{ matrix.test-group.multimodal }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
