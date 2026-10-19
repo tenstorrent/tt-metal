@@ -82,6 +82,18 @@ struct HighBwAllGatherParams {
     // `gathered_slab_global` is the block-cyclic slab width in gathered-dim elements (chunk_local * sp).
     // It is structural -- identical for every chunk and every layer -- so it is hashed.
     uint32_t gathered_slab_global = 0;
+
+    // Outer blocks. When > 0, each rank's gather dim is split into blocks of `outer_block_rows` rows, and every
+    // block (together with any dims between batch and the gather dim) is gathered as its own rank-interleaved
+    // group: rank r's local row b * B + i lands at output row b * (N * B) + r * B + i. No reshape is needed --
+    // only the page order is reinterpreted, so an ND-sharded cache works as the source. The live data is then a
+    // prefix of whole blocks: the scalar `gathered_outer_blocks` is the live block count, and on the metadata path
+    // one `gathered_slab_global` is one block, so the reader's
+    //     min(round_up(start + slab, slab), outer_count * slab) / slab
+    // is the live block count. Structural (changes compile-time arguments), so hashed. 0 = off.
+    uint32_t outer_block_rows = 0;
+    // Scalar form of the live outer-block count; hash-excluded like gathered_dim_size.
+    std::optional<uint32_t> gathered_outer_blocks;
 };
 
 struct HighBwAllGatherInputs {

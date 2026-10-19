@@ -40,6 +40,7 @@ struct HighBwAllGatherUnicastFactory {
         // Tensor specs and routing are hashed; only these scalar controls change the page schedule.
         std::optional<uint32_t> input_batch_index;
         std::optional<uint32_t> gathered_dim_size;
+        std::optional<uint32_t> gathered_outer_blocks;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

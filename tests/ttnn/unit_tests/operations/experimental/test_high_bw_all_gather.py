@@ -2450,3 +2450,290 @@ def test_high_bw_all_gather_cached_link_discovery(mesh_device, num_links, expect
                 rows_per_device=32,
                 num_links=invalid_links,
             )
+
+
+# Outer blocks: each rank's rows are gathered in blocks of B rows, every block rank-interleaved
+# ([1, 1, ranks * rows, width] laid out block by block), and the live data is a prefix of whole blocks. This is how
+# unrolled-V MLA rebuilds one SP row's latent from a TP-deduped, ND-sharded KV cache (block = one 160-row region per
+# chunk), without reshaping the cache.
+_OUTER_BLOCKS = 6
+_OUTER_BLOCK_ROWS = 160
+_OUTER_WIDTH = 576
+_OUTER_SLAB = 5120  # one chunk of the global sequence = one block
+_OUTER_SENTINEL = 7.0
+
+
+def _outer_live_blocks(start):
+    return min(-(-(start + _OUTER_SLAB) // _OUTER_SLAB), _OUTER_BLOCKS)
+
+
+def _kv_cache_like_memory_config(mesh_device, width):
+    """ND-sharded DRAM in 32-row shards round-robined over the banks, as the MLA KVPE cache is allocated."""
+    banks = mesh_device.dram_grid_size().x
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, 0)) for b in range(banks)])
+    spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, 32, width],
+        grid=grid,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=spec)
+
+
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("cluster_axis", [1, 0], ids=["tp_ring4", "sp_ring8"])
+@pytest.mark.parametrize("nd_sharded_input", [False, True], ids=["interleaved", "kv_cache_nd_sharded"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bfp8"])
+@run_for_blackhole("high_bw_all_gather outer-block coverage requires Blackhole")
+@_AG_TRACED_AXIS
+def test_high_bw_all_gather_outer_blocks(mesh_device, cluster_axis, nd_sharded_input, dtype, ag_traced):
+    ranks = mesh_device.shape[cluster_axis]
+    rows = _OUTER_BLOCKS * _OUTER_BLOCK_ROWS
+    user_slots = _META_NUM_LAYERS * 2  # 2 users x 2 layers, user-major
+    torch.manual_seed(0)
+    # rank r holds host[:, :, r*rows:(r+1)*rows]; distinct rows per (slot, block, rank) catch any mispairing.
+    host = torch.randn(user_slots, 1, ranks * rows, _OUTER_WIDTH, dtype=torch.bfloat16)
+    if dtype == ttnn.bfloat8_b:
+        # The device holds the bfp8-rounded values; compare against the same rounding.
+        host = ttnn.to_torch(ttnn.from_torch(host, dtype=dtype, layout=ttnn.TILE_LAYOUT)).to(torch.bfloat16)
+    shard_dims = [None, None]
+    shard_dims[cluster_axis] = 2
+    tt_in = ttnn.from_torch(
+        host,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=(
+            _kv_cache_like_memory_config(mesh_device, _OUTER_WIDTH) if nd_sharded_input else ttnn.DRAM_MEMORY_CONFIG
+        ),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+    out_shape = (1, 1, ranks * rows, _OUTER_WIDTH)
+    tt_out = _make_tensor(
+        mesh_device,
+        torch.full(out_shape, _OUTER_SENTINEL, dtype=torch.bfloat16),
+        dtype,
+        ttnn.TILE_LAYOUT,
+        ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    # (flat slot, chunk start): chunk 0 (1 block), a rotated start spanning two blocks, an aligned start, one past
+    # capacity (clamped to every block), then long -> short -> long on the same program. Slots 1 and 3 are users 0
+    # and 1 at layer 1, so the traced arm (layer captured) runs every case; the eager arm adds layer-0 slots.
+    cases = [(1, 0), (3, 2560), (1, 5120), (3, 27000), (1, 0), (3, 27000)]
+    if not ag_traced:
+        cases += [(0, 2560), (2, 27000)]
+
+    def expected_output(slot, live):
+        expected = torch.full(out_shape, _OUTER_SENTINEL, dtype=torch.bfloat16)
+        for b in range(live):
+            for r in range(ranks):
+                src = host[slot, 0, r * rows + b * _OUTER_BLOCK_ROWS : r * rows + (b + 1) * _OUTER_BLOCK_ROWS]
+                dst = b * ranks * _OUTER_BLOCK_ROWS + r * _OUTER_BLOCK_ROWS
+                expected[0, 0, dst : dst + _OUTER_BLOCK_ROWS] = src
+        return expected
+
+    def check(slot, live):
+        expected = expected_output(slot, live)
+        for dev_tensor in ttnn.get_device_tensors(tt_out):
+            got = ttnn.to_torch(dev_tensor)
+            assert torch.equal(got, expected), f"slot {slot}, {live} live blocks: output mismatch"
+
+    def reset_output():
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.full(out_shape, _OUTER_SENTINEL, dtype=torch.bfloat16),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            ),
+            tt_out,
+        )
+
+    if not ag_traced:
+        entries = None
+        for slot, start in cases:
+            reset_output()
+            live = _outer_live_blocks(start)
+            ttnn.experimental.high_bw_all_gather(
+                tt_in,
+                2,
+                tt_out,
+                cluster_axis=cluster_axis,
+                num_links=2,
+                input_batch_index=slot,
+                outer_block_rows=_OUTER_BLOCK_ROWS,
+                gathered_outer_blocks=live,
+            )
+            ttnn.synchronize_device(mesh_device)
+            check(slot, live)
+            # A new slot / block count reuses the cached program (both are hash-excluded runtime values).
+            if entries is None:
+                entries = mesh_device.num_program_cache_entries()
+            assert mesh_device.num_program_cache_entries() == entries
+        return
+
+    user, num_layers, layer = _meta_slot_terms(cases[0][0])
+    slot_meta = _meta_scalar(mesh_device, user)
+    prefix_meta = _meta_scalar(mesh_device, cases[0][1])
+
+    def issue():
+        ttnn.experimental.high_bw_all_gather(
+            tt_in,
+            2,
+            tt_out,
+            cluster_axis=cluster_axis,
+            num_links=2,
+            input_batch_index_tensor=slot_meta,
+            batch_slot_num_layers=num_layers,
+            batch_slot_layer_idx=layer,
+            gathered_prefix_tensor=prefix_meta,
+            gathered_slab_global=_OUTER_SLAB,
+            outer_block_rows=_OUTER_BLOCK_ROWS,
+        )
+
+    issue()
+    ttnn.synchronize_device(mesh_device)
+    entries = mesh_device.num_program_cache_entries()
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    issue()
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    try:
+        for slot, start in cases:
+            case_user, _, case_layer = _meta_slot_terms(slot)
+            assert case_layer == layer, "traced cases must share the captured layer"
+            reset_output()
+            _write_meta_scalar(slot_meta, case_user)
+            _write_meta_scalar(prefix_meta, start)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            ttnn.synchronize_device(mesh_device)
+            check(slot, _outer_live_blocks(start))
+        assert mesh_device.num_program_cache_entries() == entries
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+
+
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@run_for_blackhole("high_bw_all_gather outer-block validation requires Blackhole")
+def test_high_bw_all_gather_outer_blocks_validation(mesh_device, expect_error):
+    ranks = mesh_device.shape[1]
+    rows = _OUTER_BLOCKS * _OUTER_BLOCK_ROWS
+    tt_in = _make_tensor(
+        mesh_device,
+        torch.zeros(2, 1, ranks * rows, _OUTER_WIDTH, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 2)),
+    )
+    tt_out = _make_tensor(
+        mesh_device,
+        torch.zeros(1, 1, ranks * rows, _OUTER_WIDTH, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    def gather(**kwargs):
+        ttnn.experimental.high_bw_all_gather(
+            tt_in, 2, tt_out, cluster_axis=1, num_links=2, input_batch_index=0, **kwargs
+        )
+
+    with expect_error(RuntimeError, "gathered_outer_blocks requires outer_block_rows"):
+        gather(gathered_outer_blocks=1)
+    with expect_error(RuntimeError, "gathered_outer_blocks 0 must be in"):
+        gather(outer_block_rows=_OUTER_BLOCK_ROWS, gathered_outer_blocks=0)
+    with expect_error(RuntimeError, "must be in"):
+        gather(outer_block_rows=_OUTER_BLOCK_ROWS, gathered_outer_blocks=_OUTER_BLOCKS + 1)
+    with expect_error(RuntimeError, "must divide the gather dim"):
+        gather(outer_block_rows=96 * 7)
+    with expect_error(RuntimeError, "whole number of tile rows"):
+        gather(outer_block_rows=48)
+    with expect_error(RuntimeError, "cannot be combined with the row extent"):
+        gather(outer_block_rows=_OUTER_BLOCK_ROWS, gathered_dim_size=ranks * _OUTER_BLOCK_ROWS)
+    prefix = _meta_scalar(mesh_device, 0)
+    with expect_error(RuntimeError, "gathered_outer_blocks and gathered_prefix_tensor are mutually exclusive"):
+        ttnn.experimental.high_bw_all_gather(
+            tt_in,
+            2,
+            tt_out,
+            cluster_axis=1,
+            num_links=2,
+            input_batch_index_tensor=_meta_scalar(mesh_device, 0),
+            gathered_prefix_tensor=prefix,
+            gathered_slab_global=_OUTER_SLAB,
+            outer_block_rows=_OUTER_BLOCK_ROWS,
+            gathered_outer_blocks=1,
+        )
+    # A bad block count on a program-cache HIT is still rejected: two valid counts share one program (so the third
+    # call is a hit, not a miss whose validation would raise the same message).
+    gather(outer_block_rows=_OUTER_BLOCK_ROWS, gathered_outer_blocks=2)
+    ttnn.synchronize_device(mesh_device)
+    entries = mesh_device.num_program_cache_entries()
+    assert entries > 0, "the program cache must be on for the cache-hit check to mean anything"
+    gather(outer_block_rows=_OUTER_BLOCK_ROWS, gathered_outer_blocks=3)
+    ttnn.synchronize_device(mesh_device)
+    assert mesh_device.num_program_cache_entries() == entries, "a new block count must reuse the cached program"
+    with expect_error(RuntimeError, "must be in"):
+        gather(outer_block_rows=_OUTER_BLOCK_ROWS, gathered_outer_blocks=_OUTER_BLOCKS + 1)
+    # In block mode the slab is only a unit: one that does not divide by the ring size is valid.
+    ttnn.experimental.high_bw_all_gather(
+        tt_in,
+        2,
+        tt_out,
+        cluster_axis=1,
+        num_links=2,
+        input_batch_index_tensor=_meta_scalar(mesh_device, 0),
+        gathered_prefix_tensor=_meta_scalar(mesh_device, 5),
+        gathered_slab_global=5,
+        outer_block_rows=_OUTER_BLOCK_ROWS,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    # Blocks split a row dim: a row-major gather of the last dim is rejected by validation itself.
+    rm_in = _make_tensor(
+        mesh_device,
+        torch.zeros(2, 1, 32, ranks * 64, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 3)),
+    )
+    rm_out = _make_tensor(
+        mesh_device,
+        torch.zeros(1, 1, 32, ranks * 64, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    with expect_error(RuntimeError, "cannot be used when gathering the last dim"):
+        ttnn.experimental.high_bw_all_gather(
+            rm_in, 3, rm_out, cluster_axis=1, num_links=2, input_batch_index=0, outer_block_rows=32
+        )
+
+    # One block must cover every worker slice: a 1-page block (32x32) with a scalar count is rejected at build time,
+    # since a cache hit could patch the count down to one block and starve workers.
+    narrow_in = _make_tensor(
+        mesh_device,
+        torch.zeros(2, 1, ranks * 128, 32, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 2)),
+    )
+    narrow_out = _make_tensor(
+        mesh_device,
+        torch.zeros(1, 1, ranks * 128, 32, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    with expect_error(RuntimeError, "one 32-row block is 1 pages"):
+        ttnn.experimental.high_bw_all_gather(
+            narrow_in,
+            2,
+            narrow_out,
+            cluster_axis=1,
+            num_links=2,
+            input_batch_index=0,
+            outer_block_rows=32,
+            gathered_outer_blocks=4,
+        )

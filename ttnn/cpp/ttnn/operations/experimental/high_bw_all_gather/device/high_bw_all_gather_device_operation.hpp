@@ -59,6 +59,10 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& gathered_prefix_tensor = std::nullopt,
     uint32_t gathered_slab_global = 0,
     const std::optional<GlobalSemaphore>& ready_semaphore = std::nullopt,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt);
+    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt,
+    // Gather in rank-interleaved blocks of outer_block_rows rows, bounded in whole blocks; see
+    // HighBwAllGatherParams::outer_block_rows. gathered_outer_blocks is the scalar live block count.
+    uint32_t outer_block_rows = 0,
+    std::optional<uint32_t> gathered_outer_blocks = std::nullopt);
 
 }  // namespace ttnn::prim

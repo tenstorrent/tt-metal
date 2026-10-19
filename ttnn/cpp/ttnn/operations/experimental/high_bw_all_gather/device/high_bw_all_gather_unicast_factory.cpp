@@ -36,6 +36,9 @@ struct PageGeometry {
     uint32_t num_output_chunks;
     uint32_t output_chunks_per_stripe;
     uint32_t input_page_base;
+    // Outer blocks per selected/partial slot (gather dim / outer_block_rows; 1 without outer blocks). Each block
+    // is its own rank-interleaved group in the output; together they are one contiguous input range.
+    uint32_t outer_count;
 };
 
 enum class ReaderRtArg : std::size_t {
@@ -122,9 +125,13 @@ PageGeometry derive_page_geometry(
     }
 
     const bool has_runtime_extent = operation_attributes.gathered_dim_size.has_value();
+    // Outer blocks split the gather dim into groups of B rows; each group is one stripe of B rows.
+    // Validation guarantees block_rows divides the gather dim.
+    const uint32_t block_rows = operation_attributes.outer_block_rows;
+    const uint32_t stripe_dim_size = block_rows > 0 ? block_rows : input_shape[gather_dim];
     const uint32_t active_dim_size = has_runtime_extent
                                          ? *operation_attributes.gathered_dim_size / operation_attributes.num_devices
-                                         : input_shape[gather_dim];
+                                         : stripe_dim_size;
 
     const auto tile_spec =
         input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
@@ -162,7 +169,7 @@ PageGeometry derive_page_geometry(
     // (such as sparse MLA's block-cyclic KV cache) at their stable physical offsets.
     uint32_t max_input_pages_per_stripe = 1;
     for (int32_t i = gather_dim; i < rank; i++) {
-        uint32_t extent = input_shape[i];
+        uint32_t extent = i == gather_dim ? stripe_dim_size : input_shape[i];
         if (i == rank - 1) {
             extent = input_tensor.layout() == Layout::TILE
                          ? extent / tile_spec.get_width()
@@ -175,7 +182,9 @@ PageGeometry derive_page_geometry(
     const uint32_t output_chunks_per_stripe = max_input_pages_per_stripe * split_factor;
     TT_FATAL(output_chunks_per_stripe > 0, "output_chunks_per_stripe must be > 0");
     const bool selected_batch = operation_attributes.input_batch_index.has_value() || batch_index_from_metadata;
-    const bool selected_or_partial = selected_batch || has_runtime_extent || extent_from_metadata;
+    const bool has_outer_extent = operation_attributes.gathered_outer_blocks.has_value();
+    const bool selected_or_partial = selected_batch || has_runtime_extent || extent_from_metadata || has_outer_extent;
+    const uint32_t outer_count = block_rows > 0 ? input_shape[gather_dim] / block_rows : 1;
     uint32_t input_page_base = 0;
     uint32_t num_input_pages = input_tensor.buffer()->num_pages();
     if (selected_or_partial) {
@@ -204,7 +213,9 @@ PageGeometry derive_page_geometry(
                 "high_bw_all_gather gathered_dim_size without input_batch_index requires input batch 1, got {}",
                 input_shape[0]);
         }
-        num_input_pages = input_pages_per_stripe;
+        // Validation bounds gathered_outer_blocks to (0, outer_count] on every dispatch.
+        const uint32_t live_outer = has_outer_extent ? *operation_attributes.gathered_outer_blocks : outer_count;
+        num_input_pages = live_outer * input_pages_per_stripe;
         TT_FATAL(
             input_page_base + num_input_pages <= input_tensor.buffer()->num_pages(),
             "high_bw_all_gather selected range exceeds input allocation");
@@ -218,7 +229,8 @@ PageGeometry derive_page_geometry(
         num_input_pages,
         num_output_chunks,
         output_chunks_per_stripe,
-        input_page_base};
+        input_page_base,
+        outer_count};
 }
 
 uint32_t derive_data_valid_granularity(const PageGeometry& geometry, uint32_t packet_size, uint32_t total_slices) {
@@ -495,7 +507,8 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // whenever split_factor > 1.
     const bool has_runtime_controls =
         operation_attributes.input_batch_index.has_value() || operation_attributes.gathered_dim_size.has_value() ||
-        tensor_args.has_batch_index_metadata() || tensor_args.has_gathered_prefix_metadata();
+        operation_attributes.gathered_outer_blocks.has_value() || tensor_args.has_batch_index_metadata() ||
+        tensor_args.has_gathered_prefix_metadata();
     const auto page_geometry = derive_page_geometry(
         input_tensor,
         output_tensor,
@@ -520,7 +533,9 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // input_batch_index/gathered_dim_size patch its page base and active slice counts at dispatch time.
     auto scheduling_geometry = page_geometry;
     if (has_runtime_controls) {
-        scheduling_geometry.num_input_pages = page_geometry.output_chunks_per_stripe;
+        // Every outer block of the slot, not one stripe: with outer blocks the source is not one
+        // stripe group, so the bank-owned check below must see the full count and fall back to scatter.
+        scheduling_geometry.num_input_pages = page_geometry.output_chunks_per_stripe * page_geometry.outer_count;
     }
     const auto can_use_bank_owned = [&](uint32_t workers_per_direction) {
         return can_use_output_bank_owned_schedule(
@@ -849,6 +864,20 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // far wider than the reader's fixed prefix. Only the tensor accessor stays conditional, since it has
     // no meaningful zero form; its index is guarded instead.
     reader_compile_args.push_back(extent_from_metadata ? 1u : 0u);
+    if (operation_attributes.gathered_outer_blocks.has_value()) {
+        // Same starvation guard as the metadata extent below: the scalar block count can be patched down to ONE
+        // block on a cache hit, so one block's pages must cover every worker slice of this schedule.
+        const uint32_t pages_per_block = page_geometry.output_chunks_per_stripe / page_geometry.split_factor;
+        TT_FATAL(
+            pages_per_block >= total_slices,
+            "high_bw_all_gather gathered_outer_blocks: one {}-row block is {} pages but the schedule has {} slices "
+            "({} links x {} workers); raise outer_block_rows or reduce num_links so every worker owns a page",
+            operation_attributes.outer_block_rows,
+            pages_per_block,
+            total_slices,
+            num_links,
+            workers_per_dir);
+    }
     {
         uint32_t pages_per_slab = 0;
         uint32_t full_gathered_dim_size = 0;
@@ -858,7 +887,12 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
             if (gdim < 0) {
                 gdim += static_cast<int32_t>(out_shape.rank());
             }
-            full_gathered_dim_size = out_shape[gdim];
+            // Outer-block mode: one slab is one outer block, so the reader's
+            //     min(round_up(start + slab, slab), outer_count * slab) / slab
+            // is the live block count, and pages_per_slab below is one block's pages.
+            full_gathered_dim_size = operation_attributes.outer_block_rows > 0
+                                         ? page_geometry.outer_count * operation_attributes.gathered_slab_global
+                                         : out_shape[gdim];
             // Count in whole slabs, not rows: a TILE page spans 32 gathered rows, so pages-per-row is
             // fractional there, while pages-per-slab is an integer for every layout this op accepts.
             TT_FATAL(
@@ -1179,6 +1213,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         .output_bank_owned_schedule = output_bank_owned_schedule,
         .input_batch_index = operation_attributes.input_batch_index,
         .gathered_dim_size = operation_attributes.gathered_dim_size,
+        .gathered_outer_blocks = operation_attributes.gathered_outer_blocks,
     };
 
     shared_variables.destinations.reserve(num_links * workers_per_dir);
@@ -1202,7 +1237,8 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
     const uint32_t output_addr = output_tensor.buffer()->address();
     const bool has_runtime_controls =
         operation_attributes.input_batch_index.has_value() || operation_attributes.gathered_dim_size.has_value() ||
-        tensor_args.has_batch_index_metadata() || tensor_args.has_gathered_prefix_metadata();
+        operation_attributes.gathered_outer_blocks.has_value() || tensor_args.has_batch_index_metadata() ||
+        tensor_args.has_gathered_prefix_metadata();
     // Addresses are invocation-wide, including freshly allocated metadata tensors.
     const bool has_batch_metadata = tensor_args.has_batch_index_metadata();
     const bool has_prefix_metadata = tensor_args.has_gathered_prefix_metadata();
@@ -1273,8 +1309,10 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
 
         // Common addresses and metadata above must refresh even when the schedule is unchanged.
         // Metadata-driven extents are derived on device; their host schedule stays at maximum capacity.
-        if (!has_runtime_controls || (shared_vars.input_batch_index == operation_attributes.input_batch_index &&
-                                      shared_vars.gathered_dim_size == operation_attributes.gathered_dim_size)) {
+        if (!has_runtime_controls ||
+            (shared_vars.input_batch_index == operation_attributes.input_batch_index &&
+             shared_vars.gathered_dim_size == operation_attributes.gathered_dim_size &&
+             shared_vars.gathered_outer_blocks == operation_attributes.gathered_outer_blocks)) {
             continue;
         }
         if (!updated_page_geometry.has_value()) {
@@ -1381,6 +1419,7 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
         }
         shared_vars.input_batch_index = operation_attributes.input_batch_index;
         shared_vars.gathered_dim_size = operation_attributes.gathered_dim_size;
+        shared_vars.gathered_outer_blocks = operation_attributes.gathered_outer_blocks;
     }
 }
 
