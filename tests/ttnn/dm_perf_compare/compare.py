@@ -29,14 +29,7 @@ def series(runs, call_id, impl):
     return {"us": values, "status": status, "error": error, "digests": sorted(digests)}
 
 
-def _comparison(base, other, noise):
-    """`other` against `base`; the verdict is about `other` (faster means other beats base)."""
-    if base["status"] != "ok" or other["status"] != "ok":
-        reason = base if base["status"] != "ok" else other
-        return {"comparable": False, "reason": "%s: %s" % (reason["status"], reason["error"] or "no data")}
-    if len(base["digests"]) != 1 or base["digests"] != other["digests"]:
-        return {"comparable": False, "reason": "output differs"}
-    changes = stats.per_round_changes(base["us"], other["us"])
+def _from_changes(changes, noise):
     if not changes:
         return {"comparable": False, "reason": "no round measured on both sides"}
     return {
@@ -45,6 +38,25 @@ def _comparison(base, other, noise):
         "median_pct": stats.median(changes),
         "verdict": stats.verdict(changes, noise),
     }
+
+
+def _comparison(base, other, noise):
+    """`other` against `base`; the verdict is about `other` (faster means other beats base)."""
+    if base["status"] != "ok" or other["status"] != "ok":
+        reason = base if base["status"] != "ok" else other
+        return {"comparable": False, "reason": "%s: %s" % (reason["status"], reason["error"] or "no data")}
+    if len(base["digests"]) != 1 or base["digests"] != other["digests"]:
+        return {"comparable": False, "reason": "output differs"}
+    return _from_changes(stats.per_round_changes(base["us"], other["us"]), noise)
+
+
+def _device_comparison(host, base_ns, other_ns, noise):
+    """Device time of `other` against the default's; host checks (status, output match) gate it."""
+    if not host["comparable"] and not host["reason"].startswith("no round"):
+        return host
+    if not any(v is not None for v in base_ns) or not any(v is not None for v in other_ns):
+        return {"comparable": False, "reason": "no device time"}
+    return _from_changes(stats.per_round_changes(base_ns, other_ns), noise)
 
 
 def _device(device_rounds, index, impl):
@@ -56,6 +68,11 @@ def _device(device_rounds, index, impl):
         "ns": stats.median([s["ns"] for s in samples]),
         "ops": samples[0]["ops"],
     }
+
+
+def _device_rounds(device_rounds, index, impl):
+    """Per-round device ns, None where that round has no sample, so rounds stay paired."""
+    return [r[(impl, index)]["ns"] if (impl, index) in r else None for r in device_rounds]
 
 
 def _default_uses(device):
@@ -89,7 +106,7 @@ def build(calls_doc, raw, meta):
     """`raw`: time runs per label (`before`, `after_default`, `after`, `ctl_before`, `ctl_after`: one
     worker JSON or None per round; `after_default` and `before` both run the default only, so Q1
     compares like with like, `after` runs every implementation plus the control copy of the default
-    for Q2), `device`: per round `{(impl, call index): {"ns", "ops"}}`, `control_ids`.
+    for the host-time detail and the A-vs-A control; Q2's verdict reads `device`), `device`: per round `{(impl, call index): {"ns", "ops"}}`, `control_ids`.
     """
     noise = measure_noise(raw["time"]["ctl_before"], raw["time"]["ctl_after"], raw["control_ids"])
     noise_pct = noise["noise_pct"]
@@ -100,7 +117,14 @@ def build(calls_doc, raw, meta):
         after = {impl: series(raw["time"]["after"], cid, impl) for impl in ("default", "native", "codegen", CONTROL)}
         after_solo = series(raw["time"]["after_default"], cid, "default")
         q1 = _comparison(before["default"], after_solo, noise_pct)
-        q2 = {impl: _comparison(after["default"], after[impl], noise_pct) for impl in ("native", "codegen")}
+        q2_host = {impl: _comparison(after["default"], after[impl], noise_pct) for impl in ("native", "codegen")}
+        # The default's public entry and routing check cost a few microseconds the forced entries
+        # skip, so on host time it never wins; device time is where the choice of implementation shows.
+        default_ns = _device_rounds(raw["device"], index, "default")
+        q2 = {
+            impl: _device_comparison(q2_host[impl], default_ns, _device_rounds(raw["device"], index, impl), noise_pct)
+            for impl in ("native", "codegen")
+        }
         q2_control = _comparison(after["default"], after[CONTROL], noise_pct)
         beaten_by = [i for i, c in q2.items() if c["comparable"] and c["verdict"] == "faster"]
         device = {}
@@ -123,6 +147,7 @@ def build(calls_doc, raw, meta):
                 "after_default_only": after_solo,
                 "q1": q1,
                 "q2": q2,
+                "q2_host": q2_host,
                 "q2_control": q2_control,
                 "fastest_option_used": None if not any(c["comparable"] for c in q2.values()) else not beaten_by,
                 "beaten_by": beaten_by,

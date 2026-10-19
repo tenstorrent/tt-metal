@@ -4,8 +4,11 @@ Measures, on one machine, whether a change moved the speed of a data-movement op
 default call picks the fastest implementation.
 
 - **Q1: did the change alter speed?** `default` before vs `default` after.
-- **Q2: does the default pick the fastest option?** `default` after vs `native` after and `codegen`
-  after (`ttnn._ttnn.operations.data_movement.<op>_force_native` / `_force_codegen`).
+- **Q2: does the default pick the fastest option?** Device time of `default` after vs `native` after
+  and `codegen` after (`ttnn._ttnn.operations.data_movement.<op>_force_native` / `_force_codegen`),
+  plus `default_uses`, the implementation the default dispatched. Host time for the same pairs is
+  kept as `q2_host` for detail only: the default's public entry and routing check cost a few
+  microseconds the forced entries skip, so it can never come out fastest on host time.
 
 `default` is the op as users call it, `ttnn.<op>`. A forced `codegen` call that the generated path
 refuses is skipped and listed, not counted as an error.
@@ -25,7 +28,7 @@ Each tree is a built tt-metal checkout; the script runs each side's processes wi
 - 5 rounds, after one discarded priming pair. A round runs fresh processes: before (default only),
   after (default only), then after again with `default`, `native`, `codegen` and `default_b` (the
   default measured a second time: Q2's own A-vs-A control, reported as `q2_control`). The first two
-  feed Q1 and alternate order between rounds; the third feeds Q2. Q1 compares like with like
+  feed Q1 and alternate order between rounds; the third feeds `q2_host` and the control. Q1 compares like with like
   because a process that also runs the forced entries leaves caches and allocator in another state
   (measured: about +4% on the same default call).
 - Per call and implementation: warm-up, then best of N timed calls, each synced. Profiler off.
@@ -43,7 +46,9 @@ Each tree is a built tt-metal checkout; the script runs each side's processes wi
 - Device time: a separate pass of the after build under the device profiler. Device time is the sum
   of kernel durations between signposts, best of the reps, median over rounds. The device ops each
   implementation dispatched are recorded, and `default_uses` is whichever of native/codegen has the
-  same ops as the default.
+  same ops as the default. Q2's verdict compares these per-round device times against the same noise
+  band as host time. Both sides of Q1 and the device pass run on profiler-enabled builds, so the host
+  times carry the same few-percent profiler overhead on each side.
 
 ## Call file
 

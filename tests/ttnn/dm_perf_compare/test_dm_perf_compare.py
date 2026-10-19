@@ -102,7 +102,7 @@ def test_csv_reduction(tmp_path):
     assert profile_csv.find_csv(str(tmp_path)) == str(path)
 
 
-def results_for(after_default, after_native, before=100.0, digest_native="d", control=None):
+def results_for(after_default, after_native, before=100.0, digest_native="d", control=None, device_ns=None):
     cid = "c"
     doc = {
         "calls": [{"id": cid, "shape": [1], "dtype": "bfloat16", "layout": "tile", "memory_config": "DRAM", "args": {}}]
@@ -133,17 +133,35 @@ def results_for(after_default, after_native, before=100.0, digest_native="d", co
             "ctl_before": run(None, {"default": (100.0, "d")}),
             "ctl_after": run(None, {"default": (100.0, "d")}),
         },
-        "device": [],
+        "device": [
+            {(impl, 0): {"ns": ns, "ops": [impl]} for impl, ns in (device_ns or {}).items()} for _ in range(rounds)
+        ],
         "control_ids": [cid],
     }
     return compare.build(doc, raw, {"op": "t"})
 
 
 def test_build_flags_slower_and_beaten_default():
-    row = results_for(after_default=120.0, after_native=80.0)["calls"][0]
+    device = {"default": 1200.0, "native": 800.0, "codegen": 1200.0}
+    row = results_for(after_default=120.0, after_native=80.0, device_ns=device)["calls"][0]
     assert row["q1"]["verdict"] == "slower"
     assert row["fastest_option_used"] is False
     assert row["beaten_by"] == ["native"]
+
+
+def test_q2_ignores_host_gap_when_device_time_matches():
+    # The default's entry overhead makes it slower on host time against any forced entry.
+    device = {"default": 1000.0, "native": 1000.0, "codegen": 1000.0}
+    row = results_for(after_default=120.0, after_native=80.0, device_ns=device)["calls"][0]
+    assert row["q2_host"]["native"]["verdict"] == "faster"
+    assert row["fastest_option_used"] is True
+    assert row["beaten_by"] == []
+
+
+def test_q2_without_device_time_is_not_comparable():
+    row = results_for(after_default=100.0, after_native=100.0)["calls"][0]
+    assert row["q2"]["native"] == {"comparable": False, "reason": "no device time"}
+    assert row["fastest_option_used"] is None
 
 
 def test_build_output_mismatch_is_not_comparable():
