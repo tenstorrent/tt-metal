@@ -395,6 +395,10 @@ class Qwen38Generator:
             0,  # Physical slot.
             0,  # Prefix position.
             length,
+            # A padded prompt masks its tail and takes the last token through a selector; an exact
+            # one bakes the slice offset into the program. One bucket holds one recording, so the
+            # two cannot share it.
+            length != valid,
             False,  # Last-token logits only; public all-logits prefill stays eager.
             trace_sampling,
         )

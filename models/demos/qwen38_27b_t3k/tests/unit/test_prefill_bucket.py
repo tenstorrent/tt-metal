@@ -171,6 +171,19 @@ class OwnedPrefillBucketTests(OwnedPrefillFixture):
         self.assertEqual(self.gen.counters["prefill_token_refreshes"], 1)
         self.assertEqual(self.gen.counters["prefill_selector_refreshes"], 2)
 
+    def test_an_exact_prompt_and_a_padded_one_take_separate_buckets(self):
+        # An exact prompt masks nothing and slices its last token at an offset the program bakes
+        # in. Sharing a bucket would hand a padded prompt that recording, which reads the wrong
+        # token out of state the padding was never masked from.
+        self.run_prompt(128)
+        exact = self.gen.prefill_prepared["key"]
+        self.assertIsNone(self.gen.prefill_prepared["selectors"])
+        self.owned(torch.arange(100, dtype=torch.int64).reshape(1, 100))
+        self.assertNotEqual(self.gen.prefill_prepared["key"], exact)
+        self.assertIsNotNone(self.gen.prefill_prepared["selectors"])
+        self.assertEqual((self.gen.prefill_prepared["length"], self.gen.prefill_prepared["valid"]), (128, 100))
+        self.assertEqual(len(self.gen.prefill_buckets), 2)
+
 
 class ResidentBucketTests(OwnedPrefillFixture):
     """Each bucket keeps its own buffers and traces, so changing bucket replays.
