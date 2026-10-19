@@ -23,7 +23,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkProfiler
 from tests.ttnn.utils_for_testing import is_unsigned_tensor
 from tracy import signpost
 

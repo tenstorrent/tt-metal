@@ -9,6 +9,7 @@ namespace ckernel::sfpu {
 struct LogitBf16Config {
     static constexpr unsigned kLogDegree = 2u;
     static constexpr unsigned kCorrectionDegree = 1u;
+    static constexpr unsigned kIntervalCount = 2u;
     // Blackhole's own TT-NN kernel stores -inf for finite |x| from BF16 word 0x7E80 up, 512 inputs
     // of both signs. The word is read from that board's TT-NN outputs, so each board's header has its own.
     static constexpr unsigned kPositiveFirst = 32384u;
@@ -30,9 +31,9 @@ struct LogitBf16Config {
 
 namespace ckernel::sfpu {
 
-template <int ITERATIONS = 8>
+template <int ITERATIONS = 32>
 inline void calculate_logit_bf16() {
-    ckernel::sfpu::bf16::calculate_normalized_log_odds<ckernel::sfpu::LogitBf16Config, ITERATIONS>();
+    ckernel::sfpu::bf16::logit::calculate_normalized_log_odds<ckernel::sfpu::LogitBf16Config, ITERATIONS>();
 }
 
 }  // namespace ckernel::sfpu
