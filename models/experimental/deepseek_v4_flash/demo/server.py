@@ -2759,9 +2759,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 @torch.no_grad()
-def serve(args: argparse.Namespace, engine_cls=ChatEngine, prefiller_cls=_Prefiller) -> int:
+def serve(
+    args: argparse.Namespace, engine_cls=ChatEngine, prefiller_cls=_Prefiller, num_stages: int | None = None
+) -> int:
     """Build the engine (``engine_cls``, a :class:`ChatEngine`) and the prefill (``prefiller_cls``, a
-    :class:`_Prefiller`) on the opened mesh and serve until interrupted."""
+    :class:`_Prefiller`) on the opened mesh and serve until interrupted.
+
+    ``num_stages`` is how many ``1 x TP`` submeshes to carve out of the full mesh. Unset, prefill
+    takes every row. The mesh itself stays the whole system either way. The V4.1 server passes
+    ``DEEPSEEK_V4_NUM_STAGES``.
+    """
     # The model emits plenty of non-ASCII (CJK, emoji, typographic punctuation), which
     # an ASCII/POSIX locale would turn into a UnicodeEncodeError mid-reply.
     for stream in (sys.stdout, sys.stderr):
@@ -2782,21 +2789,38 @@ def serve(args: argparse.Namespace, engine_cls=ChatEngine, prefiller_cls=_Prefil
         f"stages rather than batched."
     )
     mesh_shape = l1_small_size = None
-    if args.prefill:
-        # The layout of tests/prefill/test_prefill_decode_demo.py: ``1 x 4`` TP4 stages, one per
-        # mesh row (8 x 4 = all 32 chips of a Galaxy), shared by the decode and the prefill model.
+    if args.prefill or num_stages is not None:
+        # The layout of tests/prefill/test_prefill_decode_demo.py: the whole mesh opened as
+        # ``rows x 4`` (8 x 4 = all 32 chips of a Galaxy). ``num_stages`` carves that many 1x4
+        # submeshes off the front; the rest of the mesh stays open and idle.
         chips = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
         if chips % _TP_SIZE:
-            print(f"the prefill model needs TP{_TP_SIZE} stages, but the system has {chips} chips", file=sys.stderr)
+            print(
+                f"TP{_TP_SIZE} stages need a multiple of {_TP_SIZE} chips, but the system has {chips}", file=sys.stderr
+            )
             return 1
-        args.tp_size, args.num_stages = _TP_SIZE, chips // _TP_SIZE
-        mesh_shape, l1_small_size = (args.num_stages, _TP_SIZE), args.l1_small_size
-        # MTP disabled (read by DeepSeekV4Model.__init__): every row is a pipeline stage. Its
-        # prefetches could also outlive a step, which a prefill between steps does not allow.
-        os.environ["DEEPSEEK_V4_DSPARK"] = "0"
-        # Room above the GCB rings for decode's own buffers, so releasing the rings frees one block of L1 for prefill.
-        os.environ.setdefault("DEEPSEEK_V4_GCB_HEADROOM", "16384")
-        logger.info(f"traced prefill on: {args.num_stages} x TP{_TP_SIZE} stages ({chips} chips) shared with decode")
+        rows = chips // _TP_SIZE
+        stages = rows if num_stages is None else num_stages
+        if stages < 1 or stages > rows:
+            print(f"{stages} pipeline stage(s) do not fit the {rows} mesh rows", file=sys.stderr)
+            return 1
+        args.tp_size, args.num_stages = _TP_SIZE, stages
+        mesh_shape = (rows, _TP_SIZE)
+        if args.prefill:
+            l1_small_size = args.l1_small_size
+            # MTP disabled (read by DeepSeekV4Model.__init__): every row is a pipeline stage. Its
+            # prefetches could also outlive a step, which a prefill between steps does not allow.
+            os.environ["DEEPSEEK_V4_DSPARK"] = "0"
+            # Room above the GCB rings for decode's own buffers, so releasing the rings frees one block of L1 for prefill.
+            os.environ.setdefault("DEEPSEEK_V4_GCB_HEADROOM", "16384")
+            logger.info(
+                f"traced prefill on: {args.num_stages} x TP{_TP_SIZE} stages "
+                f"({args.num_stages * _TP_SIZE} of {chips} chips) shared with decode"
+            )
+        else:
+            logger.info(
+                f"decode on: {args.num_stages} x TP{_TP_SIZE} stages ({args.num_stages * _TP_SIZE} of {chips} chips)"
+            )
     with open_mesh_device(
         args.trace_region_size, system_config=args.system_config, mesh_shape=mesh_shape, l1_small_size=l1_small_size
     ) as mesh_device:

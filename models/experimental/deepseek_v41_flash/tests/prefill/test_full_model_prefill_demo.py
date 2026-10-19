@@ -4,9 +4,10 @@
 """Long-prompt prefill demo on the full ttnn ``DeepSeekV41PrefillModel`` (the prefill twin of
 ``tests/decode/test_full_model_decode_demo.py``, modeled on V4's ``test_full_model_prefill_demo.py``).
 
-Opens the 8 x 4 Galaxy mesh, carves ``1 x 4`` tensor-parallel submeshes out of it (rows 0..N-1 of column 0) and
-builds the real 40-layer V4.1 checkpoint on them as N pipeline stages (eight by default, five layers a stage; the
-embedding with the first stage, the head with the last), tokenizes a *real* prompt -- by default the book prompt of
+Opens the full 8 x 4 Galaxy mesh and carves ``DEEPSEEK_V4_NUM_STAGES`` (default eight) ``1 x 4`` tensor-parallel
+submeshes out of it (rows 0..N-1 of column 0). The real 40-layer V4.1 checkpoint is built on those stages (five
+layers a stage at the default; the embedding with the first stage, the head with the last) and tokenizes a *real*
+prompt -- by default the book prompt of
 ``models/tt_transformers/demo/sample_prompts/input_data_long_128k.json``, cut or repeated to
 ``DEEPSEEK_V4_PREFILL_LEN`` tokens -- and prefills it chunk by chunk.
 
@@ -20,8 +21,8 @@ V4's ``TracedPrefill``): the chunk step is compiled and captured once per stage 
 chunk with the stages running as a pipeline. A chunk's only host input is its packet (H2D on stage 0) and its Engram
 rows (H2D on the Engram layers' stages); the residual and any compressed KV a later stage reads go stage to stage
 over D2D sockets, and the last stage sends its output to the host over a D2H socket. The layers are split evenly into
-contiguous runs (V4's ``plan_layer_placement`` with a pipeline group size of 1): KV-only puts its 21 layers on eight
-stages of 3 or 2 layers (0-2, 3-5, 6-8, 9-11, 12-14, 15-16, 17-18, 19-20).
+contiguous runs (V4's ``plan_layer_placement`` with a pipeline group size of 1): KV-only puts its 21 layers on the
+default eight stages of 3 or 2 layers (0-2, 3-5, 6-8, 9-11, 12-14, 15-16, 17-18, 19-20).
 
 The final collapse uses the last layer's FFN ``pre_mix`` (there is no ``hc_head``). Engram layers 1 and 14 read host
 n-gram tables (~101 GB each) when built, and the test is skipped when that RAM is not free.
@@ -42,8 +43,8 @@ Knobs (environment):
 * ``DEEPSEEK_V4_PREFILL_KV_ONLY`` -- 1 (default): layers 0-20 only, no head; 0: the full stack with the head,
 * ``DEEPSEEK_V4_PREFILL_LAYERS``  -- build only the first N layers (default 21 when KV-only, else all 40; with KV-only
   it must be at least 21, so use ``DEEPSEEK_V4_PREFILL_KV_ONLY=0`` for a shorter bring-up),
-* ``DEEPSEEK_V4_PREFILL_STAGES``  -- at most this many ``1 x 4`` pipeline stages, 1 to 8 (default 8; fewer when there
-  are fewer layers),
+* ``DEEPSEEK_V4_NUM_STAGES``      -- how many ``1 x 4`` submeshes to carve from the full mesh (default 8; fewer
+  are used when there are fewer layers). ``DEEPSEEK_V4_PREFILL_STAGES`` still applies when this is unset,
 * ``DEEPSEEK_V4_TRACE_REGION_SIZE`` -- bytes to reserve for the captured traces (unset keeps the ttnn default),
 * ``DEEPSEEK_V4_PREFILL_HEARTBEAT`` -- seconds between ``[heartbeat]`` lines saying what it is doing (default 30),
 * ``DEEPSEEK_V4_PREFILL_STALL_SECS`` -- warn when one step lasts longer than this (default 600),
@@ -74,7 +75,12 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_full_model_decode_
     _build_rope,
     _checkpoint_available,
 )
-from models.experimental.deepseek_v41_flash.tt.config import CACHE_DIR, DEFAULT_MODEL_DIR, load_config
+from models.experimental.deepseek_v41_flash.tt.config import (
+    CACHE_DIR,
+    DEFAULT_MODEL_DIR,
+    load_config,
+    pipeline_stage_count,
+)
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     EngramHostLookup,
     engram_table_nbytes,
@@ -95,6 +101,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
 _TP_SIZE = 4
+_NUM_STAGES = pipeline_stage_count()
 _ATTENTION_WEIGHT_DTYPE = ttnn.bfloat8_b
 _EXPERT_DTYPE = ttnn.bfloat4_b
 
@@ -117,7 +124,7 @@ _EXPERT_DTYPE = ttnn.bfloat4_b
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=["mesh_device"], ids=["galaxy_8x4"])
+@pytest.mark.parametrize("mesh_device", [(8, _TP_SIZE)], indirect=["mesh_device"], ids=["galaxy_8x4"])
 def test_full_model_prefill_demo(mesh_device, reset_seeds) -> None:
     from transformers import AutoTokenizer
 
@@ -183,9 +190,9 @@ def _run_demo(mesh_device, progress: _Progress, AutoTokenizer) -> None:
     set_active_system_config(system_config)
     mesh_rows, mesh_cols = tuple(mesh_device.shape)
     assert mesh_cols >= _TP_SIZE, f"a 1 x {_TP_SIZE} submesh does not fit in the {mesh_rows} x {mesh_cols} mesh"
-    num_stages = _env_int("DEEPSEEK_V4_PREFILL_STAGES", 8)
+    num_stages = _NUM_STAGES
     if not 1 <= num_stages <= mesh_rows:
-        raise ValueError(f"DEEPSEEK_V4_PREFILL_STAGES={num_stages} must be in [1, {mesh_rows}] (mesh rows)")
+        raise ValueError(f"DEEPSEEK_V4_NUM_STAGES={num_stages} must be in [1, {mesh_rows}] (mesh rows)")
     placement = plan_layer_placement(num_layers, num_stages, 1)
     num_stages = placement[-1] + 1
     logger.info(f"opened a {mesh_rows} x {mesh_cols} mesh; {num_stages} stage(s) of 1 x {_TP_SIZE}")

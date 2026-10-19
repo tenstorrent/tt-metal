@@ -24,7 +24,8 @@ What differs from V4:
 
 * Placement. The prefill layers share the decode layers' routed experts, so both models use one placement: the layers
   split evenly into contiguous runs (V4's ``plan_layer_placement`` with a pipeline group size of 1), five on each of
-  the eight ``1 x 4`` stages. Traced prefill sends a selection on when a stage edge splits an index group.
+  the ``DEEPSEEK_V4_NUM_STAGES`` (default eight) ``1 x 4`` stages. Traced prefill sends a selection on when a stage
+  edge splits an index group.
 * Context. Prompt + new tokens must fit ``DEEPSEEK_V4_E2E_CONTEXT`` (16384 + ``DEEPSEEK_V4_MAX_NEW_TOKENS``); a
   LongBench question that does not is skipped. Past ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries prefill and decode both
   select two-level, so a larger context with ``DEEPSEEK_V4_E2E_COMPARE=1`` checks the two-level prefill against
@@ -56,8 +57,9 @@ chunk), ``DEEPSEEK_V4_E2E_TEXT``, ``DEEPSEEK_V4_DECODE_LAYERS``, ``DEEPSEEK_V4_E
 before its prefill, and compare the next-token logits -- the check that the commit is right),
 ``DEEPSEEK_V4_PREFILL_TIER_FACTOR``, ``DEEPSEEK_V4_PREFILL_MAX_LEN``, ``DEEPSEEK_V4_TRACE_REGION_SIZE``,
 ``DEEPSEEK_V4_L1_SMALL_SIZE``, ``DEEPSEEK_V4_PREFETCHER``, ``DEEPSEEK_V4_GCB_HEADROOM``, ``DEEPSEEK_V4_LONGBENCH``,
-``DEEPSEEK_V4_DEMO_COUNT``, ``DEEPSEEK_V4_LONGBENCH_INDICES``, and ``DEEPSEEK_V4_E2E_CONTEXT`` (16384 +
-``DEEPSEEK_V4_MAX_NEW_TOKENS``, prompt + new tokens).
+``DEEPSEEK_V4_DEMO_COUNT``, ``DEEPSEEK_V4_LONGBENCH_INDICES``, ``DEEPSEEK_V4_E2E_CONTEXT`` (16384 +
+``DEEPSEEK_V4_MAX_NEW_TOKENS``, prompt + new tokens), and ``DEEPSEEK_V4_NUM_STAGES`` (8; how many ``1 x 4``
+submeshes are carved from the full 8 x 4 mesh. ``DEEPSEEK_V4_PREFILL_STAGES`` still applies when the former is unset).
 """
 
 from __future__ import annotations
@@ -90,7 +92,12 @@ from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefil
     _ATTENTION_WEIGHT_DTYPE,
     _TP_SIZE,
 )
-from models.experimental.deepseek_v41_flash.tt.config import CACHE_DIR, DEFAULT_MODEL_DIR, load_config
+from models.experimental.deepseek_v41_flash.tt.config import (
+    CACHE_DIR,
+    DEFAULT_MODEL_DIR,
+    load_config,
+    pipeline_stage_count,
+)
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_table_nbytes
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
 from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
@@ -99,7 +106,6 @@ from models.experimental.deepseek_v4_flash.tests.prefill.test_prefill_decode_dem
     _DECODE_REPLAY_AHEAD,
     _DEVICE_PARAMS,
     _LONGBENCH_FILE,
-    _NUM_STAGES,
     _Prompt,
     _Result,
     _compare_logits,
@@ -115,6 +121,10 @@ from models.experimental.deepseek_v4_flash.tt.system_config import load_system_c
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
+# The full Galaxy stays open. DEEPSEEK_V4_NUM_STAGES (default 8) is how many 1x4 submeshes decode and
+# prefill share; the other rows stay idle.
+_NUM_STAGES = pipeline_stage_count()
+_MESH = (8, _TP_SIZE)
 # LongBench indices of the ``length == "short"`` questions test_prefill_decode_demo answered correctly. Empty until a
 # full-model V4.1 run records them (V4's list does not carry over: those passages are past V4.1's 16384-token context).
 _KNOWN_CORRECT_LONGBENCH: list[int] = []
@@ -125,7 +135,7 @@ _KNOWN_CORRECT_LONGBENCH: list[int] = []
 @pytest.mark.timeout(86400)  # 20 long passages, prefill + decode each
 @torch.no_grad()
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"], ids=["fabric_2d"])
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=["mesh_device"], ids=["galaxy_8x4"])
+@pytest.mark.parametrize("mesh_device", [_MESH], indirect=["mesh_device"], ids=["galaxy_8x4"])
 def test_prefill_decode_demo(mesh_device, reset_seeds) -> None:
     """The first ``DEEPSEEK_V4_DEMO_COUNT`` (20) ``length == "short"`` questions of ``data.json`` that fit the context,
     in file order, answered back to back by the two models (each loaded and captured once)."""
@@ -147,7 +157,7 @@ def test_prefill_decode_demo(mesh_device, reset_seeds) -> None:
 @pytest.mark.timeout(21600)  # weight conversion on a cold cache + one prompt
 @torch.no_grad()
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"], ids=["fabric_2d"])
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=["mesh_device"], ids=["galaxy_8x4"])
+@pytest.mark.parametrize("mesh_device", [_MESH], indirect=["mesh_device"], ids=["galaxy_8x4"])
 def test_prefill_decode_text(mesh_device, reset_seeds) -> None:
     """One chat prompt (``DEEPSEEK_V4_E2E_TEXT``, default the decode demo's 128-token prompt), prefilled and answered."""
     from transformers import AutoTokenizer
@@ -169,7 +179,7 @@ def test_prefill_decode_text(mesh_device, reset_seeds) -> None:
 @pytest.mark.timeout(86400)  # long passages, prefill + decode each
 @torch.no_grad()
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"], ids=["fabric_2d"])
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=["mesh_device"], ids=["galaxy_8x4"])
+@pytest.mark.parametrize("mesh_device", [_MESH], indirect=["mesh_device"], ids=["galaxy_8x4"])
 def test_prefill_decode_longbench_known_correct(mesh_device, reset_seeds) -> None:
     """Accuracy regression: the ``_KNOWN_CORRECT_LONGBENCH`` questions (or ``DEEPSEEK_V4_LONGBENCH_INDICES``), which
     ``test_prefill_decode_demo`` answered correctly, must all still be answered correctly."""
@@ -277,9 +287,12 @@ def _run(
         logger.info(f"  starts : {tokenizer.decode(prompt.ids[:24])!r}")
         logger.info(f"  ends   : {tokenizer.decode(prompt.ids[-80:])!r}")
 
-    # --- the stages (all 32 chips), placed for traced prefill, shared by the decode and the prefill model ---- #
+    # --- the full mesh stays open; only ``_NUM_STAGES`` rows become submeshes, shared by both models ---- #
     system_config = load_system_config(mesh_device=mesh_device)
     set_active_system_config(system_config)
+    mesh_rows = tuple(mesh_device.shape)[0]
+    if not 1 <= _NUM_STAGES <= mesh_rows:
+        raise ValueError(f"DEEPSEEK_V4_NUM_STAGES={_NUM_STAGES} must be in [1, {mesh_rows}] (mesh rows)")
     submeshes = [
         mesh_device.create_submesh(ttnn.MeshShape(1, _TP_SIZE), ttnn.MeshCoordinate(i, 0)) for i in range(_NUM_STAGES)
     ]
