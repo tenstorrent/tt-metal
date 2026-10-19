@@ -318,7 +318,7 @@ class Gemma4Generator:
 
         Prefill has compact parameter rows; decode pads them to max_num_seqs.
         Their repr differs even when the live request has unchanged sampling.
-        The model graph also fixes whether device seeds advance, so that mode
+        The sampling graph also fixes whether device seeds advance, so that mode
         must match independently of the sampler's persistent parameter values.
         """
         if (
@@ -471,7 +471,7 @@ class Gemma4Generator:
                 and all(isinstance(t, torch.Tensor) and t.shape[0] == 1 for t in self._tables(page_table))
             )
             if trace_suffix:
-                # Reuse the canonical logits-only trace: explicit input tokens
+                # Reuse the canonical model trace: explicit input tokens
                 # and absolute positions, with no sampling or RNG advancement.
                 for position in range(start, int(length)):
                     traced = self.decode_forward(
