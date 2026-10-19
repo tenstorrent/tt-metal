@@ -446,23 +446,37 @@ ALWI void reduce(
                 accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
 
             const uint32_t dst_idx = get_dst_index(accumulate);
-            for (uint32_t ht = 0; ht < Ht; ++ht) {
-                for (uint32_t wt = 0; wt < Wt; ++wt) {
-                    if constexpr (waits_per_tile(input_policy)) {
-                        // One-at-a-time: wait/pop per tile
-                        input_dfb.wait_front(onetile);
-                        reduce_tile<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
-                            input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
-                        input_dfb.pop_front(onetile);
-                    } else if constexpr (waits_bulk(input_policy)) {
-                        // BulkWaitBulkPop: use indexed access
-                        uint32_t tile_idx = ht * stride + wt;
-                        reduce_tile<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
-                            input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
-                    } else {  // PreloadedPolicy or PersistentPolicy: indexed access
-                        uint32_t tile_idx = batch_offset + ht * stride + wt;
-                        reduce_tile<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
-                            input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
+#ifdef ARCH_BLACKHOLE
+            if constexpr (!waits_per_tile(input_policy) && !is_sfpu) {
+                // Resident tiles: the block call keeps each tile's sums and overlaps its final pool with the next tile.
+                const uint32_t first = waits_bulk(input_policy) ? 0 : batch_offset;
+                const uint32_t runs = (stride == Wt) ? 1 : Ht;
+                const uint32_t run_tiles = (stride == Wt) ? Ht * Wt : Wt;
+                for (uint32_t r = 0; r < runs; ++r) {
+                    reduce_block<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
+                        input_dfb_id, scaler_dfb_id, first + r * stride, 0, dst_idx, run_tiles, 0);
+                }
+            } else
+#endif
+            {
+                for (uint32_t ht = 0; ht < Ht; ++ht) {
+                    for (uint32_t wt = 0; wt < Wt; ++wt) {
+                        if constexpr (waits_per_tile(input_policy)) {
+                            // One-at-a-time: wait/pop per tile
+                            input_dfb.wait_front(onetile);
+                            reduce_tile<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
+                                input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
+                            input_dfb.pop_front(onetile);
+                        } else if constexpr (waits_bulk(input_policy)) {
+                            // BulkWaitBulkPop: use indexed access
+                            uint32_t tile_idx = ht * stride + wt;
+                            reduce_tile<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
+                                input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
+                        } else {  // PreloadedPolicy or PersistentPolicy: indexed access
+                            uint32_t tile_idx = batch_offset + ht * stride + wt;
+                            reduce_tile<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
+                                input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
+                        }
                     }
                 }
             }
