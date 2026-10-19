@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+#include "api/compile_time_args.h"
+// With fp32 DEST and a small Q chunk the per-tile hand-off of the broadcast multiplies loses to the per-face one.
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST (!DST_ACCUM_MODE || get_compile_time_arg_val(3) >= 8)
 #define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true
 #include <cstdint>
 
