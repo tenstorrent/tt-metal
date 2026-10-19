@@ -162,6 +162,12 @@ while IFS= read -r FILE; do
             TTNN_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
+        # The tt-train gate test lists. They are not source files but decide what the gates
+        # run, so a PR that only edits them must still build and run the train gate jobs.
+        tt-train/tests/ops/smoke_tests.txt|tt-train/tests/ops/run_smoke_tests.sh|tests/pipeline_reorg/train_pr_gate_tests.yaml|tests/pipeline_reorg/train_merge_gate_tests.yaml)
+            TTTRAIN_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
         tt-train/**/*.@(h|hpp|inl|c|cpp|py))
             TTTRAIN_CHANGED=true
             ANY_CODE_CHANGED=true
