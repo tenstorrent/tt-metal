@@ -24,10 +24,12 @@ scaled by the routing score) and ExpertDownStream (routed down + bias, summed ov
 partial sum).
 """
 
+import os
 import struct
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -154,6 +156,53 @@ def as_stream_tensor(mesh_device, layouts, rows, dtype, cache_file_name):
     )
 
 
+# Reader-core placement knob GPT_OSS_DECODE_ROBUST_READERS: unset = on for every streamed op on Blackhole 1x4 (the
+# only mesh the fused decode path runs on) and off elsewhere; 0 = the mesh's first-device placement for every op; 1 =
+# robust for every op; a comma list of roles = robust for those roles only (A/B measurements).
+STREAM_ROLES = ("qkv", "o_proj", "router", "gate_up", "down", "lm_head")
+
+
+def robust_reader_roles(mesh_device):
+    """The streamed-op roles that place their readers with robust_bank_workers (GPT_OSS_DECODE_ROBUST_READERS)."""
+    knob = os.environ.get("GPT_OSS_DECODE_ROBUST_READERS")
+    if knob is None:
+        on = ttnn.device.is_blackhole(mesh_device) and tuple(mesh_device.shape) == (1, 4)
+        return set(STREAM_ROLES) if on else set()
+    if knob in ("0", "1"):
+        return set(STREAM_ROLES) if knob == "1" else set()
+    roles = {r.strip() for r in knob.split(",") if r.strip()}
+    assert roles <= set(STREAM_ROLES), f"GPT_OSS_DECODE_ROBUST_READERS={knob!r}: roles are {STREAM_ROLES}"
+    return roles
+
+
+def _device_bank_workers(mesh_device):
+    """Each device's own optimal NOC0 reader core per DRAM bank (logical coordinates)."""
+    return [
+        mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0, ttnn.MeshCoordinate(r, c))
+        for r in range(mesh_device.shape[0])
+        for c in range(mesh_device.shape[1])
+    ]
+
+
+def robust_bank_workers(mesh_device, per_device=None):
+    """First reader core per DRAM bank that suits every device of the mesh (one program serves them all).
+
+    get_optimal_dram_bank_to_logical_worker_assignment(noc) without a coordinate answers for the mesh's first device
+    only. Column harvesting differs per device, so its logical column can sit west of the ARC column on another device:
+    the NOC0 data of an east bank (x = 9) then wraps around the torus row through the west DRAM column and shares
+    links with the west bank's stream in the same row (banks 0 and 4 both have their NOC0 endpoint in row 11). Each
+    device's own optimal core is the nearest worker east of the bank; the largest logical column over the devices is
+    east of the bank on every device, and so is every column past it (logical columns keep the physical order), which
+    is why _BankStreamOp grows robust readers east only. Banks keep their row (Blackhole harvests columns only)."""
+    per = per_device or _device_bank_workers(mesh_device)
+    workers = []
+    for bank in range(mesh_device.dram_grid_size().x):
+        ys = {a[bank].y for a in per}
+        assert len(ys) == 1, f"bank {bank}: optimal worker rows differ across devices: {ys}"
+        workers.append(ttnn.CoreCoord(max(a[bank].x for a in per), ys.pop()))
+    return workers
+
+
 def _page_bytes(tiles, tile_bytes):
     """Largest NOC packet holding whole tiles that divides a `tiles`-tile block."""
     return max(d for d in range(1, tiles + 1) if tiles % d == 0 and d * tile_bytes <= MAX_PACKET_BYTES) * tile_bytes
@@ -166,11 +215,17 @@ class _BankStreamOp:
     coalesced into rectangles: dispatch writes kernel binaries and arguments per core range, and single-core ranges
     made multi-reader programs measurably slower to launch under trace."""
 
-    def __init__(self, mesh_device, readers, active_banks=None):
+    def __init__(self, mesh_device, readers, role, active_banks=None):
         self.mesh_device = mesh_device
         self.banks = mesh_device.dram_grid_size().x
         self.readers = readers
-        bank_workers = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        self.role = role
+        robust = role in robust_reader_roles(mesh_device)
+        if robust:
+            per_device = _device_bank_workers(mesh_device)
+            bank_workers = robust_bank_workers(mesh_device, per_device)
+        else:
+            bank_workers = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
         assert len(bank_workers) == self.banks
         bank_workers = bank_workers[: active_banks or self.banks]
         grid = mesh_device.compute_with_storage_grid_size()
@@ -181,12 +236,21 @@ class _BankStreamOp:
             dx = 1
             while len(cores) < readers:
                 assert dx < grid.x, f"no room for {readers} readers next to bank {bank} worker {core}"
-                for x in (core.x + dx, core.x - dx):
+                for x in (core.x + dx,) if robust else (core.x + dx, core.x - dx):
                     if 0 <= x < grid.x and (x, core.y) not in used and len(cores) < readers:
                         cores.append(ttnn.CoreCoord(x, core.y))
                         used.add((x, core.y))
                 dx += 1
             placed += [(c, bank, r) for r, c in enumerate(cores)]
+        if robust:
+            # The readers of the west banks (first column = the smallest) must stay west of every device's first
+            # column east of the east DRAM column, or their data would cross it and share the east banks' links.
+            west = min(c.x for c in bank_workers)
+            east = min(a[b].x for a in per_device for b in range(self.banks) if a[b].x > west)
+            assert all(
+                c.x < east for c, b, _ in placed if bank_workers[b].x == west
+            ), f"{role}: west-bank readers reach column {east}"
+            logger.info(f"Fused decode {role}: robust readers {sorted({(c.x, c.y) for c, *_ in placed})}")
         vcs = []
         for i, (core, bank, r) in enumerate(placed):
             vc = (bank + r) & 0x3
@@ -243,7 +307,7 @@ class ExpertGateUpStream(_BankStreamOp):
     I_pad] BF16 row-major L1, receives w_e * SwiGLU(gate_e, up_e) per routed expert e."""
 
     def __init__(self, mesh_device, hidden, inter_pad, num_sel, swiglu_limit, alpha, readers):
-        super().__init__(mesh_device, readers)
+        super().__init__(mesh_device, readers, "gate_up")
         self.kx = hidden // TILE
         self.kt = self.kx + 1
         self.num_sel = num_sel
@@ -311,7 +375,7 @@ class ExpertDownStream(_BankStreamOp):
     the routed experts)."""
 
     def __init__(self, mesh_device, hidden, inter_pad, num_sel, readers):
-        super().__init__(mesh_device, readers)
+        super().__init__(mesh_device, readers, "down")
         self.hidden = hidden
         self.num_sel = num_sel
         self.inter_pad = inter_pad
@@ -396,11 +460,13 @@ class LinearStream(_BankStreamOp):
         heads=(0, 0),
         head_tiles=2,
         prefetch_cols=None,
+        role=None,
     ):
         n_tiles = -(-n // TILE)
         banks = mesh_device.dram_grid_size().x
         self.C = -(-n_tiles // banks)
-        super().__init__(mesh_device, readers, active_banks=-(-n_tiles // self.C))
+        role = role or {3: "qkv", 4: "router", 5: "o_proj"}[out_mode]
+        super().__init__(mesh_device, readers, role, active_banks=-(-n_tiles // self.C))
         assert self.C % readers == 0, f"{self.C} columns per bank do not split over {readers} readers"
         self.cols = self.C // readers
         self.n_tiles = n_tiles

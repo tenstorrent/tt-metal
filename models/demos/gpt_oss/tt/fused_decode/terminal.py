@@ -78,6 +78,7 @@ class DecodeTerminal:
             heads=(self.n_tiles, 0),
             head_tiles=self.row_tiles,
             prefetch_cols=LM_HEAD_STREAM_PREFETCH,
+            role="lm_head",
         )
         rows = linear_stream_rows(mesh_device, self.hidden, self.vd)
         layouts = None
