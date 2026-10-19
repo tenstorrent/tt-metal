@@ -6,8 +6,9 @@ set -euo pipefail
 curl -LsSf https://astral.sh/uv/0.7.13/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 uv python install 3.12
+export UV_OVERRIDE="$(dirname "$0")/harbor_dependency_overrides.txt"
 uv tool install --python 3.12 mini-swe-agent==2.2.8 \
-    --with 'litellm[mcp]==1.106.0' --with mcp==2.2.0 --with orjson --with fastapi
+    --with litellm --with orjson --with fastapi
 "$HOME/.local/share/uv/tools/mini-swe-agent/bin/python" - <<'PY'
 import importlib.metadata
 import litellm
