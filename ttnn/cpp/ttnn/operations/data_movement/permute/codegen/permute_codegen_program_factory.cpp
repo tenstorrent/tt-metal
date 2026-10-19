@@ -165,10 +165,12 @@ ProgramDescriptor build_row_invariant(
     const uint32_t row_axes = static_cast<uint32_t>(input_shape.size()) - kPermuteWidthAxisFromEnd;
     const uint32_t stick_bytes = width * input.element_size();
     const uint32_t src_page = static_cast<uint32_t>(src_buffer->aligned_page_size());
-    const uint32_t slot_bytes = row_invariant_slot_bytes(input, output.tensor_spec());
+    const uint32_t dst_page = static_cast<uint32_t>(dst_buffer->aligned_page_size());
+    const uint32_t slot_bytes = std::max(src_page, dst_page);
     const uint32_t num_sticks = static_cast<uint32_t>(input.logical_shape().volume() / width);
 
-    const std::optional<PermuteRmCbPlan> planned = permute_rm_cb_plan(input, output.tensor_spec());
+    const std::optional<PermuteRmCbPlan> planned =
+        plan_permute_rm_cb(slot_bytes, permute_live_cb_l1_budget(input, output.tensor_spec()));
     TT_FATAL(planned.has_value(), "Permute codegen row-invariant CB does not fit in the L1 left free");
     const PermuteRmCbPlan cb_plan = *planned;
 
@@ -208,7 +210,6 @@ ProgramDescriptor build_row_invariant(
         {"cb_id", kCbIn},
         {"write_size", stick_bytes},
         {"batch", cb_plan.batch},
-        {"row_axes", row_axes},
     };
     writer.config = WriterConfigDescriptor{};
 
@@ -228,6 +229,7 @@ ProgramDescriptor build_row_invariant(
 
         KernelDescriptor::RTArgList writer_args;
         writer_args.push_back(n);
+        writer_args.push_back(row_axes);
         writer_args.append(std::vector<uint32_t>(out_row_strides.begin(), out_row_strides.begin() + row_axes));
         writer_args.append(row_shape);
         writer_args.append(row_perm);
