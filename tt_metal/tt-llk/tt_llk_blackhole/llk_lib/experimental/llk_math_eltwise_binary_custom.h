@@ -34,8 +34,8 @@ inline void eltwise_binary_configure_addrmod_custom()
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4> (ELWMUL only)
  * @param num_faces: Number of faces to process (1, 2, or 4)
- * @note Establishes the operand-driven default Src zero-substitution state, which the bcast-col compute asserts
- *       under LLK asserts; an op that leaves it at keep must be followed by this init again.
+ * @note Clears the Src zero-substitution flag, as ELW* need and the bcast-col compute asserts under LLK
+ *       asserts; an op that sets it must be followed by this init again.
  */
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces)
@@ -55,8 +55,8 @@ inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces)
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    // A preceding datacopy leaves the Src zero flag at keep; the FPU op needs the operand-driven value.
-    math::_configure_default_zero_flag_state_();
+    // A preceding datacopy leaves the Src zero flag set; ELW* need it clear.
+    math::_configure_elw_zero_flag_state_();
 }
 
 inline void _llk_math_eltwise_binary_uninit_custom_()
@@ -114,8 +114,7 @@ inline void _bcast_cols_op_()
  *                   callers (e.g. the fuser LoopBlockRow driver) advance this per block-row so each row
  *                   lands on its own dest slots; single-tile-row callers leave it at 0.
  * @note Canonical description of the shared blocked bcast-col mechanism; other files reference this one.
- * @note Call @ref _llk_math_eltwise_binary_init_custom_ first; re-run it after any op that leaves the Src zero flag
- *       at keep.
+ * @note Call @ref _llk_math_eltwise_binary_init_custom_ first; re-run it after any op that sets the Src zero flag.
  */
 template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_bcast_cols_reuse_custom_(
@@ -128,9 +127,9 @@ inline void _llk_math_bcast_cols_reuse_custom_(
         math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
         "Math fidelity larger than LoFi only works with Eltwise multiply");
     LLK_ASSERT(
-        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
-        "bcast-col custom: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
-        "this call left it at keep, so denormal Src operands would not be flushed");
+        math::src_zero_flag_hw == 0,
+        "bcast-col custom: Src zero-substitution flag is set; an op between the init and this call left it set, and "
+        "ELWMUL/ELWSUB need it clear");
 
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
@@ -280,7 +279,8 @@ inline void _llk_math_sub_bcast_cols_compensated_(
 {
     LLK_ASSERT(tensor_shape.total_num_faces() == 4, "compensated column broadcast requires 32x32 tiles");
 
-    math::_configure_preserve_zero_flag_state_();
+    // ELWSUB needs the Src zero flag clear.
+    math::_configure_elw_zero_flag_state_();
     for (std::uint32_t tile = 0; tile < ct_dim; ++tile)
     {
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + tile);

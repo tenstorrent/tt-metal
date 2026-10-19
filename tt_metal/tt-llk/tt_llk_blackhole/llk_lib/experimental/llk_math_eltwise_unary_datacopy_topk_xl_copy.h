@@ -42,6 +42,7 @@ inline void _llk_math_topk_xl_copy_init_([[maybe_unused]] const std::uint32_t ds
     tmp.program();
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    math::_configure_elw_zero_flag_state_(); // ELW* need the Src zero flag clear
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
