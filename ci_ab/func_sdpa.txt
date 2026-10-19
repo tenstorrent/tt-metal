@@ -1,0 +1,2 @@
+tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py
+tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py
