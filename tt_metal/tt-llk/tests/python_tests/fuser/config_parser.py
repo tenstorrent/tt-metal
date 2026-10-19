@@ -338,6 +338,8 @@ class FuserConfigSchema(BaseModel):
         num_stages = len(pipeline)
         for i, operation in enumerate(pipeline):
             operation.stage_id = i + 1
+            operation.previous_operation = pipeline[i - 1] if i > 0 else None
+            operation.next_operation = pipeline[i + 1] if i + 1 < num_stages else None
             operation.needs_pack_sync = any(
                 (node.src_a is not None and node.src_a.is_output)
                 or (node.src_b is not None and node.src_b.is_output)

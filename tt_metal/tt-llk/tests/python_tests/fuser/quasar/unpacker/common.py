@@ -51,12 +51,6 @@ def configure_unpack(
 
 
 def dvalid_init(config: "GlobalConfig" = None, operation: "L1Operation" = None) -> str:
-    from helpers.llk_params import PerfRunType
-
-    if config.quasar_use_dvalid:
-        if config.perf_run_type in (None, PerfRunType.L1_TO_L1):
-            return "set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
-        return "set_up_zero_dest_dvalid_handshake_for_unpack();\n"
     return ""
 
 

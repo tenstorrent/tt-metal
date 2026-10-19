@@ -17,6 +17,7 @@ _ARCH_NAME = {
 unpack_common = importlib.import_module(f"fuser.{_ARCH_NAME}.unpacker.common")
 fpu_common = importlib.import_module(f"fuser.{_ARCH_NAME}.fpu.common")
 pack_common = importlib.import_module(f"fuser.{_ARCH_NAME}.packer.common")
+sfpu_common = importlib.import_module(f"fuser.{_ARCH_NAME}.sfpu.common")
 
 
 def _get_parser():
