@@ -477,6 +477,47 @@ class TT_CCL:
             )
         return self.mla_chunked_kv_buffers[key]
 
+    def get_mla_tp_latent_slot(self, *, seq_len, kvpe_dim, sp_axis, tp_axis, dtype=ttnn.bfloat8_b):
+        """One user/layer slot of the latent cache, TP-gathered from a TP-deduped cache into the TP-replicated
+        layout (SP-sharded on dim 2, global row c*chunk + s*chunk_local + t*region + r at local row
+        c*chunk_local + t*region + r). Unrolled-V expands V from it and ring_joint reads its K from it. Shared by
+        every layer: each layer's gather overwrites it before its expansion and SDPA, which run in queue order.
+        Zero-filled so the rows past the gathered extent that the expansion and SDPA read (K-chunk rounding)
+        start finite."""
+        import torch
+
+        key = ("tp_latent_slot", seq_len, kvpe_dim, sp_axis, tp_axis, dtype)
+        if key not in self.mla_chunked_kv_buffers:
+            shard_dims = [None, None]
+            shard_dims[sp_axis] = 2
+            self.mla_chunked_kv_buffers[key] = ttnn.from_torch(
+                torch.zeros(1, 1, seq_len, kvpe_dim, dtype=torch.bfloat16),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
+                ),
+            )
+        return self.mla_chunked_kv_buffers[key]
+
+    def get_zero_slot_tensor(self):
+        """Persistent 1-element uint32 zero: the slot id of a single-slot cache on the trace-safe metadata path."""
+        import torch
+
+        key = ("zero_slot",)
+        if key not in self.mla_chunked_kv_buffers:
+            self.mla_chunked_kv_buffers[key] = ttnn.from_torch(
+                torch.zeros(1, 1, 1, 1, dtype=torch.int64),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self.mla_chunked_kv_buffers[key]
+
     def get_mla_sparse_kv_gather_buffer(self, *, seq_len, row_width, dtype, layout):
         """Return the full-capacity output scratch for sparse MLA's SP KV-prefix gather.
 
