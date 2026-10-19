@@ -98,8 +98,9 @@ A `fields` object holds what the router kernel is fed, keyed by the field's key.
 | `flag` | `value`, a boolean |
 | `enum` | `value`, an integer, and `schema`, the `enum:<Name>` that names it |
 
-A field is null when it is a buffer the builder did not allocate (the kernel is fed address 0). A field the builder
-does not emit in this configuration (for example a 2D-only field on 1D) is left out.
+A field is null when it is a buffer or stream register the builder did not allocate (the kernel is fed address 0, or
+the unused stream id, 32). A field the builder does not emit in this configuration (for example a 2D-only field on
+1D) is left out.
 
 [FIELDS.md](FIELDS.md) lists every field: its kind, schema and category, the argument that feeds it, and what it
 means.
@@ -122,7 +123,7 @@ entries.
   sibling's path when a sibling's downstream edge lands on the channel, and null when nothing feeds it.
 - **Sender credits** (`credits`): `completed` always, and `acked` only on VC0 with bubble flow control. Each is a
   stream register, or `{array, index}` into the router's credit counter arrays, as the mesh's `credit_transport`
-  backing for the VC says.
+  backing for the VC says. A stream register is null when the builder did not allocate one.
 - **Credit transport** (`meshes.M<n>.credit_transport`): each VC's backing (`stream_register` or `l1_counter`) and the
   reasons the builder put it on counters.
 - **Credit counters** (`credit_counters`): the router's four L1 counter arrays, always reserved. `index_space` says
