@@ -88,7 +88,6 @@ class Attention:
         rope_mats,
         position_idx=None,
         kv_cache=None,
-        batch_size=1,
         indexed_rope=False,
         entries=None,
     ):
@@ -96,7 +95,7 @@ class Attention:
         Prefill attention forward.
 
         Args:
-            hidden_states: Input tensor [batch, seq_len, hidden_size]
+            hidden_states: Input tensor [1, 1, seq_len, hidden_size]
             rope_mats: Tuple of (cos, sin) matrices for RoPE
             kv_cache: Externally-owned :class:`MiniMaxKVCache` (packed K/V/index_k), written at
                 ``self.local_layer_idx`` (the local layer).
@@ -104,7 +103,7 @@ class Attention:
                 None = one chunk in slot 0 at position 0.
 
         Returns:
-            Attention output [batch, seq_len, hidden_size]
+            Attention output [1, 1, seq_len, hidden_size]
         """
         transformation_mat = self.transformation_mats["prefill"] if self.transformation_mats else None
 
@@ -120,7 +119,6 @@ class Attention:
             transformation_mat=transformation_mat,
             position_idx=position_idx,
             ccl_manager=self.ccl_manager,
-            batch_size=batch_size,
             layer_idx=self.local_layer_idx,
             indexed_rope=indexed_rope,
             entries=entries,

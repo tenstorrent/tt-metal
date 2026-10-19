@@ -353,7 +353,6 @@ class Model:
         current_pos,
         get_last_token=-1,
         sampling_on_device=False,
-        batch_size=1,
         skip_lm_head=False,
         on_layer_complete=None,
         kv_cache=None,
@@ -385,7 +384,6 @@ class Model:
                 position_embeddings=rope_mats,
                 position_idx=current_pos,
                 kv_cache=kv_cache,
-                batch_size=batch_size,
                 indexed_rope=indexed_rope,
                 entries=entries,
             )
@@ -402,24 +400,9 @@ class Model:
         if get_last_token != -1:
             if len(logits.shape) == 3:
                 logits = ttnn.unsqueeze(logits, dim=1)
-            if batch_size > 1:
-                # Batch>1: tokens are concatenated [1,1,B*S,H]. Extract each user's 32-token tile.
-                per_user_seq = logits.shape[2] // batch_size
-                tiles = []
-                for b in range(batch_size):
-                    start = b * per_user_seq + get_last_token
-                    tile = ttnn.slice(logits, (0, 0, start, 0), (1, 1, start + 32, logits.shape[-1]))
-                    tiles.append(tile)
-                logits.deallocate(True)
-                logits = ttnn.concat(tiles, dim=2)  # [1, 1, B*32, H]
-                for t in tiles:
-                    t.deallocate(True)
-            else:
-                logits_sliced = ttnn.slice(
-                    logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1])
-                )
-                logits.deallocate(True)
-                logits = logits_sliced
+            logits_sliced = ttnn.slice(logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1]))
+            logits.deallocate(True)
+            logits = logits_sliced
             hidden_states = logits
 
         if skip_lm_head:
@@ -451,7 +434,6 @@ class Model:
         rot_mats_local=None,
         get_last_token=-1,
         kv_cache=None,
-        batch_size=1,
         skip_lm_head=False,
         on_layer_complete=None,
         indexed_rope=False,
@@ -481,7 +463,6 @@ class Model:
             current_pos=None,  # No current_pos for prefill
             kv_cache=kv_cache,
             get_last_token=get_last_token,
-            batch_size=batch_size,
             skip_lm_head=skip_lm_head,
             on_layer_complete=on_layer_complete,
             indexed_rope=indexed_rope,

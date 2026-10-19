@@ -40,7 +40,6 @@ def attention_forward(
     transformation_mat,
     position_idx,
     ccl_manager,
-    batch_size=1,
     layer_idx=0,
     indexed_rope=False,
     entries=None,
@@ -49,7 +48,7 @@ def attention_forward(
     Prefill forward pass - optimized for sequence processing (seq_len>1).
 
     Args:
-        hidden_states: Input tensor [batch, seq_len, hidden_size]
+        hidden_states: Input tensor [1, 1, seq_len, hidden_size]
         rope_mats: Tuple of (cos, sin) matrices for RoPE
         weights: Attention weights
         kv_cache: Externally-owned MiniMaxKVCache (packed K/V/index_k)
@@ -67,12 +66,11 @@ def attention_forward(
             get zero rows.
 
     Returns:
-        Attention output [batch, seq_len, hidden_size]
+        Attention output [1, 1, seq_len, hidden_size]
     """
     activation_dtype = ttnn.bfloat16
-    total_seq_len = hidden_states.shape[-2]
+    seq_len = hidden_states.shape[-2]
     hidden_size = hidden_states.shape[-1]
-    seq_len = total_seq_len // batch_size  # Per-user sequence length
     if seq_len > 32 * 1024:
         activation_dtype = ttnn.bfloat8_b
     else:
@@ -93,11 +91,7 @@ def attention_forward(
     # head_dim (qk_norm_type="per_head"). See the post-split block below (matches
     # transformers minimax_m3_vl: view-to-heads → q_norm/k_norm → RoPE).
 
-    # Reshape for batch: [1, 1, B*S, QKV] -> [B, 1, S, QKV]
-    if batch_size > 1:
-        xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len, -1])
-
-    def core(xqkv, hidden, entry, rows, batch):
+    def core(xqkv, hidden, entry, rows):
         return _attention_core(
             xqkv,
             hidden,
@@ -111,7 +105,6 @@ def attention_forward(
             transformation_mat,
             ccl_manager,
             user_id=entry.slot,
-            batch_size=batch,
             layer_idx=layer_idx,
             cached_len=entry.start,
             indexed_rope=indexed_rope,
@@ -120,17 +113,17 @@ def attention_forward(
 
     entries = entries or [PrefillEntry(slot=0, start=0, end=seq_len)]
     if len(entries) == 1:
-        tt_sdpa_out = core(xqkv_fused, hidden_states, entries[0], seq_len, batch_size)
+        tt_sdpa_out = core(xqkv_fused, hidden_states, entries[0], seq_len)
     else:
-        assert indexed_rope and batch_size == 1, "a packed forward needs the whole-cache indexed RoPE and batch 1"
-        rows = total_seq_len // len(entries)
+        assert indexed_rope, "a packed forward needs the whole-cache indexed RoPE"
+        rows = seq_len // len(entries)
         real = [e for e in entries if not e.is_empty]
 
         def entry_rows(t, k):
             return ttnn.slice(t, (0, 0, k * rows, 0), (1, 1, (k + 1) * rows, t.shape[-1]))
 
         outs = [
-            core(entry_rows(xqkv_fused, k), entry_rows(hidden_states, k) if config.is_sparse else None, e, rows, 1)
+            core(entry_rows(xqkv_fused, k), entry_rows(hidden_states, k) if config.is_sparse else None, e, rows)
             for k, e in enumerate(real)
         ]
         xqkv_fused.deallocate(True)
@@ -143,9 +136,7 @@ def attention_forward(
         for o in outs + ([zeros] if empties else []):
             o.deallocate(True)
 
-    return _output_projection(
-        tt_sdpa_out, weights, mesh_config, ccl_manager, batch_size, total_seq_len, hidden_size, activation_dtype
-    )
+    return _output_projection(tt_sdpa_out, weights, mesh_config, ccl_manager, hidden_size, activation_dtype)
 
 
 def _attention_core(
@@ -161,7 +152,6 @@ def _attention_core(
     transformation_mat,
     ccl_manager,
     user_id,
-    batch_size,
     layer_idx,
     cached_len,
     indexed_rope,
@@ -190,20 +180,15 @@ def _attention_core(
 
     # Apply RoPE. indexed_rope: rope_mats are the WHOLE-cache block-cyclic SP-sharded cos/sin (built once
     # by the runtime); the indexed op derives this chunk's per-chip start from kv_actual_global=cached_len +
-    # the device's cluster_axis coord on-device (no per-chunk host reshard). The per-user seq_len slice only
-    # applies to the non-indexed multi-user path (indexed rope carries the whole cache, never sliced here).
+    # the device's cluster_axis coord on-device (no per-chunk host reshard).
     rope_kv_actual = cached_len if indexed_rope else None
     rope_cluster_axis = mesh_config.sp_axis if indexed_rope else None
-    if batch_size > 1 and not indexed_rope:
-        rope_mats_sliced = [rope_mats[0][:, :, :seq_len, :], rope_mats[1][:, :, :seq_len, :]]
-    else:
-        rope_mats_sliced = rope_mats
     tt_q_orig = tt_q
     tt_k_orig = tt_k
     with zone("rope", FINE):
         tt_q = apply_rope(
             tt_q,
-            rope_mats_sliced,
+            rope_mats,
             transformation_mat,
             is_decode_mode=False,
             kv_actual_global=rope_kv_actual,
@@ -211,7 +196,7 @@ def _attention_core(
         )
         tt_k = apply_rope(
             tt_k,
-            rope_mats_sliced,
+            rope_mats,
             transformation_mat,
             is_decode_mode=False,
             kv_actual_global=rope_kv_actual,
@@ -248,7 +233,7 @@ def _attention_core(
             tt_iq, tt_ik = index_branch_forward(
                 hidden_states,
                 weights,
-                rope_mats_sliced,
+                rope_mats,
                 transformation_mat,
                 index_dim=config.msa_index_dim,
                 rms_norm_eps=config.rms_norm_eps,
@@ -393,13 +378,7 @@ def _attention_core(
     return tt_sdpa_out
 
 
-def _output_projection(
-    tt_sdpa_out, weights, mesh_config, ccl_manager, batch_size, total_seq_len, hidden_size, activation_dtype
-):
-    # Flatten back for output projection: [B, 1, S, H] -> [1, 1, B*S, H]
-    if batch_size > 1:
-        tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
-
+def _output_projection(tt_sdpa_out, weights, mesh_config, ccl_manager, hidden_size, activation_dtype):
     # Output projection + the closing TP collective. Under a SHARDED residual the collective is a
     # reduce-scatter only (o_proj is row-parallel, so the RS both completes the partial sums and lands
     # the result already in the residual's emb/tp layout); under the replicated residual it must be a

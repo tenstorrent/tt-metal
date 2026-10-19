@@ -198,7 +198,6 @@ class DecoderLayer:
         position_embeddings=None,
         position_idx=None,
         kv_cache=None,
-        batch_size=1,
         indexed_rope=False,
         entries=None,
     ):
@@ -222,7 +221,6 @@ class DecoderLayer:
                     rope_mats=position_embeddings,
                     position_idx=position_idx,
                     kv_cache=kv_cache,
-                    batch_size=batch_size,
                     indexed_rope=indexed_rope,
                     entries=entries,
                 )
