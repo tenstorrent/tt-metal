@@ -19,7 +19,8 @@ def image(p):
     return h.hexdigest()[:10]
 
 
-args = [a for a in sys.argv[1:] if "=" in a]
+args = [a for a in sys.argv[1:] if "=" in a and not a.startswith("--")]
+must = sys.argv[sys.argv.index("--must") + 1].split(",") if "--must" in sys.argv else None
 out = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else None
 sides = dict(a.split("=", 1) for a in args)
 H = {}
@@ -48,6 +49,6 @@ for k in keys:
     lines.append(" ".join(row))
 if out:
     open(out, "w").write("\n".join(lines) + "\n")
-ok = aa_bad == 0 and all(v > 0 for v in diff.values()) and keys
+ok = aa_bad == 0 and all(v > 0 for s, v in diff.items() if must is None or s in must) and keys
 print(f"GUARD {'ok' if ok else 'FAIL'} variants={len(keys)} aa_diff={aa_bad} " + " ".join(f"{s}_differs={v}" for s, v in diff.items()))
 sys.exit(0 if ok else 1)

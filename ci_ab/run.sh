@@ -34,7 +34,7 @@ for v in $RUN $GO; do
   grep -a -E "^(FAILED|ERROR)" /tmp/b_$v.txt | cut -c1-200 | head -5
   EC="$EC $v=$HOME/tz_$v"
 done
-python $S/elfguard.py $EC --out /tmp/elf.txt | tee /tmp/guard.txt
+python $S/elfguard.py $EC --must $(echo $RUN | tr " " "\n" | grep -v -E "^M2?$" | paste -sd,) --out /tmp/elf.txt | tee /tmp/guard.txt
 cut -d' ' -f2- /tmp/elf.txt | sort | uniq -c | sort -rn | head -12
 grep -q "^GUARD ok" /tmp/guard.txt || { echo "== GUARD FAIL: the sides did not build as expected"; exit 1; }
 for v in $ISO; do
