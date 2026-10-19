@@ -13,7 +13,7 @@ from models.tt_cnn.tt.builder import TtConv2d
 from models.experimental.ops.quasar.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.ops.quasar.panoptic_deeplab.tt.common import reshape_flattened_conv_output
-from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import block_float_dtype
+from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import block_float_dtype, uses_20_core_path
 
 try:
     from tracy import signpost
@@ -62,8 +62,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
         self.decoder_only = num_classes is None
         self.device = device
         self.model_configs = model_configs
-        compute_grid = device.compute_with_storage_grid_size()
-        self.is_20_core = compute_grid.x == 5 and compute_grid.y == 4
+        self.is_20_core = uses_20_core_path(device)  # also every grid without a tuned profile
 
         # Initialize decoder with all stages
         self._initialize_decoder(

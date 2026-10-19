@@ -156,7 +156,9 @@ class ModelOptimisations:
         elif compute_grid.x == 11 and compute_grid.y == 10:
             self.optimiser = HundredTenCoreOptimiser(self)
         else:
-            raise NotImplementedError("No optimiser implemented for this core grid size.")
+            self.optimiser = AnyGridOptimiser(self)
+        # Set by AnyGridOptimiser: drop every per-layer sharding / slicing choice (see there).
+        self.auto_memory_layout = isinstance(self.optimiser, AnyGridOptimiser)
 
     # =========================================================================
     # CORE API METHODS
@@ -177,6 +179,8 @@ class ModelOptimisations:
 
         if conv_path is not None and conv_path in self.layer_overrides:
             overrides.update(self.layer_overrides[conv_path])
+        if self.auto_memory_layout:
+            overrides.update(sharding_strategy=AutoShardedStrategyConfiguration(), slice_strategy=None)
 
         # Debug logging for stem layers
         if conv_path and conv_path.startswith("stem."):
@@ -207,6 +211,8 @@ class ModelOptimisations:
 
         if maxpool_path is not None and maxpool_path in self.layer_overrides:
             overrides.update(self.layer_overrides[maxpool_path])
+        if self.auto_memory_layout:
+            overrides.update(slice_strategy=None)
 
         return replace(base_config, **overrides)
 
@@ -1139,3 +1145,18 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             deallocate_activation=True,
             enable_weights_double_buffer=True,
         )
+
+
+class AnyGridOptimiser(TwentyCoreOptimiser):
+    """
+    Optimization strategy for core grids without a tuned profile (e.g. Quasar's 8x4, or the
+    2-core grid of the Quasar emulator).
+
+    Keeps every per-layer setting the 20-core profile makes for correctness — which convs fuse
+    ReLU, which keep their input alive for a residual add or a second head, the maxpool's output
+    dtype and layout — but none of its memory-layout tuning: ``ModelOptimisations`` gives every
+    conv auto sharding and no slice strategy, and every maxpool no slice strategy, so the op
+    chooses its own sharding and DRAM slicing for the grid it runs on
+    (``determine_slice_config`` in ``sliding_window/op_slicing/op_slicing.cpp``). The final
+    upsample matmuls get no program config either (``_setup_matmul_configs``).
+    """

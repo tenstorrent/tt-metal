@@ -22,6 +22,7 @@ from models.experimental.ops.quasar.panoptic_deeplab.tests.pcc.common import (
     bf16_conv_via_fp32,
     skip_if_not_blackhole_110_cores,
     skip_if_not_blackhole_20_cores,
+    skip_if_tuned_grid,
 )
 
 
@@ -61,12 +62,22 @@ from models.experimental.ops.quasar.panoptic_deeplab.tests.pcc.common import (
             },
             skip_if_not_blackhole_110_cores,
         ),
+        (
+            PANOPTIC_DEEPLAB,
+            {
+                "semantic": {"pcc": 0.986, "abs_err": 1.3, "rel_err": 0.4},
+                "center": {"pcc": 0.95, "abs_err": 0.1, "rel_err": 2.1},
+                "offset": {"pcc": 0.990, "abs_err": 10.4, "rel_err": 0.6},
+            },
+            skip_if_tuned_grid,
+        ),
     ],
     ids=[
         "panoptic_deeplab_20_cores",
         "panoptic_deeplab_110_cores",
         "deeplab_v3_plus_20_cores",
         "deeplab_v3_plus_110_cores",
+        "panoptic_deeplab_any_grid",
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)

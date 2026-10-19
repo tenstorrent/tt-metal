@@ -131,3 +131,14 @@ def skip_if_not_blackhole_110_cores(device):
         pytest.skip(
             f"This test is intended to run only on Blackhole P150 devices with 110 cores. Core grid [{compute_grid.x},{compute_grid.y}] must be [11, 10]."
         )
+
+
+def skip_if_tuned_grid(device):
+    """Skip on the 5x4 and 11x10 grids, which have tuned profiles and their own test cases.
+
+    Every other grid (Quasar's 8x4, the emulator's 2 cores, or any Blackhole/Wormhole grid limited with
+    ``TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE``) runs ``AnyGridOptimiser``.
+    """
+    compute_grid = device.compute_with_storage_grid_size()
+    if (compute_grid.x, compute_grid.y) in ((5, 4), (11, 10)):
+        pytest.skip(f"Core grid [{compute_grid.x},{compute_grid.y}] has a tuned profile; see its own test case.")
