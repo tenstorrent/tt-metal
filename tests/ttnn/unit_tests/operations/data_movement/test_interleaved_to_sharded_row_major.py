@@ -35,8 +35,8 @@ ELEMENT_BYTES = {ttnn.bfloat16: 2, ttnn.float32: 4, ttnn.uint32: 4}
 @pytest.mark.parametrize("row_bytes", [32, 48, 128, 240, 256, 512])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.uint32])
 def test_interleaved_to_sharded_row_major_dram(device, dtype, row_bytes, rows_per_core, grid, orientation):
-    # Row-major DRAM-interleaved -> height-sharded L1, bit for bit: aligned and unaligned rows, few and many rows
-    # per core, one row of cores and the full grid, both orientations, a partly filled last shard.
+    # Row-major DRAM-interleaved -> height-sharded L1, bit for bit, with a partly filled last shard. On Blackhole,
+    # rows <= 256 B at 100 / 513 rows per core take I2S_BANK_RUNS (on one row of cores only unaligned rows do).
     width = row_bytes // ELEMENT_BYTES[dtype]
     g = device.compute_with_storage_grid_size()
     grid_y = 1 if grid == "one_row" else g.y

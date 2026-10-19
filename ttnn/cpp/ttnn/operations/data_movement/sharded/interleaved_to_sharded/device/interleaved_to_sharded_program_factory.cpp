@@ -165,8 +165,8 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t l1_alignment = hal::get_l1_alignment();
     uint32_t num_trids = 4;
-    // Height-sharded row-major from DRAM: read a shard one run of pages per DRAM bank instead of one read per
-    // stick, where per-stick reads bound the op (narrow or unaligned pages on many cores). Blackhole only.
+    // Blackhole, height-sharded row-major from DRAM: read one run of pages per DRAM bank instead of one per stick.
+    // Wider pages, fewer pages per bank or (aligned pages) fewer cores are slower this way; N150 models gained nothing.
     constexpr uint32_t bank_runs_stage_bytes = 16 * 1024;
     constexpr uint32_t bank_runs_max_page_bytes = 256;
     constexpr uint32_t bank_runs_min_pages_per_bank = 8;
@@ -176,23 +176,21 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     const bool unaligned_pages = input_unit_size % dram_alignment != 0;
     const bool use_bank_runs = is_blackhole && !is_tile && src_is_dram &&
                                shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED &&
-                               input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
                                input_unit_size == src_buffer->page_size() && page_stride <= bank_runs_max_page_bytes &&
-                               page_stride * num_dram_banks * 2 <= bank_runs_stage_bytes &&
                                num_units_per_shard_height >= bank_runs_min_pages_per_bank * num_dram_banks &&
                                (unaligned_pages || all_cores.num_cores() >= bank_runs_min_cores);
     // The scratchpad stages DRAM (64B) reads down to L1 (16B) alignment. See issue #34414. Only the
     // row-major reader has a use for it -- the tile reader never receives a handle to it -- so the
     // tile path declares no spec at all rather than an unbound one.
-    const bool needs_scratch = (src_is_dram && (input_unit_size % dram_alignment != 0)) ||
-                               (is_blackhole || is_quasar) || keep_l1_aligned || use_bank_runs;
+    const bool needs_scratch =
+        (src_is_dram && (input_unit_size % dram_alignment != 0)) || (is_blackhole || is_quasar) || keep_l1_aligned;
     const bool has_scratch = !is_tile && needs_scratch;
     if (has_scratch) {
         uint32_t scratch_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
         // Whole region the former DFB reserved on each node: entry_size * num_entries.
         uint32_t scratch_size = scratch_page_size * num_trids;
         if (use_bank_runs) {
-            scratch_size = std::max(scratch_size, bank_runs_stage_bytes + dram_alignment);
+            scratch_size = std::min(bank_runs_stage_bytes, num_units_per_shard_height * page_stride);
         }
         scratchpads.push_back(ScratchpadSpec{
             .unique_id = SCRATCH,
