@@ -6,13 +6,11 @@
 
 ``ttml.core.distributed.synchronize_gradients`` decides per (parameter, mesh axis) whether to all-reduce the gradient
 along that axis by reading the *parameter's* TensorTopology through ``is_sharded_on_axis``: a parameter sharded on an
-axis (TP, FSDP) already holds a per-shard-correct gradient there, a replicated one must be averaged. That reader used
-to index ``placements[axis]`` directly, which is only meaningful for an N-D label (one placement per mesh axis); the
-collapsed 1-D ``{N}, [placement]`` of the default mappers -- and of every tensor created without a mapper -- read as
-"not sharded" on every axis but 0. After the reduction a relabel by index (force_replicate_axes) then rewrote the
-result's label, over-claiming Replicate for a collapsed Shard. Now every tensor created without a mapper carries one
-Replicate per mesh axis, the reader expands a collapsed label per axis (a whole-mesh Shard is Shard on every axis of
-size > 1) and refuses one it cannot read, and the all_reduce result carries its own per-axis label.
+axis (TP, FSDP) already holds a per-shard-correct gradient there, a replicated one must be averaged. The reader takes
+an N-D label (one placement per mesh axis) as is, expands the collapsed 1-D ``{N}, [placement]`` of the default
+mappers per axis (a whole-mesh Shard is Shard on every axis of size > 1, a whole-mesh Replicate is Replicate
+everywhere) and refuses a label it cannot read; every tensor created without a mapper carries one Replicate per mesh
+axis, and the all_reduce result carries its own per-axis label.
 
 For tiny TP / DDP / FSDP / HSDP models after one backward this module asserts:
 
@@ -20,9 +18,8 @@ For tiny TP / DDP / FSDP / HSDP models after one backward this module asserts:
   * ``is_sharded_on_axis`` per (parameter, axis), hence the set of axes each gradient is reduced along;
   * after ``synchronize_gradients`` the gradient reads Replicate on the reduced axis, keeps its Shard on the other
     axis, and holds the mean of the per-device gradients read before the reduction;
-  * negative controls: a collapsed Shard label reads as Shard on the non-trivial axis (it read as Replicate before
-    this change, the one placement sat at index 0), and a label that does not cover the mesh raises instead of being
-    guessed.
+  * negative controls: a collapsed Shard label reads as Shard on the non-trivial axis, and a label that does not
+    cover the mesh raises instead of being guessed.
 
 The ParallelismContext-driven overload of ``synchronize_gradients`` cannot be exercised for several layouts in one
 process (the context is a one-shot singleton), so its axis filter is checked through the reader it uses and the
@@ -302,9 +299,8 @@ class TestTP:
 
     def test_collapsed_shard_label_reads_as_shard_on_the_tp_axis(self, tp_mesh, expect_error):
         """Negative control. ``{2}, [Shard(2)]`` from the whole-mesh 1-D mapper reads as Shard on the tp axis (axis 1)
-        and Replicate on the size-1 dp axis. Before this change axis 1 was out of range of the single placement and
-        read as not sharded, so a TP-sharded parameter created this way would have been reduced along a DDP axis
-        with its own shard. A collapsed label that does not cover the mesh is refused, not guessed."""
+        and Replicate on the size-1 dp axis, so a TP-sharded parameter created this way is never reduced along a DDP
+        axis with its own shard. A collapsed label that does not cover the mesh is refused, not guessed."""
         tp, dp = tp_mesh.axis_index("tp"), tp_mesh.axis_index("dp")
         collapsed = _input(
             (1, 1, DIM, DIM), ttml.core.distributed.shard_tensor_to_mesh_mapper(_device(), 2, None)
@@ -363,9 +359,7 @@ class TestFSDP:
     def test_fully_shard_refuses_a_collapsed_shard_label(self, fsdp_mesh, expect_error):
         """A parameter carrying the collapsed ``{2}, [Shard(2)]`` label of the whole-mesh 1-D mapper is sharded over
         every mesh axis at once, so ``fully_shard`` refuses it with the collapsed-label error, whatever index the
-        FSDP axis has. Negative control: the reader used to look at ``placements[axis_index]`` first, so with the FSDP
-        axis at index 0 the single placement "existed" and the diagnosis was "already sharded on mesh axis 'fsdp'",
-        while at index 1 the label read as not sharded and one device's shard was redistributed as the full tensor."""
+        FSDP axis has: the placement count is checked before any index is read."""
         from ttml import fsdp as fsdp_module
 
         linear = LinearLayer(DIM, DIM, has_bias=False)
@@ -378,7 +372,7 @@ class TestFSDP:
             ttml.fsdp.fully_shard(linear)
 
         n_axes = len(fsdp_mesh.shape)
-        with expect_error(RuntimeError, "collapsed 1-D topology label"):  # FSDP axis at index 0: refused, not misread
+        with expect_error(RuntimeError, "collapsed 1-D topology label"):  # FSDP axis at index 0
             fsdp_module._already_fsdp_sharded([ttnn.PlacementShard(2)], 0, n_axes)
         assert fsdp_module._already_fsdp_sharded([ttnn.PlacementReplicate()], 0, n_axes) is False
         assert fsdp_module._already_fsdp_sharded([ttnn.PlacementReplicate(), ttnn.PlacementShard(2)], 1, n_axes) is True
@@ -418,11 +412,9 @@ class TestDDP:
 
     def test_collapsed_grad_label_is_read_reduced_and_relabelled(self, ddp_mesh):
         """Negative control. A gradient carrying the collapsed ``{2}, [Shard(0)]`` label (what a whole-mesh
-        ShardTensorToMesh batch hands every downstream gradient) reads as Shard on the dp axis -- before this change
-        it read as not sharded there, the one placement sat at index 0 -- and comes back from the reduction as
-        Replicate on every axis with the averaged bytes, labelled by the collective itself (the relabel-by-index this
-        replaces would have produced the same label here, but over-claimed Replicate for the same input on a 2-D
-        mesh). On this line mesh the all_reduce keeps the collapsed spelling, so the result is ``{2}, [Replicate]``
+        ShardTensorToMesh batch hands every downstream gradient) reads as Shard on the dp axis and comes back from the
+        reduction as Replicate on every axis with the averaged bytes, labelled by the collective itself. On this line
+        mesh the all_reduce keeps the collapsed spelling, so the result is ``{2}, [Replicate]``
         with ONE placement (on a 2-D mesh it would be the N-D ``[Replicate, ...]``); hence no ``len == 2`` assertion
         here, by design."""
         dp = ddp_mesh.axis_index("dp")
