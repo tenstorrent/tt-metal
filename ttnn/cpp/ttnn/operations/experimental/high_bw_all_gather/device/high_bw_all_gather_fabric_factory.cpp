@@ -570,12 +570,31 @@ ChipShardPageGeometry derive_shard_page_geometry(
         geometry.pages_per_cache_slot,
         shape,
         dim);
+    // Outer blocks (HighBwAllGatherParams::outer_block_rows): every block of the gather dim is an outer slice of its
+    // own, so the output interleaves the ranks per block. The live blocks are a prefix of the outer slices only when
+    // the dims before the gather dim are one slot.
+    if (args.outer_block_rows > 0) {
+        geometry.outer_blocks = shape[dim] / args.outer_block_rows;
+        TT_FATAL(
+            geometry.num_outer_slices == 1 ||
+                (!args.gathered_outer_blocks.has_value() && !tensor_args.has_gathered_prefix_metadata()),
+            "high_bw_all_gather: a partial outer-block gather needs singleton dims before the gather dim, got {} outer "
+            "slices (shape {}, dim {})",
+            geometry.num_outer_slices,
+            shape,
+            dim);
+        geometry.num_outer_slices *= geometry.outer_blocks;
+        geometry.pages_per_outer_slice /= geometry.outer_blocks;
+    }
     geometry.local_gather_dim_length = shape[dim];
     geometry.gather_dim_elements_per_page = tile && dim == tensor_rank - 1
                                                 ? tile_spec.get_width()
                                                 : (tile && dim == tensor_rank - 2 ? tile_spec.get_height() : 1);
     geometry.num_ranks = args.num_devices;
-    if (tensor_args.has_gathered_prefix_metadata()) {
+    if (tensor_args.has_gathered_prefix_metadata() && args.outer_block_rows > 0) {
+        // one KV slab is one outer block (see common_args)
+        geometry.pages_per_kv_slab = 1;
+    } else if (tensor_args.has_gathered_prefix_metadata()) {
         const uint32_t full_gathered_length = shape[dim] * args.num_devices;
         TT_FATAL(
             full_gathered_length % args.gathered_slab_global == 0,
@@ -601,7 +620,8 @@ ChipShardPageGeometry derive_shard_page_geometry(
 }
 
 uint32_t host_valid_pages_per_outer_slice(const HighBwAllGatherParams& args, const ChipShardPageGeometry& geometry) {
-    if (!args.gathered_dim_size.has_value()) {
+    // outer blocks are whole: gathered_outer_blocks bounds the outer slices instead
+    if (!args.gathered_dim_size.has_value() || args.outer_block_rows > 0) {
         return geometry.pages_per_outer_slice;
     }
     const uint64_t valid_local_length = *args.gathered_dim_size / args.num_devices;
@@ -648,16 +668,21 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> common_args(
     std::vector<uint32_t> sender{
         output.buffer()->address(), shards_arrived_counter_address, downstream_started_counter_address};
     // the chip shard geometry: [0] prefix tensor address [1] valid pages per outer slice (host) [2] outer slices [3]
-    // pages per outer slice [4] ranks [5] KV slab [6] full gathered length [7] pages per KV slab
-    const std::array<uint32_t, 8> geometry_block{
+    // pages per outer slice [4] ranks [5] KV slab [6] full gathered length [7] pages per KV slab [8] whether the prefix
+    // counts outer slices. With outer blocks the live blocks are a prefix of the outer slices: gathered_outer_blocks,
+    // or on the metadata path one KV slab per block, so the valid prefix (in "pages" of one per slab) is the count.
+    const bool outer_blocks = args.outer_block_rows > 0;
+    const std::array<uint32_t, 9> geometry_block{
         tensor_args.has_gathered_prefix_metadata() ? tensor_args.gathered_prefix_tensor->buffer()->address() : 0u,
         host_valid_pages_per_outer_slice(args, geometry),
-        geometry.num_outer_slices,
+        args.gathered_outer_blocks.value_or(geometry.num_outer_slices),
         geometry.pages_per_outer_slice,
         geometry.num_ranks,
         args.gathered_slab_global,
-        tensor_args.input_tensor.padded_shape()[args.dim] * args.num_devices,
-        geometry.pages_per_kv_slab};
+        outer_blocks ? geometry.outer_blocks * args.gathered_slab_global
+                     : tensor_args.input_tensor.padded_shape()[args.dim] * args.num_devices,
+        geometry.pages_per_kv_slab,
+        outer_blocks ? 1u : 0u};
     reader.insert(reader.end(), geometry_block.begin(), geometry_block.end());
     sender.insert(sender.end(), geometry_block.begin(), geometry_block.end());
     return {std::move(reader), std::move(sender)};

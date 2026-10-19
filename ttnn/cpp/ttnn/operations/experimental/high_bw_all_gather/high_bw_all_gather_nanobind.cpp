@@ -93,14 +93,24 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     grows every chunk, and a replay would re-gather only the captured chunk's prefix.
                     Mutually exclusive with ``gathered_dim_size``.
                 gathered_slab_global: Block-cyclic slab width in gathered-dim elements
-                    (``chunk_local * num_devices``). Required with ``gathered_prefix_tensor`` and hashed,
-                    being structural rather than per-chunk.
+                    (``chunk_local * num_devices``). With ``outer_block_rows`` it is instead the unit of one
+                    block in the units of the start position (e.g. one global chunk). Required with
+                    ``gathered_prefix_tensor`` and hashed, being structural rather than per-chunk.
                 ready_semaphore: Optional caller-owned persistent startup semaphore. Must be
                     supplied together with ``data_valid_semaphore`` and initialized to zero on
                     the complete worker-core restriction before the first call.
                 data_valid_semaphore: Optional caller-owned persistent relay/completion semaphore.
                     Supplying both semaphore handles selects the allocation-free, no-internal-sync
                     dispatch path intended for sub-device overlap.
+                outer_block_rows: Split each rank's ``dim`` into blocks of this many rows and gather every block
+                    as its own rank-interleaved group: rank ``r``'s local row ``b*B + i`` lands at output row
+                    ``b*(N*B) + r*B + i``. Only the page order is reinterpreted, so no reshape is needed and an
+                    ND-sharded cache works as the source. The live data is a prefix of whole blocks: with
+                    ``gathered_prefix_tensor`` one ``gathered_slab_global`` is one block, so the live block count is
+                    ``min(round_up(start + slab, slab), nblk * slab) / slab``. 0 (default) = off. Hashed.
+                gathered_outer_blocks: Scalar live outer-block count, in ``(0, nblk]``. Requires
+                    ``outer_block_rows``; mutually exclusive with ``gathered_prefix_tensor`` and
+                    ``gathered_dim_size``. Not hashed: a new count reuses the cached program.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -119,7 +129,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("gathered_prefix_tensor") = nb::none(),
         nb::arg("gathered_slab_global") = 0,
         nb::arg("ready_semaphore") = nb::none(),
-        nb::arg("data_valid_semaphore") = nb::none());
+        nb::arg("data_valid_semaphore") = nb::none(),
+        nb::arg("outer_block_rows") = 0,
+        nb::arg("gathered_outer_blocks") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail

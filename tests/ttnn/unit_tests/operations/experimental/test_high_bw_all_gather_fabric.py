@@ -6,8 +6,8 @@
 Every output is preallocated and pre-filled with random bytes, so a case also checks what the op must leave untouched.
 Covered: TILE and ROW_MAJOR, interleaved and ND-sharded DRAM input into an interleaved DRAM output, every cluster_axis
 (0, 1 and the whole mesh), program-cache hits on new buffers, slot select and partial extents, the trace-safe metadata
-forms, caller-owned L1_SMALL semaphores (with and without a sub-device), worker-core restrictions, link counts, and
-pages larger than the fabric payload.
+forms, caller-owned L1_SMALL semaphores (with and without a sub-device), worker-core restrictions, link counts,
+pages larger than the fabric payload, and outer blocks (rank-interleaved blocks of rows, a live prefix of whole blocks).
 
 Runs on any Blackhole mesh: QuietBox (2x2), LoudBox (2x4) or Galaxy (8x4), and under tt-emule except for the cases
 that need fast dispatch (trace, sub-devices).
@@ -454,3 +454,192 @@ def test_subdevice_external_semaphores(mesh_device, layout):
         ttnn.synchronize_device(mesh_device)
         mesh_device.clear_loaded_sub_device_manager()
         mesh_device.remove_sub_device_manager(manager)
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Outer blocks
+# ----------------------------------------------------------------------------------------------------------------------
+# Each rank's rows are gathered in blocks of B rows, every block rank-interleaved (rank r's local row b * B + i lands at
+# output row b * G * B + r * B + i), and the live data is a prefix of whole blocks. This is how unrolled-V MLA rebuilds
+# one SP row's latent from a TP-deduped, ND-sharded KV cache (a block is one 160-row region per chunk) without reshaping
+# the cache.
+OUTER_BLOCKS = 6
+OUTER_BLOCK_ROWS = 160
+OUTER_SLAB = 5120  # one chunk of the global sequence = one block
+OUTER_CASES = [(1, 0), (3, 2560), (1, 5120), (3, 27000), (1, 0), (3, 27000)]  # (slot, chunk start)
+
+
+def _outer_live_blocks(start):
+    return min(-(-(start + OUTER_SLAB) // OUTER_SLAB), OUTER_BLOCKS)
+
+
+def _outer_setup(mesh_device, cluster_axis, nd_sharded, dtype):
+    torch.manual_seed(2)
+    G, mapper = _group(mesh_device, cluster_axis)
+    rows = OUTER_BLOCKS * OUTER_BLOCK_ROWS
+    host = _random((SLOTS, 1, G * rows, 576), ttnn.bfloat16)
+    inp = _input(mesh_device, host, dtype, ttnn.TILE_LAYOUT, mapper(2), nd_sharded)
+    out, _ = _output(mesh_device, (1, 1, G * rows, 576), dtype, ttnn.TILE_LAYOUT)
+    # what the device holds (bfp8 rounds), so the reference compares bit for bit
+    host = ttnn.to_torch(ttnn.from_torch(host, dtype=dtype, layout=ttnn.TILE_LAYOUT))
+    expected = ttnn.to_torch(ttnn.get_device_tensors(out)[0])
+    return inp, out, G, host, expected
+
+
+def _outer_expected(expected, host, G, slot, live):
+    expected = expected.clone()
+    rows, B = OUTER_BLOCKS * OUTER_BLOCK_ROWS, OUTER_BLOCK_ROWS
+    for b in range(live):
+        for r in range(G):
+            expected[0, 0, (b * G + r) * B : (b * G + r + 1) * B] = host[
+                slot, 0, r * rows + b * B : r * rows + (b + 1) * B
+            ]
+    return expected
+
+
+@pytest.mark.parametrize("device_params", [TORUS_6K], indirect=True)
+@MESH
+@pytest.mark.parametrize("cluster_axis", [1, None], ids=["axis1", "full_mesh"])
+@INPUT_MEMORY
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bfp8"])
+def test_outer_blocks(mesh_device, cluster_axis, nd_sharded, dtype):
+    """outer_block_rows + gathered_outer_blocks: a new slot or block count reuses the cached program; blocks past the
+    live count keep their bytes."""
+    _skip_singleton(mesh_device, cluster_axis)
+    inp, out, G, host, expected = _outer_setup(mesh_device, cluster_axis, nd_sharded, dtype)
+    entries = None
+    for slot, start in OUTER_CASES + [(0, 2560), (2, 27000)]:
+        live = _outer_live_blocks(start)
+        _gather(
+            mesh_device,
+            inp,
+            out,
+            dim=2,
+            cluster_axis=cluster_axis,
+            input_batch_index=slot,
+            outer_block_rows=OUTER_BLOCK_ROWS,
+            gathered_outer_blocks=live,
+        )
+        expected = _outer_expected(expected, host, G, slot, live)
+        _check(out, expected, f"slot {slot}, {live} live blocks")
+        entries = entries or mesh_device.num_program_cache_entries()
+        assert mesh_device.num_program_cache_entries() == entries
+
+
+@FAST_DISPATCH_ONLY
+@pytest.mark.parametrize("device_params", [TORUS_6K], indirect=True)
+@MESH
+@pytest.mark.parametrize("cluster_axis", [1, None], ids=["axis1", "full_mesh"])
+@INPUT_MEMORY
+def test_outer_blocks_metadata_traced(mesh_device, cluster_axis, nd_sharded):
+    """The trace-safe form: the slot and the live block count (from the chunk start, one slab per block) are read on
+    device. Captured once; only the user and prefix tensors change between replays."""
+    _skip_singleton(mesh_device, cluster_axis)
+    inp, out, G, host, expected = _outer_setup(mesh_device, cluster_axis, nd_sharded, ttnn.bfloat16)
+    num_layers, layer_idx = 2, 1  # slot = user * num_layers + layer_idx: slots 1 and 3 are users 0 and 1
+
+    def scalar(value, device=None):
+        return ttnn.from_torch(
+            torch.tensor([[[[value]]]], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    user, prefix = scalar(0, mesh_device), scalar(0, mesh_device)
+
+    def issue():
+        ttnn.experimental.high_bw_all_gather(
+            inp,
+            dim=2,
+            output_tensor=out,
+            cluster_axis=cluster_axis,
+            num_links=NUM_LINKS,
+            input_batch_index_tensor=user,
+            batch_slot_num_layers=num_layers,
+            batch_slot_layer_idx=layer_idx,
+            gathered_prefix_tensor=prefix,
+            gathered_slab_global=OUTER_SLAB,
+            outer_block_rows=OUTER_BLOCK_ROWS,
+        )
+
+    issue()  # compile (user 0, start 0)
+    ttnn.synchronize_device(mesh_device)
+    expected = _outer_expected(expected, host, G, layer_idx, 1)
+    entries = mesh_device.num_program_cache_entries()
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    issue()
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    try:
+        for slot, start in OUTER_CASES:
+            ttnn.copy_host_to_device_tensor(scalar(slot // num_layers), user)
+            ttnn.copy_host_to_device_tensor(scalar(start), prefix)
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+            ttnn.synchronize_device(mesh_device)
+            live = _outer_live_blocks(start)
+            expected = _outer_expected(expected, host, G, slot, live)
+            _check(out, expected, f"replay slot {slot}, {live} live blocks")
+        assert mesh_device.num_program_cache_entries() == entries
+    finally:
+        ttnn.release_trace(mesh_device, tid)
+
+
+@pytest.mark.parametrize("device_params", [TORUS_6K], indirect=True)
+@MESH
+def test_outer_blocks_validation(mesh_device, expect_error):
+    G, mapper = _group(mesh_device, None)
+    rows = OUTER_BLOCKS * OUTER_BLOCK_ROWS
+    inp = _input(mesh_device, torch.zeros(2, 1, G * rows, 576), ttnn.bfloat16, ttnn.TILE_LAYOUT, mapper(2), False)
+    out, _ = _output(mesh_device, (1, 1, G * rows, 576), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+
+    def scalar(value):
+        return ttnn.from_torch(
+            torch.tensor([[[[value]]]], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    def gather(**kw):
+        kw.setdefault("input_batch_index", 0)
+        _gather(mesh_device, inp, out, dim=2, cluster_axis=None, **kw)
+
+    with expect_error(RuntimeError, "gathered_outer_blocks requires outer_block_rows"):
+        gather(gathered_outer_blocks=1)
+    with expect_error(RuntimeError, "gathered_outer_blocks 0 must be in"):
+        gather(outer_block_rows=OUTER_BLOCK_ROWS, gathered_outer_blocks=0)
+    with expect_error(RuntimeError, "must divide the gather dim"):
+        gather(outer_block_rows=96 * 7)
+    with expect_error(RuntimeError, "whole number of tile rows"):
+        gather(outer_block_rows=48)
+    with expect_error(RuntimeError, "cannot be combined with the row extent"):
+        gather(outer_block_rows=OUTER_BLOCK_ROWS, gathered_dim_size=G * OUTER_BLOCK_ROWS)
+    with expect_error(RuntimeError, "gathered_outer_blocks and gathered_prefix_tensor are mutually exclusive"):
+        gather(
+            input_batch_index=None,
+            input_batch_index_tensor=scalar(0),
+            gathered_prefix_tensor=scalar(0),
+            gathered_slab_global=OUTER_SLAB,
+            outer_block_rows=OUTER_BLOCK_ROWS,
+            gathered_outer_blocks=1,
+        )
+    # A bad block count on a program-cache hit is still rejected: two valid counts share one program.
+    gather(outer_block_rows=OUTER_BLOCK_ROWS, gathered_outer_blocks=2)
+    entries = mesh_device.num_program_cache_entries()
+    gather(outer_block_rows=OUTER_BLOCK_ROWS, gathered_outer_blocks=3)
+    assert mesh_device.num_program_cache_entries() == entries, "a new block count must reuse the cached program"
+    with expect_error(RuntimeError, "must be in"):
+        gather(outer_block_rows=OUTER_BLOCK_ROWS, gathered_outer_blocks=OUTER_BLOCKS + 1)
+    # In block mode the slab is only a unit: one that does not divide by the ring size is valid.
+    gather(
+        input_batch_index=None,
+        input_batch_index_tensor=scalar(0),
+        gathered_prefix_tensor=scalar(5),
+        gathered_slab_global=5,
+        outer_block_rows=OUTER_BLOCK_ROWS,
+    )
