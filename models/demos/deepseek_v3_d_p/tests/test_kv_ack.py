@@ -26,6 +26,7 @@ class _Recorder:
 
     def __init__(self):
         self.zero_calls = []
+        self.zero_kwargs = []
         self.syncs = 0
         self.socket_syncs = []
 
@@ -33,7 +34,7 @@ class _Recorder:
         monkeypatch.setattr(
             ttnn.experimental.deepseek_prefill,
             "zero_padded_kv_cache",
-            lambda *args: self.zero_calls.append(args),
+            lambda *args, **kwargs: (self.zero_calls.append(args), self.zero_kwargs.append(kwargs)),
         )
         monkeypatch.setattr(
             ttnn.experimental.deepseek_prefill,
@@ -142,10 +143,15 @@ def test_metadata_and_scalar_forms_pass_different_arguments(monkeypatch):
     zero_pad_and_ack(**_call(on_layer_complete=lambda _idx: None))
     scalar_args = rec.zero_calls[-1]
     assert scalar_args == (rec.zero_calls[-1][0], 1, 2, 6, 5000, 640 * 8, 0)
+    assert rec.zero_kwargs[-1] == {"tp_axis": None}
+
+    zero_pad_and_ack(**_call(tp_axis=1, on_layer_complete=lambda _idx: None))
+    assert rec.zero_calls[-1] == scalar_args and rec.zero_kwargs[-1] == {"tp_axis": 1}
 
     zero_pad_and_ack(**_call(metadata=("SLOT", "START", "END"), on_layer_complete=lambda _idx: None))
     traced_args = rec.zero_calls[-1]
     assert traced_args[1:] == ("SLOT", "END", 2, 6, 640 * 8, 0), "traced form reads slot and end on device"
+    assert rec.zero_kwargs[-1] == {"tp_axis": None}
 
 
 def test_missing_end_and_metadata_is_rejected(expect_error):

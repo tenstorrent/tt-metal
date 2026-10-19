@@ -56,7 +56,7 @@ _CMD_K3_CHUNKED_8X4 = (
 # signpost filter keeps every MLA_START/MLA_END region, so an unpinned axis multiplies the total.
 _CMD_MISTRAL4_CHUNKED_8X4 = (
     f"pytest {_CHUNKED_TEST_PATH} "
-    "-k 'deep-50k+5k and mistral4 and func and torus-xy-8x4 and scalar and no_determinism'"
+    "-k 'deep-50k+5k and mistral4 and func and torus-xy-8x4 and scalar and no_determinism and sp_only'"
 )
 # Record-only: one local run on DDR 14000 where the other baselines here are cut at 16000, so the
 # margin admits any measurement. Replace both with the first certified TorusXY CI result.

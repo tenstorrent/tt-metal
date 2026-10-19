@@ -2082,6 +2082,7 @@ class ttMLA:
         if tp_shard_kv is None:
             self.tp_shard_kv = self._has_indexer and self.tp_factor > 1
         else:
+            assert tp_shard_kv or not self._has_indexer, "sparse (DSA) MLA requires a TP-deduped KV cache"
             self.tp_shard_kv = tp_shard_kv
             assert not tp_shard_kv or self.tp_factor > 1, (
                 f"tp_shard_kv needs a TP axis to dedup across (tp_factor={self.tp_factor}); at tp=1 the "
