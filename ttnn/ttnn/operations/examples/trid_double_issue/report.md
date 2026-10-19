@@ -192,3 +192,73 @@ Each core drains its own NoC, so the effect is per-core and survives to 6 cores 
 essentially undiminished (1.54× → 1.48× at block=1; 1.37× → 1.36× at block=4) as the aggregate in-flight depth approaches the knee.
 
 **Not measured: the fully saturated grid.** 6 of 110 cores is far from it.
+
+---
+
+## Blackhole p150b — bh-qb-15-special-adamjanovic-for-reservation-139410 (2026-10-19)
+
+| stamp | value |
+|---|---|
+| arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| metric / method | same op and CB as §2: `test_trid_double_issue_device_perf`, `DEVICE KERNEL DURATION [ns]`, mean of 10 profiled launches per cell (the test's default; §2 used 20), 1 Tensix core, `[512, 512]` bf16, `cb_blocks = 6` in every cell |
+
+### Main table (`test_trid_double_issue_device_perf`) — same schema as §2
+
+| block | method | slots | in-flight | ns/op | GB/s | vs naive | vs best base |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | base ahead=1 | 1 | 1 | 103755.3 | 10.1 | 1.00× | 0.42× |
+| 1 | base ahead=2 | 2 | 2 | 59468.9 | 17.6 | 1.74× | 0.73× |
+| 1 | base ahead=3 | 3 | 3 | 43374.9 | 24.2 | 2.39× | 1.00× |
+| 1 | base ahead=4 | 4 | 4 | 43328.1 | 24.2 | 2.39× | 1.00× **←best base** |
+| 1 | trid ×2 | 2 | 2 | 54579.6 | 19.2 | 1.90× | 0.79× |
+| 1 | trid ×3 | 3 | 3 | 36148.6 | 29.0 | 2.87× | 1.20× |
+| 1 | trid ×4 | 4 | 4 | 28087.8 | 37.3 | 3.69× | 1.54× **←best trid** |
+| 2 | base ahead=1 | 1 | 2 | 58701.8 | 17.9 | 1.00× | 0.45× |
+| 2 | base ahead=2 | 2 | 4 | 34337.4 | 30.5 | 1.71× | 0.77× |
+| 2 | base ahead=3 | 3 | 6 | 26438.1 | 39.7 | 2.22× | 1.00× **←best base** |
+| 2 | base ahead=4 | 4 | 8 | 29036.7 | 36.1 | 2.02× | 0.91× |
+| 2 | trid ×2 | 2 | 4 | 29913.4 | 35.1 | 1.96× | 0.88× |
+| 2 | trid ×3 | 3 | 6 | 20180.8 | 52.0 | 2.91× | 1.31× |
+| 2 | trid ×4 | 4 | 8 | 16114.0 | 65.1 | 3.64× | 1.64× **←best trid** |
+| 4 | base ahead=1 | 1 | 4 | 32067.6 | 32.7 | 1.00× | 0.52× |
+| 4 | base ahead=2 | 2 | 8 | 21239.4 | 49.4 | 1.51× | 0.79× |
+| 4 | base ahead=3 | 3 | 12 | 16716.7 | 62.7 | 1.92× | 1.00× **←best base** |
+| 4 | base ahead=4 | 4 | 16 | 19235.6 | 54.5 | 1.67× | 0.87× |
+| 4 | trid ×2 | 2 | 8 | 16841.7 | 62.3 | 1.90× | 0.99× |
+| 4 | trid ×3 | 3 | 12 | 12171.3 | 86.2 | 2.63× | 1.37× **←best trid** |
+| 4 | trid ×4 | 4 | 16 | 12172.8 | 86.1 | 2.63× | 1.37× |
+| 8 | base ahead=1 | 1 | 8 | 20145.6 | 52.0 | 1.00× | 0.61× |
+| 8 | base ahead=2 | 2 | 16 | 14124.0 | 74.2 | 1.43× | 0.87× |
+| 8 | base ahead=3 | 3 | 24 | 12251.3 | 85.6 | 1.64× | 1.00× **←best base** |
+| 8 | base ahead=4 | 4 | 32 | 15213.6 | 68.9 | 1.32× | 0.81× |
+| 8 | trid ×2 | 2 | 16 | 10762.7 | 97.4 | 1.87× | 1.14× |
+| 8 | trid ×3 | 3 | 24 | 10346.8 | 101.3 | 1.95× | 1.18× **←best trid** |
+| 8 | trid ×4 | 4 | 32 | 10544.2 | 99.4 | 1.91× | 1.16× |
+| 16 | base ahead=1 | 1 | 16 | 13537.3 | 77.5 | 1.00× | 0.78× |
+| 16 | base ahead=2 | 2 | 32 | 11161.9 | 93.9 | 1.21× | 0.95× |
+| 16 | base ahead=3 | 3 | 48 | 10615.3 | 98.8 | 1.28× | 1.00× **←best base** |
+| 16 | base ahead=4 | 4 | 64 | 13395.5 | 78.3 | 1.01× | 0.79× |
+| 16 | trid ×2 | 2 | 32 | 9432.6 | 111.2 | 1.44× | 1.13× **←best trid** |
+| 16 | trid ×3 | 3 | 48 | 9862.0 | 106.3 | 1.37× | 1.08× |
+| 16 | trid ×4 | 4 | 64 | 10212.1 | 102.7 | 1.33× | 1.04× |
+
+### Block sweep — best base vs best trid, BH p150b vs `bh-50` (§2)
+
+| block (tiles) | BH p150b best base → best trid (GB/s) | gain | `bh-50` best base → best trid (GB/s) | gain |
+|---:|---|---:|---|---:|
+| 1 | 24.2 → 37.3 | **1.54×** | 24.2 → 37.3 | 1.54× |
+| 2 | 39.7 → 65.1 | **1.64×** | 39.4 → 64.3 | 1.63× |
+| 4 | 62.7 → 86.2 | **1.37×** | 62.2 → 84.9 | 1.36× |
+| 8 | 85.6 → 101.3 | **1.18×** | 85.1 → 99.4 | 1.17× |
+| 16 | 98.8 → 111.2 | **1.13×** | 97.8 → 108.8 | 1.11× |
+| does not help: block 4, `ahead=3` vs `trid ×2` | 62.7 → 62.3 | **0.99×** | 62.2 → 62.1 | 1.00× |
+
+### Reading it
+- **Reproduces `bh-50` within ~1–2% on every cell.** The single-Tensix-core copy does not depend on grid size
+  (120 vs 110 Tensix cores), so the p150b numbers confirm the headline: **1.13–1.64×** over a tuned baseline at
+  the same allocated CB, gain shrinking with block size.
+- **`ahead=3` is again the baseline's optimum** (at block=1 `ahead=4` ties it); `trid ×2` again only ties the tuned
+  baseline at block=4 (0.99×), so depth 3–4 is what pays.
+- **Not re-measured on p150b:** the L1-budget sweep (§4), the dtype check (§5) and core scaling (§6). WH B0 n150
+  has no measurement of this example.

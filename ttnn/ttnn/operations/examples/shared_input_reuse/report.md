@@ -53,3 +53,47 @@ Busy AICLK, enabled GDDR count, and firmware were not captured by the original r
 Stream-length sweep at 64-tile chunks: 1 chunk 17856 -> 15268 ns (1.17x); 2: 28522 -> 24874 (1.15x); 4: 54526 -> 44359 (1.23x); 8: 107834 -> 83630 (1.29x); 40: 528122 -> 395822 (1.33x).
 
 Test runs (helps / does_not_help speedup): 1.32x / 0.82x; 1.34x / 0.82x; 1.34x / 0.82x.
+
+## Blackhole p150b — bh-qb-15-special-adamjanovic-for-reservation-139410 (2026-10-19)
+
+| stamp | value |
+|---|---|
+| arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| worker rectangle | 2 × 12 = 24 Tensix cores, injector = top-left (0,0) |
+| metric / method | DEVICE KERNEL DURATION [ns], median of 10 interleaved windows × 5 launches (`test_shared_input_reuse_device_perf`, `test_shared_input_reuse_regimes`, and a probe using the regimes test's `_measure_interleaved_ns`) |
+
+### Sweep (`test_shared_input_reuse_device_perf`)
+
+Shared input [R=9728, C=128] = 1216 tiles (2.38 MiB bf16), 19 chunks of 16×4 = 64 tiles. The baseline reads
+the whole stream from DRAM on every Tensix core (24× = 57.0 MiB of DRAM reads); `mcast` reads each chunk once.
+
+| variant | ns/op | ±% | vs per_core_dram |
+|---------|-------|----|------------------|
+| per_core_dram | 150179.5 | 0.2 | 1.00x |
+| mcast | 77760.8 | 0.1 | 1.93x |
+
+### Boundary sweep / regimes (`test_shared_input_reuse_regimes` on BH p150b, plus same-code probe)
+
+Same-stream chunk-size sweep (1216 tiles unless noted; ranges = min-max over the 10 windows where recorded):
+
+| chunk tiles | chunks | per_core_dram ns | mcast ns | speedup | source |
+|---|---|---|---|---|---|
+| 4 | 304 | 169285 | 247015 | 0.69x | probe |
+| 8 | 152 | 148567 (148167-148897) | 154494 (154410-154698) | 0.96x | regime `does_not_help_chunk8tiles_1216tiles` (assert <= 1.0) |
+| 16 | 76 | 149415 | 113451 | 1.32x | probe; regime `measure_chunk16tiles_1216tiles` (logged only — verdict differs by arch) |
+| 32 | 38 | 150358 | 90532 | 1.66x | probe |
+| 64 | 19 | 150228 (149554-150601) | 77777 (77707-77864) | 1.93x | regime `helps_chunk64tiles_1216tiles` (assert >= 1.17) |
+| 128 (1280 tiles) | 10 | 164538 | 76613 | 2.15x | probe |
+
+### Reading it
+
+- Crossover between 8- and 16-tile chunks on BH p150b, vs ~32 tiles on WH B0 n150: 16-tile chunks lose on
+  WH B0 (0.93x) and win on BH p150b (1.32x).
+- `per_core_dram` is flat at ~148–150 µs for 8- to 64-tile chunks: 24 readers × 2 490 368 B = 59.8 MB at
+  ~400 GB/s, i.e. at the BH p150b DRAM ceiling (~415–430 GB/s) regardless of chunk size.
+- `mcast` grows by ~0.54–0.67 µs per extra chunk (the per-chunk ack-and-broadcast handshake), about the same
+  as WH B0 n150 (~0.48–0.60 µs). What differs is the injector's stream itself: ~65 µs for 2.49 MB on BH p150b
+  vs ~180 µs on WH B0, leaving room for ~150 handshakes under the baseline instead of ~45.
+- The 64-tile gain (1.93x) is the largest of the four boards measured (WH B0 n150 1.34x with 16 Tensix cores,
+  BH P150 1.71x and P100a 1.82x with 22): more readers make the redundant baseline costlier.

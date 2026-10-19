@@ -2,6 +2,7 @@
 
 **Problem type:** compute-bound: L1 round-trips  ·  **Concept(s):** the accumulate mechanism in a reduction loop — L1↔DEST round-trip vs. packer L1-accumulation vs. DEST-resident accumulation
 **First profiled on:** `bh-qb-11-special-dnijemcevic-for-reservation-42432` · BH · Blackhole · 2026-07-15
+**Measured on:** WH B0 n150 (regimes + step sweep, 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19)
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -99,20 +100,41 @@ scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/t
 ```
 
 ## When it helps / when it does not
-Board: **Wormhole B0 n150** (1 Tensix core, sharded L1, fp32, one tile per step, kernel-iters 100, DEVICE KERNEL DURATION per accumulation pass,
-interleaved trials, median). The measured Blackhole numbers above (5.09x / 10.59x at 64 steps) are kept and labeled Blackhole;
-the Wormhole B0 numbers below come from `test_eltwise_l1_vs_dest_accumulate_regimes`.
+**Rule:** folding the accumulator with the packer (`pack_l1_acc`) instead of an L1 round-trip (`rmw`) pays at every
+step count tried (≥ 2 single-tile steps) on both boards; keeping the sum in DEST (`dest_acc`) over `pack_l1_acc`
+pays from 4 steps and grows with the step count B — to 1.30× at 64 steps on WH B0 n150 but 2.01× on BH p150b.
 
-| Condition | Steps B (single-tile) | Baseline ns | Lever ns | Speedup | Trials | Board |
-|---|---:|---:|---:|---:|---:|---|
-| **Helps:** accumulator round-trips L1 every step | 64 | 23784 (`rmw`) | 5769 (`pack_l1_acc`) | 4.12x | 11 | WH B0 n150 |
-| **Does not help:** only one pair to fold, so DEST-resident accumulation has nothing to save over `pack_l1_acc` | 2 | 367 (`pack_l1_acc`) | 370 (`dest_acc`) | 0.99x | 11 | WH B0 n150 |
+| Regime (same definition on every board; 1 Tensix core, sharded L1, fp32, 1 tile per step) | WH B0 n150 · 8×8 = 64 Tensix cores | BH p150b · 12×10 = 120 Tensix cores |
+|---|---|---|
+| **Helps:** accumulator round-trips L1 every step — `rmw → pack_l1_acc`, B = 64 steps | 23 784 → 5 769 ns **4.12×** | 9 772 → 1 857 ns **5.26×** |
+| **Helps:** many steps to keep in DEST — `pack_l1_acc → dest_acc`, B = 64 steps | 5 768 → 4 447 ns **1.30×** (step sweep) | 1 857 → 922 ns **2.01×** |
+| **Does not help:** only one pair to fold — `pack_l1_acc → dest_acc`, B = 2 steps | 367 → 370 ns **0.99×** | 155 → 155 ns **1.00×** |
+| Step sweep `pack_l1_acc → dest_acc`, B = 2 / 4 / 8 / 16 / 64 | 0.99× / 1.09× / 1.17× / 1.25× / 1.30× | 1.00× / 1.15× / 1.40× / 1.65× / 2.01× |
+| Step sweep `rmw → pack_l1_acc`, B = 2 / 4 / 8 / 16 / 64 | 2.03× / 2.75× / 3.36× / 3.72× / 4.10× | 2.25× / 3.15× / 3.89× / 4.58× / 5.27× |
+| **Boundary** (`dest_acc` over `pack_l1_acc`) | B = 4 steps (1.09×); ≥ 1.15× from B = 8 | B = 4 steps (1.15×) |
 
-Spread: 23653..23791 / 5735..5808 and 366..368 / 365..373 ns.
+**Why the boards differ:** the marginal cost per extra step (ns at B = 64 minus B = 2, over 62 steps) is ~87 ns for
+`pack_l1_acc` and ~66 ns for `dest_acc` on WH B0 n150, but ~27 ns and ~12 ns on BH p150b. Both paths got faster than
+the 1.35× AICLK ratio (1350 vs 1000 MHz) alone explains, but the DEST-resident add (unpack + FPU add into DEST) got
+much faster than the packer's L1 accumulate, so on BH p150b every step left in `pack_l1_acc` costs ~2.2× a
+`dest_acc` step instead of ~1.3×. (Per-step costs derived from the step sweeps; the per-unit split is inferred, not
+profiled per zone.)
 
 - **Helps** because `rmw` unpacks and packs `acc` every tile (B steps) while `pack_l1_acc` only packs it, once per pair (B/2 steps).
-- **Does not help (for `dest_acc` over `pack_l1_acc`)** at B=2: both are one add plus one pack. Their gap opens only as B grows (B=4: 1.09x, B=8: 1.17x, B=16: 1.25x, B=64: 1.30x on WH B0).
-  Note `pack_l1_acc` over `rmw` was NOT flat at any step count tried on WH B0 (B=2: 2.03x, 4: 2.75x, 8: 3.36x, 16: 3.72x, 64: 4.10x), so there is no small-B regime where `pack_l1_acc` stops paying for this single-tile fold.
+- **Does not help (for `dest_acc` over `pack_l1_acc`)** at B=2: both are one add plus one pack. Their gap opens only
+  as B grows — slowly on WH B0 n150 (B=4: 1.09x, B=8: 1.17x, B=16: 1.25x, B=64: 1.30x), fast on BH p150b
+  (B=4: 1.15x, B=8: 1.40x, B=16: 1.65x, B=64: 2.01x). On BH p150b, prefer `dest_acc` for any run of 4+ steps.
+  Note `pack_l1_acc` over `rmw` was NOT flat at any step count tried on either board (WH B0 n150 B=2: 2.03x … 64: 4.10x;
+  BH p150b B=2: 2.25x … 64: 5.27x), so there is no small-B regime where `pack_l1_acc` stops paying for this single-tile fold.
+
+*How measured:* WH B0 n150 rows — `test_eltwise_l1_vs_dest_accumulate_regimes` (1 Tensix core, sharded L1, fp32,
+one tile per step, kernel-iters 100, DEVICE KERNEL DURATION per accumulation pass, 11 interleaved trials, median;
+spread 23653..23791 / 5735..5808 and 366..368 / 365..373 ns), 2026-10-12; step sweeps from
+`test_eltwise_l1_vs_dest_accumulate_device_perf` on the same board. BH p150b rows — the same regimes test plus
+step sweeps on that board, `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19 (details in `report.md`). The
+illustrative bh-qb-11 table above (5.09× / 10.59× at 64 steps) is an older Blackhole run, kept.
+Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_eltwise_l1_vs_dest_accumulate.py::test_eltwise_l1_vs_dest_accumulate_regimes`
+(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
 
 ## Syntax — summing one stream with `DestAccumulation` (moved here from `master.md`)
 

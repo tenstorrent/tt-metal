@@ -13,7 +13,7 @@ See ttnn/ttnn/operations/examples/noc_placement/README.md for what this illustra
     scripts/run_safe_pytest.sh --run-all \\
         tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_device_perf
 
-    # when placement / NoC choice helps and when it does not (WH B0 n150), interleaved A/B medians
+    # when placement / NoC choice helps and when it does not interleaved A/B medians
     scripts/run_safe_pytest.sh --run-all \\
         tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_regimes
 
@@ -39,7 +39,6 @@ from ttnn.operations.examples.noc_placement import noc_placement, PLACEMENTS, NO
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
 
 TILE = 32
 # Overridable via env so the CLI (python -m ...noc_placement) measures the caller's params.
@@ -151,7 +150,7 @@ def test_noc_placement_matrix(device, op, noc, placement):
 
 
 # ---------------------------------------------------------------------------------------------
-# When it helps / when it does not (Wormhole B0 n150). Each regime compares a BASELINE cell to a
+# When it helps / when it does not (numbers: WH B0 n150 and BH p150b in README.md). Each regime compares a BASELINE cell to a
 # LEVER cell of the identity copy (op="copy": reads on `noc`, writes on the other NoC), measured
 # interleaved (A,B,A,B...) so drift hits both. One trial = mean of _REGIME_PER_TRIAL launches;
 # the reported number is the median over _REGIME_TRIALS trials.
@@ -172,15 +171,21 @@ _REGIME_ITERS = 2  # in-kernel repeats of the page range
 # id: (num_cores, block, (base_placement, base_noc), (lever_placement, lever_noc), kind, threshold)
 #   kind "helps"         -> assert speedup >= threshold  (T_help = 1 + 0.5 * (measured - 1), >= 1.05)
 #   kind "does_not_help" -> assert speedup <= threshold  (1.05 for "flat", 1.0 for a measured loss)
+# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
+# - numbers per board in README.md.
 _NP_REGIMES = {
     # 8 cores x 16 pages in flight = 128 outstanding 2 KB reads: column saturates its shared links.
-    "placement_helps_8cores_block16": (8, 16, ("column", "noc0"), ("row", "noc0"), "helps", 1.95),
+    # WH 2.91x, BH 2.24x
+    "placement_helps_8cores_block16": (8, 16, ("column", "noc0"), ("row", "noc0"), "helps", 1.62),
     # 2 cores x 1 page in flight = 2 outstanding reads: latency-bound, no link contention to remove.
+    # WH 1.03x, BH 1.01x
     "placement_flat_2cores_block1": (2, 1, ("column", "noc0"), ("row", "noc0"), "does_not_help", 1.05),
     # Spread 8-core row, bandwidth-bound: reads NoC0 disperse, reads NoC1 concentrate on DRAM columns.
-    "noc_helps_row_8cores_block16": (8, 16, ("row", "noc1"), ("row", "noc0"), "helps", 2.13),
-    # A single core at (0,0): no line to disperse; the canonical pairing is a few % slower.
-    "noc_loses_1core_block16": (1, 16, ("row", "noc1"), ("row", "noc0"), "does_not_help", 1.0),
+    # WH 3.27x, BH 2.45x
+    "noc_helps_row_8cores_block16": (8, 16, ("row", "noc1"), ("row", "noc0"), "helps", 1.72),
+    # A single core at (0,0): no line to disperse; the canonical pairing is within a few % either way.
+    # WH 0.94x, BH 1.02x
+    "noc_flat_1core_block16": (1, 16, ("row", "noc1"), ("row", "noc0"), "does_not_help", 1.05),
 }
 
 
@@ -204,12 +209,7 @@ def _interleaved_trials(device, run_a, run_b, trials, per_trial):
 
 @pytest.mark.parametrize("regime", list(_NP_REGIMES), ids=list(_NP_REGIMES))
 def test_noc_placement_regimes(device, regime):
-    """Placement / NoC lever: one regime where it clearly helps, one where it does not (WH B0 n150)."""
-    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
-    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
-    # another arch re-measure the regimes and add its own thresholds before enabling this test.
-    if not ttnn.device.is_wormhole_b0(device):
-        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
+    """Placement / NoC lever: one regime where it clearly helps, one where it does not."""
     import statistics
 
     num_cores, block, (pl_a, noc_a), (pl_b, noc_b), kind, threshold = _NP_REGIMES[regime]
@@ -240,7 +240,7 @@ def test_noc_placement_regimes(device, regime):
     speedup = base_med / lever_med
     tiles = (_REGIME_SHAPE[0] // TILE) * (_REGIME_SHAPE[1] // TILE)
     logger.info(
-        f"\n=== noc_placement regime {regime} (WH B0) ==="
+        f"\n=== noc_placement regime {regime} ({device.arch()}) ==="
         f"\n    shape={_REGIME_SHAPE} ({tiles} tiles, {tiles // num_cores} tiles/core)  cores={num_cores}  "
         f"block={block} (outstanding 2 KB reads on the line = {num_cores * block})  kernel_iters={_REGIME_ITERS}"
         f"\n    baseline ({pl_a}, reads {noc_a}): median {base_med:10.0f} ns  [min {min(base):.0f} - max {max(base):.0f}]"

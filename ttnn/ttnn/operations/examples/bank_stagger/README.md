@@ -2,6 +2,7 @@
 
 **Problem type:** data movement below the ceiling: contention  ·  **Concept(s):** DRAM bank contention — per-core rotation of the issue order
 **First profiled on:** `bh-qbge-09-special-dstoiljkovic-for-reservation-117054` · Blackhole p300c · 11×10=110 grid · 8 DRAM banks · 2026-10-05
+**Measured on:** BH p300c (`bh-qbge-09-special-dstoiljkovic-for-reservation-117054` / `…-131852`, 2026-10-05 / 2026-10-13) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19) · WH B0 n150 not measured
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -35,7 +36,7 @@ The op is a real tilize (`ROW_MAJOR` width-sharded DRAM → `TILE` interleaved D
 32 rows × `chunk` tiles, one or two tile-rows (8 or 16 blocks) per core.
 
 ## Measured result
-*Blackhole, 110 cores, one launch; median of 7 trials × 10 launches. Full table in
+*Blackhole p300c, 110 Tensix cores, one launch; median of 7 trials × 10 launches (BH p150b reproduces it, see below). Full table in
 [`report.md`](report.md).*
 
 ```
@@ -81,31 +82,53 @@ the banks and they walk it in the same order:
   of the bank count: every core starts writing on the same bank. Rotate the write order.
 
 ## When it helps / when it does not
-Board: **Blackhole p300c** (11×10 = 110 Tensix cores, 8 DRAM banks), bf16 tilize (`ROW_MAJOR` DRAM →
-`TILE` interleaved DRAM), all 110 Tensix cores. Baseline = `none` (every core walks its blocks and
-rows in order); lever = `stagger` (`stagger_blocks`, width-sharded source) or `rows`
-(`stagger_rows`, interleaved source). Numbers are the measurements above (median of 7 trials × 10
-launches, variants interleaved per trial; full table in [`report.md`](report.md)). There is no
-`test_bank_stagger_regimes` yet — these are Blackhole numbers and have not been re-measured on
-Wormhole B0.
+**Rule:** rotate each Tensix core's block order (`stagger_blocks`) when the source is width-sharded with one shard
+per DRAM bank and every Tensix core walks the blocks in the same order: **~1.3× at 256 B reads and ~1.2× at
+1024 B with 8 blocks per Tensix core**, shrinking as blocks per Tensix core grow (~1.1–1.2× at 16). On an
+interleaved source the row rotation (`stagger_rows`) is worth only 1.04–1.07× with one block per Tensix core
+and ~1.0× with several. Measured on two Blackhole boards with the same verdicts; **not measured on WH B0 n150**
+— bank conflicts are an 8-DRAM-bank effect here, and WH has 12 DRAM banks. bf16 tilize (`ROW_MAJOR` DRAM →
+`TILE` interleaved DRAM), full grid; baseline = `none`, lever = `stagger` or `rows`. Each board's shapes give
+one or two tile-rows per Tensix core on its grid (110 vs 120 tile-rows).
 
-| Condition | Shape (H×W) | Read size | Blocks per Tensix core | none (ns) | lever (ns) | Speedup | Trials | Board |
-|---|---|--:|--:|--:|--:|--:|--:|---|
-| **Helps:** width-sharded source, few blocks per core (`stagger`) | `3520×1024` | 256 B | 8 | 101361 | 77087 | **1.32×** | 7 | BH p300c |
-| **Helps:** width-sharded source, larger reads (`stagger`) | `3520×4096` | 1024 B | 8 | 184246 | 158186 | **1.16×** | 7 | BH p300c |
-| **Gain shrinks:** width-sharded source, twice the blocks per core (`stagger`) | `7040×1024` / `7040×4096` | 256 B / 1024 B | 16 | 194525 / 357802 | 163880 / 316582 | **1.19× / 1.13×** | 7 | BH p300c |
-| **Small:** interleaved source, one block per core (`rows`) | `32×7040`, `32×56320`, `3520×512` | 128–1024 B | 1 | 7447–19017 | 7157–17749 | **1.04–1.07×** | 7 | BH p300c |
-| **Does not help:** interleaved source, four blocks per core (`rows`) | `128×56320` | 1024 B | 4 | 66462 | 66040 | **1.01×** | 7 | BH p300c |
+| Regime (same definition on every board) | WH B0 n150 · 8×8 = 64 Tensix cores | BH p300c · 11×10 = 110 Tensix cores | BH p150b · 12×10 = 120 Tensix cores |
+|---|---|---|---|
+| **Helps:** width-sharded source, 256 B reads, 8 blocks per Tensix core (`stagger`) | not measured | `3520×1024`: 101 361 → 77 087 ns **1.32×** | `3840×1024`: 111 677 → 84 255 ns **1.33×** |
+| **Helps:** width-sharded source, 1024 B reads, 8 blocks per Tensix core (`stagger`) | not measured | `3520×4096`: 184 246 → 158 186 ns **1.16×** | `3840×4096`: 203 545 → 171 495 ns **1.19×** |
+| **Gain shrinks:** width-sharded, 256 B reads, 16 blocks per Tensix core (`stagger`) | not measured | `7040×1024`: 194 525 → 163 880 ns **1.19×** | `7680×1024`: 208 627 → 175 265 ns **1.19×** |
+| **Gain shrinks:** width-sharded, 1024 B reads, 16 blocks per Tensix core (`stagger`) | not measured | `7040×4096`: 357 802 → 316 582 ns **1.13×** | `7680×4096`: 385 965 → 345 965 ns **1.12×** |
+| **Does not help:** width-sharded source, row rotation (`rows`) | not measured | not measured | all 4 shapes above: **0.99–1.01×** |
+| **Small:** interleaved source, width blocking, 128 B reads, 1 block per Tensix core (`rows`) | not measured | `32×7040`: 7 447 → 7 157 ns **1.04×** | `32×7680`: 8 079 → 7 773 ns **1.04×** |
+| **Small:** interleaved source, width blocking, 1024 B reads, 1 block (`rows`) | not measured | `32×56320`: 19 017 → 17 749 ns **1.07×** | `32×61440`: 21 134 → 19 998 ns **1.06×** |
+| **Small:** interleaved source, height blocking, 1024 B reads, 1 block (`rows`) | not measured | `3520×512`: 18 534 → 17 589 ns **1.05×** | `3840×512`: 20 194 → 19 377 ns **1.04×** |
+| **Does not help:** interleaved source, 4 blocks per Tensix core (`rows`) | not measured | `128×56320`: 66 462 → 66 040 ns **1.01×** | not measured |
+| **Does not help:** interleaved source, block rotation (`stagger`) | not measured | not measured | the 3 shapes above: **0.99–1.00×** |
+| **Boundary** | — | width-sharded: still 1.13× at 16 blocks per Tensix core; interleaved: 1.01× at 4 blocks | width-sharded: still 1.12× at 16 blocks per Tensix core |
 
-- **Helps** when the source is width-sharded with one shard per bank and each Tensix core has few
-  blocks: without the rotation the whole grid reads one bank per block step, and starting core k at
-  block `k % n_w` spreads the same requests over all 8 banks.
-- **Gain shrinks** as blocks per core grow: doubling 8 → 16 blocks cuts the speedup from 1.32× to
-  1.19× (256 B) and 1.16× to 1.13× (1024 B); total time saved grows (24 → 31 µs, 26 → 41 µs) but
-  less than the work does. Do not extrapolate the 8-block speedups.
-- **Does not help** on an interleaved source once each Tensix core has several blocks: `rows` saves
-  only ~0.3–1.3 µs whatever the work, so at four blocks per core it is 1.01×. These measurements do
-  not establish why the saving stays flat.
+**Why the boards differ:** the two Blackhole boards agree within ~0.03× on every shared row — both have 8 DRAM
+banks, and 110 vs 120 Tensix cores only changes how many cores pile onto a bank. WH B0 n150 is untested: with 12
+DRAM banks the width-sharded case becomes 12 shards and the height-blocking alignment argument (`32·k % 8 == 0`)
+no longer holds as stated, so do not assume the Blackhole ratios there.
+
+- **Helps** when the source is width-sharded with one shard per DRAM bank and each Tensix core has few blocks:
+  without the rotation the whole grid reads one DRAM bank per block step, and starting Tensix core k at block
+  `k % n_w` spreads the same requests over all 8 DRAM banks.
+- **Gain shrinks** as blocks per Tensix core grow: doubling 8 → 16 blocks cuts the speedup from 1.32× to 1.19×
+  (256 B) and 1.16× to 1.13× (1024 B) on BH p300c, 1.33× → 1.19× and 1.19× → 1.12× on BH p150b; total time saved
+  grows (p300c: 24 → 31 µs, 26 → 41 µs) but less than the work does. Do not extrapolate the 8-block speedups.
+- **Does not help** on an interleaved source once each Tensix core has several blocks: `rows` saves only
+  ~0.3–1.3 µs whatever the work, so at four blocks per Tensix core it is 1.01×. These measurements do not
+  establish why the saving stays flat.
+
+*How measured:* `DEVICE KERNEL DURATION [ns]`, variants interleaved per trial, median of trials; every variant
+checked bit-exact first. There is no `test_bank_stagger_regimes` yet.
+- **BH p300c:** `bh-qbge-09-special-dstoiljkovic-for-reservation-117054` (width-sharded, 2026-10-05) and
+  `…-131852` (interleaved, 2026-10-13), 7 trials × 10 launches ([`report.md`](report.md)).
+- **BH p150b:** `test_bank_stagger_device_perf`, 5 trials × 10 launches, `kernel-iters=1`,
+  `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19, commit `f74ee7aad64`.
+- **WH B0 n150:** not measured.
+
+Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_bank_stagger.py::test_bank_stagger_device_perf`
 
 ## Run it
 ```bash

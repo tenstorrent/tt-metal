@@ -83,3 +83,54 @@ copy  row: rd NoC1 -> NoC0  1    16    2048 t           1613496    1713602    0.
 ```
 The 2026-07-17 matrix above reproduces on this board (copy column/row 2.94× vs 2.91×; read row NoC0/NoC1 4.81× vs 4.8×;
 write row NoC1/NoC0 4.29× vs 4.3×).
+
+## Blackhole p150b — bh-qb-15-special-adamjanovic-for-reservation-139410 (2026-10-19)
+
+| stamp | value |
+|---|---|
+| arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks (DRAM in NoC columns 0 and 9), AICLK 1350 MHz |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| metric / method | `DEVICE KERNEL DURATION [ns]`, in-process profiler. `test_noc_placement_device_perf`: `shape=(1024, 2048)`, 8 Tensix cores, `block=16`, `kernel_iters=8`, 20 profiled launches averaged. `test_noc_placement_regimes`: same as the 2026-10-12 WH block (interleaved A,B; one trial = mean of 3 launches; median of 12 trials; `kernel_iters=2`) |
+
+### NoC × operation × placement (`test_noc_placement_device_perf`)
+
+```
+    op     placement     noc0 ns    noc1 ns  faster
+    read   column         291910     153363  NoC1 1.9x
+    read   row            106070     376203  NoC0 3.5x
+    read   diagonal       107438     151336  NoC0 1.4x
+    write  column         194745     370556  NoC0 1.9x
+    write  row            402260     105135  NoC1 3.8x
+    write  diagonal       196011     111075  NoC1 1.8x
+
+    copy (reads noc0 / writes noc1)
+    placement         ns/op  vs column
+    column         383253.4 (baseline)
+    row            164624.1   -> 2.33x
+    diagonal       165034.0   -> 2.32x
+```
+
+Mirror symmetry holds as on WH B0 n150 (read·NoC0 row 106k ≈ write·NoC1 row 105k; read·NoC1 row 376k ≈ write·NoC0
+row 402k), and the canonical reads-NoC0 / writes-NoC1 pairing wins for row and diagonal.
+
+### Regimes (`test_noc_placement_regimes`)
+
+```
+regime                           baseline -> lever       base / lever (ns)                                   speedup  asserted
+placement_helps_8cores_block16   column -> row (NoC0)     97835 (97561-98360)   /  43723 (43375-44646)        2.24     >= 1.62
+placement_flat_2cores_block1     column -> row (NoC0)    838190 (829679-845767) / 829478 (829285-829840)      1.01     <= 1.05
+noc_helps_row_8cores_block16     row: rd NoC1 -> NoC0    107508 (106508-108197) /  43806 (43076-44530)        2.45     >= 1.72
+noc_flat_1core_block16           row: rd NoC1 -> NoC0    216865 (216705-217365) / 211690 (211469-213292)      1.02     <= 1.05
+```
+Measured on BH p150b with the four cases as they stood before the regimes test became arch-agnostic (that log tags
+the run "WH B0"; the device was BH p150b). The fourth case was then named `noc_loses_1core_block16` (WH B0 n150
+0.94×); the test now calls it `noc_flat_1core_block16` and asserts ≤ 1.05×, which held on both boards.
+
+### Reading it
+- **Same verdicts as WH B0 n150, smaller gains.** Placement column → row: 2.24× (WH B0 2.91×); reads NoC1 → NoC0
+  on a spread row: 2.45× (WH B0 3.27×); both latency-bound/single-Tensix-core cases are flat.
+- **The column baseline suffers less on BH p150b** (97.8 µs vs 246.8 µs on WH B0, while the row lever is 43.7 vs
+  84.9 µs) — consistent with the 64 B NoC flit (WH 32 B) relieving the shared column links; not isolated.
+- **No single-Tensix-core loss.** WH B0 n150 is 0.94× with the canonical pairing at (0,0); BH p150b is 1.02×.
+- **Row ≈ diagonal** on BH p150b as on WH B0 (copy 2.33× vs 2.32×; read NoC0 106k vs 107k). The boundary sweep
+  (outstanding reads 4–64) was not repeated on BH p150b.

@@ -1,10 +1,12 @@
 # noc_placement — placement × NoC × operation
 
+**Measured on:** WH B0 n150 (`bgd-lab-t3002-special-dnijemcevic-for-reservation-33181`, 2026-07-17; regimes 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19)
+
 Two kernel-level decisions govern how interleaved DRAM traffic contends on the Network-on-Chip,
 and this example lets you switch and measure both:
 
 1. **Where you place the line of cores** — spreading it across the DRAM-facing axis (a **row** or
-   **diagonal**) beats stacking it on one axis (a **column**): same kernel, same work, ~2.2–2.8× less time.
+   **diagonal**) beats stacking it on one axis (a **column**): same kernel, same work, ~2.2–2.9× less time on both WH B0 n150 and BH p150b.
    A column line is exactly what `split_work_to_cores(..., row_wise=False)` (the default) hands you.
 2. **Which NoC a stream uses** — **reads want NoC0, writes want NoC1** (the tt-metal default) for the
    spread placements you actually use. It is not that NoC0 is intrinsically faster: NoC0's routing
@@ -41,13 +43,14 @@ Wormhole B0, `shape=(1024,2048)` = 2048 tiles, 8 cores, `block=16` (see `report.
     diagonal        327144.2  -> 2.93x
 ```
 row/diagonal are ~2.2–2.8× faster than column, and the gap **grows with core count** — the contention
-signature: a column line saturates its shared NoC links and stops scaling. On this symmetric WH part
-**row ≈ diagonal**; the diagonal's edge over row is a Blackhole (asymmetric-grid) story.
+signature: a column line saturates its shared NoC links and stops scaling. **Row ≈ diagonal** on WH B0 n150
+and on BH p150b too (BH p150b, same copy: column 383 253 → row 164 624 ns 2.33×, diagonal 165 034 ns 2.32×) — the
+diagonal's edge over the row once expected on Blackhole's asymmetric grid does not show on BH p150b at 8 Tensix cores.
 `split_work_to_cores(..., row_wise=True)` spreads across the DRAM-facing axis instead of the column trap.
 
 ## 2. Which NoC for reads vs writes (op="read"/"write")
 DRAM is **column-localized** — on Wormhole DRAM lives only in NoC columns 0 and 5. The two NoCs route
-[dimension-ordered on a torus](../../../../METALIUM_GUIDE.md): **NoC0 = east→south**, **NoC1 = north→west**.
+[dimension-ordered on a torus](../../../../../METALIUM_GUIDE.md): **NoC0 = east→south**, **NoC1 = north→west**.
 
 - **NoC0 (reads):** traffic fans east across columns first and only turns south at the reader's *own*
   column → spread the readers across columns and no link is shared.
@@ -73,47 +76,64 @@ for the per-cell NoC link-demand heatmaps):
   default to exactly this.)
 - The column exception (where the reverse NoC wins) is a property of the pathological column placement —
   not a reason to swap the default.
+- **BH p150b** (DRAM in NoC columns 0 and 9; 8 Tensix cores, same shape, `block=16`, `kernel_iters=8`): the same
+  winner in every row — read row NoC0 106k vs NoC1 376k ns (3.5×), read diagonal 107k vs 151k (1.4×), read column
+  NoC1 153k vs NoC0 292k (1.9×); write row NoC1 105k vs NoC0 402k (3.8×), write diagonal 111k vs 196k (1.8×), write
+  column NoC0 195k vs NoC1 371k (1.9×). Stamped block in [`report.md`](report.md).
 
 ## When it helps / when it does not
-Board: **Wormhole B0 n150** (8×8 Tensix grid; line length is capped at 8 Tensix cores so a diagonal fits).
-Numbers come from `test_noc_placement_regimes`: identity copy (`op="copy"`), `shape=(1024, 2048)` = 2048 bf16
-tiles (2 KB pages), `kernel_iters=2`, baseline and lever measured interleaved (A,B,A,B…), median of
-12 trials × 3 launches, spread = min–max over trials. "Outstanding reads" = Tensix cores × `block`
-(2 KB pages in flight per barrier per core) — the traffic the line puts on the NoC at once.
+**Rule:** both levers pay once the line of Tensix cores is **bandwidth-bound** — on WH B0 n150 from ≳16 outstanding
+2 KB reads (Tensix cores × `block`); at ≤ 8 they are within ~10%. Same verdicts on BH p150b, with smaller gains
+(2.2–2.5× vs 2.9–3.3×). For a single Tensix core the NoC choice does not help on either board — WH B0 n150 even
+loses 6% with the canonical pairing, BH p150b is flat. Identity copy (`op="copy"`), `shape=(1024, 2048)` = 2048
+bf16 tiles (2 KB pages), interleaved DRAM (`TensorMemoryLayout::INTERLEAVED`); line length capped at 8 Tensix
+cores so a diagonal fits. "Outstanding reads" = Tensix cores × `block` (2 KB pages in flight per barrier per
+Tensix core).
 
-| lever | condition | config | baseline ns | lever ns | speedup | trials | board |
-|---|---|---|---|---|---|---|---|
-| placement column → row | **helps:** bandwidth-bound line, 128 outstanding 2 KB reads | 8 cores, `block=16`, 256 tiles/core | 246 765 (246 316–247 525) | 84 917 (84 155–86 778) | **2.91×** | 12 | WH B0 n150 |
-| placement column → row | **does not help:** latency-bound line, 2 outstanding reads | 2 cores, `block=1`, 1024 tiles/core | 1 106 889 (1 091 085–1 115 261) | 1 077 065 (1 076 902–1 077 855) | **1.03×** | 12 | WH B0 n150 |
-| reads NoC1 → reads NoC0 (writes on the other NoC) | **helps:** spread row line, bandwidth-bound | row, 8 cores, `block=16` | 278 002 (276 867–279 155) | 85 066 (84 521–85 694) | **3.27×** | 12 | WH B0 n150 |
-| reads NoC1 → reads NoC0 | **does not help (loses):** a single Tensix core at (0,0) | 1 core, `block=16`, 2048 tiles/core | 404 600 (404 361–404 747) | 429 238 (428 252–429 843) | **0.94×** | 12 | WH B0 n150 |
+| Regime (same definition on every board) | WH B0 n150 · 8×8 = 64 Tensix cores | BH p150b · 12×10 = 120 Tensix cores |
+|---|---|---|
+| **Placement helps:** column → row, 8 Tensix cores, `block=16` (128 outstanding reads) | 246 765 → 84 917 ns **2.91×** | 97 835 → 43 723 ns **2.24×** |
+| **Placement does not help:** column → row, 2 Tensix cores, `block=1` (2 outstanding reads, latency-bound) | 1 106 889 → 1 077 065 ns **1.03×** | 838 190 → 829 478 ns **1.01×** |
+| **NoC helps:** reads NoC1 → NoC0 (writes on the other NoC), row of 8 Tensix cores, `block=16` | 278 002 → 85 066 ns **3.27×** | 107 508 → 43 806 ns **2.45×** |
+| **NoC does not help:** reads NoC1 → NoC0, 1 Tensix core at (0,0), `block=16` | 404 600 → 429 238 ns **0.94× (loses)** | 216 865 → 211 690 ns **1.02× — flat on BH, no loss** |
+| Copy column → row, 8 Tensix cores, `block=16`, `kernel_iters=8` (device_perf) | 959 161 → 330 069 ns **2.91×** (diagonal 2.93×) | 383 253 → 164 624 ns **2.33×** (diagonal 2.32×) |
+| Sweep: column → row, 4 Tensix cores × `block=1` (4 outstanding) | **1.04×** | not measured |
+| Sweep: column → row, 8 Tensix cores × `block=1` (8 outstanding) | **1.09×** | not measured |
+| Sweep: column → row, 8 Tensix cores × `block=2` (16 outstanding) | **1.40×** | not measured |
+| Sweep: column → row, 2 Tensix cores × `block=16` (32 outstanding) | **1.31×** | not measured |
+| Sweep: column → row, 4 Tensix cores × `block=16` (64 outstanding) | **2.20×** | not measured |
+| **Boundary** | ≳16 outstanding 2 KB reads | between 2 (flat) and 128 (helps) outstanding reads; not swept |
 
-- **Placement helps** when the line's outstanding reads contend: a column funnels every core's DRAM traffic
-  through the same column links, a row spreads it across columns, so the row moves the same bytes ~2.9× faster.
-- **Placement stops paying** when the line is latency-bound (one page per barrier, few cores): no link is
-  saturated, so each read costs one round trip wherever the core sits.
+**Why the boards differ:**
+- **Smaller gains on BH p150b.** BH's NoC flit is 64 B (WH 32 B), so each link carries twice the bytes and a
+  column line's shared links saturate less; the column baseline is ~2.5× faster on BH p150b (97.8 vs 246.8 µs)
+  while the row lever is ~1.9× faster. Consistent with the link-width difference, not isolated.
+- **Single Tensix core:** WH B0 n150 loses 6% with reads on NoC0 at (0,0); BH p150b does not (1.02×). The DRAM
+  cores sit in different NoC columns (WH 0 and 5, BH 0 and 9), so the one-core route differs; not investigated.
+
+- **Placement helps** when the line's outstanding reads contend: a column funnels every Tensix core's DRAM traffic
+  through the same column links, a row spreads it across columns, so the row moves the same bytes 2.2–2.9× faster.
+- **Placement stops paying** when the line is latency-bound (one page per barrier, few Tensix cores): no link is
+  saturated, so each read costs one round trip wherever the Tensix core sits.
 - **NoC0 for reads helps** on a spread line because NoC0 (east→south) fans the traffic out across columns before
   turning toward DRAM, while NoC1 (north→west) concentrates it on the DRAM columns.
-- **The NoC choice does not help** without a line to disperse: one Tensix core at (0,0) has nothing to spread, and
-  there the canonical reads-NoC0 / writes-NoC1 pairing is ~6 % *slower* than the reverse (stable across runs) —
-  keep the default for multi-core lines, but do not expect it to help a single-core kernel.
+- **The NoC choice does not help** without a line to disperse: one Tensix core has nothing to spread — keep the
+  default for multi-core lines, but do not expect it to help a single-Tensix-core kernel.
 
-Boundary sweep (probe, same copy and shape, `kernel_iters=8`, 12 trials × 3 launches, column → row):
+Small payloads still benefit on WH B0 n150 if the line is bandwidth-bound: 64 tiles (8 tiles per Tensix core,
+`block=16`, `kernel_iters=1`) measured 2.65×, 16 tiles (2 tiles per Tensix core) 1.51×. The NoC choice for reads is
+likewise flat when latency-bound (`block=1`: 1.04× at 2 Tensix cores, 1.07× at 8 Tensix cores; `op="read"`, row).
 
-| Tensix cores | `block` | outstanding 2 KB reads | speedup |
-|---|---|---|---|
-| 2 | 1 | 2 | 1.01× |
-| 4 | 1 | 4 | 1.04× |
-| 8 | 1 | 8 | 1.09× |
-| 2 | 16 | 32 | 1.31× |
-| 8 | 2 | 16 | 1.40× |
-| 4 | 16 | 64 | 2.20× |
-| 8 | 16 | 128 | 2.94× |
+*How measured:* `test_noc_placement_regimes`, `DEVICE KERNEL DURATION [ns]`, baseline/lever interleaved
+(A,B,A,B…), median of 12 trials × 3 launches, `kernel_iters=2` unless stated.
+- **WH B0 n150:** commit `adce58258c3` + test, 2026-10-12 (three runs agree within 0.01×); sweep rows from
+  tt-probe (`kernel_iters=8`); device_perf row from the 2026-07-17 report ([`report.md`](report.md)).
+- **BH p150b:** the same four cases (the fourth, then named `noc_loses_1core_block16`, is now
+  `noc_flat_1core_block16`); device_perf row from `test_noc_placement_device_perf` (20 launches averaged).
+  `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19, commit `f74ee7aad64`.
 
-Rule of thumb on WH B0: placement is worth changing once the line has ≳16 outstanding 2 KB reads; at ≤8 it is
-within ~10 %. Small payloads still benefit if the line is bandwidth-bound: 64 tiles (8 tiles/core, `block=16`,
-`kernel_iters=1`) measured 2.65×, 16 tiles (2 tiles/core) 1.51×. The NoC choice for reads is likewise flat when
-latency-bound (`block=1`: 1.04× at 2 cores, 1.07× at 8 cores; `op="read"`, row).
+Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_regimes`
+(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
 
 ## Measure your own shapes/params
 ```bash
@@ -143,4 +163,4 @@ scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/t
 
 ## Code
 `noc_placement.py` (op), `kernels/{copy_reader,copy_writer,read_bench,write_bench}.cpp`, `noc_report.py`
-(report pipeline). Numbers are single-box, single-arch (WH B0) — illustrative of the mechanism, not a CI bound.
+(report pipeline). Numbers are single-box per arch (WH B0 n150, BH p150b) — illustrative of the mechanism, not a CI bound.

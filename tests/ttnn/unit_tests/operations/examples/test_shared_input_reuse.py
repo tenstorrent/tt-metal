@@ -183,8 +183,8 @@ def test_shared_input_reuse_device_perf(device):
         assert med is not None, f"profiler produced no data for {variant}"
         ns[variant] = (med, std)
 
-    (bm, bs) = ns["per_core_dram"]
-    (mm, msd) = ns["mcast"]
+    bm, bs = ns["per_core_dram"]
+    mm, msd = ns["mcast"]
     ratio = bm / mm if mm else float("nan")
     lines = [
         "",
@@ -243,13 +243,17 @@ def _measure_interleaved_ns(device, run_fns, trials=N_PROFILE_ITERS):
     return {k: (statistics.median(v), min(v), max(v)) for k, v in samples.items()}
 
 
-# (id, chunk_rows, d_cols, num_chunks, assertion). All shapes are bf16 tiles; the worker rectangle is
-# 2 x grid_x Tensix cores (16 on Wormhole B0 n150), injector at (0,0).
-#   helps:          64-tile chunks (131072 B per multicast), 1216 tiles total  -> measured 1.34x on WH B0
-#   does_not_help:  8-tile chunks (16384 B per multicast), SAME 1216 tiles total -> measured 0.82x
+# (chunk_rows, d_cols, num_chunks, regime, threshold). All shapes are bf16 tiles; the worker rectangle is
+# 2 x grid_x Tensix cores (16 on Wormhole B0 n150, 24 on Blackhole p150b), injector at (0,0).
+#   helps:          64-tile chunks (131072 B per multicast), 1216 tiles total
+#   measure:        16-tile chunks, same 1216 tiles: loses on WH B0, wins on BH, so only logged
+#   does_not_help:  8-tile chunks (16384 B per multicast), SAME 1216 tiles total
+# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
+# -- numbers per board in README.md.
 _REGIME_CASES = [
-    pytest.param(16, 4, 19, "helps", 1.17, id="helps_chunk64tiles_1216tiles"),
-    pytest.param(2, 4, 152, "does_not_help", 1.0, id="does_not_help_chunk8tiles_1216tiles"),
+    pytest.param(16, 4, 19, "helps", 1.17, id="helps_chunk64tiles_1216tiles"),  # WH 1.34x, BH 1.93x
+    pytest.param(4, 4, 76, "measure", None, id="measure_chunk16tiles_1216tiles"),  # WH 0.93x, BH 1.32x
+    pytest.param(2, 4, 152, "does_not_help", 1.0, id="does_not_help_chunk8tiles_1216tiles"),  # WH 0.82x, BH 0.96x
 ]
 
 
@@ -260,13 +264,8 @@ def test_shared_input_reuse_regimes(device, chunk_rows, d_cols, num_chunks, regi
     The per-chunk mcast handshake (wait for all receivers' acks, then broadcast) has a fixed cost per
     chunk. With few large chunks it is amortized and the DRAM-read saving wins; with many small chunks
     the handshake dominates and `mcast` loses to plain per-core DRAM reads.
-    Asserts: helps -> speedup >= threshold (= 1 + 0.5*(measured-1)); does_not_help -> speedup <= threshold.
+    Asserts: helps -> speedup >= threshold; does_not_help -> speedup <= threshold; measure -> logged only.
     """
-    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
-    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
-    # another arch re-measure the regimes and add its own thresholds before enabling this test.
-    if not ttnn.device.is_wormhole_b0(device):
-        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
     n = _num_cores(device)
     s_kv = num_chunks * chunk_rows * TILE
     x = torch.ones(s_kv, d_cols * TILE, dtype=torch.float32)
@@ -288,8 +287,9 @@ def test_shared_input_reuse_regimes(device, chunk_rows, d_cols, num_chunks, regi
     base, mc = res["per_core_dram"][0], res["mcast"][0]
     speedup = base / mc
     chunk_tiles = chunk_rows * d_cols
+    arch = {"WORMHOLE_B0": "WH_B0", "BLACKHOLE": "BH"}.get(str(device.arch()).rsplit(".", 1)[-1], str(device.arch()))
     logger.info(
-        f"[shared_input_reuse regimes] {regime}: {n} Tensix cores, {num_chunks * chunk_tiles} tiles total in "
+        f"[{arch}] [shared_input_reuse regimes] {regime}: {n} Tensix cores, {num_chunks * chunk_tiles} tiles total in "
         f"{num_chunks} chunks of {chunk_tiles} tiles ({chunk_tiles * 2048} B/chunk) | "
         f"per_core_dram {base:.0f} ns [{res['per_core_dram'][1]:.0f}-{res['per_core_dram'][2]:.0f}]  "
         f"mcast {mc:.0f} ns [{res['mcast'][1]:.0f}-{res['mcast'][2]:.0f}]  speedup {speedup:.2f}x  "
@@ -297,5 +297,5 @@ def test_shared_input_reuse_regimes(device, chunk_rows, d_cols, num_chunks, regi
     )
     if regime == "helps":
         assert speedup >= threshold, f"expected mcast speedup >= {threshold:.2f}x, got {speedup:.2f}x"
-    else:
+    elif regime == "does_not_help":
         assert speedup <= threshold, f"expected mcast speedup <= {threshold:.2f}x (no gain), got {speedup:.2f}x"

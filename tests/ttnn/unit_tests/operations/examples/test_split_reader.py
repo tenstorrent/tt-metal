@@ -151,7 +151,7 @@ def test_split_reader_device_perf(device):
 
 
 # ---------------------------------------------------------------------------
-# When the split reader helps / when its gain shrinks (Wormhole B0 n150).
+# When the split reader helps / when its gain shrinks (numbers below: WH B0 n150; BH p150b in README.md).
 #
 # Baseline = split_reader=False (NCRISC issues every read); lever = split_reader=True
 # (BRISC also issues the second half of every block). 8 source Tensix cores x 8 tiles,
@@ -167,7 +167,7 @@ def test_split_reader_device_perf(device):
 #                           DRAM writes) becomes the critical RISC-V            -> ~1.35x
 #
 # No configuration reachable through row_gather_copy's arguments is flat (<= 1.05x) on
-# WH B0: because the reader barriers after every tile, a second issuing RISC-V always
+# WH B0 and BH: because the reader barriers after every tile, a second issuing RISC-V always
 # doubles the reads in flight. The diminished case asserts the gain stays well below the
 # issue-bound one instead.
 #
@@ -182,9 +182,11 @@ _REGIME_CORES, _REGIME_TILES_PER_CORE, _REGIME_BLOCK_TILES = 8, 8, 8
 
 # (regime id, transaction_bytes, kind, threshold). helps -> speedup >= 1 + 0.5*(measured-1);
 # diminished -> speedup <= threshold (well below the issue-bound gain).
+# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
+# - numbers per board in README.md.
 _REGIMES = [
-    ("helps_issue_bound_32B", 32, "helps", 1.4),  # measured ~1.84x
-    ("diminished_2048B", 2048, "diminished", 1.50),
+    ("helps_issue_bound_32B", 32, "helps", 1.4),  # WH 1.84x, BH 1.90x
+    ("diminished_2048B", 2048, "diminished", 1.75),  # WH 1.38x, BH 1.61x - stays well below the issue-bound gain
 ]
 
 
@@ -217,11 +219,6 @@ def _median(trials, key):
 @pytest.mark.parametrize("regime,transaction_bytes,kind,threshold", _REGIMES, ids=[r[0] for r in _REGIMES])
 def test_split_reader_regimes(device, regime, transaction_bytes, kind, threshold):
     """split off (baseline) vs on (lever) where NCRISC is issue-bound and where it is not."""
-    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
-    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
-    # another arch re-measure the regimes and add its own thresholds before enabling this test.
-    if not ttnn.device.is_wormhole_b0(device):
-        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
     torch_input, tt_input = _regime_input(device)
     expected = _expected(torch_input)
     runs = {
@@ -255,7 +252,7 @@ def test_split_reader_regimes(device, regime, transaction_bytes, kind, threshold
     b_dev = [t["device"] for t in off]
     l_dev = [t["device"] for t in on]
     logger.info(
-        f"[WH_B0] split_reader {regime}: tx={transaction_bytes} B reads/launch={reads} "
+        f"[{device.arch()}] split_reader {regime}: tx={transaction_bytes} B reads/launch={reads} "
         f"(cores={_REGIME_CORES} tiles/core={_REGIME_TILES_PER_CORE} block={_REGIME_BLOCK_TILES}) | "
         f"off median {b_med:.1f} ns (min {min(b_dev):.1f} max {max(b_dev):.1f}; NCRISC {_median(off, 'ncrisc'):.1f}) | "
         f"on median {l_med:.1f} ns (min {min(l_dev):.1f} max {max(l_dev):.1f}; NCRISC {_median(on, 'ncrisc'):.1f} "

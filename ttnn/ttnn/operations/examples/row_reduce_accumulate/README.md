@@ -2,6 +2,7 @@
 
 **Problem type:** compute-bound: reduction  ·  **Concept(s):** cross-tile accumulation strategy for a row-mean reduce · precision (input dtype × accumulation dtype), swept over input distributions
 **First profiled on:** `bgd-lab-t3003-special-mstaletovic-for-reservation-40918` · WH B0 · single core · 2026-07-13 · `54a202a35d5`
+**Measured on:** WH B0 n150 (overview 2026-07-13, regimes 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19)
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -148,17 +149,42 @@ scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/t
 plus a tiny dataflow kernel that fills the reduce scaler (`1/(W·32)`) and the zero tile.
 
 ## When it helps / when it does not
-*Board: **Wormhole B0 n150**, single Tensix core, input sharded in L1, `positive` distribution, HiFi4, 200 in-kernel iters. Numbers come from `test_row_reduce_accumulate_regimes` (11 interleaved trials per variant, median (min-max); baseline = `reduce_fold`, lever = `dest_accum_pairs`; speedup = baseline_ns / lever_ns).*
+**Rule:** `dest_accum_pairs` beats the single `reduce_fold` once the row is wide enough to amortize its fixed
+finalize — from 16 tiles for bf16 input and 8 tiles for fp32 input on WH B0 n150, from 8 tiles for either input on
+BH p150b (marginal there: 1.05–1.06×; clearly from 16 tiles). At 1–4 tiles it loses on both boards.
 
-| condition | row width / precision | `reduce_fold` ns | `dest_accum_pairs` ns | speedup | trials | board |
-|---|---|---:|---:|---:|---:|---|
-| helps: wide row, fp32 input | 32 tiles, `fp32-fp32` | 4478 (4465-4487) | 2850 (2842-2861) | 1.57x | 11 | WH B0 n150 |
-| helps: wide row, bf16 input | 32 tiles, `bf16-fp32` | 2419 (2411-2439) | 1803 (1798-1806) | 1.34x | 11 | WH B0 n150 |
-| does not help: 1-tile row | 1 tile, `bf16-fp32` | 433 (430-442) | 837 (830-844) | 0.52x | 11 | WH B0 n150 |
-| does not help: 2-tile row | 2 tiles, `bf16-fp32` | 497 (495-513) | 834 (828-837) | 0.60x | 11 | WH B0 n150 |
-| does not help: 8-tile row | 8 tiles, `bf16-fp32` | 886 (883-893) | 1014 (1012-1020) | 0.87x | 11 | WH B0 n150 |
+| Regime (same definition on every board; 1 Tensix core, input sharded in L1, HiFi4, 200 in-kernel iters) | WH B0 n150 · 8×8 = 64 Tensix cores | BH p150b · 12×10 = 120 Tensix cores |
+|---|---|---|
+| **Helps:** wide row, fp32 input — 32 tiles, `fp32-fp32` | 4 478 → 2 850 ns **1.57×** | 1 386 → 784 ns **1.77×** |
+| **Helps:** wide row, bf16 input — 32 tiles, `bf16-fp32` | 2 419 → 1 803 ns **1.34×** | 1 369 → 694 ns **1.97×** |
+| **Does not help:** 8-tile row — 8 tiles, `bf16-fp32` | 886 → 1 014 ns **0.87×** | 499 → 470 ns **1.06× — marginal gain on BH** (`measure` regime: verdict differs by arch) |
+| **Does not help:** 4-tile row — 4 tiles, `bf16-fp32` | 633 → 877 ns **0.72×** (sweep) | 356 → 430 ns **0.83×** |
+| **Does not help:** 2-tile row — 2 tiles, `bf16-fp32` | 497 → 834 ns **0.60×** | 282 → 403 ns **0.70×** |
+| **Does not help:** 1-tile row — 1 tile, `bf16-fp32` | 433 → 837 ns **0.52×** | 240 → 413 ns **0.58×** |
+| Sweep `bf16-fp32`, 1 / 2 / 4 / 8 / 16 / 32 tiles | 0.52 / 0.61 / 0.72 / 0.87 / 1.09 / 1.34× | 0.58 / 0.70 / 0.83 / 1.06 / 1.46 / 1.97× |
+| Sweep `fp32-fp32`, same widths | 0.58 / 0.71 / 0.87 / 1.10 / 1.35 / 1.58× | 0.61 / 0.71 / 0.85 / 1.05 / 1.37 / 1.77× |
+| Sweep `bf16-bf16`, same widths | 0.60 / 0.71 / 0.82 / 0.99 / 1.22 / 1.46× | 0.63 / 0.74 / 0.89 / 1.14 / 1.55 / 2.08× |
+| Single-tile-per-add `dest_accum`, 32 tiles (`fp32-fp32` / `bf16-fp32`) | 0.93× / 0.86× — never wins | 1.20× / 1.33× — wins at 32 tiles |
+| **Boundary** (first width ≥ 1.05×) | bf16 input 16 tiles · fp32 input 8 tiles | 8 tiles for both (1.06× / 1.05×) |
 
-- **Helps (wide row):** `reduce_fold` costs about 70 ns (bf16) to 130 ns (fp32) per tile, `dest_accum_pairs` about 30-60 ns per tile plus a fixed cost, so the gap widens with width; the win is larger for fp32 input (more bytes per `reduce_fold` tile).
-- **Does not help (narrow row):** `dest_accum_pairs` has a fixed ~800 ns finalize (pack to L1, FPU reduce) that a 1-2 tile single reduce never pays.
-- **Measured crossover on this build:** `dest_accum_pairs` first wins at **16 tiles for bf16 input** (1.09x `bf16-fp32`, 1.22x `bf16-bf16`) and at **8 tiles for fp32 input** (1.10x); at 8 tiles bf16 it is 0.87x. Single-tile-per-add `dest_accum` never wins here (0.93x even at 32 tiles, fp32).
-- **Correction to the text above (measured 2026-07-13 on WH B0):** the overview table and the "wins for W >= 4 (2.93x bf16 @32t)" claim do not reproduce on this build. `reduce_fold` is now ~2.2x cheaper at 32 tiles bf16 (2419 vs 5312 ns), so the win at 32 tiles is **1.34x (bf16) / 1.57x (fp32)**, not 2.93x / 1.87x, the crossover is 8-16 tiles, not 4, and fp32 input now gives the *larger* win rather than half of it.
+**Why the boards differ:** per extra tile (from the 1 → 32 tile `bf16-fp32` sweeps) `reduce_fold` costs ~64 ns on
+WH B0 n150 vs ~36 ns on BH p150b, but `dest_accum_pairs` costs ~31 ns vs ~9 ns, and its fixed cost halves
+(~830 → ~410 ns at 1 tile). The FPU add-into-DEST path sped up far more on BH p150b than the reduce datapath did —
+the same pattern as in `reduce_accumulate` and `eltwise_l1_vs_dest_accumulate` — so the accumulate methods pay
+sooner and more. Input dtype also flips: on BH p150b `reduce_fold` costs the same per tile for fp32 and bf16 input
+(~36 ns) while the add path pays ~30 % more for fp32, so bf16 input gives the larger win (1.97× vs 1.77×); on WH B0
+n150 `reduce_fold` doubles its per-tile cost for fp32 input (~129 vs ~64 ns), so fp32 gives the larger win.
+
+- **Helps (wide row):** `reduce_fold` costs about 70 ns (bf16) to 130 ns (fp32) per tile on WH B0 n150 (~36 ns for either on BH p150b), `dest_accum_pairs` about 30-60 ns per tile on WH B0 n150 (~9-12 ns on BH p150b) plus a fixed cost, so the gap widens with width; on WH B0 n150 the win is larger for fp32 input (more bytes per `reduce_fold` tile), on BH p150b for bf16 input.
+- **Does not help (narrow row):** `dest_accum_pairs` has a fixed ~800 ns finalize on WH B0 n150 (~410 ns on BH p150b) (pack to L1, FPU reduce) that a 1-2 tile single reduce never pays.
+- **Measured crossover on this build (WH B0 n150):** `dest_accum_pairs` first wins at **16 tiles for bf16 input** (1.09x `bf16-fp32`, 1.22x `bf16-bf16`) and at **8 tiles for fp32 input** (1.10x); at 8 tiles bf16 it is 0.87x. Single-tile-per-add `dest_accum` never wins on WH B0 n150 (0.93x even at 32 tiles, fp32); on BH p150b it does at 32 tiles (1.20x fp32, 1.33x bf16).
+- **Measured crossover on BH p150b:** 8 tiles for both inputs, but only just (1.06x `bf16-fp32`, 1.05x `fp32-fp32`, 1.14x `bf16-bf16`); 1.37-1.55x from 16 tiles. 4 tiles still loses (0.83x).
+- **Correction to the text above (measured 2026-07-13 on WH B0; WH B0 n150 only):** the overview table and the "wins for W >= 4 (2.93x bf16 @32t)" claim do not reproduce on this build. `reduce_fold` is now ~2.2x cheaper at 32 tiles bf16 (2419 vs 5312 ns), so the win at 32 tiles is **1.34x (bf16) / 1.57x (fp32)**, not 2.93x / 1.87x, the crossover is 8-16 tiles, not 4, and fp32 input now gives the *larger* win rather than half of it. On BH p150b the win at 32 tiles is 1.97x (bf16) / 1.77x (fp32), the crossover is 8 tiles, and bf16 input gives the larger win, as the overview said for WH originally (though fp32 is ~0.9x of the bf16 win there, not half).
+
+*How measured:* WH B0 n150 rows — `test_row_reduce_accumulate_regimes` (single Tensix core, input sharded in L1,
+`positive` distribution, HiFi4, 200 in-kernel iters, 11 interleaved trials per variant, median (min-max in `report.md`);
+baseline = `reduce_fold`, lever = `dest_accum_pairs`; speedup = baseline_ns / lever_ns) and the `RRA_DISTS=positive`
+device_perf sweep, 2026-10-12. BH p150b rows — the same regimes test and device_perf sweep on that board (distribution
+`signal`; perf is data-independent), `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19 (details in `report.md`).
+Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_row_reduce_accumulate.py::test_row_reduce_accumulate_regimes`
+(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).

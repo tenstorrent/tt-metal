@@ -71,3 +71,65 @@ Interleaved DRAM puts row `r` in bank `r % 8`. Width blocking (`32xW`, all 110 c
   increases with blocks per core.
 - These measurements do not establish why the saving stays flat; a pile-up that is limited to
   launch start would fit, but was not measured directly.
+
+## Blackhole p150b — bh-qb-15-special-adamjanovic-for-reservation-139410 (2026-10-19)
+
+| stamp | value |
+|---|---|
+| arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| metric / method | `test_bank_stagger_device_perf`: same op and metric as above, 5 trials × 10 launches (median of trials; the p300c blocks used 7), variants interleaved per trial, `kernel-iters=1`; shapes sized to 120 tile-rows (`3840`) instead of 110 (`3520`) |
+
+### Width-sharded (`ws`) and interleaved (`il`) sources — all three variants
+
+```
+         shape src chunk read B nt_h  n_w cores blk  variant        ns  spread  vs none
+   3840x1024    ws     4    256  120    8   120   8  none       111677    0.6%    base
+   3840x1024    ws     4    256  120    8   120   8  stagger     84255    1.1%  1.325x
+   3840x1024    ws     4    256  120    8   120   8  rows       111579    1.7%  1.001x
+
+   7680x1024    ws     4    256  240    8   120  16  none       208627    1.4%    base
+   7680x1024    ws     4    256  240    8   120  16  stagger    175265    1.6%  1.190x
+   7680x1024    ws     4    256  240    8   120  16  rows       210400    1.6%  0.992x
+
+   3840x4096    ws    16   1024  120    8   120   8  none       203545    1.0%    base
+   3840x4096    ws    16   1024  120    8   120   8  stagger    171495    1.0%  1.187x
+   3840x4096    ws    16   1024  120    8   120   8  rows       203979    0.9%  0.998x
+
+   7680x4096    ws    16   1024  240    8   120  16  none       385965    0.6%    base
+   7680x4096    ws    16   1024  240    8   120  16  stagger    345965    0.5%  1.116x
+   7680x4096    ws    16   1024  240    8   120  16  rows       383476    1.0%  1.006x
+
+     32x7680    il     2    128    1  120   120   1  none         8079    1.1%    base
+     32x7680    il     2    128    1  120   120   1  stagger      8142    1.0%  0.992x
+     32x7680    il     2    128    1  120   120   1  rows         7773    1.3%  1.039x
+
+    32x61440    il    16   1024    1  120   120   1  none        21134    1.3%    base
+    32x61440    il    16   1024    1  120   120   1  stagger     21135    1.2%  1.000x
+    32x61440    il    16   1024    1  120   120   1  rows        19998    0.6%  1.057x
+
+    3840x512    il    16   1024  120    1   120   1  none        20194    0.9%    base
+    3840x512    il    16   1024  120    1   120   1  stagger     20122    0.7%  1.004x
+    3840x512    il    16   1024  120    1   120   1  rows        19377    1.7%  1.042x
+```
+
+### Helps / does not help vs BH p300c
+
+| case | BH p300c (110 Tensix cores) | BH p150b (120 Tensix cores) |
+|---|--:|--:|
+| ws, 256 B, 8 blocks per Tensix core, `stagger` | 1.32× | **1.33×** |
+| ws, 256 B, 16 blocks, `stagger` | 1.19× | **1.19×** |
+| ws, 1024 B, 8 blocks, `stagger` | 1.16× | **1.19×** |
+| ws, 1024 B, 16 blocks, `stagger` | 1.13× | **1.12×** |
+| ws, any, `rows` (does not help) | not measured | **0.99–1.01×** |
+| il, 1 block, `rows` | 1.04–1.07× | **1.04–1.06×** |
+| il, 1 block, `stagger` (does not help) | not measured | **0.99–1.00×** |
+| il, 4 blocks, `rows` (does not help) | 1.01× | not measured |
+
+### Reading it
+- **Reproduces BH p300c.** Every shared case is within ~0.03×: the effect depends on the 8 DRAM banks, which
+  both boards have, not on 110 vs 120 Tensix cores.
+- **Each rotation only fixes its own source.** `stagger` (block rotation) helps only the width-sharded source and
+  `rows` (row rotation) only the interleaved one; the crossed variants are flat (0.99–1.01×), which confirms the
+  two pile-ups are different.
+- **WH B0 n150 is untested** (12 DRAM banks); the ratios above should not be assumed there.

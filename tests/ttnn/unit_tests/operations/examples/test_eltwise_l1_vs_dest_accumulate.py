@@ -41,7 +41,6 @@ from ttnn.operations.examples.eltwise_l1_vs_dest_accumulate.eltwise_l1_vs_dest_a
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-
 TILE = 32
 
 # Single L1 accumulator tile (the helper's L1Accumulation lifecycle folds the stream onto one tile).
@@ -218,22 +217,24 @@ def _regime_ns(device, tt_x, tt_acc, base_variant, lever_variant, num_blocks):
 
 # (steps B, baseline, lever, verdict, measured speedup)
 #   helps:          B=64 single-tile steps, rmw -> pack_l1_acc (rmw unpacks+packs acc every tile; the packer folds
-#                   a pair per step instead). Measured ~4.1x on Wormhole B0 (5.09x was Blackhole).
+#                   a pair per step instead), and pack_l1_acc -> dest_acc (the sum stays in DEST).
 #   does_not_help:  B=2 (one pair): pack_l1_acc -> dest_acc. Keeping the sum in DEST instead of folding in L1 saves
-#                   nothing when there is a single pair to fold (~1.00x); dest_acc only pays as B grows (~1.3x at B=64).
+#                   nothing when there is a single pair to fold (~1.00x); dest_acc only pays as B grows.
+# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
+# -- numbers per board in README.md.
 _REGIMES = [
-    pytest.param(64, "rmw", "pack_l1_acc", "helps", 4.10, id="helps_B64_rmw_to_pack_l1_acc"),
-    pytest.param(2, "pack_l1_acc", "dest_acc", "does_not_help", 1.00, id="flat_B2_pack_l1_acc_to_dest_acc"),
+    pytest.param(64, "rmw", "pack_l1_acc", "helps", 4.10, id="helps_B64_rmw_to_pack_l1_acc"),  # WH 4.12x, BH 5.26x
+    pytest.param(
+        64, "pack_l1_acc", "dest_acc", "helps", 1.30, id="helps_B64_pack_l1_acc_to_dest_acc"
+    ),  # WH 1.30x, BH 2.01x
+    pytest.param(
+        2, "pack_l1_acc", "dest_acc", "does_not_help", 1.00, id="flat_B2_pack_l1_acc_to_dest_acc"
+    ),  # WH 0.99x, BH 1.00x
 ]
 
 
 @pytest.mark.parametrize("num_blocks,base_variant,lever_variant,verdict,measured", _REGIMES)
 def test_eltwise_l1_vs_dest_accumulate_regimes(device, num_blocks, base_variant, lever_variant, verdict, measured):
-    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
-    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
-    # another arch re-measure the regimes and add its own thresholds before enabling this test.
-    if not ttnn.device.is_wormhole_b0(device):
-        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
     tt_x, x = _make_input(device, b=num_blocks)
     expected = _expected(x, b=num_blocks)
     tt_acc = ttnn.allocate_tensor_on_device(

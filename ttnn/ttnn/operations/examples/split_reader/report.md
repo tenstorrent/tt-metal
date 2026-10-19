@@ -97,3 +97,44 @@ No reachable configuration is flat: the reader barriers after every tile, so eve
 per tile a second issuing RISC-V doubles the tiles in flight. The issue-bound component of the gain
 (the part that grows as reads get smaller at fixed bytes) disappears from ~1 KiB per read up; the
 ~1.3–1.5× floor is per-tile barrier latency, not issue rate.
+
+## Blackhole p150b — bh-qb-15-special-adamjanovic-for-reservation-139410 (2026-10-19)
+
+| stamp | value |
+|---|---|
+| arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores (this test uses 8 source + 1 consumer), 8 DRAM banks, AICLK 1350 MHz |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| metric / method | same as the 2026-10-12 WH block: `test_split_reader_regimes` (5 warmup launches; 12 trials per variant interleaved off/on, a trial = mean per-launch `DEVICE KERNEL DURATION`, `DEVICE NCRISC KERNEL DURATION`, `DEVICE BRISC KERNEL DURATION` over 5 launches; medians) and `test_split_reader_device_perf` |
+
+### Sweep — 8 source Tensix cores × 8 tiles, 8-tile blocks, transaction size
+
+| bytes per NoC read | NoC reads/launch | off NCRISC µs | on device speedup |
+|--:|--:|--:|--:|
+| 32 | 4096 | 111.4 | **1.90×** |
+| 64 | 2048 | 64.0 | **1.85×** |
+| 128 | 1024 | 40.2 | **1.78×** |
+| 256 | 512 | 28.4 | **1.70×** |
+| 512 | 256 | 22.8 | **1.64×** |
+| 1024 | 128 | 20.1 | **1.60×** |
+| 2048 | 64 | 19.0 | **1.61×** |
+
+Full row from `test_split_reader_device_perf` (64 B): off NCRISC 63971.3, on NCRISC 32015.3, on BRISC 34751.5,
+off device 64438.7, on device 34796.2 ns → 1.85×. The other rows are the regimes test (32 B, 2048 B) and probes
+of the same A/B.
+
+### Regimes (`test_split_reader_regimes` on BH p150b)
+
+| regime | bytes per NoC read | reads/launch | off device ns | off NCRISC ns | on device ns | on NCRISC ns | on BRISC ns | speedup | asserted |
+|---|--:|--:|---|--:|---|--:|--:|--:|---|
+| helps_issue_bound_32B | 32 | 4096 | 111869.9 (111812.4–111889.6) | 111402.5 | 58811.2 (58758.2–59560.6) | 55871.8 | 58766.9 | **1.90×** | ≥ 1.4× |
+| diminished_2048B | 2048 | 64 | 19432.3 (19412.2–19488.4) | 18970.9 | 12069.7 (12050.6–12084.2) | 10030.6 | 12006.0 | **1.61×** | ≤ 1.75× |
+
+### Reading it
+- **Same shape as WH B0 n150, higher floor.** The baseline NCRISC lifetime falls 111.4 → 19.0 µs from 32 B to
+  2,048 B per read (WH B0: 146.3 → 24.1 µs) and is flat from ~1 KiB up, so the issue-bound component disappears
+  at the same read size on both boards. What is left is 1.60–1.61× on BH p150b vs 1.36–1.38× on WH B0.
+- **Why the floor is higher:** at 2,048 B the split's critical RISC-V (BRISC: half the reads + all DRAM writes)
+  takes 12.0 µs vs the baseline NCRISC's 19.0 µs (ratio 1.58); on WH B0 it is 18.1 vs 24.1 µs (1.33). BRISC's
+  DRAM-write share costs relatively less on BH p150b; this is an observation from the lifetimes, not isolated.
+- **No flat regime on either board.** The regimes test therefore asserts the 2,048 B gain stays below 1.75× on
+  every board (the issue-bound gain is 1.90× here), not ≤ 1.05×.

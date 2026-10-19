@@ -2,22 +2,23 @@
 
 Short, self-contained, **runnable** ops that each isolate one kernel-level performance lever and
 **measure** it on device. Every entry says when the lever helps **and when it does not**, with
-real device-kernel ns for both, and the board they were measured on.
+real device-kernel ns for both, on **both** Wormhole B0 and Blackhole where measured.
 
-**How to use this catalog.** Read this index (it ends at `END OF INDEX`). Measure your op first:
-stage breakdown (stub reads / writes / compute and time what is left), achieved GB/s vs the
-DRAM/NoC ceiling, active Tensix cores vs the grid. Find your row below, then search the rest:
-`grep -n "^## " master.md` lists every entry with its problem type; `grep -n -A10 "<example>"`
-returns one whole entry; its **Code** line names the file and functions where the lever lives. Details
-and CLI: `examples/<example>/README.md`.
+**How to use this catalog.** Read this index (it ends at `END OF INDEX`). Find your board below and
+note how it differs from the other. Measure your op first: stage breakdown (stub reads / writes /
+compute and time what is left), achieved GB/s vs the DRAM/NoC ceiling, active Tensix cores vs the
+grid. Find your row below, then search the rest: `grep -n "^## " master.md` lists every entry with its
+problem type; `grep -n -A12 "<example>"` returns one whole entry; its **Code** line names the file and
+functions where the lever lives. Details, the full regime × board table and CLI:
+`examples/<example>/README.md`.
 
 | If you measure… | Problem type | Examples |
 |---|---|---|
-| Few Tensix cores active, or one core holds the whole time | **Grid not filled** | [`width_split`](width_split/) |
+| Few Tensix cores active, or one Tensix core holds the whole time | **Grid not filled** | [`width_split`](width_split/) |
 | Reads/writes dominate, achieved GB/s far below the ceiling, few reads in flight per barrier | **Data movement below the ceiling: latency** | [`double_buffer`](double_buffer/), [`trid_double_issue`](trid_double_issue/) |
 | …and each page goes out as several small writes, one barrier each | **…: transfer size** | [`tile_reorder`](tile_reorder/) |
 | …and one data-movement RISC-V's own time equals the kernel time and scales with the read count | **…: issue-bound** | [`split_reader`](split_reader/) |
-| …and time changes with which cores / which NoC run the same bytes, or with the order the cores walk the DRAM banks | **…: contention** | [`noc_placement`](noc_placement/), [`tensix_all_reduce_ring_transport`](tensix_all_reduce_ring_transport/), [`bank_stagger`](bank_stagger/) |
+| …and time changes with which Tensix cores / which NoC run the same bytes, or with the order the Tensix cores walk the DRAM banks | **…: contention** | [`noc_placement`](noc_placement/), [`tensix_all_reduce_ring_transport`](tensix_all_reduce_ring_transport/), [`bank_stagger`](bank_stagger/) |
 | Many Tensix cores fetch the same bytes from DRAM | **Redundant reads** | [`shared_input_reuse`](shared_input_reuse/), [`mcast_topology`](mcast_topology/) |
 | Compute dominates and cost is per helper call, not per tile | **Compute-bound: fixed cost per call** | [`compute_block_size`](compute_block_size/) |
 | …intermediates or an accumulator round-trip through L1 between steps | **Compute-bound: L1 round-trips** | [`compute_fusion`](compute_fusion/), [`eltwise_l1_vs_dest_accumulate`](eltwise_l1_vs_dest_accumulate/) |
@@ -26,14 +27,59 @@ and CLI: `examples/<example>/README.md`.
 | …matmul reloading SRC operands per output tile | **Compute-bound: SRC operand reload** | [`matmul_output_subblock`](matmul_output_subblock/) |
 | Tensix cores wait on each other (gather, reduce, ring) | **Cross-core communication** | [`tensix_all_reduce`](tensix_all_reduce/) |
 
+## Wormhole vs Blackhole — read before trusting a number
+
+Boards measured: **WH B0 n150** and **BH p150b** (plus older BH p150 / p100a / p300c runs where an
+entry says so). Every number below names its board. A lever's *direction* is the same on both archs
+for most examples, but the **boundary** (how many tiles, Tensix cores or steps before it pays) moves,
+and for a few levers the verdict **flips**.
+
+| | WH B0 n150 | BH p150b |
+|---|---|---|
+| Tensix compute grid | 8×8 = 64 Tensix cores | 12×10 = 120 Tensix cores (p100a / p300c: other grids — query `compute_with_storage_grid_size()`) |
+| DRAM banks | 12 | 8 (p100a: 7) — interleaved page `p` lands in bank `p % 8` |
+| AICLK | 1000 MHz | 1350 MHz |
+| L1 per Tensix core | 1464 KB | 1536 KB |
+| NoC flit / max single packet | 32 B / 8 KB | 64 B / 16 KB |
+| DRAM alignment (NoC DRAM read alignment) | 32 B | **64 B** — row-major pages pad to 64 B |
+| DST capacity | 16 tiles full, 8 half-sync bf16, 4 half-sync fp32 | same |
+| Kernel launch floor (1-tile relu, 1 Tensix core) | ~1.8 µs | ~1.0 µs |
+| Achieved DRAM read + write, full grid | ~190 GB/s | ~415–430 GB/s |
+
+Where the boundary or verdict moves on BH p150b (everything else: same verdict, numbers in each entry):
+
+| Example | WH B0 n150 | BH p150b |
+|---|---|---|
+| `width_split` | pays from Wt = 3 tile-columns | pays from Wt = 2 (lower launch floor) |
+| `double_buffer` | flat at 64 Tensix cores (0.98×, DRAM saturated) | never flat: 1.07× at 120 Tensix cores (DRAM ceiling ~2× higher) |
+| `tile_reorder` | DRAM output 1.58× | DRAM output **0.99×** (DRAM in + out at 120 Tensix cores is the ceiling); L1 output still 1.50× |
+| `shared_input_reuse` | crossover ~32 tiles per chunk | crossover 8–16 tiles per chunk |
+| `mcast_topology` | 4×4 grid flat (1.03×) | 4×4 grid loses (0.80×) |
+| `matmul_output_subblock` | ~1.7× from Kt = 1 to 12; tall 8×1 slower than wide 1×8 | 1.46× at Kt = 1 → **1.10× at Kt = 4**; tall 8×1 = wide 1×8 |
+| `eltwise_l1_vs_dest_accumulate` | DEST accumulation 1.30× at 64 steps | 2.01× at 64 steps |
+| `reduce_accumulate` | all dims pay from ~8 tiles | row needs 16 tiles; col / scalar pay from 8 |
+| `row_reduce_accumulate` | pays from 16 tiles (bf16 input) | pays from 8 tiles |
+| `reduce_block` | all dims pay from ~8 tiles per output | row needs > 8; col / scalar pay from 4 |
+| `compute_block_size` | flat at 2 passes (1.04×) | smallest gain 1.07×; no flat case fits L1 |
+| `noc_placement` | single Tensix core loses 0.94× on the canonical NoC pairing | flat (1.02×) |
+
+Kernel-writing differences that are not levers (code, not measurement): DRAM reads must be 64 B
+aligned on BH (`NOC_DRAM_READ_ALIGNMENT_BYTES`, `tt_metal/hw/inc/internal/tt-1xx/blackhole/noc/noc_parameters.h`);
+`reduce_uninit` and `untilize_uninit` take different arguments per arch (`tt_metal/hw/inc/api/compute/reduce.h`,
+`untilize.h`); the matmul dynamic throttle and `skip_cmdbuf_chk` are BH-only
+(`tt_metal/hw/inc/api/compute/matmul.h`, `tt_metal/hw/inc/api/dataflow/dataflow_api.h`). Shapes sized
+for an 8×8 grid (64 tile-rows → one per Tensix core) do **not** map one-per-Tensix-core on 12×10.
+
 Each entry, in this order: `## <example> — <problem type>` · **Situation** · **How to recognize
-it** · **Helps when** · **Does not help when** · **Gist** · **Code** (where the lever lives) · **See also**. Numbers are device kernel
-ns, baseline → lever, speedup = baseline / lever (< 1.00× = slower). Wormhole numbers (WH B0, n150)
-come from each example's `test_<example>_regimes`, which asserts both sides; Blackhole (BH)
-numbers are labelled; `trid_double_issue` and `bank_stagger` have no regimes test yet, so their
-numbers are the Blackhole measurements in their READMEs. **Not covered yet** (no example — measure
-it yourself): fixed launch cost of kernels with nothing to move; data already resident in L1 (CB
-aliasing).
+it** · **Helps when** · **Does not help when** · **Gist** · **Code** (where the lever lives) · **See also**.
+Numbers are device kernel ns, baseline → lever, speedup = baseline / lever (< 1.00× = slower), each
+labelled WH B0 (n150) or BH (p150b unless another board is named). Both boards' numbers come from
+the example's `test_<example>_regimes`, which is arch-agnostic: it runs the same regimes on any board
+and asserts only what held on every measured board; a regime whose verdict differs by arch is marked
+`measure` and only logs its speedup, so the per-board verdicts live here and in the README. Sweep
+points come from the README. `trid_double_issue` and `bank_stagger` have no regimes test and no WH measurement.
+**Not covered yet** (no example — measure it yourself): fixed launch cost of kernels with nothing to
+move; data already resident in L1 (CB aliasing).
 
 <!-- END OF INDEX -->
 
@@ -43,10 +89,10 @@ aliasing).
 
 ## width_split — grid not filled
 **Situation:** a wide, short tensor (1 tile-row, Wt tile-columns) split by tile-rows, so one Tensix core does all Wt tiles.
-**How to recognize it:** active Tensix cores = tile-rows (1) while Wt ≫ 1; time grows ~240 ns per tile above a ~1.8 µs launch floor.
-**Helps when:** Wt ≥ 3 tile-columns: `[32,2048]` (Wt=64, 64 cores) 16 832 → 2 720 ns = **6.19×** (WH B0); Wt=3 1.30×, Wt=8 2.2×.
-**Does not help when:** Wt ≤ 2: `[32,64]` 2 076 → 2 105 ns = **0.99×** (0.89–0.99×, WH B0) — the single core is already at the launch floor.
-**Gist:** give each core a contiguous tile-column range over min(Wt, grid) cores (capped by a chunk constant for L1).
+**How to recognize it:** active Tensix cores = tile-rows (1) while Wt ≫ 1; time grows ~240 ns per tile above a ~1.8 µs launch floor (WH B0), ~160 ns per tile above ~1.0 µs (BH).
+**Helps when:** WH B0 Wt ≥ 3 tile-columns, BH Wt ≥ 2. `[32,2048]` (Wt=64, 64 Tensix cores): WH B0 16 832 → 2 720 ns = **6.19×** · BH 11 092 → 1 536 ns = **7.22×**. Wt=3: WH 1.30× · BH 1.36×; Wt=8: WH 2.2× · BH 2.19×; BH Wt=256 on 120 Tensix cores 13.68×.
+**Does not help when:** WH B0 Wt ≤ 2: `[32,64]` 2 076 → 2 105 ns = **0.99×** (0.89–0.99×) — the single Tensix core is already at the launch floor. BH: only Wt = 1 (nothing to split, 1.00–1.02×); at Wt = 2 BH already gains 1 217 → 1 031 ns = **1.18×**.
+**Gist:** give each Tensix core a contiguous tile-column range over min(Wt, grid) Tensix cores (capped by a chunk constant for L1).
 **Code:** `examples/width_split/width_split.py` — `_num_cores_for()`, `_assign_pages()` (host only; kernels unchanged).
 **See also:** `double_buffer` (per-core efficiency once the grid is full).
 
@@ -54,45 +100,45 @@ aliasing).
 
 ## double_buffer — data movement below the ceiling: latency
 **Situation:** a reader that does *read one tile, barrier, push* into one-tile CBs.
-**How to recognize it:** per-core DRAM rate ~6.5 GB/s (bf16) vs ~18 GB/s single-core ceiling, and cores × 6.5 GB/s well below the ~190 GB/s DRAM peak.
-**Helps when:** cores × per-core rate ≪ DRAM peak (≲16 cores, bf16): 1 core `[512,512]` 155 933 → 59 156 ns = **2.64×**; 8 cores `[2048,2048]` 322 468 → 118 236 ns = **2.73×** (WH B0).
-**Does not help when:** the naive reader already saturates DRAM: 64 cores `[2048,2048]` 87 884 → 89 425 ns = **0.98×** (190.9 GB/s untuned, WH B0). Sweep at 4096 tiles: 16 cores 1.97×, 32 cores 1.11×, 64 cores 0.98×.
-**Gist:** issue ~4–8 async reads per barrier and size each CB to 2 × block; skip it once cores × naive rate reaches DRAM peak.
+**How to recognize it:** per-Tensix-core DRAM rate ~6.5 GB/s (WH B0) / ~8.8 GB/s (BH), bf16, vs a single-core ceiling of ~18 / ~26 GB/s, and Tensix cores × that rate well below the achieved DRAM ceiling (~190 GB/s WH B0, ~415–430 GB/s BH).
+**Helps when:** Tensix cores × per-core rate ≪ DRAM ceiling. 1 Tensix core `[512,512]`: WH B0 155 933 → 59 156 ns = **2.64×** · BH 118 883 → 40 361 ns = **2.95×**. 8 Tensix cores `[2048,2048]`: WH B0 322 468 → 118 236 ns = **2.73×** · BH 238 575 → 86 108 ns = **2.77×**. At 4096 tiles: WH 16 Tensix cores 1.97×, 32 1.11× · BH 16 2.44×, 32 1.55×.
+**Does not help when:** the naive reader already saturates DRAM. WH B0 64 Tensix cores `[2048,2048]` 87 884 → 89 425 ns = **0.98×** (190.9 GB/s untuned). BH never goes flat: 64 Tensix cores 1.08×, 120 Tensix cores 43 554 → 40 519 ns = **1.07×** (385 → 414 GB/s) — the BH DRAM ceiling is ~2× WH, so the gain shrinks but stays.
+**Gist:** issue ~4–8 async reads per barrier and size each CB to 2 × block. On WH B0 skip it once Tensix cores × naive rate reaches DRAM peak; on BH keep it — it still adds ~7–9% at the full grid.
 **Code:** `examples/double_buffer/double_buffer.py` — `_DEPTH`, `create_program_descriptor()` CB `total_size` (host only; kernels unchanged).
 **See also:** `split_reader`, `width_split`.
 
 ## trid_double_issue — data movement below the ceiling: latency
 **Situation:** a reader that already batches reads (a block, or several blocks, per barrier) but cannot widen the block — a shard size, a wide tensor or co-resident buffers cap L1 — and whose `noc_async_read_barrier()` drains every outstanding read, so the NoC idles once per block; lever: tag each block with a transaction id and retire only the oldest (`noc_async_read_barrier_with_trid`).
-**How to recognize it:** reads are batched, yet single-core GB/s sits well below the ~122 GB/s single-core ceiling (BH) and keeps rising with block size and with blocks issued per barrier (`ahead`) — depth is being bought with L1.
-**Helps when:** small blocks at a fixed CB (`cb_blocks=6`), 1 core, bf16 `[512,512]`: block=2 best baseline (`ahead=3`) 39.4 → trid ×4 64.3 GB/s = **1.63×**; block=1 1.54×, block=4 1.36×, block=16 1.11× (BH; GB/s, same bytes, so the ratio is the time ratio). Per core: block=1 still 1.48× on 6 cores. At a 96 KB CB 89.8 → 107.1 GB/s = 1.19× (BH).
-**Does not help when:** L1 is free to widen the block: at a 768 KB CB best baseline 120.9 → best trid 122.2 GB/s = **1.01×**, and the trivial one-block loop (118.7 GB/s) is within 3% (BH). A shallow ring only ties a tuned baseline: block=4 `ahead=3` 62.2 → `trid ×2` 62.1 GB/s = **1.00×** (BH). The DRAM-saturated full grid was not measured.
-**Gist:** tune `ahead` first (optimum ≈ `cb_blocks/2`; block=8 52.1 → 85.1 GB/s, BH) — it is the bigger win; add a trid ring of depth 3–4 only when L1 caps the block — it reaches a given GB/s with ~1.5–2× less L1, not a higher ceiling. Land each new block at `get_write_ptr() + in_flight` slots (README).
+**How to recognize it:** reads are batched, yet single-Tensix-core GB/s sits well below the ~110–122 GB/s single-core ceiling (BH) and keeps rising with block size and with blocks issued per barrier (`ahead`) — depth is being bought with L1.
+**Helps when:** small blocks at a fixed CB (`cb_blocks=6`), 1 Tensix core, bf16 `[512,512]`: block=2 best baseline (`ahead=3`) → trid ×4: BH bh-50 39.4 → 64.3 GB/s = **1.63×** · BH p150b 39.7 → 65.1 GB/s = **1.64×**; block=1 1.54×, block=4 1.36–1.37×, block=16 1.11–1.13× (GB/s, same bytes, so the ratio is the time ratio). Per Tensix core: block=1 still 1.48× on 6 Tensix cores. At a 96 KB CB 89.8 → 107.1 GB/s = 1.19× (BH).
+**Does not help when:** L1 is free to widen the block: at a 768 KB CB best baseline 120.9 → best trid 122.2 GB/s = **1.01×**, and the trivial one-block loop (118.7 GB/s) is within 3% (BH). A shallow ring only ties a tuned baseline: block=4 `ahead=3` 62.2 → `trid ×2` 62.1 GB/s = **1.00×** (BH). WH B0 and the DRAM-saturated full grid: not measured.
+**Gist:** tune `ahead` first (optimum ≈ `cb_blocks/2`; block=8 52.1 → 85.1 GB/s, BH) — it is the bigger win; add a trid ring of depth 3–4 only when L1 caps the block — it reaches a given GB/s with ~1.5–2× less L1, not a higher ceiling. Land each new block at `get_write_ptr() + in_flight` slots (README). Both archs have 16 NoC transaction ids.
 **Code:** `examples/trid_double_issue/kernels/trid_reader.cpp` — `if constexpr (num_trids == 0)` (full barrier, `ahead` blocks per barrier) vs the trid ring (`dataflow_kernel_lib::set_read_trid` / `async_read_barrier_with_trid`); `trid_double_issue.py` `create_program_descriptor()` passes `num_trids`, `ahead`, `cb_blocks` (reader only; writer and CB size shared).
 **See also:** `double_buffer`, `split_reader`.
 
 ## tile_reorder — data movement below the ceiling: transfer size
 **Situation:** a whole-tile relocation whose writer sends each 2 KB tile as 4 × 512 B face writes with a barrier after each face.
 **How to recognize it:** the writer RISC-V (BRISC) is on the critical path and its time scales with the write-barrier count, not with bytes; the gap persists with an L1 output, so it is not DRAM bandwidth.
-**Helps when:** destination pages are remote to the writer: DRAM out `(2048,1024)` 71 855 → 45 513 ns = **1.58×**; L1-interleaved out 43 773 → 31 317 ns = **1.40×** (WH B0). Small moves gain too (2 tiles 2.24×).
-**Does not help when:** every output page is in the writer's own L1 (L1 HEIGHT_SHARDED, one tile-row per core): 23 666 → 23 515 ns = **1.01×** (WH B0).
-**Gist:** write whole pages with one barrier per page or batch whenever the target is remote — the win is fewer barrier round trips.
+**Helps when:** destination pages are remote to the writer and the op is not DRAM-bound. L1-interleaved output: WH B0 `(2048,1024)` 43 773 → 31 317 ns = **1.40×** · BH `(3840,1024)` 38 446 → 25 612 ns = **1.50×**. DRAM output on WH B0 `(2048,1024)` 71 855 → 45 513 ns = **1.58×**. Small moves gain too (2 tiles 2.24×, WH B0).
+**Does not help when:** every output page is in the writer's own L1 (L1 `HEIGHT_SHARDED`, one tile-row per Tensix core): WH B0 `(2048,1024)` 23 666 → 23 515 ns = **1.01×** · BH `(3840,1024)` 25 645 → 25 448 ns = **1.01×**. On BH, also DRAM output: `(2048,1024)` 21 180 → 21 387 ns = **0.99×** — DRAM read + write at 120 Tensix cores is ~400 GB/s, the BH DRAM ceiling, so the writer's barriers are hidden (`(3840,1024)` 1.10×).
+**Gist:** write whole pages with one barrier per page or batch whenever the target is remote — the win is fewer barrier round trips; on BH it shows only for L1 destinations or when DRAM is not saturated. Size shapes to the grid: a 64-tile-row shape is one tile-row per Tensix core on 8×8 but not on 12×10.
 **Code:** `examples/tile_reorder/` — `_WRITER_SOURCE` picks `kernels/tile_reorder_writer_relocate.cpp` vs `tile_reorder_writer_scatter.cpp` (writer only; reader, CBs and work split shared).
-**See also:** `noc_placement`, `split_reader`.
+**See also:** `noc_placement`, `split_reader`, `double_buffer` (BH DRAM ceiling).
 
 ## split_reader — data movement below the ceiling: issue-bound
 **Situation:** one Tensix core gathers many small NoC reads issued from NCRISC alone while BRISC only writes.
-**How to recognize it:** NCRISC lifetime ≈ device time and grows with the read count at fixed bytes (128 KiB: 32 B reads 146 µs vs 2048 B reads 24 µs).
-**Helps when:** ≤ 256 B per NoC read: 32 B reads (4096 reads/launch) 147 274 → 79 968 ns = **1.84×** (WH B0).
-**Does not help when:** no flat regime is reachable in this example — with ≥ 1 KiB reads the gain shrinks to **1.38×** (2048 B: 25 041 → 18 182 ns, WH B0); lowest seen 1.29×. The remaining gain is per-tile barrier latency, which batching reads (`double_buffer`) also removes.
+**How to recognize it:** NCRISC lifetime ≈ device time and grows with the read count at fixed bytes (128 KiB: 32 B reads 146 µs vs 2048 B reads 24 µs on WH B0; 111 µs vs 19 µs on BH).
+**Helps when:** ≤ 256 B per NoC read. 32 B reads (4096 reads/launch): WH B0 147 274 → 79 968 ns = **1.84×** · BH 111 870 → 58 811 ns = **1.90×**; BH 256 B 1.70×.
+**Does not help when:** no flat regime is reachable in this example on either arch — with ≥ 1 KiB reads the gain shrinks to WH B0 **1.38×** (2048 B: 25 041 → 18 182 ns; lowest seen 1.29×) · BH **1.61×** (2048 B: 19 432 → 12 070 ns; 1.60× at 1 KiB). The remaining gain is per-tile barrier latency, which batching reads (`double_buffer`) also removes.
 **Gist:** split disjoint reads across NCRISC and BRISC only when the reader's lifetime scales with read count; otherwise batch reads per barrier first.
 **Code:** `examples/split_reader/split_reader.py` — `_create_program_descriptor()` (`make_reader(num_halves)`, `writer_compile_args`); `kernels/gather_writer.cpp` `if constexpr (split_reader)` (host and kernel).
 **See also:** `double_buffer`.
 
 ## noc_placement — data movement below the ceiling: contention
 **Situation:** a line of Tensix cores streams interleaved-DRAM pages, laid out as a column (`split_work_to_cores(..., row_wise=False)`, the default) and/or with reads on NoC1.
-**How to recognize it:** same bytes and kernel, but time changes a lot when the line moves to a row or the NoC flips; per-core time grows with outstanding reads on the line.
-**Helps when:** ≥ 16 outstanding 2 KB reads on the line (8 cores × 16 per barrier): column → row 246 765 → 84 917 ns = **2.91×**; reads NoC1 → NoC0 278 002 → 85 066 ns = **3.27×** (WH B0).
-**Does not help when:** latency-bound line (2 cores × 1 read per barrier): column → row 1 106 889 → 1 077 065 ns = **1.03×**; on a single core the default NoC pairing is **0.94×** (WH B0). Payload size is not the boundary (16 tiles still 1.51×); reads in flight are.
+**How to recognize it:** same bytes and kernel, but time changes a lot when the line moves to a row or the NoC flips; per-Tensix-core time grows with outstanding reads on the line.
+**Helps when:** ≥ 16 outstanding 2 KB reads on the line (8 Tensix cores × 16 per barrier): column → row WH B0 246 765 → 84 917 ns = **2.91×** · BH 97 835 → 43 723 ns = **2.24×**; reads NoC1 → NoC0 WH B0 278 002 → 85 066 ns = **3.27×** · BH 107 508 → 43 806 ns = **2.45×**.
+**Does not help when:** latency-bound line (2 Tensix cores × 1 read per barrier): column → row WH B0 1 106 889 → 1 077 065 ns = **1.03×** · BH 838 190 → 829 478 ns = **1.01×**. On a single Tensix core the default NoC pairing is WH B0 **0.94×** · BH **1.02×**. Payload size is not the boundary (16 tiles still 1.51×, WH B0); reads in flight are.
 **Gist:** with ≥ ~16 pages in flight, use `row_wise=True` (row/diagonal) and keep reads on NoC0 / writes on NoC1; with 1 read per barrier fix latency first.
 **Code:** `examples/noc_placement/noc_placement.py` — `_ordered_cores()`, `_dm_config()` (host only; kernels unchanged).
 **See also:** `split_reader`, `mcast_topology`, `tile_reorder`.
@@ -100,38 +146,38 @@ aliasing).
 ## tensix_all_reduce_ring_transport — data movement below the ceiling: contention
 **Situation:** a reduce-and-forward ring of neighbour L1 writes whose ring order runs against the chosen NoC's routing direction.
 **How to recognize it:** the same ring payload on NoC0 vs NoC1 differs by a large factor on a line; the semaphore-only variants differ by only ~2×.
-**Helps when:** ring along a line (all hops one direction), 12 KiB per hop: 1×8 × 8 groups NoC1 → NoC0 26 373 → 4 364 ns = **6.04×** (WH B0).
-**Does not help when:** a 2-row serpentine (equal traffic both directions): 2×8 × 4 groups 48 920 → 47 490 ns = **1.03×** (WH B0).
+**Helps when:** ring along a line (all hops one direction), 12 KiB per hop, 1×8 × 8 groups NoC1 → NoC0: WH B0 26 373 → 4 364 ns = **6.04×** · BH 10 308 → 2 613 ns = **3.94×**.
+**Does not help when:** a 2-row serpentine (equal traffic both directions), 2×8 × 4 groups: WH B0 48 920 → 47 490 ns = **1.03×** · BH 19 554 → 19 309 ns = **1.01×**.
 **Gist:** on line rings keep ring order along the NoC's routing direction; on a serpentine, switching NoC does nothing — reorder or split the ring.
 **Code:** `examples/tensix_all_reduce_ring_transport/program_descriptor_with_inline_kernels.py` — `create_program_descriptor()` `use_noc1` branch (host only; same `_PAYLOAD_RING_KERNEL`).
 **See also:** `noc_placement`, `tensix_all_reduce`.
 
 ## bank_stagger — data movement below the ceiling: contention
-**Situation:** every Tensix core walks its DRAM data in the same order and the data lines up on the banks — a width-sharded DRAM source with one shard per bank, or an interleaved source split by width (cores share rows) or by height on Blackhole (rows start at `32·k`, `32·k % 8 == 0`) — so at any moment the whole grid reads one bank; lever: start each core's walk at a different block (`stagger_blocks`) or row (`stagger_rows`) and wrap.
-**How to recognize it:** map each core's first page to its DRAM bank (shard → bank for width-sharded; row `r` → bank `r % num_banks` for interleaved): every core starts on the same bank and steps through the banks in lockstep. Same transactions and bytes; only the order differs.
-**Helps when:** width-sharded source, few blocks per core: 8 blocks per core, 256 B reads, `3520×1024` bf16 101 361 → 77 087 ns = **1.32×**; 1024 B reads (`3520×4096`) 184 246 → 158 186 ns = 1.16× (BH p300c, 110 cores).
-**Does not help when:** interleaved source with several blocks per core: `stagger_rows`, `128×56320`, 4 blocks per core 66 462 → 66 040 ns = **1.01×** (BH p300c); at 1 block per core it is only 1.04–1.07× (~0.3–1.3 µs saved). On the width-sharded source the gain shrinks as blocks per core grow: 16 blocks 1.19× (256 B), 1.13× (1024 B) — do not extrapolate the 8-block numbers.
-**Gist:** start core k at block `k % n_w` (or row `k % 32`) and wrap; both are compile-time switches, so flip them per call and keep them where they pay — mostly width-sharded sources with few blocks per core. Writes into width-sharded or bank-aligned outputs are the same pattern (README).
-**Code:** `examples/bank_stagger/kernels/bs_reader.cpp` — `if constexpr (stagger_blocks)` / `if constexpr (stagger_rows)` (and `stagger_blocks` in `bs_writer.cpp`); `bank_stagger.py` `create_program_descriptor()` sets `blk_rot` / `row_rot` per core (compute kernel unchanged).
+**Situation:** every Tensix core walks its DRAM data in the same order and the data lines up on the banks — a width-sharded DRAM source with one shard per bank, or an interleaved source split by width (Tensix cores share rows) or by height on Blackhole (rows start at `32·k`, `32·k % 8 == 0`) — so at any moment the whole grid reads one bank; lever: start each Tensix core's walk at a different block (`stagger_blocks`) or row (`stagger_rows`) and wrap.
+**How to recognize it:** map each Tensix core's first page to its DRAM bank (shard → bank for width-sharded; row `r` → bank `r % num_banks` for interleaved): every Tensix core starts on the same bank and steps through the banks in lockstep. Same transactions and bytes; only the order differs.
+**Helps when:** width-sharded source, few blocks per Tensix core, 8 blocks per core, 256 B reads: BH p300c (110 Tensix cores) `3520×1024` 101 361 → 77 087 ns = **1.32×** · BH p150b (120 Tensix cores) `3840×1024` 111 677 → 84 255 ns = **1.33×**; 1024 B reads 1.16× (p300c) / 1.19× (p150b).
+**Does not help when:** interleaved source with several blocks per Tensix core: `stagger_rows`, `128×56320`, 4 blocks per core 66 462 → 66 040 ns = **1.01×** (BH p300c); at 1 block per core it is only 1.04–1.07× (~0.3–1.3 µs saved; p150b 1.04–1.06×). On the width-sharded source the gain shrinks as blocks per core grow: 16 blocks 1.19× / 1.12–1.13× (256 B / 1024 B) — do not extrapolate the 8-block numbers. WH B0 (12 DRAM banks): not measured.
+**Gist:** start Tensix core k at block `k % n_w` (or row `k % 32`) and wrap; both are compile-time switches, so flip them per call and keep them where they pay — mostly width-sharded sources with few blocks per core. Writes into width-sharded or bank-aligned outputs are the same pattern (README).
+**Code:** `examples/bank_stagger/kernels/bs_reader.cpp` — `if constexpr (stagger_blocks)` / `if constexpr (stagger_rows)` (and `stagger_blocks` in `bs_writer.cpp`); `bank_stagger.py` `create_program_descriptor()` sets `blk_rot` / `row_rot` per Tensix core (compute kernel unchanged).
 **See also:** `noc_placement`.
 
 # Redundant reads
 
 ## shared_input_reuse — redundant reads
-**Situation:** every core in a rectangle streams the same multi-MB DRAM input in chunks; lever: one injector reads each chunk once and multicasts it (`mcast_pipe`).
-**How to recognize it:** N cores read identical page ids, so DRAM bytes = N × unique bytes; check the chunk size (bytes per multicast handshake).
-**Helps when:** ≥ 64 tiles (≥ 128 KB) per chunk, 16 cores: 1216 tiles 255 592 → 191 246 ns = **1.34×**; 128-tile chunks 1.45× (WH B0). BH, 22 cores: 1.71×.
-**Does not help when:** ≤ 16 tiles per chunk: 8-tile chunks 214 339 → 262 332 ns = **0.82×** (WH B0); 4-tile 0.72×, 16-tile 0.93×, 32-tile 1.04× — crossover ~32 tiles (64 KB) per chunk. Stream length is not the boundary.
+**Situation:** every Tensix core in a rectangle streams the same multi-MB DRAM input in chunks; lever: one injector reads each chunk once and multicasts it (`mcast_pipe`).
+**How to recognize it:** N Tensix cores read identical page ids, so DRAM bytes = N × unique bytes; check the chunk size (bytes per multicast handshake).
+**Helps when:** chunks large enough to amortize the handshake — WH B0 ≥ 64 tiles, BH ≥ 16 tiles. 1216-tile stream, 64-tile chunks: WH B0 (2×8 = 16 Tensix cores) 255 592 → 191 246 ns = **1.34×** · BH p150b (2×12 = 24 Tensix cores) 150 228 → 77 777 ns = **1.93×** (older BH P150 22 Tensix cores 1.71×, P100a 1.82×). 16-tile chunks: BH 149 415 → 113 451 ns = **1.32×** (WH 0.93×). 128-tile chunks: WH 1.45× · BH 2.15×.
+**Does not help when:** small chunks: 8-tile chunks WH B0 214 339 → 262 332 ns = **0.82×** · BH 148 567 → 154 494 ns = **0.96×**; 4-tile WH 0.72× · BH 0.69×. Crossover: WH B0 ~32 tiles (64 KB) per chunk; BH between 8 and 16 tiles. Stream length is not the boundary.
 **Gist:** multicast a shared stream only with chunks large enough to amortize the ack-then-broadcast handshake; otherwise enlarge chunks first, or keep per-core reads.
 **Code:** `examples/shared_input_reuse/shared_input_reuse.py` — `create_program_descriptor()` (`per_core_dram` branch vs `ttnn.Mcast` path), `_READER_KERNEL` vs `_SENDER_KERNEL` / `_RECEIVER_KERNEL` (compute and writer unchanged).
 **See also:** `mcast_topology`.
 
 ## mcast_topology — redundant reads
-**Situation:** a 2-D work split where every core in a row needs the same A slice and every core in a column the same B slice, each fetched from DRAM; lever: two 1-D multicasts (`Mcast` channels grouped `RowMajor` + `ColumnMajor`).
-**How to recognize it:** count cores reading identical tiles — the line length is the DRAM-read reduction factor.
-**Helps when:** full 8×8 grid (lines of 8): Mt=8 Nt=32 Kt=4 16 204 → 8 677 ns = **1.87×**; Kt=16 2.67×, Kt=64 3.47× (WH B0). BH 8×8: 1.91×.
-**Does not help when:** lines of ≤ 4 cores: 4×4 4 186 → 4 056 ns = **1.03×**; 2×2 2 288 → 3 120 ns = **0.73×** (WH B0); 1×8 0.84×, 2×8 0.86×.
-**Gist:** use two 1-D multicasts only when the split fills a big grid with several tiles per core; on ≤ 4×4 grids per-core reads match or beat them. A 2-D *work* split needs 1-D multicasts.
+**Situation:** a 2-D work split where every Tensix core in a row needs the same A slice and every Tensix core in a column the same B slice, each fetched from DRAM; lever: two 1-D multicasts (`Mcast` channels grouped `RowMajor` + `ColumnMajor`).
+**How to recognize it:** count Tensix cores reading identical tiles — the line length is the DRAM-read reduction factor.
+**Helps when:** a big grid with several tiles per Tensix core. 8×8 (lines of 8), Mt=8 Nt=32 Kt=4: WH B0 16 204 → 8 677 ns = **1.87×** · BH 8 698 → 4 327 ns = **2.01×**; Kt=16 WH 2.67× · BH 3.27×; Kt=64 WH 3.47× · BH 3.90×. BH full 10×12 = 120 Tensix cores, Kt=4: 14 171 → 5 849 ns = **2.42×** (Kt=16 4.18×).
+**Does not help when:** lines of ≤ 4 Tensix cores: 4×4 WH B0 4 186 → 4 056 ns = **1.03×** · BH 1 791 → 2 252 ns = **0.80×**; 2×2 WH 0.73× · BH 0.65×; 1×8 WH 0.84× · BH 0.75×; 2×8 WH 0.86× · BH 0.91×.
+**Gist:** use two 1-D multicasts only when the split fills a big grid with several tiles per Tensix core; on ≤ 4×4 grids per-core reads match (WH) or beat (BH) them. A 2-D *work* split needs 1-D multicasts.
 **Code:** `examples/mcast_topology/mcast_topology.py` — `_PER_CORE_DRAM_READER` vs `_1D_PAIR_READER`, `create_program_descriptor()` `mcast_1d_pair` branch (two `ttnn.Mcast` channels, `RowMajor` + `ColumnMajor`; work split and writer unchanged).
 **See also:** `shared_input_reuse`.
 
@@ -139,9 +185,9 @@ aliasing).
 
 ## compute_block_size — compute-bound: fixed cost per call
 **Situation:** a row-parallel compute chain (tilize, tilize, add, matmul, untilize) looped one tile-row at a time.
-**How to recognize it:** time vs number of passes over M: ~1.5 µs per extra pass, flat across payload size.
-**Helps when:** many passes, small payload each: M,K,N = 8,4,4 tiles 29 064 → 17 271 ns = **1.68×** (WH B0); 8,2,16 1.39×.
-**Does not help when:** few passes that each carry tens of µs: 2,16,16 tiles 37 202 → 35 634 ns = **1.04×** (WH B0).
+**How to recognize it:** time vs number of passes over M: ~1.5 µs (WH B0) / ~1.4 µs (BH) per extra pass, flat across payload size.
+**Helps when:** many passes, small payload each: M,K,N = 8,4,4 tiles WH B0 29 064 → 17 271 ns = **1.68×** · BH 18 623 → 9 096 ns = **2.05×**; 8,2,16 1.39× (WH B0).
+**Does not help when:** few passes that each carry a large payload: 2,16,16 tiles WH B0 37 202 → 35 634 ns = **1.04×**. BH has no flat case that fits L1: 2,16,16 is 19 976 → 18 693 ns = **1.07×** (the 1.35× faster AICLK halves the payload per pass while the fixed cost stays).
 **Gist:** run each helper on the whole row-parallel block (or the largest L1 allows); also drop data-format reconfig at boundaries where the format is constant (up to 1.19×, see README).
 **Code:** `examples/compute_block_size/program_descriptor_with_inline_kernels.py` — `block_rows_for()`, `create_program_descriptor()` (host only; `_COMPUTE_KERNEL` unchanged, block size is a compile-time arg).
 **See also:** `compute_fusion`.
@@ -149,35 +195,35 @@ aliasing).
 ## compute_fusion — compute-bound: L1 round-trips
 **Situation:** one helper call per op, each packing its result to a CB that the next op unpacks.
 **How to recognize it:** the phase after the producer is unpack-bound although its math is cheap; check whether the consumer is SFPU or FPU.
-**Helps when:** SFPU consumer, small work per call: `sfpu_chain` 4 tiles 9 674 → 8 632 ns = **1.12×** (WH B0); the win is ~1 µs per call, so it shrinks with tile count (~1.05× at 64 tiles).
-**Does not help when:** FPU consumer: `fpu_sfpu` 64 tiles 77 734 → 84 105 ns (dest-reuse) = **0.92×** (WH B0) — the DEST → SRC move costs more than the pack + unpack it replaces.
+**Helps when:** SFPU consumer, small work per call: `sfpu_chain` 4 tiles WH B0 9 674 → 8 632 ns = **1.12×** · BH 6 386 → 5 745 ns = **1.11×**; the win is ~0.6–1 µs per call, so it shrinks with tile count (~1.05× at 64 tiles, both).
+**Does not help when:** FPU consumer: `fpu_sfpu` 64 tiles (dest-reuse) WH B0 77 734 → 84 105 ns = **0.92×** · BH 54 023 → 58 328 ns = **0.93×** — the DEST → SRC move costs more than the pack + unpack it replaces.
 **Gist:** keep intermediates in DEST when the next op is SFPU; for an FPU consumer pack to L1 and let the unpacker feed it back.
 **Code:** `examples/compute_fusion/program_descriptor_with_inline_kernels.py` — `_SFPU_CHAIN_KERNEL`, `_FPU_SFPU_KERNEL` `if constexpr (method == …)` branches, `_VARIANT_SPEC` (kernel only; host adds scratch CBs).
 **See also:** `eltwise_l1_vs_dest_accumulate`, `sfpu_tile_scope`.
 
 ## eltwise_l1_vs_dest_accumulate — compute-bound: L1 round-trips
 **Situation:** a running L1 accumulator rebuilt each step by unpacking it, adding on the FPU and packing it back (`rmw`).
-**How to recognize it:** `rmw` grows ~370 ns per step while packer L1-accumulation (`pack_l1_acc`) costs ~90 ns per step.
-**Helps when:** `rmw` → `pack_l1_acc` at every step count: 64 fp32 steps 23 784 → 5 769 ns = **4.12×**; 2 steps 2.03× (WH B0). BH 64 steps: 5.09×; DEST-resident `dest_acc` 10.59× (BH).
-**Does not help when:** short loops for the DEST-resident version: 2 steps `pack_l1_acc` → `dest_acc` 367 → 370 ns = **0.99×** (WH B0); it grows to 1.09× at 4 steps and 1.30× at 64.
-**Gist:** fold pairs into the L1 accumulator with `pack_l1_acc`; reserve DEST (`dest_acc`) only for long loops when DEST is free. Syntax for one stream: README.
+**How to recognize it:** `rmw` grows ~370 ns (WH B0) / ~150 ns (BH) per step while packer L1-accumulation (`pack_l1_acc`) costs ~90 / ~27 ns per step.
+**Helps when:** `rmw` → `pack_l1_acc` at every step count: 64 fp32 steps WH B0 23 784 → 5 769 ns = **4.12×** · BH 9 772 → 1 857 ns = **5.26×**; 2 steps WH 2.03× · BH 2.25×. DEST-resident `dest_acc` over `pack_l1_acc` pays sooner on BH: 64 steps WH 1.30× · BH 1 857 → 922 ns = **2.01×**; 4 steps WH 1.09× · BH 1.15×.
+**Does not help when:** short loops for the DEST-resident version: 2 steps `pack_l1_acc` → `dest_acc` WH B0 367 → 370 ns = **0.99×** · BH 155 → 155 ns = **1.00×**.
+**Gist:** fold pairs into the L1 accumulator with `pack_l1_acc`; reserve DEST (`dest_acc`) for loops of ≥ 4 steps when DEST is free (WH needs longer loops for it to matter). Syntax for one stream: README.
 **Code:** `examples/eltwise_l1_vs_dest_accumulate/eltwise_l1_vs_dest_accumulate.py` — `_ACCUMULATE_KERNEL` `if constexpr (method == …)` branches, `_METHOD` (kernel only; host unchanged).
 **See also:** `compute_fusion`, `reduce_accumulate`.
 
 ## reduce_accumulate — compute-bound: reduction
 **Situation:** a SUM/mean reduce of N tiles written with the reduce library (matmul-with-ones per tile); lever: pairwise `add_tiles` accumulate + one SFPU finalize.
-**How to recognize it:** library time grows ~linearly per tile; the fast path has an ~800–900 ns floor plus a small slope.
-**Helps when:** ≥ 8 tiles reduced per output: row 32 tiles 3 652 → 1 865 ns = **1.96×**, col 1.72×, scalar 2.93× (WH B0).
-**Does not help when:** ≤ 4 tiles per output: row 1 tile 467 → 940 ns = **0.50×**, row 4 0.83×, col 4 0.81×, scalar 4 0.95× (WH B0). The example's `dispatch` threshold row ≥ 4 is stale on WH (0.83× at 4).
-**Gist:** accumulate + SFPU finalize only when the reduce spans ~8+ tiles per output; below that use the library reduce.
+**How to recognize it:** library time grows ~linearly per tile; the fast path has a ~800–900 ns (WH B0) / ~450–600 ns (BH) floor plus a small slope.
+**Helps when:** WH B0 ≥ 8 tiles reduced per output; BH col / scalar ≥ 8, row ≥ 16. 32 tiles: row WH 3 652 → 1 865 ns = **1.96×** · BH 1 385 → 800 ns = **1.73×**; col WH 1.72× · BH **2.97×**; scalar WH 2.93× · BH 3.73×. BH 8 tiles: col 1.35×, scalar 1.48×; BH row 16 tiles 1.24×.
+**Does not help when:** WH B0 ≤ 4 tiles: row 1 tile 467 → 940 ns = **0.50×**, row 4 0.83×, col 4 0.81×, scalar 4 0.95×. BH: row ≤ 8 tiles (8: 514 → 578 ns = **0.89×**; 4: 0.69×), col / scalar 4 tiles 0.96× / 0.97×. The example's `dispatch` threshold row ≥ 4 is stale on both archs (WH 0.83×, BH 0.69× at 4).
+**Gist:** accumulate + SFPU finalize only when the reduce spans enough tiles per output (WH ~8; BH 8 for col / scalar, 16 for row); below that use the library reduce.
 **Code:** `examples/reduce_accumulate/program_descriptor_with_inline_kernels.py` — `_HELPER_KERNEL` vs `_FAST_KERNEL`, `_resolve()` + `_DISPATCH_MIN` for `dispatch` (separate compute kernel per variant).
 **See also:** `row_reduce_accumulate`, `reduce_block`.
 
 ## row_reduce_accumulate — compute-bound: reduction
 **Situation:** a row mean over W tiles written as one `reduce<SUM, REDUCE_ROW>` over the row; lever: pairwise `add_tiles` into DEST then one finalize reduce (`dest_accum_pairs`).
-**How to recognize it:** the single reduce costs ~70–140 ns per tile; `dest_accum_pairs` has an ~800 ns floor plus ~30–60 ns per tile.
-**Helps when:** rows ≥ 16 tiles (bf16 input) or ≥ 8 (fp32): 32 tiles fp32 4 478 → 2 850 ns = **1.57×**, bf16 2 419 → 1 803 ns = **1.34×** (WH B0).
-**Does not help when:** ≤ 8 tiles (bf16): 1 tile 433 → 837 ns = **0.52×**, 2 tiles 0.60×, 8 tiles 0.87× (WH B0).
+**How to recognize it:** the single reduce costs ~70–140 ns (WH B0) / ~35–45 ns (BH) per tile; `dest_accum_pairs` has a ~800 ns (WH) / ~400 ns (BH) floor plus a small per-tile slope.
+**Helps when:** WH B0 rows ≥ 16 tiles (bf16 input) or ≥ 8 (fp32); BH ≥ 8 tiles for both. 32 tiles: fp32 WH 4 478 → 2 850 ns = **1.57×** · BH 1 386 → 784 ns = **1.77×**; bf16 WH 2 419 → 1 803 ns = **1.34×** · BH 1 369 → 694 ns = **1.97×**. BH 8 tiles 1.05–1.06×, 16 tiles 1.37–1.46×.
+**Does not help when:** narrow rows: bf16 1 tile WH B0 433 → 837 ns = **0.52×** · BH 240 → 413 ns = **0.58×**; 2 tiles WH 0.60× · BH 0.70×; 4 tiles BH 0.83×; 8 tiles WH 0.87× (BH already 1.06×).
 **Gist:** use `dest_accum_pairs` (parity resolved at the seed, no zero CB) for wide rows; keep the single reduce for narrow ones. bf16 accumulation, not bf16 input, costs precision (README).
 **Code:** `examples/row_reduce_accumulate/program_descriptor_with_inline_kernels.py` — `_COMPUTE_KERNEL` `if constexpr (method == …)` branches, `_METHOD_ID` (kernel; host only varies CBs via `_NEEDS_INTERM` / `_NEEDS_SCALER_CB` / `_NEEDS_ZERO`).
 **See also:** `reduce_accumulate`, `reduce_block`.
@@ -185,46 +231,46 @@ aliasing).
 ## reduce_block — compute-bound: reduction
 **Situation:** a 2-D `(Ht, Wt, NC)` block reduced along one dim into many output tiles with the default `reduce_tile`; lever: `AccumulateViaAdd` per output tile.
 **How to recognize it:** count reduced tiles per output tile (row Wt, col Ht, scalar Ht×Wt) — that, not block size, decides it.
-**Helps when:** ≥ 8 reduced tiles per output: row `(2,32,1)` 6 977 → 3 343 ns = **2.09×**, col 1.88×, scalar `(4,8,1)` 3.04× (WH B0).
-**Does not help when:** ≤ 4 per output: row `(4,2,1)` 1 307 → 2 569 ns = **0.51×**, row `(2,4,1)` 0.81×, col 0.90×, scalar `(2,2,1)` 1.02× (WH B0).
-**Gist:** opt into `AccumulateViaAdd` only when each output reduces ~8+ tiles; one DEST per output also avoids the `REDUCE_COL` chunk limit.
+**Helps when:** WH B0 ≥ 8 reduced tiles per output; BH col / scalar ≥ 4, row > 8. Row `(2,32,1)` WH 6 977 → 3 343 ns = **2.09×** · BH 2 565 → 1 296 ns = **1.98×**; col 32 WH 1.88× · BH 3.64×; scalar `(4,8,1)` WH 3.04× · BH 4.12×. BH col `(4,2,1)` 738 → 663 ns = **1.11×**, scalar `(2,2,1)` 1.08×.
+**Does not help when:** WH B0 ≤ 4 per output: row `(4,2,1)` 1 307 → 2 569 ns = **0.51×**, row `(2,4,1)` 0.81×, col 0.90×, scalar `(2,2,1)` 1.02×. BH: row ≤ 8 (`(2,8,1)` 825 → 876 ns = **0.94×**, 0.99× on a re-run — flat; 4 tiles 0.66×; 2 tiles 0.39×), col / scalar 2 tiles 0.78× / 0.76×.
+**Gist:** opt into `AccumulateViaAdd` only when each output reduces enough tiles (WH ~8; BH 4 for col / scalar, > 8 for row); one DEST per output also avoids the `REDUCE_COL` chunk limit.
 **Code:** `examples/reduce_block/program_descriptor_with_inline_kernels.py` — `_HELPER_BLOCK_KERNEL` `algo` arg (`ReduceAlgorithm::Auto` vs `AccumulateViaAdd`), `_FAST_BLOCK_KERNEL`, `_resolve()` (kernel; scaler kernel shared).
 **See also:** `reduce_accumulate`, `row_reduce_accumulate`.
 
 ## tensix_all_reduce_compute — compute-bound: reduction
 **Situation:** a reducer that copies each contributor into DEST, re-runs `add_binary_tile_init()` and does one SFPU add per contributor.
-**How to recognize it:** single-core reducer time grows ~linearly with (blocks − 1) × tiles with low unpack/pack counts.
-**Helps when:** always, growing with blocks: 8 blocks × 6 tiles 11 178 → 1 899 ns = **5.89×**; 2 blocks 1.90×, 4 blocks 3.01× (WH B0).
-**Does not help when:** no slower case exists in the measured range (≥ 2 blocks); the smallest gain is **1.38×** (2 blocks × 1 tile, one call: 783 → 568 ns, WH B0). FP32 vs BF16 DEST on the fast path is only 1.03×.
+**How to recognize it:** single-Tensix-core reducer time grows ~linearly with (blocks − 1) × tiles with low unpack/pack counts.
+**Helps when:** always, growing with blocks: 8 blocks × 6 tiles WH B0 11 178 → 1 899 ns = **5.89×** · BH 6 937 → 740 ns = **9.37×**; 2 blocks WH 1.90× · BH 3.91×, 4 blocks WH 3.01× · BH 6.74×.
+**Does not help when:** no slower case exists in the measured range (≥ 2 blocks); the smallest gain is 2 blocks × 1 tile, one call: WH B0 783 → 568 ns = **1.38×** · BH 509 → 392 ns = **1.30×**. FP32 vs BF16 DEST on the fast path: WH 1.03× · BH 0.94× (fp32 DEST slightly slower on BH).
 **Gist:** pairwise FPU `add_tiles(..., acc_to_dest=true)`, one init per DEST batch, pack once.
 **Code:** `examples/tensix_all_reduce_compute/program_descriptor_with_inline_kernels.py` — `_SFPU_SERIAL_KERNEL` vs `_FPU_DEST_REUSE_KERNEL`, chosen in `create_program_descriptor()` (compute kernel only).
 **See also:** `eltwise_l1_vs_dest_accumulate`, `tensix_all_reduce`.
 
 ## sfpu_tile_scope — compute-bound: wasted SFPU work
 **Situation:** `rsqrt`/`recip` run on all 32 vector ops of a tile whose meaningful result lives on one row or column after a reduction.
-**How to recognize it:** MATH-thread zone ns per SFPU call is flat per vector op (~35.6 ns rsqrt, ~17.6 ns recip on WH), so cost tracks the vector count.
-**Helps when:** SFPU math dominates and the result is on row 0: `VectorMode::R` + `ITERATIONS=2` (4 vectors) rsqrt 1 139 → 156 ns = **7.30×**, recip 6.69× (math zone); whole op on 1 tile 2.22× / 1.61× (WH B0).
-**Does not help when:** swapping scopes with the same vector count: `VectorMode::C` → `R` (16 vectors) 576 → 576 ns = **1.00×** (WH B0); at op level copy/pack dilute the gain.
+**How to recognize it:** MATH-thread zone ns per SFPU call is flat per vector op (rsqrt ~35.6 ns WH B0 / ~25 ns BH; recip ~17.6 / ~6.5 ns), so cost tracks the vector count.
+**Helps when:** SFPU math dominates and the result is on row 0: `VectorMode::R` + `ITERATIONS=2` (4 vectors) rsqrt WH B0 1 139 → 156 ns = **7.30×** · BH 795.6 → 109.0 ns = **7.30×**; recip WH 6.69× · BH 5.46× (math zone); whole op on 1 tile WH 2.22× / 1.61× · BH 2.27× / 1.38×.
+**Does not help when:** swapping scopes with the same vector count: `VectorMode::C` → `R` (16 vectors) WH B0 576 → 576 ns = **1.00×** · BH 402 → 402 ns = **1.00×**; at op level copy/pack dilute the gain.
 **Gist:** scope the SFPU to the minimum vectors covering the result (row 0: `ITERATIONS=2`; col 0: even-parity stride, README).
 **Code:** `examples/sfpu_tile_scope/program_descriptor_with_inline_kernels.py` — `_SCOPE` (`VectorMode`, `ITERATIONS` per variant), `_KERNEL` `kernel_main()` / `cskip()` (one kernel; compile-time args differ).
 **See also:** `reduce_accumulate`.
 
 ## matmul_output_subblock — compute-bound: SRC operand reload
 **Situation:** `matmul_block` with a 1×1 output subblock, so every output tile reloads both operands into SRC.
-**How to recognize it:** sweeping the subblock shape at fixed Mt/Nt/Kt drops time 1.5–1.8× at 8-tile subblocks.
-**Helps when:** many output tiles per call: 16×16 output tiles, Kt=1, 1×1 → 2×4 24 312 → 13 905 ns = **1.75×**; tall 8×1 → wide 1×8 1.40× (WH B0). Still 1.66–1.69× at Kt=2–12.
-**Does not help when:** only a handful of output tiles with short K: 2×2 output tiles, Kt=1, 1×1 → 2×2 670 → 656 ns = **1.02×** (WH B0); 2×2 at Kt=8 still 1.34×.
-**Gist:** use the largest subblock that fits DEST (2×4, 4×2, 1×8 — avoid a tall 8×1 on WH); with fp32 DEST the budget halves to 4 tiles.
+**How to recognize it:** sweeping the subblock shape at fixed Mt/Nt/Kt drops time 1.5–1.8× (WH B0) / ~1.46× (BH, Kt = 1 only) at 8-tile subblocks.
+**Helps when:** many output tiles per call, and on BH short K. 16×16 output tiles, Kt=1, 1×1 → 2×4: WH B0 24 312 → 13 905 ns = **1.75×** · BH 10 429 → 7 161 ns = **1.46×**. WH holds 1.66–1.69× at Kt=2–12; BH drops to 1.17× at Kt=2 and **1.10×** at Kt=4 (29 238 → 26 654 ns). Tall 8×1 → wide 1×8: WH 1.40× · BH **1.00×** (equivalent on BH). BH 8×8 output tiles 1.34×.
+**Does not help when:** only a handful of output tiles: 2×2 output tiles, Kt=1, 1×1 → 2×2 WH B0 670 → 656 ns = **1.02×** · BH 372 → 382 ns = **0.97×**; 2×2 at Kt=8 WH still 1.34× · BH 0.98×.
+**Gist:** use the largest subblock that fits DEST (2×4, 4×2, 1×8 — avoid a tall 8×1 on WH; on BH orientation does not matter); with fp32 DEST the budget halves to 4 tiles. On BH expect ~1.1–1.2× once Kt ≥ 2, not the WH 1.7×.
 **Code:** `examples/matmul_output_subblock/matmul_output_subblock.py` — `SUBBLOCK`, `create_program_descriptor()` (host only; `_MATMUL_KERNEL` unchanged, subblock shape is a compile-time arg).
 **See also:** `tile_reorder`.
 
 # Cross-core communication
 
 ## tensix_all_reduce — cross-core communication
-**Situation:** cores in an L1-sharded group all need the group sum, and one root core gathers and adds every contributor serially, then multicasts (`reduce_root_mcast`).
+**Situation:** Tensix cores in an L1-sharded group all need the group sum, and one root Tensix core gathers and adds every contributor serially, then multicasts (`reduce_root_mcast`).
 **How to recognize it:** the root alone is busy for (group size − 1) × tiles-per-core adds while the others idle.
-**Helps when:** groups ≥ 8 cores and ≥ 6 tiles per core: `reduce_scatter_mcast` on 1×8 × 8 groups, 6 tiles 6 145 → 3 646 ns = **1.68×** (WH B0).
-**Does not help when:** 4-core groups (3 976 → 4 663–5 120 ns = **0.78–0.85×**) or 1 tile per core (1 614 → 1 994 ns = **0.81×**) (WH B0) — keep root reduction there.
-**Gist:** reduce-scatter for well-fed groups of 8+; root (or BH tree) reduction for small groups or tiny payloads; reduce-scatter also needs far less L1 per core (README).
+**Helps when:** groups ≥ 8 Tensix cores and enough tiles per core: `reduce_scatter_mcast` on 1×8 × 8 groups, 6 tiles WH B0 6 145 → 3 646 ns = **1.68×** · BH 2 592 → 1 817 ns = **1.43×**. BH 1-D crossover 2–4 tiles per core; 16 tiles 1.61×; gone by 32 tiles (`report_bh_p150b_1d.md`). BH full grid 120 Tensix cores: whole rows 1×12 1.19×, whole columns 10×1 1.26×.
+**Does not help when:** 4-core groups WH B0 3 976 → 4 663–5 120 ns = **0.78–0.85×** · BH 2 086 → 3 812 ns = **0.55×**; 1 tile per core WH 1 614 → 1 994 ns = **0.81×** · BH 990 → 1 326 ns = **0.75×**; BH 6-core half-row groups: tree ≈ root, reduce-scatter 0.95× — keep root reduction there.
+**Gist:** reduce-scatter for well-fed groups of 8+; root (or BH tree) reduction for small groups or tiny payloads; reduce-scatter also needs far less L1 per Tensix core (README).
 **Code:** `examples/tensix_all_reduce/program_descriptor_with_inline_kernels.py` — `_create_reduce_root_descriptor()` + `_REDUCE_ROOT_KERNEL` vs `_create_reduce_scatter_descriptor()` + `_REDUCE_SCATTER_KERNEL` (host and dataflow kernels).
 **See also:** `tensix_all_reduce_compute`, `tensix_all_reduce_ring_transport`.
