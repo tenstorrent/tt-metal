@@ -1147,3 +1147,15 @@ Not yet measured beside the DRISC weight stream (NOC1 = the DRISC tile 1 port; t
   UB 2 unprofiled M 58: 657 cycles a 13.8 KB block (UB 1: 702), ~29 GB/s a tile: mostly per byte, not per unit -
   16 tiles cap near ~460 GB/s (~90%). UB 2 at M 145: the DRISCs wait 12-24% of the call on the gate/up cores' grants
   (2-5% at M 58): the receive side limits there. Next: what the gate/up cores wait on at M 145 (zones).
+- Why UB 2 loses at M 145: device-profiler zones (MIMO_FL_ZONES=1 MIMO_FL_WAITZ=0, flat90/zones.py; W_X / W_W
+  sampled, compare between runs), last call, no y:
+  | M 145 | UB 1 | UB 2 |
+  | gate/up waits on x (W_X) / weights (W_W) | 36.5 / 8.2 us | 56.3 / 3.4 |
+  | relay DRAM read barrier (XRD_DRAM) / tilizer starved (TZ_IN) | 142 / 77 | 166 / 103 |
+  | relay sender waits on the tilizer (XMC_SB) / on credits (XMC_CRED) | 39 / 27 | 219 / 2 |
+  With paired DMA units x becomes the bottleneck: the relays' gathers slow, the tilizer starves, the sender waits, the
+  gate/up cores wait on x and hold their weight slots (the DRISCs' grant waits). Not the NOC1 port: UB 2 with the relay
+  reads on NOC0 1131 / 1435 (NOC1 1122 / 1394); XRD_BATCH 4 1120 / 1439; DRISC_BURST 64 1122 / 1387 (XRD_BATCH 8:
+  TT_FATAL, must divide 4). Likely the DRAM side: the weight stream near the practical peak (read only ~492 GB/s)
+  leaves the latency-bound x gathers (7% of the bytes) queued. Next: x priority at the DRAM (MPFE), or x read further
+  ahead (relay buffering), with UB 2.
