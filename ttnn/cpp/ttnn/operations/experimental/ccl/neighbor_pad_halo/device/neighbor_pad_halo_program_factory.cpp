@@ -338,7 +338,7 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
     if (use_w_mux) {
         using tt::tt_fabric::FabricMuxChannelType;
         const uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-        const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+        const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
         // num_buffers per channel: 4 (np_num_buffers) is the measured 2x4 sweet spot (+~3pp)
         auto mux_cfg = tt::tt_fabric::FabricMuxConfig(
             /*num_full_size_channels=*/static_cast<uint8_t>(num_w_workers),
@@ -1222,7 +1222,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     if (use_h_mux) {
         using tt::tt_fabric::FabricMuxChannelType;
         const uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-        const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+        const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
         auto hmux_cfg = tt::tt_fabric::FabricMuxConfig(
             static_cast<uint8_t>(num_h_workers), 0, np_num_buffers, 0, mux_buf_size, l1_base);
 

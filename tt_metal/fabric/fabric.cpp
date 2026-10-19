@@ -53,8 +53,8 @@ bool is_neighbor_in_direction(
 
 namespace tt::tt_fabric {
 
-size_t get_tt_fabric_channel_buffer_size_bytes() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+size_t get_tt_fabric_channel_buffer_size_bytes(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
     return control_plane.get_fabric_context().get_fabric_channel_buffer_size_bytes();
 }
 
