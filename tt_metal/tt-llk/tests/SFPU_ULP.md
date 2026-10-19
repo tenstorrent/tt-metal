@@ -75,6 +75,11 @@ measured on (`MEASURED_ON_SWEEP` in `test_sfpu_accuracy_budget.py`). The isinf/i
 and threshold predicates have no registered domain, so those sweeps are their only gate;
 `Signbit`, `ReluMin` and `ReluMax` are driven by the exhaustive sweep as well.
 
+On Wormhole and Blackhole no functional driver sweeps a `Float16` input or output, so
+nothing in CI gates the `Float16` rows there: the binary ones, and the unary rows on
+the tolerance metric. They stay in the table as the last measurement, and a stale one
+fails no test; re-measure before relying on one.
+
 `Float32` has 2^32 values and one device run holds 2^16, so it cannot be enumerated. The
 sweep strides the format's total order instead. Every binade holds the same number of
 representable values, so each gets an equal share: one run reaches 261 binades from 0 to
