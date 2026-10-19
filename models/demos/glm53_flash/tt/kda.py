@@ -202,9 +202,10 @@ class TtKDA(LightweightModule):
         return layer.forward(x, state, actual_start, actual_end)
 
     # ----------------------------------------------------------------- decode
-    def decode_forward(self, x: ttnn.Tensor, state: KdaState) -> tuple[ttnn.Tensor, KdaState]:
+    def decode_forward(self, x: ttnn.Tensor, state: KdaState, *, inplace: bool = True) -> tuple[ttnn.Tensor, KdaState]:
         """x: [1, 1, B, hidden] bf16 TILE, one token per user. Returns y [1, 1, B, hidden] and the
-        new state. Composite v1 (section 5.3 of the design)."""
+        state after the token: ``inplace`` (default) updates ``state``'s tensors in place and returns
+        the same object (trace-safe); otherwise returns a fresh ``KdaState``. Composite v1 (design 5.3)."""
         B = x.shape[-2]
         H, K, V = self.H, self.K, self.V
         BH = B * H
@@ -274,4 +275,12 @@ class TtKDA(LightweightModule):
         oh = ttnn.multiply(oh, gate, output_tensor=oh)
         o_flat = ttnn.typecast(ttnn.reshape(oh, [1, 1, B, H * V]), ttnn.bfloat16)
         y = ttnn.linear(o_flat, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,hidden]
+        if inplace:
+            # write the new carries back into the caller's persistent tensors so a captured decode
+            # trace reads the updated state on the next replay (device-owned autoregressive state)
+            ttnn.copy(new_recurrent, state.recurrent)
+            ttnn.copy(new_conv, state.convolution)
+            ttnn.deallocate(new_recurrent)
+            ttnn.deallocate(new_conv)
+            return y, state
         return y, KdaState(recurrent=new_recurrent, convolution=new_conv)

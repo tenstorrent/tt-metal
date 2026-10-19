@@ -46,3 +46,10 @@ Stage: tt-model-bringup stage 1 (functional decoder, 1x1 mesh) = design Phase 1.
   (cores_per_user-1)*(out+2) fp32 tiles (1.6 MB at 12 cores/user with the 512-wide latent) -> 4 cores/user,
   k_chunk 32. Layer 3 vs HF: prefill PCC 0.99964 (T=96) / 0.99961 (T=1000), latent cache 0.99997, decode 0.9991-0.9999.
 - Commit 25c8b1100f8: moe, dsa, decoder_layer, functional_decoder (stage contract), tests.
+- Full-layer tests (`tests/test_decoder_layer.py`, HF dumps T256): layer 0 prefill 0.99984 / decode 0.9999;
+  layer 3 0.99992 / 0.99996; layer 4 0.99997 / 0.99999; non-aligned S=200 vs HF built live: layer 0 0.99980,
+  layer 3 0.99993. Commit 8e2723a6cea.
+- Traced decode (`tests/test_decode_trace.py`): KDA decode writes its carries back in place (ttnn.copy into the
+  persistent batched state; prefill writes user slots), the DSA cache is already in place; capture once on a
+  dummy token, replay the 4 reference steps updating only the input/position tensors: replay PCC identical to
+  eager for layers 0, 3, 4 (0.9999).

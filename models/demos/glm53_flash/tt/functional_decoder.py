@@ -75,8 +75,11 @@ class FunctionalDecoder(LightweightModule):
             self.cache = TtLatentCache(
                 self.device, self.cfg, max_batch=max_batch, max_seq_len=max_seq_len, block_size=block_size
             )
-        self.kda_user_states: dict[int, KdaState] = {}
+        # persistent batched KDA state (max_batch slots): prefill writes slot `user`, decode reads
+        # and updates all slots in place, so captured decode traces always see the live state.
         self.kda_batched: KdaState | None = None
+        if layer.is_kda:
+            self.kda_batched = layer.attn.allocate_state(max_batch)
 
     @classmethod
     def from_state_dict(
@@ -101,32 +104,39 @@ class FunctionalDecoder(LightweightModule):
         return cls(layer, max_batch=max_batch, max_seq_len=max_seq_len, **kwargs)
 
     # ------------------------------------------------------------------ state
-    def reset(self):
-        self.kda_user_states.clear()
-        self.kda_batched = None
-
     def _state_for_prefill(self, user: int) -> LayerState:
         if self.layer.is_kda:
             return LayerState(kda=self.layer.attn.allocate_state(1))
         return LayerState(cache=self.cache)
 
+    def _write_user_kda_state(self, user: int, new: KdaState):
+        """Copy a freshly prefilled single-user state into slot ``user`` of the persistent batched state."""
+        dst = self.kda_batched
+        if self.max_batch == 1:
+            ttnn.copy(new.recurrent, dst.recurrent)
+            ttnn.copy(new.convolution, dst.convolution)
+        else:
+            for src_t, dst_t in ((new.recurrent, dst.recurrent), (new.convolution, dst.convolution)):
+                rows = []
+                for u in range(self.max_batch):
+                    if u == user:
+                        rows.append(src_t)
+                    else:
+                        end = list(dst_t.shape)
+                        start = [0] * len(end)
+                        start[0], end[0] = u, u + 1
+                        rows.append(ttnn.slice(dst_t, start, end))
+                stacked = ttnn.concat(rows, dim=0)
+                ttnn.copy(stacked, dst_t)
+                ttnn.deallocate(stacked)
+        ttnn.deallocate(new.recurrent)
+        ttnn.deallocate(new.convolution)
+
     def _state_for_decode(self, batch: int) -> LayerState:
         if not self.layer.is_kda:
             return LayerState(cache=self.cache)
-        if self.kda_batched is None:
-            missing = [u for u in range(batch) if u not in self.kda_user_states]
-            if missing:
-                raise ValueError(f"decode for {batch} users but users {missing} were never prefilled")
-            parts = [self.kda_user_states[u] for u in range(batch)]
-            if batch == 1:
-                self.kda_batched = parts[0]
-            else:
-                self.kda_batched = KdaState(
-                    recurrent=ttnn.concat([p.recurrent for p in parts], dim=0),
-                    convolution=ttnn.concat([p.convolution for p in parts], dim=0),
-                )
-        if self.kda_batched.recurrent.shape[0] != batch:
-            raise ValueError(f"decode batch {batch} != prefetched users {self.kda_batched.recurrent.shape[0]}")
+        if batch != self.max_batch:
+            raise ValueError(f"decode batch {batch} must equal max_batch {self.max_batch} (fixed user slots)")
         return LayerState(kda=self.kda_batched)
 
     # ---------------------------------------------------------------- forwards
@@ -141,17 +151,28 @@ class FunctionalDecoder(LightweightModule):
             raise ValueError(f"seq_len {seq_len} > max_seq_len {self.max_seq_len}")
         out, new_state = self.layer.prefill_forward(streams, self._state_for_prefill(user), user=user, seq_len=seq_len)
         if self.layer.is_kda:
-            self.kda_user_states[user] = new_state.kda
-            self.kda_batched = None
+            self._write_user_kda_state(user, new_state.kda)
         return out
 
     def decode_forward(self, streams: ttnn.Tensor, *, positions: ttnn.Tensor) -> ttnn.Tensor:
         B = streams.shape[-2]
         out, new_state = self.layer.decode_forward(streams, self._state_for_decode(B), positions=positions)
         if self.layer.is_kda:
-            old = self.kda_batched
-            self.kda_batched = new_state.kda
-            if old is not None and old is not new_state.kda:
-                ttnn.deallocate(old.recurrent)
-                ttnn.deallocate(old.convolution)
+            assert new_state.kda is self.kda_batched, "KDA decode must update the persistent state in place"
         return out
+
+    # ------------------------------------------------------------------- trace
+    def capture_decode_trace(self, streams: ttnn.Tensor, positions: ttnn.Tensor, *, cq_id: int = 0):
+        """Warm up (compile) one decode step on the persistent inputs, then capture the next one.
+        Returns (trace_id, output tensor). Replay with ``replay_decode``; the state tensors are
+        updated in place by the captured graph. The warm-up step consumes one real token: call
+        this with the first decode token's inputs and treat its output as that step's result."""
+        warm = self.decode_forward(streams, positions=positions)
+        ttnn.synchronize_device(self.device)
+        trace_id = ttnn.begin_trace_capture(self.device, cq_id=cq_id)
+        out = self.decode_forward(streams, positions=positions)
+        ttnn.end_trace_capture(self.device, trace_id, cq_id=cq_id)
+        return trace_id, out, warm
+
+    def replay_decode(self, trace_id, *, cq_id: int = 0, blocking: bool = True):
+        ttnn.execute_trace(self.device, trace_id, cq_id=cq_id, blocking=blocking)

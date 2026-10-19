@@ -164,7 +164,7 @@ class TtDecoderLayer(LightweightModule):
         def attention(h):
             h = self._norm(h, self.input_norm_w)
             if self.is_kda:
-                y, new_state.kda = self.attn.decode_forward(h, state.kda)
+                y, new_state.kda = self.attn.decode_forward(h, state.kda, inplace=True)
                 return y
             return self.attn.decode_forward(h, state.cache, positions)
 
