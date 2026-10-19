@@ -2,12 +2,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Two CHIP_ARCH passes. Gathering is @blackhole_only. The out-of-tree contract
-# inherits CHIP_ARCH into its compile child, so the blackhole pass runs it too.
-# Both passes always run; the exit status is the last failure.
+# Two CHIP_ARCH passes: gathering is @blackhole_only, and the out-of-tree contract inherits CHIP_ARCH so blackhole runs it too.
 # -c and --confcutdir keep this suite's pytest.ini when a parent checkout has its own.
-# tools/python is inserted by helpers.llk_pytest_plugin. Do not export PYTHONPATH:
-# the out-of-tree child copies this environment and must attach like an external consumer.
+# Do not export PYTHONPATH: the plugin inserts tools/python, and the out-of-tree child copies this environment.
 
 set -euo pipefail
 
@@ -35,9 +32,9 @@ pytest "${COMMON[@]}" ../hardware_free \
     || pytest_exit=$?
 
 export CHIP_ARCH=blackhole
-pytest "${COMMON[@]}" \
-    ../hardware_free/kernels/test_gathering_config.py \
-    ../hardware_free/harness/test_out_of_tree_contract.py \
+# A directory plus -k, not two files: file args outside the rootdir leave classname empty in the junit report.
+pytest "${COMMON[@]}" ../hardware_free \
+    -k "test_gathering_config or test_out_of_tree_contract" \
     --junitxml=pytest-report-hardware-free-blackhole.xml \
     || pytest_exit=$?
 

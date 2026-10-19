@@ -187,9 +187,7 @@ def _assert_the_child_ran_the_fixture(
     # skipping — an arch marker, a guard clause, a mode that returns early — is
     # the same silent loss of coverage this check exists to catch, and it would
     # otherwise still emit a <testcase> element.
-    # The driver compile is the exception: it includes ckernel.h, so a standalone
-    # tt-llk checkout (no sibling hw/inc) cannot run it. It stays required when
-    # that tree is present.
+    # The driver compile stays required only when hw/inc is present.
     root = ET.parse(report).getroot()
     ran = {
         case.get("name", "").split("[")[0]

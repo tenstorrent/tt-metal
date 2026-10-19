@@ -502,10 +502,6 @@ def test_per_variant_search_dirs_are_accepted():
 def test_out_of_tree_driver_compiles():
     """Compile an out-of-tree driver that depends on every registered dir.
 
-    The driver includes ``ckernel.h``, which pulls ``tt_metal/hw``. A standalone
-    tt-llk checkout has no such tree, so the compile is skipped there. The
-    wrapper still requires this test to pass when ``hw/inc`` is present.
-
     The driver ``#error``s if ``oot_probe.h`` is missing or resolves to the
     shadowed copy, and ``static_assert``s on the helpers tree. So a green
     compile here is the contract holding end to end:
