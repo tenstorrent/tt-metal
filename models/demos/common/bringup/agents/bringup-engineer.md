@@ -53,8 +53,12 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    measured, limits, used by) and its `INDEX.md` entry current, build (`./build_metal.sh`, fix any build errors), and run the fork's tests. When you extend an existing
    fork, iterate on a few targeted tests and the model's gate, then run the fork's full regression once, with the new
    option off: the results must match the recorded baseline (the recipe in the skill, section 3).
-7. Precision (owner rule). Run every matmul at HiFi4, in every role. Use bfp4 weights only where the HF checkpoint
-   itself stores them in 4 bits; otherwise never use bfp4 (the owner tries that, not an agent).
+7. Precision (owner rule). Run every matmul at HiFi4, in every role. Weights (owner, 2026-10-19): the shipped default
+   stores each weight in the device format of the checkpoint's own width: fp4 -> bfp4, fp8 -> bfp8, 16-bit -> bf16;
+   never wider (that doubles memory and DRAM traffic), never narrower. Where that format cannot hold the checkpoint's
+   values exactly (bfp4 for fp4 with per-32 scales, bfp8 for e4m3 with block scales), the weight's setting names the
+   smallest exact wider format (bfp8 / bf16) in `max_precision`, so the per-step tests stay exact and the default is
+   judged end to end (rule 14).
 8. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
    afterwards and only its verdict counts. Do not edit tests, goldens, thresholds, `tasks.yaml`, `state.json` or
    `results/`.
