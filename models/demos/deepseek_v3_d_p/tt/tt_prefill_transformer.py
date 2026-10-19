@@ -21,8 +21,8 @@ from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
