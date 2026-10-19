@@ -161,8 +161,8 @@ int run() {
         [&](const streaming_profiler::Batch<streaming_profiler::Zone>& batch) {
             dropped_bytes += batch.dropped_bytes();
             for (const streaming_profiler::Zone& zone : batch.records<streaming_profiler::Zone>()) {
-                if (zone.site().name == "HOST_RX") {
-                    starts[zone.core().chip_id].push_back(zone.start_time());
+                if (zone.metadata().name == "HOST_RX") {
+                    starts[zone.core().chip_id].push_back(zone.payload().start.time());
                 }
             }
         },
@@ -683,7 +683,7 @@ Run run(distributed::MeshDevice& mesh_device, uint32_t runtime_id) {
 void add_zone(CoreZones& zones, const streaming_profiler::Zone& zone, bool tx) {
     (tx ? zones.tx : zones.rx)++;
     if (zones.timed.size() < 2 * kTimedRounds) {
-        zones.timed.push_back({zone.start_device_cycles(), zone.start_time(), tx});
+        zones.timed.push_back({zone.payload().start.device_cycles(), zone.payload().start.time(), tx});
     }
 }
 
@@ -785,12 +785,12 @@ public:
             [this](const streaming_profiler::Batch<streaming_profiler::Zone>& batch) {
                 dropped_bytes_ += batch.dropped_bytes();
                 for (const streaming_profiler::Zone& zone : batch.records<streaming_profiler::Zone>()) {
-                    const std::string_view name = zone.site().name;
+                    const std::string_view name = zone.metadata().name;
                     const streaming_profiler::Core core = zone.core();
                     if (name == "MC_RX") {
                         arrivals_[zone.runtime_id()].push_back(multicast::Arrival{
-                            .host_ns = zone.start_time().time_since_epoch().count(),
-                            .cycles = static_cast<int64_t>(zone.start_device_cycles()),
+                            .host_ns = zone.payload().start.time().time_since_epoch().count(),
+                            .cycles = static_cast<int64_t>(zone.payload().start.device_cycles()),
                             .chip = core.chip_id,
                             .logical_x = static_cast<uint8_t>(core.logical.x),
                             .logical_y = static_cast<uint8_t>(core.logical.y),
