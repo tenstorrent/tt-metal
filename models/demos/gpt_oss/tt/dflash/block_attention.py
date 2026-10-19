@@ -32,7 +32,9 @@ TREE_SEM = 9
 LAND_SEM, COPY_SEM = 10, 11  # the shared K / V reads: groups landed in the leader / copied by its partner
 MIN_CHUNKS = 4  # 32-position chunks per slice at least
 G = 8  # chunks per K / V group (one running-softmax step)
-CAP = 3  # groups in flight per core (4 clashes with the verify pass's L1 buffers)
+CAP = 3  # groups in flight per core (4 clashes with the verify pass's L1 buffers; at least 2: the compute kernel's
+# pipelined loop computes group g + 1's scores while it still holds group g's V)
+assert CAP >= 2
 
 
 def _f32_bits(v):

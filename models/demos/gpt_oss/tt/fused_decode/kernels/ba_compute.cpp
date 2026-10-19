@@ -4,7 +4,8 @@
 // Block attention, compute (TRISC) (dflash/block_attention.py): one of kv head g's packed Q tiles (tile t = block rows
 // 4 t .. 4 t + 3 x query heads 8 g .. 8 g + 7, every row real; one tile per core, the other tile group's core shares
 // the K / V reads) over this slice's chunks. Online softmax over groups of G chunks, with the running state (m, l, O)
-// in cb_m, cb_l, cb_o (FP32; O unnormalised; the loops over the core's Tt = 1 Q tiles index them cb_m + t ..):
+// in cb_m, cb_l, cb_o (FP32; O unnormalised; the merge / output loops over the core's Tt = 1 Q tiles index them
+// cb_m + t ..; the pipelined group loop is written for Tt = 1):
 //   S_j = Qs . K_j^T (+ causal mask of the block's chunks); on slice 0's first group also the sink "chunk" (column
 //   0 = each head's sink logit: in the max and the sum, no V);
 //   m' = max(m, rowmax S); a = exp(m - m'); P_j = exp(S_j - m') (BF16-accurate exp, P in BF16);
@@ -246,11 +247,14 @@ void kernel_main() {
     // the math thread issues only FPU ops, so it fills the other DST half while the pack thread runs the SFPU (one
     // SFPU, two instruction streams: the exp no longer serialises the FPU work). Order per group g: P(g)'s first DST
     // block, the scores of g + 1 (cb_s holds 2 groups), P(g)'s other blocks, the row max of g + 1, then l(g) and
-    // O(g). The same ops compute every value as in a group-by-group loop (same results).
+    // O(g). The same ops compute every value as in a group-by-group loop (same results). The math thread may issue
+    // SFPU ops only before the loop (Qs, the sink tile) and after it (merge, 1 / l).
+    static_assert(Tt == 1, "the pipelined loop holds one Q tile's state (cb_s sized for one tile's 2 groups)");
     constexpr uint32_t t = 0;
     const uint32_t cm = cb_m, cl = cb_l, co = cb_o;
-    auto qk_block = [&](uint32_t gi, uint32_t jb, uint32_t n, bool extra) {
+    auto qk_block = [&](uint32_t gi, uint32_t jb, uint32_t n) {
         const uint32_t j0 = gi * G;
+        const bool extra = sink && gi == 0;  // the sink tile: group 0 only, computed before the loop (prelude)
         if (jb == 0) {
             cb_wait_front(cb_k, 2 * G);
             cb_reserve_back(cb_s, G + 1);
@@ -297,9 +301,9 @@ void kernel_main() {
             cb_pop_front(cb_k, 2 * G);
         }
     };
-    auto qk_all = [&](uint32_t gi, uint32_t n, bool extra) {
+    auto qk_all = [&](uint32_t gi, uint32_t n) {
         for (uint32_t jb = 0; jb < n; jb += 4) {
-            qk_block(gi, jb, n, extra);
+            qk_block(gi, jb, n);
         }
     };
     // m' = max(m, rowmax S) (math: the reduce + m's copy; pack: max, a = exp(m - m'))
@@ -455,7 +459,7 @@ void kernel_main() {
     auto group_n = [&](uint32_t gi) { return gi * G + G < nc ? G : nc - gi * G; };
     {
         const uint32_t n0 = group_n(0);
-        qk_all(0, n0, sink);
+        qk_all(0, n0);
         mx(n0 + (sink ? 1 : 0), true);
     }
     for (uint32_t gi = 0; gi < n_groups; ++gi) {
@@ -464,7 +468,7 @@ void kernel_main() {
         const bool nxt = gi + 1 < n_groups;
         p_block(0, ns);
         if (nxt) {
-            qk_all(gi + 1, group_n(gi + 1), false);
+            qk_all(gi + 1, group_n(gi + 1));
         }
         for (uint32_t jb = 4; jb < ns; jb += 4) {
             p_block(jb, ns);
@@ -476,8 +480,9 @@ void kernel_main() {
         pv(n, gi == 0);
     }
 
-    // the children's partials: [m, l, O_0, O_1] per Q tile (merge's SFPU ops run on the math thread: its first DST
-    // half frees only after the pack thread has finished the loop's last SFPU op, l's add)
+    // the children's partials: [m, l, O_0, O_1] per Q tile (merge's and the root's SFPU ops run on the math thread:
+    // the pack thread issues no SFPU op after the loop, and its last one precedes the release of the DST half that
+    // merge's first acquire takes)
     for (uint32_t r = 0; r < rounds; ++r) {
         cb_wait_front(cb_recv, 4 * Tt);
         for (uint32_t t = 0; t < Tt; ++t) {

@@ -755,8 +755,9 @@ class LinearStream(_BankStreamOp):
                 gs_noc += [p.x, p.y]
         for i, (core, bank, r, vc) in enumerate(self.assignments):
             reader_rt[core.x][core.y] = [weights.buffer_address(), bank, vc, r * self.cols * self.col_bytes]
-            if rope_kv is not None:  # KV_SPLIT: the core's first output column is a K / V column
-                reader_rt[core.x][core.y].append(int(self._slot_columns(bank, r, order)[0] >= self.heads[0]))
+            if rope_kv is not None:  # KV_SPLIT: the core's first output column is a K / V column (not padding)
+                col0 = self._slot_columns(bank, r, order)[0]
+                reader_rt[core.x][core.y].append(int(self.heads[0] <= col0 < self.n_tiles))
             writer_rt[core.x][core.y] = [
                 x.buffer_address(),
                 outs[0].buffer_address(),
@@ -819,6 +820,9 @@ class LinearStream(_BankStreamOp):
         # to BFP8 while the writer converts the others (kernels/stream_linear_reader.cpp KV_SPLIT)
         kv_split = rope_kv is not None and M > 1
         if kv_split:
+            # the reader converts its rows after streaming its columns while the writer holds the K / V tile: every
+            # column must fit the weight ring, or the reader would wait on a ring compute no longer drains
+            assert self.cols <= w_cols, f"KV_SPLIT needs the weight ring to hold all {self.cols} columns ({w_cols})"
             defines = (defines or []) + [
                 ("KV_SPLIT", "1"),
                 ("KV_SPLIT_SEM", "2"),

@@ -6,7 +6,7 @@
 // as `num_blocks` blocks of `block_tiles` tiles (one K block of one column group) in `page_bytes` packets, with one
 // block in flight ahead of compute, into a ring of `num_buffers` blocks (the circular buffer's depth).
 //
-// runtime args: [w_addr, bank_id, vc, reader_offset_bytes]
+// runtime args: [w_addr, bank_id, vc, reader_offset_bytes(, KV_SPLIT: 1 if this core's first output column is K / V)]
 
 #include <stdint.h>
 

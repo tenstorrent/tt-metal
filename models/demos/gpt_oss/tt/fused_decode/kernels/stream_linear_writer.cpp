@@ -25,9 +25,10 @@
 // 4. QKV_ROPE_KV (out_mode 3, one user; fused_decode/stream.py QKVRopeCache): before the activation arrives, loads the
 //    RoPE inputs of the compute kernel (kernels/stream_qkv_rope_compute.cpp: [I, T] and the position's cos / sin
 //    rows), reads the position and its paged-cache block (unpaged caches: block 0) and prefetches the cache tile of
-//    each of this core's K / V columns. Q columns (rotated by compute) go to the Q heads as above; a K (rotated) or V
-//    column is converted to BFP8 into row (position % block) of its cache tile, which is written back. The weight slots
-//    are in K / V-first order (qkv_column_order): slot c's output column is runtime arg 12 + c.
+//    each of this core's K / V columns (ROWS > 1: the cache tiles are read after the activation). Q columns (rotated
+//    by compute) go to the Q heads as above; a K (rotated) or V column is converted to BFP8 into row
+//    (position % block) of its cache tile, which is written back. The weight slots are in K / V-first order
+//    (qkv_column_order): slot c's output column is runtime arg 12 + c.
 //
 // 5. ROWS = M > 1 (DFlash verify, M token rows): activation / output tiles are [M, 32] (faces [M, 16]: row r of
 //    face f at byte f * 32 M + 32 r). x_pages = 0: the source is the boundary's row-tile layout
@@ -612,8 +613,9 @@ void kernel_main() {
                 const uint32_t t0 = kv_l1 + (scr_pages + 2 * c) * kv_tile_bytes;
                 invalidate_l1_cache();  // src was written by the packer
 #ifdef KV_SPLIT
-                // the first output column (a K / V column on every core, qkv_column_order): rows [rows / 2, rows) were
-                // converted by the reader (kernels/stream_linear_reader.cpp) into KV_SPLIT_CB_STAGE
+                // the first output column, when it is a K / V column (the reader's runtime arg 4 is then set): rows
+                // [rows / 2, rows) were converted by the reader (kernels/stream_linear_reader.cpp) into
+                // KV_SPLIT_CB_STAGE
                 const uint32_t i1 = c == 0 ? rows / 2 : rows;
 #else
                 constexpr uint32_t i1 = rows;
