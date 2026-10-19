@@ -1,0 +1,450 @@
+2026-10-14 13:41:34.880 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mmanzoor/.cache/ttnn,model_cache_path=/home/mmanzoor/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /home/mmanzoor/compiler/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mmanzoor/compiler/tt-metal
+configfile: pytest.ini
+plugins: repeat-0.9.4, cov-7.0.0, anyio-4.15.1, split-0.11.0, timeout-2.4.0, dash-2.15.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 6 items
+
+tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q64-k256-chunk2048-ksplit3-seg] 2026-10-14 13:41:38.491 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:234)
+2026-10-14 13:41:38.491 | info     |             UMD | Cluster constructor started. (cluster.cpp:409)
+2026-10-14 13:41:38.506 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-10-14 13:41:38.506 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-10-14 13:41:38.587 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:654)
+2026-10-14 13:41:38.592 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-10-14 13:41:40.039 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:176)
+2026-10-14 13:41:40.039 | info     |             UMD | IOMMU: enabled (cluster.cpp:150)
+2026-10-14 13:41:40.039 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:153)
+2026-10-14 13:41:40.039 | info     |             UMD | Cluster constructor completed. (cluster.cpp:880)
+2026-10-14 13:41:40.059 | info     |             UMD | Starting devices in cluster (cluster.cpp:1466)
+2026-10-14 13:41:40.755 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:245)
+2026-10-14 13:41:42.653 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1475)
+2026-10-14 13:41:42.729 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:529)
+2026-10-14 13:41:42.729 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:591)
+2026-10-14 13:41:42.750 | info     |          Fabric | Loaded physical groupings from: /home/mmanzoor/compiler/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-14 13:41:42.785 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-10-14 13:41:42.785 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-10-14 13:41:42.788 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 4 topology match(es), committed: 4x8_Mesh_flat (MESH), 4x8_Mesh_flat_torus_x (TORUSX), 4x8_Mesh_flat_torus_y (TORUSY), 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1731)
+2026-10-14 13:41:42.791 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-10-14 13:41:42.796 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:41:42.796 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:41:42.796 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:41:42.796 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:41:43.494 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:41:43.494 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:41:43.494 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:41:43.494 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:41:43.585 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-14 13:41:45.485 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:466)
+2026-10-14 13:41:45.485 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:336)
+2026-10-14 13:41:46.995 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:run_ring_joint_sdpa_chunked:2094 - Chunked prefill: model=gemma4_global, use_ring_mla=True, total_seq=262144, sp_size=8, per-device Q seq_len=32768, qk_configs=[(64, 256)], indexed_nd_sharded_kv_cache=False, nd_sharded_kv_cache=True, persistent_buffer_mode=reuse_max
+2026-10-14 13:42:11.987 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:test_ring_joint_attention_gemma4_chunked_perf_check:7871 - Gemma 4 chunked perf check gemma4_global-q64-k256-chunk2048-ksplit3-seg: duration=5.631 ms, math_util=31.98% (expected 33.69%, band [33.35, 34.03]), profiler_records=32, effective_cores=110, matmul_math_fidelity=MathFidelity.LoFi
+FAILED
+tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q128-k256-chunk4096-ksplit3-seg] 2026-10-14 13:42:12.069 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:529)
+2026-10-14 13:42:12.069 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:591)
+2026-10-14 13:42:12.084 | info     |          Fabric | Loaded physical groupings from: /home/mmanzoor/compiler/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-14 13:42:12.118 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-10-14 13:42:12.118 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-10-14 13:42:12.121 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 4 topology match(es), committed: 4x8_Mesh_flat (MESH), 4x8_Mesh_flat_torus_x (TORUSX), 4x8_Mesh_flat_torus_y (TORUSY), 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1731)
+2026-10-14 13:42:12.125 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-10-14 13:42:12.129 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:12.129 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:12.129 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:12.129 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:13.094 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:13.094 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:13.094 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:13.094 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:13.178 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-14 13:42:13.329 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:466)
+2026-10-14 13:42:13.329 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:336)
+2026-10-14 13:42:14.072 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:run_ring_joint_sdpa_chunked:2094 - Chunked prefill: model=gemma4_global, use_ring_mla=True, total_seq=262144, sp_size=8, per-device Q seq_len=32768, qk_configs=[(128, 256)], indexed_nd_sharded_kv_cache=False, nd_sharded_kv_cache=True, persistent_buffer_mode=reuse_max
+2026-10-14 13:42:39.230 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:test_ring_joint_attention_gemma4_chunked_perf_check:7871 - Gemma 4 chunked perf check gemma4_global-q128-k256-chunk4096-ksplit3-seg: duration=7.363 ms, math_util=48.72% (expected 50.10%, band [49.60, 50.60]), profiler_records=32, effective_cores=110, matmul_math_fidelity=MathFidelity.LoFi
+FAILED
+tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q96-k256-chunk8192-ksplit1-seg] 2026-10-14 13:42:39.515 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:529)
+2026-10-14 13:42:39.515 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:591)
+2026-10-14 13:42:39.531 | info     |          Fabric | Loaded physical groupings from: /home/mmanzoor/compiler/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-14 13:42:39.564 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-10-14 13:42:39.564 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-10-14 13:42:39.568 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 4 topology match(es), committed: 4x8_Mesh_flat (MESH), 4x8_Mesh_flat_torus_x (TORUSX), 4x8_Mesh_flat_torus_y (TORUSY), 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1731)
+2026-10-14 13:42:39.571 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-10-14 13:42:39.576 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:39.576 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:39.576 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:39.576 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:40.532 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:40.532 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:40.532 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:40.532 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:42:40.554 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-14 13:42:40.712 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:466)
+2026-10-14 13:42:40.712 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:336)
+2026-10-14 13:42:41.482 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:run_ring_joint_sdpa_chunked:2094 - Chunked prefill: model=gemma4_global, use_ring_mla=True, total_seq=262144, sp_size=8, per-device Q seq_len=32768, qk_configs=[(96, 256)], indexed_nd_sharded_kv_cache=False, nd_sharded_kv_cache=True, persistent_buffer_mode=reuse_max
+2026-10-14 13:43:07.120 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:test_ring_joint_attention_gemma4_chunked_perf_check:7871 - Gemma 4 chunked perf check gemma4_global-q96-k256-chunk8192-ksplit1-seg: duration=16.276 ms, math_util=43.73% (expected 44.80%, band [44.35, 45.25]), profiler_records=32, effective_cores=110, matmul_math_fidelity=MathFidelity.LoFi
+FAILED
+tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk2048-ksplit1-unseg] 2026-10-14 13:43:07.196 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:529)
+2026-10-14 13:43:07.196 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:591)
+2026-10-14 13:43:07.212 | info     |          Fabric | Loaded physical groupings from: /home/mmanzoor/compiler/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-14 13:43:07.246 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-10-14 13:43:07.246 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-10-14 13:43:07.249 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 4 topology match(es), committed: 4x8_Mesh_flat (MESH), 4x8_Mesh_flat_torus_x (TORUSX), 4x8_Mesh_flat_torus_y (TORUSY), 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1731)
+2026-10-14 13:43:07.252 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-10-14 13:43:07.257 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:43:07.257 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:43:07.257 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:43:07.257 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:43:08.215 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:43:08.215 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:43:08.215 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:43:08.215 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:43:08.302 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-14 13:43:08.459 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:466)
+2026-10-14 13:43:08.459 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:336)
+2026-10-14 13:43:10.536 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:run_ring_joint_sdpa_chunked:2094 - Chunked prefill: model=gemma4_swa, use_ring_mla=False, total_seq=262144, sp_size=8, per-device Q seq_len=32768, qk_configs=[(128, 128)], indexed_nd_sharded_kv_cache=False, nd_sharded_kv_cache=True, persistent_buffer_mode=reuse_max
+2026-10-14 13:44:08.356 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:test_ring_joint_attention_gemma4_chunked_perf_check:7871 - Gemma 4 chunked perf check gemma4_swa-q128-k128-chunk2048-ksplit1-unseg: duration=0.338 ms, math_util=2.09% (expected 2.15%, band [1.94, 2.37]), profiler_records=32, effective_cores=110, matmul_math_fidelity=None
+PASSED
+tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk4096-ksplit1-unseg] 2026-10-14 13:44:08.373 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:529)
+2026-10-14 13:44:08.373 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:591)
+2026-10-14 13:44:08.393 | info     |          Fabric | Loaded physical groupings from: /home/mmanzoor/compiler/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-14 13:44:08.427 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-10-14 13:44:08.427 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-10-14 13:44:08.431 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 4 topology match(es), committed: 4x8_Mesh_flat (MESH), 4x8_Mesh_flat_torus_x (TORUSX), 4x8_Mesh_flat_torus_y (TORUSY), 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1731)
+2026-10-14 13:44:08.434 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-10-14 13:44:08.439 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:44:08.439 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:44:08.439 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:44:08.439 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:44:09.395 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:44:09.395 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:44:09.395 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:44:09.395 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:44:09.417 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-14 13:44:09.569 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:466)
+2026-10-14 13:44:09.569 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:336)
+2026-10-14 13:44:11.675 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:run_ring_joint_sdpa_chunked:2094 - Chunked prefill: model=gemma4_swa, use_ring_mla=False, total_seq=262144, sp_size=8, per-device Q seq_len=32768, qk_configs=[(128, 128)], indexed_nd_sharded_kv_cache=False, nd_sharded_kv_cache=True, persistent_buffer_mode=reuse_max
+2026-10-14 13:45:09.973 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:test_ring_joint_attention_gemma4_chunked_perf_check:7871 - Gemma 4 chunked perf check gemma4_swa-q128-k128-chunk4096-ksplit1-unseg: duration=0.362 ms, math_util=3.90% (expected 3.91%, band [3.52, 4.30]), profiler_records=32, effective_cores=110, matmul_math_fidelity=None
+PASSED
+tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk8192-ksplit1-unseg] 2026-10-14 13:45:09.991 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:529)
+2026-10-14 13:45:09.991 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:591)
+2026-10-14 13:45:10.007 | info     |          Fabric | Loaded physical groupings from: /home/mmanzoor/compiler/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-14 13:45:10.041 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-10-14 13:45:10.041 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-10-14 13:45:10.044 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 4 topology match(es), committed: 4x8_Mesh_flat (MESH), 4x8_Mesh_flat_torus_x (TORUSX), 4x8_Mesh_flat_torus_y (TORUSY), 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1731)
+2026-10-14 13:45:10.048 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-10-14 13:45:10.053 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:45:10.053 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:45:10.053 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:45:10.053 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:45:11.013 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:45:11.013 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:45:11.013 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:45:11.013 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1211)
+2026-10-14 13:45:11.035 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-14 13:45:11.191 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:466)
+2026-10-14 13:45:11.191 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:336)
+2026-10-14 13:45:13.303 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:run_ring_joint_sdpa_chunked:2094 - Chunked prefill: model=gemma4_swa, use_ring_mla=False, total_seq=262144, sp_size=8, per-device Q seq_len=32768, qk_configs=[(128, 128)], indexed_nd_sharded_kv_cache=False, nd_sharded_kv_cache=True, persistent_buffer_mode=reuse_max
+2026-10-14 13:46:12.370 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:test_ring_joint_attention_gemma4_chunked_perf_check:7871 - Gemma 4 chunked perf check gemma4_swa-q128-k128-chunk8192-ksplit1-unseg: duration=0.438 ms, math_util=6.45% (expected 6.50%, band [5.85, 7.15]), profiler_records=32, effective_cores=110, matmul_math_fidelity=None
+PASSED
+
+=================================== FAILURES ===================================
+_ test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q64-k256-chunk2048-ksplit3-seg] _
+
+perf_config = ChunkedPerfConfig(model=ModelConfig(name='gemma4_global', nhq=8, nhk=1, nhv=1, d_q=512, d_k=640, d_v=512, is_causal=True, q_dtype=DataType.BFLOAT16, kv_dtype=DataType.BFLOAT8_B, q_chunk_sizes=[32, 64, 96, 128], k_chunk_sizes=[32, 64, 96, 128, 160, 192, 224, 256, 288], seq_len=262144, is_balanced=False, sliding_window_size=None, scale=1.0, topology=Topology.Linear, total_seq=262144, use_ring_mla=True, matmul_math_fidelity=MathFidelity.LoFi, nd_sharded_kv_cache=True), chunk_size=2048, q_chunk_size=64, k_chunk_size=256, max_k_splits=3, segmented_accumulation=True)
+
+    @pytest.mark.timeout(600)
+    @pytest.mark.parametrize("perf_config", GEMMA4_CHUNKED_PRODUCTION_PERF_CONFIGS, ids=lambda config: config.id)
+    @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+    @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+    @pytest.mark.skipif(
+        MESH_CONFIG.is_galaxy and not is_high_power(),
+        reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
+    )
+    def test_ring_joint_attention_gemma4_chunked_perf_check(perf_config):
+        """Measure Gemma 4's final production chunk against the full 256K cache capacity."""
+        if MESH_CONFIG.sp_size != 8:
+            pytest.skip(f"Expected ring size 8, current topology has ring size {MESH_CONFIG.sp_size}")
+
+        model = perf_config.model
+        chunk_size = perf_config.chunk_size
+        assert model.total_seq % chunk_size == 0
+        perf_chunk = model.total_seq // chunk_size - 1
+        expected_util, margin = GEMMA4_CHUNKED_PERF_CHECK_CONFIGS[(model.name, chunk_size)]
+
+        runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, topology=model.topology)
+        try:
+            with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
+                duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+                    runtime.mesh_device,
+                    lambda: run_ring_joint_sdpa_chunked(
+                        MESH_CONFIG,
+                        model,
+                        chunk_size=chunk_size,
+                        total_seq=model.total_seq,
+                        qk_configs=[(perf_config.q_chunk_size, perf_config.k_chunk_size)],
+                        persistent_buffer_mode="reuse_max",
+                        do_check=False,
+                        reuse_kv_buffer=True,
+                        use_compact_single_chunk_q=True,
+                        sliding_window_size=model.sliding_window_size,
+                        use_ring_mla=model.use_ring_mla,
+                        matmul_math_fidelity=model.matmul_math_fidelity,
+                        nd_sharded_kv_cache=model.nd_sharded_kv_cache,
+                        max_k_splits=perf_config.max_k_splits,
+                        segmented_accumulation=perf_config.segmented_accumulation,
+                        runtime=runtime,
+                    ),
+                )
+        finally:
+            close_ring_joint_sdpa_runtime(runtime)
+
+        effective_cores = MESH_CONFIG.sdpa_cores
+        if model.sliding_window_size is None:
+            utilization, effective_cores = compute_chunked_prefill_perf_check_utilization(
+                MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, effective_cores
+            )
+        else:
+            utilization = compute_ring_joint_utilization(
+                chunk_size // MESH_CONFIG.sp_size,
+                model.sliding_window_size,
+                model.d_q,
+                model.d_v,
+                model.nhq,
+                duration_ns,
+                effective_cores,
+                is_causal=False,
+            )
+        # The utilization helpers use the HiFi2 peak; normalize LoFi against its 2x modeled peak.
+        utilization /= get_matmul_peak_multiplier(model)
+
+        lower = expected_util * (1 - margin)
+        upper = expected_util * (1 + margin)
+        logger.info(
+            f"Gemma 4 chunked perf check {perf_config.id}: duration={duration_ns/1e6:.3f} ms, "
+            f"math_util={utilization:.2f}% (expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
+            f"profiler_records={len(perf_records)}, effective_cores={effective_cores}, "
+            f"matmul_math_fidelity={model.matmul_math_fidelity}"
+        )
+>       assert lower <= utilization <= upper, (
+            f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+            f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+        )
+E       AssertionError: Math utilization 31.98% outside band [33.35, 34.03] (expected 33.69%, margin +/- 1.0%)
+E       assert 33.3531 <= 31.977803435663105
+
+tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py:7877: AssertionError
+_ test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q128-k256-chunk4096-ksplit3-seg] _
+
+perf_config = ChunkedPerfConfig(model=ModelConfig(name='gemma4_global', nhq=8, nhk=1, nhv=1, d_q=512, d_k=640, d_v=512, is_causal=True, q_dtype=DataType.BFLOAT16, kv_dtype=DataType.BFLOAT8_B, q_chunk_sizes=[32, 64, 96, 128], k_chunk_sizes=[32, 64, 96, 128, 160, 192, 224, 256, 288], seq_len=262144, is_balanced=False, sliding_window_size=None, scale=1.0, topology=Topology.Linear, total_seq=262144, use_ring_mla=True, matmul_math_fidelity=MathFidelity.LoFi, nd_sharded_kv_cache=True), chunk_size=4096, q_chunk_size=128, k_chunk_size=256, max_k_splits=3, segmented_accumulation=True)
+
+    @pytest.mark.timeout(600)
+    @pytest.mark.parametrize("perf_config", GEMMA4_CHUNKED_PRODUCTION_PERF_CONFIGS, ids=lambda config: config.id)
+    @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+    @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+    @pytest.mark.skipif(
+        MESH_CONFIG.is_galaxy and not is_high_power(),
+        reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
+    )
+    def test_ring_joint_attention_gemma4_chunked_perf_check(perf_config):
+        """Measure Gemma 4's final production chunk against the full 256K cache capacity."""
+        if MESH_CONFIG.sp_size != 8:
+            pytest.skip(f"Expected ring size 8, current topology has ring size {MESH_CONFIG.sp_size}")
+
+        model = perf_config.model
+        chunk_size = perf_config.chunk_size
+        assert model.total_seq % chunk_size == 0
+        perf_chunk = model.total_seq // chunk_size - 1
+        expected_util, margin = GEMMA4_CHUNKED_PERF_CHECK_CONFIGS[(model.name, chunk_size)]
+
+        runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, topology=model.topology)
+        try:
+            with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
+                duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+                    runtime.mesh_device,
+                    lambda: run_ring_joint_sdpa_chunked(
+                        MESH_CONFIG,
+                        model,
+                        chunk_size=chunk_size,
+                        total_seq=model.total_seq,
+                        qk_configs=[(perf_config.q_chunk_size, perf_config.k_chunk_size)],
+                        persistent_buffer_mode="reuse_max",
+                        do_check=False,
+                        reuse_kv_buffer=True,
+                        use_compact_single_chunk_q=True,
+                        sliding_window_size=model.sliding_window_size,
+                        use_ring_mla=model.use_ring_mla,
+                        matmul_math_fidelity=model.matmul_math_fidelity,
+                        nd_sharded_kv_cache=model.nd_sharded_kv_cache,
+                        max_k_splits=perf_config.max_k_splits,
+                        segmented_accumulation=perf_config.segmented_accumulation,
+                        runtime=runtime,
+                    ),
+                )
+        finally:
+            close_ring_joint_sdpa_runtime(runtime)
+
+        effective_cores = MESH_CONFIG.sdpa_cores
+        if model.sliding_window_size is None:
+            utilization, effective_cores = compute_chunked_prefill_perf_check_utilization(
+                MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, effective_cores
+            )
+        else:
+            utilization = compute_ring_joint_utilization(
+                chunk_size // MESH_CONFIG.sp_size,
+                model.sliding_window_size,
+                model.d_q,
+                model.d_v,
+                model.nhq,
+                duration_ns,
+                effective_cores,
+                is_causal=False,
+            )
+        # The utilization helpers use the HiFi2 peak; normalize LoFi against its 2x modeled peak.
+        utilization /= get_matmul_peak_multiplier(model)
+
+        lower = expected_util * (1 - margin)
+        upper = expected_util * (1 + margin)
+        logger.info(
+            f"Gemma 4 chunked perf check {perf_config.id}: duration={duration_ns/1e6:.3f} ms, "
+            f"math_util={utilization:.2f}% (expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
+            f"profiler_records={len(perf_records)}, effective_cores={effective_cores}, "
+            f"matmul_math_fidelity={model.matmul_math_fidelity}"
+        )
+>       assert lower <= utilization <= upper, (
+            f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+            f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+        )
+E       AssertionError: Math utilization 48.72% outside band [49.60, 50.60] (expected 50.10%, margin +/- 1.0%)
+E       assert 49.599000000000004 <= 48.71866811865282
+
+tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py:7877: AssertionError
+_ test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q96-k256-chunk8192-ksplit1-seg] _
+
+perf_config = ChunkedPerfConfig(model=ModelConfig(name='gemma4_global', nhq=8, nhk=1, nhv=1, d_q=512, d_k=640, d_v=512, is_causal=True, q_dtype=DataType.BFLOAT16, kv_dtype=DataType.BFLOAT8_B, q_chunk_sizes=[32, 64, 96, 128], k_chunk_sizes=[32, 64, 96, 128, 160, 192, 224, 256, 288], seq_len=262144, is_balanced=False, sliding_window_size=None, scale=1.0, topology=Topology.Linear, total_seq=262144, use_ring_mla=True, matmul_math_fidelity=MathFidelity.LoFi, nd_sharded_kv_cache=True), chunk_size=8192, q_chunk_size=96, k_chunk_size=256, max_k_splits=1, segmented_accumulation=True)
+
+    @pytest.mark.timeout(600)
+    @pytest.mark.parametrize("perf_config", GEMMA4_CHUNKED_PRODUCTION_PERF_CONFIGS, ids=lambda config: config.id)
+    @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+    @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+    @pytest.mark.skipif(
+        MESH_CONFIG.is_galaxy and not is_high_power(),
+        reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
+    )
+    def test_ring_joint_attention_gemma4_chunked_perf_check(perf_config):
+        """Measure Gemma 4's final production chunk against the full 256K cache capacity."""
+        if MESH_CONFIG.sp_size != 8:
+            pytest.skip(f"Expected ring size 8, current topology has ring size {MESH_CONFIG.sp_size}")
+
+        model = perf_config.model
+        chunk_size = perf_config.chunk_size
+        assert model.total_seq % chunk_size == 0
+        perf_chunk = model.total_seq // chunk_size - 1
+        expected_util, margin = GEMMA4_CHUNKED_PERF_CHECK_CONFIGS[(model.name, chunk_size)]
+
+        runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, topology=model.topology)
+        try:
+            with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
+                duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+                    runtime.mesh_device,
+                    lambda: run_ring_joint_sdpa_chunked(
+                        MESH_CONFIG,
+                        model,
+                        chunk_size=chunk_size,
+                        total_seq=model.total_seq,
+                        qk_configs=[(perf_config.q_chunk_size, perf_config.k_chunk_size)],
+                        persistent_buffer_mode="reuse_max",
+                        do_check=False,
+                        reuse_kv_buffer=True,
+                        use_compact_single_chunk_q=True,
+                        sliding_window_size=model.sliding_window_size,
+                        use_ring_mla=model.use_ring_mla,
+                        matmul_math_fidelity=model.matmul_math_fidelity,
+                        nd_sharded_kv_cache=model.nd_sharded_kv_cache,
+                        max_k_splits=perf_config.max_k_splits,
+                        segmented_accumulation=perf_config.segmented_accumulation,
+                        runtime=runtime,
+                    ),
+                )
+        finally:
+            close_ring_joint_sdpa_runtime(runtime)
+
+        effective_cores = MESH_CONFIG.sdpa_cores
+        if model.sliding_window_size is None:
+            utilization, effective_cores = compute_chunked_prefill_perf_check_utilization(
+                MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, effective_cores
+            )
+        else:
+            utilization = compute_ring_joint_utilization(
+                chunk_size // MESH_CONFIG.sp_size,
+                model.sliding_window_size,
+                model.d_q,
+                model.d_v,
+                model.nhq,
+                duration_ns,
+                effective_cores,
+                is_causal=False,
+            )
+        # The utilization helpers use the HiFi2 peak; normalize LoFi against its 2x modeled peak.
+        utilization /= get_matmul_peak_multiplier(model)
+
+        lower = expected_util * (1 - margin)
+        upper = expected_util * (1 + margin)
+        logger.info(
+            f"Gemma 4 chunked perf check {perf_config.id}: duration={duration_ns/1e6:.3f} ms, "
+            f"math_util={utilization:.2f}% (expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
+            f"profiler_records={len(perf_records)}, effective_cores={effective_cores}, "
+            f"matmul_math_fidelity={model.matmul_math_fidelity}"
+        )
+>       assert lower <= utilization <= upper, (
+            f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+            f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+        )
+E       AssertionError: Math utilization 43.73% outside band [44.35, 45.25] (expected 44.80%, margin +/- 1.0%)
+E       assert 44.352 <= 43.7294548395249
+
+tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py:7877: AssertionError
+==================================== PASSES ====================================
+- generated xml file: /home/mmanzoor/compiler/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+62.40s call     tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk8192-ksplit1-unseg]
+61.62s call     tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk4096-ksplit1-unseg]
+61.18s call     tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk2048-ksplit1-unseg]
+33.50s call     tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q64-k256-chunk2048-ksplit3-seg]
+27.61s call     tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q96-k256-chunk8192-ksplit1-seg]
+27.16s call     tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q128-k256-chunk4096-ksplit3-seg]
+0.00s setup    tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q64-k256-chunk2048-ksplit3-seg]
+0.00s setup    tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk4096-ksplit1-unseg]
+0.00s setup    tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk8192-ksplit1-unseg]
+0.00s setup    tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q128-k256-chunk4096-ksplit3-seg]
+0.00s setup    tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk2048-ksplit1-unseg]
+0.00s setup    tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q96-k256-chunk8192-ksplit1-seg]
+0.00s teardown tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk2048-ksplit1-unseg]
+0.00s teardown tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk4096-ksplit1-unseg]
+0.00s teardown tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q64-k256-chunk2048-ksplit3-seg]
+0.00s teardown tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q128-k256-chunk4096-ksplit3-seg]
+0.00s teardown tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q96-k256-chunk8192-ksplit1-seg]
+0.00s teardown tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk8192-ksplit1-unseg]
+=========================== short test summary info ============================
+PASSED tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk2048-ksplit1-unseg]
+PASSED tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk4096-ksplit1-unseg]
+PASSED tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_swa-q128-k128-chunk8192-ksplit1-unseg]
+FAILED tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q64-k256-chunk2048-ksplit3-seg] - AssertionError: Math utilization 31.98% outside band [33.35, 34.03] (expected 33.69%, margin +/- 1.0%)
+assert 33.3531 <= 31.977803435663105
+FAILED tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q128-k256-chunk4096-ksplit3-seg] - AssertionError: Math utilization 48.72% outside band [49.60, 50.60] (expected 50.10%, margin +/- 1.0%)
+assert 49.599000000000004 <= 48.71866811865282
+FAILED tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q96-k256-chunk8192-ksplit1-seg] - AssertionError: Math utilization 43.73% outside band [44.35, 45.25] (expected 44.80%, margin +/- 1.0%)
+assert 44.352 <= 43.7294548395249
+=================== 3 failed, 3 passed in 277.41s (0:04:37) ====================
+2026-10-14 13:46:13.958 | info     |    BuildKernels | JIT cache stats: 255/255 hits (100.0%) [255 cached, 4591 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-10-14 13:46:13.958 | info     |    BuildKernels | JIT telemetry: 33 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-10-14 13:46:14.246 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:532)
+2026-10-14 13:46:14.246 | info     |             UMD | Closing devices in cluster (cluster.cpp:1480)
+2026-10-14 13:46:17.172 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1490)
+2026-10-14 13:46:17.172 | info     |             UMD | Cluster destructor started. (cluster.cpp:1211)
+2026-10-14 13:46:17.172 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1224)
+PR CHECK EXIT 0

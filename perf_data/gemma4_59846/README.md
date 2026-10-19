@@ -21,20 +21,31 @@ not merged upstream) + the sweep tests (1b930d75ffb). C = request chunk before C
 - `swa_table.csv`: sliding-window attention per C and (Q, K) chunk: `accuracy` (prefix 0, C, and >= 4K on a
   production-style oversized, garbage-padded cache; PCC gate 0.99 at Gemma's scale 1.0, RMSE recorded) and
   `perf_final` (final 256K chunk, 6 calls, median).
-- `run_*.sh`, `analyze.py`: exact commands (paths assume the original box; `source activate` sets TT_METAL_CACHE).
-- Raw data (not in git; the large-file hook caps files at 500 KB): JSON-lines with every per-call duration and full
-  error text, all pytest logs, the invalid first sliding run (`swa_sweep_v1_bad_reference.*`) and the PR #59484
-  perf check log are in `/data/mmanzoor/sdpa_chunk_sweep/bundle_59846.tar.gz` on the NFS share 10.32.13.1:/data
-  (also unpacked in that folder). A git bundle of this branch is next to it: `branch_59846.bundle`.
+- `run_*.sh`, `analyze.py`: exact commands as run on bh-glx-120-b09u08 (paths assume that box; `source activate`
+  sets TT_METAL_CACHE). `c04u02/`: the scripts and build step used on bh-glx-120-c04u02.
+- `raw/`: gzipped per-call data. `global_sweep.jsonl.gz` and `swa_sweep.jsonl.gz` hold every call's duration and the
+  op's full error text; `global_accuracy.log.gz` and `repeat_failing.log.gz` are the correctness runs.
+  `python3 analyze.py <(zcat raw/global_sweep.jsonl.gz)` regenerates `global_summary.txt` exactly.
+- `pr_perf_check_b09u08.log`, `c04u02/pr_perf_check.log`: PR #59484's own perf check on the two hosts.
+- Everything else (all pytest logs, the invalid first sliding run `swa_sweep_v1_bad_reference.*`) is in
+  `/data/mmanzoor/sdpa_chunk_sweep/bundle_59846.tar.gz` on the NFS share 10.32.13.1:/data.
 
-Reproduce (each pytest item opens the full 8x4 mesh):
+## Reproduce
 
-    GEMMA4_SDPA_SWEEP_OUT=<out>.jsonl pytest -sv \
-        "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_global_chunk_sweep"
-    GEMMA4_SDPA_SWEEP_OUT=<out>.jsonl pytest -sv \
-        "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_swa_chunk_sweep"
-    pytest -sv "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_global_chunk_sweep_accuracy"
-    python3 analyze.py <out>.jsonl
+On an 8x4 Blackhole galaxy (each pytest item opens the full mesh; the perf check skips on hosts below 130 W TDP):
+
+    git fetch origin mmanzoor/gemma4-sdpa-small-chunk-sweep && git switch mmanzoor/gemma4-sdpa-small-chunk-sweep
+    git submodule update --init --recursive
+    ./build_metal.sh --build-type Release      # Tracy is on by default; incremental: ninja -C build && ninja -C build install
+    T=tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py
+    pytest -sv "$T::test_ring_joint_attention_gemma4_chunked_perf_check"                 # PR #59484's check, ~5 min
+    GEMMA4_SDPA_SWEEP_OUT=global.jsonl pytest -sv "$T::test_ring_joint_attention_gemma4_global_chunk_sweep"
+    GEMMA4_SDPA_SWEEP_OUT=swa.jsonl pytest -sv "$T::test_ring_joint_attention_gemma4_swa_chunk_sweep"
+    pytest -sv "$T::test_ring_joint_attention_gemma4_global_chunk_sweep_accuracy"
+    python3 perf_data/gemma4_59846/analyze.py global.jsonl
+
+Rows are appended to the `GEMMA4_SDPA_SWEEP_OUT` file, so a stopped sweep resumes with `--deselect` of the finished
+`[chunkC-prefixP]` items. `GEMMA4_SDPA_SWEEP_REPEATS` (default 6, first dropped) sets calls per point.
 
 Global: ~4 min per (C, prefix) item, 25 items. Sliding: 60 items, ~45 min. Accuracy: 18 items, ~35 min.
 
@@ -58,14 +69,21 @@ Global attention, final 256K chunk (best tuning / production tuning on main):
 - Production is 5-13% slower than the best tuning at C <= 1024 (always q32 + 3 bands); within 3% at 2048; best at 4096.
 - Prefix length: utilization rises with the prefix and saturates by 128K at every C; the ranking of C does not change.
   Prefix 0 is ~0.3-0.45 ms with up to 30% spread, which says little.
-- PR #59484's reference: its 4096 final chunk 50.1% / 7.154 ms did not reproduce here (47.8% / 7.50 ms warm median;
-  48.2% / 7.446 ms in a single-shot run of the PR's own check). Not investigated.
+- PR #59484's own check does not reproduce its 50.1% / 7.154 ms at C = 4096 on either host, and the two hosts agree
+  within 1% (b09u08 / c04u02 after a board reset): C = 2048 5.633 / 5.631 ms (31.97 / 31.98%), C = 4096 7.446 /
+  7.363 ms (48.18 / 48.72%), C = 8192 16.280 / 16.276 ms (43.72 / 43.73%); sliding cases pass on both. The shared
+  "Gemma 4 Global SDPA Sweep" host (c05u02) also ran 4-7% slower. Likely a change on main between the PR's base
+  (8b796837a47) and 6ba9d172b63 (161 commits); candidates e951c82c9e4 (Blackhole bf16 exp), b7b6412a7f4 (clamped
+  exp21f), baa325fd3d0 (Blaze SDPA fidelity). Not bisected.
+- The shared "Gemma 4 Global SDPA Sweep" (C = 256-12288 in 256 steps) agrees with this sweep within ~2% at the five
+  common sizes; it finds 50% first at C = 6144.
 
 Correctness (`global_accuracy.csv`): all 9 last-chunk cases pass (PCC 0.9990-0.9991, RMSE <= 0.036). All 9 first-chunk
 cases pass accuracy (PCC 0.9998, RMSE ~0.02) but fail the runner's "output equals the run without K split ... never
 applied" check; reproduced identically on a repeat. Cause is the harness: chunk 0 gets a cache sized to the chunk, so
 `is_chunked()` (Q rows < local K/V rows) is false, the kernel runs non-chunked causal and the factory disables K split.
-Production's full-size cache keeps chunk 0 chunked. Proposed fix: skip the feature check for the first-chunk position.
+Production's full-size cache keeps chunk 0 chunked. Fix (this branch, `unchecked_features` on the runner): the
+first-chunk cases skip only the K-split check; accuracy and the LoFi check still run. Not yet rerun on device.
 
 Sliding-window attention (`swa_table.csv`): main accepts only Q chunk 64/128 with K chunk 128, and both must divide c.
 So C=256 and C=512 cannot run sliding attention at all. C=1024/2048/4096 with q64 or q128 (production) and k128 pass:
@@ -77,7 +95,8 @@ configs (scale 1.0) were checked against 1/sqrt(d) (sliding PCC 0.38). Worth its
 
 ## Not done yet
 
-1. First-chunk K-split feature check fix (above), then rerun the 9 first-chunk accuracy cases.
-2. Why 4096 gives 47.8% here vs the PR's 50.1%.
-3. Optional: rerun on the `kmabee/gemma4-matmul-dig-base` kernels (up to 8 K-split bands, q128 + bfp8 Q for 2K).
-4. Utilization/latency plot, write-up and the issue comment (nothing posted to #59846 yet).
+1. Rerun the 9 first-chunk accuracy cases with the K-split check fix (~18 min on the galaxy).
+2. Build PR #59484 at its own base (8b796837a47) and run its check; if ~50.1%, bisect main to 6ba9d172b63.
+3. Split the reference-scale fix into its own PR.
+4. Optional: rerun on kernels allowing 8 K-split bands (`kmabee/gemma4-matmul-dig-base`).
+5. Write-up and the issue comment (nothing posted to #59846 yet).
