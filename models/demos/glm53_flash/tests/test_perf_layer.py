@@ -35,9 +35,17 @@ except ImportError:  # pragma: no cover - tracy module ships with the source tre
         pass
 
 
+def _read_profiler(device):
+    """Drain the device profiler buffers (they fill during long warm-ups and later ops are dropped)."""
+    try:
+        ttnn.ReadDeviceProfiler(device)
+    except Exception:  # not built with the profiler
+        pass
+
+
 LAYER = int(os.environ.get("GLM53_PERF_LAYER", "3"))
 PREFILL_LEN = int(os.environ.get("GLM53_PERF_PREFILL", "1024"))
-DECODE_STEPS = int(os.environ.get("GLM53_PERF_DECODE_STEPS", "10"))
+DECODE_STEPS = int(os.environ.get("GLM53_PERF_DECODE_STEPS", "3"))
 # "both" | "prefill" | "decode": the Tracy device-zone hash table collides for the full prefill+decode kernel
 # set of a MoE layer ("Source location hashes are colliding"), so each phase can be profiled in its own run
 PHASE = os.environ.get("GLM53_PERF_PHASE", "both")
@@ -61,6 +69,7 @@ def test_layer_perf(mesh_device):
     x_dev = host_streams_to_device(x_in, mesh_device)
     dec.prefill_forward(x_dev, user=0, seq_len=S)
     ttnn.synchronize_device(mesh_device)
+    _read_profiler(mesh_device)
     if PHASE in ("both", "prefill"):
         signpost("PERF_PREFILL")
         t0 = time.perf_counter()
@@ -68,6 +77,7 @@ def test_layer_perf(mesh_device):
         ttnn.synchronize_device(mesh_device)
         t_prefill = time.perf_counter() - t0
         signpost("PERF_PREFILL_END")
+        _read_profiler(mesh_device)
         ttnn.deallocate(y)
         logger.info(
             f"layer {LAYER} ({kind}) warmed prefill S={S}: {t_prefill*1e3:.1f} ms wall ({S / t_prefill:.0f} tok/s)"
@@ -94,6 +104,7 @@ def test_layer_perf(mesh_device):
     trace_id, out_dev, _ = dec.capture_decode_trace(streams_dev, pos_dev)
     dec.replay_decode(trace_id)  # one warm replay
     ttnn.synchronize_device(mesh_device)
+    _read_profiler(mesh_device)
     signpost("PERF_DECODE")
     t0 = time.perf_counter()
     for _ in range(DECODE_STEPS):
@@ -101,6 +112,7 @@ def test_layer_perf(mesh_device):
     ttnn.synchronize_device(mesh_device)
     t_decode = (time.perf_counter() - t0) / DECODE_STEPS
     signpost("PERF_DECODE_END")
+    _read_profiler(mesh_device)
     logger.info(
         f"layer {LAYER} ({kind}) traced decode B=1: {t_decode*1e3:.2f} ms/step wall "
         f"(single-layer rate {1/t_decode:.0f} tok/s/user; x45 layers -> {1/(45*t_decode):.1f} tok/s/user)"
