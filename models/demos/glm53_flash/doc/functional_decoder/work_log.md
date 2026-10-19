@@ -53,3 +53,23 @@ Stage: tt-model-bringup stage 1 (functional decoder, 1x1 mesh) = design Phase 1.
   persistent batched state; prefill writes user slots), the DSA cache is already in place; capture once on a
   dummy token, replay the 4 reference steps updating only the input/position tensors: replay PCC identical to
   eager for layers 0, 3, 4 (0.9999).
+- Two-user decode (`test_two_users_decode_vs_hf`, prompts 100 and 37 tokens in slots 0/1): layer 0 per-user PCC
+  0.9998-0.9999, layer 3 0.9998-0.99998. Commit d5efa78fb35.
+- First perf numbers, layer 3 (DSA+MoE), one chip, functional v1 (`tests/test_perf_layer.py`, wall clock):
+  warmed prefill S=1024 = 314 ms (3.3k tok/s for this layer); traced decode B=1 = 10.95 ms/step
+  (a 45-layer single-chip extrapolation would be ~2 tok/s/user: the composite KDA/MoE paths are not tuned;
+  the design's performance work is Phase 2/3 on the 8x4 mesh). `python -m tracy -r -p` failed to merge
+  device data ("Op 1024 not present in cpp_device_perf_report.csv"); re-collecting with
+  TT_METAL_DEVICE_PROFILER=1 + process_ops_logs.py.
+- Sparse DSA path (`tt/indexer.py`, `tt/dsa.py::_prefill_sparse / decode_forward_sparse`, `tests/test_dsa_sparse.py`):
+  pooled-key cache (paged, [B*blocks,1,32,128]) written with paged_fill_cache / paged_update_cache; raw k/gate
+  4-slot rings per user complete the pool a decode token closes (pool (a+1)//4-1 rewritten every step, harmless
+  before completion because it is not yet selectable); scoring = indexer_score_dsa(key_compression_ratio=4) with
+  the 128^-0.5 and 32^-0.5 scales folded into wq_b / weights_proj; selection = repeat_interleave(scores, 4) +
+  topk_large_indices(k=2048) (token ids directly, whole pools since ties are contiguous) + host-geometry tail ids
+  + 0xFFFFFFFF sentinel pad to 2176; attention = sparse_sdpa over the user's latent rows untilized from the paged
+  cache. Op facts: indexer_score_dsa needs Sq%32==0, chunk_start%32==0 and chunk_start < kv_len*4 (decode query
+  placed at row a%32 of an aligned block, kv_len extended by one tile); ttnn.pad cannot front-pad tiles (concat);
+  update_padded_kv_cache only writes whole-chunk multiples (not usable as a row writer); int32->uint32 typecast
+  preserves bits (-1 == sentinel). Layer 3 vs the T4097 dump: prefill PCC 0.99977 (rows >= 2048: 0.99990),
+  sparse decode at 4097..4100: 0.99995 / 0.99996 / 0.99993 / 0.99991.

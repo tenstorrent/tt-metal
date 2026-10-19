@@ -30,6 +30,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache
 
 TILE = 32
 CORES_PER_USER_DECODE = 4
@@ -79,6 +80,10 @@ class TtLatentCache:
         # identity page table [B, blocks_per_seq]: user b owns blocks [b*bps, (b+1)*bps)
         pt = torch.arange(self.max_blocks, dtype=torch.int32).reshape(max_batch, self.blocks_per_seq)
         self.set_page_table(pt)
+        # sparse path (context > index_topk): pooled-key index cache; sparse_sdpa reads the user's
+        # latent rows untilized on the fly (``user_rows_rm``), so there is no second copy to keep in sync
+        self.rows_per_user = self.blocks_per_seq * block_size
+        self.index = TtIndexCache(device, cfg, max_batch=max_batch, max_seq_len=self.rows_per_user)
 
     def set_page_table(self, page_table: torch.Tensor):
         assert tuple(page_table.shape) == (self.max_batch, self.blocks_per_seq), page_table.shape
@@ -88,9 +93,21 @@ class TtLatentCache:
         )
 
     def fill(self, latent: ttnn.Tensor, user: int):
-        """latent [1, 1, T_pad, 512] (T_pad % block_size == 0) -> pages of ``user`` from position 0."""
+        """latent [1, 1, T_pad, 512] (T_pad % block_size == 0) -> pages of ``user`` from position 0,
+        and the same rows into the row-major copy."""
         src = latent if latent.dtype == self.dtype else ttnn.typecast(latent, self.dtype)
         ttnn.experimental.paged_fill_cache(self.cache, src, self.page_table, batch_idx=user)
+
+    def user_rows_rm(self, user: int, n_rows: int) -> ttnn.Tensor:
+        """The first ``n_rows`` (rounded up to whole blocks) latent rows of ``user`` as a fresh
+        ROW_MAJOR [1, 1, rows, 512] tensor (identity page table: the user's blocks are contiguous)."""
+        n_blocks = min(self.blocks_per_seq, -(-n_rows // self.block_size))
+        b0 = user * self.blocks_per_seq
+        blocks = ttnn.slice(self.cache, [b0, 0, 0, 0], [b0 + n_blocks, 1, self.block_size, self.latent_dim])
+        rows = ttnn.reshape(blocks, [1, 1, n_blocks * self.block_size, self.latent_dim])
+        rm = ttnn.to_layout(rows, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(blocks)
+        return rm
 
     def update(self, latent_sharded: ttnn.Tensor, positions: ttnn.Tensor):
         """latent [1, B, 1(32), 512] height-sharded on B cores, positions [B] int32 row-major."""
@@ -134,6 +151,10 @@ class TtDSA(LightweightModule):
         self.w_absorb_q = _upload(device, wkb1.reshape(1, H, Dq, L), weight_dtype)
         self.w_absorb_o = _upload(device, wkb2.transpose(1, 2).reshape(1, H, L, Dv), weight_dtype)
         self.w_o = _upload(device, sd["o_proj.weight"].t(), weight_dtype)  # [H*256, 4096]
+        self.indexer = TtDSAIndexer(
+            device, cfg, {k[len("indexer.") :]: v for k, v in sd.items() if k.startswith("indexer.")}
+        )
+        self.sparse_from = cfg.index_topk  # query position from which fewer than all visible tokens are selected
         self.hifi2 = _compute(device)
         self.hifi4 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
         grid = device.compute_with_storage_grid_size()
@@ -193,6 +214,8 @@ class TtDSA(LightweightModule):
         q = self._q(x)  # [1,1,T,H*Dq]
         c = self._latent(x)  # [1,1,T,L]
         cache.fill(c, user)
+        if seq_len > self.sparse_from:
+            return self._prefill_sparse(x, q, c, cache, user, seq_len)
         k = ttnn.linear(c, self.w_k_all, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,H*Dq]
         v = ttnn.linear(c, self.w_v_all, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,H*Dv]
         ttnn.deallocate(c)
@@ -218,11 +241,223 @@ class TtDSA(LightweightModule):
         o = ttnn.reshape(ttnn.transpose(o, 1, 2), [1, 1, T, H * Dv])
         return ttnn.linear(o, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
 
-    # ---------------------------------------------------------------------- decode
-    def decode_forward(self, x: ttnn.Tensor, cache: TtLatentCache, positions: ttnn.Tensor) -> ttnn.Tensor:
-        """x [1,1,B,4096] (one token per user), positions [B] int32 row-major (the token's
-        position = current context length). Appends the latent and attends over [0, pos]."""
+    # --------------------------------------------------------------- sparse path
+    def _absorb_q(self, q: ttnn.Tensor) -> ttnn.Tensor:
+        """q [1,1,T,H*Dq] -> q_lat [1,H,T,L] bf16 (per-head q @ Wkb1)."""
+        T = q.shape[-2]
+        qh = ttnn.transpose(ttnn.reshape(q, [1, T, self.H, self.Dq]), 1, 2)  # [1,H,T,Dq]
+        q_lat = ttnn.matmul(qh, self.w_absorb_q, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        ttnn.deallocate(qh)
+        return q_lat
+
+    def _unabsorb_o(self, o_lat: ttnn.Tensor) -> ttnn.Tensor:
+        """o_lat [1,H,T,L] -> o_proj output [1,1,T,4096]."""
+        T = o_lat.shape[-2]
+        o = ttnn.matmul(o_lat, self.w_absorb_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,H,T,Dv]
+        o = ttnn.reshape(ttnn.transpose(o, 1, 2), [1, 1, T, self.H * self.Dv])
+        return ttnn.linear(o, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+
+    def _write_tail_ring(self, cache: TtLatentCache, user: int, k: ttnn.Tensor, g: ttnn.Tensor, positions: list[int]):
+        """Store rows of k/g [1,1,n,D] (n <= P) at ring slots position % P of ``user``."""
+        P, D = cache.index.P, cache.index.D
+        for ring, src in ((cache.index.tail_k, k), (cache.index.tail_g, g)):
+            rows = []
+            for slot in range(P):
+                hit = [i for i, pos in enumerate(positions) if pos % P == slot]
+                if hit:
+                    i = hit[-1]
+                    rows.append(ttnn.slice(src, [0, 0, i, 0], [1, 1, i + 1, D]))
+                else:
+                    rows.append(ttnn.slice(ring, [user, 0, slot, 0], [user + 1, 1, slot + 1, D]))
+            new = ttnn.concat(rows, dim=-2)  # [1,1,P,D]
+            all_users = [
+                new if u == user else ttnn.slice(ring, [u, 0, 0, 0], [u + 1, 1, P, D]) for u in range(cache.max_batch)
+            ]
+            stacked = ttnn.concat(all_users, dim=0)
+            ttnn.copy(stacked, ring)
+            ttnn.deallocate(stacked)
+
+    def _prefill_sparse(self, x, q, c, cache: TtLatentCache, user: int, seq_len: int) -> ttnn.Tensor:
+        """Chunk from position 0 with seq_len > index_topk: pooled-key index + top-k + sparse_sdpa."""
+        T = x.shape[-2]
+        idx = self.indexer
+        P = idx.P
+        k_idx, g_idx = idx.keys_and_gates(x)  # [1,1,T,128] each
+        n_pools = seq_len // P
+        n_pad = -(-max(n_pools, 1) // TILE) * TILE
+        if n_pools > 0:
+            k_full = ttnn.slice(k_idx, [0, 0, 0, 0], [1, 1, n_pools * P, idx.D])
+            g_full = ttnn.slice(g_idx, [0, 0, 0, 0], [1, 1, n_pools * P, idx.D])
+            pooled = idx.pool(k_full, g_full)  # [1,1,n_pools,128]
+            if n_pad != n_pools:
+                pooled = ttnn.pad(pooled, [(0, 0), (0, 0), (0, n_pad - n_pools), (0, 0)], value=0.0)
+            cache.index.write_pools(pooled, user)
+        tail_n = seq_len - n_pools * P
+        if tail_n:
+            self._write_tail_ring(
+                cache,
+                user,
+                ttnn.slice(k_idx, [0, 0, n_pools * P, 0], [1, 1, seq_len, idx.D]),
+                ttnn.slice(g_idx, [0, 0, n_pools * P, 0], [1, 1, seq_len, idx.D]),
+                list(range(n_pools * P, seq_len)),
+            )
+        ttnn.deallocate(k_idx)
+        ttnn.deallocate(g_idx)
+        q_resid = self._q_resid(x)
+        q_i, w_i = idx.queries_and_weights(x, q_resid)
+        ttnn.deallocate(q_resid)
+        indices = idx.select(q_i, w_i, cache.index, user, query_start=0, num_pools_valid=n_pools)  # [1,1,T,W] uint32
+        ttnn.deallocate(q_i)
+        ttnn.deallocate(w_i)
+        q_lat = self._absorb_q(q)  # [1,H,T,L]
+        q_rm = ttnn.to_layout(q_lat, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(q_lat)
+        kv_rm = cache.user_rows_rm(user, T)
+        o_rm = ttnn.transformer.sparse_sdpa(
+            q_rm,
+            kv_rm,
+            indices,
+            v_dim=self.L,
+            kv_format=ttnn.transformer.SparseKVFormat.BF16,
+            scale=self.scale,
+            k_chunk_size=128,
+        )  # [1,H,T,L] row-major
+        ttnn.deallocate(q_rm)
+        ttnn.deallocate(indices)
+        ttnn.deallocate(kv_rm)
+        o_lat = ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(o_rm)
+        y = self._unabsorb_o(o_lat)
+        ttnn.deallocate(o_lat)
+        return y
+
+    def _place_row(self, row: ttnn.Tensor, r: int) -> ttnn.Tensor:
+        """[.., 1, W] -> [.., 32, W] with ``row`` at row r and zeros elsewhere (tile pad cannot front-pad)."""
+        shape = list(row.shape)
+        parts = []
+        if r:
+            parts.append(
+                ttnn.zeros(shape[:-2] + [r, shape[-1]], dtype=row.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+            )
+        parts.append(row)
+        if TILE - 1 - r:
+            parts.append(
+                ttnn.zeros(
+                    shape[:-2] + [TILE - 1 - r, shape[-1]], dtype=row.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+                )
+            )
+        return parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=-2)
+
+    def _q_resid(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        qa = ttnn.linear(x, self.w_qa, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        return ttnn.rms_norm(qa, epsilon=self.cfg.rms_norm_eps, weight=self.qa_norm, compute_kernel_config=self.hifi4)
+
+    def decode_forward_sparse(self, x: ttnn.Tensor, cache: TtLatentCache, positions: list[int]) -> ttnn.Tensor:
+        """Decode step for B users at host-known positions (any >= index_topk use the sparse path).
+        Not trace-replayable (chunk geometry comes from host ints); Phase 1 functional path."""
         B = x.shape[-2]
+        idx = self.indexer
+        P, D = idx.P, idx.D
+        q = self._q(x)  # [1,1,B,H*Dq]
+        c = self._latent(x)  # [1,1,B,L]
+        # latent caches (tile paged + row-major copy)
+        grid = self.device.compute_with_storage_grid_size()
+        shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(TILE, self.L),
+            core_grid=ttnn.num_cores_to_corerangeset(B, grid, row_wise=True),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        pos_t = ttnn.from_torch(
+            torch.tensor(positions, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
+        c_sh = ttnn.to_memory_config(ttnn.reshape(c, [1, B, 1, self.L]), shard_cfg)
+        cache.update(c_sh, pos_t)
+        ttnn.deallocate(c_sh)
+        ttnn.deallocate(c)
+        # index keys/gates for the new tokens -> tail rings, and the pool each token (may) complete
+        k_idx, g_idx = idx.keys_and_gates(x)
+        q_resid = self._q_resid(x)
+        q_i, w_i = idx.queries_and_weights(x, q_resid)  # [1,Hi,B,D], [1,1,B,Hi]
+        ttnn.deallocate(q_resid)
+        q_lat = self._absorb_q(q)  # [1,H,B,L]
+        outs = []
+        for u in range(B):
+            a = positions[u]
+            self._write_tail_ring(
+                cache,
+                u,
+                ttnn.slice(k_idx, [0, 0, u, 0], [1, 1, u + 1, D]),
+                ttnn.slice(g_idx, [0, 0, u, 0], [1, 1, u + 1, D]),
+                [a],
+            )
+            # pool p = (a+1)//P - 1 from the ring (tokens P*p .. P*p+P-1 sit in slots 0..P-1 when complete)
+            p_id = max((a + 1) // P - 1, 0)
+            ring_k = ttnn.slice(cache.index.tail_k, [u, 0, 0, 0], [u + 1, 1, P, D])
+            ring_g = ttnn.slice(cache.index.tail_g, [u, 0, 0, 0], [u + 1, 1, P, D])
+            pooled = idx.pool(ring_k, ring_g)  # [1,1,1,D]
+            pooled_sh = ttnn.to_memory_config(
+                ttnn.reshape(pooled, [1, 1, 1, D]),
+                ttnn.create_sharded_memory_config(
+                    shape=(TILE, D),
+                    core_grid=ttnn.num_cores_to_corerangeset(1, grid, row_wise=True),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    use_height_and_width_as_shard_shape=True,
+                ),
+            )
+            pool_row = ttnn.from_torch(
+                torch.tensor([p_id], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
+            # write only user u's slot: use a page table view restricted to that user
+            ttnn.experimental.paged_update_cache(
+                cache.index.pool_cache,
+                pooled_sh,
+                update_idxs_tensor=pool_row,
+                page_table=ttnn.slice(cache.index.page_table, [u, 0], [u + 1, cache.index.pool_blocks]),
+            )
+            n_pools_valid = (a + 1) // P
+            # indexer_score_dsa wants a tile-aligned query block and chunk start: score the 32 positions
+            # [a - a%32, a - a%32 + 32) with this user's query placed at row r = a % 32 (zero rows elsewhere,
+            # scored but discarded) and keep row r of the selection
+            start, r = a - a % TILE, a % TILE
+            qu = self._place_row(ttnn.slice(q_i, [0, 0, u, 0], [1, idx.Hi, u + 1, D]), r)
+            wu = self._place_row(ttnn.slice(w_i, [0, 0, u, 0], [1, 1, u + 1, idx.Hi]), r)
+            indices32 = idx.select(
+                qu, wu, cache.index, u, query_start=start, num_pools_valid=n_pools_valid
+            )  # [1,1,32,W]
+            indices = ttnn.slice(indices32, [0, 0, r, 0], [1, 1, r + 1, indices32.shape[-1]])
+            q_rm = ttnn.to_layout(ttnn.slice(q_lat, [0, 0, u, 0], [1, self.H, u + 1, self.L]), ttnn.ROW_MAJOR_LAYOUT)
+            kv_rm = cache.user_rows_rm(u, a + 1)
+            o_rm = ttnn.transformer.sparse_sdpa(
+                q_rm,
+                kv_rm,
+                indices,
+                v_dim=self.L,
+                kv_format=ttnn.transformer.SparseKVFormat.BF16,
+                scale=self.scale,
+                k_chunk_size=128,
+            )  # [1,H,1,L]
+            ttnn.deallocate(kv_rm)
+            outs.append(ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT))
+        o_lat = outs[0] if B == 1 else ttnn.concat(outs, dim=-2)  # [1,H,B,L]
+        return self._unabsorb_o(o_lat)
+
+    # ---------------------------------------------------------------------- decode
+    def decode_forward(
+        self, x: ttnn.Tensor, cache: TtLatentCache, positions: ttnn.Tensor, host_positions: list[int] | None = None
+    ) -> ttnn.Tensor:
+        """x [1,1,B,4096] (one token per user), positions [B] int32 row-major (the token's
+        position = current context length). Appends the latent and attends over [0, pos].
+        With ``host_positions`` and any position >= index_topk the sparse (indexer) path runs."""
+        B = x.shape[-2]
+        if host_positions is not None and max(host_positions) >= self.sparse_from:
+            return self.decode_forward_sparse(x, cache, host_positions)
         H, Dq, Dv, L = self.H, self.Dq, self.Dv, self.L
         q = self._q(x)  # [1,1,B,H*Dq]
         c = self._latent(x)  # [1,1,B,L]

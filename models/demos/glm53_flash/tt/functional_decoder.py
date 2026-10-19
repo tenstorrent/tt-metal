@@ -154,9 +154,15 @@ class FunctionalDecoder(LightweightModule):
             self._write_user_kda_state(user, new_state.kda)
         return out
 
-    def decode_forward(self, streams: ttnn.Tensor, *, positions: ttnn.Tensor) -> ttnn.Tensor:
+    def decode_forward(
+        self, streams: ttnn.Tensor, *, positions: ttnn.Tensor, host_positions: list[int] | None = None
+    ) -> ttnn.Tensor:
+        """``host_positions`` (same values as ``positions``) enables the DSA sparse path for users whose
+        position is >= index_topk; it is host-side chunk geometry, so that path is not traced."""
         B = streams.shape[-2]
-        out, new_state = self.layer.decode_forward(streams, self._state_for_decode(B), positions=positions)
+        out, new_state = self.layer.decode_forward(
+            streams, self._state_for_decode(B), positions=positions, host_positions=host_positions
+        )
         if self.layer.is_kda:
             assert new_state.kda is self.kda_batched, "KDA decode must update the persistent state in place"
         return out
