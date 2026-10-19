@@ -2001,22 +2001,34 @@ class TPGatedDeltaNet:
                 self._conv_taps_stale = False
                 self._conv_win_stale = True
             ttnn.deallocate(conv_new_state)
+        out = self._prefill_out_tail(o, z, T, o_head_major=self._gdn_fuse_out)
+        if return_state:
+            return out, captured[0], captured[1]
+        return out
+
+    def _prefill_out_tail(self, o, z, M, o_head_major, B=1):
+        """Prefill out-projection tail on M token rows: per-head gated RMSNorm, SiLU(z) gate, row-parallel
+        out-proj (column-parallel AGMM / fused MMRS / matmul + all-reduce) -> [1,1,M,dim(/tp)].
+
+        o: the recurrence output. o_head_major=True: [1*Nv, M, Dv] head-major (return_o_bh=True, B=1 only);
+        False: token-major [B, T, Nv, Dv] with B*T == M. z: [1, M, value_dim_tp] (consumed)."""
+        tw, Nv, Dv = self.tw, self.Nv, self.Dv
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
         _L1 = ttnn.L1_MEMORY_CONFIG
-        if self._gdn_fuse_out:
+        if o_head_major:
             # Fuse adapter relayout with per-head rms_norm + head-flatten.
             # TILE-native head->token relayout (transpose + fold), dropping the
             # TILE->ROW_MAJOR->TILE round-trip. o is head-major (1,Nv,T,Dv).
             n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
             ttnn.deallocate(o)
-            n = ttnn.reshape(n, (1, Nv, T, Dv))
-            # Fused head->token relayout: [1,Nv,T,Dv] -> [1,1,T,Nv*Dv].
+            n = ttnn.reshape(n, (B, Nv, M // B, Dv))
+            # Fused head->token relayout: [B,Nv,T,Dv] -> [B,1,T,Nv*Dv] (rows stay user-major, token order).
             n = ttnn.experimental.nlp_concat_heads(n, memory_config=_L1)
-            out_f = ttnn.reshape(n, (1, T, self.value_dim_tp))
+            out_f = ttnn.reshape(n, (1, M, self.value_dim_tp))
         else:
             out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
             ttnn.deallocate(o)
-            out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp), memory_config=_L1)
+            out_f = ttnn.reshape(out_n, (1, M, self.value_dim_tp), memory_config=_L1)
             ttnn.deallocate(out_n)
         if self._out_colpar_prefill:
             # Column-parallel out-proj: the gate multiply emits the AGMM input directly as bf16 (the
@@ -2036,27 +2048,23 @@ class TPGatedDeltaNet:
                 persistent_output_buffer=tpc.agmm_gather_buffer(self.tt_ccl, gated),
             )
             ttnn.deallocate(gated)
-            if return_state:
-                return out, captured[0], captured[1]
             return out
         gated = _silu_mul(out_f, z, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
         # Prefill: fused out-proj matmul + reduce-scatter (matmul_reduce_scatter_async), flag-gated.
         if self._fuse_out_mmrs_prefill:
-            x_out = ttnn.reshape(gated, (1, 1, T, gated.shape[-1]))
+            x_out = ttnn.reshape(gated, (1, 1, M, gated.shape[-1]))
             # fp32 output is load-bearing: o_proj is row-parallel, so the RS SUMS 4 per-device partials
             # across devices — bf16 there tanks PCC to ~0.69 even at ISL 2048 (test_oproj_dtype_isl). Keep fp32.
             out = tpc.matmul_reduce_scatter_prefill(
                 x_out, tw["out"], self.tt_ccl, self.cfg, self.args.ccl_topology(), self.args.num_devices, ttnn.float32
             )
             ttnn.deallocate(gated)
-            if return_state:
-                return out, captured[0], captured[1]
             return out
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
-        partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))
+        partial = ttnn.reshape(partial, (1, 1, M, partial.shape[-1]))
         out = tt_all_reduce(
             partial,
             self.mesh,
@@ -2066,9 +2074,169 @@ class TPGatedDeltaNet:
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        if return_state:
-            return out, captured[0], captured[1]
         return out
+
+    # ------------------------------------------------------------------ #
+    # Grouped (batched) short prefill: Bg users x Tb bucket rows in ONE pass, from scratch, trace-safe.
+    # ------------------------------------------------------------------ #
+    def alloc_group_scratch(self, Bg, zero_rec=None):
+        """Allocate the persistent state outputs of forward_prefill_group for a group of `Bg` users, like
+        reset_state allocates the B=1 scratch but WITHOUT touching self.* bindings: ``rec`` [Bg, Nv, Dk, Dv]
+        (fp32 unless QWEN35_GDN_STATE_BF16=1, the reset_state rule) and ``conv`` = K tensors [1, Bg, C] bf16
+        TILE (the B=1 conv_states format with Bg rows; conv[0] is the shifted-out zero and stays zero, conv[m]
+        row u = user u's conv-input row valid_len-K+m). Host writes: call before any trace capture.
+
+        ``zero_rec``: optional shared read-only fp32 zero [Bg, Nv, Dk, Dv] used as the fused op's initial_state (the
+        op only reads it). The model passes ONE buffer per Bg for all layers; when None a private one is allocated
+        (then the caller owns freeing it via scratch.zero_rec)."""
+        from types import SimpleNamespace
+
+        rep = ttnn.ReplicateTensorToMesh(self.mesh)
+
+        def z(shape, dtype):
+            return ttnn.from_torch(
+                torch.zeros(*shape, dtype=torch.float32 if dtype == ttnn.float32 else torch.bfloat16),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=rep,
+            )
+
+        rec_dtype = ttnn.bfloat16 if os.environ.get("QWEN35_GDN_STATE_BF16") == "1" else ttnn.float32
+        return SimpleNamespace(
+            Bg=Bg,
+            rec=z((Bg, self.Nv, self.Dk, self.Dv), rec_dtype),
+            # persistent fp32 zero initial state: the op's own fallback (ttnn.zeros) is a host upload, illegal under trace
+            zero_rec=zero_rec if zero_rec is not None else z((Bg, self.Nv, self.Dk, self.Dv), ttnn.float32),
+            conv=[z((1, Bg, self.qkv_dim_tp), ttnn.bfloat16) for _ in range(self.K)],
+        )
+
+    def _kda_conv_group(self, qkv, conv_sel, zeros_pad):
+        """KDA conv + SiLU + q/k/v split for Bg users, each its own from-scratch (zero-history) sequence.
+
+        The KDA op is batch-1, so the rows are laid out back to back with a zero block after each user (pad
+        and slice): [Bg,Tb,C] ++ zeros_pad [Bg,32,C] -> [Bg,Tb+32,C] -> [1,Bg*(Tb+32),C], ONE call with the zero
+        history, then back to [Bg,Tb+32,*] and sliced to [:, :Tb]. User i+1's first K-1 rows see the K-1 last
+        (zero) rows of user i's pad, exactly the zero history of a B=1 call -> bit-identical to B=1.
+        Only ops run here (the persistent zero block comes from the caller), so this is trace-safe.
+
+        qkv:       [Bg, Tb, C] bf16 TILE (DRAM preferred), Tb a multiple of 32.
+        conv_sel:  [Bg, K-1, Tb] bf16 TILE one-hot of each row's last K-1 real conv-input rows.
+        zeros_pad: [Bg, 32, C] bf16 TILE zeros (persistent).
+        Returns q [Bg,Tb,Q], k [Bg,Tb,K], v [Bg,Tb,V] bf16 TILE DRAM and new_state [Bg, K-1, C] bf16 TILE
+        DRAM = matmul(conv_sel, qkv) (the same exact one-hot select kda_conv_prefill does at B=1)."""
+        self._ensure_kda_consts()
+        Bg, Tb, C = qkv.shape[0], qkv.shape[1], qkv.shape[2]
+        n_hist = self.K - 1
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        assert Tb % 32 == 0, Tb
+        assert tuple(zeros_pad.shape) == (Bg, 32, C), (tuple(zeros_pad.shape), (Bg, 32, C))
+        assert tuple(conv_sel.shape) == (Bg, n_hist, Tb), (tuple(conv_sel.shape), (Bg, n_hist, Tb))
+        Tp = Tb + 32
+        kd, vd = self.key_dim_tp, self.value_dim_tp
+        qkv_d = qkv if qkv.memory_config().buffer_type == ttnn.BufferType.DRAM else ttnn.to_memory_config(qkv, _dram)
+        padded = ttnn.concat([qkv_d, zeros_pad], dim=1, memory_config=_dram)  # [Bg, Tb+32, C]
+        flat = ttnn.reshape(padded, (1, Bg * Tp, C))
+        q, k, v, _ = kda_conv_prefill(
+            flat,
+            Bg * Tp,
+            self._kda_zero_history,
+            self.tw["conv_taps"],
+            (kd, kd, vd),
+            self._kda_actual_start,
+            emit_state=False,
+        )
+        ttnn.deallocate(padded)
+        outs = []
+        for t in (q, k, v):
+            w = t.shape[-1]
+            t3 = ttnn.reshape(t, (Bg, Tp, w))
+            outs.append(ttnn.slice(t3, (0, 0, 0), (Bg, Tb, w), memory_config=_dram))
+            ttnn.deallocate(t)
+        new_state = ttnn.matmul(
+            conv_sel, qkv_d, memory_config=_dram, compute_kernel_config=exact_select_cfg(), dtype=ttnn.bfloat16
+        )
+        if qkv_d is not qkv:
+            ttnn.deallocate(qkv_d)
+        return outs[0], outs[1], outs[2], new_state
+
+    def forward_prefill_group(self, x, Bg, Tb, masks, scratch, chunk_size=128):
+        """Prefill Bg users (each right-padded to the bucket Tb, from scratch) in ONE pass.
+
+        x:       [1, 1, Bg*Tb, dim/tp] K-sharded like forward_prefill's (row u*Tb + t = user u, token t).
+        masks:   dict of PERSISTENT device tensors: "bg" [Bg,Tb,1] fp32 TILE (1 for t < valid_len_u),
+                 "conv_sel" [Bg,K-1,Tb] bf16 TILE, "zeros_pad" [Bg,32,C] bf16 TILE zeros (and optionally "qkv").
+        scratch: alloc_group_scratch(Bg). Receives user u's final recurrent state (rec[u]) and conv taps
+                 (conv[m][0,u] for m = 1..K-1) IN PLACE; self.rec_state / conv_states / B are never touched.
+        Returns the gated, out-projected output [1, 1, Bg*Tb, dim(/tp)] (rows beyond a user's valid_len are
+        padding garbage). Allocates nothing persistent and uploads nothing from the host: trace-safe given
+        warm-up (agmm gather buffers) and persistent masks/scratch."""
+        from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import (
+            chunk_gated_delta_rule_fused_adapter,
+            fused_chunk_enabled,
+        )
+
+        assert fused_chunk_enabled() and self._gdn_kda_conv, "forward_prefill_group needs the fused chunk op + KDA conv"
+        assert scratch.Bg == Bg, (scratch.Bg, Bg)
+        Nk, Nv, Dk, Dv = self.Nk, self.Nv, self.Dk, self.Dv
+        C, kd = self.qkv_dim_tp, self.key_dim_tp
+        if len(x.shape) == 4:
+            x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
+        M = x.shape[1]
+        assert M == Bg * Tb, (M, Bg, Tb)
+
+        # Projection is per token: run it over all M rows, then split the user dim back out (DRAM outputs).
+        qkv_f, z, a, b = self._project_qkvzab(x, M)
+        qkv = ttnn.reshape(qkv_f, (Bg, Tb, C))
+        q, k, v, conv_new_state = self._kda_conv_group(qkv, masks["conv_sel"], masks["zeros_pad"])
+        ttnn.deallocate(qkv)
+        if self._gdn_flat_qkv:
+            _qkv_head_dims = (Nk, Dk, Nv, Dv)
+        else:
+            q = ttnn.reshape(q, (Bg, Tb, Nk, Dk))
+            k = ttnn.reshape(k, (Bg, Tb, Nk, Dk))
+            v = ttnn.reshape(v, (Bg, Tb, Nv, Dv))
+            _qkv_head_dims = None
+        beta = ttnn.reshape(ttnn.sigmoid(b), (Bg, Tb, Nv))
+        ttnn.deallocate(b)
+        g = ttnn.reshape(ttnn.multiply(self.tw["neg_exp_A"], _softplus_add(a, self.tw["dt_bias"])), (Bg, Tb, Nv))
+        ttnn.deallocate(a)
+
+        o, final_state = chunk_gated_delta_rule_fused_adapter(
+            q,
+            k,
+            v,
+            beta,
+            g,
+            chunk_size=chunk_size,
+            scale=self.scale,
+            initial_state=scratch.zero_rec,
+            device=self.mesh,
+            valid_len=None,
+            qkv_head_dims=_qkv_head_dims,
+            return_o_bh=self._gdn_fuse_out,
+            const_tiles=self._fused_const_tiles,
+            # NOT self.gdn_program_config (a B=1 prefill-geometry knob): at Bg*Nv rows the op's own fused/phased
+            # dispatch picks (Bg=4: fused; Bg=8: BH=96 phased).
+            program_config=None,
+            wy_inverse=self.gdn_wy_inverse,
+            masks=(masks["bg"], masks.get("qkv")),
+        )
+
+        # ---- state outputs, in place into the persistent group scratch ----
+        rec_src = (
+            final_state if final_state.dtype == scratch.rec.dtype else ttnn.typecast(final_state, scratch.rec.dtype)
+        )
+        ttnn.copy(rec_src, scratch.rec)
+        if rec_src is not final_state:
+            ttnn.deallocate(rec_src)
+        ttnn.deallocate(final_state)
+        for m in range(1, self.K):
+            src = ttnn.reshape(ttnn.slice(conv_new_state, (0, m - 1, 0), (Bg, m, C)), (1, Bg, C))
+            ttnn.copy(src, scratch.conv[m])
+        ttnn.deallocate(conv_new_state)
+
+        return self._prefill_out_tail(o, z, M, o_head_major=self._gdn_fuse_out, B=Bg)
 
     def forward_prefill_collect(self, x, chunk_size=128, valid_len=None):
         """Per-user prefill that stashes this user's B=1 state for later assembly.

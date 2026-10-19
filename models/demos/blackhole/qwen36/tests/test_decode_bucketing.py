@@ -434,6 +434,7 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatc
         _chunked_trace_id=None,
         _prefix_cache=None,
         short_prefill_trace_enabled=lambda: False,
+        batched_prefill_enabled=lambda: False,  # existing per-user paths only
     )
 
     def record(device):

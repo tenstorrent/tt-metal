@@ -831,6 +831,30 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         prev = model._bind_gdn_prefill_scratch() if batched else None
         try:
             model.prepare_prefill_trace_chunked(self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK)
+            grouped = (
+                batched
+                and model.batched_prefill_enabled()
+                and model._lmhead_vocab_sharded
+                and model._short_trace_masks_supported()
+            )
+            if grouped and not enable_trace:
+                # Grouped short prefill (QWEN36_BATCHED_PREFILL=1): allocate ALL its persistent state (group GDN
+                # scratch, per-(bucket, Bg) inputs) and run its body eagerly (compile + lazily-keyed buffers) HERE, in
+                # the eager pass, before any trace is parked; the trace pass below only captures.
+                model.prefill_trash_block = 0
+                try:
+                    model.prepare_prefill_batched_short(self.mesh_device, page_table)
+                except Exception as e:  # e.g. RuntimeError "TT_FATAL ... Out of Memory": keep serving per-user
+                    logger.warning(
+                        f"Grouped short prefill disabled for this session: prepare_prefill_batched_short failed "
+                        f"({'out of DRAM' if 'out of memory' in str(e).lower() else type(e).__name__}): {e}"
+                    )
+                    try:
+                        model.release_prefill_batched_short()
+                    except Exception as e2:
+                        logger.warning(f"release_prefill_batched_short after failed prepare also raised: {e2}")
+                    model._batched_short_unavailable = True
+                    grouped = False
             if enable_trace:
                 model.record_prefill_trace_chunked(self.mesh_device)
                 # Traced short prefill for ANY prompt length < 2048 (QWEN36_PREFILL_BUCKET_TRACE, default 1): one B=1 trace
@@ -842,6 +866,11 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 if model.short_prefill_trace_enabled() and model.num_devices > 1 and model._lmhead_vocab_sharded:
                     model.prefill_trash_block = 0
                     model.capture_prefill_traces_short(self.mesh_device, page_table)
+                if grouped:
+                    # One trace per (bucket, Bg) of the grouped body + one row-extract trace per (Bg, row), right after
+                    # the chunk / short traces (everything they need was prepared in the eager pass).
+                    model.prefill_trash_block = 0
+                    model.record_prefill_trace_batched_short(self.mesh_device)
         finally:
             if prev is not None:
                 model._unbind_gdn_prefill_scratch(prev)

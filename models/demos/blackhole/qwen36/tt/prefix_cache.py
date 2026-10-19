@@ -53,7 +53,21 @@ class GdnPrefixStateCache:
     def __init__(self, model, num_slots=None, name="GDN prefix-state cache"):
         self.model = model
         self.name = name
-        self.num_slots = int(num_slots if num_slots is not None else os.environ.get("QWEN36_PREFIX_CACHE_SLOTS", "32"))
+        if num_slots is not None:
+            self.num_slots = int(num_slots)
+            why = "explicit num_slots argument"
+        elif "QWEN36_PREFIX_CACHE_SLOTS" in os.environ:
+            self.num_slots = int(os.environ["QWEN36_PREFIX_CACHE_SLOTS"])
+            why = "QWEN36_PREFIX_CACHE_SLOTS"
+        elif (
+            os.environ.get("QWEN36_BATCHED_PREFILL", "1") == "1"
+        ):  # same semantics as Qwen36Model.batched_prefill_enabled
+            self.num_slots = 16
+            why = "default 16 because batched prefill is on (QWEN36_BATCHED_PREFILL!=0) and needs DRAM for its persistent state (32 otherwise)"
+        else:
+            self.num_slots = 32
+            why = "default 32"
+        logger.info(f"{self.name}: using {self.num_slots} slots ({why}).")
         assert self.num_slots >= 1
         self.debug = os.environ.get("QWEN36_PREFIX_CACHE_DEBUG", "0") == "1"
         # The B=1 scratch (and its init buffers) must exist first: the slots mirror its shapes.

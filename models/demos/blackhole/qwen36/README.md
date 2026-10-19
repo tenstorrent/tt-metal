@@ -261,7 +261,11 @@ single-device paths ignore `start_pos` and recompute from 0.
 | Env var | Default | Meaning |
 |---|---|---|
 | `QWEN36_PREFIX_CACHE` | `1` | advertise `supports_prefix_caching` and build the snapshot cache (`0` disables) |
-| `QWEN36_PREFIX_CACHE_SLOTS` | `32` | snapshot slots, allocated before trace capture: about 19 MB of DRAM per device per slot at TP=8, about 38 MB at TP=4. 32 fits next to the default BFP8 gate/up weights and the 1.05M-token KV pool on P150x4; 64 runs out of DRAM there |
+| `QWEN36_PREFIX_CACHE_SLOTS` | `16`, or `32` when `QWEN36_BATCHED_PREFILL=0` | snapshot slots (the 16 default with batched prefill leaves ~0.6 GB/chip for its persistent state; an explicit value always wins), allocated before trace capture: about 19 MB of DRAM per device per slot at TP=8, about 38 MB at TP=4. 32 fits next to the default BFP8 gate/up weights and the 1.05M-token KV pool on P150x4; 64 runs out of DRAM there |
+| `QWEN36_BATCHED_PREFILL` | `1` | `1` groups short fresh prompts (text, start 0, bucket in `_BUCKETS`) of one `prefill_paged_slots` call into a single forward; allocates persistent state at vLLM warmup (if that allocation fails the server logs a warning and falls back to per-user prefill; `0` disables). vLLM on QB2, 32 concurrent 128-token prompts: TTFT 3.0 s -> 1.3 s, output tok/s 537 -> 691, outputs identical |
+| `QWEN36_BATCHED_PREFILL_BG` | `4,8` | group sizes (rows per grouped forward; smaller remainders pad with dummy rows) |
+| `QWEN36_BATCHED_PREFILL_BUCKETS` | `128,256` | prompt-length buckets served by grouped prefill |
+| `QWEN36_BATCHED_PREFILL_TRACE` | `1` | capture one trace per (bucket, Bg) of the grouped body at warmup (`0` keeps it eager) |
 | `QWEN36_PREFIX_SNAPSHOT_MIN_LEN` | `8192` | minimum prompt length for the end-of-prompt snapshot (a prefill split); shorter prompts save at the last full-chunk boundary instead |
 | `QWEN36_PREFIX_SNAPSHOT_STRIDE` | `8192` | snapshot every N tokens (chunk boundaries, relative to the resume point) |
 | `QWEN36_PREFIX_CACHE_DEBUG` | `0` | `1` logs one line per prefix-cached prefill (hit position, saves, stats) |

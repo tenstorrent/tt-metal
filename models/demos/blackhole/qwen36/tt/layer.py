@@ -193,7 +193,12 @@ class Qwen36DecoderLayer:
         n_users=1,
         state_blk_idx=None,
         conv_sel=None,
+        prefill_group=None,
     ):
+        # prefill_group (TP prefill only): dict for a GROUPED short prefill of Bg users x Tb bucket rows laid out
+        # user-major in x [1,1,Bg*Tb,dim]: keys Bg, Tb, cos, sin, csi, full_pts / chunk_pts (per-user device page
+        # tables), gdn_masks, gdn_scratch ({id(gdn layer): alloc_group_scratch(Bg)}). Full attention runs per user on
+        # its row slice (own KV pages), GDN runs once for the whole group (forward_prefill_group).
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
@@ -251,7 +256,28 @@ class Qwen36DecoderLayer:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
             # output is fractured along dim=3. cos/sin are in rope_tp format.
             if self.is_full_attention:
-                if mode == "prefill":
+                if mode == "prefill" and prefill_group is not None:
+                    pg = prefill_group
+                    Bg, Tb = pg["Bg"], pg["Tb"]
+                    D = attn_input.shape[-1]
+                    outs = []
+                    for i in range(Bg):
+                        xi = ttnn.slice(attn_input, (0, 0, i * Tb, 0), (1, 1, (i + 1) * Tb, D))
+                        oi = self.attention.forward_prefill_paged(
+                            xi,
+                            pg["cos"],
+                            pg["sin"],
+                            pg["full_pts"][i],
+                            chunk_page_table=pg["chunk_pts"][i],
+                            chunk_start_idx=0,
+                            chunk_start_idx_tensor=pg["csi"],
+                        )
+                        ttnn.deallocate(xi)
+                        outs.append(oi)
+                    attn_output = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    for oi in outs:
+                        ttnn.deallocate(oi)
+                elif mode == "prefill":
                     # Contract/vLLM path supplies a page_table → paged KV prefill; the
                     # demo path (no page_table) uses the internal concat caches.
                     if page_table is not None:
@@ -288,7 +314,17 @@ class Qwen36DecoderLayer:
             else:
                 # GDN carries its recurrent/conv state internally (capture_state on
                 # prefill, read on decode); it has no paged KV, so page_table is N/A.
-                if mode == "prefill":
+                if mode == "prefill" and prefill_group is not None:
+                    pg = prefill_group
+                    attn_output = self.attention.forward_prefill_group(
+                        attn_input,
+                        pg["Bg"],
+                        pg["Tb"],
+                        pg["gdn_masks"],
+                        pg["gdn_scratch"][id(self.attention)],
+                        chunk_size=chunk_size,
+                    )
+                elif mode == "prefill":
                     if gdn_recurrent and gdn_seed:
                         # Spec-decode seed: the verify's conv1d + fused recurrent arithmetic, run
                         # against the durable state and without the deferred-commit selectors.

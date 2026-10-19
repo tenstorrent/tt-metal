@@ -1515,3 +1515,217 @@ def test_gdn_tp_fused_batched_decode_trace(mesh_device, Bmax, width, reset_seeds
     assert torch.equal(eager_rec, replay_rec), "traced decode rec_state differs from the eager step"
     assert torch.equal(eager_hist, replay_hist), "traced decode conv history differs from the eager step"
     logger.info(f"PASSED: traced fused batched GDN decode Bmax={Bmax} width={width} == eager")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Grouped short prefill (Bg users x bucket Tb in one pass): TPGatedDeltaNet.forward_prefill_group / _kda_conv_group
+# against the existing B=1 masked prefill, row by row.
+# ---------------------------------------------------------------------------------------------------------------
+
+
+def _group_valid_lens(Bg, Tb, seed):
+    """Per-row valid lengths drawn from {1, 2, 3, Tb-1, Tb, random}, deterministic. The LAST row is the dummy row
+    the model pads a group with (valid_len 1)."""
+    import random
+
+    rng = random.Random(seed)
+    pool = [1, 2, 3, Tb - 1, Tb, rng.randint(4, Tb - 2)]
+    rng.shuffle(pool)
+    lens = [pool[i % len(pool)] for i in range(Bg - 1)] + [1]
+    return lens
+
+
+def _mask_torch(lens, Tb, n_hist=3):
+    """(bg [B,Tb,1] fp32, conv_sel [B,n_hist,Tb] fp32 0/1): the same construction as model._short_trace_host_torch."""
+    B = len(lens)
+    bg = torch.zeros(B, Tb, 1, dtype=torch.float32)
+    conv_sel = torch.zeros(B, n_hist, Tb, dtype=torch.float32)
+    for u, vl in enumerate(lens):
+        bg[u, :vl, :] = 1.0
+        for j in range(n_hist):
+            i = vl - n_hist + j
+            if i >= 0:
+                conv_sel[u, j, i] = 1.0
+    return bg, conv_sel
+
+
+def _rep_dev(mesh, t, dtype, layout=ttnn.TILE_LAYOUT):
+    return ttnn.from_torch(t, dtype=dtype, layout=layout, device=mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+
+
+def _all_devs(t):
+    """[n_dev, ...] torch stack of every device's copy (heads/channels differ per device, so compare all of them)."""
+    return torch.stack([ttnn.to_torch(d) for d in ttnn.get_device_tensors(t)])
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("Tb", [128, 256], ids=lambda t: f"Tb{t}")
+@pytest.mark.parametrize("Bg", [2, 4, 8], ids=lambda b: f"Bg{b}")
+@pytest.mark.parametrize("weights", ["checkpoint", "random"])
+def test_gdn_prefill_group_matches_per_row(mesh_device, Bg, Tb, weights, reset_seeds, ensure_gc, request):
+    """forward_prefill_group (Bg users, one pass) == Bg B=1 masked forward_prefill calls (from zero state).
+
+    Per row (valid_len drawn from {1, 2, 3, Tb-1, Tb, random}; the last row is a valid_len-1 dummy): final
+    recurrent state and the new conv state must equal the B=1 call's bit for bit (every device), the output rows
+    [:valid_len] must have PCC > 0.9999. Then the group is re-run with different garbage in the dummy row: every
+    other row's output / state / conv must be unchanged bit for bit (dummy rows cannot perturb real rows).
+    Bg=8 -> BH=96 (the op's phased path), Bg=4 -> BH=48 (fused path)."""
+    os.environ.setdefault("HF_MODEL", model_path())
+    mesh = mesh_device
+    nd = mesh.get_num_devices()
+    args = Qwen36ModelArgs(mesh, max_batch_size=1, max_seq_len=2048)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li) if weights == "checkpoint" else random_gdn_state_dict(args, seed=li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh) if nd > 1 else None
+    tw = load_gdn_weights_tp(mesh, sd, args)
+    gdn = TPGatedDeltaNet(mesh, args, tw, tt_ccl)
+    gdn.reset_state()
+    C, K1 = gdn.qkv_dim_tp, gdn.K - 1
+    comp = tp_composer(mesh)
+    lens = _group_valid_lens(Bg, Tb, seed=1000 + 10 * Bg + Tb)
+    dummy = Bg - 1
+    logger.info(f"Bg={Bg} Tb={Tb} weights={weights} valid_lens={lens}")
+
+    torch.manual_seed(4242 + Bg + Tb)
+    x = torch.randn(Bg, Tb, args.dim, dtype=torch.bfloat16)  # rows beyond valid_len are garbage on purpose
+
+    # ---- reference: B=1 masked prefill per row ----
+    bg_t, sel_t = _mask_torch(lens, Tb)
+    ref = []
+    for i in range(Bg):
+        masks_i = {
+            "bg": _rep_dev(mesh, bg_t[i : i + 1], ttnn.float32),
+            "conv_sel": _rep_dev(mesh, sel_t[i : i + 1], ttnn.bfloat16),
+        }
+        x_i = shard_to_device(mesh, x[i].reshape(1, 1, Tb, args.dim), dim=-1)
+        out, fs, cs = gdn.forward_prefill(x_i, chunk_size=128, prefill_masks=masks_i, return_state=True)
+        ref.append(
+            {
+                "out": ttnn.to_torch(out, mesh_composer=comp)[0, 0].float(),  # [Tb, dim]
+                "rec": _all_devs(fs),  # [nd, 1, Nv, Dk, Dv]
+                "conv": _all_devs(cs),  # [nd, 1, 3, C]
+            }
+        )
+        for t in (out, fs, cs, x_i, masks_i["bg"], masks_i["conv_sel"]):
+            ttnn.deallocate(t)
+
+    # ---- group ----
+    scratch = gdn.alloc_group_scratch(Bg)
+    masks = {
+        "bg": _rep_dev(mesh, bg_t, ttnn.float32),
+        "conv_sel": _rep_dev(mesh, sel_t, ttnn.bfloat16),
+        "zeros_pad": _rep_dev(mesh, torch.zeros(Bg, 32, C, dtype=torch.bfloat16), ttnn.bfloat16),
+    }
+
+    def run_group(xg):
+        x_tt = shard_to_device(mesh, xg.reshape(1, 1, Bg * Tb, args.dim), dim=-1)
+        out = gdn.forward_prefill_group(x_tt, Bg, Tb, masks, scratch)
+        o = ttnn.to_torch(out, mesh_composer=comp)[0, 0].float()  # [Bg*Tb, dim]
+        ttnn.deallocate(out)
+        ttnn.deallocate(x_tt)
+        rec = _all_devs(scratch.rec)  # [nd, Bg, Nv, Dk, Dv]
+        conv = [_all_devs(scratch.conv[m]) for m in range(gdn.K)]  # K x [nd, 1, Bg, C]
+        return o, rec, conv
+
+    o1, rec1, conv1 = run_group(x)
+
+    thr = 0.9999
+    problems = []
+    for i in range(Bg):
+        vl = lens[i]
+        rec_eq = torch.equal(rec1[:, i : i + 1], ref[i]["rec"])
+        rec_diff = (rec1[:, i : i + 1].float() - ref[i]["rec"].float()).abs().max().item()
+        conv_eq = all(torch.equal(conv1[m][:, 0, i : i + 1], ref[i]["conv"][:, 0, m - 1 : m]) for m in range(1, gdn.K))
+        zero0 = torch.count_nonzero(conv1[0]).item() == 0
+        got = o1[i * Tb : i * Tb + vl]
+        pcc = compute_pcc(ref[i]["out"][:vl], got)
+        out_eq = torch.equal(ref[i]["out"][:vl], got)
+        logger.info(
+            f"row {i} vl={vl}: rec bit-exact={rec_eq} (max-abs {rec_diff:.3e}) conv bit-exact={conv_eq} "
+            f"conv[0] zero={zero0} out pcc={pcc:.6f} out bit-exact={out_eq}"
+        )
+        if not rec_eq:
+            problems.append(f"row {i} vl={vl}: rec state differs (max-abs {rec_diff:.3e})")
+        if not conv_eq:
+            problems.append(f"row {i} vl={vl}: conv new state differs")
+        if not zero0:
+            problems.append(f"row {i}: conv[0] not zero")
+        if not pcc >= thr:
+            problems.append(f"row {i} vl={vl}: output pcc {pcc:.6f} < {thr}")
+
+    # ---- dummy-row / padding isolation: new garbage in the dummy row only ----
+    x2 = x.clone()
+    x2[dummy] = torch.randn(Tb, args.dim, dtype=torch.bfloat16) * 3.0
+    o2, rec2, conv2 = run_group(x2)
+    real = [i for i in range(Bg) if i != dummy]
+    for i in real:
+        if not torch.equal(o1[i * Tb : (i + 1) * Tb], o2[i * Tb : (i + 1) * Tb]):
+            problems.append(f"row {i}: output changed when the dummy row's input changed")
+        if not torch.equal(rec1[:, i], rec2[:, i]):
+            problems.append(f"row {i}: rec state changed when the dummy row's input changed")
+        for m in range(1, gdn.K):
+            if not torch.equal(conv1[m][:, 0, i], conv2[m][:, 0, i]):
+                problems.append(f"row {i}: conv[{m}] changed when the dummy row's input changed")
+    assert not problems, "\n".join(problems)
+    logger.info(f"PASSED: forward_prefill_group Bg={Bg} Tb={Tb} == per-row B=1 masked prefill")
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("Tb", [128, 256], ids=lambda t: f"Tb{t}")
+@pytest.mark.parametrize("Bg", [2, 4, 8], ids=lambda b: f"Bg{b}")
+def test_kda_conv_group_matches_b1(mesh_device, Bg, Tb, reset_seeds, ensure_gc, request):
+    """_kda_conv_group (pad-and-slice into the batch-1 KDA op) vs the B=1 kda_conv_prefill per row, from a zero
+    history: q/k/v bit-identical on EVERY row, including each user's first K-1 rows (which would read the
+    previous user's tokens if the zero pad did not separate the rows), and new_state (one-hot select) too."""
+    mesh = mesh_device
+    kd, vd = 512, 1536  # 27B at TP4
+    C = 2 * kd + vd
+    widths = (kd, kd, vd)
+    lens = _group_valid_lens(Bg, Tb, seed=2000 + 10 * Bg + Tb)
+    torch.manual_seed(227)
+    x = torch.randn(Bg, Tb, C).to(torch.bfloat16)  # nonzero everywhere, incl. the first rows of each user
+    w = (torch.randn(C, CONV_K) * 0.3).to(torch.bfloat16)
+    taps = _taps(mesh, w)
+
+    gdn = TPGatedDeltaNet.__new__(TPGatedDeltaNet)  # weight-free instance holding only what the method reads
+    gdn.mesh, gdn.K = mesh, CONV_K
+    gdn.qkv_dim_tp, gdn.key_dim_tp, gdn.value_dim_tp = C, kd, vd
+    gdn.tw = {"conv_taps": taps}
+    gdn._kda_actual_start = gdn._kda_zero_history = None
+    gdn._ensure_kda_consts()
+
+    _, sel_t = _mask_torch(lens, Tb)
+    conv_sel = _rep_dev(mesh, sel_t, ttnn.bfloat16)
+    zeros_pad = _rep_dev(mesh, torch.zeros(Bg, 32, C, dtype=torch.bfloat16), ttnn.bfloat16)
+    qkv = _rep_dev(mesh, x, ttnn.bfloat16)
+    gq, gk, gv, gns = gdn._kda_conv_group(qkv, conv_sel, zeros_pad)
+    got = [_dev0(t) for t in (gq, gk, gv, gns)]
+    assert tuple(got[0].shape) == (Bg, Tb, kd) and tuple(got[2].shape) == (Bg, Tb, vd), [tuple(g.shape) for g in got]
+    assert tuple(got[3].shape)[:2] == (Bg, CONV_K - 1), tuple(got[3].shape)
+
+    bad = []
+    for i in range(Bg):
+        qkv_i = _rep_dev(mesh, x[i : i + 1], ttnn.bfloat16)
+        sel_i = _rep_dev(mesh, sel_t[i : i + 1], ttnn.bfloat16)
+        rq, rk, rv, rns = kda_conv_prefill(
+            qkv_i, Tb, gdn._kda_zero_history, taps, widths, gdn._kda_actual_start, conv_sel=sel_i
+        )
+        for label, g, r in zip(("q", "k", "v", "new_state"), got, (rq, rk, rv, rns)):
+            rt = _dev0(r)
+            gt = g[i : i + 1]
+            if not torch.equal(gt, rt):
+                d = (gt.float() - rt.float()).abs().max().item()
+                head = (
+                    (gt[:, :CONV_K].float() - rt[:, :CONV_K].float()).abs().max().item()
+                    if label != "new_state"
+                    else 0.0
+                )
+                bad.append(f"row {i} (vl={lens[i]}) {label}: max-abs {d:.3e} (first K rows {head:.3e})")
+        for t in (qkv_i, sel_i, rq, rk, rv, rns):
+            ttnn.deallocate(t)
+    assert not bad, "\n".join(bad)
+    logger.info(f"PASSED: _kda_conv_group Bg={Bg} Tb={Tb} bit-identical to per-row B=1 conv")
