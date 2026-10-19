@@ -16,6 +16,12 @@ The caches start out full of random values instead of zeros, so a kernel that re
 never wrote, or a key outside the window, shows up as an error. SWA layers get vLLM ``SlidingWindowSpec``
 tables: before each chunk and decode step, every block wholly behind the window points at a shared null
 block (block 0), and blocks past the chunk are not mapped yet.
+
+SWA layers also run a third time, on the tables ``TtMiMoModel`` itself uses (``kv.layer_page_tables``):
+each user gets only the blocks for the window plus one of that row's chunks, and reuses them as the window
+moves, and no fewer than its share of the table width (the pool must be at least as wide as the table).
+On rows 0-2 that is 8 blocks (512 tokens), so the 1333-token prompt cycles through them 2-3 times. That
+run must match the reference, and the no-reuse run, in prefill and decode.
 """
 
 import math
@@ -99,7 +105,8 @@ def set_swa_row(table, slot, lo, hi, window):
 
 
 class Row:
-    """One replica (Galaxy row) with its layer, one-shot and chunked caches, and their page tables."""
+    """One replica (Galaxy row) with its layer and one cache + page table per mode: "oneshot", "chunked",
+    and on SWA layers "cyclic" (the model's own reused blocks)."""
 
     def __init__(self, sm, cfg, layer_idx, weights, dims, r):
         self.plan = plan = MeshPlan(sm)
@@ -115,15 +122,19 @@ class Row:
         if self.window is None:
             tables, num_blocks = kv_lib.page_tables(n, MAX_BATCH, LOGICAL_BLOCKS, TP, self.layer.attn.rep, seed=r)
             self.tables = {"oneshot": tables, "chunked": tables}
+            num_blocks = {"oneshot": num_blocks, "chunked": num_blocks}
         else:
-            num_blocks = 1 + n * LOGICAL_BLOCKS
             full = torch.full((TP, MAX_BATCH, LOGICAL_BLOCKS), NULL_BLOCK, dtype=torch.int32)
             for u in range(n):
                 set_swa_row(full, u, MAX_SEQ, MAX_SEQ, MAX_SEQ)
-            self.tables = {"oneshot": full, "chunked": full.clone().fill_(NULL_BLOCK)}
+            cyclic, cyclic_blocks = kv_lib.layer_page_tables(
+                n, MAX_BATCH, MAX_SEQ, BLOCK, TP, 1, sliding_window=self.window, max_chunk=self.chunk, seed=r
+            )
+            self.tables = {"oneshot": full, "chunked": full.clone().fill_(NULL_BLOCK), "cyclic": cyclic}
+            num_blocks = {"oneshot": 1 + n * LOGICAL_BLOCKS, "chunked": 1 + n * LOGICAL_BLOCKS, "cyclic": cyclic_blocks}
         self.kv = {
-            mode: garbage_cache(plan, num_blocks, dims.head_dim, seed=100 * r + i)
-            for i, mode in enumerate(("oneshot", "chunked"))
+            mode: garbage_cache(plan, num_blocks[mode], dims.head_dim, seed=100 * r + i)
+            for i, mode in enumerate(self.tables)
         }
         self.tables_tt = {}
         for mode in self.tables:
@@ -195,21 +206,27 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
         users.append(dict(x=x, ref=y, hist=hist, ref_k=hist.k.clone(), ref_v=hist.v.clone()))
 
     # ---- prefill: one shot and in chunks, every row enqueued before anything is read
+    chunk_modes = [m for m in rows[0].tables if m != "oneshot"]
     pending = []
     for u, usr in enumerate(users):
         for r, row in enumerate(rows):
-            outs = [row.prefill("oneshot", usr["x"], u, 0)]
-            for s in range(0, usr["x"].shape[0], row.chunk):
-                outs.append(row.prefill("chunked", usr["x"][s : s + row.chunk], u, s))
+            outs = {"oneshot": [row.prefill("oneshot", usr["x"], u, 0)]}
+            for mode in chunk_modes:
+                outs[mode] = [
+                    row.prefill(mode, usr["x"][s : s + row.chunk], u, s) for s in range(0, usr["x"].shape[0], row.chunk)
+                ]
             pending.append((r, u, outs))
 
     worst = dict(chunked=1.0, chunked_delta=1.0, vs_oneshot=1.0, vs_oneshot_delta=1.0, decode=1.0, decode_delta=1.0)
+    worst.update(cyclic=1.0, cyclic_delta=1.0, cyclic_vs_chunked=1.0)  # stay 1.0 on global layers
     for r, u, outs in pending:
         plan, usr = rows[r].plan, users[u]
-        host = [plan.to_torch_replicated(o).float()[0, 0, :n] for o, n in outs]
-        for o, _ in outs:
-            o.deallocate(True)
-        oneshot, chunked = host[0], torch.cat(host[1:])
+        host = {}
+        for mode, chunk_outs in outs.items():
+            host[mode] = torch.cat([plan.to_torch_replicated(o).float()[0, 0, :n] for o, n in chunk_outs])
+            for o, _ in chunk_outs:
+                o.deallocate(True)
+        oneshot, chunked = host["oneshot"], host["chunked"]
         x, y = usr["x"], usr["ref"]
         result = dict(
             chunked=pcc(chunked, y),
@@ -217,6 +234,13 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
             vs_oneshot=pcc(chunked, oneshot),
             vs_oneshot_delta=pcc(chunked - x, oneshot - x),
         )
+        if "cyclic" in host:
+            cyclic = host["cyclic"]
+            result.update(
+                cyclic=pcc(cyclic, y),
+                cyclic_delta=pcc(cyclic - x, y - x),
+                cyclic_vs_chunked=pcc(cyclic - x, chunked - x),
+            )
         for key, value in result.items():
             worst[key] = min(worst[key], value)
         logger.info(
@@ -234,8 +258,8 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
             worst_kv["v_pad"] = max(worst_kv["v_pad"], pad)
     logger.info(f"chunked KV vs reference, worst over rows/users/chips: {worst_kv}")
 
-    # ---- decode from the chunked cache; the same inputs on every row, so one reference serves all four
-    decode_pool = {r: ([], []) for r in range(DP)}
+    # ---- decode from each chunked cache; the same inputs on every row, so one reference serves all four
+    decode_pool = {(r, mode): ([], []) for r in range(DP) for mode in chunk_modes}
     for step in range(DECODE_STEPS):
         pos = torch.full((MAX_BATCH,), -1, dtype=torch.int32)
         x = torch.zeros(MAX_BATCH, cfg.hidden_size)
@@ -266,24 +290,27 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
                 "owner_mask": kv_lib.per_chip(plan, kv_lib.owner_mask(pos, TP, rep), ttnn.bfloat16, ttnn.TILE_LAYOUT),
             }
             mask = replicated(plan, (pos >= 0).bfloat16().reshape(1, 1, -1, 1), ttnn.bfloat16, ttnn.TILE_LAYOUT)
-            outs.append(
-                row.layer.forward_decode(
-                    to_tt(x, plan), rot, cur_pos, row.tables_tt["chunked"], row.kv["chunked"], mask
+            for mode in chunk_modes:
+                outs.append(
+                    (
+                        mode,
+                        row.layer.forward_decode(to_tt(x, plan), rot, cur_pos, row.tables_tt[mode], row.kv[mode], mask),
+                    )
                 )
-            )
-        for r, out in enumerate(outs):
+        for i, (mode, out) in enumerate(outs):
+            r = i // len(chunk_modes)
             got = rows[r].plan.to_torch_replicated(out).float()[0, 0]
             for u, usr in enumerate(users):
                 xd, rd = usr["x_decode"], usr["ref_decode"]
                 p, pd = pcc(got[u], rd), pcc(got[u] - xd, rd - xd)
                 worst["decode"] = min(worst["decode"], p)
-                decode_pool[r][0].append(got[u] - xd)
-                decode_pool[r][1].append(rd - xd)
-                logger.info(f"decode step {step} row {r} slot {u} pos {int(pos[u])}: pcc {p:.5f} delta {pd:.5f}")
+                decode_pool[(r, mode)][0].append(got[u] - xd)
+                decode_pool[(r, mode)][1].append(rd - xd)
+                logger.info(f"decode step {step} row {r} {mode} slot {u} pos {int(pos[u])}: pcc {p:.5f} delta {pd:.5f}")
     # One decode token's delta is dominated by its MoE output, and a token whose 8th and 9th expert scores
     # are within the router matmul's error (~2^-12 relative) picks a different expert on device. As in
     # test_decoder_tp8_dp4.py, the delta is checked over all of a row's decode tokens together.
-    for r, (got_d, ref_d) in decode_pool.items():
+    for got_d, ref_d in decode_pool.values():
         worst["decode_delta"] = min(worst["decode_delta"], pcc(torch.stack(got_d), torch.stack(ref_d)))
 
     logger.info(f"layer {layer_idx} worst over 4 rows x {len(users)} prompts: {worst}")
@@ -291,5 +318,8 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
     assert worst["chunked"] > 0.995 and worst["decode"] > 0.995, worst
     assert worst["chunked_delta"] > 0.99 and worst["decode_delta"] > 0.99, worst
     assert worst["vs_oneshot"] > 0.995 and worst["vs_oneshot_delta"] > 0.99, worst
+    assert worst["cyclic"] > 0.995 and worst["cyclic_delta"] > 0.99, worst
+    # Same math as the no-reuse run, only other physical blocks: the results should agree to the last bit.
+    assert worst["cyclic_vs_chunked"] > 0.9999, worst
     assert worst_kv["k"] > 0.999 and worst_kv["v"] > 0.999, worst_kv
     assert worst_kv["v_pad"] == 0.0, "V padding columns must stay zero"

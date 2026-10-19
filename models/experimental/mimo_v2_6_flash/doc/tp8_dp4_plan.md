@@ -31,7 +31,7 @@ DP path. The cost is that experts must be BFP4 to fit.
 | Router | 4096 x 256 bf16, bias fp32 | replicated | fp32 sigmoid / topk / gather |
 | Routed experts | 256 x (3 x 4096 x 2048) | 256 x (3 x 4096 x 256) | intermediate dim TP-sharded; `sparse_matmul` on the union of selected experts per 32-token group; all-reduce |
 | LM head | 4096 x 152576 | 4096 x 19072 | vocab-parallel, host concatenates |
-| KV cache, SWA layer | | K, V `[blocks, 1, 64, 192]` | vLLM `SlidingWindowSpec` layout: addressed by position, only the blocks around the window mapped (standalone: window + one prefill chunk per user, reused), BFP8 |
+| KV cache, SWA layer | | K, V `[blocks, 1, 64, 192]` | vLLM `SlidingWindowSpec` layout: addressed by position, only the blocks around the window mapped (standalone: per user, window + one prefill chunk and at least a share of the table width, reused), BFP8 |
 | KV cache, global layer | | K, V `[blocks, 1, 64, 192]` | full context, only the users this chip owns, BFP8; V padded 128 -> 192 so chunked prefill SDPA can read it |
 
 RoPE: HF rotates the first 64 of 192 dims with `rotate_half`. The Q/K rows of each head are
@@ -49,7 +49,8 @@ max_seq_len tables on device).
 | Embedding (bf16, replicated) | 1.25 GB |
 | Router, dense MLP, LM head, norms | ~0.2 GB |
 | KV cache, 4 users x 1M, BFP8: global layers (2 owned users x 1M x 9 layers x 384, V padded) | 7.7 GB |
-| KV cache, SWA layers (39 layers x 4 users x (4096-token chunk + 128 window) x 384) | 0.27 GB |
+| KV cache, SWA layers, under vLLM (window blocks only, from vLLM's shared block pool) | not measured yet |
+| KV cache, SWA layers, standalone at 1M (the pool must be as wide as the 16384-entry table, see `kv.layer_page_tables`) | ~16.7 GB: does not fit; 1M runs go through vLLM |
 | **Measured** (`test_capacity_1m_tp8_dp4.py` on `mimo-v2.6/tp8-dp4`, every replica, before V padding) | weights 23.69 GB; with 4 x 1M KV 30.14 GB of 34.03 GB (3.89 GB free) |
 
 How B=4 @ 1M fits, with existing ops only (no new kernel):

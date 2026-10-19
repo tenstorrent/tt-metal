@@ -15,10 +15,14 @@ KV cache:
   -1 for the slots it does not own, which the cache update and SDPA skip; in decode and prefill its
   attention output for those slots is zeroed (``owner_mask``) before the row all-reduce.
 * SWA layers (``SlidingWindowSpec``): only blocks that overlap the 128-token window have to be mapped.
-  vLLM frees the blocks behind the window and points their entries at its null block. Standalone, we
-  reuse a few physical blocks per user cyclically (``sliding_window_page_tables``). Either way the
+  vLLM frees the blocks behind the window and points their entries at its null block. Standalone, each
+  user reuses its own physical blocks cyclically (``sliding_window_page_tables``). Either way the
   attention kernels never read a key outside the window, so stale or null blocks are never used.
   One KV head per chip, so the table is the same on every chip.
+
+A cache never has fewer physical blocks than its table has entries per user: ``paged_update_cache``
+rejects a table wider than the pool. vLLM keeps that bound by trimming its tables to the pool size; the
+standalone SWA pool is sized up to the table width for the same reason (``layer_page_tables``).
 """
 
 import math
@@ -79,15 +83,19 @@ def sliding_window_page_tables(num_users, max_batch, logical_blocks, physical_pe
 def layer_page_tables(
     num_users, max_batch, max_seq_len, block_size, tp, rep, sliding_window=None, max_chunk=None, seed=None
 ):
-    """Tables for one layer group: whole context for global layers, a reused window for SWA layers.
+    """Tables for one layer group: whole context for global layers, reused blocks for SWA layers.
 
-    ``max_chunk``: the longest (padded) prefill chunk the caller will run; it sizes the SWA blocks."""
+    ``max_chunk``: the longest (padded) prefill chunk the caller will run. Each SWA user gets at least the
+    blocks for one chunk plus the window, and at least its share of the table width, so the pool
+    (users x blocks per user) is never smaller than the table is wide, as ``paged_update_cache`` requires.
+    With 4 users and 4096-token chunks, that share only matters past ~17K tokens of context; at 1M it costs
+    ~17 GB per chip over 39 layers, so 1M runs go through vLLM's shared pool, not the standalone model."""
     logical = math.ceil(max_seq_len / block_size)
     if sliding_window is None:
         return page_tables(num_users, max_batch, logical, tp, rep, seed)
     assert rep == 1 and max_chunk is not None
-    physical = min(swa_blocks_per_user(sliding_window, max_chunk, block_size), logical)
-    return sliding_window_page_tables(num_users, max_batch, logical, physical, tp, seed)
+    per_user = max(swa_blocks_per_user(sliding_window, max_chunk, block_size), math.ceil(logical / num_users))
+    return sliding_window_page_tables(num_users, max_batch, logical, min(per_user, logical), tp, seed)
 
 
 def slot_owner_masks(tp, rep):

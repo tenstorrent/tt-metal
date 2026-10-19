@@ -31,14 +31,19 @@ from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .rope import MiMoRotarySetup
 
 
-def prefill_padded_len(seq_len):
-    """Tokens are padded so the prefill SDPA chunk (32/128/256) divides the length."""
+def prefill_padded_len(seq_len, room=None):
+    """Tokens are padded so the prefill SDPA chunk (32/128/256) divides the length.
+
+    ``room``: positions left in the context after the chunk's start. A chunk that would be padded past the
+    end of the context is padded to a tile only; the SDPA chunk then shrinks to divide its length."""
     n = pad_to(seq_len, TILE)
     if n >= 2048:
-        return pad_to(n, 256)
-    if n >= 128:
-        return pad_to(n, 128)
-    return n
+        padded = pad_to(n, 256)
+    elif n >= 128:
+        padded = pad_to(n, 128)
+    else:
+        padded = n
+    return n if room is not None and padded > room else padded
 
 
 class TtMiMoModel:
@@ -204,9 +209,9 @@ class TtMiMoModel:
     # ------------------------------------------------------------------ prefill
     def _prefill_chunk(self, tokens, slot, start_pos, hidden):
         """Run one chunk (``tokens`` 1D torch, at most ``max_prefill_chunk``) through every layer.
-        Returns the last layer's output [1, 1, padded, hidden]; appends per-layer copies to ``hidden``."""
+        Returns (the last layer's output [1, 1, padded, hidden], padded); appends per-layer copies to ``hidden``."""
         seq_len = tokens.numel()
-        padded = prefill_padded_len(seq_len)
+        padded = prefill_padded_len(seq_len, room=self.max_seq_len - start_pos)
         assert start_pos + padded <= self.max_seq_len, f"chunk ends at {start_pos + padded} > {self.max_seq_len}"
         toks = torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - seq_len))
         x = self._embed(toks)
@@ -218,7 +223,7 @@ class TtMiMoModel:
             x = y
             if hidden is not None:
                 hidden[i].append((ttnn.clone(x), seq_len))
-        return x
+        return x, padded
 
     def prefill_enqueue(self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None):
         """Enqueue prefill of one user (``tokens`` 1D torch, positions ``start_pos ..``) into batch ``slot``.
@@ -233,12 +238,12 @@ class TtMiMoModel:
         n = tokens.numel()
         assert n > 0, "nothing to prefill"
         for s in range(0, n, chunk_size):
-            x = self._prefill_chunk(tokens[s : s + chunk_size], slot, start_pos + s, hidden)
+            x, padded = self._prefill_chunk(tokens[s : s + chunk_size], slot, start_pos + s, hidden)
             if s + chunk_size < n:
                 x.deallocate(True)
         seq_len = n - s
         tile_start = ((seq_len - 1) // TILE) * TILE
-        if prefill_padded_len(seq_len) == TILE:
+        if padded == TILE:
             last = x  # a slice covering the whole tensor shares its buffer, so it must not be freed separately
         else:
             last = ttnn.slice(x, (0, 0, tile_start, 0), (1, 1, tile_start + TILE, self.cfg.hidden_size))

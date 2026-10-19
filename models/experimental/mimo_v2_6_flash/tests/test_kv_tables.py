@@ -13,16 +13,23 @@ BLOCK = 64
 WINDOW = 128
 
 
+@pytest.mark.parametrize("max_seq", [2048, 4096, 64 * 1024])
 @pytest.mark.parametrize("max_chunk", [64, 512, 4096])
-def test_sliding_window_tables_keep_window_and_chunk_apart(max_chunk):
-    """A chunk at any block-aligned start must not write over the window it reads, nor over another user."""
-    num_users, max_batch, max_seq = 4, 32, 64 * 1024
+def test_sliding_window_tables_keep_window_and_chunk_apart(max_chunk, max_seq):
+    """A chunk at any block-aligned start must not write over the window it reads, nor over another user,
+    and the pool must hold at least as many blocks as the table has entries (paged_update_cache rejects
+    a wider table)."""
+    if max_chunk > max_seq:
+        pytest.skip("chunk longer than the context")
+    num_users, max_batch = 4, 32
+    logical = max_seq // BLOCK
     tables, num_blocks = kv_lib.layer_page_tables(
         num_users, max_batch, max_seq, BLOCK, TP, rep=1, sliding_window=WINDOW, max_chunk=max_chunk, seed=0
     )
-    assert tables.shape == (TP, max_batch, max_seq // BLOCK)
+    assert tables.shape == (TP, max_batch, logical)
     assert (tables == tables[0]).all(), "SWA tables are the same on every chip"
-    per_user = kv_lib.swa_blocks_per_user(WINDOW, max_chunk, BLOCK)
+    assert num_blocks >= logical, f"pool of {num_blocks} blocks is narrower than the {logical}-entry table"
+    per_user = min(max(kv_lib.swa_blocks_per_user(WINDOW, max_chunk, BLOCK), -(-logical // num_users)), logical)
     assert num_blocks == num_users * per_user
     owned = [set(tables[0, u].tolist()) for u in range(num_users)]
     for u in range(num_users):

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 
 import pytest
@@ -43,9 +44,12 @@ def cache_dir(tag):
 
 
 def pcc(a, b):
+    """Pearson correlation. Raises on NaN: callers take min() over scores, and min() would skip a NaN score."""
     a = a.flatten().double()
     b = b.flatten().double()
-    return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+    score = torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+    assert math.isfinite(score), "PCC is not finite: an input holds NaN/Inf or is constant"
+    return score
 
 
 def dp_submeshes(mesh_device):

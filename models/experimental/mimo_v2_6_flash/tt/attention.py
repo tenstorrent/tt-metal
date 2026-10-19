@@ -232,7 +232,8 @@ class TtMiMoAttention:
         ttnn.experimental.paged_fill_cache(v_cache, v_fill, chunk_table, batch_idx=0)
         k_fill.deallocate(True)
         v_fill.deallocate(True)
-        chunk_table.deallocate(True)
+        # Not forced: a slice that covers the whole table (max_batch 1) shares the persistent table's buffer.
+        chunk_table.deallocate(False)
 
         program = self._prefill_sdpa_program(seq_len, start_pos)
         if start_pos == 0:
@@ -262,7 +263,7 @@ class TtMiMoAttention:
                 sliding_window_size=self.sliding_window,
                 attention_sink=self.sinks,
             )
-            user_table.deallocate(True)
+            user_table.deallocate(False)  # may share the persistent table's buffer, as above
         q_rot.deallocate(True)
         k_rot.deallocate(True)
         v.deallocate(True)
@@ -356,8 +357,10 @@ class TtMiMoAttention:
         attn_cat_dram = ttnn.to_memory_config(attn_cat, ttnn.DRAM_MEMORY_CONFIG)
         attn_cat.deallocate(True)
         if owner_mask is not None:
-            # Slots owned by the other chip of the pair were skipped here; zero them before the row all-reduce.
-            owned = ttnn.mul(attn_cat_dram, owner_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Slots owned by the other chip of the pair were skipped here, and SDPA decode does not write a skipped
+            # slot's output row, so it holds stale memory. Select zero rather than multiply: 0 * NaN is NaN, and the
+            # row all-reduce would add it to the owner's result.
+            owned = ttnn.where(owner_mask, attn_cat_dram, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             attn_cat_dram.deallocate(True)
             attn_cat_dram = owned
         out = ttnn.linear(
