@@ -251,7 +251,7 @@ extern "C" __attribute__((noinline, used)) void dual_x_and_packed_y_channels()
 
 extern "C" __attribute__((noinline, used)) void mixed_widths_all_counters()
 {
-    constexpr auto counters = adc::AddrCounter {.channel0 = {.x = 0, .y = 8, .z = 7, .w = 1024}, .channel1 = {.x = 1023, .y = 7, .z = 65535, .w = 0}}
+    constexpr auto counters = adc::AddrCounter {.channel0 = {.x = 0, .y = 8, .z = 7, .w = 1024}, .channel1 = {.x = 1023, .y = 7, .z = 8191, .w = 0}}
                                   .for_clients<adc::Client::Unpacker0, adc::Client::Packers>();
     adc::set<counters>();
 }
@@ -262,7 +262,7 @@ extern "C" __attribute__((noinline, used)) void mixed_widths_all_counters()
 // CHECK-NEXT: ttsetadc 5,0,1,8
 // CHECK-NEXT: ttsetadc 5,1,1,7
 // CHECK-NEXT: ttsetadc 5,0,3,1024
-// CHECK-NEXT: ttsetadc 5,1,2,65535
+// CHECK-NEXT: ttsetadc 5,1,2,8191
 // CHECK-NEXT: ttsetadczw 5,0,0,0,7,9
 // CHECK-NEXT: ret
 
@@ -270,21 +270,21 @@ extern "C" __attribute__((noinline, used)) void wide_values_all_counters()
 {
     constexpr auto counters =
         adc::AddrCounter {
-            .channel0 = {.x = 65535, .y = 65534, .z = 65533, .w = 65532},
-            .channel1 = {.x = 65531, .y = 65530, .z = 65529, .w = 65528},
+            .channel0 = {.x = 65535, .y = 8191, .z = 8190, .w = 8189},
+            .channel1 = {.x = 65531, .y = 8188, .z = 8187, .w = 8186},
         }
             .for_clients<adc::Client::Unpacker0>();
     adc::set<counters>();
 }
 
-// Every value needs the full sixteen-bit SETADC field, reaching the eight-instruction maximum.
+// Every value needs SETADC, reaching the eight-instruction maximum within each dimension's range.
 // CHECK-LABEL: <wide_values_all_counters>:
 // CHECK-NEXT: ttsetadc 1,0,0,65535
-// CHECK-NEXT: ttsetadc 1,0,1,65534
+// CHECK-NEXT: ttsetadc 1,0,1,8191
 // CHECK-NEXT: ttsetadc 1,1,0,65531
-// CHECK-NEXT: ttsetadc 1,1,1,65530
-// CHECK-NEXT: ttsetadc 1,0,2,65533
-// CHECK-NEXT: ttsetadc 1,0,3,65532
-// CHECK-NEXT: ttsetadc 1,1,2,65529
-// CHECK-NEXT: ttsetadc 1,1,3,65528
+// CHECK-NEXT: ttsetadc 1,1,1,8188
+// CHECK-NEXT: ttsetadc 1,0,2,8190
+// CHECK-NEXT: ttsetadc 1,0,3,8189
+// CHECK-NEXT: ttsetadc 1,1,2,8187
+// CHECK-NEXT: ttsetadc 1,1,3,8186
 // CHECK-NEXT: ret
