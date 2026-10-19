@@ -20,29 +20,39 @@ namespace ckernel {
 
 #if defined(ARCH_BLACKHOLE)
 namespace detail {
-// A kernel that defines ELTWISE_BINARY_PER_TILE_HANDOFF true (seen by all three threads) before this header hands each
-// operand tile to math as one source bank (SrcDvalid::PerTile); every other kernel keeps the per-face one.
-#if defined(ELTWISE_BINARY_PER_TILE_HANDOFF)
-constexpr SrcDvalid BINARY_SRC_DVALID = (ELTWISE_BINARY_PER_TILE_HANDOFF) ? SrcDvalid::PerTile : SrcDvalid::PerFace;
-#else
-constexpr SrcDvalid BINARY_SRC_DVALID = SrcDvalid::PerFace;
-#endif
-// ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true gives the per-tile hand-off to the dest-reuse forms alone.
-#if defined(ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE)
-constexpr SrcDvalid BINARY_REUSE_SRC_DVALID =
-    (ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE) ? SrcDvalid::PerTile : BINARY_SRC_DVALID;
-#else
-constexpr SrcDvalid BINARY_REUSE_SRC_DVALID = BINARY_SRC_DVALID;
-#endif
-template <EltwiseBinaryReuseDestType reuse_dest>
-constexpr SrcDvalid binary_src_dvalid =
-    reuse_dest == EltwiseBinaryReuseDestType::NONE ? BINARY_SRC_DVALID : BINARY_REUSE_SRC_DVALID;
 // ELTWISE_BINARY_BLOCK_UNPACK true: the *_block forms unpack their tile pairs with one call.
 #if defined(ELTWISE_BINARY_BLOCK_UNPACK)
 constexpr bool BINARY_BLOCK_UNPACK = (ELTWISE_BINARY_BLOCK_UNPACK);
 #else
 constexpr bool BINARY_BLOCK_UNPACK = false;
 #endif
+// Set by the host for every compute kernel. A LoFi kernel with two DEST sections loses the whole-tile wait on per-tile
+// calls, so there the opt-in below keeps the per-face hand-off unless the kernel unpacks blocks.
+#if defined(PER_TILE_HANDOFF_GAINS)
+constexpr bool BINARY_PER_TILE_GAINS = (PER_TILE_HANDOFF_GAINS) || BINARY_BLOCK_UNPACK;
+#else
+constexpr bool BINARY_PER_TILE_GAINS = true;
+#endif
+// A kernel that defines ELTWISE_BINARY_PER_TILE_HANDOFF true (seen by all three threads) before this header hands each
+// operand tile to math as one source bank (SrcDvalid::PerTile); every other kernel keeps the per-face one.
+#if defined(ELTWISE_BINARY_PER_TILE_HANDOFF)
+constexpr bool BINARY_PER_TILE_OPT_IN = (ELTWISE_BINARY_PER_TILE_HANDOFF);
+#else
+constexpr bool BINARY_PER_TILE_OPT_IN = false;
+#endif
+constexpr SrcDvalid BINARY_SRC_DVALID =
+    (BINARY_PER_TILE_OPT_IN && BINARY_PER_TILE_GAINS) ? SrcDvalid::PerTile : SrcDvalid::PerFace;
+// ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true gives the per-tile hand-off to the dest-reuse forms alone. The dest-reuse
+// forms gain from it at any fidelity (one hand-off instead of a drain per face), so they follow the opt-in alone.
+#if defined(ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE)
+constexpr SrcDvalid BINARY_REUSE_SRC_DVALID =
+    (ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE || BINARY_PER_TILE_OPT_IN) ? SrcDvalid::PerTile : SrcDvalid::PerFace;
+#else
+constexpr SrcDvalid BINARY_REUSE_SRC_DVALID = BINARY_PER_TILE_OPT_IN ? SrcDvalid::PerTile : SrcDvalid::PerFace;
+#endif
+template <EltwiseBinaryReuseDestType reuse_dest>
+constexpr SrcDvalid binary_src_dvalid =
+    reuse_dest == EltwiseBinaryReuseDestType::NONE ? BINARY_SRC_DVALID : BINARY_REUSE_SRC_DVALID;
 #ifdef TRISC_UNPACK
 ALWI void binary_unpack_AB_init(std::uint32_t icb0, std::uint32_t icb1) {
     llk_unpack_AB_init<BroadcastType::NONE, BINARY_SRC_DVALID>(icb0, icb1, Transpose::None);

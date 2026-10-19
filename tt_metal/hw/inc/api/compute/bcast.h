@@ -30,7 +30,11 @@ namespace ckernel {
 namespace detail {
 // A kernel that defines ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true (seen by all three threads) before this header hands each
 // operand tile of its broadcast multiplies to math as one source bank (SrcDvalid::PerTile); every other kernel keeps the per-face one.
-#if defined(ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST)
+// PER_TILE_HANDOFF_GAINS (set by the host for every compute kernel): a LoFi multiply with two DEST sections loses the whole-tile wait.
+#if defined(ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST) && defined(PER_TILE_HANDOFF_GAINS)
+constexpr SrcDvalid BCAST_MUL_SRC_DVALID =
+    (ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST) && (PER_TILE_HANDOFF_GAINS) ? SrcDvalid::PerTile : SrcDvalid::PerFace;
+#elif defined(ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST)
 constexpr SrcDvalid BCAST_MUL_SRC_DVALID = (ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST) ? SrcDvalid::PerTile : SrcDvalid::PerFace;
 #else
 constexpr SrcDvalid BCAST_MUL_SRC_DVALID = SrcDvalid::PerFace;
