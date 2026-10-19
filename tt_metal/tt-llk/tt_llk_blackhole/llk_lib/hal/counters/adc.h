@@ -43,8 +43,9 @@ enum class Action : std::uint8_t
  * Public members keep descriptors usable as template arguments. Normally initialize a field
  * directly with its value, for example .x = 10. GPR sources are rejected on Blackhole.
  */
-struct Value
+class Value
 {
+public:
     std::uint32_t value = 0;     ///< Assignment or increment, interpreted according to AddrCounter::action.
     bool selected       = false; ///< Whether this counter participates in the update, including when its value is zero.
 
@@ -76,8 +77,9 @@ struct Value
 };
 
 /** @brief Sparse X/Y/Z/W values for one address-counter channel. */
-struct Channel
+class Channel
 {
+public:
     Value x {}; ///< X assignment or increment; omitted by default.
     Value y {}; ///< Y assignment or increment; omitted by default.
     Value z {}; ///< Z assignment or increment; omitted by default.
@@ -111,8 +113,9 @@ struct Channel
  * constexpr auto reset_xy_word = reset_xy.operation();
  * @endcode
  */
-struct AddrCounter
+class AddrCounter
 {
+public:
     Action action = Action::Set; ///< Effect applied to every selected counter.
     Channel channel0 {};         ///< Sparse assignments or increments for channel 0.
     Channel channel1 {};         ///< Sparse assignments or increments for channel 1.
@@ -167,8 +170,9 @@ inline constexpr std::uint32_t SingleXCounterValueMax   = 0xffffu; ///< Maximum 
 inline constexpr std::uint32_t SingleYZWCounterValueMax = 0x1fffu; ///< Maximum value stored by a thirteen-bit Y, Z, or W counter.
 
 /** @brief Four counter slots in either the X/Y or Z/W instruction group. */
-struct Group
+class Group
 {
+public:
     Value fields[4]; ///< Channel 0 first/second dimension, followed by channel 1 first/second dimension.
 
     /**
@@ -194,8 +198,9 @@ struct Group
 };
 
 /** @brief Instruction sequence with capacity for one SETADC per counter across both channels. */
-struct Sequence
+class Sequence
 {
+public:
     std::uint32_t words[8] {}; ///< Encoded instructions in issue order; only the first count entries are used.
     std::size_t count = 0;     ///< Number of encoded instructions, in [0, 8].
 
