@@ -184,6 +184,7 @@ def reconstruct_convolution_at_sp_rank(
     )
 
 
+# Convolution-state NRMSE bar for K3's bfloat8_b projections: q/k/v feed the convolution state directly.
 KIMI_K3_CONVOLUTION_NRMSE = 0.009
 
 
@@ -191,12 +192,13 @@ KIMI_K3_CONVOLUTION_NRMSE = 0.009
 class LayerNrmseThresholds:
     """NRMSE thresholds for a KDA layer's three results: output, recurrent state, convolution state.
 
-    The convolution default is the production K3 bar; bfloat16-projection layers pass a tighter one.
+    No defaults: K3's bfloat8_b projections pass `KIMI_K3_CONVOLUTION_NRMSE`, bfloat16-projection
+    layers keep a tighter convolution bar, and a default would silently loosen one of them.
     """
 
     output: float
     recurrent: float
-    convolution: float = KIMI_K3_CONVOLUTION_NRMSE
+    convolution: float
 
 
 def compare_cpu_device(

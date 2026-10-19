@@ -19,7 +19,7 @@ from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheCheck
 
 _CACHE_SCHEMA_VERSION = 2
 # Stored at the caller's `projection_dtype`; every other KDA weight stays bfloat16.
-_PROJECTION_ARTIFACTS = ("input_projection_head_major", "decay_output_projection", "output_projection")
+PROJECTION_ARTIFACTS = ("input_projection_head_major", "decay_output_projection", "output_projection")
 
 
 def _parallel_geometry(device: ttnn.Device | ttnn.MeshDevice, tensor_parallel_axis: int) -> tuple[tuple[int, int], int]:
@@ -102,7 +102,7 @@ class KDAWeights:
         mesh_shape, _ = _parallel_geometry(mesh_device, tensor_parallel_axis)
         for name in _cache_artifact_names(config):
             stem = _cache_stem(cache_name_prefix, name, config, mesh_shape, tensor_parallel_axis)
-            dtype = projection_dtype if name in _PROJECTION_ARTIFACTS else ttnn.bfloat16
+            dtype = projection_dtype if name in PROJECTION_ARTIFACTS else ttnn.bfloat16
             pattern = f"{stem}_dtype_{dtype.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
             if not checker.pattern_exists(pattern, "KDA"):
                 return False
