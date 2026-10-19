@@ -71,6 +71,50 @@ def spec_hostfix_enabled():
     return bool(int(os.environ.get("QWEN36_SPEC_HOSTFIX", "1")))
 
 
+def spec_hostset_enabled():
+    """QWEN36_SPEC_HOSTSET (default 1; 0 = today's exact code paths, for A/B): the host set of the MTP spec step
+    (work/notes/39_hostset_impl.md). Same device-visible values, fewer host copies and less host Python:
+    packed per-step int inputs with the RoPE cos/sin looked up on the device (verify and drafter traces), the
+    next verify's position/ctrl inputs staged while the drafter runs, vectorized per-row host plans, and the
+    narrow (no-draft) step reading one logits column per user. The trace-changing part (packed inputs, in-trace
+    RoPE lookup) is read at trace capture; it also needs QWEN36_SPEC_HOSTSET_TRACE (default 1)."""
+    return os.environ.get("QWEN36_SPEC_HOSTSET", "1") != "0"
+
+
+def spec_hostset_trace_enabled():
+    """The part of QWEN36_SPEC_HOSTSET that changes the captured traces: one packed uint32 input buffer per trace with
+    in-trace slices, and cos/sin rows looked up from the resident RoPE tables by position (ttnn.embedding) instead of
+    uploaded. QWEN36_SPEC_HOSTSET_TRACE=0 keeps the host-only parts of the set and today's trace inputs. Read when the
+    verify / drafter traces are prepared, so one process sees one answer."""
+    return spec_hostset_enabled() and os.environ.get("QWEN36_SPEC_HOSTSET_TRACE", "1") != "0"
+
+
+HOSTSET_PACK_ALIGN = 32  # words; a packed row is padded to a multiple of this (128 B)
+
+
+def pack_u32_rows(segments):
+    """Pack 1-D non-negative integer segments into ONE host buffer for a single H2D copy: row i holds segment i, zero
+    padded to W = max segment length rounded up to HOSTSET_PACK_ALIGN words. Returns torch.int32 [len(segments), W]
+    (staged as ttnn.uint32). The trace slices row i, columns [0, len_i), with ttnn.slice (the same start-at-0 RM slice
+    the batched decode loop uses), so every segment starts at a row page boundary. Raises on a negative value: the
+    buffer is uint32 and a negative would become a huge index."""
+    segs = [x.reshape(-1).tolist() if isinstance(x, torch.Tensor) else [int(v) for v in x] for x in segments]
+    width = -(-max(len(x) for x in segs) // HOSTSET_PACK_ALIGN) * HOSTSET_PACK_ALIGN
+    out = torch.tensor([x + [0] * (width - len(x)) for x in segs], dtype=torch.int64)
+    if int(out.min()) < 0:
+        raise ValueError("pack_u32_rows: negative value in a packed uint32 input")
+    return out.to(torch.int32)
+
+
+def rope_row_index(positions, rope_delta, table_rows):
+    """RoPE table row per position for the in-trace lookup: position + rope_delta, clamped into [0, table_rows).
+    Equal to the host-computed cos/sin for every position inside the table. Outside it only rows the engine never
+    reads are affected: positions >= table_rows lie past max_model_len (junk draft / padding window rows that no
+    commit uses), and the engine never passes a negative position (inactive rows run at position 0)."""
+    idx = torch.as_tensor(positions).to(torch.int64).reshape(-1) + int(rope_delta)
+    return idx.clamp(0, int(table_rows) - 1).to(torch.int32)
+
+
 def spec_fast_join_enabled():
     """QWEN36_SPEC_FAST_JOIN (default "1"; "0" opts out): a fresh row's first verify (the seed, or a join into a running
     batch) runs INSIDE the normal verify replay as an ordinary 0-draft row, after its ring slot 0 / conv window are

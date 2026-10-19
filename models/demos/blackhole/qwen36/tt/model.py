@@ -23,7 +23,14 @@ from models.demos.blackhole.qwen36.tt.prefix_cache import alloc_zeros_like
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.demos.blackhole.qwen36.tt.tp_common import kv_cache_bf8_enabled
 from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
-from models.demos.blackhole.qwen36.tt.tp_common import spec_hostfix_enabled, verify_device_topk_m
+from models.demos.blackhole.qwen36.tt.tp_common import (
+    pack_u32_rows,
+    rope_row_index,
+    spec_hostfix_enabled,
+    spec_hostset_enabled,
+    spec_hostset_trace_enabled,
+    verify_device_topk_m,
+)
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
@@ -1830,6 +1837,101 @@ class Qwen36Model:
             return logits, feed, normed
         return logits, feed
 
+    # ------------------------------------------------------------------------------------------------------- #
+    # QWEN36_SPEC_HOSTSET: packed verify inputs (note 39). The per-replay kvpos / RoPE index / GDN ctrl page of the
+    # verify are ONE uint32 host buffer ([3, W], row 0 = row positions, row 1 = RoPE table row per verify row,
+    # row 2 = the ctrl page) = ONE H2D copy; the trace slices it and looks cos/sin up from the resident RoPE tables.
+    # ------------------------------------------------------------------------------------------------------- #
+    def _vfy_inputs(self, rows):
+        """(kvpos, cos, sin, ctrl, owned): the verify body's per-replay inputs. Without the packed layout these are the
+        persistent buffers (owned = []). With it (``_vfy_hostset``) they are derived from ``_vfy_aux_buf`` inside the
+        body: kvpos = typecast(slice row 0) int32 [rows]; cos / sin = ttnn.embedding(slice row 1, RoPE tables)
+        [1,1,rows,rope_dim] TILE (_dl_rope_cos_sin, the lookup the batched decode loop runs); ctrl = slice row 2 [1,N]
+        uint32 (fused GDN only). ``owned`` are freed by the body when it is done."""
+        if not getattr(self, "_vfy_hostset", False):
+            return (
+                self._vfy_kvpos_buf,
+                self._vfy_cos_buf,
+                self._vfy_sin_buf,
+                getattr(self, "_vfy_ctrl", None),
+                [],
+            )
+        aux = self._vfy_aux_buf
+        pos_u = ttnn.slice(aux, [0, 0], [1, rows])
+        kvpos_i = ttnn.typecast(pos_u, ttnn.int32)
+        ttnn.deallocate(pos_u)
+        kvpos = ttnn.reshape(kvpos_i, (rows,))
+        ridx = ttnn.slice(aux, [1, 0], [2, rows])
+        cos, sin = self._dl_rope_cos_sin(ridx, rows)
+        ctrl = None
+        owned = [kvpos, cos, sin, ridx]
+        if getattr(self, "_vfy_fused", False):
+            ctrl = ttnn.slice(aux, [2, 0], [3, self._vfy_ctrl_words])
+            owned.append(ctrl)
+        return kvpos, cos, sin, ctrl, owned
+
+    def _vfy_aux_host(self, row_positions, mi_prev):
+        """Host form of ``_vfy_aux_buf``: torch.int32 [3 (2 without the fused GDN op), W]."""
+        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_page
+
+        segs = [row_positions, rope_row_index(row_positions, self.rope.rope_delta, self.rope.max_seq_len)]
+        if getattr(self, "_vfy_fused", False):
+            _pars = {dn._spec_win_par for dn in self._vfy_gdn}
+            assert len(_pars) == 1, f"GDN window parities out of step: {sorted(_pars)}"
+            segs.append(spec_ctrl_page(mi_prev, self._vfy_B, self._vfy_Nv, parity=_pars.pop()).reshape(-1))
+        return pack_u32_rows(segs)
+
+    def _vfy_stage_aux(self, aux_host):
+        """Copy the packed aux inputs to the device unless the device already holds exactly these words (the host copy
+        of what the buffer holds is ``_vfy_aux_staged``, written only here). Returns True when a copy was made."""
+        prev = getattr(self, "_vfy_aux_staged", None)
+        if prev is not None and prev.shape == aux_host.shape and bool(torch.equal(prev, aux_host)):
+            return False
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+        _h = ttnn.from_torch(aux_host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(_h, self._vfy_aux_buf)
+        self._vfy_aux_staged = aux_host.clone()
+        return True
+
+    def prestage_verify_aux(self, positions, mi_prev):
+        """Stage the NEXT verify's packed aux inputs for the predicted ``positions`` / ``mi_prev`` (B ints each) while the
+        drafter trace runs on the device. Safe by construction: it writes the same words verify_traced would build
+        for these arguments, and verify_traced compares its own words with ``_vfy_aux_staged`` and copies again when
+        they differ, so a wrong prediction costs one extra tiny copy and nothing else. The drafter trace reads none
+        of these buffers; the copy is queued behind it. Returns True when it staged, False when the packed layout is
+        off or the arguments are not a valid verify's."""
+        if not getattr(self, "_vfy_hostset", False) or getattr(self, "_vfy_trace_id", None) is None:
+            return False
+        T = self._vfy_T
+        if len(positions) != self._vfy_B or len(mi_prev) != self._vfy_B:
+            return False
+        if any(int(x) < 0 for x in positions) or any(not 0 <= int(x) < T for x in mi_prev):
+            return False
+        self._vfy_stage_aux(self._vfy_aux_host(self._vfy_row_positions(positions), mi_prev))
+        return True
+
+    def _vfy_narrow_logits(self, logits_rm):
+        """Column 0 of every user of the ROW_MAJOR verify logits [1,1,B*T,V] -> [B,1,V] (rows u*T), on the device: a
+        view-reshape to [B,T,V] and a slice of the T axis, so a narrow (no-draft) step reads B rows (1/T of the bytes)
+        instead of B*T. Pure data movement: the values are the full read's rows u*T."""
+        B, T = self._vfy_B, self._vfy_T
+        v = ttnn.reshape(logits_rm, (B, T, int(logits_rm.shape[-1])))
+        return ttnn.slice(v, [0, 0, 0], [B, 1, int(logits_rm.shape[-1])])
+
+    def _vfy_warm_narrow(self, logits_rm):
+        """Compile the narrow-read slice before any trace is captured (a program compiled while a trace is parked can
+        land in memory the replay writes over). Any failure leaves the narrow read off and the full read in place."""
+        self._vfy_narrow_ready = False
+        if not spec_hostset_enabled() or self._vfy_T < 2:
+            return
+        try:
+            out = self._vfy_narrow_logits(logits_rm)
+            ttnn.synchronize_device(self.device)
+            ttnn.deallocate(out)
+            self._vfy_narrow_ready = True
+        except Exception as e:  # noqa: BLE001 - an optimisation: never block startup
+            logger.warning(f"QWEN36_SPEC_HOSTSET narrow logits read disabled (compile failed: {e})")
+
     def _forward_verify_bucket_tp(self, n_users):
         """Trace body: recurrent verify over the persistent B*T-row bucket buffers -> per-position
         logits + hidden. Reads only fixed-address buffers so it is trace-capturable. Full-attention
@@ -1850,6 +1952,7 @@ class Qwen36Model:
         """
         T = self._vfy_T
         rows = n_users * T
+        kvpos, cos, sin, ctrl, owned = self._vfy_inputs(rows)
         x = self.embd(self._vfy_token_buf)
         x = ttnn.reshape(x, (1, 1, rows, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -1863,10 +1966,10 @@ class Qwen36Model:
                 # [B, nb] per-user table, is reused by every group.
                 x_new = layer.forward(
                     x,
-                    cos=self._vfy_cos_buf,
-                    sin=self._vfy_sin_buf,
+                    cos=cos,
+                    sin=sin,
                     mode="decode",
-                    position_tensor=self._vfy_kvpos_buf,
+                    position_tensor=kvpos,
                     page_table=self._vfy_kvpt_buf,
                     alias_kv_write=True,
                     spec_user_page_table=self._vfy_kvpt_users,
@@ -1890,7 +1993,7 @@ class Qwen36Model:
                     n_users=n_users,
                     state_blk_idx=self._vfy_state_idx,
                     conv_sel=self._vfy_conv_sel,
-                    spec_ctrl=getattr(self, "_vfy_ctrl", None),  # QWEN36_VERIFY_SPEC_STEP=1: the fused op's page
+                    spec_ctrl=ctrl,  # QWEN36_VERIFY_SPEC_STEP=1: the fused op's page
                 )
             ttnn.deallocate(x)
             x = x_new
@@ -1903,6 +2006,8 @@ class Qwen36Model:
                 ttnn.deallocate(shard_logits)
                 keep = None
             ids = self._dl_greedy_token_row_batched(idx, val, self._vfy_dl)  # [1,1,1,32] uint32 RM
+            for t in owned:
+                ttnn.deallocate(t)
             return None, rows_out, ids, None, normed, keep
         logits, rows_out = self._spec_tail(x)  # [1,1,B*T,vocab] replicated, drafter feed [1,1,B*T,dim/tp]
         # Greedy acceptance compares token ids, so argmax the verify rows inside the trace and read back
@@ -1914,6 +2019,8 @@ class Qwen36Model:
         ids = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,B*T] uint32 ROW_MAJOR
         # `u` is NOT deallocated: it is handed back as the ROW_MAJOR logits copy. The sampling path
         # reads THAT back instead of the TILE `logits`, which costs an untilize on host.
+        for t in owned:
+            ttnn.deallocate(t)
         return logits, rows_out, ids, u, None, None
 
     def _forward_verify_logits_body(self):
@@ -2025,6 +2132,9 @@ class Qwen36Model:
     def _vfy_row_positions(self, positions):
         """Per-ROW absolute positions for the user-major bucket: row u*T + j is positions[u] + j."""
         T = self._vfy_T
+        if spec_hostset_enabled():  # QWEN36_SPEC_HOSTSET: one broadcast add instead of B*T Python ints
+            pos = torch.as_tensor([int(p) for p in positions], dtype=torch.int64)
+            return (pos[:, None] + torch.arange(T)).reshape(-1).to(torch.int32)
         return torch.tensor([int(positions[u]) + j for u in range(self._vfy_B) for j in range(T)], dtype=torch.int32)
 
     def _vfy_page_table_host(self, pt):
@@ -2156,6 +2266,12 @@ class Qwen36Model:
         self._vfy_nb = nb
         self._vfy_setup_sharded_argmax(rows)
         self._vfy_setup_device_topk()
+        # QWEN36_SPEC_HOSTSET (+ _TRACE): packed aux inputs + in-trace RoPE lookup (see _vfy_inputs). Decided here, so
+        # the captured trace and every replay agree. The RoPE tables are allocated now, outside any trace.
+        self._vfy_hostset = spec_hostset_trace_enabled()
+        self._vfy_aux_staged = None
+        if self._vfy_hostset:
+            self.rope.decode_rm_tables()
 
         # Persistent per-replay input buffers (addresses baked into the trace).
         self._vfy_token_buf = ttnn.from_torch(
@@ -2169,9 +2285,12 @@ class Qwen36Model:
         # re-staged per replay by verify_traced (same convention as the prefill traces).
         # KV is written position-exact (paged_update_cache at absolute slots), not block-aligned.
         warm = self._vfy_row_positions(warm_positions)
-        self._vfy_kvpos_buf = ttnn.from_torch(
-            warm, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
-        )
+        if self._vfy_hostset:
+            self._vfy_kvpos_buf = None  # derived in the trace from _vfy_aux_buf
+        else:
+            self._vfy_kvpos_buf = ttnn.from_torch(
+                warm, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
+            )
         # Grouped aliased KV write (TPAttention._write_kv_aliased): checked here for the warm passes and on
         # every replay (verify_traced), while the tables are still torch; see spec_kv_write_conflicts.
         self._vfy_pt_host = pt.clone()
@@ -2197,13 +2316,16 @@ class Qwen36Model:
         # [1, rows, 1, rope_dim] (one rotation per ROW at that row's own position) — not the prefill
         # [1, 1, S, rope_dim] table. Same host math the plain decode step uses, so the two paths'
         # rotations are byte-identical and near-ties round the same way.
-        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(warm)
-        self._vfy_cos_buf = ttnn.from_torch(
-            cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
-        )
-        self._vfy_sin_buf = ttnn.from_torch(
-            sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
-        )
+        if self._vfy_hostset:
+            self._vfy_cos_buf = self._vfy_sin_buf = None  # looked up in the trace from the resident RoPE tables
+        else:
+            cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(warm)
+            self._vfy_cos_buf = ttnn.from_torch(
+                cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
+            )
+            self._vfy_sin_buf = ttnn.from_torch(
+                sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
+            )
 
         # The deferred commit's two selectors, shared by all GDN layers (pure index / one-hot data, so one
         # pair of buffers is staged per iteration instead of one per layer). state_blk_idx picks each
@@ -2246,7 +2368,18 @@ class Qwen36Model:
         # the warmup pass: the trace bakes their addresses in, and nothing may allocate later.
         for dn in gdn:
             dn.prepare_spec_verify(B, T)
-        if self._vfy_fused:
+        if self._vfy_hostset:
+            from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_words
+
+            if getattr(self, "_vfy_aux_buf", None) is not None:  # a re-capture: drop the previous buffer
+                ttnn.deallocate(self._vfy_aux_buf)
+            self._vfy_ctrl_words = spec_ctrl_words(B, Nv)
+            _aux = self._vfy_aux_host(warm, _mi0)
+            self._vfy_aux_buf = ttnn.from_torch(
+                _aux, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
+            )
+            self._vfy_aux_staged = _aux.clone()
+        elif self._vfy_fused:
             # The shared ctrl page, at the layers' CURRENT window parity (a re-capture at the same spec shape keeps
             # the pair and its parity; a fresh prepare_spec_verify resets it to 0). The page is data the op reads
             # at replay, so the parity it is captured with does not bind later replays -- verify_traced restages
@@ -2278,7 +2411,9 @@ class Qwen36Model:
         if self._vfy_sharded:
             # Compile the logits trace's programs too (cache misses are disallowed during capture).
             self._vfy_normed_out = outs[4]
-            for t in self._forward_verify_logits_body():
+            _lg = self._forward_verify_logits_body()
+            self._vfy_warm_narrow(_lg[1])
+            for t in _lg:
                 ttnn.deallocate(t)
             ttnn.deallocate(self._vfy_normed_out)
             self._vfy_normed_out = None
@@ -2289,6 +2424,8 @@ class Qwen36Model:
                     ttnn.deallocate(t)
                 ttnn.deallocate(self._vfy_shard_logits_out)
                 self._vfy_shard_logits_out = None
+        if not self._vfy_sharded:
+            self._vfy_warm_narrow(outs[3])
         for t in outs[:4]:
             if t is not None:
                 ttnn.deallocate(t)
@@ -2352,7 +2489,15 @@ class Qwen36Model:
         )
 
     def verify_traced(
-        self, tokens, positions, mi_prev, read_logits=False, page_tables=None, inactive=None, read_topk=False
+        self,
+        tokens,
+        positions,
+        mi_prev,
+        read_logits=False,
+        page_tables=None,
+        inactive=None,
+        read_topk=False,
+        read_col0=False,
     ):
         """Replay the captured verify trace for B users x T candidates.
 
@@ -2379,6 +2524,10 @@ class Qwen36Model:
         The MTP drafter's own table (``SpeculativeDecoder.mtp_pt``) is a separate buffer this argument does
         not touch. ``inactive``: length-B bools; those users are skipped by the KV-write collision check only
         (their rows write the null block).
+
+        ``read_col0`` (with ``read_logits``; QWEN36_SPEC_HOSTSET): read only column 0 of each user, as ``[B, vocab]``
+        (``self._vfy_last_col0`` is True then); the full ``[B*T, vocab]`` read is the fallback (flag off, T == 1, or the
+        slice did not compile).
 
         ``feed_rows`` is the trace's own output buffer: do not deallocate it, and finish with it
         before the next replay (the spec loop reads its anchor rows and reseeds the drafter within
@@ -2436,16 +2585,18 @@ class Qwen36Model:
         # Absolute cache slot for each row: positions[u] + j. This doubles as the decode SDPA's
         # per-row cur_pos, which is what makes the hybrid verify causal.
         pos = self._vfy_row_positions(positions)
-        _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_kvpos_buf)
-        if self._vfy_staging_cache:
-            cos_t, sin_t = self._rope_tp_cos_sin_decode_cached(pos)
-        else:
-            cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
-        _h = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_cos_buf)
-        _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_sin_buf)
+        _hostset = bool(getattr(self, "_vfy_hostset", False))
+        if not _hostset:
+            _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
+            ttnn.copy_host_to_device_tensor(_h, self._vfy_kvpos_buf)
+            if self._vfy_staging_cache:
+                cos_t, sin_t = self._rope_tp_cos_sin_decode_cached(pos)
+            else:
+                cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
+            _h = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
+            ttnn.copy_host_to_device_tensor(_h, self._vfy_cos_buf)
+            _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
+            ttnn.copy_host_to_device_tensor(_h, self._vfy_sin_buf)
         # The deferred commit (see prepare_verify_trace): where each user's recurrence and conv
         # window resume. Two small host-built tensors, shared by every GDN layer.
         _fused = bool(getattr(self, "_vfy_fused", False))
@@ -2457,14 +2608,15 @@ class Qwen36Model:
             assert all(0 <= int(mi_prev[u]) < T for u in range(B)), f"mi_prev {list(mi_prev)} out of range [0,{T})"
             _pars = {dn._spec_win_par for dn in self._vfy_gdn}
             assert len(_pars) == 1, f"GDN window parities out of step: {sorted(_pars)}"
-            _h = ttnn.from_torch(
-                spec_ctrl_page(mi_prev, B, self._vfy_Nv, parity=_pars.pop()),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=None,
-                mesh_mapper=rep,
-            )
-            ttnn.copy_host_to_device_tensor(_h, self._vfy_ctrl)
+            if not _hostset:
+                _h = ttnn.from_torch(
+                    spec_ctrl_page(mi_prev, B, self._vfy_Nv, parity=_pars.pop()),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=None,
+                    mesh_mapper=rep,
+                )
+                ttnn.copy_host_to_device_tensor(_h, self._vfy_ctrl)
         else:
             _h = ttnn.from_torch(
                 spec_state_blk_idx(mi_prev, B, self._vfy_Nv),
@@ -2483,6 +2635,10 @@ class Qwen36Model:
             )
             ttnn.copy_host_to_device_tensor(_h, self._vfy_conv_sel)
 
+        if _hostset:
+            # kvpos + RoPE rows + ctrl page: one packed copy, skipped when the next-verify prestage already staged these
+            # exact words (prestage_verify_aux); the trace slices them and looks cos/sin up on the device.
+            self._vfy_stage_aux(self._vfy_aux_host(pos, mi_prev))
         ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
         if read_logits and self._vfy_sharded:
             ttnn.execute_trace(dev, self._vfy_logits_trace_id, cq_id=0, blocking=False)
@@ -2500,9 +2656,19 @@ class Qwen36Model:
         ids = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_ids_out)[0]).reshape(-1)
         ids = [int(v) for v in ids[:rows]]
         lt = None
+        self._vfy_last_col0 = False
         if read_logits:
-            lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
-            lt = lt.reshape(-1, self.vocab_size)[:rows]
+            if read_col0 and getattr(self, "_vfy_narrow_ready", False):
+                # QWEN36_SPEC_HOSTSET narrow step: only column 0 of each user is real. Slice it on the device and read
+                # [B, V] (1/T of the bytes); ``_vfy_last_col0`` tells the caller which shape it got.
+                sl = self._vfy_narrow_logits(self._vfy_logits_rm_out)
+                lt = ttnn.to_torch(ttnn.get_device_tensors(sl)[0])
+                ttnn.deallocate(sl)
+                lt = lt.reshape(B, -1)[:, : self.vocab_size]
+                self._vfy_last_col0 = True
+            else:
+                lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
+                lt = lt.reshape(-1, self.vocab_size)[:rows]
         if read_topk:
             # Replicated by the all-gather: one replica holds every device's block (32 KB + 64 KB at M=64).
             width = self.num_devices * self._vfy_topk_m
