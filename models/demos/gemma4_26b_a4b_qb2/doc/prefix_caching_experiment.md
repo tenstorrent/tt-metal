@@ -133,6 +133,40 @@ storage; the experiment did not issue broad cleanup or reset commands.
 
 ## Independent suffix variants
 
+### Serial control result
+
+[39235204816](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39235204816)
+passed 11 host tests and all six separately named decode-contract cases.
+Token-major ordinary decode, layer-major continuation, and scheduler-reused
+prefix KV produced exactly equal full-vocabulary logits in those cases.
+This does not establish cold-prefill equality: its greedy token differed at
+lengths 33, 63, and 65, and matching greedy tokens at the other lengths did
+not imply matching logits.
+
+Three warmed pairs per shape, physical B1, one output token, host sampling,
+identical selected precision configuration. The first diagnostic/compilation
+requests are excluded. Values below are medians in seconds; TTFT is the
+server histogram-sum delta and wall time includes the HTTP response.
+Counters asserted full recomputation for cold salts and the listed suffix
+length for cached requests. The precision *configuration* is fixed, but its
+prefill/decode arithmetic differs as documented above.
+
+| Prompt | Computed suffix | Cold wall | Cached wall | Cold TTFT | Cached TTFT |
+|---:|---:|---:|---:|---:|---:|
+| 33 | 1 | 0.109 | 0.115 | 0.094 | 0.098 |
+| 63 | 31 | 0.111 | 2.686 | 0.096 | 2.667 |
+| 65 | 1 | 0.126 | 0.122 | 0.110 | 0.102 |
+| 1023 | 31 | 0.444 | 2.691 | 0.427 | 2.673 |
+| 1025 | 1 | 0.774 | 0.119 | 0.755 | 0.100 |
+| 1057 | 1 | 0.780 | 0.119 | 0.762 | 0.102 |
+
+Within these shapes, serial continuation helps the nearly complete ~1K
+cache hits but substantially regresses 31-token suffixes. This is not a
+growing-conversation or agentic-runtime result. Eviction, divergent suffixes,
+device sampling, longer contexts, functional accuracy, and seed independence
+remain unqualified. The performance-claim review guidance keeps these
+serving-level results distinct from device-kernel or end-to-end eval claims.
+
 The user authorized concurrent jobs on the four-machine QB2 pool. No tests
 run locally. Serial control run `39235204816` keeps Metal
 `8c594566c40526540337c005cc100e3725f56074` on runner `qb2-120-p02t02`.
