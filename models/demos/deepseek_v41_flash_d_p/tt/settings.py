@@ -217,7 +217,7 @@ TABLE = {
         "0.409-0.413 vs 0.764-0.805 ms; per layer per chunk (attn_hc + ffn_hc) 0.82 vs 1.56 ms",
     ),
     "CCL_IMPL": Setting(
-        "fabric",
+        "fabric_bf16",
         ("stock", "fabric", "fabric_bf16"),
         "the cross-chip collectives (tt/ccl.py, P.5): stock = ttnn.all_gather, and the exact TP partial sums (ATTN_O_SUM "
         "/ EXPERTS_SUM / HC_TP_SUM gather_add) as all_gather + SFPU ttnn.add (+ mesh_partition for the hidden-split "
