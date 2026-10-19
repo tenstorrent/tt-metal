@@ -13,21 +13,26 @@ import struct
 import unittest
 
 from tt_metal.fabric.debug.visualizer.decode.routes import (
+    ChunkEncoding,
     ManifestError,
     MeshView,
     Odd2D,
+    ScatterChunk,
     Step2D,
+    TreeEdge2D,
     get_encodings_from_manifest,
+    get_mcast_tree_edges_2d,
     get_mesh_view,
     get_path_table_entry_1d,
     get_route_map_from_table_2d,
+    get_scatter_chunks,
     read_action_2d,
     read_packed,
     walk_1d,
     walk_2d,
 )
 
-# routing_encodings as make_routing_encodings_json writes it, less the parts no test reads yet.
+# routing_encodings as make_routing_encodings_json writes it, and the one enum the rules read.
 MANIFEST = {
     "routing_encodings": {
         "1d": {
@@ -41,7 +46,24 @@ MANIFEST = {
             "table_entries_per_byte": 4,
             "y_code_action": [0, 4, 8, 16],
             "x_code_action": [0, 1, 2, 0],
+            "mcast_tree_edge": {
+                "bytes": 2,
+                "child": {"shift": 0, "bits": 6},
+                "parent": {"shift": 6, "bits": 6},
+                "output": {"shift": 12, "bits": 2},
+            },
         },
+        "scatter": {"chunk_encoding_bits": 2, "max_chunks": 4},
+    },
+    "enums": {
+        "NocScatterWriteChunkEncoding": {
+            "values": {
+                "chunk_encoding_nop": 0,
+                "chunk_encoding_unicast_write": 1,
+                "chunk_encoding_seminc_no_flush": 2,
+                "chunk_encoding_seminc_flush": 3,
+            }
+        }
     },
 }
 ENC = get_encodings_from_manifest(MANIFEST)
@@ -83,6 +105,19 @@ class GetEncodingsFromManifestTest(unittest.TestCase):
         manifest = copy.deepcopy(MANIFEST)
         manifest["routing_encodings"]["2d"]["action_bits"]["z"] = S
         with self.assertRaisesRegex(ManifestError, "action_bits"):
+            get_encodings_from_manifest(manifest)
+
+    def test_a_tree_edge_output_that_is_not_a_table_code_is_refused(self):
+        manifest = copy.deepcopy(MANIFEST)
+        manifest["routing_encodings"]["2d"]["mcast_tree_edge"]["output"]["bits"] = 3
+        with self.assertRaisesRegex(ManifestError, r"mcast_tree_edge\.output"):
+            get_encodings_from_manifest(manifest)
+
+    def test_an_unknown_chunk_type_name_is_refused(self):
+        manifest = copy.deepcopy(MANIFEST)
+        types = manifest["enums"]["NocScatterWriteChunkEncoding"]["values"]
+        types["chunk_encoding_atomic_add"] = types.pop("chunk_encoding_seminc_flush")
+        with self.assertRaisesRegex(ManifestError, "chunk_encoding_atomic_add"):
             get_encodings_from_manifest(manifest)
 
 
@@ -304,6 +339,77 @@ class GetRouteMapFromTable2DTest(unittest.TestCase):
     def test_a_destination_outside_the_mesh_is_refused(self):
         with self.assertRaises(ValueError):
             get_route_map_from_table_2d(bytes(6), 3, 3, (3, 0), ENC.two_d)
+
+
+def tree_edge(child, parent, code):
+    return (child | parent << 6 | code << 12).to_bytes(2, "little")
+
+
+class GetMcastTreeEdges2DTest(unittest.TestCase):
+    def test_the_y_tree_comes_first_then_the_x_tree(self):
+        # The trees of the chip at (1, 0) of a 4x3 mesh. The Y tree hangs row 3 off row 2, then rows 2 and 0 off row 1;
+        # its first edge is fabric_common.h's example, 0x2083: child 3, parent 2, south. The X tree starts after the
+        # Y tree's 3 edges, and hangs column 2 off column 1 and column 1 off column 0. Code 1 is north on Y, east on X.
+        region = (0x2083).to_bytes(2, "little") + tree_edge(2, 1, 2) + tree_edge(0, 1, 1)
+        region += tree_edge(2, 1, 1) + tree_edge(1, 0, 1)
+        trees = get_mcast_tree_edges_2d(region, 4, 3, ENC.two_d)
+        self.assertEqual(trees.y, [TreeEdge2D(3, 2, "south"), TreeEdge2D(2, 1, "south"), TreeEdge2D(0, 1, "north")])
+        self.assertEqual(trees.x, [TreeEdge2D(2, 1, "east"), TreeEdge2D(1, 0, "east")])
+
+    def test_an_axis_of_one_chip_has_no_edges(self):
+        # A 1x3 mesh has no Y tree, so its X tree starts at byte 0.
+        trees = get_mcast_tree_edges_2d(tree_edge(2, 1, 1) + tree_edge(1, 0, 1), 1, 3, ENC.two_d)
+        self.assertEqual(trees.y, [])
+        self.assertEqual(trees.x, [TreeEdge2D(2, 1, "east"), TreeEdge2D(1, 0, "east")])
+
+    def test_code_3_is_z_on_y_and_nothing_on_x(self):
+        trees = get_mcast_tree_edges_2d(tree_edge(1, 0, 3) + tree_edge(1, 0, 3), 2, 2, ENC.two_d)
+        self.assertEqual((trees.y, trees.x), ([TreeEdge2D(1, 0, "z")], [TreeEdge2D(1, 0, None)]))
+
+    def test_a_region_too_short_is_refused(self):
+        with self.assertRaises(ValueError):
+            get_mcast_tree_edges_2d(bytes(4), 2, 3, ENC.two_d)
+
+
+WRITE, SEMINC, SEMINC_FLUSH = ChunkEncoding.UNICAST_WRITE, ChunkEncoding.SEMINC_NO_FLUSH, ChunkEncoding.SEMINC_FLUSH
+
+
+class GetScatterChunksTest(unittest.TestCase):
+    def test_two_writes_then_a_flushed_increment(self):
+        # The fused write and increment: types 0b11_01_01, so chunk 2 adds its chunk_size slot after a flush.
+        self.assertEqual(
+            get_scatter_chunks(3, [64, 192, 1], 0b110101, 256, ENC.scatter),
+            [ScatterChunk(WRITE, 64), ScatterChunk(WRITE, 192), ScatterChunk(SEMINC_FLUSH, 1)],
+        )
+
+    def test_the_last_write_gets_the_rest_of_the_payload(self):
+        # A plain scatter write marks all four chunks as writes (0x55), whatever chunk_count is.
+        self.assertEqual(
+            get_scatter_chunks(2, [64, 0, 0], 0x55, 100, ENC.scatter),
+            [ScatterChunk(WRITE, 64), ScatterChunk(WRITE, 36)],
+        )
+        self.assertEqual(
+            [chunk.amount for chunk in get_scatter_chunks(4, [10, 20, 30], 0x55, 100, ENC.scatter)], [10, 20, 30, 40]
+        )
+
+    def test_only_the_last_chunk_type_is_read(self):
+        # Chunk 0's type says nop, but the router writes chunk 0 without reading it.
+        self.assertEqual(
+            get_scatter_chunks(2, [16, 5, 0], 0b10_00, 16, ENC.scatter),
+            [ScatterChunk(WRITE, 16), ScatterChunk(SEMINC, 5)],
+        )
+
+    def test_a_scatter_the_router_cannot_carry_out_is_refused(self):
+        cases = {
+            "one chunk": (1, [16, 0, 0], 0x55, 32),
+            "five chunks": (5, [1, 2, 3], 0x55, 32),
+            "a nop last": (2, [16, 0, 0], 0b00_01, 32),
+            "an increment fourth, past the 3 chunk_size slots": (4, [1, 2, 3], 0b10_01_01_01, 6),
+            "writes past the payload": (3, [16, 32, 0], 0x55, 40),
+        }
+        for name, args in cases.items():
+            with self.subTest(name), self.assertRaises(ValueError):
+                get_scatter_chunks(*args, ENC.scatter)
 
 
 if __name__ == "__main__":

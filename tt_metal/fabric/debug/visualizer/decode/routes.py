@@ -48,6 +48,16 @@ X_DIRECTIONS = (Direction.EAST, Direction.WEST)
 Y_DIRECTIONS = (Direction.NORTH, Direction.SOUTH)
 LOCAL_DELIVER = "local_deliver"
 
+
+class ChunkEncoding(str, Enum):
+    """A scatter write chunk type the rules know, by its name in NocScatterWriteChunkEncoding."""
+
+    NOP = "chunk_encoding_nop"
+    UNICAST_WRITE = "chunk_encoding_unicast_write"
+    SEMINC_NO_FLUSH = "chunk_encoding_seminc_no_flush"
+    SEMINC_FLUSH = "chunk_encoding_seminc_flush"
+
+
 # A chip's place in its mesh, (y, x), as its mesh_coord.
 Coord = tuple[int, int]
 
@@ -73,6 +83,21 @@ class Encodings1D:
 
 
 @dataclass(frozen=True)
+class BitField:
+    """
+    A field of `bits` bits, `shift` bits up from the bottom of a packed value. For example, a tree edge's parent row is
+    BitField(shift=6, bits=6), so BitField(6, 6).read(0x2083) is 2: 0x2083 is 0b00_10_000010_000011, and bits 6 to 11
+    are 0b000010.
+    """
+
+    shift: int
+    bits: int
+
+    def read(self, value: int) -> int:
+        return (value >> self.shift) & ((1 << self.bits) - 1)
+
+
+@dataclass(frozen=True)
 class Encodings2D:
     direction_bits: tuple[tuple[Direction, int], ...]  # (direction, its action bit), in Direction order
     local_deliver_bit: int
@@ -80,6 +105,17 @@ class Encodings2D:
     table_entries_per_byte: int
     y_code_action: tuple[int, ...]  # the action a Y table code widens to, indexed by code
     x_code_action: tuple[int, ...]  # the action an X table code widens to, indexed by code
+    tree_edge_bytes: int
+    tree_edge_child: BitField
+    tree_edge_parent: BitField
+    tree_edge_output: BitField  # a table code
+
+
+@dataclass(frozen=True)
+class EncodingsScatter:
+    chunk_type_bits: int
+    max_chunks: int
+    chunk_encodings: tuple[ChunkEncoding, ...]  # indexed by a chunk type's value
 
 
 @dataclass(frozen=True)
@@ -88,6 +124,7 @@ class Encodings:
 
     one_d: Encodings1D
     two_d: Encodings2D
+    scatter: EncodingsScatter
 
 
 def _lookup(manifest: dict, path: str):
@@ -124,6 +161,12 @@ def _encodings_2d(manifest: dict) -> Encodings2D:
     table_entries_per_byte = _lookup(manifest, "routing_encodings.2d.table_entries_per_byte")
     y_code_action = _lookup(manifest, "routing_encodings.2d.y_code_action")
     x_code_action = _lookup(manifest, "routing_encodings.2d.x_code_action")
+    edge = "routing_encodings.2d.mcast_tree_edge"
+    tree_edge_bytes = _lookup(manifest, f"{edge}.bytes")
+    tree_edge_fields = {
+        name: BitField(_lookup(manifest, f"{edge}.{name}.shift"), _lookup(manifest, f"{edge}.{name}.bits"))
+        for name in ("child", "parent", "output")
+    }
     known = {*(direction.value for direction in Direction), LOCAL_DELIVER}
 
     # Catch any inconsistencies in different action bit values between the manifest and the decoder
@@ -151,6 +194,19 @@ def _encodings_2d(manifest: dict) -> Encodings2D:
                 f"{1 << table_entry_bits}"
             )
 
+    # Ensure each tree edge field lies within an edge
+    for name, field in tree_edge_fields.items():
+        if field.shift + field.bits > 8 * tree_edge_bytes:
+            raise ManifestError(
+                f"{edge}.{name} ends at bit {field.shift + field.bits}, past a {tree_edge_bytes}-byte edge"
+            )
+
+    # Ensure an edge's output is a table code, so it widens through the code-to-action lists
+    if tree_edge_fields["output"].bits != table_entry_bits:
+        raise ManifestError(
+            f"{edge}.output is {tree_edge_fields['output'].bits} bits; table codes are {table_entry_bits}"
+        )
+
     return Encodings2D(
         direction_bits=tuple((direction, action_bits[direction.value]) for direction in Direction),
         local_deliver_bit=action_bits[LOCAL_DELIVER],
@@ -158,12 +214,37 @@ def _encodings_2d(manifest: dict) -> Encodings2D:
         table_entries_per_byte=table_entries_per_byte,
         y_code_action=tuple(y_code_action),
         x_code_action=tuple(x_code_action),
+        tree_edge_bytes=tree_edge_bytes,
+        tree_edge_child=tree_edge_fields["child"],
+        tree_edge_parent=tree_edge_fields["parent"],
+        tree_edge_output=tree_edge_fields["output"],
     )
 
 
+def _encodings_scatter(manifest: dict) -> EncodingsScatter:
+    chunk_type_bits = _lookup(manifest, "routing_encodings.scatter.chunk_encoding_bits")
+    max_chunks = _lookup(manifest, "routing_encodings.scatter.max_chunks")
+    types = _lookup(manifest, "enums.NocScatterWriteChunkEncoding.values")
+    known = {encoding.value for encoding in ChunkEncoding}
+    if set(types) != known:
+        raise ManifestError(
+            f"enums.NocScatterWriteChunkEncoding names {sorted(types)}; the scatter rule knows {sorted(known)}"
+        )
+    if sorted(types.values()) != list(range(1 << chunk_type_bits)):
+        raise ManifestError(
+            f"enums.NocScatterWriteChunkEncoding values {sorted(types.values())} aren't each {chunk_type_bits}-bit "
+            "value once"
+        )
+    by_value = sorted(types.items(), key=lambda item: item[1])
+    return EncodingsScatter(chunk_type_bits, max_chunks, tuple(ChunkEncoding(name) for name, _ in by_value))
+
+
 def get_encodings_from_manifest(manifest: dict) -> Encodings:
-    """Reads the manifest's routing_encodings. Raises ManifestError naming the first value it can't use."""
-    return Encodings(one_d=_encodings_1d(manifest), two_d=_encodings_2d(manifest))
+    """
+    Reads the manifest's routing_encodings, and the scatter chunk types from its enums. Raises ManifestError naming
+    the first value it can't use.
+    """
+    return Encodings(one_d=_encodings_1d(manifest), two_d=_encodings_2d(manifest), scatter=_encodings_scatter(manifest))
 
 
 def read_packed(data: bytes, bits_per_entry: int, num_entries: int) -> list[int]:
@@ -347,7 +428,7 @@ def walk_2d(
     # to contain the maximum number of bytes for the configured mesh
     if len(route_map) < y_size + x_size:
         raise ValueError(f"a {y_size}x{x_size} mesh's route map is {y_size + x_size} bytes; got {len(route_map)}")
-    
+
     # Create a mask of all the "known" bits (bits that have a value)
     known_bits = enc.local_deliver_bit
     for _, bit in enc.direction_bits:
@@ -375,7 +456,7 @@ def walk_2d(
         if action == enc.local_deliver_bit and dst_mesh != mesh.mesh_id:
             exits.append(chip)
             continue
-            
+
         # If the action is "deliver here" and the destination mesh is the same as the current mesh,
         # this packet is is expected to be delivered here
         if action & enc.local_deliver_bit:
@@ -427,7 +508,7 @@ def get_route_map_from_table_2d(action_vectors: bytes, y_size: int, x_size: int,
     x_start = y_size * y_row_bytes + dst_x * x_row_bytes
     if x_start + x_row_bytes > len(action_vectors):
         raise ValueError(f"{dst}'s column codes end at byte {x_start + x_row_bytes}, past {len(action_vectors)} bytes")
-    
+
     # Read the y and x codes
     y_codes = read_packed(action_vectors[y_start : y_start + y_row_bytes], enc.table_entry_bits, y_size)
     x_codes = read_packed(action_vectors[x_start : x_start + x_row_bytes], enc.table_entry_bits, x_size)
@@ -438,3 +519,97 @@ def get_route_map_from_table_2d(action_vectors: bytes, y_size: int, x_size: int,
     # Add the "deliver here" bit to the destination column
     route_map[y_size + dst_x] |= enc.local_deliver_bit
     return bytes(route_map)
+
+
+@dataclass(frozen=True)
+class TreeEdge2D:
+    """One edge of a multicast tree: routers in row (or column) `parent` reach `child` by sending in `direction`."""
+
+    child: int
+    parent: int
+    direction: Direction | None  # None when the edge's code names no direction
+
+
+@dataclass(frozen=True)
+class McastTrees2D:
+    y: list[TreeEdge2D]  # over rows, rooted at the chip's row
+    x: list[TreeEdge2D]  # over columns, rooted at the chip's column
+
+
+def _read_tree_2d(
+    region: bytes, start: int, count: int, code_action: tuple[int, ...], enc: Encodings2D
+) -> list[TreeEdge2D]:
+    direction_of = {bit: direction for direction, bit in enc.direction_bits}
+    edges = []
+    for at in range(start, start + count * enc.tree_edge_bytes, enc.tree_edge_bytes):
+        packed = int.from_bytes(region[at : at + enc.tree_edge_bytes], "little")
+        action = code_action[enc.tree_edge_output.read(packed)]
+        edges.append(
+            TreeEdge2D(enc.tree_edge_child.read(packed), enc.tree_edge_parent.read(packed), direction_of.get(action))
+        )
+    return edges
+
+
+def get_mcast_tree_edges_2d(region: bytes, y_size: int, x_size: int, enc: Encodings2D) -> McastTrees2D:
+    """
+    A chip's two multicast trees, from its 2D route table's mcast_trees region: the Y tree, then the X tree. An axis of
+    n chips has n - 1 edges, each tree_edge_bytes bytes, lowest byte first. Edges keep their stored order, which puts
+    every edge below a row before the edge into it. An edge's output is a table code, widened through y_code_action or
+    x_code_action to its direction.
+    """
+    y_edges, x_edges = y_size - 1, x_size - 1
+
+    # Our byte region does not cover all the edges
+    if (y_edges + x_edges) * enc.tree_edge_bytes > len(region):
+        raise ValueError(
+            f"a {y_size}x{x_size} mesh's trees are {(y_edges + x_edges) * enc.tree_edge_bytes} bytes; got {len(region)}"
+        )
+
+    # Read the y and x tree edges
+    return McastTrees2D(
+        y=_read_tree_2d(region, 0, y_edges, enc.y_code_action, enc),
+        x=_read_tree_2d(region, y_edges * enc.tree_edge_bytes, x_edges, enc.x_code_action, enc),
+    )
+
+
+@dataclass(frozen=True)
+class ScatterChunk:
+    """
+    What one chunk of a scatter write does at its noc_address, by the type the router treats it as: a unicast write
+    writes `amount` bytes of the payload, and a semaphore increment adds `amount` to the semaphore there, flushing the
+    packet's writes first for SEMINC_FLUSH.
+    """
+
+    encoding: ChunkEncoding
+    amount: int
+
+
+def get_scatter_chunks(
+    chunk_count: int, chunk_size: Sequence[int], chunk_encoding: int, payload_size_bytes: int, enc: EncodingsScatter
+) -> list[ScatterChunk]:
+    """
+    What each chunk of a scatter write does, chunk 0 first, as the router carries it out. Every chunk but the last
+    writes its chunk_size, whatever its type. The last chunk's type (chunk i's is chunk_type_bits bits at bit
+    i * chunk_type_bits of `chunk_encoding`) decides what it does: a write gets the rest of the payload, and an
+    increment adds its chunk_size slot. Raises ValueError for a scatter the router can't carry out.
+    """
+    # The router writes chunk 0 before it reads the last chunk's type, so chunk 0 can't be the last.
+    if not 2 <= chunk_count <= enc.max_chunks:
+        raise ValueError(f"chunk_count is {chunk_count}; a scatter has 2 to {enc.max_chunks} chunks")
+
+    # We write every chunk but the last
+    last = chunk_count - 1
+    written = sum(chunk_size[:last])
+    chunks = [ScatterChunk(ChunkEncoding.UNICAST_WRITE, size) for size in chunk_size[:last]]
+
+    # Decode the last chunk's type
+    encoding = enc.chunk_encodings[BitField(last * enc.chunk_type_bits, enc.chunk_type_bits).read(chunk_encoding)]
+    if encoding == ChunkEncoding.NOP:
+        raise ValueError(f"the last chunk, chunk {last}, is a nop")
+    if encoding == ChunkEncoding.UNICAST_WRITE:
+        if written > payload_size_bytes:
+            raise ValueError(f"chunks 0 to {last - 1} write {written} bytes, past a {payload_size_bytes}-byte payload")
+        return chunks + [ScatterChunk(encoding, payload_size_bytes - written)]
+    if last >= len(chunk_size):
+        raise ValueError(f"chunk {last} increments, but chunk_size has no slot {last}")
+    return chunks + [ScatterChunk(encoding, chunk_size[last])]
