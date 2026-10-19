@@ -1370,3 +1370,11 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   device may run queued work during an upload). DeepSeek-V4.1 P.8: 3-run medians gave 861 (new, still warming: the
   experts + combine program keys its cache on buffer addresses) vs 785 (old); 25 runs: ~546 vs ~845; the gap uploads
   were ~280 ms of every run.
+
+- F120 (owner, 2026-10-19): the accept reuse takes each gate run from the side that measured its configuration: the
+  frozen tests run at max precision, so per switch the max-precision value (else the on value); when that is every
+  switch's off value, the tests come from the off side (gate_tests_side), the ladder rung and profile from the on side.
+  The A/B code key ignores files that cannot change a measurement (NO_MEASURE: the orchestration, agents, briefs,
+  skills, selftests, dev notes, dashboards, knowledge, any markdown). DeepSeek-V4.1 P.8: the on side's swap test failed
+  by design (rounding mismatch) and the overseer's framework commits had changed the key: the accept would have rerun
+  ~1 h of tests the A/B had already run; done by hand once. WALL_RUNS 20 / WALL_WARM 10 (P.8: ~10 warm-up chunks).
