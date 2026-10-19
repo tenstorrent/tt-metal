@@ -30,8 +30,15 @@ namespace tt::tt_metal {
 
 namespace {
 // The session of the context an object belongs to, or nullptr if the inspector is not active on that context.
+// Objects can outlive their context, e.g. cached programs after the mesh device owning it is closed. So the context is
+// looked up by id rather than through a pointer, and the events of such objects are dropped.
+inspector::Data* get_inspector_data(ContextId context_id) {
+    return MetalContext::instance_exists(context_id) ? MetalContext::instance(context_id).get_inspector_data()
+                                                     : nullptr;
+}
+
 inspector::Data* get_inspector_data(const distributed::MeshDeviceImpl& mesh_device) {
-    return mesh_device.metal_context().get_inspector_data();
+    return get_inspector_data(mesh_device.get_context_id());
 }
 
 inspector::Data* get_inspector_data(const distributed::MeshDevice* mesh_device) {
@@ -43,15 +50,9 @@ inspector::Data* get_inspector_data(const distributed::MeshBuffer& buffer) {
     return buffer.is_allocated() ? get_inspector_data(buffer.device()) : nullptr;
 }
 
-// A program must not outlive its context, and is compiled only on devices of its context.
-// TODO(#39849): Remove the DEFAULT_CONTEXT_ID guard once legacy programs from CreateProgram() are gone. It exists
-// because MetalContext::instance() would create the default context, e.g. when a legacy program is destroyed after it.
+// A program is compiled only on devices of its context.
 inspector::Data* get_inspector_data(const detail::ProgramImpl& program) {
-    const ContextId context_id = program.get_context_id();
-    if (context_id == DEFAULT_CONTEXT_ID && !MetalContext::instance_exists(context_id)) {
-        return nullptr;
-    }
-    return MetalContext::instance(context_id).get_inspector_data();
+    return get_inspector_data(program.get_context_id());
 }
 }  // namespace
 
@@ -237,13 +238,28 @@ void Inspector::mesh_device_destroyed(const distributed::MeshDeviceImpl* mesh_de
         return;
     }
     try {
-        std::lock_guard<std::mutex> lock(data->mesh_devices_mutex);
-        auto it = data->mesh_devices_data.find(mesh_device->id());
-        if (it == data->mesh_devices_data.end()) {
-            return;  // Not recorded by this session, e.g. created before the context was re-initialized.
+        {
+            std::lock_guard<std::mutex> lock(data->mesh_devices_mutex);
+            // Not found if not recorded by this session, e.g. created before the context was re-initialized.
+            if (auto it = data->mesh_devices_data.find(mesh_device->id()); it != data->mesh_devices_data.end()) {
+                data->logger.log_mesh_device_destroyed(it->second);
+                data->mesh_devices_data.erase(it);
+            }
         }
-        data->logger.log_mesh_device_destroyed(it->second);
-        data->mesh_devices_data.erase(it);
+        // Buffers still allocated on the mesh device are deallocated with it: their own deallocation events, if any,
+        // come once the mesh device is gone and are dropped.
+        std::vector<const distributed::MeshBuffer*> mesh_buffers;
+        {
+            std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+            for (const auto& [mesh_buffer, mesh_id] : data->mesh_buffers_data) {
+                if (mesh_id == mesh_device->id()) {
+                    mesh_buffers.push_back(mesh_buffer);
+                }
+            }
+        }
+        for (const auto* mesh_buffer : mesh_buffers) {
+            remove_mesh_buffer(*data, mesh_buffer);
+        }
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG(data->rtoptions(), "Failed to log mesh device destroyed: {}", e.what());
     }
@@ -274,7 +290,7 @@ void Inspector::mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer
             data->logger.log_mesh_buffer_allocated(mesh_buffer);
         }
         std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
-        data->mesh_buffers_data.insert(mesh_buffer);
+        data->mesh_buffers_data.emplace(mesh_buffer, mesh_buffer->device()->id());
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG(data->rtoptions(), "Failed to log mesh buffer allocated: {}", e.what());
     }
@@ -286,24 +302,28 @@ void Inspector::mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buff
         return;
     }
     try {
-        if (data->mesh_buffer_logging_enabled) {
-            data->logger.log_mesh_buffer_deallocated(mesh_buffer);
-        }
-        std::optional<inspector::MeshSocketData> destroyed_socket;
-        {
-            std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
-            data->mesh_buffers_data.erase(mesh_buffer);
-            data->global_semaphores_data.erase(mesh_buffer);
-            if (auto it = data->mesh_sockets_data.find(mesh_buffer); it != data->mesh_sockets_data.end()) {
-                destroyed_socket = std::move(it->second);
-                data->mesh_sockets_data.erase(it);
-            }
-        }
-        if (destroyed_socket.has_value() && data->mesh_socket_logging_enabled) {
-            data->logger.log_mesh_socket_destroyed(mesh_buffer, *destroyed_socket);
-        }
+        remove_mesh_buffer(*data, mesh_buffer);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG(data->rtoptions(), "Failed to log mesh buffer deallocated: {}", e.what());
+    }
+}
+
+void Inspector::remove_mesh_buffer(inspector::Data& data, const distributed::MeshBuffer* mesh_buffer) {
+    if (data.mesh_buffer_logging_enabled) {
+        data.logger.log_mesh_buffer_deallocated(mesh_buffer);
+    }
+    std::optional<inspector::MeshSocketData> destroyed_socket;
+    {
+        std::lock_guard<std::mutex> lock(data.mesh_buffers_mutex);
+        data.mesh_buffers_data.erase(mesh_buffer);
+        data.global_semaphores_data.erase(mesh_buffer);
+        if (auto it = data.mesh_sockets_data.find(mesh_buffer); it != data.mesh_sockets_data.end()) {
+            destroyed_socket = std::move(it->second);
+            data.mesh_sockets_data.erase(it);
+        }
+    }
+    if (destroyed_socket.has_value() && data.mesh_socket_logging_enabled) {
+        data.logger.log_mesh_socket_destroyed(mesh_buffer, *destroyed_socket);
     }
 }
 
