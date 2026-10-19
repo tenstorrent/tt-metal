@@ -19,7 +19,7 @@ from models.experimental.trellis2.reference import structure_flow_host as host
 from models.tt_dit.layers.linear import Linear
 from models.tt_dit.layers.module import Module, ModuleList, Parameter
 from models.tt_dit.layers.normalization import LayerNorm
-from models.tt_dit.utils.tensor import bf16_tensor
+from models.tt_dit.utils.tensor import bf16_tensor, float32_tensor
 
 
 def _hifi4(device):
@@ -47,6 +47,18 @@ class Precision:
     io_hifi4: bool = True
     # out_layer reads the final norm output in fp32 (off: cast to bf16 first)
     fp32_out_input: bool = True
+    # q/k per-head RMSNorm, gamma and RoPE in fp32 with fp32 tables, one cast to bf16 before SDPA, as TRELLIS.2's
+    # bf16 model does (off: every op rounds to bf16, cos/sin tables in bf16)
+    fp32_qk: bool = True
+    # x_t reaches the input layer with ~16 mantissa bits, as TRELLIS.2's bf16 model keeps it fp32: uploaded as bf16
+    # hi and lo halves against a stacked [W; W] weight (an fp32 activation overflows L1 at K=32). Off: one bf16 copy.
+    fp32_input: bool = False
+
+
+def hi_lo_split(x: torch.Tensor) -> torch.Tensor:
+    """[..., C] fp32 -> [..., 2C]: bf16-exact hi and the remainder lo, so that W @ hi + W @ lo carries ~16 bits."""
+    hi = x.bfloat16().float()
+    return torch.cat([hi, x - hi], dim=-1)
 
 
 def _norm_in(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -73,9 +85,11 @@ class DeviceTables:
 class MultiHeadRMSNorm(Module):
     """TRELLIS.2 MultiHeadRMSNorm: F.normalize(x) * gamma * sqrt(E) == rms_norm(x) * gamma, gamma per head."""
 
-    def __init__(self, num_heads: int, head_dim: int, *, mesh_device: ttnn.MeshDevice) -> None:
+    def __init__(
+        self, num_heads: int, head_dim: int, *, mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType = ttnn.bfloat16
+    ) -> None:
         super().__init__()
-        self.gamma = Parameter(total_shape=[1, num_heads, 1, head_dim], device=mesh_device)
+        self.gamma = Parameter(total_shape=[1, num_heads, 1, head_dim], device=mesh_device, dtype=dtype)
         self.compute_kernel_config = _hifi4(mesh_device)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -100,8 +114,10 @@ class Attention(Module):
         self.to_k = Linear(ctx_dim or dim, dim, mesh_device=mesh_device, compute_kernel_config=mm)
         self.to_v = Linear(ctx_dim or dim, dim, mesh_device=mesh_device, compute_kernel_config=mm)
         self.to_out = Linear(dim, dim, mesh_device=mesh_device, compute_kernel_config=mm)
-        self.q_rms_norm = MultiHeadRMSNorm(num_heads, self.head_dim, mesh_device=mesh_device)
-        self.k_rms_norm = MultiHeadRMSNorm(num_heads, self.head_dim, mesh_device=mesh_device)
+        self.fp32_qk = precision.fp32_qk
+        qk_dtype = ttnn.float32 if self.fp32_qk else ttnn.bfloat16
+        self.q_rms_norm = MultiHeadRMSNorm(num_heads, self.head_dim, mesh_device=mesh_device, dtype=qk_dtype)
+        self.k_rms_norm = MultiHeadRMSNorm(num_heads, self.head_dim, mesh_device=mesh_device, dtype=qk_dtype)
 
         grid = mesh_device.compute_with_storage_grid_size()
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
@@ -140,14 +156,20 @@ class Attention(Module):
         rotated = ttnn.matmul(x, tables.rot, compute_kernel_config=self.rope_compute_kernel_config)
         return ttnn.add(ttnn.multiply(x, tables.cos), ttnn.multiply(rotated, tables.sin))
 
+    def _qk(self, x: ttnn.Tensor, norm: MultiHeadRMSNorm, tables: DeviceTables) -> ttnn.Tensor:
+        x = self._heads(x)
+        if self.fp32_qk:
+            x = ttnn.typecast(x, ttnn.float32)
+        x = norm(x)
+        if self.is_self:
+            x = self._rope(x, tables)
+        return _norm_in(x)
+
     def forward(self, x: ttnn.Tensor, tables: DeviceTables, context: ttnn.Tensor | None = None) -> ttnn.Tensor:
         kv_in = x if self.is_self else context
-        q = self.q_rms_norm(self._heads(self.to_q(x)))
-        k = self.k_rms_norm(self._heads(self.to_k(kv_in)))
+        q = self._qk(self.to_q(x), self.q_rms_norm, tables)
+        k = self._qk(self.to_k(kv_in), self.k_rms_norm, tables)
         v = self._heads(self.to_v(kv_in))
-        if self.is_self:
-            q = self._rope(q, tables)
-            k = self._rope(k, tables)
         out = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -214,7 +236,8 @@ class TtStructureFlow(Module):
         self.precision = precision
         d = host.MODEL_CHANNELS
         io = _hifi4(mesh_device) if precision.io_hifi4 else None
-        self.input_layer = Linear(host.CHANNEL_PAD, d, mesh_device=mesh_device, compute_kernel_config=io)
+        k_in = host.CHANNEL_PAD * (2 if precision.fp32_input else 1)
+        self.input_layer = Linear(k_in, d, mesh_device=mesh_device, compute_kernel_config=io)
         self.blocks = ModuleList(Block(mesh_device=mesh_device, precision=precision) for _ in range(host.NUM_BLOCKS))
         self.final_norm = LayerNorm(
             d, norm_eps=host.FINAL_NORM_EPS, norm_elementwise_affine=False, mesh_device=mesh_device
@@ -231,7 +254,8 @@ class TtStructureFlow(Module):
             if k.startswith(host.HOST_KEYS):
                 del state[k]
         if "input_layer.weight" in state:
-            state["input_layer.weight"] = torch.nn.functional.pad(state["input_layer.weight"], (0, pad))
+            w = torch.nn.functional.pad(state["input_layer.weight"], (0, pad))
+            state["input_layer.weight"] = torch.cat([w, w], dim=1) if self.precision.fp32_input else w
         if "out_layer.weight" in state:
             state["out_layer.weight"] = torch.nn.functional.pad(state["out_layer.weight"], (0, 0, 0, pad))
             state["out_layer.bias"] = torch.nn.functional.pad(state["out_layer.bias"], (0, pad))
@@ -241,10 +265,11 @@ class TtStructureFlow(Module):
             cos, sin = host.rope_tables(host.grid_coords())
             expand = lambda t: t.reshape(1, 1, *t.shape).expand(1, host.NUM_HEADS, *t.shape).contiguous()
             dev = self.mesh_device
+            rope_tensor = float32_tensor if self.precision.fp32_qk else bf16_tensor
             self._tables[n_kv] = DeviceTables(
-                cos=bf16_tensor(expand(cos), device=dev),
-                sin=bf16_tensor(expand(sin), device=dev),
-                rot=bf16_tensor(host.pair_rotation(), device=dev),
+                cos=rope_tensor(expand(cos), device=dev),
+                sin=rope_tensor(expand(sin), device=dev),
+                rot=rope_tensor(host.pair_rotation(), device=dev),
                 cross_mask=bf16_tensor(host.cross_mask(host.RESOLUTION**3, n_kv), device=dev),
             )
         return self._tables[n_kv]
@@ -263,7 +288,10 @@ class TtStructureFlow(Module):
         tables = self.tables(cond.shape[1])
         mods = self.modulation(t)
         context = bf16_tensor(host.pad_context(cond.float()), device=dev)
-        h = self.input_layer(bf16_tensor(host.x_to_tokens(x.float()), device=dev))
+        tokens = host.x_to_tokens(x.float())
+        if self.precision.fp32_input:
+            tokens = hi_lo_split(tokens)
+        h = self.input_layer(bf16_tensor(tokens, device=dev))
         if self.precision.fp32_residual:
             h = ttnn.typecast(h, ttnn.float32)
         for block, mod in zip(self.blocks, mods):

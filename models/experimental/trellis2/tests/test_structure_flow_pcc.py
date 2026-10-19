@@ -18,12 +18,11 @@ import os
 import time
 
 import pytest
-import torch
 from loguru import logger
 
 from models.experimental.trellis2.reference import structure_flow_host as host
 from models.experimental.trellis2.tests import goldens
-from models.experimental.trellis2.tt.structure_flow import TtStructureFlow
+from models.experimental.trellis2.tt.structure_flow import Precision, TtStructureFlow
 
 SINGLE_PASS_PCC = 0.999
 LAST_CALL_PCC = 0.985
@@ -31,8 +30,8 @@ LAST_CALL_PCC = 0.985
 pytestmark = pytest.mark.skipif(goldens.missing_reason() is not None, reason=goldens.missing_reason() or "")
 
 
-def _model(mesh_device) -> TtStructureFlow:
-    model = TtStructureFlow(mesh_device=mesh_device)
+def _model(mesh_device, precision: Precision = Precision()) -> TtStructureFlow:
+    model = TtStructureFlow(mesh_device=mesh_device, precision=precision)
     model.load_torch_state_dict(host.load_state_dict(f"{goldens.weights_dir()}/{goldens.SS_CKPT}"))
     return model
 
