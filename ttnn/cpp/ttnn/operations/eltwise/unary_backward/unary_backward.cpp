@@ -1325,15 +1325,15 @@ std::vector<Tensor> sign_bw(
 }
 
 std::vector<Tensor> div_no_nan_bw(
-    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& grad, const Tensor& /*input*/, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor val = ttnn::full_like(input, scalar, input.dtype(), input.layout(), std::nullopt, output_mem_config);
-    Tensor result = where(
-        ttnn::eq(val, 0, std::nullopt, output_mem_config),
-        0.f,
-        ttnn::multiply(grad, 1 / scalar, std::nullopt, output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(result);
+    // Test the host float directly: a device copy of a subnormal scalar is flushed to zero.
+    if (scalar == 0.0f) {
+        grad_tensor.emplace_back(
+            ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config));
+    } else {
+        grad_tensor.emplace_back(ttnn::multiply(grad, 1.0f / scalar, std::nullopt, output_mem_config));
+    }
     return grad_tensor;
 }
 

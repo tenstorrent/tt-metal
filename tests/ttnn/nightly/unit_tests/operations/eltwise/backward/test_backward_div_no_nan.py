@@ -28,3 +28,22 @@ def test_bw_unary_div_no_nan(input_shapes, scalar, device):
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("scalar", [1.0e-38, -8.0e-39, 0.0, 0.5])
+def test_bw_div_no_nan_subnormal_scalar(scalar, dtype, device):
+    torch.manual_seed(0)
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    mag = torch.rand(1, 1, 32, 32) * 1.5 + 0.5
+    sign = torch.where(torch.rand(1, 1, 32, 32) < 0.5, -1.0, 1.0)
+    grad_data = (sign * mag * 1.0e-37).to(torch_dtype)
+    in_data = torch.rand(1, 1, 32, 32).to(torch_dtype)
+    grad_tensor = ttnn.from_torch(grad_data, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(in_data, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.to_torch(ttnn.div_no_nan_bw(grad_tensor, input_tensor, scalar)[0]).float()
+    s = torch.tensor(scalar, dtype=torch.float32)
+    golden = torch.zeros_like(grad_data.float()) if scalar == 0.0 else grad_data.float() / s
+
+    assert torch.allclose(output, golden, rtol=2e-2, atol=0.0)
