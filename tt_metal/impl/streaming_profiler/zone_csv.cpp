@@ -107,6 +107,7 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
         Row& r = rows_.emplace_back(row_for(d.core()));
         r.timer_id = legacy;
         r.timestamp = d.timestamp();
+        r.prog = d.runtime_id();
         r.data = payload.front();
         r.type = "TS_DATA";
     }
