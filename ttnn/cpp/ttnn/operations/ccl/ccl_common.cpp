@@ -17,6 +17,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/math.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -46,7 +47,7 @@ void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size)
     // tt_metal/fabric/erisc_datamover_builder.hpp
     constexpr size_t max_packet_payload_wormhole = 7616;
     constexpr size_t max_packet_payload_blackhole = 15232;
-    // NOC_SCATTER_WRITE_MAX_CHUNKS in tt_metal/fabric/fabric_edm_packet_header.hpp
+    // NOC_SCATTER_WRITE_MAX_CHUNKS in tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp
     constexpr size_t max_scatter_write_chunks = 4;
 
     if (page_size == 0) {
@@ -148,7 +149,7 @@ bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, 
         const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
                                      : mesh_view.get_fabric_node_ids_on_row(row_or_col);
         for (size_t i = 1; i < nodes.size(); i++) {
-            const auto directions = tt::tt_fabric::get_neighbor_eth_directions(nodes[i - 1], nodes[i]);
+            const auto directions = tt::tt_fabric::get_neighbor_eth_directions(mesh_device, nodes[i - 1], nodes[i]);
             if (directions.empty() || (axis_direction.has_value() && directions.front() != *axis_direction)) {
                 return false;
             }
@@ -161,6 +162,17 @@ bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, 
 tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
     const size_t l1_small_bank_size = mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
     return l1_small_bank_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
+}
+
+void warn_if_semaphores_fall_back_to_l1(tt::tt_metal::BufferType sem_buffer_type) {
+    if (sem_buffer_type == tt::tt_metal::BufferType::L1_SMALL) {
+        return;
+    }
+    log_warning(
+        tt::LogOp,
+        "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. "
+        "Pass a non-zero l1_small_size to ttnn.open_device / ttnn.open_mesh_device to reserve an L1_SMALL region "
+        "for them.");
 }
 
 size_t l1_small_floor_address(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
@@ -720,8 +732,8 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     const std::vector<ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
     std::optional<uint32_t> /*receiver_device_id*/,
     std::optional<uint32_t> /*sender_device_id*/) {
-    auto sender_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(tt::tt_metal::hal::get_arch());
-    auto receiver_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(tt::tt_metal::hal::get_arch());
+    auto sender_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    auto receiver_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     for (uint32_t i = 0; i < topology_config.num_links; ++i) {
         bool is_clockwise_direction_edm_enabled =
             !topology_config.is_linear || topology_config.ring_index != topology_config.ring_size - 1;
