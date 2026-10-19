@@ -464,6 +464,10 @@ UNARY_SFPU_OPS = {
     MathOperation.UnaryLe,
     MathOperation.UnaryEq,
     MathOperation.UnaryNe,
+    MathOperation.UnaryMax,
+    MathOperation.UnaryMin,
+    MathOperation.UnaryMaxInt32,
+    MathOperation.UnaryMinInt32,
     MathOperation.BitwiseNot,
     MathOperation.LeftShift,
     MathOperation.RightShift,
@@ -529,6 +533,7 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuLogaddexp,
     MathOperation.SfpuLogaddexp2,
     MathOperation.SfpuGcd,
+    MathOperation.SfpuLcm,
     MathOperation.SfpuElwRightShift,
     MathOperation.SfpuElwLeftShift,
     MathOperation.SfpuElwLogicalRightShift,
@@ -562,6 +567,7 @@ class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):
         "SfpuElwLe",
         "SfpuElwGe",
         "SfpuGcd",
+        "SfpuLcm",
     }
 
 
