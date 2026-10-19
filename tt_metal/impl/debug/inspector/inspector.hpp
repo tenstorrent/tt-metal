@@ -62,7 +62,8 @@ public:
     static void mesh_device_destroyed(const distributed::MeshDeviceImpl* mesh_device) noexcept;
     static void mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_device) noexcept;
 
-    // Events on a mesh buffer whose mesh device is gone are dropped.
+    // A mesh buffer still allocated when its mesh device is destroyed is reported deallocated then. Events on a mesh
+    // buffer whose mesh device is gone are dropped.
     static void mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer) noexcept;
     static void mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept;
 
@@ -113,6 +114,10 @@ public:
     static std::string get_kernel_elf_path(
         const MetalContext& context, int watcher_kernel_id, uint32_t processor_index);
     static void enable_kernel_path_collection(const MetalContext& context);
+
+private:
+    // Logs the deallocation of `mesh_buffer`, and of the socket whose config buffer it is, and forgets it.
+    static void remove_mesh_buffer(inspector::Data& data, const distributed::MeshBuffer* mesh_buffer);
 };
 
 }  // namespace tt::tt_metal
