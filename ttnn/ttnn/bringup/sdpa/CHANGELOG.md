@@ -5,6 +5,13 @@
 - Python: `ttnn.bringup.*` (was `ttnn.transformer.*`)
 - Forked for: mimo_v2_6_d_p attention V head dim 128 (non-MLA GQA)
 - Used by: mimo_v2_6_d_p (tt/attention.py: full and sliding layers, V 128)
+- Note (2026-10-19): the two lines above and "only the first two are carried and tested" below date from the fork.
+  Now also used by mimo_v2_6_d_p_2x2, glm53_flash_d_p (sparse_sdpa), xing40_a4b_d_p (ring_mla) and
+  deepseek_v41_flash_d_p (sparse_sdpa); sparse_sdpa and ring_mla are changed and tested here too (entries below);
+  README.md lists the calls. xing40_a4b_d_p calls `ttnn.bringup.ring_mla` at HiFi2 + fp32 DEST by default
+  (`XING_MLA_SDPA_FIDELITY=HiFi2`, the owner's exception for the SDPA; `HiFi4` is the previous setting;
+  `tt/attention.py`), and its model case in `tests/cases.py`
+  (`xing40_a4b_d_p-4x2-ring-mla-q16x1280-isl51200-n56320-k576-v512-hifi2-fp32-q64k256`) runs HiFi2 + fp32 DEST.
 
 Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMake target `ttnn_op_bringup_sdpa`, kernel paths and includes pointing at this folder, Python prefix `ttnn.bringup.`.
 

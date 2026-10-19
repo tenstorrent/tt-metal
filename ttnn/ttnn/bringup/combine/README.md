@@ -6,7 +6,7 @@ Fork of `ttnn.experimental.deepseek_prefill.combine` (source
 of `dispatch`. For each valid row of each local expert's region in the expert-output buffer it reads the dispatch
 metadata (origin chip, token, top-k slot) and writes the row to `out[token, topk_slot]` on the origin chip (NoC locally,
 fabric remotely). Output `(1, 1, S, K, H)`; slots of experts outside this dispatch group stay zero (`init_zeros`) or
-uninitialized. No routing weight is applied (the kernels have none, despite the docstring's "weighted"): the caller
+uninitialized. No routing weight is applied (no kernel reads one): the caller
 does the weighted top-k sum.
 
 This fork adds: a 1-device dispatch axis. With one device on the axis (or `num_links == 0`) all fabric setup is skipped
@@ -28,11 +28,11 @@ Keyword (required): `dispatch_group_size`, `experts_per_chip`, `num_experts_per_
 Keyword (optional):
 - `memory_config=None`: interleaved L1 or DRAM; defaults to the buffer's.
 - `subdevice_id=None`.
-- `cluster_axis=None`: combine mesh axis (docstring says default 0; binding default is None).
+- `cluster_axis=None`: combine mesh axis; only 0 / None pass validation, FABRIC_2D needs 0 explicitly.
 - `num_links=1`: fabric links; 0 also disables fabric (fork gate).
 - `topology=Topology.Linear` (Linear or Ring).
 - `init_zeros=True`: zero the output first.
-- `use_l1_small_for_semaphores=False` (bound, not in the docstring).
+- `use_l1_small_for_semaphores=False`: the GlobalSemaphores in L1_SMALL instead of L1.
 - `use_fp8_combine=False`: fp8_e4m3 output (Blackhole).
 No fork-only option: the fork change is automatic on a 1-device axis.
 

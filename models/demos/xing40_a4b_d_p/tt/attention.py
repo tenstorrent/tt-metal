@@ -80,8 +80,9 @@ def sdpa_q_chunk() -> int:
 
 
 def sdpa_impl() -> str:
-    """XING_MLA_SDPA: ``fork`` (default) = ttnn.bringup.ring_mla at HiFi4 + fp32 DEST (the fork runs latent-V ring
-    attention on the streaming path with fp32 accumulation); ``source`` = ttnn.transformer.ring_mla at HiFi4 + bf16
+    """XING_MLA_SDPA: ``fork`` (default) = ttnn.bringup.ring_mla at XING_MLA_SDPA_FIDELITY (default HiFi2) + fp32
+    DEST (the fork runs latent-V ring attention on the streaming path with fp32 accumulation); ``source`` =
+    ttnn.transformer.ring_mla at HiFi4 + bf16
     DEST (the owner's 06:35 setting; its bf16 QK^T accumulation fails the component test's x2-input check)."""
     impl = settings.get("MLA_SDPA")
     assert impl in ("fork", "source"), f"XING_MLA_SDPA must be fork or source, got {impl}"

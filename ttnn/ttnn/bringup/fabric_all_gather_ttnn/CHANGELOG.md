@@ -17,6 +17,9 @@ edited; the stock namespace is spelled out in full). Also here: the Python proto
 `plan()` is the planning code ttnn.bringup.fabric_reduce_scatter uses), its README / report (`README_python.md`,
 `report_python.md`) and CLI (`python -m ttnn.bringup.fabric_all_gather_ttnn`).
 
+Note (2026-10-19): "~84% of a LoudBox link (README.md)" above is unsourced: the README it cites never had that number,
+and no test, log or report in this tree records the measurement.
+
 Mechanical changes (fork_op.py on a temporary checkout of the source folder): namespace `ttnn::operations::bringup`,
 CMake target `ttnn_op_bringup_fabric_all_gather_ttnn`, kernel paths and includes pointing at this folder, Python prefix `ttnn.bringup.`.
 

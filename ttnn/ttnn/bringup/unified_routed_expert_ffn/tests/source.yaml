@@ -20,7 +20,8 @@
 # Not covered: the fork's two changes (GeluTanh, high_precision=True), since no upstream test has them; the fork's own
 # tests/test_unified_routed_expert_ffn.py covers them (the model cases).
 #
-# Baseline 103/103 on both the original and the fork, no gaps. Recording took about 8.5 minutes, one entry at a time;
+# Baseline (tests/source_baseline.json, upstream_sha 8d964822541): 75/75 passed on both the original and the fork, no
+# gaps (this line said 103/103 before; the baseline file holds 75 entries). Recording took about 8.5 minutes, one entry at a time;
 # a check (fork only, warm) about 3 minutes.
 upstream_sha: 8d964822541a8846daf5d221ff531df4069f3635
 swap:

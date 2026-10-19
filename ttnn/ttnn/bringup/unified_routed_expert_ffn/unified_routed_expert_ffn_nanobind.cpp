@@ -63,7 +63,16 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             activation (ttnn.RoutedExpertActivation, optional):
                 Silu (default, DeepSeek), SwiGluOai (clamped, MiniMax-M3 / gpt-oss),
                 SituGlu (tanh-capped, Kimi K3; Blackhole only), or ClampedSiluGlu
-                (silu(min(gate,10)) * clamp(up,+/-10), DeepSeek V4; Blackhole only).
+                (silu(min(gate,10)) * clamp(up,+/-10), DeepSeek V4; Blackhole only),
+                or GeluTanh (bring-up fork).
+            gate_biases, up_biases, down_biases (list[ttnn.Tensor], optional): default None.
+                Per-local-expert biases (gpt-oss): all three lists together or none, one entry
+                per local expert.
+            min_active_tokens (int, optional): default 0.
+            max_active_tokens (int, optional): default 2**32 - 1. The active-token band this op
+                owns: an expert whose token count falls outside [min, max] is dropped like a zero
+                count. Wide open by default; a hybrid dispatch narrows it so this op and
+                moe_fused_swiglu split the experts by load over one shared counts vector.
             high_precision (bool, optional): default False. When True, every activation
                 honours compute_kernel_config's math_fidelity and fp32_dest_acc_en (by
                 default only GeluTanh does; the others run LoFi with a bf16 dest), and x

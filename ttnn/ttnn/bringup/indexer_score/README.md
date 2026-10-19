@@ -56,8 +56,6 @@ Fork additions marked; the rest as the source (`indexer_score_nanobind.cpp`).
 
 ## Limits
 - fp32 DEST: DSA only (not MSA, not block pooling); `dst_full_sync_en` must stay False.
-- The nanobind docstrings of `indexer_score_dsa` / `indexer_score_msa` still say `fp32_dest_acc_en` must stay false and
-  only math_fidelity is honoured; for DSA the fork accepts fp32 DEST (code in `device/indexer_score_device_operation.cpp`).
 - `natural_query_blocks`: axis ring only, block-cyclic layout required, no metadata (`chunk_start_idx_tensor`) path.
 - Source multi-device tests are not carried (they open FABRIC_1D / torus meshes); the ring op is covered by the
   fork's own 2x2 FABRIC_2D tests. `tests/unit/test_key_stride_ring.py` has a 2x4 case skipped on a 2x2 box.
