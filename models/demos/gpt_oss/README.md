@@ -37,32 +37,41 @@ plus its own next token. The output is the target's greedy output (up to BF16 ro
 ```bash
 export HF_MODEL=openai/gpt-oss-20b
 pytest models/demos/gpt_oss/demo/dflash_demo.py -k "isl_1k"   # isl_256, isl_512, isl_1k, ... isl_64k, isl_128k
-pytest models/demos/gpt_oss/tests/test_dflash.py               # accuracy vs. the target's own greedy decode
+pytest models/demos/gpt_oss/tests/test_dflash.py               # accuracy vs. the target's own greedy decode (1K, 16K)
 ```
 
-All three passes of a round run as device traces, and the host reads one small result per round:
+The demo and the test download the drafter and the prompt's books (gutenberg.org) on first use; without network
+access they skip (under CI they fail). `DFLASH_DRAFT_PATH` points at a local copy of the drafter checkpoint instead
+of the HuggingFace cache.
+
+A round is three passes, captured as one device trace and replayed once per round; the host reads one small result
+per round:
 - draft pass: [tt/dflash/fused_draft.py](tt/dflash/fused_draft.py);
 - 8-row verify pass: [tt/dflash/verify.py](tt/dflash/verify.py);
 - context pass (adds the accepted tokens' target features to the drafter's K / V cache).
 
-The drafter attends to the last 512 positions.
+The drafter attends to the last 1024 positions. The chat template writes "Current date: ..." into the prompt, so the
+demo pins that date (`PROMPT_DATE`): the answer, and with it the tokens accepted per round, changes with the date.
 
-| Prompt length (tokens) | Tokens per round | Round (ms) | DFlash (tok/s/user) |
-|---|---|---|---|
-| 256 | 4.03 | 4.928 | 799.1 |
-| 512 | 2.90 | 4.833 | 602.0 |
-| 1,024 | 3.36 | 4.980 | 676.4 |
-| 2,048 | 3.39 | 5.042 | 668.1 |
-| 4,096 | 3.34 | 5.021 | 662.2 |
-| 8,192 | 3.28 | 5.093 | 644.4 |
-| 16,384 | 3.27 | 5.243 | 626.0 |
-| 32,768 | 3.59 | 5.549 | 649.8 |
-| 65,536 | 4.20 | 6.186 | 678.4 |
-| 130,752 | 3.41 | 7.259 | 470.2 |
+| Prompt length (tokens) | Tokens per round | Draft (ms) | Verify (ms) | Round (ms) | DFlash (tok/s/user) | DFlash, mean of 5 dates | Plain decode (tok/s/user) |
+|---|---|---|---|---|---|---|---|
+| 256 | 4.03 | 1.02 | 3.79 | 4.842 | 813.4 | 771.9 | 415.2 |
+| 512 | 3.04 | 1.02 | 3.69 | 4.749 | 641.7 | 689.3 | 408.9 |
+| 1,024 | 4.11 | 1.06 | 3.88 | 4.967 | 831.3 | 717.5 | 404.9 |
+| 2,048 | 3.32 | 1.05 | 3.87 | 4.957 | 670.7 | 696.0 | 401.0 |
+| 4,096 | 3.34 | 1.05 | 3.83 | 4.923 | 675.4 | 703.1 | 393.1 |
+| 8,192 | 3.46 | 1.06 | 3.98 | 5.074 | 681.8 | 638.6 | 375.8 |
+| 16,384 | 3.31 | 1.05 | 4.07 | 5.162 | 644.1 | 665.7 | 360.9 |
+| 32,768 | 3.76 | 1.06 | 4.38 | 5.474 | 687.7 | 698.9 | 337.9 |
+| 65,536 | 3.94 | 1.06 | 4.83 | 5.921 | 665.1 | 636.2 | 302.3 |
+| 130,752 | 3.37 | 1.11 | 5.65 | 6.739 | 499.8 | 482.2 | 258.5 |
 
-Measured with the demo above (one `-k isl_*` case per row: the chat-template Gutenberg prompt, 256 new tokens). For
-comparison, plain batch-1 decode (`pytest models/demos/gpt_oss/demo/text_demo.py -k "1x4 and prefill_128"`) runs at
-2.37 ms per token (421 tok/s/user) on the same build.
+QuietBox 2, 256 new tokens. Round and DFlash: the demo above (one `-k isl_*` case per row: the chat-template
+Gutenberg prompt dated 2026-10-17). Draft and verify: the same rounds with each pass timed on its own (a device
+synchronize after each pass; the round also holds the context pass, ~0.1 ms). Mean of 5 dates: the same prompt dated
+2026-10-15 .. 2026-10-19. Plain decode: the fused batch-1 decode on the same build, a random-token prompt of the same
+length (130,943 tokens for the last row); `pytest models/demos/gpt_oss/demo/text_demo.py -k "1x4 and prefill_128"`
+gives 2.38 ms per token (420 tok/s/user).
 
 | File | Role |
 |---|---|
