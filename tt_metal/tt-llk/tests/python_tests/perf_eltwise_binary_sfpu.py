@@ -3,7 +3,6 @@
 
 import pytest
 import test_eltwise_binary_sfpu as _func
-from conftest import skip_for_quasar
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
@@ -180,7 +179,6 @@ def test_perf_eltwise_binary_sfpu_float_shallow(
 
 
 @pytest.mark.perf
-@skip_for_quasar
 @parametrize(
     **_func.MIXED_FORMAT_SWEEP,
     **_PERF_AXES,

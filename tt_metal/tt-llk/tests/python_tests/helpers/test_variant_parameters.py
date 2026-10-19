@@ -1660,24 +1660,6 @@ class TILE_COUNT(RuntimeParameter):
 
 
 @dataclass
-class WORK_TILES(RuntimeParameter):
-    """Tiles the kernel actually walks.
-
-    Block driver: loop_factor * num_blocks * num_tiles_in_block.
-    Broadcast kernel: loop_factor * (tile_cnt_A + tile_cnt_B). It ignores block
-    geometry and unpacks two tiles per loop.
-    """
-
-    work_tiles: int = 0
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t WORK_TILES = {self.work_tiles};"
-
-    def convert_to_struct_fields(self) -> tuple[str, str]:
-        return f"std::uint32_t WORK_TILES;", "I"
-
-
-@dataclass
 class NUM_GUARD_TILES(RuntimeParameter):
     count: int = 0
 

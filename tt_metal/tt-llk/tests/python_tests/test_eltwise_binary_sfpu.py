@@ -9,7 +9,6 @@ from typing import Dict
 
 import pytest
 import torch
-from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -69,7 +68,6 @@ from helpers.test_variant_parameters import (
     SFPU_DST_ROUNDING_MODE,
     SIGN_MAGNITUDE_FORMAT,
     TILE_COUNT,
-    WORK_TILES,
     ZERO_POINT,
     generate_input_dim,
 )
@@ -657,7 +655,6 @@ def sfpu_binary(
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half, geometry_dest_acc, formats, block_dimensions, TILE_DIMENSIONS
     )
-    work_tiles = loop_factor * num_blocks * num_tiles_in_block
 
     run_types = _resolve_perf_args(is_perf, perf_report, run_types)
 
@@ -682,7 +679,6 @@ def sfpu_binary(
         ],
         "runtimes": [
             TILE_COUNT(result_tile_cnt),
-            WORK_TILES(work_tiles),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             LOOP_FACTOR(loop_factor),
@@ -921,7 +917,6 @@ MIXED_FORMAT_SWEEP = dict(
 )
 
 
-@skip_for_quasar
 @parametrize(**MIXED_FORMAT_SWEEP)
 def test_eltwise_binary_sfpu_mixed_format(formats, mathop, dest_acc, **run_kwargs):
     sfpu_binary(
@@ -2092,7 +2087,6 @@ def _run_sfpu_add_top_row(
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
-            WORK_TILES(loop_factor * num_blocks * num_tiles_in_block),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             LOOP_FACTOR(loop_factor),
@@ -2273,7 +2267,6 @@ def _run_sfpu_binary_bcast(
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A + tile_cnt_B),
-            WORK_TILES(loop_factor * (tile_cnt_A + tile_cnt_B)),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             LOOP_FACTOR(loop_factor),
