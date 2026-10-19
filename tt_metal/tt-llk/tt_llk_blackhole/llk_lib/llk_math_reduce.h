@@ -199,17 +199,12 @@ inline void reduce_scalar_transpose_pool()
     // copy over from dest to B and do transpose
     // use rows 16 - 31 in src B as scratch
     TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, row);
-    TTI_GATESRCRST(0b1, 0b1);
     TTI_TRNSPSRCB;
-    // gate math instructions until src B has been updated
-    TTI_GATESRCRST(0b1, 0b1);
     // copy over all 16 rows from B to A
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
-    // gate math instructions until src A has been updated by MOV instructions
-    TTI_GATESRCRST(0b1, 0b1);
     // zero out scratch in dest
     TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, clear_32b, 0, ADDR_MOD_0, row);
 
@@ -285,14 +280,11 @@ inline void reduce_scalar_transpose_upper()
 {
     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
     TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, row);
-    TTI_GATESRCRST(0b1, 0b1);
     TTI_TRNSPSRCB;
-    TTI_GATESRCRST(0b1, 0b1);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 16, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 20, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 24, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 28, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
-    TTI_GATESRCRST(0b1, 0b1);
     TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, clear_32b, 0, ADDR_MOD_0, row);
 }
 
