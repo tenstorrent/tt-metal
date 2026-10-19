@@ -14,8 +14,12 @@ split-reader halves of one op; they differ only in ``reader_id``). Compile-time 
     interleaved                                                                         [H]
   * grid batching factor 7 (``batch_output_channels``: the 7 height points of each BEV
     cell in one stick), grid_hw 576 -> grid [1, 1, 576, 14] after the reshape            [H]
-  * grid HEIGHT_SHARDED, 32 sticks per core on the 5x4 grid (and the 28-B-row
-    interleaved->sharded copy ``128759`` that put it there)                           [H/M]
+  * grid HEIGHT_SHARDED, 32 sticks per core on the 5x4 grid (and the interleaved->sharded
+    copy ``128759`` that put it there; 28-B logical rows)                             [H/M]
+  * the grid shard width is padded 14 -> 16 bf16 (32 B, L1-aligned), as upstream's
+    ``prepare_sharded_grid_memory_config`` does: the sharded factory strides the grid shard by
+    ``padded_shape[-1] * elem_size`` while the buffer stores rows at the L1-aligned page size,
+    so an unaligned shard width (28 B) reads every row after the first at the wrong offset.
   * output [1, 1, 576, 1792] float32 ROW_MAJOR, sharded like the grid (32, 1792)          [H]
 
 The precomputed grid is made on host with ``ttnn.prepare_grid_sample_grid`` from a
@@ -31,6 +35,7 @@ import ttnn
 from models.experimental.ops.quasar.tests.oft_ops import op_utils as U
 
 K = U.GRID_POINTS
+L1_ALIGNMENT_BYTES = 16
 
 
 def _make_grid(rows, h, w):
@@ -70,7 +75,9 @@ def _run(mesh, in_shape, rows, sharded):
     tt_grid = ttnn.to_device(grid_host, mesh)
     kwargs = {}
     if sharded:
-        tt_grid = ttnn.to_memory_config(tt_grid, U.resolve_memcfg(("hs", (U.TILE, 2 * K)), mesh))
+        # L1-align the shard row (14 -> 16 bf16 = 32 B); see module docstring.
+        grid_shard_w = -(-2 * K * 2 // L1_ALIGNMENT_BYTES) * L1_ALIGNMENT_BYTES // 2
+        tt_grid = ttnn.to_memory_config(tt_grid, U.resolve_memcfg(("hs", (U.TILE, grid_shard_w)), mesh))
         kwargs["memory_config"] = U.resolve_memcfg(("hs", (U.TILE, K * c)), mesh)
 
     tt_inp = U.to_tt(inp, mesh, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
