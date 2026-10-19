@@ -78,8 +78,8 @@ M8 rows (references; design ``docs/M8_DESIGN.md`` section 9.4; cases = the golde
                           ``crop == (4, 4, 1020, 1020)``, ``image_tokens == 4096`` (shape / crop only, no quality band;
                           the design's 1000x1000 example pads to a 1008 canvas whose /8 VAE level is not tile-aligned and
                           is refused by the policy, see test_references_flux3_klein.py).
-  P6 test_admission_before_device  a request over capacity (4096x4096 + 10 references + the prompt): ``generate`` raises
-                          ``Flux3KleinAdmissionError`` with ``budget == "total_tokens"`` and leaves the denoisers'
+  P6 test_admission_before_device  a structurally invalid request (a 4112 side, + 10 references + the prompt): ``generate``
+                          raises ``Flux3KleinAdmissionError`` with ``budget == "side"`` and leaves the denoisers'
                           captured keys, the DRAM / TRACE per bank and the encoder untouched, AND makes zero calls into
                           any device entry point (``DeviceCallCounter``: ``ttnn.from_torch`` / ``to_device`` /
                           ``allocate_tensor_on_device`` / ``copy``, ``utils.tensor.from_torch``, the VAE encoder's
@@ -410,7 +410,8 @@ def test_request_resolve(expect_error) -> None:
     zero_ref = Flux3KleinRequest(prompt="x", width=0, height=0, images=(Image.new("RGB", (1000, 1000)),)).resolve()
     assert (zero_ref.width, zero_ref.height, zero_ref.crop) == (1008, 1008, (4, 4, 1004, 1004)), zero_ref
     assert Flux3KleinRequest(prompt="x", width=1008, images=(Image.new("RGB", (1000, 1000)),)).resolve().crop is None
-    over = admit(
+    # no token budget (2026-10-19): the structural worst case is admitted, a side over MAX_SIDE is refused
+    worst = admit(
         replace(
             Flux3KleinRequest(
                 prompt="x", width=4096, height=4096, images=(Image.new("RGB", (1024, 1024)),) * 10
@@ -419,8 +420,10 @@ def test_request_resolve(expect_error) -> None:
         ),
         (4, 8),
     )
-    assert not over.ok and over.budget == "total_tokens", over
-    with expect_error(Flux3KleinAdmissionError, "total tokens"):
+    assert worst.ok and worst.measured["total_tokens"] == 65536 + 40960 + 80, worst
+    over = admit(replace(Flux3KleinRequest(prompt="x", width=4112, height=4096).resolve(), text_length=80), (4, 8))
+    assert not over.ok and over.budget == "side", over
+    with expect_error(Flux3KleinAdmissionError, "outside"):
         raise Flux3KleinAdmissionError(over)
 
     noise = make_noise(7, 64, 64)
@@ -711,15 +714,12 @@ def expected_total_tokens(golden: GoldenCase) -> int:
 
 
 def skip_unless_bucket_measured(pipeline: Flux3KleinPipeline, request: Flux3KleinRequest, name: str) -> None:
-    """A reference request is admitted only up to the largest MEASURED token bucket of the mesh (``policy.CAPACITY``);
-    until the bucket that holds it has run on the ring (and its DRAM / TRACE line is cited in the table) the row is
-    SKIPPED with the admission, not failed: the gate is unmeasured, not missed."""
+    """Every structurally valid request is admitted (no token budget since 2026-10-19); the row asserts the admission
+    and logs the token sum before the device run."""
     resolved = request.resolve()
     resolved = replace(resolved, text_length=pipeline.text_length(resolved.prompt))
     admission = admit(resolved, pipeline.mesh_shape)
-    if not admission.ok and admission.budget == "total_tokens":
-        logger.info(f"RESULT {name}: SKIPPED, capacity bucket not measured: {admission.reason}; {admission.measured}")
-        pytest.skip(f"{name}: {admission.reason} (the bucket is measured on the ring before it enters policy.CAPACITY)")
+    logger.info(f"RESULT {name}: admitted {admission.measured}")
     assert admission.ok, admission
 
 
@@ -948,12 +948,12 @@ def check_admission_before_device(pipeline: Flux3KleinPipeline, name: str, expec
     request = Flux3KleinRequest(
         prompt="a photo",
         model="distilled",
-        width=4096,
+        width=4112,  # over MAX_SIDE: the structural refusal (no token budget since 2026-10-19)
         height=4096,
         images=(synthetic_reference(1024, 1024, 9),) * 10,
     )
     t0 = time.time()
-    with DeviceCallCounter(pipeline) as counter, expect_error(Flux3KleinAdmissionError, "total tokens") as info:
+    with DeviceCallCounter(pipeline) as counter, expect_error(Flux3KleinAdmissionError, "outside") as info:
         pipeline.generate(request, traced=True)
     wall = time.time() - t0
     admission = info.value.admission
@@ -966,10 +966,7 @@ def check_admission_before_device(pipeline: Flux3KleinPipeline, name: str, expec
         f"{keys_before == keys_after}; encoder untouched {pipeline.vae_encode.last_wall_s == wall_before}; device "
         f"entry-point calls during the refused generate {counter.total} {counter.counts}"
     )
-    assert (
-        admission.budget == "total_tokens"
-        and admission.measured["total_tokens"] > admission.measured["max_total_tokens"]
-    )
+    assert admission.budget == "side" and admission.measured["width"] == 4112, admission
     assert before == after, "the refused request changed the device memory"
     assert keys_before == keys_after and pipeline.vae_encode.last_wall_s == wall_before
     assert counter.total == 0, f"the refused request reached a device entry point: {counter.counts}"

@@ -26,10 +26,10 @@ Rows:
                                         of the row max (fp32 reduction order of the CPU convolutions differs with the
                                         thread count / BLAS blocking, reproducibly on the producing node itself;
                                         bit-equality is logged, not asserted).
-  R3  test_policy_references            ``admit`` rows: 1024 + 1 ref (8512) admitted at the measured capacity 12608
-                                        (refused with ``total_tokens`` while the table was at the M7 bucket 4416);
-                                        the 4096x4096 + 10 refs + 4096 text worst case -> ``total_tokens`` with
-                                        ``measured["total_tokens"] == 110592``; 11 refs -> ValueError at resolve; an
+  R3  test_policy_references            ``admit`` rows: 1024 + 1 ref (8512) admitted; the 4096x4096 + 10 refs + 4096
+                                        text structural worst case ADMITTED with ``measured["total_tokens"] ==
+                                        110592`` (no token budget since 2026-10-19); a 4112 side -> ``side``;
+                                        11 refs -> ValueError at resolve; an
                                         80x80 reference (level rows 6400 / 1600 / 400 / 100) -> ``reference_size``;
                                         a 1000x1000 reference (canvas 1008, level 15876 rows) -> ``reference_size``;
                                         the measured dict carries every field of design section 6.
@@ -243,7 +243,7 @@ def test_policy_references(expect_error) -> None:
     from PIL import Image
 
     cap = CAPACITY[(4, 8)]
-    assert cap.max_references == 10 and cap.max_total_tokens is not None and cap.measured_buckets
+    assert cap.max_references == 10 and not hasattr(cap, "max_total_tokens")
     ref1024 = Image.new("RGB", (1024, 1024))
     one = replace(Flux3KleinRequest(prompt="x", model="distilled", images=(ref1024,)).resolve(), text_length=320)
     assert (one.width, one.height, one.crop) == (1024, 1024, None)
@@ -260,8 +260,8 @@ def test_policy_references(expect_error) -> None:
         "samples",
         "width",
         "height",
-        "max_total_tokens",
     }
+    assert "max_total_tokens" not in m
     assert (m["image_tokens"], m["cond_tokens"], m["references"], m["total_tokens"], m["samples"]) == (
         4096,
         4096,
@@ -269,18 +269,19 @@ def test_policy_references(expect_error) -> None:
         4096 + 4096 + 320,
         1,
     )
-    if cap.max_total_tokens < 8512:
-        assert not a.ok and a.budget == "total_tokens", a
-    else:
-        assert a.ok, a
+    assert a.ok, a
     base = replace(Flux3KleinRequest(prompt="x", model="base", images=(ref1024,)).resolve(), text_length=320)
     assert admit(base, (4, 8)).measured["text_null"] == 80 and admit(base, (4, 8)).measured["samples"] == 2
-    # the structural worst case: 4096 x 4096 + 10 references of 1 MP + 4096 text tokens
+    # the structural worst case: 4096 x 4096 + 10 references of 1 MP + 4096 text tokens is ADMITTED (no token budget)
     worst = Flux3KleinRequest(prompt="x", model="distilled", width=4096, height=4096, images=(ref1024,) * 10).resolve()
     worst = replace(worst, text_length=4096)
     w = admit(worst, (4, 8))
-    assert not w.ok and w.budget == "total_tokens" and w.measured["total_tokens"] == 110592, w
+    assert w.ok and w.budget is None and w.measured["total_tokens"] == 110592, w
     assert w.measured["references"] == 10 and w.measured["cond_tokens"] == 40960
+    # a side over MAX_SIDE is the structural refusal
+    wide = replace(Flux3KleinRequest(prompt="x", model="distilled", width=4112, height=4096).resolve(), text_length=80)
+    wd = admit(wide, (4, 8))
+    assert not wd.ok and wd.budget == "side" and "outside" in wd.reason, wd
     # eleven references never reach admit
     with expect_error(ValueError, "at most 10 references"):
         Flux3KleinRequest(prompt="x", images=(ref1024,) * 11).resolve()
@@ -311,7 +312,7 @@ def test_policy_references(expect_error) -> None:
     sized = Flux3KleinRequest(prompt="x", model="distilled", width=512, height=768, images=(ref1024,)).resolve()
     assert (sized.width, sized.height, sized.crop) == (512, 768, None)
     logger.info(
-        f"RESULT policy references: 1 ref 1024 total {m['total_tokens']} (capacity {cap.max_total_tokens}: "
-        f"{'admitted' if a.ok else a.budget}); worst case {w.measured['total_tokens']} -> {w.budget}; 80x80 -> "
+        f"RESULT policy references: 1 ref 1024 total {m['total_tokens']} admitted; worst case "
+        f"{w.measured['total_tokens']} admitted (no token budget); 4112 side -> {wd.budget}; 80x80 -> "
         f"{s.budget}; 1000x1000 (1008 canvas) -> {pd.budget}; 1008 canvas -> {c.budget}; 11 refs -> ValueError"
     )
