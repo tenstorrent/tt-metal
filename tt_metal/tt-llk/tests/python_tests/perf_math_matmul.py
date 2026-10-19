@@ -261,6 +261,7 @@ def test_perf_math_matmul(
                     matmul_config.tile_dimensions.kt_dim,
                     matmul_config.tile_dimensions.in0_tile_r_dim,
                     matmul_config.tile_dimensions.in1_tile_c_dim,
+                    throttle,
                 )
             ),
         ],

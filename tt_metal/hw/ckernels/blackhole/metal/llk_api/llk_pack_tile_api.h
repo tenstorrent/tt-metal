@@ -159,14 +159,16 @@ inline void llk_matmul_pack(
     }
 }
 
-// Matmul output blocks take llk_pack_block where the tt-llk matmul sweep reads it faster: DestSync full, and with DestSync
-// half the pack-bound LoFi blocks of one K tile. More K tiles at LoFi read slower in Llama FF1 (+1 percent).
-template <MathFidelity math_fidelity, std::uint32_t kt_per_section, std::uint32_t output>
+// Matmul output blocks take llk_pack_block where the tt-llk sweep reads it faster: DestSync full, and half sync at LoFi
+// with one K tile; a static math throttle of 4 or more at half sync keeps the per-tile pack (math bounds the block).
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, std::uint32_t output, int throttle_level = 0>
 constexpr bool llk_matmul_block_pack() {
     if constexpr (math_fidelity == MathFidelity::LoFi && kt_per_section > 1) {
         return false;
     } else if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
         return true;
+    } else if constexpr (throttle_level >= 4) {
+        return false;
     } else {
         constexpr bool small_tile = pack_tile_num_faces[output] != 4 || pack_tile_face_r_dim[output] != FACE_R_DIM ||
                                     pack_partial_face[output] != 0;
