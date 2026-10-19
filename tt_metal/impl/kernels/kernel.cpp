@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <core_coord.hpp>
 #include <device.hpp>
 #include <fmt/format.h>
@@ -267,7 +268,10 @@ void ComputeKernel::process_defines(
     // per-tile calls only where math is long enough to hide the whole-tile wait (above LoFi or with one DEST section).
     callback(
         "PER_TILE_HANDOFF_GAINS",
-        (this->config_.math_fidelity != MathFidelity::LoFi || this->config_.dst_full_sync_en) ? "1" : "0");
+        (std::getenv("EB_NOGATE") != nullptr || this->config_.math_fidelity != MathFidelity::LoFi ||
+         this->config_.dst_full_sync_en)
+            ? "1"
+            : "0");  // scratch toggle EB_NOGATE: the head's behaviour
     // pass default noc mode as compute does not need it, just for compile to pass
     callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
 }
