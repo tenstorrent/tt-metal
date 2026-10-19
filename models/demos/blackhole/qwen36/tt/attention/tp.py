@@ -773,6 +773,11 @@ class TPAttention:
                 # The grid is divided across all groups (8 users at T=4: 110 // 8 = 13 cores/head),
                 # capped at the table's 1-user count, which is the one known to fit L1.
                 max_cores = min(max_cores, max(1, (grid.x * grid.y) // groups))
+                # QWEN36_VERIFY_SDPA_MAX_CORES (unset = the table above): device sweep knob for cores per group; the
+                # fused SDPA costs 55 us/layer at 8 users x T=4 vs 23 us for plain decode at 32 rows (note 42).
+                _mc_env = os.environ.get("QWEN36_VERIFY_SDPA_MAX_CORES")
+                if _mc_env:
+                    max_cores = max(1, int(_mc_env))
                 plan = (
                     ttnn.SDPAProgramConfig(
                         compute_with_storage_grid_size=(grid.x, grid.y),
@@ -814,6 +819,7 @@ class TPAttention:
         spec_page_table=None,
         spec_n_users=1,
         spec_user_page_table=None,
+        spec_pos_groups=None,
     ):
         """One decode step for B "users".
 
@@ -842,8 +848,30 @@ class TPAttention:
         ``page_table`` equals row u of this table for every (u, j): true for the verify, not for the
         reseed (whose padding rows point at a scratch block). None derives each group's table from
         ``page_table`` with a strided slice.
+
+        spec_pos_groups: QWEN36_VERIFY_ATTN_LEAN only; list of T device int32 [n_users] tensors, entry j = the strided
+        slice cur_pos[j::T] (group j's KV positions). The verify model builds them once per trace; None = slice here.
         """
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
+        if (
+            alias_kv_write
+            and spec_verify_mode
+            and self._verify_lean_eligible(
+                x.shape[-2], page_table is not None, spec_n_users, spec_user_page_table, spec_page_table
+            )
+        ):
+            return self._forward_verify_lean(
+                x,
+                cur_pos_tt,
+                cos_tt,
+                sin_tt,
+                page_table,
+                decode_ar,
+                spec_n_users,
+                spec_user_page_table,
+                spec_page_table,
+                spec_pos_groups,
+            )
         # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
         # BUCKETED decode: a request feeds B<self.B users; every shape/reshape/rope/head-split and
         # the KV-update shard config below run at this width, and the paged SDPA reads only these B
@@ -1070,6 +1098,182 @@ class TPAttention:
         else:
             gated_flat = ttnn.reshape(gated, (1, B, NH * HD))
             ttnn.deallocate(gated)
+        wo_partial = self._wo_proj(gated_flat, tw["wo"])
+        ttnn.deallocate(gated_flat)
+        wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
+        if decode_ar is not None:
+            return decode_ar.all_reduce(wo_partial)
+        return tt_all_reduce(
+            wo_partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _kv_fused_cores_ok(self, n):
+        """Whether the fused K+V cache update can take an n-row group: its two inputs need disjoint, equal-size core sets.
+        V sits on _kv_shard_cfg(n) (n cores filled row-wise, at most 8 per row), K on _kv_key_shard_cfg(n) (cores
+        [n, 2n) of the row-wise numbering over the full grid width). They collide only for n > 8 or so."""
+        cache = getattr(self, "_kv_fused_ok_cache", None)
+        if cache is None:
+            cache = self._kv_fused_ok_cache = {}
+        if n not in cache:
+            grid = self.mesh.compute_with_storage_grid_size()
+            cols = next(c for c in range(min(8, n), 0, -1) if n % c == 0)
+            v_cores = {(x, y) for y in range(n // cols) for x in range(cols)}
+            k_cores = {(i % grid.x, i // grid.x) for i in range(n, 2 * n)}
+            inside = all(y < grid.y for _, y in v_cores | k_cores)
+            cache[n] = bool(inside and not (v_cores & k_cores))
+        return cache[n]
+
+    def _verify_lean_eligible(self, B, has_page_table, spec_n_users, spec_user_page_table, spec_page_table):
+        """QWEN36_VERIFY_ATTN_LEAN dispatch for the traced verify (spec_verify_mode + alias_kv_write): the lean data
+        movement of _forward_verify_lean needs the paged cache, the fused [q|k|v|gate] weight, the nlp head split, the
+        strided-slice probe (same as the grouped KV write), a fused spec SDPA plan at (T, n_users), the per-user page table
+        and disjoint K/V core sets for the fused update. Anything else keeps the legacy body below, unchanged."""
+        if not tpc.verify_attn_lean_enabled():
+            return False
+        if not (self.use_paged and has_page_table and self._fused_qkv and self._use_nlp_decode_heads):
+            return False
+        if not KV_GROUP_WRITE_OK:
+            return False
+        n = spec_n_users
+        if n < 1 or B % n or B > tpc.TILE_SIZE:
+            return False
+        T = B // n
+        if T < 2 or self._spec_sdpa_plan(T, n) is None:
+            return False
+        if spec_user_page_table is None or spec_user_page_table.shape[0] != n:
+            return False
+        if spec_page_table is None or spec_page_table.shape[0] != self._spec_sdpa_plan(T, n)[1]:
+            return False
+        return self._kv_fused_cores_ok(n)
+
+    def _write_kv_fused_groups(self, k, v, cur_pos_tt, spec_n_users, spec_user_page_table, spec_pos_groups, B):
+        """Grouped aliased KV write with ONE paged_fused_update_cache (K and V) per candidate group.
+
+        Same grouping as _write_kv_aliased (group j = rows {u*T + j}, one per user, so no two cores touch one cache tile in a
+        call; T calls), with three cuts: K and V go out in one fused call (T calls, not 2T), the T position slices are
+        shared by all layers (spec_pos_groups), and k / v are not padded to 32 rows first (the cache has NKV = 1 head
+        per device, and the op copies only row 0 of each user's tile, so the other 31 tile rows are never read).
+        Consumes k and v ([1, B, NKV, HD] TILE interleaved, rows user-major)."""
+        n = spec_n_users
+        T = B // n
+        _tile = ttnn.TILE_SIZE
+        HD = self.HD
+        # [1, B, NKV, HD] (tile (b) = row b) -> [1, n, T*32, HD]: tile (u*T + j) becomes (u, j), same bytes. The
+        # explicit padded shape takes reshape's tile-view path (no copy) even though the logical volume differs.
+        _view = ttnn.Shape([1, n, T * _tile, HD])
+        _srcs = []
+        for _t in (k, v):
+            _v = ttnn.reshape(_t, _view, _view)
+            _srcs.append((_v, None if tpc.aliases(_v, _t) else _t))
+        (k_v, k_orig), (v_v, v_orig) = _srcs
+        _k_cfg = self._kv_key_shard_cfg(n)
+        _v_cfg = self._kv_shard_cfg(n)
+        for j in range(T):
+            r0 = j * _tile
+            pos_j = spec_pos_groups[j] if spec_pos_groups is not None else ttnn.slice(cur_pos_tt, (j,), (B,), (T,))
+            k_grp = ttnn.slice(k_v, (0, 0, r0, 0), (1, n, r0 + _tile, HD))
+            k_sh = ttnn.to_memory_config(k_grp, _k_cfg)
+            ttnn.deallocate(k_grp)
+            v_grp = ttnn.slice(v_v, (0, 0, r0, 0), (1, n, r0 + _tile, HD))
+            v_sh = ttnn.to_memory_config(v_grp, _v_cfg)
+            ttnn.deallocate(v_grp)
+            ttnn.experimental.paged_fused_update_cache(
+                self.paged_k,
+                k_sh,
+                self.paged_v,
+                v_sh,
+                update_idxs_tensor=pos_j,
+                page_table=spec_user_page_table,
+            )
+            ttnn.deallocate(k_sh)
+            ttnn.deallocate(v_sh)
+            if spec_pos_groups is None:
+                ttnn.deallocate(pos_j)
+        for _t in (k_v, v_v, k_orig, v_orig):
+            if _t is not None:
+                ttnn.deallocate(_t)
+
+    def _forward_verify_lean(
+        self,
+        x,
+        cur_pos_tt,
+        cos_tt,
+        sin_tt,
+        page_table,
+        decode_ar,
+        spec_n_users,
+        spec_user_page_table,
+        spec_page_table,
+        spec_pos_groups,
+    ):
+        """Traced-verify attention (QWEN36_VERIFY_ATTN_LEAN): the arithmetic of the legacy forward_decode verify branch,
+        op for op (same QKV matmul, nlp head split, rms_norm then * (1+w), partial rope, fused spec SDPA, sigmoid then
+        multiply, wo matmul, all-reduce), with only DATA MOVEMENT cut. Bit-identical outputs, so the seed (which keeps the
+        legacy body) and the verify still share one arithmetic. What goes (note 42 has the per-op table):
+          * the DRAM qkv3 -> L1 copy (qkv3 is sliced straight into L1, as _forward_decode_lean does);
+          * the gate reshape [1,1,B,N] -> [1,B,NH,HD]: gating runs on the flat layout AFTER the head concat (concat is
+            a pure data move, so sigmoid(gate) * attn is the same element-wise product as before);
+          * the two ttnn.pad (FillPad) of k / v to 32 rows and the 4 position slices per layer (see _write_kv_fused_groups);
+          * the 2T separate paged_update_cache calls (T fused K+V calls instead).
+        Rope cos/sin arrive already as [1,1,B,rope_dim] (the model reshapes them once per trace), which turns the 4
+        per-layer reshapes inside apply_partial_rope_decode into no-ops. Needs spec_verify_mode semantics: the B rows
+        are spec_n_users users x T candidates (see forward_decode)."""
+        tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
+        B = x.shape[-2]
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        T = B // spec_n_users
+
+        qkv3, gate, _ = self._qkv(x, decode_qkv3_l1=True)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            qkv3, num_heads=NH, num_kv_heads=NKV, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        )
+        ttnn.deallocate(qkv3)
+        q = ttnn.sharded_to_interleaved(q, _L1)
+        k = ttnn.sharded_to_interleaved(k, _L1)
+        v = ttnn.sharded_to_interleaved(v, _L1)
+
+        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm"], memory_config=_L1)
+        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=_L1), tw["k_norm"], memory_config=_L1)
+        q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
+        k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
+
+        self._write_kv_fused_groups(k, v, cur_pos_tt, spec_n_users, spec_user_page_table, spec_pos_groups, B)
+        # The paged SDPA-decode derives its batch from the page table's row count and checks nothing (legacy comment).
+        assert B == page_table.shape[0] == cur_pos_tt.shape[-1], (
+            f"decode SDPA batch mismatch: q rows {B}, page_table rows {page_table.shape[0]}, "
+            f"cur_pos len {cur_pos_tt.shape[-1]}"
+        )
+
+        _spec_cfg, _spec_groups, _spec_tiles = self._spec_sdpa_plan(T, spec_n_users)
+        _rows = _spec_tiles * ttnn.TILE_SIZE
+        _spec_shape = ttnn.Shape([1, _spec_groups, _rows, HD])
+        q = ttnn.reshape(q, _spec_shape, _spec_shape)
+        attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q,
+            self.paged_k,
+            self.paged_v,
+            page_table_tensor=spec_page_table,
+            cur_pos_tensor=cur_pos_tt,
+            scale=self.scale,
+            program_config=_spec_cfg,
+            memory_config=_L1,
+            spec_multi_pos_tiles=_spec_tiles,
+        )
+        ttnn.deallocate(q)
+        attn_out = ttnn.reshape(attn_out, ttnn.Shape([1, B, NH, HD]), ttnn.Shape([1, B, ttnn.TILE_SIZE, HD]))
+
+        attn_flat = self._concat_heads_decode(attn_out, B)  # consumes attn_out -> [1, B, NH*HD] L1
+        gate_flat = ttnn.reshape(gate, (1, B, NH * HD))  # [1,1,B,NH*HD] -> [1,B,NH*HD]: a pure view
+        gated_flat = ttnn.multiply(attn_flat, ttnn.sigmoid(gate_flat, memory_config=_L1), memory_config=_L1)
+        ttnn.deallocate(attn_flat)
+        ttnn.deallocate(gate)  # gate_flat is a view of it
+
         wo_partial = self._wo_proj(gated_flat, tw["wo"])
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
