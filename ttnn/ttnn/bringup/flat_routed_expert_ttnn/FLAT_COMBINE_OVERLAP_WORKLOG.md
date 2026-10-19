@@ -1460,3 +1460,25 @@ expert outputs) rebuilt its plan and whole mesh descriptor in Python every call 
 fabric_all_gather_ttnn the same. Both now cache the plan and the descriptor per buffer-address set (bounded, hash
 frozen). S 640 eager = traced now; S 256 still host bound by ~2.5 ms a layer: plain ttnn op calls (59% of samples),
 mostly KDA attention's many small ops (~27%).
+
+### Fused flat + combine vs the DRAM floor (2026-10-19, 2 x 4, pure DRISC, unicast x, full-L1 arena + landing pool)
+Floor of the busiest chip (lean_sender/floor.py, the harness's routings): DRAM = its active experts' bfp4 weights + x
+row reads (M_total x H bf16) + combine's output writes (S K rows: y reaches combine in L1) at 512 GB/s; math = LoFi
+4096 FLOP / cycle / core at 1.35 GHz (assumed, not measured) on the 90 compute cores. Harness FC_DET_REPEAT=0 (the
+full-L1 arena leaves no room for its sum check).
+| config | routing | M_total | flat alone | fused | DRAM floor | math floor | fused / floor | DRAM % | math % 90 / 110 | us / expert |
+| GLM-Flash S 640 | uniform | 5206 | 1331 | 1362 | 1161 | 579 | 1.17x | 85% | 43 / 35% | 38 |
+| GLM-Flash S 640 | zipf spread | 8071 | 1607 | 1700 | 1206 | 874 | 1.41x | 71% | 51 / 42% | 47 |
+| GLM-Flash S 640 | zipf packed | 29579 | 4097 | 4741 | 1551 | 3052 | 1.55x | 33% | 64 / 53% | 132 |
+| GLM-Flash S 256 | uniform | 2083 | 1208 | 1229 | 1061 | 252 | 1.16x | 86% | 21 / 17% | 34 |
+| GLM-Flash S 256 | zipf spread | 3216 | 1327 | 1349 | 1080 | 392 | 1.25x | 80% | 29 / 24% | 37 |
+| GLM-Flash S 256 | zipf packed | 11801 | 2049 | 2215 | 1217 | 1259 | 1.76x | 55% | 57 / 47% | 62 |
+| K3 (S 320, K 16) | uniform | 5246 | 2285 | 2305 | 2177 | 786 | 1.06x | 94% | 34 / 28% | 41 |
+| K3 | zipf spread | 6369 | 2493 | 2515 | 2193 | 956 | 1.15x | 87% | 38 / 31% | 45 |
+| K3 | zipf packed | 28854 | 5228 | 5321 | 2508 | 3955 | 1.35x | 47% | 74 / 61% | 95 |
+| V4.1-Flash (S 320) | uniform | 1967 | 1093 | 1100 | 1011 | 332 | 1.09x | 92% | 30 / 25% | 46 |
+| V4.1-Flash | zipf spread | 3281 | 1237 | 1248 | 1037 | 528 | 1.20x | 83% | 42 / 35% | 52 |
+| V4.1-Flash | zipf packed | 10718 | 2493 | 2509 | 1186 | 1579 | 1.59x | 47% | 63 / 51% | 105 |
+The combine costs 0.6-2.3% on uniform and spread (fused / flat) except GLM-Flash S 640 spread (5.8%) and packed S 640
+/ S 256 (16% / 8%): the gap to the floor is the flat expert's own. GLM-Flash spread S 640: flat alone 1.33x the floor
+(the hot experts' 4738 rows on one chip's grid).
