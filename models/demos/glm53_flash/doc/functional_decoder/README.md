@@ -38,13 +38,13 @@ Residual convention: HF `[B, S, 4, 4096]` <-> packed `[1, 1, B*S, 16384]` (`host
 |---|---|---|
 | `test_kda.py` | layer 0 KDA, T=96 / 1000 + 3 decode | prefill 0.99994 / 0.99995, state 0.9999, decode 0.9999 |
 | `test_moe.py` | layer 4 MoE, T=32 / 256 | router sets identical 32/32, 255/256; output 0.99993 / 0.99995 |
-| `test_dsa.py` | layer 3 MLA, T=96 / 1000 + 3 decode | prefill 0.99964 / 0.99961, latent cache 0.99997, decode 0.9991-0.9999 |
+| `test_dsa.py` | layer 3 MLA, T=1, 2, 3, 31, 33, 96, 1000 + 3 decode | prefill 0.99989 (T=1) .. 0.99961 (T=1000), latent cache 0.99997, decode 0.9991-0.9999 |
 | `test_decoder_layer.py` | full layers 0 / 3 / 4 vs HF dump, T=256 + 4 decode; T=200 non-aligned live HF | 0.99984 / 0.99992 / 0.99997 prefill, 0.9999 decode; 0.99980 / 0.99993 |
 | `test_decode_trace.py` | traced decode replay vs the HF dump (layers 0/3/4); two users (100 + 37 tokens, slots) | replay PCC 0.9999 (same as the eager run of the same steps); per-user 0.9998-0.99998 |
-| `test_dsa_sparse.py` | layer 3 at 4097 tokens (sparse path, repeated prompt) + decode 4097..4100 | prefill 0.99977 (selected rows 0.99990), decode 0.9999 |
-| `test_dsa_long.py` | random-token prompt: 4097 + 12 sparse decode steps with the TT/HF selected-id sets and the pooled-key cache vs a host recomputation; 2040-token dense prefill (slot 1, permuted page table) then decode 2040..2063 across the switch; 16385-token sparse prefill + 2 decode | 0.9997+; 98-99 % ids common; pool cache 0.99999; transition >= 0.9996 (tails 0-3); 16K prefill 0.9991 (last 2048 rows 0.9998), decode 0.99996 |
+| `test_dsa_sparse.py` | layer 3 at 4097 tokens (repeated prompt): dense rows [0,2048) + sparse rows, decode 4097..4100 | prefill 0.99992 (rows<2048 0.99994, rows>=2048 0.9999), decode 0.9999 |
+| `test_dsa_long.py` | random-token prompt: 4097 + 12 sparse decode steps with TT/HF selected-id sets (contiguous-prefix contract asserted) and the pooled-key cache vs a host recomputation; 2040-token dense prefill (slot 1, permuted page table) then decode 2040..2063 with the short user 0 checked every step; 16385-token prefill + 2 decode; prompts 2042/2043 (tails 2, 3) + 12 decode steps with the pool-cache check | prefill 0.99994 (rows<2048 0.99988, >=2048 0.99986), decode 0.9997+, 98-99 % ids common, pool cache 0.99999; transition >= 0.9996 both users; 16K 0.99983 (0.99988 / 0.99980); tails 2/3: prefill 0.9987-0.9990, decode >= 0.9978, pool cache 0.99999 |
 | `test_batch8.py` | 8 user slots (lengths 1..200, permuted page table), layers 3 and 4, 3 batched decode steps | prefill >= 0.9968 (1-token user), decode worst per user 0.9994 |
-| `test_determinism.py` | layers 0, 3: repeated prefill and traced-decode replay, `throw_exception_on_fallback` raised | bit-identical outputs, no host fallback |
+| `test_determinism.py` | layers 0, 3: repeated prefill and traced-decode replay with `throw_exception_on_fallback`; sparse prefill + sparse decode repeated | bit-identical outputs |
 | watcher | `TT_METAL_WATCHER=10` on the layer-3 dump test (`~/ashai/glm53/_logs/watcher_layer3`) | PASSED, 10 dumps, no watcher exceptions |
 | `test_perf_layer.py` | warmed prefill S=1024 (wall), traced decode B=1 (one replay, tt-perf-report `Device Time`) | prefill: layer 3 314 ms, layer 4 298 ms (device 293 ms, 1002 ops); decode: layer 3 10.93 ms/step device (435 ops, wall 11.36), layer 4 10.76 ms/step device (471 ops, wall 11.2) |
 
@@ -63,6 +63,14 @@ python models/demos/glm53_flash/reference/hf_layer_reference.py --layers 0,1,2,3
 ```
 
 ## Known limits (single chip, v1)
+
+- Prefill is single-shot (one chunk from position 0 per user): the design's chunked prefill (``actual_start``
+  carries exist in ttKDA and the layer plumbs them, the DSA cache is filled from 0) is not wired through the public
+  API yet. The sparse prefill materializes a `[T - 2048, 4 * pools]` bf16 score matrix per DSA layer (~0.5 GB at 16K),
+  so the practical single-chip prefill bound is that quadratic intermediate, not DRAM.
+- Runtime audit method: `grep -nE 'from_torch|to_torch|torch\.'` over `tt/*.py` forward paths (hits are
+  construction-time or first-use-cached constants only) plus `throw_exception_on_fallback=True` runs
+  (`test_determinism.py`); the ring tail rows and the KDA scalars use tensors created once per geometry/value.
 
 - Performance is the design's Phase 2/3 work: the KDA decode recurrence and the per-block MoE are composites,
   the sparse decode untilizes the user's latent prefix per step, and the decode SDPA runs on 4 cores per user.

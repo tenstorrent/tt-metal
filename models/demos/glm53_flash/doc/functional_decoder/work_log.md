@@ -147,3 +147,34 @@ two users: unchanged PCCs.
   shares compute_streaming.hpp with the dense prefill kernel.
 - Checkpoint after the review fixes: local `arg/glm53_flash` @ 8e965d64e72 (code + docs), upstream
   `origin/arg/glm-53-flash` @ ab2653dbbf5 (code + tests only, pre-commit green). Second stage review requested.
+
+## 2026-10-19 (late): stage review 2 -> fixes
+
+Second independent review: `more-work-needed`. P1: `sparse_sdpa` reads an index row only up to its FIRST sentinel
+(`sparse_sdpa_reader.cpp`: "sentinels are a contiguous tail"), while the rows were `[top-k | tail ids | pad]` with the
+top-k block ending in sentinels whenever fewer than 2048 tokens were visible -> every query at position < 2047 that
+went through the sparse path lost its tail ids (its own token included) and rows 0-2 gathered page 0xFFFFFFFF. That is
+why the sparse prefill rows < 2048 scored 0.99966 vs 0.9999 on the dense path and the random-prompt 4097 prefill
+0.99657 (a number I had mis-transcribed as 0.9998 in the contract). P2: prefill tails of 2-3 rows were written with one
+paged_update_cache call whose per-row cores read-modify-write the same 32-row tile (race; lengths == 2,3 mod 4 were
+never tested); README/contract numbers contradicted the logs; `ttnn.from_torch` uploads inside measured passes (KDA
+scalars, prefill tail slot/page tensors); plus other concerns (single-shot prefill only, layer-3 S=1 PCC 0.9968, raw
+test hook filtering, pool-splitting ties, batch 32 not attempted).
+
+Fixes (`tt/dsa.py`, `tt/indexer.py`, `tt/kda.py`, `tt/decoder_layer.py`, `tt/functional_decoder.py`):
+- Sparse rows must be full prefixes: prefill rows [0, 2048) run the dense causal SDPA, rows >= 2048 (they always see
+  >= 2048 pooled tokens) run select(query_start=2048) + sparse_sdpa; decode runs the dense flash-MLA for every slot
+  (HF-exact through position 2050 = index_topk + kpool - 2) and only users at position >= 2051 get their row replaced
+  by the per-user sparse result (mixed batches are therefore exact for the short users). `select` asserts >= 2048
+  scored tokens instead of capping k.
+- Ring tail rows written one per `paged_update_cache` call with slot/page tensors uploaded once at cache creation;
+  KDA `actual_start/actual_end` scalars cached per value; the sparse-decode geometry constants were already cached:
+  no `ttnn.from_torch` inside a prefill/decode pass after the first use of a geometry. Audit method: grep of
+  `from_torch|to_torch|torch\.` in the forward paths + `throw_exception_on_fallback=True` runs.
+- `selected_ids` test hook returns the raw row; the test asserts the contiguous-prefix contract and the id range.
+- Trace guard aligned with the dense-exact range (max_seq_len > 2051 refused unless allow_sparse_range).
+New references: R2042 / R2043 (random ids, layers 0-3, 12 decode steps: prompt tails 2 and 3, decode through the pool
+completion and across 2048/2050). New/extended tests: per-row PCC split (rows < 2048 / >= 2048 / position % 4) on the
+4097 and 16385 prefills with every class asserted > 0.995; random-prompt prefill PCC asserted; the transition test
+checks the short user 0 at every step against its own HF cache; `test_prefill_tail_2_3_then_decode`; dense DSA
+prefill at S = 1, 2, 3, 31, 33 (short-S control); sparse-path determinism.

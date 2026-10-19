@@ -145,6 +145,13 @@ class TtKDA(LightweightModule):
         self.fp32 = _fp32_compute(device)
         self.hifi2 = _hifi2_compute(device)
         self.gate_lower_bound = float(self.kcfg.gate_lower_bound)
+        self._scalars: dict[int, ttnn.Tensor] = {}
+
+    def scalar(self, value: int) -> ttnn.Tensor:
+        """Cached replicated UINT32 device scalar (ttKDA's actual_start / actual_end)."""
+        if value not in self._scalars:
+            self._scalars[value] = device_scalar_u32(self.device, value)
+        return self._scalars[value]
 
     # ------------------------------------------------------------------ state
     def allocate_state(self, batch_size: int = 1) -> KdaState:
