@@ -33,7 +33,8 @@ class PplxDeciderModelArgs(Qwen36ModelArgs):
         # (prefill_tuning.py); PPLX_SDPA_TUNED=0 / PPLX_AGMM_TUNED=0 / PPLX_RS_TUNED=0 turn one off.
         self.prefill_sdpa_config_fn = make_sdpa_config_fn(self.num_devices)
         self.prefill_sdpa_sp_config_fn = make_sdpa_sp_config_fn(self.num_devices)
-        self.prefill_agmm_config_fn = make_agmm_config_fn(self.num_devices)
+        grid = mesh_device.compute_with_storage_grid_size() if mesh_device is not None else None
+        self.prefill_agmm_config_fn = make_agmm_config_fn(self.num_devices, None if grid is None else (grid.x, grid.y))
         self.prefill_rs_hparams = make_rs_hparams()
         # Prefill reduce-scatters move bf8 partials (PPLX_RS_BF8=1; default off): half the fabric bytes, but numerics
         # change, so validate calibration first.

@@ -192,12 +192,23 @@ def agmm_wide_enabled():
     return os.environ.get("PPLX_AGMM_WIDE", "1") != "0"
 
 
-def make_agmm_config_fn(tp):
-    """fn(S, shape_name) -> override dict | None for args.prefill_agmm_config_fn; None = disabled / no entry."""
+def make_agmm_config_fn(tp, device_grid=None):
+    """fn(S, shape_name) -> override dict | None for args.prefill_agmm_config_fn; None = disabled / no entry.
+
+    device_grid (x, y): entries whose grid exceeds it are dropped, so those shapes keep the default config. The
+    tables were tuned on a Galaxy chip (12x10 worker grid); a P150 exposes 11x10 and AGMM rejects a larger grid.
+    """
     if not agmm_tuned_enabled():
         return None
     wide = agmm_wide_enabled()
-    table = {key: cfg for key, cfg in AGMM_CONFIGS.items() if key[0] == tp and (wide or cfg.get("grid_x", 8) <= 8)}
+
+    def usable(cfg):
+        grid_x, grid_y = cfg.get("grid_x", 8), cfg.get("grid_y", 0)
+        if not wide and grid_x > 8:
+            return False
+        return device_grid is None or (grid_x <= device_grid[0] and grid_y <= device_grid[1])
+
+    table = {key: cfg for key, cfg in AGMM_CONFIGS.items() if key[0] == tp and usable(cfg)}
     if not table:
         return None
 
