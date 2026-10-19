@@ -10,6 +10,7 @@
 // the other op compares them with calls x writers).
 #pragma once
 
+#include <memory>
 #include <tuple>
 #include <vector>
 
@@ -24,7 +25,8 @@ namespace ttnn::operations::bringup::flat_routed_expert {
 
 struct FlatWithProgramParams {
     FlatRoutedExpertConfig flat;  // with cmb_rt set
-    tt::tt_metal::experimental::MeshProgramDescriptor extra;
+    // (shared: the descriptor is not copied with the attributes; null on a call that expects a program-cache hit)
+    std::shared_ptr<const tt::tt_metal::experimental::MeshProgramDescriptor> extra;
     tt::tt_metal::CoreCoord collector{0, 0};  // logical
     uint32_t counts_addr = 0;
     uint32_t writers = 0;
@@ -76,6 +78,22 @@ struct FlatWithProgramDeviceOperation {
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&) {}
+    // the program is defined by the attributes (every baked buffer address, the plan key, the extra program's key) and
+    // the tensors' specs: a custom hash over exactly those (the default canonical key also encodes the attribute
+    // struct's other members and the tensors' mesh coordinates, so a caller could not predict a hit)
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t& p, const tensor_args_t& t) {
+        return ttsl::hash::hash_objects_with_default_seed(
+            p.flat_key,
+            p.addrs,
+            p.extra_key,
+            p.writers,
+            p.counts_addr,
+            static_cast<uint32_t>(p.collector.x),
+            static_cast<uint32_t>(p.collector.y),
+            t.x.tensor_spec(),
+            t.arena.tensor_spec(),
+            t.output.tensor_spec());
+    }
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t& t) {
         return t.output.tensor_spec();
     }
