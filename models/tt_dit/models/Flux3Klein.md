@@ -176,6 +176,14 @@ export FLUX3_KLEIN_OUT=/path/for/renders                    # PNGs land here, ne
 export FLUX3_KLEIN_VAE_ORACLE_CACHE=/path/for/cpu/decodes     # optional: CPU reference decodes (~11 s each on a node CPU)
 export FLUX3_KLEIN_SAMPLING_ORACLE_CACHE=/path/for/cpu/samples  # optional: CPU reference sampling on device text (~9 min)
 
+# Command-line demo (flags as upstream scripts/cli.py). The prompt must already be an upsampled caption until the
+# prompt upsampler is on device; --record replays a shipped example (prompt, model, seed, references from its json).
+python models/tt_dit/pipelines/flux3_klein/demo_flux3_klein.py "<upsampled caption>" --model base --seed 7 --out out/t2i.png
+python models/tt_dit/pipelines/flux3_klein/demo_flux3_klein.py "<upsampled caption>" --model distilled \
+    --image dog.png --image mug.png --out out/edit.png                           # up to 10 references
+python models/tt_dit/pipelines/flux3_klein/demo_flux3_klein.py --record reference/examples/distilled/3_bandana.json --out out/bandana.png
+# A request over the measured capacity is refused on the host (exit 3, "REFUSED: ... budget ...") before any device call.
+
 # Text-to-image with the device text encoder, both checkpoints resident, Galaxy 4x8 (SP4 x TP8, ring).
 # Expected: base passes; distilled is a strict XFAIL against the CPU reference on the same device text (precision
 # contract, latent-state row) until the B300 render exists.
