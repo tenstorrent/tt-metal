@@ -44,9 +44,10 @@ bool supported_by_codegen(const Tensor& input, const ttnn::Shape& logical_output
 // full plan cuts reads 8x, saves 16+ reads per output tile, or copies whole face halves over more than one native
 // round; the segment map on widths that are not multiples of 32. Tile rows wins only while the segment map it falls
 // back to is within its size caps.
-// ROW_MAJOR: rm_native_faster's stick-size rule, taken only while the stick program and native's scratch both fit the
-// static L1 window. Depends on shapes and static device geometry only, never live L1. Never true for uint16: native
-// rejects it, so demoting would fail the call.
+// ROW_MAJOR: the smallest stick or slab plan needs more L1 than native's smallest footprint, or rm_native_faster's
+// stick-size rule, taken only while the stick program and native's scratch both fit the static L1 window. Depends on
+// shapes and static device geometry only, never live L1. Never true for uint16: native rejects it, so demoting would
+// fail the call.
 bool is_demoted(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,

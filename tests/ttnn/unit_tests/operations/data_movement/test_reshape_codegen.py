@@ -321,18 +321,32 @@ def test_reshape_codegen_falls_back_to_segment_map_when_no_tile_row_plan_fits_l1
     ttnn.deallocate(hog)
 
 
-def test_reshape_codegen_rm_raises_when_no_program_fits_l1(device, expect_error):
+_RM_ABOVE_NATIVE_FLOOR = [
     # Merging 4 B sticks into 30004 B ones takes two 30 KB CB pages in the stick program and a window region of over
-    # 64 KiB in the slab program, while native's single kernel needs about 30 KB. Routing does not read live L1, so
-    # with 48 KiB free auto takes the codegen program and raises as the forced entry does, where native would run.
-    in_shape, out_shape, dtype = [60008, 1], [8, 7501], ttnn.float32
+    # 64 KiB in the slab program, while native's single kernel needs about 30 KB.
+    ("merge_30004", lambda n: ([60008, 1], [8, 7501]), ttnn.float32),
+    # 6 B sticks do not divide 8 KiB ones, so only the slab program applies: a slab of up to 4 KiB spans one window
+    # per 6 B source stick, over 54 KiB per core, while native needs under 9 KiB.
+    ("slab_6_to_8192", lambda n: ([n * 4096, 3], [n * 3, 4096]), ttnn.bfloat16),
+]
+
+
+@pytest.mark.parametrize("case,shapes,dtype", _RM_ABOVE_NATIVE_FLOOR, ids=[c[0] for c in _RM_ABOVE_NATIVE_FLOOR])
+def test_reshape_codegen_rm_routes_native_when_no_program_fits_l1(device, expect_error, case, shapes, dtype):
+    # The smallest row-major program needs more L1 than native's, so auto runs native and keeps running with 48 KiB
+    # free, while the forced entry refuses.
+    grid = device.compute_with_storage_grid_size()
+    in_shape, out_shape = shapes(grid.x * grid.y)
     source = _make(in_shape, dtype)
     expected = source.reshape(out_shape)
     x = _to_device(device, source, dtype, ttnn.ROW_MAJOR_LAYOUT, _DRAM)
     hog = _l1_hog_leaving(device, 48 * 1024)
+    # Native's program hash leaves out its staging ring depth, so a program cached with more L1 free would not fit.
+    device.clear_program_cache()
     _assert_bits(expected, ttnn.to_torch(_force_native(x, out_shape, memory_config=_DRAM)), dtype)
-    with expect_error(RuntimeError, "no row-major program fits"):
-        ttnn.reshape(x, out_shape, memory_config=_DRAM)
+    entries = device.num_program_cache_entries()
+    _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+    assert device.num_program_cache_entries() == entries, "auto did not run native"
     with expect_error(RuntimeError, "no row-major program fits"):
         _force_codegen(x, out_shape, memory_config=_DRAM)
     ttnn.deallocate(hog)

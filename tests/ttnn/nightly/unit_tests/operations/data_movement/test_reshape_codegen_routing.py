@@ -186,7 +186,7 @@ _RM_ROUTES = [
     ("rm_merge_uint16", *gate._rm_aligned_pair(256, merge=True), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
     # A demoted merge whose stick program does not fit L1 runs the slab program, which beats native.
     ("rm_merge_slab", [64, 50001], [32, 100002], ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
-    # Widths that do not divide are never demoted.
+    # Widths that do not divide are demoted only when the slab program needs more L1 than native.
     ("rm_arbitrary", [64, 97], [97, 64], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
 ]
 

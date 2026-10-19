@@ -250,6 +250,35 @@ constexpr uint64_t kNativeSourceReadSlack = 128;
 constexpr uint64_t kNativeDestSlotSlack = 80;
 constexpr uint64_t kNativeMaxDestSlots = 8;
 
+// Scratchpads native's row-major kernel takes per core. Per instance: one of two source pages padded to 64 B plus
+// 128 B, and one of `slots` destination slots each padded to 64 B plus 80 B. Every scratchpad starts DRAM-aligned, so
+// each takes its size rounded up to that alignment.
+struct NativeRmScratch {
+    uint64_t source_scratch = 0;
+    uint64_t dest_slot = 0;
+    uint64_t kernels = 1;
+    bool pages_noc_aligned = false;
+
+    uint64_t footprint(uint64_t slots) const {
+        const uint64_t alignment = tt::tt_metal::hal::get_dram_alignment();
+        return kernels * (tt::round_up(source_scratch, alignment) + tt::round_up(dest_slot * slots, alignment));
+    }
+};
+
+NativeRmScratch native_rm_scratch(
+    const Tensor& input, const ttnn::Shape& logical_output_shape, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    const uint32_t elem = input.element_size();
+    const uint64_t old_stick = static_cast<uint64_t>(input.logical_shape()[-1]) * elem;
+    const uint64_t new_stick = static_cast<uint64_t>(logical_output_shape[-1]) * elem;
+    const bool divisible = old_stick % new_stick == 0 || new_stick % old_stick == 0;
+    const bool two_kernels = divisible && native_runs_two_kernels(static_cast<uint32_t>(new_stick), output_mem_config);
+    return NativeRmScratch{
+        .source_scratch = 2 * (((old_stick - 1) & ~uint64_t{63}) + kNativeSourceReadSlack),
+        .dest_slot = ((new_stick - 1) & ~uint64_t{63}) + kNativeDestSlotSlack,
+        .kernels = two_kernels ? uint64_t{2} : uint64_t{1},
+        .pages_noc_aligned = old_stick % kNativeNocAlignment == 0 && new_stick % kNativeNocAlignment == 0};
+}
+
 // Native's row-major kernel fits the scratch and destination ring it selects in `budget`. Native picks its ring from
 // unaligned sizes but places every scratchpad DRAM-aligned, so the ring it picks can overrun `budget`; native then
 // fails where a row-major program still fits.
@@ -258,30 +287,18 @@ bool native_rm_fits_l1(
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     uint64_t budget) {
-    const uint32_t elem = input.element_size();
-    const uint64_t old_stick = static_cast<uint64_t>(input.logical_shape()[-1]) * elem;
-    const uint64_t new_stick = static_cast<uint64_t>(logical_output_shape[-1]) * elem;
-    // Per instance: a scratchpad of two source pages padded to 64 B plus 128 B, and one of `slots` destination slots
-    // each padded to 64 B plus 80 B. Every scratchpad starts DRAM-aligned, so each takes its size rounded up to that
-    // alignment.
-    const uint64_t alignment = tt::tt_metal::hal::get_dram_alignment();
-    const uint64_t source_scratch = 2 * (((old_stick - 1) & ~uint64_t{63}) + kNativeSourceReadSlack);
-    const uint64_t dest_slot = ((new_stick - 1) & ~uint64_t{63}) + kNativeDestSlotSlack;
-    const bool divisible = old_stick % new_stick == 0 || new_stick % old_stick == 0;
-    const uint64_t kernels =
-        divisible && native_runs_two_kernels(static_cast<uint32_t>(new_stick), output_mem_config) ? 2 : 1;
-    const auto footprint = [&](uint64_t slots) {
-        return kernels * (tt::round_up(source_scratch, alignment) + tt::round_up(dest_slot * slots, alignment));
-    };
-    if (footprint(1) > budget) {
+    const NativeRmScratch native = native_rm_scratch(input, logical_output_shape, output_mem_config);
+    if (native.footprint(1) > budget) {
         return false;
     }
-    const bool pages_noc_aligned = old_stick % kNativeNocAlignment == 0 && new_stick % kNativeNocAlignment == 0;
-    const uint64_t slots =
-        pages_noc_aligned
-            ? 1
-            : std::clamp((budget - kernels * source_scratch) / (kernels * dest_slot), uint64_t{1}, kNativeMaxDestSlots);
-    return footprint(slots) <= budget;
+    uint64_t slots = 1;
+    if (!native.pages_noc_aligned) {
+        slots = std::clamp(
+            (budget - native.kernels * native.source_scratch) / (native.kernels * native.dest_slot),
+            uint64_t{1},
+            kNativeMaxDestSlots);
+    }
+    return native.footprint(slots) <= budget;
 }
 
 // Wormhole thresholds, fitted from the same forced sweeps run on Wormhole. Its DRAM reads stay transaction-bound up to
@@ -383,8 +400,10 @@ public:
         return slab_.has_value() ? fit_rm_arbitrary(*slab_, l1_budget) : std::nullopt;
     }
 
-    // Whether the smallest stick or slab plan fits the static window.
-    bool fits_static() { return fit_stick(static_budget_).has_value() || fit_slab(static_budget_).has_value(); }
+    // Whether the smallest stick or slab plan fits `l1_budget`, as live_rm_choice tries them.
+    bool fits(uint64_t l1_budget) { return fit_stick(l1_budget).has_value() || fit_slab(l1_budget).has_value(); }
+
+    bool fits_static() { return fits(static_budget_); }
 
     LaunchPlan launch_plan() const {
         return LaunchPlan{.out_aligned_page = out_aligned_page_, .rm = stick_, .rm_arbitrary = slab_};
@@ -473,13 +492,20 @@ bool is_demoted(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     if (input.layout() == Layout::ROW_MAJOR) {
-        const uint32_t num_cores = rm_grid_cores(input, sub_core_grids);
-        // The stick-size rule runs before any output spec is built; native's device operation rejects uint16.
-        if (input.dtype() == DataType::UINT16 ||
-            !rm_native_faster(input, logical_output_shape, output_mem_config, num_cores)) {
+        // Native's device operation rejects uint16.
+        if (input.dtype() == DataType::UINT16) {
             return false;
         }
+        const uint32_t num_cores = rm_grid_cores(input, sub_core_grids);
         RmGeometry geometry(input, logical_output_shape, output_mem_config, num_cores);
+        // The program factory raises when live L1 holds no row-major program, so the call runs native unless every L1
+        // window native runs in also holds the smallest one.
+        if (!geometry.fits(native_rm_scratch(input, logical_output_shape, output_mem_config).footprint(1))) {
+            return true;
+        }
+        if (!rm_native_faster(input, logical_output_shape, output_mem_config, num_cores)) {
+            return false;
+        }
         const uint64_t static_budget = geometry.static_budget();
         return demotion_applies(
             input,
