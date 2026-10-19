@@ -597,6 +597,11 @@ class TtPrefillRuntime:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+    def _make_partial_placeholder(self) -> ttnn.Tensor:
+        """Trace buffer for the upstream drafter partial: the hidden-only placeholder, which is the partial's
+        shape whenever the hidden is a single plane. A model sending more planes overrides this."""
+        return self.make_placeholder_activation(dflash_packed=False)
+
     def _num_mtp_tokens(self) -> int:
         """MTP lookahead ids the H2D row carries past this chip's trunk shard. Same function the runner
         cuts that row with and the producer builds its rows with. 0 when MTP is off.
@@ -980,8 +985,8 @@ class TtPrefillRuntime:
         chunk = self.config.chunk_size
         if self.config.dflash_enabled and not self.config.is_first_rank:
             self._trace_input = self.make_placeholder_activation(dflash_packed=False)
-            # The capture reads the upstream partial here; same shape as the hidden half.
-            self._trace_partial_in = self.make_placeholder_activation(dflash_packed=False)
+            # The capture reads the upstream partial here.
+            self._trace_partial_in = self._make_partial_placeholder()
         else:
             self._trace_input = self.make_chunk_input([0] * chunk)
         if self.config.mtp_levels and self.config.is_first_rank:
