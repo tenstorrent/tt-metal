@@ -154,6 +154,8 @@ ttnn:
 train:
   merge_gate:
     bh_p150b_civ2: 60
+  pr_gate:
+    bh_p150b_civ2: 10
   unit:
     bh_p100: 105
     bh_p150b_civ2: 90
