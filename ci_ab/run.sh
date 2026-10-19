@@ -48,6 +48,7 @@ runc() {  # runc <side> <tag> <run types> [extra]
     "${PY[@]}" --compile-consumer "$@" "${NODES[@]}" > /tmp/r_$tag.txt 2>&1
   echo "== run $tag rc=$? $(date -u +%T) $(grep -aE '[0-9]+ (passed|failed|error|skipped)' /tmp/r_$tag.txt | tail -1)"
   grep -a -E "^(FAILED|ERROR)" /tmp/r_$tag.txt | cut -c1-160 | head -3
+  ls $LLK_HOME/perf_data/runs/$tag/*/*.csv > /dev/null 2>&1 || { echo "== no csv for $tag, tail:"; tail -40 /tmp/r_$tag.txt | cut -c1-300; }
 }
 RV=$(echo $RUN | tr ' ' '\n' | tac | tr '\n' ' ')
 j=0
