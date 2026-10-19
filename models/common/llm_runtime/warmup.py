@@ -26,6 +26,7 @@ class WarmupCase:
     sequence_length: int | None
     sampling_path: str
     cached_tokens: int = 0
+    log_probs: bool = False
 
 
 @dataclass(frozen=True)
@@ -399,11 +400,7 @@ class WarmupCoordinator:
         for case in cases:
             if case in destination:
                 continue
-            sampling = None
-            if case.sampling_path == "argmax":
-                sampling = _greedy_sampling_params(case.batch_size)
-            elif case.sampling_path == "topk":
-                sampling = _topk_sampling_params(case.batch_size)
+            sampling = _sampling_params(case, case.batch_size)
             actual_uncached_lengths = (int(case.sequence_length),)
             if (
                 case.batch_size == 1
@@ -412,6 +409,8 @@ class WarmupCoordinator:
                 and (
                     case.sampling_path == "argmax"
                     or (case.sampling_path == "topk" and self.config.prime_q128_tile_ends)
+                    # Greedy requests with logprobs leave argmax for this path.
+                    or (case.log_probs and self.config.allow_force_argmax)
                 )
             ):
                 # Q128 single-user sampled postprocessing has one TT slice
@@ -468,11 +467,7 @@ class WarmupCoordinator:
         for case in plan.decode:
             if case in destination:
                 continue
-            sampling = None
-            if case.sampling_path == "argmax":
-                sampling = _greedy_sampling_params(lane_batch)
-            elif case.sampling_path == "topk":
-                sampling = _topk_sampling_params(lane_batch)
+            sampling = _sampling_params(case, lane_batch)
             compile_target = self.execution if enable_trace else self.eager
             program = compile_target.compile_decode(
                 tokens=torch.zeros(lane_batch, dtype=torch.long),
@@ -701,8 +696,24 @@ def _build_plan(
             decode_paths.append("argmax")
         if not allow_force_argmax or warmup.include_decode_top_k:
             decode_paths.append("topk")
-    decode = tuple(WarmupCase("decode", lane_batch_size, None, sampling_path) for sampling_path in decode_paths)
-    return WarmupPlan(tuple(prefill), decode)
+    decode = [WarmupCase("decode", lane_batch_size, None, sampling_path) for sampling_path in decode_paths]
+    if can_sample_on_device and warmup.include_log_probs:
+        # Greedy requests with logprobs also take top-k; logprobs are part of program identity.
+        prefill.extend([replace(case, log_probs=True) for case in prefill if case.sampling_path == "topk"])
+        decode.append(WarmupCase("decode", lane_batch_size, None, "topk", log_probs=True))
+    return WarmupPlan(tuple(prefill), tuple(decode))
+
+
+def _sampling_params(case: WarmupCase, batch_size: int) -> SamplingParams | None:
+    if case.sampling_path == "argmax":
+        sampling = _greedy_sampling_params(batch_size)
+    elif case.sampling_path == "topk":
+        sampling = _topk_sampling_params(batch_size)
+    else:
+        return None
+    if case.log_probs:
+        sampling = replace(sampling, enable_log_probs=True, num_logprobs=0)
+    return sampling
 
 
 def _greedy_sampling_params(batch_size: int) -> SamplingParams:

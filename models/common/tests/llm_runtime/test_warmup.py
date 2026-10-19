@@ -22,6 +22,8 @@ from models.common.llm_runtime.warmup import (
     WarmupCoordinatorConfig,
     _resolve_coverage_manifest,
 )
+from models.common.modules.sampling.params import prepare_sampling_params
+from models.common.sampling.sampling_params import SamplingParams
 
 
 class RecordingExecution:
@@ -418,7 +420,11 @@ def test_resolved_config_is_frozen_and_owns_both_coverage_plans(expect_error):
     )
 
     assert coordinator.config.eager_plan.decode == (coordinator.config.eager_plan.decode[0],)
-    assert [case.sampling_path for case in coordinator.config.sampled_plan.decode] == ["logits", "argmax"]
+    assert [(case.sampling_path, case.log_probs) for case in coordinator.config.sampled_plan.decode] == [
+        ("logits", False),
+        ("argmax", False),
+        ("topk", True),
+    ]
     with expect_error(AttributeError, "cannot assign"):
         coordinator.config.lane_batch_size = 4
 
@@ -598,6 +604,84 @@ def test_sampling_paths_include_forced_prefill_topk_and_opt_in_true_topk_decode(
     assert execution.decode_calls[2]["sampling_params"].top_p.tolist() == pytest.approx([0.08, 0.08])
 
 
+@pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize("allow_force_argmax", [True, False])
+def test_greedy_selected_token_logprob_identity_is_warmed(allow_force_argmax, enable_trace):
+    lane_capacity = 2
+    config = WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1, 2))
+    coordinator, execution, *_ = make_coordinator(
+        warmup_config=config,
+        sequence_lengths=(128,),
+        lane_capacity=lane_capacity,
+        allow_force_argmax=allow_force_argmax,
+    )
+
+    coordinator.warmup_prefill(kv_cache="cache", enable_trace=enable_trace, can_sample_on_device=True)
+    coordinator.warmup_decode(
+        kv_cache="cache",
+        enable_trace=enable_trace,
+        max_batch_size=lane_capacity,
+        num_blocks=8,
+        can_sample_on_device=True,
+    )
+
+    def identity(sampling_params, batch_size):
+        prepared = prepare_sampling_params(
+            sampling_params,
+            batch_size,
+            max_device_top_k=32,
+            allow_force_argmax=allow_force_argmax,
+        )
+        return prepared.sampling_path, prepared.log_probs_enabled
+
+    def greedy_logprob_request(batch_size):
+        return SamplingParams(
+            temperature=[0.0] * batch_size,
+            top_k=[1] * batch_size,
+            top_p=[1.0] * batch_size,
+            enable_log_probs=[True] * batch_size,
+            num_logprobs=[0] * batch_size,
+        )
+
+    def prefill_geometry(call):
+        cached = 0 if call["start_pos"] is None else int(call["start_pos"][0])
+        return int(call["tokens"].shape[0]), int(call["tokens"].shape[-1]), cached
+
+    sampled_prefill = [call for call in execution.prefill_calls if call["sampling_params"] is not None]
+    warmed_prefill = {
+        (prefill_geometry(call), identity(call["sampling_params"], int(call["tokens"].shape[0])))
+        for call in sampled_prefill
+    }
+    for geometry in {prefill_geometry(call) for call in sampled_prefill}:
+        expected = identity(greedy_logprob_request(geometry[0]), geometry[0])
+        assert expected == ("topk", True)
+        assert (geometry, expected) in warmed_prefill
+
+    warmed_decode = {
+        identity(call["sampling_params"], lane_capacity)
+        for call in execution.decode_calls
+        if call["sampling_params"] is not None
+    }
+    assert identity(greedy_logprob_request(lane_capacity), lane_capacity) in warmed_decode
+
+
+def test_logprob_variants_can_be_disabled():
+    config = WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,), include_log_probs=False)
+    coordinator, execution, *_ = make_coordinator(warmup_config=config, sequence_lengths=(128,), lane_capacity=2)
+
+    coordinator.warmup_prefill(kv_cache="cache", enable_trace=False, can_sample_on_device=True)
+    coordinator.warmup_decode(
+        kv_cache="cache",
+        enable_trace=False,
+        max_batch_size=2,
+        num_blocks=8,
+        can_sample_on_device=True,
+    )
+
+    calls = execution.prefill_calls + execution.decode_calls
+    assert not any(call["sampling_params"] is not None and call["sampling_params"].enable_log_probs for call in calls)
+
+
 def test_q128_single_topk_primes_all_tile_ends():
     config = WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,))
     coordinator, execution, *_ = make_coordinator(
@@ -612,6 +696,7 @@ def test_q128_single_topk_primes_all_tile_ends():
         for call in execution.prefill_calls
         if call["sampling_params"] is not None
         and float(call["sampling_params"].temperature[0]) == 1.0
+        and not call["sampling_params"].enable_log_probs
         and call["start_pos"] is None
     ]
     assert [int(call["prompt_lens"][0]) for call in topk_calls] == [32, 64, 96, 128]
@@ -992,7 +1077,10 @@ def test_failed_case_is_not_marked_complete_and_retry_skips_completed_case(expec
         num_blocks=8,
         can_sample_on_device=True,
     )
-    assert len(execution.decode_calls) == 2
+    # The retry compiles the failed argmax case and the logprob top-k case, not logits again.
+    assert len(execution.decode_calls) == 3
+    assert execution.decode_calls[0]["sampling_params"] is None
+    assert execution.decode_calls[2]["sampling_params"].enable_log_probs is True
 
 
 def test_dynamic_hints_cannot_expand_static_trace_or_sampling_ceilings(expect_error):

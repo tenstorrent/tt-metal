@@ -850,8 +850,10 @@ def test_generator_constructs_model_owned_lane_configs_with_exact_decode_coverag
             allow_force_argmax=True,
             can_sample_on_device=device_sampling_enabled,
         )
-        assert [case.sampling_path for case in plan.decode] == (
-            ["logits", "argmax", "topk"] if device_sampling_enabled else ["logits"]
+        assert [(case.sampling_path, case.log_probs) for case in plan.decode] == (
+            [("logits", False), ("argmax", False), ("topk", False), ("topk", True)]
+            if device_sampling_enabled
+            else [("logits", False)]
         )
     assert isinstance(generator._adapter.config, llama_generator.VLLMAdapterConfig)
     assert vars(generator._adapter) == {"config": generator._adapter.config}

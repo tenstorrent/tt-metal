@@ -631,8 +631,10 @@ def test_large_qwen_builder_threads_exact_decode_sampling_coverage(
             allow_force_argmax=True,
             can_sample_on_device=device_sampling_enabled,
         )
-        assert [case.sampling_path for case in plan.decode] == (
-            ["logits", "argmax", "topk"] if device_sampling_enabled else ["logits"]
+        assert [(case.sampling_path, case.log_probs) for case in plan.decode] == (
+            [("logits", False), ("argmax", False), ("topk", False), ("topk", True)]
+            if device_sampling_enabled
+            else [("logits", False)]
         )
     finally:
         generator.cleanup()
