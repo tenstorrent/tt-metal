@@ -179,6 +179,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 
 #if UNPACK_BLOCK
+// As llk_pack_tilize_block (#60672): one block pack run only for full 32x32 tiles with a non-BFP output, else per tile.
+inline bool pack_block_ok(const std::uint32_t pack_dst_format)
+{
+    return TA_NF == 4 && TA_FACE_R == 16 && !IS_BFP_FORMAT(pack_dst_format);
+}
+
 inline void pack_tilize_block(const std::uint32_t num_tiles, const std::uint32_t unpack_src_format)
 {
     if (_llk_pack_skip_bh_tilize_workaround_wrapper_(unpack_src_format))
@@ -226,7 +232,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     const std::uint32_t num_tiles = std::min(remaining_tiles, SECT_TILES);
 #if UNPACK_BLOCK
-                    if (num_tiles > 1)
+                    if (num_tiles > 1 && pack_block_ok(formats.pack_dst))
                     {
                         pack_tilize_block(num_tiles, formats.unpack_A_src);
                         remaining_tiles -= num_tiles;
@@ -251,7 +257,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 const std::uint32_t num_tiles = std::min(remaining_tiles, SECT_TILES);
                 _llk_packer_wait_for_math_done_();
 #if UNPACK_BLOCK
-                if (num_tiles > 1)
+                if (num_tiles > 1 && pack_block_ok(formats.pack_dst))
                 {
                     pack_tilize_block(num_tiles, formats.unpack_A_src);
                     _llk_pack_dest_section_done_<TA_SYNC, is_fp32_dest_acc_en>();
