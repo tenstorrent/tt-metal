@@ -14,12 +14,10 @@
 //   args::entries_this_thread - relay entries each consumer thread pops
 //                               STRIDED: total_entries / num_consumers
 //                               ALL:     total_entries (each Neo consumes the full stream)
-//   args::batch_size          - entries per wait_front / pop_front (on a BLOCKED relay: the
-//                               consumer share, i.e. the block; the harness derives it)
-//   args::total_blocks        - BLOCKED consumers only: blocks in this run; block b belongs to
-//                               consumer (first_block + b) % num_consumers, which overrides
-//                               entries_this_thread (0 = every thread pops entries_this_thread)
-//   args::first_block         - index of this run's first block in the relay's block sequence
+//   args::batch_size          - entries per wait_front / pop_front
+//   args::total_blocks        - blocks in this run (BLOCKED consumers). Block b goes to consumer
+//                               (first_block + b) % num_consumers; 0 means use entries_this_thread
+//   args::first_block         - how many blocks came before this run
 //   args::num_consumers       - compute threads sharing the relay
 //   args::delay_iterations    - busy-loop iterations per batch (backpressure tests)
 // Args (named RTAs):

@@ -11,6 +11,10 @@
 //   args::total_entries    - pipe entries this core consumes over the run
 //   args::batch_size       - pipe entries per wait_front / pop_front
 //   args::relay_pages_per_entry - relay entries per pipe entry (the relay may page an entry finer)
+//   args::repage_entry_size - 0, or a pipe entry size to switch to in place once everything at the
+//                             old size is consumed (set_receiver_entry_size on the bound relay)
+//   args::probe_addr       - with repage_entry_size: L1 address of per-hart [write_ptr, stride, entry,
+//                             window, span] words recorded before and after the re-page
 //
 // Pipe consumers are the relay producers. Each hart owns total_entries / P pipe entries
 // (P = num_threads = the pipe's credit lanes; P=1: all of them, dense; P>1: entries tid, tid+P,
@@ -32,11 +36,16 @@
 #include "api/dataflow/noc.h"
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
+#ifdef ARCH_QUASAR
+#include "internal/tt-2xx/quasar/dev_mem_map.h"
+#endif
 
 void kernel_main() {
     constexpr uint32_t total_entries = get_arg(args::total_entries);
     constexpr uint16_t batch_size = get_arg(args::batch_size);
     constexpr uint32_t relay_pages_per_entry = get_arg(args::relay_pages_per_entry);
+    constexpr uint32_t repage_entry_size = get_arg(args::repage_entry_size);
+    constexpr uint32_t probe_addr = get_arg(args::probe_addr);
 
     Noc noc;
     experimental::PrefetcherPipe pipe(pipe::in);
@@ -58,5 +67,31 @@ void kernel_main() {
             relay.push_back(share);
         }
         pipe.pop_front(batch_size, noc);
+    }
+
+    if constexpr (repage_entry_size != 0) {
+        // Once everything at the old size is consumed, re-page the bound relay in place and record this
+        // thread's relay layout before and after, so the host can check that the block layout survived.
+        // Written through the uncached alias so the host sees the words.
+#ifdef ARCH_QUASAR
+        volatile tt_l1_ptr uint32_t* probe =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(probe_addr + MEM_L1_UNCACHED_BASE) + tid * 10;
+#else
+        volatile tt_l1_ptr uint32_t* probe = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(probe_addr) + tid * 10;
+#endif
+        auto record = [&](uint32_t at) {
+#ifdef ARCH_QUASAR
+            probe[at + 0] = relay.get_write_ptr() - MEM_L1_UNCACHED_BASE;
+#else
+            probe[at + 0] = relay.get_write_ptr();
+#endif
+            probe[at + 1] = relay.get_stride_size();
+            probe[at + 2] = relay.get_entry_size();
+            probe[at + 3] = relay.get_local_size_bytes();
+            probe[at + 4] = relay.get_ring_span_bytes();
+        };
+        record(0);
+        pipe.set_receiver_entry_size(repage_entry_size);
+        record(5);
     }
 }
