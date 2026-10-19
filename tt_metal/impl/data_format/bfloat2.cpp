@@ -95,11 +95,11 @@ std::vector<float> unpack_bfp2_tiles_into_float_vec(
         exp_bit_mask = 0x3;
     }
 
-    uint32_t size_bytes = bfp_tiles.size() * 4;
+    const size_t size_bytes = bfp_tiles.size() * sizeof(uint32_t);
     uint32_t single_bfp_tile_size =
         tile.has_value() ? tile->get_tile_size(tt::DataFormat::Bfp2_b) : tile_size(tt::DataFormat::Bfp2_b);
     TT_ASSERT(size_bytes % single_bfp_tile_size == 0);
-    uint32_t num_tiles = size_bytes / single_bfp_tile_size;
+    const size_t num_tiles = size_bytes / single_bfp_tile_size;
 
     int data_index;
     int subtile_r;
@@ -130,8 +130,8 @@ std::vector<float> unpack_bfp2_tiles_into_float_vec(
     }
     uint32_t exp_word, sub_word_index;
 
-    uint32_t num_float_in_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows * subtile_cols;
-    uint32_t fp32_element_index = 0;
+    const size_t num_float_in_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows * subtile_cols;
+    size_t fp32_element_index = 0;
 
     uint32_t num_exp_words = tt::round_up(num_faces * face_H, l1_alignment) / num_exps_in_dword;
     uint32_t num_tile_words = tile_HW / num_elements_in_dword;
@@ -140,7 +140,7 @@ std::vector<float> unpack_bfp2_tiles_into_float_vec(
 
     std::vector<float> float_vec;
     float_vec.resize(num_tiles * num_float_in_tile);
-    for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
+    for (size_t tile_index = 0; tile_index < num_tiles; ++tile_index) {
         for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
             for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
                 for (int i = 0; i < subtile_rows; ++i) {
@@ -153,13 +153,13 @@ std::vector<float> unpack_bfp2_tiles_into_float_vec(
                             (tr * (subtiles_in_tile_col * face_HW / num_elements_in_dword) +
                              tc * (face_HW / num_elements_in_dword) + i * num_dwords_per_row +
                              j / num_elements_in_dword);
-                        int tile_and_data_index = data_index + (num_bfp_dwords_in_tile * tile_index);
+                        const size_t tile_and_data_index = data_index + (num_bfp_dwords_in_tile * tile_index);
 
-                        int exponent_index =
+                        const size_t exponent_index =
                             (data_index >> data_dwords_per_exp_dword_log2) + (num_bfp_dwords_in_tile * tile_index);
                         exp_word = bfp_tiles[exponent_index];
 
-                        int num_exponent_words_skip = tile_index * num_exp_words;
+                        const size_t num_exponent_words_skip = tile_index * num_exp_words;
                         sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> data_dwords_per_exp_log2) &
                                          exp_bit_mask;
                         simde__m256i exp_vector0 = simde_mm256_set1_epi32(get_byte(exp_word, sub_word_index));
@@ -238,7 +238,7 @@ std::vector<float> unpack_bfp2_tiles_into_float_vec(
 
                         man0 = simde_mm256_blendv_epi8(man0, simde_mm256_setzero_si256(), mask_denormal0);
                         man1 = simde_mm256_blendv_epi8(man1, simde_mm256_setzero_si256(), mask_denormal1);
-                        uint32_t float_data_index;
+                        size_t float_data_index;
                         if (row_major_output) {
                             float_data_index = subtile_c + (tile_W * subtile_r) + (tile_index * num_float_in_tile);
                         } else {
