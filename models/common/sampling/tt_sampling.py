@@ -1077,8 +1077,8 @@ class TTSampling(LightweightModule):
 
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
-            # Logprobs consume the masked vocabulary shards, before argmax's
-            # gather/slice. Keep token selection identical when reporting toggles.
+            # Logprobs consume the vocabulary shards before argmax's gather/slice,
+            # masked below. Keep token selection identical when reporting toggles.
             logits_for_log_probs = x
             # BH galaxy prefetcher (unfused-CCL) keeps a split senders/worker sub-device manager
             # loaded during decode. The vocab-trim ttnn.slice auto-grids a 32-core block from origin
