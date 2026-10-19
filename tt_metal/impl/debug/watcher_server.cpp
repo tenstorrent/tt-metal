@@ -310,7 +310,7 @@ void WatcherServer::Impl::create_log_file() {
     if (!f) {
         TT_THROW("Watcher failed to create log file\n");
     }
-    log_debug(LogLLRuntime, "Watcher log file: {}", fname);
+    log_info(LogLLRuntime, "Watcher log file: {}", fname);
 
     fprintf(f, "At %.3lfs starting\n", get_elapsed_secs());
     fprintf(f, "Legend:\n");
