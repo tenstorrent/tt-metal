@@ -34,7 +34,8 @@ ReshapeCodegenDeviceOperation::program_factory_t ReshapeCodegenDeviceOperation::
             operation_attributes.logical_output_shape,
             rcg::reshape_core_grid(tensor_args.input, operation_attributes.sub_core_grids).num_cores(),
             operation_attributes.plan);
-        if (chosen.has_value() && std::holds_alternative<rcg::TileMappedChoice>(*chosen)) {
+        if (operation_attributes.plan.tile_route == rcg::TileRoute::TileMapped ||
+            (chosen.has_value() && std::holds_alternative<rcg::TileMappedChoice>(*chosen))) {
             return ReshapeCodegenTileMappedProgramFactory{};
         }
         if (operation_attributes.plan.tile_route == rcg::TileRoute::TileRows) {
@@ -62,15 +63,22 @@ void ReshapeCodegenDeviceOperation::validate_on_program_cache_miss(
             "ReshapeCodegen was launched without a row-major geometry");
         return;
     }
-    if (plan.tile_route != rcg::TileRoute::TileRows) {
+    // A view keeps its source's buffer, so the buffer may hold more pages than the plan reads; interleaved
+    // page i sits at the same address either way, so only a short buffer is an error.
+    if (plan.tile_route == rcg::TileRoute::Lcm) {
+        TT_FATAL(plan.lcm.has_value(), "ReshapeCodegen was launched on the LCM route without its geometry");
+        const uint64_t lcm_pages = static_cast<uint64_t>(plan.lcm->total_chunks) * plan.lcm->in_tiles;
         TT_FATAL(
-            plan.tile_route != rcg::TileRoute::Lcm || plan.lcm.has_value(),
-            "ReshapeCodegen was launched on the LCM route without its geometry");
+            input.buffer()->num_pages() >= lcm_pages,
+            "Reshape input has {} tiles, the LCM plan needs at least {}",
+            input.buffer()->num_pages(),
+            lcm_pages);
+        return;
+    }
+    if (plan.tile_route != rcg::TileRoute::TileRows) {
         return;
     }
     const auto& layout = plan.tile_rows.layout;
-    // A view keeps its source's buffer, so the buffer may hold more pages than the plan reads; interleaved
-    // page i sits at the same address either way, so only a short buffer is an error.
     TT_FATAL(
         input.buffer()->num_pages() >= layout.num_input_pages,
         "Reshape input has {} tiles, the tile-row plan needs at least {}",

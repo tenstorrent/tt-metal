@@ -154,10 +154,10 @@ std::optional<TilePlan> tile_geometry(
     TilePlan plan;
     plan.wt_in = w_in / tile_w;
     plan.wt_out = w_out / tile_w;
-    const uint32_t lcm_w = std::lcm(w_in, w_out);
+    const uint64_t lcm_w = std::lcm<uint64_t, uint64_t>(w_in, w_out);
     const uint64_t ht_in = volume_before_last(in_shape) / tile_h;
-    plan.in_rows = lcm_w / w_in;
-    plan.out_rows = lcm_w / w_out;
+    plan.in_rows = static_cast<uint32_t>(lcm_w / w_in);
+    plan.out_rows = static_cast<uint32_t>(lcm_w / w_out);
     if (ht_in == 0 || ht_in % plan.in_rows != 0) {
         return std::nullopt;
     }
