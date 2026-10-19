@@ -715,10 +715,7 @@ def test_hardmish_float16_dest_identity_branch(dest_acc: DestAccumulation):
     # 0x0400..0x7BFF: every positive normal fp16, ending at 65504. Subnormals are left out
     # because the unpack flushes them, which is the unpack and not the op.
     probes = torch.arange(0x0400, 0x7C00, dtype=torch.int16).view(torch.float16)
-    # The rest of the 32 tiles cycles through quadratic-branch inputs whose answers are exact
-    # in fp16 and in bf16 alike, so a bf16 round cannot move them. On the identity branch a
-    # datacopy, or an SFPU that reads the Float16 Dest as bf16 bits and writes the same bits
-    # back, is indistinguishable from hardmish; these lanes are what tell them apart.
+    # Quadratic-branch inputs exact in fp16 and bf16, so they show the op ran whatever the round.
     sentinels = {-0.5: -0.375, -1.0: -0.5, -1.5: -0.375, -4.0: 0.0}
     num_sentinel_lanes = num_elements - probes.numel()
     sentinel_in = torch.tensor(list(sentinels), dtype=torch.float16).repeat(
