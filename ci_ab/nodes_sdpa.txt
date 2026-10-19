@@ -1,0 +1,6 @@
+ci_ab/test_bcast_ab.py::test_sdpa[sdpa_1k_d64-hifi2]
+ci_ab/test_bcast_ab.py::test_sdpa[sdpa_1k_d64-lofi]
+ci_ab/test_bcast_ab.py::test_sdpa[sdpa_2k_d128-hifi2]
+ci_ab/test_bcast_ab.py::test_sdpa[sdpa_2k_d128-lofi]
+ci_ab/test_bcast_ab.py::test_sdpa[sdpa_4k_d128-hifi2]
+ci_ab/test_bcast_ab.py::test_sdpa[sdpa_4k_d128-lofi]
