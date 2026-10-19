@@ -60,7 +60,7 @@ sub_core_grid=None, ready_semaphore=None, data_valid_semaphore=None)`:
   (`report_python.md`). `balance=True` ring 153-156 GB/s at 2 links, 166 at 4 (`README_python.md`). Increment on
   every packet 24.5 vs every 8 chunks 46.4 GB/s per chip (`report_python.md`). All 112 fabric x topology x link
   combinations bit-exact (`README_python.md`).
-- C++ op runs at ~84% of a LoudBox link (`CHANGELOG.md`; no test or log in this tree records the measurement).
+- C++ op at ~84% of a LoudBox link: claimed in `CHANGELOG.md`, unsourced (its 2026-10-19 note; no measurement in this tree).
 - GLM-5.3, LoudBox 2x4 p150b, 2 links, device time vs `ttnn.all_gather`: 640x4096 bf16 axis 1 281 -> 208 us, 640x1536
   132 -> 88, 2560x4096 axis 0 340 -> 289, 640x512 / 2560x512 56 / 65 -> 42 / 53; ~7 ms per chunk
   (`models/demos/glm53_flash_d_p_lb/bringup/BREADCRUMBS.md`, "Row gathers on fabric_all_gather"). Striped MLA latent

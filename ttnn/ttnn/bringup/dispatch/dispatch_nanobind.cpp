@@ -79,7 +79,8 @@ void bind_dispatch(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
             subdevice_id (ttnn.SubDeviceId, optional): Subdevice ID for core allocation.
             cluster_axis (int, optional): Mesh axis along which dispatch communicates
-                (0 = SP/dispatch axis). Defaults to 0.
+                (0 = SP/dispatch axis). Defaults to None. Only 0 (or None) passes validation;
+                under FABRIC_2D pass 0 explicitly (None is refused there).
             num_links (int, optional): Number of fabric links for remote token writes.
                 Defaults to 1.
             topology (ttnn.Topology, optional): Fabric topology for remote writes.
@@ -97,6 +98,7 @@ void bind_dispatch(nb::module_& mod) {
             num_workers_per_sender (int, optional): Number of worker cores per
                 sender. Applies to both TILE and ROW_MAJOR input (both layouts run on
                 the same worker architecture; ROW_MAJOR reads rows without untilizing).
+                Defaults to 2.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]:
