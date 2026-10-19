@@ -190,30 +190,36 @@ class MeshConfig:
     dispatch_group_size: int
     num_dispatch_groups: int
 
+    @property
+    def tp_axis(self) -> int:
+        return 1 - self.sp_axis
 
-def extract_mesh_config(mesh_device) -> MeshConfig:
+
+def extract_mesh_config(mesh_device, sp_axis: int = 0) -> MeshConfig:
     """
     Extract dispatch configuration from mesh device shape.
 
-    For 2D meshes (both dimensions > 1):
-      - sp_axis = 0 (sequence parallel along rows)
-      - dispatch_group_size = number of rows
-      - num_dispatch_groups = number of columns (EP ranks)
-
-    For 1D meshes:
-      - dispatch_group_size = total number of devices
-      - num_dispatch_groups = 1
-      - sp_axis = whichever dimension has size > 1
+    The dispatch groups run along `sp_axis` (sequence parallel), one group per index of the other
+    (TP / EP) axis:
+      - dispatch_group_size = mesh extent along sp_axis
+      - num_dispatch_groups = mesh extent along the other axis
     """
-    sp_axis = 0
-    dispatch_group_size = mesh_device.shape[sp_axis]
-    num_dispatch_groups = mesh_device.shape[1]
-
+    assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
     return MeshConfig(
         sp_axis=sp_axis,
-        dispatch_group_size=dispatch_group_size,
-        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=mesh_device.shape[sp_axis],
+        num_dispatch_groups=mesh_device.shape[1 - sp_axis],
     )
+
+
+def ep_mesh_dims(sp_axis: int = 0) -> tuple[int, int]:
+    """ShardTensor2dMesh / MeshComposerConfig dims for a tensor laid out (group, chip, ...).
+
+    The chip-within-group dim goes on the SP mesh axis and the group dim on the other axis:
+    (1, 0) for sp_axis=0, (0, 1) for sp_axis=1.
+    """
+    assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
+    return (1, 0) if sp_axis == 0 else (0, 1)
 
 
 class ExpertMapping:
@@ -1033,76 +1039,74 @@ def get_dispatch_input_mesh_mapper(mesh_device, sp_axis: int):
     )
 
 
-def get_ep_mesh_mapper(mesh_device):
+def get_ep_mesh_mapper(mesh_device, sp_axis: int = 0):
     """
-    Create mesh mapper for expert-parallel tensors.
+    Create mesh mapper for expert-parallel tensors laid out (num_dispatch_groups, dispatch_group_size, ...).
 
-    Shards tensor dim 1 across mesh rows (dispatch_group_size),
-    tensor dim 0 across mesh cols (num_dispatch_groups).
+    Shards tensor dim 1 (dispatch_group_size) across the SP mesh axis and
+    tensor dim 0 (num_dispatch_groups) across the other axis.
     """
     return ttnn.ShardTensor2dMesh(
         mesh_device,
         mesh_shape=mesh_device.shape,
-        dims=(1, 0),
+        dims=ep_mesh_dims(sp_axis),
     )
 
 
-def get_expert_token_counts_mesh_mapper(mesh_device):
+def get_expert_token_counts_mesh_mapper(mesh_device, sp_axis: int = 0):
     """
     Create mesh mapper for expert_token_counts tensor.
 
     Shape: [num_dispatch_groups, dispatch_group_size, num_routed_experts]
 
-    Shards dimension 1 (dispatch_group_size) across mesh rows and
-    dimension 0 (num_dispatch_groups) across mesh columns.
+    Shards dimension 1 (dispatch_group_size) across the SP mesh axis and
+    dimension 0 (num_dispatch_groups) across the other axis.
     Each device receives [1, 1, num_routed_experts].
     """
-    return ttnn.ShardTensor2dMesh(
-        mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(1, 0),  # Shard dim 1 across rows, shard dim 0 across cols
-    )
+    return get_ep_mesh_mapper(mesh_device, sp_axis)
 
 
-def get_tp_mesh_composer(mesh_device):
+def get_tp_mesh_composer(mesh_device, sp_axis: int = 0):
     """
-    Create mesh composer for TP sharded tensors; TP embedding dim over columns
+    Create mesh composer for TP sharded tensors: sequence over the SP axis, embedding dim over the TP axis.
     """
     return ttnn.create_mesh_composer(
         mesh_device,
         ttnn.MeshComposerConfig(
-            dims=[0, -1],
+            dims=[0, -1] if sp_axis == 0 else [-1, 0],
         ),
     )
 
 
-def get_sp_mesh_composer(mesh_device):
+def get_sp_mesh_composer(mesh_device, sp_axis: int = 0):
     """
-    Create mesh composer for tensors replicated across TP columns.
+    Create mesh composer for tensors replicated across the TP axis.
 
-    Composes along SP axis (column) only, taking column 0 from each row.
+    Composes along the SP axis only, taking TP index 0.
     Use for gate outputs that are replicated across TP after all_reduce_async
     (e.g., logits, topk_indices, topk_weights).
     """
+    if sp_axis == 0:
+        return ttnn.create_mesh_composer(
+            mesh_device,
+            ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(mesh_device.shape[0], 1)),
+        )
     return ttnn.create_mesh_composer(
         mesh_device,
-        ttnn.MeshComposerConfig(
-            [0, 1],
-            ttnn.MeshShape(mesh_device.shape[0], 1),
-        ),
+        ttnn.MeshComposerConfig([1, 0], ttnn.MeshShape(1, mesh_device.shape[1])),
     )
 
 
-def get_ep_mesh_composer(mesh_device):
+def get_ep_mesh_composer(mesh_device, sp_axis: int = 0):
     """
     Create mesh composer for expert-parallel tensors.
 
-    Composes tensor dim 1 from mesh rows (dispatch_group_size),
-    tensor dim 0 from mesh cols (num_dispatch_groups).
+    Composes tensor dim 1 from the SP mesh axis (dispatch_group_size),
+    tensor dim 0 from the other axis (num_dispatch_groups).
     """
     return ttnn.create_mesh_composer(
         mesh_device,
-        ttnn.MeshComposerConfig(dims=[1, 0]),
+        ttnn.MeshComposerConfig(dims=list(ep_mesh_dims(sp_axis))),
     )
 
 
