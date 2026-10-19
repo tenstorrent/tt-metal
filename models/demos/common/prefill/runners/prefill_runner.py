@@ -18,6 +18,7 @@ from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams,
 from models.demos.common.prefill.forward_entries import SHUTDOWN_WORD as SHUTDOWN_METADATA_WORD
 from models.demos.common.prefill.forward_entries import WARMUP_WORD as WARMUP_METADATA_WORD
 from models.demos.common.prefill.forward_entries import (
+    ENTRY_BYTES,
     check_packed_forward_support,
     decode_forward_metadata,
     forward_metadata_words,
@@ -385,6 +386,84 @@ def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: fl
         pass
 
 
+def _entry_rows(inp: ttnn.Tensor, k: int, rows: int) -> ttnn.Tensor:
+    """Entry k's rows; dim 2 is the sequence for both token rows and activations."""
+    start = [0] * len(inp.shape)
+    end = list(inp.shape)
+    start[2], end[2] = k * rows, (k + 1) * rows
+    return ttnn.slice(inp, start, end, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+_zero_rows_cache: dict = {}
+
+
+def _zero_rows(like: ttnn.Tensor, rows: int) -> ttnn.Tensor:
+    shape = list(like.shape)
+    shape[2] = rows
+    key = (tuple(shape), like.dtype, like.layout)
+    if key not in _zero_rows_cache:
+        dev = like.device()
+        _zero_rows_cache[key] = ttnn.from_torch(
+            torch.zeros(*shape),
+            dtype=like.dtype,
+            layout=like.layout,
+            device=dev,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                dev, ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
+            ),
+        )
+    return _zero_rows_cache[key]
+
+
+def _entry_metadata(entry, like: ttnn.Tensor) -> ttnn.Tensor:
+    """The entry as a single-chunk metadata tensor."""
+    dev = like.device()
+    return ttnn.from_torch(
+        torch.tensor([entry.slot, entry.start, entry.end], dtype=torch.int32).reshape(1, 1, 1, -1),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=dev,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            dev, ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
+        ),
+    )
+
+
+def _prefill_entries(runtime, kv_caches, inp, entries: list, c: int, d2h_service=None):
+    """A packed forward run one non-empty entry at a time through prefill_chunk. Returns the activation in the
+    packed layout, empty entries as zero rows."""
+    rows = CHUNK_SIZE // _sp
+    real = [e for e in entries if not e.is_empty]
+    outs = []
+    for k, entry in enumerate(real):
+        md = _entry_metadata(entry, inp)
+        out = runtime.prefill_chunk(
+            _entry_rows(inp, k, rows),
+            kv_caches,
+            slot_id=entry.slot,
+            actual_start=entry.start,
+            actual_end=entry.end,
+            request_id=c,
+            d2h_service=d2h_service,
+            metadata_msg=md,
+        )
+        if md.is_allocated():  # the runtime may have freed it
+            ttnn.deallocate(md)
+        if out is not None:
+            outs.append(out)
+    ttnn.deallocate(inp)
+    if not outs:
+        return None
+    missing = len(entries) - len(real)
+    parts = outs + ([_zero_rows(outs[0], missing * rows)] if missing else [])
+    act = ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for o in outs:
+        ttnn.deallocate(o)
+    return act
+
+
 def _compute_and_send(
     runtime,
     kv_caches,
@@ -407,10 +486,13 @@ def _compute_and_send(
         f"provided={meta.get('provided_levels')}{_entries_str(meta)}"
     )
 
-    if FORWARD_CHUNKS > 1:
+    if FORWARD_CHUNKS > 1 and ADAPTER.supports_packed_forward:
         out = runtime.prefill_forward(
             inp, kv_caches, meta["entries"], request_id=c, d2h_service=d2h_service, metadata_msg=metadata_msg
         )
+    elif FORWARD_CHUNKS > 1:
+        out = _prefill_entries(runtime, kv_caches, inp, meta["entries"], c, d2h_service=d2h_service)
+        ttnn.deallocate(metadata_msg)
     else:
         mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
         out = runtime.prefill_chunk(
@@ -801,7 +883,12 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             global_spec=None,
             fifo_size_bytes=fifo_size_bytes,
             worker_cores=SYNC_WORKER_CORES,
-            metadata_size_bytes=(CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES),
+            # A packed forward acks each entry on its own.
+            metadata_size_bytes=(
+                ENTRY_BYTES
+                if FORWARD_CHUNKS > 1
+                else (CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES)
+            ),
             metadata_ring=True,
         )
         # The D2H record is the chunk's metadata {slot_id, actual_start, actual_end}; LayerAckService labels it

@@ -86,8 +86,7 @@ class PrefillRunParams:
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
     mtp_levels: int = 0
-    # Chunk entries per forward (PREFILL_FORWARD_CHUNKS). 1 = one chunk per prefill_chunk call; > 1 needs an
-    # adapter with supports_packed_forward and drives the runtime's prefill_forward.
+    # Chunk entries per forward (PREFILL_FORWARD_CHUNKS).
     forward_chunks: int = 1
 
     @property
@@ -148,8 +147,8 @@ class PrefillModelAdapter(ABC):
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
     supports_mtp: bool = False
-    # Whether the runtime implements prefill_forward (several chunk entries per forward), so the runner may
-    # run with PREFILL_FORWARD_CHUNKS > 1. See docs/ADDING_A_PREFILL_MODEL.md.
+    # Whether the runtime implements prefill_forward (several chunk entries per forward). Without it the runner
+    # runs a PREFILL_FORWARD_CHUNKS > 1 forward one entry at a time. See docs/ADDING_A_PREFILL_MODEL.md.
     supports_packed_forward: bool = False
 
     def fabric_payload_size(self) -> int:
@@ -237,7 +236,7 @@ class PrefillModelAdapter(ABC):
         """Construct the model for this rank and return a runtime handle. The runtime
         is stateless w.r.t. the KV cache — it receives the engine-owned ``KvCaches`` as an
         argument on each call. The engine then calls ``.compile(kv_caches)`` and drives
-        it (make_chunk_input, prefill_chunk — or prefill_forward when ``params.forward_chunks > 1`` — and,
+        it (make_chunk_input, prefill_chunk — or prefill_forward with ``supports_packed_forward`` — and,
         when enabled, build_kv_chunk_table / set_layer_completion_sink). ``params`` carries the per-rank
         knobs."""
 
