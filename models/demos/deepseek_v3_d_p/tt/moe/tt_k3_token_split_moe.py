@@ -53,6 +53,7 @@ from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import (
     _bank_sharded,
     flat_weight_regions,
 )
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import flat_layout, k3_gu64
 
 import models.demos.glm53_flash_d_p.tt.mm_configs as mm_configs
 import ttnn
@@ -154,12 +155,20 @@ class TtK3TokenSplitMoE:
         weight_cache=None,
         acc_on_ports=True,
         routed_only=False,
-        flat_env=None,
+        flat_layout=None,
+        gu64=True,
+        combine_depth=4,
+        x_once=None,
+        dw_batch=None,
+        layout_overrides=None,
     ):
         """routed_only (GLM-5.3-Flash hack): only the routed experts and their combine - no router (the caller's top-k
         goes to routed()), no latent projections (d.latent = d.H: the dispatch rows are x), no shared expert; the
-        flat expert's weights come per call (routed(op=...): one block for every layer). flat_env: the routed
-        experts' plan options (process-wide env defaults) instead of K3's."""
+        flat expert's weights come per call (routed(op=...): one block for every layer). flat_layout: the routed
+        experts' layout (flat_layouts.py preset) instead of K3's (gu64: flat_layouts.k3_gu64, else the plan's
+        defaults). combine_depth: the combine's rings per source chip. x_once / dw_batch / layout_overrides: the routed
+        experts' program options for the fused call only (x read from DRAM once - default off with gu64 / routed_only;
+        down-weight blocks per read barrier; any other FlatLayoutOptions fields)."""
         self.mesh, self.d, self.S, self.torus = mesh_device, d, S, tuple(torus)
         self.routed_only = routed_only
         assert not routed_only or d.latent == d.H, "routed_only: no latent projections (d.latent = d.H)"
@@ -298,19 +307,9 @@ class TtK3TokenSplitMoE:
         # rectangle (MIMO_FL_NH=2, on the cells the accumulators-on-ports layout frees): x delivery (~20 GB/s a relay)
         # capped compute-bound calls - single chip M 1024 182.6 -> 165.2 us / expert, harness fused packed 5807 ->
         # 5709 us, uniform / spread and the block's traced forward unchanged (3312 us)
-        self.gu64 = os.environ.get("K3_GU64", "1") == "1" and flat_env is None
-        for k, v in (flat_env or {}).items():
-            os.environ.setdefault(k, v)
-        if self.gu64:
-            for k, v in (
-                ("MIMO_FL_CMB_DRISC", "1"),
-                ("MIMO_FL_DRISC_DUAL", "0"),
-                ("MIMO_FL_HG", "1"),
-                ("MIMO_FL_HG_NU", "3"),
-                ("MIMO_FL_ND", "28"),
-                ("MIMO_FL_NH", "2" if acc_on_ports else "1"),
-            ):
-                os.environ.setdefault(k, v)
+        self.gu64 = gu64 and flat_layout is None
+        self.flat_layout = flat_layout if flat_layout is not None else (k3_gu64(acc_on_ports) if self.gu64 else {})
+        self.x_once, self.dw_batch, self.layout_overrides = x_once, dw_batch, dict(layout_overrides or {})
         self.op = FlatRoutedExpert(
             mesh_device,
             "fake",
@@ -324,6 +323,7 @@ class TtK3TokenSplitMoE:
             pin=1,
             x_bf16=self.x_bf16,
             h_bf16=self.h_bf16,
+            layout=self.flat_layout,
         )
         P = len(w.pool) if not routed_only else 1
         assert EPC % P == 0, "every chip's local expert e uses pool[e % P]: EPC must be a multiple of the pool"
@@ -502,7 +502,7 @@ class TtK3TokenSplitMoE:
                 max_e=lay["sched_max_e"],
                 gu_nreg=lay["sched_gu_nreg"],
                 pin=1,
-                pin_ratio=os.environ.get("MIMO_FL_PIN_RATIO", "8"),
+                pin_ratio=str(self.op.layout.pin_ratio),
             )
         probe = combine_planner_prepare(mesh_device, A=15, **self._planner_args)  # (outputs only: their addresses)
         self.combine = sparse_combine_rf_prepare(
@@ -513,7 +513,7 @@ class TtK3TokenSplitMoE:
             num_links=2,
             torus=self.torus,
             n_acc=16,
-            depth=int(os.environ.get("K3_D", "4")),
+            depth=combine_depth,
             cells=self.cells,
             arena=self.arena,
             writers=self.writers,
@@ -834,26 +834,17 @@ class TtK3TokenSplitMoE:
         return arena
 
     def experts_combine(self, xg, pl, arena, op=None):
-        # x read from DRAM once (MIMO_FL_X1, read when the program is built): routed experts 2433 -> 2372 us traced;
-        # the shared expert's flat op keeps reading it twice (X1 there: 523 -> 702 us). K3_EXP_X1=0: off
-        # K3_EXP_DW_BATCH=n: down-weight blocks per read barrier (MIMO_FL_DW_BATCH, 2 by default; 4: block-level noise)
-        scoped = {
-            # (routed_only, GLM-5.3-Flash: off - 1.99 -> 1.70 ms fused at S 640)
-            "MIMO_FL_X1": os.environ.get("K3_EXP_X1", "0" if self.gu64 or self.routed_only else "1") == "1",
-            "MIMO_FL_DW_BATCH": os.environ.get("K3_EXP_DW_BATCH", ""),
-        }
-        scoped = {k: ("1" if v is True else v) for k, v in scoped.items() if v and v != "0" and k not in os.environ}
-        for kv in filter(None, os.environ.get("K3_EXP_ENV", "").split(",")):  # (more flat knobs, this program only)
-            k, v = kv.split("=", 1)
-            scoped[k] = v
-        os.environ.update(scoped)
-        try:
-            return self._experts_combine(xg, pl, arena, op or self.op)
-        finally:
-            for k in scoped:
-                os.environ.pop(k, None)
+        # x read from DRAM once (x_once): routed experts 2433 -> 2372 us traced with 48 gate/up cores; the shared
+        # expert's flat op keeps reading it twice (x_once there: 523 -> 702 us); off with gu64 (one multicaster cannot
+        # feed 64 gate/up cores) and routed_only (GLM-5.3-Flash: 1.99 -> 1.70 ms fused at S 640 without it)
+        # dw_batch: down-weight blocks per read barrier (2 by default; 4: block-level noise)
+        x1 = self.x_once if self.x_once is not None else not (self.gu64 or self.routed_only)
+        lay = dict(self.flat_layout, x_once=bool(x1), **self.layout_overrides)
+        if self.dw_batch:
+            lay["dw_batch"] = int(self.dw_batch)
+        return self._experts_combine(xg, pl, arena, op or self.op, flat_layout(lay))
 
-    def _experts_combine(self, xg, pl, arena, op):
+    def _experts_combine(self, xg, pl, arena, op, layout):
         extra = self.desc
         if self.routed_only:
             # the fused op's program-cache key is its buffer addresses (+ the plan): a key seen before is a hit, where the
@@ -903,6 +894,8 @@ class TtK3TokenSplitMoE:
             h_bf16=self.h_bf16,
             l1_args=self.l1_args,
             relay_words=self.relay_words,
+            y_l1=True,
+            layout=layout,
         )
 
     def latent_up(self, yr_l1=False):
@@ -1144,7 +1137,6 @@ class TtK3TokenSplitMoE:
                             + " ".join(f"{k} {1e3 * v / st['n']:.1f}" for k, v in st.items() if k != "n")
                         )
 
-        os.environ["MIMO_FL_Y_L1"] = "1"
         gi, _ = self.gather_routing(ids, wts)
         mark("routing_gather")
         pl = self.planner(gi, gi)
@@ -1173,7 +1165,6 @@ class TtK3TokenSplitMoE:
         """x: [S, H] bf16 TILE per chip. Returns y [S, H] (and the intermediates with keep=True). hook(stage name),
         if given, is called after every stage (e.g. to read the profiler per stage)."""
         mark = hook or (lambda _: None)
-        os.environ["MIMO_FL_Y_L1"] = "1"
         ids, wts, *logits = self.router(x, keep_logits=keep)
         mark("router")
         x_rm = None

@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 import os
 
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import GLM_FLASH
+
 import ttnn
 from models.demos.glm53_flash_d_p.tt.experts import LazyExpertWeights
 from models.demos.glm53_flash_d_p.tt.experts_ag import (
@@ -33,24 +35,14 @@ from models.demos.glm53_flash_d_p.tt.experts_ag import (
     moe_hooks,
 )
 
-# the routed experts' plan: DRISC-only weight readers, 32 down cores (128 output tile columns, 4 a core), one x helper
-# (a second one costs ~104 KB of every core's arena (1208 vs 1104 KB): in the whole model the dispatch's 103 KB
+# the routed experts' layout: DRISC-only weight readers, 32 down cores (128 output tile columns, 4 a core), one x
+# helper (a second one costs ~104 KB of every core's arena (1208 vs 1104 KB): in the whole model the dispatch's 103 KB
 # manifest then no longer fits beside it at S 640; no gain on GLM in the overlap harness)
-FLAT_ENV = {
-    "MIMO_FL_CMB_DRISC": "1",
-    "MIMO_FL_DRISC_DUAL": "0",
-    "MIMO_FL_ND": "32",
-    "MIMO_FL_NH": "1",
-}
+FLAT_LAYOUT = GLM_FLASH
 _BLOCKS = {}
 _HOST = {}
 _DONE = {}  # mesh -> the done words every layer's flat expert shares
 _GX = {}  # (mesh, T) -> the gathered x tiles and the full-mesh topology
-
-
-def _apply_env():
-    for k, v in FLAT_ENV.items():
-        os.environ.setdefault(k, v)
 
 
 class TtExpertsTs:
@@ -83,7 +75,6 @@ class TtExpertsTs:
         self.max_seq_len = max_seq_len
         self.gids = default_gids(n, self.epc)
         self.gathered_x = None
-        _apply_env()
         wdtype = {ttnn.bfloat4_b: "bf4", ttnn.bfloat8_b: "bf8"}[weights_dtype]
         fake = isinstance(torch_weights, str)
         prefix = None
@@ -116,6 +107,7 @@ class TtExpertsTs:
             act="clamped_silu",
             pin=1,
             cache_prefix=prefix,
+            layout=FLAT_LAYOUT,
         )
         # (one done-words buffer for every layer: 2 KB of L1 on each down coordinator per layer otherwise - 86 KB over
         # 42 layers, under the token-split block's arena; launches leave it zeroed and the layers run one at a time)
@@ -150,7 +142,7 @@ class TtExpertsTs:
                 cap=self.max_seq_len,
                 rows_cap=-(-n * s * min(self.K, self.epc) // 32) * 32 + 32 * self.epc,
                 routed_only=True,
-                flat_env=FLAT_ENV,
+                flat_layout=FLAT_LAYOUT,
                 # (hang hunting: block variants, e.g. {"acc_on_ports": false} or {"deterministic": true})
                 **json.loads(os.environ.get("GLM_TS_BLOCK_OPTS", "{}")),
             )

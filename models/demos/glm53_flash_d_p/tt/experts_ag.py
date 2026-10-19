@@ -288,9 +288,11 @@ class TtExpertsAg:
         num_links: int = 1,
         weights_dtype=ttnn.bfloat4_b,
         cache: bool = True,
+        layout=None,
     ):
         """torch_weights: sequence (len E) of HF expert weight dicts ((out, in) layout), indexed lazily; only read on a
-        weight cache miss. max_seq_len: the longest chunk (all S tokens)."""
+        weight cache miss. max_seq_len: the longest chunk (all S tokens). layout: the flat expert's (flat_layouts.py).
+        """
         from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 
         rows, cols = tuple(mesh.shape)
@@ -349,6 +351,7 @@ class TtExpertsAg:
             cache_prefix=prefix,
             x_bf16=self.x_bf16,
             h_bf16=self.h_bf16,
+            layout=layout,
         )
 
     def _block(self, s):
@@ -483,7 +486,8 @@ class TtExpertsAg:
 def build_experts_ag(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtype=ttnn.bfloat4_b) -> TtExpertsAg:
     # 32 down cores (128 output tile columns, 4 a core: as fast as the 36 the 12 x 10 grid would give, and the
     # token-split path's layout - one flat weight cache for both modes)
-    os.environ.setdefault("MIMO_FL_ND", "32")
+    from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import GLM_FLASH_AG
+
     return TtExpertsAg(
         mesh,
         layer,
@@ -497,4 +501,5 @@ def build_experts_ag(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtyp
         weights_dtype=weights_dtype,
         num_links=int(os.environ.get("GLM_MOE_LINKS", "1")),
         cache=os.environ.get("GLM_EXPERTS_CACHE", "1") != "0",
+        layout=GLM_FLASH_AG,
     )
