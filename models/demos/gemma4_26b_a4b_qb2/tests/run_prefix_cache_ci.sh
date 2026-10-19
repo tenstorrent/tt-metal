@@ -56,6 +56,12 @@ case "${GEMMA4_PREFIX_SUITE:-boundary}" in
         test_file="$model_dir/tests/test_prefix_cache_lifetime.py"
         test_selection=live_trace_chat_transitions
         ;;
+    traceperf)
+        max_context=4096
+        export GEMMA4_PREFIX_DIAGNOSE=0
+        test_file="$model_dir/tests/test_prefix_cache_lifetime.py"
+        test_selection=live_trace_chat_transitions
+        ;;
     agentic)
         server_host=0.0.0.0
         export GEMMA4_PREFIX_DIAGNOSE=0
