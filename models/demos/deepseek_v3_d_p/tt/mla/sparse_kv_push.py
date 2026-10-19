@@ -78,7 +78,7 @@ def build_plan_host(indices, num_devices, stripe_chunk, links, pages_per_packet,
     words = _STREAM_HEADER_WORDS + max(
         sum(3 + len(l) for _, _, l in streams[o][w]) for o in range(num_devices) for w in range(links)
     )
-    words += -words % 16
+    words = max(1024, 1 << (words - 1).bit_length())  # few distinct page sizes, so few kernel recompiles
     host = np.zeros((num_devices, 1, links, words), dtype=np.int64)
     for o in range(num_devices):
         for w in range(links):
@@ -100,6 +100,7 @@ class SparseKvPushPlanner:
         self.banks = mesh_device.dram_grid_size().x
         self._last: SparseKvPushPlan | None = None
         self._key = None
+        self.host_seconds = 0.0  # cumulative host planning time
 
     def invalidate(self):
         self._last = None
@@ -144,5 +145,7 @@ class SparseKvPushPlanner:
         )
         self._key = key
         self._last = SparseKvPushPlan(streams=streams_tt, compact_indices=compact_tt)
-        logger.info(f"sparse KV push plan: {time.perf_counter() - t0:.3f}s on host, up to {used} buffer rows per chip")
+        dt = time.perf_counter() - t0
+        self.host_seconds += dt
+        logger.info(f"sparse KV push plan: {dt:.3f}s on host, up to {used} buffer rows per chip")
         return self._last
