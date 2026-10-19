@@ -58,6 +58,12 @@
 # signbit, isinf/isnan and threshold sweeps (test_eltwise_unary_sfpu.py,
 # `gate_on_step_budget`), whose stimuli measured those predicates' rows.
 #
+# On Wormhole and Blackhole no functional driver sweeps a Float16 input or output (the
+# exponent-A format, not Float16_b), so nothing in CI gates the Float16 rows there: the
+# binary ones (Elwadd/Elwsub/Elwrsub/Elwmul/Elwdiv, Eq..Ge, Max/Min, Fmod/Remainder) and
+# the unary tolerance ones. They are the last measurement, and a stale one fails no test;
+# re-measure before relying on one.
+#
 # Every exhaustive row was measured with FAST_MODE(No) and CLAMP_NEGATIVE(True) compiled
 # in. The key has no axis for either, so a row holds for a kernel built that way: the
 # unary functional driver builds Sqrt/Rsqrt at FastMode.Yes and Exp's clamp path depends

@@ -27,8 +27,8 @@ import sys
 import pytest
 import torch
 from helpers import ulp_sweep
-from helpers.chip_architecture import get_chip_architecture
-from helpers.format_config import InputOutputFormat
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
     UnarySFPUGolden,
@@ -230,9 +230,18 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         # only by an emit run, which is what wrote the row's comment. The nightly sweep
         # that measures every cell and holds a tolerance row to its recorded maximum
         # arrives with the headroom report (#57527).
+        # On Wormhole/Blackhole no functional driver sweeps Float16 (exponent-A), so
+        # such a cell is gated nowhere.
+        owner = (
+            "no functional driver sweeps Float16, so it is gated nowhere"
+            if DataFormat.Float16 in (in_fmt, out_fmt)
+            and get_chip_architecture()
+            in (ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE)
+            else "its safe domain is the functional driver's"
+        )
         pytest.skip(
-            f"{cell}: on the tolerance metric, so unswept at gate time; its safe "
-            "domain is the functional driver's, the full-format tail only an emit's"
+            f"{cell}: on the tolerance metric, so unswept at gate time; {owner}, "
+            "the full-format tail only an emit's"
         )
 
     # No OverflowError skip. cosh/sinh were the last goldens that could raise on a finite
