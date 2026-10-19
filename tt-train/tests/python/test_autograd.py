@@ -736,6 +736,18 @@ def test_assign_numpy_adds_leading_unit_dims(shape):
     np.testing.assert_array_equal(parameter.to_numpy(precision=_NATIVE), values.reshape(shape_4d))
 
 
+@pytest.mark.parametrize("shape", [(64,), (32, 64), (2, 32, 64)])
+def test_assign_numpy_keeps_a_lower_rank_tensors_shape(shape):
+    """A tensor below rank 4 keeps its shape: only an array with fewer dimensions than the tensor gets unit ones."""
+    values = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
+    tensor = ttml.autograd.Tensor.from_numpy(np.zeros(shape, dtype=np.float32), new_type=ttnn.DataType.FLOAT32)
+
+    ttml.autograd.assign_numpy(tensor, values)
+
+    assert tuple(tensor.shape()) == shape
+    np.testing.assert_array_equal(tensor.to_numpy(precision=_NATIVE), values)
+
+
 def test_linear_layer_setstate_keeps_the_layer_dtype():
     """__setstate__ loads the weights in the dtype the layer stores them in: an fp32 layer gets the exact values."""
     layer = ttml.modules.LinearLayer(32, 32)
