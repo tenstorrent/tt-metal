@@ -1014,6 +1014,33 @@ class Decoder:
         result = self._prefill_ragged_mlp(residual, descriptor)
         return (result, next_histories) if return_history else result
 
+    @staticmethod
+    def _coalesce_prefill_attention_groups(groups):
+        """Join same-coordinate attention only within 25% padded-row overhead."""
+        coordinates = {}
+        for (coordinate, span), rows in groups.items():
+            coordinates.setdefault(coordinate, []).extend((row, span) for row in rows)
+        eligible = {}
+        for coordinate, entries in coordinates.items():
+            maximum = max(span for _, span in entries)
+            # Nonzero coordinates retain their original K iteration count.
+            # Extra all-masked K blocks change LoFi softmax state numerically.
+            if (coordinate == 0 and len({span for _, span in entries}) > 1 and
+                    4 * maximum * len(entries) <= 5 * sum(span for _, span in entries)):
+                # Natural row order matters when selected() returns the complete
+                # input directly and preceding histories are concatenated.
+                eligible[coordinate] = (maximum, sorted(row for row, _ in entries))
+        merged, emitted = {}, set()
+        for (coordinate, span), rows in groups.items():
+            if coordinate in eligible:
+                if coordinate not in emitted:
+                    maximum, selected_rows = eligible[coordinate]
+                    merged[(coordinate, maximum)] = selected_rows
+                    emitted.add(coordinate)
+            else:
+                merged[(coordinate, span)] = rows
+        return merged
+
     def prefill_batched(
         self,
         x,
@@ -1100,6 +1127,8 @@ class Decoder:
         for row in range(batch):
             key = (0 if histories[row] is None else histories[row][0].shape[2]) if self.sliding else starts[row]
             groups.setdefault((key, (lengths[row] + 127) // 128 * 128), []).append(row)
+        if os.environ.get("GEMMA_PREFILL_ATTENTION_COALESCE", "0") == "1":
+            groups = self._coalesce_prefill_attention_groups(groups)
         outputs = [None] * batch
         next_histories = [None] * batch
         for (coordinate, logical_sequence), rows in groups.items():
