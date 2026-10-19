@@ -148,6 +148,11 @@ json optional_l1_json(const std::optional<manifest::content::L1>& l1) {
 }
 
 json stream_json(const manifest::content::Stream& stream) {
+    TT_FATAL(
+        stream.stream_id < StreamRegAssignments::num_eth_stream_registers,
+        "Fabric manifest: stream id {} is not one of the {} stream registers",
+        stream.stream_id,
+        StreamRegAssignments::num_eth_stream_registers);
     json out;
     out["stream_id"] = stream.stream_id;
     out["register"] = lower_enum_name(stream.reg);
@@ -327,8 +332,8 @@ json credit_counters_json(const manifest::L1CreditCounters& counters) {
 
 // A counter element names its array by its path within the router, e.g. "credit_counters/to_sender_ack".
 json credit_ref_json(const manifest::CreditRef& credit) {
-    if (const auto* stream = std::get_if<manifest::content::Stream>(&credit)) {
-        return stream_json(*stream);
+    if (const auto* stream = std::get_if<std::optional<manifest::content::Stream>>(&credit)) {
+        return stream->has_value() ? stream_json(**stream) : json(nullptr);
     }
     const auto& counter = std::get<manifest::CounterRef>(credit);
     json out;
