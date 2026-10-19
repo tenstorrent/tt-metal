@@ -131,6 +131,31 @@ The failed worker's standard infrastructure cleanup reclaimed 913.7 GB of Docker
 storage; the experiment did not issue broad cleanup or reset commands.
 # Remote correctness finding and diagnostic follow-up
 
+## Independent suffix variants
+
+The user authorized concurrent jobs on the four-machine QB2 pool. No tests
+run locally. Serial control run `39235204816` keeps Metal
+`8c594566c40526540337c005cc100e3725f56074` on runner `qb2-120-p02t02`.
+The separate branch `mvasiljevic/gemma4-qb2-prefix-suffix-variants` at
+`fccedf77af1dfd8d9b80d5a057c7098c0a30e727` adds two default-off alternatives:
+
+- `GEMMA4_PREFIX_SHARED_BATCH=1`: reuse the existing shared-MLP batch path
+  for 8..32 suffix tokens; sequential cache updates/attention retain absolute
+  positions and repeated request tables. Run `39235780379`, runner
+  `120-qb2-p05t01`.
+- `GEMMA4_PREFIX_TRACE_SUFFIX=1`: reuse the existing logits-only model decode
+  trace for B1 suffixes of at least eight tokens; explicit tokens/positions,
+  no sampler draws, and an owned final-logits copy. Run `39235783153`, runner
+  `qb2-120-p01t03`.
+
+Workflow `492b0fd` selects exactly one mode, records runner/mode, and refuses
+device access when another device container or process owns it. Both jobs
+use the same image and inputs as the serial control. These are not duplicate
+retries, and neither variant is enabled in the inference profile. Results
+are pending; no optimization claim is made from source inspection. The
+tracing skill informed reuse of exact-signature warmup/capture and output
+ownership instead of introducing a new capture lifecycle.
+
 Follow-up [39233122287](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39233122287)
 on Metal `be19cbffcc745b04836cf26c98cc04e897da204f`, workflow `7436b68`,
 completed with the expected cold-parity failure. Ordinary decode and
