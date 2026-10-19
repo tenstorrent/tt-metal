@@ -492,3 +492,134 @@ def test_cumsum_tile_axis_fallback_permutes(torch_dtype, reverse_order, device):
     else:
         expected = torch.cumsum(torch_input, dim)
     assert_cumsum_quality(expected, ttnn.to_torch(output_tensor, dtype=torch_dtype))
+
+
+@pytest.mark.parametrize("scan_length", [4, 8, 33])
+@pytest.mark.parametrize("dim", [0, -2])
+@pytest.mark.parametrize("disable_compensated_sum", [False, True])
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "pos_inf",
+        "neg_inf",
+        "overflow",
+        "neg_overflow",
+        "inf_then_neg_max",
+        "neg_inf_then_pos_max",
+        "overflow_then_neg_max",
+        "neg_overflow_then_pos_max",
+        "finite_with_overflowing_c",
+        "pos_inf_neg_inf",
+        "nan_input",
+        "inf_at_end",
+    ],
+)
+def test_cumsum_fp32_non_finite(scan_length, dim, disable_compensated_sum, pattern, device):
+    """Guarding the Kahan compensation must prevent non-finite running totals from poisoning the scan (#58986)."""
+    torch.manual_seed(0)
+    size = [scan_length, 1, 32, 64] if dim == 0 else [1, 1, scan_length, 64]
+    torch_input = torch.randn(size, dtype=torch.float32)
+    steps = torch_input.movedim(dim, 0)
+    max_fp32 = torch.finfo(torch.float32).max
+
+    if pattern == "pos_inf":
+        steps[1, ..., :32] = float("inf")
+    elif pattern == "neg_inf":
+        steps[1, ..., :32] = float("-inf")
+    elif pattern == "overflow":
+        steps[0, ..., :32] = max_fp32 * 0.75
+        steps[1, ..., :32] = max_fp32 * 0.75
+    elif pattern == "neg_overflow":
+        steps[0, ..., :32] = -max_fp32 * 0.75
+        steps[1, ..., :32] = -max_fp32 * 0.75
+    elif pattern == "inf_then_neg_max":
+        steps[1, ..., :32] = float("inf")
+        steps[2, ..., :32] = -max_fp32
+    elif pattern == "neg_inf_then_pos_max":
+        steps[1, ..., :32] = float("-inf")
+        steps[2, ..., :32] = max_fp32
+    elif pattern == "overflow_then_neg_max":
+        steps[0, ..., :32] = max_fp32 * 0.75
+        steps[1, ..., :32] = max_fp32 * 0.75
+        steps[2, ..., :32] = -max_fp32
+    elif pattern == "neg_overflow_then_pos_max":
+        steps[0, ..., :32] = -max_fp32 * 0.75
+        steps[1, ..., :32] = -max_fp32 * 0.75
+        steps[2, ..., :32] = max_fp32
+    elif pattern == "finite_with_overflowing_c":
+        steps[0, ..., :32] = max_fp32 * 0.8
+        steps[1, ..., :32] = -max_fp32 * 0.5
+    elif pattern == "pos_inf_neg_inf":
+        steps[1, ..., :32] = float("inf")
+        steps[2, ..., :32] = float("-inf")
+    elif pattern == "nan_input":
+        steps[1, ..., :32] = float("nan")
+    else:
+        steps[-1, ..., 60:64] = float("inf")
+
+    expected = torch.cumsum(torch_input, dim=dim)
+    if pattern in ("overflow_then_neg_max", "neg_overflow_then_pos_max"):
+        expected_steps = expected.movedim(dim, 0)
+        total = torch.zeros_like(steps[0])
+        for i in range(scan_length):
+            total = total + steps[i]
+            expected_steps[i] = total
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim, disable_compensated_sum=disable_compensated_sum))
+
+    for name, kind in (("NaN", torch.isnan), ("+inf", torch.isposinf), ("-inf", torch.isneginf)):
+        assert torch.equal(
+            kind(output), kind(expected)
+        ), f"{name} in {kind(output).sum().item()} elements, the reference has {kind(expected).sum().item()}"
+    finite = torch.isfinite(expected)
+    assert_allclose(expected[finite], output[finite], rtol=1e-2, atol=1e-4)
+
+
+@pytest.mark.parametrize("dim", [0, -2])
+def test_cumsum_fp32_finite_near_max(dim, device):
+    """A finite running total in the top fp32 binade must keep the compensated accuracy."""
+    torch.manual_seed(0)
+    scan_length = 128
+    size = [scan_length, 1, 32, 64] if dim == 0 else [1, 1, scan_length, 64]
+    base = 2.0**127
+    torch_input = base * (0.001 + 0.019 * torch.rand(size, dtype=torch.float64))
+    torch_input *= torch.where(torch.rand(size) < 0.5, -1.0, 1.0)
+    steps = torch_input.movedim(dim, 0)
+    steps[0] = base * (1.2 + 0.25 * torch.rand(steps[0].shape, dtype=torch.float64))
+    steps[..., 32:] *= -1
+    torch_input = torch_input.to(torch.float32)
+    expected = torch.cumsum(torch_input.to(torch.float64), dim=dim)
+    assert expected.abs().max() < torch.finfo(torch.float32).max, "the reference scan must stay finite"
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim)).to(torch.float64)
+
+    assert torch.isfinite(output).all(), f"{(~torch.isfinite(output)).sum().item()} non-finite elements"
+    bound = 2 * torch.finfo(torch.float32).eps * expected.abs()
+    worst = ((output - expected).abs() / bound).max().item()
+    assert worst <= 1.0, f"max error is {worst:.1f}x the bound 2*eps*|exact|"
+
+
+@pytest.mark.parametrize("dim", [0, -2])
+def test_cumsum_fp32_finite_large_inputs(dim, device):
+    """A finite scan whose inputs are as large as its running total must keep the compensated accuracy."""
+    scan = [
+        float.fromhex(h)
+        for h in ("-0x1.c4dbcep+126", "0x1.f74fccp+127", "-0x1.f60404p+125", "0x1.40bc9ap+127", "-0x1.d43534p+127")
+    ]
+    size = [len(scan), 1, 32, 64] if dim == 0 else [1, 1, len(scan), 64]
+    torch_input = torch.empty(size, dtype=torch.float32)
+    steps = torch_input.movedim(dim, 0)
+    for i, value in enumerate(scan):
+        steps[i] = value
+    expected = torch.cumsum(torch_input.to(torch.float64), dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim)).to(torch.float64)
+
+    assert torch.isfinite(output).all(), f"{(~torch.isfinite(output)).sum().item()} non-finite elements"
+    bound = 2 * torch.finfo(torch.float32).eps * expected.abs()
+    worst = ((output - expected).abs() / bound).max().item()
+    assert worst <= 1.0, f"max error is {worst:.1f}x the bound 2*eps*|exact|"
+
