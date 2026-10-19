@@ -30,13 +30,10 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
 
 class _TtKimiK3TransformerHostNorm(TtKimiK3Transformer):
-    """The last rank's stack without the device final norm: forward returns what `model.norm` would see.
+    """Last-rank stack without the device final norm, for `return_last_hidden`; the adapter applies it on host.
 
-    For `return_last_hidden`, whose reader applies the norm and the LM head on the host
-    (`KimiK3Adapter.first_token_from_hidden`). The production runtime gets `state_dict={}`, so a
-    device norm would take its weight from the TTNN cache, and nothing checks that the cache holds
-    one: `check_cache_complete` reads per-layer markers only, and a missing file makes
-    `TtDistributedRmsNorm` convert `torch.empty` (#54841).
+    The production runtime has no state dict and `check_cache_complete` does not check for a final-norm
+    weight, so a device norm could silently load `torch.empty` (#54841).
     """
 
     def __init__(self, *args, **kwargs):

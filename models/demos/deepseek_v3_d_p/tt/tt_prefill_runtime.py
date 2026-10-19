@@ -76,9 +76,8 @@ class TtPrefillRuntimeConfig:
     # The KV cache is the prefill output either way; this only trims the last layer.
     # The pipeline sets it on the last rank.
     kv_only_last_layer: bool = False
-    # Last rank only: return the model's final hidden state from prefill_chunk instead of None, so the
-    # runner can read the row the request's first token is computed from (`tail_hidden_row`). Needs the
-    # whole last layer, so it excludes kv_only_last_layer, MTP and DFlash.
+    # Last rank: prefill_chunk returns the final hidden state (for `tail_hidden_row`) instead of None.
+    # Excludes kv_only_last_layer, MTP and DFlash.
     return_last_hidden: bool = False
     # The same trim for the last MTP level: it only has to fill its KV slot.
     kv_only_last_mtp_level: bool = True
@@ -699,8 +698,8 @@ class TtPrefillRuntime:
         ttnn.synchronize_device(self.mesh_device)
         # Allocated inside the capture: the trace owns that address.
         get_tt_ccl(self.mesh_device).set_shared_rs_input_keepalive(None)
-        # Non-last rank: the persistent output activation the replay refreshes each chunk. Last rank: the
-        # final hidden state, kept only when return_last_hidden asks for it.
+        # The persistent output: the activation for the next rank, or the final hidden state under
+        # return_last_hidden.
         self._trace_output = out if self._returns_output else None
         self._trace_captured = True
         logger.info(
@@ -1136,8 +1135,8 @@ class TtPrefillRuntime:
             self._controller.replay(variant=mtp_variant)
 
             # Non-last rank: return the persistent output activation (replay just refreshed it) for the
-            # driver to forward downstream over D2D. Last/single rank: the populated KV cache is the output,
-            # plus the final hidden state under return_last_hidden.
+            # driver to forward downstream over D2D. Last/single rank: the populated KV cache is the output
+            # (plus the final hidden state under return_last_hidden).
             return self._trace_output if self._returns_output else None
 
         on_layer_complete = self._layer_complete_cb(request_id)
@@ -1206,8 +1205,8 @@ class TtPrefillRuntime:
             return packed
 
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
-        # Last/single rank: the KV cache is the output; the final hidden state is returned only under
-        # return_last_hidden (the caller then owns it).
+        # Last/single rank: the KV cache is the output; under return_last_hidden the caller also gets, and
+        # owns, the final hidden state.
         return out if self._returns_output else None
 
     @property
@@ -1215,12 +1214,9 @@ class TtPrefillRuntime:
         return not self.config.is_last_rank or self.config.return_last_hidden
 
     def tail_hidden_row(self, tail_out: ttnn.Tensor, row: int) -> Tuple[torch.Tensor, float]:
-        """Row ``row`` (0-based within the chunk) of the last rank's output as a host fp32 ``[hidden]``
-        vector, plus the host ms it took. ``tail_out`` is what prefill_chunk returned under
-        return_last_hidden: per chip ``[1, 1, S_l, D_l]``, SP-sharded on rows and TP-sharded on the hidden
-        dim. One tile-aligned 32-row slice is pulled from every chip and the row's SP shard picked on the
-        host. Whether the row is before or after the final norm is the model's choice; the adapter's
-        ``first_token_from_hidden`` applies the rest."""
+        """Row ``row`` of the chunk's output under return_last_hidden as a host fp32 ``[hidden]``, plus host ms.
+
+        ``tail_out`` is SP-sharded on rows and TP-sharded on the hidden dim; one 32-row tile is read per chip."""
         c = self.config
         t0 = time.perf_counter()
         s_l = c.chunk_size // c.sp_factor

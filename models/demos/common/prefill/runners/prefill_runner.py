@@ -123,11 +123,9 @@ _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 
 
 assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
 
-# When set, the last rank runs the whole last layer and publishes, for every chunk, the output row at its
-# last valid position as <dir>/slot<s>_end<actual_end>.pt ({"hidden": fp32 [hidden], ...}). The migration
-# driver reads the one at the request's real length, turns it into the first token with
-# ADAPTER.first_token_from_hidden and puts it in the handoff, so the decode side starts at prompt_len
-# without re-running prompt_len-1. Must be storage the driver's host can read.
+# When set, the last rank runs the whole last layer and writes each chunk's output row at its last valid
+# position to <dir>/slot<s>_end<actual_end>.pt; the migration driver turns the request's row into the
+# handoff's first_token. Must be readable from the driver's host.
 FIRST_TOKEN_DIR = os.environ.get("PREFILL_FIRST_TOKEN_DIR", "")
 if FIRST_TOKEN_DIR and not ADAPTER.supports_host_first_token:
     raise ValueError(f"PREFILL_FIRST_TOKEN_DIR is set but {type(ADAPTER).__name__} cannot compute a first token")
@@ -475,10 +473,10 @@ def _compute_and_send(
 
 
 def _emit_first_token_row(runtime, out, meta: dict, rank: int) -> None:
-    """Publish the chunk's output row at its last valid position under PREFILL_FIRST_TOKEN_DIR (see there).
-    Every chunk publishes, since the runner does not know which chunk ends a request; the file of a
-    request's last chunk is the one the driver reads. Written atomically, so the driver never reads half a
-    file. Never fatal here: the KV is what the request is for, and the driver reports a missing row."""
+    """Write the chunk's last-valid-position row under PREFILL_FIRST_TOKEN_DIR, atomically.
+
+    Every chunk writes one, since the runner does not know which chunk ends a request. Not fatal: the
+    driver reports a missing row."""
     try:
         n_valid = int(meta["actual_end"]) - int(meta["actual_start"])
         if n_valid <= 0:

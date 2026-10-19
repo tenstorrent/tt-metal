@@ -212,11 +212,10 @@ class MigrationDriver:
         return migrated
 
     def _first_token(self, src_slot: int, real_len: int) -> int:
-        """The token prefill sampled after ``src_slot``'s prompt, from the row the last rank published for
-        the request's last chunk. Waits for it: the last rank writes it after its forward, which can land
-        after the layer acks this driver waited on, and it may be another process. Consumes the file, so a
-        later request of the same length cannot read a stale row. Raises rather than writing a handoff
-        without first_token, which a decode side resuming recurrent state (Kimi-K3) refuses anyway."""
+        """The first token of ``src_slot``'s request, from the row the last rank wrote for its last chunk.
+
+        Waits for the row (the last rank writes it after its forward, possibly after the layer acks) and
+        consumes it, so a later request of the same slot and length cannot read a stale one."""
         import torch
 
         from models.demos.common.prefill.runners import prefill_producer as producer

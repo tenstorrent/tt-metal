@@ -283,9 +283,8 @@ class KimiK3Adapter(MLAPrefillAdapter):
         version = (real_len - 1) % KDA_VERSIONS
         return version * window, (version + 1) * window
 
-    # The runtime leaves the final norm off the device under return_last_hidden
-    # (`_TtKimiK3TransformerHostNorm`), so the row is the output AttnRes read and the host applies
-    # `model.norm` and `lm_head` from the checkpoint at PREFILL_HF_MODEL (the runner's own), else KIMI_K3_HF_MODEL.
+    # The row is pre-norm (`_TtKimiK3TransformerHostNorm`); `model.norm` and `lm_head` come from the
+    # checkpoint at PREFILL_HF_MODEL, else KIMI_K3_HF_MODEL.
     supports_host_first_token = True
 
     def first_token_from_hidden(self, hidden) -> int:
@@ -380,9 +379,9 @@ class KimiK3Adapter(MLAPrefillAdapter):
 
 
 def host_norm_head_argmax(hidden, norm_weight, lm_head, *, eps: float, vocab_block: int = 16384) -> int:
-    """Greedy next token from a pre-norm hidden row: `KimiRMSNorm` (normalize in fp32, cast back to the
-    checkpoint dtype, scale), then `lm_head`, then argmax. The logits are accumulated in fp32 one
-    ``vocab_block`` of rows at a time, so the bf16 head is never copied whole to fp32 (4.7 GB)."""
+    """Greedy token from a pre-norm row: `KimiRMSNorm`, `lm_head`, argmax.
+
+    Logits are computed in fp32 one ``vocab_block`` at a time, so the bf16 head is never copied whole."""
     import torch
 
     x = hidden.float()

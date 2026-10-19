@@ -86,9 +86,7 @@ class PrefillRunParams:
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
     mtp_levels: int = 0
-    # Last rank: return the final hidden state from prefill_chunk so the runner can publish the row the
-    # request's first token comes from (PREFILL_FIRST_TOKEN_DIR). Only for an adapter with
-    # ``supports_host_first_token``; it needs the whole last layer, so kv_only_last_layer is off with it.
+    # Last rank returns its final hidden state, for PREFILL_FIRST_TOKEN_DIR. Off with kv_only_last_layer.
     return_last_hidden: bool = False
 
     @property
@@ -169,16 +167,14 @@ class PrefillModelAdapter(ABC):
         issues one call per run of consecutive layers with equal ranges and byte-verifies that range."""
         return 0, real_len
 
-    # Whether ``first_token_from_hidden`` is implemented, so PREFILL_FIRST_TOKEN_DIR can hand the decode
-    # side the request's first token. The runner refuses that knob for an adapter without it.
+    # ``first_token_from_hidden`` is implemented; the runner refuses PREFILL_FIRST_TOKEN_DIR otherwise.
     supports_host_first_token: bool = False
 
     def first_token_from_hidden(self, hidden) -> int:
-        """The token prefill samples after the prompt (greedy), from the last rank's output row at the
-        prompt's last position (``TtPrefillRuntime.tail_hidden_row``, host fp32 ``[hidden]``). Runs on the
-        host in the migration driver; the adapter applies whatever of the final norm and the LM head its
-        runtime left off the device. A decode side that resumes from migrated recurrent state needs this
-        token: deriving it there would re-run position ``prompt_len - 1`` and overwrite that state."""
+        """Greedy first token from the last rank's output row at the prompt's last position (host fp32).
+
+        Applies whatever of the final norm and LM head the runtime left off the device. A decode side that
+        resumes migrated recurrent state needs it: it cannot re-run position ``prompt_len - 1``."""
         raise NotImplementedError(f"{type(self).__name__} does not compute the first token on the host")
 
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:

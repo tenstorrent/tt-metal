@@ -1,12 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host-only: the first token Kimi-K3's prefill hands the decode side (PREFILL_FIRST_TOKEN_DIR).
-
-The decode side resumes migrated KDA state at prompt_len and cannot derive the first token itself
-(re-running prompt_len-1 would overwrite that state), so prefill computes it: the last rank returns its
-output AttnRes read without the device final norm, and the adapter applies `model.norm` and `lm_head` on
-the host.
-"""
+"""Host-only: Kimi-K3's first token for PREFILL_FIRST_TOKEN_DIR (host norm and LM head, host-norm stack)."""
 
 from types import SimpleNamespace
 

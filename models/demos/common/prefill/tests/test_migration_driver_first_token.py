@@ -1,12 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host-only: the migration driver's half of PREFILL_FIRST_TOKEN_DIR.
-
-The runner's last rank writes the output row of each chunk's last valid position as
-slot<s>_end<actual_end>.pt; the driver waits for the request's row, turns it into a token with the
-adapter's first_token_from_hidden, deletes it, and puts first_token in the handoff. The rank may be on
-another host and finish after the layer acks, so the driver waits rather than assuming the file exists.
-"""
+"""Host-only: the migration driver's half of PREFILL_FIRST_TOKEN_DIR (row lookup, wait, handoff)."""
 
 import json
 import sys
@@ -35,8 +29,7 @@ class _Adapter:
 
 @pytest.fixture
 def adapter(monkeypatch):
-    # `_first_token` imports the producer for its ADAPTER; importing the real one starts a prefill
-    # configuration from the environment, so a stand-in carries just the adapter.
+    # The real producer module configures a prefill from the environment on import; stand in for it.
     adapter = _Adapter()
     fake = types.ModuleType("models.demos.common.prefill.runners.prefill_producer")
     fake.ADAPTER = adapter
