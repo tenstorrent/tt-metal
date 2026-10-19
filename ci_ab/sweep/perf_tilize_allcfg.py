@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.perf.core import PerfConfig
@@ -92,6 +93,8 @@ def test_perf_tilize_allcfg(perf_report, case):
     _, fmt, acc, rt, ct, ta = case
     if ta.ta_form == "block" and not HAS_BLOCK:
         pytest.skip("no block tilize in this tree")
+    if effective_dest_acc(fmt.input_format, fmt.output_format, acc) != acc:
+        pytest.skip("TestConfig promotes this pair to a 32-bit DEST: the Yes case measures it")
     tiles = rt * ct
     rows = ta.ta_face_r * (2 if ta.ta_nf == 4 else 1)
     dims = [rt * rows, ct * 32]
