@@ -141,7 +141,8 @@ def write_rows(run_dir: Path, test_name: str, sweep, rows):
         how="cross",
     )
     run_dir.mkdir(parents=True, exist_ok=True)
-    path = run_dir / f"{test_name}.{os.getpid()}.windowhash"
+    safe = test_name.replace("/", "_").replace(".", "_")
+    path = run_dir / f"{safe}.{os.getpid()}.windowhash"
     frame.to_csv(path, mode="a", header=not path.exists(), index=False)
     dump_dir = run_dir / "windows"
     dump_dir.mkdir(exist_ok=True)
