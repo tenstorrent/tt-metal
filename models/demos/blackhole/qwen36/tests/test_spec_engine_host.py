@@ -689,6 +689,7 @@ def test_verify_defers_fresh_row_left_out():
         _last_hidden=[None] * B,
     )
     e._stage_mtp_tables = e._warm_mtp_last = lambda *a, **k: None
+    e._stage_mtp_tables_rows = e._warm_mtp_last_rows = lambda *a, **k: None
     seeds, joins, prefills = [], [], []
     e._seed = lambda *a: (seeds.append(1), (torch.zeros(B, T, dtype=torch.int32), None))[1]
     e._join = lambda *a: (joins.append(a[5]), (torch.zeros(B, T, dtype=torch.int32), None))[1]

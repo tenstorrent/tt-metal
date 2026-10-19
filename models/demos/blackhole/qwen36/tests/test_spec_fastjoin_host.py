@@ -179,6 +179,12 @@ def _engine(B, K, model, gdn, fast_join=True, **kw):
     e._stage = lambda host, dev, dtype, layout: e.log["stage"].append((host.clone(), dev, dtype, layout))
     e._stage_mtp_tables = lambda pt: e.log["tables"].append(pt.clone())
     e._warm_mtp_last = lambda h, tok, slot, pt: e.log["warm"].append((h, int(tok), int(slot), pt))
+    # QWEN36_SPEC_JOIN_FAST (default on) path: the same log entries as the old path (see test_spec_joinfast_host.py)
+    e._stage_mtp_tables_rows = lambda pt, rows: e.log["tables"].append(pt.clone())
+    e._warm_mtp_last_rows = lambda fresh_now, tokens, pt: [
+        e._warm_mtp_last(e._last_hidden[u], int(tokens[u, 0]), fresh_now[u] - 1, e._mtp_pt_rows[u])
+        for u in sorted(fresh_now)
+    ]
     e._reprefill = lambda slot: e.log["reprefill"].append(slot)
     e.__dict__.update(kw)
     return e

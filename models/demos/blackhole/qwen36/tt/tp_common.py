@@ -145,6 +145,15 @@ def spec_fast_join_enabled():
     return os.environ.get("QWEN36_SPEC_FAST_JOIN", "1") == "1"
 
 
+def spec_join_fast_enabled():
+    """QWEN36_SPEC_JOIN_FAST (default "1"; "0" = the old join host path, byte for byte): a join (fresh rows seeded
+    into a running spec batch, MTPSpecEngine._seed_fresh_rows) stages only the fresh rows' MTP page tables (the old
+    path re-staged the [B, nb] table and every row's [1, nb] table) and, with two or more fresh rows, warms their
+    MTP slot Tp-1 KV in ONE batched drafter decode call instead of one call per row (work/notes/55_mtp_join_fast.md).
+    The KV written is the same; the staged tables of the other rows are refreshed by the next propose."""
+    return os.environ.get("QWEN36_SPEC_JOIN_FAST", "1") != "0"
+
+
 def spec_fast_prefill_enabled():
     """QWEN36_SPEC_FAST_PREFILL (default "0"; "1" opts in): the MTP engine's prompt prefill replays captured traces
     like the non-spec class instead of the eager masked-bucket forward: one short-prompt bucket trace per request

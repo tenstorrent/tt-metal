@@ -342,6 +342,7 @@ def _topk_engine(B, K, model, slotmap=True):
         e.vocab = model.vocab_size
         e._last_hidden, e._mtp_pt_rows, e._vfeed, e._topk_logits = [None] * B, [None] * B, None, None
         e._stage_mtp_tables = e._warm_mtp_last = lambda *a, **k: None
+        e._stage_mtp_tables_rows = e._warm_mtp_last_rows = lambda *a, **k: None
     return e
 
 

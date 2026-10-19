@@ -61,6 +61,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     spec_hostfix_enabled,
     spec_hostset_enabled,
     spec_hostset_trace_enabled,
+    spec_join_fast_enabled,
     verify_device_topk_m,
 )
 
@@ -131,6 +132,17 @@ def _anchor_selector_old(m, B, T):
     for u in range(B):
         sel[0, 0, u, u * T + int(m[u])] = 1.0
     return sel
+
+
+def join_warm_plan(fresh_now, tokens, pt):
+    """Host plan of the join's MTP slot Tp-1 warm (QWEN36_SPEC_JOIN_FAST): for the fresh rows in ascending engine-row
+    order, (rows, first tokens, slots Tp-1, page-table rows [R, nb] int32). Row i is exactly what the per-row
+    ``_warm_mtp_last(_last_hidden[u], tokens[u, 0], Tp - 1, _mtp_pt_rows[u])`` call uses."""
+    rows = sorted(fresh_now)
+    toks = [int(tokens[u, 0]) for u in rows]
+    slots = [int(fresh_now[u]) - 1 for u in rows]
+    pt_rows = torch.as_tensor(pt)[rows].to(torch.int32).contiguous()
+    return rows, toks, slots, pt_rows
 
 
 def last_row_selector(i, bucket):
@@ -833,6 +845,49 @@ class MTPSpecEngine:
         for u in range(self.B):
             self._stage_table(pt[u : u + 1].contiguous(), self._mtp_pt_rows[u], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
 
+    def _stage_mtp_tables_rows(self, pt, rows):
+        """QWEN36_SPEC_JOIN_FAST: _stage_mtp_tables for the fresh ``rows`` only. The full [B, nb] table and the other
+        rows' tables are staged by the next propose before anything reads them (_stage_table keys on content)."""
+        for u in rows:
+            self._stage_table(pt[u : u + 1].contiguous(), self._mtp_pt_rows[u], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+
+    def _warm_mtp_last_rows(self, fresh_now, tokens, pt):
+        """QWEN36_SPEC_JOIN_FAST: _warm_mtp_last for every fresh row. One row: the old single-row call. Two or more:
+        ONE drafter decode over R rows (hidden rows concatenated, tokens / slots Tp-1 / page-table rows in the
+        ``join_warm_plan`` order). The rows are independent users on distinct blocks, so the KV written per row is the
+        one the per-row calls write; the logits are not computed (need_logits=False) and the output is dropped."""
+        rows, toks, slots, pt_rows = join_warm_plan(fresh_now, tokens, pt)
+        if len(rows) == 1:
+            u = rows[0]
+            self._warm_mtp_last(self._last_hidden[u], toks[0], slots[0], self._mtp_pt_rows[u])
+            return
+        mesh = self.mesh
+        parts = [ttnn.to_layout(self._last_hidden[u], ttnn.ROW_MAJOR_LAYOUT) for u in rows]
+        cat = ttnn.concat(parts, dim=2)  # [1,1,R,dim/tp]
+        hid = ttnn.to_layout(cat, ttnn.TILE_LAYOUT)
+        pt_tt = ttnn.from_torch(
+            pt_rows,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        _, h_next = self.model.ttnn_mtp_decode_forward(hid, toks, slots, pt_tt, need_logits=False)
+        for t in (*parts, cat, hid, pt_tt, h_next):
+            ttnn.deallocate(t)
+
+    def _join_warm_warmup(self):
+        """QWEN36_SPEC_JOIN_FAST: compile the R-row batched warm (R = 2 .. B) before capture, so a join never compiles a
+        program. Every row writes slot 0 of the MTP scratch block (write-only garbage)."""
+        if not spec_join_fast_enabled():
+            return
+        B = self.B
+        pt = torch.full((B, self.nb), self._scratch_block, dtype=torch.int32)
+        tokens = torch.zeros(B, self.T, dtype=torch.int64)
+        for R in range(2, B + 1):
+            self._warm_mtp_last_rows({u: 1 for u in range(R)}, tokens, pt)
+        ttnn.synchronize_device(self.mesh)
+
     def _check_scratch(self, pt):
         assert int(pt.max()) < self._scratch_block, (
             f"page table names block {int(pt.max())}, but the MTP cache's scratch block is "
@@ -1035,6 +1090,7 @@ class MTPSpecEngine:
         ttnn.deallocate(zrow)
         self._reseed_warmup(B * T, self._dim_frac, self._feed_dtype)
         self._eager_warmup()
+        self._join_warm_warmup()
         self._draft_warmup([0] * B, self._hp_buf, [0] * B)
         if self.recorded_drafter:
             self._alloc_drafter_inputs()
@@ -1661,10 +1717,17 @@ class MTPSpecEngine:
         from models.demos.blackhole.qwen36.tt.gdn.tp import fresh_row_select
 
         B, T = self.B, self.T
-        self._stage_mtp_tables(pt)
-        for u, Tp in sorted(fresh_now.items()):
-            assert int(start_pos[u]) == Tp, f"slot {u}: start_pos {int(start_pos[u])} != prompt length {Tp}"
-            self._warm_mtp_last(self._last_hidden[u], int(tokens[u, 0]), Tp - 1, self._mtp_pt_rows[u])
+        if spec_join_fast_enabled():
+            # QWEN36_SPEC_JOIN_FAST: only the fresh rows' tables, one batched warm call (note 55)
+            for u, Tp in fresh_now.items():
+                assert int(start_pos[u]) == Tp, f"slot {u}: start_pos {int(start_pos[u])} != prompt length {Tp}"
+            self._stage_mtp_tables_rows(pt, sorted(fresh_now))
+            self._warm_mtp_last_rows(fresh_now, tokens, pt)
+        else:
+            self._stage_mtp_tables(pt)
+            for u, Tp in sorted(fresh_now.items()):
+                assert int(start_pos[u]) == Tp, f"slot {u}: start_pos {int(start_pos[u])} != prompt length {Tp}"
+                self._warm_mtp_last(self._last_hidden[u], int(tokens[u, 0]), Tp - 1, self._mtp_pt_rows[u])
         fresh = sorted(fresh_now)
         for u in fresh:
             del self._fresh[u]

@@ -583,3 +583,87 @@ def test_withheld_rows_keep_mtp_kv(mesh_device):
             logger.info(f"[mtp_kv] request {rid} {which}: min cos {float(cos.min()):.5f} at offset {worst}")
             assert float(cos.min()) > 0.99, f"request {rid}: MTP {which} differs at generated offset {worst}"
     assert mesh_device.num_program_cache_entries() == n_prog, "a program compiled after capture"
+
+
+def _mtp_kv_slot_all_devices(eng, blocks, pos):
+    """MTP paged K and V at position ``pos`` over ``blocks``, one tensor per device (bf16, exact bytes)."""
+    att = eng.mtp.attention
+    out = []
+    for cache in (att.paged_k, att.paged_v):
+        for t in ttnn.get_device_tensors(cache):
+            c = ttnn.to_torch(t)
+            out.append(c[blocks[pos // BLOCK_SIZE], :, pos % BLOCK_SIZE].clone())
+    return out
+
+
+def _join_scenario(eng, prompts, R, join_fast, monkeypatch):
+    """R fresh rows (rows 0..R-1) join in ONE step (QWEN36_SPEC_JOIN_FAST=join_fast), then run to completion.
+    Returns tokens, the MTP KV of slot Tp-1 per fresh row right after the join step, the join step's verify logits
+    (fresh rows) and the join step's host ms."""
+    monkeypatch.setenv("QWEN36_SPEC_JOIN_FAST", join_fast)
+    logger.info(f"[joinfast] QWEN36_SPEC_JOIN_FAST={os.environ['QWEN36_SPEC_JOIN_FAST']} R={R}")
+    drv = BatchDriver(eng, seed=11)
+    snap = {}
+    orig = eng.decode_forward
+
+    def hooked(*a, **kw):
+        first = not snap
+        if first:
+            kw["spec_mode"] = "logits"
+            assert sorted(eng._fresh) == list(range(R)), f"fresh rows {sorted(eng._fresh)} != 0..{R - 1}"
+        t0 = time.perf_counter()
+        res = orig(*a, **kw)
+        if first:
+            snap["ms"] = 1e3 * (time.perf_counter() - t0)
+            snap["logits"] = res.logits[:R].clone()
+            snap["kv"] = [
+                _mtp_kv_slot_all_devices(eng, drv.reqs[r]["blocks"], len(drv.reqs[r]["prompt"]) - 1) for r in range(R)
+            ]
+        return res
+
+    eng.decode_forward = hooked
+    try:
+        for r in range(R):
+            drv.admit(r, r, prompts[r])
+        outs = drv.run({})
+    finally:
+        del eng.decode_forward
+    snap["outs"] = outs
+    return snap
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_join_fast_multirow_bit_identical(mesh_device, monkeypatch):
+    """QWEN36_SPEC_JOIN_FAST 1 vs 0 with R = 2 and R = 4 fresh rows joining in one step (temperature 0): identical
+    token streams, bit-identical MTP KV of slot Tp-1 for every joined row (every device), identical verify logits of
+    the join step (torch.equal). Logs the join step host ms for both flags (3 repeats each, interleaved)."""
+    monkeypatch.setenv("QWEN36_SPEC_FAST_JOIN", "1")
+    monkeypatch.setenv("QWEN36_SPEC_JOIN_FAST", "1")  # prepare compiles the batched warm programs
+    model, eng, tokenizer, prompts = _setup(mesh_device)
+    assert eng.fast_join
+    for R in (2, 4):
+        runs = {"0": [], "1": []}
+        for rep in range(3):
+            for flag in ("1", "0"):
+                runs[flag].append(_join_scenario(eng, prompts, R, flag, monkeypatch))
+        ref = runs["0"][0]
+        for flag in ("1", "0"):
+            for i, s in enumerate(runs[flag]):
+                tag = f"R={R} flag={flag} rep={i}"
+                for rid in range(R):
+                    _assert_same(f"{tag} request {rid}", s["outs"][rid], ref["outs"][rid])
+                for r in range(R):
+                    for d, (a, b) in enumerate(zip(s["kv"][r], ref["kv"][r])):
+                        assert torch.equal(a, b), f"{tag}: MTP KV row {r} tensor {d} differs"
+                    assert any(bool(t.any()) for t in s["kv"][r]), f"{tag}: MTP KV row {r} is all zero"
+                assert torch.equal(s["logits"], ref["logits"]), f"{tag}: join-step verify logits differ"
+        for flag in ("1", "0"):
+            ms = [s["ms"] for s in runs[flag]]
+            logger.info(
+                f"[joinfast] R={R} QWEN36_SPEC_JOIN_FAST={flag} join step host ms: "
+                + ", ".join(f"{m:.1f}" for m in ms)
+                + f" (median {statistics.median(ms):.1f})"
+            )
