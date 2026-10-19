@@ -168,6 +168,8 @@ _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_si
 if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
+# Hybrid page pool v2: the engine finds each rank's D2D receiver from the exported pipeline descriptor.
+HYBRID_PAGE_POOL_V2 = os.environ.get("PREFILL_HYBRID_PAGE_POOL_V2", "0") == "1"
 # GLM KVPE cache: scaled FP8 unless PREFILL_SCALED_FP8_KV_CACHE=0 (bf16). Dense-MLA models get None.
 SCALED_FP8_KV_CACHE = os.environ.get("PREFILL_SCALED_FP8_KV_CACHE", "1") == "1"
 
@@ -436,6 +438,13 @@ def _d2d_send_indices(
     backing_cfg = idx_out.get_backing_tensor().memory_config()
     staged = indices if indices.memory_config() == backing_cfg else ttnn.to_memory_config(indices, backing_cfg)
     _d2d_send(idx_out, staged, rank, meta, deallocate=staged is not indices, metadata_msg=metadata_msg)
+
+
+def export_d2d_pipeline_descriptor(d2d_in, rank: int, service_id: str, master_rank: int) -> None:
+    """Collective: the master writes every rank's D2D receiver to one file for the engine."""
+    path = ttnn.D2DStreamService.export_pipeline_descriptor(service_id, d2d_in, root=master_rank)
+    if path is not None:
+        logger.info(f"[pp rank {rank}] [d2d] pipeline descriptor service_id={service_id!r} -> {path}")
 
 
 def _d2d_drain_op(inbound, sockets):
@@ -1018,6 +1027,7 @@ def _print_config() -> None:
         ("PREFILL_MTP_DECODE_LEVELS", str(MTP_DECODE_LEVELS)),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
+        ("PREFILL_HYBRID_PAGE_POOL_V2", str(int(HYBRID_PAGE_POOL_V2))),
         ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         (
@@ -1068,6 +1078,7 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "sparse_kv_cache_format": _sparse_kv_cache_format(),
         "PREFILL_ENABLE_MIGRATION": migration_publish_enabled(),
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
+        "PREFILL_HYBRID_PAGE_POOL_V2": HYBRID_PAGE_POOL_V2,
     }
     fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
     digest = zlib.crc32(fingerprint.encode()) & 0x7FFFFFFF
@@ -1239,11 +1250,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     ack_shm_name = scheduler_shm_name(service_id)
     master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
-    if num_ranks > 1:
-        # Collective: the master writes every rank's D2D receiver to one file for the engine.
-        path = ttnn.D2DStreamService.export_pipeline_descriptor(service_id, d2d_in, root=master_rank)
-        if path is not None:
-            logger.info(f"[pp rank {rank}] [d2d] pipeline descriptor service_id={service_id!r} -> {path}")
+    if num_ranks > 1 and HYBRID_PAGE_POOL_V2:
+        export_d2d_pipeline_descriptor(d2d_in, rank, service_id, master_rank)
     router = None
     d2h_service = None
     layer_ack_service = None
