@@ -812,7 +812,7 @@ AllToAllAsyncGenericProgram::create_at(
             connection_node);
         auto& info = infos[static_cast<uint32_t>(*direction)];
         const auto valid_links =
-            tt::tt_fabric::get_forwarding_link_indices(sender_device_fabric_node_id, connection_node);
+            tt::tt_fabric::get_forwarding_link_indices(*device, sender_device_fabric_node_id, connection_node);
         TT_FATAL(
             !valid_links.empty(),
             "No Fabric2D forwarding links from all-to-all source {} to target {}",
