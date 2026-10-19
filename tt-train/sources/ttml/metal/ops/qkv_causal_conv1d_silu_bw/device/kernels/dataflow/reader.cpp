@@ -50,10 +50,13 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const uint32_t self_y = my_y[noc.get_noc_id()];
 
     DataflowBuffer ones(dfb::ones);
+    // A tile of 1.0, needed because the FPU has no add-constant: stage B computes 1 + preact * (1 - s) with it.
+    // 0x3F80 is 1.0 in bf16; two per 32-bit store. Every number is the same, so the tile layout does not matter.
+    constexpr uint32_t two_bf16_ones = 0x3F803F80;
     ones.reserve_back(1);
     auto* ones_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ones.get_write_ptr());
     for (uint32_t i = 0; i < tile_bytes / sizeof(uint32_t); ++i) {
-        ones_ptr[i] = 0x3F803F80;
+        ones_ptr[i] = two_bf16_ones;
     }
     ones.push_back(1);
 
