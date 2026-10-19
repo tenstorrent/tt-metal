@@ -144,8 +144,7 @@ def activation_global_spec(rows: int, hidden_size: int, planes: int = 1) -> ttnn
     )
 
 
-# Rows per chip the MTP union's token ids ride in below the hidden on the D2D activation (one tile row of
-# byte-encoded ids; the last rank gathers the union embedding from them, see mtp_prefill/id_transport.py).
+# Rows per chip of the MTP id block below the hidden on the D2D activation (see mtp_prefill/id_transport.py).
 MTP_ID_ROWS = TILE_HEIGHT
 
 

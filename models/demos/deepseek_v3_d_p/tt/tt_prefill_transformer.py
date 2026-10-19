@@ -53,8 +53,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvC
 
 
 def _row_fold_width(n: int, max_cols: int = 2048) -> int:
-    """Widest divisor of ``n`` that is at most ``max_cols`` and a multiple of 16 (32-byte bf16 pages): the
-    row length a 1 x ``n`` row-major vector folds into so a gather moves it in small pages."""
+    """Widest 16-aligned divisor of ``n`` up to ``max_cols``: the row length to fold a 1 x ``n`` vector into."""
     for cols in range(min(n, max_cols) // 16 * 16, 0, -16):
         if n % cols == 0:
             return cols
@@ -743,10 +742,7 @@ class TtPrefillTransformer(LightweightModule):
     def mtp_generate_embedding_selected(self, h_normed: ttnn.Tensor, lm_rows: ttnn.Tensor) -> ttnn.Tensor:
         """:meth:`mtp_generate_embedding` with the LM head's input picked on device by the one-hot ``lm_rows``.
 
-        ``lm_rows`` copies the chunk's last real row into every row of the tile, so the logits rows are
-        identical and the argmax reads row 0 alone: a 32x smaller gather and argmax than the tile's, and
-        the same token, since the row's logits are the same dot products. The id is repeated back to 32
-        rows so the embedding feeds the SP gather and the one-hot patch exactly as before.
+        ``lm_rows`` copies the last real row into all 32 rows, so the argmax reads row 0 only.
         """
         assert self.lm_head is not None, "MTP generation needs the LM head (last rank, build_tail)"
         tile = select_rows(lm_rows, h_normed)
@@ -758,9 +754,7 @@ class TtPrefillTransformer(LightweightModule):
         row = ttnn.slice(rm_logits, [0, 0, 0, 0], [s[0], s[1], 1, s[3]])
         ttnn.deallocate(rm_logits)
         if self.lm_head.is_column_parallel and self.tp_factor > 1:
-            # A row-major gather along W caps its page at 64 KiB, which one vocab shard exceeds. Fold the
-            # shard into rows, gather along H and unfold: shards concatenate in TP order either way, so
-            # the flattened row is the vocab in order.
+            # A row-major W gather caps pages at 64 KiB; fold the shard into rows, gather on H, unfold.
             shard = s[3]
             cols = _row_fold_width(shard)
             folded = ttnn.reshape(row, [s[0], s[1], shard // cols, cols])
@@ -928,8 +922,6 @@ class TtPrefillTransformer(LightweightModule):
         assert not union.has_derived, "the variants share the union's row blocks only"
         variants = {"generate": generate, "provided": lambda: run(None)}
         if geometry.has_split_chip:
-            # Most chunks start on a chip boundary, where the split-chip blend is the identity: a gather
-            # over SP, two one-hot matmuls and four eltwise per level that change nothing. The idle pass
-            # runs only "generate", whose programs cover this variant's.
+            # On chip-aligned chunks the split-chip blend is the identity, so skip it.
             variants["provided_aligned"] = lambda: run(None, blend=False)
         self._trace_controller.capture_variants(variants)

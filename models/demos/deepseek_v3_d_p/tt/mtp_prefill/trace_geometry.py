@@ -44,8 +44,7 @@ class MTPTraceGeometry:
     - ``keep``: zero on the rows generation writes, applied once before level 0. Clearing them that early
       matches the eager clear at level ``provided_levels``: a level below it never reads those rows.
     - ``selects[k]``: level ``k``'s one-hot patch selector, all zero for a provided level.
-    - ``lm_rows``: one-hot ``[32, W]`` copying the chunk's last real (chip-local) row into all 32 rows, so the
-      LM head's argmax reads one row instead of a tile.
+    - ``lm_rows``: one-hot ``[32, W]`` copying the chunk's last real row into all 32 rows.
     - ``win_keep[k]`` / ``win_place[k]``: the window at shift ``k + 1`` is ``plain * win_keep + win_place @ L``,
       which on the split chip swaps the rows before ``split_row`` for its lookahead ``L``. Identity elsewhere.
     - ``next_select``, ``take_tail``, ``take_next``: ``L`` is the union's tile at row W (the split chip's own
@@ -78,9 +77,9 @@ class MTPTraceGeometry:
             f"{self.num_mtp_tokens} lookahead rows"
         )
         self._tensors: dict = {}
-        # The split-chip lookahead of the chunk last written (None: no chip holds two position runs).
+        # Split-chip lookahead of the last written chunk, or None.
         self.split = None
-        # The plan key each device tensor was last written for, so write() skips an unchanged one.
+        # Plan key per tensor; write() skips a tensor whose key is unchanged.
         self._keys: dict = {}
         plan = self._plan(0, self.chunk_size, self.num_levels)
         for name in self._names():
@@ -90,7 +89,7 @@ class MTPTraceGeometry:
         self._selects = [
             self._device(torch.zeros(self.sp_factor, 1, self.union_len, width)) for _ in range(self.num_levels)
         ]
-        # level_pick[k] keeps only row k of "col"; constant, so it is written once here.
+        # Constant: level_pick[k] keeps row k of "col".
         tile = ttnn.TILE_SIZE
         self._level_pick, self._level_cols = [], []
         for k in range(self.num_levels):
@@ -98,7 +97,7 @@ class MTPTraceGeometry:
             pick[:, 0, k, k] = 1.0
             self._level_pick.append(self._device(pick))
             self._level_cols.append(self._device(torch.zeros(self.sp_factor, 1, tile, width)))
-        # Also compiles the select program before the capture, so write() never compiles between replays.
+        # Compiles the select programs before capture.
         self._build_selects(range(self.num_levels))
 
     @property
@@ -138,11 +137,9 @@ class MTPTraceGeometry:
         return self._tensors["take_next"]
 
     def write(self, actual_start: int, actual_end: int, provided_levels: int) -> None:
-        """Refresh the tensors whose plan key changed, for the chunk ``[actual_start, actual_end)``.
+        """Rewrite the tensors whose plan key changed for ``[actual_start, actual_end)``. Never inside a capture.
 
-        Never inside a capture. The selects are rebuilt on device from ``rows`` and ``col``, which are
-        ~1/15 of their size. A "provided" replay skips generation, so its write leaves the generate-only
-        tensors and the selects stale.
+        A provided chunk leaves the generate-only tensors and the selects stale; its replay does not read them.
         """
         plan = self._plan(actual_start, actual_end, provided_levels)
         self.split = plan["split"]
@@ -181,8 +178,7 @@ class MTPTraceGeometry:
         )
 
     def _build_selects(self, levels) -> None:
-        # rows[:, k] is level k's landing row and col row k is a 1 at source_row; picking that one row
-        # and multiplying gives the [U, 32*sp] one-hot selector. One-hot operands keep both exact.
+        # select[k] = rows @ (level_pick[k] @ col); one-hot operands keep it exact.
         for k in levels:
             ttnn.matmul(
                 self._level_pick[k],
@@ -215,11 +211,7 @@ class MTPTraceGeometry:
         return plan["split"]
 
     def _generation_rows(self, actual_start: int, actual_end: int, levels) -> dict:
-        """Per level, the (chips, union rows) that position ``actual_end + level`` lands on.
-
-        Same answer as ``mtp_generation_union_rows``, trunk before slots on each chip, from closed forms: one
-        chip's trunk can carry the position, and each chip's lookahead slots are consecutive positions.
-        """
+        """Per level, the (chips, union rows) position ``actual_end + level`` lands on (closed form)."""
         w = self.window_len
         slots = mtp_lookahead_positions(actual_start, self.sp_factor, w, actual_end, self.num_levels)
         assert all(len(s) <= self.num_mtp_tokens for s in slots), f"lookahead slots do not fit in {self.num_mtp_tokens}"
@@ -242,7 +234,6 @@ class MTPTraceGeometry:
         assert 0 <= provided_levels <= k_levels, f"provided_levels {provided_levels} outside [0, {k_levels}]"
         assert k_levels <= tile, f"rows packs one level per column of a {tile}-wide tile; K={k_levels}"
         generated = range(provided_levels, k_levels)
-        # A provided chunk reads only the split-chip windows, so it skips the per-chip position lists.
         landing = self._generation_rows(actual_start, actual_end, generated) if generated else {}
         last_local_row, source_row = 0, 0
         if generated:
@@ -319,7 +310,7 @@ class MTPTraceGeometry:
         return out
 
     def _host(self, actual_start: int, actual_end: int, provided_levels: int) -> dict:
-        """Every tensor the replay reads, on host, with the selects formed as the device forms them."""
+        """Every tensor the replay reads, built on host (the test reference)."""
         plan = self._plan(actual_start, actual_end, provided_levels)
         built: dict = {}
         out = {name: self._build(name, plan, built) for name in self._names()}
@@ -338,7 +329,7 @@ class MTPTraceEmbedSource:
 
     With ``embed_fn=None`` it serves chunks whose levels are all provided: generation and the patch are
     skipped, which is what the masks would reduce them to. ``blend=False`` also skips the split-chip
-    blend, which is the identity on a chunk where no chip holds two position runs.
+    blend (the identity on chip-aligned chunks).
     """
 
     def __init__(

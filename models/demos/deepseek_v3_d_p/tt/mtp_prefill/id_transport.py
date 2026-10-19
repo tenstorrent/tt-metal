@@ -2,16 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Carry the MTP union's token ids down the pipeline instead of its embeddings.
+"""Send the MTP union's token ids down the pipeline instead of its embeddings; the last rank gathers them.
 
-The last rank needs the union embedding (the chunk's trunk rows and its lookahead rows) and already holds
-the embedding table, so the ranks between can forward the ids it was gathered from: one 32-row block per
-chip instead of ``window_len + num_mtp_tokens`` embedding rows. The D2D activation is bf16, so each id
-travels as three bytes in three rows of the block, each byte an integer bf16 holds exactly; the block's
-other rows and columns are zero.
-
-Ids are clamped to ``vocab_size - 1`` first, which is what the embedding lookup does to them anyway (the
-MTP pad id is 0xFFFFFFFF), so the union the last rank gathers is bit-identical to the one rank 0 gathers.
+The D2D activation is bf16, so each id travels as three bytes (each exact in bf16) in three rows of one
+32-row block per chip. Ids are clamped to ``vocab_size - 1`` first, as the embedding lookup does.
 """
 
 from __future__ import annotations

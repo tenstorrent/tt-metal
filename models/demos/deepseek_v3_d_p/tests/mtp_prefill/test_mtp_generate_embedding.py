@@ -137,8 +137,7 @@ def test_mtp_generate_embedding_one_row_matches_tile(mesh_device, device_params,
     new = _per_device(new_path())
     r = local_row % tile
     for dev, (o, n) in enumerate(zip(old, new)):
-        # Gathered over SP: chip c's 32 rows sit at [32c, 32c + 32). The patch reads row 32c + r of the
-        # chip holding the real row; the new path's rows are all that token, so every row must match it.
+        # Chip c's 32 rows sit at [32c, 32c + 32); every row of the new path must match the reference.
         o = o.reshape(sp * tile, -1)
         n = n.reshape(sp * tile, -1)
         for c in range(sp):

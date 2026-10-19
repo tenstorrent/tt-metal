@@ -202,10 +202,7 @@ def mtp_lookahead_positions(
 ) -> list[list[int]]:
     """Per chip, the global positions carried by its MTP lookahead slots, which follow its trunk rows:
     the ``num_levels`` positions after its last one, every later slot pad. A split chip whose second run lies at
-    or past ``actual_end`` carries the next chip's first ``num_levels`` positions instead.
-
-    Reads three entries of ``rotated_chip_positions`` per chip, so it computes those rather than the table:
-    the runner calls this on every chunk."""
+    or past ``actual_end`` carries the next chip's first ``num_levels`` positions instead."""
 
     def position(chip, row):
         return rotated_chip_position(kv_actual_isl, sp, chunk_local, chip, row)

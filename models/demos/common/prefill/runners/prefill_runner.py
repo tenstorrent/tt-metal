@@ -190,8 +190,7 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers, ack_idx_of
 
 
 def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False) -> dict:
-    # One blocking D2H read per chunk: the D2D record's 4th word (MTP provided_levels) comes from the
-    # same read rather than a second one.
+    # One D2H read; the 4th word is MTP provided_levels.
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
     meta = {
         "slot_id": int(m[0]),

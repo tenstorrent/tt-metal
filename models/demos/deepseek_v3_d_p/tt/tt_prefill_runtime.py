@@ -486,11 +486,7 @@ class TtPrefillRuntime:
 
     def _mtp_pack_activation(self, hidden: ttnn.Tensor, ids_block: ttnn.Tensor) -> ttnn.Tensor:
         """Fuse this rank's output hidden and the chunk's MTP id block into one D2D activation, stacking
-        them on the row axis. Consumes the hidden, not the block.
-
-        The ids, not their embeddings: the last rank gathers the union embedding itself, so each hop carries
-        32 rows per chip below the hidden instead of the union's ``window_len + num_mtp_tokens``.
-        """
+        them on the row axis. Consumes the hidden, not the block."""
         packed = ttnn.concat([hidden, ids_block], dim=2)
         ttnn.deallocate(hidden)
         return packed
@@ -509,12 +505,12 @@ class TtPrefillRuntime:
         return hidden, ids_block
 
     def _mtp_ids_block(self, chunk_ids: ttnn.Tensor, mtp_ids: ttnn.Tensor) -> ttnn.Tensor:
-        """The first rank's id block for the next rank, from the two id tensors the H2D row was cut into."""
+        """Pack the first rank's ids for the next rank."""
         width = d2d_activation_width(self.hf_config.hidden_size) // self.config.tp_factor
         return pack_ids(chunk_ids, mtp_ids, vocab_size=self.hf_config.vocab_size, width=width)
 
     def _mtp_union_from_ids_block(self, ids_block: ttnn.Tensor) -> MTPUnionEmbedding:
-        """The last rank's union embedding, gathered from the received id block. Does not free the block."""
+        """Gather the last rank's union from the id block. Does not free the block."""
         chunk_ids, mtp_ids = unpack_ids(
             ids_block,
             num_chunk_ids=self.config.chunk_size // self.config.sp_factor,
@@ -528,12 +524,10 @@ class TtPrefillRuntime:
         return union
 
     def _mtp_prepare_input(self, input_tensor: ttnn.Tensor, mtp_tokens: Optional[ttnn.Tensor]) -> tuple:
-        """Turn what arrived into ``(union embedding or None, model input, id block to forward or None)``.
+        """Return ``(union or None, model input, id block to forward or None)``.
 
-        First rank: gather the union from the two id tensors the H2D row was cut into and hand its trunk
-        back as the model input, so the transformer skips its own gather; a non-last first rank also packs
-        the ids for downstream. Downstream: unpack the id block off the hidden; the last rank gathers the
-        union from it, the ranks between only forward it.
+        First rank: gather the union from the H2D ids and use its trunk as the model input. Downstream:
+        unpack the id block; only the last rank gathers the union from it.
         """
         k = self.config.mtp_levels
         if self.config.is_first_rank:

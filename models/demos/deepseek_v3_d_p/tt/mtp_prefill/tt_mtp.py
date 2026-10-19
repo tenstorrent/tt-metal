@@ -245,8 +245,7 @@ class TtMTPModule(LightweightModule):
         self.mtp_config = mtp_config or MTPConfig.from_hf_config(config)
         self.layer_idx = self.mtp_config.mtp_layer_idx if layer_idx is None else layer_idx
         self.mesh_device = mesh_device
-        # Same rule as TtPrefillBlock's own norms, so the level's three norms take the fused op wherever
-        # the trunk's do (the unfused path is three ops plus a gather per norm).
+        # Same fused-norm rule as the trunk's TtPrefillBlock.
         use_fused_rmsnorm = block_kwargs.get("use_fused_rmsnorm")
         if use_fused_rmsnorm is None:
             use_fused_rmsnorm = (
