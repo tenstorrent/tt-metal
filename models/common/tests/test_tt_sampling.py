@@ -21,6 +21,7 @@ import torch
 import ttnn
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
 from models.common.sampling.tt_log_probs import LogProbsResult
+from models.common.sampling.tt_penalties import TTPenalties
 from models.common.sampling.tt_sampling import TTSampling
 
 # TEST NOTES:
@@ -1242,6 +1243,38 @@ class TestFrequencyPenaltyPerRequest:
             top_p=[1.0] * BATCH_SIZE,
             frequency_penalty=penalties,
         )
+
+
+class TestPenaltiesOnBlockFloatLogits:
+    @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+    def test_bfloat8_b_logits_leave_other_tokens_unchanged(self, mesh_device):
+        """The LM head hands over bfloat8_b logits, which share one exponent across 16 tokens of a
+        row. A penalty on one token must not re-quantize the logits of the tokens next to it."""
+        torch.manual_seed(0)
+        vocab_size = 1024
+        penalized_token = 3
+        penalties = TTPenalties(mesh_device, SimpleNamespace(max_batch_size=BATCH_SIZE, vocab_size=vocab_size))
+        penalties.reset_params([0.0], [2.0], [1.0])
+        penalties.reset_output_tokens(torch.full((BATCH_SIZE, 32), penalized_token, dtype=torch.int64))
+
+        logits_tt = ttnn.from_torch(
+            torch.rand(1, 1, BATCH_SIZE, vocab_size) * 2 - 1,
+            device=mesh_device,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        # The values the module actually receives, after bfloat8_b quantization.
+        logits_in = ttnn.to_torch(ttnn.get_device_tensors(logits_tt)[0]).float().reshape(BATCH_SIZE, vocab_size)
+
+        result_tt = penalties.apply(logits_tt)
+        result = ttnn.to_torch(ttnn.get_device_tensors(result_tt)[0]).float().reshape(BATCH_SIZE, vocab_size)
+
+        others = torch.ones(vocab_size, dtype=torch.bool)
+        others[penalized_token] = False
+        mismatched = (result[:, others] != logits_in[:, others]).sum().item()
+        assert mismatched == 0, f"{mismatched} logits of tokens that were not penalized changed"
+        # frequency 2.0 x 32 occurrences; just past -64 one bfloat16 step is 0.5
+        assert torch.allclose(result[:, penalized_token], logits_in[:, penalized_token] - 64.0, atol=0.5)
 
 
 # --- Test: seed behavior ---
