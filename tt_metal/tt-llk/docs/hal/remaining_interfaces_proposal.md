@@ -306,6 +306,8 @@ struct Zero
 | GPR → MMIO | STOREREG | Scalar unit | n.a. — posted |
 | MMIO → GPR | LOADREG | Scalar unit | n.a. — posted, async write-back |
 
+**Implemented: Dest → SrcA (MOVD2A).** `move.h` provides it as `hal::move::Transfer<Dst, SrcA>`, the SrcA counterpart of the implemented `Transfer<Dst, SrcB>`: same fields (`source_row`, `source_addressing`, `destination_row`, `address_mode`, `number_of_rows`, `final_address_mode`, `source_32bit_low`), validation, and `rows::Face` expansion into four MOVD2A. The caller stalls on `SrcAValid | MathIdle` before issue and, on Blackhole, disables implied SrcA-format inference. The `DestToSrcA` sketch below is the original proposal shape; see `move_hal_interface.html` for the implemented interface.
+
 #### Matrix-unit routes
 
 ```cpp

@@ -113,6 +113,7 @@
         <h2>Interfaces</h2>
         <a href="#srca-dst">SrcA to Dst</a>
         <a href="#srcb-dst">SrcB to Dst</a>
+        <a href="#dst-srca">Dst to SrcA</a>
         <a href="#dst-srcb">Dst to SrcB</a>
         <a href="#l1-gpr">L1 and GPR</a>
         <a href="#gpr-src">GPR to Src</a>
@@ -134,7 +135,7 @@
         <div class="meta">
           <span class="pill"><strong>Architecture</strong> Blackhole</span>
           <span class="pill"><strong>Header</strong> hal/move.h</span>
-          <span class="pill"><strong>Instructions</strong> MOVA2D · MOVB2D · MOVD2B · LOADIND · STOREIND · LOADREG · STOREREG · XMOV</span>
+          <span class="pill"><strong>Instructions</strong> MOVA2D · MOVB2D · MOVD2A · MOVD2B · LOADIND · STOREIND · LOADREG · STOREREG · XMOV</span>
           <span class="pill"><strong>Status</strong> Implemented</span>
         </div>
         <div class="install"><span>Include the transfer interface</span><code>#include "hal/move.h"</code></div>
@@ -172,10 +173,10 @@ hal::move::run&lt;move_face&gt;();</code></pre>
             <div class="route-lane">
               <div class="route-card source"><span class="flow-label">Matrix source</span><strong>Dst</strong><small>Select the normal or low 16-bit half of each row.</small></div>
               <div class="flow-arrow" aria-hidden="true">→</div>
-              <div class="route-card operation"><span class="flow-label">Reverse matrix path</span><strong>MOVD2B</strong><small>One-row or four-row native fragments.</small></div>
+              <div class="route-card operation"><span class="flow-label">Reverse matrix path</span><strong>MOVD2A / MOVD2B</strong><small>One-row or four-row native fragments.</small></div>
               <div class="flow-arrow" aria-hidden="true">→</div>
-              <div class="route-card"><span class="flow-label">Destination bank</span><strong>SrcB</strong><small>One or more source-register rows.</small></div>
-              <div class="route-card completion"><span class="flow-label">Progression</span><strong>Dst / SrcB RWCs</strong><small>Selected ADDR_MOD entry.</small></div>
+              <div class="route-card"><span class="flow-label">Destination bank</span><strong>SrcA / SrcB</strong><small>One or more source-register rows.</small></div>
+              <div class="route-card completion"><span class="flow-label">Progression</span><strong>Dst / SrcA or SrcB RWCs</strong><small>Selected ADDR_MOD entry.</small></div>
             </div>
             <div class="route-lane">
               <div class="route-card source"><span class="flow-label">Memory side</span><strong>L1 / MMIO</strong><small>Immediate or GPR-indirect address formation.</small></div>
@@ -201,6 +202,7 @@ hal::move::run&lt;move_face&gt;();</code></pre>
           <tbody>
             <tr><td><code>SrcA → Dst</code></td><td>MOVA2D or MOVDBGA2D; 1/8-row native fragments.</td><td>The instruction's source-validity policy.</td></tr>
             <tr><td><code>SrcB → Dst</code></td><td>MOVB2D or MOVDBGB2D; 1/4 rows, or one row broadcast to 8.</td><td>The instruction's source-validity policy.</td></tr>
+            <tr><td><code>Dst → SrcA</code></td><td>MOVD2A; 1/4-row native fragments, with normal or low-16 Dst source selection.</td><td>ADDR_MOD-controlled RWC progression.</td></tr>
             <tr><td><code>Dst → SrcB</code></td><td>MOVD2B; 1/4-row native fragments, with normal or low-16 Dst source selection.</td><td>ADDR_MOD-controlled RWC progression.</td></tr>
             <tr><td><code>L1 ↔ Gpr</code></td><td>LOADIND or STOREIND with 16/4/2/1-byte size.</td><td>Posted; optional ScalarIdle wait.</td></tr>
             <tr><td><code>Gpr → SrcA/SrcB</code></td><td>Fixed four-BF16 STOREIND.</td><td>Waits for source-bank ownership.</td></tr>
@@ -386,6 +388,37 @@ broadcast_scalar {
 };
 
 hal::move::run&lt;broadcast_scalar&gt;();</code></pre>
+      </section>
+
+      <section id="dst-srca">
+        <h2><code>Dst</code> to <code>SrcA</code></h2>
+<pre><code>template &lt;&gt;
+struct Transfer&lt;Dst, SrcA&gt;
+{
+    std::uint32_t source_row;
+    RowAddressing source_addressing = RowAddressing::Absolute;
+    std::uint32_t destination_row;
+    std::uint8_t address_mode;
+    RowCount number_of_rows;
+    std::uint8_t final_address_mode = SameAddressMode;
+    bool source_32bit_low = false;
+
+    constexpr std::uint32_t get_operation() const;
+};</code></pre>
+        <p>MOVD2A is the SrcA counterpart of MOVD2B: the descriptor fields, row-count rules, face expansion, and validation match <code>Dst → SrcB</code>, with SrcA rows <code>[0, 63]</code> as the destination. A face expands to four straight-line four-row MOVD2A instructions; the last one uses <code>final_address_mode</code>. MOVD2A does not wait for SrcA bank ownership, so stall on <code>SrcAValid | MathIdle</code> before issuing it.</p>
+<pre><code>hal::move::Transfer&lt;
+    hal::move::Dst,
+    hal::move::SrcA&gt;
+extract_face_to_srca {
+    .source_row = hal::move::dst_layout::tile_row(dst_index, face),
+    .destination_row = 16,
+    .address_mode = ADDR_MOD_0,
+    .number_of_rows = hal::move::rows::Face,
+    .final_address_mode = ADDR_MOD_3,
+};
+
+// Runtime row addresses, compile-time-known face shape: four unrolled MOVD2A instructions.
+hal::move::run(extract_face_to_srca);</code></pre>
       </section>
 
       <section id="dst-srcb">
@@ -712,7 +745,7 @@ hal::move::run&lt;quad_shuffle&gt;();</code></pre>
         <h3>Rejected descriptors</h3>
         <ul>
           <li>Missing required fields; unsupported enum values; GPR indices outside <code>[0, 63]</code>; or half-register indices outside <code>[0, 127]</code>.</li>
-          <li>SrcA/SrcB rows outside <code>[0, 63]</code>, Dst rows outside <code>[0, 1023]</code>, noncanonical row counts, semantic spans crossing either register file, or descriptors expanding beyond eight native TT instructions. For <code>Dst → SrcB</code>, those source and destination ranges are reversed.</li>
+          <li>SrcA/SrcB rows outside <code>[0, 63]</code>, Dst rows outside <code>[0, 1023]</code>, noncanonical row counts, semantic spans crossing either register file, or descriptors expanding beyond eight native TT instructions. For <code>Dst → SrcA</code> and <code>Dst → SrcB</code>, those source and destination ranges are reversed.</li>
           <li>Blackhole address modes outside <code>[0, 7]</code>; a distinct final mode on a one-instruction transfer; or a total one-row <code>Broadcast::Row</code>.</li>
           <li>A 16-byte LOADIND/STOREIND or fixed-width Src store whose GPR base is not four-aligned.</li>
           <li>An immediate MMIO address that is unaligned or outside <code>0xffb11000..0xffbffffc</code>; any indirect MMIO read.</li>
@@ -720,8 +753,9 @@ hal::move::run&lt;quad_shuffle&gt;();</code></pre>
         </ul>
         <h3>Live-state preconditions</h3>
         <ul>
-          <li>Configure effective SrcA/Dst rows eight-aligned for eight-row A2D fragments, SrcB/Dst rows four-aligned for four-row B2D or D2B fragments, and Dst rows eight-aligned for row/scalar broadcast fragments.</li>
-          <li>Configure each address mode to advance the RWCs by its native fragment width; row/scalar broadcast must hold SrcB while advancing Dst, while D2B face extraction advances both Dst and SrcB.</li>
+          <li>Configure effective SrcA/Dst rows eight-aligned for eight-row A2D fragments, SrcB/Dst rows four-aligned for four-row B2D or D2B fragments, SrcA/Dst rows four-aligned for four-row D2A fragments, and Dst rows eight-aligned for row/scalar broadcast fragments.</li>
+          <li>Configure each address mode to advance the RWCs by its native fragment width; row/scalar broadcast must hold SrcB while advancing Dst, while D2A face extraction advances both Dst and SrcA, and D2B face extraction advances both Dst and SrcB.</li>
+          <li>Before MOVD2A, stall on <code>SrcAValid | MathIdle</code>; MOVD2A does not automatically wait for SrcA bank ownership. On Blackhole, disable implied SrcA-format inference (<code>DISABLE_IMPLIED_SRCA_FMT</code>) while using Dst-to-SrcA extraction.</li>
           <li>Before MOVD2B, own or explicitly mark SrcB valid; MOVD2B does not automatically wait for SrcB bank ownership. On Blackhole, disable implied SrcA-format inference while using Dst-to-SrcB extraction.</li>
           <li>Use <code>source_32bit_low</code> only when Dst is configured for a 32-bit representation; selecting the low half for a 16-bit Dst representation is undefined.</li>
           <li>Do not use <code>destination_32bit_low</code> while effective TF32, FP32, or UseDst32b operation makes the Blackhole low-half erratum applicable.</li>
@@ -741,6 +775,7 @@ hal::move::run&lt;quad_shuffle&gt;();</code></pre>
         <div class="api-index">
           <a href="../../tt_llk_blackhole/llk_lib/hal/move.h"><code>tt_llk_blackhole/llk_lib/hal/move.h</code><span>Public descriptors, validation, private encoders, and issue paths.</span></a>
           <a href="../../tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_datacopy.h"><code>tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_datacopy.h</code><span>Production integration for explicit broadcast workarounds and MOP instruction words.</span></a>
+          <a href="https://github.com/tenstorrent/tt-isa-documentation/blob/c1e93dde9c2c866472ddca5baf326d72dd57572c/WormholeB0/TensixTile/TensixCoprocessor/MOVD2A.md"><code>MOVD2A functional model</code><span>Native row shapes, RWC progression, ownership, and the Blackhole implied-format recommendation.</span></a>
           <a href="https://github.com/tenstorrent/tt-isa-documentation/blob/c1e93dde9c2c866472ddca5baf326d72dd57572c/WormholeB0/TensixTile/TensixCoprocessor/MOVD2B.md"><code>MOVD2B functional model</code><span>Native row shapes, RWC progression, ownership, and format behavior.</span></a>
           <a href="../../tt_llk_blackhole/llk_lib/hal/cfg/thcon.h"><code>tt_llk_blackhole/llk_lib/hal/cfg/thcon.h</code><span>Typed mover configuration fields.</span></a>
           <a href="../../tt_llk_blackhole/llk_lib/hal/sync.h"><code>tt_llk_blackhole/llk_lib/hal/sync.h</code><span>Scalar- and mover-idle completion waits.</span></a>
@@ -759,6 +794,7 @@ hal::move::run&lt;quad_shuffle&gt;();</code></pre>
         <li><a href="#shared">Shared types</a></li>
         <li><a href="#srca-dst">SrcA to Dst</a></li>
         <li><a href="#srcb-dst">SrcB to Dst</a></li>
+        <li><a href="#dst-srca">Dst to SrcA</a></li>
         <li><a href="#dst-srcb">Dst to SrcB</a></li>
         <li><a href="#l1-gpr">L1 and GPR</a></li>
         <li><a href="#gpr-src">GPR to Src</a></li>
