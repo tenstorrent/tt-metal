@@ -76,6 +76,9 @@ class TtPrefillRuntimeConfig:
     # The KV cache is the prefill output either way; this only trims the last layer.
     # The pipeline sets it on the last rank.
     kv_only_last_layer: bool = False
+    # Half-layer pipeline split (TtPrefillTransformer attn_only_last_layer / ffn_prefix_layer).
+    attn_only_last_layer: bool = False
+    ffn_prefix_layer: bool = False
     # The same trim for the last MTP level: it only has to fill its KV slot.
     kv_only_last_mtp_level: bool = True
     # Build the DFlash drafter context-KV cache during this prefill (opt-in). Every rank builds its owned fc
@@ -291,6 +294,8 @@ class TtPrefillRuntime:
             sparse_kv_cache_format=self.config.sparse_kv_cache_format,
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
             mtp_predictor=self.mtp_predictor,
+            attn_only_last_layer=self.config.attn_only_last_layer,
+            ffn_prefix_layer=self.config.ffn_prefix_layer,
         )
         self.model_built = True
 

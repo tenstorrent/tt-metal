@@ -219,6 +219,17 @@ def _snap_counts_to_starts(counts, valid_starts, num_layers):
     return out
 
 
+def ffn_handoff_flags(num_ranks: int) -> list[bool]:
+    """PREFILL_PP_FFN_HANDOFF: one 0/1 per pipeline boundary. 1 moves the FFN of the layer before that
+    boundary to the downstream rank (the upstream rank still runs its attention and owns its KV), which
+    splits a stage at half-layer granularity on top of the whole-layer split in PREFILL_PP_LAYER_COUNTS."""
+    raw = os.environ.get("PREFILL_PP_FFN_HANDOFF", "")
+    flags = [x.strip() == "1" for x in raw.split(",")] if raw else [False] * max(0, num_ranks - 1)
+    if len(flags) != num_ranks - 1:
+        raise ValueError(f"PREFILL_PP_FFN_HANDOFF={raw!r} must list {num_ranks - 1} boundaries (0/1 each)")
+    return flags + [False]
+
+
 def compute_layer_split(
     num_layers: int, num_ranks: int, valid_starts=None, tail_levels: int = 0
 ) -> list[tuple[int, int]]:
