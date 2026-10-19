@@ -9302,6 +9302,82 @@ tasks:
       pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'
+- id: P.8
+  title: 'Routed experts + weighted combine in one program (flat expert + combine_rf), no parity-only rounding, ffn_norm
+    in bf16: owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.4
+  - P.5
+  - P.6
+  - P.7
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup/flat_routed_expert_ttnn
+  - ttnn/ttnn/bringup/combine_rf
+  - ttnn/ttnn/bringup/INDEX.md
+  ab:
+    change:
+      EXPERTS_COMBINE: weighted
+      NUMERICS: native
+      FFN_NORM_DTYPE: bf16
+    env:
+      EXPERTS_COMBINE: separate
+      NUMERICS: official
+      FFN_NORM_DTYPE: fp32
+  brief:
+    details: 'Owner (2026-10-19), one task, three settings in tt/settings.py, each default = today''s path (the owner
+      decides from the table). Read first: ttnn/ttnn/bringup/INDEX.md, flat_routed_expert_ttnn/README.md,
+      combine_rf/README.md and combine_rf/examples/ (Marko Staletovic''s wiring of the flat expert with the weighted
+      combine in one program, and his K3 MoE block using it; reference only), agents rule 17 (no parity-only
+      rounding).
+      (1) EXPERTS_COMBINE {separate (default), weighted}, with EXPERTS_KERNEL=flat: run the flat expert and
+      combine_rf''s router-forwarded weighted combine (sparse_combine_rf) in one program per chip via
+      ttnn.bringup.flat_routed_expert_with_program, KEEPING the model''s layout: tokens replicated over the mesh row,
+      dispatch and combine along the column (axis 0) to that column''s expert group, then the column partials added
+      across the row by the existing reduce-scatter (tt/ccl.py sum_cols). The combine multiplies each expert row by
+      its routing weight and accumulates in fp32 per token, so with weighted: no routing-weight pieces in the
+      dispatched row (tt/experts.py _pieces / _routing_rows / sel_all), no routing_weights / fp8_act_quant option on
+      the expert, no separate ttnn.bringup.combine, no K-slot permute / slices / adds. The weight moves from h (before
+      w2) to the combine: exact without the h rounding (w2 is linear). The combine writes bf16 when CCL_IMPL is
+      fabric_bf16 (the reduce-scatter''s input, DS41-67), else fp32 if it can (add the output dtype as a combine_rf
+      option, default unchanged, if it has none). Adapt combine_rf (an option, default = today) to the column-axis
+      combine if it assumes a whole-mesh token split; extend flat_routed_expert_with_program with the V4.1 options it
+      lacks only where (1) needs them (weights_nk, hidden). Fork rules: bringup-fork-op skill section 3; every op
+      folder you change keeps its README.md and INDEX.md entry current (F113).
+      (2) NUMERICS {official (default), native}: native turns off every parity-only rounding in the model (rule 17):
+      tt/quant.fp8_qdq / fp4_qdq / round_tf32 calls in norm.py, experts.py (x), shared_expert.py (x and h),
+      q_a.py, attention.py, kv.py, indexer.py, compressor.py, engram_kv.py (ENGRAM_KV_QDQ), COMPRESSOR_X; with
+      EXPERTS_COMBINE=separate also the expert op''s fp8_act_quant. Inputs a matmul reads in bf16 / bfp8 are just cast.
+      Do NOT add `numerics` to the reference hook (bringup/hooks.py reference): this model''s per-step tests stay on
+      the official arithmetic.
+      (3) FFN_NORM_DTYPE {fp32 (default), bf16}: ffn_norm writes bf16 (its row all-gather moves half the bytes); the
+      router and the experts read it as is (no conversion op).
+      MAX_PRECISION (tt/settings.py): NUMERICS official and FFN_NORM_DTYPE fp32 (component and swap tests keep the
+      official arithmetic); EXPERTS_COMBINE stays weighted in MAX_PRECISION only if its sums can be fp32 there, else
+      pin separate and say why.
+      Checks: a tt/perf_experts.py test, weighted vs separate on the same inputs (rel error, and the determinism check);
+      one smoke run each (information only, not gates) of the router component tests with DS41_FFN_NORM_DTYPE=bf16
+      (report the tie-aware recall) and of test_c_swa_experts with DS41_NUMERICS=native. Report: the experts section
+      and every changed section (attention, indexer, compressor, kv, q_a, shared_expert, ffn_norm, router), device
+      total, chunk_wall_ms (clean, F114) and profiled_programs, change on vs off; the per-layer time of the experts
+      call; what would remain of the experts path.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done
+      && for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13
+      dec_reuse_12; do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_experts: '< 134.2'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -9310,6 +9386,7 @@ tasks:
   - P.5
   - P.6
   - P.7
+  - P.8
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
