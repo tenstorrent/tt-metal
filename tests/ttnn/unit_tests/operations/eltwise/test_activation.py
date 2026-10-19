@@ -79,6 +79,41 @@ def test_softplus_threshold_boundary(device, beta, threshold):
     run_softplus_boundary_test(device, beta, threshold)
 
 
+def test_sigmoid_approximate_specials(device):
+    """Regression guard for the approximate sigmoid's LUT specials (issue #60966).
+
+    The top LUT segment is (slope 0.0f, intercept 0.5f) and the hardware evaluates A * |x| + B,
+    so x = +/-inf reached that segment as 0 * inf + 0.5 = NaN instead of sigmoid's own
+    asymptotes (+inf -> 1.0, -inf -> 0.0); the kernel now classifies both infinities on their
+    abs bit pattern (the ckernel_sfpu_binary.h / ckernel_sfpu_isclose.h style) and repairs
+    them via copysgn(1.0f, val) fed through max(..., 0.0f). NaN keeps the LUT's NaN. The
+    assertions are exact and per-element: a whole-tensor PCC passes while every infinity
+    lane is NaN, which is how the bug survived the finite-sweep accuracy tests so far.
+    """
+    values = [float("inf"), float("-inf"), 12.5, 0.0, -12.5, float("nan")]
+    stride = len(values)
+    torch_input_tensor = torch.tensor(values, dtype=torch.bfloat16).repeat(64, 32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.sigmoid(input_tensor, mode=ttnn.SigmoidMode.FastApproximate)
+    output_torch = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)))
+
+    for lane, value in enumerate(values):
+        actual = output_torch[:, lane::stride]
+        if value == float("inf"):
+            assert torch.all(actual == 1.0), "+inf must map to exactly 1.0 in FastApproximate mode"
+        elif value == float("-inf"):
+            assert torch.all(actual == 0.0), "-inf must map to exactly 0.0 in FastApproximate mode"
+        elif value != value:  # NaN is the only float that is not equal to itself
+            assert torch.all(torch.isnan(actual)), "NaN input must stay NaN in FastApproximate mode"
+        else:
+            assert (
+                torch.isfinite(actual).all() and (actual >= 0).all() and (actual <= 1).all()
+            ), f"finite input {value} produced a result outside [0, 1] in FastApproximate mode"
+
+
 def test_tanhshrink_ulp(device):
     """ULP regression guard for the dedicated tanhshrink SFPU op (issue #45520).
 
