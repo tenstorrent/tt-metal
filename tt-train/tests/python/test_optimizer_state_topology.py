@@ -17,7 +17,7 @@ and ``MuonComposite`` have Python classes; ``MorehAdamW``, ``AdamWComposite`` an
 ``OptimizerBase`` whose ``step`` / ``get_state_dict`` dispatch virtually (nanobind falls back to the registered base
 class when the dynamic type has no binding). The fused kernels pin their outputs to the parameter's topology in the
 device op; the composites are built from generic ``ttnn`` binary ops, whose outputs take the UNION of their inputs'
-labels, so they restore the parameter's topology after every in-place ``set_value`` instead.
+labels, so they restore the parameter's topology once at the end of the step, over everything the step wrote.
 
 TP: ``TPBlock`` mixes replicated params with weights sharded on dims 2 and 3 and a sharded bias.
 FSDP: ``ttml.fsdp.fully_shard`` installs ``Shard(dim)`` on the ``"fsdp"`` axis of every managed parameter -- by a
@@ -51,9 +51,9 @@ NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 OPTIMIZERS = ["AdamW", "AdamWFullPrecision", "SGD"]
 
 # Composite optimizers, reachable only through ``create_optimizer`` (registry keys in optimizer_registry.cpp). The
-# weight-decay default (0.01) is kept on the AdamW variants so the unpinned weight-decay intermediate in
-# ``AdamWComposite::step`` is exercised; the momentum variants take the SGD "first update" branch on step one and
-# the regular branch on step two.
+# weight-decay default (0.01) is kept on the AdamW variants so ``AdamWComposite::step``'s weight-decay write is among
+# the tensors the end-of-step restore covers; the momentum variants take the SGD "first update" branch on step one
+# and the regular branch on step two.
 COMPOSITE_CONFIGS = {
     "MorehAdamW": {"type": "MorehAdamW"},
     "AdamWComposite": {"type": "AdamWComposite"},
