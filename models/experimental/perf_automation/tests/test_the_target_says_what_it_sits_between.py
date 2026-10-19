@@ -27,7 +27,7 @@ def _slice(after: str, n: int = 1400) -> str:
 
 
 def test_the_blocking_entry_keeps_the_adjacency_roofline_carried():
-    seg = _slice('op_code = o.get("op_code") or o.get("bucket") or ""')
+    seg = _slice('op_code = _group_name(o) or o.get("bucket") or ""')
     assert '"prev_op": o.get("prev_op")' in seg
     assert '"next_op": o.get("next_op")' in seg
 

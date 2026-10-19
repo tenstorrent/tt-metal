@@ -184,6 +184,7 @@ def test_termination_check_queues_a_repeated_stage_s_ops(pm, monkeypatch):
     out = pm.termination_check()
     blocking = out.get("blocking_ops") or out.get("blocking") or []
     names = [(b.get("stage"), b.get("op")) for b in blocking]
-    assert ("step", "Matmul") in names, out
-    assert names[0] == ("step", "Matmul"), "the short, repeated stage is worked first"
+    step_name = "Matmul %s" % _STEP_SHAPE  # an op_code with no dims is named by its shape
+    assert ("step", step_name) in names, out
+    assert names[0] == ("step", step_name), "the short, repeated stage is worked first"
     assert out["can_stop"] is False

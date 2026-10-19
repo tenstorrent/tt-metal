@@ -86,6 +86,6 @@ def test_a_real_target_still_carries_the_prior_attempt_reason(pm, monkeypatch):
     monkeypatch.setattr(pm, "_last_recorded_note", lambda op: "wedged at grid 8x8")
     out = _gate(pm, monkeypatch, gap=0.3, short=[])
     assert out["can_stop"] is False
-    assert out["next_target"]["op"] == "Softmax", out
+    assert out["next_target"]["op"] == "Softmax 1x32x32", out  # a shapeless op is named by its shape
     assert out["next_target"]["reason"].endswith("Last recorded attempt on this target: wedged at grid 8x8")
     assert "work next_target" in out["directive"]

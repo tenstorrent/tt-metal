@@ -8827,7 +8827,14 @@ def termination_check() -> dict:
             eff_gap = gap
         if not _req.material(o, max(gap, eff_gap)):
             continue
-        op_code = o.get("op_code") or o.get("bucket") or ""
+        # NAMED BY OP AND SHAPE (_group_name), as the fold gate names its groups. A matmul's op_code
+        # carries its dims; a shapeless class (GenericOp, BinaryNg, LayerNorm) does not, so every
+        # instance of it shared one name -- and _op_match matches a shapeless name on class alone, so
+        # one attempt on any of them answered the ladder for all of them. A model's custom kernels
+        # all profile as GenericOpDeviceOperation: one cpp try on a small attention kernel closed the
+        # largest kernel in its prefill (a fused gate/up matmul, a third of the stage) unexamined.
+        # The target carries this name, so the agent records against it and its ladder is its own.
+        op_code = _group_name(o) or o.get("bucket") or ""
         entry = {
             "op": op_code,
             "op_class": o.get("bucket"),
