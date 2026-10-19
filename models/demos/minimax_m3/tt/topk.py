@@ -78,8 +78,10 @@ class TopKRouter:
     PADDING_CONFIG_CACHE_SIZE = 512  # each entry is one tiny [sp, 2] device tensor
 
     def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, num_tokens=None, mesh_config=None):
-        """num_tokens: tokens per device per forward (forward_tokens_budget // sp_factor). Required — the gate's
-        bias is materialized at that width (see below).
+        """num_tokens: rows per device per forward. Every chunk of the forward puts chunk_size // sp_factor rows
+        on each SP device, so a forward of forward_tokens_budget // chunk_size chunks gives
+        forward_tokens_budget // sp_factor rows (chunk_size // sp_factor at the default budget). Required — the
+        gate's bias is materialized at that width (see below).
         mesh_config: resolves which mesh axis is SP for build_padding_config; None assumes axis 0."""
         self.top_k = hf_config.num_experts_per_tok
         self.num_experts = hf_config.num_local_experts
