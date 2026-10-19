@@ -30,7 +30,9 @@ Tensor high_bw_all_gather(
     std::optional<uint32_t> window_max_slabs,
     bool prefix_only,
     const std::optional<Tensor>& progress_tensor,
-    const std::optional<Tensor>& push_runs_tensor) {
+    const std::optional<Tensor>& push_runs_tensor,
+    uint32_t push_stripe_chunk,
+    uint32_t push_max_rows) {
     return ttnn::prim::high_bw_all_gather(
         input_tensor,
         output_tensor,
@@ -52,7 +54,9 @@ Tensor high_bw_all_gather(
         window_max_slabs,
         prefix_only,
         progress_tensor,
-        push_runs_tensor);
+        push_runs_tensor,
+        push_stripe_chunk,
+        push_max_rows);
 }
 
 std::vector<Tensor> sparse_push_plan(

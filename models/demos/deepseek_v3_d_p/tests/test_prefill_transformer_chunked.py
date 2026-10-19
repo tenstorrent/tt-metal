@@ -2278,7 +2278,8 @@ def run_chunked_transformer_updated(
             m._sparse_kv_push = False
         planner.memo, planner.memo_tag = None, None
         planner.invalidate()
-        assert plan_s[0] > 0 and not any(plan_s[1:]), f"expected only the first push re-run to plan, got {plan_s}"
+        if not planner.on_device:
+            assert plan_s[0] > 0 and not any(plan_s[1:]), f"expected only the first push re-run to plan, got {plan_s}"
         gather_s, cold_s, push_s = min(samples[False]), samples[True][0], min(samples[True][1:])
         plan = plan_s[0]
         push_ab_rows.append((c, kv_actual, gather_s, push_s, cold_s, plan))

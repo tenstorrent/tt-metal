@@ -87,6 +87,10 @@ struct HighBwAllGatherParams {
     // (nullopt = unbounded); prefix_only changes the reader's extent formula, so it is hashed.
     std::optional<uint32_t> window_max_slabs;
     bool prefix_only = false;
+
+    // PROTOTYPE sparse push from the all-gathered on-device plan tables (0 = host-built run lists). Structural.
+    uint32_t push_stripe_chunk = 0;
+    uint32_t push_max_rows = 0;
 };
 
 struct HighBwAllGatherInputs {

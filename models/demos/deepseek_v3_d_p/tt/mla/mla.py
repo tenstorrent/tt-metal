@@ -1901,6 +1901,7 @@ class ttMLA:
             stripe_chunk=seq_len_local // self.tp_factor,
             buffer_rows=push_buffer.shape[2],
             page_bytes=page_bytes,
+            max_rows=dense.shape[2],
         )
         compact = ttnn.experimental.high_bw_all_gather(
             storage,
@@ -1910,6 +1911,7 @@ class ttMLA:
             num_links=self.ccl_num_links,
             input_batch_index=cache_batch_idx if storage.shape[0] > 1 else None,
             push_runs_tensor=plan.streams,
+            **plan.push_kwargs,
             ready_semaphore=ready_sem,
             data_valid_semaphore=done_sem,
         )
