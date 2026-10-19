@@ -319,8 +319,11 @@ def spec_ctrl_page(mi, n_users, nv, parity, hold=None):
     hold = set(hold or ())
     words = torch.zeros(spec_ctrl_words(n_users, nv), dtype=torch.int32)
     words[0] = int(parity)
-    for u in range(n_users):
-        words[1 + u] = 0 if u in hold else int(mi[u])
+    if tpc.spec_hostset_enabled() and not hold:  # QWEN36_SPEC_HOSTSET: one slice assignment instead of B scalar ones
+        words[1 : 1 + n_users] = torch.as_tensor(mi, dtype=torch.int32)
+    else:
+        for u in range(n_users):
+            words[1 + u] = 0 if u in hold else int(mi[u])
     words[1 + n_users : 1 + n_users + n_users * nv] = spec_state_blk_idx(mi, n_users, nv, hold=hold)
     return words.reshape(1, -1)
 

@@ -54,9 +54,13 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
 from models.demos.blackhole.qwen36.tt.tp_common import (
+    pack_u32_rows,
+    rope_row_index,
     spec_fast_join_enabled,
     spec_fast_prefill_enabled,
     spec_hostfix_enabled,
+    spec_hostset_enabled,
+    spec_hostset_trace_enabled,
     verify_device_topk_m,
 )
 
@@ -113,7 +117,16 @@ class DraftResult:
 # --------------------------------------------------------------------------------------------- #
 def anchor_selector(m, B, T):
     """One-hot [1,1,B,B*T] bf16 with a single 1.0 at (u, u*T + m[u]): ``sel @ feed`` gathers each
-    user's accepted-prefix row of the verify feed."""
+    user's accepted-prefix row of the verify feed. QWEN36_SPEC_HOSTSET (default 1): one index assignment."""
+    if not spec_hostset_enabled():
+        return _anchor_selector_old(m, B, T)
+    sel = torch.zeros(1, 1, B, B * T, dtype=torch.bfloat16)
+    rows = torch.arange(B)
+    sel[0, 0, rows, rows * T + torch.as_tensor([int(x) for x in m], dtype=torch.int64)] = 1.0
+    return sel
+
+
+def _anchor_selector_old(m, B, T):
     sel = torch.zeros(1, 1, B, B * T, dtype=torch.bfloat16)
     for u in range(B):
         sel[0, 0, u, u * T + int(m[u])] = 1.0
@@ -132,10 +145,18 @@ def accepted_plan(committed_tokens, committed_positions, accepted_counts, B, T):
 
     m[u] = accepted_counts[u] - 1 (accepted drafts); anchor row = u*T + m[u] of the verify feed;
     pending[u] = committed_tokens[u, m[u]] (the bonus token, at position p+1); anchor_pos[u] = p =
-    committed_positions[u, m[u]] - 1 (the slot whose KV the first draft step writes)."""
+    committed_positions[u, m[u]] - 1 (the slot whose KV the first draft step writes).
+    QWEN36_SPEC_HOSTSET (default 1): the two lookups go through plain lists (no tensor index per row)."""
     m = [int(a) - 1 for a in accepted_counts]
     assert len(m) == B and all(0 <= x < T for x in m), f"accepted_counts must be in [1, {T}], got {m}"
     anchor_rows = [u * T + m[u] for u in range(B)]
+    if (
+        spec_hostset_enabled()
+        and isinstance(committed_tokens, torch.Tensor)
+        and isinstance(committed_positions, torch.Tensor)
+    ):
+        tl, pl = committed_tokens.tolist(), committed_positions.tolist()
+        return m, anchor_rows, [int(tl[u][m[u]]) for u in range(B)], [int(pl[u][m[u]]) - 1 for u in range(B)]
     pending = [int(committed_tokens[u][m[u]]) for u in range(B)]
     anchor_pos = [int(committed_positions[u][m[u]]) - 1 for u in range(B)]
     return m, anchor_rows, pending, anchor_pos
@@ -165,6 +186,27 @@ def reseed_rows_host(plan, pt, T, nb, scratch_block):
         if real:
             pt_rows[r] = pt[r // T]
     return tok, pos, pt_rows
+
+
+def reseed_rows_vec(committed_tokens, committed_positions, m, pt, T, nb, scratch_block, need_pt=True):
+    """reseed_row_plan + reseed_rows_host in tensor ops (QWEN36_SPEC_HOSTSET): (tok [R,1] int32, pos [R] int32,
+    pt_rows [R,nb] int32, real [R] bool), element for element what the two loops return (row u*T+i is real for
+    i < m[u]; padding rows are token 0, position 0, an all-scratch table row; ``pt`` is not read when all pad).
+    ``need_pt=False`` skips the [R,nb] table (pt_rows is None)."""
+    ct, cp = torch.as_tensor(committed_tokens).to(torch.int64), torch.as_tensor(committed_positions).to(torch.int64)
+    B = ct.shape[0]
+    mm = torch.as_tensor([int(x) for x in m], dtype=torch.int64)
+    real = (torch.arange(T)[None, :] < mm[:, None]).reshape(-1)
+    zero = torch.zeros((), dtype=torch.int64)
+    tok = torch.where(real, ct.reshape(-1), zero).to(torch.int32).reshape(B * T, 1)
+    pos = torch.where(real, cp.reshape(-1) - 1, zero).to(torch.int32)
+    if not need_pt:
+        return tok, pos, None, real
+    pt_rows = torch.full((B * T, nb), int(scratch_block), dtype=torch.int32)
+    ridx = real.nonzero().reshape(-1)
+    if ridx.numel():
+        pt_rows[ridx] = torch.as_tensor(pt)[ridx // T].to(torch.int32)
+    return tok, pos, pt_rows, real
 
 
 def exact_topk(values, m, ids=None):
@@ -413,10 +455,15 @@ def mtp_prefill_inputs(prompt_ids, chunk_start, bucket, page_table_row, block_si
 
 def verify_write_table(page_table, start_pos, num_valid_drafts, block_size):
     """[B, nb] table with each row's entries past the block of its last real column (start_pos + n) set to the
-    null block 0, so padded verify columns write only that row's current block or the null block."""
+    null block 0, so padded verify columns write only that row's current block or the null block.
+    QWEN36_SPEC_HOSTSET (default 1): one slice assignment per row instead of a whole-table boolean mask."""
     pt = torch.as_tensor(page_table).clone()
     last = torch.as_tensor(start_pos).reshape(-1).to(torch.int64)
     last = last + torch.as_tensor(num_valid_drafts).reshape(-1).to(torch.int64)
+    if spec_hostset_enabled() and pt.dim() == 2 and last.shape[0] == pt.shape[0]:
+        for u, c in enumerate((last // int(block_size)).tolist()):
+            pt[u, max(c + 1, 0) :] = 0
+        return pt
     cols = torch.arange(pt.shape[1]).reshape(1, -1)
     pt[cols > (last // int(block_size)).reshape(-1, 1)] = 0
     return pt
@@ -594,6 +641,8 @@ def _device_bytes(t):
 class MTPSpecEngine:
     """MTP speculative decode engine over B users (see module docstring)."""
 
+    _dr_hostset = False  # class default (engines built without __init__ in tests); set by _alloc_drafter_inputs
+
     def __init__(self, model, batch_size, draft_len):
         assert model.mtp is not None, "model has no MTP head (has_mtp / mtp.* weights?)"
         assert model.num_devices > 1, "MTPSpecEngine is TP-only for now"
@@ -666,6 +715,13 @@ class MTPSpecEngine:
         self._dr_rs_tok = (
             self._dr_rs_pos
         ) = self._dr_rs_pt = self._dr_rs_cos = self._dr_rs_sin = None  # reseed rows (B*T)
+        # QWEN36_SPEC_HOSTSET (+ _TRACE), decided when the drafter inputs are allocated: ONE packed uint32 input buffer
+        # (_dr_pack) replaces tok0 / pos / rs_tok / rs_pos / anchor selector / cos / sin (16 H2D copies -> 1); the trace
+        # slices it, looks cos/sin up from the RoPE tables and builds the anchor one-hot from an index (_dr_eye).
+        self._dr_hostset = False
+        self._dr_pack = None
+        self._dr_eye = None
+        self._dr_rs_cache = None  # (real-row mask, table or None) the reseed page-table buffer holds
         self._dr_trace = None  # trace id: anchor gather + batched reseed + K draft steps
         self._dr_outs = []  # K persistent [1,1,B] uint32 ids outputs of that trace
         self._last_pt = None  # fitted host page table of the most recent verify
@@ -1052,6 +1108,8 @@ class MTPSpecEngine:
             ttnn.deallocate(t)
         self._dr_outs, self._dr_bufs = [], []
         self._dr_tok0 = self._dr_rs_tok = self._dr_rs_pos = self._dr_rs_pt = self._dr_rs_cos = self._dr_rs_sin = None
+        self._dr_pack = self._dr_eye = self._dr_rs_cache = None
+        self._dr_hostset = False
         self._dr_pos, self._dr_cos, self._dr_sin = [], [], []
         self.__dict__.pop("_stage_cache", None)  # QWEN36_SPEC_HOSTFIX table cache: its buffers are freed here
         bufs = [
@@ -1385,6 +1443,7 @@ class MTPSpecEngine:
         active=None,
         num_valid_drafts=None,
         read_topk=False,
+        narrow=False,
     ):
         """Replay the verify trace over [B, T] tokens at start_pos[u] + j. The first verify after prefill is
         the seed (see _seed): row 0 holds the first generated token, other rows are filler, accepted_counts = 1.
@@ -1398,7 +1457,10 @@ class MTPSpecEngine:
         from the topk trace (merge_shard_topk) -- under fast join that covers a fresh row's first step too, since
         it runs as a 0-draft row inside the same replay (column 0 real, the filler columns ignored by the runner
         like its argmax / logits columns) -- and on an eager seed / join step (QWEN36_SPEC_FAST_JOIN=0) from the
-        host logits those steps read anyway (exact_topk), which are then cached for fetch_verify_logits."""
+        host logits those steps read anyway (exact_topk), which are then cached for fetch_verify_logits.
+        ``narrow`` (with ``read_logits``; QWEN36_SPEC_HOSTSET): only column 0 of each row is wanted (a no-draft step), so
+        the replay reads [B, 1, V] logits (column 0 sliced on the device) instead of [B, T, V]; the returned logits
+        are [B, 1, V] when that read was served (otherwise [B, T, V] as always)."""
         assert self.captured, "verify before capture"
         if read_topk and read_logits:
             raise ValueError("verify: read_logits and read_topk are exclusive")
@@ -1412,13 +1474,15 @@ class MTPSpecEngine:
         active = (
             torch.ones(B, dtype=torch.bool) if active is None else torch.as_tensor(active, dtype=torch.bool).reshape(B)
         )
-        rows = [u for u in range(B) if active[u]]
+        # QWEN36_SPEC_HOSTSET: plain bools for the per-row loops (a tensor index per row costs ~2 us each)
+        act = active.tolist() if spec_hostset_enabled() else active
+        rows = [u for u in range(B) if act[u]]
         unknown = [u for u in rows if u not in self._active]
         if unknown:
             raise ValueError(f"rows {unknown} carry a request that was never prefilled into that slot")
         # contract 4e: a live row left out of a step keeps its GDN state on host until it returns
         for u in range(B):
-            if not active[u] and u in self._active and u not in self._fresh and u not in self._parked:
+            if not act[u] and u in self._active and u not in self._fresh and u not in self._parked:
                 self._parked[u] = [dn.save_spec_user(u) for dn in self._gdn]
                 logger.info(f"[spec_engine] parked slot {u} (left out of a step)")
         back = [u for u in rows if u in self._parked]
@@ -1443,7 +1507,7 @@ class MTPSpecEngine:
             self._last_cap_blocks, self.block_size
         ), "verify window past the paged KV capacity"
 
-        fresh_now = {u: Tp for u, Tp in self._fresh.items() if active[u]}
+        fresh_now = {u: Tp for u, Tp in self._fresh.items() if act[u]}
         if fresh_now and self.fast_join:
             # QWEN36_SPEC_FAST_JOIN=1: seed the fresh rows' ring slot 0 / E_prev in place, then verify them in THIS
             # replay as 0-draft rows at mi = 0 next to the running rows (one forward for the whole step).
@@ -1476,11 +1540,15 @@ class MTPSpecEngine:
         kw = dict(read_logits=read_logits, page_tables=vpt, inactive=(~active).tolist())
         if read_topk:
             kw["read_topk"] = True  # only when asked: an older model.verify_traced has no such argument
+        if narrow and read_logits and spec_hostset_enabled():
+            kw["read_col0"] = True
         if self._timing:
             ids, vfeed, lt = self._verify_split(*args, **kw)
         else:
             ids, vfeed, lt = self.model.verify_traced(*args, **kw)
         self._vfeed = vfeed
+        if lt is not None and kw.get("read_col0") and getattr(self.model, "_vfy_last_col0", False):
+            return torch.tensor(ids, dtype=torch.int32).reshape(B, T), lt.reshape(B, 1, -1)
         ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
         if read_topk:
             self._topk_logits = None  # steady state: fetch_verify_logits replays the logits trace
@@ -1651,10 +1719,12 @@ class MTPSpecEngine:
         page_table,
         spec_mode="argmax_ids",
         slot_remap=None,
+        narrow_col0=False,
     ):
         """Runner verify contract over a [B, 1+K] block (see sanitize_verify_block) in runner slots; slot_remap is
         applied after validation, then every per-row input is scattered to engine rows (_to_rows) and the outputs
-        are gathered back (_to_slots). Returns VerifyResult."""
+        are gathered back (_to_slots). Returns VerifyResult. ``narrow_col0`` (spec_mode "logits", the narrow
+        no-draft step; QWEN36_SPEC_HOSTSET): the caller uses only column 0, so ``logits`` may come back [B, 1, V]."""
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
         clean, start0, active = sanitize_verify_block(tokens, start_pos, num_valid_drafts, self.K)
@@ -1676,6 +1746,8 @@ class MTPSpecEngine:
             self.no_draft_streak,
         )
         kw = {"read_topk": True} if spec_mode == "topk" else {}
+        if narrow_col0 and spec_mode == "logits":
+            kw["narrow"] = True
         ids, logits = self.verify(
             clean,
             start0,
@@ -1898,6 +1970,21 @@ class MTPSpecEngine:
         B, K, R, nb, rd = self.B, self.K, self.B * self.T, self.nb, self.args.rope_head_dim
         al, z, bf, i32 = self._alloc_host_replicated, torch.zeros, ttnn.bfloat16, torch.int32
         rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
+        self._dr_hostset = spec_hostset_trace_enabled()
+        if self._dr_hostset:
+            self.model.rope.decode_rm_tables()  # the resident RoPE tables exist before the trace is captured
+            self._dr_pack = al(pack_u32_rows([z(n, dtype=i32) for n in self._dr_seg_lens()]), ttnn.uint32, rm)
+            self._dr_eye = al(torch.eye(R, dtype=torch.bfloat16).reshape(1, 1, R, R), bf, rm)
+            self._dr_tok0, self._dr_pos, self._dr_cos, self._dr_sin = None, [], [], []
+            self._dr_rs_tok = self._dr_rs_pos = self._dr_rs_cos = self._dr_rs_sin = None
+            self._dr_rs_pt = al(torch.full((R, nb), self._scratch_block, dtype=i32), ttnn.int32, rm)
+            self._dr_rs_cache = (
+                torch.zeros(R, dtype=torch.bool),
+                None,
+                torch.full((R, nb), self._scratch_block, dtype=i32),
+            )
+            self._dr_bufs = [self._dr_pack, self._dr_eye, self._dr_rs_pt]
+            return
         self._dr_tok0 = al(z(B, 1, dtype=i32), ttnn.uint32, rm)
         self._dr_pos = [al(z(B, dtype=i32), ttnn.int32, rm) for _ in range(K)]
         self._dr_cos = [al(z(1, B, 1, rd, dtype=torch.bfloat16), bf, tile) for _ in range(K)]
@@ -1924,24 +2011,25 @@ class MTPSpecEngine:
         persistent buffer (device-input twin of _set_anchor + _reseed_mtp_batched + _draft). Returns the K ids
         tensors [1,1,B] uint32 (step k's drafts)."""
         B, mtp = self.B, self.mtp
-        Hp = ttnn.matmul(self._anchor_sel, feed, compute_kernel_config=self._anchor_cc)
+        d = self._dr_inputs()
+        Hp = ttnn.matmul(d["anchor_sel"], feed, compute_kernel_config=self._anchor_cc)
         ttnn.copy(Hp, self._hp_buf)
         ttnn.deallocate(Hp)
         _, hn = mtp.forward_decode(
             feed,
-            self._dr_rs_tok,
-            self._dr_rs_pos,
-            self._dr_rs_cos,
-            self._dr_rs_sin,
+            d["rs_tok"],
+            d["rs_pos"],
+            d["rs_cos"],
+            d["rs_sin"],
             self._dr_rs_pt,
             need_logits=False,
             alias_kv_write=True,
             spec_n_users=B,
         )
         ttnn.deallocate(hn)
-        h, tok, outs = self._hp_buf, self._dr_tok0, []
+        h, tok, outs = self._hp_buf, d["tok0"], []
         for k in range(self.K):
-            logits, hn = mtp.forward_decode(h, tok, self._dr_pos[k], self._dr_cos[k], self._dr_sin[k], self._mtp_pt)
+            logits, hn = mtp.forward_decode(h, tok, d["pos"][k], d["cos"][k], d["sin"][k], self._mtp_pt)
             idx = draft_argmax(mtp, logits)
             ttnn.deallocate(logits)
             tok = ttnn.reshape(idx, (B, 1))
@@ -1950,12 +2038,84 @@ class MTPSpecEngine:
                 ttnn.deallocate(h)
             h = hn
         ttnn.deallocate(h)
+        for t in d["owned"]:
+            ttnn.deallocate(t)
         return outs
+
+    def _dr_seg_lens(self):
+        B, K, R = self.B, self.K, self.B * self.T
+        return [B] + [B] * K + [R, R, B, R] + [B] * K
+
+    def _dr_inputs(self):
+        """The drafter body's inputs as a dict (anchor_sel, rs_tok, rs_pos, rs_cos, rs_sin, tok0, pos[k], cos[k], sin[k],
+        owned). Without the packed layout: the persistent buffers (owned = []). With it (``_dr_hostset``): derived from
+        ``_dr_pack`` in the trace. Rows of the pack (uint32 [2K+5, W], segment i at row i, columns [0, len)):
+        0 pending tok0 [B]; 1..K step positions [B]; K+1 reseed tokens [R]; K+2 reseed positions [R]; K+3 anchor row
+        u*T+m[u] [B]; K+4 reseed RoPE rows [R]; K+5..2K+4 RoPE rows of the step positions [B].
+        Positions: typecast(uint32 -> int32) of the slice. cos/sin: ttnn.embedding on the RoPE tables
+        (model._dl_rope_cos_sin) = the host's bf16 values (rope_row_index). The anchor one-hot: embedding of the anchor
+        row index into an identity table (a row copy: 1.0 / 0.0 in bf16, exactly the host's anchor_selector)."""
+        if not self._dr_hostset:
+            return dict(
+                anchor_sel=self._anchor_sel,
+                rs_tok=self._dr_rs_tok,
+                rs_pos=self._dr_rs_pos,
+                rs_cos=self._dr_rs_cos,
+                rs_sin=self._dr_rs_sin,
+                tok0=self._dr_tok0,
+                pos=self._dr_pos,
+                cos=self._dr_cos,
+                sin=self._dr_sin,
+                owned=[],
+            )
+        B, K, R, pk, model = self.B, self.K, self.B * self.T, self._dr_pack, self.model
+        owned = []
+
+        def seg(row, n):
+            return ttnn.slice(pk, [row, 0], [row + 1, n])
+
+        def i32(t, shape):
+            c = ttnn.typecast(t, ttnn.int32)
+            ttnn.deallocate(t)
+            v = ttnn.reshape(c, shape)
+            owned.append(v)
+            return v
+
+        def rope(row, n):
+            idx = seg(row, n)
+            cos, sin = model._dl_rope_cos_sin(idx, n)
+            owned.extend([idx, cos, sin])
+            return cos, sin
+
+        tok0 = ttnn.reshape(seg(0, B), (B, 1))
+        pos = [i32(seg(1 + k, B), (B,)) for k in range(K)]
+        rs_tok = ttnn.reshape(seg(K + 1, R), (R, 1))
+        rs_pos = i32(seg(K + 2, R), (R,))
+        aidx = seg(K + 3, B)
+        sel = ttnn.embedding(aidx, self._dr_eye, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        anchor_sel = ttnn.reshape(sel, (1, 1, B, R))
+        rs_cos, rs_sin = rope(K + 4, R)
+        steps = [rope(K + 5 + k, B) for k in range(K)]
+        owned.extend([tok0, rs_tok, aidx, anchor_sel])
+        return dict(
+            anchor_sel=anchor_sel,
+            rs_tok=rs_tok,
+            rs_pos=rs_pos,
+            rs_cos=rs_cos,
+            rs_sin=rs_sin,
+            tok0=tok0,
+            pos=pos,
+            cos=[c for c, _ in steps],
+            sin=[sn for _, sn in steps],
+            owned=owned,
+        )
 
     def _propose_recorded(self, ctok, cpos, m, pending, p, pt, m_kv=None):
         """Stage the drafter trace's inputs (host->device copies only; _mtp_pt already staged), replay, read ids.
         The reseed rows always run (padding-only when every m == 0). ``m_kv``: reseed row counts (default m)."""
         B, T, K, model = self.B, self.T, self.K, self.model
+        if self._dr_hostset:
+            return self._propose_recorded_packed(ctok, cpos, m, pending, p, pt, m_kv)
         stage, bf, rm, tile = self._stage, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
         stage(anchor_selector(m, B, T), self._anchor_sel, bf, tile)
         plan = reseed_row_plan(ctok, cpos, m if m_kv is None else m_kv, B, T)
@@ -1978,6 +2138,101 @@ class MTPSpecEngine:
             self.mtp_extra_steps += 1
         steps = self._ids_to_host(self._dr_outs)  # steps[k][u]
         return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
+
+    def _dr_pack_host(self, ctok, cpos, m, pending, p, m_kv):
+        """The packed drafter inputs (see _dr_inputs) for one propose: (pack int32 [2K+5, W], tok [R,1], pos [R], real [R]).
+        Element for element the values the unpacked path stages (draft_step_plan, reseed_row_plan, anchor_selector,
+        _rope_tp_cos_sin_decode_torch), as indices: tests/test_spec_hostset_host.py proves it."""
+        B, T, K, model = self.B, self.T, self.K, self.model
+        rtok, rpos, _, real = reseed_rows_vec(ctok, cpos, m if m_kv is None else m_kv, None, T, 0, 0, need_pt=False)
+        delta, rows = model.rope.rope_delta, model.rope.max_seq_len
+        R = B * T
+        steps = torch.as_tensor([int(x) for x in p], dtype=torch.int64)[None, :] + torch.arange(K)[:, None]  # [K, B]
+        ridx = rope_row_index(
+            torch.cat([rpos.to(torch.int64), steps.reshape(-1)]), delta, rows
+        )  # reseed rows, then steps
+        segs = [
+            [int(t) for t in pending],
+            *steps.tolist(),
+            rtok.reshape(-1),
+            rpos,
+            [u * T + int(m[u]) for u in range(B)],
+            ridx[:R],
+            *ridx[R:].reshape(K, B).tolist(),
+        ]
+        return pack_u32_rows(segs), rtok, rpos, real
+
+    def _propose_recorded_packed(self, ctok, cpos, m, pending, p, pt, m_kv):
+        """_propose_recorded with the packed inputs (QWEN36_SPEC_HOSTSET): ONE pack copy + the reseed page table (skipped
+        while the real-row mask and the table repeat, which is most steps of a steady batch). _mtp_pt was staged by
+        the caller. After the replay is enqueued the host would only wait for the first id read, so the next verify's
+        inputs are prestaged then (_prestage_next_verify)."""
+        B, T, K = self.B, self.T, self.K
+        pack, _, _, real = self._dr_pack_host(ctok, cpos, m, pending, p, m_kv)
+        h = ttnn.from_torch(
+            pack,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        ttnn.copy_host_to_device_tensor(h, self._dr_pack)
+        table = self._dr_rs_table(real, pt)
+        if table is not None:
+            self._stage(table, self._dr_rs_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
+        if any(m):
+            self.mtp_extra_steps += 1
+        self._prestage_next_verify(cpos, m)
+        steps = self._ids_to_host(self._dr_outs)  # steps[k][u]
+        return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
+
+    def _dr_rs_table(self, real, pt):
+        """The reseed page table [R, nb] the drafter trace must see for this step, or None when the device buffer already
+        holds it. Row r = pt[r // T] if real[r] else the scratch block (what reseed_rows_vec builds). The host mirror of
+        the buffer (_dr_rs_cache = (real mask, the pt its real rows were taken from or None, mirror)) is updated in
+        place: only the rows whose real flag toggled are rewritten while the page table repeats; a changed table
+        rebuilds the real rows. Returns a copy of the mirror (the copy to the device may outlive this call)."""
+        T, R = self.T, self.B * self.T
+        cached_real, cached_pt, host = self._dr_rs_cache
+        anyreal = bool(real.any())
+        same_pt = cached_pt is not None and torch.equal(pt, cached_pt)
+        if torch.equal(real, cached_real) and (same_pt or (not anyreal)):
+            return None
+        scratch = int(self._scratch_block)
+        if same_pt or cached_pt is None:  # no stale real row: rewrite the toggled rows only
+            for r in (real != cached_real).nonzero().reshape(-1).tolist():
+                if bool(real[r]):
+                    host[r] = pt[r // T]
+                else:
+                    host[r] = scratch
+        else:  # the table changed under rows that were real: rebuild them all
+            host.fill_(scratch)
+            ridx = real.nonzero().reshape(-1)
+            if ridx.numel():
+                host[ridx] = pt[ridx // T].to(torch.int32)
+        new_pt = cached_pt if same_pt else (pt.clone() if anyreal else None)
+        if not anyreal:
+            new_pt = None
+        self._dr_rs_cache = (real.clone(), new_pt, host)
+        return host.clone()
+
+    def _prestage_next_verify(self, cpos, m):
+        """While the drafter trace runs (the host would idle ~6 ms in the first id read), stage what the NEXT verify can
+        know before the drafts exist: its row positions, RoPE rows and GDN ctrl page. They follow from the commit:
+        user u's next start position is the bonus token's slot cpos[u, m[u]] and its mi_prev is m[u]; a row left out of
+        the step runs at position 0 / mi 0 (verify's padding rule). NOT prestageable: the 32 verify token ids (the
+        drafts), the page tables (the runner owns them and may add a block) and the KV-write check (it needs the
+        next num_valid_drafts), and anything that depends on a request joining, finishing or being parked. A wrong
+        guess is harmless: verify_traced stages its own words unless they equal what is already there."""
+        model = self.model
+        if not getattr(model, "_vfy_hostset", False):
+            return
+        act = [True] * self.B if self._row_active is None else [bool(a) for a in self._row_active]
+        cp = torch.as_tensor(cpos).tolist()
+        pos = [int(cp[u][int(m[u])]) if act[u] else 0 for u in range(self.B)]
+        mi = [int(m[u]) if act[u] else 0 for u in range(self.B)]
+        model.prestage_verify_aux(pos, mi)
 
     def _draft_warmup(self, pending, Hp, p):
         """One need_logits=True draft step before capture (compiles head norm, LM head, argmax, mesh_partition)."""

@@ -27,7 +27,7 @@ import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
 from models.demos.blackhole.qwen36.tt.model import serve_device_decode_env_enabled
-from models.demos.blackhole.qwen36.tt.tp_common import fabric_router_config, verify_device_topk_m
+from models.demos.blackhole.qwen36.tt.tp_common import fabric_router_config, spec_hostset_enabled, verify_device_topk_m
 from models.tt_transformers.tt.generator import Generator
 
 # Sampler top-k limit (models/common/sampling TTSampling.max_top_k default; ttnn.sampling walks k <= 32 candidates).
@@ -1191,6 +1191,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             page_table=self._table(page_table),
             spec_mode="logits",
             slot_remap=remap,
+            **({"narrow_col0": True} if spec_hostset_enabled() else {}),  # QWEN36_SPEC_HOSTSET: read column 0 only
         )
         return res.logits[:, :1].float()
 
