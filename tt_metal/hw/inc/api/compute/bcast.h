@@ -39,9 +39,18 @@ constexpr SrcDvalid BCAST_MUL_SRC_DVALID = (ELTWISE_BINARY_PER_TILE_HANDOFF_BCAS
 #else
 constexpr SrcDvalid BCAST_MUL_SRC_DVALID = SrcDvalid::PerFace;
 #endif
-// PER_TILE_HANDOFF_COL_LOSS (set by the host): a LoFi column multiply with fp32 DEST at full sync keeps the per-face hand-off.
+// PER_TILE_HANDOFF_COL_LOSS (set by the host): a LoFi column multiply with fp32 DEST at full sync reads slower per tile when
+// the operand is Bfp8_b, so a kernel with any Bfp8_b buffer keeps the per-face hand-off there.
+constexpr bool any_bfp8_b_buffer() {
+    for (std::uint32_t i = 0; i < sizeof(unpack_src_format) / sizeof(unpack_src_format[0]); ++i) {
+        if (unpack_src_format[i] == static_cast<std::uint8_t>(DataFormat::Bfp8_b)) {
+            return true;
+        }
+    }
+    return false;
+}
 #if defined(PER_TILE_HANDOFF_COL_LOSS)
-constexpr bool BCAST_COL_PER_FACE = (PER_TILE_HANDOFF_COL_LOSS);
+constexpr bool BCAST_COL_PER_FACE = (PER_TILE_HANDOFF_COL_LOSS) && any_bfp8_b_buffer();
 #else
 constexpr bool BCAST_COL_PER_FACE = false;
 #endif
