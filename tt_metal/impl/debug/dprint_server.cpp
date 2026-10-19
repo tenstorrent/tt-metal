@@ -29,9 +29,9 @@
 #include "context/metal_env_accessor.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/soc_descriptor.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 #include "core_coord.hpp"
 #include "debug_helpers.hpp"
