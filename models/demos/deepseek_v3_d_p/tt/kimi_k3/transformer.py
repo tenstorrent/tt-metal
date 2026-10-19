@@ -475,14 +475,17 @@ class TtKimiK3Transformer(LightweightModule):
         `attn_input_tap(local_idx, hidden)` fires inside each layer with its AttnRes read before
         attention, the input of `attn_norm`. That read is what DSpark taps for target layer
         `local_idx - 1`. `hidden` is borrowed from the stream, so use or copy it before returning.
+
+        `on_layer_hidden(global_idx, hidden)` is the runtime's drafter hook. It rides the same read,
+        reported as the layer before it: under AttnRes a new read site would need its own query.
         """
         if on_layer_hidden is not None:
-            # DFlash's per-layer tap. Under AttnRes a tap is a READ SITE, and a site needs its own
-            # folded query in the walk order — so exposing one is a schedule change, not a callback.
-            raise NotImplementedError(
-                "Kimi-K3 does not support on_layer_hidden: under AttnRes every read needs its own "
-                "query and site, so a per-layer tap is a walk-schedule change rather than a hook"
-            )
+            assert attn_input_tap is None, "on_layer_hidden and attn_input_tap share one read site"
+            first = self.first_layer_idx
+
+            def attn_input_tap(local_idx, hidden):
+                on_layer_hidden(first + local_idx - 1, hidden)
+
         if index_kv_cache is not None:
             raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
         if return_intermediates:
