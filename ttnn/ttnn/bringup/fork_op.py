@@ -11,7 +11,8 @@ The copy is mechanical. The script then does the following:
 - It renames the CMake target to ttnn_op_bringup_<name> and the alias to TTNN::Ops::Bringup::<Name>.
 - It points every kernel path and fork-internal #include at the copy.
 - It binds the op under "ttnn.bringup." instead of its original Python prefix.
-- It adds the op to bringup_nanobind.cpp and INDEX.md, and writes CHANGELOG.md with the source path and SHA.
+- It adds the op to bringup_nanobind.cpp and INDEX.md, writes CHANGELOG.md with the source path and SHA, and a README.md
+  skeleton (the sections models/demos/common/bringup/testing/ops_lint.py checks).
 The source op is not touched. Build afterwards (./build_metal.sh) and run the copied tests against ttnn.bringup.
 
 Refuses to overwrite an existing fork: if the op is already in INDEX.md, extend that fork instead.
@@ -335,17 +336,33 @@ def main(argv=None) -> int:
         "- Files: <paths inside this folder>\n"
         "-->\n"
     )
+    # the sections models/demos/common/bringup/testing/ops_lint.py SECTIONS checks (F113)
+    stock = f"{py_prefix}{name}"  # the source's Python name (the folder names the op)
+    (dst / "README.md").write_text(
+        f"# ttnn.bringup.{name}\n\n"
+        f"## What it does\nFork of `{stock}`: only what this fork adds or fixes; everything else as the stock op.\n\n"
+        f"## Consider it instead of\n`{stock}`, when <the case this fork serves>.\n\n"
+        "## Options\n<every fork option: default (= stock behaviour), one line each>\n\n"
+        "## Measured\nnot measured\n\n"
+        "## Limits\n<meshes, dtypes, layouts it refuses or was never tested on; known test failures>\n\n"
+        "## How to call\n<one minimal call; the tests in tests/>\n\n"
+        f"## Used by\n{a.model} ({a.task})\n\n"
+        "## History\nCHANGELOG.md\n"
+    )
     idx = HERE / "INDEX.md"
     idx.write_text(
         idx.read_text().rstrip("\n")
-        + f"\n| `{name}` | `{src.relative_to(ROOT)}` @ `{sha[:11]}` | (see CHANGELOG.md) | {a.model} |\n"
+        + f"\n- `ttnn.bringup.{name}` ({name}): fork of `{stock}` (fill in what it adds).\n"
+        + f"  Consider instead of: {stock}. -> {name}/README.md\n"
     )
 
     print(f"forked {src.relative_to(ROOT)} -> {dst.relative_to(ROOT)} (source {sha[:11]}), bind {binds[0]}")
     if left:
         print("still referencing the source tree (sibling ops, check each):")
         print("\n".join(left))
-    print("next: make the change, fill CHANGELOG.md and the INDEX.md row, ./build_metal.sh, run the copied tests")
+    print(
+        "next: make the change, fill CHANGELOG.md, README.md and the INDEX.md entry, ./build_metal.sh, run the copied tests"
+    )
     return 0
 
 

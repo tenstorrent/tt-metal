@@ -1333,3 +1333,12 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   (default native) when the hook takes it; older hooks keep their only arithmetic. DeepSeek-V4.1: ~12 fp8 / fp4
   quant-dequant passes (tt/quant.py, ~25 eltwise ops each) were added only to pass per-step checks against the
   quantizing reference.
+
+- F113 (owner, 2026-10-19): bring-up ops before stock TTNN. ttnn/ttnn/bringup/INDEX.md is one entry per op folder
+  with "Consider instead of: <stock ops>", each op folder a README.md (what it does / consider it instead of /
+  options / measured / limits / how to call / used by). testing/ops_lint.py: a step that adds a call to a stock op an
+  INDEX entry lists as a standalone item needs `stock <op> instead of <ttnn.bringup.op>: <reason>` in the model's
+  BREADCRUMBS.md (soft: justified, never banned); a changed op folder keeps its README sections and INDEX entry;
+  `python -m models.demos.common.bringup.testing.ops_lint` checks every folder. fork_op.py writes the README skeleton
+  and the new INDEX entry; rule 6 / 16 and the fork-op skill say so. DeepSeek-V4.1: combine_rf (the weighted fp32
+  combine) had no INDEX row, and our combine (unweighted) was followed by ~16 ops of sums.

@@ -49,8 +49,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    first: if the op is already forked, call the fork (`ttnn.bringup.<op>`) and extend it, with any new behaviour behind
    an option whose default keeps the fork's current behaviour. Otherwise fork it with `ttnn/ttnn/bringup/fork_op.py`,
    and carry a best-effort selection of the source op's own tests with a recorded baseline (skill section 2b).
-   Record every change in the fork's `CHANGELOG.md` (what, why, model and task, files), keep the `INDEX.md` row
-   current, build (`./build_metal.sh`, fix any build errors), and run the fork's tests. When you extend an existing
+   Record every change in the fork's `CHANGELOG.md` (what, why, model and task, files), keep its `README.md` (options,
+   measured, limits, used by) and its `INDEX.md` entry current, build (`./build_metal.sh`, fix any build errors), and run the fork's tests. When you extend an existing
    fork, iterate on a few targeted tests and the model's gate, then run the fork's full regression once, with the new
    option off: the results must match the recorded baseline (the recipe in the skill, section 3).
 7. Precision (owner rule). Run every matmul at HiFi4, in every role. Use bfp4 weights only where the HF checkpoint
@@ -124,10 +124,13 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    common multiple of the per-chip shares); and take any path that depends on a per-chip count (experts or heads per
    chip, alignment) as the plan's `conditions` say, keeping the deployment box's path wherever this box can run it.
 16. Ops: the bring-up forks first (owner). For every op a step needs, in this order:
-   1. `ttnn/ttnn/bringup/INDEX.md`: the bring-up forks (AI-generated or changed for earlier models, often faster and
-      more precise than the library op: e.g. rms_norm_ttnn; mhc_pre_ttnn's mhc_pre_xing, an fp32 SFPU Sinkhorn). Use
-      one that fits; one that nearly fits is extended behind an option, and one that is slow or imprecise for this
-      model is optimized or fixed there (bringup-fork-op skill), never worked around.
+   1. `ttnn/ttnn/bringup/INDEX.md`: the bring-up ops (AI-generated, imported or changed for earlier models, often
+      faster and more precise than the library op), one entry each with the stock ops to consider it instead of; the
+      op's `README.md` says what it does, its options, measured numbers and limits. Use one that fits; one that nearly
+      fits is extended behind an option, and one that is slow or imprecise for this model is optimized or fixed there
+      (bringup-fork-op skill), never worked around. Calling a stock op an INDEX entry lists under "Consider instead
+      of" needs one line in the model's BREADCRUMBS.md, `stock <ttnn.op> instead of <ttnn.bringup.op>: <reason>`;
+      the orchestrator checks every call you add (F113).
    2. Only then the TTNN library (`ttnn.*`, `ttnn.experimental.*`); a library op that needs changing is forked into
       `ttnn/ttnn/bringup/`, never edited in place.
    3. Composing a path from smaller ops is the last resort: never for one a fork or TTNN already has (an RMS norm from
