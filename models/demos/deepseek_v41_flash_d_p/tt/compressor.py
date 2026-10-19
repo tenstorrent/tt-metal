@@ -49,7 +49,7 @@ import torch
 import ttnn
 
 from . import ccl
-from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, tp_sum
+from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, tp_sum
 from .norm import TtDistributedRmsNorm
 from .quant import fp4_qdq, round_tf32
 from .rope import deinterleave_perm, rope_deinterleaved
@@ -263,7 +263,7 @@ class TtCompressor:
         assert ratio in (1, 2), ratio
         perm, permk = deinterleave_perm(self.hd, rd), deinterleave_perm(self.idx, rd)
         tp = mesh.shape[TP_AXIS]
-        self.ckc = compute_config(mesh)
+        self.ckc = attn_compute_config(mesh)  # [wkv | wgate] and wk: ATTN_FIDELITY (P.7)
         self.round_x = settings.get("COMPRESSOR_X") == "round_tf32"
         blocks = [w["wkv"].float()[perm]] + ([w["wgate"].float()[perm]] if ratio > 1 else [])
         w_t = torch.cat(blocks, dim=0).t().contiguous()  # [H, 512 | 1024]

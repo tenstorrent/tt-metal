@@ -1836,3 +1836,29 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   2.43, q_a 36.50 vs 36.75, rest within +-0.03; chunk wall 814.8 ms; host_transfers_per_layer 0; pcc_chunk_out 0.99979.
   On this 2x2 box (TP = 2) the sums are a small share of the chunk; the gain grows with the bytes per sum.
 - Re-run: on `DS41_CCL_IMPL=fabric_bf16`, off `DS41_CCL_IMPL=fabric`, in front of the brief's ladder / profile command.
+
+## P.7 perf (attempt 1): attention matmuls at HiFi2 (ATTN_FIDELITY, owner comparison)
+- Added setting ATTN_FIDELITY {HiFi4 (default, unchanged: the task's "default unchanged"), HiFi2} in tt/settings.py
+  and MAX_PRECISION ATTN_FIDELITY=HiFi4 (component / swap tests stay at HiFi4). tt/common.py:attn_compute_config =
+  compute_config with ATTN_FIDELITY (fp32 DEST from FP32_DEST_ACC, approx off, as before).
+- Applied to: tt/q_a.py TtAttnInProj's fpu linear ([wq_a | wkv], also the kv step's columns); tt/attention.py
+  self.ckc (wq_b, window / compressed sparse_sdpa, wo_a, wo_b; TtSparseAttention inherits it); tt/indexer.py self.ckc
+  (weights_proj, wq_b) and score_ckc (ring_indexer_score_dsa; the candidate / re-index indexers inherit);
+  tt/compressor.py self.ckc ([wkv | wgate], wk). Not applied: mHC, norms, router, experts, shared expert, engram_kv
+  (compute_config, MATMUL_FIDELITY). The comparison-only exact paths (ATTN_IN_MM=exact ExactMatmul,
+  WINDOW_SDPA=exact) keep compute_config: their exactness needs HiFi4 (DS41-16).
+- Accuracy (frozen, gate order, each once, HiFi4 by MAX_PRECISION): test_c_{swa_attention, dec_reindex_attention,
+  dec_reindex_indexer, dec_reindex_q_a} all PASS.
+- Smoke, information only, DS41_ATTN_FIDELITY=HiFi2 (same 4 tests, all PASS), vs CPU step HiFi4 -> HiFi2:
+  q_a L24 rel 1.577e-4 -> 1.577e-4 (bit-identical: fp8 x fp8 operands, DS41-42); indexer L24 overlap 0.98866 ->
+  0.98855, recall_tie 0.99546 -> 0.99545; attention L24 rel 0.0352 -> 0.0430 (limit 0.0748), bias -0.00077 ->
+  -0.00467, ratio_min 0.9945 -> 0.9865 (+ a not-gating column-bias WARN); attention L00 (swa) rel 0.0230 (recorded
+  C.swa.attention, 2026-10-15) -> 0.0300 (limit 0.0512), bias -0.00086 -> -0.00406. Attention's bias grows ~5x
+  (K-25: HiFi2 truncates the bf16 q / probs / o operands), not its rel past a limit. DS41-68.
+- Plain profile (rung last, chunk 53248-55296, 8 layers, 2x2), HiFi4 -> HiFi2: device total 641.06 -> 634.35 ms
+  (-6.71, -1.05 %); attention 234.16 -> 232.40, indexer 56.48 -> 52.09, q_a 36.77 -> 36.42, compressor 9.13 -> 9.08;
+  rest within +-0.3 (experts 149.20 -> 148.94 noise). Same program counts. HiFi2: host_transfers_per_layer 0,
+  pcc_chunk_out 0.99979. Chunk wall 793 / 920 ms (host-bound, host overhead ~280 ms: noise, not the change).
+- Not run (orchestrator does): the ladder at either setting.
+- Re-run: on `DS41_ATTN_FIDELITY=HiFi2`, off `DS41_ATTN_FIDELITY=HiFi4`, in front of each frozen test / the ladder /
+  the brief's profile command.
