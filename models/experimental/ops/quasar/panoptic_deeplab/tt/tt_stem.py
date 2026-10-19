@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
+import torch
 import ttnn
 from loguru import logger
 
 from models.tt_cnn.tt.builder import TtConv2d, TtMaxPool2d
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import has_tuned_profile, uses_20_core_path
 
 try:
     from tracy import signpost
@@ -39,8 +43,9 @@ class TtStem(LightweightModule):
         super().__init__()
         self.device = device
         self.model_configs = model_configs
-        compute_grid = device.compute_with_storage_grid_size()
-        self.is_20_core = compute_grid.x == 5 and compute_grid.y == 4
+        # Only the 110-core path keeps conv1's output in L1 for conv2: the 20-core profile slices
+        # conv2 from DRAM, and on any other grid conv2 picks its own slicing (AnyGridOptimiser).
+        self.conv1_output_to_dram = uses_20_core_path(device)
 
         logger.debug(f"Initializing TtStem with TT CNN Builder API")
 
@@ -89,6 +94,17 @@ class TtStem(LightweightModule):
             final_config = base_config
             logger.debug(f"No model_configs provided for {conv_path}, using base config")
 
+        # The image arrives zero-padded from 3 to 8 channels (preprocess_nchw_input_tensor). The tuned
+        # profiles feed it height-sharded in L1, where conv1 reads only its 3 channels; on other grids it
+        # arrives in DRAM and conv2d's DRAM path needs in_channels to match the tensor, so give conv1 the
+        # padded channel count and zero weights for the padding (same result).
+        if conv_path == "stem.conv1" and not has_tuned_profile(self.device):
+            padded_channels = 8
+            weight = final_config.weight  # host ttnn tensor [O, I, kH, kW]
+            padded = torch.nn.functional.pad(ttnn.to_torch(weight), (0, 0, 0, 0, 0, padded_channels - weight.shape[1]))
+            weight = ttnn.from_torch(padded, dtype=weight.dtype, layout=weight.layout)
+            final_config = replace(final_config, in_channels=padded_channels, weight=weight)
+
         # Compute output shape (NHWC format) based on conv2d formula
         kernel_h, kernel_w = final_config.kernel_size
         stride_h, stride_w = final_config.stride
@@ -122,8 +138,8 @@ class TtStem(LightweightModule):
 
         assert x.storage_type() == ttnn.StorageType.DEVICE, "Input tensor must be on device"
         x = self.conv1(x)  # self._conv_relu_block(self.conv1, x, "Conv1", self.conv1_out_shape)
-        if self.is_20_core:
-            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # next conv is sliced, in case of 20 cores
+        if self.conv1_output_to_dram:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # next conv is sliced from DRAM
         x = self.conv2(x)  # self._conv_relu_block(self.conv2, x, "Conv2", self.conv2_out_shape)
         x = self.conv3(x)
         x = self.maxpool(x)

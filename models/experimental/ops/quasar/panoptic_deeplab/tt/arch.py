@@ -18,3 +18,21 @@ def block_float_dtype(device):
     there for now. Wormhole and Blackhole keep bfloat8_b.
     """
     return ttnn.bfloat16 if is_quasar(device) else ttnn.bfloat8_b
+
+
+def has_tuned_profile(device) -> bool:
+    """Whether ``device``'s grid has a hand-tuned profile: 5x4 (20 cores) or 11x10 (110 cores)."""
+    grid = device.compute_with_storage_grid_size()
+    return (grid.x, grid.y) in ((5, 4), (11, 10))
+
+
+def uses_20_core_path(device) -> bool:
+    """Whether the model takes its 20-core (memory-conservative) forward paths on ``device``.
+
+    The model has two sets of forward paths: the 110-core one (11x10 Blackhole), which keeps
+    more activations in L1, and the 20-core one (5x4), which moves them to DRAM between stages.
+    Every grid without a tuned profile (e.g. Quasar's 8x4 and the emulator's 2 cores) takes the
+    20-core paths, matching ``AnyGridOptimiser``, which inherits from the 20-core profile.
+    """
+    grid = device.compute_with_storage_grid_size()
+    return not (grid.x == 11 and grid.y == 10)

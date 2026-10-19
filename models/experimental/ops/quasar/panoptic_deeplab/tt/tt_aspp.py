@@ -9,7 +9,7 @@ from loguru import logger
 from models.tt_cnn.tt.builder import TtConv2d
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.ops.quasar.panoptic_deeplab.tt.common import reshape_flattened_conv_output
-from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import block_float_dtype
+from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import block_float_dtype, uses_20_core_path
 
 try:
     from tracy import signpost
@@ -51,8 +51,7 @@ class TtASPP(LightweightModule):
         self.dropout = dropout
         self.model_configs = model_configs
         use_bias = False
-        compute_grid = device.compute_with_storage_grid_size()
-        self.is_20_core = compute_grid.x == 5 and compute_grid.y == 4
+        self.is_20_core = uses_20_core_path(device)  # also every grid without a tuned profile
 
         self.device = device
         self.pool_kernel_size = pool_kernel_size
