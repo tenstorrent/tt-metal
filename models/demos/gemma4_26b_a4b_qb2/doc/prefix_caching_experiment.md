@@ -366,6 +366,24 @@ All use Metal7fe17051c4417a01ab7d72d414731145edd6f010 and the same
 repaired dependencies. Real inference is confirmed for the bootstrap;
 task reward, errors and trajectory remain pending, not inferred from CI status.
 
+### First repaired trajectory result: unseeded, cache on
+
+Run39247606568 completed with official SWE-bench verifier reward1.0 and
+no agent exception. It made35 normally stopped requests (zero length,
+error or repetition finishes), then submitted via the standard completion
+command. Agent execution702.065s; client wall762s; trial751.767s.
+Input521,676 tokens, server cache hits512,064, computed prefill9,612,
+output21,260. TTFT sum279.138s; decode sum415.620s. Harbor's own cached
+token field was0 despite confirmed server hits, so cache accounting uses
+server counters. Final request context27,865, cached27,776, computed89.
+
+Trajectory review found35 agent tool-call turns and a final submission.
+The target subclass-property exception test passed. The test log also has
+an unrelated leap-second update warning failure; the standard SWE-bench
+grading output is PASSED/reward1.0, not a claim that every pytest case passed.
+This single successful unseeded cached trajectory does not establish seed
+removal safety or a speedup over different trajectories. Other arms pending.
+
 Remote runs 39238204679 (qb2-120-p03t09) and 39238201191
 (qb2-120-p01t03) passed concurrently on distinct machines, using Metal
 7d5c3e5cb8438989e36a6a35c704f1154f9a4584 and workflow 38d4d6f.
