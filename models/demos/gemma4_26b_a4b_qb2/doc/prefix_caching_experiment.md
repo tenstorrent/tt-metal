@@ -696,3 +696,24 @@ this probe performed no manual reset and did not weaken the topology.
 No additional retry is planned on this worker without operator repair or
 healthy routing. This remains an infrastructure result, not a model gate.
 
+### User clarification: execution visibility
+
+The user briefly clarified that separate branches meant Metal and inference
+only; custom qb2 dispatches and edits were stopped immediately, with the
+active full5 run preserved. No new run was launched during that interval.
+The subsequent clarification explicitly permits the experimental workflow:
+all iterative jobs must be visible in `tt-agentic-bringup-qb2/actions`, with
+clear model/suite/cache/seed names and active counts. Final release remains
+Shield. No local tests, servers, imports or device execution are permitted.
+Existing workflow history is retained; production PRs remain untouched.
+
+Read-only inspection confirmed the normal qb2
+`manual-tt-shield-dispatch.yml` entrypoint and Metal's Agentic Research model
+test entrypoint. The latter always builds a Metal artifact and invokes the
+model-owned `tests/run_ci.sh`; it has no prebuilt-image override. Its
+`bh_quietbox_2` routing uses `BH-Quietbox-2`, `pipeline-perf`, `in-service`.
+The focused experiment adopts those existing pool labels to route the
+remaining boundary check, retaining the unconditional faulty-worker guard.
+The one-off health bypass is removed. No shared workflow or runner state is
+modified; only the existing experiment workflow branch changes.
+
