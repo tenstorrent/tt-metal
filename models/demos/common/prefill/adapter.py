@@ -142,6 +142,11 @@ class PrefillModelAdapter(ABC):
     dflash_golden_default: str = ""
     supports_mtp: bool = False
 
+    def fabric_payload_size(self) -> int:
+        """The fabric packet payload the mesh is opened with. It is fixed at mesh open, before the model is
+        built, so a model whose ops need more room than ``model_config.FABRIC_PAYLOAD_SIZE`` returns it here."""
+        return self.model_config.FABRIC_PAYLOAD_SIZE
+
     def cache_kind(self, config_id: int) -> str:
         """What migration-table config ``config_id`` holds. Generic consumers understand ``"kvpe"`` and
         ``"index"`` (a DSA indexer key cache) and treat any other value as an opaque cache they neither

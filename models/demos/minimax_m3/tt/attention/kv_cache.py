@@ -5,10 +5,9 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-import torch
-
 import ttnn
 from models.demos.common.prefill.adapter import KvCaches
+from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 
 # DRAM ND-shard geometry for the packed prefill KV cache — M3-local (decoupled from the DeepSeek substrate
 # so they can diverge). The sequence is tiled into NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK-token blocks that
@@ -107,19 +106,27 @@ def allocate_kv_caches(
     )
     mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=nd_shard_spec)
 
+    # The topology ReplicateTensorToMesh would give: 1-D Replicate over the physical 2-D coordinates.
+    replicated = ttnn.TensorTopology(
+        ttnn.MeshShape([mesh_device.shape[0] * mesh_device.shape[1]]),
+        [ttnn.PlacementReplicate()],
+        [
+            ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())])
+            for coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1]))
+        ],
+    )
+
     def _alloc(dtype=cache_dtype, rows=seq_local):
         # Per-chip cache is one head ([.., 1, ..]); WHICH head a chip holds (or whether index_k is
         # replicated across cols) is decided at write time by how the input chunk is mesh-mapped, not
-        # here. Allocated zeroed + ReplicateTensorToMesh: every chip gets the same empty buffer; content
-        # diverges on the first update_padded_kv_cache write.
-        return ttnn.from_torch(
-            torch.zeros(num_users * num_layers, 1, rows, head_dim),
-            dtype=dtype,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=mem_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        # here. Every chip gets the same zeroed buffer, allocated and zeroed on device: a host tensor of
+        # the full cache does not fit in host RAM at production slot counts.
+        cache = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([num_users * num_layers, 1, rows, head_dim]), dtype, ttnn.TILE_LAYOUT, mesh_device, mem_config
         )
+        DRAMZeroFill.op(cache)
+        cache.update_tensor_topology(replicated)
+        return cache
 
     # index_k feeds the indexer's HARD top-16 block selection (not a smooth softmax like K/V), so bf8's
     # ~2-3 mantissa bits perturb the block scores enough to flip many picks -> chunked vs one-shot

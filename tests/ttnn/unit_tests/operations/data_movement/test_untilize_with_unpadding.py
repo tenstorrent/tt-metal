@@ -9,7 +9,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_slow_dispatch
+from tt_py_test_utils_common.utility_functions import is_slow_dispatch
 from tests.ttnn.utils_for_testing import assert_equal
 
 TTNN_TO_TORCH_DTYPE = {
