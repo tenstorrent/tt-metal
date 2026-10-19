@@ -67,6 +67,8 @@ case "${MODEL}" in
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     # EXPERIMENT: half-layer split, stages start at 18.5 / 38 / 57.5 (KV 19/19/20/20).
     [ "${CONFIG}" = sc4 ] && RUNNER_ENV="${RUNNER_ENV} export PREFILL_PP_LAYER_COUNTS=19,19,20,20; export PREFILL_PP_FFN_HANDOFF=1,0,1;"
+    # EXPERIMENT: inter-mesh D2D lands on VC0 (no VC1 on intra-mesh routers).
+    [ "${CONFIG}" != sc1 ] && RUNNER_ENV="${RUNNER_ENV} export TT_METAL_FABRIC_INTERMESH_VC0=1;"
     PCC_THRESHOLD=0.83
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
