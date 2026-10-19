@@ -657,44 +657,6 @@ std::optional<UnifiedMatmulPlan> plan_unified_matmul(
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-// The machine the estimate assumes, per arch. Only the ranking of placements matters; Quasar's numbers are
-// first-order until the emulator measures them.
-struct ArchCostModel {
-    double tile_matmul_cycles;         // one 32x32x32 tile product per math fidelity phase, on one compute engine
-    double tile_pack_cycles;           // one tile packed out of DST or reloaded into it
-    double noc_read_bytes_per_cycle;   // into one core
-    double noc_write_bytes_per_cycle;  // out of one core, multicasts included
-    double dram_bytes_per_cycle;       // the whole device
-    double C_slice_cycles;             // fixed cost per C slice: handshakes and pipeline fill
-};
-
-constexpr ArchCostModel WORMHOLE_COST_MODEL{
-    .tile_matmul_cycles = 16.0,
-    .tile_pack_cycles = 16.0,
-    .noc_read_bytes_per_cycle = 32.0,
-    .noc_write_bytes_per_cycle = 32.0,
-    .dram_bytes_per_cycle = 256.0,
-    .C_slice_cycles = 1000.0,
-};
-
-constexpr ArchCostModel BLACKHOLE_COST_MODEL{
-    .tile_matmul_cycles = 16.0,
-    .tile_pack_cycles = 16.0,
-    .noc_read_bytes_per_cycle = 64.0,
-    .noc_write_bytes_per_cycle = 64.0,
-    .dram_bytes_per_cycle = 380.0,
-    .C_slice_cycles = 1000.0,
-};
-
-constexpr ArchCostModel QUASAR_COST_MODEL{
-    .tile_matmul_cycles = 16.0,
-    .tile_pack_cycles = 16.0,
-    .noc_read_bytes_per_cycle = 128.0,
-    .noc_write_bytes_per_cycle = 128.0,
-    .dram_bytes_per_cycle = 512.0,
-    .C_slice_cycles = 2000.0,
-};
-
 // Estimated cycles of a plan: the slowest of the busiest core's compute and data movement and the device's DRAM
 // traffic (the buffers overlap them), plus a fixed cost per C slice. Second, to break ties: the three summed
 // (decode reads the same DRAM bytes on 8 cores as on 32).
