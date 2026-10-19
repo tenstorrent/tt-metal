@@ -917,6 +917,11 @@ class KDARecurrence:
         return list(self._relay_final_carry._cores)
 
     @property
+    def ring_relay_head_cores(self) -> list[ttnn.CoreCoord]:
+        """The relay's head cores: one head's state update (a small matmul) each."""
+        return list(self._ring_relay.head_cores)
+
+    @property
     def ring_relay_cores(self) -> list[ttnn.CoreCoord]:
         """Worker cores the SP ring relay runs on (one per head, then one per link)."""
         return list(self._ring_relay.head_cores) + list(self._ring_relay.sender_cores)
