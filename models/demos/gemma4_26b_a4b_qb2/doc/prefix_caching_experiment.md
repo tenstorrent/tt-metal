@@ -535,6 +535,13 @@ timeout is 780 minutes to accommodate five sequential two-hour task limits;
 task limits themselves were not changed. Results are pending, and this is
 not final Shield qualification.
 
+The full5 job on `qb2-120-p01t03` passed server startup and the explicit
+nonzero prompt-token gate, entering `Await standard Harbor result and
+collect counters`. Thus the clean standard Harbor path has reached actual
+model inference using the URL override, without the source-replacement
+hook. This establishes bootstrap success only; individual verifier rewards
+and full-cohort completion remain pending.
+
 Shield main's normal dispatch with an empty `docker-image` builds the
 specified Metal/inference/plugin refs; supplying the old prebuilt image
 does not overlay Metal. Final qualification therefore needs an exact-model
