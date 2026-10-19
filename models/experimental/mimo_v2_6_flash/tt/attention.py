@@ -26,6 +26,13 @@ there. A later chunk needs the keys before it:
 * Global layers need the whole context, which only the owner chip of the pair holds: both chips run
   the group's 16 Q heads (the decode weights) through ``chunked_flash_mla_prefill`` over the K and
   128-wide V caches, and the non-owner's result is zeroed before the row all-reduce.
+
+Every prefill program keys on the chunk's padded length (and, for a later chunk, on how far ``start_pos`` is
+aligned and how many window blocks it reads), never on ``start_pos``, the user or a block id: the model hands each
+chunk its block tables as small device tensors (``kv.PrefillTables``) instead of the layers slicing the page tables,
+the window blocks are read by tensor-args slices and chunked MLA takes ``start_pos`` from a device tensor. So a
+warmup over the padded lengths compiles every program a served prefill runs, and no prefill run between decode
+trace replays compiles one (a program compiled after a trace capture keeps buffers the replays can overwrite).
 ``attention_value_scale`` is folded into the V weights. Sinks (SWA only) are pre-divided by the
 softmax scale because the SDPA kernels apply ``scale`` to the sink logit too.
 """
@@ -39,6 +46,10 @@ from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_conf
 from .kv import kv_replication, per_chip, slot_owner_masks
 from .moe_stream import KERNEL_DIR, zero_output
 from .rope import permute_heads_for_rope
+
+# chunked_flash_mla_prefill reads its start position from a device tensor (chunk_start_idx_tensor); builds without
+# that keyword key the program on the scalar start, which compiles a program for every new start.
+MLA_RUNTIME_START = "chunk_start_idx_tensor" in (ttnn.transformer.chunked_flash_mla_prefill.__doc__ or "")
 
 
 class SwaDecodeQkv:
@@ -644,18 +655,13 @@ class TtMiMoAttention:
             t.deallocate(True)
         return q_rot, k_rot
 
-    def _fill(self, kv_cache, k_rot, v, page_table, user_id, start_pos):
+    def _fill(self, kv_cache, k_rot, v, page_table, user_id, tables):
         """Write the chunk's K and V (only its first ``v_head_dim`` columns when the V cache is that narrow) into
-        the user's cache blocks for positions start_pos .. start_pos + S - 1."""
+        the user's cache blocks for positions start_pos .. start_pos + S - 1: the blocks of ``tables.fill``, or
+        (no ``tables``, a first chunk) row ``user_id`` of ``page_table``."""
         k_cache, v_cache = kv_cache
         seq_len = k_rot.shape[-2]
-        block_size = k_cache.shape[-2]
-        if start_pos == 0:
-            table, batch_idx = page_table, user_id
-        else:
-            first, end = start_pos // block_size, -(-(start_pos + seq_len) // block_size)
-            assert end <= page_table.shape[-1], "chunk runs past the page table"
-            table, batch_idx = ttnn.slice(page_table, (user_id, first), (user_id + 1, end)), 0
+        table, batch_idx = (page_table, user_id) if tables is None else (tables.fill, 0)
         k_fill = ttnn.typecast(k_rot, k_cache.dtype)
         if v_cache.shape[-1] < v.shape[-1]:
             v_real = ttnn.slice(v, (0, 0, 0, 0), (1, v.shape[1], seq_len, v_cache.shape[-1]))
@@ -667,14 +673,13 @@ class TtMiMoAttention:
         ttnn.experimental.paged_fill_cache(v_cache, v_fill, table, batch_idx=batch_idx)
         k_fill.deallocate(True)
         v_fill.deallocate(True)
-        if table is not page_table:
-            table.deallocate(True)
 
     def _cached_window(self, cache, blocks):
-        """The cache blocks ``blocks`` (physical ids, in position order) as one bf16 [1, kv_heads, n * block, dim]."""
+        """The cache blocks ``blocks`` (int32 [4] slice starts (block, 0, 0, 0) on device, in position order) as one
+        bf16 [1, kv_heads, n * block, dim]. A tensor-args slice keys on the cache's shape, not on the block id."""
         parts = []
-        for b in blocks:
-            part = ttnn.slice(cache, (b, 0, 0, 0), (b + 1, *tuple(cache.shape)[1:]))
+        for start in blocks:
+            part = ttnn.slice(cache, start, start, slice_dim=0, num_devices=cache.shape[0])
             parts.append(ttnn.typecast(part, ttnn.bfloat16))
             part.deallocate(True)
         out = ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG) if len(parts) > 1 else parts[0]
@@ -683,14 +688,16 @@ class TtMiMoAttention:
                 t.deallocate(True)
         return out
 
-    def forward_prefill(self, x, user_id, page_table, kv_cache, start_pos=0, real_len=None, window_blocks=None):
+    def forward_prefill(self, x, user_id, page_table, kv_cache, start_pos=0, real_len=None, tables=None):
         """x [1, 1, S, hidden] (S a multiple of 32): positions start_pos .. start_pos + S - 1 of the user in slot
         ``user_id`` (``real_len`` real tokens, then padding whose K/V land past them, where decode overwrites them).
         ``start_pos`` is a multiple of the block size; the cache must hold the user's earlier positions.
-        ``window_blocks`` (SWA layers, start_pos > 0): physical cache blocks of the positions from
-        kv.SwaBlockTable.window_start(start_pos) up to start_pos, which the chunk attends to."""
+        ``tables`` (kv.PrefillTables of this layer's page table; required when start_pos > 0): the blocks the chunk
+        writes, and for a later chunk the window blocks it reads (SWA) or its whole context and start (global).
+        Without it a first chunk writes row ``user_id`` of ``page_table``."""
+        assert start_pos == 0 or tables is not None, "a later chunk needs its kv.PrefillTables"
         if start_pos > 0 and self.split_users:
-            return self._prefill_owner_chunk(x, user_id, page_table, kv_cache, start_pos)
+            return self._prefill_owner_chunk(x, user_id, kv_cache, start_pos, tables)
         seq_len = x.shape[-2]
         xqkv = self._prefill_qkv(x)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -706,12 +713,12 @@ class TtMiMoAttention:
         lead = 0
         if start_pos > 0:
             # SWA: the window before the chunk from the cache, read before the fill can reuse any of its blocks.
-            assert self.sliding_window is not None and window_blocks, "a later SWA chunk needs its window blocks"
+            assert self.sliding_window is not None and tables.window, "a later SWA chunk needs its window blocks"
             k_cache, v_cache = kv_cache
-            lead = len(window_blocks) * k_cache.shape[-2]
-            k_win = self._cached_window(k_cache, window_blocks)
-            v_win = self._cached_window(v_cache, window_blocks)
-        self._fill(kv_cache, k_rot, v, page_table, user_id, start_pos)
+            lead = len(tables.window) * k_cache.shape[-2]
+            k_win = self._cached_window(k_cache, tables.window)
+            v_win = self._cached_window(v_cache, tables.window)
+        self._fill(kv_cache, k_rot, v, page_table, user_id, tables)
         if lead:
             q_lead = ttnn.zeros(
                 (1, self.nh_local, lead, self.head_dim),
@@ -757,7 +764,7 @@ class TtMiMoAttention:
         attn_cat.deallocate(True)
         return self.plan.all_reduce(out)
 
-    def _prefill_owner_chunk(self, x, user_id, page_table, kv_cache, start_pos):
+    def _prefill_owner_chunk(self, x, user_id, kv_cache, start_pos, tables):
         """A global layer's chunk after the first: the group's 16 Q heads over the whole cached context on the
         chip that owns the user (the other chip of the pair runs the same program on its scratch block and its
         result is zeroed)."""
@@ -779,26 +786,26 @@ class TtMiMoAttention:
         )
         xqkv.deallocate(True)
         q_rot, k_rot = self._rope_prefill(q, k, start_pos, seq_len)
-        self._fill(kv_cache, k_rot, v, page_table, user_id, start_pos)
+        self._fill(kv_cache, k_rot, v, None, user_id, tables)
         k_rot.deallocate(True)
         v.deallocate(True)
 
         k_cache, v_cache = kv_cache
-        end = -(-(start_pos + seq_len) // k_cache.shape[-2])
-        user_table = ttnn.slice(page_table, (user_id, 0), (user_id + 1, end))
+        assert tables.context.shape[-1] * k_cache.shape[-2] >= start_pos + seq_len, "chunk runs past its context table"
+        # The context table is one fixed width for every chunk; the kernel reads only its blocks before the chunk's end.
+        start = dict(chunk_start_idx_tensor=tables.start) if MLA_RUNTIME_START else dict(chunk_start_idx=start_pos)
         attn = ttnn.transformer.chunked_flash_mla_prefill(
             q_rot,
             k_cache,
             self.v_head_dim,
-            user_table,
-            start_pos,
+            tables.context,
+            **start,
             scale=self.scale,
             program_config=self._prefill_sdpa_program(seq_len, start_pos),
             compute_kernel_config=self.sdpa_config,
             input_tensor_v=v_cache,
         )  # [1, 16, S, 128]
         q_rot.deallocate(True)
-        user_table.deallocate(True)
         attn_cat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn.deallocate(True)
         owned = ttnn.mul(attn_cat, self.prefill_owner_masks[user_id % self.rep], memory_config=ttnn.DRAM_MEMORY_CONFIG)

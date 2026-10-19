@@ -38,7 +38,7 @@ from models.experimental.mimo_v2_6_flash.tests.common import (
 )
 from models.experimental.mimo_v2_6_flash.tt import kv as kv_lib
 from models.experimental.mimo_v2_6_flash.tt.attention import kv_heads_for_chip
-from models.experimental.mimo_v2_6_flash.tt.common import MeshPlan
+from models.experimental.mimo_v2_6_flash.tt.common import MeshPlan, pad_to
 from models.experimental.mimo_v2_6_flash.tt.decoder import TtMiMoDecoderLayer
 from models.experimental.mimo_v2_6_flash.tt.model import prefill_padded_len
 from models.experimental.mimo_v2_6_flash.tt.rope import MiMoRotarySetup, meta_rope_permutation
@@ -47,6 +47,7 @@ MAX_SEQ = 2048
 MAX_BATCH = 32
 BLOCK = 64
 LOGICAL_BLOCKS = MAX_SEQ // BLOCK
+CONTEXT_BLOCKS = pad_to(-(-(MAX_SEQ + kv_lib.PREFILL_MAX_PAD) // BLOCK), 8)  # as TtMiMoModel.prefill_context_blocks
 PROMPT_LENS = (200, 517, 960, 1333)
 CHUNKS = (64, 128, 256, 512)  # chunk size on replica rows 0..3
 DECODE_STEPS = 3
@@ -111,9 +112,11 @@ class Row:
                     min_blocks=LOGICAL_BLOCKS,  # decode here runs paged_update_cache (no SwaDecodeQkv)
                 )
                 self.tables[mode], num_blocks = self.swa[mode].host_table(TP), self.swa[mode].num_blocks
+                self.scratch = 0
             else:
                 self.swa[mode] = None
                 self.tables[mode], num_blocks = kv_lib.page_tables(n, MAX_BATCH, LOGICAL_BLOCKS, TP, attn.rep, seed=r)
+                self.scratch = num_blocks - 1  # the chip pair's scratch block (kv.page_tables)
         v_dim = attn.v_head_dim if attn.split_users else attn.head_dim
         self.kv = {
             mode: garbage_cache(plan, num_blocks, (attn.head_dim, v_dim), seed=100 * r + i)
@@ -136,26 +139,35 @@ class Row:
             tbl.dirty = False
 
     def prefill(self, mode, x, slot, start_pos):
+        """One chunk through the layer with its kv.PrefillTables, as TtMiMoModel._prefill_chunk builds them."""
         n = x.shape[0]
         padded = prefill_padded_len(n)
-        window_blocks = None
         tbl = self.swa[mode]
         if tbl is not None:
             tbl.prefill(slot, start_pos, start_pos + n, start_pos + padded)
             self.sync(mode)
-            if start_pos > 0:
-                window_blocks = tbl.window_blocks(slot, start_pos)
+        later = start_pos > 0
+        start = replicated(self.plan, torch.tensor([start_pos], dtype=torch.int32), ttnn.int32) if later else None
+        tables = kv_lib.PrefillTables(
+            self.plan,
+            self.tables[mode],
+            slot,
+            start_pos,
+            padded,
+            BLOCK,
+            self.scratch,
+            context_blocks=CONTEXT_BLOCKS if later and tbl is None else None,
+            window=tbl.window_blocks(slot, start_pos) if later and tbl is not None else None,
+            start_tensor=start,
+        )
         x_tt = to_tt(torch.nn.functional.pad(x, (0, 0, 0, padded - n)), self.plan)
         out = self.layer.forward_prefill(
-            x_tt,
-            slot,
-            self.tables_tt[mode],
-            self.kv[mode],
-            real_len=n,
-            start_pos=start_pos,
-            window_blocks=window_blocks,
+            x_tt, slot, self.tables_tt[mode], self.kv[mode], real_len=n, start_pos=start_pos, tables=tables
         )
         x_tt.deallocate(True)
+        tables.release()
+        if start is not None:
+            start.deallocate(True)
         return out, n
 
     def read_kv(self, slot, length, ref_k, ref_v, num_kv_heads):
