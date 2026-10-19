@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// DRISC mode of the flat expert (MIMO_FL_DRISC, kernels/se_drisc.hpp): the persistent gate/up senders on the
+// DRISC mode of the flat expert (layout.drisc, kernels/se_drisc.hpp): the persistent gate/up senders on the
 // Blackhole programmable DRAM cores. They run outside the flat programs (DRAM-core kernels launch by slow dispatch,
 // next to fast dispatch, as the tensor prefetcher's), launched once per mesh device and left running until
 // flat_drisc_stop.
@@ -29,8 +29,8 @@ uint32_t flat_drisc_base();
 uint32_t flat_drisc_size();
 // MIMO_FL_DRISC_TILES (1, 2, or 3 = switch): DRISC tiles used per bank
 uint32_t flat_drisc_tiles();
-// MIMO_FL_DRISC_PURE: every slot on DRISC (switch tiles; reader cells keep only reader down columns). Default: the
-// plan's choice (flat_drisc_set_auto_pure: plans without reader down columns), else dual slots
+// layout.drisc_pure (FlatLayoutOptions): every slot on DRISC (switch tiles; reader cells keep only reader down
+// columns). Default: the plan's choice (flat_drisc_set_auto_pure: plans without reader down columns), else dual slots
 bool flat_drisc_pure();
 // set by the plan before the DRISC senders start (process-wide, as the senders: one mode per process)
 void flat_drisc_set_auto_pure(bool pure);

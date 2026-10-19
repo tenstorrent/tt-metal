@@ -4,7 +4,7 @@
 //
 // The flat routed expert overlapped with combine_fabric2d in one program per chip (the flat expert's counterpart of
 // hybrid_routed_expert_moe's combine overlap, #58093): combine runs on grid rows 0-1 (its senders next to the eth
-// cores, its untilizers and collector), the flat expert on the rows below them (MIMO_FL_ROWS), and every flat y writer
+// cores, its untilizers and collector), the flat expert on the rows below them (layout rows), and every flat y writer
 // reports each local expert to combine's collector once its rows have landed (se_cmb_done.hpp), so combine takes an
 // expert while the next ones are still being computed.
 //

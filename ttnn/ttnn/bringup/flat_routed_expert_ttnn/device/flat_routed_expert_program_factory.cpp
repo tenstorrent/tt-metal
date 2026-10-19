@@ -66,7 +66,8 @@ tt::DataFormat w_format(bool bf8) { return bf8 ? tt::DataFormat::Bfp8_b : tt::Da
 // the expert matmuls' fidelity: the config's (default LoFi); MIMO_FL_FIDELITY=LoFi / HiFi2 / HiFi3 / HiFi4 overrides
 // it for every flat expert (probes)
 MathFidelity expert_fidelity(uint32_t cfg_fidelity) {
-    const char* f = std::getenv("MIMO_FL_FIDELITY");
+    const FlatProbes pr = FlatProbes::from_env();
+    const char* f = cstr(pr.fidelity);
     if (f == nullptr) {
         return static_cast<MathFidelity>(cfg_fidelity);
     }
@@ -95,9 +96,8 @@ std::vector<std::pair<std::string, std::string>> flat_schedule_defines(
     if (cfg.pin) {
         d.emplace_back("SE_PIN_MIN", std::to_string(cfg.pin));
         d.emplace_back("SE_PIN_SMALL", "2");
-        // pin only a dominant expert (se_dyn_pin); MIMO_FL_PIN_RATIO (read at program build; 0: always pin)
-        const char* r = std::getenv("MIMO_FL_PIN_RATIO");
-        d.emplace_back("SE_PIN_RATIO", r != nullptr ? std::string(r) : std::string("8"));
+        // pin only a dominant expert (se_dyn_pin); layout.pin_ratio (0: always pin)
+        d.emplace_back("SE_PIN_RATIO", std::to_string(cfg.layout.pin_ratio));
     }
     return d;
 }
@@ -106,6 +106,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     const FlatRoutedExpertParams& cfg, const FlatRoutedExpertInputs& t, Tensor& output) {
     using namespace tt::tt_metal;
     auto* device = t.x.device();
+    const FlatProbes pr = FlatProbes::from_env();
+    const FlatLayoutOptions& lo = cfg.layout;
     const FlatRoutedExpertPlan p = make_flat_routed_expert_plan(device, cfg);
     Program program{};
     shared_variables_t sv;
@@ -137,22 +139,22 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     for (uint32_t ci = 0; ci < ngu; ++ci) {
         rect_cores[p.rect_of(p.gu[ci])].push_back(ci);
     }
-    // MIMO_FL_X1=1 (prototype, read at program build): x is read from DRAM once. Rectangle 0's relays (primary +
+    // layout.x_once (prototype): x is read from DRAM once. Rectangle 0's relays (primary +
     // helpers) read and tilize every super-block and the primary multicasts each one into BOTH rectangles
     // (se11_xmc.cpp's second-rectangle args), gated on all gate/up cores' freed words; rectangle 1's relays idle.
     // (Each rectangle's relays read all of x before: 2x the x DRAM bytes; NoC trace, worklog 8e.)
-    const bool x_once = std::getenv("MIMO_FL_X1") && std::atoi(std::getenv("MIMO_FL_X1")) != 0;
+    const bool x_once = lo.x_once;
     TT_FATAL(
         !x_once || (NR == 2 && p.nsg == 1 && !p.group_rect),
-        "MIMO_FL_X1: two rectangles, one subgrid, no M-groups by rectangle only");
+        "flat layout x_once: two rectangles, one subgrid, no M-groups by rectangle only");
     // MIMO_FL_X2=1: x read once with both multicasters: rectangle k's relays read and tilize the super-blocks g with
     // g % 2 == k (helpers sharing them as before) and its primary multicasts each into BOTH rectangles, setting its own
     // arrival counter (rectangle 0's XARR, rectangle 1's semaphore 3); the gate/up cores merge the two streams
     // (se5_recv.cpp SE_X_RELAY2) and report their freed slots to both primaries.
-    const bool x_two = std::getenv("MIMO_FL_X2") && std::atoi(std::getenv("MIMO_FL_X2")) != 0;
+    const bool x_two = cstr(pr.x2) && std::atoi(cstr(pr.x2)) != 0;
     TT_FATAL(
         !x_two || (NR == 2 && p.nsg == 1 && !p.group_rect && !x_once),
-        "MIMO_FL_X2: two rectangles, one subgrid, no M-groups by rectangle, not with MIMO_FL_X1");
+        "MIMO_FL_X2: two rectangles, one subgrid, no M-groups by rectangle, not with x_once");
     // x delivery. Default: unicast snakes whenever the plan allows them (one primary per rectangle, rectangles full of
     // gate/up cores, no X1 / X2 / XFWD) - no multicast: the NOC0 wedge of the relay's multicast into the gate/up
     // rectangle beside the DRISC weight writes and DRAM traffic (TS_HANG_WORKLOG.md); else the linked multicast. Each
@@ -162,37 +164,33 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     // multicast 211.5), 4 cut-through pieces, the forwarder on the gate/up NCRISC (se5_xfwd.cpp) on NOC0 with 3 pieces
     // in flight, the receiver (se5_recv.cpp, BRISC) on NOC1. Fused flat + combine vs the multicast: K3 / GLM-Flash /
     // V4.1-Flash within -4.4 .. +0.8%.
-    // Probe overrides (env, read at program build): MIMO_FL_X_CHAIN = 0 multicast, 1 tree (trunk along the relay's row
-    // + every column, se5_recv's two-successor chain), 2 column chains (the relay feeds every column head), 3 snakes;
-    // MIMO_FL_X_CHAIN_SNAKES, MIMO_FL_X_PIECES, MIMO_FL_X_FWD_NC (modes 2 / 3), MIMO_FL_X_CHAIN_NOC (the forwarding
-    // NoC), MIMO_FL_X_FWD_DEPTH (pieces in flight, one successor).
+    // Options (FlatLayoutOptions): x_path 0 multicast, 1 tree (trunk along the relay's row + every column, se5_recv's
+    // two-successor chain), 2 column chains (the relay feeds every column head), 3 snakes; x_snakes, x_pieces,
+    // x_fwd_ncrisc (modes 2 / 3), x_fwd_noc (the forwarding NoC), x_fwd_depth (pieces in flight, one successor).
     struct XPath {
         uint32_t mode = 0, snakes = 1, pieces = 1, fwd_depth = 0;
         bool fwd_nc = false, noc1 = false;
     } xo;
     {
-        const auto env = [](const char* k, uint32_t dflt) {
-            const char* v = std::getenv(k);
-            return v != nullptr ? static_cast<uint32_t>(std::atoi(v)) : dflt;
-        };
+        const auto opt = [](int32_t v, uint32_t dflt) { return v >= 0 ? static_cast<uint32_t>(v) : dflt; };
         bool full = true;
         for (uint32_t k = 0; k < NR; ++k) {
             const auto [x0, x1, y0, y1] = p.rects[k];
             full = full && rect_cores[k].size() == (x1 - x0 + 1) * (y1 - y0 + 1);
         }
         const bool can = !x_once && !x_two && !p.xfwd && p.nh >= 1 && full;
-        xo.mode = env("MIMO_FL_X_CHAIN", can ? 3 : 0);
-        TT_FATAL(xo.mode <= 3, "MIMO_FL_X_CHAIN={}: modes 1 (tree), 2 (column chains), 3 (snakes)", xo.mode);
+        xo.mode = opt(lo.x_path, can ? 3 : 0);
+        TT_FATAL(xo.mode <= 3, "layout x_path {}: 0 multicast, 1 tree, 2 column chains, 3 snakes", xo.mode);
         if (xo.mode != 0) {
             const auto aligned = [&](uint32_t n) { return x_bytes % n == 0 && (x_bytes / n) % 16 == 0; };
-            xo.snakes = env("MIMO_FL_X_CHAIN_SNAKES", 1);
-            xo.pieces = env("MIMO_FL_X_PIECES", xo.mode >= 2 ? (aligned(4) ? 4 : (aligned(2) ? 2 : 1)) : 1);
-            xo.fwd_nc = xo.mode >= 2 && env("MIMO_FL_X_FWD_NC", 1) != 0;
-            xo.noc1 = env("MIMO_FL_X_CHAIN_NOC", 0) != 0;
-            xo.fwd_depth = env("MIMO_FL_X_FWD_DEPTH", xo.fwd_nc ? 3 : 0);  // (0: se5_recv's default, 6)
+            xo.snakes = opt(lo.x_snakes, 1);
+            xo.pieces = opt(lo.x_pieces, xo.mode >= 2 ? (aligned(4) ? 4 : (aligned(2) ? 2 : 1)) : 1);
+            xo.fwd_nc = xo.mode >= 2 && opt(lo.x_fwd_ncrisc, 1) != 0;
+            xo.noc1 = opt(lo.x_fwd_noc, 0) != 0;
+            xo.fwd_depth = opt(lo.x_fwd_depth, xo.fwd_nc ? 3 : 0);  // (0: se5_recv's default, 6)
             TT_FATAL(
                 xo.fwd_depth == 0 || (xo.mode >= 2 && xo.fwd_depth <= 14),
-                "MIMO_FL_X_FWD_DEPTH={}: 1..14, one successor",
+                "layout x_fwd_depth {}: 1..14, one successor",
                 xo.fwd_depth);
         }
         log_info(
@@ -220,9 +218,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     if (x_chain) {
         TT_FATAL(
             !x_once && !x_two && !p.xfwd && p.nh >= 1,
-            "MIMO_FL_X_CHAIN: one primary per rectangle (no X1 / X2 / XFWD)");
-        bool rv_noc1 = !(p.drisc && std::getenv("MIMO_FL_DRISC_XNOC") && std::atoi(std::getenv("MIMO_FL_DRISC_XNOC")));
-        if (std::getenv("MIMO_FL_X_CHAIN_NOC") || x_fwd_nc) {  // (the forwarding NoC: no multicast now)
+            "flat x chains: one primary per rectangle (no x_once / X2 / XFWD)");
+        bool rv_noc1 = !(p.drisc && cstr(pr.drisc_xnoc) && std::atoi(cstr(pr.drisc_xnoc)));
+        if (lo.x_fwd_noc >= 0 || x_fwd_nc) {  // (the forwarding NoC: no multicast now)
             rv_noc1 = xo.noc1;
         }
         const int d = rv_noc1 ? -1 : 1;  // NOC1: west / north; NOC0: east / south
@@ -233,7 +231,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 at[{p.gu[ci].x, p.gu[ci].y}] = ci;
             }
             const uint32_t W = x1 - x0 + 1, H = y1 - y0 + 1;
-            TT_FATAL(at.size() == W * H, "MIMO_FL_X_CHAIN: rectangle {} is not full of gate/up cores", k);
+            TT_FATAL(at.size() == W * H, "flat x chains: rectangle {} is not full of gate/up cores", k);
             const uint32_t yr = std::clamp<uint32_t>(p.relays[k].y, y0, y1);
             auto col_y = [&](uint32_t i) {  // the i-th row of a column's chain from the trunk row, wrapping
                 return y0 + static_cast<uint32_t>(((int(yr - y0) + d * int(i)) % int(H) + int(H)) % int(H));
@@ -241,11 +239,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             auto trunk_x = [&](uint32_t i) { return d < 0 ? x1 - i : x0 + i; };
             x_head[k] = at.at({trunk_x(0), yr});
             if (x_chain_mode == 3) {
-                // snakes (MIMO_FL_X_CHAIN_SNAKES, default 1): each covers a run of columns - down a column (wrapping
+                // snakes (layout.x_snakes, default 1): each covers a run of columns - down a column (wrapping
                 // inside the rectangle, one NoC hop a step), one column over, on down from that row - every core
                 // forwards once; the relay feeds every snake's head
                 const uint32_t ns = xo.snakes;
-                TT_FATAL(ns >= 1 && ns <= W, "MIMO_FL_X_CHAIN_SNAKES={}: 1..{} (the rectangle's columns)", ns, W);
+                TT_FATAL(ns >= 1 && ns <= W, "flat layout x_snakes {}: 1..{} (the rectangle's columns)", ns, W);
                 for (uint32_t g = 0; g < ns; ++g) {
                     const uint32_t c0 = g * W / ns, c1 = (g + 1) * W / ns;  // trunk-order columns [c0, c1)
                     std::vector<uint32_t> seq;
@@ -342,7 +340,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     // compact copy (instead of ~150 tiny DRAM reads of bank 0 behind the startup weight streams: 5-16 us each).
     // Plans without reader down columns (the reader cells run only se_reader / se10_fwd, which use semaphores 0-3);
     // MIMO_FL_DYN_PULL=0 reads DRAM everywhere.
-    const char* dp_env = std::getenv("MIMO_FL_DYN_PULL");
+    const char* dp_env = cstr(pr.dyn_pull);
     const bool dyn_pull = (dp_env == nullptr || std::atoi(dp_env) != 0) && !p.rdown && p.nsg == 1 && cfg.cmb_rt == 0;
     if (dyn_pull) {
         const CoreCoord lv = phys(p.readers[0]), l0 = flat_worker_noc0(device, p.readers[0]);
@@ -357,30 +355,30 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     if (p.nsg > 1) {
         dyn_def["SE_SG"] = std::to_string(p.nsg);
     }
-    if (std::getenv("MIMO_FL_DYN_ZONE")) {  // (perf probe: a profiler zone around se_dyn_load)
+    if (cstr(pr.dyn_zone)) {  // (perf probe: a profiler zone around se_dyn_load)
         dyn_def["SE_DYN_ZONE"] = "1";
     }
-    if (std::getenv("MIMO_FL_W_NOFWD")) {  // (perf probe: gate/up weight blocks signalled, not forwarded)
+    if (cstr(pr.w_nofwd)) {  // (perf probe: gate/up weight blocks signalled, not forwarded)
         dyn_def["SE_W_NOFWD"] = "1";
     }
     // perf probe (read at program build): MIMO_FL_W_NOREAD=1 - the weight readers skip their DRAM reads (garbage
     // weights), every other transfer stays: the flat expert's NoC pattern without most of its DRAM traffic
-    if (std::getenv("MIMO_FL_W_NOREAD")) {
+    if (cstr(pr.w_noread)) {
         dyn_def["SE_W_NOREAD"] = "1";
     }
     // traffic probes (read at program build; garbage outputs): MIMO_FL_GU_NOREAD / MIMO_FL_DN_NOREAD - no gate/up /
     // down weight reads; MIMO_FL_H_NODATA - no h data from the gate/up to the down cores or down the chains (the
     // counters still move); MIMO_FL_NO_MATH - no matmul / activation (every CB handshake stays: traffic only)
     for (const auto& [env, def] : std::initializer_list<std::pair<const char*, const char*>>{
-             {"MIMO_FL_GU_NOREAD", "SE_GU_NOREAD"},
-             {"MIMO_FL_DN_NOREAD", "SE_DN_NOREAD"},
-             {"MIMO_FL_H_NODATA", "SE_H_NODATA"},
-             {"MIMO_FL_NO_MATH", "SE_NO_MATH"}}) {
-        if (std::getenv(env)) {
+             {cstr(pr.gu_noread), "SE_GU_NOREAD"},
+             {cstr(pr.dn_noread), "SE_DN_NOREAD"},
+             {cstr(pr.h_nodata), "SE_H_NODATA"},
+             {cstr(pr.no_math), "SE_NO_MATH"}}) {
+        if (env != nullptr) {
             dyn_def[def] = "1";
         }
     }
-    if (std::getenv("MIMO_FL_NO_MATH")) {
+    if (cstr(pr.no_math)) {
         dyn_def["SE_NO_ACT"] = "1";
     }
     if (dn_reg) {
@@ -397,32 +395,32 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     // h pieces per sub-block down the chains (perf probe MIMO_FL_HPIECES; must divide the h tiles)
     // (32 per sub-block; h units keep the piece size: 32 HU / MT per unit, else each chain link, LINK_DEPTH pieces in
     // flight, is round-trip bound: 1-row units with 32 pieces ran bfp8 M 2048 at 655 vs 275 us per expert)
-    const uint32_t H_PIECES = std::getenv("MIMO_FL_HPIECES") ? std::atoi(std::getenv("MIMO_FL_HPIECES"))
-                                                             : (p.hu ? std::max(1u, 32 * p.hu / MT) : 32);
-    if (const char* ld = std::getenv("MIMO_FL_LINK_DEPTH")) {  // (perf probe: h pieces in flight per chain link)
+    const uint32_t H_PIECES =
+        cstr(pr.hpieces) ? std::atoi(cstr(pr.hpieces)) : (p.hu ? std::max(1u, 32 * p.hu / MT) : 32);
+    if (const char* ld = cstr(pr.link_depth)) {  // (perf probe: h pieces in flight per chain link)
         dyn_def["SE_LINK_DEPTH"] = ld;
     }
-    if (std::getenv("MIMO_FL_ZONES")) {  // device-profiler zones in the kernels that have them
+    if (cstr(pr.zones)) {  // device-profiler zones in the kernels that have them
         dyn_def["SE_ZONES"] = "1";
     }
-    if (const char* wz = std::getenv("MIMO_FL_WAITZ")) {  // gate/up x / weight wait zones on sub-block WAITZ
+    if (const char* wz = cstr(pr.waitz)) {  // gate/up x / weight wait zones on sub-block WAITZ
         dyn_def["SE_WAITZ"] = wz;
     }
-    if (std::getenv("MIMO_FL_DZ")) {  // detail zones in the down compute (a sample of sub-blocks)
+    if (cstr(pr.dz)) {  // detail zones in the down compute (a sample of sub-blocks)
         dyn_def["SE_DZ"] = "1";
     }
-    if (const char* hv = std::getenv("MIMO_FL_H_VC")) {  // (perf probe: the h exchange's unicast VC)
+    if (const char* hv = cstr(pr.h_vc)) {  // (perf probe: the h exchange's unicast VC)
         dyn_def["SE_H_VC"] = hv;
     }
-    if (const char* fv = std::getenv("MIMO_FL_FWD_VC")) {  // (perf probe: the weight forward's unicast VC)
+    if (const char* fv = cstr(pr.fwd_vc)) {  // (perf probe: the weight forward's unicast VC)
         dyn_def["SE_FWD_VC"] = fv;
     }
     // x-path probes: MIMO_FL_XSOLO=N - x resident for every consumer, N relays only read their share of one copy of x
-    // (no tilize / multicast); MIMO_FL_XPRIM_ONLY=1 (with MIMO_FL_X1) - the one primary reads every super-block, its
+    // (no tilize / multicast); MIMO_FL_XPRIM_ONLY=1 (with layout.x_once) - the one primary reads every super-block, its
     // helpers idle
-    const uint32_t xsolo = std::getenv("MIMO_FL_XSOLO") ? std::atoi(std::getenv("MIMO_FL_XSOLO")) : 0;
-    const bool xprim_only = std::getenv("MIMO_FL_XPRIM_ONLY") != nullptr;
-    if (std::getenv("MIMO_FL_X_RESIDENT") || xsolo) {
+    const uint32_t xsolo = cstr(pr.xsolo) ? std::atoi(cstr(pr.xsolo)) : 0;
+    const bool xprim_only = cstr(pr.xprim_only) != nullptr;
+    if (cstr(pr.x_resident) || xsolo) {
         dyn_def["SE_X_RESIDENT"] = "1";
     }
     auto with = [](Defines base, std::initializer_list<std::pair<const std::string, std::string>> extra) {
@@ -442,24 +440,24 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 "flat_routed_expert: {} writer args > cmb_rt {}",
                 args.v.size(),
                 cfg.cmb_rt);
-            args.v.resize(cfg.cmb_rt + 4 + (std::getenv("MIMO_FL_Y_L1") ? FLAT_Y_L1_ARGS : 0), 0);
+            args.v.resize(cfg.cmb_rt + 4 + (cfg.y_l1 ? FLAT_Y_L1_ARGS : 0), 0);
             sv.cmb_writers.emplace_back(k, c);
         }
         return args;
     };
     Defines cmb_def = cfg.cmb_rt ? Defines{{"SE_CMB_DONE_RT", std::to_string(cfg.cmb_rt)}} : Defines{};
-    if (cfg.cmb_rt && std::getenv("MIMO_FL_CMB_NO_GO")) {  // (flat_with_program: cumulative counts, no go)
+    if (cfg.cmb_rt && cfg.cmb_no_go) {  // (flat_with_program: cumulative counts, no go)
         cmb_def["SE_CMB_NO_GO"] = "1";
     }
-    if (cfg.cmb_rt && std::getenv("MIMO_FL_Y_L1")) {  // (flat_with_program: y rows straight into the combine's L1)
+    if (cfg.cmb_rt && cfg.y_l1) {  // (flat_with_program: y rows straight into the combine's L1)
         cmb_def["SE_Y_L1"] = std::to_string(cfg.cmb_rt + 4);
     }
-    if (cfg.cmb_rt && std::getenv("MIMO_FL_CMB_EARLY")) {  // (perf probe: combine released at launch, garbage)
+    if (cfg.cmb_rt && cstr(pr.cmb_early)) {  // (perf probe: combine released at launch, garbage)
         cmb_def["SE_CMB_EARLY"] = "1";
     }
     // the steps the writers report must be the order combine walks: flat_combine_overlap's completion order with
-    // row-major y, slot order with bfp8 tiles (combine's untilizers) or the MIMO_FL_CMB_SLOT_ORDER probe
-    if (cfg.cmb_rt && (!cfg.y_row_major || std::getenv("MIMO_FL_CMB_SLOT_ORDER"))) {
+    // row-major y, slot order with bfp8 tiles (combine's untilizers) or cmb_slot_order (flat_with_program)
+    if (cfg.cmb_rt && (!cfg.y_row_major || cfg.cmb_slot_order)) {
         cmb_def["SE_CMB_SLOT_ORDER"] = "1";
     } else if (cfg.cmb_rt) {  // steps = schedule entries, at most 2 E (flat_combine_overlap_walk_steps)
         cmb_def["SE_CMB_STEPS"] = std::to_string(flat_combine_overlap_walk_steps(E));
@@ -478,6 +476,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         std::vector<uint32_t> ct;
         Defines defs;
         int proc;
+        int cfgw = 0;  // (the dump: DM noc + 2 x noc mode; compute fidelity + 8 fp32 + 16 full sync)
     };
     std::vector<KRec> krec;
     auto dm = [&](const std::string& name,
@@ -493,7 +492,14 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             rect_ranges(cores),
             DataMovementConfig{
                 .processor = proc, .noc = noc, .noc_mode = noc_mode, .compile_args = ct, .defines = defs});
-        krec.push_back({k, name, cores, ct, defs, proc == DataMovementProcessor::RISCV_0 ? 0 : 1});
+        krec.push_back(
+            {k,
+             name,
+             cores,
+             ct,
+             defs,
+             proc == DataMovementProcessor::RISCV_0 ? 0 : 1,
+             static_cast<int>(noc) + 2 * static_cast<int>(noc_mode)});
         return k;
     };
     auto cp = [&](const std::string& name,
@@ -516,7 +522,14 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 .dst_full_sync_en = full_sync,
                 .compile_args = ct,
                 .defines = d});
-        krec.push_back({k, name, cores, ct, d, 2});
+        krec.push_back(
+            {k,
+             name,
+             cores,
+             ct,
+             d,
+             2,
+             static_cast<int>(expert_fidelity(cfg.math_fidelity)) + (fp32 ? 8 : 0) + (full_sync ? 16 : 0)});
         return k;
     };
     // the down computes' accumulation (cfg.down_fp32): fp32 DEST in a full-sync DST
@@ -534,7 +547,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     // there); K2.7 E12 M 32 / 64 / 128 58.0 / 62.1 / 68.7 -> 56.5 / 60.6 / 67.6 (256: DRISC 85.0 vs 83.7)
     Defines drisc_dual_def = dyn_def;
     if (p.dual) {
-        const char* mc = std::getenv("MIMO_FL_DRISC_MAXCNT");
+        const char* mc = cstr(pr.drisc_maxcnt);
         drisc_dual_def["SE_DRISC_DUAL"] = "1";
         drisc_dual_def["SE_DRISC_MAXCNT"] =
             mc ? std::string(mc)
@@ -544,7 +557,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     // switch mode: the alternate tiles serve calls with counts up to this (dual or not: without it a non-dual pure plan
     // ran every bank's two slots on one tile, ~21-28 GB/s each: V4.1 units E 24 M 32 58.9 us / expert vs 43.2 dual)
     if (p.drisc && flat_drisc_tiles() == 3) {
-        const char* am = std::getenv("MIMO_FL_DRISC_ALT_MAXCNT");
+        const char* am = cstr(pr.drisc_alt_maxcnt);
         // (two tiles up to: GLM-Flash 224, K2.7 E12 (reader down columns) 384: M 256 85.2 two tiles vs 89.1 / 98.1
         // one tile, job 1 on NOC0 / NOC1)
         // DRISC-only (no Tensix readers to take hot calls): both tiles on every call - one tile per bank for the whole
@@ -593,16 +606,16 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             d["SE_Y_RM"] = "1";
             // perf probes (read at program build): MIMO_FL_YRM_NOWRITE - the writers drop the y writes;
             // MIMO_FL_YRM_PACKTILE - the down compute packs tiles instead of untilizing (y is garbage either way)
-            if (std::getenv("MIMO_FL_YRM_NOWRITE")) {
+            if (cstr(pr.yrm_nowrite)) {
                 d["SE_YRM_NOWRITE"] = "1";
             }
-            if (std::getenv("MIMO_FL_YRM_SELF")) {  // (perf probe: y written onto itself in L1, no DRAM)
+            if (cstr(pr.yrm_self)) {  // (perf probe: y written onto itself in L1, no DRAM)
                 d["SE_YRM_SELF"] = "1";
             }
-            if (const char* vc = std::getenv("MIMO_FL_YRM_VC")) {
+            if (const char* vc = cstr(pr.yrm_vc)) {
                 d["SE_YRM_VC"] = vc;
             }
-            if (std::getenv("MIMO_FL_YRM_PACKTILE")) {
+            if (cstr(pr.yrm_packtile)) {
                 d["SE_YRM_PACKTILE"] = "1";
             }
             if (pw) {
@@ -705,16 +718,16 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     // perf probe MIMO_FL_DRISC_XNOC=1 (DRISC mode): the x relays' multicast on NOC1 (x reads on NOC0) and the gate/up
     // receivers on NOC0, off the DRISCs' NOC0 weight writes. Much slower (M 512 78 -> 122 us / expert: the relays sit
     // for NOC0 multicast)
-    const char* xnoc_env = std::getenv("MIMO_FL_DRISC_XNOC");
+    const char* xnoc_env = cstr(pr.drisc_xnoc);
     const bool xswap = p.drisc && xnoc_env != nullptr && std::atoi(xnoc_env) != 0;
     // MIMO_FL_XMC_NOC1=1: only the x relays move (multicast + helper sends on NOC1, x reads on NOC0); the gate/up
     // receivers stay on NOC1 - the multicast off the NoC the DRISC alt tiles' weight writes must use (NOC0: their NOC1
     // NIU is the bank's NOC2AXI endpoint), whose mix with a third NOC0 class wedges NOC0 (TS_HANG_WORKLOG.md)
-    const bool xmc1 = xswap || (std::getenv("MIMO_FL_XMC_NOC1") && std::atoi(std::getenv("MIMO_FL_XMC_NOC1")) != 0);
+    const bool xmc1 = xswap || (cstr(pr.xmc_noc1) && std::atoi(cstr(pr.xmc_noc1)) != 0);
     const NOC x_rd_noc = xmc1 ? NOC::NOC_0 : NOC::NOC_1, x_mc_noc = xmc1 ? NOC::NOC_1 : NOC::NOC_0;
     // (probe MIMO_FL_XRD_DYN=1: the relays' kernels in dynamic-NoC mode - per-RISC command buffers and counters - so
     // their x reads and multicasts may share a NoC, e.g. MIMO_FL_XRD_NOC=0)
-    const NOC_MODE x_mode = std::getenv("MIMO_FL_XRD_DYN") ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC;
+    const NOC_MODE x_mode = cstr(pr.xrd_dyn) ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC;
     auto drisc_xy = [&](uint32_t r) {
         const auto v = device->virtual_core_from_logical_core(flat_drisc_logical(device, r, banks), tt::CoreType::DRAM);
         return static_cast<uint32_t>((v.x << 16) | v.y);
@@ -722,12 +735,12 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     Args drisc_post;
     if (p.drisc) {
         TT_FATAL(
-            p.nsg == 1 && p.r_ <= 8, "MIMO_FL_DRISC: one subgrid, <= 8 receivers a slot (se_drisc.hpp SE_DRISC_MAX_R)");
+            p.nsg == 1 && p.r_ <= 8, "flat DRISC: one subgrid, <= 8 receivers a slot (se_drisc.hpp SE_DRISC_MAX_R)");
         for (const auto& [r, tail] : p.rdn) {
-            TT_FATAL(!p.drisc_slot(r) || p.dual, "MIMO_FL_DRISC: a reader down column on a DRISC-only slot");
+            TT_FATAL(!p.drisc_slot(r) || p.dual, "flat DRISC: a reader down column on a DRISC-only slot");
         }
         auto* mesh = dynamic_cast<distributed::MeshDevice*>(device);
-        TT_FATAL(mesh != nullptr, "MIMO_FL_DRISC: a mesh device");
+        TT_FATAL(mesh != nullptr, "flat DRISC: a mesh device");
         flat_drisc_ensure(mesh, p.drisc_n, banks, p.rdown);
         // the job posting args (se_drisc_post.hpp): by a launcher kernel, or (dual) by slot 0's own reader
         drisc_post.lit(drisc_base)
@@ -746,7 +759,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 const auto v = device->virtual_core_from_logical_core(ac, tt::CoreType::DRAM);
                 axy = static_cast<uint32_t>((v.x << 16) | v.y);
             }
-            TT_FATAL(p.r_of(r) <= p.r_, "MIMO_FL_DRISC: slot {} has {} receivers > {}", r, p.r_of(r), p.r_);
+            TT_FATAL(p.r_of(r) <= p.r_, "flat DRISC: slot {} has {} receivers > {}", r, p.r_of(r), p.r_);
             drisc_post.lit(drisc_xy(r))
                 .lit(flat_drisc_job(r, banks))
                 .lit((r / banks) * p.region_bytes)
@@ -763,7 +776,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         TT_FATAL(
             !p.dual || std::find(plain.begin(), plain.end(), p.launcher) != plain.end(),
-            "MIMO_FL_DRISC dual: the launcher must be a plain reader");
+            "flat DRISC dual: the launcher must be a plain reader");
         if (!p.dual) {
             const auto k =
                 dm("se_drisc_go.cpp", {p.launcher}, DataMovementProcessor::RISCV_0, NOC::NOC_0, {E}, drisc_dual_def);
@@ -894,7 +907,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             xrd_def["XRD_INDEXED"] = "1";
             // (probe MIMO_FL_XIDX_ALL=1: the whole call's token index read once into the relay's arena instead of one
             // small read + barrier per sub-block; no gain measured: K3 E1 / E12 / E56 within 0.1%)
-            const char* xa = std::getenv("MIMO_FL_XIDX_ALL");
+            const char* xa = cstr(pr.xidx_all);
             if (xa != nullptr && std::atoi(xa) != 0) {
                 xrd_def["XRD_IDX_ALL"] = "1";
             }
@@ -904,28 +917,26 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // barrier (must divide the row-major chunks), MIMO_FL_XRD_BIG=k: the same bytes in k-segment requests (indexed; garbage)
         if (xsolo) {
             xrd_def["XRD_SOLO"] = "1";
-            if (const char* k = std::getenv("MIMO_FL_XSOLO_K")) {
+            if (const char* k = cstr(pr.xsolo_k)) {
                 xrd_def["XRD_SOLO_K"] = k;
             }
-            if (const char* m = std::getenv("MIMO_FL_XSOLO_SEQ")) {  // row mask (4095: 4096 rows; 7: 8 rows)
+            if (const char* m = cstr(pr.xsolo_seq)) {  // row mask (4095: 4096 rows; 7: 8 rows)
                 xrd_def["XRD_SOLO_SEQ"] = m;
             }
-            if (std::getenv("MIMO_FL_XSOLO_NOIDX")) {
+            if (cstr(pr.xsolo_noidx)) {
                 xrd_def["XRD_SOLO_NOIDX"] = "1";
             }
         }
         // (probe MIMO_FL_XRD_NOC=0/1: the x readers' NoC)
-        const NOC xrd_noc = std::getenv("MIMO_FL_XRD_NOC")
-                                ? (std::atoi(std::getenv("MIMO_FL_XRD_NOC")) ? NOC::NOC_1 : NOC::NOC_0)
-                                : x_rd_noc;
-        if (const char* xb = std::getenv("MIMO_FL_XRD_BIG")) {
+        const NOC xrd_noc = cstr(pr.xrd_noc) ? (std::atoi(cstr(pr.xrd_noc)) ? NOC::NOC_1 : NOC::NOC_0) : x_rd_noc;
+        if (const char* xb = cstr(pr.xrd_big)) {
             xrd_def["XRD_BIG"] = xb;
         }
-        if (const char* skip = std::getenv("MIMO_FL_XRD_SKIP")) {
+        if (const char* skip = cstr(pr.xrd_skip)) {
             xrd_def["XRD_SKIP_READS"] = skip;
         }
         uint32_t xrd_batch = XRD_BATCH;
-        if (const char* b = std::getenv("MIMO_FL_XRD_BATCH")) {
+        if (const char* b = cstr(pr.xrd_batch)) {
             xrd_batch = static_cast<uint32_t>(std::stoul(b));
             TT_FATAL(xrd_batch > 0 && p.rm_chunks % xrd_batch == 0, "MIMO_FL_XRD_BATCH must divide {}", p.rm_chunks);
         }
@@ -939,10 +950,10 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // NOC1 endpoint a DRISC tile DMAs through - in dynamic-NoC mode with their NOC0 sends to the primary; the
         // primaries keep NOC1 reads next to their linked NOC0 multicasts, which must not share a NoC with other
         // traffic of the core)
-        const bool xhelp_noc0 = std::getenv("MIMO_FL_XHELP_NOC0") != nullptr && !x_once;
+        const bool xhelp_noc0 = cstr(pr.xhelp_noc0) != nullptr && !x_once;
         // (probe MIMO_FL_XHELP_ALL=1: the helpers read and tilize all of x, the primaries only multicast - and read it
         // all on small-M calls, the role split's)
-        const bool xhelp_all = std::getenv("MIMO_FL_XHELP_ALL") != nullptr;
+        const bool xhelp_all = cstr(pr.xhelp_all) != nullptr;
         TT_FATAL(
             !xhelp_all || (!x_once && !x_two && !p.xfwd && !xsolo && !xprim_only),
             "MIMO_FL_XHELP_ALL: not with X1 / X2 / XFWD / XSOLO / XPRIM_ONLY");
@@ -973,7 +984,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // MIMO_FL_TZ_SKIP: the relays' tilizers only do the CB handshakes; MIMO_FL_XMC_NODATA: the multicasters send
         // only the XARR counts (garbage x on the gate/up cores)
         Defines tz_def = with(dyn_def, {{"SE_SBT", sbt}});
-        if (std::getenv("MIMO_FL_TZ_SKIP")) {
+        if (cstr(pr.tz_skip)) {
             tz_def["TZ_SKIP"] = "1";
         }
         const auto ktz = cp("se11_tz.cpp", xrel, {0, 1, MT}, tz_def);
@@ -986,16 +997,16 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
              {"SE_XNH", std::to_string(p.nh)},
              {"XMC_ZERO_WORDS", "1"}});
         if (xprim_only) {
-            TT_FATAL(x_once, "MIMO_FL_XPRIM_ONLY needs MIMO_FL_X1");
+            TT_FATAL(x_once, "MIMO_FL_XPRIM_ONLY needs layout.x_once");
             xmc_def["XMC_PRIM_ONLY"] = "1";
         }
-        if (std::getenv("MIMO_FL_XMC_NODATA")) {
+        if (cstr(pr.xmc_nodata)) {
             xmc_def["XMC_NODATA"] = "1";
         }
-        if (std::getenv("MIMO_FL_XMC_POSTED")) {  // (probe: posted x multicasts - no per-destination acks)
+        if (cstr(pr.xmc_posted)) {  // (probe: posted x multicasts - no per-destination acks)
             xmc_def["XMC_POSTED"] = "1";
         }
-        if (std::getenv("MIMO_FL_XMC_UNLINKED")) {  // (probe: the x multicasts without linked chains)
+        if (cstr(pr.xmc_unlinked)) {  // (probe: the x multicasts without linked chains)
             xmc_def["XMC_UNLINKED"] = "1";
         }
         if (x_chain) {  // (no multicast: unicast into the chain head(s))
@@ -1004,9 +1015,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 xmc_def["XMC_CHAIN_HEADS"] = "1";
             }
             xmc_def["XMC_CHAIN_PIECES"] = std::to_string(x_pieces);
-            if (const char* dd = std::getenv("MIMO_FL_X_CHAIN_DEPTH")) {  // (relay: head-write batches in flight, 1..8)
-                const int d = std::atoi(dd);
-                TT_FATAL(d >= 1 && d <= 8, "MIMO_FL_X_CHAIN_DEPTH={}: 1..8", d);
+            if (lo.x_relay_depth >= 0) {  // (relay: head-write batches in flight, 1..8)
+                const int d = lo.x_relay_depth;
+                TT_FATAL(d >= 1 && d <= 8, "layout x_relay_depth {}: 1..8", d);
                 xmc_def["XMC_CHAIN_DEPTH"] = std::to_string(d);
             }
         }
@@ -1052,7 +1063,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 TT_FATAL(xsolo <= p.relays.size(), "MIMO_FL_XSOLO: at most {} relays", p.relays.size());
                 // MIMO_FL_XSOLO_IDS=a,b,..: which relays (indices into p.relays) take the N slots (default 0..N-1)
                 uint32_t slot = idx < xsolo ? idx : 0xFFFFFFu;
-                if (const char* ids = std::getenv("MIMO_FL_XSOLO_IDS")) {
+                if (const char* ids = cstr(pr.xsolo_ids)) {
                     slot = 0xFFFFFFu;
                     std::stringstream ss(ids);
                     std::string tok;
@@ -1086,7 +1097,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             SetRuntimeArgs(program, ktz, rl, std::vector<uint32_t>{rl_sb(idx)});
             if (idx < NR) {
                 Args xm;
-                const uint32_t hxy = x_chain ? pk(p.gu[x_head[k]]) : 0;  // (MIMO_FL_X_CHAIN: the chain head)
+                const uint32_t hxy = x_chain ? pk(p.gu[x_head[k]]) : 0;  // (x chains: the chain head)
                 xm.a(AddrSrc::Arena, p.x_off)
                     .lit(x_chain ? hxy : pk(xmc1 ? CoreCoord(x1, y1) : CoreCoord(x0, y0)))  // (NOC1: the far corner)
                     .lit(x_chain ? hxy : pk(xmc1 ? CoreCoord(x0, y0) : CoreCoord(x1, y1)))
@@ -1157,7 +1168,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // DRISC mode: the DRISC slots' receivers count their grants locally (SE_DRISC), the others credit their reader
         Defines recv_def = with(dyn_def, {{"SE_GU_ONLY", "1"}, {"SE_X_RELAY", "1"}, {"SE_NO_PARTNER", "1"}});
         // debug probe MIMO_FL_SE_DBG=1: the receivers / x forwarders DPRINT their counters every 4M loop passes
-        const bool se_dbg = std::getenv("MIMO_FL_SE_DBG") != nullptr;
+        const bool se_dbg = cstr(pr.se_dbg) != nullptr;
         if (se_dbg) {
             recv_def["SE_DBG"] = "1";
         }
@@ -1198,11 +1209,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             p.x_slots, x_bytes, S,    NP,     HSFREE,      H_PIECES, p.nk_gu,  GATH1, GATH2, x_pieces, G,    E};
         TT_FATAL(
             x_pieces >= 1 && x_bytes % x_pieces == 0 && (x_bytes / x_pieces) % 16 == 0,
-            "MIMO_FL_X_PIECES={}: pieces of a {} B x block must be 16 B aligned",
+            "flat layout x_pieces {}: pieces of a {} B x block must be 16 B aligned",
             x_pieces,
             x_bytes);
         NOC recv_noc = xswap ? NOC::NOC_0 : NOC::NOC_1;
-        if (x_chain && std::getenv("MIMO_FL_X_CHAIN_NOC")) {  // (x chains: the forwarding NoC is free)
+        if (x_chain && lo.x_fwd_noc >= 0) {  // (x chains: the forwarding NoC is free)
             recv_noc = xo.noc1 ? NOC::NOC_1 : NOC::NOC_0;
         }
         const NOC xfwd_noc = xo.noc1 ? NOC::NOC_1 : NOC::NOC_0;
@@ -1232,7 +1243,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                                           : 0;
         // perf probe (read at program build): MIMO_FL_GU_FULL_SYNC=1 - fp32 gate/up in a full-sync DST (8 tiles: the
         // whole MT x 2 NP sub-block in one K loop, no row passes; pack no longer overlaps math, once per sub-block)
-        const bool gu_full_sync = p.gu_fp32 && p.gu_rp && (p.gu_full_sync || std::getenv("MIMO_FL_GU_FULL_SYNC"));
+        const bool gu_full_sync = p.gu_fp32 && p.gu_rp && (p.gu_full_sync || cstr(pr.gu_full_sync));
         const bool gu_rp = p.gu_rp && !gu_full_sync;
         Defines cdef = with(
             dyn_def,
@@ -1257,7 +1268,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             cdef["SE_HG_NU"] = std::to_string(p.nu);
             cdef["SE_HPC"] = std::to_string(p.hpc);
         }
-        if (std::getenv("MIMO_FL_NO_ACT")) {  // probe: no gate/up activation (wrong h), the bare matmul + pack
+        if (cstr(pr.no_act)) {  // probe: no gate/up activation (wrong h), the bare matmul + pack
             cdef["SE_NO_ACT"] = "1";
         }
         const auto kc =
@@ -1327,18 +1338,18 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         // perf probe (read at program build): MIMO_FL_DN_NOC0=1 - the down cores' h chain / y writes on NOC0, their
         // weight reads on NOC1 (default: the other way round)
-        const bool dn_noc0 = std::getenv("MIMO_FL_DN_NOC0") != nullptr;
+        const bool dn_noc0 = cstr(pr.dn_noc0) != nullptr;
         // y writes from the NCRISC on its NOC (se6_dw.cpp) instead of the BRISC, whose NOC carries the h chain (one
         // subgrid): bfp8 x + bf16 h at M 512 / 2048 / 5120 -9 / -9 / -11%, bf16 x + h -4 / -3 / -4% (the doubled h
         // traffic the y writes contended with), bfp8 / bfp8 -4 / -1 / -0%; +1% (~0.4 us) at M <= 64 (perf probe
         // MIMO_FL_Y_NC=0: the BRISC writes y). Not with reader down columns (H > 4992): there the NCRISC's NOC also
         // carries the larger down weight stream, H 7168 / 6144 bf16 x + h at M 2048 +7 / +6%
-        const char* ync_env = std::getenv("MIMO_FL_Y_NC");
+        const char* ync_env = cstr(pr.y_nc);
         const bool y_nc = yrm && p.nsg == 1 && (ync_env ? std::atoi(ync_env) != 0 : !p.rdown);
         // MIMO_FL_Y_NOC1=1 (with the NCRISC's y writes): those writes on the other NoC than its down-weight reads -
         // the y traffic off the x relays' multicast NoC (NOC0), whose mix with the DRISC NOC0 weight writes and the
         // multicast wedges NOC0 (TS_HANG_WORKLOG.md); both down kernels in dynamic-NoC mode (per-RISC command buffers)
-        const bool y_other = y_nc && std::getenv("MIMO_FL_Y_NOC1") && std::atoi(std::getenv("MIMO_FL_Y_NOC1")) != 0;
+        const bool y_other = y_nc && cstr(pr.y_noc1) && std::atoi(cstr(pr.y_noc1)) != 0;
         const NOC_MODE dn_mode = y_other ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC;
         Defines ync = y_nc ? Defines{{"SE_Y_NC", "1"}} : Defines{};
         if (y_other) {
@@ -1365,13 +1376,12 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                cores,
                DataMovementProcessor::RISCV_1,
                dn_noc0 ? NOC::NOC_1 : NOC::NOC_0,
-               // (MIMO_FL_DW_BATCH: down blocks per read barrier, default DW_BATCH; read at program build)
+               // (layout.dw_batch: down blocks per read barrier, default DW_BATCH)
                {1,
                 slot,
                 w_tile,
                 E * nblk,
-                std::getenv("MIMO_FL_DW_BATCH") ? static_cast<uint32_t>(std::atoi(std::getenv("MIMO_FL_DW_BATCH")))
-                                                : DW_BATCH,
+                lo.dw_batch >= 0 ? static_cast<uint32_t>(lo.dw_batch) : DW_BATCH,
                 cfg.weights_bf8 ? 1u : 0u,
                 E,
                 0,
@@ -1528,7 +1538,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
 
     cached_program_t cached{std::move(program), std::move(sv)};
     override_runtime_arguments(cached, cfg, t, output);
-    if (const char* dump = std::getenv("MIMO_FL_DUMP_RT")) {
+    if (const char* dump = cstr(pr.dump_rt)) {
         std::ostringstream o;
         const auto vec = [&](const std::vector<uint32_t>& v) {
             o << "[";
@@ -1540,7 +1550,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         o << "{\"arena\":" << t.arena.buffer()->address() << ",\"kernels\":[";
         for (size_t i = 0; i < krec.size(); ++i) {
             const auto& r = krec[i];
-            o << (i ? "," : "") << "{\"name\":\"" << r.name << "\",\"proc\":" << r.proc << ",\"ct\":";
+            o << (i ? "," : "") << "{\"name\":\"" << r.name << "\",\"proc\":" << r.proc << ",\"cfg\":" << r.cfgw
+              << ",\"ct\":";
             vec(r.ct);
             o << ",\"defs\":{";
             bool first = true;
@@ -1560,9 +1571,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             o << "]}";
         }
         o << "]}";
-        FILE* f = std::fopen(dump, "w");
+        FILE* f = std::fopen(dump, "a");  // (one line per program built)
         if (f) {
-            std::fputs(o.str().c_str(), f);
+            std::fputs((o.str() + "\n").c_str(), f);
             std::fclose(f);
         }
     }

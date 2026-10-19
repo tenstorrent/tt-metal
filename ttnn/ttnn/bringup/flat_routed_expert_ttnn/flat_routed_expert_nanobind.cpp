@@ -43,7 +43,8 @@ nb::dict plan_dict(
     bool weights_bf8,
     uint32_t pin,
     bool x_bf16,
-    bool h_bf16) {
+    bool h_bf16,
+    const fre::FlatLayoutOptions& layout) {
     const auto p = fre::flat_routed_expert_plan(
         device,
         fre::FlatRoutedExpertConfig{
@@ -56,7 +57,8 @@ nb::dict plan_dict(
             .activation = 0,
             .pin = pin,
             .x_bf16 = x_bf16,
-            .h_bf16 = h_bf16});
+            .h_bf16 = h_bf16,
+            .layout = layout});
     nb::dict d;
     d["nsg"] = p->nsg;
     d["n_rd"] = p->readers.size();
@@ -165,6 +167,33 @@ nb::dict plan_dict(
 }  // namespace
 
 void bind_flat_routed_expert(nb::module_& mod) {
+    // the layout / program choices (FlatLayoutOptions: typed, in the plan key and the program hashes); presets in
+    // ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_layouts.py
+    nb::class_<fre::FlatLayoutOptions>(mod, "FlatLayoutOptions")
+        .def(nb::init<>())
+        .def_rw("drisc", &fre::FlatLayoutOptions::drisc)
+        .def_rw("drisc_dual", &fre::FlatLayoutOptions::drisc_dual)
+        .def_rw("drisc_in_overlap", &fre::FlatLayoutOptions::drisc_in_overlap)
+        .def_rw("drisc_pure", &fre::FlatLayoutOptions::drisc_pure)
+        .def_rw("max_down", &fre::FlatLayoutOptions::max_down)
+        .def_rw("x_helpers", &fre::FlatLayoutOptions::x_helpers)
+        .def_rw("half_width", &fre::FlatLayoutOptions::half_width)
+        .def_rw("hg_units", &fre::FlatLayoutOptions::hg_units)
+        .def_rw("row0", &fre::FlatLayoutOptions::row0)
+        .def_rw("row1", &fre::FlatLayoutOptions::row1)
+        .def_rw("x_path", &fre::FlatLayoutOptions::x_path)
+        .def_rw("x_snakes", &fre::FlatLayoutOptions::x_snakes)
+        .def_rw("x_pieces", &fre::FlatLayoutOptions::x_pieces)
+        .def_rw("x_fwd_ncrisc", &fre::FlatLayoutOptions::x_fwd_ncrisc)
+        .def_rw("x_fwd_noc", &fre::FlatLayoutOptions::x_fwd_noc)
+        .def_rw("x_fwd_depth", &fre::FlatLayoutOptions::x_fwd_depth)
+        .def_rw("x_relay_depth", &fre::FlatLayoutOptions::x_relay_depth)
+        .def_rw("x_once", &fre::FlatLayoutOptions::x_once)
+        .def_rw("dw_batch", &fre::FlatLayoutOptions::dw_batch)
+        .def_rw("pin_ratio", &fre::FlatLayoutOptions::pin_ratio)
+        .def("key", &fre::FlatLayoutOptions::key)
+        .def("__repr__", [](const fre::FlatLayoutOptions& o) { return "FlatLayoutOptions(" + o.str() + ")"; })
+        .def("__eq__", [](const fre::FlatLayoutOptions& a, const fre::FlatLayoutOptions& b) { return a == b; });
     ttnn::bind_function<"flat_routed_expert", "ttnn.bringup.">(
         mod,
         R"doc(
@@ -205,6 +234,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
             h_bf16 (bool): h (gate/up -> down) as bf16 tiles (else bfp8); as x_bf16.
             y_bf16 (bool): y as bf16 tiles (else bfp8; tiled y only): no bfp8 rounding of the output.
             math_fidelity (int): the expert matmuls' fidelity (0 LoFi: exact for bfp4 weights; 2 HiFi2 for bfp8).
+            layout (FlatLayoutOptions): the layout / program choices (presets: flat_layouts.py); must match the
+                plan the weights were laid out with (flat_routed_expert_plan(..., layout)).
 
         Returns:
             ttnn.Tensor: y [rows, H] bfp8 TILE, or bf16 ROW_MAJOR with y_row_major (rows: token_index's length in
@@ -232,18 +263,19 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("x_bf16") = false,
         nb::arg("h_bf16") = false,
         nb::arg("y_bf16") = false,
-        nb::arg("math_fidelity") = 0);
+        nb::arg("math_fidelity") = 0,
+        nb::arg("layout") = fre::FlatLayoutOptions{});
 
     ttnn::bind_function<"flat_combine_overlap", "ttnn.bringup.">(
         mod,
         R"doc(
         The flat routed expert overlapped with combine_fabric2d in one program per chip (initial version): combine on
         grid rows 0-1 takes each local expert as soon as every flat y writer reports its rows landed. The flat expert's
-        arguments as for flat_routed_expert (planned below rows 0-1: MIMO_FL_ROWS=2,9), combine's as for
+        arguments as for flat_routed_expert (planned below rows 0-1: layout rows 2..9), combine's as for
         hybrid_routed_expert_moe's overlap. Returns combine's output [1, 1, seq_len_per_chip, num_experts_per_tok, H]
         bf16 ROW_MAJOR; y_out (optional, [rows, H]) receives the flat expert's output: bf16 ROW_MAJOR with y_row_major
-        (default: combine's readers read its rows directly, no untilizer cores; plan with MIMO_FL_ROWS=1,9), else bfp8
-        TILE (combine untilizes it on rows 0-1; MIMO_FL_ROWS=2,9).
+        (default: combine's readers read its rows directly, no untilizer cores; plan with layout rows 1..9), else bfp8
+        TILE (combine untilizes it on rows 0-1; layout rows 2..9).
         )doc",
         &fre::flat_combine_overlap,
         nb::arg("dispatched_buffer").noconvert(),
@@ -273,7 +305,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("x_bf16") = false,
         nb::arg("h_bf16") = false,
         nb::arg("y_row_major") = true,
-        nb::arg("y_out") = nb::none());
+        nb::arg("y_out") = nb::none(),
+        nb::arg("layout") = fre::FlatLayoutOptions{});
     ttnn::bind_function<"flat_routed_expert_with_program", "ttnn.bringup.">(
         mod,
         R"doc(
@@ -309,7 +342,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("x_bf16") = false,
         nb::arg("h_bf16") = false,
         nb::arg("l1_args") = std::vector<std::vector<uint32_t>>{},
-        nb::arg("relay_words") = nb::none());
+        nb::arg("relay_words") = nb::none(),
+        nb::arg("y_l1") = nb::none(),
+        nb::arg("layout") = fre::FlatLayoutOptions{});
     mod.def(
         "flat_routed_expert_plan",
         &plan_dict,
@@ -323,6 +358,7 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("pin") = 1,
         nb::arg("x_bf16") = false,
         nb::arg("h_bf16") = false,
+        nb::arg("layout") = fre::FlatLayoutOptions{},
         "The flat_routed_expert layout plan (weight bank layout, coordinator cores for the done words).");
     mod.def(
         "flat_drisc_stop",
@@ -330,7 +366,7 @@ void bind_flat_routed_expert(nb::module_& mod) {
             ttnn::operations::bringup::flat_routed_expert::flat_drisc_stop(device);
         },
         nb::arg("device"),
-        "Stops the flat expert's persistent DRISC gate/up senders on this mesh device (MIMO_FL_DRISC); call before "
+        "Stops the flat expert's persistent DRISC gate/up senders on this mesh device (layout.drisc); call before "
         "closing it.");
     mod.def(
         "flat_drisc_dump",

@@ -16,7 +16,7 @@ namespace ttnn::operations::bringup::flat_routed_expert {
 
 void FlatWithProgramDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& p, const tensor_args_t& t) {
-    if (std::getenv("FLAT_WP_KEYLOG")) {  // (debug: the cache key of every miss)
+    if (cstr(FlatProbes::from_env().flat_wp_keylog)) {  // (debug: the cache key of every miss)
         log_info(
             tt::LogOp,
             "flat_with_program miss: extra_key {} writers {} counts_addr {} addrs {} flat_key {}",
@@ -66,8 +66,7 @@ FlatWithProgramFactory::cached_mesh_workload_t FlatWithProgramFactory::create_me
             for (const auto& [k, core] : flat.shared_variables.cmb_writers) {
                 auto& a = GetRuntimeArgs(flat.program, k, core);
                 TT_FATAL(
-                    a.size() >= p.flat.cmb_rt + 4 + FLAT_Y_L1_ARGS,
-                    "flat_with_program: writer args too short (MIMO_FL_Y_L1?)");
+                    a.size() >= p.flat.cmb_rt + 4 + FLAT_Y_L1_ARGS, "flat_with_program: writer args too short (y_l1?)");
                 for (uint32_t j = 0; j < l1.size(); ++j) {
                     a[p.flat.cmb_rt + 4 + j] = l1[j];
                 }
@@ -75,7 +74,8 @@ FlatWithProgramFactory::cached_mesh_workload_t FlatWithProgramFactory::create_me
             }
         }
         ++prog_i;
-        if (std::getenv("FLAT_WP_LOG") && range.start_coord() == p.extra->mesh_programs.front().first.start_coord()) {
+        if (cstr(FlatProbes::from_env().flat_wp_log) &&
+            range.start_coord() == p.extra->mesh_programs.front().first.start_coord()) {
             const uint32_t ti =
                 MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
             for (const auto& kg : flat.program.impl().get_kernel_groups(ti)) {

@@ -16,6 +16,8 @@ namespace tt::tt_metal {
 class IDevice;
 }
 
+#include "flat_routed_expert_options.hpp"
+
 namespace ttnn::operations::bringup::flat_routed_expert {
 
 // Layout constants shared by the planner and the program factory.
@@ -54,6 +56,13 @@ struct FlatRoutedExpertConfig {
     // combine overlap (flat_combine_overlap): the y writers (down cores, reader tails) report each local expert to
     // combine's collector once its rows have landed; the 4 report args sit at this runtime-arg index (0: off)
     uint32_t cmb_rt = 0;
+    // the y writers' L1 hand-off args after the report args (flat_with_program with l1_args: SE_Y_L1)
+    bool y_l1 = false;
+    // combine overlap report protocol (flat_with_program): cumulative counts, no go handshake; steps in slot order
+    bool cmb_no_go = false;
+    bool cmb_slot_order = false;
+    // the caller's layout / program choices (typed; part of the plan key and the program hashes)
+    FlatLayoutOptions layout;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "hidden",
@@ -71,9 +80,13 @@ struct FlatRoutedExpertConfig {
         "h_bf16",
         "y_bf16",
         "math_fidelity",
-        "cmb_rt");
+        "cmb_rt",
+        "y_l1",
+        "cmb_no_go",
+        "cmb_slot_order",
+        "layout");
     auto attribute_values() const {
-        return std::forward_as_tuple(
+        return std::make_tuple(
             hidden,
             intermediate,
             experts_per_chip,
@@ -89,7 +102,11 @@ struct FlatRoutedExpertConfig {
             h_bf16,
             y_bf16,
             math_fidelity,
-            cmb_rt);
+            cmb_rt,
+            y_l1,
+            cmb_no_go,
+            cmb_slot_order,
+            layout.key());
     }
 };
 
@@ -113,10 +130,11 @@ struct FlatRoutedExpertPlan {
     // g), pair-sets ps0[r] .., to gate/up cores gu[gu_off[r] ..]; each bank's readers together hold the bank's even
     // share. Even plans: rgs = rg, ps0 = (r % n_rd_sg) * rg, gu_off = r * r_
     bool uneven = false;
-    // half-width gate / up tiles (MIMO_FL_HG): a pair's two weight tiles hold [gate | up] of its h tile's left / right
-    // 16 columns (the activation runs face-wise, se_glu_faces.hpp); the split granularity of 16 columns builds on it
+    // half-width gate / up tiles (layout.half_width): a pair's two weight tiles hold [gate | up] of its h tile's left /
+    // right 16 columns (the activation runs face-wise, se_glu_faces.hpp); the split granularity of 16 columns builds on
+    // it
     bool hg = false;
-    // 16-column units (MIMO_FL_HG_NU = units per core, HG only; np is then 0): a core's gate/up block is nu weight
+    // 16-column units (layout.hg_units = units per core, HG only; np is then 0): a core's gate/up block is nu weight
     // tiles a row ([gate | up] of units cg nu ..), its h a run of hpc h tiles from K tile cg nu / 2, the first / last
     // one half its own when cg nu / (cg + 1) nu is odd. Generic widths: gwt weight tiles a row (2 np / nu), hpc h tiles
     // a row (np / (nu + 1) / 2), ngrp column groups (It / np / 2 It / nu)
@@ -136,7 +154,7 @@ struct FlatRoutedExpertPlan {
     bool gu_full_sync = false;
     bool hl_in_arena = false;  // gate/up h_local (CB 3) in the arena (bf16 x / h), else a static CB
     bool group_rect = false;
-    // DRISC mode (MIMO_FL_DRISC, flat_drisc.hpp): the DRAM cores send the gate/up weights, the readers only post jobs
+    // DRISC mode (layout.drisc, flat_drisc.hpp): the DRAM cores send the gate/up weights, the readers only post jobs
     bool drisc = false;
     // DRISC mode: the one Tensix core that posts every slot's job (the readers' cells are free: the down cores take
     // them; MIMO_FL_DRISC_RD_DOWN=0 leaves them idle)
@@ -144,7 +162,7 @@ struct FlatRoutedExpertPlan {
     // DRISC mode: reader slots 0 .. drisc_n - 1 stream from the DRAM cores, the rest keep their Tensix reader +
     // forwarder (MIMO_FL_DRISC_SLOTS; a DRISC tile sends one slot per bank at full rate)
     uint32_t drisc_n = 0;
-    // dual (MIMO_FL_DRISC_DUAL, default): the DRISC slots keep their Tensix reader too; per call (every kernel the same
+    // dual (layout.drisc_dual, default): the DRISC slots keep their Tensix reader too; per call (every kernel the same
     // rule) counts <= SE_DRISC_MAXCNT stream from the DRAM cores, larger ones from the Tensix readers
     bool dual = false;
     // x read once with forwarding (MIMO_FL_XFWD): the relays' forward ring (FW_SLOTS super-blocks at fw_off)

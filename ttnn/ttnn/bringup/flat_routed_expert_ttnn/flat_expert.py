@@ -26,6 +26,7 @@ from loguru import logger
 import ttnn
 from ttnn.bringup.flat_routed_expert_ttnn._helpers import BF8_TILE, noc_hops
 from ttnn.bringup.flat_routed_expert_ttnn._helpers import crs_single as _crs_single
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import flat_layout
 
 
 def _drisc_close_hook():
@@ -1892,17 +1893,30 @@ class FlatRoutedExpert:
         cache_prefix=None,
         x_bf16=False,
         h_bf16=False,
+        layout=None,
     ):
         """``weights``: per device, per local expert (Wg [H, I], Wu [H, I], Wd [I, H]), or a callable returning that
         (only called when the weight cache misses), or ``"fake"``: uninitialised weight tensors in the right layout
         (perf only: no host packing / upload; outputs are garbage). ``cache_prefix``: path stem of the laid-out weight
         cache; the file names carry the dtype and a hash of the C++ plan, so a layout change never loads a stale
-        layout."""
+        layout. ``layout``: the layout / program choices (flat_layouts.py presets, a dict of FlatLayoutOptions fields,
+        or a FlatLayoutOptions; None: the plan's defaults) - every call of this op uses it."""
         E, n_dev = len(gids[0]), len(gids)
         self.device, self.H, self.I, self.m, self.act, self.pin = device, H, I, m, ACTS[act], pin
         self.x_bf16, self.h_bf16 = x_bf16, h_bf16  # x / h tile formats (else bfp8): part of the plan
+        self.layout = flat_layout(layout)
         self.plan = ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
-            device, H, I, E, n_global, m, weights_bf8=wdtype == "bf8", pin=pin, x_bf16=x_bf16, h_bf16=h_bf16
+            device,
+            H,
+            I,
+            E,
+            n_global,
+            m,
+            weights_bf8=wdtype == "bf8",
+            pin=pin,
+            x_bf16=x_bf16,
+            h_bf16=h_bf16,
+            layout=self.layout,
         )
         lay = dict(self.plan)
         w_dtype = W_DTYPES[wdtype][0]
@@ -2017,4 +2031,5 @@ class FlatRoutedExpert:
             h_bf16=self.h_bf16,
             y_bf16=y_bf16,
             math_fidelity=math_fidelity,
+            layout=self.layout,
         )

@@ -45,6 +45,7 @@ target_sources(
         device/flat_combine_overlap_device_operation.cpp
         device/flat_with_program_device_operation.cpp
         device/flat_drisc.cpp
+        device/flat_routed_expert_options.cpp
         device/flat_routed_expert_plan.cpp
         device/flat_routed_expert_program_factory.cpp
         flat_routed_expert.cpp

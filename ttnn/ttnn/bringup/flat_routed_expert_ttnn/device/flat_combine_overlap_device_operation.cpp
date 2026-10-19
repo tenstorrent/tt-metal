@@ -38,9 +38,9 @@ FlatCombineOverlapFactory::cached_mesh_workload_t FlatCombineOverlapFactory::cre
     using namespace tt::tt_metal;
     // Row-major y: combine walks every chip's schedule entries (an expert, or one chunk of a pinned one) in the order
     // the flat expert computes them; its readers rebuild the schedules from the counts with the same defines
-    // (MIMO_FL_CMB_SLOT_ORDER=1, probe: whole experts in slot order)
+    // (cmb_slot_order, flat_with_program: whole experts in slot order)
     std::vector<std::string> schedule_defines;
-    if (p.flat.y_row_major && !std::getenv("MIMO_FL_CMB_SLOT_ORDER")) {
+    if (p.flat.y_row_major && !p.flat.cmb_slot_order) {
         for (const auto& [k, v] : flat_schedule_defines(p.flat, make_flat_routed_expert_plan(t.x.device(), p.flat))) {
             schedule_defines.push_back(k + "=" + v);
         }
@@ -100,7 +100,7 @@ FlatCombineOverlapFactory::cached_mesh_workload_t FlatCombineOverlapFactory::cre
     for (auto& prog : combine->programs) {
         TT_FATAL(prog.range.shape().mesh_size() == 1, "flat_combine_overlap: combine builds one program per chip");
         const auto coord = prog.range.start_coord();
-        if (std::getenv("FLAT_CMB_LOG") && coord == combine->programs.front().range.start_coord()) {
+        if (cstr(FlatProbes::from_env().flat_cmb_log) && coord == combine->programs.front().range.start_coord()) {
             for (const auto& k : prog.descriptor.kernels) {
                 log_info(tt::LogOp, "flat_combine_overlap: combine kernel {} on {}", k.kernel_source, k.core_ranges.str());
             }
