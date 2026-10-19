@@ -9,9 +9,12 @@
 // P rows are banks pages apart (interleaved page p lives in bank p % banks). Packets are full whatever the
 // locality of the rows, so the transfer cost depends only on the row count.
 //
-// Stream page layout (one page per worker): word 0 = number of streams; stream words start at byte 64.
+// Stream page layout (one page per link): word 0 = number of streams; stream words start at byte 64. The link's
+// four senders (E, W, N, S) share the page; each takes only streams whose first fabric hop leaves in its direction
+// (rows for this chip go to the E sender), and skips the rest without reading their rows.
 
 #include "api/dataflow/dataflow_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 #include <cstdint>
 
@@ -39,7 +42,16 @@ void kernel_main() {
     const uint32_t num_layers = get_common_arg_val<uint32_t>(3);
     const uint32_t layer_idx = get_common_arg_val<uint32_t>(4);
     const uint32_t scalar_slot = get_common_arg_val<uint32_t>(5);
-    const uint32_t worker = get_arg_val<uint32_t>(0);
+    const uint32_t link = get_arg_val<uint32_t>(0);
+    const uint32_t dir = get_arg_val<uint32_t>(1);
+    const uint32_t my_rank = get_arg_val<uint32_t>(2);
+    constexpr uint32_t dest_chip_ids[] = DEST_CHIP_ID;
+    constexpr uint32_t dest_mesh_ids[] = DEST_MESH_ID;
+    auto mine = [&](uint32_t dest) {
+        return dest == my_rank ? dir == 0
+                               : static_cast<uint32_t>(tt::tt_fabric::get_next_hop_router_direction(
+                                     dest_mesh_ids[dest], dest_chip_ids[dest])) == dir;
+    };
 
     const auto input = TensorAccessor(input_args, input_addr, page_bytes);
     const auto runs = TensorAccessor(runs_args, runs_addr, runs_page_bytes);
@@ -59,7 +71,7 @@ void kernel_main() {
     // Word stream over this worker's page, refilled one block at a time.
     cb_reserve_back(kRuns, 1);
     const uint32_t block_l1 = get_write_ptr(kRuns);
-    const uint64_t page_noc = runs.get_noc_addr(worker);
+    const uint64_t page_noc = runs.get_noc_addr(link);
     uint32_t block_start = 0, cursor = 0;  // word offsets into the page
     auto fill = [&](uint32_t word) {
         block_start = word & ~15u;  // 64 B aligned
@@ -93,6 +105,10 @@ void kernel_main() {
         const uint32_t dest = next_word();
         const uint32_t base = next_word();
         const uint32_t count = next_word();
+        if (!mine(dest)) {
+            cursor += count;
+            continue;
+        }
         for (uint32_t j = 0; j * pages_per_packet < count; ++j) {
             const uint32_t n =
                 count - j * pages_per_packet < pages_per_packet ? count - j * pages_per_packet : pages_per_packet;
