@@ -1407,7 +1407,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         arch == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
         std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) && !has_operand_activations &&
         !has_post_activations && num_tiles_per_cycle > 1 &&
-        compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast && bf16_or_bfp8(a_data_format) &&
+        (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast ||
+         // the scalar is a bf16 tile: a bfp8_b a adds or subtracts unpack bound and reads slower in a block
+         (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar &&
+          (a_data_format == b_data_format ||
+           std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) == OpConfig::FpuBinaryOp::MUL))) &&
+        bf16_or_bfp8(a_data_format) &&
         bf16_or_bfp8(b_data_format) && bf16_or_bfp8(c_data_format) &&
         // a bf16 and a bfp8_b operand add or subtract unpack bound (the 8-bit stall), so the whole-tile wait shows below 16 tiles
         block_tiles >= ((a_data_format != b_data_format &&

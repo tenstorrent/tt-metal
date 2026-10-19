@@ -3,6 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+
+#ifndef BINARY_NG_BLOCK
+#define BINARY_NG_BLOCK 0
+#endif
+// Blackhole: the block section (BINARY_NG_BLOCK) hands each operand tile over whole, as its block unpack needs.
+#define ELTWISE_BINARY_PER_TILE_HANDOFF BINARY_NG_BLOCK
+#define ELTWISE_BINARY_BLOCK_UNPACK BINARY_NG_BLOCK
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_binary.h"
 
@@ -65,6 +72,10 @@ void kernel_main() {
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_op_a.get_cb_id(), cb_op_b.get_cb_id());
 #endif
         tile_regs_acquire();
+#if BINARY_NG_BLOCK
+        binary_block_fixed_operand<BINARY_OP_TYPE, SCALAR_IS_LHS, !SCALAR_IS_LHS>(
+            cb_op_a.get_cb_id(), cb_op_b.get_cb_id(), 0, 0, 0, n);
+#else
         for (uint32_t i = 0; i < n; ++i) {
 #if SCALAR_IS_LHS
             BINARY_OP(cb_op_a.get_cb_id(), cb_op_b.get_cb_id(), 0, i, i);
@@ -73,6 +84,7 @@ void kernel_main() {
 #endif
             PROCESS_POST_ACTIVATIONS(i);
         }
+#endif
         tile_regs_commit();
 
         tile_regs_wait();

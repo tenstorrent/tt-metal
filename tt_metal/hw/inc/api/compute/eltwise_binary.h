@@ -93,7 +93,7 @@ ALWI void binary_math(std::uint32_t icb0, std::uint32_t icb1, std::uint32_t idst
 }
 #endif  // TRISC_MATH
 
-template <EltwiseBinaryType eltwise_binary_type, bool is_fp32_dest_acc_en>
+template <EltwiseBinaryType eltwise_binary_type, bool is_fp32_dest_acc_en, bool fixed_a = false, bool fixed_b = false>
 ALWI void binary_block(
     std::uint32_t icb0,
     std::uint32_t icb1,
@@ -101,7 +101,7 @@ ALWI void binary_block(
     std::uint32_t start_itile1,
     std::uint32_t start_idst,
     std::uint32_t ntiles) {
-    UNPACK((llk_unpack_AB_block(icb0, icb1, start_itile0, start_itile1, ntiles)));
+    UNPACK((llk_unpack_AB_block<fixed_a, fixed_b>(icb0, icb1, start_itile0, start_itile1, ntiles)));
     MATH(
         constexpr MathFidelity math_fidelity =
             (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi);
@@ -572,6 +572,53 @@ ALWI void sub_block(
 #endif
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         sub_tiles<is_fp32_dest_acc_en>(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
+    }
+}
+
+// clang-format off
+/**
+ * Runs the op on ntiles tiles into consecutive DST slots where one operand keeps one tile (a scalar or another constant
+ * tile): fixed_a or fixed_b holds that operand at its start tile index. On Blackhole kernels that define
+ * ELTWISE_BINARY_BLOCK_UNPACK true, the tile pairs are unpacked with one call; elsewhere it runs the op tile by tile.
+ * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on
+ * the compute engine.
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range                                    | Required |
+ * |----------------|---------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31                                        | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31                                        | True     |
+ * | start_itile0   | The index of the first tile in A                              | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_itile1   | The index of the first tile in B                              | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_idst     | The index of the first tile in DST REG for the result         | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | ntiles         | The number of tiles                                           | uint32_t | ntiles <= DST capacity                         | True     |
+ */
+// clang-format on
+template <EltwiseBinaryType eltwise_binary_type, bool fixed_a, bool fixed_b, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void binary_block_fixed_operand(
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    static_assert(!(fixed_a && fixed_b), "At most one operand stays on one tile");
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (detail::BINARY_BLOCK_UNPACK) {
+        detail::binary_block<eltwise_binary_type, is_fp32_dest_acc_en, fixed_a, fixed_b>(
+            icb0, icb1, start_itile0, start_itile1, start_idst, ntiles);
+        return;
+    }
+#endif
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        const std::uint32_t itile0 = fixed_a ? start_itile0 : start_itile0 + i;
+        const std::uint32_t itile1 = fixed_b ? start_itile1 : start_itile1 + i;
+        if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL) {
+            mul_tiles<is_fp32_dest_acc_en>(icb0, icb1, itile0, itile1, start_idst + i);
+        } else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD) {
+            add_tiles<is_fp32_dest_acc_en>(icb0, icb1, itile0, itile1, start_idst + i);
+        } else {
+            sub_tiles<is_fp32_dest_acc_en>(icb0, icb1, itile0, itile1, start_idst + i);
+        }
     }
 }
 
