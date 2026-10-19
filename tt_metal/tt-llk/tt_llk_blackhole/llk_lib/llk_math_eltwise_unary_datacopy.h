@@ -475,6 +475,7 @@ inline void eltwise_unary_configure_mop(
         if (((is_fp32_dest_acc_en || is_int_fpu_en) && !(dst_format == to_underlying(DataFormat::UInt16))) || (dst_format == to_underlying(DataFormat::UInt8)))
         {
             // use elwadd to handle unpacking data into src A as fp16, but dest is in fp32 mode OR to handle uint8 datums
+            math::_configure_elw_zero_flag_state_();
             ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
@@ -536,6 +537,13 @@ inline void eltwise_unary_configure_mop(
         // MOVB2D cannot accumulate, so acc_to_dest always takes ELWADD; the init rejects UInt16.
         constexpr std::uint32_t dest_accum = acc_to_dest ? p_elwise::DEST_ACCUM_EN : p_elwise::DEST_ACCUM_DIS;
 
+        if constexpr (bcast_type == BroadcastType::SCALAR || bcast_type == BroadcastType::COL)
+        {
+            if (dst_format != to_underlying(DataFormat::UInt16))
+            {
+                math::_configure_elw_zero_flag_state_();
+            }
+        }
         if constexpr (bcast_type == BroadcastType::SCALAR)
         {
             const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16))
@@ -558,6 +566,7 @@ inline void eltwise_unary_configure_mop(
         }
         else if constexpr (bcast_type == BroadcastType::ROW && acc_to_dest)
         {
+            math::_configure_elw_zero_flag_state_();
             // _llk_unpack_A_ publishes one SrcB face and one zeroed SrcA bank per face.
             ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(p_elwise::CLR_NONE, dest_accum, p_elwise::SRCB_BCAST_ROW, addr_mod, 0 /*dst*/));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
