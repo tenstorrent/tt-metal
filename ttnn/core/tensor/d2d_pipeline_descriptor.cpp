@@ -103,8 +103,11 @@ std::vector<uint8_t> D2DPipelineDescriptor::serialize() const {
     std::vector<flatbuffers::Offset<fb::D2DRank>> rank_offsets;
     for (const auto& r : ranks) {
         const auto host_name = builder.CreateString(r.host_name);
-        const auto inbound = r.inbound ? to_flatbuffer(builder, *r.inbound) : flatbuffers::Offset<fb::D2DReceiver>();
-        rank_offsets.push_back(fb::CreateD2DRank(builder, r.rank, host_name, inbound));
+        std::vector<flatbuffers::Offset<fb::D2DReceiver>> receivers;
+        for (const auto& rx : r.receivers) {
+            receivers.push_back(to_flatbuffer(builder, rx));
+        }
+        rank_offsets.push_back(fb::CreateD2DRank(builder, r.rank, host_name, builder.CreateVector(receivers)));
     }
     builder.Finish(fb::CreateD2DPipelineDescriptor(builder, kVersion, builder.CreateVector(rank_offsets)));
     return {builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize()};
@@ -126,8 +129,10 @@ D2DPipelineDescriptor D2DPipelineDescriptor::deserialize(const std::vector<uint8
     }
     for (const auto* fr : *root->ranks()) {
         D2DRankDescriptor r{.rank = fr->rank(), .host_name = fr->host_name() ? fr->host_name()->str() : ""};
-        if (fr->inbound() != nullptr) {
-            r.inbound = from_flatbuffer(*fr->inbound());
+        if (fr->receivers() != nullptr) {
+            for (const auto* rx : *fr->receivers()) {
+                r.receivers.push_back(from_flatbuffer(*rx));
+            }
         }
         desc.ranks.push_back(std::move(r));
     }

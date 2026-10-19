@@ -132,7 +132,7 @@ void py_module_types(nb::module_& mod) {
     nb::class_<D2DRankDescriptor>(mod, "D2DRankDescriptor")
         .def_ro("rank", &D2DRankDescriptor::rank)
         .def_ro("host_name", &D2DRankDescriptor::host_name)
-        .def_ro("inbound", &D2DRankDescriptor::inbound);
+        .def_ro("receivers", &D2DRankDescriptor::receivers);
 
     nb::class_<D2DPipelineDescriptor>(mod, "D2DPipelineDescriptor", R"doc(
         Every D2DStreamService receiver of a pipeline, as written by
@@ -445,16 +445,17 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def_static(
             "export_pipeline_descriptor",
-            [](const std::string& service_id, const D2DStreamServiceReceiver* inbound, int root) {
-                return D2DStreamService::export_pipeline_descriptor(service_id, inbound, Rank{root});
+            [](const std::string& service_id, const std::vector<const D2DStreamServiceReceiver*>& receivers, int root) {
+                return D2DStreamService::export_pipeline_descriptor(service_id, receivers, Rank{root});
             },
             nb::arg("service_id"),
-            nb::arg("inbound").none(),
+            nb::arg("receivers"),
             nb::arg("root") = 0,
             R"doc(
-                Collective over the current distributed world: every rank calls it with its inbound
-                receiver (None if it has none). `root` gathers them and writes
-                d2d_pipeline_descriptor_path(service_id). Returns the path on `root`, None elsewhere.
+                Collective over the current distributed world: every rank calls it with the receivers
+                it owns, one per pipeline stage it receives into (empty list if none). `root` gathers
+                them and writes d2d_pipeline_descriptor_path(service_id). Returns the path on `root`,
+                None elsewhere.
             )doc");
 }
 

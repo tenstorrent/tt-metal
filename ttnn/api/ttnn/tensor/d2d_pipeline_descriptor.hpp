@@ -9,7 +9,6 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -45,7 +44,7 @@ struct D2DReceiverDescriptor {
 struct D2DRankDescriptor {
     int rank = 0;
     std::string host_name;
-    std::optional<D2DReceiverDescriptor> inbound;  // empty on a rank with no inbound socket
+    std::vector<D2DReceiverDescriptor> receivers;  // one per pipeline stage this rank receives into
 
     bool operator==(const D2DRankDescriptor&) const = default;
 };
