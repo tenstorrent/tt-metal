@@ -1,0 +1,115 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Direct safetensors access to the GLM-5.3-Flash checkpoint (no transformers, no ttnn).
+
+The checkpoint is fp8-e4m3 with 128x128 ``weight_scale_inv`` blocks for the fp8 groups; everything
+else is bf16/fp32. Keys are the raw checkpoint names (Kimi-K3 KDA naming: ``q_conv1d``,
+``f_a_proj``, ``A_log`` directly under ``self_attn``; ``hc_attn_fn`` etc.; per-expert
+``mlp.experts.N.{gate,up,down}_proj``). Both the host reference and the TTNN weight loader read
+through this module so they see identical dequantized tensors.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import struct
+from pathlib import Path
+
+import torch
+
+LAYER_PREFIX = "model.language_model.layers."
+EMBED_KEY = "model.language_model.embed_tokens.weight"
+FINAL_NORM_KEY = "model.language_model.norm.weight"
+LM_HEAD_KEY = "lm_head.weight"
+FP8_BLOCK = (128, 128)
+
+
+def default_snapshot_dir() -> Path:
+    hub = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub"
+    snaps = sorted((hub / "models--zai-org--GLM-5.3-Flash" / "snapshots").glob("*"))
+    if not snaps:
+        raise FileNotFoundError("GLM-5.3-Flash snapshot not found in the HF cache")
+    return snaps[-1]
+
+
+def shard_headers(snapshot: Path) -> dict[str, tuple[str, dict]]:
+    """key -> (shard file, safetensors header entry) for every tensor in the checkpoint."""
+    out = {}
+    for f in sorted(Path(snapshot).glob("*.safetensors")):
+        with open(f, "rb") as fh:
+            n = struct.unpack("<Q", fh.read(8))[0]
+            hdr = json.loads(fh.read(n))
+        for k, v in hdr.items():
+            if k != "__metadata__":
+                out[k] = (f.name, v)
+    return out
+
+
+def load_tensors(snapshot: Path, keys: list[str], headers: dict[str, tuple[str, dict]]) -> dict[str, torch.Tensor]:
+    from safetensors import safe_open
+
+    by_file: dict[str, list[str]] = {}
+    for k in keys:
+        by_file.setdefault(headers[k][0], []).append(k)
+    out = {}
+    for fname, ks in by_file.items():
+        with safe_open(str(Path(snapshot) / fname), framework="pt", device="cpu") as f:
+            for k in ks:
+                out[k] = f.get_tensor(k)
+    return out
+
+
+def dequantize_weight_tensor(
+    tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape=FP8_BLOCK, *, dtype=torch.bfloat16
+) -> torch.Tensor:
+    """fp8 block-scaled -> dtype. Same arithmetic as
+    models/demos/deepseek_v3/utils/hf_model_utils.dequantize_weight_tensor (inlined so this file
+    runs in a plain torch venv without the ttnn tree importable)."""
+    assert tensor.ndim == inv_scale.ndim == len(block_shape)
+    original_shape = tuple(tensor.shape)
+    padded_shape = tuple(inv_scale.shape[i] * int(block_shape[i]) for i in range(tensor.ndim))
+    assert all(p >= o for p, o in zip(padded_shape, original_shape)), (tensor.shape, inv_scale.shape)
+    original_slices = tuple(slice(0, size) for size in original_shape)
+    out = tensor.float()
+    if padded_shape != original_shape:
+        padded = torch.zeros(padded_shape, dtype=out.dtype)
+        padded[original_slices] = out
+        out = padded
+    interleaved_shape, scale_broadcast_shape = [], []
+    for dim, block_dim in enumerate(block_shape):
+        interleaved_shape.extend([inv_scale.shape[dim], int(block_dim)])
+        scale_broadcast_shape.extend([inv_scale.shape[dim], 1])
+    out_view = out.reshape(*interleaved_shape)
+    out_view.mul_(inv_scale.float().reshape(*scale_broadcast_shape))
+    out = out_view.reshape(*padded_shape)
+    return out[original_slices].to(dtype).contiguous()
+
+
+def load_layer_raw(snapshot: Path, layer_idx: int, headers=None, *, name_filter=None) -> dict[str, torch.Tensor]:
+    """Raw checkpoint-named tensors of one layer (prefix stripped), fp8 groups dequantized to bf16.
+
+    ``name_filter(name) -> bool`` restricts which (prefix-stripped) tensors are loaded, e.g. to skip
+    the routed experts when only the attention path is needed.
+    """
+    headers = headers or shard_headers(snapshot)
+    prefix = f"{LAYER_PREFIX}{layer_idx}."
+    names = [k[len(prefix) :] for k in headers if k.startswith(prefix)]
+    if name_filter is not None:
+        names = [n for n in names if name_filter(n.replace(".weight_scale_inv", ".weight"))]
+    raw = load_tensors(snapshot, [prefix + n for n in names], headers)
+    out: dict[str, torch.Tensor] = {}
+    for k, t in raw.items():
+        name = k[len(prefix) :]
+        if name.endswith(".weight_scale_inv"):
+            continue
+        if t.dtype == torch.float8_e4m3fn:
+            inv = raw[k.replace(".weight", ".weight_scale_inv")]
+            t = dequantize_weight_tensor(t, inv, FP8_BLOCK, dtype=torch.bfloat16)
+        out[name] = t
+    return out
+
+
+def load_embedding(snapshot: Path, headers=None) -> torch.Tensor:
+    headers = headers or shard_headers(snapshot)
+    return load_tensors(snapshot, [EMBED_KEY], headers)[EMBED_KEY]
