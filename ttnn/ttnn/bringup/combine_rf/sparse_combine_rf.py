@@ -1090,6 +1090,18 @@ def sparse_combine_rf_prepare(
         # (fused: room kept for an 8-slot local ring and a 32-slot injection ring; what is left after the rings
         # grows them, below)
         keep = (8 + min(32, QP0)) * ISLOT if FUSED else (2 * ISLOT if l1 else 0)
+        need_min = RINGS + (N - 1) * SLOT + acc_cbs + keep  # (one ring slot per source)
+        if need_min > arena_bytes:  # (L1 capacity: every home token's fp32 sum stays in its accumulator's L1)
+            sums = MAXT * NT * 4096
+            rest = need_min - al(sums)
+            s_fit = max(0, (arena_bytes - rest) // (NT * 4096)) * A
+            a_min = next((a for a in range(A, 65) if al(-(-S // a) * NT * 4096) + rest <= arena_bytes), None)
+            raise ValueError(
+                f"sparse_combine_rf: {S} home tokens over {A} accumulators = {MAXT} tokens x {NT} fp32 tiles = "
+                f"{sums >> 10} KB of sums per accumulator, {need_min >> 10} KB with the rings / CBs; the arena has "
+                f"{arena_bytes >> 10} KB. Call with <= {s_fit} home tokens (passes: out_row0 + the planner's tokens / "
+                f"token_base) or with >= {a_min} accumulators (n_acc <= 16, one free cell each)"
+            )
         fit = (arena_bytes - RINGS - acc_cbs - keep) // ((N - 1) * SLOT)
         D = min(depth, fit)
     else:

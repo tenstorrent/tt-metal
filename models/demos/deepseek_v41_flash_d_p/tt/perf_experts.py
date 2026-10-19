@@ -484,17 +484,9 @@ def test_weighted_vs_separate(mesh_device, combines, prof):
     assert pcc > 0.999, (rel, pcc)
 
 
-@pytest.mark.timeout(1200)
-@pytest.mark.parametrize("device_params", [_weighted_params()], indirect=True, ids=["box_payload"])
-@pytest.mark.parametrize("mesh_device", [tuple(spec().mesh)], indirect=True, ids=["x".join(map(str, spec().mesh))])
-@pytest.mark.parametrize("route", ["local", "remote", "random"])
-@pytest.mark.parametrize("S", [64, 256, 448, 468, 512])
-@pytest.mark.parametrize("arena_kb", [0, 1252], ids=["arena_auto", "arena1252"])
-def test_weighted_combine_routes(mesh_device, route, S, arena_kb):
-    """Debug harness of tt/weighted_combine.py alone (no model inputs): fake (uninitialized) expert weights, S tokens per
-    chip, the routing forced so that every row stays on its home chip (local), goes to the other chip of the column
-    (remote) or is random; the call must finish, then the combine's sums are checked against the y rows it read only
-    when ``route`` is local... (fake weights: only completion and finiteness of the rows that got experts)."""
+def _wc_setup(mesh_device, route, S, **wc_kw):
+    """test_weighted_combine_routes' harness: fake-weight flat expert, WeightedCombine(**wc_kw), the routing forced
+    by ``route``, gathered x / ids / weights. Returns (wc, fe, xg, ids_g, wts_g)."""
     from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 
     from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import WeightedCombine
@@ -531,7 +523,7 @@ def test_weighted_combine_routes(mesh_device, route, S, arena_kb):
         out_dtype=ttnn.float32,
         x_bf16=False,
         h_bf16=False,
-        arena_bytes=arena_kb * 1024 or None,
+        **wc_kw,
     )
     g = torch.Generator().manual_seed(1)
     ids = torch.zeros(R, S, K, dtype=torch.int64)  # per mesh row r, its tokens' global expert ids
@@ -573,9 +565,66 @@ def test_weighted_combine_routes(mesh_device, route, S, arena_kb):
     )
     xg = wc.gather_x(x_d)
     ids_g, wts_g = wc.routing(idx_d, w_d)
+    return wc, fe, xg, ids_g, wts_g
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [_weighted_params()], indirect=True, ids=["box_payload"])
+@pytest.mark.parametrize("mesh_device", [tuple(spec().mesh)], indirect=True, ids=["x".join(map(str, spec().mesh))])
+@pytest.mark.parametrize("route", ["local", "remote", "random"])
+@pytest.mark.parametrize("S", [64, 256, 448, 468, 512])
+@pytest.mark.parametrize("arena_kb", [0, 1252], ids=["arena_auto", "arena1252"])
+def test_weighted_combine_routes(mesh_device, route, S, arena_kb):
+    """Debug harness of tt/weighted_combine.py alone (no model inputs): fake (uninitialized) expert weights, S tokens per
+    chip, the routing forced so that every row stays on its home chip (local), goes to the other chip of the column
+    (remote) or is random; the call must finish, then the combine's sums are checked against the y rows it read only
+    when ``route`` is local... (fake weights: only completion and finiteness of the rows that got experts)."""
+    wc, fe, xg, ids_g, wts_g = _wc_setup(mesh_device, route, S, arena_bytes=arena_kb * 1024 or None)
     t0 = time.time()
     out = wc(fe, xg, ids_g, wts_g, 4)
     ttnn.synchronize_device(mesh_device)
     print(f"WC_ROUTES route={route} S={S} passes={wc.P} first call {time.time() - t0:.2f} s")
     o = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
     print(f"WC_ROUTES route={route} S={S} out {tuple(o.shape)} finite {bool(torch.isfinite(o).all())}")
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [_weighted_params()], indirect=True, ids=["box_payload"])
+@pytest.mark.parametrize("mesh_device", [tuple(spec().mesh)], indirect=True, ids=["x".join(map(str, spec().mesh))])
+@pytest.mark.parametrize("fid", [0, 4], ids=["LoFi", "HiFi4"])
+@pytest.mark.parametrize("passes", [1, 2, 3])
+@pytest.mark.parametrize("S", [512, 1024])
+def test_weighted_passes_cost(mesh_device, S, passes, fid):
+    """What a pass costs: S home tokens per chip (fake weights, random routing) in passes (1 where it fits), the mean
+    wall time of N_CALLS synchronized calls (the flat expert streams every weight once a pass). S=1024 is the model's
+    2x2 chunk (2048): T(3) - T(2) = one pass's fixed cost, T(2) minus that = what one pass would take."""
+    from ttnn.bringup.combine_rf.sparse_combine_rf import accumulator_bytes
+
+    from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import ARENA_MAX
+
+    R = tuple(mesh_device.shape)[0]
+    if accumulator_bytes(R, 9, hooks._config(spec()).dim, -(-S // passes), out_dtype=ttnn.float32) > ARENA_MAX:
+        pytest.skip(f"{S} home tokens do not fit {passes} pass(es)")
+    wc, fe, xg, ids_g, wts_g = _wc_setup(mesh_device, "random", S, passes=passes)
+    assert wc.P == passes, (wc.P, passes)
+    for _ in range(2):
+        ttnn.deallocate(wc(fe, xg, ids_g, wts_g, fid))
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.time()
+    for _ in range(N_CALLS):
+        ttnn.deallocate(wc(fe, xg, ids_g, wts_g, fid))
+    ttnn.synchronize_device(mesh_device)
+    dt = (time.time() - t0) / N_CALLS
+    print(f"WC_PASSES S={S} fid={fid} passes={wc.P} x {wc.S_pass} call_ms={dt * 1e3:.3f}")
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [_weighted_params()], indirect=True, ids=["box_payload"])
+@pytest.mark.parametrize("mesh_device", [tuple(spec().mesh)], indirect=True, ids=["x".join(map(str, spec().mesh))])
+def test_weighted_refuses_small_arena(mesh_device):
+    """sparse_combine_rf refuses an arena that cannot hold its accumulators' fp32 sums (S = 512 home tokens, 9
+    accumulators: 1140 KB of sums each, in the flat expert's 1156 KB arena) with the numbers, instead of building."""
+    wc, fe, xg, ids_g, wts_g = _wc_setup(mesh_device, "local", 512, arena_bytes=1156 * 1024)
+    with pytest.raises(ValueError, match="home tokens over 9 accumulators") as e:
+        wc(fe, xg, ids_g, wts_g, 4)
+    print(f"WC_REFUSE {e.value}")
