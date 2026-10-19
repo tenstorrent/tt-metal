@@ -138,7 +138,8 @@ std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_me
 
 std::vector<FabricType> get_all_mgd_fabric_types();
 
-tt::tt_fabric::Topology get_fabric_topology();
+// The fabric topology of `mesh_device`'s context.
+tt::tt_fabric::Topology get_fabric_topology(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
 struct FabricEriscDatamoverKernelConfig {
     tt::tt_metal::Program& program;
