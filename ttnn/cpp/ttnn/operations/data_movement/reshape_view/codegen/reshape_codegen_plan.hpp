@@ -59,9 +59,9 @@ std::optional<TileRowsChoice> live_tile_rows_choice(
 
 // The program of `planned.tile_route` sized to the L1 free below the lowest live allocation: the largest tile-rows
 // plan (live_tile_rows_choice), or the segment map, sliced where slicing pays off and fits, with the deepest input CB
-// that fits. When no tile-rows plan fits, the segment map: its smallest plan holds one map row and two tiles, no more
-// than native's tiled reshape, so routing need not look at live L1. nullopt when nothing fits. Same contract as
-// live_tile_rows_choice.
+// that fits. When no tile-rows plan fits, the segment map: its smallest plan, unsliced with one input slot, needs no
+// more L1 than native's tiled reshape (tile_mapped_input_depth), so routing need not look at live L1. nullopt when
+// nothing fits. Same contract as live_tile_rows_choice.
 std::optional<TileChoice> live_tile_choice(
     const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores, const LaunchPlan& planned);
 
