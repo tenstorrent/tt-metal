@@ -449,6 +449,9 @@ void TestWorker::create_kernel(
     std::map<std::string, std::string> kernel_defines;
     if (std::getenv("TT_FABRIC2") != nullptr) {
         kernel_defines["FABRIC2_WORKER"] = "";  // Fabric 2.0 worker adapter (fabric2_worker_adapter.hpp)
+        if (std::getenv("F2_DISPATCH") != nullptr && std::atoi(std::getenv("F2_DISPATCH")) != 0) {
+            kernel_defines["FABRIC2_DISPATCH"] = "";  // the design-of-record request path (x280 dispatch); without it the adapter is the departed pull-ring path
+        }
     }
     auto kernel_handle = tt::tt_metal::CreateKernel(
         this->test_device_ptr_->get_program_handle(),
