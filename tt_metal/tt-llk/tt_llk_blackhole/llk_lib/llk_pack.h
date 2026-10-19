@@ -659,7 +659,12 @@ inline void _llk_pack_block_closed_(
     program_packer_destination(address);
 
     // The output address adds the packer W counter of channel 1 times this stride; no other pack program moves it.
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+    // Rewriting an unchanged stride cost the call up to 8 cycles.
+    if (tile_stride != pack_ch1_w_stride)
+    {
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+        pack_ch1_w_stride = tile_stride;
+    }
 
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
     {
