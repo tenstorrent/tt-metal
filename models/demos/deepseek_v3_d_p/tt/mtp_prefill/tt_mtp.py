@@ -175,7 +175,12 @@ class TtFusedMTP(LightweightModule):
         """Build the fused-MTP weight cache without copying anything to the device."""
         for name in ("enorm", "hnorm"):
             TtDistributedRmsNorm.build_ttnn_cache(
-                state_dict[name], mtp_config.hidden_size, mesh_device, cache_path, f"{cache_name_prefix}.{name}"
+                state_dict[name],
+                mtp_config.hidden_size,
+                mesh_device,
+                cache_path,
+                f"{cache_name_prefix}.{name}",
+                cluster_axis=tp_axis,
             )
         TtFusedMTP._convert_and_cache_eh_proj(
             state_dict["eh_proj"],

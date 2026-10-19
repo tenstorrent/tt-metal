@@ -176,6 +176,7 @@ class TtPrefillBlock(LightweightModule):
             mesh_device=mesh_device,
             cache_path=cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            cluster_axis=tp_axis,
         )
 
         # Build MLA cache
@@ -203,6 +204,7 @@ class TtPrefillBlock(LightweightModule):
             mesh_device=mesh_device,
             cache_path=cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
+            cluster_axis=tp_axis,
         )
 
         # Build FFN or MoE cache
