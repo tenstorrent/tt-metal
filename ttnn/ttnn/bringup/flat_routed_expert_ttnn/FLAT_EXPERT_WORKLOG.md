@@ -1114,3 +1114,20 @@ weights 996 + x 33 / 84 + y 33 / 84. Recipe: /localdev/mstaletovic/flat90/run.sh
   tile), and the 65 us tail (the last experts' gate/up -> down after their weights).
 Options: UB chosen per call from the rows (runtime, like the ALT_MAXCNT switch), or UB 2 with the slot room kept; the
 bank's third tile as a forwarder (if free); the tail / x port at M 145.
+
+### x injectors on the gate/up cores instead of relays: microbenchmarks (2026-10-19, one chip, nothing else running)
+zz_scratch_x_injector.py (flat90/xi.sh): a piece = 32 random x rows (T 5120, H 4096 bf16 row-major in DRAM) x W tiles
+of columns; tilize = fast_tilize bf16 -> bfp8 (se11_tz.cpp's); inject = gather + tilize + write the bfp8 tiles to one
+other core's L1. GB/s of bf16 x.
+| case | result |
+| tilize, W 8 / 16 / 32 | 33.7 / 32.9 / 32.4 cycles a tile (~83 GB/s a core) |
+| gather, 1 core, 512 B a row (W 8) | 11.2 (1 piece in flight) / 13.5 (4): ~51 cycles a read, issue bound; NOC0 = NOC1 |
+| gather, 1 core, 1 / 2 KB a row (W 16 / 32) | 26.9 / 52.6 |
+| gather 2 KB rows, 8 / 16 cores, NOC0 | 335 / 368 (row placement), 342 / 353 (spread over rows) |
+| gather 2 KB rows, 8 / 16 cores, NOC1 | 95 / 155 (side by side on one / two rows), 223 / 228 (spread) |
+| inject 16 cores -> one core, NOC0 reads | 155 / 149: the one receiving core's ingress (~80 GB/s of bfp8) |
+- Tilizing on the gate/up cores is free: M 145 = 73 tiles an expert for an injector doing 1/8 of x (~1.8 us of a 35 us
+  expert, math ~40% busy), ~0.2 us with all 64.
+- Reads must be >= 1-2 KB a row (the issue cost); NOC1 DRAM reads cap at ~225 GB/s spread and less for cores sharing
+  rows, NOC0 ~350; one receiving core takes ~150 GB/s of x (so >= 2 snake heads for a hot expert's ~85-100 GB/s).
+Not yet measured beside the DRISC weight stream (NOC1 = the DRISC tile 1 port; the full op's NOC0 x reads hang).
