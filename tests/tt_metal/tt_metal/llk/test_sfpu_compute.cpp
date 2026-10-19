@@ -3580,8 +3580,7 @@ INSTANTIATE_TEST_SUITE_P(
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
 
-// Disabled due to hang: tenstorrent/tt-metal#59923
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarSfpuRelu) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
     // 1 and 4-tile, SyncFull and SyncHalf
     for (const char* sfpu_op : {"relu", "relu_min", "relu_max"}) {
         for (const uint32_t num_tiles : {1u, 4u}) {
@@ -3616,8 +3615,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuReluPackBackpressure) {
     }
 }
 
-// Disabled due to hang: tenstorrent/tt-metal#59923
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarSfpuUnpackToDest16b) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
     // 16-bit operand explicitly unpacked to Dest
     for (const char* sfpu_op : {"relu", "relu_min", "relu_max"}) {
         for (const bool dst_full_sync_en : {true, false}) {
