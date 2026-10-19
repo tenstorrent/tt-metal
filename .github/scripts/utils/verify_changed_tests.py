@@ -661,6 +661,7 @@ def scope_file(
     changed_src=None,
     edited=True,
     base_blobs=None,
+    source_scan_exempt_files=frozenset(),
 ):
     """Diff one tests yaml and return its scoping result.
 
@@ -669,7 +670,9 @@ def scope_file(
     full of new entries.
 
     tracked/dirs/changed_src drive the source pass: an entry is scoped when its cmd
-    names an edited file, even if its own yaml is untouched.
+    names an edited file, even if its own yaml is untouched. source_scan_exempt_files
+    opts a yaml out of that pass only -- direct edits to it (added/changed entries)
+    still scope normally either way.
 
     edited says whether the PR touched this yaml. The source pass reads every yaml,
     so an unedited broken one is skipped rather than failing the gate -- for every
@@ -722,7 +725,7 @@ def scope_file(
     # out here too, since behavioural_view() excludes them.
 
     # Entries already touched above keep their reason and are not added twice.
-    if changed_src:
+    if changed_src and os.path.basename(path) not in source_scan_exempt_files:
         already = {key for key, _, _ in touched}
         for key, entry in new_index.items():
             if key in already:
@@ -794,6 +797,7 @@ def build_scope(
     unsupported_files,
     renames=None,
     changed_src=None,
+    source_scan_exempt_files=frozenset(),
 ):
     run_legs, dropped_legs, skipped = [], [], []
     renames = renames or {}
@@ -826,6 +830,7 @@ def build_scope(
             changed_src=changed_src,
             edited=path in files,
             base_blobs=base_blobs,
+            source_scan_exempt_files=source_scan_exempt_files,
         )
         if scoped["no_entries"]:
             # Only a yaml the PR edited is worth reporting as skipped.
@@ -1066,6 +1071,7 @@ def run(args):
     tracy_files = set(split_list(args.tracy_files))
     non_matrix_files = set(split_list(args.non_matrix_files))
     unsupported_files = set(split_list(args.unsupported_files))
+    source_scan_exempt_files = set(split_list(args.source_scan_exempt_files))
     base = merge_base(args.base)
     files = args.files if args.files is not None else changed_files(base)
     files = [f for f in files if f.startswith(TESTS_DIR + "/")]
@@ -1091,6 +1097,7 @@ def run(args):
         unsupported_files,
         renames=renames,
         changed_src=changed_src,
+        source_scan_exempt_files=source_scan_exempt_files,
     )
 
     # In a merge group the legs already ran on the PR head, so there is no matrix
@@ -1189,6 +1196,16 @@ def main(argv=None):
         help=(
             "Skip the source pass, scoping only from edits to the tests yamls themselves. "
             "Without it an entry is also scoped when its cmd names a file the PR changed."
+        ),
+    )
+    parser.add_argument(
+        "--source-scan-exempt-files",
+        default=os.environ.get("SOURCE_SCAN_EXEMPT_YAMLS", ""),
+        help=(
+            "Yaml basenames the source pass does not scope entries into, e.g. a yaml whose "
+            "cmd matches an entire tree so broadly that any file in it scopes every entry "
+            "(default: $SOURCE_SCAN_EXEMPT_YAMLS). Direct edits to the yaml still scope "
+            "normally -- this only opts it out of being scoped by someone else's change."
         ),
     )
     parser.add_argument("--ttsim-skip-list", default=DEFAULT_TTSIM_SKIP_LIST)

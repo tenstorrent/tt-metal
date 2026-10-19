@@ -4,7 +4,14 @@
 
 # LLK perf tests are no longer triggered on PR label "llk:performance"
 # ci-quiet log mode is hard-coded.
-# SPEED_OF_LIGHT is supplied by llk-perf-impl and defaults to true in the runners.
+#
+# The env below is only read by this gate, not by llk-perf-impl itself: it mirrors
+# what llk-perf.yaml's nightly non-speed-of-light job passes. SPEED_OF_LIGHT stays
+# false -- the nightly measures speed-of-light and a 2-4h leg per change is not
+# worth it, and nothing compares it. LLK_PERF_RUN_TYPES mirrors ALL_MODES, which
+# nightly uses to skip L1_CONGESTION (ungated, a fifth of the build); blank would
+# keep it. PIPELINE is "pr" since this runs on a pull_request, not the schedule.
+#
 # {split_group} is substituted with each row's split_group by prepare_test_matrix.py,
 # so every group below shares one identical cmd that calls a shared runner in
 # tt_metal/tt-llk/tests/: run_llk_perf_wormhole.sh and run_llk_perf_blackhole.sh
@@ -23,10 +30,9 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
-                             # leg per change is not worth it, and nothing compares it
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
-    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 2/5
@@ -42,10 +48,9 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
-                             # leg per change is not worth it, and nothing compares it
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
-    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 3/5
@@ -61,10 +66,9 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
-                             # leg per change is not worth it, and nothing compares it
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
-    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 4/5
@@ -80,10 +84,9 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
-                             # leg per change is not worth it, and nothing compares it
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
-    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 5/5
@@ -99,10 +102,9 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
-                             # leg per change is not worth it, and nothing compares it
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
-    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 1/5
@@ -118,10 +120,9 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
-                             # leg per change is not worth it, and nothing compares it
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
-    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 2/5
@@ -137,10 +138,9 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
-                             # leg per change is not worth it, and nothing compares it
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
-    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 3/5
@@ -156,10 +156,9 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
-                             # leg per change is not worth it, and nothing compares it
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
-    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 4/5
@@ -175,10 +174,9 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
-                             # leg per change is not worth it, and nothing compares it
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
-    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 5/5
@@ -194,8 +192,7 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
-                             # leg per change is not worth it, and nothing compares it
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
-    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
     TT_LLK_DISABLE_ASSERTS: "1"

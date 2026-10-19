@@ -97,6 +97,7 @@ class Repo:
         files: list[str] | None = None,
         non_matrix_files: str = DEFAULT_NON_MATRIX,
         no_source_scope: bool = False,
+        source_scan_exempt_files: str = "",
     ):
         """
         Run the scope-only path.
@@ -117,6 +118,8 @@ class Repo:
             unsupported_skus,
             "--non-matrix-files",
             non_matrix_files,
+            "--source-scan-exempt-files",
+            source_scan_exempt_files,
             "--output",
             "result.json",
         ]
@@ -860,6 +863,47 @@ def test_deleting_a_named_test_file_still_scopes_its_entry(src_repo: Repo):
     code, payload, stderr = src_repo.scope()
     assert code == 0, stderr
     assert "src alpha" in {leg["name"] for leg in payload["run_legs"]}
+
+
+# --- source-scan exemption ----------------------------------------------------
+
+EXEMPT_YAML = """\
+- name: exempt delta
+  cmd: pytest tests/ttnn/unit_tests/
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  team: ttnn
+  owner_id: U013
+"""
+
+
+def test_source_scan_exempt_file_is_not_scoped_by_an_unrelated_edit(src_repo: Repo):
+    """Same directory reference as 'src beta', but this yaml opts out of the source pass."""
+    src_repo.write("tests/pipeline_reorg/sample_exempt_tests.yaml", EXEMPT_YAML)
+    src_repo.commit_base()  # the exempt yaml is base state; only test_other.py below is the diff
+    src_repo.write("tests/ttnn/unit_tests/test_other.py", "def test_other(): assert True\n")
+    code, payload, stderr = src_repo.scope(source_scan_exempt_files="sample_exempt_tests.yaml")
+    assert code == 0, stderr
+    names = {leg["name"] for leg in payload["run_legs"]}
+    # beta is scoped the normal way; delta names the same directory but is exempt.
+    assert "src beta" in names
+    assert "exempt delta" not in names
+
+
+def test_source_scan_exempt_file_still_scopes_a_direct_edit(src_repo: Repo):
+    """Exemption only opts out of the source pass; editing the entry itself still gates."""
+    src_repo.write("tests/pipeline_reorg/sample_exempt_tests.yaml", EXEMPT_YAML)
+    src_repo.commit_base()
+    src_repo.write(
+        "tests/pipeline_reorg/sample_exempt_tests.yaml",
+        EXEMPT_YAML.replace("timeout: 10", "timeout: 20"),
+    )
+    code, payload, stderr = src_repo.scope(source_scan_exempt_files="sample_exempt_tests.yaml")
+    assert code == 0, stderr
+    delta = legs_for(payload, "exempt delta")
+    assert len(delta) == 1
+    assert delta[0]["reason"] == "changed"
 
 
 def test_renaming_a_named_test_file_still_scopes_its_entry(src_repo: Repo):
@@ -1690,6 +1734,7 @@ def test_entry_env_rejects_a_multiline_value():
 LLK_ENV_SOURCES = {
     "llk_pr_gate_tests": (".github/workflows/sanity-tests.yaml", "PYTEST_MARKERS", "pytest-markers"),
     "llk_e2e_tests": (".github/workflows/llk-e2e.yaml", "PYTEST_MARKERS", "pytest-markers"),
+    "llk_perf_tests": (".github/workflows/llk-perf.yaml", "LLK_PERF_RUN_TYPES", "perf-run-types"),
 }
 
 
@@ -1707,16 +1752,22 @@ def test_declared_env_matches_the_owning_pipeline(stem: str, spec: tuple):
     assert len(declared) == 1, f"{stem}: entries disagree on env"
     declared_value = dict(declared.pop())[env_key]
 
-    # Written either as `pytest-markers: "<value>"` or, where the pipeline allows an
-    # override, as `${{ inputs.x || '<value>' }}`. Take every quoted literal on the line.
+    # Written either as `pytest-markers: "<value>"`, `perf-run-types: ALL_MODES` (an
+    # unquoted scalar needs no quoting), or `${{ inputs.x || '<value>' }}` where the
+    # pipeline allows an override. Prefer a quoted literal anywhere on the line; fall
+    # back to a bare identifier immediately after the key only when there is none.
     text = wf.read_text()
-    passed = [
-        literal
-        for line in text.splitlines()
-        if re.search(rf"\b{re.escape(input_key)}\s*:", line)
-        for literal in re.findall(r"\"([^\"]+)\"|'([^']+)'", line)
-        for literal in [next(g for g in literal if g)]
-    ]
+    passed = []
+    for line in text.splitlines():
+        if not re.search(rf"\b{re.escape(input_key)}\s*:", line):
+            continue
+        quoted = [g1 or g2 for g1, g2 in re.findall(r"\"([^\"]+)\"|'([^']+)'", line)]
+        if quoted:
+            passed.extend(quoted)
+            continue
+        bare = re.search(rf"{re.escape(input_key)}\s*:\s*([A-Za-z0-9_.-]+)\s*$", line)
+        if bare:
+            passed.append(bare.group(1))
     assert declared_value in passed, (
         f"{stem}.yaml declares {env_key}={declared_value!r}, which {workflow} no longer passes "
         f"(it passes {passed!r}). Update the tests yaml so the gate runs what the pipeline runs."

@@ -76,6 +76,28 @@ env:
     llk_ttnop_tests.yaml
     llk_sfpu_report_tests.yaml
 
+  # TEMPORARY. Unlike UNSUPPORTED_YAMLS, the gate can dispatch these fine -- this is
+  # not a compatibility exemption, and an edit to one of these yamls still scopes
+  # and gates normally. It only opts them out of the *source* pass: every entry here
+  # shares the one cmd `cd tests/python_tests && pytest -m "$PYTEST_MARKERS" ... .`,
+  # so any file anywhere under that (currently flat, 180+ file) tree scopes every
+  # entry in all three, regardless of which markers would actually select it --
+  # pytest markers are invisible to a path match. llk_pr_gate_tests.yaml stays
+  # source-scanned: it is the cheap, fast-feedback leg this gate exists to run per
+  # push. These three are not: llk-e2e.yaml and llk-bit-exact.yaml already run the
+  # full suite nightly, and llk-perf.yaml's nightly covers llk_perf_tests.yaml too,
+  # so dispatching them again per push on an unrelated file is duplicate signal at
+  # real hardware cost (measured ~7 runner-hours in #60588's validation run).
+  #
+  # Remove this once either lands: (1) the scope tool learns to resolve which legs
+  # a change actually selects (e.g. by marker) instead of matching the whole tree,
+  # or (2) the LLK side detects a verify-changed-tests invocation and prunes its own
+  # unrequired legs.
+  SOURCE_SCAN_EXEMPT_YAMLS: >-
+    llk_e2e_tests.yaml
+    llk_bit_exact_tests.yaml
+    llk_perf_tests.yaml
+
   # Yamls under tests/pipeline_reorg/ that legitimately hold no test matrix, so the
   # gate has nothing to prove for them. ttsim-skip-list.yaml is a per-arch mapping of
   # test ids, not a list of entries. models_trace_config.yaml selects trace-audit
