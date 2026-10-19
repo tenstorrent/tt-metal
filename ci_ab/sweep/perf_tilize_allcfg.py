@@ -135,6 +135,6 @@ def test_perf_tilize_allcfg(perf_report, case):
                                       tile_count_A=tiles, tile_count_B=tiles, tile_count_res=tiles),
         dest_acc=acc,
         unpack_to_dest=fmt.input_format in (F.Int32, F.UInt32) or name in ("u2d", "ctfu2d"),
-        compile_time_formats=bool(ta.ta_ctf),
+        compile_time_formats=bool(ta.ta_ctf) or os.environ.get("TA_CTF_ALL") == "1",
     )
     configuration.run(perf_report)
