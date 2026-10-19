@@ -41,7 +41,7 @@ class QKVProjection:
             packer_l1_acc=False,
         )
         self.program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(3, 8),
+            compute_with_storage_grid_size=ttnn.CoreCoord(_LOCAL_QKV_WIDTH // ttnn.TILE_SIZE // 8, 8),
             in0_block_w=4,
             out_subblock_h=1,
             out_subblock_w=4,
@@ -98,8 +98,10 @@ class QKVProjection:
             q_local = q_heads[q0 : q0 + layout.local_q_heads].reshape(
                 layout.local_q_heads * Model.HEAD_DIM, Model.EMB_SIZE
             )
-            k_local = k_heads[tp_coord].reshape(Model.HEAD_DIM, Model.EMB_SIZE)
-            v_local = v_heads[tp_coord].reshape(Model.HEAD_DIM, Model.EMB_SIZE)
+            kv0 = tp_coord * layout.local_kv_heads
+            kv_width = layout.local_kv_heads * Model.HEAD_DIM
+            k_local = k_heads[kv0 : kv0 + layout.local_kv_heads].reshape(kv_width, Model.EMB_SIZE)
+            v_local = v_heads[kv0 : kv0 + layout.local_kv_heads].reshape(kv_width, Model.EMB_SIZE)
             groups.append(torch.cat((q_local, k_local, v_local), dim=0).transpose(-2, -1))
         packed = torch.cat(groups, dim=-1).contiguous()
         return packed.reshape(1, 1, Model.EMB_SIZE, layout.tp * _LOCAL_QKV_WIDTH)

@@ -10,8 +10,9 @@ import torch
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
+from models.demos.llama_3p1_8b_d_p.tt.config import tp_topology
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
-from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import validate_mesh
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import tp_neighbors, validate_mesh
 
 _WEIGHT_SHAPES = {
     "gate_proj.weight": (Model.INTERMEDIATE_SIZE, Model.EMB_SIZE),
@@ -43,7 +44,7 @@ class MLP:
             out_subblock_h=1,
             out_subblock_w=4,
             per_core_M=1,
-            per_core_N=8,
+            per_core_N=Model.INTERMEDIATE_SIZE // layout.tp // ttnn.TILE_SIZE // 7,
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=False,
@@ -91,7 +92,7 @@ class MLP:
             for tp_coord in range(layout.tp):
                 src_coord = ttnn.MeshCoordinate([sp_coord, tp_coord])
                 src_node = self.mesh_device.get_fabric_node_id(src_coord)
-                for neighbor_tp in ((tp_coord - 1) % layout.tp, (tp_coord + 1) % layout.tp):
+                for neighbor_tp in tp_neighbors(tp_coord):
                     dst_coord = ttnn.MeshCoordinate([sp_coord, neighbor_tp])
                     dst_node = self.mesh_device.get_fabric_node_id(dst_coord)
                     forwarding_indices = tuple(ttnn.get_forwarding_link_indices(self.mesh_device, src_node, dst_node))
@@ -132,9 +133,9 @@ class MLP:
             raise ValueError(f"MLP input must use TILE_LAYOUT, got {x.layout}")
         if x.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
             raise ValueError(f"MLP input must use interleaved DRAM, got {x.memory_config()}")
-        topology = ttnn.get_usable_topology(x, topology=ttnn.Topology.Ring, cluster_axis=self.mesh_config.tp_axis)
-        if topology != ttnn.Topology.Ring:
-            raise RuntimeError(f"MLP requires a live TP ring, but TTNN selected {topology}")
+        topology = ttnn.get_usable_topology(x, topology=tp_topology(), cluster_axis=self.mesh_config.tp_axis)
+        if topology != tp_topology():
+            raise RuntimeError(f"MLP requires a live TP {tp_topology()}, but TTNN selected {topology}")
 
     def __call__(self, x):
         self._validate_input(x)
@@ -178,7 +179,7 @@ class MLP:
             cluster_axis=self.mesh_config.tp_axis,
             num_links=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
+            topology=tp_topology(),
         )
         partial.deallocate(True)
         return output

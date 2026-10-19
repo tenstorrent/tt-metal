@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host address arithmetic for the packed SP4/TP8 BF8_B prefill cache."""
+"""Host address arithmetic for the packed SP4 BF8_B prefill cache (TP8 or TP4)."""
 
 from dataclasses import dataclass
 
@@ -63,9 +63,12 @@ class PrefillKVLayout:
         width = self.chunk_size // self.sp
         row = position % self.chunk_size // width
         local_position = position // self.chunk_size * width + position % width
-        page = ((slot * self.num_layers + layer) * (self.max_seq_len // self.sp) + local_position) // 32
+        heads_per_chip = Model.NUM_KEY_VALUE_HEADS // self.tp
+        head = config % Model.NUM_KEY_VALUE_HEADS
+        plane = (slot * self.num_layers + layer) * heads_per_chip + head % heads_per_chip
+        page = (plane * (self.max_seq_len // self.sp) + local_position) // 32
         bank = page % self.num_banks
         offset = base_addr + page // self.num_banks * self.chunk_size_bytes
         if offset + self.chunk_size_bytes > 1 << 32:
             raise ValueError("DRAM offset exceeds the 32-bit NoC address field")
-        return (row, config % self.tp), bank, offset
+        return (row, head // heads_per_chip), bank, offset

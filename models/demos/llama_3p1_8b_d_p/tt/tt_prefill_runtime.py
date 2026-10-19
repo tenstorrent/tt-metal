@@ -40,7 +40,7 @@ class TtPrefillRuntimeConfig:
             True,
             layout.mesh_shape,
         ):
-            raise ValueError("Llama runtime supports one SP4/TP8 rank containing all 32 layers")
+            raise ValueError(f"Llama runtime supports one SP{layout.sp}/TP{layout.tp} rank containing all 32 layers")
 
 
 class TtPrefillRuntime:
