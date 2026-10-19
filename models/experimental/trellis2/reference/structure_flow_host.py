@@ -190,17 +190,18 @@ def sample(
     return x, outs
 
 
-def functional_forward(state: dict[str, torch.Tensor], x: torch.Tensor, t: torch.Tensor, cond: torch.Tensor):
-    """Torch mirror of the TT model, in fp32. Same inputs and output as SparseStructureFlowModel.forward."""
-    s = {k: v.float() for k, v in state.items()}
-    mods = modulation(state, t)
-    cos, sin = rope_tables(grid_coords())
+def blocks_forward(
+    s: dict[str, torch.Tensor],
+    mods: Modulation,
+    h: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    ctx: torch.Tensor,
+    cross_attn_mask: torch.Tensor,
+    self_attn_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """The 30 shared-modulation blocks on h [1, 1, N, D] (fp32 state s). Used by the structure and SLat mirrors."""
     rot = pair_rotation()
-    ctx = pad_context(cond.float())
-    mask = cross_mask(RESOLUTION**3, cond.shape[1])
-
-    w_in = F.pad(s["input_layer.weight"], (0, CHANNEL_PAD - IN_CHANNELS))
-    h = F.linear(x_to_tokens(x.float()), w_in, s["input_layer.bias"])
     for i in range(NUM_BLOCKS):
         p = f"blocks.{i}."
         q_w, k_w, v_w = s[p + "self_attn.to_qkv.weight"].chunk(3)
@@ -212,7 +213,7 @@ def functional_forward(state: dict[str, torch.Tensor], x: torch.Tensor, t: torch
         v = _heads(F.linear(a, v_w, v_b))
         q = q * cos + (q @ rot) * sin
         k = k * cos + (k @ rot) * sin
-        a = _merge(F.scaled_dot_product_attention(q, k, v))
+        a = _merge(F.scaled_dot_product_attention(q, k, v, attn_mask=self_attn_mask))
         h = h + F.linear(a, s[p + "self_attn.to_out.weight"], s[p + "self_attn.to_out.bias"]) * mods.gate_msa[i]
 
         kv_w, kv_b = s[p + "cross_attn.to_kv.weight"], s[p + "cross_attn.to_kv.bias"]
@@ -225,13 +226,26 @@ def functional_forward(state: dict[str, torch.Tensor], x: torch.Tensor, t: torch
             _heads(F.linear(ctx, kv_w[:MODEL_CHANNELS], kv_b[:MODEL_CHANNELS])), s[p + "cross_attn.k_rms_norm.gamma"]
         )
         v = _heads(F.linear(ctx, kv_w[MODEL_CHANNELS:], kv_b[MODEL_CHANNELS:]))
-        a = _merge(F.scaled_dot_product_attention(q, k, v, attn_mask=mask))
+        a = _merge(F.scaled_dot_product_attention(q, k, v, attn_mask=cross_attn_mask))
         h = h + F.linear(a, s[p + "cross_attn.to_out.weight"], s[p + "cross_attn.to_out.bias"])
 
         a = F.layer_norm(h, (MODEL_CHANNELS,), eps=BLOCK_NORM_EPS) * mods.scale_mlp[i] + mods.shift_mlp[i]
         a = F.gelu(F.linear(a, s[p + "mlp.mlp.0.weight"], s[p + "mlp.mlp.0.bias"]), approximate="tanh")
         h = h + F.linear(a, s[p + "mlp.mlp.2.weight"], s[p + "mlp.mlp.2.bias"]) * mods.gate_mlp[i]
+    return h
 
+
+def functional_forward(state: dict[str, torch.Tensor], x: torch.Tensor, t: torch.Tensor, cond: torch.Tensor):
+    """Torch mirror of the TT model, in fp32. Same inputs and output as SparseStructureFlowModel.forward."""
+    s = {k: v.float() for k, v in state.items()}
+    mods = modulation(state, t)
+    cos, sin = rope_tables(grid_coords())
+    ctx = pad_context(cond.float())
+    mask = cross_mask(RESOLUTION**3, cond.shape[1])
+
+    w_in = F.pad(s["input_layer.weight"], (0, CHANNEL_PAD - IN_CHANNELS))
+    h = F.linear(x_to_tokens(x.float()), w_in, s["input_layer.bias"])
+    h = blocks_forward(s, mods, h, cos, sin, ctx, mask)
     h = F.layer_norm(h, (MODEL_CHANNELS,), eps=FINAL_NORM_EPS)
     w_out = F.pad(s["out_layer.weight"], (0, 0, 0, CHANNEL_PAD - IN_CHANNELS))
     b_out = F.pad(s["out_layer.bias"], (0, CHANNEL_PAD - IN_CHANNELS))

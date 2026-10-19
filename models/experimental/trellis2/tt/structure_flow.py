@@ -60,6 +60,7 @@ class DeviceTables:
     sin: ttnn.Tensor  # [1, H, N, E]
     rot: ttnn.Tensor  # [E, E]
     cross_mask: ttnn.Tensor  # [1, 1, N, Lp]
+    self_windows: ttnn.Tensor | None = None  # SDPA cu_window_seqlens [0, n_real, N] (uint32); None: no padding
 
 
 class MultiHeadRMSNorm(Module):
@@ -146,6 +147,7 @@ class Attention(Module):
             v,
             is_causal=False,
             attn_mask=None if self.is_self else tables.cross_mask,
+            cu_window_seqlens=tables.self_windows if self.is_self else None,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
         )

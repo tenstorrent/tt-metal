@@ -48,6 +48,20 @@ def conditions() -> dict[str, torch.Tensor]:
     return torch.load(f"{golden_dir()}/cond.pt", weights_only=False)
 
 
+@lru_cache(maxsize=None)
+def shape_stage() -> dict:
+    """shape.pt: calls (args[0] and out are {feats [N, 32], coords [N, 4]}), steps, final slat."""
+    return torch.load(f"{golden_dir()}/shape.pt", weights_only=False)
+
+
+def shape_call_inputs(i: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str]:
+    """feats, coords, t, cond (by the recorded CFG branch), golden output feats, branch."""
+    c = shape_stage()["calls"][i]
+    cond = conditions()["cond" if c["branch"] == "pos" else "neg_cond"]
+    x = c["args"][0]
+    return x["feats"], x["coords"], c["args"][1], cond, c["out"]["feats"], c["branch"]
+
+
 def call_inputs(i: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str]:
     """x_t, t, cond (cond or neg_cond by the recorded CFG branch), golden output, branch."""
     c = structure_calls()[i]
