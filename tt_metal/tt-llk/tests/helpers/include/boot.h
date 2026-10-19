@@ -12,6 +12,7 @@
 #include "ckernel_helper.h"
 #if defined(ARCH_QUASAR)
 #include "ckernel_trisc_common.h"
+#include "llk_dest_dvalid.h"
 #endif
 
 // C-runtime related linker symbols
@@ -129,14 +130,15 @@ TT_ALWAYS_INLINE void device_setup()
 #endif
 
 #if defined(ARCH_QUASAR)
-    // Reset all dest dvalid bits for all clients
-    TTI_CLEARDVALID(0, 0, 0xf, 0xf, 0, 0);
+    ckernel::_llk_dest_dvalid_boot_reset_();
     volatile std::uint32_t* dvalid_cfg                      = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE);
     dvalid_cfg[UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
     dvalid_cfg[MATH_DEST_DVALID_CTRL_wait_mask_ADDR32]      = 0;
     dvalid_cfg[SFPU_DEST_DVALID_CTRL_wait_mask_ADDR32]      = 0;
     dvalid_cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32]      = 0;
     TTI_SEMINIT(1, 0, 0, ckernel::trisc::semaphore::t6_sem(ckernel::trisc::semaphore::PACK_UNPACK));
+    TTI_SEMINIT(1, 0, 0, ckernel::trisc::semaphore::t6_sem(ckernel::trisc::semaphore::FPU_SFPU));
+    TTI_SEMINIT(1, 0, 0, ckernel::trisc::semaphore::t6_sem(ckernel::trisc::semaphore::SFPU_FPU));
 #endif
 
 // Enable CC stack

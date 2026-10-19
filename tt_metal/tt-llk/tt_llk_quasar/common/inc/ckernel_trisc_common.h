@@ -275,9 +275,13 @@ struct semaphore
     // - UNPACK_MATH = unpack->math
     // - UNPACK_PACK = unpack->pack
     // - PACK_UNPACK = pack->unpack
+    // - FPU_SFPU = math->sfpu thread
+    // - SFPU_FPU = sfpu thread->math
     // - UNPACK_INIT = unpack->math (startup barrier, see llk_sync.h)
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
     constexpr static std::uint32_t UNPACK_PACK = 3; // unpack -> pack: DEST sections unpacked and not yet released by pack
+    constexpr static std::uint32_t FPU_SFPU    = 5; // math -> sfpu thread, dest section ready
+    constexpr static std::uint32_t SFPU_FPU    = 6; // sfpu thread -> math, dest section done
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
     constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
     // Startup barrier for the unpack-to-dest handshake. Each semaphore is seeded by the thread that posts it, in front of
