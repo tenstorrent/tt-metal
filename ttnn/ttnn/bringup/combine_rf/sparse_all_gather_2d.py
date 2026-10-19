@@ -21,8 +21,10 @@ bytes (word 0: slot | hops left << 16 | generation << 20 | order << 24; word 1: 
 write + increment vouches for the rows sent before it on the same link. END(g) = no more rows that had travelled g
 hops before leaving; a port emits END(0) after its own rows, END(g) after every input delivered END(g - 1), and is done
 when END(GMAX) is out and every input delivered END(GMAX). Rings hold a whole call (no credits, nothing waits for
-space).
+space): ring k holds S entries per origin chip whose trees can reach a ring k of some port (manifest_layout), not N S.
 """
+
+import functools
 
 import torch
 
@@ -66,8 +68,25 @@ def span_entry(n, wrap, pos, tmask, tie):
     return a | b << 4
 
 
+@functools.lru_cache(maxsize=None)  # (pure in its integer arguments: per-call host time otherwise)
 def span_table(n, wrap):
     return [span_entry(n, wrap, pos, tm, tie) for pos in range(n) for tm in range(1 << n) for tie in range(2)]
+
+
+def ring_table(n, wrap):
+    """The kernels' ring span table: span_entry from position 0 by rotated mask and tie ([0] for a line)."""
+    return [span_entry(n, True, 0, rm, tie) for rm in range(1 << n) for tie in range(2)] if wrap else [0]
+
+
+@functools.lru_cache(maxsize=None)  # (pure in its integer arguments: per-call host time otherwise)
+def span_subs(R, C, wrap_x, wrap_y):
+    """The _COMMON substitutions of the span helpers."""
+    return {
+        "__WRAPX__": "true" if wrap_x else "false",
+        "__WRAPY__": "true" if wrap_y else "false",
+        "__XRING__": ", ".join(map(str, ring_table(C, wrap_x))),
+        "__YRING__": ", ".join(map(str, ring_table(R, wrap_y))),
+    }
 
 
 _COMMON = r"""
@@ -78,8 +97,11 @@ constexpr uint32_t R = __R__;
 constexpr uint32_t C = __C__;
 constexpr uint32_t S = __S__;
 constexpr uint32_t GMAX = __GMAX__;
-constexpr uint8_t XSPAN[C * (1u << C) * 2] = {__XSPAN__};
-constexpr uint8_t YSPAN[R * (1u << R) * 2] = {__YSPAN__};
+constexpr bool WRAP_X = __WRAPX__, WRAP_Y = __WRAPY__;
+// ring spans by the destination mask rotated to the position (a ring looks the same from every chip: 2^n x 2 bytes, not
+// n x 2^n x 2, which an 8-ring would put at 4 KB of the RISC's local memory); a line's span needs no table
+constexpr uint8_t XRING[WRAP_X ? (1u << C) * 2 : 1] = {__XRING__};
+constexpr uint8_t YRING[WRAP_Y ? (1u << R) * 2 : 1] = {__YRING__};
 constexpr uint32_t END = 1u << 31;
 constexpr uint32_t SKIP = 1u << 30;
 constexpr uint32_t META_WORDS = 4;
@@ -87,9 +109,23 @@ constexpr uint32_t META_WORDS = 4;
 constexpr uint32_t RW = __RW__;  // route words per own row (1: mask | order << 16 | link << 17; 2: mask, order | link << 1)
 FORCE_INLINE uint32_t route_mask(const uint32_t* w, uint32_t t) { return RW == 2 ? w[2 * t] : w[t] & 0xFFFF; }
 FORCE_INLINE uint32_t route_flags(const uint32_t* w, uint32_t t) { return RW == 2 ? w[2 * t + 1] : w[t] >> 16; }
+// ring k's first entry in the manifest (ring_offs: ring 1's | ring 2's << 16, in entries)
+FORCE_INLINE uint32_t ring_off(uint32_t ring_offs, uint32_t k) { return k == 0 ? 0 : (ring_offs >> (16 * (k - 1))) & 0xFFFF; }
 FORCE_INLINE uint32_t tie_of(uint32_t t) { return ((t * 2654435761u) >> 30) & 1; }
-FORCE_INLINE uint32_t xspan(uint32_t pos, uint32_t cm, uint32_t t) { return XSPAN[(pos * (1u << C) + cm) * 2 + tie_of(t)]; }
-FORCE_INLINE uint32_t yspan(uint32_t pos, uint32_t rm, uint32_t t) { return YSPAN[(pos * (1u << R) + rm) * 2 + tie_of(t)]; }
+// (a, b) packed a | b << 4: hops forward / backward from pos covering mask m's set positions (pos itself ignored)
+template <uint32_t n, bool wrap>
+FORCE_INLINE uint32_t span_of(const uint8_t* ring, uint32_t pos, uint32_t m, uint32_t t) {
+    m &= ~(1u << pos) & ((1u << n) - 1);
+    if (m == 0) return 0;
+    if constexpr (wrap) {
+        return ring[(((m >> pos) | (m << (n - pos))) & ((1u << n) - 1)) * 2 + tie_of(t)];
+    } else {
+        const uint32_t hi = 31 - __builtin_clz(m), lo = __builtin_ctz(m);
+        return (hi > pos ? hi - pos : 0) | ((lo < pos ? pos - lo : 0) << 4);
+    }
+}
+FORCE_INLINE uint32_t xspan(uint32_t pos, uint32_t cm, uint32_t t) { return span_of<C, WRAP_X>(XRING, pos, cm, t); }
+FORCE_INLINE uint32_t yspan(uint32_t pos, uint32_t rm, uint32_t t) { return span_of<R, WRAP_Y>(YRING, pos, rm, t); }
 // columns holding a destination (any row)
 FORCE_INLINE uint32_t cols_of(uint32_t m) {
     uint32_t cm = 0;
@@ -132,7 +168,7 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(a++);
     const uint32_t plan_addr = get_arg_val<uint32_t>(a++);
     const uint32_t man_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t ring_bytes = get_arg_val<uint32_t>(a++);
+    const uint32_t ring_offs = get_arg_val<uint32_t>(a++);
     uint32_t cnt_addr[3];
     for (uint32_t k = 0; k < 3; ++k) cnt_addr[k] = get_arg_val<uint32_t>(a++);
     const uint32_t ring_mask = get_arg_val<uint32_t>(a++);  // which inputs exist
@@ -159,7 +195,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* ring[3];
     for (uint32_t k = 0; k < 3; ++k) {
         cnt[k] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cnt_addr[k]);
-        ring[k] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(man_addr + k * ring_bytes);
+        ring[k] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(man_addr + ring_off(ring_offs, k) * 16);
     }
     uint32_t mi[3] = {0, 0, 0};
     int32_t end_in[3] = {-1, -1, -1};
@@ -323,7 +359,7 @@ void kernel_main() {
     const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
     const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
     const uint32_t man_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t ring_bytes = get_arg_val<uint32_t>(a++);
+    const uint32_t ring_offs = get_arg_val<uint32_t>(a++);
     uint32_t cnt_addr[3];
     for (uint32_t k = 0; k < 3; ++k) cnt_addr[k] = get_arg_val<uint32_t>(a++);
     uint32_t s_on[3], s_x[3], s_y[3], s_k[3];
@@ -365,7 +401,7 @@ void kernel_main() {
     auto send_manifest = [&](uint32_t s) {
         if (staged[s] == 0) return;
         const uint32_t src = stage_l1 + (s * 2 + half[s]) * MB * 16;
-        const uint64_t dst = get_noc_addr(s_x[s], s_y[s], man_addr + s_k[s] * ring_bytes + sent[s] * 16);
+        const uint64_t dst = get_noc_addr(s_x[s], s_y[s], man_addr + (ring_off(ring_offs, s_k[s]) + sent[s]) * 16);
         const uint64_t cnt_noc = get_noc_addr(s_x[s], s_y[s], cnt_addr[s_k[s]]);
         mhdr->to_noc_fused_unicast_write_atomic_inc(NocUnicastAtomicIncFusedCommandHeader{dst, cnt_noc, staged[s], true},
                                                      staged[s] * 16);
@@ -494,9 +530,32 @@ def mesh_plan(mesh_device, num_links, torus=(False, False)):
     return chips, nb, (wrap_x, wrap_y)
 
 
+_PORTS_CACHE = {}
+_DESC_CACHE = {}  # sparse_all_gather_2d's descriptors by buffers and options
+
+
 def place_ports(mesh_device, chips, allowed=None):
     """{(coord, dir, link index): logical core}: one port core per direction and link, next to its Ethernet core
-    (from `allowed`, logical (x, y) cells, if given: e.g. the cells another op leaves free)."""
+    (from `allowed`, logical (x, y) cells, if given: e.g. the cells another op leaves free). Memoized per mesh, chips
+    and allowed cells (a per-call op's host time: ~8 ms a placement)."""
+    key = (
+        id(mesh_device),
+        repr(
+            sorted(
+                (c, sorted((d, p["peer"], tuple(p["links"])) for d, p in ports.items())) for c, ports in chips.items()
+            )
+        ),
+        None if allowed is None else tuple(sorted(allowed)),
+    )
+    hit = _PORTS_CACHE.get(key)
+    if hit is not None and hit[0] is mesh_device:
+        return dict(hit[1])
+    out = _place_ports(mesh_device, chips, allowed)
+    _PORTS_CACHE[key] = (mesh_device, dict(out))
+    return out
+
+
+def _place_ports(mesh_device, chips, allowed=None):
     allowed = allowed_cores(mesh_device) if allowed is None else set(allowed)
     connections = {
         coord: [(p["peer"], l) for p in ports.values() for l in p["links"]] for coord, ports in chips.items()
@@ -530,16 +589,71 @@ def ensure_semaphores(mesh_device, *, num_links=2, torus=(False, False)):
     return _SEM_CACHE[key][1]
 
 
+@functools.lru_cache(maxsize=None)  # (pure in its integer arguments: per-call host time otherwise)
+def axis_reach(n, wrap):
+    """Per position: the most hops a tree's span goes forward / backward from it (over every mask and tie)."""
+    t = span_table(n, wrap)
+    per = 2 << n
+    return [max(e & 15 for e in t[p * per : (p + 1) * per]) for p in range(n)], [
+        max(e >> 4 for e in t[p * per : (p + 1) * per]) for p in range(n)
+    ]
+
+
+@functools.lru_cache(maxsize=None)  # (pure in its integer arguments: per-call host time otherwise)
+def manifest_layout(R, C, wrap_x, wrap_y, S):
+    """(ring 1's offset, ring 2's offset, total) in 16-byte entries of a port core's manifest. A row enters a given
+    ring of a given port at most once, so ring k needs S entries per origin chip whose trees can put a row there (max
+    over the ports) plus the END markers. Ring 0 of port (chip, d): rows that started their leg along d's axis at an
+    entry chip k hops back with a span of at least k + 1 hops; their origins are the entry chip and, for the second
+    leg, the chips of its line on the other axis that reach it. Rings 1 / 2: first-leg rows of the other axis that
+    arrived moving + / -: one origin per chip of that line within reach."""
+    fx, bx = axis_reach(C, wrap_x)
+    fy, by = axis_reach(R, wrap_y)
+
+    def hops(n, wrap, p, q, fwd):  # hops from p to q moving + (fwd) or -, None if that way does not lead there
+        k = (q - p if fwd else p - q) % n if wrap else (q - p if fwd else p - q)
+        return k if k > 0 else None
+
+    def reaches(n, wrap, f, b, p, q):
+        kf, kb = hops(n, wrap, p, q, True), hops(n, wrap, p, q, False)
+        return (kf is not None and kf <= f[p]) or (kb is not None and kb <= b[p])
+
+    axes = {"X": (C, wrap_x, fx, bx, R, wrap_y, fy, by), "Y": (R, wrap_y, fy, by, C, wrap_x, fx, bx)}
+    n0 = n1 = n2 = 0
+    for r in range(R):
+        for c in range(C):
+            for ax, (n, w, f, b, no, wo, fo, bo) in axes.items():
+                pos, opos = (c, r) if ax == "X" else (r, c)
+                for fwd in (True, False):
+                    span = f if fwd else b
+                    cont = 0
+                    for e in range(n):
+                        k = hops(n, w, e, pos, fwd)
+                        if k is not None and k + 1 <= span[e]:
+                            cont += 1 + sum(reaches(no, wo, fo, bo, q, opos) for q in range(no) if q != opos)
+                    n0 = max(n0, cont)
+                for fwd, k_ in ((True, 1), (False, 2)):
+                    span = fo if fwd else bo
+                    cnt = sum(1 for q in range(no) if (k := hops(no, wo, q, opos, fwd)) is not None and k <= span[q])
+                    if k_ == 1:
+                        n1 = max(n1, cnt)
+                    else:
+                        n2 = max(n2, cnt)
+    GMAX = (C - 1) + (R - 1) - 1
+    e0, e1, e2 = (n * S + GMAX + 4 for n in (n0, n1, n2))
+    assert e0 + e1 < (1 << 16), "manifest ring offsets are 16-bit entry counts"
+    return e0, e0 + e1, e0 + e1 + e2
+
+
 def manifest_spec(mesh_device, S, *, num_links=2, torus=(False, False)):
     """(shape, dtype, layout, device, memory config) of the port cores' manifest rings for S own rows per chip:
     allocate it per call (ttnn.allocate_tensor_on_device) and pass it as ``manifest`` (its contents need no zeroing:
     the rings are consumed by count, and the counters are global semaphores the reader resets), instead of the
     persistent one (~123 KB of every core's L1 at K3's 2560 rows)."""
     R, C = tuple(mesh_device.shape)
-    chips, _, _ = mesh_plan(mesh_device, num_links, torus)
+    chips, _, (wrap_x, wrap_y) = mesh_plan(mesh_device, num_links, torus)
     cores = sorted({(c.x, c.y) for c in place_ports(mesh_device, chips).values()})
-    GMAX = (C - 1) + (R - 1) - 1
-    man_words = 3 * (R * C * S + GMAX + 4) * 4
+    man_words = manifest_layout(R, C, wrap_x, wrap_y, S)[2] * 4
     crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cores])
     mc = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -567,6 +681,28 @@ def sparse_all_gather_2d(
     slots idx * S + t, idx = r * C + c); plan_tensor: [1, 1, 1, S] uint32 per chip, the route words of its own rows.
     Fills every destination's slots; returns output. extra = (tensors, fn((r, c)) -> (cbs, kernels)): another op's
     CBs / kernels appended to each chip's program, on cores off port_cores_all(..) (it runs under the dispatch)."""
+    # (the same buffers, options and no merged op: the descriptor of the last such call - its runtime args are these
+    # buffers' addresses; ~2 ms of host per call otherwise)
+    dkey = None
+    if extra is None:
+        a_ = lambda t: None if t is None else int(t.buffer_address())  # noqa: E731
+        dkey = (
+            id(output.device()),
+            a_(output),
+            a_(plan_tensor),
+            a_(manifest),
+            a_(debug),
+            num_links,
+            tuple(torus),
+            group,
+            manifest_batch,
+            pack,
+            spin_limit,
+            ttnn.get_tt_fabric_max_payload_size_bytes(),
+        )
+        hit = _DESC_CACHE.get(dkey)
+        if hit is not None and hit[0] is output.device():
+            return ttnn.generic_op([plan_tensor, output], hit[1])
     mesh_device = output.device()
     R, C = tuple(mesh_device.shape)
     N = R * C
@@ -585,9 +721,9 @@ def sparse_all_gather_2d(
     port_core = place_ports(mesh_device, chips)
     all_cores = sorted({(c.x, c.y) for c in port_core.values()})
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in all_cores])
-    ring_entries = N * S + GMAX + 4
-    ring_bytes = ring_entries * 16
-    man_words = 3 * ring_entries * 4
+    off1, off2, man_entries = manifest_layout(R, C, wrap_x, wrap_y, S)
+    ring_offs = off1 | off2 << 16
+    man_words = man_entries * 4
     key = (id(mesh_device), tuple(all_cores), "sparse_2d", man_words if manifest is None else "own")
     sems = ensure_semaphores(mesh_device, num_links=num_links, torus=torus)
     if key not in _SEM_CACHE and manifest is not None:
@@ -630,8 +766,7 @@ def sparse_all_gather_2d(
         "__S__": str(S),
         "__GMAX__": str(GMAX),
         "__RW__": str(RW),
-        "__XSPAN__": ", ".join(map(str, span_table(C, wrap_x))),
-        "__YSPAN__": ", ".join(map(str, span_table(R, wrap_y))),
+        **span_subs(R, C, wrap_x, wrap_y),
     }
     reader_src, sender_src = _READER, _SENDER
     for k, v in common.items():
@@ -692,7 +827,7 @@ def sparse_all_gather_2d(
                 ring_mask |= 4
             port_idx = (r * C + c) * 8 + DIRS.index(d) * 2 + li
             reader_rt[core.x][core.y] = (
-                [out_addr, plan_addr, man_addr, ring_bytes]
+                [out_addr, plan_addr, man_addr, ring_offs]
                 + cnt_addrs
                 + [ring_mask, r, c, DIRS.index(d), li, dbg_addr, port_idx, spin_limit]
             )
@@ -709,7 +844,7 @@ def sparse_all_gather_2d(
                     streams += [1, v.x, v.y, k]
                 else:
                     streams += [0, 0, 0, 0]
-            args = [out_addr, ready_addr, rc.x, rc.y, int(pn.mesh_id), int(pn.chip_id), man_addr, ring_bytes]
+            args = [out_addr, ready_addr, rc.x, rc.y, int(pn.mesh_id), int(pn.chip_id), man_addr, ring_offs]
             args += cnt_addrs + streams + [peer[0], peer[1], DIRS.index(d)]
             args += list(ttnn.setup_fabric_connection(node(coord), pn, ports[d]["links"][li], program, core))
             sender_rt[core.x][core.y] = args
@@ -736,6 +871,10 @@ def sparse_all_gather_2d(
             program.cbs = list(program.cbs) + list(cbs_x)
             program.kernels = list(program.kernels) + list(kernels_x)
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(*coord), ttnn.MeshCoordinate(*coord))] = program
+    if dkey is not None:
+        if len(_DESC_CACHE) >= 256:  # (bounded: callers with per-call buffers at ever new addresses)
+            _DESC_CACHE.pop(next(iter(_DESC_CACHE)))
+        _DESC_CACHE[dkey] = (mesh_device, mesh_desc)
     return ttnn.generic_op(([] if extra is None else list(extra[0])) + [plan_tensor, output], mesh_desc)
 
 

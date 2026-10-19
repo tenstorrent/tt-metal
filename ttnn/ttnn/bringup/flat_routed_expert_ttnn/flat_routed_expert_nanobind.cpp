@@ -99,6 +99,11 @@ nb::dict plan_dict(
     d["arena_cores"] = cores(p->arena_cores());
     // DRISC: which reader cells still run Tensix readers (the others are free unless they became down cores) and the
     // launcher (posts the DRISC jobs when no Tensix reader is left to)
+    // the per-call schedule's parameters (flat_schedule_defines without the pinning ones, which follow the call's
+    // pin): another op rebuilding a chip's schedule from counts (se_dyn_from_counts) must use the same
+    d["sched_rps"] = p->mt * 32;
+    d["sched_max_e"] = p->E <= 16 ? 16u : (p->E <= 32 ? 32u : 64u);
+    d["sched_gu_nreg"] = p->nk_gu ? p->ring_g / p->nk_gu : 0u;
     d["drisc"] = p->drisc;
     d["dual"] = p->dual;
     {
@@ -291,7 +296,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("down_fp32") = false,
         nb::arg("x_bf16") = false,
         nb::arg("h_bf16") = false,
-        nb::arg("l1_args") = std::vector<std::vector<uint32_t>>{});
+        nb::arg("l1_args") = std::vector<std::vector<uint32_t>>{},
+        nb::arg("relay_words") = nb::none());
     mod.def(
         "flat_routed_expert_plan",
         &plan_dict,

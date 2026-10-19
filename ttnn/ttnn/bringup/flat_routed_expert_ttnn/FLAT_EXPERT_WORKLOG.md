@@ -1017,3 +1017,36 @@ Tensix reader for each bank's second slot (the old hybrid: 8 cells free).
   One reader core cannot carry a rectangle's x (~24 GB/s of 2 KB reads), and NOC0 x reads (tile 0, with the down
   weight reads) are slower per reader than NOC1's. DN_NOC0 hangs intermittently with these relay layouts (also with
   NH 2 standalone, and with unlinked multicasts) - the one layout that would leave x a bank tile to itself.
+
+### V4.1 hot-expert tolerance (2026-10-17, single chip, E 24, DRISC-only, 28 down; test_flat_balanced_sweep GLM_SWEEP_COUNTS)
+Patterns: one hot expert of h tokens over 23 at 32 (or 80); "mix" = h + 4 x 256 + 6 x 48 + 8 x 24 + 5 x 12; two hot;
+few active. ms per call, then max(DRAM %, math % of 90 cores) (DRAM % assumes every expert active: over 100% when not).
+| pattern | 48 gate/up | 72 gate/up |
+| rest 32: h 32 / 1024 / 2048 / 4096 / 8192 | 1.041 / 1.117 / 1.250 / 1.490 / 2.148 | 1.237 / 1.250 / 1.268 / 1.478 / 2.122 |
+| rest 80: h 80 / 1024 / 2048 / 4096 / 8192 | 1.146 / 1.255 / 1.364 / 1.670 / 2.425 | 1.265 / 1.315 / 1.372 / 1.575 / 2.184 |
+| mix: no hot / h 1024 / 2048 / 4096 / 8192 | 1.138 / 1.260 / 1.365 / 1.641 / 2.325 | 1.274 / 1.408 / 1.389 / 1.588 / 2.225 |
+| two hot 1024 / 4096 (+3 x 256, 19 x 32) | 1.457 / 2.431 | 1.525 / 2.276 |
+| 4 x 1024 only / 1 x 8192 only | 0.931 / 1.728 (math 67%) | 0.850 / 1.558 (math 75%) |
+A hot expert up to ~1024 tokens hides under the others' weight streaming (+7-10%); 2048 +20%, 4096 +45%, 8192 about
+2x the no-hot time. Past ~2k the call is ~ the hot expert's own time (one 8192 expert alone: 1.73 ms, 67% of the 90-core
+peak) + ~0.4 ms of the other 23 (alone ~1.0 ms: about 60% hidden under it). 72 gate/up: slower without a hot expert
+(-16%), even at 2048, better from 4096 (8192: -1..-10%); a lone large expert runs at 75% vs 67%.
+
+### Why more down cores (or gate/up cores) gained nothing (2026-10-18, single chip, DRISC-only, us / expert)
+Effective-core math (min(1.5 gate/up, 3 down)) predicted +14% for K3 at 32 down and more for V4.1 at 72 gate/up.
+Three ceilings sit within ~10% of each other per 64-row sub-block, so lifting one alone shows nothing:
+1. **Down column granularity**: the down output is H / 32 column tiles split over the down cores - K3 112 tiles: 28
+   cores x 4 exactly, 32 cores still have 4-column cores (the slowest sets the pace); time only steps at ceil(112 / ND)
+   = 3 (38 cores). V4.1 160 tiles: 28 -> 6, 32 -> 5 (72 gate/up: 190.6 -> 179.6 at M 1024), 40 -> 4 (181.9: no more).
+   Zones (K3, compute only, 32 down): the down cores are in SE_DOWN ~100% of the time (~14k cycles a sub-block at 4
+   columns, ~88% of the LoFi tile rate), the gate/up cores 33-49% in SE_GU_MM.
+2. **x delivery**: ~15.5k cycles a sub-block = 64 rows x 7 KB x 2 rectangles at ~80 GB/s, ~20 GB/s a relay (the
+   known relay rate). K3 M 1024: 28 down 182.6, 38 down 186.1; x reads skipped 163.4; **MIMO_FL_NH=2 (two x helpers a
+   rectangle) 165.2** (38 down 169.1, NH 3 168.4). V4.1 is not x bound (NH 2: 72/32 177.9 vs 179.6, 48/28 219.8 vs 216.5).
+3. **Gate/up compute**: with x free, ~13.7k cycles a sub-block whatever the down count = the 2 x 3-tile matmul blocks
+   at ~79% of the LoFi tile rate (64 gate/up cores, K 112).
+Compute only (no weight / x traffic): K3 28 down 171.6, 32 down 163.7 (127 us = the LoFi floor at 96 effective cores).
+In the overlap (K3 harness, accumulators on ports): NH 2 flat alone packed 5592 -> 5277, fused 5807 -> 5709 (the hot
+chip's combine links then show: fused / flat 1.039 -> 1.082); uniform / spread unchanged. K3 block: NH 2 neutral
+(traced 3312), now its default with acc_on_ports. Next levers: gate/up block shape (taller blocks: fewer weight unpacks
+per FLOP), down cores at the next granularity step, the hot chip's combine link time.
