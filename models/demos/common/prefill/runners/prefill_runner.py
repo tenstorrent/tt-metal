@@ -1054,6 +1054,8 @@ def run_request_loop(
         if warmup:
             ttnn.deallocate(inp)
             ttnn.deallocate(metadata_msg)
+            if indices is not None:
+                ttnn.deallocate(indices)
         if before_first_chunk is not None:
             before_first_chunk()
             before_first_chunk = None
