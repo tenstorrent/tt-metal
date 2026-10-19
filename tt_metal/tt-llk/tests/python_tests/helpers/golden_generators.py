@@ -3467,8 +3467,15 @@ class UnarySFPUGolden:
 
     def _i1_bessel(self, x):
         # Modified Bessel I1; the kernel poly approx is valid on |x| <= ~3.75. Same torch
-        # limitation as _i0, with the sign kept: I1 is odd, so I1(+/-inf) = +/-inf. I1 stays
-        # outside SPECIALS_READY_OPS because the kernel saturates a non-finite input.
+        # limitation as _i0, with the sign kept: I1 is odd, so I1(+/-inf) = +/-inf. The
+        # WH/BH kernels clamp their input at +/-92, past i1's own fp32 overflow point (~91.9),
+        # so every |x| >= 92 overflows to +/-inf as here (the Quasar kernel still clamps at
+        # +/-88.5 and returns ~1.15e37 there). I1 stays outside SPECIALS_READY_OPS:
+        # the kernel's symmetric_clamp is min(abs(x), 92) with the sign copied back, and the
+        # SFPU min orders +NaN above every finite, so a NaN input is clamped to 92 and comes
+        # back as +inf where this golden keeps the NaN (measured on Wormhole, Float32 ->
+        # Float32 at dest_acc=Yes, the one cell that delivers the NaN intact; +/-inf and
+        # +/-0 agree everywhere the probe reaches).
         if math.isnan(x):
             return x
         if math.isinf(x):

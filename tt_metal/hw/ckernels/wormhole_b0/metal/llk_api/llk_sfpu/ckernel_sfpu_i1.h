@@ -22,7 +22,7 @@ namespace ckernel::sfpu {
 //              FP32: 7 numer + 8 denom coeffs in t (= n13/d14 in x) → <0.001 FP32 ULP analytical
 //   |x| > 10:  asymptotic expansion
 //                i1(x) = sign(x) · exp(|x|) / sqrt(|x|) · P(1/|x|)
-//              degree-5 minimax fit (6 coeffs), max rel err ~1e-9 over [10, 88.5].
+//              degree-5 minimax fit (6 coeffs), max rel err ~1e-9 over [10, 92].
 //
 // Code shape (chosen to relieve SFPI LRA budget):
 //   1. Compute polynomial result unconditionally and store to DST.
@@ -32,7 +32,11 @@ namespace ckernel::sfpu {
 // register allocator schedule the two paths sequentially rather than
 // keeping the polynomial alive across the asymptotic block.
 //
-// Inputs are clamped to [-88.5, 88.5] to avoid exp() overflow.
+// Inputs are clamped to [-92, 92]: i1(x) ~ e^|x| / sqrt(2π|x|) first exceeds
+// FLT_MAX at |x| ≈ 91.906, so every |x| ≥ 92 overflows to ±inf (the correct
+// FP32 result) and no finite input is clamped to a wrong finite value.
+// exp(|x|) alone overflows earlier (|x| > 88.72), which is why the asymptotic
+// path evaluates exp on a shifted argument — see calculate_i1_asymptotic_.
 // In-domain accuracy is unchanged from the polynomial-only baseline.
 // OOD accuracy: ~10⁶ FP32 ULP (clamping) → <60 FP32 ULP (asymptotic with
 // accurate FP32 exp).
@@ -45,13 +49,18 @@ namespace ckernel::sfpu {
 // Note: this function must stay minimalist — SFPU LRA is limited.
 // Every operation here competes with the main loop.
 inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfpi::vFloat x_signed) {
-    // exp(|x|) — unsafe variants in both paths: |x|∈[10,88.5] precludes
-    // overflow/underflow, so the safe wrappers' clamping/guards are dead
-    // and skipped.
+    // exp(|x| - 4) — unsafe variants in both paths. They need an argument
+    // below exp's FP32 overflow point (~88.7; the bf16 variant wraps its
+    // float→int conversion above ~89.4), and |x| ≤ 92 gives an argument in
+    // [6, 88]: no overflow/underflow, so the safe wrappers' guards are dead.
+    // exp(|x|) itself would overflow for |x| > 88.72 although i1(|x|) stays
+    // finite up to |x| ≈ 91.9; the factor e^4 is applied last, below.
+    constexpr float I1_EXP_SHIFT = 4.0f;
+    constexpr float I1_EXP_SHIFT_SCALE = 54.598150f;  // e^4
 #ifdef INP_FLOAT32
-    const sfpi::vFloat exp_abs = _sfpu_exp_fp32_accurate_unsafe_(abs_x);
+    const sfpi::vFloat exp_shifted = _sfpu_exp_fp32_accurate_unsafe_(abs_x - I1_EXP_SHIFT);
 #else
-    const sfpi::vFloat exp_abs = _sfpu_exp_21f_bf16_unsafe_<true>(abs_x);
+    const sfpi::vFloat exp_shifted = _sfpu_exp_21f_bf16_unsafe_<true>(abs_x - I1_EXP_SHIFT);
 #endif
 
     // 1/sqrt(|x|) via Quake-style magic constant + two Newton refinements.
@@ -67,7 +76,7 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
     // 1/|x| = (1/√|x|)² — reuses the refined rsqrt instead of a fresh reciprocal.
     const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
 
-    // P(y), degree-5 minimax fit on y ∈ [1/88.5, 0.1]; max rel err ~1e-9.
+    // P(y), degree-5 minimax fit on y ∈ [1/92, 0.1]; max rel err ~1e-9.
     // This outlined function does not stress the main loop's LRA, so full precision is safe.
     const sfpi::vFloat correction = PolynomialEvaluator::eval(
         inv_abs_x,
@@ -78,20 +87,28 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
         -1.9748322314e-02f,
         -3.3467922914e-01f);
 
+    // Multiply by e^4 last: the partial product is at most ~6.9e36 for
+    // |x| ≤ 92, so only this final multiply can overflow, and it does so
+    // exactly where i1 exceeds FLT_MAX.
     // i1 is odd: copy sign of original x onto positive magnitude.
-    return sfpi::copysgn(exp_abs * rsqrt_y * correction, x_signed);
+    return sfpi::copysgn((exp_shifted * rsqrt_y * correction) * I1_EXP_SHIFT_SCALE, x_signed);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_i1() {
-    constexpr float I1_MAX_INPUT = 88.5f;
+    constexpr float I1_MAX_INPUT = 92.0f;
     constexpr float I1_THRESHOLD = 10.0f;
 
 #pragma GCC unroll 1
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // Clamp to [-88.5, 88.5] — exp() saturates near ±88.7 in FP32.
+        // Clamp to [-92, 92] — i1 exceeds FLT_MAX for |x| ≥ 91.906, so every
+        // clamped finite or ±inf lane overflows to ±inf, as the unclamped input
+        // would. NaN is not propagated: symmetric_clamp (min of |x| and the
+        // bound, sign copied back) maps a NaN lane onto the bound, so NaN comes
+        // back as +inf (measured on Wormhole for +NaN on both paths and for a
+        // sign-bit NaN on the bf16 path; a sign-bit NaN on the FP32 path stays NaN).
         x = sfpi::symmetric_clamp(x, I1_MAX_INPUT);
 
         const sfpi::vFloat abs_x = sfpi::abs(x);
