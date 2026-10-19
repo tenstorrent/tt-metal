@@ -65,11 +65,23 @@ def _tensor_meta(tensor: ttml.autograd.Tensor) -> dict:
     return {"layout": "ROW_MAJOR" if val.get_layout() == ttnn.Layout.ROW_MAJOR else "TILE", "dtype": dtype}
 
 
-def _load_into(live: ttml.autograd.Tensor, meta: dict, data) -> None:
+def _load_into(path: tuple, name: str, live: ttml.autograd.Tensor, meta: dict, data) -> None:
     """Load header `meta` + its streamed `data` into the `live` tensor in place. The live tensor decides the sharding
-    (its mapper distributes the data; see `Sharding.derive_mapper`) and the dtype (see `assign_numpy`)."""
+    (its mapper distributes the data; see `Sharding.derive_mapper`) and the dtype (see `assign_numpy`).
+
+    A record that does not land at the live tensor's per-device shape -- one shard saved as if it were the full
+    tensor, redistributed by the live mapper -- is refused as `CheckpointShapeError`, the live tensor untouched."""
     layout = ttnn.Layout.ROW_MAJOR if meta["layout"] == "ROW_MAJOR" else ttnn.Layout.TILE
-    ttml.autograd.assign_numpy(live, data, layout=layout, mapper=Sharding.from_tensor(live).derive_mapper())
+    sharding = Sharding.from_tensor(live)
+    try:
+        ttml.autograd.assign_numpy(live, data, layout=layout, mapper=sharding.derive_mapper())
+    except ttml.autograd.ShapeMismatchError as e:
+        raise CheckpointShapeError(
+            f"checkpointing: {_leaf_label(path, name)} record of shape {tuple(data.shape)} does not redistribute to "
+            f"the live per-device shape ({e}). The record does not hold a full tensor of the layout "
+            f"{sharding.describe()}; most likely it was saved as one device's shard through a wrong topology label. "
+            f"Nothing was restored past this point; re-save from a run whose tensors gather to their full shape."
+        ) from e
 
 
 def _leaf_label(path: tuple, name: str) -> str:
@@ -131,7 +143,7 @@ def _rebuild(
                     f"wrong topology label). Refusing to restore it; re-save from a run whose state gathers to the "
                     f"full shape."
                 )
-            _load_into(live_node[name], meta, data)
+            _load_into(path, name, live_node[name], meta, data)
             named[name] = live_node[name]
         return named
     return {
@@ -165,7 +177,7 @@ def _load_params(params: ttml.NamedParameters, skeleton: dict, f, display_progre
         shapes[name] = tuple(data.shape)
         if name not in params:
             continue
-        _load_into(params[name], meta, data)
+        _load_into(("model",), name, params[name], meta, data)
         restored.add(name)
 
     missing = set(params) - restored  # in model, not restored → left at init (dangerous)

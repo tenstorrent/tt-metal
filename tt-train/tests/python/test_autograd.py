@@ -748,6 +748,18 @@ def test_assign_numpy_keeps_a_lower_rank_tensors_shape(shape):
     np.testing.assert_array_equal(tensor.to_numpy(precision=_NATIVE), values)
 
 
+def test_assign_numpy_refuses_an_array_of_another_shape(expect_error):
+    """Loading values never resizes a tensor: an array that would land at another shape is refused, the tensor kept."""
+    values = np.zeros((1, 1, 32, 32), dtype=np.float32)
+    tensor = ttml.autograd.Tensor.from_numpy(values, new_type=ttnn.DataType.FLOAT32)
+
+    with expect_error(ttml.autograd.ShapeMismatchError, r"lands at \(1, 1, 32, 64\) per device"):
+        ttml.autograd.assign_numpy(tensor, np.ones((32, 64), dtype=np.float32))
+
+    assert tuple(tensor.shape()) == (1, 1, 32, 32)
+    np.testing.assert_array_equal(tensor.to_numpy(precision=_NATIVE), values)
+
+
 def test_linear_layer_setstate_keeps_the_layer_dtype():
     """__setstate__ loads the weights in the dtype the layer stores them in: an fp32 layer gets the exact values."""
     layer = ttml.modules.LinearLayer(32, 32)
