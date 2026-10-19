@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
-from models.demos.pplx_decider_v1_27b.tt.bucket_trace import BucketPrefillTraces
+from models.demos.pplx_decider_v1_27b.tt.bucket_trace import BucketPrefillTraces, bucket_sizes_for
 from models.demos.pplx_decider_v1_27b.tt.decision import answer, decision_probabilities, options, render_input_ids
 from models.demos.pplx_decider_v1_27b.tt.model_config import PplxDeciderModelArgs
 
@@ -54,7 +54,9 @@ class PplxDecider:
             self.model.capture_prefill_trace_chunked(self.mesh_device, self._page_table)
             return
         # Nothing may be allocated or compiled once a trace is parked: prepare everything, then capture.
-        self.bucket_traces = BucketPrefillTraces()
+        # Only the buckets this max_seq_len reaches and the KV cache holds (page table length x block size).
+        capacity = self._page_table.shape[-1] * KV_BLOCK_SIZE
+        self.bucket_traces = BucketPrefillTraces(bucket_sizes_for(self.max_seq_len, capacity))
         self.bucket_traces.prepare(self.model, self.mesh_device, self._page_table)
         if tpc.is_2d_mesh(self.mesh_device):
             # The chunk path's LM head and norms are not 2D-ready: bucket traces only.

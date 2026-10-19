@@ -63,6 +63,14 @@ def bucket_sizes():
     return tuple(sorted(set(sizes)))
 
 
+def bucket_sizes_for(max_seq_len, capacity):
+    """The bucket_sizes() a model with this max_seq_len and KV capacity (tokens) can use: every bucket below
+    max_seq_len plus the first one at or above it (so every prompt up to max_seq_len fits), none beyond capacity."""
+    sizes = [s for s in bucket_sizes() if s <= capacity]
+    above = [s for s in sizes if s >= max_seq_len]
+    return tuple(s for s in sizes if s < max_seq_len) + tuple(above[:1])
+
+
 @dataclass
 class _Bucket:
     size: int
