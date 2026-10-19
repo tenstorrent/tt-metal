@@ -705,7 +705,7 @@ def _fp16_lanes(mask, x, got, limit=4):
 )
 def test_hardmish_float16_dest_identity_branch(dest_acc: DestAccumulation):
     formats = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
-    _skip_bh_unsupported_float_combo(formats, dest_acc)
+    _skip_bh_unless_fp32(formats, dest_acc)
 
     # 32 tiles, so blocks divide evenly at both Dest widths (8 or 4 tiles per half).
     input_dimensions = [256, 128]
