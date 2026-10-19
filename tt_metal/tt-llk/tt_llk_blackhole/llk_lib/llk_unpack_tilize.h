@@ -532,6 +532,12 @@ inline void _llk_unpack_tilize_dest_block_(
     LLK_ASSERT(num_tiles > 0 && dest_section_tiles > 0, "A block and a run have at least one tile");
     LLK_ASSERT(ckernel::unpacker::is_32bit_input(unpack_src_format, unpack_dst_format) && num_faces == 4, "DEST runs take four-face 32-bit tiles");
 
+    if (num_tiles == 1)
+    {
+        _llk_unpack_tilize_(base_address, first_tile_index, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
+        return;
+    }
+
     const std::uint32_t tile_offset_16B = SCALE_DATUM_SIZE(unpack_src_format, 1) << (narrow_tile ? 0 : 1);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_offset_16B), 0, LO_16(p_gpr_unpack::TMP0));
     TT_SETDMAREG(0, UPPER_HALFWORD(tile_offset_16B), 0, HI_16(p_gpr_unpack::TMP0));
