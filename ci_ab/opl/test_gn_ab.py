@@ -32,3 +32,22 @@ def test_gn(device, case):
     out = ttnn.group_norm(x, num_groups=groups, input_mask=mask, weight=g, bias=b, memory_config=ttnn.DRAM_MEMORY_CONFIG,
                           core_grid=grid, inplace=False, num_out_blocks=out_blocks, use_welford=False)
     ttnn.to_torch(out)
+
+
+HW = {
+    "sum_bf16": (ttnn.sum, ttnn.bfloat16),
+    "mean_bf16": (ttnn.mean, ttnn.bfloat16),
+    "max_bf16": (ttnn.max, ttnn.bfloat16),
+    "sum_f32": (ttnn.sum, ttnn.float32),
+    "max_f32": (ttnn.max, ttnn.float32),
+}
+
+
+@pytest.mark.parametrize("case", list(HW))
+def test_hw(device, case):
+    # The generic reduce's SCALAR path: a one-tile tensor reduced over H and W (single-core HW program)
+    op, dtype = HW[case]
+    torch.manual_seed(61433)
+    t = torch.randn((1, 1, 32, 32), dtype=torch.float32)
+    x = ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.to_torch(op(x, dim=[2, 3], keepdim=True))

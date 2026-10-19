@@ -1,1 +1,2 @@
 ci_ab/opl/test_gn_ab.py::test_gn
+ci_ab/opl/test_gn_ab.py::test_hw

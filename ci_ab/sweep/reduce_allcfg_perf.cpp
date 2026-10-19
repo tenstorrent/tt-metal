@@ -31,7 +31,9 @@ static constexpr DstSync DST_SYNC                = CI_SYNC_FULL ? DstSync::SyncF
 static constexpr std::uint32_t MAX_TILES_DEST    = (is_fp32_dest_acc_en ? 4 : 8) * (CI_SYNC_FULL ? 2 : 1);
 static constexpr std::uint32_t CT                = CI_CT == 0 ? 1 : CI_CT;
 // Side 3 models the compute API, which sends BFP blocks and the HiFi held-scaler row sums tile by tile
-static constexpr bool BLOCK_CALL                 = CI_CT != 0 && CI_REDUCE_HEAD && !(CI_REDUCE_HEAD == 3 && CI_API_TILES);
+static constexpr bool BLOCK_CALL                 = CI_CT != 0 && CI_REDUCE_HEAD && !(CI_REDUCE_HEAD >= 3 && CI_API_TILES);
+// Side 4 models the API that runs a SCALAR block's math as a block also when its unpacker goes tile by tile (BFP data)
+static constexpr bool MATH_BLOCK_CALL = BLOCK_CALL || (CI_CT != 0 && CI_REDUCE_HEAD == 4 && REDUCE_DIM == ReduceDim::REDUCE_SCALAR);
 static constexpr std::uint32_t TILES_PER_OUTPUT  = CI_K;
 static constexpr std::uint32_t TILES_PER_SECTION = MAX_TILES_DEST * TILES_PER_OUTPUT;
 static constexpr std::uint32_t DST_STRIDE        = CI_K > 1 ? 0 : 1;
@@ -197,7 +199,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     else
                     {
 #if CI_REDUCE_HEAD
-                        if constexpr (BLOCK_CALL)
+                        if constexpr (MATH_BLOCK_CALL)
                         {
                             _llk_math_reduce_block_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
                                 CI_K > 1 ? out_dst(call, section) : call - section, n, DST_STRIDE, CI_SHAPE
