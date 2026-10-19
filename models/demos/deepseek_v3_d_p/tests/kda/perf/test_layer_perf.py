@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 )
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    KIMI_K3_CONVOLUTION_NRMSE,
     KimiK3TestCase,
     LayerNrmseThresholds,
     check_kimi_k3_accuracy,
@@ -154,7 +155,11 @@ def _trace_wall_samples_ms(
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
         validation = (
-            validate_first_replay(next_state, output, nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04))
+            validate_first_replay(
+                next_state,
+                output,
+                nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
+            )
             if validate_first_replay is not None
             else None
         )
@@ -242,7 +247,7 @@ def test_kimi_k3_layer_1_perf(
             mesh_device,
             tensor_parallel_axis,
             pcc_threshold=_PCC_THRESHOLD,
-            nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04),
+            nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
         )
     finally:
         ttnn.deallocate(output)
