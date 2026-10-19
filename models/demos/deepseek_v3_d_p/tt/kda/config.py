@@ -117,6 +117,16 @@ class KDAProgramConfig:
     # Compute the output gate's projection columns in their own matmul (GateMatmulProgram), run on the worker rows
     # the SP ring relay leaves idle (the gate is only read by the gated norm). Taken only with the ring relay.
     overlap_output_gate: bool = False
+    # Blackhole di/dt: at most this many cores run projection matmuls at once. The projections take the widest
+    # full-height block of worker columns within it (11 x 10 of the 12 x 10 grid at 110).
+    max_matmul_cores: int = 110
+    # K-block tiles of the matmul-program projections (GateMatmulProgram).
+    input_projection_k_block: int = 4
+    output_projection_k_block: int = 4
+    output_gate_k_block: int = 8
+    # Output-gate tile columns per core the tuned input projection takes past its own width: they shorten the gate
+    # matmul beside the SP relay, whose window is on the critical path.
+    input_projection_extra_gate_tiles: int = 2
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -126,6 +136,13 @@ class KDAProgramConfig:
             )
         if self.gated_rms_output_dtype not in (ttnn.float32, ttnn.bfloat16):
             raise ValueError("gated_rms_output_dtype must be ttnn.float32 or ttnn.bfloat16")
+        if self.max_matmul_cores <= 0:
+            raise ValueError("max_matmul_cores must be positive")
+
+
+def matmul_grid(grid: ttnn.CoreCoord, max_cores: int) -> ttnn.CoreCoord:
+    """The widest block of full-height worker columns of ``grid`` with at most ``max_cores`` cores."""
+    return ttnn.CoreCoord(max(1, min(grid.x, max_cores // grid.y)), grid.y)
 
 
 # Rows per device the projection schedules were tuned at: Galaxy SP8xTP4 at T=5120.
@@ -221,6 +238,12 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+        # Tuned at T=5120 on the 110-core matmul grid with bfloat8_b weights: 8-tile K blocks, and the input
+        # projection takes 5 gate tile columns per core past its width, 32 tiles per core (1 x 4 subblocks; 29 or
+        # 31 leave only 2 x 1), so the gate beside the relay gets 37 tiles on 8 columns.
+        input_projection_k_block=8,
+        output_projection_k_block=8,
+        input_projection_extra_gate_tiles=5,
         # The output gate beside the relay (and the projections on the matmul program) also at T=1024, 2048 and
         # 2560: 0.752 -> 0.740 ms, 0.913 -> 0.839 ms and 1.021 -> 0.871 ms.
         overlap_output_gate=active_seq_len_local in (128, 256, 320, _TUNED_PROJECTION_ROWS),

@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
     decay_projection_program_config,
     l1_when_it_fits,
+    matmul_grid,
     tuned_projection_matmul_configs,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.gate_matmul_program import GateMatmulProgram
@@ -243,6 +244,9 @@ class ttKDA:
             packer_l1_acc=True,
         )
         grid = mesh_device.compute_with_storage_grid_size()
+        # The projection matmuls run on at most max_matmul_cores cores (Blackhole di/dt).
+        mm_grid = matmul_grid(grid, program_config.max_matmul_cores)
+        self._matmul_grid = mm_grid
         self._relay_column_cores = [
             ttnn.CoreCoord(x, y) for x in range(grid.x - 1, grid.x - 4, -1) for y in range(grid.y)
         ]
@@ -276,7 +280,7 @@ class ttKDA:
             hidden, width = tuple(fused.shape)[-2:]
             gate_start = self._convolution_width + self.config.head_k_dim
             gate_end = gate_start + self.config.v_dim
-            self.input_projection_gate_columns = self._input_projection_gate_tiles(grid, program_config, width) * (
+            self.input_projection_gate_columns = self._input_projection_gate_tiles(mm_grid, program_config, width) * (
                 ttnn.TILE_SIZE
             )
             kept_end = gate_start + self.input_projection_gate_columns
@@ -292,46 +296,57 @@ class ttKDA:
             relay_cores = self.recurrence.ring_relay_cores
             # The kept heads' gate columns are copied into the gate's output by the relay columns' spare cores.
             self._gate_copy_cores = [c for c in self._relay_column_cores if c not in relay_cores]
+            # The relay's head cores multiply while the gate runs, so they share the gate's max_matmul_cores.
+            gate_columns = min(
+                min(c.x for c in self._relay_column_cores),
+                (program_config.max_matmul_cores - len(self.recurrence.ring_relay_head_cores)) // grid.y,
+            )
             self._output_gate_program = GateMatmulProgram(
                 mesh_device,
                 rows=(0, grid.y - 1),
-                cols=(0, min(c.x for c in self._relay_column_cores) - 1),
-                k_block=8,
+                cols=(0, gate_columns - 1),
+                k_block=program_config.output_gate_k_block,
                 math_fidelity=program_config.input_projection_math_fidelity,
             )
-            # The output projection on every worker core the final carry leaves: the columns left of the carry's
-            # column, and that column above the carry's cores, which takes the projection's last tile columns.
+            # The output projection on the worker cores the final carry leaves, within max_matmul_cores: the columns
+            # left of the carry's column, and that column above the carry's cores (the projection's last tile columns)
+            # when the cap leaves room for them.
             carry_cores = self.recurrence.final_carry_cores
             carry_x = min(c.x for c in carry_cores)
-            self._output_projection_programs = (
-                GateMatmulProgram(
-                    mesh_device,
-                    rows=(0, grid.y - 1),
-                    cols=(0, carry_x - 1),
-                    k_block=4,
-                    math_fidelity=program_config.output_projection_math_fidelity,
-                ),
-                GateMatmulProgram(
-                    mesh_device,
-                    rows=(0, min(c.y for c in carry_cores) - 1),
-                    cols=(carry_x, carry_x),
-                    k_block=4,
-                    math_fidelity=program_config.output_projection_math_fidelity,
-                ),
-            )
-        if self.overlap_output_gate:
-            # The input projection on the whole worker grid: the same blocking as the tuned linear (2 x 27 tiles per
-            # core, 4-tile K blocks), and its BF16 output leaves each subblock as it is finished.
-            self._input_projection_program = GateMatmulProgram(
+            wide_x = min(carry_x, mm_grid.x)
+            narrow_rows = min(c.y for c in carry_cores)
+            wide = GateMatmulProgram(
                 mesh_device,
                 rows=(0, grid.y - 1),
-                cols=(0, grid.x - 1),
-                k_block=4,
+                cols=(0, wide_x - 1),
+                k_block=program_config.output_projection_k_block,
+                math_fidelity=program_config.output_projection_math_fidelity,
+            )
+            narrow = (
+                GateMatmulProgram(
+                    mesh_device,
+                    rows=(0, narrow_rows - 1),
+                    cols=(carry_x, carry_x),
+                    k_block=program_config.output_projection_k_block,
+                    math_fidelity=program_config.output_projection_math_fidelity,
+                )
+                if wide_x == carry_x and len(wide.cores) + narrow_rows <= program_config.max_matmul_cores
+                else None
+            )
+            self._output_projection_programs = (wide, narrow)
+        if self.overlap_output_gate:
+            # The input projection on the matmul grid: the tuned linear's blocking (2 rows of tiles per core), and its
+            # BF16 output leaves each subblock as it is finished.
+            self._input_projection_program = GateMatmulProgram(
+                mesh_device,
+                rows=(0, mm_grid.y - 1),
+                cols=(0, mm_grid.x - 1),
+                k_block=program_config.input_projection_k_block,
                 math_fidelity=program_config.input_projection_math_fidelity,
             )
         self.input_projection_program_config, self.output_projection_program_config = (
             tuned_projection_matmul_configs(
-                mesh_device.compute_with_storage_grid_size(),
+                mm_grid,
                 self.active_seq_len_local,
                 self.weights.input_projection.shape[-1],
                 *tuple(self.weights.output_projection.shape)[-2:],
@@ -342,7 +357,7 @@ class ttKDA:
         # The bounded gate's per-head scale is folded into the decay projection, which then applies the sigmoid.
         decay_width = self.config.num_heads * self.config.head_k_dim
         self.decay_program_config = decay_projection_program_config(
-            mesh_device.compute_with_storage_grid_size(),
+            mm_grid,
             self.active_seq_len_local,
             self.config.head_k_dim,
             decay_width,
@@ -371,9 +386,9 @@ class ttKDA:
 
     def _input_projection_gate_tiles(self, grid: ttnn.CoreCoord, program_config, width: int) -> int:
         """Output-gate tile columns the input projection keeps: its per-core width without the gate's columns plus
-        one or two tiles (K3 at 640 rows: 293 tiles fill 25 of 26 per core column; at 28, 43 gate tiles fit). An
-        extra tile column costs the input projection less than the tiles it takes from the gate, whose matmul sets
-        the relay's window."""
+        input_projection_extra_gate_tiles (one off the tuned schedule). K3 at 640 rows on the 11-column matmul grid:
+        293 tiles take 27 per core column; at 32, 59 gate tiles fit. The gate's matmul beside the relay sets the
+        relay's window."""
         base_tiles = -(-(width - self.config.v_dim) // ttnn.TILE_SIZE)
         if program_config.tuned_projection_matmuls:
             out_k, out_n = tuple(self.weights.output_projection.shape)[-2:]
@@ -382,14 +397,17 @@ class ttKDA:
             )[0]
             if base is None:
                 return 0
-            # K3 at 640 rows: two tile columns, 43 gate tiles (in_proj 336 -> 345 us, the gate's window 115 -> 107 us).
-            extra = 2
+            extra = program_config.input_projection_extra_gate_tiles
         else:
             # The matmul program's own blocking (T=2048 and T=2560: 25 tiles per core) and one more column.
             base_per_core = -(-base_tiles // grid.x)
             extra = 1
         per_core = (base.per_core_N if program_config.tuned_projection_matmuls else base_per_core) + extra
         return max(0, min(self.config.v_dim // ttnn.TILE_SIZE, per_core * grid.x - base_tiles))
+
+    def _matmul_core_grid(self, program_config) -> ttnn.CoreGrid | None:
+        """The core grid of an auto-configured projection linear: the matmul grid (a program config sets its own)."""
+        return None if program_config is not None else ttnn.CoreGrid(y=self._matmul_grid.y, x=self._matmul_grid.x)
 
     def _idle_projection_heads(self, grid: ttnn.CoreCoord, program_config, base_width: int) -> int:
         """Output-gate heads that fit in the input projection's per-core width without widening it."""
@@ -506,6 +524,7 @@ class ttKDA:
                 hidden_states,
                 weights.input_projection,
                 program_config=self.input_projection_program_config,
+                core_grid=self._matmul_core_grid(self.input_projection_program_config),
                 memory_config=(
                     ttnn.DRAM_MEMORY_CONFIG if self.input_projection_program_config is None else ttnn.L1_MEMORY_CONFIG
                 ),
@@ -580,14 +599,18 @@ class ttKDA:
             weights.output_projection,
             memory_config=self.partial_output_memory_config,
             program_config=self.output_projection_program_config,
+            core_grid=self._matmul_core_grid(self.output_projection_program_config),
             compute_kernel_config=self.output_projection_compute_config,
         )
         return self._reduce_scatter(output)
 
     def _output_projection(self, normed: ttnn.Tensor, output: ttnn.Tensor):
-        """(io_tensors, MeshProgramDescriptor) of the output projection on the cores the final carry leaves."""
+        """(io_tensors, MeshProgramDescriptor) of the output projection on the cores the final carry leaves (and
+        max_matmul_cores allows)."""
         wide, narrow = self._output_projection_programs
         weight = self.weights.output_projection
+        if narrow is None:
+            return wide(normed, weight, output)
         n = weight.padded_shape[-1] // ttnn.TILE_SIZE
         wide_columns = (n // wide.columns) * wide.columns
         io, program = wide(normed, weight, output, columns=wide_columns)
