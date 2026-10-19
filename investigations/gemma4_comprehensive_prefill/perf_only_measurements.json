@@ -1,0 +1,666 @@
+{
+  "complete": true,
+  "chunk_sizes": [
+    4096,
+    6144,
+    8192
+  ],
+  "runs": [
+    {
+      "complete": true,
+      "started_at": "2026-10-19T11:59:16.025524+00:00",
+      "git_revision": "85c260c82a5f6966bb316da5f0d38d811418e768",
+      "git_dirty": true,
+      "model": "google/gemma-4-31B-it",
+      "layers": 60,
+      "mesh": [
+        8,
+        4
+      ],
+      "chunk_size": 4096,
+      "cache_capacity": 262144,
+      "num_users": 5,
+      "prefixes": [
+        0,
+        258048
+      ],
+      "device_metric": "max per-chip first-program-start to last-program-end span; includes device op gaps",
+      "cache_history": "zero-initialized synthetic KV; measured forwards overwrite their current chunks",
+      "warmup_replays": 1,
+      "baseline": "one legacy 4096-padded forward per request; packed uses one shared 4096-row forward",
+      "device_repeats": 3,
+      "results": [
+        {
+          "path": "legacy",
+          "case": "single_4096",
+          "request_lengths": [
+            4096
+          ],
+          "prefix": 0,
+          "real_tokens": 4096,
+          "projection_rows": 4096,
+          "device_us": {
+            "median": 75252.13424098087,
+            "min": 75169.97070827651,
+            "max": 75310.4072910073,
+            "samples": [
+              75169.97070827651,
+              75252.13424098087,
+              75310.4072910073
+            ]
+          },
+          "device_us_per_token": 18.37210308617697
+        },
+        {
+          "path": "legacy",
+          "case": "mixed",
+          "request_lengths": [
+            256,
+            512,
+            768,
+            1024,
+            1536
+          ],
+          "prefix": 0,
+          "real_tokens": 4096,
+          "projection_rows": 20480,
+          "device_us": {
+            "median": 376046.88496646285,
+            "min": 376029.3748843019,
+            "max": 376205.220571117,
+            "samples": [
+              376205.220571117,
+              376046.88496646285,
+              376029.3748843019
+            ]
+          },
+          "device_us_per_token": 91.80832152501534
+        },
+        {
+          "path": "legacy",
+          "case": "single_4096",
+          "request_lengths": [
+            4096
+          ],
+          "prefix": 258048,
+          "real_tokens": 4096,
+          "projection_rows": 4096,
+          "device_us": {
+            "median": 143680.07541925617,
+            "min": 143619.84901339293,
+            "max": 143692.70343971162,
+            "samples": [
+              143692.70343971162,
+              143619.84901339293,
+              143680.07541925617
+            ]
+          },
+          "device_us_per_token": 35.07814341290434
+        },
+        {
+          "path": "legacy",
+          "case": "mixed",
+          "request_lengths": [
+            256,
+            512,
+            768,
+            1024,
+            1536
+          ],
+          "prefix": 258048,
+          "real_tokens": 4096,
+          "projection_rows": 20480,
+          "device_us": {
+            "median": 718021.4909164719,
+            "min": 717906.7714664962,
+            "max": 718030.1872405377,
+            "samples": [
+              718021.4909164719,
+              717906.7714664962,
+              718030.1872405377
+            ]
+          },
+          "device_us_per_token": 175.29821555577928
+        },
+        {
+          "path": "packed",
+          "case": "single_4096",
+          "request_lengths": [
+            4096
+          ],
+          "prefix": 0,
+          "real_tokens": 4096,
+          "projection_rows": 4096,
+          "device_us": {
+            "median": 82974.0961542068,
+            "min": 82886.64215191566,
+            "max": 83002.84780190594,
+            "samples": [
+              82974.0961542068,
+              82886.64215191566,
+              83002.84780190594
+            ]
+          },
+          "device_us_per_token": 20.257347693898144,
+          "device_speedup_vs_legacy": 0.9069352693053178
+        },
+        {
+          "path": "packed",
+          "case": "mixed",
+          "request_lengths": [
+            256,
+            512,
+            768,
+            1024,
+            1536
+          ],
+          "prefix": 0,
+          "real_tokens": 4096,
+          "projection_rows": 4096,
+          "device_us": {
+            "median": 100498.0976077729,
+            "min": 100494.12118040399,
+            "max": 100498.79671933422,
+            "samples": [
+              100494.12118040399,
+              100498.79671933422,
+              100498.0976077729
+            ]
+          },
+          "device_us_per_token": 24.53566836127268,
+          "device_speedup_vs_legacy": 3.7418308795665998
+        },
+        {
+          "path": "packed",
+          "case": "single_4096",
+          "request_lengths": [
+            4096
+          ],
+          "prefix": 258048,
+          "real_tokens": 4096,
+          "projection_rows": 4096,
+          "device_us": {
+            "median": 153032.28924013395,
+            "min": 152955.4881468432,
+            "max": 153093.05886587733,
+            "samples": [
+              153032.28924013395,
+              153093.05886587733,
+              152955.4881468432
+            ]
+          },
+          "device_us_per_token": 37.36139874026708,
+          "device_speedup_vs_legacy": 0.9388873167400473
+        },
+        {
+          "path": "packed",
+          "case": "mixed",
+          "request_lengths": [
+            256,
+            512,
+            768,
+            1024,
+            1536
+          ],
+          "prefix": 258048,
+          "real_tokens": 4096,
+          "projection_rows": 4096,
+          "device_us": {
+            "median": 375087.4915937483,
+            "min": 374944.79465559893,
+            "max": 375296.311792284,
+            "samples": [
+              375296.311792284,
+              375087.4915937483,
+              374944.79465559893
+            ]
+          },
+          "device_us_per_token": 91.57409462737995,
+          "device_speedup_vs_legacy": 1.9142773539730575
+        }
+      ]
+    },
+    {
+      "complete": true,
+      "started_at": "2026-10-19T12:01:23.593244+00:00",
+      "git_revision": "85c260c82a5f6966bb316da5f0d38d811418e768",
+      "git_dirty": true,
+      "model": "google/gemma-4-31B-it",
+      "layers": 60,
+      "mesh": [
+        8,
+        4
+      ],
+      "chunk_size": 6144,
+      "cache_capacity": 264192,
+      "num_users": 6,
+      "prefixes": [
+        0,
+        251904
+      ],
+      "device_metric": "max per-chip first-program-start to last-program-end span; includes device op gaps",
+      "cache_history": "zero-initialized synthetic KV; measured forwards overwrite their current chunks",
+      "warmup_replays": 1,
+      "baseline": "one legacy 6144-padded forward per request; packed uses one shared 6144-row forward",
+      "device_repeats": 3,
+      "results": [
+        {
+          "path": "legacy",
+          "case": "single_6144",
+          "request_lengths": [
+            6144
+          ],
+          "prefix": 0,
+          "real_tokens": 6144,
+          "projection_rows": 6144,
+          "device_us": {
+            "median": 95190.9107533505,
+            "min": 95068.50472591688,
+            "max": 95211.05700301942,
+            "samples": [
+              95068.50472591688,
+              95211.05700301942,
+              95190.9107533505
+            ]
+          },
+          "device_us_per_token": 15.493312297094809
+        },
+        {
+          "path": "legacy",
+          "case": "mixed",
+          "request_lengths": [
+            256,
+            512,
+            768,
+            1024,
+            1536,
+            2048
+          ],
+          "prefix": 0,
+          "real_tokens": 6144,
+          "projection_rows": 36864,
+          "device_us": {
+            "median": 570301.8286186496,
+            "min": 570174.680954736,
+            "max": 570445.7264684227,
+            "samples": [
+              570301.8286186496,
+              570174.680954736,
+              570445.7264684227
+            ]
+          },
+          "device_us_per_token": 92.82256325173334
+        },
+        {
+          "path": "legacy",
+          "case": "single_6144",
+          "request_lengths": [
+            6144
+          ],
+          "prefix": 251904,
+          "real_tokens": 6144,
+          "projection_rows": 6144,
+          "device_us": {
+            "median": 248609.21193928889,
+            "min": 248419.734086617,
+            "max": 248753.57029410108,
+            "samples": [
+              248609.21193928889,
+              248753.57029410108,
+              248419.734086617
+            ]
+          },
+          "device_us_per_token": 40.4637389224103
+        },
+        {
+          "path": "legacy",
+          "case": "mixed",
+          "request_lengths": [
+            256,
+            512,
+            768,
+            1024,
+            1536,
+            2048
+          ],
+          "prefix": 251904,
+          "real_tokens": 6144,
+          "projection_rows": 36864,
+          "device_us": {
+            "median": 1489923.6332753454,
+            "min": 1489741.3614052506,
+            "max": 1490444.972409757,
+            "samples": [
+              1489741.3614052506,
+              1489923.6332753454,
+              1490444.972409757
+            ]
+          },
+          "device_us_per_token": 242.50059135340908
+        },
+        {
+          "path": "packed",
+          "case": "single_6144",
+          "request_lengths": [
+            6144
+          ],
+          "prefix": 0,
+          "real_tokens": 6144,
+          "projection_rows": 6144,
+          "device_us": {
+            "median": 108376.01942939954,
+            "min": 108324.92478321693,
+            "max": 108516.50859243447,
+            "samples": [
+              108376.01942939954,
+              108516.50859243447,
+              108324.92478321693
+            ]
+          },
+          "device_us_per_token": 17.639326079003833,
+          "device_speedup_vs_legacy": 0.8783392419700528
+        },
+        {
+          "path": "packed",
+          "case": "mixed",
+          "request_lengths": [
+            256,
+            512,
+            768,
+            1024,
+            1536,
+            2048
+          ],
+          "prefix": 0,
+          "real_tokens": 6144,
+          "projection_rows": 6144,
+          "device_us": {
+            "median": 126228.88845434063,
+            "min": 126153.26920755135,
+            "max": 126284.78983604064,
+            "samples": [
+              126153.26920755135,
+              126284.78983604064,
+              126228.88845434063
+            ]
+          },
+          "device_us_per_token": 20.54506648019867,
+          "device_speedup_vs_legacy": 4.517997707196309
+        },
+        {
+          "path": "packed",
+          "case": "single_6144",
+          "request_lengths": [
+            6144
+          ],
+          "prefix": 251904,
+          "real_tokens": 6144,
+          "projection_rows": 6144,
+          "device_us": {
+            "median": 263381.8130456223,
+            "min": 263356.29084017203,
+            "max": 263539.06021755934,
+            "samples": [
+              263381.8130456223,
+              263356.29084017203,
+              263539.06021755934
+            ]
+          },
+          "device_us_per_token": 42.86813363372759,
+          "device_speedup_vs_legacy": 0.9439118406259336
+        },
+        {
+          "path": "packed",
+          "case": "mixed",
+          "request_lengths": [
+            256,
+            512,
+            768,
+            1024,
+            1536,
+            2048
+          ],
+          "prefix": 251904,
+          "real_tokens": 6144,
+          "projection_rows": 6144,
+          "device_us": {
+            "median": 448353.907194576,
+            "min": 447861.99078641634,
+            "max": 448508.61813940055,
+            "samples": [
+              448508.61813940055,
+              448353.907194576,
+              447861.99078641634
+            ]
+          },
+          "device_us_per_token": 72.97426874911719,
+          "device_speedup_vs_legacy": 3.32309724386711
+        }
+      ]
+    },
+    {
+      "complete": true,
+      "started_at": "2026-10-19T12:02:27.368037+00:00",
+      "git_revision": "85c260c82a5f6966bb316da5f0d38d811418e768",
+      "git_dirty": true,
+      "model": "google/gemma-4-31B-it",
+      "layers": 60,
+      "mesh": [
+        8,
+        4
+      ],
+      "chunk_size": 8192,
+      "cache_capacity": 262144,
+      "num_users": 6,
+      "prefixes": [
+        0,
+        253952
+      ],
+      "device_metric": "max per-chip first-program-start to last-program-end span; includes device op gaps",
+      "cache_history": "zero-initialized synthetic KV; measured forwards overwrite their current chunks",
+      "warmup_replays": 1,
+      "baseline": "one legacy 8192-padded forward per request; packed uses one shared 8192-row forward",
+      "device_repeats": 3,
+      "results": [
+        {
+          "path": "legacy",
+          "case": "single_8192",
+          "request_lengths": [
+            8192
+          ],
+          "prefix": 0,
+          "real_tokens": 8192,
+          "projection_rows": 8192,
+          "device_us": {
+            "median": 111935.71633440739,
+            "min": 111778.13001998707,
+            "max": 111942.65407281373,
+            "samples": [
+              111935.71633440739,
+              111942.65407281373,
+              111778.13001998707
+            ]
+          },
+          "device_us_per_token": 13.664027872852465
+        },
+        {
+          "path": "legacy",
+          "case": "mixed",
+          "request_lengths": [
+            512,
+            512,
+            1024,
+            1536,
+            2048,
+            2560
+          ],
+          "prefix": 0,
+          "real_tokens": 8192,
+          "projection_rows": 49152,
+          "device_us": {
+            "median": 666930.1125465622,
+            "min": 666626.5326798767,
+            "max": 667101.5454000809,
+            "samples": [
+              666626.5326798767,
+              666930.1125465622,
+              667101.5454000809
+            ]
+          },
+          "device_us_per_token": 81.41236725421902
+        },
+        {
+          "path": "legacy",
+          "case": "single_8192",
+          "request_lengths": [
+            8192
+          ],
+          "prefix": 253952,
+          "real_tokens": 8192,
+          "projection_rows": 8192,
+          "device_us": {
+            "median": 268861.01488679217,
+            "min": 268783.2065248289,
+            "max": 269001.43342292844,
+            "samples": [
+              268861.01488679217,
+              269001.43342292844,
+              268783.2065248289
+            ]
+          },
+          "device_us_per_token": 32.81994810629787
+        },
+        {
+          "path": "legacy",
+          "case": "mixed",
+          "request_lengths": [
+            512,
+            512,
+            1024,
+            1536,
+            2048,
+            2560
+          ],
+          "prefix": 253952,
+          "real_tokens": 8192,
+          "projection_rows": 49152,
+          "device_us": {
+            "median": 1610583.1738212341,
+            "min": 1610494.526102231,
+            "max": 1610719.800212022,
+            "samples": [
+              1610494.526102231,
+              1610583.1738212341,
+              1610719.800212022
+            ]
+          },
+          "device_us_per_token": 196.60439133559987
+        },
+        {
+          "path": "packed",
+          "case": "single_8192",
+          "request_lengths": [
+            8192
+          ],
+          "prefix": 0,
+          "real_tokens": 8192,
+          "projection_rows": 8192,
+          "device_us": {
+            "median": 129337.70472594727,
+            "min": 129337.01641598456,
+            "max": 129460.48157449572,
+            "samples": [
+              129337.01641598456,
+              129460.48157449572,
+              129337.70472594727
+            ]
+          },
+          "device_us_per_token": 15.78829403392911,
+          "device_speedup_vs_legacy": 0.8654530909728696
+        },
+        {
+          "path": "packed",
+          "case": "mixed",
+          "request_lengths": [
+            512,
+            512,
+            1024,
+            1536,
+            2048,
+            2560
+          ],
+          "prefix": 0,
+          "real_tokens": 8192,
+          "projection_rows": 8192,
+          "device_us": {
+            "median": 153164.83592179985,
+            "min": 153079.6583792755,
+            "max": 153214.28456090033,
+            "samples": [
+              153214.28456090033,
+              153079.6583792755,
+              153164.83592179985
+            ]
+          },
+          "device_us_per_token": 18.696879384985333,
+          "device_speedup_vs_legacy": 4.354329167871609
+        },
+        {
+          "path": "packed",
+          "case": "single_8192",
+          "request_lengths": [
+            8192
+          ],
+          "prefix": 253952,
+          "real_tokens": 8192,
+          "projection_rows": 8192,
+          "device_us": {
+            "median": 289008.92551832536,
+            "min": 288593.2410597981,
+            "max": 289188.362260043,
+            "samples": [
+              288593.2410597981,
+              289188.362260043,
+              289008.92551832536
+            ]
+          },
+          "device_us_per_token": 35.2794098533112,
+          "device_speedup_vs_legacy": 0.9302861993089011
+        },
+        {
+          "path": "packed",
+          "case": "mixed",
+          "request_lengths": [
+            512,
+            512,
+            1024,
+            1536,
+            2048,
+            2560
+          ],
+          "prefix": 253952,
+          "real_tokens": 8192,
+          "projection_rows": 8192,
+          "device_us": {
+            "median": 564734.9905570402,
+            "min": 564640.665688321,
+            "max": 565018.1066453155,
+            "samples": [
+              564640.665688321,
+              565018.1066453155,
+              564734.9905570402
+            ]
+          },
+          "device_us_per_token": 68.93737677698245,
+          "device_speedup_vs_legacy": 2.851927365493319
+        }
+      ]
+    }
+  ],
+  "validation": {
+    "pytest_wall_seconds": 266.72,
+    "seconds_after_last_weight_load": 217.097,
+    "cpu_profiler_checks_passed": 6,
+    "previous_pytest_wall_seconds": 694.74
+  }
+}

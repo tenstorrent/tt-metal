@@ -3,4 +3,6 @@
 /chunk_*/
 /first_attempt.json
 /probe/
+/perf_only/
 !/comparison.csv
+!/perf_only_comparison.csv
