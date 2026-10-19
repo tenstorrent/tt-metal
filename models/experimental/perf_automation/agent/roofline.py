@@ -232,8 +232,15 @@ def compute_rooflines(profile: dict[str, Any], env: dict[str, Any]) -> dict[str,
     }
 
 
-_AT_FLOOR_ABS_MS = 0.05  # gap within measurement noise
-_AT_FLOOR_FRAC = 0.10  # ...or within 10% of the floor -> effectively at the ttnn floor
+# AT FLOOR IS RELATIVE TO THE OP'S OWN FLOOR, AND NOTHING ELSE. There was an absolute cutoff beside
+# this (gap <= 0.05 ms, "within measurement noise"), judged on the gap one profiled pass showed. The gate
+# weighs a gap by what it costs one REQUEST -- a decode row runs 40 layers x 127 steps -- but an op
+# this cutoff dropped never reached the gate to be weighed: on Devstral run 5 (2026-10-19) it hid 0.8 ms
+# per decode step (the qkv matmul at 2x its floor, the o_proj program, the paged KV update), every one
+# with an untried ladder, on a stage 5.85 ms over its band. The absolute question -- is this gap worth
+# a round -- is asked once, per request, in perf_mcp._per_request_reader; here it was a second answer
+# given before the weight.
+_AT_FLOOR_FRAC = 0.10  # within 10% of the floor -> effectively at the ttnn floor
 
 
 def residual_report(profile: dict[str, Any], env: dict[str, Any]) -> dict[str, Any]:
@@ -259,7 +266,7 @@ def residual_report(profile: dict[str, Any], env: dict[str, Any]) -> dict[str, A
         if ideal is None:
             at_floor = None
         else:
-            at_floor = eff_gap <= _AT_FLOOR_ABS_MS or eff_gap <= _AT_FLOOR_FRAC * (eff_ideal or ideal)
+            at_floor = eff_gap <= _AT_FLOOR_FRAC * (eff_ideal or ideal)
         rows.append(
             {
                 "bucket": o.get("bucket"),
@@ -356,7 +363,7 @@ def _op_at_floor(op: dict[str, Any] | None) -> bool:
     ideal, gap = op.get("ideal_ms"), op.get("gap_ms")
     if ideal is None or gap is None:
         return False
-    return gap <= _AT_FLOOR_ABS_MS or gap <= _AT_FLOOR_FRAC * ideal
+    return gap <= _AT_FLOOR_FRAC * ideal
 
 
 def classify_regime(

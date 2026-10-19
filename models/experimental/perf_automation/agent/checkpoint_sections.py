@@ -170,8 +170,13 @@ def _index_keys(snapshot: Path) -> list:
     small JSON answers the whole structural question; opening the shards is unnecessary, and reading
     only SOME of them reports a model with fewer sections than it has.
     """
+    # THE LOADER'S INDEX ALONE when the checkpoint ships a second copy of its weights under another
+    # one (model_bytes.weight_indexes): reading both named every tower twice, and a depth that two
+    # sections share places no stage.
+    from .model_bytes import weight_indexes
+
     out = []
-    for idx in sorted(snapshot.glob("*.index.json")):
+    for idx in weight_indexes(snapshot):
         try:
             data = json.loads(idx.read_text())
         except (OSError, ValueError):
@@ -191,8 +196,11 @@ def checkpoint_keys(root) -> list:
     if root.is_file():
         files = [root]
     else:
+        from .model_bytes import duplicate_weight_files
+
+        _dup = {f.resolve() for f in duplicate_weight_files(root)}
         for suf in _WEIGHT_SUFFIX:
-            files.extend(sorted(root.rglob("*" + suf))[:_MAX_FILES])
+            files.extend(f for f in sorted(root.rglob("*" + suf))[:_MAX_FILES] if f.resolve() not in _dup)
     keys = []
     for f in files[:_MAX_FILES]:
         try:

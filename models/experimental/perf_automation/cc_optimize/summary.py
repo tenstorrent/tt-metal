@@ -2225,6 +2225,13 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # measurement in the tens of milliseconds. A single-block model has root geometry equal to
         # its one block's, so nothing changes there.
         _blk = _stage_block(name) or {}
+        # A STAGE NO BLOCK CLAIMS, ON A MODEL WITH SEVERAL, HAS NO COMPUTE ROOF. The memory roof already
+        # refuses here ("A REFUSED SHARE IS NOT A SMALL ONE"); the compute term fell through to the
+        # whole model's parameters, so Devstral's vision encoder was priced as 24B parameters over its
+        # 8192 patches -- a 1085 ms floor under a 34.6 ms measurement, printed as 3135% of peak, and
+        # the gate never judged the stage because it sat "below" that floor. No roof is the answer the
+        # report already knows how to print. A single-block model is its one block, as before.
+        _unplaced = (not _blk) and len((mf or {}).get("blocks") or {}) > 1
         # THE PARAMS THAT ARE MULTIPLIED, NOT THE PARAMS THAT EXIST.
         #
         # `2 x params x tokens` counts a multiply-accumulate for every parameter, once per token --
@@ -2248,6 +2255,8 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
             _lo = int(_blk.get("lookup_params") or 0)
             _mm = max(0, int(_blk.get("params") or 0) - _lo) if _lo else 0
         _params = _mm or int(_blk.get("params") or 0) or int(params or 0)
+        if _unplaced:
+            _params = 0  # no block claims this stage: no compute roof (see _unplaced above)
         # PINNED FIRST, like every other ceiling input. Read-only here: anchor_value never writes, so
         # rendering a report cannot move the number it is reporting -- the producers (the arch mirror
         # for params, trace_replay's observed counts for items) do the pinning where the value is

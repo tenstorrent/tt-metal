@@ -8432,7 +8432,8 @@ def _per_request_reader(profile):
     A GAP ITS STAGE CANNOT RESOLVE IS NOT MULTIPLIED. Multiplying a gap multiplies its error with it,
     so the weight is withheld from an op whose gap is inside its stage's measured run-to-run wobble
     (read_stage_spread x the op's own device_ms). With no spread on file nothing is withheld; the
-    roofline has already left any gap within its absolute noise floor at_floor, and the per-op launch
+    roofline leaves at_floor only a gap within a tenth of the op's own floor -- it has no absolute
+    cutoff, since one judged on the profiled pass would run before this weight -- and the per-op launch
     cost is already inside every op's floor.
 
     Fields: weights ({stage: weight}, stage_cost_weights), stage(o), gap(o, raw) -> per-request ms,

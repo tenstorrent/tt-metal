@@ -26,6 +26,7 @@ prefill or large-batch work (compute-bound), for long-sequence encoders (activat
 for a mixed multimodal pipeline (each stage has its own bound). Those get no ceiling from here, and
 the caller falls back to the per-op roofline floor, which picks the binding term per op.
 """
+
 from __future__ import annotations
 
 import json
@@ -275,6 +276,52 @@ _COMPONENT_INDEX = "model_index.json"
 _HEADER_SUFFIXES = (".safetensors",)
 # Every suffix a weight file is stored under -- what the unread-files gate looks for.
 _WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth")
+# THE COPY THE LOADER READS. A checkpoint may ship its weights more than once: Devstral-Small-2 carries
+# the six `model-*` shards transformers loads AND two `consolidated-*` shards in Mistral's own layout,
+# each set declared by its own `*.index.json`. Every reader below walked both, so the model had 48.0B
+# parameters instead of 24.0B, two towers of every depth (so no stage could be placed and no block got
+# geometry), and prefill's compute floor sat 2x too slow -- "93% of peak" on a stage at 47%. The
+# loader's own convention decides which copy IS the model: the index transformers reads, or the single
+# file of the same name (transformers.utils.SAFE_WEIGHTS_INDEX_NAME / SAFE_WEIGHTS_NAME). A top-level
+# weight file outside that copy is the same weights again, or something the loader never loads; it is
+# neither read nor reported unread. A checkpoint that declares no such copy is read whole, as before.
+_LOADER_INDEX = "model.safetensors.index.json"
+_LOADER_FILE = "model.safetensors"
+
+
+def loader_copy(snapshot_dir) -> set:
+    """The resolved top-level files of the copy the loader reads; empty when the checkpoint declares none."""
+    d = Path(snapshot_dir or "")
+    try:
+        wm = json.loads((d / _LOADER_INDEX).read_text()).get("weight_map") or {}
+        files = {(d / str(f)).resolve() for f in wm.values() if (d / str(f)).is_file()}
+        if files:
+            return files
+    except (OSError, ValueError, AttributeError):
+        pass
+    one = d / _LOADER_FILE
+    return {one.resolve()} if one.is_file() else set()
+
+
+def duplicate_weight_files(snapshot_dir) -> list:
+    """Top-level weight files outside the loader's copy, when the checkpoint declares one. [] otherwise."""
+    d = Path(snapshot_dir or "")
+    keep = loader_copy(d) if d.is_dir() else set()
+    if not keep:
+        return []
+    return sorted(
+        f for f in d.iterdir() if f.suffix.lower() in _WEIGHT_SUFFIXES and f.is_file() and f.resolve() not in keep
+    )
+
+
+def weight_indexes(snapshot_dir) -> list:
+    """The shard indexes whose files weight_files reads: the loader's alone when it exists, else every one."""
+    d = Path(snapshot_dir or "")
+    if not d.is_dir():
+        return []
+    if loader_copy(d) and (d / _LOADER_INDEX).is_file():
+        return [d / _LOADER_INDEX]
+    return sorted(d.glob("*.index.json"))
 
 
 def weight_files(snapshot_dir, suffixes=_HEADER_SUFFIXES) -> list:
@@ -284,7 +331,10 @@ def weight_files(snapshot_dir, suffixes=_HEADER_SUFFIXES) -> list:
     d = Path(snapshot_dir or "")
     if not d.is_dir():
         return []
-    out = [("", f) for f in sorted(d.iterdir()) if f.suffix.lower() in suffixes and f.is_file()]
+    _dup = {f.resolve() for f in duplicate_weight_files(d)}
+    out = [
+        ("", f) for f in sorted(d.iterdir()) if f.suffix.lower() in suffixes and f.is_file() and f.resolve() not in _dup
+    ]
     try:
         comps = json.loads((d / _COMPONENT_INDEX).read_text())
     except (OSError, ValueError):
@@ -300,11 +350,14 @@ def weight_files(snapshot_dir, suffixes=_HEADER_SUFFIXES) -> list:
 def unread_weight_files(snapshot_dir) -> list:
     """Weight files anywhere under the snapshot that weight_files does not return: the gate. Empty for
     every layout the tool reads; anything here is a checkpoint shape nobody taught it, and every number
-    derived from the weights would silently be missing or short."""
+    derived from the weights would silently be missing or short. A second copy of the loader's weights
+    (duplicate_weight_files) is deliberately not read and is not unread."""
     d = Path(snapshot_dir or "")
     if not d.is_dir():
         return []
-    read = {f.resolve() for _, f in weight_files(d, _WEIGHT_SUFFIXES)}
+    read = {f.resolve() for _, f in weight_files(d, _WEIGHT_SUFFIXES)} | {
+        f.resolve() for f in duplicate_weight_files(d)
+    }
     return sorted(
         p.relative_to(d).as_posix()
         for p in d.rglob("*")

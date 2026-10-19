@@ -272,7 +272,15 @@ def _checkpoint_tensor_sections(model_id_or_dir):
                 str(Path(_croot) / "*.safetensors"),
                 str(Path(_croot) / "snapshots" / "*" / "*.safetensors"),
             ]
+        from .model_bytes import duplicate_weight_files
+
+        _dup: dict = {}  # snapshot dir -> the second copy of its weights, consulted once per dir
         for f in sorted({f for p in pats for f in glob.glob(p)}):
+            _d = str(Path(f).parent)
+            if _d not in _dup:
+                _dup[_d] = {q.resolve() for q in duplicate_weight_files(_d)}
+            if Path(f).resolve() in _dup[_d]:
+                continue
             with open(f, "rb") as fh:
                 n = struct.unpack("<Q", fh.read(8))[0]
                 if n <= 0 or n > 200_000_000:

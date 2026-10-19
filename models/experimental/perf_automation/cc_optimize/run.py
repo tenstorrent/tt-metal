@@ -6745,6 +6745,15 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
         # xB -> xGB rule was bypassed for exactly the models least able to report the error themselves.
         if _snap:
             _unread_w = _mb.unread_weight_files(_snap)
+            # SAID, NOT SILENT. A second copy of the weights is skipped by rule (model_bytes.loader_copy);
+            # naming the files keeps a reader from taking the smaller count for a short read.
+            _dup_w = [p.name for p in _mb.duplicate_weight_files(_snap)]
+            if _dup_w:
+                facts_note = (
+                    "  [optimize/cc] checkpoint ships its weights twice; counted once, from the copy the loader reads (skipped: %s)"
+                    % ", ".join(_dup_w[:6])
+                )
+                print(facts_note, flush=True)
             _an = _mb.weight_bytes(
                 _snap,
                 # Unknown unit -> count as "token", which EXCLUDES lookup-only tensors. One row of an
