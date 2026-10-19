@@ -73,6 +73,30 @@ inline SrcValidsPerTile src_valids_per_tile(const std::uint32_t num_faces)
     return {srca_valids, srcb_valids - srca_valids};
 }
 
+// Fakes the absent side's valids for `tiles` tiles: sets them in place of unpack, clears them in place of math.
+// COL must alternate its paired and SrcB-only valid per tile; every other type posts one kind, issued in one call.
+template <bool set_valids>
+inline void fake_src_valids(const std::uint32_t tiles, const std::uint32_t num_faces)
+{
+    const SrcValidsPerTile valids      = src_valids_per_tile(num_faces);
+    constexpr bool per_tile            = (BROADCAST_TYPE == ckernel::BroadcastType::COL);
+    const std::uint32_t calls          = per_tile ? tiles : 1;
+    const std::uint32_t tiles_per_call = per_tile ? 1 : tiles;
+    for (std::uint32_t call = 0; call < calls; ++call)
+    {
+        if constexpr (set_valids)
+        {
+            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(tiles_per_call * valids.paired /*iterations*/);
+            _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(tiles_per_call * valids.b_only /*iterations*/);
+        }
+        else
+        {
+            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(tiles_per_call * valids.paired /*iterations*/);
+            _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(tiles_per_call * valids.b_only /*iterations*/);
+        }
+    }
+}
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
@@ -128,12 +152,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            const SrcValidsPerTile valids = src_valids_per_tile(num_faces);
-            for (std::uint32_t tile = 0; tile < LOOP_FACTOR * num_tiles; ++tile)
-            {
-                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(valids.paired);
-                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(valids.b_only);
-            }
+            fake_src_valids<true /*set_valids*/>(LOOP_FACTOR * num_tiles /*tiles*/, num_faces);
         }
         else
         {
@@ -186,14 +205,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr ((PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION) && !unpack_to_dest)
+        else if constexpr ((PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION) && unpack_to_dest)
         {
-            const SrcValidsPerTile valids = src_valids_per_tile(num_faces);
-            for (std::uint32_t tile = 0; tile < LOOP_FACTOR * NUM_BLOCKS * NUM_TILES_IN_BLOCK; ++tile)
+            // Stand in for math's half of the unpack-to-dest handshake without copying: send the unpacker
+            // each tile's Dest index through the mailbox and take the tile back through UNPACK_TO_DEST.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(valids.paired);
-                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(valids.b_only);
+                for (int block = 0; block < NUM_BLOCKS; ++block)
+                {
+                    for (std::uint32_t tile_in_block = 0; tile_in_block < NUM_TILES_IN_BLOCK; ++tile_in_block)
+                    {
+                        math::math_unpack_to_dest_math_ready();
+                        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(tile_in_block);
+                        math::math_unpack_to_dest_tile_ready();
+                    }
+                }
             }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            fake_src_valids<false /*set_valids*/>(LOOP_FACTOR * NUM_BLOCKS * NUM_TILES_IN_BLOCK /*tiles*/, num_faces);
         }
         else
         {
