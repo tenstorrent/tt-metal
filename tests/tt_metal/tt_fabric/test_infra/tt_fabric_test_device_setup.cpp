@@ -165,6 +165,7 @@ void FabricConnectionManager::process(
             mux_configs_.emplace(
                 mux_core.value(),
                 std::make_unique<FabricMuxConfig>(
+                    device_info_provider->get_mesh_device(),
                     num_full_size_channels,
                     num_header_only_channels,
                     num_buffers_full_size_channel,
@@ -844,7 +845,12 @@ void TestDevice::create_mux_kernels() {
 
         auto mux_ct_args = mux_config->get_fabric_mux_compile_time_args();
         auto mux_rt_args = mux_config->get_fabric_mux_run_time_args(
-            fabric_node_id_, dst_node_id, connection_key.link_idx, program_handle_, mux_core);
+            device_info_provider_->get_mesh_device(),
+            fabric_node_id_,
+            dst_node_id,
+            connection_key.link_idx,
+            program_handle_,
+            mux_core);
 
         mux_worker.create_kernel(
             coord_,

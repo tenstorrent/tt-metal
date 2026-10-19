@@ -595,6 +595,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     const auto buffer_size_bytes_full_size_channel =
         tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     const auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        *mesh_device,
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
@@ -786,11 +787,11 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                 if (dir) {  // forward
                     const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link, program, {mux_logical_core});
+                        *mesh_device, src_node_id, dst_node_id, link, program, {mux_logical_core});
                 } else {
                     const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link, program, {mux_logical_core});
+                        *mesh_device, src_node_id, dst_node_id, link, program, {mux_logical_core});
                 }
                 tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
             }

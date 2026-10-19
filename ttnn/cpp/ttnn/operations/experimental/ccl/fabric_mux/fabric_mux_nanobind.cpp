@@ -75,8 +75,18 @@ void bind_fabric_mux(nb::module_& experimental_module) {
     nb::class_<tt::tt_fabric::FabricMuxConfig>(
         fabric_mux_module, "Config", "Computes the kernel arguments and L1 layout for a program-local fabric mux.")
         .def(
-            nb::init<uint8_t, uint8_t, uint8_t, uint8_t, size_t, size_t, tt::CoreType, size_t>(),
+            nb::init<
+                const tt::tt_metal::distributed::MeshDevice&,
+                uint8_t,
+                uint8_t,
+                uint8_t,
+                uint8_t,
+                size_t,
+                size_t,
+                tt::CoreType,
+                size_t>(),
             nb::kw_only(),
+            nb::arg("mesh_device"),
             nb::arg("num_full_size_channels"),
             nb::arg("num_header_only_channels"),
             nb::arg("num_buffers_per_full_size_channel"),
@@ -89,6 +99,7 @@ void bind_fabric_mux(nb::module_& experimental_module) {
             Configure the mux L1 memory map.
 
             Args:
+                mesh_device: Mesh device whose fabric the mux connects to.
                 num_full_size_channels: Number of full-size channels.
                 num_header_only_channels: Number of header-only channels.
                 num_buffers_per_full_size_channel: Buffers per full-size channel.
@@ -114,6 +125,7 @@ void bind_fabric_mux(nb::module_& experimental_module) {
         .def(
             "kernel_runtime_args",
             nb::overload_cast<
+                const tt::tt_metal::distributed::MeshDevice&,
                 const tt::tt_fabric::FabricNodeId&,
                 const tt::tt_fabric::FabricNodeId&,
                 uint32_t,
@@ -122,6 +134,7 @@ void bind_fabric_mux(nb::module_& experimental_module) {
                 &tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>,
                 nb::const_),
             nb::kw_only(),
+            nb::arg("mesh_device"),
             nb::arg("source_node_id"),
             nb::arg("destination_node_id"),
             nb::arg("link_index"),
@@ -131,6 +144,7 @@ void bind_fabric_mux(nb::module_& experimental_module) {
             Build mux kernel runtime arguments and append fabric connection resources to the descriptor.
 
             Args:
+                mesh_device: Mesh device whose fabric the connection is resolved in.
                 source_node_id: Fabric node hosting the mux.
                 destination_node_id: Fabric node reached through the selected link.
                 link_index: Fabric link to the destination node.

@@ -32,6 +32,7 @@ class MeshShape;
 
 namespace tt::tt_fabric {
 class ControlPlane;
+class FabricContext;
 class FabricNodeId;
 enum class RoutingDirection;
 struct FabricEriscDatamoverConfig;
@@ -219,9 +220,11 @@ class FabricMuxConfig {
     static constexpr size_t default_num_iters_between_teardown_checks = 32;
 
 public:
-    // Builds the config in the default MetalContext's context.
-    // TODO(#52020): replace with a const MeshDevice& form for callers that hold a device (ttnn ops, Python).
+    // Builds the config in `mesh_device`'s context. The mux connects to the fabric the way the device's fabric is
+    // configured: through the fabric router, or through the fabric tensix extension when that is enabled. The
+    // config keeps no handle to the device, so the fabric must be set up (the device open) by the time it is built.
     FabricMuxConfig(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
         uint8_t num_full_size_channels,
         uint8_t num_header_only_channels,
         uint8_t num_buffers_full_size_channel,
@@ -235,7 +238,8 @@ public:
         size_t usable_l1_end_address = 0);
 
     // Builds the config in `control_plane`'s context. For metal code that has a context but no MeshDevice, such as
-    // the dispatch relay mux, which is configured before any MeshDevice exists.
+    // the dispatch relay mux, which is configured before any MeshDevice exists. The mux connects to the fabric router
+    // and never to a tensix extension, since the tensix config is not set up at that point.
     FabricMuxConfig(
         const ControlPlane& control_plane,
         uint8_t num_full_size_channels,
@@ -251,14 +255,14 @@ public:
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const;
 
     // Returns the compile time args for relay mux. The relay mux always connects to the fabric router (never a
-    // tensix extension), so it passes the control plane it is built against.
-    std::vector<uint32_t> get_fabric_mux_compile_time_args_for_relay_mux(const ControlPlane& control_plane) const;
+    // tensix extension) and waits for the router to be ready, so build it with the ControlPlane constructor.
+    std::vector<uint32_t> get_fabric_mux_compile_time_args_for_relay_mux() const;
 
     // Returns the run-time arguments for the mux kernel depending on the connection setup with fabric router.
-    // Resolves the fabric connection in the default MetalContext's context.
-    // TODO(#52020): replace with a const MeshDevice& form for callers that hold a device (ttnn ops, Python).
+    // Resolves the fabric connection in `mesh_device`'s context. src and dst do not have to belong to the device.
     template <typename ProgramOrDescriptor = tt::tt_metal::Program>
     std::vector<uint32_t> get_fabric_mux_run_time_args(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
         const FabricNodeId& src_fabric_node_id,
         const FabricNodeId& dst_fabric_node_id,
         uint32_t link_idx,
@@ -295,9 +299,22 @@ public:
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
 private:
+    // The one place the L1 map and the fabric endpoint are computed; both public constructors delegate to it.
+    // `connect_via_tensix` selects whether the mux connects to the fabric tensix extension rather than the router.
+    FabricMuxConfig(
+        const FabricContext& fabric_context,
+        bool connect_via_tensix,
+        uint8_t num_full_size_channels,
+        uint8_t num_header_only_channels,
+        uint8_t num_buffers_full_size_channel,
+        uint8_t num_buffers_header_only_channel,
+        size_t buffer_size_bytes_full_size_channel,
+        size_t base_l1_address,
+        CoreType core_type,
+        size_t usable_l1_end_address);
+
     // Returns the base compile time args without stream IDs
-    std::vector<uint32_t> get_fabric_mux_compile_time_main_args(
-        const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
+    std::vector<uint32_t> get_fabric_mux_compile_time_main_args(bool wait_for_fabric_endpoint_ready) const;
 
     void validate_channel_id(FabricMuxChannelType channel_type, uint8_t channel_id) const;
     uint8_t get_channel_global_offset(FabricMuxChannelType channel_type, uint8_t channel_id) const;
@@ -337,9 +354,9 @@ private:
 
     size_t num_full_size_channel_iters_ = default_num_full_size_channel_iters;
     size_t num_iters_between_teardown_checks_ = default_num_iters_between_teardown_checks;
-    mutable bool wait_for_fabric_endpoint_ready_ = false;
-    mutable size_t fabric_endpoint_channel_num_buffers_ = 0;
-    mutable size_t fabric_endpoint_status_address_ = 0;
+    // The fabric endpoint the mux connects to, read from the fabric context when the config is built.
+    size_t fabric_endpoint_channel_num_buffers_ = 0;
+    size_t fabric_endpoint_status_address_ = 0;
 
     // memory regions
     MemoryRegion status_region_{};
