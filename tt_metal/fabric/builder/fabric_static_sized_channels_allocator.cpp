@@ -678,9 +678,19 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     bool vc1_present = (num_used_sender_channels_per_vc[1] > 0 || num_used_receiver_channels_per_vc[1] > 0);
     bool vc2_present = (num_used_sender_channels_per_vc[2] > 0 || num_used_receiver_channels_per_vc[2] > 0);
 
+    // A VC0-only multi-mesh fabric (inter-mesh traffic on VC0) adds a fifth VC0 sender, the inter-mesh landing
+    // channel. With the single-mesh {8,16} row that leaves the worker-connected sender 9 slots instead of 17,
+    // and its depth bounds intra-mesh CCLs; {6,16} gives it 17 back. A single mesh keeps {8,16}: there the
+    // forwarding depth is worth ~1% and the worker already has 17.
+    std::vector<PerVcBufferSlots> slot_options = get_num_buffer_slots(topology, arch_index, vc1_present, vc2_present);
+    if ((topology == Topology::Mesh || topology == Topology::Torus) && arch_index == 1 && !vc1_present &&
+        !vc2_present && num_used_sender_channels_per_vc[0] > 4) {
+        slot_options.insert(slot_options.begin(), PerVcBufferSlots{6, 16, 0, 0, 0, 0});
+    }
+
     // Get optimal buffer slots considering active VCs
     get_optimal_num_slots_per_vc(
-        get_num_buffer_slots(topology, arch_index, vc1_present, vc2_present),
+        slot_options,
         num_used_sender_channels_per_vc[0],
         num_used_receiver_channels_per_vc[0],
         num_used_sender_channels_per_vc[1],
