@@ -103,6 +103,26 @@ void generate_mask_tile(
     cb_push_back(cb_id, onetile);
 }
 
+// Generates the mask tile with vertical masking: rows below mask_height hold fill_value, the rest mask_fill_value.
+void generate_mask_h_tile(
+    const uint32_t cb_id, const uint16_t fill_value, const uint16_t mask_fill_value, const uint32_t mask_height) {
+    cb_reserve_back(cb_id, onetile);
+
+    uint16_t* tile_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
+
+    for (uint32_t face = 0; face < 4; ++face) {
+        uint32_t face_offset = (face >> 1U) << 4U;
+        for (uint32_t h = 0; h < 16; ++h) {
+            const uint16_t value = (face_offset + h < mask_height) ? fill_value : mask_fill_value;
+            for (uint32_t w = 0; w < 16; ++w) {
+                *tile_ptr++ = value;
+            }
+        }
+    }
+
+    cb_push_back(cb_id, onetile);
+}
+
 // Fills a tile (32x32 bfloat16 values) with a packed 32-bit value,
 // where each 32-bit word contains two identical bfloat16 values.
 // This improves performance by writing 512 uint32_t values instead of 1024 uint16_t values.

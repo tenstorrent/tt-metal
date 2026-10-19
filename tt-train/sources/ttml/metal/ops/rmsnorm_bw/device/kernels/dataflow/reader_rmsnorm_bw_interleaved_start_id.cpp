@@ -20,11 +20,15 @@ constexpr uint32_t cb_dL_dgamma_components = tt::CBIndex::c_9;
 // CBs with intermediate computations
 constexpr uint32_t cb_recip_rms_a_bcasted_idx = tt::CBIndex::c_10;
 constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
+constexpr uint32_t cb_external_sums_idx = tt::CBIndex::c_12;
+constexpr uint32_t cb_mask_h_idx = tt::CBIndex::c_13;
 
 constexpr uint32_t packed_scaler = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t mask_w = get_compile_time_arg_val(2);
 constexpr uint32_t Wt = get_compile_time_arg_val(3);
+constexpr uint32_t num_external_tiles = get_compile_time_arg_val(4);
+constexpr uint32_t mask_h = get_compile_time_arg_val(5);
 
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;
@@ -40,6 +44,7 @@ void kernel_main() {
     uint32_t dL_out_address = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
+    [[maybe_unused]] uint32_t external_sums_address = get_arg_val<uint32_t>(runtime_args_counter++);
 
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
@@ -48,6 +53,9 @@ void kernel_main() {
     if constexpr (do_mask_w) {
         generate_mask_tile(cb_mask_w_idx, one, zero, mask_w);
     }
+#ifdef DO_MASK_H
+    generate_mask_h_tile(cb_mask_h_idx, one, zero, mask_h);
+#endif
     // Generate tile with scalar.
     generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
     // Generate tile for matmul row reduce.
@@ -56,20 +64,38 @@ void kernel_main() {
     generate_tile_with_bfloat16_value(cb_zero_idx, zero);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
-    constexpr auto input_args = TensorAccessorArgs<4>();
+    constexpr auto input_args = TensorAccessorArgs<6>();
     constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto rms_a_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr auto dL_out_args = TensorAccessorArgs<rms_a_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto external_sums_args =
+        TensorAccessorArgs<dL_out_args.next_compile_time_args_offset()>();
     const auto input_address_generator = TensorAccessor(input_args, input_address);
     const auto gamma_address_generator = TensorAccessor(gamma_args, gamma_address);
-    const auto rms_a_address_generator = TensorAccessor(rms_a_args, rms_a_address);
+    [[maybe_unused]] const auto rms_a_address_generator = TensorAccessor(rms_a_args, rms_a_address);
     const auto dL_out_address_generator = TensorAccessor(dL_out_args, dL_out_address);
+#ifdef EXTERNAL_SCALE
+    const uint32_t external_sums_tile_bytes = get_tile_size(cb_external_sums_idx);
+    const auto external_sums_address_generator = TensorAccessor(external_sums_args, external_sums_address);
+#endif
 
-    // Read input tensors row by row, reading each row's data twice due to compute requirements
+    // Full mode reads each row twice when it does not fit in L1: once to reduce the scale and once for the
+    // gradients. LocalSum only reduces and ExternalScale only computes gradients, so both read each row once.
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {
+#ifndef LOCAL_SUM
         // Read RMS(a) once per row - shape [B,1,S,1], one scalar per row
         read_tiles_by_row(cb_rms_a_idx, rms_a_address_generator, r, 1, tile_bytes, 1);
+#endif
+#ifdef EXTERNAL_SCALE
+        read_tiles_by_row(
+            cb_external_sums_idx,
+            external_sums_address_generator,
+            r * num_external_tiles,
+            num_external_tiles,
+            external_sums_tile_bytes,
+            num_external_tiles);
+#endif
 
         // First pass: read row data for first compute phase
         for (uint32_t c = 0; c < Wt; c += block_size) {
@@ -100,7 +126,7 @@ void kernel_main() {
 #endif
         }
 
-#ifndef EVERYTHING_FITS_IN_L1
+#if !defined(EVERYTHING_FITS_IN_L1) && !defined(LOCAL_SUM) && !defined(EXTERNAL_SCALE)
         // Second pass: read row data again for second compute phase
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t row_tile_idx = (r * Wt) + c;

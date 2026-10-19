@@ -35,10 +35,14 @@ namespace ttnn::prim {
 ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation::tensor_return_value_t ttml_rmsnorm_bw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
-    const ttnn::Tensor& rms_tensor,
+    const std::optional<ttnn::Tensor>& rms_tensor,
     const ttnn::Tensor& dL_dout_tensor,
     float epsilon = 1e-6F,
     const std::optional<ttnn::Tensor>& preallocated_da = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_dgamma_components = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_dgamma_components = std::nullopt,
+    ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardMode mode =
+        ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardMode::Full,
+    uint32_t full_width = 0U,
+    const std::optional<ttnn::Tensor>& external_sums = std::nullopt);
 
 }  // namespace ttnn::prim

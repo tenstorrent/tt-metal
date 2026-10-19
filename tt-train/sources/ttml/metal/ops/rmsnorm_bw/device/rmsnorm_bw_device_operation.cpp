@@ -10,86 +10,156 @@
 
 namespace ttml::metal::ops::rmsnorm_bw::device {
 
+namespace {
+
+// rms and the external sums hold one value per row of the input, so their row grid must match the input's.
+void check_per_row_tensor(const ttnn::Tensor& tensor, const ttnn::Tensor& input, const std::string& name) {
+    const auto& padded = tensor.padded_shape();
+    const auto& input_padded = input.padded_shape();
+    TT_FATAL(
+        padded.rank() == 4U && padded[0] == input_padded[0] && padded[1] == input_padded[1] &&
+            padded[2] == input_padded[2],
+        "{} padded shape {} must match the first three padded dims of the input {}",
+        name,
+        padded,
+        input_padded);
+}
+
+}  // namespace
+
 void RMSNormBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    constexpr std::string_view kOp = "RMSNormBackward";
     const auto& input_tensor = tensor_args.input;
-    const auto& gamma_tensor = tensor_args.gamma;
-    const auto& rms_tensor = tensor_args.rms;
-    const auto& dL_dout_tensor = tensor_args.dL_dout;
-    const auto& preallocated_da_tensor = tensor_args.preallocated_da;
-    const auto& preallocated_dgamma_components_tensor = tensor_args.preallocated_dgamma_components;
 
-    check_device_tensor(input_tensor, "RMSNormBackward", "Input");
-    check_device_tensor(gamma_tensor, "RMSNormBackward", "Gamma");
-    check_device_tensor(rms_tensor, "RMSNormBackward", "RMS");
-    check_device_tensor(dL_dout_tensor, "RMSNormBackward", "dL_dout");
-    if (preallocated_da_tensor.has_value()) {
-        check_device_tensor(preallocated_da_tensor.value(), "RMSNormBackward", "Preallocated dL_da");
+    check_device_tensor(input_tensor, kOp, "Input");
+    check_device_tensor(tensor_args.gamma, kOp, "Gamma");
+    check_device_tensor(tensor_args.dL_dout, kOp, "dL_dout");
+    TT_FATAL(
+        tensor_args.dL_dout.padded_shape() == input_tensor.padded_shape(),
+        "dL_dout padded shape {} must match the input padded shape {}",
+        tensor_args.dL_dout.padded_shape(),
+        input_tensor.padded_shape());
+
+    if (args.mode == RMSNormBackwardMode::LocalSum) {
+        TT_FATAL(
+            !tensor_args.preallocated_da.has_value() && !tensor_args.preallocated_dgamma_components.has_value(),
+            "RMSNormBackward LocalSum mode does not take preallocated gradients");
+    } else {
+        TT_FATAL(tensor_args.rms.has_value(), "RMSNormBackward requires rms outside LocalSum mode");
+        const auto& rms = tensor_args.rms.value();
+        check_device_tensor(rms, kOp, "RMS");
+        check_same_device(rms, input_tensor, kOp, "RMS", "Input");
+        check_per_row_tensor(rms, input_tensor, "RMS");
+        if (tensor_args.preallocated_da.has_value()) {
+            check_device_tensor(tensor_args.preallocated_da.value(), kOp, "Preallocated dL_da");
+        }
+        if (tensor_args.preallocated_dgamma_components.has_value()) {
+            TT_FATAL(
+                !compute_layout(args, tensor_args).dgamma_on_chip,
+                "RMSNormBackward accumulates dgamma on chip for this shape and cannot write into preallocated "
+                "dL_dgamma_components");
+            check_device_tensor(
+                tensor_args.preallocated_dgamma_components.value(), kOp, "Preallocated dL_dgamma_components");
+        }
     }
-    if (preallocated_dgamma_components_tensor.has_value()) {
-        check_device_tensor(
-            preallocated_dgamma_components_tensor.value(), "RMSNormBackward", "Preallocated dL_dgamma_components");
+
+    if (args.mode == RMSNormBackwardMode::ExternalScale) {
+        TT_FATAL(tensor_args.external_sums.has_value(), "RMSNormBackward ExternalScale mode requires external_sums");
+        const auto& sums = tensor_args.external_sums.value();
+        check_device_tensor(sums, kOp, "External sums", {.dtypes = {tt::tt_metal::DataType::FLOAT32}});
+        check_same_device(sums, input_tensor, kOp, "External sums", "Input");
+        check_per_row_tensor(sums, input_tensor, "External sums");
+        TT_FATAL(
+            sums.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0U,
+            "External sums last dim {} must hold one tile per shard",
+            sums.logical_shape()[-1]);
+        TT_FATAL(
+            args.full_width >= input_tensor.logical_shape()[-1],
+            "full_width {} must be at least the local width {}",
+            args.full_width,
+            input_tensor.logical_shape()[-1]);
+    } else {
+        TT_FATAL(!tensor_args.external_sums.has_value(), "external_sums is only used by ExternalScale mode");
     }
 }
 
 spec_return_value_t RMSNormBackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
     spec_return_value_t output_specs;
-    output_specs.reserve(2U);
 
+    if (args.mode == RMSNormBackwardMode::LocalSum) {
+        auto shape = input.logical_shape();
+        shape[-1] = tt::constants::TILE_WIDTH;
+        output_specs.emplace_back(
+            shape,
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, input.memory_config()));
+        return output_specs;
+    }
+
+    output_specs.reserve(2U);
     if (tensor_args.preallocated_da.has_value()) {
         output_specs.push_back(tensor_args.preallocated_da->tensor_spec());
     } else {
         output_specs.emplace_back(
-            tensor_args.input.logical_shape(),
-            tt::tt_metal::TensorLayout(
-                tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
+            input.logical_shape(),
+            tt::tt_metal::TensorLayout(input.dtype(), tt::tt_metal::Layout::TILE, input.memory_config()));
     }
 
-    if (tensor_args.preallocated_dgamma_components.has_value()) {
+    const auto layout = compute_layout(args, tensor_args);
+    if (layout.dgamma_on_chip) {
+        output_specs.emplace_back(
+            ttnn::Shape({1U, 1U, layout.num_cores * tt::constants::TILE_HEIGHT, input.logical_shape()[-1]}),
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, tensor_args.gamma.memory_config()));
+    } else if (tensor_args.preallocated_dgamma_components.has_value()) {
         output_specs.push_back(tensor_args.preallocated_dgamma_components->tensor_spec());
     } else {
-        // Since we cannot compute dL_dgamma in the kernel, we need to return dL_dgamma_components, which will be
-        // reduced outside the kernel. The shape of dL_dgamma_components is the same as the input shape.
         output_specs.emplace_back(
-            tensor_args.input.logical_shape(),
+            input.logical_shape(),
             tt::tt_metal::TensorLayout(
                 tensor_args.gamma.dtype(), tt::tt_metal::Layout::TILE, tensor_args.gamma.memory_config()));
     }
-
     return output_specs;
 }
 
 tensor_return_value_t RMSNormBackwardDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    tensor_return_value_t output_tensors;
-    output_tensors.reserve(2U);
+    const spec_return_value_t output_specs = compute_output_specs(args, tensor_args);
+    auto* device = tensor_args.input.device();
 
-    spec_return_value_t output_specs = compute_output_specs(args, tensor_args);
+    tensor_return_value_t output_tensors;
+    output_tensors.reserve(output_specs.size());
+    if (args.mode == RMSNormBackwardMode::LocalSum) {
+        output_tensors.push_back(ttnn::create_device_tensor(output_specs[0], device));
+        return output_tensors;
+    }
 
     if (tensor_args.preallocated_da.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_da.value());
     } else {
-        output_tensors.push_back(ttnn::create_device_tensor(output_specs[0], tensor_args.input.device()));
+        output_tensors.push_back(ttnn::create_device_tensor(output_specs[0], device));
     }
 
-    if (tensor_args.preallocated_dgamma_components.has_value()) {
+    const bool dgamma_on_chip = compute_layout(args, tensor_args).dgamma_on_chip;
+    if (!dgamma_on_chip && tensor_args.preallocated_dgamma_components.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_dgamma_components.value());
     } else {
-        output_tensors.push_back(ttnn::create_device_tensor(output_specs[1], tensor_args.gamma.device()));
+        output_tensors.push_back(ttnn::create_device_tensor(output_specs[1], device));
     }
-
     return output_tensors;
 }
 
 ttsl::hash::hash_t RMSNormBackwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.logical_shape();
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RMSNormBackwardDeviceOperation>(
-        args, input_tensor.dtype(), input_logical_shape);
-
-    return hash;
+    const uint32_t num_external_tiles = tensor_args.external_sums.has_value()
+                                            ? tensor_args.external_sums->padded_shape()[-1] / tt::constants::TILE_WIDTH
+                                            : 0U;
+    return tt::tt_metal::operation::hash_operation<RMSNormBackwardDeviceOperation>(
+        args.mode, args.full_width, input_tensor.dtype(), input_tensor.logical_shape(), num_external_tiles);
 }
 
 }  // namespace ttml::metal::ops::rmsnorm_bw::device
@@ -99,19 +169,24 @@ namespace ttnn::prim {
 ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation::tensor_return_value_t ttml_rmsnorm_bw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
-    const ttnn::Tensor& rms_tensor,
+    const std::optional<ttnn::Tensor>& rms_tensor,
     const ttnn::Tensor& dL_dout_tensor,
     float epsilon,
     const std::optional<ttnn::Tensor>& preallocated_da,
-    const std::optional<ttnn::Tensor>& preallocated_dgamma_components) {
+    const std::optional<ttnn::Tensor>& preallocated_dgamma_components,
+    ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardMode mode,
+    uint32_t full_width,
+    const std::optional<ttnn::Tensor>& external_sums) {
     using OperationType = ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{.epsilon = epsilon};
+    auto operation_attributes =
+        OperationType::operation_attributes_t{.epsilon = epsilon, .mode = mode, .full_width = full_width};
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .gamma = gamma_tensor,
         .rms = rms_tensor,
         .dL_dout = dL_dout_tensor,
+        .external_sums = external_sums,
         .preallocated_da = preallocated_da,
         .preallocated_dgamma_components = preallocated_dgamma_components,
     };
