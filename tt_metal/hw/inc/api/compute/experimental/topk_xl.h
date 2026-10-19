@@ -261,6 +261,39 @@ ALWI void topk_xl_add_lsb_indices(std::uint32_t idst) {
 }
 
 /**
+ * Initialize supplied-index packing after copying the score and index operands.
+ * Call topk_xl_pack_supplied_indices before restoring the TopK sort/merge state.
+ */
+ALWI void topk_xl_pack_supplied_indices_init() { MATH((llk_math_topk_xl_pack_supplied_indices_init())); }
+
+// clang-format off
+/**
+ * Combine BF16-expanded scores and raw UInt32 IDs into fused TopK entries.
+ * Preserve score bits 31:16 and insert ID bits 15:0. UINT32_MAX IDs produce
+ * negative-infinity padding; K=512 also fills the unused output half with padding.
+ * Load both inputs in matching element order, enable FP32 DEST, and acquire the
+ * entire referenced DEST range. Initialize with topk_xl_pack_supplied_indices_init.
+ * Output can alias either input at the same start; other overlaps are unsupported.
+ * Restore TopK sort/merge state after packing. High ID bits are not retained here.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name | Description | Type | Valid Range | Required |
+ * |------------|------|-------------|------|-------------|----------|
+ * | Template | K | Number of entries | uint32_t | 512, 1024, 2048 | Yes |
+ * | Function | scores | First score tile in DEST | uint32_t | Acquired DEST | Yes |
+ * | Function | indices | First bit-preserving UInt32 ID tile | uint32_t | Acquired DEST | Yes |
+ * | Function | output | First packed output tile | uint32_t | Acquired DEST | Yes |
+ * | Function | score_half | Select score half for K=512 | uint32_t | 0; 0 or 1 for K=512 | No |
+ */
+// clang-format on
+template <std::uint32_t K>
+ALWI void topk_xl_pack_supplied_indices(
+    std::uint32_t scores, std::uint32_t indices, std::uint32_t output, std::uint32_t score_half = 0) {
+    MATH((llk_math_topk_xl_pack_supplied_indices<K>(scores, indices, output, score_half)));
+}
+
+/**
  * Reprogram only the MOP Expander after topk_xl_copy_tile_init, instead of a
  * full topk_xl_init. copy init clobbers ADDR_MOD_0/3 and the MOP; the fused
  * merge/rebuild kernels use ADDR_MOD_1/5/6/7, so for fused = true only the MOP

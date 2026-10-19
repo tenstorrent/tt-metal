@@ -9,6 +9,8 @@
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
 #include "sanitizer/api.h"
+#include "llk_math_eltwise_binary_sfpu_params.h"
+#include "sfpu/experimental/ckernel_sfpu_topk_pack_indices.h"
 
 namespace ckernel {
 
@@ -61,6 +63,22 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices(std::uint32_t ds
     SAN_HOOK(unsupported());
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_topk_xl_add_lsb_indices_<K, core_id, row_major>, dst_index, VectorMode::RC_custom);
+}
+
+/** Initialize the shared SFPU state for supplied-index packing. */
+inline void llk_math_topk_xl_pack_supplied_indices_init() {
+    SAN_HOOK(unsupported());
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>([] {});
+}
+
+/** Pack matching score and raw-index regions; the caller owns their full DEST range. */
+template <std::uint32_t K>
+inline void llk_math_topk_xl_pack_supplied_indices(
+    std::uint32_t scores, std::uint32_t indices, std::uint32_t output, std::uint32_t score_half) {
+    SAN_HOOK(unsupported());
+    LLK_ASSERT(score_half == 0 || (K == 512 && score_half == 1), "invalid score half");
+    _llk_math_eltwise_binary_sfpu_params_(
+        ckernel::sfpu::_topk_xl_pack_supplied_indices_<K>, scores, indices, output, VectorMode::RC_custom, score_half);
 }
 
 // Reprogram only the MOP Expander after a topk_xl copy, instead of a full
