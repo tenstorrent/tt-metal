@@ -498,3 +498,47 @@ arms vary caching and presence of request seed9472; GPQA42 and server9472
 remain untouched. One task cannot qualify accuracy or justify seed removal.
 All execution remains remote; no local validation/device process was run.
 
+### Full-cohort release preparation (2026-10-19)
+
+The clean inference candidate branch `mvasiljevic/gemma4-prefix-full5-release`
+at `29f1648bff455a330bafdcaedcf7fd37178cb54d` starts from the original full
+five-task configuration, retaining request seed9472. Relative to PR5315,
+only the Gemma26 blocks in `workflows/model_specs/dev/llm.yaml` and
+`reference_config/evals/eval_config.py` differ: prefix caching and traced
+suffix replay are explicit, and SWE uses the existing `agent_env` interface
+to supply `UV_OVERRIDE`. There is no `workflow_venvs.py` source patch in this
+candidate. No production PR branch was changed.
+
+The override URL is immutable Metal commit
+`6b303feaa5f46aa8f4ef84db816104a04e840306`, model-owned file
+`tests/harbor_dependency_overrides.txt`, requesting `litellm[mcp]==1.106.0`
+and `mcp==2.2.0`. Upstream Harbor main and the current Tenstorrent Harbor
+fork still use the original installer without MCP dependencies. The
+supported uv override preserves that installer command; it changes only
+the isolated task dependency resolution, not the agent or verifier.
+
+Device-free fresh Astropy task-image preflight
+[39255415691](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39255415691)
+passed on `qb2-120-p05t02`: mini-swe-agent2.2.8, LiteLLM1.106.0, mcp2.2.0,
+fastapi0.148.0, orjson3.13.0, httpx2 2.14.0; both the failing MCP handler
+and CacheableResult imports succeeded. This preflight used a mounted
+override file; the full Harbor run additionally validates immutable URL
+loading and the existing per-agent environment propagation.
+
+Full5 SWE run
+[39255759103](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/39255759103)
+was dispatched with those exact Metal/inference refs and workflow `bddb4d6`.
+It reuses the existing prebuilt image with the exact BFP8 model directory
+mounted, caching/traced suffix enabled, and seed9472 retained. Its workflow
+no longer exports the experimental Harbor source-patch switch. The job
+timeout is 780 minutes to accommodate five sequential two-hour task limits;
+task limits themselves were not changed. Results are pending, and this is
+not final Shield qualification.
+
+Shield main's normal dispatch with an empty `docker-image` builds the
+specified Metal/inference/plugin refs; supplying the old prebuilt image
+does not overlay Metal. Final qualification therefore needs an exact-model
+image (one build, subsequently reused). No build has been dispatched yet.
+The tested plugin ref to retain is
+`0a76258e14ca7237067ca9a22ec02e257bee570a`.
+
