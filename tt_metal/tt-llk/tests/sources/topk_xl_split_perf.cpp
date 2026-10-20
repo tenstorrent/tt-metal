@@ -148,7 +148,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
             _llk_math_wait_for_dest_available_<dest_sync>();
-            topk_xl_split::math_row<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS, [math_format](std::uint32_t, std::uint32_t tile) { copy_chunk(tile, math_format); });
+            constexpr bool prefetch = topk_xl_split::can_prefetch<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS);
+            topk_xl_split::math_row<TOPK_XL_K>(
+                TOPK_XL_NUM_CHUNKS,
+                [math_format](std::uint32_t, std::uint32_t tile) { copy_chunk(tile, math_format); },
+                prefetch && loop > 0,
+                prefetch && loop + 1 < LOOP_FACTOR);
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
         PROFILER_SYNC();
@@ -193,7 +198,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(t, L1_ADDRESS(TOPK_PERF_PARAM(buffer_Res)[t]));
             }
-            _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            if (topk_xl_split::can_prefetch<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS) && loop + 1 < LOOP_FACTOR)
+            {
+                topk_xl_split::release_dest_bank0<is_fp32_dest_acc_en>();
+            }
+            else
+            {
+                _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            }
         }
         PROFILER_SYNC();
     }

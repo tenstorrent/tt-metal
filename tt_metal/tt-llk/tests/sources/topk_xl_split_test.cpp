@@ -130,8 +130,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
     {
         _llk_math_wait_for_dest_available_<dest_sync>();
+        constexpr bool prefetch = topk_xl_split::can_prefetch<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS);
         topk_xl_split::math_row<TOPK_XL_K>(
-            TOPK_XL_NUM_CHUNKS, [math_format](std::uint32_t chunk, std::uint32_t tile) { copy_chunk(chunk, tile, math_format); });
+            TOPK_XL_NUM_CHUNKS,
+            [math_format](std::uint32_t chunk, std::uint32_t tile) { copy_chunk(chunk, tile, math_format); },
+            prefetch && r > 0,
+            prefetch && r + 1 < TOPK_XL_NUM_ROWS);
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 
@@ -167,7 +171,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(t, L1_ADDRESS(params.buffer_Res[2 * TILES_PER_SEQ * r + t]));
         }
-        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        if (topk_xl_split::can_prefetch<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS) && r + 1 < TOPK_XL_NUM_ROWS)
+        {
+            topk_xl_split::release_dest_bank0<is_fp32_dest_acc_en>();
+        }
+        else
+        {
+            _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        }
     }
 }
 

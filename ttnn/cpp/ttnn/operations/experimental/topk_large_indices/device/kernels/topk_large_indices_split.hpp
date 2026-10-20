@@ -77,6 +77,13 @@ constexpr int survivor_distance(const std::uint32_t slot_parity) {
     return static_cast<int>(((slot_tile<K>(slot_parity + 1) - slot_tile<K>(slot_parity)) & 15) << 6);
 }
 
+// Whether the next row's first fused chunk can be copied while this row finishes: it lands in bank 1, which the
+// survivor and index tiles never use.
+template <std::uint32_t K>
+constexpr bool can_prefetch(const std::uint32_t num_chunks) {
+    return (num_chunks & 1) == 0 && !(K == 512 && num_chunks == 2);
+}
+
 #ifdef TRISC_MATH
 
 inline void take_pack_token() {
@@ -91,12 +98,19 @@ inline void start() {
     ckernel::t6_semaphore_post<ckernel::p_stall::MATH | ckernel::p_stall::WAIT_SFPU>(ckernel::semaphore::MATH_PACK);
 }
 
+// A token that carries no step: MATH's row set-up is done.
+inline void post_token() { ckernel::t6_semaphore_post<ckernel::p_stall::MATH | ckernel::p_stall::WAIT_SFPU>(F2S); }
+
 inline void release_src() { TTI_SETRWC(ckernel::p_setrwc::CLR_AB, 0, 0, 0, 0, ckernel::p_setrwc::SET_ABD); }
 
 // The SrcA/SrcB releases keep the single-thread order (after the copy, halfway through the chunk, before the next
 // copy), and every release and copy runs with the transpose CFG block closed, as in the single-thread kernel.
 template <std::uint32_t K, bool classic, typename CopyChunk>
-inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk) {
+inline void math_row(
+    const std::uint32_t num_chunks,
+    CopyChunk&& copy_chunk,
+    const bool first_prefetched = false,
+    const bool prefetch_next = false) {
     static_assert(
         supported_split<K, classic>, "the split takes fused K = 512, 1024 and 2048 rows and Classic K = 512 rows");
     std::uint32_t posted = 0, taken = 0, half_release_step = 0;
@@ -117,6 +131,11 @@ inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk) {
                 take_pack_token();
             }
 
+            if (first_prefetched && step == 0) {
+                posted++;
+                prev_step_busy = true;
+                continue;
+            }
             if (stage == 0) {
                 if (cfg_open) {
                     ckernel::sfpu::leave_transpose_cfg_block();
@@ -164,6 +183,14 @@ inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk) {
         ckernel::sfpu::leave_transpose_cfg_block();
     }
     release_src();
+    if (prefetch_next) {
+        // Stage 6 of the last chunk has read the other chunk's tiles; stages 7 and 8 stay in the survivor's bank.
+        for (; taken + 2 < posted; taken++) {
+            take_pack_token();
+        }
+        copy_chunk(0, chunk_tile<K, classic>(0, num_chunks));
+        ckernel::t6_semaphore_post<ckernel::p_stall::MATH>(F2S);
+    }
     for (; taken < posted; taken++) {
         take_pack_token();
     }
@@ -182,6 +209,14 @@ inline void take_math_token() {
 // Once per kernel: waits for MATH's start signal.
 inline void wait_start() {
     _llk_packer_wait_for_math_done_();
+    _llk_packer_set_math_semaphore_<ckernel::p_stall::NONE>();
+}
+
+// Releases Dst to MATH, clearing only bank 0: bank 1 may already hold the next row's first chunk.
+template <bool fp32>
+inline void release_dest_bank0() {
+    TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, ckernel::p_stall::PACK);
+    TTI_ZEROACC(ckernel::p_zeroacc::CLR_HALF, fp32, 0, ckernel::ADDR_MOD_1, 0);
     _llk_packer_set_math_semaphore_<ckernel::p_stall::NONE>();
 }
 
@@ -345,4 +380,4 @@ inline void release_accumulator() {
 
 #endif  // TRISC_MATH
 
-}
+}  // namespace topk_large_indices_split
