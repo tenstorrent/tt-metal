@@ -52,6 +52,10 @@ _OP = MathOperation.Abs
 #: The ``(in, out, approx, dest)`` key of a cell whose coordinates the test is not about.
 _CELL = ("Float16", "Float16", "No", "No")
 
+#: A floored reading: the worst lane over every lane, and ``(residual, atol)`` for the
+#: lanes outside the floor.
+_WORST, _FLOOR = 14337, (2, 2.4e-7)
+
 
 #: One op block with a row of each kind write_table has to tell apart.
 _TABLE = """Gelu:  # header provenance, ungeneratable
@@ -1602,7 +1606,7 @@ def test_a_floored_cell_is_written_with_its_floor_and_read_back(table):
     unfloored maximum. The loader accepts the row as a ULP contract with a floor."""
     from helpers.sfpu_accuracy_budget import _load_table
 
-    _record_grid("Gelu", "Float16", "Float16", 14337, floor=(2, 2.4e-7))
+    _record_grid("Gelu", "Float16", "Float16", _WORST, floor=_FLOOR)
     report = write_table(table, _RUN)
     assert (set(report.written), report.kept) == ({"Gelu"}, {})
     row = BudgetTable.load(table).row("Gelu", in_="Float16", out="Float16")
@@ -1695,7 +1699,7 @@ def test_the_trig_claim_reaches_65504_on_a_wide_input():
 
 
 def test_a_floor_that_still_leaves_the_cell_over_the_ceiling_demotes_and_says_so(table):
-    _record_grid("Gelu", "Float16", "Float16", 14337, floor=(100, 1e-3))
+    _record_grid("Gelu", "Float16", "Float16", _WORST, floor=(100, 1e-3))
     write_table(table, _RUN)
     row = BudgetTable.load(table).row("Gelu", in_="Float16", out="Float16")
     assert (row.metric, row.near_zero_atol) == ("tolerance", None)
