@@ -67,7 +67,8 @@ class GreedyHead:
         return crs, cb
 
     def _scan_program(self, logits):
-        crs, cb = self._scratch(self.scan_cores, self.max_tiles * 2 * self.users * 32 + 64)
+        elem_bytes = 4 if logits.dtype == ttnn.float32 else 2
+        crs, cb = self._scratch(self.scan_cores, self.max_tiles * 2 * self.users * 16 * elem_bytes + 64)
         rt = ttnn.RuntimeArgs()
         for i, (core, (b, e)) in enumerate(zip(self.scan_cores, self.ranges)):
             rt[core.x][core.y] = [logits.buffer_address(), self.partials.buffer_address(), b, e, i]
@@ -75,7 +76,7 @@ class GreedyHead:
             kernel_source=f"{KERNEL_DIR}/greedy_scan.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=crs,
-            compile_time_args=[self.users, SCRATCH_CB, self.max_tiles],
+            compile_time_args=[self.users, SCRATCH_CB, self.max_tiles, elem_bytes],
             runtime_args=rt,
             config=ttnn.ReaderConfigDescriptor(),
         )
@@ -105,11 +106,11 @@ class GreedyHead:
         return ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[cb])
 
     def __call__(self, logits, token_input=None):
-        """logits [1, 1, 32, vocab_local] bf16 TILE (DRAM interleaved; users in rows 0..users-1).
+        """logits [1, 1, 32, vocab_local] bf16 or fp32 TILE (DRAM interleaved; users in rows 0..users-1).
 
         Returns the persistent ``next_tokens`` [1, max_batch] uint32 row-major (zeros past ``users``); also writes
         it into ``token_input`` (a [1, max_batch] uint32 row-major tensor) when given."""
-        assert logits.layout == ttnn.TILE_LAYOUT and logits.dtype == ttnn.bfloat16 and _is_dram(logits)
+        assert logits.layout == ttnn.TILE_LAYOUT and logits.dtype in (ttnn.bfloat16, ttnn.float32) and _is_dram(logits)
         assert logits.shape[-1] == self.vocab_local and logits.shape[-2] == TILE
         ttnn.generic_op([logits, self.partials], self._scan_program(logits))
         gathered = self.plan.all_gather(self.partials, dim=-1)

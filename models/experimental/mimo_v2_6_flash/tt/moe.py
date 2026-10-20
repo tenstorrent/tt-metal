@@ -15,11 +15,22 @@ streams the selected experts (moe_stream.py). The weighted sum over experts is a
 chip and is all-reduced across the row.
 """
 
+import os
+
 import torch
 
 import ttnn
 
-from .common import TILE, DramShardedMatmul, as_weight, cache_exists, cache_name, compute_config, mcast_1d_config
+from .common import (
+    TILE,
+    DramShardedMatmul,
+    as_weight,
+    bfp_mse_prepare,
+    cache_exists,
+    cache_name,
+    compute_config,
+    mcast_1d_config,
+)
 from .moe_stream import (
     DownStream,
     GateUpStream,
@@ -31,6 +42,34 @@ from .moe_stream import (
 )
 from .moe_prefill import PrefillExperts
 from .proj_stream import RouterScoreStream
+
+
+def expert_weights_host(experts, tp, inter_local, expert_dtype, layer_idx=None, mse=True):
+    """Host expert weights in device layout: (w_gate_up [1, E, H, tp * 2 * I_local], w_down [1, E, I, H]).
+
+    gate/up [E, I, H] -> one tensor whose chip-c slice holds [gate_c | up_c], so one matmul makes both; down
+    [E, H, I] -> [1, E, I, H] with I sharded over TP. bfloat4_b weights are MSE-prepared (bfp_mse_prepare); a
+    precomputed copy is taken from MIMO_EXPERT_PREP_DIR/layer<i>.pt when present (tests/perf/prep_experts.py).
+    """
+    prep_dir = os.environ.get("MIMO_EXPERT_PREP_DIR")
+    path = os.path.join(prep_dir, f"layer{layer_idx}.pt") if prep_dir and layer_idx is not None else None
+    mse = mse and expert_dtype == ttnn.bfloat4_b
+    if mse and path and os.path.exists(path):
+        saved = torch.load(path)
+        return saved["w_gate_up"], saved["w_down"]
+    g = experts["gate_proj"].transpose(1, 2)
+    u = experts["up_proj"].transpose(1, 2)
+    il = inter_local
+    w_gate_up = torch.cat(
+        [torch.cat([g[..., c * il : (c + 1) * il], u[..., c * il : (c + 1) * il]], dim=-1) for c in range(tp)],
+        dim=-1,
+    ).unsqueeze(0)
+    del g, u
+    w_down = experts["down_proj"].transpose(1, 2).unsqueeze(0)
+    if mse:
+        w_gate_up = bfp_mse_prepare(w_gate_up, expert_dtype)
+        w_down = bfp_mse_prepare(w_down, expert_dtype)
+    return w_gate_up, w_down
 
 
 class TtMiMoMoE:
@@ -51,7 +90,11 @@ class TtMiMoMoE:
         self.router_mm = DramShardedMatmul(
             plan, self.hidden, self.num_experts, out_dtype=ttnn.float32, compute_kernel_config=self.router_config
         )
-        expert_cache = [cache_name(cache_dir, prefix, n) for n in ("w_gate_up", "w_down")]
+        # bfloat4_b experts are stored MSE-prepared (bfp_mse_prepare): same format and speed, lower error.
+        # MIMO_EXPERT_MSE=0 keeps the stock packer's values (A/B).
+        self.expert_mse = expert_dtype == ttnn.bfloat4_b and os.environ.get("MIMO_EXPERT_MSE", "1") != "0"
+        tag = "_mse" if self.expert_mse else ""
+        expert_cache = [cache_name(cache_dir, prefix, n + tag) for n in ("w_gate_up", "w_down")]
         if all(cache_exists(f, expert_dtype) for f in expert_cache):
             experts = None  # already converted: skip dequantizing 256 experts on the host
         w_router = bias = w_gate_up = w_down = None
@@ -60,18 +103,9 @@ class TtMiMoMoE:
             w_router = self.router_mm.pad_chip_blocks(w_router, 1)
             bias = router["e_score_correction_bias"].float().reshape(1, 1, 1, -1)
         if experts is not None:
-            # gate/up [E, I, H] -> one [1, E, H, tp * 2 * I_local] tensor: chip c's slice holds
-            # [gate_c | up_c], so one sparse_matmul makes both (twice the N width, twice the cores).
-            # down [E, H, I] -> [1, E, I, H]: TP shards I.
-            g = experts["gate_proj"].transpose(1, 2)
-            u = experts["up_proj"].transpose(1, 2)
-            il = self.inter_local
-            w_gate_up = torch.cat(
-                [torch.cat([g[..., c * il : (c + 1) * il], u[..., c * il : (c + 1) * il]], dim=-1) for c in range(tp)],
-                dim=-1,
-            ).unsqueeze(0)
-            del g, u
-            w_down = experts["down_proj"].transpose(1, 2).unsqueeze(0)
+            w_gate_up, w_down = expert_weights_host(
+                experts, tp, self.inter_local, expert_dtype, layer_idx, self.expert_mse
+            )
 
         rep = plan.replicate()
         self.w_router = as_weight(
@@ -83,11 +117,9 @@ class TtMiMoMoE:
             memory_config=self.router_mm.weight_memory_config,
         )
         self.score_bias = as_weight(bias, plan, rep, ttnn.float32, cache_name(cache_dir, prefix, "score_bias"))
-        self.w_gate_up = as_weight(
-            w_gate_up, plan, plan.shard(-1), expert_dtype, cache_name(cache_dir, prefix, "w_gate_up")
-        )
+        self.w_gate_up = as_weight(w_gate_up, plan, plan.shard(-1), expert_dtype, expert_cache[0])
         del w_gate_up
-        self.w_down = as_weight(w_down, plan, plan.shard(-2), expert_dtype, cache_name(cache_dir, prefix, "w_down"))
+        self.w_down = as_weight(w_down, plan, plan.shard(-2), expert_dtype, expert_cache[1])
 
         self.expert_config = compute_config(ttnn.MathFidelity.HiFi2, fp32_acc=True)
         # Measured on BH (decode, 32 experts): wider K blocks cut the per-expert handshakes; down over 8x8 cores.

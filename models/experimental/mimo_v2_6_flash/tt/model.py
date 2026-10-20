@@ -97,10 +97,13 @@ class TtMiMoModel:
         expert_dtype=ttnn.bfloat4_b,
         lm_head_dtype=ttnn.bfloat8_b,
         kv_dtype=ttnn.bfloat8_b,
+        logits_dtype=ttnn.float32,
         num_links=2,
     ):
         """``ckpt`` may be None when ``cache_dir`` already holds every tensor (a later DP replica).
-        ``max_prefill_chunk``: the default prefill chunk (a multiple of ``block_size``)."""
+        ``max_prefill_chunk``: the default prefill chunk (a multiple of ``block_size``).
+        ``logits_dtype``: fp32 keeps near-tied logits apart; in bf16 (a step of 0.125 at the usual top logit of
+        16-32) they often tie exactly and the lowest token id wins."""
         assert max_prefill_chunk % block_size == 0
         self.mesh_device = mesh_device
         self.cfg = cfg
@@ -175,7 +178,8 @@ class TtMiMoModel:
                 f"[{tuple(mesh_device.shape)} id={id(mesh_device):x}] layer {i} ready in {time.time() - t0:.1f}s"
             )
 
-        self.lm_config = compute_config(ttnn.MathFidelity.HiFi2)
+        self.lm_config = compute_config(ttnn.MathFidelity.HiFi4)
+        self.logits_dtype = logits_dtype
         self.kv_caches = None
         self.page_table_tt = None
         # Host copies of the model's own page tables ({is_swa: int32 [tp, max_batch, blocks]}) and each one's scratch
@@ -469,7 +473,7 @@ class TtMiMoModel:
         logits = ttnn.linear(
             h,
             self.lm_head,
-            dtype=ttnn.bfloat16,
+            dtype=self.logits_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.lm_config,
         )

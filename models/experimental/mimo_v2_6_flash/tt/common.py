@@ -94,6 +94,46 @@ def cache_exists(cache_file, dtype, layout=ttnn.TILE_LAYOUT):
     return os.path.exists(f"{cache_file}_dtype_{dtype.name}_layout_{layout.name}.tensorbin")
 
 
+def bfp_mse_prepare(w, dtype, chunk=1 << 24):
+    """Values on the ``dtype`` (bfloat8_b / bfloat4_b) grid with each block's shared exponent chosen for least error.
+
+    ``w`` [..., N] is in its stored layout: the 16-value blocks of a tile face row run along the last dim, so blocks
+    are 16 consecutive columns. The stock host packer gives every block the largest element exponent ``e`` and
+    rounds; here each block takes the best of ``{e, e - 1, e + 1}`` (``e - 1`` clips the largest elements) under
+    squared error, with ties to ``e``. The result is exactly representable in bf16, and the stock packer reproduces
+    it bit for bit, so the device format, memory and speed are unchanged (tt-quant's ``mse`` policy,
+    github.com/tenstorrent/tt-quant). On MiMo's MXFP4 experts in bfloat4_b it raises the weight SQNR from ~18.3 to
+    ~20.9 dB.
+    """
+    bits = {ttnn.bfloat8_b: 7, ttnn.bfloat4_b: 3}[dtype]
+    max_code, scale_offset = (1 << bits) - 1, 126 + bits
+    shape = w.shape
+    assert shape[-1] % 16 == 0, shape
+    flat = w.reshape(-1, 16)
+    out = torch.empty(flat.shape, dtype=torch.bfloat16)
+    for s in range(0, flat.shape[0], chunk // 16):
+        x = flat[s : s + chunk // 16].float()
+        e = ((x.view(torch.int32) >> 23) & 0xFF).amax(-1, keepdim=True)
+        best = best_err = None
+        for offset in (0, -1, 1):
+            cand = e + offset
+            # Power-of-two scaling and round-half-even are exact in fp32 for these magnitudes.
+            step = torch.ldexp(torch.ones_like(x[:, :1]), (cand - scale_offset).float())
+            mag = torch.round(x.abs() / step).clamp_(max=max_code)
+            val = torch.where(mag > 0, torch.copysign(mag * step, x), torch.zeros_like(x))  # no signed zeros
+            err = (val - x).square().sum(-1, keepdim=True)
+            if offset:
+                err = torch.where((cand >= bits) & (cand <= 254), err, torch.full_like(err, float("inf")))
+            if best is None:
+                best, best_err = val, err
+            else:
+                better = err < best_err
+                best = torch.where(better, val, best)
+                best_err = torch.where(better, err, best_err)
+        out[s : s + chunk // 16] = best.to(torch.bfloat16)
+    return out.reshape(shape)
+
+
 def as_weight(torch_tensor, plan, mapper, dtype, cache_file, layout=ttnn.TILE_LAYOUT, memory_config=None):
     """``ttnn.as_tensor`` that loads from the cache when ``torch_tensor`` is None and the cache is warm."""
     return ttnn.as_tensor(
