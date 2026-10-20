@@ -79,6 +79,9 @@ contract:
 
 perf:
   op_profile: false        # per-op breakdown (representative layers only)
+  ab_mode: quick           # F122: a perf pick's A/B: quick (one process a side: the last chunk after the golden
+                           # prefix, every layer vs the golden, clean wall); full (frozen tests, ladder rungs,
+                           # profile). Quick picks' full gates run once, merged, before the final task (X.3)
   full_prefill: false      # the full-target warm prefill in the profile
 
 intake:

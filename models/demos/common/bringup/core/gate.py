@@ -70,6 +70,11 @@ def state_metrics(spec: dict[str, str], got: dict) -> dict:
     return {k: v for k, v in vals.items() if any(fnmatch.fnmatchcase(k, g) for g in globs)}
 
 
+def measured_only(spec: dict[str, str], got: dict) -> dict[str, str]:
+    """F122: the thresholds whose metric a partial (quick) measurement recorded; the rest wait for the full gate."""
+    return {g: c for g, c in (spec or {}).items() if any(fnmatch.fnmatchcase(k, g) for k in got)}
+
+
 def check_metrics(spec: dict[str, str], got: dict) -> tuple[bool, list[str]]:
     ok, lines = True, []
     for glob, cond in (spec or {}).items():
@@ -437,7 +442,10 @@ def run_gate(
     dur = time.time() - t0
 
     got = M.load(tid, ledger.results_dir)
-    m_ok, lines = check_metrics(task["gate"].get("metrics", {}), got)
+    thresholds = task["gate"].get("metrics", {})
+    if reuse is not None and reuse.get("partial"):  # F122: a quick A/B; the full gate runs before the final task
+        thresholds = measured_only(thresholds, got)
+    m_ok, lines = check_metrics(thresholds, got)
     missing = [a for a in task.get("artifacts", []) if not (spec.repo / a).exists()]
     hang = rc == SAFE_HANG_RC and _uses_safe_runner(task["gate"]["cmd"])
     verdict = "PASS" if (rc == 0 and m_ok and not missing) else ("HANG" if hang else "FAIL")
