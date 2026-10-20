@@ -113,13 +113,24 @@ class FunctionalDecoder(LightweightModule):
         max_seq_len: int = 4096,
         weight_cache_path: Path | None = None,
         weight_dtype=ttnn.bfloat8_b,
+        expert_dtype=ttnn.bfloat8_b,
+        expert_down_dtype=ttnn.bfloat8_b,
         **kwargs,
     ) -> "FunctionalDecoder":
         """``state_dict``: this layer's raw checkpoint tensors (prefix stripped, fp8 dequantized).
-        ``hf_config``: a ``GLM53FlashConfig``, or a path to the checkpoint ``config.json``."""
+        ``hf_config``: a ``GLM53FlashConfig``, or a path to the checkpoint ``config.json``.
+        ``expert_dtype`` / ``expert_down_dtype``: routed-expert gate/up and down weight formats
+        (``bfloat8_b`` default; ``bfloat4_b`` is the design's accuracy-gated candidate for gate/up)."""
         cfg = hf_config if isinstance(hf_config, GLM53FlashConfig) else GLM53FlashConfig.from_hf_config_json(hf_config)
         layer = TtDecoderLayer(
-            mesh_device, cfg, layer_idx, state_dict, weight_cache_path=weight_cache_path, weight_dtype=weight_dtype
+            mesh_device,
+            cfg,
+            layer_idx,
+            state_dict,
+            weight_cache_path=weight_cache_path,
+            weight_dtype=weight_dtype,
+            expert_dtype=expert_dtype,
+            expert_down_dtype=expert_down_dtype,
         )
         return cls(layer, max_batch=max_batch, max_seq_len=max_seq_len, **kwargs)
 

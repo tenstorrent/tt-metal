@@ -19,6 +19,12 @@ runtime (a static nnz that disagrees with the mask deadlocks the op). Prefill pr
 sequence in 32-token blocks with the same code.
 
 Weight layout for sparse_matmul: W13 ``[1, E, H, 2I]`` (gate columns then up), W2 ``[1, E, I, H]``.
+
+Expert dtype knobs (design section 9): ``expert_dtype`` is the routed W13 (gate/up) format and
+``expert_down_dtype`` the routed W2 format, both ``bfloat8_b`` by default; ``bfloat4_b`` for W13 is
+the candidate that halves the dominant expert-streaming term and is adopted only if the eval-set
+accuracy is unchanged (``tests/test_expert_dtype.py`` carries the single-layer evidence). The shared
+expert stays on ``weight_dtype`` like the dense MLP.
 """
 
 from __future__ import annotations
@@ -155,7 +161,8 @@ class TtRoutedExperts(LightweightModule):
         gate_up: torch.Tensor,  # [E, 2I, H] (HF stacked: gate rows then up rows)
         down: torch.Tensor,  # [E, H, I]
         *,
-        weight_dtype=ttnn.bfloat8_b,
+        expert_dtype=ttnn.bfloat8_b,  # W13 (gate/up) format
+        expert_down_dtype=ttnn.bfloat8_b,  # W2 (down) format
         activation_dtype=ttnn.bfloat16,
     ):
         self.device = device
@@ -163,11 +170,13 @@ class TtRoutedExperts(LightweightModule):
         self.E, self.H, self.I = cfg.n_routed_experts, cfg.hidden_size, cfg.moe_intermediate_size
         self.limit = float(cfg.swiglu_limit)
         self.activation_dtype = activation_dtype
+        self.expert_dtype = expert_dtype
+        self.expert_down_dtype = expert_down_dtype
         assert tuple(gate_up.shape) == (self.E, 2 * self.I, self.H) and tuple(down.shape) == (self.E, self.H, self.I)
         w13 = gate_up.transpose(1, 2).contiguous().reshape(1, self.E, self.H, 2 * self.I)  # [1,E,H,2I]
         w2 = down.transpose(1, 2).contiguous().reshape(1, self.E, self.I, self.H)  # [1,E,I,H]
-        self.w13 = ttnn.from_torch(w13, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        self.w2 = ttnn.from_torch(w2, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        self.w13 = ttnn.from_torch(w13, dtype=expert_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        self.w2 = ttnn.from_torch(w2, dtype=expert_down_dtype, layout=ttnn.TILE_LAYOUT, device=device)
         grid = device.compute_with_storage_grid_size()
         self.grid = (grid.x, grid.y)
         self.compute = _compute(device)
@@ -245,10 +254,19 @@ class TtMoE(LightweightModule):
     """Router + routed experts + shared expert (HF Glm5NextTextMoE)."""
 
     def __init__(
-        self, device, cfg: GLM53FlashConfig, mlp_state_dict: dict[str, torch.Tensor], *, weight_dtype=ttnn.bfloat8_b
+        self,
+        device,
+        cfg: GLM53FlashConfig,
+        mlp_state_dict: dict[str, torch.Tensor],
+        *,
+        weight_dtype=ttnn.bfloat8_b,
+        expert_dtype=ttnn.bfloat8_b,
+        expert_down_dtype=ttnn.bfloat8_b,
     ):
         """``mlp_state_dict``: raw checkpoint tensors of ``mlp.`` (prefix stripped), experts as
-        ``experts.N.{gate,up,down}_proj.weight`` or pre-stacked ``experts.gate_up_proj/down_proj``."""
+        ``experts.N.{gate,up,down}_proj.weight`` or pre-stacked ``experts.gate_up_proj/down_proj``.
+        ``weight_dtype`` is the shared expert's format; the routed experts take ``expert_dtype``
+        (gate/up) and ``expert_down_dtype`` (down)."""
         self.cfg = cfg
         E, I, H = cfg.n_routed_experts, cfg.moe_intermediate_size, cfg.hidden_size
         if "experts.gate_up_proj" in mlp_state_dict:
@@ -270,7 +288,9 @@ class TtMoE(LightweightModule):
         self.router = TtRouter(
             device, cfg, mlp_state_dict["gate.weight"], mlp_state_dict["gate.e_score_correction_bias"]
         )
-        self.experts = TtRoutedExperts(device, cfg, gate_up, down, weight_dtype=weight_dtype)
+        self.experts = TtRoutedExperts(
+            device, cfg, gate_up, down, expert_dtype=expert_dtype, expert_down_dtype=expert_down_dtype
+        )
         self.shared = TtClampedSwiGLU(
             device,
             mlp_state_dict["shared_experts.gate_proj.weight"],

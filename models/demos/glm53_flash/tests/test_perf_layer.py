@@ -54,6 +54,10 @@ PHASE = os.environ.get("GLM53_PERF_PHASE", "both")
 # both the dense and the sparse prefill kernels share compute_streaming.hpp, whose Tracy zones
 # collide on this commit (profiler.cpp "Source location hashes are colliding")
 SEED_ONLY = os.environ.get("GLM53_PERF_SEED_ONLY", "0") == "1"
+# routed-expert weight formats (design section 9 dtype gate): "bfp8" (default) | "bfp4"
+_DTYPES = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
+EXPERT_DTYPE = os.environ.get("GLM53_PERF_EXPERT_DTYPE", "bfp8")
+EXPERT_DOWN_DTYPE = os.environ.get("GLM53_PERF_EXPERT_DOWN_DTYPE", "bfp8")
 DUMP = Path("bringup/references/glm53_flash/T4097")
 
 
@@ -66,9 +70,18 @@ def test_layer_perf(mesh_device):
     S = PREFILL_LEN
     x_in = pre["x_in"][:, :S]
     dec = FunctionalDecoder.from_state_dict(
-        raw, hf_config=cfg, layer_idx=LAYER, mesh_device=mesh_device, max_batch=1, max_seq_len=S + 64
+        raw,
+        hf_config=cfg,
+        layer_idx=LAYER,
+        mesh_device=mesh_device,
+        max_batch=1,
+        max_seq_len=S + 64,
+        expert_dtype=_DTYPES[EXPERT_DTYPE],
+        expert_down_dtype=_DTYPES[EXPERT_DOWN_DTYPE],
     )
     kind = f"{'KDA' if dec.layer.is_kda else 'DSA'}+{'MoE' if dec.layer.is_moe else 'dense'}"
+    if dec.layer.is_moe:
+        kind += f" experts gate/up {EXPERT_DTYPE} down {EXPERT_DOWN_DTYPE}"
     if SEED_ONLY:
         if dec.cache is not None:
             g = torch.Generator().manual_seed(0)

@@ -55,9 +55,13 @@ class TtDecoderLayer(LightweightModule):
         *,
         weight_cache_path: Path | None = None,
         weight_dtype=ttnn.bfloat8_b,
+        expert_dtype=ttnn.bfloat8_b,
+        expert_down_dtype=ttnn.bfloat8_b,
     ):
         """``state_dict``: raw checkpoint tensors of ``model.language_model.layers.{i}.`` with the
-        prefix stripped and the fp8 groups dequantized (``reference/checkpoint.load_layer_raw``)."""
+        prefix stripped and the fp8 groups dequantized (``reference/checkpoint.load_layer_raw``).
+        ``weight_dtype`` covers the big non-expert matmuls (attention projections, dense MLP, shared
+        expert); ``expert_dtype`` / ``expert_down_dtype`` the routed experts' gate/up and down weights."""
         self.device = device
         self.cfg = cfg
         self.layer_idx = layer_idx
@@ -94,7 +98,14 @@ class TtDecoderLayer(LightweightModule):
             self.attn = TtDSA(device, cfg, attn_sd, layer_idx=layer_idx, weight_dtype=weight_dtype)
         mlp_sd = _strip(sd, "mlp.")
         if self.is_moe:
-            self.mlp = TtMoE(device, cfg, mlp_sd, weight_dtype=weight_dtype)
+            self.mlp = TtMoE(
+                device,
+                cfg,
+                mlp_sd,
+                weight_dtype=weight_dtype,
+                expert_dtype=expert_dtype,
+                expert_down_dtype=expert_down_dtype,
+            )
         else:
             self.mlp = TtClampedSwiGLU(
                 device,
