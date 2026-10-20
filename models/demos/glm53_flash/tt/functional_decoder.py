@@ -63,6 +63,7 @@ the sparse chunk geometry is per user); a multi-row decoder refuses them.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -168,10 +169,13 @@ class FunctionalDecoder(LightweightModule):
         max_batch: int,
         max_seq_len: int,
         block_size: int = TILE,
-        partition_users: bool = False,
+        partition_users: bool | None = None,
     ):
         """``partition_users``: the user-partitioned DSA cache on a multi-column mesh (column c of a row owns users
-        ``[c*B/cols, (c+1)*B/cols)``; ``max_batch`` % cols == 0; decode through the traced sparse path only)."""
+        ``[c*B/cols, (c+1)*B/cols)``; ``max_batch`` % cols == 0; decode through the traced sparse path only).
+        ``None`` = the ``GLM53_PARTITION_USERS`` knob (default off)."""
+        if partition_users is None:
+            partition_users = os.environ.get("GLM53_PARTITION_USERS", "0") == "1"
         self.layer: TtDecoderLayer | None = layer
         self.cfg = layer.cfg
         self.device = layer.device

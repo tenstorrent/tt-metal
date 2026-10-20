@@ -149,3 +149,40 @@ def test_index_score_decode_timing(mesh_device):
         )
         for t in (q_t, w_t, k_t, o_t):
             ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("B", [1, 8])
+def test_index_score_decode_masked_segmented(mesh_device, B):
+    """The writer-v2 modes: ``valid_rows`` writes -inf at and beyond each user's bound; ``segments`` lays the row out as
+    S pages of W/S columns (the two-stage top-k's input); both vs the plain output."""
+    W = 262400
+    op = IndexScoreDecode(mesh_device)
+    q, k, w = _inputs(B, W, 23)
+    q_t, w_t, k_t, o_plain = _device(mesh_device, q, k, w)
+    op(q_t, w_t, k_t, o_plain)
+    plain = ttnn.to_torch(o_plain).float().reshape(B, W)
+    g = torch.Generator().manual_seed(23)
+    valid = torch.randint(K, W + 1, (B,), generator=g)
+    valid[0] = W - 1000
+    v_t = ttnn.from_torch(valid.reshape(B, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    o_mask = ttnn.zeros((B, 1, 1, W), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op(q_t, w_t, k_t, o_mask, valid_rows=v_t)
+    masked = ttnn.to_torch(o_mask).float().reshape(B, W)
+    ok = True
+    for b in range(B):
+        n = int(valid[b])
+        ok &= (
+            torch.equal(masked[b, :n], plain[b, :n])
+            and bool(torch.isinf(masked[b, n:]).all())
+            and bool((masked[b, n:] < 0).all())
+        )
+    S = 5
+    o_seg = ttnn.zeros((B * S, 1, 1, W // S), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op(q_t, w_t, k_t, o_seg, valid_rows=v_t, segments=S)
+    segd = ttnn.to_torch(o_seg).float().reshape(B, W)
+    ok_seg = torch.equal(segd, masked)
+    logger.info(f"writer v2 B={B}: masked prefix equal / tail -inf {ok}; segmented layout equal to masked {ok_seg}")
+    assert ok and ok_seg
+    for t in (q_t, w_t, k_t, o_plain, v_t, o_mask, o_seg):
+        ttnn.deallocate(t)
