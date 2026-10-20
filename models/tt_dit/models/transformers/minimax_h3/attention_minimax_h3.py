@@ -141,7 +141,7 @@ class MiniMaxH3Attention(Module):
             sol_fused  # fused pre-pass (sol_prepass_fused.SolPrepassFused) instead of the ttnn-op SolPrepass
         )
         self.sol_active = False
-        self.sol_logical_n: int | None = None
+        self._sol_logical_n: int | None = None
         self.sol_sink_tokens = 0
         self.sol_report_density = False
         self.sol_last_density: float | None = None
@@ -491,6 +491,19 @@ class MiniMaxH3Attention(Module):
         )
 
     # ------------------------------------------------------------------ Sol-Attn
+
+    @property
+    def sol_logical_n(self) -> int | None:
+        return self._sol_logical_n
+
+    @sol_logical_n.setter
+    def sol_logical_n(self, value: int | None) -> None:
+        # The caller sets the logical sequence length once per request: that is the generation boundary. E13: drop
+        # this module's pre-pass instance and the shared uploaded constants so the request re-uploads them (the
+        # constants kept across generations lose their device contents; see SolPrepassFused.new_generation).
+        self._sol_logical_n = value
+        self._sol_prepass = None
+        SolPrepassFused.new_generation()
 
     def _sol_tensors(self, q_BHNE: ttnn.Tensor, k_BHNE: ttnn.Tensor, v_BHNE: ttnn.Tensor) -> dict:
         """Run the routing pre-pass and return the ring op's `sol_*` keyword tensors."""

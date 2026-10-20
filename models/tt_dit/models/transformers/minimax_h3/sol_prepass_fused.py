@@ -112,6 +112,20 @@ class SolPrepassFused:
     """Drop-in replacement for SolPrepass (same constructor keywords, prepare() and __call__())."""
 
     _shared: dict = {}
+    _generation: int = 0
+
+    @classmethod
+    def new_generation(cls) -> None:
+        """Drop the shared per-geometry state (uploaded constants, program descriptors) so the next call re-uploads it.
+
+        E13 (2026-10-20): constants uploaded once and kept across generations lose their device contents between two
+        generations (the VAE decode / prompt encoder run in between; see TTNN_SHARDED_UPLOAD_BUG.md), which made every
+        sparse generation after the first of a process wrong at 5 s / 15 s (E12: PSNR 23.5 -> 16.6, mask 70 % denser).
+        Re-uploading per generation restores the first generation bit for bit at no measurable cost. Called by
+        MiniMaxH3Attention when the caller sets `sol_logical_n` for a request.
+        """
+        cls._shared.clear()
+        cls._generation += 1
 
     def __init__(
         self,
