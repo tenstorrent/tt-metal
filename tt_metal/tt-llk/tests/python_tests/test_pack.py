@@ -3,7 +3,7 @@
 """Test pack operation with various configurations.
 
 Tests the LLK pack kernel with:
-- Different data formats (Float16_b, Float16, Float32, Int32, Bfp8_b)
+- Different data formats (Float16_b, Float32, Int32, Bfp8_b)
 - Destination accumulation modes
 - Variable tile dimensions
 - ReLU activation

@@ -14,14 +14,14 @@ sparse-to-dense packing into a contiguous L1 block.
 
 import torch
 from conftest import skip_for_wormhole
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     DestAccumulation,
     L1Accumulation,
     format_dict,
     format_tile_sizes,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -128,11 +128,7 @@ def _make_config(
 
 @skip_for_wormhole
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-        ]
-    ),
+    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     tile_dims=[
         (1, 32),  # face_r_dim=1,  num_faces=2
@@ -170,11 +166,7 @@ def test_pack_tiny_tile_block(
 
 @skip_for_wormhole
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-        ]
-    ),
+    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     tile_dims=[
         (1, 32),  # face_r_dim=1,  num_faces=2

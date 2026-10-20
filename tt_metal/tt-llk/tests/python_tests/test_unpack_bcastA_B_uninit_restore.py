@@ -20,19 +20,19 @@ does a plain `_llk_unpack_A_` datacopy of the ORIGINAL operand-A tile (run 1) wi
 no other state reset. If the restore leaves Y-stride at 32 instead of the canonical
 16, run 1 reads SrcA with the wrong row stride and diverges from the datacopy golden.
 
-Only 16-bit formats (Float16_b / Float16) expose the bug: for those the canonical
-Y-stride is 16, whereas the old hardcoded value was 32. (Float32's canonical stride
-is already 32, so it would not reveal the regression.)
+Only 16-bit formats expose the bug: for those the canonical Y-stride is 16, whereas
+the old hardcoded value was 32. (Float32's canonical stride is already 32, so it
+would not reveal the regression.) Float16_b is the 16-bit format exercised here.
 """
 
 from dataclasses import dataclass
 
 import torch
 from conftest import skip_for_blackhole
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import DataCopyGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathOperation, format_dict
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -68,12 +68,7 @@ class RESTORE_VIA_RECONFIG(TemplateParameter):
 @parametrize(
     # Same format for both ops so the run-1 datacopy needs no data-format reconfig —
     # isolating the Y-stride restore as the only state change that matters.
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-        ],
-        same=True,
-    ),
+    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
     dest_acc=[DestAccumulation.No],
     # "uninit" -> Phase 4 (C1); "reconfig" -> Phase 3 (C2).
     restore_via_reconfig=[False, True],
