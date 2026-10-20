@@ -43,6 +43,10 @@ from .moe_stream import (
 from .moe_prefill import PrefillExperts
 from .proj_stream import RouterScoreStream
 
+# Longest prefill chunk one MoE call takes: past it the router's prefill program block (_router_program) and the
+# expert plan's row buffers (moe_prefill.DevicePlan) outgrow L1, so forward runs longer chunks in slices.
+PREFILL_MAX_TOKENS = 8192
+
 
 def expert_quant(expert_dtype):
     """How bfloat4_b experts are prepared: "mse" (default, bfp_mse_prepare), "gptq" (tests/perf/gptq_experts.py,
@@ -454,6 +458,8 @@ class TtMiMoMoE:
     def forward(self, x, token_mask=None, decode=False):
         """x [1, 1, T, hidden] replicated across the row -> [1, 1, T, hidden] replicated."""
         assert x.shape[-2] % TILE == 0, "pad tokens to a multiple of 32"
+        if not decode and x.shape[-2] > PREFILL_MAX_TOKENS:
+            return self._forward_slices(x, token_mask)
         logits = self._router_logits(x, prefill=not decode)
         indices, weights = self._topk(logits)
         logits.deallocate(True)
@@ -465,3 +471,25 @@ class TtMiMoMoE:
         indices.deallocate(True)
         weights.deallocate(True)
         return self.plan.all_reduce(out)
+
+    def _forward_slices(self, x, token_mask):
+        """A prefill chunk longer than PREFILL_MAX_TOKENS, in slices of at most that many tokens. Each token's output
+        is the same as in one call: the router's K blocking does not change with T, and the experts work per token."""
+        T, H = x.shape[-2], x.shape[-1]
+        outs = []
+        for s in range(0, T, PREFILL_MAX_TOKENS):
+            e = min(T, s + PREFILL_MAX_TOKENS)
+            xs = ttnn.slice(x, [0, 0, s, 0], [1, 1, e, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ms = None
+            if token_mask is not None:
+                ms = ttnn.slice(
+                    token_mask, [0, 0, s, 0], [1, 1, e, token_mask.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+            outs.append(self.forward(xs, ms))
+            xs.deallocate(True)
+            if ms is not None:
+                ms.deallocate(True)
+        out = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for o in outs:
+            o.deallocate(True)
+        return out
