@@ -4,7 +4,7 @@
 // Tilize + gate|up matmul + clamped SwiGLU + routing weight (TRISC) of the per-expert dispatch op
 // (custom_ops/expert_stream/op.py, ExpertGateUpDispatch).
 //
-// Per work unit (expert, column pair) of this core (pass count from the BRISC mailbox, 0 = done) the pair stays
+// Per expert of this core (pass count from the BRISC mailbox, 0 = done) the bank's (gate, up) column pair stays
 // resident over the expert's passes; per pass the writer's 32-row row-major block is tilized into the [32, K]
 // activation tiles, then as compute_gate_up.cpp: g -> DST 0, u -> DST 1, clamped_silu_glu -> DST 2, D @ h -> DST 3.
 // HiFi2, fp32 accumulation.
@@ -28,6 +28,7 @@ void kernel_main() {
     constexpr uint32_t cb_h = get_compile_time_arg_val(4);
     constexpr uint32_t cb_out = get_compile_time_arg_val(5);
     constexpr uint32_t kt = get_compile_time_arg_val(6);
+    constexpr uint32_t ppb = get_compile_time_arg_val(7);  // column pairs per bank
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_out);
     matmul_init(cb_x, cb_w);
@@ -40,7 +41,9 @@ void kernel_main() {
         if (passes == 0) {
             break;
         }
-        cb_wait_front(cb_w, 2 * kt);  // the unit's pair, resident over the passes: gate tiles 0..kt-1, up kt..2kt-1
+        if constexpr (ppb == 1) {
+            cb_wait_front(cb_w, 2 * kt);  // the pair, resident over the passes: gate tiles 0..kt-1, up kt..2kt-1
+        }
         for (uint32_t p = 0; p < passes; ++p) {
             // the pass's token rows -> tiles
             cb_wait_front(cb_xrm, kt);
@@ -54,8 +57,11 @@ void kernel_main() {
             cb_pop_front(cb_xrm, kt);
             cb_wait_front(cb_x, kt);
 
-            cb_wait_front(cb_d, 1);  // the pass's routing weights
-            {
+            cb_wait_front(cb_d, 1);  // the pass's routing weights, shared by the column pairs
+            for (uint32_t q = 0; q < ppb; ++q) {
+                if constexpr (ppb > 1) {
+                    cb_wait_front(cb_w, 2 * kt);  // this pair's gate and up columns (streamed per pass)
+                }
                 tile_regs_acquire();
                 fill_tile_init();
                 fill_tile(0, 0.0f);
@@ -77,6 +83,9 @@ void kernel_main() {
                 pack_tile(2, cb_h);
                 tile_regs_release();
                 cb_push_back(cb_h, 1);
+                if constexpr (ppb > 1) {
+                    cb_pop_front(cb_w, 2 * kt);
+                }
 
                 // routing weights: out = D @ h
                 reconfig_data_format<SrcOrder::Reverse>(cb_d, cb_h);
@@ -96,6 +105,8 @@ void kernel_main() {
             cb_pop_front(cb_d, 1);
             cb_pop_front(cb_x, kt);
         }
-        cb_pop_front(cb_w, 2 * kt);
+        if constexpr (ppb == 1) {
+            cb_pop_front(cb_w, 2 * kt);
+        }
     }
 }

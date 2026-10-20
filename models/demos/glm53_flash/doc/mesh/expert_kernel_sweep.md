@@ -431,13 +431,18 @@ active experts).
 
 Gate|up bfp4 knob (`GLM53_EXPERT_W13_DTYPE=bfp4`, 576 B tiles through the same kernels, `w13_dtype` of the ops):
 unit test `test_expert_dispatch_ep_bfp4` PCC 0.999983 / 0.999978 vs the bfp4-rounded golden (the kernels are
-format-agnostic; the block-level PCC vs the bfp8 reference on real weights is the next run of
-`tests/test_moe_ep.py` with the knob set -- not run before the board reset).
+format-agnostic). Block level on real layer-4 weights (`_logs/optexperts_postreset_bfp4_moe.log`, pair-parallel
+units): PCC vs the bfp8 hybrid reference 0.9894 / 0.9899 (9 experts, T = 32 / 256) and 0.9914 / 0.9907 (36
+experts) -- the bfp4 rounding of the gate|up weights alone; whether that is acceptable is the model-level eval
+gate's call (the 45-layer bfp4 token check passed before). Time: 9 experts 418 / 626 us (bfp8 414 / 643),
+36 experts 1002 / 1785 us (bfp8 1221 / 1811): the half-size weights only pay where the gate|up is bank-bound.
 
 Mesh path (`TtEPExperts.forward` on D > 1: `all_to_all_dispatch` of the row-major tokens and of the weight lists
-along axis 0, the EP op on the dispatched rows, `all_to_all_combine(local_reduce=True)`): written, UNTESTED until
-a (2,4) block is available; the (2,4) numbers (per-layer time at 4 / 32 tokens per device, dispatch / combine
-times) are the coordinator's follow-up.
+along axis 0 with the DeepSeek-V3 decode kwargs (L1 outputs, links by the op, linear topology), the EP op on the
+dispatched rows, `all_to_all_combine(local_reduce=True)`): written, UNTESTED until a (2,4) block is available.
+The D = 1 plumbing check is impossible on one chip (measured: a fabric config cannot be opened on one device,
+and without one the ops throw 'un-initialized fabric context'), so the first dispatch / combine run is the block's
+`GLM53_MOE_LAYOUT=ep` test, under `timeout`.
 
 Down-op note for the EP shapes: every down core reads every pass's full [32, I] activation block (I = 2048:
 128 KB per pass per core, 64 cores); at the 8x4 shape (<= ~20 passes) that is ~2.6 MB per core, on a (2,4)
@@ -462,8 +467,35 @@ own units.
 Expected at the 8x4 EP shape: 3 active experts = 24 units per bank = 2 per core = 557 KB per core at ~5.3 GB/s:
 ~105 us + 2 units x passes x 16 us -> ~140 us gate|up (was ~350); 2 active at T = 32 -> ~75 us (was ~300);
 9 active -> bank-bound ~310 us as before. The (2,4) share (36 experts) is bank-bound either way.
-To measure after the reset: `pytest tests/custom_ops/test_expert_dispatch.py -k ep` (correctness, 4 shapes +
-bfp4) then `tests/test_moe_ep.py` (the table of section 11 again).
+Measured after the reset (`_logs/optexperts_postreset_units_*.log`): correctness unchanged (all EP shapes, the
+bfp4 case, the 256-256 hybrid dispatch cases, pass tables exact), `tests/test_moe_ep.py` bfp8:
+
+| experts owned | T | active | pre-units EP us | units EP us | hybrid us |
+|---|---|---|---|---|---|
+| 9 | 32 | 2 | 297 | **414** | 298 |
+| 9 | 256 | 3 | 590 | **643** | 528 |
+| 36 | 32 | 11 | 1378 | **1221** | 1219 |
+| 36 | 256 | 12 | 2069 | **1811** | 1533 |
+
+The many-expert cases gained 11-12 % (no per-pass re-streaming, better spread), but the few-expert 8x4 cases got
+SLOWER (+117 / +53 us): the gate|up is not weight-bound there after all. The traced A/B at the 8x4 EP shape
+(`test_expert_dispatch_ep_trace`, 9 experts, I = 2048, `_logs/optexperts_ab_units_{current,v1}.log`; the v1 run
+was cut by the board reset after two cases):
+
+| T | active x rows | passes | per-expert (v1) us | units us |
+|---|---|---|---|---|
+| 32 | 2 x 5 | 2 | **288** | 579 |
+| 256 | 3 x 27 | 3 | **476** | 726 |
+| 256 | 9 x 28 | 9 | (cut) | 1528 |
+
+So the per-expert assignment stays the default and the units are a knob (`units=True` of the dispatch ops,
+`GLM53_STREAM_UNITS=1` in `TtEPExperts`; kernels `*_gate_up_dispatch_units.cpp`) for the many-expert chips. The
+likely cost of the units with few experts: every unit's core gathers (256 KB of row reads from the L1-interleaved
+tokens) and tilizes the pass itself, so 8 cores per bank re-read the same rows for one expert (24 MB of L1 reads
+per pass over the NOC, hot-spotting the token pages), while the per-expert core gathers once for its 8 pairs. The
+8x4 EP gate|up at few experts is therefore gather/tilize/NOC-bound, not weight-bound; the lever there is a
+per-bank multicast of the tilized activation (one gather + tilize per bank, 8 receivers) -- the same mechanism the
+down op's activation traffic wants (section 12 note above).
 
 Why not the expert-parallel down split first (section 10's lever): at the 8x4 EP shape a chip has 2-9 active
 experts, so a split by expert over a bank's 8 down cores would leave most of them idle (the column split balances
