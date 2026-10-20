@@ -93,20 +93,91 @@ constexpr uint32_t FP32_MINUS_ONE = 0xBF800000u;
 
 namespace {
 
+// The geometry's SFPU ops, as the compute API runs them but over GEOM_FACES. A geometry tile holds
+// one kernel position per column, so with at most 16 positions faces 1 and 3 carry nothing the
+// readers use, and the SFPU skips them.
+constexpr VectorMode GEOM_FACES = kernel_positions <= 16 ? VectorMode::C : VectorMode::RC;
+
+template <ckernel::BinaryOp OP>
+inline void geom_binary(uint32_t a, uint32_t b, uint32_t out) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (APPROX, OP, 8 /* ITERATIONS */, DST_ACCUM_MODE, ckernel::DstRoundingMode::Default),
+        a,
+        b,
+        out,
+        GEOM_FACES)));
+}
+inline void geom_add(uint32_t a, uint32_t b, uint32_t out) { geom_binary<ckernel::BinaryOp::ADD>(a, b, out); }
+inline void geom_sub(uint32_t a, uint32_t b, uint32_t out) { geom_binary<ckernel::BinaryOp::SUB>(a, b, out); }
+inline void geom_mul(uint32_t a, uint32_t b, uint32_t out) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary_mul,
+        (APPROX, ckernel::BinaryOp::MUL, 8 /* ITERATIONS */, DST_ACCUM_MODE),
+        a,
+        b,
+        out,
+        GEOM_FACES)));
+}
+inline void geom_ge(uint32_t dst, uint32_t scalar) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_ge, (APPROX, 8 /* ITERATIONS */), dst, GEOM_FACES, scalar));
+}
+inline void geom_lt(uint32_t dst, uint32_t scalar) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_lt, (APPROX, 8 /* ITERATIONS */), dst, GEOM_FACES, scalar));
+}
+inline void geom_floor(uint32_t dst) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_floor_, (APPROX, 8 /* ITERATIONS */), dst, GEOM_FACES));
+}
+inline void geom_mul_scalar(uint32_t dst, uint32_t scalar) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binop_with_scalar,
+        (APPROX, MUL_UNARY, 8 /* ITERATIONS */, DST_ACCUM_MODE),
+        dst,
+        GEOM_FACES,
+        scalar));
+}
+inline void geom_rsub_scalar(uint32_t dst, uint32_t scalar) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binop_with_scalar,
+        (APPROX, RSUB_UNARY, 8 /* ITERATIONS */, DST_ACCUM_MODE),
+        dst,
+        GEOM_FACES,
+        scalar));
+}
+
 inline void copy_values(uint32_t from, uint32_t to) {
     copy_dest_values_init();
-    copy_dest_values<DataFormat::Float32>(from, to);
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        copy_dest_value,
+        (DataFormat::Float32, false /* APPROXIMATE */),
+        from,
+        to,
+        0 /* unused */,
+        GEOM_FACES)));
 }
 
 // dst = (lo <= dst < hi), as 1.0 or 0.0; scratch is overwritten.
 inline void in_range(uint32_t dst, uint32_t scratch, uint32_t lo_fp32, uint32_t hi_fp32) {
     copy_values(dst, scratch);
     unary_ge_tile_init();
-    unary_ge_tile(dst, lo_fp32);
+    geom_ge(dst, lo_fp32);
     unary_lt_tile_init();
-    unary_lt_tile(scratch, hi_fp32);
+    geom_lt(scratch, hi_fp32);
     mul_binary_tile_init();
-    mul_binary_tile(dst, scratch, dst);
+    geom_mul(dst, scratch, dst);
 }
 
 // Sample point (y, x) = origin + kernel offset + offset; (y0, x0) = floor; ly = y - y0 and
@@ -132,60 +203,61 @@ void compute_geometry(uint32_t in_cb_index, uint32_t index_cb_index, uint32_t we
     copy_tile(geom_kernel_cb_index, KERNEL_X, 5);
 
     sigmoid_tile_init();
-    sigmoid_tile(6);  // the mask, from its logits
+    sigmoid_tile<GEOM_FACES>(6);  // the mask, from its logits
 
     add_binary_tile_init();
-    add_binary_tile(0, 1, 0);
-    add_binary_tile(0, 2, 0);  // y
-    add_binary_tile(3, 4, 3);
-    add_binary_tile(3, 5, 3);  // x
+    geom_add(0, 1, 0);
+    geom_add(0, 2, 0);  // y
+    geom_add(3, 4, 3);
+    geom_add(3, 5, 3);  // x
     copy_values(0, 1);
     copy_values(3, 4);
     rounding_op_tile_init();
-    floor_tile(1);  // y0
-    floor_tile(4);  // x0
+    geom_floor(1);  // y0
+    geom_floor(4);  // x0
     sub_binary_tile_init();
-    sub_binary_tile(0, 1, 0);  // ly
-    sub_binary_tile(3, 4, 3);  // lx
+    geom_sub(0, 1, 0);  // ly
+    geom_sub(3, 4, 3);  // lx
 
     // The top-left corner's page in its image.
     copy_values(1, 2);
     binop_with_scalar_tile_init();
-    mul_unary_tile(2, IN_W_FP32);
+    geom_mul_scalar(2, IN_W_FP32);
     add_binary_tile_init();
-    add_binary_tile(2, 4, 2);
+    geom_add(2, 4, 2);
 
     // Rows: y0 inside the input weighs (1 - ly), y0 + 1 inside weighs ly.
     copy_values(1, 5);
     in_range(5, 7, FP32_ZERO, IN_H_FP32);
     copy_values(0, 7);
     binop_with_scalar_tile_init();
-    rsub_unary_tile(7, FP32_ONE);
+    geom_rsub_scalar(7, FP32_ONE);
     mul_binary_tile_init();
-    mul_binary_tile(7, 5, 7);  // near row weight
+    geom_mul(7, 5, 7);  // near row weight
     in_range(1, 5, FP32_MINUS_ONE, IN_H_LESS_ONE_FP32);
-    mul_binary_tile(0, 1, 0);  // far row weight
+    geom_mul(0, 1, 0);  // far row weight
 
     // Columns, the same way.
     copy_values(4, 5);
     in_range(5, 1, FP32_ZERO, IN_W_FP32);
     copy_values(3, 1);
     binop_with_scalar_tile_init();
-    rsub_unary_tile(1, FP32_ONE);
+    geom_rsub_scalar(1, FP32_ONE);
     mul_binary_tile_init();
-    mul_binary_tile(1, 5, 1);  // near column weight
+    geom_mul(1, 5, 1);  // near column weight
     in_range(4, 5, FP32_MINUS_ONE, IN_W_LESS_ONE_FP32);
-    mul_binary_tile(3, 4, 3);  // far column weight
+    geom_mul(3, 4, 3);  // far column weight
 
-    mul_binary_tile(7, 6, 7);  // near row * mask
-    mul_binary_tile(0, 6, 0);  // far row * mask
-    mul_binary_tile(7, 1, 4);  // corner 0
-    mul_binary_tile(7, 3, 7);  // corner 1
-    mul_binary_tile(0, 1, 1);  // corner 2
-    mul_binary_tile(0, 3, 0);  // corner 3
+    geom_mul(7, 6, 7);  // near row * mask
+    geom_mul(0, 6, 0);  // far row * mask
+    geom_mul(7, 1, 4);  // corner 0
+    geom_mul(7, 3, 7);  // corner 1
+    geom_mul(0, 1, 1);  // corner 2
+    geom_mul(0, 3, 0);  // corner 3
 
     typecast_tile_init<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>();
-    typecast_tile<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>(2);
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_fp32_to_int32, (APPROX, 8 /* ITERATIONS */), 2, GEOM_FACES));
     tile_regs_commit();
     geom_in_cb.pop_front(GEOM_IN_TILES);
 
