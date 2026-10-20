@@ -46,7 +46,7 @@ uint8_t sparse_push_mux_buffers() {
 }
 
 // PROTOTYPE switch: SPARSE_PUSH_TREE=1 runs host-planned stream pages as one-hop multicast trees
-// (kernels/tree_push_*.cpp), one page per sender.
+// (kernels/tree_push_*.cpp), one page per sender; =2 reads them as fixed-size records (tree_push_reader2.cpp).
 bool tree_mode(const HighBwAllGatherParams& params) {
     const char* v = std::getenv("SPARSE_PUSH_TREE");
     return params.push_stripe_chunk == 0 && v != nullptr && std::string(v) != "0";
@@ -79,6 +79,7 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
     const uint32_t links = num_links(operation_attributes, tensor_args);
     const bool from_table = operation_attributes.push_stripe_chunk > 0;
     const bool tree = tree_mode(operation_attributes);
+    const bool tree_records = tree && std::string(std::getenv("SPARSE_PUSH_TREE")) == "2";
     const uint32_t channels = links * kDirections;
     TT_FATAL(channels >= 1 && channels <= kMaxChannels, "sparse push supports 1..2 links, got {}", links);
     TT_FATAL(
@@ -281,7 +282,7 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
         const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/device/kernels/";
         auto reader = tt::tt_metal::CreateKernel(
             program,
-            kdir + (tree ? "tree_push_reader.cpp"
+            kdir + (tree ? (tree_records ? "tree_push_reader2.cpp" : "tree_push_reader.cpp")
                          : (from_table ? "sparse_push_table_reader.cpp" : "sparse_push_reader.cpp")),
             worker_range,
             tt::tt_metal::ReaderDataMovementConfig(reader_ct, reader_defines));

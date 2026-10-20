@@ -1661,9 +1661,11 @@ def test_sparse_push_tree(mesh_device):
         t_routed = timed(routed)
 
         t0 = time.perf_counter()
-        planner = {"local": _tree_plan_local, "level": partial(_tree_plan_local, per_packet=False)}.get(
-            os.environ.get("TREE_PLAN"), _tree_plan
-        )
+        planner = {
+            "local": _tree_plan_local,
+            "level": partial(_tree_plan_local, per_packet=False),
+            "records": _tree_plan_records,
+        }.get(os.environ.get("TREE_PLAN"), _tree_plan)
         streams_host, slot_maps, stats = planner(
             natural, n_dev, mesh_shape, stripe_chunk, pages_per_packet, buffer_rows, links=links, k_per=k_per
         )
@@ -1864,3 +1866,124 @@ def _tree_plan_local(
         slot_maps[d, needed[d]] = slot[d, ids]
     stats = dict(depth=max_depth + 1, packets=int(sent.sum()), stream_words=width)
     return torch.from_numpy(host.reshape(n_dev, 1, senders, width).astype(np.int32)), slot_maps, stats
+
+
+_TREE_LEVELS = 12  # tree depths a plan may use (the device planner's bound)
+
+
+def _tree_plan_records(natural, n_dev, mesh_shape, stripe_chunk, pages_per_packet, buffer_rows, links=2, k_per=2):
+    """Reference for the device tree planner (SPARSE_PUSH_TREE=2 stream format): _tree_plan_local's rules, with
+    fixed-size records so every row's words have a position computable from per-edge group counts alone.
+
+    Sender page: words 1..16 = packets this chip receives per neighbour sender; record r at word 32 + r * (3 + 2P):
+    [kind, target, n, (src, arrival) x P], arrival = stream << 24 | packets of that stream through the row's.
+    Sender w holds this chip's local packets q = w, w + 16, ..., then its edge's packets n = pick, pick + 4, ... (pick
+    = w's index among the 4 senders of its direction) with a level marker after each level and an end record. On an
+    edge, rows are grouped by (level, keep), ascending; packet n and the receiver lane follow from group counts."""
+    R, C = mesh_shape
+    B, P, LV = _DRAM_BANKS, pages_per_packet, _TREE_LEVELS
+    unit, RW = P * B, 3 + 2 * pages_per_packet
+    per_dir = links * k_per
+    senders = 4 * per_dir
+    needed = [np.unique(v[v >= 0]) for v in natural.reshape(n_dev, -1)]
+    req_of = np.concatenate([np.full(len(v), d) for d, v in enumerate(needed)])
+    uniq, inv = np.unique(np.concatenate(needed), return_inverse=True)
+    masks = np.zeros(len(uniq), dtype=np.int64)
+    np.bitwise_or.at(masks, inv, np.left_shift(1, req_of).astype(np.int64))
+    owners, local = _owner_local(uniq, stripe_chunk, n_dev)
+    remote = masks & ~np.left_shift(1, owners).astype(np.int64)
+    lane_rel = lambda j: (j % B) + (j // B) * unit
+    region = [-(-(-(-len(needed[b]) // P) + LV) // B) * unit for b in range(n_dev)]
+    stage = -(-(-(-_TREE_STAGE_ROWS // P) + LV) // B) * unit
+    base = lambda b, dr, keep: (1 + dr) * region[b] if keep == 0 else 5 * region[b] + dr * stage
+    assert max(5 * r + 4 * stage for r in region) <= buffer_rows, "tree regions exceed the buffer"
+    nb = lambda a, dr: ((a // C + (dr == _S) - (dr == _N)) % R) * C + (a % C + (dr == _E) - (dr == _W)) % C
+    stream = lambda dr, n: (((n % per_dir) // k_per) * 4 + dr) * k_per + (n % per_dir) % k_per
+
+    edges_of = {}
+    for u in np.flatnonzero(remote):
+        o, m, x = int(owners[u]), int(remote[u]), int(uniq[u])
+        ro, co = divmod(o, C)
+        key = (o, m, x & 1)
+        if key not in edges_of:
+            rel = [(((d // C) - ro) % R, ((d % C) - co) % C) for d in range(n_dev) if m >> d & 1]
+            edges_of[key] = [
+                (((a[0] + ro) % R) * C + (a[1] + co) % C, dr, ((b[0] + ro) % R) * C + (b[1] + co) % C, h)
+                for a, dr, b, h in _tree_edges(rel, _tree_order(x, rel, mesh_shape), mesh_shape)
+            ]
+    # Group counts per (chip, dir, level, keep) and each (row, edge)'s rank in its group (rows ascending).
+    count = np.zeros((n_dev, 4, LV, 2), dtype=np.int64)
+    on_edge = []  # (a, dr, h, keep, rank, row id)
+    for u in np.flatnonzero(remote):  # uniq is ascending, so ranks come out in row order
+        m = int(remote[u])
+        for a, dr, b, h in edges_of[(int(owners[u]), m, int(uniq[u]) & 1)]:
+            assert h < LV
+            keep = 0 if m >> b & 1 else 1
+            on_edge.append((a, dr, h, keep, int(count[a, dr, h, keep]), u))
+            count[a, dr, h, keep] += 1
+    pk = -(-count // P)  # packets per group
+    flat = pk.reshape(n_dev, 4, 2 * LV)
+    pk_before = (np.cumsum(flat, axis=2) - flat).reshape(n_dev, 4, LV, 2)  # packets of earlier groups on the edge
+    lanes_before = np.cumsum(pk, axis=2) - pk  # lanes of earlier levels in the same (keep) region
+
+    slot = np.full((n_dev, len(uniq)), -1, dtype=np.int64)
+    arrival = np.zeros((n_dev, len(uniq)), dtype=np.int64)
+    for a, dr, h, keep, k, u in on_edge:
+        b = nb(a, dr)
+        n = pk_before[a, dr, h, keep] + k // P
+        slot[b, u] = base(b, dr, keep) + lane_rel(lanes_before[a, dr, h, keep] + k // P) + (k % P) * B
+        arrival[b, u] = (stream(dr, n) << 24) | (n // per_dir + 1)
+    own = [np.flatnonzero((owners == b) & (masks >> b & 1).astype(bool)) for b in range(n_dev)]
+    for b in range(n_dev):
+        slot[b, own[b]] = lane_rel(np.arange(len(own[b])) // P) + (np.arange(len(own[b])) % P) * B
+
+    total = pk.sum(axis=(2, 3))  # packets per edge
+    incoming = np.zeros((n_dev, senders), dtype=np.int64)
+    for a in range(n_dev):
+        for dr in range(4):
+            for n in range(int(total[a, dr])):
+                incoming[nb(a, dr), stream(dr, n)] += 1
+    nlocal = -(-np.array([len(o) for o in own]) // P)
+    locals_of = lambda a, w: max(0, -(-(int(nlocal[a]) - w) // senders))
+    records = int(max(locals_of(a, 0) for a in range(n_dev)) + LV + -(-total.max() // per_dir) + 1)
+    host = np.zeros((n_dev, senders, 32 + records * RW), dtype=np.int64)
+    rec = lambda a, w, r: host[a, w, 32 + r * RW : 32 + (r + 1) * RW]
+    for a in range(n_dev):
+        host[a, :, 1 : 1 + senders] = incoming[a]
+        for q in range(int(nlocal[a])):
+            rows = own[a][q * P : (q + 1) * P]
+            r = rec(a, q % senders, q // senders)
+            r[:3] = (3, lane_rel(q), len(rows))
+            r[3 : 3 + 2 * len(rows) : 2] = local[rows]
+        for w in range(senders):
+            dr, pick = (w // k_per) % 4, (w // (4 * k_per)) * k_per + w % k_per
+            done_before = 0
+            for h in range(LV):
+                done_before = -(-(pk[a, dr, : h + 1].sum() - pick) // per_dir)
+                if h < LV - 1:
+                    rec(a, w, locals_of(a, w) + h + done_before)[0] = 6
+            rec(a, w, locals_of(a, w) + LV - 1 + done_before)[0] = 0
+    for a, dr, h, keep, k, u in on_edge:
+        n = pk_before[a, dr, h, keep] + k // P
+        w = stream(dr, n)
+        first = k - k % P
+        r = rec(a, w, locals_of(a, w) + h + n // per_dir)
+        if k % P == 0:
+            r[:3] = (
+                1 if h == 0 else 2,
+                base(nb(a, dr), dr, keep) + lane_rel(lanes_before[a, dr, h, keep] + k // P),
+                min(P, count[a, dr, h, keep] - first),
+            )
+        r[3 + 2 * (k % P)] = local[u] if h == 0 else slot[a, u]
+        r[4 + 2 * (k % P)] = 0 if h == 0 else arrival[a, u]
+    slot_maps = np.full((n_dev, natural.max() + 1), -1, dtype=np.int64)
+    for d in range(n_dev):
+        ids = np.searchsorted(uniq, needed[d])
+        assert (slot[d, ids] >= 0).all(), "requester row without a slot"
+        slot_maps[d, needed[d]] = slot[d, ids]
+    stats = dict(
+        depth=int((count.sum(axis=(0, 1, 3)) > 0).nonzero()[0].max() + 1),
+        packets=int(total.sum()),
+        stream_words=host.shape[-1],
+    )
+    return torch.from_numpy(host.reshape(n_dev, 1, senders, -1).astype(np.int32)), slot_maps, stats
