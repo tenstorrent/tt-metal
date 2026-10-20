@@ -5,9 +5,15 @@
 """Map changed LLK files to the pytest files that exercise them."""
 
 import argparse
+import io
 import json
+import os
 import re
 import subprocess
+import sys
+import urllib.request
+import xml.etree.ElementTree as ET
+import zipfile
 from collections import defaultdict
 from pathlib import Path
 
@@ -142,6 +148,60 @@ def select(repo: Path, arch: str, changed_paths: list[str]) -> dict:
     return {"tests": tests, "reasons": explanation}
 
 
+def _github(url: str) -> bytes:
+    request = urllib.request.Request(url)
+    # Unredirected: the artifact download redirects to storage that rejects it.
+    request.add_unredirected_header("Authorization", f"Bearer {os.environ['GH_TOKEN']}")
+    with urllib.request.urlopen(request) as response:
+        return response.read()
+
+
+def _last_failed_tests(repo: Path, arch: str) -> list[str]:
+    """Test files that failed in the last scheduled run, from its junit artifacts."""
+    api = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/actions"
+    runs = json.loads(
+        _github(
+            f"{api}/workflows/ttnop-injector.yaml/runs"
+            "?event=schedule&status=completed&per_page=1"
+        )
+    )["workflow_runs"]
+    if not runs or runs[0]["conclusion"] == "success":
+        return []
+    artifacts = json.loads(
+        _github(f"{api}/runs/{runs[0]['id']}/artifacts?per_page=100")
+    )["artifacts"]
+    files = set()
+    for artifact in artifacts:
+        if not artifact["name"].startswith(f"ttnop-junit-{arch}-"):
+            continue
+        with zipfile.ZipFile(
+            io.BytesIO(_github(f"{api}/artifacts/{int(artifact['id'])}/zip"))
+        ) as archive:
+            for name in archive.namelist():
+                if not name.endswith("junit.xml"):
+                    continue
+                for case in ET.fromstring(archive.read(name)).iter("testcase"):
+                    if case.find("failure") is None and case.find("error") is None:
+                        continue
+                    path = case.get("classname").replace(".", "/") + ".py"
+                    files.add(f"tt_metal/tt-llk/tests/python_tests/{path}")
+    return sorted(path for path in files if (repo / path).is_file())
+
+
+def _weekly(repo: Path, base: str, arch: str) -> tuple[str, list[str]]:
+    """Look back one week at most; a failed week is retried only by its failed files."""
+    week = _run(repo, "git", "rev-list", "-1", "--before=7 days ago", "HEAD").strip()
+    # Empty `week..base` means base is no newer than week.
+    if not week or _run(repo, "git", "rev-list", f"{week}..{base}").strip():
+        return base, []
+    try:
+        return week, _last_failed_tests(repo, arch)
+    except Exception as error:
+        # Without the failed list, sweep everything since the given base.
+        print(f"::warning::ttnop retry lookup failed: {error}", file=sys.stderr)
+        return base, []
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", type=Path, default=Path.cwd())
@@ -151,8 +211,15 @@ def main() -> None:
     args = parser.parse_args()
 
     repo = args.repo.resolve()
-    changed = _changed_paths(repo, args.base)
+    base, retry = args.base, []
+    if os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("GH_TOKEN"):
+        base, retry = _weekly(repo, base, args.arch)
+    changed = _changed_paths(repo, base)
     result = select(repo, args.arch, changed)
+    result["tests"] = sorted({*result["tests"], *retry})
+    result["reasons"] += [
+        f"Run {path} on {args.arch}: failed in the last scheduled run" for path in retry
+    ]
     if args.paths:
         print("\n".join(result["tests"]))
     else:

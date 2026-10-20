@@ -238,6 +238,7 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           BASE_SHA: ${{ needs.select-tests.outputs.base-sha }}
+          GH_TOKEN: ${{ github.token }}
           SELECTED_SHARDS: ${{ needs.select-tests.outputs.shards }}
         run: |
           set -euo pipefail
