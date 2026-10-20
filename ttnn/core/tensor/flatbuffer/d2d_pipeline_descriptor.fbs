@@ -20,6 +20,7 @@ table D2DReceiverCoord {
   sender_chip_id: uint32;
   backing_tensor_addr: uint64;
   stage_gate_base_addr: uint64;
+  metadata_core: PCIeCoreLocation;  // absent without metadata
 }
 
 table D2DReceiver {
@@ -29,6 +30,8 @@ table D2DReceiver {
   stage_gate_slot_offset_bytes: uint32;
   stage_gate_mode_offset_bytes: uint32;
   coords: [D2DReceiverCoord];
+  metadata_addr: uint64;
+  stage_gate_stride_bytes: uint32;
 }
 
 table D2DRank {

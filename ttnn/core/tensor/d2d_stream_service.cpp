@@ -6,6 +6,7 @@
 
 #include <array>
 #include <chrono>
+#include <filesystem>
 #include <limits>
 #include <map>
 #include <memory>
@@ -28,7 +29,6 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/sockets/pcie_core_location.hpp>
-#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <internal/service/service_core_manager.hpp>
@@ -156,7 +156,8 @@ std::vector<D2DReceiverCoordDescriptor> describe_receiver_coords(
     const distributed::MeshSocket& socket,
     const Tensor& backing,
     const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
-    const std::map<distributed::MeshCoordinate, DeviceAddr>& stage_gate_addrs) {
+    const std::map<distributed::MeshCoordinate, DeviceAddr>& stage_gate_addrs,
+    const std::optional<CoreCoord>& metadata_worker) {
     using distributed::SocketEndpoint;
     std::vector<distributed::MeshCoordinate> coords;
     for (const auto& [coord, core] : service_cores) {
@@ -172,6 +173,9 @@ std::vector<D2DReceiverCoordDescriptor> describe_receiver_coords(
             .sender_fabric_node_id = socket.get_fabric_node_id(SocketEndpoint::SENDER, coord),
             .backing_tensor_addr = backing_addrs.at(coord),
             .stage_gate_base_addr = gate == stage_gate_addrs.end() ? 0 : gate->second,
+            .metadata_core = metadata_worker ? std::optional(distributed::PCIeCoreLocation::resolve(
+                                                   mesh, distributed::MeshCoreCoord(coord, *metadata_worker)))
+                                             : std::nullopt,
         });
     }
     return out;
@@ -179,10 +183,11 @@ std::vector<D2DReceiverCoordDescriptor> describe_receiver_coords(
 
 // DistributedContext tag for the multi-host service-core exchange. Distinct from
 // any MeshSocket descriptor-exchange tag; the exchange is fully sequential before
-// the handshake, so there is no concurrent (source, tag) collision.
-constexpr int kServiceCoreExchangeTag = 0x44324443;  // 'D2DC'
+// the handshake, so there is no concurrent (source, tag) collision. Tags stay at or
+// below 32767, the smallest MPI_TAG_UB the MPI standard allows.
+constexpr int kServiceCoreExchangeTag = 0x7D2C;
 // DistributedContext tag for gathering pipeline descriptors onto the root rank.
-constexpr int kPipelineDescriptorTag = 0x44325044;  // 'D2PD'
+constexpr int kPipelineDescriptorTag = 0x7D2D;
 
 // Result of the pre-handshake exchange: the peer's per-coord service cores and
 // per-coord backing tensor base addresses. The sender uses the receiver's backing
@@ -917,12 +922,21 @@ bool D2DStreamServiceReceiver::is_stage_gate_open(
 }
 
 D2DReceiverDescriptor D2DStreamServiceReceiver::describe() const {
+    TT_FATAL(impl_->mesh_device->is_initialized(), "D2DStreamServiceReceiver::describe: the mesh device is closed");
+    const bool has_metadata = impl_->metadata_size_bytes > 0;
     return D2DReceiverDescriptor{
         .sender_rank = impl_->sender_rank,
         .metadata_size_bytes = impl_->metadata_size_bytes,
+        .metadata_addr = has_metadata ? impl_->metadata_l1_addr : 0,
         .stage_gate = impl_->stage_gate.value_or(D2DStageGateConfig{}),
+        .stage_gate_stride_bytes = impl_->stage_gate ? tt::tt_metal::hal::get_l1_alignment() : 0,
         .coords = CMAKE_UNIQUE_NAMESPACE::describe_receiver_coords(
-            *impl_->mesh_device, *impl_->socket, impl_->backing_tensor, impl_->service_cores, impl_->stage_gate_addrs),
+            *impl_->mesh_device,
+            *impl_->socket,
+            impl_->backing_tensor,
+            impl_->service_cores,
+            impl_->stage_gate_addrs,
+            has_metadata ? std::optional(impl_->worker_cores.start_coord) : std::nullopt),
     };
 }
 
@@ -1842,7 +1856,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
     return receiver_handle;
 }
 
-std::optional<std::string> D2DStreamService::export_pipeline_descriptor(
+std::unique_ptr<D2DPipelineDescriptorFile> D2DStreamService::export_pipeline_descriptor(
     const std::string& service_id,
     const std::vector<const D2DStreamServiceReceiver*>& receivers,
     tt::tt_metal::distributed::multihost::Rank root,
@@ -1873,19 +1887,22 @@ std::optional<std::string> D2DStreamService::export_pipeline_descriptor(
     const auto as_bytes = [](auto& v) {
         return ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(v.data()), v.size() * sizeof(v[0]));
     };
-    auto payload = D2DPipelineDescriptor{.ranks = {std::move(local)}}.serialize();
     if (rank != *root) {
+        auto payload = D2DPipelineDescriptor{.ranks = {std::move(local)}}.serialize();
         uint64_t size = payload.size();
         auto size_span = ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&size), sizeof(size));
         ctx->send(size_span, root, tag);
         ctx->send(as_bytes(payload), root, tag);
-        return std::nullopt;
+        return nullptr;
     }
 
+    // Drop a file left by an earlier run so a reader can't pick it up while the gather runs.
+    const auto path = d2d_pipeline_descriptor_path(service_id);
+    std::filesystem::remove(path);
     D2DPipelineDescriptor pipeline;
     for (int r = 0; r < world_size; ++r) {
         if (r == rank) {
-            pipeline.ranks.push_back(D2DPipelineDescriptor::deserialize(payload).ranks.at(0));
+            pipeline.ranks.push_back(std::move(local));
             continue;
         }
         uint64_t size = 0;
@@ -1895,11 +1912,8 @@ std::optional<std::string> D2DStreamService::export_pipeline_descriptor(
         ctx->recv(as_bytes(bytes), Rank{r}, tag);
         pipeline.ranks.push_back(D2DPipelineDescriptor::deserialize(bytes).ranks.at(0));
     }
-    const auto path = d2d_pipeline_descriptor_path(service_id);
     pipeline.write_to_file(path);
-    // Removed at process exit, like the H2D service descriptor.
-    tt::tt_metal::distributed::ShmResourceTracker::instance().track_file(path);
-    return path;
+    return std::make_unique<D2DPipelineDescriptorFile>(path);
 }
 
 }  // namespace ttnn

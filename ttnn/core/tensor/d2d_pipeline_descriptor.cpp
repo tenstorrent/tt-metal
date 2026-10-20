@@ -4,7 +4,11 @@
 
 #include "ttnn/tensor/d2d_pipeline_descriptor.hpp"
 
+#include <cerrno>
+#include <cstdio>
+
 #include <fmt/format.h>
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 #include <tt_stl/assert.hpp>
 #include <internal/descriptor_file.hpp>
 
@@ -51,15 +55,19 @@ flatbuffers::Offset<fb::D2DReceiver> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const D2DReceiverDescriptor& rx) {
     std::vector<flatbuffers::Offset<fb::D2DReceiverCoord>> coords;
     for (const auto& c : rx.coords) {
+        const auto service_core = to_flatbuffer(builder, c.service_core);
+        const auto metadata_core =
+            c.metadata_core ? to_flatbuffer(builder, *c.metadata_core) : flatbuffers::Offset<fb::PCIeCoreLocation>();
         coords.push_back(fb::CreateD2DReceiverCoord(
             builder,
-            to_flatbuffer(builder, c.service_core),
+            service_core,
             *c.fabric_node_id.mesh_id,
             c.fabric_node_id.chip_id,
             *c.sender_fabric_node_id.mesh_id,
             c.sender_fabric_node_id.chip_id,
             c.backing_tensor_addr,
-            c.stage_gate_base_addr));
+            c.stage_gate_base_addr,
+            metadata_core));
     }
     return fb::CreateD2DReceiver(
         builder,
@@ -68,18 +76,22 @@ flatbuffers::Offset<fb::D2DReceiver> to_flatbuffer(
         rx.stage_gate.num_gates,
         rx.stage_gate.slot_id_offset_bytes,
         rx.stage_gate.gate_mode_offset_bytes,
-        builder.CreateVector(coords));
+        builder.CreateVector(coords),
+        rx.metadata_addr,
+        rx.stage_gate_stride_bytes);
 }
 
 D2DReceiverDescriptor from_flatbuffer(const fb::D2DReceiver& f) {
     D2DReceiverDescriptor rx{
         .sender_rank = f.sender_rank(),
         .metadata_size_bytes = f.metadata_size_bytes(),
+        .metadata_addr = f.metadata_addr(),
         .stage_gate =
             D2DStageGateConfig{
                 .num_gates = f.num_stage_gates(),
                 .slot_id_offset_bytes = f.stage_gate_slot_offset_bytes(),
                 .gate_mode_offset_bytes = f.stage_gate_mode_offset_bytes()},
+        .stage_gate_stride_bytes = f.stage_gate_stride_bytes(),
     };
     if (f.coords() != nullptr) {
         for (const auto* c : *f.coords()) {
@@ -90,7 +102,10 @@ D2DReceiverDescriptor from_flatbuffer(const fb::D2DReceiver& f) {
                 .sender_fabric_node_id =
                     tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{c->sender_mesh_id()}, c->sender_chip_id()),
                 .backing_tensor_addr = c->backing_tensor_addr(),
-                .stage_gate_base_addr = c->stage_gate_base_addr()});
+                .stage_gate_base_addr = c->stage_gate_base_addr(),
+                .metadata_core = c->metadata_core() != nullptr
+                                     ? std::optional<PCIeCoreLocation>(from_flatbuffer(*c->metadata_core()))
+                                     : std::nullopt});
         }
     }
     return rx;
@@ -150,6 +165,17 @@ D2DPipelineDescriptor D2DPipelineDescriptor::wait_and_read(const std::string& pa
 
 std::string d2d_pipeline_descriptor_path(const std::string& service_id) {
     return fmt::format("/dev/shm/tt_d2d_pipeline_{}.bin", service_id);
+}
+
+D2DPipelineDescriptorFile::D2DPipelineDescriptorFile(std::string path) : path_(std::move(path)) {
+    // Removed at process exit too, in case this object never gets destroyed.
+    tt::tt_metal::distributed::ShmResourceTracker::instance().track_file(path_);
+}
+
+D2DPipelineDescriptorFile::~D2DPipelineDescriptorFile() {
+    if (std::remove(path_.c_str()) == 0 || errno == ENOENT) {
+        tt::tt_metal::distributed::ShmResourceTracker::instance().untrack_file(path_);
+    }
 }
 
 }  // namespace ttnn

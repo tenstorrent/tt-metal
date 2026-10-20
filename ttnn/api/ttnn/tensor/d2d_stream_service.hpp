@@ -31,7 +31,8 @@ class MeshDevice;
 
 namespace ttnn {
 
-struct D2DReceiverDescriptor;  // ttnn/tensor/d2d_pipeline_descriptor.hpp
+struct D2DReceiverDescriptor;     // ttnn/tensor/d2d_pipeline_descriptor.hpp
+class D2DPipelineDescriptorFile;  // ttnn/tensor/d2d_pipeline_descriptor.hpp
 
 // Receiver stage gate: the receiver holds each landed transfer until the gate selected
 // by the slot id in its metadata is open. Slot ids >= num_gates (e.g.
@@ -360,9 +361,9 @@ public:
 
     // Collective over `ctx` (default: world): every rank calls it with the receivers it owns,
     // one per pipeline stage it receives into (empty if none). `root` gathers them and writes
-    // them to d2d_pipeline_descriptor_path(service_id). Returns that path on `root`, nullopt
-    // elsewhere.
-    static std::optional<std::string> export_pipeline_descriptor(
+    // them to d2d_pipeline_descriptor_path(service_id). Returns the file on `root`, which removes
+    // it when destroyed; null elsewhere.
+    static std::unique_ptr<D2DPipelineDescriptorFile> export_pipeline_descriptor(
         const std::string& service_id,
         const std::vector<const D2DStreamServiceReceiver*>& receivers,
         tt::tt_metal::distributed::multihost::Rank root = tt::tt_metal::distributed::multihost::Rank{0},
