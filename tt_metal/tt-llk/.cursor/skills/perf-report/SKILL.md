@@ -68,9 +68,9 @@ Rules:
   compared with CI numbers, and never mix speed-of-light and normal rows in
   one report.
 - `--enable-perf-counters` produces a different, mutually exclusive kind of
-  report. It compiles with `-DPERF_COUNTERS_COMPILED` (the WC build), which
-  reduces `ZONE_SCOPED` to metadata only: the run emits no wall-clock
-  `mean(<run type>)` columns, only `<RUN_TYPE>_..._pct` efficiency columns.
+  report. It compiles with `-DPERF_COUNTERS_COMPILED` (the WC build; NC
+  compiles no counter code): the run emits the wall-clock
+  `mean(<run type>)` columns plus the `<RUN_TYPE>_...` counter metric columns.
   It also writes to the same `<module>.csv` path, overwriting the timing
   report. Move the timing report out of the way first (see Refresh and
   compare), run counters as a separate sweep, and validate the result as a
@@ -127,8 +127,8 @@ finish, or every selected test was skipped.
    variants; duplicate keys are rejected, never merged. Markers are the
    zones the kernel declares — `INIT` and `TILE_LOOP` in the perf sources,
    plus the `KERNEL` zone that `trisc.cpp` wraps around every profiler build.
-   A counter report has no profiler-derived rows, so expect only the counter
-   zones `INIT` and `TILE_LOOP` there. An unexplained shortfall means an
+   A counter run's `.counters.csv` has no profiler-derived rows, so expect only
+   the counter zones `INIT` and `TILE_LOOP` there. An unexplained shortfall means an
    aborted or partly skipped sweep; a shortfall you can attribute to skips or
    collapse is fine.
 3. **Duplicate keys.** `combine_perf_reports()` warns when it collapses rows
@@ -147,11 +147,10 @@ finish, or every selected test was skipped.
    `TEXT_SIZE(<run type>)` column only for `L1_TO_L1`, `UNPACK_ISOLATE`,
    `MATH_ISOLATE`, and `PACK_ISOLATE`. `L1_CONGESTION` is deliberately absent
    from the code-size map, so a missing `TEXT_SIZE(L1_CONGESTION)` is correct
-   rather than a defect. A counter report has no wall-clock means at all:
-   check its `<RUN_TYPE>_..._pct` columns, expect only the `INIT` and
-   `TILE_LOOP` markers, and note that its `.post.csv` is identical to the raw
-   file because normalization only rescales columns named `mean(...)` and
-   `std(...)`.
+   rather than a defect. A counter report carries the same columns and
+   markers plus the `<RUN_TYPE>_..._pct` counter columns; its wall-clock
+   means are counters on timing, so compare them only with other counter
+   reports.
 
 Never present metrics from a run whose pytest phase failed.
 
