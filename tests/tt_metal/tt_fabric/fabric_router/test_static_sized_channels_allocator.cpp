@@ -103,7 +103,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, ChannelBuffersEndAfterTheLastReceiv
     constexpr size_t region_start = 0x10000;
 
     // The allocator lays out every sender, VC by VC, then every receiver, so the last buffer is the last receiver.
-    // It sizes channels from a hardcodedtable of options, deepest first, taking the first whose total fits the space.
+    // It sizes channels from a hardcoded table of options, deepest first, taking the first whose total fits the space.
 
     // Mesh: 4 VC0 senders (worker + 3 forwarding), 3 VC1 senders (all forwarding), one receiver per VC. The space holds
     // 360800 / 14432 = 25 slots. The VC0+VC1 mesh options, as (VC0 sender, VC0 receiver, VC1 sender, VC1 receiver), using
@@ -118,7 +118,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, ChannelBuffersEndAfterTheLastReceiv
         constexpr size_t available_space = 360800;
         const FabricStaticSizedChannelsAllocator allocator(
             Topology::Mesh,
-            FabricEriscDatamoverOptions{},
+            silicon_options(),
             {4, 3, 0},
             {1, 1, 0},
             channel_buffer_size,
@@ -144,7 +144,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, ChannelBuffersEndAfterTheLastReceiv
         constexpr size_t available_space = 366656;
         const FabricStaticSizedChannelsAllocator allocator(
             Topology::Ring,
-            FabricEriscDatamoverOptions{},
+            silicon_options(),
             {2, 0, 0},
             {1, 0, 0},
             channel_buffer_size,
