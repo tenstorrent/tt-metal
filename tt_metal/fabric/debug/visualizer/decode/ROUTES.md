@@ -213,7 +213,7 @@ the manifest carries, a value whose meaning is in `routes.py`, and a change to t
 | --- | --- | --- |
 | An encoding's value or width changes, such as a bit position, the table code width or a tree edge field | Nothing, while the loader's checks still hold: the rules read these from the manifest | Nothing |
 | A key the rules read is renamed or removed | The route decoder check in `run_fabric_manifest_tests.sh`: `get_encodings_from_manifest` or `get_mesh_view` raises `ManifestError`, "manifest has no ...", naming the manifest | The key in `routes.py` |
-| A value the rules read changes type, such as an object where an array was | The same check: `ManifestError`, naming the key, the type it has and the type the rules need | The read in `routes.py`, and its `_lookup` type |
+| A value the rules read changes type, such as an object where an array was | The same check: `ManifestError`, naming the key, the type it has and the type the rules need | The read in `routes.py`, and its `lookup` type |
 | A 1D hop, 2D action bit, Z port role or scatter chunk type is renamed, added or removed | The same check: `ManifestError`, naming what the manifest holds and what the rules know | `HOP_ACTIONS`, `Direction` and `LOCAL_DELIVER`, `Z_PORT_ROLES`, or `ChunkEncoding`, and the rule on this page |
 | A Z router's key (`Z0`) or its peer's format (`M0/C5/Z0`) changes | The same check, run with `--expect-z-peers` on the `express_32x4` manifests: "finds no Z peer in", naming the manifest | The Z peer read in `get_mesh_view` |
 | The code a rule mirrors changes what it does | Nothing | The rule on this page, its function in `routes.py`, and its tests |

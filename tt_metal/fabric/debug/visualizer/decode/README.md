@@ -51,6 +51,7 @@ with it. A fabric change falls into one of three cases:
 | [`tests/test_routes.py`](tests/test_routes.py) | Hand-written cases for each rule |
 | [`tests/check_manifest_routes.py`](tests/check_manifest_routes.py) | Checks that `routes.py` can read the manifests CI writes |
 | [`tests/test_check_manifest_routes.py`](tests/test_check_manifest_routes.py) | Cases for the check's `--expect-z-peers` |
+| [`../common/manifest_lookup.py`](../common/manifest_lookup.py) | `lookup`, which reads a manifest value and checks its JSON type, and `ManifestError`. Shared with the visualizer's other Python packages |
 
 ## Running the tests
 
