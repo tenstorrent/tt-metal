@@ -98,7 +98,6 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
 
         for (uint32_t step = 0; step < step_count; ++step) {
             const uint32_t tile_row = first_tile_row + step;
-            uint32_t first_new_row = 0;
             if (step == 0) {
                 for (uint32_t row = 0; row < halo_rows; ++row) {
                     const int32_t source_row = static_cast<int32_t>(tile_row * tile_height + row) - halo_rows;
