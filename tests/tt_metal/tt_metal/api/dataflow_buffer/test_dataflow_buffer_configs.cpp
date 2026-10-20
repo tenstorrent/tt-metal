@@ -541,8 +541,8 @@ TEST_F(UnitMeshFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
 }
 
 // Implicit-sync counts are 16 bits, so a ring can hold more than 255 entries. 593 is prime, so its ring gets one txn id
-// of 593 entries; 600 splits into two of 300. Checks the host writes the counts whole to the DM0 threshold pool, the DM0
-// txn descriptor image and the DM hart's txn-id scalars.
+// of 593 entries; 600 splits into two of 300. Checks the host writes the counts whole to the threshold in each DM0
+// descriptor slot, the DM0 txn descriptor image and the DM hart's LocalDFBInterface image.
 TEST_F(UnitMeshFixture, DfbSerializeImplicitSyncRingOver255) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
@@ -586,7 +586,7 @@ TEST_F(UnitMeshFixture, DfbSerializeImplicitSyncRingOver255) {
         ASSERT_GT(nbytes, 0u);
         const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
 
-        // DM0 blob: threshold pool, then the txn descriptor image pool.
+        // DM0 blob: the txn descriptor pool, one slot per used txn id, the 16-bit threshold in each slot.
         uint32_t prod_mask = 0;
         uint32_t cons_mask = 0;
         for (uint8_t i = 0; i < prod.num_txn_ids; ++i) {
@@ -596,27 +596,31 @@ TEST_F(UnitMeshFixture, DfbSerializeImplicitSyncRingOver255) {
             cons_mask |= 1u << cons.txn_ids[i];
         }
         const uint32_t all_mask = prod_mask | cons_mask;
-        const uint32_t pool_off = ghdr->dm0_isr_blob_offset + sizeof(dfb_dm0_isr_blob_core_header_t);
-        const auto* thresholds = reinterpret_cast<const dfb_dm0_isr_txn_threshold_t*>(buf.data() + pool_off);
-        const uint32_t desc_off = pool_off + dm0_isr_txn_hw_pool_byte_size(prod_mask, cons_mask);
+        ASSERT_NE(ghdr->dm0_packed, 0u);
+        const uint32_t stride = dfb_dm0_packed_desc_stride(ghdr->dm0_packed);
+        const uint8_t* pool = buf.data() + dfb_dm0_packed_blob_offset(ghdr->dm0_packed) + DFB_DM0_CACHED_PAYLOAD_OFFSET;
         for (const uint32_t mask : {prod_mask, cons_mask}) {
             for (uint32_t pending = mask; pending != 0; pending &= pending - 1u) {
                 const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending));
-                const uint32_t slot = dm0_isr_txn_slot_index(all_mask, txn_id);
-                EXPECT_EQ(thresholds[slot].threshold, per_txn);
-                dfb_dm0_txn_descriptor_image_t image;
-                std::memcpy(&image, buf.data() + desc_off + slot * sizeof(image), sizeof(image));
+                const uint8_t* slot = pool + dm0_isr_txn_slot_index(all_mask, txn_id) * stride;
+                uint16_t threshold = 0;
+                std::memcpy(&threshold, slot + dfb_dm0_desc_threshold_offset(stride), sizeof(threshold));
+                EXPECT_EQ(threshold, per_txn);
+                // The head (tiles_to_post_or_ack, num_counters, finish) is at the same bytes in every stride.
+                dfb_dm0_txn_descriptor_image_t image{};
+                std::memcpy(&image, slot, offsetof(dfb_dm0_txn_descriptor_image_t, tile_counters));
                 EXPECT_EQ(image.tiles_to_post_or_ack, per_txn);
                 EXPECT_EQ(image.finish.op_entries, 1u);
             }
         }
 
-        // DM hart's txn-id scalars: per_txn and per_tc at bytes 18-19 and 20-21 of the init entry, little endian.
+        // DM hart's LocalDFBInterface image (after the 8 B control prefix): per_txn and per_tc at bytes 14-15
+        // and 16-17, little endian, then num_txn_ids at byte 18.
         for (const uint8_t hart : {uint8_t{0}, uint8_t{4}}) {
-            const uint8_t* entry = buf.data() + ghdr->hart_blob_offset[hart];
-            EXPECT_EQ(entry[18] | (entry[19] << 8), per_txn) << "hart " << static_cast<int>(hart);
-            EXPECT_EQ(entry[20] | (entry[21] << 8), per_txn) << "hart " << static_cast<int>(hart);
-            EXPECT_EQ(entry[22], expected_txn_ids) << "hart " << static_cast<int>(hart);
+            const uint8_t* img = buf.data() + ghdr->hart_desc[hart].blob_start + DFB_IFACE_IMAGE_CTRL_BYTES;
+            EXPECT_EQ(img[14] | (img[15] << 8), per_txn) << "hart " << static_cast<int>(hart);
+            EXPECT_EQ(img[16] | (img[17] << 8), per_txn) << "hart " << static_cast<int>(hart);
+            EXPECT_EQ(img[18], expected_txn_ids) << "hart " << static_cast<int>(hart);
         }
     }
 }
@@ -2702,7 +2706,6 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeaderGappedDeviceSlots) {
     const uint32_t wide_id = experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(all_cores), config);
 
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().prepare_ephemeral_allocation(this->device().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
     const auto& impl = program.impl();

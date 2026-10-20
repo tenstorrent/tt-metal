@@ -30,7 +30,7 @@ extern thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS];
 // separate parameter.
 extern thread_local uintptr_t g_dfb_config_base_addr;
 #ifndef COMPILE_FOR_TRISC
-extern volatile TxnDFBDescriptor g_txn_dfb_descriptor[32];
+extern TxnDFBDescriptor g_txn_dfb_descriptor[32];
 extern overlay::RemapperAPI g_remapper_configurator;
 #endif
 
@@ -39,13 +39,17 @@ extern overlay::RemapperAPI g_remapper_configurator;
 // full Quasar L1 (~4 MB). cursor_entry_idx is the write cursor on pack and the read cursor on
 // unpack; its byte offset is not stored but derived (advances in lockstep with stride_size /
 // stride_size_tiles).
-struct DFBTCSlot {
+//
+// 16B and 4B-aligned rather than a packed 13B: in the packed form every slot after the first starts
+// at an odd offset, so GCC writes each field one byte at a time.
+struct alignas(4) DFBTCSlot {
     uint32_t base_addr;
     uint32_t ring_size;
     uint16_t cursor_entry_idx;
     uint16_t base_entry_idx;
     dfb::PackedTileCounter packed_tile_counter;
-} __attribute__((packed));
+    uint8_t _pad[3];
+};
 #else
 struct DFBTCSlot {
     uint32_t ptr;
@@ -58,7 +62,7 @@ struct DFBTCSlot {
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
-static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (TRISC) size is incorrect");
+static_assert(sizeof(DFBTCSlot) == 16, "DFBTCSlot (TRISC) size is incorrect");
 // Compute TRISCs draw their tile-counter slots from one shared pool per thread, so an interface entry
 // holds only the index of its contiguous slice (slot_base) and keeps the iface.tc_slots[i] API.
 extern thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_TRISC_TC_SLOTS];
@@ -80,14 +84,14 @@ struct LocalDFBInterface {
     uint16_t stride_size;
     uint16_t num_entries;
     uint16_t wr_entry_ptr;
-    uint8_t stride_size_tiles;
-    uint8_t num_tcs_to_rr;
-    uint8_t tc_idx;
     uint16_t block_size;  // entries in one block; 1 unless the ring is BLOCKED
     uint16_t split_tc;    // one op (a whole block) is split across all of this hart's TCs
     uint16_t jump;        // cursor jump in entries, taken on each TC rotation
+    uint8_t stride_size_tiles;
+    uint8_t num_tcs_to_rr;
+    uint8_t tc_idx;
     DFBTCSlotSpan tc_slots;
-} __attribute__((packed));
+} __attribute__((packed, aligned(2)));
 static_assert(sizeof(LocalDFBInterface) == 18, "LocalDFBInterface (pack TRISC) size is incorrect");
 #elif defined(COMPILE_FOR_TRISC)
 struct LocalDFBInterface {
@@ -102,10 +106,14 @@ struct LocalDFBInterface {
     uint16_t split_tc;
     uint16_t jump;
     DFBTCSlotSpan tc_slots;
-} __attribute__((packed));
-static_assert(sizeof(LocalDFBInterface) == 17, "LocalDFBInterface (unpack TRISC) size is incorrect");
+} __attribute__((packed, aligned(2)));  // aligned(2): keeps every array entry's uint16 fields aligned
+static_assert(sizeof(LocalDFBInterface) == 18, "LocalDFBInterface (unpack TRISC) size is incorrect");
 #else
-struct LocalDFBInterface {
+// alignas(64): g_dfb_interface is thread_local and only 8B-aligned otherwise, so a slot could start
+// mid-line and the init copy of its first 48 bytes would touch two cache lines instead of one.
+// sizeof is unchanged: 128 is already a multiple of 64. The host builds this layout byte for byte
+// as the DM init image (dfb_write_dm_image_entry in dataflow_buffer_config.h).
+struct alignas(64) LocalDFBInterface {
     uint32_t entry_size;
     uint32_t stride_size;
 
@@ -117,7 +125,7 @@ struct LocalDFBInterface {
     uint16_t num_entries_per_txn_id_per_tc;
     uint8_t num_txn_ids;
     uint8_t broadcast_tc;  // DM-DM ALL producer: post to all TCs instead of round-robin
-                           // bytes [8,20) are written as three u32 stores (dfb_write_dm_iface_scalars_from_hdr)
+                           // bytes [8,20): the host writes them in the DM init image (dfb_write_dm_image_entry)
 
     uint16_t num_entries;
     uint16_t block_size;  // entries in one block; 1 unless the ring is BLOCKED
@@ -131,12 +139,13 @@ struct LocalDFBInterface {
 
 static_assert(sizeof(DFBTCSlot) == 16, "DFBTCSlot size is incorrect");
 static_assert(sizeof(LocalDFBInterface) == 128, "LocalDFBInterface size is incorrect");
+static_assert(offsetof(LocalDFBInterface, tc_slots) == 32, "tc_slots must start at 32");
 static_assert(
     offsetof(LocalDFBInterface, num_entries_per_txn_id) == 14 &&
         offsetof(LocalDFBInterface, num_entries_per_txn_id_per_tc) == 16 &&
         offsetof(LocalDFBInterface, num_txn_ids) == 18 && offsetof(LocalDFBInterface, broadcast_tc) == 19 &&
         offsetof(LocalDFBInterface, num_entries) == 20,
-    "LocalDFBInterface scalar span [8,20) must match dfb_write_dm_iface_scalars_from_hdr");
+    "LocalDFBInterface scalar span [8,20) must match dfb_write_dm_image_entry");
 
 namespace dfb {
 constexpr uint8_t NUM_KERNEL_DM_HARTS = MaxDMProcessorsPerCoreType - ReservedDMProcessorsPerCoreType;
@@ -193,18 +202,21 @@ inline LocalDFBInterface& get_local_dfb_interface(uint32_t logical_dfb_id) {
 // Holds metadata for transaction ID based ISR handling.
 // It is used by the ISR to understand which tile counters need to update which credits (post/ack).
 // Padded to 32 bytes so g_txn_dfb_descriptor[trid] compiles to base + (trid << 5) instead of a multiply-by-20.
-struct TxnDFBDescriptor {
-    uint8_t num_counters;
-    dfb::PackedTileCounter tile_counters[dfb::MAX_TILE_COUNTERS_PER_SIDE];
+// Hot fields first: tiles_to_post/ack (16 bits, 2B-aligned at byte 0) and num_counters at byte 2, so the
+// ISR's first load covers both. The offsetof asserts below keep it identical to the host image.
+// alignas(32): each descriptor is one aligned half-line, which the 64-bit init copy relies on.
+struct alignas(32) TxnDFBDescriptor {
     union {
         uint16_t tiles_to_post;
         uint16_t tiles_to_ack;
-    };                             // 2B-aligned, at byte 20
-    dfb_dm0_finish_info_t finish;  // read only by DM0's kernel-exit flush, not by the ISR
-    uint8_t _pad[6];               // pad 26 → 32 bytes
+    };  // bytes 0-1
+    uint8_t num_counters;          // byte 2
+    dfb_dm0_finish_info_t finish;  // bytes 3-6; read only by DM0's kernel-exit flush, not by the ISR
+    dfb::PackedTileCounter tile_counters[dfb::MAX_TILE_COUNTERS_PER_SIDE];
+    uint8_t _pad[7];  // pad 25 -> 32 bytes
 };
 static_assert(sizeof(TxnDFBDescriptor) == 32, "TxnDFBDescriptor size is incorrect");
-static_assert(offsetof(TxnDFBDescriptor, tiles_to_post) == 20, "TxnDFBDescriptor tiles_to_post must be 2B-aligned");
+static_assert(offsetof(TxnDFBDescriptor, tiles_to_post) == 0, "TxnDFBDescriptor tiles_to_post must be 2B-aligned");
 static_assert(
     sizeof(TxnDFBDescriptor) == sizeof(dfb_dm0_txn_descriptor_image_t),
     "TxnDFBDescriptor must match dfb_dm0_txn_descriptor_image_t for ISR blob memcpy");
