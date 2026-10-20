@@ -148,8 +148,7 @@ const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal:
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
-// b is a pointer so callers that already hold a tensor do not copy its TensorSpec. The optional
-// overload below covers callers that already have one. Routing (interleaved, DRAM, ND) stays here.
+// b == nullptr is a scalar operand. The optional overload forwards a spec the caller already owns.
 bool is_native_L1_sharding(const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec* b, const MemoryConfig& c);
 
 inline bool is_native_L1_sharding(

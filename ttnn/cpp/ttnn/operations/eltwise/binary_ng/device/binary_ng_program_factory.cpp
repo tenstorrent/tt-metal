@@ -1470,8 +1470,8 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
     constexpr uint32_t kWriterKernelIdx = 1;
     constexpr uint32_t kComputeKernelIdx = 2;
 
-    // One table per kernel, addressed by logical core. The per-core GetRuntimeArgs overload checks this
-    // bound before returning a slot; indexing the table has to do it itself.
+    // One table per kernel, addressed by logical core. The table is sized to the kernel core box;
+    // a slot inside that box can still be empty when the core is outside the kernel's core set.
     auto& reader_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
     auto& writer_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
     auto& compute_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kComputeKernelIdx);
@@ -1480,13 +1480,18 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
                         const CoreCoord& core) -> tt::tt_metal::RuntimeArgsData& {
         TT_FATAL(
             core.x < table.size() && core.y < table[core.x].size(),
-            "Cannot get runtime args for a binary_ng kernel that is not placed on core ({}, {})",
+            "binary_ng runtime-arg table has no entry for core ({}, {})",
             core.x,
             core.y);
         return table[core.x][core.y];
     };
 
     auto apply = [](tt::tt_metal::RuntimeArgsData& data, const RuntimeArgList& args) {
+        TT_FATAL(
+            args.size() <= data.size(),
+            "binary_ng runtime-arg override writes {} args into a slot of {}",
+            args.size(),
+            data.size());
         for (uint32_t arg_idx = 0; arg_idx < static_cast<uint32_t>(args.size()); ++arg_idx) {
             const auto& slot = args[arg_idx];
             data[arg_idx] = std::holds_alternative<tt::tt_metal::Buffer*>(slot)

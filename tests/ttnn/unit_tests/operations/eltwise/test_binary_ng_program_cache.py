@@ -685,10 +685,11 @@ def test_ng_tensor_interleaved_memcfg_with_sharded_output_cache_miss(device, iso
 
 
 def test_ng_interleaved_a_sharded_b_cache_miss_across_page_counts(device, isolate_program_cache):
-    """Interleaved A with sharded B still takes the sharded attribute path.
+    """Interleaved DRAM A with L1-sharded B, two shapes that share a shard spec.
 
-    B's shard spec is held constant while its page count changes, so a guard that ignored B would
-    reuse the first program. Small-then-big is the order that exposes a stale accessor."""
+    The second call misses because B's shape in pages is in the tensor hash, and because the
+    output config is taken from B. This checks that mixed layout stays correct across that miss.
+    It does not isolate the sharded-config guard: that guard is already true from the output config."""
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
     shard_spec = ttnn.ShardSpec(core_grid, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
     sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)

@@ -195,7 +195,6 @@ CoreRangeSet get_worker_grid(
         }
     }
 
-    // Pointer, not a copied TensorSpec: interleaved and DRAM declines stay inside is_native_L1_sharding.
     if (is_native_L1_sharding(
             input_tensor_a.tensor_spec(),
             input_tensor_b ? &input_tensor_b->tensor_spec() : nullptr,
