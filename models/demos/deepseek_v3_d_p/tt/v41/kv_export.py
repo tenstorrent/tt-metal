@@ -55,6 +55,30 @@ CHUNK_BYTES = {"swa_window": 16 * 1088, "csa_unified": 32 * 1024, "index_k": 4 *
 GROUPS = ("swa_window", "csa_unified", "index_k")
 
 
+def config_name(group: str) -> str:
+    """``0_swa_window`` ...: the decode ring's config names (tt-blaze ``deepseek_v4_1_flash_4_GLX/kv_migration.config_name``);
+    name-sorted ids == contract order. tt-llm-engine pairs configs by index; tt-d-gen's KV Manager pairs them by name and
+    rejected the list-built "0" / "1" / "2" ("name-to-id mismatch across the loaded tables")."""
+    return f"{GROUPS.index(group)}_{group}"
+
+
+def table_host() -> str:
+    """The host tag of every chip in the table. ``PREFILL_V41_TABLE_HOST=hostname``: ``host-<crc32(hostname) & 0x7fffffff>``,
+    the tag tt-d-gen's KV Manager derives from ``KV_MANAGER_TABLE_HOST`` and blaze's ring tables carry. Default
+    ``placeholder``: ``host-00000000``, what every tt-llm-engine run so far used (its single-rank endpoint maps any tag to
+    its one rank, but the real-tag path partitions differently, so the validated default is kept)."""
+    import os
+    import socket
+    import zlib
+
+    mode = os.environ.get("PREFILL_V41_TABLE_HOST", "placeholder")
+    if mode == "placeholder":
+        return "host-00000000"
+    if mode == "hostname":
+        return f"host-{zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF:08x}"
+    raise ValueError(f"PREFILL_V41_TABLE_HOST={mode!r}: expected placeholder or hostname")
+
+
 def _roles(cfg):
     return {L: cfg.role(L) for L in range(cfg.n_layers)}
 
@@ -289,12 +313,14 @@ def build_v41_kv_chunk_table(exp: V41KvExport, cfg, mesh_device, path: str) -> s
         c.chunk_n_tokens = TILE
         c.chunk_size_bytes = int(CHUNK_BYTES[g])
         configs.append(c)
-    table = D.KvChunkAddressTable(configs)
+    # named like the ring's configs; the name-map constructor assigns ids in sorted key order = GROUPS order
+    table = D.KvChunkAddressTable({config_name(g): c for g, c in zip(GROUPS, configs)})
     rows, cols = (int(v) for v in mesh_device.shape)
     fnids = [mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(r, c)) for r in range(rows) for c in range(cols)]
     group = table.add_device_group(fnids)
+    host = table_host()
     for fid in fnids:
-        table.set_fabric_node_host(fid, host_name="host-00000000")
+        table.set_fabric_node_host(fid, host_name=host)
     n_banks = int(get_num_dram_banks(mesh_device))
     n = 0
     # table slots past the physical ones alias physical slot 0 (only it is ever a migration source with PREFILL_V41_ALIAS_SLOTS)
