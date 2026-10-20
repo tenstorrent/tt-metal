@@ -49,6 +49,11 @@ on:
         required: false
         default: false
         type: boolean
+      node-list-artifact:
+        description: "Artifact of this run holding nodes.txt; the tests set LLK_PERF_NODE_LIST to it (blank = none)"
+        required: false
+        default: ""
+        type: string
       shadow-compile-runner:
         description: "Also build each shard on this CPU runner, measure it on the board and compare, report-only (blank = off)"
         required: false
@@ -254,6 +259,15 @@ jobs:
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
           echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
+      - name: Download the node list
+        if: ${{ inputs.node-list-artifact != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ inputs.node-list-artifact }}
+          path: ${{ runner.temp }}/node-list
+      - name: Point the tests at the node list
+        if: ${{ inputs.node-list-artifact != '' }}
+        run: echo "LLK_PERF_NODE_LIST=$RUNNER_TEMP/node-list/nodes.txt" >> "$GITHUB_ENV"
       - name: Run tests
         shell: bash
         working-directory: ${{ env.LLK_PATH }}

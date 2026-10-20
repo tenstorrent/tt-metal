@@ -3,6 +3,7 @@
 
 import fcntl
 import glob
+import json
 import os
 import re
 import shlex
@@ -118,6 +119,9 @@ class TestOutcome:
     # Lines emitted by DEVICE_PRINT() during this run.
     # Empty if it's disabled.
     device_print_lines: list = field(default_factory=list)
+
+
+LLK_CODE_SHIFT = int(os.environ.get("LLK_CODE_SHIFT", "0"))
 
 
 class TestConfig:
@@ -1692,7 +1696,32 @@ class TestConfig:
             ) from e
 
     def _compile_kernel_part(self, name, compile_command, source):
-        run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+        cache = os.environ.get("LLK_OBJ_CACHE")
+        if not cache:
+            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+            return
+        head = compile_command[: compile_command.index("-x")]
+        root = str(TestConfig.ARTEFACTS_DIR)
+        key = [
+            token.replace(root, "<artefacts>")
+            for token in head
+            if not token.startswith("-Wl,--defsym=__llk_code_shift=")
+        ]
+        digest = sha256((json.dumps(key) + source).encode()).hexdigest()[:32]
+        obj = Path(cache) / f"{digest}.o"
+        if not obj.exists():
+            obj.parent.mkdir(parents=True, exist_ok=True)
+            partial = obj.with_suffix(f".{os.getpid()}.tmp")
+            run_shell_command(
+                head + ["-c", "-x", "c++", "-", "-o", str(partial)],
+                TestConfig.TESTS_WORKING_DIR,
+                source,
+            )
+            os.replace(partial, obj)
+        run_shell_command(
+            head + [str(obj), "-lc", "-lgcc", "-o", compile_command[-1]],
+            TestConfig.TESTS_WORKING_DIR,
+        )
 
     def build_elfs(self):
 
@@ -1820,6 +1849,11 @@ class TestConfig:
                         f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
                         f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
                     ],
+                    (
+                        [f"-Wl,--defsym=__llk_code_shift={LLK_CODE_SHIFT}"]
+                        if LLK_CODE_SHIFT
+                        else []
+                    ),
                     # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
                     # that -nostdlib drops; only referenced helpers are linked.
                     ["-x", "c++", "-", "-lc", "-lgcc", "-o"],
