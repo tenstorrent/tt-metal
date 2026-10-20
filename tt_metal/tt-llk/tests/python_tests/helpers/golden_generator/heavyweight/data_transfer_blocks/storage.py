@@ -18,7 +18,7 @@ from typing import Optional, Union
 
 import torch
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation
+from helpers.llk_params import DestAccumulation, format_dict
 
 #: Explicit mantissa bits an IEEE float32 holds, the width every mask below is
 #: cut from.
@@ -168,3 +168,107 @@ def as_dest_acc(dest_acc: Union[bool, DestAccumulation]) -> bool:
     if isinstance(dest_acc, DestAccumulation):
         return dest_acc is DestAccumulation.Yes
     return bool(dest_acc)
+
+
+def to_src_storage(values: torch.Tensor, src_format: DataFormat) -> torch.Tensor:
+    """Apply the precision a src-register datum can hold.
+
+    Two losses, both from the unpacker:
+
+    * **Mantissa** -- a src datum keeps 10 explicit bits, truncated (not
+      rounded). Only Float32/Tf32 data carries more.
+    * **Exponent range** -- the Float16 family has a 5-bit range, so values
+      above it saturate to infinity and values below the smallest normal
+      flush to zero. The Tf32 family has fp32's range and clips nothing.
+
+    **Float32 into a src register loses its low 13 mantissa bits.** A 19-bit
+    datum cannot hold fp32, and the unpacker's format table allows a Float32
+    source to land only in Tf32, Float16 or Float16_b when the destination is a
+    src register -- all of which keep 10. Full fp32 survives only on the
+    unpack-to-Dest path and in SrcS; the ``Float32`` case below is reachable
+    only from the SrcS block. Integer formats pass through unchanged.
+    """
+    if src_format is DataFormat.Float16:
+        # 1+5+10 is IEEE fp16 exactly. Truncate first so the cast only has to
+        # apply the range clamp -- casting straight to fp16 would round.
+        truncated = truncate_src_mantissa(values)
+        # The unpacker flushes to zero once the rebiased exponent hits 0, so
+        # fp16 subnormals never reach the register. Flush *before* the cast:
+        # the cast rounds to nearest, and the top subnormal band (within half
+        # an ulp of 2**-14) would round up to the smallest normal and sail
+        # through a flush applied afterwards.
+        return flush_subnormals(truncated, torch.float16).to(torch.float16)
+    if src_format in (DataFormat.Float16_b, DataFormat.Tf32):
+        # Float16_b is an alias for Tf32 here -- see SRC_STORAGE_FORMATS.
+        return truncate_src_mantissa(values)
+    if src_format is DataFormat.Float32:
+        return values.to(torch.float32)
+    return values.to(format_dict[src_format])
+
+
+def to_dest_storage(values: torch.Tensor, dest_format: DataFormat) -> torch.Tensor:
+    """Round `values` to what a Dest slot can hold.
+
+    The FPU produces no denormal result: a float Dest slot with a zero exponent
+    has a zero mantissa too, so anything below the format's smallest normal
+    lands as zero. Keeping the subnormal instead lets a value the hardware
+    zeroed survive to the packer, which rounds it *up* onto the output lattice
+    -- a datum the device reports as 0 comes back as the output format's
+    smallest representable value. Only Float16 Dest meets the threshold in
+    practice; the wider formats bottom out near 2**-126.
+    """
+    if not isinstance(values, torch.Tensor):
+        values = torch.tensor(values)
+    target = format_dict[dest_format]
+    if not target.is_floating_point:
+        return saturate_to_integer(values, target, dest_format)
+    return flush_subnormals(values.to(target))
+
+
+def dest_to_src_storage(
+    values: torch.Tensor, dest_format: DataFormat, src_format: DataFormat
+) -> torch.Tensor:
+    """Re-quantize a Dest datum into a 19-bit src datum.
+
+    The conversion is driven by the **Dest** format, not the src format -- the
+    src format is consulted only to decide whether a wide Dest needs its
+    exponent rebiasing into the 5-bit range. Every case is bit-slicing, so
+    nothing rounds: bits below the target width are dropped, not folded in.
+
+    * **Float16_b** keeps 7 mantissa bits and zero-fills the low 3, so a bf16
+      Dest does **not** come back with a src register's full 10.
+    * **Int16 is carried unchanged.** The hardware routes it through the same
+      path by labelling it bf16, but that is transport, not conversion: the
+      routing redistributes all 16 bits of the datum -- sign, then bits 14:8,
+      three padding zeros, then bits 7:0 -- so every bit survives and the move
+      back reassembles them. Treating the label as a conversion and masking in
+      the float domain would quantize a genuine integer instead, turning 257
+      into 256 and 1001 into 1000.
+    * **Float16** passes as fp16 -- 10 mantissa bits, 5-bit exponent.
+    * **Int32 saturates to INT8**, clamping to +/-127. A wide integer Dest
+      cannot survive the trip, and the clamp is silent.
+    * **Float32 / Tf32** keep 10 mantissa bits and the 8-bit exponent, unless
+      the src register is Float16, in which case the exponent is rebiased and
+      values below the fp16 normal range flush to zero.
+    """
+    if dest_format is DataFormat.Int16:
+        # Bit-preserving: see the Int16 note above. The hardware borrows the
+        # bf16 label only to get the datum across intact.
+        return values
+    if dest_format is DataFormat.Float16_b:
+        # 7 explicit mantissa bits survive; the low 3 arrive as zeros.
+        return truncate_mantissa(values, BF16_MANT_BITS)
+    if dest_format is DataFormat.Float16:
+        return values.to(torch.float16).to(torch.float32)
+    if dest_format is DataFormat.Int32:
+        # Only 7 magnitude bits plus a sign reach the src register.
+        return (
+            values.to(torch.float32)
+            .clamp(-INT8_MAX_MAGNITUDE, INT8_MAX_MAGNITUDE)
+            .trunc()
+        )
+    if dest_format in (DataFormat.Float32, DataFormat.Tf32):
+        if src_format is DataFormat.Float16:
+            return to_src_storage(values, DataFormat.Float16)
+        return truncate_src_mantissa(values)
+    return to_src_storage(values, src_format)
