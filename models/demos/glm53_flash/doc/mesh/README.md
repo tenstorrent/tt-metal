@@ -266,3 +266,33 @@ device ops per layer). Changes on `arg/glm53_mesh` (4d381ab55d9, 1630e1dc250, me
 What is left is the mHC glue (Slice 80, UntilizeWithUnpadding 54, TilizeWithValPadding 49, Ternary 38 of
 the 368), the KDA head split + recurrence composite, and the single-core input norms: the three agent
 tracks (mHC fused pre/post blocks with the norm folded in, fused KDA decode, dense expert path op count).
+
+## Optimization round 2 (2026-10-20): the three agent tracks merged
+
+Merged on `arg/glm53_mesh` (experts 996ce99d9a7, KDA op 23ec6eb31fc, mHC e41b669e90e, KDA block default
+b8d4f49aab3, exact-residual option a65c66d48c3; upstream code 3e9df80eb0d). The tree now needs the wt_mesh
+C++ build (`ttnn.transformer.kda_decode`); see `doc/functional_decoder/README.md` (KDA block), `doc/mhc/README.md`
+(TtMHCFast, exact option), `expert_kernel_sweep.md` (expert layouts).
+
+| track | before | after (default path) | evidence |
+|---|---|---|---|
+| mHC (2 wraps per layer) | 222 ops, 1.96 ms (B=4) | 44 ops, 0.46 ms, input norms folded in, head collapse folded into the last layer's post-block | chip 1 Tracy; PCC 1.0000 vs composite (residual update rounds ~1e-3 rel rms: `GLM53_MHC_EXACT=3` is exact at +16 ops/wrap, off) |
+| KDA decode | ~75 ops, 11.4 ms at 32 users (64 heads) | 6 ops (qkv, 2 gate matmuls, `kda_decode`, tilize, o_proj), 1.49 ms | chip 3; block vs composite 0.99996; mesh TP4 at 32 users/row 0.99999 median after the per-column gate-weight split |
+| experts | sparse 8 slab blocks 9.7 ms at 256 tokens; block 18 ops | dense 6 ops 1.23 ms (>= 8 users/row, `GLM53_DENSE_EXPERTS=1`); sparse 13 ops 683 us per block | chip 2 `test_moe_block.py` PCC 0.9999; mesh 0.99992 |
+
+2x4 block, chip (0,0), traced decode step at position 1024, sparse experts (the dense layout reads the
+block's 4x larger per-chip slice and is only meaningful on the 8x4); reports `_logs/mesh/report_perf2x4_r3_*`:
+
+| layer | users/row | round 1 | round 2 (merged) | what is left (ops) |
+|---|---|---|---|---|
+| 4 KDA+MoE | 4 | 368 ops / 4.61 ms | **112 ops / 2.34 ms** (sparse_matmul 0.75) | BinaryNg 22, Matmul 16, Slice 9, Untilize 9, Reduce 8, FillPad 7, FastReduceNC 5, Tilize 5 |
+| 4 | 32 | - | **109 ops / 3.92 ms** (sparse_matmul 1.92) | |
+| 3 DSA+MoE | 4 | 334 ops / 4.21 ms | **147 ops / 2.42 ms** (sparse_matmul 0.66) | + Slice 16, LayerNorm 5 (single core), ReshapeView 5, cache writes 8 |
+| 3 | 32 | - | **144 ops / 3.95 ms** | |
+
+Context of every number above: decode position 1024 (per-layer profiles) and ISL 16 (the e2e), both below the
+2051-token dense/sparse switch; the design's floor (19 / 33 tok/s/user) is at 1 M ISL, where the index +
+sparse-attention path (single-chip single-user 26.5 ms per layer today) has to come down to ~0.7 ms per layer:
+track OPT_SPARSE_1M (`_agents/OPT_SPARSE_1M.md`). Next per-track items: fused exact fp32 mHC post-block kernel
+(2 ops, exact), DSA decode glue (cache writes, pooling, head transposes, norms), sparse_matmul kernel efficiency
+at low batch (38 % -> 70 % of DRAM peak).
