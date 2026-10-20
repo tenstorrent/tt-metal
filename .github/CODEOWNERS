@@ -262,6 +262,7 @@ tt_metal/**/inspector* @tenstorrent/metalium-developers-triage
 
 # LLK in-tree (tt_metal/tt-llk/) — mirrors tenstorrent/tt-llk CODEOWNERS
 tt_metal/third_party/umd @broskoTT @pjanevskiTT @tenstorrent/umd-admins @tenstorrent-github-bot
+tt_metal/third_party/tt-cluster-descriptors @Riddy21 @aliuTT @cfjchu @ubcheema @tenstorrent-github-bot
 tt_metal/tt-llk/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT
 tt_metal/tt-llk/.claude/ @nstamatovicTT @njokovicTT
 tt_metal/tt-llk/.cursor/ @nstamatovicTT @njokovicTT
