@@ -19,7 +19,7 @@ the single-chip behaviour (every collective is the identity, every placement rep
 
 Not wired yet (the decoder refuses them): prefill on multi-row meshes; sparse DSA decode (positions
 > 2050) on multi-row meshes (needs the metadata-tensor variants so every row runs one SPMD graph);
-the `sparse_sdpa` prefill rows at 16 local heads (H % 32 contract) are untested.
+the `sparse_sdpa` kernel wants H % 32 == 0 (TT_FATAL at 16 local heads): the query is padded with zero heads to 32 and the padded outputs dropped (`TtDSA._pad_heads_rm`), i.e. 2x attention compute on the sparse rows at TP4 until the user-partitioned layout (all 64 heads on the cache owner) lands.
 
 ## Test beds on the 32-chip Galaxy (disjoint from the single-chip work on chips 0-8)
 
@@ -42,8 +42,8 @@ the `sparse_sdpa` prefill rows at 16 local heads (H % 32 contract) are untested.
 | layer 3 | (2,4), B=2/row | per-user 0.99974-0.99989 (worst single row 0.99652 = the position-0 row); traced steps 48-50: 0.99993-0.99997 | `test_mesh_decoder_l3_2.log` |
 | layer 4 | (2,4), B=2/row | per-user 0.99994-0.99999 (worst row 0.99789); traced steps: 0.99996-0.99999 | `test_mesh_decoder_l4_1.log` |
 | `test_mesh_tp_prefill.py` layer 0 | (1,4) | TP4 prefill S=200 vs HF 0.999853 (replicated across the 4 chips); decode 200-202: 0.99990-0.99992 | `test_tp4_prefill_l0_3.log` |
-| layers 3, 4 | (1,4) | pending | `test_tp4_prefill_l34_1.log` |
-| `test_mesh_decoder.py` B=32/row | (2,4), 64 users | pending | `test_mesh_decoder_b32_1.log` |
+| layers 3, 4 | (1,4) | layer 3: prefill 0.999878, decode 200-202: 0.99994-0.99997; layer 4: prefill 0.999978, decode 0.999995-0.999996 | `test_tp4_prefill_l34_1.log` |
+| `test_mesh_decoder.py` B=32/row (`GLM53_MESH_B=32 GLM53_MESH_S=12`) | (2,4), 64 users | layer 3: per-user min 0.997864 / p10 0.999176 / median 0.999766 over 12 traced steps, HF-cache traced steps min 0.99650-0.99746 median 0.99993; layer 4: per-user min 0.999909 p10 0.999973 median 0.999991 | `test_mesh_decoder_b32_1.log` (layer 4), `test_mesh_decoder_b32_l3_2.log` |
 
 Method note: the mesh has no prefill path on multi-row meshes yet, so the decode test feeds each
 user's prompt through the decode step token by token; HF's prefill output row t is the exact
