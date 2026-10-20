@@ -45,7 +45,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
     const std::uint32_t dst_index,
     const std::uint32_t src_format,
     const std::uint32_t dst_format,
-    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
+    [[maybe_unused]] const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_unary_datacopy_", tensor_shape);
 
@@ -490,6 +490,7 @@ inline void eltwise_unary_configure_mop(
  * @tparam is_int_fpu_en: Enable integer FPU datapath.
  * @param tensor_shape: Tile geometry (face_r_dim, face grid). Total face count must be 1, 2, or 4.
  * @param dst_format: Destination data format (DataFormat enum underlying value); 255 means unset.
+ * @note COL broadcast supports only a full 32x32 tile (16-row faces, 2x2 face grid).
  * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ which feeds the tile.
  * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
  */
@@ -498,15 +499,16 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
     const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_format = 255)
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_unary_datacopy_init_", tensor_shape);
-    LLK_ASSERT(
-        tensor_shape.total_num_faces() == 1 || tensor_shape.total_num_faces() == 2 || tensor_shape.total_num_faces() == 4, "num_faces must be 1, 2, or 4");
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     if constexpr (src_b_bcast_type == BroadcastType::COL)
     {
         // The COL MOP covers two faces and the execute runs it twice, so it needs a full 32x32 tile
         // (4 faces of 16 rows). A 1x32 tile was seen to hang on Wormhole.
         LLK_ASSERT(
-            tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2,
+            tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
+                tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
             "Column broadcast datacopy supports only 32x32 tiles");
     }
 
