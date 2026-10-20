@@ -95,8 +95,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         single_partial_output_fits_in_face ? std::optional{TileDescriptor{1, tt::constants::FACE_WIDTH, false}}
                                            : std::nullopt;
 
-    const uint32_t grid_stick_size =
-        is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
+    const uint32_t grid_stick_size = get_aligned_stick_size(grid_shape, grid_tensor);
     const uint32_t grid_cb_index = cb_idx++;
     const uint32_t grid_cb_num_pages = is_sharded ? grid_nsticks_per_core : 1;
     desc.cbs.push_back(CBDescriptor{
@@ -217,8 +216,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
 
     // Prepare stick size arguments with proper names
     const uint32_t input_stick_size = get_aligned_stick_size(input_shape, input_tensor);
-    const uint32_t grid_stick_size_arg =
-        is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
+    const uint32_t grid_stick_size_arg = get_aligned_stick_size(grid_shape, grid_tensor);
 
     // Reader compile-time arguments - shared arguments first, then specific ones
     std::vector<uint32_t> reader_compile_time_args = {

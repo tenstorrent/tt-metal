@@ -643,3 +643,41 @@ def test_upsample_nearest_float_mixed_memory(
 
     assert list(output_torch.shape) == list(torch_result.shape)
     assert torch.equal(output_torch, torch_result)
+
+
+# Row sizes that are not a multiple of the 16-byte L1 shard pitch.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("channels", [4, 12, 20])
+def test_upsample_nearest_unaligned_sharded_rows(device, channels):
+    torch.manual_seed(0)
+    input_nhwc = torch.randn(1, 8, 8, channels, dtype=torch.bfloat16)
+    expected = nn.functional.interpolate(input_nhwc.permute(0, 3, 1, 2), scale_factor=2, mode="nearest").permute(
+        0, 2, 3, 1
+    )
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    in_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (32, channels), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    out_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (128, channels), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_input = ttnn.from_torch(
+        input_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mc
+    )
+    output = ttnn.upsample(tt_input, 2, mode="nearest", memory_config=out_mc)
+    assert torch.equal(ttnn.to_torch(output), expected)
+
+
+def test_upsample_nearest_float32_tile(device):
+    torch.manual_seed(0)
+    input_nhwc = torch.randn(1, 32, 32, 32, dtype=torch.float32)
+    expected = nn.functional.interpolate(input_nhwc.permute(0, 3, 1, 2), scale_factor=2, mode="nearest").permute(
+        0, 2, 3, 1
+    )
+    tt_input = ttnn.from_torch(input_nhwc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.upsample(tt_input, 2, mode="nearest")
+    assert torch.equal(ttnn.to_torch(output), expected)
