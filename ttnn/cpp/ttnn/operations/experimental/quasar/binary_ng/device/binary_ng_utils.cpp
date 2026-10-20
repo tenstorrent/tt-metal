@@ -914,6 +914,8 @@ uint32_t native_max_tiles_per_cycle(bool sfpu, bool dst_32bit) {
 }
 
 bool native_compute_batch_exact(const NativeConfig& config, bool sfpu) {
+    // TODO: return true for the FPU kernel too once llk_unpack_AB steps a batch by the ring stride, as llk_unpack_A
+    // does. The rule then batches the FPU kernel at 8 at 4,4,2 and 1,4,1, and the two batching-defect tests pass.
     return sfpu || (config.reader_threads == 1 && config.compute_threads == 1 && config.writer_threads == 1);
 }
 
