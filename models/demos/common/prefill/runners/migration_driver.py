@@ -1116,6 +1116,36 @@ def main() -> None:
         # TTFT (launch 12, DS4F-0268). Load it here, before any prefill, so every request pays only the ~90 ms matmul.
         _lm_head_weight()
 
+    serve_port = int(os.environ.get("PREFILL_SERVE_PORT", "0") or 0)
+    if serve_port:
+        if world_size > 1:
+            raise RuntimeError("PREFILL_SERVE_PORT is single-rank only")
+        migration_ok, verify_ok, migrate_ok = _serve_requests(
+            serve_port,
+            args,
+            cfg,
+            producer_ns=producer,
+            driver=driver,
+            service=service,
+            ack_channel=ack_channel,
+            kv_table=kv_table,
+            payload_bytes=payload_bytes,
+            mr_rank=mr_rank,
+            world_size=world_size,
+        )
+        _finish(
+            args,
+            cfg,
+            producer_ns=producer,
+            service=service,
+            migration_ok=migration_ok,
+            verify_ok=verify_ok,
+            world_size=world_size,
+            migrate_ok=migrate_ok,
+            payload_bytes=payload_bytes,
+        )
+        return
+
     # DS4F-0263: PREFILL_PRODUCER_SLOT_TRACES_SEQUENCE="dirA,dirB,..." runs the whole prefill -> migrate -> handoff -> DONE
     # cycle once PER ENTRY in one process (one H2D client, one endpoint pairing), each entry standing in for
     # PREFILL_PRODUCER_SLOT_TRACES for its round. Between rounds the driver waits until the consumer has REMOVED the
@@ -1184,6 +1214,105 @@ def main() -> None:
         migrate_ok=migrate_ok,
         payload_bytes=payload_bytes,
     )
+
+
+_XPF_MAGIC = 0x31465058  # "XPF1"
+
+
+def _recv_exact(conn, n: int) -> bytes:
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = conn.recv(min(1 << 20, n - len(buf)))
+        if not chunk:
+            raise ConnectionError("peer closed")
+        buf.extend(chunk)
+    return bytes(buf)
+
+
+def _serve_requests(port: int, args, cfg, **kw):
+    """PREFILL_SERVE_PORT (tt-d-gen external prefill, its XPF1 wire): serve prefill requests from a decode engine instead of
+    a fixed trace list. Each request carries the destination ring slot and the prompt prefix to prefill; one prefill ->
+    migrate cycle runs on prefill slot 0 (pairs "0:<slot>"), then the reply. The engine replays the rest of the prompt on
+    the ring itself. Requests run one at a time, in arrival order; one engine connection at a time, re-accepted on EOF.
+    Ends when PREFILL_SERVE_STOP_FILE appears (checked between connections).
+
+    request: <IIII magic, request_id, slot, n> + n x <I token>
+    reply:   <IIIIIIII magic, request_id, slot, status (0 ok), resident, prefill_ms, migrate_ms, error_len> + error utf-8
+    """
+    import socket
+
+    root = os.environ.get("PREFILL_SERVE_TRACE_DIR", "/tmp/xpf_traces")
+    stop_file = os.environ.get("PREFILL_SERVE_STOP_FILE", "")
+    os.makedirs(root, exist_ok=True)
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("0.0.0.0", port))
+    srv.listen(1)
+    srv.settimeout(5.0)
+    logger.success(f"[migration_driver] SERVING external prefill on :{port} (traces in {root})")
+    last = (True, True, True)
+    served = 0
+    while not (stop_file and os.path.exists(stop_file)):
+        try:
+            conn, peer = srv.accept()
+        except socket.timeout:
+            continue
+        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        logger.info(f"[migration_driver] external prefill: engine connected from {peer}")
+        try:
+            while True:
+                magic, rid, slot, n = struct.unpack("<IIII", _recv_exact(conn, 16))
+                if magic != _XPF_MAGIC:
+                    raise ConnectionError(f"bad request magic 0x{magic:08x}")
+                ids = list(struct.unpack(f"<{n}I", _recv_exact(conn, 4 * n)))
+                cap = int(getattr(kw["producer_ns"], "MAX_SEQ_LEN", 0) or 0)
+                if cap and n > cap:  # the producer would clamp it silently and migrate less than the engine expects
+                    e = f"{n} tokens exceed the runner's per-user cache of {cap} (PREFILL_MAX_SEQ_LEN)".encode()
+                    logger.error(f"[migration_driver] external prefill request {rid}: {e.decode()}")
+                    conn.sendall(struct.pack("<8I", _XPF_MAGIC, rid, slot, 1, 0, 0, 0, len(e)) + e)
+                    continue
+                tdir = os.path.join(root, f"r{rid}")
+                os.makedirs(tdir, exist_ok=True)
+                with open(os.path.join(tdir, "metadata.json.tmp"), "w") as f:
+                    json.dump({"token_ids": ids}, f)
+                os.replace(os.path.join(tdir, "metadata.json.tmp"), os.path.join(tdir, "metadata.json"))
+                os.environ["PREFILL_PRODUCER_SLOT_TRACES"] = tdir
+                os.environ["PREFILL_MIGRATION_PAIRS"] = f"0:{slot}"
+                logger.info(
+                    f"[migration_driver] ===== EXTERNAL PREFILL request {rid}: {n} tokens -> ring slot {slot} ====="
+                )
+                t0 = time.perf_counter()
+                err = ""
+                try:
+                    stats, _triples, migrate_ok, migration_ok, verify_ok, _st = _run_one_request_set(args, cfg, **kw)
+                    last = (migration_ok, verify_ok, migrate_ok)
+                    prefill_ms, migrate_ms = int(stats.wall_s * 1000), int(driver_ms(kw["driver"]))
+                    if not migrate_ok:
+                        err = "migration failed"
+                except Exception as e:  # noqa: BLE001 -- reported to the engine, which prefills locally instead
+                    logger.exception(f"[migration_driver] external prefill request {rid} failed")
+                    migrate_ok, prefill_ms, migrate_ms, err = False, 0, 0, f"{type(e).__name__}: {e}"
+                served += 1
+                logger.success(
+                    f"[migration_driver] EXTERNAL PREFILL request {rid} {'OK' if migrate_ok else 'FAILED'}: {n} tokens -> slot "
+                    f"{slot} in {time.perf_counter() - t0:.3f} s (prefill {prefill_ms} ms, migrate {migrate_ms} ms); "
+                    f"{served} served"
+                )
+                e = err.encode()
+                conn.sendall(
+                    struct.pack("<8I", _XPF_MAGIC, rid, slot, 0 if migrate_ok else 1, n, prefill_ms, migrate_ms, len(e))
+                    + e
+                )
+        except ConnectionError as e:
+            logger.info(f"[migration_driver] external prefill: engine connection ended ({e}); {served} served")
+        finally:
+            conn.close()
+    srv.close()
+    return last
+
+
+def driver_ms(driver) -> float:
+    return float(getattr(driver, "last_migrate_ms", 0.0) or 0.0)
 
 
 def _wait_consumer_ack(done_file: str, timeout_s: float) -> None:
