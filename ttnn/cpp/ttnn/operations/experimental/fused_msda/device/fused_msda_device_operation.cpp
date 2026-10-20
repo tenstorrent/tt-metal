@@ -9,7 +9,7 @@
 #include <string_view>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/experimental/fused_msda/device/kernels/msda_corner_word.hpp"
 #include "ttnn/tensor/tensor.hpp"
