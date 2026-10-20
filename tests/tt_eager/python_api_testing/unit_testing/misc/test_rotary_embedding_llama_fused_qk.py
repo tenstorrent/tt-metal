@@ -137,3 +137,13 @@ def test_rotary_embedding_llama_fused_qk_with_program_cache(
     assert (
         device.cache_entries_counter.total == num_ops
     ), f"Expected {num_ops} program cache entries, but found {device.cache_entries_counter.total}"
+
+
+@pytest.mark.parametrize("head_dim", (288, 512))
+def test_rotary_embedding_llama_fused_qk_rejects_head_dim_above_256(head_dim, device, expect_error):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if compute_grid_size.x < 8 or compute_grid_size.y < 8:
+        pytest.skip(f"Requires grid size of at least {(8, 8)} to run")
+
+    with expect_error(RuntimeError, "Head dim must be at most 256"):
+        run_test_rotary_embedding_llama(device, 8, 1, 0.9997, 8, 1, head_dim, 1, ttnn.bfloat16, fuse_qk=True)
