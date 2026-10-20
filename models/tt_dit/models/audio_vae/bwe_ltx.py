@@ -367,7 +367,7 @@ class VocoderWithBWE(Module):
         """One upload and one final download; cache construction is outside capture."""
         assert mel_spec.ndim == 4 and mel_spec.shape[1] == 2, "device chain currently requires stereo mel"
         traces = type(self)._forward_device_chain._tracers_keyed.get(self, {})
-        shape_key = tuple(mel_spec.shape)
+        shape_key = self.vocoder.c12_trace_key(mel_spec.shape)
         requested_trace = traces.get(shape_key)
         if (requested_trace is None or not requested_trace.trace_captured) and any(
             t.trace_captured for t in traces.values()
