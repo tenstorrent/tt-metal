@@ -747,3 +747,162 @@ def test_unpack_A_targeted_tensor_shape_coverage(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+# Face-grid coverage for the _llk_unpack_A_ broadcast and transpose-of-faces MOPs (tt-metal#47328).
+# 16x32 (1x2) and 32x16 (2x1) have the same face count, so each must be run with its own grid.
+FACE_GRID_TILE_DIMENSIONS = [[16, 16], [16, 32], [32, 16], [32, 32]]
+FACE_GRID_BROADCASTS = [BroadcastType.Column, BroadcastType.Row, BroadcastType.Scalar]
+
+
+def _face_grid_cases():
+    cases = []
+    for tile_dimensions in FACE_GRID_TILE_DIMENSIONS:
+        tile_id = f"{tile_dimensions[0]}x{tile_dimensions[1]}"
+        for broadcast_type in FACE_GRID_BROADCASTS:
+            cases.append(
+                pytest.param(
+                    tile_dimensions,
+                    broadcast_type,
+                    Transpose.No,
+                    DataFormat.Float16_b,
+                    id=f"{tile_id}-bcast_{broadcast_type.name}-Float16_b",
+                )
+            )
+        cases.append(
+            pytest.param(
+                tile_dimensions,
+                BroadcastType.None_,
+                Transpose.Yes,
+                DataFormat.Float16_b,
+                id=f"{tile_id}-transpose-Float16_b",
+            )
+        )
+    # 32x32 unpack-to-dest (32-bit) regression for every broadcast type. The unpack-to-dest
+    # broadcast paths are still 32x32-only on the math side, so no other shapes here.
+    for broadcast_type in FACE_GRID_BROADCASTS:
+        cases.append(
+            pytest.param(
+                [32, 32],
+                broadcast_type,
+                Transpose.No,
+                DataFormat.Float32,
+                id=f"32x32-bcast_{broadcast_type.name}-Float32_to_dest",
+            )
+        )
+    return cases
+
+
+@pytest.mark.parametrize(
+    "tile_dimensions, broadcast_type, transpose, data_format", _face_grid_cases()
+)
+def test_unpack_A_face_grid_bcast_transpose(
+    tile_dimensions, broadcast_type, transpose, data_format
+):
+    formats = input_output_formats([data_format], same=True)[0]
+    unpack_to_dest = data_format.is_32_bit()
+    dest_acc = DestAccumulation.Yes if unpack_to_dest else DestAccumulation.No
+
+    tile_shape = construct_tile_shape(tile_dimensions)
+    face_r_dim = tile_shape.face_r_dim
+    num_faces_r_dim = tile_shape.num_faces_r_dim
+    num_faces_c_dim = tile_shape.num_faces_c_dim
+    num_faces = num_faces_r_dim * num_faces_c_dim
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=tile_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=tile_dimensions,
+        tile_dimensions=tile_dimensions,
+    )
+
+    if broadcast_type != BroadcastType.None_:
+        golden_tensor = get_golden_generator(BroadcastGolden)(
+            broadcast_type,
+            src_A,
+            formats.output_format,
+            num_faces=num_faces,
+            tile_cnt=tile_cnt_A,
+            face_r_dim=face_r_dim,
+            num_faces_r_dim=num_faces_r_dim,
+            num_faces_c_dim=num_faces_c_dim,
+        )
+    else:
+        # Within-face and face transpose together: output face (i, j) is input face (j, i) transposed.
+        transpose_golden = get_golden_generator(TransposeGolden)
+        golden_tensor = transpose_golden.transpose_faces(
+            transpose_golden.transpose_within_faces(
+                src_A, formats.output_format, tile_dimensions, num_faces
+            ),
+            formats.output_format,
+            tile_dimensions,
+            num_faces,
+        )
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        tile_dimensions,
+        tile_dimensions,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/unpack_A_test.cpp",
+        formats,
+        templates=[
+            STOCHASTIC_ROUNDING(StochasticRounding.No),
+            BROADCAST_TYPE(broadcast_type),
+            ACC_TO_DEST(False),
+            REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
+            PARTIAL_FACE(
+                partial_a=False,
+                partial_face_pack=False,
+                partial_b=False,
+                partial_face_math=False,
+            ),
+            DISABLE_SRC_ZERO_FLAG(False),
+        ],
+        runtimes=[
+            UNPACK_TRANS_FACES(transpose),
+            UNPACK_TRANS_WITHIN_FACE(transpose),
+            NUM_FACES(num_faces),
+            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
+            TILE_COUNT(tile_cnt_A),
+            TEST_FACE_DIMS(face_r_dim=face_r_dim),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            NUM_BLOCKS(num_blocks),
+            INPUT_DIMENSIONS(1, 1),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            num_faces=num_faces,
+            face_r_dim=face_r_dim,
+            tile_dimensions=tile_dimensions,
+            use_dense_tile_dimensions=True,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=unpack_to_dest,
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    # Broadcast and transpose only move data, so the result must match the golden exactly.
+    assert torch.equal(
+        golden_tensor.to(format_dict[formats.output_format]), res_tensor
+    ), "Result does not match golden"

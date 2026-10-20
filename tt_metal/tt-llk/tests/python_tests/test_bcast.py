@@ -103,9 +103,15 @@ def test_unpack_bcast(
 
     # --- Skips from bugs --------------------------------------------------
 
-    # TODO: pgardner - Column broadcast for tiny tiles needs kernel support
-    if tile_dimensions != [32, 32] and broadcast_type == BroadcastType.Column:
-        pytest.skip("Column broadcast not yet implemented for tiny tiles")
+    # Column broadcast through SrcB follows the face grid (tt-metal#47328); the unpack-to-dest
+    # (32-bit) column broadcast is still 32x32-only.
+    if (
+        tile_dimensions != [32, 32]
+        and broadcast_type == BroadcastType.Column
+        and formats.input_format.is_32_bit()
+        and dest_acc == DestAccumulation.Yes
+    ):
+        pytest.skip("Unpack-to-dest column broadcast is 32x32-only")
 
     # TODO: pgardner - Bfp8_b requires minimum 16 exponents per face
     if tile_dimensions[0] < 16 and formats.input_format == DataFormat.Bfp8_b:
