@@ -37,17 +37,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.TILE_SIZE_UNPACK_B,
         params.TILE_SIZE_UNPACK_A);
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
-    _llk_unpack_AB_matmul_init_<>(
-        params.UNPACK_TRANSPOSE_FACES,
-        params.CT_DIM,
-        params.RT_DIM,
-        params.KT_DIM,
-        params.in1_tile_r_dim < FACE_R_DIM ? params.in1_tile_r_dim : FACE_R_DIM,
-        params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM,
-        params.num_faces_B,     // in1
-        params.num_faces_A,     // in0
-        params.PARTIAL_FACE_B,  // in1
-        params.PARTIAL_FACE_A); // in0
+    const ckernel::TensorShape in0_tensor_shape = ckernel::tensor_shape_from_tile_dims(params.in0_tile_r_dim, params.in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = ckernel::tensor_shape_from_tile_dims(params.in1_tile_r_dim, params.in1_tile_c_dim);
+    _llk_unpack_AB_matmul_init_<>(params.UNPACK_TRANSPOSE_FACES, params.CT_DIM, params.RT_DIM, params.KT_DIM, in0_tensor_shape, in1_tensor_shape);
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)
     {
         _llk_unpack_AB_matmul_<>(
@@ -57,8 +49,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             j * params.CT_DIM,
             params.TILE_SIZE_UNPACK_B,
             params.TILE_SIZE_UNPACK_A,
-            params.PARTIAL_FACE_B, // in1
-            params.PARTIAL_FACE_A, // in0
+            in0_tensor_shape,
+            in1_tensor_shape,
             params.CT_DIM,
             params.RT_DIM,
             params.KT_DIM);
@@ -78,15 +70,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
-        params.in0_tile_r_dim,
-        params.in0_tile_c_dim,
-        params.in1_tile_r_dim,
-        params.in1_tile_c_dim,
-        params.PARTIAL_FACE_MATH,
-        params.UNPACK_TRANSPOSE_FACES,
-        params.CT_DIM,
-        params.RT_DIM);
+    const ckernel::TensorShape in0_tensor_shape = ckernel::tensor_shape_from_tile_dims(params.in0_tile_r_dim, params.in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = ckernel::tensor_shape_from_tile_dims(params.in1_tile_r_dim, params.in1_tile_c_dim);
+    _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(in0_tensor_shape, in1_tensor_shape, params.UNPACK_TRANSPOSE_FACES, params.CT_DIM, params.RT_DIM);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_wait_for_dest_available_<dest_sync>();
