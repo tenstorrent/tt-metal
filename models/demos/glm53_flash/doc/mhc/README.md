@@ -141,6 +141,108 @@ Error budget (`_logs/optmhc_probe6.log`, device == host emulation): with 2-way s
 parts dominates (`A` 2.4e-6, `x` 1.6e-6, the dropped lo*lo term ~1e-6), hence the 3-way split for the 1e-6 bar.
 The h matmul (`P @ x`) stays inexact in every mode (the hidden is bf16 for the sublayer).
 
+### Plan: the cheapest exact-enough residual update (host analysis while chip 1 is reserved, 2026-10-20)
+
+Error model on real layer-4 streams (dump rows + 1e-3 relative noise = an fp32 residual) and real Sinkhorn
+coefficients, torch emulation of the HiFi4 matmul (bf16-rounded operands, fp32 accumulate; the emulation matched
+the device bit-for-bit in probe 6), `_logs/optmhc_host_model.log`, rel rms vs the exact chain (attn / ffn wrap):
+
+| candidate | products | rel rms |
+|---|---|---|
+| S0 default: A 8-bit, x 8-bit | 1 | 1.55e-3 / 1.59e-3 |
+| S1: x 16-bit (hi/lo), A 8-bit (`in0 = [A|A]`, `in1 = [x_hi; x_lo]`) | 2 | 1.20e-3 / 1.26e-3 |
+| S2: A 16-bit, x 8-bit | 2 | 9.9e-4 / 9.8e-4 |
+| S3: both 16-bit, drop lo*lo | 3 | 2.8e-6 / 2.8e-6 |
+| S3b: both 16-bit, 4 products | 4 | 2.6e-6 / 2.5e-6 |
+| S4: A 24-bit, x 16-bit | 5 | 1.6e-6 / 1.6e-6 |
+| S5: both 24-bit (`exact=3` as measured) | 6 | 2.8e-9 / 2.7e-9 |
+
+The Sinkhorn coefficients are not bf16-exact (max relative deviation 3.8e-3 / 3.7e-3), so (a) "split only x" is
+S1 and stays at 1e-3: for <= 1e-5 BOTH operands need their low 8 bits as a separate bf16-exact tensor (S3). Each
+operand therefore costs at least: typecast to bf16 (hi), subtract (lo; one op if binary_ng takes fp32 - bf16,
+else typecast-widen + subtract), and one stacking op for the K-stacked `[x_hi; x_hi; x_lo]` (`ttnn.where` with a
+`[3,1,1,1]` condition broadcasting two `[1,1,128,C]` tensors, one compute op instead of a concat; for `A` the
+`[hi32, hi32, lo]` source stack feeds the existing mask extraction with a `[n,3,n,1,32]` mask, so the
+block-diagonal `[128, 384]` `in0` costs no extra op). Lean S3 op list per wrap (replacing the default's 1 matmul):
+
+| side | ops | expected device us (from the measured per-op times at B=32) |
+|---|---|---|
+| x: typecast -> bf16, subtract (mixed dtype) or widen + subtract, `where`-stack `[hi; hi; lo]` (6 MB fp32) | 3-4 | 13 + (11) + 24 + ~40 |
+| A: typecast, (widen), subtract, `where`-stack on the `[32,32]` comb tile; mask extraction unchanged | 3-4 tiny | ~8 |
+| matmul `128 x 384 x 4096` (in1 fp32 6 MB; or bf16 3 MB with one more typecast of x_lo) | 0 (+0) | 32 (vs 19) |
+| total | **+6 (if the mixed-dtype subtract and the batch-broadcast `where` exist) else +8** | **~+100 us per wrap** (212 -> ~310 at B=32, i.e. +0.2 ms per layer) |
+
+Measured so far: `exact=2` as committed (concat-based stacking) = +10 ops / +93 us (2.0e-6), `exact=3` = +16 /
++167 us (1.1e-7). The two `where`/mixed-dtype assumptions and the lean S3 numbers are to be verified when chip 1
+returns. Conclusion: with the existing ttnn primitives, <= 1e-5 costs >= +6 ops / ~+90-100 us per wrap, because
+the HiFi4 matmul rounds every fp32 operand to bf16 and no exact (SFPU) reduction over the stream dim exists
+(`fast_reduce_nc` rounds, `ttnn.sum(dim=1)` transposes with 8x padding). A <= +3-op exact residual update needs
+a dedicated fp32 kernel: one eltwise-style program computing `out[j, t, c] = sum_i comb[t,i,j] x[i,t,c] +
+post[t,j] y[t,c]` per output tile from 4 x-tiles, 1 y-tile and the kernel's `[32,32]` coefficient tiles with
+SFPU fp32 FMAs (the column-broadcast multiply binary_ng already implements), bandwidth-bound (~2.5 MB in, 2 MB
+out, ~10-15 us): it replaces the coefficient extraction (4 ops), the `A` build, the matmul and the `addcmul`, so
+the post-block becomes 2 ops (typecast y + the kernel) at exact fp32, ~70 us less than today's default; a
+`collapse` flag covers the last layer. Estimated 2-3 days of kernel work.
+
+## Fused exact fp32 post-block kernel: `ttnn.experimental.deepseek_prefill.mhc_post_mix` (2026-10-20)
+
+`ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/mhc_post_mix/` (next to the Sinkhorn op; built in this
+worktree: `./build_metal.sh --build-dir $WT/build_Release --cpm-source-cache .../wt_optkda/.cpmcache --release`
+with `tt_metal/third_party/{tracy,umd,tt-cluster-descriptors}` symlinked to the main tree and `build/lib ->
+build_Release/lib`; run with `PYTHONPATH=$WT/ttnn:$WT:$W TT_METAL_HOME=$WT TT_METAL_RUNTIME_ROOT=$WT`).
+
+    out[t, j*C + c] = sum_i comb[t, i*n + j] * x[t, i*C + c] + post[t, j] * y[t, c]      (collapse: mean over j)
+
+One program on the packed streams (any T multiple of 32; the work unit is one (token-tile r, column-tile c)
+position = the n stream tiles + the y tile in, n output tiles out, split over the full grid):
+- reader: per token-tile r, fetches the kernel's `comb` and `post` tiles and writes the n*n + n coefficient
+  COLUMN tiles (coefficient k in column 0 of every row, zeros elsewhere: 32 word copies per coefficient; the
+  set is zeroed once per core with `noc.async_write_zeros`); per position, the n x-tiles and the y tile.
+- compute: phase A per token-tile: `unary_bcast<COL>` of each column tile into a resident broadcast CB (the
+  32-bit column-broadcast datacopy unpacks straight into the fp32 dest: exact); phase B per position and
+  output stream j: `copy_tile` (fp32, unpack-to-dest) of the broadcast coefficient and the stream tile,
+  `mul_binary_tile` / `add_binary_tile` in the fp32 dest (SFPU, exact), the post * y term, one pack per
+  output tile. Dest slots: 0 acc, 1 coefficient/product, 2 operand, 3 collapse total (4 fp32 slots per acquire).
+  `collapse` sums the n stream results in dest and scales by 1/n before the single pack.
+- `unpack_to_dest_mode = UnpackToDestFp32` for the four fp32 input CBs in the program factory is what makes
+  both the copies and the broadcast datacopy exact (SrcA/SrcB are 19 bits): without it the op lands at
+  4e-4 (`_logs/optmhc_k_unit.log` first run vs `_logs/optmhc_probe7.log`).
+- rows are independent: pad rows of y / x only reach pad rows of the output (no `where` guard needed).
+
+Precision (`tests/test_mhc_post_mix.py`, 6 passed): random fp32 inputs 4.2e-8 rel rms vs float64 (T=32/256,
+both modes); real layer-4 streams (+1e-3 noise) with real Sinkhorn coefficients 5.2e-8 / 6.7e-8 vs float64 and
+3.0e-8 / 3.4e-8 vs the composite `TtMHCWrap.hc_post` chain (streams / collapse).
+
+Wiring: `GLM53_MHC_POST_KERNEL=1` (`TtMHCFast(post_kernel=True)`): `_post` becomes `typecast(y)` + the kernel
+for every T (prefill included: no stream-major transpose, no column slices), collapse through the same op.
+
+Measurements with the kernel (`GLM53_MHC_POST_KERNEL=1`, chip 1, worktree build, `GLM53_KDA_FUSED=0`; logs
+`_logs/optmhc_k_*.log`):
+
+| what | default fast path (matmul post-block) | fast path + kernel |
+|---|---|---|
+| post-block ops per wrap (decode) | 8 (+1 `where` at T<32) | 2 (typecast y + kernel) |
+| post-block device us per wrap, B=4 / B=32 | ~75 / ~67 (coef 11, A 7, matmul 19, addcmul 30, typecast 3, +where at T<32) | 50 / 51 (typecast 3 + kernel 47 / 48 on 120 cores) |
+| whole wrap ops / device us, B=4 | 22 / 228 | 15 / 192 |
+| whole wrap ops / device us, B=32 | 21 / 212 | 15 / 193 |
+| one wrap traced, T=32 (`test_mhc_perf.py`) | 0.216 ms | 0.199 ms |
+| one wrap traced, T=1024 (prefill shape) | 5.155 ms | 2.789 ms (no stream-major transposes, no addcmul chain) |
+| layer-4 step wall, B=4 (20 replays) | 7.85 ms | 7.78 ms |
+| layer-4 step wall, B=32 | 20.03 ms | 20.01 ms |
+| residual update vs the composite chain | ~1e-3 rel rms (bf16-rounded matmul operands) | 3e-8 (exact fp32) |
+
+Per-block tables: `layer4_B{4,32}_kernel/summary.md`. The kernel at 47-48 us is above the ~15 us bandwidth
+estimate: per position it issues 4 x (5 coefficient + 5 operand `copy_tile`, 5 SFPU multiplies, 4-5 adds) plus
+the 20 broadcast datacopies + packs of phase A per token-tile, i.e. ~100 tile ops per position on one core;
+obvious follow-ups are `dst_full_sync_en` (8 fp32 dest slots: keep the 4 stream tiles and y resident across the
+4 output streams, halving the copies), reading y as bf16 (drops the typecast op) and splitting phase A across
+cores with a multicast. The whole layer step at these shapes moved 288 -> 143 ops between the two Tracy runs
+because of the merged tree's other optimizations (router/experts), not this change.
+
+Tests with the kernel: `tests/test_mhc.py` 5 passed (hc_post vs composite exact, pad-row contract, decoder
+collapse), `tests/test_decoder_layer.py` 5 passed, `tests/test_decode_trace.py` 5 passed (unchanged PCCs).
+
+
 ## Tests
 
 | test | what |
@@ -148,6 +250,7 @@ The h matmul (`P @ x`) stays inexact in every mode (the hidden is bf16 for the s
 | `tests/test_mhc.py::test_mhc_fast_vs_wrap[attn,ffn]` | project / hc_pre / hc_post / forward / forward+fused norm / collapse vs `TtMHCWrap` and vs float64 at T = 1, 2, 32, 256, 1024 on real layer-4 streams and parameters |
 | `tests/test_mhc.py::test_mhc_fast_pad_rows` | the pad-row contract |
 | `tests/test_mhc.py::test_decoder_collapse` | `FunctionalDecoder.decode_forward(collapse=True)` vs the head's collapse of the streams (layer 4, B=2) |
+| `tests/test_mhc_post_mix.py` | the fused post-block kernel vs float64 and vs the composite chain (random + real, both modes, T=32/256) |
 | `tests/test_mhc.py::test_mhc_exact_residual` | residual update / collapse of exact = 0, 2, 3 vs the composite on non-bf16-exact fp32 streams (bars 5e-3 / 1e-5 / 1e-6) |
 | `tests/test_mhc_perf.py` | one wrap, traced, T=32 and T=1024, both implementations |
 | `tests/test_perf_layer.py` (`GLM53_PERF_B`, `GLM53_PERF_EAGER=1`) + `tests/perf_layer_report.py` | layer-4 traced decode step, wall and per-module Tracy attribution |

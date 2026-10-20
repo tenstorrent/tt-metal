@@ -44,6 +44,10 @@ MHC_IMPL = os.environ.get("GLM53_MHC_IMPL", "fast")
 # exact: both operands split into 3 bf16 parts, the 6 significant products in one stacked-K matmul (3e-9);
 # 2 = the cheaper 2-way split, 3 products (3e-6). See TtMHCFast._exact_mm.
 MHC_EXACT = {"0": 0, "1": 3, "2": 2, "3": 3}[os.environ.get("GLM53_MHC_EXACT", "0")]
+# 1: the fused exact fp32 post-block kernel ttnn.experimental.deepseek_prefill.mhc_post_mix (one program
+# replacing the coefficient extraction, the block-diagonal matmul and the addcmul; exact like the composite
+# chain; needs the worktree build that carries the op)
+MHC_POST_KERNEL = os.environ.get("GLM53_MHC_POST_KERNEL", "0") == "1"
 
 
 @dataclass(frozen=True)
@@ -183,12 +187,16 @@ class TtMHCFast(LightweightModule):
         scale: torch.Tensor,
         dtype=ttnn.float32,
         exact: int | None = None,
+        post_kernel: bool | None = None,
     ):
         assert dtype == ttnn.float32, f"TtMHCFast is fp32-only (fused op requires FLOAT32), got {dtype}"
         self.device = device
         self.cfg = cfg
         self.exact = MHC_EXACT if exact is None else int(exact)  # residual update: 0 | 2 | 3 bf16 parts
         assert self.exact in (0, 2, 3), self.exact
+        self.post_kernel = MHC_POST_KERNEL if post_kernel is None else bool(post_kernel)
+        if self.post_kernel:
+            assert hasattr(ttnn.experimental.deepseek_prefill, "mhc_post_mix"), "this ttnn build has no mhc_post_mix"
         self.n = int(cfg.n)
         self.C = int(cfg.dim)
         self.nC = self.n * self.C
@@ -496,6 +504,12 @@ class TtMHCFast(LightweightModule):
         Tp = x32.shape[-2]
         n = self.n
         y32 = _view_rows(y, Tp)
+        if self.post_kernel:
+            # one program on the packed streams (any Tp): exact fp32, row-local (no pad-row guard needed)
+            out = ttnn.experimental.deepseek_prefill.mhc_post_mix(
+                x32, y32, _view_rows(post, Tp), _view_rows(comb, Tp), n, collapse
+            )
+            return _view_rows(out, T)
         if Tp == TILE:
             if T != Tp:
                 y32 = ttnn.where(self._rowmask_for(T), y32, 0.0)
