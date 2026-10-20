@@ -46,6 +46,7 @@ Residual convention: HF `[B, S, 4, 4096]` <-> packed `[1, 1, B*S, 16384]` (`host
 | `test_batch8.py` | 8 user slots (lengths 1..200, permuted page table), layers 3 and 4, 3 batched decode steps | prefill >= 0.9968 (1-token user), decode worst per user 0.9994 |
 | `test_determinism.py` | layers 0, 3: repeated prefill and traced-decode replay with `throw_exception_on_fallback`; sparse prefill + sparse decode repeated | bit-identical outputs |
 | watcher | `TT_METAL_WATCHER=10` on the layer-3 dump test (`~/ashai/glm53/_logs/watcher_layer3`) | PASSED, 10 dumps, no watcher exceptions |
+| `test_all_layers.py` | every layer 0..44 on its own HF input (`L45_S128` dump: 128 random tokens + 2 decode steps through the full HF stack, produced layer by layer with `hf_layer_reference.py --stream`), prefill S=128 + 2 decode vs the live HF layer, router top-8 sets with near-tie margins, attention / FFN sub-block PCCs | 45/45 pass: prefill 0.99886 (layer 23) .. 1.0, decode >= 0.99786 (layer 27, one 4e-4-margin expert flip), per-row prefill min 0.9755 (layer 23 row 125); router sets 109-126/128 identical, every flipped prefill row below the median 8th-9th margin except 3 rows of layer 43; sub-blocks: attention >= 0.99915, FFN >= 0.99589 (prefill); HF live == dump (1.000000) for all 45 layers; 4 chips, ~2 min/layer |
 | `test_perf_layer.py` | warmed prefill S=1024 (wall), traced decode B=1 (one replay, tt-perf-report `Device Time`) | prefill: layer 3 314 ms, layer 4 298 ms (device 293 ms, 1002 ops); decode: layer 3 10.87 ms/step device (435 ops, wall 11.31), layer 4 10.76 ms/step device (471 ops, wall 11.2) |
 
 Context contract: `doc/context_contract.json`. Full log: `doc/functional_decoder/work_log.md`.
@@ -60,6 +61,10 @@ source ~/ashai/glm53/env.sh
 TT_VISIBLE_DEVICES=0 pytest models/demos/glm53_flash/tests -s           # all device tests (one chip)
 python models/demos/glm53_flash/reference/hf_layer_reference.py --layers 0,1,2,3,4 --seq-len 256 --num-decode 4 \
     --out bringup/references/glm53_flash/T256                            # regenerate the HF dumps (CPU)
+python models/demos/glm53_flash/reference/hf_layer_reference.py --layers 0-44 --seq-len 128 --random-ids 45 \
+    --num-decode 2 --stream --out bringup/references/glm53_flash/L45_S128   # all-layer dump (layer by layer, ~25 min)
+TT_VISIBLE_DEVICES=0 GLM53_LAYERS=0-11 pytest models/demos/glm53_flash/tests/test_all_layers.py -s --timeout 1800
+                                                                         # every layer vs HF (shard GLM53_LAYERS over chips)
 ```
 
 ## Known limits (single chip, v1)
