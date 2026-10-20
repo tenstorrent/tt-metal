@@ -26,7 +26,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
-from models.demos.glm53_flash.tt.dsa import TtDSA, TtLatentCache
+from models.demos.glm53_flash.tt.dsa import TtDSA, TtLatentCache, sparse_decode_enabled
 from models.demos.glm53_flash.tt.kda import TtKDA
 from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
 from models.demos.glm53_flash.tt.mhc import build_mhc
@@ -232,6 +232,7 @@ class TtDecoderLayer(LightweightModule):
                 positions.ring_slots,
                 positions.host,
                 dense_positions=getattr(positions, "dense_positions", None),
+                sparse_meta=getattr(positions, "sparse", None) if sparse_decode_enabled() else None,
             )
 
         streams = self._hc_call(self.attn_hc, streams, attention, self.input_norm_w)

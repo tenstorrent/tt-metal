@@ -240,9 +240,9 @@ score 0 against positive real scores; prefill fills the whole prompt before sele
 3. Next decode targets from the perf report: mHC composite (1.9-2.2 ms/layer: single-core column slices with their
    tilize/untilize pairs, two single-core 32x16384x32 matmuls), KDA decode recurrence at 32 users/row (3.2 ms/layer),
    expert bfp4 gate/up under the eval gate, DSA small grids.
-4. Sparse decode on multi-row meshes through the metadata-tensor variants (`chunk_start_idx_tensor` /
-   `valid_end_tensor` of `indexer_score_dsa`); user-partitioned latent/index cache (design 5.3) and a paged/tiled kv
-   read for `sparse_sdpa` (the 1 M untilize cost); hybrid vs `TTMoEDecode` A/B.
+4. Sparse decode at full ISL: the traced multi-user path (per-user metadata tensors, pool gather into a compact
+   cache, batched flash-MLA decode; no whole-prefix copy) and the user-partitioned cache design are in
+   `sparse_1m.md` (track OPT_SPARSE_1M, branch `arg/glm53_sparse1m`); hybrid vs `TTMoEDecode` A/B.
 
 ## Optimization round 1 (2026-10-20): data-movement ops out, projection configs in
 

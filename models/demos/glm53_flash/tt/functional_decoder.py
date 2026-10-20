@@ -73,7 +73,12 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.decoder_layer import LayerState, TtDecoderLayer
-from models.demos.glm53_flash.tt.dsa import TtLatentCache, decode_position_tensors
+from models.demos.glm53_flash.tt.dsa import (
+    SparseDecodeMeta,
+    TtLatentCache,
+    decode_position_tensors,
+    sparse_decode_enabled,
+)
 from models.demos.glm53_flash.tt.mesh import GLMMesh
 
 TILE = 32
@@ -149,6 +154,10 @@ class DecodePositions:
     # 2050 gets the sparse row instead, so its dense row is discarded: bounding the op there keeps its cost
     # at <= 2051 keys instead of the whole prefix (1 GiB per layer at 1 M positions); identity otherwise.
     dense_positions: ttnn.Tensor | None = None
+    # the traced multi-user sparse decode's per-user metadata (``SparseDecodeMeta``): with it a DSA layer
+    # attends every user, dense or sparse, inside one trace-safe graph (default); ``GLM53_SPARSE_DECODE=eager``
+    # keeps the dense flash-MLA + per-user eager sparse rows instead (A/B reference)
+    sparse: SparseDecodeMeta | None = None
 
 
 class FunctionalDecoder(LightweightModule):
@@ -159,7 +168,10 @@ class FunctionalDecoder(LightweightModule):
         max_batch: int,
         max_seq_len: int,
         block_size: int = TILE,
+        partition_users: bool = False,
     ):
+        """``partition_users``: the user-partitioned DSA cache on a multi-column mesh (column c of a row owns users
+        ``[c*B/cols, (c+1)*B/cols)``; ``max_batch`` % cols == 0; decode through the traced sparse path only)."""
         self.layer: TtDecoderLayer | None = layer
         self.cfg = layer.cfg
         self.device = layer.device
@@ -171,9 +183,16 @@ class FunctionalDecoder(LightweightModule):
         self.total_users = max_batch * self.mesh.rows
         self.max_seq_len = max_seq_len
         self.cache = None
+        self.partition = bool(partition_users) and self.mesh.cols > 1
         if not layer.is_kda:
             self.cache = TtLatentCache(
-                self.device, self.cfg, max_batch=max_batch, max_seq_len=max_seq_len, block_size=block_size
+                self.device,
+                self.cfg,
+                max_batch=max_batch,
+                max_seq_len=max_seq_len,
+                block_size=block_size,
+                mesh=self.mesh,
+                partition_users=partition_users,
             )
         # persistent batched KDA state (max_batch slots): prefill writes slot `user`, decode reads
         # and updates all slots in place, so captured decode traces always see the live state.
@@ -304,14 +323,19 @@ class FunctionalDecoder(LightweightModule):
         if len(host_positions) != self.total_users:
             raise ValueError(f"{len(host_positions)} positions for {self.total_users} user slots")
         pos, pool_ids, ring_slots = decode_position_tensors(
-            self.device, host_positions, self.cfg.index_kpool, mesh=self.mesh
+            self.device, host_positions, self.cfg.index_kpool, mesh=self.mesh, partition=self.partition
         )
         dense = None
-        if not self.layer.is_kda:
+        if not self.layer.is_kda and not self.partition:
             dense = decode_position_tensors(
                 self.device, self._dense_bound(host_positions), self.cfg.index_kpool, mesh=self.mesh
             )[0]
-        return DecodePositions(pos, pool_ids, ring_slots, list(host_positions), dense)
+        # the sparse-decode metadata is built for every layer kind: one DecodePositions serves all layers of
+        # a model (mesh_model builds it from layer 0, a KDA layer) and the DSA layers need it
+        sparse = SparseDecodeMeta.from_positions(
+            self.device, host_positions, self.cfg, mesh=self.mesh, partition=self.partition
+        )
+        return DecodePositions(pos, pool_ids, ring_slots, list(host_positions), dense, sparse)
 
     def _dense_bound(self, host_positions: list[int]) -> list[int]:
         return [min(p, self.layer.attn.dense_exact_max_pos) for p in host_positions]
@@ -321,7 +345,9 @@ class FunctionalDecoder(LightweightModule):
         if len(host_positions) != self.total_users:
             raise ValueError(f"{len(host_positions)} positions for {self.total_users} user slots")
         P = self.cfg.index_kpool
-        mapper = self.mesh.shard_rows(0) if self.mesh.rows > 1 else None
+        from models.demos.glm53_flash.tt.dsa import _meta_mapper
+
+        mapper = _meta_mapper(self.mesh, self.partition)
         updates = [
             (dp.positions, host_positions),
             (dp.pool_ids, [p // P for p in host_positions]),
@@ -329,6 +355,8 @@ class FunctionalDecoder(LightweightModule):
         ]
         if dp.dense_positions is not None:
             updates.append((dp.dense_positions, self._dense_bound(host_positions)))
+        if dp.sparse is not None:
+            dp.sparse.update(host_positions, self.cfg, mesh=self.mesh, partition=self.partition)
         for t, vals in updates:
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(
@@ -388,8 +416,14 @@ class FunctionalDecoder(LightweightModule):
         layer = self._require_weights()
         if any(p >= self.max_seq_len for p in positions.host):
             raise ValueError(f"positions {positions.host} exceed max_seq_len {self.max_seq_len}")
-        if self.mesh.rows > 1 and not self.is_kda and any(p > layer.attn.dense_exact_max_pos for p in positions.host):
-            raise NotImplementedError("sparse DSA decode (positions > 2050) on a multi-row mesh is not wired yet")
+        traced_sparse = positions.sparse is not None and sparse_decode_enabled()
+        if (
+            self.mesh.rows > 1
+            and not self.is_kda
+            and not traced_sparse
+            and any(p > layer.attn.dense_exact_max_pos for p in positions.host)
+        ):
+            raise NotImplementedError("eager sparse DSA decode (positions > 2050) on a multi-row mesh is not wired")
         out, new_state = layer.decode_forward(
             streams, self._state_for_decode(B), positions=positions, collapse=collapse
         )
@@ -415,7 +449,13 @@ class FunctionalDecoder(LightweightModule):
         exceeds 2051 is refused unless ``allow_sparse_range`` (a replay at a position > 2050 would
         attend densely instead of taking the eager per-user sparse row, which is not HF semantics)."""
         layer = self._require_weights()
-        if not self.is_kda and self.max_seq_len > layer.attn.dense_exact_max_pos + 1 and not allow_sparse_range:
+        traced_sparse = positions.sparse is not None and sparse_decode_enabled()
+        if (
+            not self.is_kda
+            and not traced_sparse
+            and self.max_seq_len > layer.attn.dense_exact_max_pos + 1
+            and not allow_sparse_range
+        ):
             raise ValueError(
                 f"traced decode is HF-exact only through position {layer.attn.dense_exact_max_pos}; this decoder "
                 f"allows max_seq_len={self.max_seq_len}. Use eager decode_forward beyond, or pass allow_sparse_range=True"

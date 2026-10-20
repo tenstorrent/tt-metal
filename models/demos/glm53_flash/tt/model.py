@@ -38,7 +38,7 @@ import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.decoder_layer import TtDecoderLayer
-from models.demos.glm53_flash.tt.dsa import decode_position_tensors
+from models.demos.glm53_flash.tt.dsa import SparseDecodeMeta, decode_position_tensors
 from models.demos.glm53_flash.tt.embedding import TtEmbedding, padded_rows
 from models.demos.glm53_flash.tt.functional_decoder import DecodePositions, FunctionalDecoder
 from models.demos.glm53_flash.tt.mesh import GLMMesh
@@ -211,7 +211,8 @@ class GLM53Model:
         if len(positions) != self.max_batch:
             raise ValueError(f"{len(positions)} positions for {self.max_batch} user slots")
         pos, pool_ids, ring_slots = decode_position_tensors(self.device, positions, self.cfg.index_kpool)
-        return DecodePositions(pos, pool_ids, ring_slots, list(positions))
+        sparse = SparseDecodeMeta.from_positions(self.device, positions, self.cfg)
+        return DecodePositions(pos, pool_ids, ring_slots, list(positions), sparse=sparse)
 
     def decode(self, token_ids: list[int], positions: list[int], *, on_layer=None) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """One token per user slot at ``positions`` -> (logits ``[1, 1, B, vocab]`` bf16, greedy ids
