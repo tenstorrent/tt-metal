@@ -568,6 +568,10 @@ inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic
     // Added for compatability with V2, no local cmd buffers in V1
 }
 
+inline __attribute__((always_inline)) void reset_cmd_buf_trids() {
+    // Added for compatability with V2, no local cmd buffers in V1
+}
+
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 #pragma GCC unroll 0
     for (int noc = 0; noc < NUM_NOCS; noc++) {
