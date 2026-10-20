@@ -306,6 +306,7 @@ class ttMLA:
         tp_shard_kv: Optional[bool] = None,
         *,
         unrolled_v: Optional[bool] = None,
+        expanded_k: Optional[bool] = None,
         tp_latent_prefetch: bool = True,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
@@ -320,6 +321,7 @@ class ttMLA:
         # Optional segmented-trace controller. Sparse MLA uses it to split capture around the
         # top-k/KV-gather sub-device-manager load and clear, which cannot occur inside one trace.
         self._trace_controller = None
+        self._expanded_k = False
         # With a TP-sharded cache, prefetch the next layer's TP latent during this layer's SDPA (unrolled-V only).
         self._tp_latent_prefetch_requested = tp_latent_prefetch
         self.layer_idx = layer_idx
@@ -476,12 +478,15 @@ class ttMLA:
         # dense-run V3.2 key on this, not _has_indexer (see _get_sdpa_program_config).
         self._is_dsa_family = TtIndexer.matches_config(config)
 
-        # Dense chunked attention, from mla_config.MLA_ATTENTION_CONFIG unless the unrolled_v argument says otherwise:
-        # V unrolled ahead of a ring_joint SDPA, or else ring_mla.
+        # Dense chunked attention, from mla_config.MLA_ATTENTION_CONFIG unless the unrolled_v / expanded_k arguments
+        # say otherwise: V unrolled ahead of a ring_joint SDPA, optionally with K expanded inside it, or else ring_mla.
         attention = self._select_cfg(MLA_ATTENTION_CONFIG) or {}
         dense_chunked = self.is_chunked and not self._has_indexer
         assert not unrolled_v or dense_chunked, "unrolled_v is the dense chunked-prefill attention"
         self.unrolled_v = dense_chunked and (attention.get("unrolled_v", False) if unrolled_v is None else unrolled_v)
+        assert not expanded_k or self.unrolled_v, "expanded_k needs the unrolled-V attention (unrolled_v)"
+        if self.unrolled_v and (attention.get("expanded_k", False) if expanded_k is None else expanded_k):
+            self._expanded_k = self._expanded_k_supported(required=expanded_k is True)
 
         self.ccl_num_links = 2 if self._is_blackhole else 1  # Blackhole trains 2 fabric routing planes, others 1
 
@@ -1368,6 +1373,41 @@ class ttMLA:
     # 16).
     _UNROLLED_V_WIDE_LOCAL_HEADS = 24
 
+    def _expanded_k_supported(self, required: bool) -> bool:
+        """Expanded K needs a no-PE width that gives each head pair core a power-of-two count of whole tile rows (the
+        op's rule), no per-position query scale or balanced attention, and a measured chunk schedule for this shape
+        that gives head pairs (2 Q chunks per head): the absorbed model's chunks are sized for a 576-wide K and can
+        overflow L1 beside the expanded K^T CB. Anything else keeps absorbed K when expanded K is the model's default
+        (MLA_ATTENTION_CONFIG), and raises ValueError when it was asked for (expanded_k=True)."""
+        heads_local = self.num_heads // self.tp_factor
+        key = self._expanded_k_schedule_key(heads_local, self.active_seq_len // self.sp_factor)
+        own_rows = self.qk_nope_head_dim // (2 * ttnn.TILE_SIZE)  # no-PE tile rows each core of a head pair expands
+        reasons = [
+            reason
+            for reason, bad in (
+                (
+                    f"qk_nope_head_dim {self.qk_nope_head_dim} is not a power-of-two count of whole tile rows per head "
+                    "pair core",
+                    self.qk_nope_head_dim % (2 * ttnn.TILE_SIZE) != 0 or own_rows & (own_rows - 1) != 0,
+                ),
+                ("llama4 query scale", self._llama4_beta is not None),
+                ("balanced attention", self.is_balanced),
+                (f"no measured expanded-K chunk schedule for {key}", key not in self._EXPANDED_K_SDPA_CHUNKS),
+                (
+                    f"expanded-K schedule {self._EXPANDED_K_SDPA_CHUNKS.get(key)} does not give head pairs",
+                    key in self._EXPANDED_K_SDPA_CHUNKS and key[3] != 2 * self._EXPANDED_K_SDPA_CHUNKS[key][0],
+                ),
+            )
+            if bad
+        ]
+        if reasons:
+            message = f"expanded K does not apply to MLA layer {self.layer_idx}: {'; '.join(reasons)}"
+            if required:
+                raise ValueError(message)
+            logger.debug(f"{message}; keeping absorbed K")
+            return False
+        return True
+
     def _init_unrolled_v(self):
         """W_UV as one [kv_lora_rank, H_local * v_head_dim] head-major weight, and the V expansion's static configs."""
         w_bf16 = ttnn.typecast(self.wkv_b2_weight, ttnn.bfloat16)  # [1, H_local, kv_lora_rank, v_head_dim]
@@ -1411,11 +1451,27 @@ class ttMLA:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-    # Measured (Q chunk, K chunk, K splits) at the production shapes, keyed (kvpe width, local heads, local rows), all
-    # at 640 rows per chip (the 5k chunk on 8 SP devices):
+    # Measured (Q chunk, K chunk, K splits) at the production shapes, keyed (kvpe width, local heads, local rows); the
+    # absorbed entries are all at 640 rows per chip (the 5k chunk on 8 SP devices):
     #   Kimi-K3 (576, 24): q160 = 96 units on 96 cores;
     #   Kimi-K2.7 (576, 16): q320 k256 split three ways = 96 cores, 10% faster SDPA than q128 (80 cores).
     # Shapes not listed fall back to the model below, which is calibrated on the 576-wide K.
+    # Expanded K runs on head pairs only (the op refuses anything else): each entry gives each head 2 Q chunks, one per
+    # core, and the pair splits every K chunk's expansion. K3 at q320 runs its pairs in 2 K-split bands; k512 does not
+    # fit L1 beside the expanded K^T CB. 2k chunks (256 rows per chip): q128 gives the 2 Q chunks, fastest of 1, 2 and
+    # 4 K-split bands; k512 overflows L1.
+    # Keyed (kvpe width, Q / expanded-K head width, local heads, local rows): a schedule fits L1 only for the expansion
+    # geometry it was measured at, so another no-PE width with the same latent does not reuse it.
+    _EXPANDED_K_SDPA_CHUNKS = {
+        (576, 192, 24, 640): (320, 256, 2),
+        (576, 192, 16, 640): (320, 256, 3),
+        (576, 192, 24, 256): (128, 256, 2),
+        (576, 192, 16, 256): (128, 256, 3),
+    }
+
+    def _expanded_k_schedule_key(self, num_local_heads: int, seq_len_local: int) -> tuple[int, int, int, int]:
+        return (self.kv_lora_rank + self.qk_rope_head_dim, self.qk_head_dim, num_local_heads, seq_len_local)
+
     _UNROLLED_V_SDPA_CHUNKS = {
         (576, 24, 640): (160, 512, 1),
         (576, 16, 640): (320, 256, 3),
@@ -1444,9 +1500,15 @@ class ttMLA:
         critical-path rows per core (waves x q_chunk / splits) over the chunk's efficiency. A (head, Q chunk) unit takes
         one core; when the units leave whole grid rows idle, ring_joint's K split gives every band of rows a slice of
         the K/V sequence."""
-        measured = self._UNROLLED_V_SDPA_CHUNKS.get(
-            (self.kv_lora_rank + self.qk_rope_head_dim, num_local_heads, seq_len_local)
-        )
+        key = (self.kv_lora_rank + self.qk_rope_head_dim, num_local_heads, seq_len_local)
+        if self._expanded_k:
+            # Validated at construction (_expanded_k_supported) for the layer's active chunk.
+            expanded_key = self._expanded_k_schedule_key(num_local_heads, seq_len_local)
+            assert (
+                expanded_key in self._EXPANDED_K_SDPA_CHUNKS
+            ), f"expanded K was enabled for {self.active_seq_len // self.sp_factor} local rows, got {expanded_key}"
+            return self._EXPANDED_K_SDPA_CHUNKS[expanded_key]
+        measured = self._UNROLLED_V_SDPA_CHUNKS.get(key)
         if measured is not None:
             return measured
         grid_x, grid_y = self.ring_sdpa_compute_grid
@@ -1590,6 +1652,7 @@ class ttMLA:
                 scale=self.scale,
                 is_balanced=self.is_balanced,
                 **meta_slot_kwargs,
+                **({"k_expand_weight": self.wkv_b1_weight} if self._expanded_k else {}),
                 **kw,
             )
 
@@ -1765,11 +1828,13 @@ class ttMLA:
         )
         ttnn.deallocate(tt_q)
 
-        tt_q_nope = ttnn.linear(
-            tt_q_nope,
-            self.wkv_b1_weight,
-            **self._get_mm_kwargs("wkv_b1", seq_len_local),
-        )
+        if not self._expanded_k:
+            # Absorbed Q: q_nope @ W_UK (512 wide). Expanded K keeps q_nope (128) and expands K in the SDPA instead.
+            tt_q_nope = ttnn.linear(
+                tt_q_nope,
+                self.wkv_b1_weight,
+                **self._get_mm_kwargs("wkv_b1", seq_len_local),
+            )
 
         if self._use_indexed_rope:
             # The indexed RoPE writer copies the absorbed channels into the same output.

@@ -6696,7 +6696,8 @@ INDEXED_KV_CHUNKED_PERF_MODEL_CONFIGS = dict(UNROLLED_V_CHUNKED_MODEL_CONFIGS)
 
 
 def unrolled_v_production_chunks(model_name):
-    """(q_chunk, k_chunk, k_splits) the model runs at this per-chip shape, read from ttMLA so the two cannot drift."""
+    """(q_chunk, k_chunk, k_splits) of the absorbed unrolled-V path at this per-chip shape, read from ttMLA so the two
+    cannot drift. Kimi runs expanded K by default (ttMLA._EXPANDED_K_SDPA_CHUNKS); this op test covers absorbed K."""
     model = UNROLLED_V_CHUNKED_MODEL_CONFIGS[model_name]
     return ttMLA._UNROLLED_V_SDPA_CHUNKS[(model.d_k, model.nhq, CHUNKED_PREFILL_PER_DEVICE_CHUNK)]
 
