@@ -13,6 +13,7 @@ import os
 from dataclasses import dataclass, replace
 
 import pytest
+from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     DestAccumulation,
@@ -133,6 +134,12 @@ def _cfgs():
     dims = os.environ.get("CI_RED_DIM", "")  # e.g. "Scalar": only those reduce dimensions
     if dims:
         out = [c for c in out if c[4].name in dims.split(",")]
+    seen, uniq = set(), []
+    for c in out:  # the perf report rejects rows whose recorded parameters repeat (dest_acc promotion)
+        k = (c[1], c[2], effective_dest_acc(c[1], c[2], c[3]), c[4:7], repr(c[7]))
+        if k not in seen:
+            seen.add(k); uniq.append(c)
+    out = uniq
     part = os.environ.get("CI_RED_PART", "")  # "i/n": every n-th configuration from i
     if part:
         i, n = map(int, part.split("/"))
