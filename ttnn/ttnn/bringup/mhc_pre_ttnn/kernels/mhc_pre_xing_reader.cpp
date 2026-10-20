@@ -6,6 +6,7 @@
 // then per y column c of the segment the n stream tiles X_i[r, c] -> cb_x (one push of n tiles per column).
 // pack_stats: per token tile-row r, the partial mix tile r -> cb_row, then all n*Ct stream tiles of row r in order,
 // pushed in chunks of `chunk` tiles.
+// MHC_XING_GIVEN_PRE (collapse_pre given): per segment, after the row tile, the collapse_pre row tile r -> cb_gpre.
 
 #include <cstdint>
 
@@ -29,6 +30,12 @@ void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(1);
     const uint32_t start = get_arg_val<uint32_t>(2);
     const uint32_t count = get_arg_val<uint32_t>(3);
+#ifdef MHC_XING_GIVEN_PRE
+    constexpr uint32_t gpre_ct = x_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_gpre = get_compile_time_arg_val(gpre_ct);
+    constexpr auto gpre_args = TensorAccessorArgs<gpre_ct + 1>();
+    const auto gpre_acc = TensorAccessor(gpre_args, get_arg_val<uint32_t>(4), row_page);
+#endif
 
     const auto row_acc = TensorAccessor(row_args, row_addr, row_page);
     const auto x_acc = TensorAccessor(x_args, x_addr, x_page);
@@ -60,6 +67,12 @@ void kernel_main() {
         noc_async_read_page(seg.row, row_acc, get_write_ptr(cb_row));
         noc_async_read_barrier();
         cb_push_back(cb_row, 1);
+#ifdef MHC_XING_GIVEN_PRE
+        cb_reserve_back(cb_gpre, 1);
+        noc_async_read_page(seg.row, gpre_acc, get_write_ptr(cb_gpre));
+        noc_async_read_barrier();
+        cb_push_back(cb_gpre, 1);
+#endif
         if constexpr (has_streams) {
             const uint32_t row_base = seg.row * n * ct;
             for (uint32_t c = seg.col0; c < seg.col0 + seg.cols; ++c) {

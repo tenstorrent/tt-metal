@@ -13,13 +13,14 @@
 namespace ttnn::operations::bringup::mhc_pre_ttnn {
 
 void MhcPreXingDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*attrs*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     TT_FATAL(tensor_args.input.storage_type() == ttnn::StorageType::DEVICE, "mhc_pre_xing: input must be on a device");
     if (tensor_args.streams.has_value()) {
         TT_FATAL(
             tensor_args.streams->storage_type() == ttnn::StorageType::DEVICE,
             "mhc_pre_xing: streams must be on a device");
     }
+    TT_FATAL(attrs.given_pre == tensor_args.collapse_pre.has_value(), "mhc_pre_xing: given_pre without collapse_pre");
 }
 
 void MhcPreXingDeviceOperation::validate_on_program_cache_hit(
@@ -67,6 +68,20 @@ ttsl::hash::hash_t MhcPreXingDeviceOperation::compute_program_hash(
     // The scalars (scale, base, eps, clamp, iterations) are runtime args patched on every call.
     const auto& cc = attrs.compute_config;
     const bool has_streams = tensor_args.streams.has_value();
+    if (attrs.given_pre) {  // a separate program (DM define + the pre tensor); off: the hashes below, unchanged
+        return tt::tt_metal::operation::hash_operation<MhcPreXingDeviceOperation>(
+            attrs.n,
+            attrs.compute_coef,
+            attrs.pack_stats,
+            has_streams,
+            static_cast<uint32_t>(cc.math_fidelity),
+            cc.math_approx_mode,
+            tensor_args.input.tensor_spec(),
+            has_streams ? tensor_args.streams->tensor_spec() : tensor_args.input.tensor_spec(),
+            attrs.deepseek,
+            attrs.given_pre,
+            tensor_args.collapse_pre->tensor_spec());
+    }
     if (attrs.deepseek) {  // a separate program (compute define); the off hash is the one it always was
         return tt::tt_metal::operation::hash_operation<MhcPreXingDeviceOperation>(
             attrs.n,
@@ -97,9 +112,10 @@ namespace ttnn::prim::bringup {
 std::vector<ttnn::Tensor> mhc_pre_xing(
     const ttnn::Tensor& input,
     const std::optional<ttnn::Tensor>& streams,
-    const ttnn::operations::bringup::mhc_pre_ttnn::MhcPreXingParams& params) {
+    const ttnn::operations::bringup::mhc_pre_ttnn::MhcPreXingParams& params,
+    const std::optional<ttnn::Tensor>& collapse_pre) {
     using OperationType = ttnn::operations::bringup::mhc_pre_ttnn::MhcPreXingDeviceOperation;
-    auto args = OperationType::tensor_args_t{.input = input, .streams = streams};
+    auto args = OperationType::tensor_args_t{.input = input, .streams = streams, .collapse_pre = collapse_pre};
     return ttnn::device_operation::launch<OperationType>(params, args);
 }
 

@@ -11,6 +11,8 @@
 // pack_stats (per token tile-row r): the compute's lane-wise sum-of-squares tile (cb_acc, [token row, 32 column
 //   partials]) -> coefficient-major (cb_soa, lane = token row); the compute's column total (cb_soa_out slot 0) ->
 //   column n (n + 2) of the partial mix tile (cb_row) -> output page r.
+// MHC_XING_GIVEN_PRE (collapse_pre given): the pre-block tile is built from the collapse_pre row tile (cb_gpre, columns
+//   0..n-1) instead of the hc just computed; the hc is still written.
 // All moves are fp32 word copies (bit-exact).
 
 #include <cstdint>
@@ -160,9 +162,17 @@ void kernel_main() {
             pre_src = stage;
         }
         if constexpr (has_streams) {
+#ifdef MHC_XING_GIVEN_PRE
+            constexpr uint32_t cb_gpre = get_compile_time_arg_val(y_args.next_compile_time_args_offset());
+            cb_wait_front(cb_gpre, 1);
+            pre_src = reinterpret_cast<ptr_t>(get_read_ptr(cb_gpre));
+#endif
             cb_reserve_back(cb_pb, 1);
             build_pre_blocks<n>(pre_src, reinterpret_cast<ptr_t>(get_write_ptr(cb_pb)));
             cb_push_back(cb_pb, 1);
+#ifdef MHC_XING_GIVEN_PRE
+            cb_pop_front(cb_gpre, 1);
+#endif
             if constexpr (!compute_coef) {
                 cb_pop_front(cb_row, 1);
             }

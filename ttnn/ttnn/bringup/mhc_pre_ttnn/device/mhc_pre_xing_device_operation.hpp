@@ -34,12 +34,14 @@ struct MhcPreXingParams {
     double clamp_min = -30.0;
     double clamp_max = 30.0;
     bool deepseek = false;  // DeepSeek-V4 coefficient math (compute define MHC_XING_DEEPSEEK; off: Xing's program)
+    bool given_pre = false;  // y collapses with tensor_args.collapse_pre (DM define MHC_XING_GIVEN_PRE; off: unchanged)
     tt::tt_metal::ComputeConfigDescriptor compute_config;
 };
 
 struct MhcPreXingInputs {
     Tensor input;                   // (..., T, 32) mix row, or (..., T, n(n+2)) hc
     std::optional<Tensor> streams;  // (..., T, n*C) fp32
+    std::optional<Tensor> collapse_pre;  // (..., T, n..32) fp32: the pre y collapses with (given_pre)
 };
 
 tt::tt_metal::ProgramDescriptor create_xing_program_descriptor(
@@ -81,5 +83,6 @@ namespace ttnn::prim::bringup {
 std::vector<ttnn::Tensor> mhc_pre_xing(
     const ttnn::Tensor& input,
     const std::optional<ttnn::Tensor>& streams,
-    const ttnn::operations::bringup::mhc_pre_ttnn::MhcPreXingParams& params);
+    const ttnn::operations::bringup::mhc_pre_ttnn::MhcPreXingParams& params,
+    const std::optional<ttnn::Tensor>& collapse_pre = std::nullopt);
 }  // namespace ttnn::prim::bringup

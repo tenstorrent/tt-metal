@@ -52,3 +52,36 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
    not build). Default behaviour unchanged.
    - Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
    - Files: `mhc_post_ttnn.cpp`, `device/mhc_post_ttnn_program_factory.cpp`
+
+7. `mhc_post(..., stats_weight=W)`: the next hc step's partial row from the same pass (deepseek_v41_flash_d_p P.14,
+   owner's fused-mHC comparison).
+   - What: a keyword option `stats_weight` (default None: the op, its program and its one-tensor return are unchanged).
+     Given W (..., n C, 32) fp32 (the chip's slice of hc_fn^T, leading dims 1), a separate program (`device/
+     mhc_post_stats_*`, `kernels/mhc_post_stats_*`) returns (X', stats): X' bit-identical to the op without it (per
+     data vector every input loaded once, each output acc = F post_k then fused multiply-adds X_j w_jk in j order:
+     WeightedSum's arithmetic), and stats (..., T, 32) fp32 = X' @ W (FPU matmul_tiles, X' = in0 / srcB, W = in1 / srcA
+     as ttnn.matmul(x, W); fp32 DEST; compute_kernel_config's fidelity) with column n (n + 2) replaced by sum_c X'^2
+     (exact fp32 SFPU) = mhc_pre_xing_pack(X' @ W, X'). Work: column blocks of B tiles (planner: the busiest core's
+     units x (B + a per-unit overhead), B <= 8), units block-major so a core keeps its W block in L1; per column one
+     DEST window (the unit's coefficient tiles, 3 a half, built by the writer in the SFPU lane layout from the post /
+     comb row tiles; F + X_0..X_3 by UnpackToDestFp32; outputs and the column's sum of squares written in place), the
+     unit's partial (FPU matmul over its X' tiles, its sum-of-squares tile re-laid coefficient-major and summed) to a
+     DRAM scratch page; the row's root core (semaphore count) sums the row's NB partials in block order. Needs fp32 F
+     and X, n <= 4.
+   - Why: deepseek_v41_flash_d_p's next hc step read the new streams twice (the hc_fn matmul and mhc_pre_xing_pack's
+     sum of squares) right after the residual wrote them. 2x2 p150, [1024, 4 x 2560] fp32 a chip, HiFi2 (wall, 30
+     synced calls): mhc_post 0.270 ms, with stats_weight 0.327 ms, vs mhc_post + ttnn.matmul + mhc_pre_xing_pack
+     0.638 ms. Model (MHC_FUSED=on, 2x2, chunk 53248-55296): ffn_hc 3.2 -> 1.44 ms a chunk, attn_residual /
+     ffn_residual 2.44 / 3.10 -> 2.94 / 3.27 ms.
+   - Measured precision (6 cases, random inputs): stats vs the unfused device path, projection rel L2 <= 2.3e-6, sum
+     of squares <= 1.2e-7; vs float64 the projection equals the unfused path's own TF32 / srcA error.
+   - Limits: the stats program is DRAM-bound; its W blocks add ~13 % reads at B = 8 (a W multicast to the cores of a
+     block would remove them). Block widths below 8 lose to the per-unit work (B = 4 0.352, 2 0.487, 1 0.909 ms).
+   - Tests: `tests/unit/test_mhc_post_stats.py` (DS41 2x2 / 4x4 shapes, small, ragged blocks (Ct = 13), n = 2,
+     comb as stored at HiFi4: X' bit-identical, the limits above, columns past n (n + 2) zero, negative controls (a
+     0.1 % column error, a dropped column tile), a program-cache hit, refusals). Regression, option off (2026-10-20,
+     2x2): unit + golden + model cases 382 passed (= the recorded unit 164, golden 208, model cases 2, + the 8 new).
+   - Needed by: deepseek_v41_flash_d_p P.14 (tt/residual.py:TtHcResidual.fused, tt/engram_add.py, setting MHC_FUSED).
+   - Files: `mhc_post_ttnn.{hpp,cpp}`, `mhc_post_ttnn_nanobind.cpp`, `sources.cmake`,
+     `device/mhc_post_stats_device_operation.{hpp,cpp}`, `device/mhc_post_stats_program_factory.cpp`,
+     `kernels/mhc_post_stats_{common.hpp,reader.cpp,writer.cpp,compute.cpp}`, `tests/unit/test_mhc_post_stats.py`.

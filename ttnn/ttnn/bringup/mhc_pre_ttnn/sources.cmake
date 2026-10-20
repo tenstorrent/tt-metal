@@ -12,6 +12,8 @@ set(TTNN_OP_BRINGUP_MHC_PRE_TTNN_SRCS
     mhc_pre_ttnn.cpp
     device/mhc_pre_xing_device_operation.cpp
     device/mhc_pre_xing_program_factory.cpp
+    device/mhc_engram_pack_device_operation.cpp
+    device/mhc_engram_pack_program_factory.cpp
     mhc_pre_xing.cpp
 )
 

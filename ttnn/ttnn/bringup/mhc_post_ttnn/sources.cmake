@@ -6,6 +6,8 @@ set(TTNN_OP_BRINGUP_MHC_POST_TTNN_API_HEADERS mhc_post_ttnn.hpp)
 set(TTNN_OP_BRINGUP_MHC_POST_TTNN_SRCS
     device/mhc_post_ttnn_device_operation.cpp
     device/mhc_post_ttnn_program_factory.cpp
+    device/mhc_post_stats_device_operation.cpp
+    device/mhc_post_stats_program_factory.cpp
     mhc_post_ttnn.cpp
 )
 
