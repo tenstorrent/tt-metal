@@ -128,7 +128,8 @@ Tensor repeat_interleave_native(
     uint32_t normalized_dim = input_a_shape.get_normalized_index(dim);
     if (normalized_dim == input_rank - 1) {
         ttnn::Tensor transpose_input = input_a;
-        bool typecast = input_a.dtype() == DataType::UINT8;
+        bool typecast = input_a.dtype() == DataType::UINT8 || input_a.dtype() == DataType::BFLOAT8_B ||
+                        input_a.dtype() == DataType::BFLOAT4_B;
         if (typecast) {
             transpose_input = ttnn::typecast(transpose_input, DataType::BFLOAT16, mem_config);
         }
