@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+import functools
 import itertools
 import math
+import os
 from typing import TYPE_CHECKING
 
 import torch
@@ -546,6 +548,48 @@ def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[i
     return 0
 
 
+@functools.cache
+def _physical_cores_in_affinity() -> int:
+    """Number of physical cores this process may run on (SMT siblings counted once)."""
+    try:
+        cpus = os.sched_getaffinity(0)
+    except AttributeError:
+        return max(1, os.cpu_count() or 1)
+    cores = set()
+    for cpu in cpus:
+        try:
+            with open(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list") as f:
+                cores.add(f.read().strip())
+        except OSError:
+            cores.add(str(cpu))
+    return max(1, len(cores))
+
+
+def _cap_torch_threads_to_physical_cores(fn):
+    """Run ``fn`` with at most one torch thread per physical core, then restore the thread count.
+
+    Each per-shard copy in ``_reassemble_2d`` is a small OpenMP parallel region. With one thread per
+    logical CPU, every region waits for the threads that share a core with another busy process: on
+    the BH galaxy hosts the Weka client pins two polling threads at 100% on CPUs 1 and 2, which made the
+    Wan VAE readback take ~430 ms instead of ~20 ms (#60670). Bulk host work keeps the full thread count.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        prev = torch.get_num_threads()
+        cap = _physical_cores_in_affinity()
+        if prev <= cap:
+            return fn(*args, **kwargs)
+        torch.set_num_threads(cap)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            torch.set_num_threads(prev)
+
+    return wrapper
+
+
+@_cap_torch_threads_to_physical_cores
 def _reassemble_2d(
     mesh_coords: list,
     shards: list[torch.Tensor],
