@@ -36,8 +36,8 @@ optimized separately; each has its own section below.
 |---|---:|---:|---|
 | Batch-1 decode, ms/token (ISL 128) | 18.35 | **2.38** | [Batch-1 decode](#batch-1-decode-60161) (#60161) |
 | DFlash decode, tok/s/user (ISL 256 / 1K / 32K) | 415 / 405 / 338 (plain decode) | **772 / 718 / 699** | [DFlash](#dflash-speculative-decoding-61050) (#61050) |
-| Batch-1 time to first token, ms (1K / 8K / 32K prompt) | 1,233.5 / 9,715.6 / 39,259.9 | **61.9 / 230.4 / 989.6** | [Prefill](#prefill-optimizations-batch-1-and-batch-32) |
-| Batch-32 time to first token, ms (32 x 1K prompts) | 14,704.1 | **834.3** | [Prefill](#prefill-optimizations-batch-1-and-batch-32) |
+| Batch-1 time to first token, ms (1K / 8K / 32K prompt) | 1,233.5 / 9,715.6 / 39,259.9 | **55.6 / 180.1 / 788.3** | [Prefill](#prefill-optimizations-batch-1-and-batch-32) |
+| Batch-32 time to first token, ms (32 x 1K prompts) | 14,704.1 | **634.9** | [Prefill](#prefill-optimizations-batch-1-and-batch-32) |
 
 ## Decode optimizations
 
@@ -140,14 +140,14 @@ on QuietBox 2 next to the decode paths above. Time to first token (TTFT), ms:
 
 | Prompt length (tokens) | Batch 1: before | **Batch 1: now** | Batch 32 (all 32 users): before | **Batch 32: now** |
 |---:|---:|---:|---:|---:|
-| 128 | 164.3 | **42.2** | 2,731.6 | **153.2** |
-| 512 | 1,231.7 | **49.8** | 14,706.6 | **445.1** |
-| 1,024 | 1,233.5 | **61.9** | 14,704.1 | **834.3** |
-| 2,048 | 2,312.0 | **81.2** | 28,417.1 | **1,574.7** |
-| 4,096 | 4,851.5 | **129.4** | 56,047.6 | **3,254.6** |
-| 8,192 | 9,715.6 | **230.4** | 113,700.0 | **6,830.3** |
-| 32,768 | 39,259.9 | **989.6** | 464,260.5 | **32,139.4** |
-| 131,072 | 155,734.8 | **6,724.6** | does not fit | does not fit |
+| 128 | 164.3 | **41.1** | 2,731.6 | **127.1** |
+| 512 | 1,231.7 | **47.5** | 14,706.6 | **345.9** |
+| 1,024 | 1,233.5 | **55.6** | 14,704.1 | **634.9** |
+| 2,048 | 2,312.0 | **68.3** | 28,417.1 | **1,176.2** |
+| 4,096 | 4,851.5 | **105.3** | 56,047.6 | **2,458.1** |
+| 8,192 | 9,715.6 | **180.1** | 113,700.0 | **5,239.4** |
+| 32,768 | 39,259.9 | **788.3** | 464,260.5 | **25,828.0** |
+| 131,072 | 155,734.8 | **5,907.2** | does not fit | does not fit |
 
 Before: `main` 35f4cd54629; now: this code, back to back on one QuietBox 2. Random prompts (batch 1) and the
 harness's text prompts (batch 32: 32 different prompts in one prefill call), untraced, logits read back to host.
@@ -166,6 +166,33 @@ What makes prefill faster:
 - **Batch 32 in one forward pass** (`tt/batched_prefill.py`): the 32 users' prompts go through each layer together (in
   groups of users at 4K and 8K), each user bit-identical to its own batch-1 prefill; on-device sampling of the first
   tokens.
+
+Then, on top of the merged branches (batch-1 TTFT without → with each change, measured back to back on the tree it was
+added to):
+- **The expert op reads its input rows through an index.** A gather used to copy every token's row 4 times (once
+  per chosen expert) into a buffer of 4 x C rows, a quarter of which each chip reads, before the expert op read the
+  copy back. Now `unified_routed_expert_moe` reads row `tok_of_row[r]` of the token-ordered input directly
+  (`x_row_index`). 8K: 230.7 → 216.5 ms.
+- **The expert op writes rows, not tiles.** The combine needs rows, so a separate untilize converted the whole
+  4 x C-row output (0.77 ms per layer at 8K). Now the down matmul's last pack untilizes each tile-row and the writer
+  stores rows (`output_row_major`); the expert outputs also stay bf16 instead of being rounded to bf8.
+  8K: 217.4 → 201.2 ms; 32K: 939.0 → 873.7 ms.
+- **The combine reads the expert rows where they are.** An embedding gather copied each token's 4 expert rows into a
+  [block, 4, 2880] buffer that `post_combine_reduce` then read. Now `post_combine_reduce` reads row `pos[t, j]` of the
+  expert output itself (`combine_row_index`) and never reads the rows of experts on other chips (3 of every 4).
+  8K: 191.1 → 180.6 ms; 32K: 834.8 → 794.7 ms.
+- **The scatter copies its input row in one transfer.** `ttnn.scatter` (it builds the buffer-row → token map)
+  copied its input row from a scratch buffer one element at a time (~300 µs per layer at 8K); now the NoC reads it
+  straight into the output page. 8K: 196.5 → 191.1 ms.
+- **Routing weights read once per token.** `post_combine_reduce` read each (token, expert) weight with its own DRAM
+  read, from a [C, 4, 1] copy made by a reshape (63 µs per layer at 8K). Now one read per token of the [C, 4]
+  weights. 8K: 199.1 → 196.5 ms.
+- **Attention writes its heads side by side** (`output_concat_heads`) instead of a separate concat op.
+  8K: 182.6 → 179.7 ms.
+- **Router on one K block up to 128 tokens per chip** (77.5 → 12.3 µs per layer at 128 tokens).
+
+All of these are bit-identical except the bf16 expert outputs. The accuracy gates pass, and batch 32 stays
+bit-identical to batch 1.
 
 Running next to the decode paths: the routed-expert op and the 2D projection configs fit their L1 below the buffers
 DFlash keeps resident (`Model.set_prefill_l1_end`); the routed path is used for gpt-oss-20b only (gpt-oss-120b keeps
