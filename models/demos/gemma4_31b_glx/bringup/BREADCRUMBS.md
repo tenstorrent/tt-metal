@@ -265,3 +265,8 @@
 - Headroom: the frozen test runs under the repo's 300 s default timeout; the module's whole run (6 input cases plus
   A,B,A determinism) uses 170-250 s of it. A slower module (e.g. MATMUL_CORE_GRID smaller than 8x8) can time out.
 - Re-run: `bfw job check --task C.attn.attention`.
+
+## S.sliding.02 (swap: attn_norm + attention on device, sliding layer 0)
+- No code change: the existing `tt/rms_norm.py` and `tt/attention.py` (wired through `device_component` in hooks.py) chain as is in the residual layout.
+- Gate: pcc_swap_out 0.999975, swap_margin_min 1.445; attention vs CPU step rel 0.006748 (limit 0.01289), block out with device vs CPU attention rel 0.00692 (limit 0.01); device_ops attn_norm 3, attention 49, host_flops_frac 0.
+- Re-run: `bfw job check --task S.sliding.02`.
