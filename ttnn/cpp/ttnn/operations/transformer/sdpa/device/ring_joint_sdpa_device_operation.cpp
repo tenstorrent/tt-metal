@@ -12,6 +12,7 @@
 #include <variant>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
@@ -1473,7 +1474,6 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     }
 
     auto all_gather_operation_attributes = ttnn::experimental::prim::RingAttentionAllGatherAsyncParams{
-        {},
         gather_dim,
         num_links,
         num_devices,

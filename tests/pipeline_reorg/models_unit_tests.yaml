@@ -22,6 +22,7 @@
     # every tt_transformers e2e leg depends on. See #45400.
     pytest --timeout 120 models/tt_transformers/tests/test_warm_cache_marker.py
     pytest --timeout 60 models/tt_transformers/tests/test_decode_output_rows.py
+    pytest --timeout 60 models/tt_transformers/tests/test_batched_prefill_slots.py
     pytest --timeout 300 models/tt_transformers/tests/test_load_state_dict_layers.py
     pytest --timeout 300 models/tt_transformers/tests/test_traced_prefill_rope_slice.py
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
@@ -216,15 +217,18 @@
     # the tests kept here are host-only (monkeypatched, no device), so 120 s is ample.
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_bucket_trace_teardown_releases_all_stores or test_condense_remaps_gdn_before_decode_in_both_sampling_modes or test_decode_warmup_stages_every_width_before_capture or test_decode_warmup_restages_when_num_blocks_changes or test_prefill_warmup_prepares_eagerly_and_only_records_when_traced or test_prefill_prepare_is_idempotent_and_record_requires_it"
     TT_METAL_TRACE_ALLOC_TRACKING=1 pytest --timeout 900 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_vllm_warmup_leaves_no_late_allocations"
-    # MTP speculative decode (unit-test coverage only until batch>1 lands; e2e runs plain decode).
+    # MTP speculative decode, single-user and batched (B <= 8); unit-test coverage, e2e runs plain decode.
     # QWEN36_SPEC_TEST_N_LAYERS=8: lossless/determinism hold on a truncated model, and the 8 layers are
     # already in the tensor cache from test_model_tp, so no 64-layer load happens in this leg.
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_spec_sampling_math.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_spec_batch_helpers.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mtp_torch_ref.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py -k "not perf and not (no_initial_state and (blackhole-1 or blackhole-2))"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mtp_tp.py
     QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_lossless.py
     QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_determinism.py -k "not (test_spec_decode_is_deterministic and 128)"
+    # Batched spec decode at B=8, K=3 (all 32 verify rows): lossless vs plain, determinism, traced == eager.
+    QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_batched.py -k "test_spec_batched_lossless and 8"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
@@ -765,7 +769,7 @@
 # separately under kimi_rmsnorm in blaze_models_prefill_tests.yaml.
 - name: Kimi-K2.7 fused RMSNorm linear unit tests (BH Galaxy 8x4)
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
     pytest --timeout 180 models/demos/deepseek_v3_d_p/tests/pcc/test_rmsnorm_fused.py -k linear-1d -vv --tb=short
   model: kimi-k2.7-rmsnorm
@@ -783,7 +787,8 @@
 # Deploy mesh is SP=8 x TP=4 -> (8, 4) on BH Galaxy
 - name: MiniMax-M3 unit tests (1-card)
   cmd: |
-    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "1x1 and not msa_layer"
+    # Host-only layout tests (rotated / packed chunk layout) have no mesh id; run them here.
+    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout"
   model: minimax-m3
   skus:
     bh_p150:
@@ -802,10 +807,9 @@
   model: minimax-m3
   skus:
     bh_galaxy:
-      # 15 -> 30 (2026-10-07): #58594 added four test_ep_moe_vs_ref cases (shared_schedule x3,
-      # overlap_release_recreate) at ~140-280 s each (host-side random-weight build + bf8 convert);
-      # the leg went from 700 s (last green, c187c31050b) to ~1410 s projected.
-      timeout: 30
+      # ~1750 s measured: the test_ep_moe_vs_ref cases take ~140-280 s each (host-side random-weight
+      # build + bf8 convert) and test_attention_packed_vs_alone ~85 s.
+      timeout: 38
       tier: 1
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
@@ -1095,7 +1099,7 @@
   model_family: Qwen
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 30
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -1112,6 +1116,22 @@
   skus:
     wh_llmbox_perf:
       timeout: 5
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  budget_type: unit
+
+- name: Qwen2.5-VL-7B unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    uv pip install -r models/demos/qwen25_vl/requirements.txt
+    export HF_MODEL=Qwen/Qwen2.5-VL-7B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-7B-Instruct MESH_DEVICE=T3K
+    pytest --timeout 600 models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py
+  model: qwen2.5-vl-7b
+  model_family: Qwen
+  skus:
+    wh_llmbox_perf:
+      timeout: 15
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -1195,6 +1215,27 @@
   skus:
     wh_llmbox:
       timeout: 45 # 35m02s measured on run 33021627869, +~28% margin
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: unit
+
+# Mock-device memory gate: MiniMax-H3 ref2va's full warmup on a mock WH 4x8 mesh; see the test's docstring.
+- name: Minimax H3 Memory Test
+  cmd: |
+    export TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
+    unset HF_HUB_OFFLINE
+    export TT_DIT_ALLOW_HF_DOWNLOAD=1
+    export MINIMAX_H3_REQUIRE_WEIGHTS=1
+    export MINIMAX_H3_DRAM_PROBE=1
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/MiniMaxAI/MiniMax-H3
+    pytest --timeout 7200 -s models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py
+  model: minimax-h3
+  skus:
+    wh_llmbox:
+      timeout: 180
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -1801,7 +1842,7 @@
   model_family: BEVFormer
   skus:
     bh_p150b_civ2:
-      timeout: 16
+      timeout: 36
       tier: 3
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
@@ -2315,5 +2356,21 @@
       timeout: 8
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
+  team: models
+  budget_type: unit
+
+# ESM-2 650M protein language model (facebook/esm2_t33_650M_UR50D).
+# 10 tests in ~66 s warm on bh_p150 (run 38277387590); the checkpoint
+# resolves from the shared HF cache. 5 min covers first-run JIT compilation.
+- name: esm2 unit tests
+  cmd: |
+    pytest models/experimental/esm2/tests --timeout=300
+  model: esm2-650m
+  model_family: ESM
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 3
+  owner_id: U09B1UE301K # Abror Shopulatov
   team: models
   budget_type: unit
