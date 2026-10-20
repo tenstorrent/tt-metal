@@ -320,3 +320,15 @@ sparse-attention path (single-chip single-user 26.5 ms per layer today) has to c
 track OPT_SPARSE_1M (`_agents/OPT_SPARSE_1M.md`). Next per-track items: fused exact fp32 mHC post-block kernel
 (2 ops, exact), DSA decode glue (cache writes, pooling, head transposes, norms), sparse_matmul kernel efficiency
 at low batch (38 % -> 70 % of DRAM peak).
+
+## 2026-10-20 evening: first 8x4 run with the custom ops (hang, root-caused)
+
+The 45-layer bfp8 e2e at 4 users/row (fast exact mHC, KDA block op, stream experts) hung in the decode-trace capture
+on the 8x4: `tt-triage` on the live process showed the o_proj matmul (`[1,1,4,2048]`, trace 0) stuck on 9 of 32
+chips, one core each, its in0-receiver ncrisc in `noc_async_atomic_barrier`, the row-mates waiting in the following
+column reduce-scatter, and the `kda_decode` generic op as the previous op. The KDA reader/writer kernels exited with a
+cross-core `noc_semaphore_inc` still in flight; the next kernel snapshots the NoC atomic counters at start, so the late
+ack leaves them unequal forever. Fix 20eaa501a00: `kda_decode` and `mhc_pre_block` kernels end with
+`noc_async_full_barrier()`. Also from this run: the 45-layer build costs ~60 s per layer of host weight conversion;
+the e2e test and demo now build through the tensorbin cache (`GLM53_MESH_CACHE`, default `_cache/mesh`), first run
+writes it.
