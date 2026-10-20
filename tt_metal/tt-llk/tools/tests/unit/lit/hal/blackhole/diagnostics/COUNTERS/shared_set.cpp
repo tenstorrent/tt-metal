@@ -5,7 +5,7 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %s 2>&1 | FileCheck %s
 // CHECK: error: static assertion failed: expected an AddrCounter or MathCounter descriptor
 
-#include "hal/counters.h"
+#include "hal/tensix_counters.h"
 
 void probe()
 {
