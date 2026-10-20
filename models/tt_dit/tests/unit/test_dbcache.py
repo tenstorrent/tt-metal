@@ -4,7 +4,6 @@
 
 """Host-only tests for the DBCache decision bookkeeping (no device needed)."""
 
-import pytest
 
 from models.tt_dit.utils.dbcache import DBCacheConfig, DBCacheContext, steps_mask
 
@@ -122,14 +121,14 @@ def test_reset_clears_state():
     assert ctx.branch(0).has_fn_buffer is False
 
 
-def test_config_validation():
-    with pytest.raises(ValueError):
+def test_config_validation(expect_error):
+    with expect_error(ValueError, "Fn_compute_blocks must be >= 1"):
         DBCacheConfig(Fn_compute_blocks=0)
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "steps_computation_policy must be 'dynamic' or 'static'"):
         DBCacheConfig(steps_computation_policy="sometimes")
     assert DBCacheConfig(residual_diff_threshold=0.0).enabled is False
     assert DBCacheConfig().replace(residual_diff_threshold=0.2).residual_diff_threshold == 0.2
     assert "F1B0" in DBCacheConfig().strify()
     assert DBCacheConfig(taylorseer_order=2).strify().endswith("_T1O2")
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "taylorseer_order must be >= 0"):
         DBCacheConfig(taylorseer_order=-1)
