@@ -98,6 +98,19 @@ DEVICE_CONFIGS = {
         "tp_axis": 0,
         "cluster_axis": 0,
     },
+    # 6 KB payload = 3 bf16 tiles per packet, the largest Wormhole allows (7616 B incl. header).
+    # Halves the packet count when the K half-block is 3 tiles (K_block 6).
+    "wh_4x8_ring_6k": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": 6144,
+        "topology": "Ring",
+        "num_links": 4,
+        "num_workers_per_link": 2,
+        "sp_axis": 1,
+        "tp_axis": 0,
+        "cluster_axis": 0,
+    },
     "wh_4x8_linear": {
         "mesh_shape": (4, 8),
         "fabric_config": "FABRIC_1D",
