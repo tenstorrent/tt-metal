@@ -16,23 +16,6 @@ struct LLKOperandExtractor;
 }
 
 namespace tensor_accessor {
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-struct TensorBindingToken;
-}
-
-// TensorBindingToken is itself a template, so these overloads are parameterized by its offsets.
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-constexpr DataFormat get_dataformat(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>&);
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-constexpr uint8_t get_face_r_dim(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>&);
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-constexpr uint8_t get_face_c_dim(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>&);
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-constexpr uint8_t get_num_faces_r_dim(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>&);
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-constexpr uint8_t get_num_faces_c_dim(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>&);
-
-namespace tensor_accessor {
 
 // TensorBindingToken:
 //
@@ -70,16 +53,47 @@ struct TensorBindingToken {
     static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
 
     // Construct a TensorBindingToken with LLK metadata.
-    // These metadata can be extracted using LLKOperandFrom.
+    // Read these metadata with get_dataformat(token) / get_face_r_dim(token) / ...,
+    // or construct an operand with LLKOperandFrom<token>.
     explicit constexpr TensorBindingToken(binding_details::LLKMetadata llk) noexcept : llk_metadata_(llk) {}
 
-private:
-    friend constexpr DataFormat(::get_dataformat<CTA_OFFSET, ADDR_CRTA_OFFSET>)(const TensorBindingToken&);
-    friend constexpr uint8_t(::get_face_r_dim<CTA_OFFSET, ADDR_CRTA_OFFSET>)(const TensorBindingToken&);
-    friend constexpr uint8_t(::get_face_c_dim<CTA_OFFSET, ADDR_CRTA_OFFSET>)(const TensorBindingToken&);
-    friend constexpr uint8_t(::get_num_faces_r_dim<CTA_OFFSET, ADDR_CRTA_OFFSET>)(const TensorBindingToken&);
-    friend constexpr uint8_t(::get_num_faces_c_dim<CTA_OFFSET, ADDR_CRTA_OFFSET>)(const TensorBindingToken&);
+    /**
+     * Extract DataFormat metadata associated with a `TensorBindingToken`.
+     * This metadata describes the data format of the `MeshTensor` that this token represents.
+     */
+    friend constexpr DataFormat get_dataformat(const TensorBindingToken& token) {
+        return static_cast<DataFormat>(token.llk_metadata_.format);
+    }
 
+    /**
+     * Extract the face height (in elements) associated with a `TensorBindingToken`.
+     * This metadata describes the tile layout of the `MeshTensor` that this token represents.
+     */
+    friend constexpr uint8_t get_face_r_dim(const TensorBindingToken& token) { return token.llk_metadata_.face_r_dim; }
+
+    /**
+     * Extract the face width (in elements) associated with a `TensorBindingToken`.
+     * This metadata describes the tile layout of the `MeshTensor` that this token represents.
+     */
+    friend constexpr uint8_t get_face_c_dim(const TensorBindingToken& token) { return token.llk_metadata_.face_c_dim; }
+
+    /**
+     * Extract the number of faces along the tile's row dimension associated with a `TensorBindingToken`.
+     * This metadata describes the tile layout of the `MeshTensor` that this token represents.
+     */
+    friend constexpr uint8_t get_num_faces_r_dim(const TensorBindingToken& token) {
+        return token.llk_metadata_.num_faces_r_dim;
+    }
+
+    /**
+     * Extract the number of faces along the tile's column dimension associated with a `TensorBindingToken`.
+     * This metadata describes the tile layout of the `MeshTensor` that this token represents.
+     */
+    friend constexpr uint8_t get_num_faces_c_dim(const TensorBindingToken& token) {
+        return token.llk_metadata_.num_faces_c_dim;
+    }
+
+private:
     template <const auto& Token>
     friend struct binding_details::LLKOperandExtractor;
 

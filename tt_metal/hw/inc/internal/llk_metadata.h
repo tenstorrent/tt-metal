@@ -17,7 +17,8 @@ namespace binding_details {
 // The LLK operand metadata a Metal 2.0 BindingToken carries, as baked on by headergen.
 //
 // Kernel authors read this through get_dataformat(token) / get_face_r_dim(token) / ...
-// (api/llk_operand_from_tokens.h), or build an LLKOperand with LLKOperandFrom<token>.
+// (defined in each token header), or build an LLKOperand with LLKOperandFrom<token>
+// (api/llk_operand_from_tokens.h).
 //
 // This struct is explicitly separated from llk constructs to avoid:
 // 1. Coupling of LLK metadata with the Metal 2.0 binding infrastructure.

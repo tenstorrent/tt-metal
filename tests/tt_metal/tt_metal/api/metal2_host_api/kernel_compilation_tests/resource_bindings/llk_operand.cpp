@@ -27,6 +27,7 @@ using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ProgramSpecTestBlackhole;
+using test_helpers::ProgramSpecTestGen1;
 using test_helpers::ProgramSpecTestQuasar;
 
 TEST_F(ProgramSpecTestQuasar, DFBCustomTileCompiles) {
@@ -223,6 +224,49 @@ TensorParameter MakeL1ShardedTiledTensor(std::string name, std::array<uint32_t, 
         /*num_cores=*/1,
         tt::tt_metal::Layout::TILE,
         Tile{tile_shape});
+}
+
+// The existing dataflow include path must define the token overloads without the Blackhole-only LLK header.
+TEST_F(ProgramSpecTestGen1, TokenMetadataGettersThroughDataflowInclude) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.dataflow_buffers[0].tile_format_metadata = Tile{{8, 32}};
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Float32,
+        .tile_format_metadata = Tile{{32, 16}},
+    }};
+    spec.kernels[0].scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    spec.tensor_parameters = {MakeL1ShardedTiledTensor("a", {16, 32}), MakeL1ShardedTiledTensor("b", {32, 16})};
+    BindTensorParameterToKernel(spec.kernels[0], "a", "a");
+    BindTensorParameterToKernel(spec.kernels[0], "b", "b");
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/dataflow_api.h"
+void kernel_main() {
+    static_assert(get_dataformat(dfb::input_dfb) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(dfb::input_dfb) == 8);
+    static_assert(get_face_c_dim(dfb::input_dfb) == 16);
+    static_assert(get_num_faces_r_dim(dfb::input_dfb) == 1);
+    static_assert(get_num_faces_c_dim(dfb::input_dfb) == 2);
+    static_assert(get_dataformat(scratch::pad) == DataFormat::Float32);
+    static_assert(get_face_r_dim(scratch::pad) == 16);
+    static_assert(get_face_c_dim(scratch::pad) == 16);
+    static_assert(get_num_faces_r_dim(scratch::pad) == 2);
+    static_assert(get_num_faces_c_dim(scratch::pad) == 1);
+    static_assert(get_dataformat(tensor::a) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(tensor::a) == 16);
+    static_assert(get_face_c_dim(tensor::a) == 16);
+    static_assert(get_num_faces_r_dim(tensor::a) == 1);
+    static_assert(get_num_faces_c_dim(tensor::a) == 2);
+    static_assert(get_dataformat(tensor::b) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(tensor::b) == 16);
+    static_assert(get_face_c_dim(tensor::b) == 16);
+    static_assert(get_num_faces_r_dim(tensor::b) == 2);
+    static_assert(get_num_faces_c_dim(tensor::b) == 1);
+}
+)"};
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(LLKOperandInterop, L1TensorDefaultCompiles) {

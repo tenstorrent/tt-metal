@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dfb_access.h"
+#include "api/debug/assert.h"
 #include "internal/llk_metadata.h"
 
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
@@ -22,9 +23,9 @@
 //
 // Here my_dfb_name is a constexpr DFBBindingToken, auto-included in kernel_bindings_generated.h.
 //
-// This header holds only the tokens (plus the small dfb::AccessPattern enum and the LLK metadata
-// header), so naming a binding does not pull in the DataflowBuffer implementation
-// (api/dataflow/dataflow_buffer.h).
+// This header holds the tokens and their metadata getters, including device assertion support,
+// so the generated bindings header does not have to pull in the DataflowBuffer implementation. See
+// api/dataflow/dataflow_buffer.h for the DataflowBuffer class these tokens construct.
 //
 
 // Support for LLKOperandFrom.
@@ -43,11 +44,11 @@ struct DFBBindingToken {
 
     // Binding token constructor when host supplies LLK metadata.
     // See "Entry format metadata" in DataflowBufferSpec.
-    // To extract these metadata, use LLKOperandFrom<dfb::token_name>.
+    // Read these metadata with get_dataformat(token) / get_face_r_dim(token) / ...,
+    // or construct an operand with LLKOperandFrom<dfb::token_name>.
     //
-    // These metadata are only needed on math kernels to interact with LLK 2.0,
-    // kernels that wish to construct binding tokens from dfb ids without the llk metadata can use the id-only
-    // constructor.
+    // Kernels that do not query the data format or construct LLK operands can use the id-only
+    // constructor; tile geometry getters then return the default dimensions.
     constexpr DFBBindingToken(uint16_t id, binding_details::LLKMetadata llk) noexcept : id_(id), llk_metadata_(llk) {}
 
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
@@ -58,13 +59,57 @@ struct DFBBindingToken {
     // This conversion is constexpr; it's intended for Gen1 use only.
     constexpr operator uint32_t() const noexcept { return id_; }
 
-private:
-    friend constexpr DataFormat get_dataformat(const DFBBindingToken&);
-    friend constexpr uint8_t get_face_r_dim(const DFBBindingToken&);
-    friend constexpr uint8_t get_face_c_dim(const DFBBindingToken&);
-    friend constexpr uint8_t get_num_faces_r_dim(const DFBBindingToken&);
-    friend constexpr uint8_t get_num_faces_c_dim(const DFBBindingToken&);
+    /**
+     * Extract DataFormat metadata associated with a `DFBBindingToken`.
+     * This metadata is configured on the host.
+     *
+     * See: `DataflowBufferSpec::data_format_metadata` in the Metal host API for configuration.
+     *
+     * pre-condition: `DataflowBufferSpec::data_format_metadata` associated with this DFB has been set to a
+     * non-empty value on the host.
+     */
+    friend constexpr DataFormat get_dataformat(const DFBBindingToken& token) {
+        ASSERT(token.llk_metadata_.format != binding_details::LLKMetadata::kNoFormat);
+        return static_cast<DataFormat>(token.llk_metadata_.format);
+    }
 
+    /**
+     * Extract the face height (in elements) associated with a `DFBBindingToken`.
+     * returns 16 if tile metadata is omitted on host, representing a default face (16x16 elements).
+     *
+     * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
+     */
+    friend constexpr uint8_t get_face_r_dim(const DFBBindingToken& token) { return token.llk_metadata_.face_r_dim; }
+
+    /**
+     * Extract the face width (in elements) associated with a `DFBBindingToken`.
+     * returns 16 if tile metadata is omitted on host, representing a default face (16x16 elements).
+     *
+     * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
+     */
+    friend constexpr uint8_t get_face_c_dim(const DFBBindingToken& token) { return token.llk_metadata_.face_c_dim; }
+
+    /**
+     * Extract the number of faces along the tile's row dimension associated with a `DFBBindingToken`.
+     * returns 2 if tile metadata is omitted on host, representing a default tile (2x2 faces).
+     *
+     * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
+     */
+    friend constexpr uint8_t get_num_faces_r_dim(const DFBBindingToken& token) {
+        return token.llk_metadata_.num_faces_r_dim;
+    }
+
+    /**
+     * Extract the number of faces along the tile's column dimension associated with a `DFBBindingToken`.
+     * returns 2 if tile metadata is omitted on host, representing a default tile (2x2 faces).
+     *
+     * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
+     */
+    friend constexpr uint8_t get_num_faces_c_dim(const DFBBindingToken& token) {
+        return token.llk_metadata_.num_faces_c_dim;
+    }
+
+private:
     template <const auto& Token>
     friend struct binding_details::LLKOperandExtractor;
 
