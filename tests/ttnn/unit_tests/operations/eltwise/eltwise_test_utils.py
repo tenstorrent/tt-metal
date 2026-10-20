@@ -10,6 +10,8 @@ from mpmath import cosh as mp_cosh
 from mpmath import mp
 
 from tests.ttnn.utils_for_testing import (
+    assert_equal,
+    assert_with_ulp,
     flush_subnormal_values_to_zero,
     generate_all_bfloat16_bitpatterns,
 )
@@ -58,6 +60,37 @@ def flush_to_zero(tensor):
     """Flush values at or below the smallest normal bfloat16 to zero. |x| ≤ 2^{-126}"""
     tensor[torch.abs(tensor) <= SMALLEST_NORMAL_BF16] = 0.0
     return tensor
+
+
+def assert_ftz_band(result, band_mask, band_desc):
+    """Assert a known flush-to-zero band is non-empty and device-flushed to 0.
+
+    The band is a deterministic slice of the exhaustive sweep, so the
+    non-emptiness assertion guards against a future golden/kernel change that
+    shifts a boundary and silently empties the band (which would otherwise let
+    the test pass without ever checking the documented FTZ behavior).
+    """
+    assert band_mask.any(), f"expected {band_desc} to be non-empty for this exhaustive sweep"
+    assert_equal(torch.zeros_like(result[band_mask]), result[band_mask])
+
+
+def assert_ftz_then_ulp(golden, result, ulp_threshold, reference=None, allow_nonfinite=False):
+    """Exactly 0 where |reference| < SNB, within ulp_threshold of golden elsewhere.
+
+    reference defaults to golden. Pass a float64 reference when float32
+    rounding of the golden can lift a truly subnormal result to SNB itself.
+    Unlike assert_ftz_band, the FTZ region may be empty.
+    """
+    if reference is None:
+        reference = golden
+    ftz = reference.abs() < SMALLEST_NORMAL_BF16
+    assert_equal(torch.zeros_like(result[ftz]), result[ftz])
+    assert_with_ulp(
+        expected_result=golden[~ftz],
+        actual_result=result[~ftz],
+        ulp_threshold=ulp_threshold,
+        allow_nonfinite=allow_nonfinite,
+    )
 
 
 def assert_all_nonfinite(result, desc):
