@@ -275,6 +275,21 @@ def _assert_mean_over_axis(before: list, after: list, mesh_shape, axis: int, wha
         coord: bool(np.array_equal(b[coord], b[tuple(c if i == axis else 0 for i, c in enumerate(coord))]))
         for coord in np.ndindex(shape)
     }
+    if per_device:
+        # Printed before the assertion so it survives a crash later in the session (a failed test's traceback keeps
+        # device tensors alive, and releasing the MetalEnv over them is a known segfault, #57798).
+        tiles = {}
+        for coord in per_device:
+            o = off[coord].reshape(off[coord].shape[-2], off[coord].shape[-1])
+            if o.shape[0] % 32 == 0 and o.shape[1] % 32 == 0:
+                grid = o.reshape(o.shape[0] // 32, 32, o.shape[1] // 32, 32).any(axis=(1, 3))
+                tiles[coord] = [tuple(int(v) for v in ij) for ij in np.argwhere(grid)]
+        print(
+            f"\n[mean-over-axis] {what}: axis {axis}, elements off per device {per_device}, tiles off {tiles}, "
+            f"before equal to the first device of its group {same_before}, "
+            f"max abs diff {float(np.abs(a - expected).max()):.4g}",
+            flush=True,
+        )
     np.testing.assert_allclose(
         a,
         expected,
