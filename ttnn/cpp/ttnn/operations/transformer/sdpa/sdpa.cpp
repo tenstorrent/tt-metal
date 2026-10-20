@@ -986,17 +986,21 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
             "An SDPA precision recipe sets the matmul fidelity; leave program_config.matmul_math_fidelity unset");
         const uint32_t head_dim = input_tensor_q.logical_shape()[3];
         const bool chunked = input_tensor_q.logical_shape()[2] < input_tensor_kv.logical_shape()[2];
-        streaming_recipe =
-            input_tensor_kv.logical_shape()[3] != head_dim || kv_actual_isl.has_value() ||
-            (chunked && (slot_id.has_value() || kv_actual_isl_tensor.has_value())) ||
-            !numeric::named_ring_recipe_chunks_fit(
-                numeric::resolve_precision_policy(numeric::select_recipe(*precision, input_tensor_kv.dtype())),
-                program_config.q_chunk_size,
-                program_config.k_chunk_size,
-                head_dim,
-                head_dim_v,
-                numeric::recipe_free_l1(*input_tensor_q.device()),
-                /*causal=*/true);
+        streaming_recipe = input_tensor_kv.logical_shape()[3] != head_dim || kv_actual_isl.has_value() ||
+                           (chunked && (slot_id.has_value() || kv_actual_isl_tensor.has_value()));
+        const bool chunks_fit = numeric::named_ring_recipe_chunks_fit(
+            numeric::resolve_precision_policy(numeric::select_recipe(*precision, input_tensor_kv.dtype())),
+            program_config.q_chunk_size,
+            program_config.k_chunk_size,
+            head_dim,
+            head_dim_v,
+            numeric::recipe_free_l1(*input_tensor_q.device()),
+            /*causal=*/true);
+        if (!streaming_recipe && !chunks_fit) {
+            // The caller's chunk pair does not fit the named kernels (Kimi's Q32/K640 at D576): let the recipe pick.
+            program_config.q_chunk_size = 0;
+            program_config.k_chunk_size = 0;
+        }
         if (streaming_recipe) {
             TT_FATAL(
                 program_config.q_chunk_size > 0 && program_config.k_chunk_size > 0,
@@ -1032,6 +1036,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
             finalize_ring_recipe_config(
                 numeric::RecipeOp::Ring, policy, program_config, compute_kernel_config, head_dim);
             query = numeric::recipe_bf16_query(input_tensor_q);
+            log_info(
+                tt::LogOp,
+                "ring_mla {} recipe on the named kernels at Q{}/K{}",
+                *precision,
+                program_config.q_chunk_size,
+                program_config.k_chunk_size);
         }
     }
     auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
