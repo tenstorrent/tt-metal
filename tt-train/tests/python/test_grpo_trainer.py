@@ -170,15 +170,57 @@ class _RecordingCallback(TrainerCallback):
         self.final_step_time_s = trainer.metrics.get("step_time_s")
 
 
+def _patch_tiny_checkpoint(monkeypatch, checkpoint_dir, **config_overrides) -> None:
+    """Point the completer at *checkpoint_dir*, holding only the tiny model's ``config.json``, and skip the
+    weight load so the model keeps its random init."""
+    from grpo.utils import llama_completer
+
+    (checkpoint_dir / "config.json").write_text(json.dumps({**TINY_HF_CONFIG, **config_overrides}))
+    monkeypatch.setattr(llama_completer, "snapshot_download", lambda *args, **kwargs: str(checkpoint_dir))
+    monkeypatch.setattr(llama_completer, "load_from_safetensors", lambda *args, **kwargs: None)
+
+
 @pytest.fixture
 def patch_llama_weight_loading(monkeypatch, tmp_path_factory):
     """Skip the HF download / safetensors load so the tiny model keeps random init."""
-    from grpo.utils import llama_completer
+    _patch_tiny_checkpoint(monkeypatch, tmp_path_factory.mktemp("tiny_llama"))
 
-    checkpoint_dir = tmp_path_factory.mktemp("tiny_llama")
-    (checkpoint_dir / "config.json").write_text(json.dumps(TINY_HF_CONFIG))
-    monkeypatch.setattr(llama_completer, "snapshot_download", lambda *args, **kwargs: str(checkpoint_dir))
-    monkeypatch.setattr(llama_completer, "load_from_safetensors", lambda *args, **kwargs: None)
+
+def _tiny_completer(max_tokens_to_complete: int = 4) -> LlamaGRPOCompleter:
+    return LlamaGRPOCompleter(
+        ctx=LlamaCompletionCtx(max_tokens_to_complete=max_tokens_to_complete, temperature=1.0),
+        transformer_config=TINY_TRANSFORMER_CONFIG,
+        device_config=DEVICE_CONFIG,
+        model_source=HF_MODEL_ID,
+    )
+
+
+@pytest.mark.requires_device
+def test_rejects_a_tokenizer_larger_than_the_checkpoint_vocab(monkeypatch, tmp_path, expect_error):
+    """A token id past the checkpoint's vocab has no embedding row, so the completer refuses it up front."""
+    _patch_tiny_checkpoint(monkeypatch, tmp_path, vocab_size=128000)  # the tokenizer has 128256 tokens
+    with expect_error(ValueError, "the tokenizer has 128256 tokens but the checkpoint embeds 128000"):
+        _tiny_completer()
+
+
+@pytest.mark.requires_device
+def test_never_samples_a_checkpoint_row_past_the_tokenizer(monkeypatch, tmp_path):
+    """Rows past the tokenizer decode to nothing, so the logits mask covers them up to the logits' width: the
+    checkpoint's vocab, since the model slices off its tile padding. Here every such row outscores the real
+    ones, so one left unmasked gets sampled."""
+    _patch_tiny_checkpoint(monkeypatch, tmp_path, vocab_size=128256 + 8, tie_word_embeddings=False)
+    completer = _tiny_completer(max_tokens_to_complete=8)
+    model, num_tokens = completer.model, len(completer.tokenizer)
+    assert model.config.vocab_size > num_tokens, "premise: the checkpoint has rows past the tokenizer"
+
+    lm_head = np.zeros((model.padded_vocab_size, model.config.hidden_size), np.float32)
+    lm_head[num_tokens:] = np.random.default_rng(0).normal(0.0, 4.0, lm_head[num_tokens:].shape)
+    ttml.autograd.assign_numpy(model.fc.weight.tensor, lm_head)
+
+    completions = completer.generate([[1, 2, 3, 4]] * 4)
+
+    assert all(token < num_tokens for completion in completions for token in completion), completions
+    ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
 @pytest.mark.requires_device

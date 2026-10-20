@@ -153,6 +153,10 @@ class LlamaGRPOCompleter(GRPOCompleter):
             # The completer emits non-broadcast (B, 1, S, S) masks, which only the composite kernel accepts.
             use_composite_sdpa=True,
         )
+        if len(tokenizer) > llama_cfg.vocab_size:
+            raise ValueError(
+                f"the tokenizer has {len(tokenizer)} tokens but the checkpoint embeds {llama_cfg.vocab_size}"
+            )
 
         tt_model = Llama(llama_cfg)
 
