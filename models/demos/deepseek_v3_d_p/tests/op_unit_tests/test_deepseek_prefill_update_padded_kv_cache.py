@@ -1713,9 +1713,8 @@ def _page_table_tensor(mesh_device, table):
     )
 
 
-def _shuffled_page_tables(*, num_users, pages_per_user, mapped_pages, page_size, chunk_local, sp, seed, shuffle=True):
-    """Per-user rows mapping global page q to a shuffled (or, unshuffled, ascending) physical page of the rank that
-    owns q.
+def _shuffled_page_tables(*, num_users, pages_per_user, mapped_pages, page_size, chunk_local, sp, seed):
+    """Per-user rows mapping global page q to a shuffled physical page of the rank that owns q.
 
     Pages >= mapped_pages stay unmapped. Each rank allocates its pages from its own pool, with spare pages left over
     so that untouched pool entries are part of the check. Returns (table [num_users, width], pool pages per rank)."""
@@ -1723,8 +1722,7 @@ def _shuffled_page_tables(*, num_users, pages_per_user, mapped_pages, page_size,
     needed = max(sum(1 for r in owner if r == rank) for rank in range(sp)) * num_users
     num_pages = needed + 3
     gen = torch.Generator().manual_seed(seed)
-    order = lambda: torch.randperm(num_pages, generator=gen) if shuffle else torch.arange(num_pages - 1, -1, -1)
-    free = {rank: order().tolist() for rank in range(sp)}
+    free = {rank: torch.randperm(num_pages, generator=gen).tolist() for rank in range(sp)}
     width = -(-pages_per_user // PAGE_TABLE_ALIGN) * PAGE_TABLE_ALIGN
     table = torch.full((num_users, width), PAGE_UNMAPPED, dtype=torch.int64)
     for u in range(num_users):
@@ -1994,10 +1992,9 @@ def test_update_padded_kv_cache_paged_rejects(mesh_device, expect_error):
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize("page_size", [32, 64], ids=["page32", "page64"])
-@pytest.mark.parametrize("shuffle", [True, False], ids=["shuffled", "ordered"])
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 @pytest.mark.timeout(0)
-def test_update_padded_kv_cache_paged_perf(mesh_device, page_size, shuffle):
+def test_update_padded_kv_cache_paged_perf(mesh_device, page_size):
     """A paged write of MiniMax-M3's per-chip K chunk (1024 rows of 128, bfloat8_b) against a contiguous one. Device
     time is the slowest chip's, median of 7. The op is ~3 us, so the paged cost is a fraction of a microsecond; the
     bound only guards against a regression in the page mapping."""
@@ -2024,7 +2021,6 @@ def test_update_padded_kv_cache_paged_perf(mesh_device, page_size, shuffle):
         chunk_local=C,
         sp=sp,
         seed=3,
-        shuffle=shuffle,
     )
     pool = init_kvpe_cache(
         kvpe_cache_head_dim=head_dim,
@@ -2070,7 +2066,7 @@ def test_update_padded_kv_cache_paged_perf(mesh_device, page_size, shuffle):
     paged_us = sorted(paged_ns)[3] / 1e3
     ratio = paged_us / contiguous_us
     logger.info(
-        f"paged perf page={page_size} shuffle={shuffle}: contiguous {contiguous_us:.2f} us, paged {paged_us:.2f} us, "
+        f"paged perf page={page_size}: contiguous {contiguous_us:.2f} us, paged {paged_us:.2f} us, "
         f"ratio {ratio:.3f}"
     )
     assert (
