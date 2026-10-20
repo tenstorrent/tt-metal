@@ -31,19 +31,16 @@ const char* unsupported_reason(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
 
-// unsupported_reason(...) == nullptr. Output keeps the input's memory config when none is given.
+// unsupported_reason(...) == nullptr.
 bool supported_by_codegen(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
-bool supported_by_codegen(const Tensor& input, const ttnn::Shape& logical_output_shape);
 
 // Perf routing only, for a call supported_by_codegen: native's tiled reshape measures faster than the program taken
-// against the static window. Tile rows wins when the full plan cuts reads 8x, saves 16+ reads per output tile, or
-// copies whole face halves over more than one native round; the segment map on widths that are not multiples of 32.
-// Tile rows wins only while the segment map it falls back to is within its size caps. Depends on shapes and static
-// device geometry only, never live L1. Never true for uint16: native rejects it, so demoting would fail the call.
+// against the static window. Depends on shapes and static device geometry only, never live L1. Never true for uint16:
+// native rejects it, so demoting would fail the call.
 bool is_demoted(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,

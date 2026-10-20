@@ -15,13 +15,12 @@
 #include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_shape.hpp"
+#include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_plan.hpp"
 
 namespace ttnn::operations::data_movement::reshape_codegen {
 
 namespace {
 
-constexpr uint64_t kTileDim = 32;
 constexpr uint64_t kFaceDim = 16;
 constexpr uint32_t kTileElems = kTileDim * kTileDim;
 constexpr uint64_t kEntryBytes = kMappedEntryWords * sizeof(uint32_t);
@@ -40,8 +39,6 @@ constexpr uint64_t kMinGainNs = 1500;
 constexpr std::array<uint32_t, 2> kPipelinedDepths = {8, 4};
 // Distinct reshapes memoized; a miss re-walks up to kMaxOutTiles output tiles.
 constexpr size_t kLayoutCacheEntries = 1024;
-
-uint64_t tile_pages(const Shape3& s) { return s.c * tt::div_up(s.h, kTileDim) * tt::div_up(s.w, kTileDim); }
 
 uint32_t faced_offset(uint64_t row, uint64_t col) {
     const uint64_t face = (row / kFaceDim) * 2 + col / kFaceDim;
@@ -280,15 +277,6 @@ Candidates plan_candidates(
     return candidates;
 }
 
-std::optional<std::pair<Shape3, Shape3>> mapped_shapes(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape) {
-    const auto in = normalize(in_shape);
-    const auto out = normalize(out_shape);
-    if (!in || !out || in->c * in->h * in->w != out->c * out->h * out->w) {
-        return std::nullopt;
-    }
-    return std::make_pair(*in, *out);
-}
-
 Candidates cached_candidates(
     const Shape3& in, const Shape3& out, uint32_t element_bytes, uint32_t tile_bytes, uint32_t num_cores) {
     using Key = std::array<uint64_t, 10>;
@@ -340,7 +328,7 @@ std::optional<TileMappedLayout> tile_mapped_layout(
     uint32_t tile_bytes,
     uint32_t num_cores,
     uint64_t l1_budget) {
-    const auto shapes = mapped_shapes(in_shape, out_shape);
+    const auto shapes = normalize_pair(in_shape, out_shape);
     if (!shapes) {
         return std::nullopt;
     }
@@ -361,7 +349,7 @@ bool tile_mapped_within_caps(
     uint32_t element_bytes,
     uint32_t tile_bytes,
     uint32_t num_cores) {
-    const auto shapes = mapped_shapes(in_shape, out_shape);
+    const auto shapes = normalize_pair(in_shape, out_shape);
     if (!shapes) {
         return false;
     }
@@ -383,7 +371,7 @@ TileMappedPlan build_tile_mapped_plan(
     uint32_t tile_bytes,
     uint32_t num_cores,
     bool sliced) {
-    const auto shapes = mapped_shapes(in_shape, out_shape);
+    const auto shapes = normalize_pair(in_shape, out_shape);
     TT_FATAL(shapes.has_value(), "Reshape shapes differ in volume");
     const auto& [in, out] = *shapes;
     const auto candidates = cached_candidates(in, out, element_bytes, tile_bytes, num_cores);
@@ -426,10 +414,8 @@ TileMappedPlan build_tile_mapped_plan(
 }
 
 uint32_t tile_mapped_input_depth(const TileMappedLayout& layout, uint32_t tile_bytes, uint64_t l1_budget) {
-    // Map, input and scratch CBs, each starting at a DRAM-aligned address. At depth 1 the unsliced map needs no more
-    // L1 than native's tiled reshape, which holds one map page, one input tile and one output tile, each also
-    // DRAM-aligned: native's map page holds every segment it splits the output tile into, and this map's segments are
-    // those same segments, merged further once grouped by input tile.
+    // Map, input and scratch CBs, each DRAM-aligned like native's map page, input tile and output tile. This map's
+    // segments are native's merged by input tile, so at depth 1 the unsliced map never needs more L1 than native.
     const auto footprint = [](uint64_t bytes) { return tt::round_up(bytes, tt::tt_metal::hal::get_dram_alignment()); };
     const uint64_t fixed = footprint(layout.page_bytes()) + footprint(tile_bytes);
     for (const uint32_t depth : kPipelinedDepths) {

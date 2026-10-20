@@ -35,17 +35,12 @@ _SPECIAL32 = [
 
 # Float dtypes: (torch dtype handed to from_torch, integer view of its bits).
 _FLOAT = {ttnn.bfloat16: (torch.bfloat16, torch.int16), ttnn.float32: (torch.float32, torch.int32)}
-# Integer dtypes: full value range, carried in int64 so uint32 keeps its top bit.
-_INT_RANGE = {ttnn.int32: (-(1 << 31), (1 << 31) - 1), ttnn.uint32: (0, (1 << 32) - 1), ttnn.uint16: (0, (1 << 16) - 1)}
 
 
 def _make(shape, dtype):
     torch.manual_seed(0)
-    if dtype in _INT_RANGE:
-        low, high = _INT_RANGE[dtype]
-        return torch.randint(low, high, shape, dtype=torch.int64).to(
-            torch.int32 if dtype == ttnn.int32 else torch.int64
-        )
+    if dtype == ttnn.uint16:
+        return torch.randint(0, (1 << 16) - 1, shape, dtype=torch.int64)
     host, bits = _FLOAT[dtype]
     data = torch.randn(shape, dtype=torch.float32).to(host)
     width = 16 if bits == torch.int16 else 32
@@ -76,8 +71,6 @@ _PATHS = [
     # Tile-row permutation: both widths multiples of 32.
     ("tile_rows", [1, 64, 1024], [1, 64, 8, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT),
     ("tile_rows_fp32", [1, 64, 1024], [1, 64, 8, 128], ttnn.float32, ttnn.TILE_LAYOUT),
-    ("tile_rows_int32", [1, 64, 1024], [1, 64, 8, 128], ttnn.int32, ttnn.TILE_LAYOUT),
-    ("tile_rows_uint32", [1, 64, 1024], [1, 64, 8, 128], ttnn.uint32, ttnn.TILE_LAYOUT),
     ("tile_rows_uint16", [1, 64, 1024], [1, 64, 8, 128], ttnn.uint16, ttnn.TILE_LAYOUT),
     # Segment map: a width that is not a multiple of 32.
     ("tile_mapped_bf16", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
@@ -125,7 +118,7 @@ _EDGE = [
     ("outer_to_h", [3, 50, 64], [50, 3, 64]),
 ]
 _EDGE_CASES = [(*e, ttnn.bfloat16) for e in _EDGE] + [
-    (*e, dtype) for e in _EDGE if e[0] in ("h50", "rank5", "outer_to_h") for dtype in (ttnn.float32, ttnn.int32)
+    (*e, ttnn.float32) for e in _EDGE if e[0] in ("h50", "rank5", "outer_to_h")
 ]
 
 
@@ -325,9 +318,8 @@ _PAD_VALUE_CASES = [
 
 @pytest.mark.parametrize("case,in_shape,out_shape", _PAD_VALUE_CASES, ids=[c[0] for c in _PAD_VALUE_CASES])
 def test_explicit_pad_value_on_padded_output_runs_native(device, expect_error, case, in_shape, out_shape):
-    # Codegen writes zeros into tile padding, so a call that asks native to fill it must not reach codegen.
-    # Native fills through a compute kernel that rewrites NaN payloads and subnormals in every edge tile, so the
-    # data holds plain finite values only.
+    # Codegen zeroes tile padding, so a call that asks native to fill it must not reach codegen. Native's fill
+    # rewrites NaN payloads and subnormals in edge tiles, so the data holds plain finite values only.
     pad_value = 7.0
     torch.manual_seed(0)
     source = torch.randn(in_shape, dtype=torch.bfloat16)

@@ -83,11 +83,9 @@ ReshapeCodegenDeviceOperation::tensor_return_value_t ReshapeCodegenDeviceOperati
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-// With the full plan fitting, the hashed rung or depth is the same constant on every call, so calls share programs
-// exactly as the attributes and tensor args alone would key them. Under L1 pressure the hashed values step along fixed
-// ladders (tile-row rungs, segment-map input depths), so the key changes only when the frontier crosses a rung, or
-// when a tile-rows call falls back to the segment map. A call no plan fits hashes rung 0, which never has an entry: it
-// misses and the program factory raises.
+// The hashed rung or depth steps along fixed ladders (tile-row rungs, segment-map input depths), so the key changes
+// only when live L1 crosses a rung or tile rows falls back to the segment map. A call no plan fits hashes rung 0,
+// which never has an entry: it misses and the program factory raises.
 ttsl::hash::hash_t ReshapeCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& plan = operation_attributes.plan;

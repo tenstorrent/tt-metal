@@ -16,7 +16,36 @@ uint32_t tile_bytes_of(const Tensor& input) {
     return input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
 }
 
+std::optional<Shape3> normalize(const ttnn::Shape& shape) {
+    if (shape.rank() == 0) {
+        return std::nullopt;
+    }
+    for (size_t i = 0; i < shape.rank(); ++i) {
+        if (shape[i] == 0) {
+            return std::nullopt;
+        }
+    }
+    Shape3 out;
+    out.w = shape[-1];
+    if (shape.rank() >= 2) {
+        out.h = shape[-2];
+    }
+    for (size_t i = 0; i + 2 < shape.rank(); ++i) {
+        out.c *= shape[i];
+    }
+    return out;
+}
+
 }  // namespace
+
+std::optional<std::pair<Shape3, Shape3>> normalize_pair(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape) {
+    const auto in = normalize(in_shape);
+    const auto out = normalize(out_shape);
+    if (!in || !out || in->c * in->h * in->w != out->c * out->h * out->w) {
+        return std::nullopt;
+    }
+    return std::make_pair(*in, *out);
+}
 
 tt::tt_metal::TensorSpec output_spec(
     const Tensor& input, const ttnn::Shape& logical_output_shape, const tt::tt_metal::MemoryConfig& output_mem_config) {
