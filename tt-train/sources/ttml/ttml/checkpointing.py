@@ -209,39 +209,19 @@ def _load_optimizer(
     )
 
 
-def _check_gathered_shape(
-    group: str,
-    path: tuple,
-    name: str,
-    tensor: ttml.autograd.Tensor,
-    shape: tuple,
-    model_shapes: dict,
-    expected_shapes: dict | None,
-) -> bool:
-    """Hold one gathered tensor to the shape it must have before it is written (see `CheckpointShapeError`).
-
-    Model params are recorded in `model_shapes` and held to `expected_shapes` when given. Optimizer leaves are held
-    to their parameter's gathered shape when the parameter is in this checkpoint, else to `expected_shapes`. Returns
-    False for a leaf with nothing to be held to (its name is no model param and not in `expected_shapes`: an
-    optimizer over a subset of the params); the caller reports those in one summary warning."""
-    label = _leaf_label((group, *path), name)
-    if group == "model":
-        model_shapes[name] = shape
-        reference, source = (expected_shapes or {}).get(name), "expected_shapes"
-    elif name in model_shapes:
-        reference, source = model_shapes[name], f"its parameter model[{name}]"
-    elif expected_shapes is not None and name in expected_shapes:
-        reference, source = expected_shapes[name], "expected_shapes"
-    else:
-        return False
-    if reference is None or tuple(reference) == shape:
-        return True
+def _check_state_shape(
+    path: tuple, name: str, tensor: ttml.autograd.Tensor, shape: tuple, parameter_shape: tuple
+) -> None:
+    """Hold one gathered optimizer leaf to the gathered shape of its parameter before it is written (see
+    `CheckpointShapeError`)."""
+    if shape == tuple(parameter_shape):
+        return
     raise CheckpointShapeError(
-        f"checkpointing: {label} gathers to {shape} but {source} says {tuple(reference)}. The tensor is laid out as "
-        f"{Sharding.from_tensor(tensor).describe()}; if that label does not describe its data (e.g. Replicate on a "
-        f"mesh axis the parameter is sharded on), gathering by it keeps one device's copy and the checkpoint would "
-        f"hold truncated state. Nothing was written. Fix the label where the tensor was produced (the op that "
-        f"relabelled it), not the checkpoint."
+        f"checkpointing: {_leaf_label(('optimizer', *path), name)} gathers to {shape} but its parameter model[{name}] "
+        f"gathers to {tuple(parameter_shape)}. The tensor is laid out as {Sharding.from_tensor(tensor).describe()}; if "
+        f"that label does not describe its data (e.g. Replicate on a mesh axis the parameter is sharded on), gathering "
+        f"by it keeps one device's copy and the checkpoint would hold truncated state. Nothing was written. Fix the "
+        f"label where the tensor was produced (the op that relabelled it), not the checkpoint."
     )
 
 
@@ -259,7 +239,6 @@ def save_checkpoint(
     header: dict | None = None,
     model_params=None,
     optimizer=None,
-    expected_shapes: dict[str, tuple] | None = None,
     verify_replicas: bool | None = None,
     display_progress: bool = False,
 ) -> None:
@@ -273,17 +252,8 @@ def save_checkpoint(
     else `CheckpointShapeError` is raised and no file is written (the `.tmp` is removed): a mismatch means one
     side's topology label does not describe its data and the file would hold truncated state. State keyed by a
     name that is not in `model_params` is written as-is, and one summary warning, issued before the file is
-    committed, counts such leaves and names up to three; an optimizer saved without `model_params` warns once for
-    the leaves `expected_shapes` does not cover (nothing else can cross-check them). Any failure, the final rename
-    included, removes the `.tmp`.
-
-    `expected_shapes` maps parameter name -> full (gathered) shape and is held against the matching model params
-    and optimizer leaves. It is the only check that catches a parameter labelled `Shard` over identical copies
-    (it gathers too wide, and its moments with it); `verify_replicas` covers the opposite mistake. TEST-FACING for now: trainers cannot populate it
-    yet, because the global shape of a sharded parameter is not retained on the `Parameter` (only TP-aware
-    modules know it, FSDP stores none, and lazy init discards it at materialize); a follow-up keeps it there.
-    Names in `expected_shapes` that no tensor of this checkpoint carries raise `ValueError` before anything is
-    gathered or written, so a check cannot pass vacuously.
+    committed, counts such leaves and names up to three; an optimizer saved without `model_params` warns once,
+    since nothing can cross-check its state. Any failure, the final rename included, removes the `.tmp`.
 
     `verify_replicas` (on unless disabled) byte-compares every copy a tensor's label calls a replica before one copy is
     saved, for model parameters and optimizer state alike, and raises `ReplicaMismatchError` naming the tensor if
@@ -304,21 +274,14 @@ def save_checkpoint(
         manifest["optimizer"], optimizer_tensors = _walk(optimizer.get_state_dict())
         records.extend(("optimizer", *entry) for entry in optimizer_tensors)
         if model_params is None:
-            # Leaves named in `expected_shapes` are still held to it; only the rest go unchecked.
-            uncovered = [name for _, name, _ in optimizer_tensors if name not in (expected_shapes or {})]
-            if uncovered:
-                warnings.warn(
-                    f"checkpointing: saving an optimizer without model_params, so {len(uncovered)} of its state "
-                    "tensors cannot be checked against their parameters' shapes (a mislabelled moment would be saved "
-                    "truncated)",
-                    stacklevel=2,
-                )
-    if expected_shapes is not None and (unknown := set(expected_shapes) - {name for _, _, name, _ in records}):
-        # Before any gather or file: a typo in expected_shapes must neither cost a full gather nor pass vacuously.
-        raise ValueError(f"checkpointing: expected_shapes names tensors not in this checkpoint: {sorted(unknown)}")
+            warnings.warn(
+                "checkpointing: saving an optimizer without model_params, so its state tensors cannot be checked "
+                "against their parameters' shapes (a mislabelled moment would be saved truncated)",
+                stacklevel=2,
+            )
 
-    model_shapes: dict = {}
-    unchecked = []  # optimizer leaves with no parameter (nor expected shape) to be held to
+    model_shapes: dict = {}  # parameter name -> gathered shape, recorded as the model group streams
+    unchecked = []  # optimizer leaves with no parameter in this checkpoint to be held to
     tmp_path = path + ".tmp"
     try:
         with open(tmp_path, "wb") as f:
@@ -335,9 +298,12 @@ def save_checkpoint(
                         f"checkpointing: {leaf} is {e}. Nothing was written. Fix the label where the tensor was "
                         "produced (the op that relabelled it), not the checkpoint."
                     ) from e
-                if not _check_gathered_shape(
-                    group, sub_path, name, tensor, tuple(data.shape), model_shapes, expected_shapes
-                ):
+                shape = tuple(data.shape)
+                if group == "model":
+                    model_shapes[name] = shape
+                elif name in model_shapes:
+                    _check_state_shape(sub_path, name, tensor, shape, model_shapes[name])
+                else:
                     unchecked.append(_leaf_label((group, *sub_path), name))
                 pickle.dump(data, f)
         if unchecked and model_params is not None:

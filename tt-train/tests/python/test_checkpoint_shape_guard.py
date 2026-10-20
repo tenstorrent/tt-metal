@@ -334,41 +334,6 @@ def test_save_keeps_nd_replicated_tensor(tp_mesh, tmp_path):
         assert tuple(record.shape) == (1, 1, 32, 32), (verify, record.shape)
 
 
-def test_save_rejects_param_not_at_expected_shape(tp_mesh, tmp_path, expect_error):
-    """``expected_shapes`` holds a parameter to an absolute full shape: the one check that also catches a parameter
-    whose own label is wrong (parameter and moments gathering to the same wrong shape). A wrong expectation is
-    rejected with the leaf and both shapes named; the correct expectations pass; a name no tensor carries is an
-    error rather than a vacuous pass.
-
-    Negative control: ``expected_shapes`` did not exist before, so the first call raised ``TypeError`` (unknown
-    kwarg) rather than ``CheckpointShapeError``, and no shape was ever held to an external reference."""
-    params, opt = _trained_tp()
-    name = _sharded_param_name(params)
-    full = _gathered_shape(params[name])
-    per_device = tuple(params[name].get_value(NATIVE).shape)
-    assert per_device != full, "precondition: a sharded parameter's per-device shape differs from its full shape"
-
-    path = str(tmp_path / "expected.ckpt")
-    with expect_error(CheckpointShapeError, rf"model\[{name}\] gathers to .* expected_shapes says"):
-        checkpointing.save_checkpoint(
-            path, header={}, model_params=params, optimizer=opt, expected_shapes={name: per_device}
-        )
-    _assert_nothing_written(path)
-
-    with expect_error(ValueError, "expected_shapes names tensors not in this checkpoint"):
-        checkpointing.save_checkpoint(path, header={}, model_params=params, expected_shapes={"no/such/param": full})
-    _assert_nothing_written(path)
-
-    checkpointing.save_checkpoint(
-        path,
-        header={},
-        model_params=params,
-        optimizer=opt,
-        expected_shapes={n: _gathered_shape(t) for n, t in params.items()},
-    )
-    assert os.path.exists(path)
-
-
 def test_save_warns_and_skips_state_not_in_model_params(tp_mesh, tmp_path):
     """Optimizer state keyed by a name that is not in ``model_params`` has no parameter to compare against, so it is
     written as-is and reported in one summary warning (count plus the leaf names) instead of rejected
