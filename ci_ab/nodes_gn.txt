@@ -1,0 +1,6 @@
+ci_ab/test_gn_ab.py::test_gn_sharded[gn1280_64-l1]
+ci_ab/test_gn_ab.py::test_gn_sharded[gn1920_32-l1]
+ci_ab/test_gn_ab.py::test_gn_sharded[gn640_64-l1]
+ci_ab/test_gn_ab.py::test_gn_sharded[gn320_128-l1]
+ci_ab/test_gn_ab.py::test_gn_sharded[gn2560_32-l1]
+ci_ab/test_gn_ab.py::test_gn_sharded[gn512_128_tile-l1]
