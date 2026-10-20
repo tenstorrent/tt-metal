@@ -163,6 +163,14 @@ def main():
             if c
         ]
         lines.append("request: " + " | ".join(shapes))
+        powers = [(cfg, c.get("power_class")) for cfg, c in ((_BASE, base), (_REF, ref)) if c]
+        if any(power for _, power in powers):
+            lines.append("power: " + " | ".join(f"{cfg} {power or 'unknown'}" for cfg, power in powers))
+        if base.get("power_class") and ref.get("power_class") and base["power_class"] != ref["power_class"]:
+            print(
+                f"::warning::{model}: {_BASE} ran on a {base['power_class']} host and {_REF} on {ref['power_class']}; "
+                "the gain mixes power classes"
+            )
         lines.append(f"gain = how many times better {_REF} is than {_BASE}")
         if not note:
             rb, rr = base.get("pipeline_ranks"), ref.get("pipeline_ranks")

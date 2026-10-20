@@ -373,6 +373,20 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
       *) echo "perf baseline WARN: power probe on ${RESOLVED_HOSTS%%,*} returned '${PERF_POWER}'" >&2; PERF_POWER="" ;;
     esac
   fi
+  # Tag the sidecar so the scaling job can tell when its sc1 and sc4 legs ran on different power classes
+  # (the bh_sc1 pool mixes 8 kW and 14 kW hosts).
+  if [ -n "${PERF_POWER}" ] && [ -f "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" ]; then
+    python3 - "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" "${PERF_POWER}" <<'PY' || true
+import json, sys
+path, power = sys.argv[1:]
+with open(path) as fh:
+    rec = json.load(fh)
+rec["power_class"] = power
+with open(path, "w") as fh:
+    json.dump(rec, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+PY
+  fi
   python3 "${PERF_GATE}" \
     "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" \
     --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --power "${PERF_POWER}" \
