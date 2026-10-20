@@ -27,7 +27,7 @@ struct SparsePushTreePlanParams {
     uint32_t banks = 0;
     uint32_t links = 2;
     uint32_t senders_per_link = 2;
-    uint32_t levels = 12;
+    uint32_t levels = 6;  // dimension-ordered paths are at most 4 + 2 hops
     uint32_t stage_rows = 65536;
     uint32_t stream_records = 4096;  // records per sender page
     uint32_t slot_capacity = 65536;  // rows a requester may need

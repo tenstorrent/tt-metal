@@ -46,6 +46,7 @@ enum Cb : uint32_t {
 };
 constexpr uint32_t kWin = 256;        // bitmap words per requester streamed into L1 at a time
 constexpr uint32_t kChunkWords = 16;  // rows are balanced over cores in chunks of 512
+constexpr uint32_t kIdxBytes = 2048;  // one rewrite unit (512 indices); kIdx holds one for each RISC
 
 inline uint32_t popcount(uint32_t x) {
     x = x - ((x >> 1) & 0x55555555u);
@@ -122,31 +123,55 @@ void kernel_main() {
     auto* handoff = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(kHandoff));
     constexpr uint32_t sc_div = sc;  // keeps the helper's division by a constant
     auto lane_rel_h = [](uint32_t j) { return (j % B) + (j / B) * unit; };
+    // [3] tables ready (NCRISC built the block prefixes), [4] next unit from the front (NCRISC), [5] last unit
+    // from the back (BRISC) -- each side stops where the other has got to; one unit may be done twice, harmlessly.
+    constexpr uint32_t segs = topk % 512 == 0 ? topk / 512 : 1, seg_len = topk / segs;
+    const uint32_t units = rows * segs, per_core = ceil_div(units, G);
+    const uint32_t u_lo = me * per_core < units ? me * per_core : units;
+    const uint32_t u_hi = u_lo + per_core < units ? u_lo + per_core : units;
+    auto rewrite_unit = [&](uint32_t u, uint32_t idx_l1) {
+        const uint32_t a = handoff[0], need_a = handoff[2];
+        const uint32_t region_a = ceil_div(ceil_div(need_a, P) + LV, B) * unit;
+        auto* bpre = reinterpret_cast<uint32_t*>(get_write_ptr(kRw));  // [max_blocks] | requester bitmap [W]
+        auto* abits = bpre + max_blocks;
+        auto* idx = reinterpret_cast<uint32_t*>(idx_l1);
+        const uint64_t seg_off = (u % segs) * seg_len * 4;
+        noc_async_read(indices.get_noc_addr(u / segs) + seg_off, idx_l1, seg_len * 4);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        for (uint32_t k = 0; k < seg_len; ++k) {
+            const uint32_t v = idx[k];
+            if (v == kSentinel) {
+                continue;
+            }
+            const uint32_t blk = v / sc_div, w = v >> 5, o = blk % n_dev;
+            uint32_t rank = bpre[blk];
+            for (uint32_t w2 = blk * words_per_block; w2 < w; ++w2) {
+                rank += popcount(abits[w2]);
+            }
+            rank += popcount(abits[w] & ((1u << (v & 31)) - 1u));
+            if (o == a) {
+                idx[k] = lane_rel_h(rank / P) + (rank % P) * B;
+            } else {
+                const uint32_t in = handoff[16 + o], din = in & 0xFF, h = in >> 8;
+                idx[k] = (1 + din) * region_a + lane_rel_h(handoff[48 + din * LV + h] + rank / P) + (rank % P) * B;
+            }
+        }
+        noc_async_write(idx_l1, compact.get_noc_addr(u / segs) + seg_off, seg_len * 4);
+        noc_async_write_barrier();
+    };
 #if defined(REWRITE_HELPER)
     {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(handoff_sem_id)), 1);
         invalidate_l1_cache();
-        const uint32_t a = handoff[0], vw = handoff[1], need_a = handoff[2];
-        uint32_t in_of[32], lnb_in[4 * LV];
-        for (uint32_t o = 0; o < n_dev; ++o) {
-            in_of[o] = handoff[16 + o];
-        }
-        for (uint32_t i = 0; i < 4 * LV; ++i) {
-            lnb_in[i] = handoff[48 + i];
-        }
-        const uint32_t region_a = ceil_div(ceil_div(need_a, P) + LV, B) * unit;
-        constexpr uint32_t segs = topk % 512 == 0 ? topk / 512 : 1, seg_len = topk / segs;
-        const uint32_t units = rows * segs, per_core = ceil_div(units, G);
-        const uint32_t u0 = me * per_core < units ? me * per_core : units;
-        const uint32_t u1 = u0 + per_core < units ? u0 + per_core : units;
-        if (u0 >= u1) {
+        const uint32_t a = handoff[0], vw = handoff[1];
+        if (u_lo >= u_hi) {
             return;
         }
         // A needed row's slot follows from its owner: owned here -> the own region; otherwise it arrived from
         // in_of[owner] at that hop, so it sits at its rank among this chip's needed rows of owners with the same
         // (direction, hop) -- a per-block prefix over the requester's bitmap per such class.
-        const uint32_t rw_l1 = get_write_ptr(kRw);
-        auto* bpre = reinterpret_cast<uint32_t*>(rw_l1);  // [max_blocks] | this requester's bitmap [W]
+        auto* bpre = reinterpret_cast<uint32_t*>(get_write_ptr(kRw));
         auto* abits = bpre + max_blocks;
         const uint32_t blocks = vw / words_per_block;
         for (uint32_t w = 0; w < vw;) {
@@ -176,41 +201,21 @@ void kernel_main() {
             cls_run[c] = 0;
         }
         for (uint32_t b = 0; b < blocks; ++b) {
-            const uint32_t o = b % n_dev;
-            const uint32_t c = o == a ? 0u : 1u + (in_of[o] & 0xFF) % 4 * LV + (in_of[o] >> 8);
+            const uint32_t o = b % n_dev, in = handoff[16 + o];
+            const uint32_t c = o == a ? 0u : 1u + (in & 0xFF) % 4 * LV + (in >> 8);
             const uint32_t v = bpre[b];
             bpre[b] = cls_run[c];
             cls_run[c] += v;
         }
-        const uint32_t idx_l1 = get_write_ptr(kIdx);
-        auto* idx = reinterpret_cast<uint32_t*>(idx_l1);
-        for (uint32_t u = u0; u < u1; ++u) {
-            const uint64_t seg_off = (u % segs) * seg_len * 4;
-            noc_async_write_barrier();
-            noc_async_read(indices.get_noc_addr(u / segs) + seg_off, idx_l1, seg_len * 4);
-            noc_async_read_barrier();
+        handoff[3] = 1;
+        for (uint32_t u = u_lo; u < u_hi; ++u) {
             invalidate_l1_cache();
-            for (uint32_t k = 0; k < seg_len; ++k) {
-                const uint32_t v = idx[k];
-                if (v == kSentinel) {
-                    continue;
-                }
-                const uint32_t blk = v / sc_div, w = v >> 5, o = blk % n_dev;
-                uint32_t rank = bpre[blk];
-                for (uint32_t w2 = blk * words_per_block; w2 < w; ++w2) {
-                    rank += popcount(abits[w2]);
-                }
-                rank += popcount(abits[w] & ((1u << (v & 31)) - 1u));
-                if (o == a) {
-                    idx[k] = lane_rel_h(rank / P) + (rank % P) * B;
-                } else {
-                    const uint32_t din = in_of[o] & 0xFF, h = in_of[o] >> 8;
-                    idx[k] = (1 + din) * region_a + lane_rel_h(lnb_in[din * LV + h] + rank / P) + (rank % P) * B;
-                }
+            if (u > handoff[5]) {
+                break;  // BRISC has done it
             }
-            noc_async_write(idx_l1, compact.get_noc_addr(u / segs) + seg_off, seg_len * 4);
+            handoff[4] = u + 1;
+            rewrite_unit(u, get_write_ptr(kIdx));
         }
-        noc_async_write_barrier();
         return;
     }
 #endif
@@ -533,13 +538,15 @@ void kernel_main() {
     invalidate_l1_cache();
     auto* tot = carve(kGroups);
     for (uint32_t g = 0; g < kGroups; ++g) {
-        uint32_t s = 0;
-        for (uint32_t c = 0; c < G; ++c) {
-            const uint32_t v = all[c * cnt_words + g];
-            all[c * cnt_words + g] = s;
-            s += v;
+        tot[g] = 0;
+    }
+    for (uint32_t c = 0; c < G; ++c) {
+        uint32_t* row = all + c * cnt_words;
+        for (uint32_t g = 0; g < kGroups; ++g) {
+            const uint32_t v = row[g];
+            row[g] = tot[g];
+            tot[g] += v;
         }
-        tot[g] = s;
     }
     auto pre = [&](uint32_t c, uint32_t g) { return all[c * cnt_words + g]; };
     auto owner_core = [&](uint32_t g, uint32_t rank) {  // core holding rank `rank` of group g
@@ -577,6 +584,9 @@ void kernel_main() {
     handoff[0] = a;
     handoff[1] = valid_words[a];
     handoff[2] = needed_rows[a];
+    handoff[3] = 0;
+    handoff[4] = u_lo;
+    handoff[5] = u_hi;
     for (uint32_t o = 0; o < n_dev; ++o) {
         handoff[16 + o] = in_of[o];
     }
@@ -769,8 +779,20 @@ void kernel_main() {
     }
 
     PLAN_T(7);
+    // 4. Index rewrite: NCRISC (REWRITE_HELPER) started from the front; join it from the back.
+    noc_async_write_barrier();
+    while (u_lo < u_hi && handoff[3] == 0) {
+        invalidate_l1_cache();
+    }
+    for (uint32_t u = u_hi; u-- > u_lo;) {
+        invalidate_l1_cache();
+        if (u < handoff[4]) {
+            break;  // NCRISC has done it
+        }
+        handoff[5] = u;
+        rewrite_unit(u, get_write_ptr(kIdx) + kIdxBytes);
+    }
     PLAN_T(8);
-    // 4. The index rewrite runs on NCRISC (REWRITE_HELPER) from the handoff written above.
 #if defined(DEBUG_PRINT_ENABLED)
     PLAN_T(9);
     DPRINT(

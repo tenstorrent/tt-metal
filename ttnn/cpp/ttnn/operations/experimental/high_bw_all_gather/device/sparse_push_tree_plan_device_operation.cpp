@@ -51,7 +51,7 @@ void SparsePushTreePlanDeviceOperation::validate_on_program_cache_miss(
     const uint32_t n_dev = attrs.mesh_rows * attrs.mesh_cols;
     TT_FATAL(n_dev == 32 && attrs.mesh_cols == 4, "tree plan (prototype) supports the 8x4 mesh");
     TT_FATAL(td::senders(attrs) == 16, "tree plan (prototype) needs 2 links x 2 senders per channel");
-    TT_FATAL(attrs.levels == 12, "tree plan (prototype) uses 12 levels");
+    TT_FATAL(attrs.levels == 6, "tree plan (prototype) uses 6 levels");
     TT_FATAL(8 + 2 * attrs.pages_per_packet <= 32, "packet rows must fit a 128 B record");
     const auto layout = SparsePushPlanLayout::make(attrs.max_rows, attrs.stripe_chunk);
     TT_FATAL(
@@ -122,7 +122,7 @@ tt::tt_metal::ProgramDescriptor SparsePushTreePlanDeviceOperation::create_descri
                 .page_size = bytes}}},
         });
     };
-    constexpr uint32_t kGroups = 4 * 12 * 2 * 2 + 2;
+    const uint32_t kGroups = 4 * attrs.levels * 2 * 2 + 2;
     add_cb(td::kBits, 33 * td::kWin * 4);
     add_cb(td::kCnt, td::kCntWords * 4);
     add_cb(td::kAllCnt, cores * td::kCntWords * 4);
@@ -130,7 +130,7 @@ tt::tt_metal::ProgramDescriptor SparsePushTreePlanDeviceOperation::create_descri
     add_cb(td::kCarry, kGroups * td::kRecordBytes);
     add_cb(td::kScratch, 3072);
     add_cb(td::kRw, (max_blocks + td::round_up(W, 16)) * 4);
-    add_cb(td::kIdx, td::round_up(topk * 4, 64));
+    add_cb(td::kIdx, 2 * 2048);
     add_cb(td::kVars, 8192);
     add_cb(td::kDens, (cores + 1) * td::round_up(wpc / 16, 16) * 4);
     add_cb(td::kCache, td::kCacheRows * 8);

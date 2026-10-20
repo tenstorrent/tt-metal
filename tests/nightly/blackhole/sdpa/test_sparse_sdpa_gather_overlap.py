@@ -1963,7 +1963,8 @@ def _tree_plan_local(
     return torch.from_numpy(host.reshape(n_dev, 1, senders, width).astype(np.int32)), slot_maps, stats
 
 
-_TREE_LEVELS = 12  # tree depths a plan may use (the device planner's bound)
+_TREE_LEVELS = 12  # tree depths a plan may use
+_DIM_LEVELS = 6  # dimension-ordered paths: at most 4 + 2 hops (sparse_push_tree_plan's levels)
 
 
 def _dim_path(o, d, mesh_shape):
@@ -2029,7 +2030,7 @@ def _tree_plan_records(
     = w's index among the 4 senders of its direction) with a level marker after each level and an end record. On an
     edge, rows are grouped by (level, keep), ascending; packet n and the receiver lane follow from group counts."""
     R, C = mesh_shape
-    B, P, LV = _DRAM_BANKS, pages_per_packet, _TREE_LEVELS
+    B, P, LV = _DRAM_BANKS, pages_per_packet, (_DIM_LEVELS if dim else _TREE_LEVELS)
     unit, RW = P * B, 32
     assert 8 + 2 * P <= RW
     per_dir = links * k_per
