@@ -5,10 +5,10 @@
 // PROTOTYPE multicast-tree push reader for fixed-size records (SPARSE_PUSH_TREE=2), the format the device tree
 // planner writes (reference: _tree_plan_records in tests/nightly/blackhole/sdpa/test_sparse_sdpa_gather_overlap.py).
 // Same protocol as tree_push_reader.cpp; one sender page holds words 1..16 = packets this chip receives per neighbour
-// sender, then records of 3 + 2P words from word 32:
-//   [kind, target, n, (src_0, arrival_0) .. (src_{P-1}, arrival_{P-1})]
+// sender, then records from word 32.
 // kind 1/3: src = input row (to a neighbour / to this chip), 2: src = page of this chip's output, 6: level end, 0:
-// end. A row with arrival = stream << 24 | count is read once that neighbour sender has delivered count packets.
+// end. Records are 128 B: [kind, target, n, 0 x 5, (src, arrival) x P, 0...]. A row with arrival = stream << 24 |
+// count is read once that neighbour sender has delivered count packets.
 
 #include "api/dataflow/dataflow_api.h"
 
@@ -120,7 +120,7 @@ void kernel_main() {
         wpos = (wpos + 1) % kSlots;
     };
 
-    constexpr uint32_t record_words = 3 + 2 * pages_per_packet;
+    constexpr uint32_t record_words = 32;
     for (uint32_t rec = kHeaderWords;; rec += record_words) {
         cursor = rec;
         const uint32_t type = next_word();
@@ -134,6 +134,7 @@ void kernel_main() {
         }
         const uint32_t target = next_word();
         const uint32_t n = next_word();
+        cursor = rec + 8;
         cb_reserve_back(kData, batched + 1);
         cb_reserve_back(kMeta, batched + 1);
         const uint32_t data_l1 = get_write_ptr(kData) + batched * pages_per_packet * page_bytes;

@@ -65,9 +65,26 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t banks,
     const std::optional<Tensor>& chunk_start = std::nullopt);
 
+// PROTOTYPE on-device tree-push planner: returns {sender streams, compact indices, slot table}
+// (see device/sparse_push_tree_plan_device_operation.hpp).
+std::vector<Tensor> sparse_push_tree_plan(
+    const Tensor& tables,
+    const Tensor& indices,
+    const Tensor& rank,
+    uint32_t mesh_rows,
+    uint32_t mesh_cols,
+    uint32_t stripe_chunk,
+    uint32_t max_rows,
+    uint32_t pages_per_packet,
+    uint32_t banks,
+    uint32_t stage_rows,
+    uint32_t stream_records,
+    uint32_t slot_capacity);
+
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 
 namespace ttnn::experimental {
 using operations::experimental::high_bw_all_gather::high_bw_all_gather;
 using operations::experimental::high_bw_all_gather::sparse_push_plan;
+using operations::experimental::high_bw_all_gather::sparse_push_tree_plan;
 }  // namespace ttnn::experimental

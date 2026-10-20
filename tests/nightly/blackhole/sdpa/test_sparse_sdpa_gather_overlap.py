@@ -1660,6 +1660,83 @@ def test_sparse_push_tree(mesh_device):
         )
         t_routed = timed(routed)
 
+        if os.environ.get("TREE_PLAN") == "device":
+            rank = ttnn.from_torch(
+                torch.tensor([[[[d] + [0] * 15]] for d in range(n_dev)], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+                **common,
+            )
+            tree_plan = lambda: ttnn.experimental.sparse_push_tree_plan(
+                tables,
+                idx_natural,
+                rank,
+                mesh_rows=mesh_shape[0],
+                mesh_cols=mesh_shape[1],
+                stripe_chunk=stripe_chunk,
+                max_rows=cache_tokens,
+                pages_per_packet=pages_per_packet,
+                banks=_DRAM_BANKS,
+            )
+            streams, idx_tree, _ = tree_plan()
+            ttnn.synchronize_device(mesh_device)
+            t_plan = timed(lambda: tree_plan())
+            ref, ref_maps, stats = _tree_plan_records(
+                natural, n_dev, mesh_shape, stripe_chunk, pages_per_packet, buffer_rows, links=links, k_per=k_per
+            )
+            got = ttnn.to_torch(streams, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[:, 0].numpy()
+            ref = ref[:, 0].numpy()
+            if os.environ.get("TREE_DUMP"):
+                np.savez(os.environ["TREE_DUMP"], got=got, ref=ref)
+            bad = 0
+            for c in range(n_dev):
+                for w in range(ref.shape[1]):
+                    kinds = ref[c, w, 32::32]
+                    end = 32 + 32 * (int(np.flatnonzero(kinds == 0)[0]) + 1)
+                    if not np.array_equal(got[c, w, :end], ref[c, w, :end]):
+                        bad += 1
+                        if bad <= 3:
+                            diff = np.flatnonzero(got[c, w, :end] != ref[c, w, :end])
+                            logger.info(
+                                f"chip {c} sender {w}: {diff.size} words differ, first {diff[:8].tolist()}: "
+                                f"got {got[c, w, diff[:8]].tolist()} want {ref[c, w, diff[:8]].tolist()}"
+                            )
+            want_idx = np.where(natural >= 0, np.take_along_axis(ref_maps[:, None, :], np.maximum(natural, 0), 2), -1)
+            got_idx = ttnn.to_torch(idx_tree, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2)).numpy()
+            idx_bad = int((got_idx.reshape(n_dev, s_local, TOPK).astype(np.int64) != want_idx).sum())
+            logger.info(
+                f"layer {layer}: device tree plan {t_plan:.0f} us; {bad} sender pages differ, {idx_bad} indices"
+            )
+            assert bad == 0 and idx_bad == 0, "device tree plan differs from the host reference"
+            tree = lambda: ttnn.experimental.high_bw_all_gather(
+                cache, output_tensor=tree_out, push_runs_tensor=streams, **gather_kw
+            )
+            tree()
+            ttnn.synchronize_device(mesh_device)
+            t_tree = timed(tree)
+            lines.append(
+                f"  layer {layer}: routed {t_routed:6.0f} us, tree {t_tree:6.0f} us ({t_routed / t_tree:.2f}x); "
+                f"device tree plan {t_plan:.0f} us"
+            )
+            logger.info(lines[-1])
+            out_dense = ttnn.to_torch(
+                _sparse_sdpa(q, dense_out, idx_natural, s_local * TP, kv_fmt),
+                mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
+            )
+            out_tree = ttnn.to_torch(
+                ttnn.transformer.sparse_sdpa(
+                    q,
+                    tree_out,
+                    idx_tree,
+                    V_DIM,
+                    kv_format=_KV_FORMATS[kv_fmt][0],
+                    scale=K_DIM**-0.5,
+                    k_chunk_size=128,
+                ),
+                mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
+            )
+            assert torch.equal(out_dense, out_tree), f"layer {layer}: device-planned tree push differs"
+            continue
         t0 = time.perf_counter()
         planner = {
             "local": _tree_plan_local,
@@ -1875,14 +1952,16 @@ def _tree_plan_records(natural, n_dev, mesh_shape, stripe_chunk, pages_per_packe
     """Reference for the device tree planner (SPARSE_PUSH_TREE=2 stream format): _tree_plan_local's rules, with
     fixed-size records so every row's words have a position computable from per-edge group counts alone.
 
-    Sender page: words 1..16 = packets this chip receives per neighbour sender; record r at word 32 + r * (3 + 2P):
-    [kind, target, n, (src, arrival) x P], arrival = stream << 24 | packets of that stream through the row's.
+    Sender page: words 1..16 = packets this chip receives per neighbour sender; 128 B record r at word 32 + 32 r:
+    [kind, target, n, 0 x 5, (src, arrival) x P, 0...], arrival = stream << 24 | packets of that stream through the
+    row's.
     Sender w holds this chip's local packets q = w, w + 16, ..., then its edge's packets n = pick, pick + 4, ... (pick
     = w's index among the 4 senders of its direction) with a level marker after each level and an end record. On an
     edge, rows are grouped by (level, keep), ascending; packet n and the receiver lane follow from group counts."""
     R, C = mesh_shape
     B, P, LV = _DRAM_BANKS, pages_per_packet, _TREE_LEVELS
-    unit, RW = P * B, 3 + 2 * pages_per_packet
+    unit, RW = P * B, 32
+    assert 8 + 2 * P <= RW
     per_dir = links * k_per
     senders = 4 * per_dir
     needed = [np.unique(v[v >= 0]) for v in natural.reshape(n_dev, -1)]
@@ -1954,7 +2033,7 @@ def _tree_plan_records(natural, n_dev, mesh_shape, stripe_chunk, pages_per_packe
             rows = own[a][q * P : (q + 1) * P]
             r = rec(a, q % senders, q // senders)
             r[:3] = (3, lane_rel(q), len(rows))
-            r[3 : 3 + 2 * len(rows) : 2] = local[rows]
+            r[8 : 8 + 2 * len(rows) : 2] = local[rows]
         for w in range(senders):
             dr, pick = (w // k_per) % 4, (w // (4 * k_per)) * k_per + w % k_per
             done_before = 0
@@ -1974,8 +2053,8 @@ def _tree_plan_records(natural, n_dev, mesh_shape, stripe_chunk, pages_per_packe
                 base(nb(a, dr), dr, keep) + lane_rel(lanes_before[a, dr, h, keep] + k // P),
                 min(P, count[a, dr, h, keep] - first),
             )
-        r[3 + 2 * (k % P)] = local[u] if h == 0 else slot[a, u]
-        r[4 + 2 * (k % P)] = 0 if h == 0 else arrival[a, u]
+        r[8 + 2 * (k % P)] = local[u] if h == 0 else slot[a, u]
+        r[9 + 2 * (k % P)] = 0 if h == 0 else arrival[a, u]
     slot_maps = np.full((n_dev, natural.max() + 1), -1, dtype=np.int64)
     for d in range(n_dev):
         ids = np.searchsorted(uniq, needed[d])

@@ -5,6 +5,7 @@ set(TTNN_OP_EXPERIMENTAL_HIGH_BW_ALL_GATHER_SRCS
     device/high_bw_all_gather_unicast_factory.cpp
     device/high_bw_sparse_push_factory.cpp
     device/sparse_push_plan_device_operation.cpp
+    device/sparse_push_tree_plan_device_operation.cpp
     high_bw_all_gather.cpp
 )
 

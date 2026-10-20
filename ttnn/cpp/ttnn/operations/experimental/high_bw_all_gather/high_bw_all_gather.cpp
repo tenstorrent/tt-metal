@@ -6,6 +6,7 @@
 
 #include "device/high_bw_all_gather_device_operation.hpp"
 #include "device/sparse_push_plan_device_operation.hpp"
+#include "device/sparse_push_tree_plan_device_operation.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
@@ -73,6 +74,35 @@ std::vector<Tensor> sparse_push_plan(
     const std::optional<Tensor>& chunk_start) {
     return ttnn::prim::sparse_push_plan(
         indices, num_devices, stripe_chunk, max_rows, pages_per_packet, banks, chunk_start);
+}
+
+std::vector<Tensor> sparse_push_tree_plan(
+    const Tensor& tables,
+    const Tensor& indices,
+    const Tensor& rank,
+    uint32_t mesh_rows,
+    uint32_t mesh_cols,
+    uint32_t stripe_chunk,
+    uint32_t max_rows,
+    uint32_t pages_per_packet,
+    uint32_t banks,
+    uint32_t stage_rows,
+    uint32_t stream_records,
+    uint32_t slot_capacity) {
+    return ttnn::prim::sparse_push_tree_plan(
+        tables,
+        indices,
+        rank,
+        SparsePushTreePlanParams{
+            .mesh_rows = mesh_rows,
+            .mesh_cols = mesh_cols,
+            .stripe_chunk = stripe_chunk,
+            .max_rows = max_rows,
+            .pages_per_packet = pages_per_packet,
+            .banks = banks,
+            .stage_rows = stage_rows,
+            .stream_records = stream_records,
+            .slot_capacity = slot_capacity});
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
