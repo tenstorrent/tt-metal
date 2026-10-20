@@ -8,8 +8,6 @@
 
 namespace internal_ {
 
-inline bool eth_txq_is_busy(uint32_t) { return false; }
-
 // Loopback: copies SRAM to SRAM on the same CCE.
 void eth_send_packet_fake(uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words);
 
