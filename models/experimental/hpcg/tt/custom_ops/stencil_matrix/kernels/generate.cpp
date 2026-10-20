@@ -138,6 +138,27 @@ struct Geo {
     }
 };
 
+// o[0 .. n) = v, v + 4, v + 8, ...: a pointer walk, 8 stores per step with immediate offsets. Written as o[t] = v + 4 t
+// the compiler rebuilt each address from the value (5 instructions per store, about 5.7 cycles on a data-movement RISC
+// here); this takes about 1.4 instructions per store (a plain L1 store loop measured 4.0 cycles per store, unrolled
+// by 8 2.3)
+inline void ramp(uint32_t* o, int32_t n, uint32_t v) {
+    uint32_t* p = o;
+    for (uint32_t* pe = o + (n & ~7); p < pe; p += 8, v += 32) {
+        p[0] = v;
+        p[1] = v + 4;
+        p[2] = v + 8;
+        p[3] = v + 12;
+        p[4] = v + 16;
+        p[5] = v + 20;
+        p[6] = v + 24;
+        p[7] = v + 28;
+    }
+    for (uint32_t* pe = o + n; p < pe; ++p, v += 4) {
+        *p = v;
+    }
+}
+
 // rows [q, q + len) of colour block c: one run along x at line (iy, iz), x index i0 .. i0 + len - 1 in the block
 void fill_run(
     const Geo& g,
@@ -205,9 +226,7 @@ void fill_run(
         a = a < 0 ? 0 : (a > len ? len : a);
         e = e < a ? a : (e > len ? len : e);
         uint32_t off = K[j] + 4 * (i0 + a), self = self0 + 4 * a;
-        for (int32_t t = a; t < e; ++t, off += 4) {
-            o[t] = off;  // the value is the template's
-        }
+        ramp(o + a, e - a, off);  // the value is the template's
         for (int32_t t = 0; t < a; ++t) {  // missing neighbour: a zero entry on the row itself
             o[t] = self0 + 4 * t;
             v[t] = 0;
