@@ -161,6 +161,7 @@ class TtKimiK3Transformer(LightweightModule):
                 mesh_device,
                 hidden_size=model_cfg.EMB_SIZE,
                 eps=model_cfg.RMS_NORM_EPS,
+                sp_axis=sp_axis,
                 tp_axis=tp_axis,
                 weights=load_attn_res_weights(
                     mesh_device,
