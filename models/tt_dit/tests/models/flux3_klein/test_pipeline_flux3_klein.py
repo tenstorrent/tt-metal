@@ -1071,3 +1071,41 @@ def test_t2i_b300(mesh_device, variant: str) -> None:
     if device != "cuda":
         pytest.skip(f"B300 goldens pending (golden device {device!r}); the >= {PSNR_B300} dB gate waits for them")
     pytest.fail("B300 goldens present: implement the PSNR_B300 gate row (PLAN decisions 4 and 8)")
+
+
+@mesh_rows
+def test_readback_fast_equals_legacy(mesh_device) -> None:
+    """M10 readback (2026-10-20): the device-side uint8 conversion + single-replica read ("fast", the default) gives
+    the SAME bytes as ``to_pil`` of the bf16 host copy of every replica ("legacy"), on a traced replay of the same
+    request (deterministic: same seed, same captured trace). Logs both ``to_host_s``."""
+    import numpy as np
+
+    pipeline = build_pipeline(mesh_device)
+    name = f"readback_fast_equals_legacy {mesh_tag(mesh_device)}"
+    try:
+        request = Flux3KleinRequest(
+            prompt="a lighthouse on a cliff at dusk", model="distilled", width=768, height=768, seed=7
+        )
+        pipeline.readback = "fast"
+        first = pipeline.generate(request, traced=True)  # capture
+        fast = pipeline.generate(request, traced=True)  # replay
+        pipeline.readback = "legacy"
+        legacy = pipeline.generate(request, traced=True)  # replay
+        a, b = np.asarray(fast.image), np.asarray(legacy.image)
+        assert a.shape == b.shape == (768, 768, 3) and a.dtype == b.dtype == np.uint8, (
+            a.shape,
+            a.dtype,
+            b.shape,
+            b.dtype,
+        )
+        differing = int((a != b).sum())
+        max_abs = int(np.abs(a.astype(np.int16) - b.astype(np.int16)).max()) if differing else 0
+        logger.info(
+            f"RESULT {name}: fast == legacy {differing == 0} (differing bytes {differing}, max |d| {max_abs}); "
+            f"to_host fast {fast.timings['to_host_s']:.3f}s legacy {legacy.timings['to_host_s']:.3f}s "
+            f"(capture call {first.timings['to_host_s']:.3f}s); image std {a.std():.2f}"
+        )
+        assert differing == 0, f"fast readback differs from to_pil in {differing} bytes (max |d| {max_abs})"
+        assert np.array_equal(np.asarray(first.image), a), "capture-call render differs from the replay render"
+    finally:
+        pipeline.close()
