@@ -339,7 +339,8 @@ ALWI void matmul_block(
  * in0_tile_index + k (rows kt_dim apart) by the 1 x ct_dim tiles of in1 at in1_tile_index + k * in1_k_stride and
  * accumulates into DST, as num_k matmul_block calls with the indices advanced by 1 and in1_k_stride. Blackhole runs the
  * k loop inside the unpack and math calls; other architectures call matmul_block per step.
- * The template parameters are those of matmul_block_init and matmul_block.
+ * The template parameters are those of matmul_block_init and matmul_block; unpack_auto_ttsync must be false. The unpack
+ * rows are always the hoisted form.
  */
 // clang-format on
 template <
@@ -361,9 +362,10 @@ ALWI void matmul_block_k(
     std::uint32_t in1_k_stride,
     std::uint32_t call_line = __builtin_LINE()) {
 #ifdef ARCH_BLACKHOLE
+    static_assert(!unpack_auto_ttsync, "matmul_block_k: Auto TTSync rows are not supported");
     LLK_SAN_FUNCTION();
     state_configure(in1_cb_id, in0_cb_id, call_line);
-    UNPACK((llk_unpack_AB_matmul<unpack_auto_ttsync, kt_per_section, out_format, true>(
+    UNPACK((llk_unpack_AB_matmul_k(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, num_k, in1_k_stride)));
     MATH((matmul_block_math_dynamic_throttle<row_mop, llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>(), true>(
         in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim, num_k)));

@@ -339,7 +339,8 @@ ALWI void matmul_block(
  * in0_tile_index + k (rows kt_dim apart) by the 1 x ct_dim tiles of in1 at in1_tile_index + k * in1_k_stride and
  * accumulates into DST, as num_k matmul_block calls with the indices advanced by 1 and in1_k_stride. Blackhole runs the
  * k loop inside the unpack and math calls; other architectures call matmul_block per step.
- * The template parameters are those of matmul_block_init and matmul_block.
+ * The template parameters are those of matmul_block_init and matmul_block; unpack_auto_ttsync must be false. The unpack
+ * rows are always the hoisted form.
  */
 // clang-format on
 template <
