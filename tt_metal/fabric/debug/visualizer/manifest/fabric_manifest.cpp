@@ -231,6 +231,11 @@ json make_archs_json(const manifest::Arch& arch) {
     areas_json["launch"] = l1_json(areas.launch);
     areas_json["launch_msg_rd_ptr"] = l1_json(areas.launch_msg_rd_ptr);
     areas_json["eth_fw_mailbox"] = optional_l1_json(areas.eth_fw_mailbox);
+    areas_json["base_fw_port_status"] = optional_l1_json(areas.base_fw_port_status);
+    areas_json["base_fw_train_status"] = optional_l1_json(areas.base_fw_train_status);
+    areas_json["base_fw_retrain_count"] = optional_l1_json(areas.base_fw_retrain_count);
+    areas_json["base_fw_rx_link_up"] = optional_l1_json(areas.base_fw_rx_link_up);
+    areas_json["base_fw_postcode"] = optional_l1_json(areas.base_fw_postcode);
     json archs;
     archs[lower_enum_name(arch.arch)]["areas"] = std::move(areas_json);
     archs[lower_enum_name(arch.arch)]["stream_registers"] = stream_registers_json(arch.stream_registers);

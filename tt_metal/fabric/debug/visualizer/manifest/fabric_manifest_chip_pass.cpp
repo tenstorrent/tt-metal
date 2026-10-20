@@ -34,6 +34,7 @@ namespace {
 
 using manifest::direction_letter;
 using manifest::router_key;
+using tt::tt_metal::FWMailboxMsg;
 using tt::tt_metal::HalL1MemAddrType;
 using tt::tt_metal::HalProgrammableCoreType;
 
@@ -312,6 +313,15 @@ manifest::content::L1 hal_area(
     return {.address = hal_address(hal, area), .type = n == 1 ? one : layout::Type{one.element, n * one.size, n}};
 }
 
+// A base firmware word, whose address the HAL keeps among its Ethernet firmware mailbox values; null when it is 0.
+std::optional<manifest::content::L1> base_fw_word(const tt::tt_metal::Hal& hal, tt::tt_metal::FWMailboxMsg word) {
+    const uint32_t address = hal.get_eth_fw_mailbox_val(word);
+    if (address == 0) {
+        return std::nullopt;
+    }
+    return manifest::content::L1{.address = address, .type = layout::type_of<uint32_t>()};
+}
+
 // The kernel picks its heartbeat word's address by architecture: Blackhole's, or else Wormhole's.
 manifest::Heartbeat heartbeat(tt::ARCH arch) {
     return manifest::Heartbeat{
@@ -430,6 +440,11 @@ manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
                     hal.get_supports_eth_fw_mailbox()
                         ? std::optional(hal_area(hal, HalL1MemAddrType::ETH_FW_MAILBOX, layout::type_of<uint32_t>()))
                         : std::nullopt,
+                .base_fw_port_status = base_fw_word(hal, FWMailboxMsg::PORT_STATUS),
+                .base_fw_train_status = base_fw_word(hal, FWMailboxMsg::TRAIN_STATUS),
+                .base_fw_retrain_count = base_fw_word(hal, FWMailboxMsg::RETRAIN_COUNT),
+                .base_fw_rx_link_up = base_fw_word(hal, FWMailboxMsg::RX_LINK_UP),
+                .base_fw_postcode = base_fw_word(hal, FWMailboxMsg::POSTCODE),
             },
         .stream_registers = stream_registers(hal),
         .core_registers = core_registers(hal),
