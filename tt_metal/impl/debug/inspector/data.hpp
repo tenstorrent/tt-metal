@@ -112,8 +112,6 @@ private:
     std::mutex kernel_path_mutex;
     std::unordered_map<int, std::vector<std::string>> kernel_id_to_processor_elf_paths;
 
-    // Hash of the compile settings that the firmware was built with, reported over RPC.
-    // Fixed at construction, i.e. before the RPC server starts.
     const uint64_t fw_compile_hash;
     friend class tt::tt_metal::Inspector;
 };
