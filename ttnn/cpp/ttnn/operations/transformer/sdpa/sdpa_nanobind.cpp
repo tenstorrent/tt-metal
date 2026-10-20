@@ -1022,8 +1022,9 @@ void bind_sdpa(nb::module_& mod) {
             input_tensor_q (ttnn.Tensor): the input tensor.          [b x nqh x s x dh]
             input_tensor_k (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
             page_table_tensor (ttnn.Tensor): the page table tensor.  [b x num_pages]
-            chunk_start_idx (int): Absolute position in the sequence where this chunk starts.
-                Must be a multiple of program_config.q_chunk_size.
+            chunk_start_idx (int, optional): Absolute position in the sequence where this chunk starts.
+                Must be a multiple of program_config.q_chunk_size. Part of the program cache key. Omit when using
+                chunk_start_idx_tensor.
             head_dim_v (uint32_t): the head dimension of V.
 
         Keyword args:
@@ -1033,6 +1034,9 @@ void bind_sdpa(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             input_tensor_v (ttnn.Tensor, optional): a separate paged V cache [max_blocks x nkv x block_s x head_dim_v],
                 addressed by the same page table, in place of the first head_dim_v columns of K. Defaults to `None`.
+            chunk_start_idx_tensor (ttnn.Tensor, optional): the chunk's start as a device tensor [1] int32, read at
+                runtime in place of chunk_start_idx, so one program serves every start (it must still be a multiple
+                of q_chunk_size). The page table then only has to cover the chunk's end. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x head_dim_v].
@@ -1047,13 +1051,14 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("input_tensor_k").noconvert(),
         nb::arg("head_dim_v").noconvert(),
         nb::arg("page_table_tensor").noconvert(),
-        nb::arg("chunk_start_idx"),
+        nb::arg("chunk_start_idx") = nb::none(),
         nb::kw_only(),
         nb::arg("scale") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("input_tensor_v").noconvert() = nb::none());
+        nb::arg("input_tensor_v").noconvert() = nb::none(),
+        nb::arg("chunk_start_idx_tensor").noconvert() = nb::none());
 
     const auto* const ring_distributed_doc =
         R"doc(

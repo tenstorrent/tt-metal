@@ -27,6 +27,7 @@ import ttnn
 
 from ..reference.model import load_layer_weights
 from . import kv as kv_lib
+from .attention import TtMiMoAttention
 from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
@@ -34,19 +35,45 @@ from .moe_stream import zero_output
 from .rope import MiMoRotarySetup
 
 
-def prefill_padded_len(seq_len, room=None):
-    """Tokens are padded so the prefill SDPA chunk (32/128/256) divides the length.
-
-    ``room``: positions left in the context after the chunk's start. A chunk that would be padded past the
-    end of the context is padded to a tile only; the SDPA chunk then shrinks to divide its length."""
+def prefill_padded_len(seq_len):
+    """Tokens are padded so the prefill SDPA chunk (32/128/256) divides the length: 32, 64, 96, then multiples of 128,
+    then (from 2048) of 256. Every prefill program keys on one of these lengths (attention.py), so a chunk is padded
+    to one even at the end of the context: the padding past the page table lands in a scratch block
+    (kv.PrefillTables)."""
     n = pad_to(seq_len, TILE)
     if n >= 2048:
-        padded = pad_to(n, 256)
-    elif n >= 128:
-        padded = pad_to(n, 128)
-    else:
-        padded = n
-    return n if room is not None and padded > room else padded
+        return pad_to(n, 256)
+    if n >= 128:
+        return pad_to(n, 128)
+    return n
+
+
+def prefill_warmup_chunks(max_tokens, max_seq_len, block_size, window):
+    """(tokens, start) of chunks that together run every prefill program a chunk of up to ``max_tokens`` tokens can:
+    one per padded length at start 0, and at the later starts that bring something the programs key on (attention.py)
+    that an earlier start did not: the number of window blocks a SWA layer reads, or the SDPA chunk size that divides
+    the start (TtMiMoAttention._prefill_sdpa_program, which global layers run chunked MLA prefill with). Only chunks
+    that fit in the context are listed."""
+    shortest = {}  # padded length -> the fewest tokens padded to it
+    for n in range(1, max_tokens + 1):
+        shortest.setdefault(prefill_padded_len(n), n)
+    out = []
+    for padded, n in sorted(shortest.items()):
+        if n > max_seq_len:
+            continue
+        out.append((n, 0))
+        leads, chunks = set(), set()
+        # The window blocks stop changing past the window; the SDPA chunk sizes (at most 256) repeat every 256.
+        for start in range(block_size, window + 256 + 1, block_size):
+            if start + n > max_seq_len:
+                break
+            lead = start - max(0, start - window) // block_size * block_size
+            chunk = TtMiMoAttention._prefill_sdpa_program(None, padded, start).q_chunk_size
+            if lead not in leads or chunk not in chunks:
+                leads.add(lead)
+                chunks.add(chunk)
+                out.append((n, start))
+    return out
 
 
 class TtMiMoModel:
@@ -84,6 +111,9 @@ class TtMiMoModel:
         self.block_size = block_size
         self.max_prefill_chunk = max_prefill_chunk
         self.kv_dtype = kv_dtype
+        # Width of the context table a later prefill chunk of a global layer reads (kv.PrefillTables.context): every
+        # block up to the context end plus the most padding a chunk gets, as whole 32-byte rows of the page table.
+        self.prefill_context_blocks = pad_to(-(-(max_seq_len + kv_lib.PREFILL_MAX_PAD) // block_size), 8)
         if cache_dir is not None:
             os.makedirs(cache_dir, exist_ok=True)
 
@@ -148,6 +178,10 @@ class TtMiMoModel:
         self.lm_config = compute_config(ttnn.MathFidelity.HiFi2)
         self.kv_caches = None
         self.page_table_tt = None
+        # Host copies of the model's own page tables ({is_swa: int32 [tp, max_batch, blocks]}) and each one's scratch
+        # block, which kv.PrefillTables builds a chunk's block tables from (the SWA layers' copy is swa_table's).
+        self.page_table_host = None
+        self.table_scratch = None
         self.decode_trace = None
         self.greedy_head = None
         self.decode_users = None
@@ -206,15 +240,21 @@ class TtMiMoModel:
                 # at least as wide as the table.
                 min_blocks=0 if self._uses_swa_qkv() else max_blocks,
             )
+        self.table_scratch = {}
         for layer in self.layers:
             if layer.is_swa:
                 table, num_blocks = self.swa_table.host_table(self.plan.tp), self.swa_table.num_blocks
+                scratch = 0
             else:
                 table, num_blocks = kv_lib.page_tables(
                     num_users, self.max_batch, max_blocks, self.plan.tp, layer.attn.rep
                 )
+                # kv.page_tables adds one scratch block (the last) when a chip pair splits the users; with rep 1 every
+                # block is a user's, so nothing may land past the table.
+                scratch = num_blocks - 1 if layer.attn.rep > 1 else None
             self.kv_caches.append(layer.attn.allocate_kv_cache(num_blocks, self.block_size, self.kv_dtype))
             tables.setdefault(layer.is_swa, table)
+            self.table_scratch.setdefault(layer.is_swa, scratch)
         self.set_page_tables(tables)
         if self.swa_table is not None:
             self.swa_table.dirty = False
@@ -283,18 +323,62 @@ class TtMiMoModel:
         """Layer ``i``'s page table: {is_swa: table} for the model's own tables, else its vLLM group's table."""
         return self.page_table_tt if self.layer_groups is None else self.page_table_tt[self.layer_groups[i]]
 
-    def _vllm_window_blocks(self, slot, start_pos):
-        """{SWA group: physical blocks of positions [window start, start_pos) of ``slot``} from vLLM's tables (the
-        keys a later SWA chunk reads, as kv.SwaBlockTable.window_blocks)."""
-        swa_groups = {self.layer_groups[i] for i, layer in enumerate(self.layers) if layer.is_swa}
+    def _table_key(self, i):
+        """Layer ``i``'s page table: its vLLM KV cache group, else is_swa (the model's own tables)."""
+        return self.layers[i].is_swa if self.layer_groups is None else self.layer_groups[i]
+
+    def _host_table(self, key):
+        """(host copy int32 [tp, max_batch, W], scratch block) of the page table ``key`` (``_table_key``)."""
+        tp = self.plan.tp
+        if self.layer_groups is not None:
+            return self.vllm_tables[key].unsqueeze(0).expand(tp, -1, -1), 0  # vLLM's null block
+        if key:
+            return self.swa_table.table.unsqueeze(0).expand(tp, -1, -1), 0
+        return self.page_table_host[key], self.table_scratch[key]
+
+    def _window_blocks(self, key, slot, start_pos):
+        """Physical blocks of positions [window start, start_pos) of ``slot`` in the SWA page table ``key``: the keys a
+        later SWA chunk reads (kv.SwaBlockTable.window_blocks)."""
         window = next(layer.attn.sliding_window for layer in self.layers if layer.is_swa)
         first, end = max(0, start_pos - window) // self.block_size, start_pos // self.block_size
-        out = {}
-        for g in swa_groups:
-            blocks = [int(b) for b in self.vllm_tables[g][slot, first:end]]
-            assert 0 not in blocks, f"slot {slot}: the SWA window before {start_pos} is not in group {g}'s table"
-            out[g] = blocks
-        return out
+        blocks = [int(b) for b in self._host_table(key)[0][0, slot, first:end]]
+        assert 0 not in blocks, f"slot {slot}: the SWA window before {start_pos} is not in page table {key}"
+        return blocks
+
+    def _prefill_tables(self, slot, start_pos, padded, layers):
+        """({page table: kv.PrefillTables}, start tensor or None) of one chunk, for the tables ``layers`` read."""
+        later = start_pos > 0
+        start = None
+        if later:
+            start = kv_lib.replicated(self.plan, torch.tensor([start_pos], dtype=torch.int32), ttnn.int32)
+        tables = {}
+        for i in layers:
+            key = self._table_key(i)
+            if key in tables:
+                continue
+            swa = self.layers[i].is_swa
+            table, scratch = self._host_table(key)
+            tables[key] = kv_lib.PrefillTables(
+                self.plan,
+                table,
+                slot,
+                start_pos,
+                padded,
+                self.block_size,
+                scratch,
+                context_blocks=self.prefill_context_blocks if later and not swa else None,
+                window=self._window_blocks(key, slot, start_pos) if later and swa else None,
+                start_tensor=start,
+            )
+        return tables, start
+
+    def prefill_warmup_layers(self):
+        """The first layer of each kind (attention type, dense MLP or MoE). Layers of one kind run the same prefill
+        programs, so a chunk through these compiles everything a chunk of its length and start runs."""
+        kinds = {}
+        for i, layer in enumerate(self.layers):
+            kinds.setdefault((layer.is_swa, layer.is_moe), i)
+        return sorted(kinds.values())
 
     def _sync_swa_table(self):
         """Copy the SWA block table to its device tensor in place if it changed (ordered with the queued work, so
@@ -354,6 +438,7 @@ class TtMiMoModel:
         if self.page_table_tt is not None:
             for t in self.page_table_tt.values():
                 t.deallocate(True)
+        self.page_table_host = dict(tables)
         self.page_table_tt = {
             is_swa: kv_lib.per_chip(self.plan, table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             for is_swa, table in tables.items()
@@ -391,50 +476,51 @@ class TtMiMoModel:
         return logits
 
     # ------------------------------------------------------------------ prefill
-    def _prefill_chunk(self, tokens, slot, start_pos, hidden):
-        """One chunk (``tokens`` 1D torch) at ``start_pos`` through every layer; returns the last layer's output
-        [1, 1, padded, hidden] and appends (copy, real rows) of every layer's output to ``hidden`` when given."""
+    def _prefill_chunk(self, tokens, slot, start_pos, hidden, layers=None):
+        """One chunk (``tokens`` 1D torch) at ``start_pos`` through the layers ``layers`` (indices, default all);
+        returns the last one's output [1, 1, padded, hidden] and appends (copy, real rows) of every layer's output to
+        ``hidden`` when given."""
         n = tokens.numel()
-        padded = prefill_padded_len(n, room=self.max_seq_len - start_pos)
-        assert start_pos + padded <= self.max_seq_len, f"chunk ends at {start_pos + padded} > {self.max_seq_len}"
-        window_blocks = None
+        padded = prefill_padded_len(n)
+        assert start_pos + n <= self.max_seq_len, f"chunk ends at {start_pos + n} > {self.max_seq_len}"
+        layers = range(len(self.layers)) if layers is None else layers
         if self.swa_table is not None:
             self.swa_table.prefill(slot, start_pos, start_pos + n, start_pos + padded)
             self._sync_swa_table()
-            if start_pos > 0:
-                window_blocks = self.swa_table.window_blocks(slot, start_pos)
-        elif self.layer_groups is not None and start_pos > 0:
-            window_blocks = self._vllm_window_blocks(slot, start_pos)
+        tables, start = self._prefill_tables(slot, start_pos, padded, layers)
         x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)))
-        for i, layer in enumerate(self.layers):
-            y = layer.forward_prefill(
+        for k, i in enumerate(layers):
+            y = self.layers[i].forward_prefill(
                 x,
                 slot,
                 self._layer_page_table(i),
                 self.kv_caches[i],
                 real_len=n,
                 start_pos=start_pos,
-                window_blocks=window_blocks.get(self.layer_groups[i])
-                if isinstance(window_blocks, dict)
-                else window_blocks,
+                tables=tables[self._table_key(i)],
             )
             x.deallocate(True)
             x = y
             if hidden is not None:
-                hidden[i].append((ttnn.clone(x), n))
+                hidden[k].append((ttnn.clone(x), n))
+        # Enqueued: freeing them now is ordered with the work that reads them.
+        for t in tables.values():
+            t.release()
+        if start is not None:
+            start.deallocate(True)
         return x, padded
 
-    def prefill_enqueue(self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None):
+    def prefill_enqueue(self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None, layers=None):
         """Enqueue prefill of one user (``tokens`` 1D torch, positions start_pos ..) into batch ``slot``, in chunks
         of ``chunk_size`` tokens (default ``max_prefill_chunk``; a multiple of the block size, as is ``start_pos``).
-        ``start_pos > 0`` continues a user whose first start_pos tokens are in the cache. Nothing is read back;
-        returns a pending handle for ``prefill_read``."""
+        ``start_pos > 0`` continues a user whose first start_pos tokens are in the cache. ``layers``: run only these
+        layers (indices; warmup). Nothing is read back; returns a pending handle for ``prefill_read``."""
         n = tokens.numel()
         chunk = chunk_size or self.max_prefill_chunk
         assert n > 0 and chunk % self.block_size == 0 and start_pos % self.block_size == 0
-        hidden = [[] for _ in self.layers] if return_hidden else None
+        hidden = [[] for _ in (range(len(self.layers)) if layers is None else layers)] if return_hidden else None
         for s in range(0, n, chunk):
-            x, padded = self._prefill_chunk(tokens[s : s + chunk], slot, start_pos + s, hidden)
+            x, padded = self._prefill_chunk(tokens[s : s + chunk], slot, start_pos + s, hidden, layers)
             if s + chunk < n:
                 x.deallocate(True)
         seq_len = n - s
@@ -442,7 +528,10 @@ class TtMiMoModel:
         if padded == TILE:
             last = x  # a slice covering the whole tensor shares its buffer, so it must not be freed separately
         else:
-            last = ttnn.slice(x, (0, 0, tile_start, 0), (1, 1, tile_start + TILE, self.cfg.hidden_size))
+            # A tensor-args slice: keyed on the padded length, not on the row the last token is in.
+            at = kv_lib.replicated(self.plan, torch.tensor([0, 0, tile_start, 0], dtype=torch.int32), ttnn.uint32)
+            last = ttnn.slice(x, at, at, slice_dim=2, num_devices=padded // TILE)
+            at.deallocate(True)
             x.deallocate(True)
         logits = self._logits(last)
         last.deallocate(True)

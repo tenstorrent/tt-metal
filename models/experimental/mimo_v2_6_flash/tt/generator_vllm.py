@@ -24,11 +24,15 @@ attention.py) on the SWA layers, so V is shared among layers of the same kind. T
 of their KV head on a chip pair (setup_vllm_kv_cache): a block can be shared by requests in slots of either parity.
 
 Sampling runs on the host: prefill and decode return last-token logits [B, 1, vocab]. Decode replays one traced
-step per replica (captured in ``warmup_model_decode``); prefill runs eagerly in chunks of up to 4096 tokens.
+step per replica (captured in ``warmup_model_decode``); prefill runs eagerly in chunks of up to 4096 tokens, between
+the replays. A program first compiled after the capture would keep buffers the replays overwrite, so
+``warmup_model_prefill`` compiles every prefill program a served chunk can run first: they key only on the chunk's
+padded length and the alignment of its start (attention.py), a bounded set.
 """
 
 import math
 import os
+import time
 
 import numpy as np
 import torch
@@ -39,6 +43,7 @@ import ttnn
 from ..reference.checkpoint import MiMoCheckpoint, default_model_path
 from ..reference.config import MiMoConfig
 from .generator import MiMoGalaxyGenerator
+from .model import prefill_warmup_chunks
 
 TP = 8
 BLOCK_SIZE = 64
@@ -80,6 +85,9 @@ class MiMoV2ForCausalLM:
     _kv_cache_spec_source = None
     # vLLM's KV cache group of each layer, when set directly (tests driving the adapter without vLLM).
     _layer_groups = None
+    # Tokens vLLM schedules per step (--max-num-batched-tokens), which bounds a prefill chunk: None reads it from the
+    # vLLM config get_kv_cache_spec recorded (set directly when driving the adapter without vLLM).
+    prefill_token_budget = None
 
     def __init__(self, generator, max_seq_len):
         self.gen = generator
@@ -88,6 +96,7 @@ class MiMoV2ForCausalLM:
         self.per_lane = generator.users_per_replica
         self.max_seq_len = max_seq_len
         self.already_warmed_up_prefill = False
+        self.prefill_programs_compiled = False
         self.layer_groups = None
         self.kv_caches = None
         self.decode_recaptures = 0  # decode traces captured again after a prefill compiled new programs
@@ -394,28 +403,63 @@ class MiMoV2ForCausalLM:
         return out if isinstance(out, torch.Tensor) else self._read_logits(out)
 
     # ------------------------------------------------------------------ warmup and lifetime
+    def _max_prefill_tokens(self):
+        """The most tokens one prefill chunk of the model can hold: vLLM's per-step token budget plus the
+        BLOCK_SIZE - 1 positions prefill_forward recomputes in front of an unaligned start, at most the model's
+        max_prefill_chunk (prefill_enqueue splits longer chunks) and the context."""
+        budget = self.prefill_token_budget
+        if budget is None and self._kv_cache_spec_source is not None:
+            budget = self._kv_cache_spec_source[0].scheduler_config.max_num_batched_tokens
+        model = self.models[0]
+        if budget is None:
+            budget = model.max_prefill_chunk
+        return min(budget + BLOCK_SIZE - 1, model.max_prefill_chunk, self.max_seq_len)
+
     def warmup_model_prefill(self, kv_cache=None, enable_trace=False, can_sample_on_device=False, **kwargs):
-        """Compile prefill (it runs eagerly, so ``enable_trace`` changes nothing): a first chunk and a later chunk,
-        whose SWA layers read the window from the cache and whose global layers run chunked MLA prefill, on every
-        replica. Writes only KV blocks no request owns yet."""
-        if self.already_warmed_up_prefill:
+        """Compile every prefill program a served chunk can run, on every replica, before any decode trace is
+        captured (prefill runs eagerly, so ``enable_trace`` changes nothing). One chunk per padded length at start 0
+        and per later start that changes what the programs key on (model.prefill_warmup_chunks), each through one
+        layer of each kind (TtMiMoModel.prefill_warmup_layers). Writes only KV blocks no request owns yet."""
+        if self.already_warmed_up_prefill or self.prefill_programs_compiled:
+            self.already_warmed_up_prefill = True
             return
-        width = self.models[0].vllm_tables[self.layer_groups[0]].shape[1]
-        blocks = torch.arange(1, 4, dtype=torch.int32)  # positions 0 .. 191 in blocks 1-3 of every group
-        rows = {0: {g: blocks for g in set(self.layer_groups)}}
+        t0 = time.time()
+        # Decode makes persistent L1 buffers on its first step (the MoE fabric row gather's among them). Layernorm and
+        # some reductions size their circular buffers from the free L1 and key the program on that plan
+        # (ttnn/cpp/ttnn/operations/core/program_cache_l1.hpp), so prefill is compiled with those buffers in place, as
+        # served prefills run. The plugin warms prefill before decode and, with trace_mode decode_only, not again after.
+        idle = torch.full((self.models[0].max_batch,), -1, dtype=torch.int32)  # every slot idle: no KV is written
+        handles = [(m, m.decode_enqueue(torch.zeros_like(idle), idle)) for m in self.models if m.decode_trace is None]
+        for m, handle in handles:
+            m.decode_read(handle)
+        model0 = self.models[0]
+        groups = sorted(set(self.layer_groups))
+        width = model0.vllm_tables[groups[0]].shape[1]
+        num_blocks = self.kv_caches[0][0][0].shape[0]
+        window = next((l.attn.sliding_window for l in model0.layers if l.is_swa), BLOCK_SIZE)
+        max_tokens = self._max_prefill_tokens()
+        chunks = prefill_warmup_chunks(max_tokens, self.max_seq_len, BLOCK_SIZE, window)
+        layers = model0.prefill_warmup_layers()
+        # Slot 0 of every group maps positions from 0 to blocks 1, 2, ..: free while vLLM has not started.
+        blocks = torch.arange(1, min(width, num_blocks - 1) + 1, dtype=torch.int32)
+        if blocks.numel() * BLOCK_SIZE < max(start for _, start in chunks):  # the later chunks' window blocks
+            raise RuntimeError(f"{num_blocks} KV blocks cannot back the prefill warmup's chunks {chunks}")
         for model in self.models:
-            model.set_vllm_page_tables(rows)
-        tokens = torch.arange(192, dtype=torch.int32) % 1000 + 1000
-        handles = [(m, m.prefill_enqueue(tokens[:128], 0)) for m in self.models]
-        for m, h in handles:
-            m.prefill_read(h)
-        handles = [(m, m.prefill_enqueue(tokens[128:], 0, start_pos=128)) for m in self.models]
-        for m, h in handles:
-            m.prefill_read(h)
+            model.set_vllm_page_tables({0: {g: blocks for g in groups}})
+        programs = [m.mesh_device.num_program_cache_entries() for m in self.models]
+        tokens = torch.arange(max_tokens, dtype=torch.int32) % 1000 + 1000
+        for n, start in chunks:
+            handles = [(m, m.prefill_enqueue(tokens[:n], 0, start_pos=start, layers=layers)) for m in self.models]
+            for m, h in handles:
+                m.prefill_read(h)
         for model in self.models:
-            model.set_vllm_page_tables({0: {g: torch.zeros(width, dtype=torch.int32) for g in set(self.layer_groups)}})
-        self.already_warmed_up_prefill = True
-        logger.info("MiMo vLLM: prefill warmed up")
+            model.set_vllm_page_tables({0: {g: torch.zeros(width, dtype=torch.int32) for g in groups}})
+        self.already_warmed_up_prefill = self.prefill_programs_compiled = True
+        new = [m.mesh_device.num_program_cache_entries() - p for m, p in zip(self.models, programs)]
+        logger.info(
+            f"MiMo vLLM: prefill warmed up in {time.time() - t0:.1f}s: {len(chunks)} chunks of up to {max_tokens} "
+            f"tokens through layers {layers}, {new} new programs per replica"
+        )
 
     def warmup_model_decode(self, kv_cache=None, enable_trace=False, max_batch_size=None, **kwargs):
         """``enable_trace``: capture each replica's decode trace (every slot idle, so no KV is written); otherwise

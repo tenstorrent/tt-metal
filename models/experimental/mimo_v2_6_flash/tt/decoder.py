@@ -210,9 +210,10 @@ class TtMiMoDecoderLayer:
         return page_table[self.is_swa] if isinstance(page_table, dict) else page_table
 
     def forward_prefill(
-        self, x, user_id, page_table, kv_cache, token_mask=None, real_len=None, start_pos=0, window_blocks=None
+        self, x, user_id, page_table, kv_cache, token_mask=None, real_len=None, start_pos=0, tables=None
     ):
-        """One prefill chunk at ``start_pos``; ``window_blocks``: see TtMiMoAttention.forward_prefill (SWA only)."""
+        """One prefill chunk at ``start_pos``; ``tables``: this layer's kv.PrefillTables (see
+        TtMiMoAttention.forward_prefill)."""
         h = self.input_norm(x)
         attn = self.attn.forward_prefill(
             h,
@@ -221,7 +222,7 @@ class TtMiMoDecoderLayer:
             kv_cache,
             start_pos=start_pos,
             real_len=real_len,
-            window_blocks=window_blocks if self.is_swa else None,
+            tables=tables,
         )
         h.deallocate(True)
         x2 = ttnn.add(x, attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
