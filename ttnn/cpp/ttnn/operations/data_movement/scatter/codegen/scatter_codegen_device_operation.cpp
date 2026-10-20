@@ -135,6 +135,24 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
         "scatter_codegen: input/index/src tensors are not supported by the codegen prim (see "
         "supported_by_codegen())");
 
+    // The page map is a fixed [rank, input dims x8, index dims x8] descriptor. Its builder runs
+    // ahead of this validate (build_scatter_codegen_params) and only clamps, so the bound is here.
+    {
+        const bool tiled = input_tensor.layout() == Layout::TILE;
+        const uint32_t input_rank = scatter_page_rank(input_tensor.logical_shape(), tiled);
+        const uint32_t index_rank = scatter_page_rank(index_tensor.logical_shape(), tiled);
+        TT_FATAL(
+            input_rank == index_rank,
+            "scatter_codegen: page maps require equal-rank input/index tensors (got {} vs {})",
+            input_rank,
+            index_rank);
+        TT_FATAL(
+            input_rank <= kScatterMaxPageRank,
+            "scatter_codegen: at most {} page dimensions are supported; got {}",
+            kScatterMaxPageRank,
+            input_rank);
+    }
+
     // Structural preconditions copied from ScatterDeviceOperation::validate_on_program_cache_miss
     // (device/scatter_device_operation.cpp): supported_by_codegen() only answers layout/dtype/
     // memory-config questions, all of which answer for a host or deallocated tensor too.
