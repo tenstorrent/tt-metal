@@ -85,9 +85,10 @@ def _sharded_tensor_dims(placements: Optional[List[Any]]) -> set:
     return {p.dim for p in placements if _is_shard(p)}
 
 
-def _already_fsdp_sharded(placements: List[Any], axis_index: int) -> bool:
-    """True if the param's placement on the FSDP axis is already a Shard."""
-    if axis_index >= len(placements):
+def _already_fsdp_sharded(placements: Optional[List[Any]], axis_index: int) -> bool:
+    """True if the param's placement on the FSDP axis is already a Shard. ``None``, a lazy
+    param without a mapper (see :func:`_param_placements`), is replicated."""
+    if placements is None or axis_index >= len(placements):
         return False
     return _is_shard(placements[axis_index])
 
