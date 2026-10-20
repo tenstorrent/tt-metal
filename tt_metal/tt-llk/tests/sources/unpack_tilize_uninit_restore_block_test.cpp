@@ -134,7 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
         is_int_fpu_en,
-        llk_test_pack_mode_v<false, TILIZE>>(num_faces, formats_array[run].math);
+        llk_test_pack_mode_v<false, TILIZE>>(ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, num_faces), formats_array[run].math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats_array[run].math, formats_array[run].math);
 
@@ -144,7 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         LLK_ASSERT(
             (i < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
         _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            i, formats_array[run].math, formats_array[run].math, num_faces);
+            i, formats_array[run].math, formats_array[run].math, ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, num_faces));
     }
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
@@ -156,13 +156,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
         is_int_fpu_en,
-        llk_test_pack_mode_v<false, NO_TILIZE>>(num_faces, formats_array[run].math);
+        llk_test_pack_mode_v<false, NO_TILIZE>>(ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, num_faces), formats_array[run].math);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            i, formats_array[run].math, formats_array[run].math, num_faces);
+            i, formats_array[run].math, formats_array[run].math, ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, num_faces));
     }
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

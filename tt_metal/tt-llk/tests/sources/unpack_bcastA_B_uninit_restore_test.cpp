@@ -131,10 +131,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // ---- Run 1: plain datacopy ----
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, ckernel::PackMode::Default>(
-        num_faces, formats_array[1].math);
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), formats_array[1].math);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        res_dst_idx, formats_array[1].math, formats_array[1].math, num_faces);
+        res_dst_idx, formats_array[1].math, formats_array[1].math, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
