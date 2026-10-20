@@ -92,7 +92,7 @@ def run_packed_prefill(mesh_device, hf_model_id, tokens, context_len, chunk_size
     caches = allocate_ring_kv_caches(mesh, args, num_users=6, max_seq_len=context_len, prefill_chunk_size=chunk_size)
     runtime = Gemma4PrefillRuntime(mesh_device=mesh_device, hf_model_id=hf_model_id, tt_cache_path=None, config=params)
     measurements, cases, completions = [], [], []
-    runtime.set_layer_completion_sink(lambda layer, request: completions.append((layer, request)))
+    runtime.set_layer_completion_sink(SimpleNamespace(layers_completed=lambda *span: completions.append(span)))
     total_requests = 0
     report = {
         "passed": False,
@@ -117,7 +117,8 @@ def run_packed_prefill(mesh_device, hf_model_id, tokens, context_len, chunk_size
         start = time.monotonic()
         runtime.prefill_batch(inp, caches, segments=segments)
         total_requests += len(segments)
-        assert completions == [(layer, request) for request in range(total_requests) for layer in range(60)]
+        assert completions == [(0, params.num_layers, s.slot_id, s.actual_start, s.actual_end) for s in segments]
+        completions.clear()
         assert len(runtime.traces) <= runtime.max_traces
         for segment in segments:
             assert runtime.slot_ends[segment.slot_id] == segment.actual_end

@@ -101,7 +101,7 @@ def test_packed_prefill_runner(mesh_device, monkeypatch):
     )
     runtime = Gemma4PrefillRuntime(mesh_device=mesh_device, hf_model_id="synthetic", tt_cache_path=None, config=params)
     completions = []
-    runtime.set_layer_completion_sink(lambda layer, request: completions.append((layer, request)))
+    runtime.set_layer_completion_sink(SimpleNamespace(layers_completed=lambda *span: completions.append(span)))
     runtime.compile(caches)
     runtime.capture_trace(caches)
     histories = [[] for _ in range(6)]
@@ -114,7 +114,6 @@ def test_packed_prefill_runner(mesh_device, monkeypatch):
         [(0, 0, 3840), (1, 0, 4352)],
         [(2, 0, 2816), (3, 0, 5376)],
     ]
-    total_requests = 0
     try:
         for iteration, schedule in enumerate(schedules):
             segments = tuple(PrefillSegment(slot, start, start + length) for slot, start, length in schedule)
@@ -144,7 +143,7 @@ def test_packed_prefill_runner(mesh_device, monkeypatch):
                 assert passed, f"iteration={iteration} request={segment}: {pcc}"
                 offset += segment.padded_length()
                 assert runtime.slot_ends[segment.slot_id] == segment.actual_end
-            total_requests += len(segments)
-            assert completions == [(layer, request) for request in range(total_requests) for layer in range(2)]
+            assert completions == [(0, params.num_layers, s.slot_id, s.actual_start, s.actual_end) for s in segments]
+            completions.clear()
     finally:
         runtime.release_trace()

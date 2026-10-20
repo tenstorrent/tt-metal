@@ -185,11 +185,12 @@ class Gemma4PrefillRuntime:
         else:
             self._forward()
         ttnn.synchronize_device(self.mesh_device)
-        for segment, request_id in zip(segments, request_ids):
+        for segment in segments:
             self.slot_ends[segment.slot_id] = segment.actual_end
             if self.layer_completion_sink is not None:
-                for layer_idx in range(self.config.num_layers):
-                    self.layer_completion_sink(layer_idx, request_id)
+                self.layer_completion_sink.layers_completed(
+                    0, self.config.num_layers, segment.slot_id, segment.actual_start, segment.actual_end
+                )
         self._next_request_id += len(segments)
 
     def prefill_chunk(
