@@ -12,7 +12,7 @@ pool. Design: `doc/mesh/sparse_1m.md` section 2.4.
 |---|---|---|---|
 | `q` | `[1, B, 32, D]` (D = 128) | bf16 TILE | user b's index-head queries as the rows of tile row b (the indexer softmax scale folded) |
 | `w` | `[1, 1, B, 32]` | bf16 TILE | the per-head gate weights (n_heads^-0.5 folded); row b of the tile page b // 32 |
-| `pools` | `[slots, 1, W, D]`, slots >= B, W % (32*KC) == 0 | bf16 or bfp8_b TILE | the pooled-key cache view (`TtIndexCache.pools_batched()`, dtype `GLM53_POOL_DTYPE`); user b = slot b |
+| `pools` | `[slots, 1, W, D]`, slots >= B, W % (32*KC) == 0 | bf16 or bfp8_b TILE | the pooled-key cache view (`TtIndexCache.pools_batched()`, dtype `GLM53_POOL_DTYPE`); user b = slot b, or every user = `slot` when given (the prefill form: the T queries of one prompt are T users of one slot, `cols` = the pools scored, each row bounded by its own causal pool count through `valid_rows`) |
 | `out` | `[B, 1, 1, W]` | bf16 ROW_MAJOR, pre-allocated | the scores; column p = pool p |
 
 Kernels: reader (per item = (user, k-band): the Dt query tiles, a w-row tile (zeroed; row 0 of each face column =

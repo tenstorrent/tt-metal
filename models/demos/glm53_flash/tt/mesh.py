@@ -92,6 +92,10 @@ class GLMMesh:
         return ttnn.ShardTensor2dMesh(self.device, mesh_shape=self.mesh_shape, dims=(dim, None))
 
     def shard_2d(self, row_dim: int | None, col_dim: int | None):
+        if row_dim is not None and row_dim == col_dim:
+            # one host dim split over BOTH axes (chunk i of rows*cols -> chip (i // cols, i % cols)): the 2-D mapper
+            # rejects a repeated dim ("dims must be unique"), the 1-D one shards over the row-major chip list
+            return ttnn.ShardTensorToMesh(self.device, dim=row_dim)
         return ttnn.ShardTensor2dMesh(self.device, mesh_shape=self.mesh_shape, dims=(row_dim, col_dim))
 
     def upload(

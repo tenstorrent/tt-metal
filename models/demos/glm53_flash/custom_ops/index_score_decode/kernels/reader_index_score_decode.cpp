@@ -18,7 +18,10 @@ void kernel_main() {
     constexpr uint32_t KC = get_compile_time_arg_val(1);
     constexpr uint32_t Tt = get_compile_time_arg_val(2);
     constexpr uint32_t k_tile_bytes = get_compile_time_arg_val(3);
-    constexpr auto q_args = TensorAccessorArgs<4>();
+    constexpr uint32_t slot_base = get_compile_time_arg_val(4);    // user b's pool slot = slot_base + b * slot_stride
+    constexpr uint32_t slot_stride = get_compile_time_arg_val(5);  // (1: user b = slot b; 0: every user = slot_base)
+    constexpr uint32_t slot_pages = get_compile_time_arg_val(6);   // tile pages per slot (the cache width x Dt)
+    constexpr auto q_args = TensorAccessorArgs<7>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto w_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr uint32_t cb_q = 0, cb_k = 1, cb_w = 2, cb_wfaces = 6;
@@ -83,7 +86,7 @@ void kernel_main() {
         cb_push_back(cb_q, Dt);
         cb_push_back(cb_w, 1);
         // the band's pooled keys, KC k-tiles per chunk, d-major in the CB
-        const uint32_t k_base = b * Tt * Dt;
+        const uint32_t k_base = (slot_base + b * slot_stride) * slot_pages;
         for (uint32_t c0 = c_begin; c0 < c_end; ++c0) {
             cb_reserve_back(cb_k, KC * Dt);
             const uint32_t l1 = get_write_ptr(cb_k);

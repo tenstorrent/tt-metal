@@ -328,6 +328,21 @@ typecast lose on short rows). Main build, `sparse1m_seg_{topk_3,traced,1m}.log`:
 Against the 0.7 ms budget at 8 users x 1 M the attention block is 3.4 ms; the scorer's 1.4 ms read (bf16; 0.7 with
 bfp8 pools) and ~45 small fixed ops (stems, index maintenance, two top-k stages, gather, compact attention) remain.
 
+### 4.9 First (2,4) block run of the partitioned cache (rows 6-7, 2026-10-20 16:46) -- two wiring bugs, fixed host-side
+
+`_pyfix/run_block_chain.sh` on the merged tree (13d0f501b5b): the CCL probe passed (17 s); `test_mesh_sparse_partitioned.py`
+failed twice, both host-side (no device fault); the decoder B=32 and `test_mesh_dsa` steps were cut short by the
+board reset (`sparse1m_block_*.log`).
+
+| failure | cause | fix (untested on device: the board was down) |
+|---|---|---|
+| `test_partitioned_two_rows_four_users`: `NotImplementedError: sparse selection on a multi-row mesh is not wired` (indexer.select, prefill of R4097) | `indexer_score_dsa` derives every device's chunk start from its mesh coordinate (`seq_shard_axes=[0]`: row r scores with start + r*Sq; `[]`: the whole mesh is the ring; the on-device metadata form is fused-ring + block-cyclic + P=1 only) -- there is no "replicated rows" form | prefill scores on multi-row meshes come from `custom_ops/index_score_decode` in its new prefill form: the T queries of the prompt are T users of ONE cache slot (`slot=`), the first `cols` (kv_len rounded to 256) pools are scored, row t's causal bound floor((start + t + 1)/P) is written as -inf by the per-row mask. `GLM53_PREFILL_SCORER` = auto (custom on multi-row meshes) / custom / shared; `queries_and_weights(rows_form=True)` hands q as [1,T,Hi,D] (one reshape fewer than the shared form). Tests: `test_index_score_decode_shared_slot` (B = 4 / 70, cols), `test_index_score_decode_prefill_rows_vs_shared_op` (the form vs `indexer_score_dsa` on one chip: prefix PCC, top-512 overlap, mask pattern); then `GLM53_PREFILL_SCORER=custom` through the HF-referenced single-chip tests (`_pyfix/run_chip0_prefill_scorer.sh`) |
+| `test_partitioned_1m_step`: `TT_FATAL dims must be unique` (xtensor/partition.cpp:61) from the metadata upload | `ShardTensor2dMesh(dims=(0, 0))` -- the same host dim over both mesh axes -- is rejected by this build's `chunk_ndim` (the tt_dit / deepseek precedent no longer holds) | `GLMMesh.shard_2d(d, d)` returns `ttnn.ShardTensorToMesh(dim=d)`: chunk i of rows*cols goes to chip (i // cols, i % cols), the row-major order the partition's user list already uses |
+
+The prefill form costs one pass over `cols` pools per query (327 KB at the test's 1280-pool width, ~2-3 ms for 2049
+sparse rows; at 262 K pools the whole-prompt prefill belongs to the chunked / SP engine anyway). The eager decode
+selection (`select(row=)`) keeps the shared op and its single-row guard.
+
 ## 5. What remains
 
 1. Done: the batched scorer (4.6), the bfp8 pool-cache knob, the blend folded into the gather (4.7), the two-stage
