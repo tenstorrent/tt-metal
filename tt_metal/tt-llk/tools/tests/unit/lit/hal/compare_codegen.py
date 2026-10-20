@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare single-return function pairs in objdump -drz output."""
+"""Compare function pairs in objdump -drz output."""
 
 import argparse
 import difflib
@@ -18,26 +18,22 @@ INSTRUCTION_OR_RELOCATION_PATTERN = r"\s*[0-9a-fA-F]+:\s"
 
 def read_codegen(path):
     with open(path, encoding="utf-8") as dump:
-        for line in dump:
-            if not line.startswith(FUNCTION_SECTION_PREFIX):
+        sections = dump.read().split(FUNCTION_SECTION_PREFIX)[1:]
+    for section in sections:
+        name, _, body = section.partition("\n")
+        name = name.strip().removesuffix(":")
+        code_lines = []
+        for line in body.splitlines():
+            if not re.match(INSTRUCTION_OR_RELOCATION_PATTERN, line):
                 continue
-            name = line.removeprefix(FUNCTION_SECTION_PREFIX).strip().removesuffix(":")
-            code_lines = []
-            for line in dump:
-                if not re.match(INSTRUCTION_OR_RELOCATION_PATTERN, line):
-                    continue
-                # Local branch destinations are already encoded in the instructions.
-                if "R_RISCV_BRANCH" in line:
-                    continue
-                line = re.sub(OBJDUMP_ANNOTATION_PATTERN, "", line)
-                normalized_line = " ".join(line.split())
-                code_lines.append(normalized_line)
-                # Test wrappers have one final ret; extend this if that convention changes.
-                if normalized_line.endswith(" ret"):
-                    yield name, code_lines
-                    break
-            else:
-                raise ValueError(f"{path}: missing ret in {name}")
+            # Local branch destinations are already encoded in the instructions.
+            if "R_RISCV_BRANCH" in line:
+                continue
+            line = re.sub(OBJDUMP_ANNOTATION_PATTERN, "", line)
+            code_lines.append(" ".join(line.split()))
+        if not any(line.endswith(" ret") for line in code_lines):
+            raise ValueError(f"{path}: missing ret in {name}")
+        yield name, code_lines
 
 
 def main():
