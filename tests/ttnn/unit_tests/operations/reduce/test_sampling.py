@@ -331,7 +331,6 @@ def test_sampling_subcores_callback(shape, k, p, seed, k_dtype, device, sub_core
 
 
 def test_sampling_rejects_single_tile_candidates(device):
-    # One tile of candidates (W = 32) used to hang the device in the pairwise local sort (#53781).
     values = ttnn.from_torch(torch.randn(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     indices = ttnn.from_torch(
         torch.arange(32, dtype=torch.int32).repeat(1, 1, 32, 1),

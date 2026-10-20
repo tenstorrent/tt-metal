@@ -84,7 +84,6 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     // bitonic merge tree whose schedule assumes a power-of-2 tile count. A non-power-of-2 Wt hangs
     // the device (odd Wt) or silently drops candidate tiles (even non-power-of-2 Wt), so reject it
     // here instead of timing out. See https://github.com/tenstorrent/tt-metal/issues/44558.
-    // The local sort consumes tiles in pairs, so a single tile (Wt = 1) hangs as well (#53781).
     const uint32_t Wt = input_shape[3] / 32;
     TT_FATAL(
         Wt >= 2 && (Wt & (Wt - 1)) == 0,
