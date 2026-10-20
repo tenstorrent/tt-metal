@@ -33,6 +33,7 @@ from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import _project as _composite_pr
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import _streams as _composite_streams
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import _upload, build_consts  # noqa: F401  (re-exported)
 from models.demos.glm53_flash.custom_ops.mhc_post_mix.op import MhcPostMix
+from models.demos.glm53_flash.custom_ops.mhc_pre_block.op import MhcPreBlock
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 
 TILE = 32
@@ -59,6 +60,11 @@ MHC_PREFILL_EXACT = os.environ.get("GLM53_MHC_PREFILL_EXACT", "1") == "1"
 # fast_reduce_nc (bf16 rounding) and h through the post-mix kernel's pre-mix mode + the composite's typecast +
 # rms_norm (default, needs GLM53_MHC_POST_KERNEL=2); 0 = fast_reduce_nc + the P@x matmul + sharded norm (A/B)
 MHC_DECODE_EXACT = os.environ.get("GLM53_MHC_DECODE_EXACT", "1") == "1"
+# 1: the fused exact pre-block custom op (custom_ops/mhc_pre_block) for decode wraps with the fused norm: one
+# program replaces the projection, Sinkhorn, mix and norm ops and hands the post-block its lane-layout
+# coefficients (needs GLM53_MHC_POST_KERNEL=2)
+# (2: the exact SFPU projection variant of the op)
+MHC_PRE_BLOCK = int(os.environ.get("GLM53_MHC_PRE_BLOCK", "0"))
 
 
 @dataclass(frozen=True)
@@ -210,6 +216,11 @@ class TtMHCFast(LightweightModule):
         self.n = int(cfg.n)
         # the fused post-block as a model-local generic op (custom_ops/mhc_post_mix); output allocated per call
         self.post_mix = MhcPostMix(self.n, version=self.post_kernel) if self.post_kernel else None
+        # the fused pre-block (built on the first decode call with the fused norm: it holds the norm weight)
+        self.pre_block_on = MHC_PRE_BLOCK != 0 and self.post_kernel == 2
+        self._fn_raw = fn.float() if self.pre_block_on else None
+        self.pre_block = None
+        self._pre_block_norm = None
         self.C = int(cfg.dim)
         self.nC = self.n * self.C
         self.iters = int(cfg.sinkhorn_iters)
@@ -520,10 +531,37 @@ class TtMHCFast(LightweightModule):
         ttnn.deallocate(hb)
         return hn
 
+    def _fused_pre_block(self, norm):
+        """The fused pre-block op for this wrap's norm weight (built once; the weight is read back to the host)."""
+        weight, eps = norm
+        if self.pre_block is None or self._pre_block_norm is not weight:
+            w = ttnn.to_torch(weight).float().reshape(-1)
+            self.pre_block = MhcPreBlock(
+                self.device,
+                self._fn_raw,
+                self.consts,
+                w,
+                n=self.n,
+                C=self.C,
+                sinkhorn_iters=self.iters,
+                eps=self.eps,
+                norm_eps=self.norm_eps,
+                rms_eps=float(eps),
+                exact=MHC_PRE_BLOCK == 2,
+            )
+            self._pre_block_norm = weight
+        return self.pre_block
+
     def _pre(self, x: ttnn.Tensor, norm=None):
         """x ``[1,1,T,nC]`` -> (h ``[1,1,T,C]``, post ``[Tp,n]``, comb ``[Tp,n*n]``, x32, x_sm, owned)."""
         T = x.shape[-2]
         x32 = _view_rows(x, _rows_up(T))
+        if self.pre_block_on and norm is not None and x32.shape[-2] == TILE:
+            # one program: projection + Sinkhorn + mix + norm; post / comb come out in the post kernel's lane layout
+            pb = self._fused_pre_block(norm)
+            hn, post, comb = pb.allocate_outputs(x32)
+            pb(x32, hn, post, comb)
+            return _view_rows(hn, T), post, comb, x32, None, False
         if x32.shape[-2] != TILE and self.post_kernel and MHC_PREFILL_EXACT:
             x_sm, owned = None, False  # prefill through the composite projection/mix + kernel post-block: unused
         else:
