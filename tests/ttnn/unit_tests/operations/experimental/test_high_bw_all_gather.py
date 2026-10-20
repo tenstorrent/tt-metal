@@ -2489,7 +2489,12 @@ def _shuffled_page_table(*, rows, ranks, local_rows, chunk_local, page_size, num
     return table
 
 
-@pytest.mark.parametrize("device_params", _SELECTED_BATCH_PREFIX_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    _SELECTED_BATCH_PREFIX_DEVICE_PARAMS,
+    ids=[p.id for p in _SELECTED_BATCH_PREFIX_DEVICE_PARAMS],
+    indirect=True,
+)
 @run_for_blackhole("high_bw_all_gather paged-source coverage requires Blackhole")
 @_AG_TRACED_AXIS
 @pytest.mark.parametrize(
@@ -2633,8 +2638,10 @@ def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, 
     check(sparse, 0, 0, chunk_local)
 
 
-@pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [_device_params(ttnn.FabricConfig.FABRIC_2D)], ids=["fabric_2d_line"], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
 @run_for_blackhole("high_bw_all_gather paged-source perf requires Blackhole")
 @pytest.mark.parametrize("page_size", [64, 256], ids=["page64", "page256"])
 def test_high_bw_all_gather_paged_source_perf(mesh_device, page_size):
