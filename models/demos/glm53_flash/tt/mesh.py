@@ -269,9 +269,19 @@ class GLMMesh:
 
     def partition_cols(self, x: ttnn.Tensor, dim: int) -> ttnn.Tensor:
         """Each column chip keeps its own ``1/cols`` slice of ``dim`` of a column-replicated tensor (a per-device
-        slice, no fabric traffic): the user-partitioned DSA cache's "my users" of a row-wide activation."""
+        slice, no fabric traffic): the user-partitioned DSA cache's "my users" of a row-wide activation. A TILE
+        tensor whose per-column part is not tile-aligned on a tile dim (4 users split 4 ways on dim 2) goes
+        through ROW_MAJOR: ``mesh_partition`` refuses a tiled split that would create padding."""
         if self.cols == 1:
             return x
+        d = dim % len(x.shape)
+        if x.layout == ttnn.TILE_LAYOUT and d >= len(x.shape) - 2 and (x.shape[d] // self.cols) % ttnn.TILE_SIZE:
+            rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            part = ttnn.mesh_partition(rm, dim, cluster_axis=TP_AXIS)
+            ttnn.deallocate(rm)
+            out = ttnn.to_layout(part, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(part)
+            return out
         return ttnn.mesh_partition(x, dim, cluster_axis=TP_AXIS)
 
     def all_to_all_cols(self, x: ttnn.Tensor, in_dim: int, out_dim: int, *, memory_config=None) -> ttnn.Tensor:
