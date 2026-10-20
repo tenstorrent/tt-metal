@@ -8,10 +8,10 @@ SPDX-License-Identifier: Apache-2.0
 
 Brainstorm / design notes for [tt-metal#52016](https://github.com/tenstorrent/tt-metal/issues/52016).
 
-Worked examples that follow two pipelines through every step, from MGD parse through SAT
-placement, the carve planner and the resolver to blaze's runtime build, are in section 8.
+Each section ends with examples of what that step checks, including its edge cases. They
+share the running examples defined at the start of section 2.
 
-A visual version with diagrams, the same worked examples and the full per-PR implementation
+A visual version with diagrams, the same examples and the full per-PR implementation
 plan is in [mgd-pipeline-graph-design.html](mgd-pipeline-graph-design.html). Download it and
 open it in a browser; GitHub shows HTML files as source. Its source is the Cursor canvas
 [mgd-pipeline-graph-design.canvas.tsx](mgd-pipeline-graph-design.canvas.tsx), which opens
@@ -377,6 +377,73 @@ merged MGD only.
 > C++ port of the carve planner (section 3) - so the rule lives in one place per language,
 > and parity tests keep the two copies aligned.
 
+#### Running examples
+
+Each section below ends with examples of what that step checks, including its edge cases.
+They are hypothetical, traced by hand through the code as it stands (tt-blaze `origin/main`
+34e783a631, tt-metal on this branch); nothing was run. Most of them use the setup below.
+
+**Slices.** A 4x8 mesh with `host_topology [1, 4]` has four 4x2 host slices, one per rank.
+On M0 they are A0..A3 (ranks 0–3, columns 0–1, 2–3, 4–5, 6–7); on M1 they are B0..B3
+(ranks 4–7). Inside a mesh the slices form a line, A0–A1–A2–A3. Cables between meshes are
+drawn as vertical bars:
+
+```
+   A0 ── A1 ── A2 ── A3        M0
+   │            │
+   B0 ── B1 ── B2 ── B3        M1      (here: cables A0-B0 and A2-B2)
+```
+
+**`mixed4`: stages that span two ranks.** Two such meshes, joined with 2 channels. The ring
+has two 4x4 stages, which need two neighbouring slices each:
+
+```protobuf
+mesh_descriptors {
+  name: "M"  arch: BLACKHOLE
+  device_topology { dims: [ 4, 8 ] }
+  host_topology   { dims: [ 1, 4 ] }
+  channels { count: 2 policy: RELAXED }
+}
+# graph: M0 <-> M1, channels { count: 2 policy: RELAXED }
+
+pipeline_descriptors {
+  name: "mixed4"  placement: STRICT
+  stages { id: "s0" shape { dims: [ 4, 2 ] } }   # 1 slice
+  stages { id: "s1" shape { dims: [ 4, 4 ] } }   # 2 slices, two ranks
+  stages { id: "s2" shape { dims: [ 4, 4 ] } }   # 2 slices, two ranks
+  stages { id: "s3" shape { dims: [ 4, 2 ] } }   # 1 slice
+  edges { src: "s0" dst: "s1" }  edges { src: "s1" dst: "s2" }
+  edges { src: "s2" dst: "s3" }  edges { src: "s3" dst: "s0" }
+}
+```
+
+**`pod8`: different slice shapes.** The `llama_8b_pod` pattern at small scale. M0 is as
+above. M1 is 2x4 with `host_topology [2, 2]`, so each of its four ranks drives a 1x2 slice,
+T0..T3:
+
+```
+M1 (2x4)  cols 0-1   cols 2-3        slice adjacency inside M1
+row 0     T0 (r4)    T1 (r5)          T0 ── T1
+row 1     T2 (r6)    T3 (r7)          │      │
+                                      T2 ── T3
+ring of 8: s0..s3 shape [4, 2], s4..s7 shape [1, 2], loopback s7 -> s0, 2 channels
+```
+
+**The machine.** Three 32-chip pods P, Q and R, each a 4x8 grid driven by four hosts h0..h3
+(one 4x2 block each), plus two 2x4 boards U and V of four 2-chip hosts. Single cables:
+
+```
+P.h0 ── Q.h0   P.h3 ── Q.h3      P–Q: 2 links
+P.h0 ── R.h0   P.h2 ── R.h2      P–R: 2 links
+Q.h1 ── R.h1                     Q–R: 1 link
+P.h0, P.h3 ── two chips of U     P–U: 2 links
+P.h0, P.h3 ── two chips of V     P–V: 2 links
+```
+
+Assume the intra-mesh solve puts mesh host rank i on host hi of its seat (the PGD's
+preferred layout). Then with M0 on P and M1 on Q, the cables touch A0–B0 and A3–B3; with M1
+on R they touch A0–B0 and A2–B2.
+
 ### 2.1 Tier A - descriptor only
 
 **When it runs:** MGD parse, before anything else.
@@ -421,6 +488,19 @@ a 4x2 stage never lands on a 2x4 rectangle (3.2).
   (host input, host output and host hops on both sides of a stage), not just on a branch's
   return. Under FLEXIBLE placement no edge may be declared HOST up front, because blaze only
   plans host cuts when the graph declares none (`_resolve_topology`).
+
+#### Examples
+
+| Descriptor | Tier A result | Why |
+|---|---|---|
+| `mixed4` | pass | ids unique, edges name declared stages, every stage has out-degree 1, one cycle (`s3 -> s0` becomes its loopback), shapes positive |
+| `pod8` | pass | a ring of 8; the loopback is `s7 -> s0` |
+| `mixed4` plus `edges { src: "s1" dst: "s1" }` | reject | self-edge |
+| `mixed4` with `s0 -> s1` repeated | pass | two channels on that hop; the builder reads one link per edge, which is a builder limit |
+| edges `s0 -> s1`, `s0 -> s2`, `s1 -> s0`; `s2` has no out-edge | reject | out-degree 2 makes it a fork, and the branch ending at `s2` has no edge back to the router (`fork_structure`) |
+| `mixed4` as FLEXIBLE with `s3 -> s0` declared `transport: HOST` | reject | FLEXIBLE plans its own host cuts and only does so when none are declared |
+| `mixed4` as STRICT with `s3 -> s0` declared `transport: HOST` | pass | a host hop anywhere in a ring is allowed |
+| a stage declared `[2, 4]` where every mesh has 4x2 slices | pass here | shapes are logical and never transposed, so Tier B finds no mesh it binds to |
 
 ### 2.2 Tier B - descriptor plus the declared fabric
 
@@ -524,6 +604,50 @@ the stages assigned to the mesh can be cut into whole-slice rectangles along a p
 including joint stages and, for a fork, the router's degree: 2 neighbours per fabric-return
 branch plus 1 per host-return branch.
 
+#### Examples
+
+**`mixed4`: several projections survive.**
+
+- **Slices.** 4x8 divided by `[1, 4]` gives 4x2 slices, four per mesh.
+- **Binding sets.** 4x2 is one slice and 4x4 is two, so every stage binds to M0 or M1.
+  Stage 0 is one slice.
+- **Capacity.** The ring needs 6 slices and the MGD declares 8.
+
+| Projection | Slices on M0 / M1 | Crossings | Result |
+|---|---|---|---|
+| all four stages on M0 | 6 / 0 | 0 | dropped: M0 holds only 4 slices |
+| `s0, s1 -> M0`; `s2, s3 -> M1` | 3 / 3 | 2 (`s1 -> s2`, `s3 -> s0`) | survives |
+| `s0, s1, s3 -> M0`; `s2 -> M1` | 4 / 2 | 2 (`s1 -> s2`, `s2 -> s3`) | survives |
+| `s0, s2 -> M0`; `s1, s3 -> M1` | 3 / 3 | 4 | dropped: only 2 channels |
+
+Segment carve for the first survivor: M0's 1 + 2 slices fit a path of three slices in a
+line of four. Tier B passes and chooses nothing. Every survivor crosses M0–M1, and a ring
+crosses a cut an even number of times, so Plan 1 (5.1) gets `k(M0, M1) = 2`.
+
+**`pod8`: exactly one projection.**
+
+- 4x2 binds only to M0, because M1 has two rows. 1x2 binds only to M1, because on M0 it is
+  not a whole number of 4x2 slices.
+- So s0..s3 go on M0 (4 of 4 slices) and s4..s7 on M1 (4 of 4). The projection crosses twice
+  (`s3 -> s4`, `s7 -> s0`), within the 2 channels.
+- **Segment carve.** M0's four stages fill a line of four slices, so the segment can only
+  enter and leave at the end slices A0 and A3. M1's four stages are a path through all four
+  slices of a 4-cycle.
+- Tier B passes, with `k = 2` and boundary slices {A0, A3} on M0 and any slice on M1 (used
+  by Plan 1).
+
+**Edge cases.**
+
+| Change | Result | Rule |
+|---|---|---|
+| `mixed4` with s0 declared `[4, 4]` | reject | stage 0 must bind to a single slice |
+| `mixed4` with a fifth stage `[4, 6]` (3 slices) | reject | the ring needs 9 slices and the MGD declares 8 |
+| `mixed4` with a fifth stage `[4, 4]` | pass | 8 of 8 slices: s0, s3 and one 4x4 stage on one mesh, the other two 4x4 stages on the other; every slice is used |
+| `mixed4` with one stage `[4, 10]` | reject | wider than either mesh: empty binding set |
+| `pod8` with M1 as 4x8, `host_topology [1, 4]` (4x2 slices), still 1x2 stages | reject | 1x2 is not a whole slice. Blaze's per-rank tiling could build it (3.4, "a tile smaller than a host slice"), so this rule is stricter than runtime |
+| `mixed4` with the MGD connection removed | reject | every projection crosses, and no connection is declared |
+| the same, but `placement: FLEXIBLE` | pass | crossings may become host hops, so only binding sets and capacity apply |
+
 ### 2.3 Tier C - inside the topology mapper
 
 The only tier that sees physical adjacency.
@@ -614,6 +738,22 @@ Tier B can see the count. Only Tier C can see where the bound links land, becaus
 decided by the seats the mapper chooses. `mesh4x4_stage4x2` in the blaze sweep (4 stages,
 2 meshes) is exactly this shape.
 
+#### Examples
+
+Only Tier C sees where cables land, so it is the first tier that separates these seatings.
+Section 4 traces each one step by step.
+
+| Pipeline | Seating (M0, M1) | Cables land on | Tier C | Why |
+|---|---|---|---|---|
+| `mixed4` | (P, Q) | A0–B0, A3–B3 | reject | the slices form one loop of 8 and the ring needs a loop of exactly 6; every tiling fails in the resolver |
+| `mixed4` | (P, R) | A0–B0, A2–B2 | accept | a 6-slice loop exists and the stages align onto it |
+| `mixed4`, FLEXIBLE | (P, Q) | A0–B0, A3–B3 | accept | one fabric path covers 6 slices and the loopback goes over host (3.4) |
+| `pod8` | (P, U) | A3–T0, A0–T3 | reject | right count, both on M0's end slices, but on opposite corners of M1, so no path through M1's four tiles joins them |
+| `pod8` | (P, V) | A3–T1, A0–T0 | accept | the cables land on neighbouring tiles of M1 |
+
+Tier B passed all of these. Plan 1 (5.1) could only have caught `pod8` on U, and only with
+a hard-pinned layout.
+
 ### 2.4 Tier D - inside the pipeline builder
 
 **Already done. Do not change this.**
@@ -667,6 +807,37 @@ result = ttnn._ttnn.multi_device.experimental.resolve_graph_layout(
 )
 ```
 
+#### Examples
+
+**`mixed4` on (P, R) at runtime.** The control plane binds the two cables Tier C relied on
+(5.3). `build_topology` gets no `submesh_shape`, so `_collect_submeshes` calls `plan_carve`:
+
+```
+discover_host_slices      allgather: A0..A3 on M0, B0..B3 on M1, 4x2 each
+discover_slice_adjacency  links confirmed by get_forwarding_direction:
+                          the two lines plus the bound cables A0-B0, A2-B2
+plan_ring_carve           the same 6-cycle and plan as Tier C (3.2, example A)
+crc32 exchange            every rank derived the same plan
+create_submesh            one call per slot on each rank's own mesh, in plan order
+collapse                  ranks 1+2 and 5+6 carve the same chips: two joint submeshes
+resolve_graph_layout      s0 A0, s1 A1+A2, s2 B1+B2, s3 B0 (3.1)
+```
+
+**The same machine today.** Add a second A0–B0 cable on lower chip ids than A2–B2. Today's
+binding takes the two lowest ids, both A0–B0 (5.3), so blaze sees only A0–B0:
+
+```
+_prune_leaves    A3, B3 have one neighbour: drop; then A2, B2; then A1, B1; then A0, B0
+CarvePlanError: no-cycle-of-length-6: only 0 slices can lie on any cycle.
+```
+
+The mapping is already committed, so this is a hard failure. That is the failure Tiers A–C
+and 5.3 move earlier.
+
+**`pod8` at runtime.** The harness gives `submesh_shape` 4x2 on M0's ranks and 1x2 on M1's.
+`plan_carve` is not called; each rank tiles its mesh with `create_submeshes` and keeps the
+tile whose `(0,0)` chip is local, then the resolver places all eight stages.
+
 ---
 
 ## 3. Shared code
@@ -695,6 +866,73 @@ covers the router's endpoint budget.
 The one change: the resolver throws with a message string on failure. Tier C needs to know
 *which* stage or edge failed to attribute the failure (5.2). Add a structured failure
 (failing stage, failing edge, or capacity conflict) alongside the existing message.
+
+#### What the resolver checks
+
+`resolve_pipeline_placement` orders the stages topologically (loopbacks excluded), then
+`place_stages` assigns stages to submeshes one at a time, backtracking. For each stage it
+tries the unused submeshes in order and keeps one that passes every check:
+
+| Check | Rule |
+|---|---|
+| chip count | the submesh has exactly `node_chip_counts[stage]` chips |
+| core capacity | links the stage needs (one per edge, plus 2 for stage 0's host-to-device and device-to-host) fit `capacity x chips`, where capacity is 1 slot per chip on submeshes of 8 or more chips and 2 on smaller ones |
+| neighbour count | the submesh has at least as many distinct neighbouring submeshes as the stage has distinct logical neighbours |
+| connectivity | it links to the submesh of every already-placed neighbour |
+| lookahead | `remaining_stages_can_connect`: the stages still to place can still reach what they need |
+
+`LinkSearch::solve` then picks one chip pair per edge, exclusive chips first, then shared;
+host endpoints prefer chips no edge uses. Failure is `no valid submesh assignment found`.
+
+#### Examples
+
+**`mixed4` on (P, R), after the planned carve** (3.2, example A). Six submeshes: 0 = A0
+(8 chips), 1 = A1+A2 (16, ranks 1 and 2), 2 = A3, 3 = B0, 4 = B1+B2 (16, ranks 5 and 6),
+5 = B3.
+
+```
+topological order, loopback excluded: s0 s1 s2 s3
+chip counts: s0 8, s1 16, s2 16, s3 8
+submesh links: 0-1 1-2 3-4 4-5 inside meshes; 0-3 and 1-4 are the cables
+
+s0: 2 links + 2 host endpoints = 4 <= 1 x 8; two logical neighbours (s1, s3)
+    submesh 0 (neighbours 1, 3)  candidate     submesh 2 (neighbour 1 only)  skip
+    submesh 3 (neighbours 0, 4)  candidate     submesh 5 (neighbour 4 only)  skip
+    try submesh 0
+s1: 16 chips and linked to submesh 0: only submesh 1
+s2: 16 chips and linked to submesh 1: submesh 4, over the A2-B2 cable
+s3: 8 chips, linked from 4 and to 0: submesh 3, closing over the A0-B0 cable
+result: s0 -> 0, s1 -> 1, s2 -> 4, s3 -> 3
+```
+
+Had submesh 0 failed, it would try submesh 3 next and find the mirror (s0 B0, s1 B1+B2,
+s2 A1+A2, s3 A0). The resolver re-derives the assignment from chip counts and links; it
+does not take the carve planner's stage order as given.
+
+**`pod8`, per-rank tiling.** Eight submeshes: A0..A3 (8 chips each) and T0..T3 (2 chips
+each).
+
+- **Chip counts.** These confine s0..s3 to the A submeshes and s4..s7 to the T submeshes.
+- **Capacity.** s0 needs 4 of its 8 slots. Each T submesh has 2 x 2 = 4 slots, and s4..s7
+  need 2 each.
+- **M0.** s0..s3 must run along the line, A0 to A3 or A3 to A0.
+- **M1.** s4..s7 visit all four tiles. In a 4-cycle a path through every vertex ends next to
+  where it started.
+
+| Seat | Cables | Result |
+|---|---|---|
+| U | A3–T0, A0–T3 (opposite corners) | starting at T0 the path ends at T1 or T2, but the cable back is on T3; starting at T3 it ends at T1 or T2, but the cable back is on T0: `no valid submesh assignment found` |
+| V | A3–T1, A0–T0 (neighbours) | s0 A0, s1 A1, s2 A2, s3 A3, s4 T1, s5 T3, s6 T2, s7 T0; the mirror s0 A3 ... s3 A0, s4 T0, s5 T2, s6 T3, s7 T1 also works |
+
+**Edge cases.**
+
+| Case | What the resolver does |
+|---|---|
+| `mixed4` tiled 4x2 on both meshes | eight 8-chip submeshes; s1 finds nothing with 16 chips |
+| `mixed4` tiled 4x4 on both meshes | four 16-chip submeshes; s0 finds nothing with 8 chips |
+| a 1x2 stage that is stage 0 with 3 edges | 3 + 2 = 5 links against 2 chips x 2 = 4 slots: capacity fails |
+| a ring stage on a submesh with one neighbouring submesh (A3 or B3 in `mixed4` on (P, R)) | the neighbour-count check skips it before any link search |
+| harness overrides of pipeline-core pools | not in the MGD; Tier C uses blaze's defaults and can accept a layout runtime rejects (open question 7) |
 
 ### 3.2 Port the carve planner to C++ (a second copy)
 
@@ -759,6 +997,162 @@ Planner behaviour the port must keep, or deliberately change:
 - **No digest exchange.** `plan_carve`'s crc32 allgather exists because carving is
   collective per mesh. Tier C plans centrally and does not need it.
 
+#### How the carve planner works
+
+The planner answers one question: given every rank's host slice and which slice pairs the
+fabric links, which slices does each stage get? It works on whole host slices, because
+`_collect_submeshes` needs each rank's chips inside exactly one slot. That keeps the problem
+small: a 512-chip system with 4x2 slices is a graph of 128 vertices. Every rank must reach
+the same plan, so slices are ordered by `(mesh_id, row0, col0)`, never by rank, and every
+loop runs over a sorted sequence.
+
+| Phase | Code | What it does |
+|---|---|---|
+| 1. discover (not ported) | `discover_host_slices`, `discover_slice_adjacency` | Each rank's local chips become a `HostSlice(mesh_id, row0, col0, nrows, ncols)`. For each chip and direction (N, E, S, W, Z), a neighbour on another slice counts only if `get_forwarding_direction` confirms it. One confirmed link per slice pair is enough; counts are not kept. Tier C gets slices from `MeshGraph::get_coord_range` and adjacency from the candidate links (section 4, steps 3–4). |
+| 0. input checks | top of `plan_ring_carve` | All slices one shape. Each stage a whole number of slices (`r % nrows == 0`, `c % ncols == 0`), giving `stage_counts`. `need = sum(stage_counts)` no more than the slices. Stage 0 exactly one slice. |
+| 2. reduce | `_prune_leaves`, `_contract` | Repeatedly drop slices with fewer than two live neighbours. Slices with more than two are *branch slices*; each run of two-neighbour slices between them becomes one weighted chain. Several chains may join the same two branch slices. |
+| 3. cycle search | `_cycles_no_branch`, `_cycles_of_length` | Simple cycles of exactly `need` slices. With no branch slices the graph is disjoint loops, each walked once. Otherwise a DFS over branch slices takes one unused chain per step, adding its weight plus one, and prunes above `need`. Stops at 200,000 expansions or 64 cycles. |
+| 4. align | `_group_cycle`, `_canonical_walk`, `_as_rectangle` | Cycles sorted by mesh crossings, fewest first. For each, the canonical walk (anchored at the lowest slice, stepping toward its lower neighbour), then every rotation, then the reverse. Each stage's group of `stage_counts[i]` slices must be one gap-free rectangle on one mesh with exactly the declared shape. First fit wins. |
+| 5. emit | end of `plan_ring_carve`, `validate_carve_plan` | One `CarveSlot(mesh_id, shape, offset)` per stage in stage order, then a filler slot per unused slice (its rank idles). Every chip covered exactly once. |
+
+Failures name their phase: `host slices are not uniform`, `not a whole number of host
+slices`, `input-infeasible`, `no-cycle-of-length-N` (with achievable lengths),
+`budget-exhausted`, and `no-alignment` (with the cycle's same-mesh run lengths).
+
+#### Examples
+
+All on two 4x2-slice meshes, as in the running examples.
+
+**A. One loop, no branch slices** (`mixed4`, cables A0–B0 and A2–B2; seating (P, R)).
+
+```
+   A0 ── A1 ── A2 ── A3
+   │            │
+   B0 ── B1 ── B2 ── B3
+
+phase 0   slices all 4x2; stage_counts = [1, 2, 2, 1]; need = 6 <= 8; stage 0 is 1 slice
+phase 2   A3 has one live neighbour (A2), B3 has one (B2): drop both
+          alive = {A0 A1 A2 B0 B1 B2}; every alive slice has 2 neighbours -> no branch slices
+phase 3   _cycles_no_branch walks from the lowest slice A0:
+          A0 A1 A2 B2 B1 B0              length 6 == need
+phase 4   canonical walk: anchor A0; A1 (0,0,2) < B0 (1,0,0), so step to A1
+          forward, offset 0:
+            s0 <- [A0]      M0 rows 0-3 cols 0-1   4x2   ok
+            s1 <- [A1 A2]   M0 rows 0-3 cols 2-5   4x4   ok
+            s2 <- [B2 B1]   M1 rows 0-3 cols 2-5   4x4   ok
+            s3 <- [B0]      M1 rows 0-3 cols 0-1   4x2   ok
+phase 5   slots: M0 4x2@(0,0), M0 4x4@(0,2), M1 4x4@(0,2), M1 4x2@(0,0),
+          fillers M0 4x2@(0,6), M1 4x2@(0,6)        (ranks 3 and 7 idle)
+```
+
+Twelve alignments exist (six rotations, two directions) and four work, each putting the 4x4
+stages on a different pair of ranks:
+
+| Alignment | s0 | s1 | s2 | s3 |
+|---|---|---|---|---|
+| forward, offset 0 (returned) | A0 | A1+A2 | B2+B1 | B0 |
+| forward, offset 3 | B2 | B1+B0 | A0+A1 | A2 |
+| reverse, offset 1 | B0 | B1+B2 | A2+A1 | A0 |
+| reverse, offset 4 | A2 | A1+A0 | B0+B1 | B2 |
+
+The other eight fail in `_as_rectangle`, because a 4x4 group would take one slice from each
+mesh. Blaze returns the first; Tier C only needs one.
+
+**B. Wrong loop length** (`mixed4`, cables A0–B0 and A3–B3; seating (P, Q)).
+
+```
+   A0 ── A1 ── A2 ── A3
+   │                  │
+   B0 ── B1 ── B2 ── B3
+
+phase 2   every slice has 2 neighbours: nothing pruned, no branch slices
+phase 3   one loop: A0 A1 A2 A3 B3 B2 B1 B0, length 8
+error     no-cycle-of-length-6: this fabric admits no simple cycle of exactly 6 host
+          slices, which is what a 4-stage loopback ring needs.
+            achievable cycle lengths: [8]
+            nearest: none below, 8 above
+```
+
+**C. Branch slices and contraction** (add a third cable, A3–B3, to example A).
+
+```
+   A0 ── A1 ── A2 ── A3
+   │            │     │
+   B0 ── B1 ── B2 ── B3
+
+phase 2   nothing pruned. Branch slices: A2 (A1, A3, B2) and B2 (B1, B3, A2).
+          _contract walks out of A2 in neighbour order and finds three chains A2 -> B2:
+            c0  interior A1 A0 B0 B1   weight 4
+            c1  interior A3 B3         weight 2
+            c2  direct                 weight 0
+phase 3   a cycle is two different chains between A2 and B2: 2 + weight + weight slices
+            c0 + c2 = 6     c1 + c2 = 4     c0 + c1 = 8
+          need 6: the DFS finds c0 + c2, i.e. A2 A1 A0 B0 B1 B2 (four times: two start
+          slices, two directions; it is one ring). c0 + c1 exceeds 6 and is pruned.
+phase 4   same canonical walk and plan as example A.
+```
+
+The extra cable changes nothing for `mixed4`. A ring of four 4x2 stages (need 4) would take
+`c1 + c2`, the cycle A2 A3 B3 B2.
+
+There is a quirk here. With branch slices, the search records only lengths up to `need`,
+because longer partial cycles are pruned before they close. A ring needing 5 slices on this
+fabric fails with `no-cycle-of-length-5` and `achievable cycle lengths: [4]`, although an
+8-cycle exists. Without branch slices (example B) every loop's length is reported. The C++
+port should keep the same verdict; the message may say more.
+
+**D. Right length, no alignment** (example A's fabric; ring s0 4x2, s1 4x2, s2 4x8).
+
+```
+phase 0   stage_counts = [1, 1, 4], need 6
+phase 3   cycle A0 A1 A2 B2 B1 B0, length 6
+phase 4   s2 needs 4 slices in one row of one mesh. The cycle's same-mesh runs are
+          [3, 3] (A0 A1 A2, then B2 B1 B0), so every rotation puts s2 across the crossing.
+error     no-alignment: found 1 cycle(s) of the right length (6 slices) but no rotation
+          places every stage as its declared rectangle ...
+            cycle's same-mesh run lengths: [3, 3]
+            stage shapes: ['4x2', '4x2', '4x8']
+```
+
+**E. A fork** (`plan_fork_carve`, example C's fabric). A branch that returns over fabric
+needs a cycle through the router; one that returns over host needs only an open path
+starting next to the router.
+
+| Step | What it does |
+|---|---|
+| input checks | Router exactly one slice; branch stages whole slices. `need_edges = 2 x fabric-return branches + 1 x host-return branches`; `need_slices = 1 + all branch slices`. |
+| router candidates | Every slice with at least `need_edges` neighbours, in slice order. |
+| branch order | Fabric-return branches first, shortest first (a short cycle must hug the router), then host-return branches. |
+| walks | Fabric return: `_cycles_through` (prune, contract and cycle search on the free slices, keeping cycles through the router), both directions. Host return: `_path_of_length` from each free router neighbour. Each walk is cut into the branch's rectangles. |
+| search | Backtracking over each branch's walks, capped at 2,000 attempts. |
+
+Take a 4x2 router R, branch X of three 4x2 stages returning over fabric, and branch Y of one
+4x2 stage returning over host:
+
+```
+need_edges = 2 + 1 = 3; need_slices = 1 + 3 + 1 = 5
+router candidates: A2 and B2 (three neighbours each); try A2
+branch X needs a 4-cycle through A2: A2 A3 B3 B2
+  walks [A3 B3 B2] and [B2 B3 A3]; take [A3 B3 B2]: X0 A3, X1 B3, X2 B2, return B2 -> A2
+branch Y: A2's free neighbours are {A1}; path [A1]: Y0 A1, return over host
+plan: R A2 | X A3, B3, B2 | Y A1 | fillers A0, B0, B1
+```
+
+If Y also returned over fabric, the router would need four neighbours. No slice has more
+than three, so it fails with `no slice has the 4 fabric neighbours this fork needs ... the
+best any slice has is 3`.
+
+**Other edge cases.**
+
+| Case | Phase | Result |
+|---|---|---|
+| `pod8` (4x2 and 1x2 slices) | 0 | `host slices are not uniform`; per-rank tiling is the path (3.4) |
+| a 1x2 stage on 4x2 slices | 0 | `not a whole number of 4x2 host slices` |
+| `mixed4` with s0 4x4 | 0 | `input-infeasible`: stage 0 owns host-to-device, the loopback entry and device-to-host, so one rank must drive it |
+| only one cable, A0–B0 | 2 | leaf pruning removes every slice: `only 0 slices can lie on any cycle` |
+| an open chain (no loopback) | before phase 0 | `plan_carve` refuses: there is no cycle to place; give it a `submesh_shape` |
+| a huge fabric with many branch slices | 3 | `budget-exhausted`; Tier C treats it as unknown and accepts |
+
 ### 3.3 Share the inter-mesh binding rule with the control plane
 
 `ControlPlane::generate_intermesh_connectivity()` decides which physical cables carry each
@@ -783,6 +1177,20 @@ neighbouring mesh. `required_links` is empty without a pipeline descriptor, whic
 today's pairing exactly; with one, Tier C picks the links, they are bound first, and the
 rest of the budget is filled to spread across host slices (5.3). The single-host path
 (`generate_intermesh_connections_on_local_host`) moves onto the same two helpers.
+
+#### Example
+
+`mixed4` on (P, R), on a machine with an extra A0–B0 cable whose chip ids are lower than the
+A2–B2 cable's:
+
+| Call | Result |
+|---|---|
+| `gather_intermesh_candidates(psd, mapping)` | three candidates: A0–B0 (first), A0–B0 (second), A2–B2. Each source chip cables to one destination chip on M1, so all three pass |
+| `bind_intermesh_connections(cands, mgd, {})` | today's rule: the two lowest ids, both A0–B0 |
+| `bind_intermesh_connections(cands, mgd, R)` with `R = {A0–B0, A2–B2}` from Tier C | phase 0 binds both cables in `R`; the count of 2 is full |
+
+Tier C and the control plane call the same two functions, so the cables Tier C checks are
+the cables that get bound.
 
 ### 3.4 Carve paths: planned carve, per-rank tiling and flexible placement, as the pipeline builder does them
 
@@ -851,6 +1259,37 @@ the host-slice shape (for a mesh that carries no stage, whose ranks still carve 
 Try combinations across meshes; there is usually one candidate per mesh. One shape per mesh,
 since every rank of a mesh carves the same shape.
 
+**Example: slots to submeshes on a planned carve** (`mixed4` on (P, R), plan from 3.2,
+example A):
+
+```
+M0 slots in plan order: 4x2@(0,0), 4x4@(0,2), 4x2@(0,6)
+  rank 0 -> 4x2@(0,0)   rank 1 -> 4x4@(0,2)   rank 2 -> 4x4@(0,2)   rank 3 -> filler 4x2@(0,6)
+  a rank whose chips fall in zero or two slots is a planner bug and raises
+collapse identical chip sets, in first-rank order:
+  submesh 0 = A0 (8 chips)   1 = A1+A2 (16, ranks 1 and 2)   2 = A3 (8)
+  submesh 3 = B0 (8)         4 = B1+B2 (16, ranks 5 and 6)   5 = B3 (8)
+6 distinct submeshes >= 4 stages
+```
+
+**Example: per-rank tiling combinations** (`mixed4` on (P, Q), after the planned carve
+failed with `no-cycle-of-length-6`). The candidate tile shapes are {4x2, 4x4} on each mesh:
+
+| M0 tiles | M1 tiles | Submeshes | Result |
+|---|---|---|---|
+| 4x2 | 4x2 | eight with 8 chips | fails: nothing with 16 chips for s1 |
+| 4x4 | 4x4 | four with 16 chips, two ranks each | fails: nothing with 8 chips for s0 |
+| 4x2 | 4x4 | four with 8 on M0, two with 16 on M1 | fails: s0 and s3 must be neighbouring A slices that both have a cable to M1, but the cables are on A0 and A3 |
+| 4x4 | 4x2 | the mirror | fails the same way |
+
+Every path fails, so the seating is rejected (section 4).
+
+**Example: different slice shapes** (`pod8`). The planned carve rejects up front because the
+slices are not uniform. The only tile shapes that divide each mesh are 4x2 on M0 and 1x2 on
+M1. Each tile is exactly one rank's slice, so every rank keeps its own and nothing
+collapses: A0..A3 with 8 chips each, T0..T3 with 2 chips each. The resolver then decides by
+where the cables land (3.1).
+
 #### Flexible placement
 
 **What blaze does.** `PipelineGraph._resolve_topology` (`graph.py`) with
@@ -910,6 +1349,39 @@ outgoing edge, and what the planner cannot cover.
 FLEXIBLE descriptors without checking them. A STRICT check on a FLEXIBLE descriptor would
 reject placements blaze can build.
 
+**Example: `mixed4` as FLEXIBLE on (P, Q).** STRICT rejects this seating (3.2, example B).
+`plan_ring_placement` runs:
+
+```
+   A0 ── A1 ── A2 ── A3
+   │                  │
+   B0 ── B1 ── B2 ── B3
+
+phase 1   no 6-cycle (only the 8-cycle). Census note: spare = 2 and 6 + 2 is an
+          achievable length, so passthrough_ring = 2 (two passthrough stages would
+          close an 8-stage ring over fabric).
+phase 3   one component of 8 >= 6, so k starts at 1. _cover_with_chains(1) starts at
+          the smallest slice and extends to the smallest free neighbour:
+            1. A0 A1 A2 A3 B3 B2    2. A0 B0 B1 B2 B3 A3    3. A1 A0 B0 B1 B2 B3    ...
+phase 4   _group_walk per cover; joints only between stages, never cut 0:
+            cover 1 best: s0 A3, s1 B3+B2, s2 A0+A1, s3 A2   cut s1 -> s2   key (1, 1, (1,))
+            cover 2 best: s0 A3, s1 B3+B2, s2 B1+B0, s3 A0   cut s3 -> s0   key (1, 0, (3,))
+          key = (cut page sizes, 0 if the loopback is cut else 1, cut indices)
+result    cover 2 wins: one cut, and it is the loopback. s3 -> s0 becomes HOST.
+          carve M0 4x2@(0,6), M1 4x4@(0,4), M1 4x4@(0,0), M0 4x2@(0,0); A1, A2 idle
+          _resolve_chains_separately: one fabric chain s0 -> s1 -> s2 -> s3
+```
+
+**FLEXIBLE edge cases.**
+
+| Case | Result |
+|---|---|
+| a cover whose only alignment cuts `s0 -> s1` | skipped: stage 0's outgoing edge stays on fabric |
+| a joint between chains inside a 4x4 stage | skipped: a wide stage cannot be split by a host hop |
+| `pod8` as FLEXIBLE | `HostEdgePlanError: host slices are not uniform`, not caught; Tier C rejects, because blaze raises rather than falling back |
+| a fork with a two-slice router | `ForkShapeUnsupported`; blaze resolves the fork as declared, so Tier C uses the STRICT paths |
+| a FLEXIBLE ring that is already all fabric on single-slice stages | no plan; placement goes to the resolver as in STRICT |
+
 #### Reuse or rebuild
 
 | Piece | Today | Tier C |
@@ -942,6 +1414,15 @@ only the first, by the step-2 rule, and the others drop out of the submesh list.
 apply the same rule. The binding rule in 2.2 says such a stage cannot bind at all, which is
 stricter than per-rank tiling; if runtime supports that layout, the binding rule should
 allow it for the tiling path, or it eliminates placements early.
+
+For example, take `pod8` with M1 changed to 4x8 and `host_topology [1, 4]` (4x2 slices),
+still with 1x2 stages s4..s7. `create_submeshes(1x2)` on M1 makes 16 tiles, row-major. Each
+of M1's ranks owns four of them and keeps the one whose `(0,0)` chip is local: rank 4 keeps
+row 0, columns 0–1; rank 5 keeps row 0, columns 2–3; and so on. Rows 1–3 of M1 carry no
+stage. A cable that lands on M1 row 3 then does not count, because `discover_submesh_links`
+only sees chips inside submeshes. The same physical seat passes or fails depending on
+whether the intra-mesh layout puts the cabled chips in row 0. Tier B as written rejects
+this MGD at load (2.2).
 
 ## 4. Where it runs in the topology mapper
 
@@ -1069,6 +1550,59 @@ are not in the MGD, so Tier C could accept a layout runtime rejects (open questi
 - **Bonus.** `generate_rank_bindings --all-solutions` only emits mappings the pipeline can be
   built on, so `sweep_rank_binding_solutions.py` stops launching dead ones.
 
+#### Example: `mixed4` through the loop on pods P, Q, R
+
+Before the first solve, Tier B passed with `k(M0, M1) = 2` (2.2) and Plan 1 dropped the Q–R
+seat edge (5.1). With `unique_shapes` off, the master solve can offer (M0, M1) = (P, Q),
+(Q, P), (P, R) and (R, P). Suppose it offers them in that order.
+
+| Iteration | Seating | Intra-mesh | Tier C | Next |
+|---|---|---|---|---|
+| 1 | (P, Q) | success; cables on A0–B0, A3–B3 | planned carve `no-cycle-of-length-6` (3.2, example B); every tiling fails (3.4) | `exclude_mapping({M0 -> P, M1 -> Q})` |
+| 2 | (Q, P) | success; the same cables with the meshes swapped | same geometry, same failures | `exclude_mapping({M0 -> Q, M1 -> P})` |
+| 3 | (P, R) | success; cables on A0–B0, A2–B2 | planned carve finds the 6-cycle (3.2, example A); resolver places the ring (3.1); binding rerun passes (5.3) | emit |
+
+**What the intra-mesh solve constrains** (`complete_intra_mesh_for_placement`, per mesh, on
+each seating):
+
+| Constraint | Function | On (P, R) |
+|---|---|---|
+| rank binding (hard) | `add_rank_binding_constraints` | M0's host-rank-i fabric nodes map to P.hi's ASICs; M1's to R.hi's |
+| exit nodes (hard) | `add_exit_node_constraints` | the MGD connection is mesh-level, so one cardinality constraint: at least 2 of M0's nodes sit on ASICs cabled toward R, capped by the physical link total under RELAXED. P has exactly two such ASICs, on h0 and h2 |
+| MGD pins (hard) | `add_pinning_constraints` | none declared |
+| PGD layout (soft) | `add_pgd_pinning_preferred_constraints` | biases toward the PGD layout; this is what puts host rank i on host hi |
+
+A failure here is an intra-mesh failure and keeps today's `add_forbidden_constraint`. It
+is the solved layout, not the seat, that tells Tier C which slice each cable touches.
+
+**Per-step outputs on iteration 3:**
+
+1. **Seat.** M0 on P, M1 on R.
+2. **Intra-mesh.** `full.fabric_node_to_asic` for both meshes.
+3. **Links.** `gather_intermesh_candidates` returns the two P–R cables (3.3); the routed
+   intra-mesh links give the two lines.
+4. **Slices.** `get_coord_range(M0, host_rank)` gives A0..A3 (columns 0–1, 2–3, 4–5, 6–7),
+   likewise B0..B3. Adjacency is the lines plus A0–B0 and A2–B2.
+5. **Carve.** The planned carve returns six slots (3.2, example A). Per-rank tiling is not
+   needed, since the first path succeeded.
+6. **Layout.** The resolver gives s0 A0, s1 A1+A2, s2 B1+B2, s3 B0 (3.1).
+7. **Binding.** `R` = {A2–B2 for `s1 -> s2`, A0–B0 for `s3 -> s0`}; bound first; rerun
+   passes (5.3).
+8. **Emit.** The mapping, the plan and the layout; `TT_PIPELINE_STAGE` per rank (4.1).
+
+**Edge cases in this loop.**
+
+- **Feedback is about seats.** After iteration 1, `add_forbidden_constraint(M0 on P)` would
+  have blocked iteration 3, which succeeds with M0 on P. `exclude_mapping` blocks only the
+  pair of seats (5.2).
+- **The swap matters in general.** Iteration 2 fails here only because the layout is the
+  same. With `unique_shapes` on, it would never be offered; that is harmless in this example,
+  but wrong when the two meshes' pins or rank bindings differ (5.2).
+- **FLEXIBLE accepts iteration 1.** As FLEXIBLE, `mixed4` on (P, Q) passes with the loopback
+  over host (3.4), so the loop would stop there.
+- **`pod8`** takes two iterations: (P, U) fails in the resolver because the cables land on
+  opposite corners of M1, and (P, V) passes (3.1).
+
 ### 4.1 Writing the stage plan into rank bindings (written, not used)
 
 When a mapping passes Tier C, `generate_rank_bindings` writes the stage each rank drives as
@@ -1083,6 +1617,21 @@ Co-owners of a joint stage all get the same stage id:
 **Not consumed yet.** Nothing in tt-metal or blaze reads it. Blaze keeps planning with its
 own Python carve planner. It records the mapper's witness placement (2.3), which may differ
 from what blaze builds, and whether anything ever uses it is a separate decision.
+
+For `mixed4` on (P, R) the entries would be:
+
+| Rank | Slice | `TT_PIPELINE_STAGE` |
+|---|---|---|
+| 0 | A0 | `s0` |
+| 1, 2 | A1, A2 | `s1` (co-owned) |
+| 3 | A3 | `idle` |
+| 4 | B0 | `s3` |
+| 5, 6 | B1, B2 | `s2` (co-owned) |
+| 7 | B3 | `idle` |
+
+If blaze's runtime carve picked a different alignment of the same cycle (3.2, example A),
+for example s0 on B0, every entry would differ while the mapping stays the same. That is
+why the entry is a witness, not an instruction.
 
 ---
 
@@ -1149,6 +1698,37 @@ allowed set only when it fails under every projection and layout:
   host-to-device and device-to-host slots, and the router's endpoint budget. These depend on
   the whole pipeline at once. The exact check (5.2) catches them.
 
+#### Examples
+
+**How the master solve is set up today, on `mixed4` and pods P, Q, R:**
+
+| Step | Code | Result |
+|---|---|---|
+| seat pools | `create_sat_placement_pools` | both meshes embed their PGD grouping (a 4x8 over four hosts): pool {P, Q, R}. `sat_footprint_canonical` merges orientations of one footprint (key: grouping name, type, sorted ASICs), so each pod is one seat |
+| seat graph | `build_sat_placement_seat_graph` | for the MGD pair M0–M1, `saturated_link_count` parallel edges per seat pair: P–Q x2, P–R x2, Q–R x1 |
+| constraints | `build_sat_placement_constraints` | each mesh on a seat from its pool. M0 and M1 share a pool but are adjacent, so they are not twins and get no symmetry window. The footprints are disjoint, so injectivity keeps chips unshared |
+| master session | `MasterSolve::restart` | maps M0–M1 (count 2, RELAXED) onto the seat graph. RELAXED only needs adjacency, so all six ordered pairs are possible, including (Q, R) on one link |
+
+**Plan 1 on `mixed4`.** `k(M0, M1) = 2` (2.2). The footprint-level rule drops the Q–R edge,
+which has 1 link, so (Q, R) and (R, Q) are never offered. P–Q stays (2 links), although
+`mixed4` fails on it: the reason is the loop length (3.2, example B), which no seat-pair
+link count can see. The slice-level rule would not catch it either, because P–Q's two
+links are on distinct slice pairs.
+
+**Plan 1 on `pod8`.** `k = 2`, and every projection agrees that the boundary slices on M0
+are A0 and A3 (2.2). Both P–U and P–V have 2 links, so the footprint rule keeps both. With a
+hard-pinned layout the slice-level rule could check that both links touch {A0, A3}, which
+they do on both seats. It still cannot reject U: U fails because its cables land on
+opposite corners of M1 (3.1). That depends on the path through M1, not on boundary slices.
+
+**What Plan 1 must not do.** It must not use one projection's values. For `mixed4`, the
+projection `s0, s1 -> M0` has boundary stages s0 and s1 on M0, while `s0, s1, s3 -> M0` has
+s1 and s3. Pruning by either one's slices would drop seats the other could use. The minimum
+`k` and the union of boundary slices hold for both.
+
+**Under FLEXIBLE** `k = 0` for every pair, and Plan 1 prunes nothing: `mixed4` as FLEXIBLE
+can use (Q, R) with its one link by sending one crossing over host.
+
 ### 5.2 Plan 2 - check each candidate and teach the solver (backstop)
 
 After intra-mesh completion, run the carve planner and the resolver on the candidate
@@ -1176,6 +1756,18 @@ was at fault. Feedback must therefore be about seats, not about a mesh on a seat
   including orientation, not on the ASIC set `block_assigned` matches today.
 - Attribution needs the structured failures from 3.1 and 3.2.
 - Cap the number of pipeline rejections per run and report the last carve or resolver reason.
+
+**Example.** `mixed4` fails on (P, Q) (section 4, iteration 1).
+
+| Feedback | Effect | Verdict |
+|---|---|---|
+| `exclude_mapping({M0 -> P, M1 -> Q})` | blocks this seat set only | correct: (P, R) is still offered and succeeds |
+| `add_forbidden_constraint(M0 on P)` | M0 may never use P | wrong: it removes (P, R), one of the two seatings that work |
+| `add_forbidden_constraint(M1 on Q)` | M1 may never use Q | wrong: harmless here, but Q could carry M1 next to a different M0 seat |
+| block "P and Q both used" (new API) | blocks (P, Q) and (Q, P) | only if proven for every carve over P and Q. Here it holds, because the slice graph is the same either way, but proving it needs the attribution from 3.1 and 3.2 |
+
+On `pod8`, (P, U) fails and `exclude_mapping({M0 -> P, M1 -> U})` leaves (P, V), which is
+the only seating that works.
 
 #### Turn `unique_shapes` off for SAT placement
 
@@ -1236,6 +1828,14 @@ The rules elsewhere in this design (no split fixed early, 2.2 and 5.1; feedback 
 **Cost.** Off, the master solve can yield every mesh permutation of a seat set, which is what
 the dedup was added to avoid on large symmetric machines. Cap pipeline rejections per run
 (5.2) and measure on the ring-stress and superpod cases before turning it off by default.
+
+**Example.** On `mixed4`, (P, Q) and (Q, P) are the same set of seats {P, Q}, so with
+`unique_shapes` on only the first is offered. In this example both fail with the same slice
+geometry, so the dedup is harmless. Now change it so that M1 has an MGD pin putting its
+host rank 0 on host h1. Then (Q, P) lays out differently from (P, Q), and the two can give
+different answers. After (P, Q) fails, `exclude_mapping` blocks the key {P, Q}, which also
+covers (Q, P), so the swap is never checked. With `unique_shapes` off, (Q, P) is its own
+seating and gets its own check.
 
 ### 5.3 Pipeline-aware exit-node binding
 
@@ -1315,6 +1915,33 @@ checks against exactly those.
    Tier C on a single host must model that path's greedy order, or skip the rerun there and
    note the gap.
 
+#### Examples
+
+**`mixed4` on (P, R) with an extra cable.** Suppose the machine has two A0–B0 cables, both
+on lower chip ids than the A2–B2 cable, and the MGD asks for 2 channels.
+
+| Step | Today | With 5.3 |
+|---|---|---|
+| gather | three candidates: A0–B0, A0–B0, A2–B2 | same (3.3) |
+| required links | none | Tier C's layout crosses on `s1 -> s2` (A2–B2) and `s3 -> s0` (A0–B0), so `R` holds one cable of each |
+| bind | the two lowest ids: both A0–B0 | phase 0 binds `R`; the count of 2 is full |
+| rerun over bound links | not done | the same plan and layout: accept |
+| runtime | blaze sees only A0–B0; leaf pruning removes every slice; `no-cycle-of-length-6` (2.4) | blaze sees A0–B0 and A2–B2 and builds |
+
+**Spread fill.** Take the count as 3 instead. `R` takes two, and one more is filled from
+the spare A0–B0. Step 4 orders the fill by slice pair, but every spare cable here is on
+A0–B0, so it makes no difference. With a spare on A3–B3 instead, the fill would take it
+first. That adds a new slice pair, which gives blaze's runtime planner the branch-slice
+fabric of 3.2, example C.
+
+**Phase 0 cannot place a cable.** Suppose the A2–B2 cable's chip has no free port left in a
+direction facing M1. Phase 0 fails, Tier C finds no other layout cheaply, and the seating is
+blocked with `failure_stage = "pipeline_binding"` (step 6).
+
+**STRICT `Graph` connections.** The user pins the exit chips, so the cables Tier C may use
+are exactly the pinned ones. If the pins give A0–B0 and A3–B3, Tier C rejects `mixed4`
+(3.2, example B), and 5.3 has nothing to choose between.
+
 #### Gaps
 
 - **Live link state.** The control plane drops cables whose link is down at init. Offline
@@ -1359,6 +1986,17 @@ checks against exactly those.
   (2.3): the mapper only guarantees that a placement exists on the mapping. If
   `TT_PIPELINE_STAGE` is ever consumed, the two would have to be made to agree first.
 
+#### Example
+
+`mixed4` on (P, R):
+
+| Step | Who decides | Result |
+|---|---|---|
+| rank to slice | the topology mapper (rank bindings and intra-mesh solve) | rank i drives Ai on M0, rank 4 + i drives Bi on M1 |
+| stage to slices | the carve planner | s0 A0, s1 A1+A2, s2 B2+B1, s3 B0; A3 and B3 are fillers |
+| co-ownership | `_collect_submeshes`, then `allgather_end_owners` | ranks 1 and 2 share s1 and ranks 5 and 6 share s2; `allgather_end_owners` picks which co-owner drives the entry chip and which the exit chip |
+| idle ranks | filler slots | ranks 3 and 7 carve their own slice and carry no stage |
+
 ---
 
 ## 7. Open questions
@@ -1390,506 +2028,3 @@ checks against exactly those.
    (4.1).
 10. **Spread fill for the binding** (5.3, step 4). Turn it on only with a pipeline descriptor,
     or everywhere once the goldens are regenerated.
-
----
-
-## 8. Worked examples, end to end
-
-Everything in this section is hypothetical and traced by hand through the code as it stands:
-tt-blaze `origin/main` (34e783a631) for the carve planner, `_collect_submeshes` and the host
-edge planner, and tt-metal on this branch for SAT placement, the intra-mesh solve and the
-graph-layout resolver. Steps this design adds are marked *new*. Nothing here was run.
-
-8.1 explains the carve planner on its own, with small examples. 8.2 and 8.3 then follow two
-pipelines through every stage: parse (Tier A), the declared fabric (Tier B), SAT placement,
-the intra-mesh solve, the per-seating check (Tier C), cable binding, and blaze's build at
-runtime (Tier D). 8.4 lists the special cases the examples hit.
-
-All examples use the same slice names. A mesh driven by four ranks with `host_topology
-[1, 4]` has four host slices; on mesh M0 they are A0..A3 (ranks 0–3), on M1 they are B0..B3
-(ranks 4–7). Inside a mesh the slices form a line (A0–A1–A2–A3). Cables between meshes are
-drawn as vertical bars.
-
-### 8.1 How the carve planner works
-
-The carve planner (`pipeline_builder/carve_planner.py`) answers one question: given every
-rank's host slice and which slice pairs the fabric links, which slices does each stage get?
-
-It works on host slices, not chips. `_collect_submeshes` requires each rank's chips to sit
-inside exactly one slot, so a slot is always a union of whole slices. That keeps the problem
-small: a 512-chip system with 4x2 slices is a graph of 128 vertices.
-
-Every rank runs the planner on its own and must reach the same plan, because carving is
-collective. So the plan is a pure function of allgathered integers. Slices are ordered by
-`(mesh_id, row0, col0)`, never by rank, every loop runs over a sorted sequence, and
-`plan_carve` finishes by exchanging a crc32 of the plan and failing if any rank disagrees.
-
-#### The phases of `plan_ring_carve`
-
-| Phase | Code | What it does |
-|---|---|---|
-| 1. discover | `discover_host_slices`, `discover_slice_adjacency` | Allgather each rank's local chips; each rank's bounding box becomes a `HostSlice(mesh_id, row0, col0, nrows, ncols)`. For each chip and direction (N, E, S, W, Z), a neighbour on another slice counts only if `get_forwarding_direction` confirms it. The result is a set of slice pairs; one confirmed link is enough, counts are not kept. |
-| 0. input checks | top of `plan_ring_carve` | All slices one shape. Each stage shape a whole number of slices (`r % nrows == 0`, `c % ncols == 0`), giving `stage_counts`. `need = sum(stage_counts)` no more than the number of slices. Stage 0 is exactly one slice. |
-| 2. reduce | `_prune_leaves`, `_contract` | Repeatedly drop slices with fewer than two live neighbours (they cannot lie on a cycle). Slices with more than two neighbours are *branch slices*; each run of two-neighbour slices between branch slices becomes one weighted chain. Several chains may join the same two branch slices. |
-| 3. cycle search | `_cycles_of_length`, `_cycles_no_branch` | Find simple cycles of exactly `need` slices. With no branch slices the graph is disjoint loops, and each loop is walked once. Otherwise a DFS over branch slices picks one unused chain per step, adding its weight plus one, and prunes any partial cycle above `need`. Stops at 200,000 expansions (`budget-exhausted`) or 64 cycles. |
-| 4. align | `_group_cycle`, `_canonical_walk`, `_as_rectangle` | Cycles are sorted by mesh crossings, fewest first. For each cycle, start from the canonical walk (anchored at the lowest slice, stepping toward its lower neighbour), then try every rotation and the reverse direction. Cut consecutive groups of `stage_counts[i]` slices; each group must be one gap-free rectangle on one mesh with exactly the declared shape (no transpose). The first alignment that works wins. |
-| 5. emit | end of `plan_ring_carve`, `validate_carve_plan` | One `CarveSlot(mesh_id, shape, offset)` per stage in stage order, then one filler slot per unused slice (its rank idles). Every chip of every mesh must be covered exactly once. |
-
-The failures name their phase: `host slices are not uniform`, `stage i declares shape ...
-not a whole number of host slices`, `input-infeasible`, `no-cycle-of-length-N` (with the
-cycle lengths that are achievable), `budget-exhausted`, and `no-alignment` (with the
-cycle's same-mesh run lengths).
-
-After the plan, `_collect_submeshes` turns slots into submeshes. Each rank calls
-`create_submesh(shape, offset)` for every slot on its own mesh, in plan order (a collective
-over that mesh's ranks), and keeps the one slot that holds its chips. Chip lists are
-allgathered and identical chip sets collapse into one submesh, which is how a stage
-spanning two ranks becomes one co-owned node. The resolver (`resolve_graph_layout`) then
-decides which stage goes on which submesh; it does not take the planner's stage order as
-given, it re-derives the assignment from chip counts and links.
-
-In Tier C, phase 1 comes from the mapper instead of ttnn: slices from
-`MeshGraph::get_coord_range` and adjacency from the candidate inter-mesh links plus routed
-intra-mesh links (section 4, steps 3–4). Phases 0 and 2–5 are the C++ port (3.2).
-
-#### Carver example A: one loop, no branch slices
-
-Two meshes, cables A0–B0 and A2–B2. Ring: s0 4x2, s1 4x4, s2 4x4, s3 4x2.
-
-```
-   A0 ── A1 ── A2 ── A3
-   │            │
-   B0 ── B1 ── B2 ── B3
-
-phase 0   slices all 4x2; stage_counts = [1, 2, 2, 1]; need = 6 <= 8; stage 0 is 1 slice
-phase 2   A3 has one live neighbour (A2), B3 has one (B2): drop both
-          alive = {A0 A1 A2 B0 B1 B2}; every alive slice has 2 neighbours -> no branch slices
-phase 3   _cycles_no_branch walks from the lowest slice A0:
-          A0 A1 A2 B2 B1 B0              length 6 == need
-phase 4   canonical walk: anchor A0; A1 (0,0,2) < B0 (1,0,0), so step to A1
-          forward, offset 0:
-            s0 <- [A0]      M0 rows 0-3 cols 0-1   4x2   ok
-            s1 <- [A1 A2]   M0 rows 0-3 cols 2-5   4x4   ok
-            s2 <- [B2 B1]   M1 rows 0-3 cols 2-5   4x4   ok
-            s3 <- [B0]      M1 rows 0-3 cols 0-1   4x2   ok
-phase 5   slots: M0 4x2@(0,0), M0 4x4@(0,2), M1 4x4@(0,2), M1 4x2@(0,0),
-          fillers M0 4x2@(0,6), M1 4x2@(0,6)        (ranks 3 and 7 idle)
-```
-
-Twelve alignments exist (six rotations, two directions); four of them work. The other three
-are forward offset 3 (s0 B2, s1 B1+B0, s2 A0+A1, s3 A2), reverse offset 1 (s0 B0, s1 B1+B2,
-s2 A2+A1, s3 A0), and reverse offset 4 (s0 A2, s1 A1+A0, s2 B0+B1, s3 B2). The rest fail in
-`_as_rectangle`, because a 4x4 group would take one slice from each mesh. The planner returns
-the first; Tier C only needs one to exist.
-
-#### Carver example B: branch slices and contraction
-
-Add a third cable, A3–B3:
-
-```
-   A0 ── A1 ── A2 ── A3
-   │            │     │
-   B0 ── B1 ── B2 ── B3
-
-phase 2   nothing pruned. Branch slices: A2 (A1, A3, B2) and B2 (B1, B3, A2).
-          _contract walks out of A2 in neighbour order and finds three chains A2 -> B2:
-            c0  interior A1 A0 B0 B1   weight 4
-            c1  interior A3 B3         weight 2
-            c2  direct                 weight 0
-phase 3   a cycle is two different chains between A2 and B2: 2 + weight + weight slices
-            c0 + c2 = 6     c1 + c2 = 4     c0 + c1 = 8
-          need 6: the DFS finds c0 + c2, i.e. A2 A1 A0 B0 B1 B2 (four times: two start
-          slices, two directions; it is one ring). c0 + c1 exceeds 6 and is pruned.
-phase 4   same canonical walk and plan as example A.
-```
-
-The extra cable changes nothing for this ring. A ring of four 4x2 stages (need 4) would take
-`c1 + c2`, the cycle A2 A3 B3 B2.
-
-One quirk shows up here. With branch slices, the search records only lengths up to `need`,
-because longer partial cycles are pruned before they close. A ring needing 5 slices on this
-fabric fails with `no-cycle-of-length-5` and `achievable cycle lengths: [4]`, although an
-8-cycle also exists. With no branch slices (example A) every loop's length is reported.
-
-#### Carver example C: right length, no alignment
-
-Same fabric as example A, ring s0 4x2, s1 4x2, s2 4x8 (`stage_counts = [1, 1, 4]`, need 6).
-
-```
-phase 3   cycle A0 A1 A2 B2 B1 B0, length 6
-phase 4   s2 needs 4 slices in one row of one mesh. The cycle's same-mesh runs are
-          [3, 3] (A0 A1 A2, then B2 B1 B0), so every rotation puts s2 across the crossing.
-error     no-alignment: found 1 cycle(s) of the right length (6 slices) but no rotation
-          places every stage as its declared rectangle ...
-            cycle's same-mesh run lengths: [3, 3]
-            stage shapes: ['4x2', '4x2', '4x8']
-```
-
-#### Carver example D: a fork (`plan_fork_carve`)
-
-A fork is a router stage plus branches. A branch that returns over fabric needs a cycle
-through the router (router, head, ..., tail, router). A branch that returns over host needs
-only an open path starting next to the router. The branches share nothing but the router.
-
-| Step | What it does |
-|---|---|
-| input checks | Router is exactly one slice; branch stages are whole slices. `need_edges = 2 x fabric-return branches + 1 x host-return branches`; `need_slices = 1 + all branch slices`. |
-| router candidates | Every slice with at least `need_edges` neighbours, in slice order. None gives `no slice has the N fabric neighbours this fork needs`. |
-| branch order | Fabric-return branches first, shortest first (a short cycle must hug the router), then host-return branches. |
-| walks per branch | Fabric return: `_cycles_through` reuses prune, contract and cycle search on the free slices and keeps cycles through the router, offered in both directions. Host return: `_path_of_length` from each free router neighbour, depth first, lowest index first. Each walk is cut into the branch's rectangles. |
-| search | Backtracking over each branch's walks, capped at 2,000 attempts, because one branch's first walk often eats slices a later branch needs. |
-| emit | Router slot, branch slots, fillers. |
-
-On example B's fabric, take a 4x2 router R, branch X of three 4x2 stages returning over
-fabric, and branch Y of one 4x2 stage returning over host:
-
-```
-need_edges = 2 + 1 = 3; need_slices = 1 + 3 + 1 = 5
-router candidates: A2 and B2 (three neighbours each); try A2
-branch X (fabric, 3 slices) needs a 4-cycle through A2: A2 A3 B3 B2
-  walks [A3 B3 B2] and [B2 B3 A3]; take [A3 B3 B2]: X0 A3, X1 B3, X2 B2, return B2 -> A2
-branch Y (host, 1 slice): A2's free neighbours are {A1}; path [A1]: Y0 A1, return over host
-plan: R A2 | X A3, B3, B2 | Y A1 | fillers A0, B0, B1
-```
-
-If Y also returned over fabric, the router would need four neighbours and no slice has more
-than three, so the planner fails at the candidate step.
-
-#### Flexible placement (`plan_ring_placement`)
-
-Under FLEXIBLE, blaze may turn ring edges into host hops. The host edge planner runs the
-same input checks, then:
-
-1. **Phase 1, a fabric cycle.** The same prune, contract and cycle search as the carve
-   planner, then an alignment with no cuts. If one exists there are no host edges.
-2. **Phase 3, cover with chains.** Count the fewest fabric components that hold `need`
-   slices and start `k` there. `_cover_with_chains(k)` finds covers of `need` slices by `k`
-   disjoint simple paths, depth first: start a chain at the smallest free slice, extend to
-   the smallest free neighbour.
-3. **Phase 4, align.** `_group_walk` lays the stages along the covers' concatenated walk.
-   The joints between chains must fall between stages, never inside a wide stage, and never
-   on stage 0's outgoing edge (cut 0). Among valid alignments the key is (total page size
-   of cut edges, 0 if the loopback is cut else 1, cut indices); the smallest wins. Each cut
-   costs `HOST_HOP_COST = 10` in the plan.
-4. The plan's carve (if a stage is wide) or per-rank tiling by the uniform stage shape makes
-   the submeshes, the cut edges become HOST, and `_resolve_chains_separately` resolves each
-   fabric chain on its own.
-
-On the fabric where cables are A0–B0 and A3–B3 (one loop of 8), with example A's ring:
-
-```
-   A0 ── A1 ── A2 ── A3
-   │                  │
-   B0 ── B1 ── B2 ── B3
-
-phase 1   no 6-cycle (only the 8-cycle). Census note: 2 passthrough stages would make an
-          8-stage ring that closes over fabric (passthrough_ring = 2).
-phase 3   one component of 8 >= 6, so k starts at 1. Covers in search order:
-            1. A0 A1 A2 A3 B3 B2    2. A0 B0 B1 B2 B3 A3    3. A1 A0 B0 B1 B2 B3    ...
-phase 4   cover 1, best: s0 A3, s1 B3+B2, s2 A0+A1, s3 A2; cuts s1 -> s2     key (1, 1, (1,))
-          cover 2, best: s0 A3, s1 B3+B2, s2 B1+B0, s3 A0; cuts s3 -> s0     key (1, 0, (3,))
-          cover 2 wins: one cut, and it is the loopback.
-result    host edge s3 -> s0; carve M0 4x2@(0,6), M1 4x4@(0,4), M1 4x4@(0,0), M0 4x2@(0,0);
-          A1 and A2 idle. One fabric chain s0 -> s1 -> s2 -> s3 is resolved.
-```
-
-### 8.2 Example 1: stages that span two ranks (planned carve)
-
-**Setup.** Two 4x8 meshes, each driven by four ranks (`host_topology [1, 4]`, so 4x2
-slices). The ring has two 4x4 stages, which cannot fit in one rank.
-
-```protobuf
-mesh_descriptors {
-  name: "M"  arch: BLACKHOLE
-  device_topology { dims: [ 4, 8 ] }
-  host_topology   { dims: [ 1, 4 ] }
-  channels { count: 2 policy: RELAXED }
-}
-# graph: M0 <-> M1, channels { count: 2 policy: RELAXED }
-
-pipeline_descriptors {
-  name: "mixed4"  placement: STRICT
-  stages { id: "s0" shape { dims: [ 4, 2 ] } }   # 1 slice
-  stages { id: "s1" shape { dims: [ 4, 4 ] } }   # 2 slices, two ranks
-  stages { id: "s2" shape { dims: [ 4, 4 ] } }   # 2 slices, two ranks
-  stages { id: "s3" shape { dims: [ 4, 2 ] } }   # 1 slice
-  edges { src: "s0" dst: "s1" }  edges { src: "s1" dst: "s2" }
-  edges { src: "s2" dst: "s3" }  edges { src: "s3" dst: "s0" }
-}
-```
-
-The hypothetical machine is three 32-chip pods, each a 4x8 grid driven by four hosts
-(h0..h3, one 4x2 block each), with single cables between some hosts:
-
-```
-P.h0 ── Q.h0   P.h3 ── Q.h3      P–Q: 2 links
-P.h0 ── R.h0   P.h2 ── R.h2      P–R: 2 links
-Q.h1 ── R.h1                     Q–R: 1 link
-```
-
-Assume the intra-mesh solve puts mesh host rank i on host hi of its seat (the PGD's
-preferred layout), so with M0 on P, slice A2 is P.h2.
-
-#### Step 1: Tier A (MGD parse)
-
-`validate_pipeline_descriptors` checks the descriptor alone: stage ids are unique, every
-edge names declared stages, there is no self-edge, every stage has out-degree 1 (a ring),
-one cycle exists and `s3 -> s0` becomes its loopback, and every shape is positive. Pass.
-
-#### Step 2: Tier B (declared fabric, no physical system)
-
-- **Slices.** 4x8 divided by `[1, 4]` gives 4x2 slices, four per mesh.
-- **Binding sets.** 4x2 is one slice and 4x4 is two, both on either mesh. Stage 0 is one
-  slice.
-- **Capacity.** The ring needs 6 slices; the MGD has 8.
-- **Projections.** Each mesh holds at most 4 slices, so neither mesh can take the whole ring
-  (6). For example, `s0, s1 -> M0` and `s2, s3 -> M1` (3 slices each) crosses twice, within
-  the 2 channels. `s0, s1, s3 -> M0` and `s2 -> M1` (4 and 2) also crosses twice. An
-  interleaved split such as `s0, s2 -> M0` crosses four times and is dropped.
-- **Segment carve.** In the first projection, M0's segment (1 + 2 slices) is a path of three
-  slices in a line of four, which fits.
-- **Result.** Pass. Every projection crosses M0–M1, and a ring crosses a cut an even number
-  of times, so Plan 1 gets `k(M0, M1) = 2`.
-
-#### Step 3: SAT placement setup
-
-- **Seat pools.** `create_sat_placement_pools` embeds each mesh's PGD grouping (a 4x8 over
-  four hosts) into the physical graph. Both meshes get the pool {P, Q, R}.
-  `sat_footprint_canonical` merges orientations of the same footprint (the key is grouping
-  name, type and sorted ASICs), so each pod is one seat.
-- **Seat graph.** `build_sat_placement_seat_graph` counts links between every seat pair for
-  each MGD mesh pair (`saturated_link_count`) and adds that many parallel edges: P–Q x2,
-  P–R x2, Q–R x1.
-- **Constraints.** `build_sat_placement_constraints` requires each mesh on a seat from its
-  pool. M0 and M1 share a pool but are adjacent, so they are not twins and get no symmetry
-  window. The footprints are disjoint, so injectivity alone keeps chips unshared.
-- ***New:* Plan 1 (5.1).** With `k = 2`, drop seat-graph edges between seats with fewer than
-  2 links: Q–R goes. This is the footprint-level rule; the layout is not hard-pinned, so the
-  slice-level rule cannot run. It would not help here anyway: P–Q's two links are on
-  distinct slice pairs, and P–Q fails for a reason only the exact check sees (step 4).
-- ***New:* `unique_shapes = false`** because a pipeline descriptor is present (5.2).
-- **Master solve.** `MasterSolve::restart` builds the master session; it maps the mesh graph
-  (M0–M1, count 2, RELAXED) onto the seat graph. The candidate seatings are (M0, M1) = (P,
-  Q), (Q, P), (P, R), (R, P). Without Plan 1, (Q, R) and (R, Q) would also be offered,
-  since RELAXED only needs adjacency. With `unique_shapes` on, (P, Q) and (Q, P) would count
-  as one.
-
-Suppose the solver offers them in the order (P, Q), (Q, P), (P, R).
-
-#### Step 4: seating (P, Q)
-
-**Intra-mesh** (`complete_intra_mesh_for_placement`, per mesh):
-
-| Constraint | Function | Here |
-|---|---|---|
-| rank binding (hard) | `add_rank_binding_constraints` | M0's host-rank-i fabric nodes map to P.hi's ASICs; M1's to Q.hi's |
-| exit nodes (hard) | `add_exit_node_constraints` | the connection is mesh-level, so one cardinality constraint: at least 2 of M0's nodes on ASICs cabled toward Q (capped by the physical link total under RELAXED). P has exactly two such ASICs, on h0 and h3 |
-| MGD pins (hard) | `add_pinning_constraints` | none declared |
-| PGD layout (soft) | `add_pgd_pinning_preferred_constraints` | biases toward the PGD layout |
-
-Both meshes solve. `full.fabric_node_to_asic` now fixes which slice each cable touches:
-A0–B0 and A3–B3.
-
-***New:* Tier C.**
-
-1. **Links.** `gather_intermesh_candidates` returns the two P–Q cables. The routed intra-mesh
-   links give the two lines.
-2. **Slices and adjacency.** A0..A3, B0..B3; lines plus A0–B0 and A3–B3, one loop of 8.
-3. **Planned carve.** No slice is pruned and none is a branch slice, so
-   `_cycles_no_branch` finds the single 8-cycle: `no-cycle-of-length-6`, achievable [8].
-4. **Per-rank tiling.** The tile shape per mesh is one of {4x2, 4x4}. The resolver's chip-count
-   filter then decides:
-   - 4x2 on both meshes gives eight 8-chip submeshes and nothing with 16 chips for s1.
-   - 4x4 on both gives four 16-chip submeshes (two ranks each) and nothing with 8 chips for
-     s0.
-   - 4x2 on M0 and 4x4 on M1 puts s0 and s3 on A slices and s1, s2 on M1's two 4x4 tiles.
-     s3 -> s0 then needs two neighbouring A slices that both have cables to M1, but the
-     cables are on A0 and A3, which are not neighbours. The mirror (4x4 on M0) fails the same
-     way.
-5. **Result.** Every path fails, so the seating is rejected with `failure_stage =
-   "pipeline_carve"` and the last reason attached.
-6. **Feedback (5.2).** `exclude_mapping({M0 -> P, M1 -> Q})`. Not
-   `add_forbidden_constraint(M0 on P)`: M0 on P is exactly what succeeds in step 6.
-
-#### Step 5: seating (Q, P)
-
-Same two cables with the meshes swapped. Under the assumed layout the slice geometry is the
-same, so it fails and is excluded the same way. With `unique_shapes` on, this seating would
-never be offered. That is harmless here, but if the two meshes' layouts differed (different
-pins or rank bindings), the swap could be the one that works.
-
-#### Step 6: seating (P, R)
-
-Intra-mesh succeeds as in step 4, with cables on A0–B0 and A2–B2.
-
-***New:* Tier C.**
-
-1. **Planned carve.** Carver example A: plan `M0 4x2@(0,0)`, `M0 4x4@(0,2)`, `M1 4x4@(0,2)`,
-   `M1 4x2@(0,0)`, fillers `M0 4x2@(0,6)` and `M1 4x2@(0,6)`.
-2. **Slots to submeshes** (the `_collect_submeshes` model):
-
-   ```
-   M0 slots in plan order: 4x2@(0,0), 4x4@(0,2), 4x2@(0,6)
-     rank 0 -> slot 4x2@(0,0)    rank 1 -> 4x4@(0,2)    rank 2 -> 4x4@(0,2)    rank 3 -> filler
-     (a rank whose chips fall in zero or two slots is a planner bug and raises)
-   collapse identical chip sets:
-     submesh 0 = A0 (8)   1 = A1+A2 (16, ranks 1 and 2)   2 = A3 (8)
-     submesh 3 = B0 (8)   4 = B1+B2 (16, ranks 5 and 6)   5 = B3 (8)
-   6 distinct submeshes >= 4 stages
-   ```
-
-3. **Resolver** (`resolve_graph_layout` -> `resolve_pipeline_placement`):
-
-   ```
-   topological order, loopback excluded: s0 s1 s2 s3
-   chip counts: s0 8, s1 16, s2 16, s3 8
-   submesh links: 0-1, 1-2, 3-4, 4-5 (inside meshes), 0-3 and 1-4 (the cables)
-
-   s0: needs 2 links + 2 host endpoints = 4 <= capacity 1 x 8 chips; needs 2 neighbours
-       submesh 0 (neighbours 1, 3)  candidate      submesh 2 (neighbour 1 only)  skip
-       submesh 3 (neighbours 0, 4)  candidate      submesh 5 (neighbour 4 only)  skip
-       try submesh 0
-   s1: 16 chips and linked to submesh 0: only submesh 1
-   s2: 16 chips and linked to submesh 1: submesh 4, over the A2-B2 cable
-   s3: 8 chips, linked from 4 and to 0: submesh 3, closing over the A0-B0 cable
-   LinkSearch: one chip pair per edge, exclusive chips first; host endpoints on s0's
-               unused chips
-   result: s0 -> 0, s1 -> 1, s2 -> 4, s3 -> 3
-   ```
-
-   Had submesh 0 failed, the resolver would try submesh 3 next and find the mirror (s0 B0,
-   s1 B1+B2, s2 A2+A1, s3 A0).
-
-4. ***New:* binding (5.3).** The crossing edges are `s1 -> s2` (A2–B2) and `s3 -> s0`
-   (A0–B0), so `R` holds those two cables. Phase 0 binds them first and fills the count of
-   2. The rerun over the bound links gives the same plan and layout. Accept.
-
-   Suppose the machine had a second A0–B0 cable on lower chip ids than A2–B2. Today's
-   binding would take the two lowest ids, both A0–B0, and the ring could not close. Phase 0
-   binds `R` first, so the A2–B2 cable is kept.
-
-5. **Emit.** The mapping, plan and layout. `rank_bindings.yaml` records `TT_PIPELINE_STAGE`
-   (4.1): rank 0 `s0`, ranks 1 and 2 `s1`, ranks 5 and 6 `s2`, rank 4 `s3`, ranks 3 and 7
-   `idle`.
-
-#### Step 7: runtime (Tier D, unchanged)
-
-The control plane binds the two cables in `R`. Blaze's `build_topology` is called without
-`submesh_shape`, so `_collect_submeshes` calls `plan_carve`. It allgathers the slices, builds
-adjacency from links that `get_forwarding_direction` confirms (exactly the bound cables plus
-the intra-mesh lines), and reaches the same plan as Tier C. The ranks exchange the crc32,
-carve with `create_submesh`, collapse ranks 1+2 and 5+6, and resolve.
-
-Without 5.3, on the machine with the extra A0–B0 cable, blaze would see only A0–B0. Leaf
-pruning would then remove every slice (A3 and B3 first, then A2 and B2, and so on), and
-blaze would fail with `no-cycle-of-length-6: only 0 slices can lie on any cycle`. That is
-the hard runtime failure this design moves into the mapper.
-
-### 8.3 Example 2: different slice shapes (per-rank tiling)
-
-**Setup.** M0 is 4x8 with `host_topology [1, 4]` (4x2 slices, ranks 0–3). M1 is 2x4 with
-`host_topology [2, 2]` (1x2 slices, ranks 4–7). This is the `llama_8b_pod` pattern at small
-scale. The ring has eight stages: s0..s3 are 4x2, s4..s7 are 1x2.
-
-```
-M1 (2x4), one 1x2 slice per rank      slice adjacency inside M1: a 4-cycle
-        cols 0-1   cols 2-3
-row 0   T0 (r4)    T1 (r5)             T0 ── T1
-row 1   T2 (r6)    T3 (r7)             │      │
-                                       T2 ── T3
-```
-
-The machine has one pod P (as in 8.2) and two 2x4 boards U and V, each driven by four hosts
-of two chips. Each board has two cables to P, from hosts P.h0 and P.h3.
-
-#### Tier A and Tier B
-
-- **Tier A.** Ring, eight stages, loopback `s7 -> s0`. Pass.
-- **Binding sets.** 4x2 binds only to M0 (M1 has two rows). 1x2 binds only to M1; on M0 it
-  is not a whole number of 4x2 slices.
-- **Projections.** There is exactly one: s0..s3 on M0 and s4..s7 on M1. Capacity is 4 of 4
-  slices on each mesh. It crosses twice (`s3 -> s4`, `s7 -> s0`), within the 2 channels.
-- **Segment carve.** M0's segment must visit all four slices of a line, so it enters and
-  leaves at the end slices A0 and A3. M1's segment is a path through all four slices of a
-  4-cycle.
-- **Result.** Pass, with `k(M0, M1) = 2`. The boundary slices are {A0, A3} on M0 and any
-  slice on M1.
-
-#### SAT placement
-
-M0's pool is {P}; M1's pool is {U, V}. The seat graph has P–U x2 and P–V x2, and the
-footprint-level Plan 1 keeps both. The slice-level rule would use the boundary slices, but
-needs a hard-pinned layout. The master solve offers (P, U), then (P, V).
-
-#### Seating (P, U)
-
-After intra-mesh, the cables land on M0 A3 to M1 (0,1), which is in T0, and M0 A0 to M1
-(1,3), which is in T3.
-
-***New:* Tier C.**
-
-1. **Planned carve.** It is rejected up front because the host slices are not uniform (4x2
-   on M0, 1x2 on M1). This path does not apply.
-2. **Per-rank tiling.** The only tile shapes that divide each mesh are 4x2 for M0 and 1x2
-   for M1. Each tile is exactly one rank's slice, so each rank keeps its own and nothing
-   collapses. That gives 8 submeshes: A0..A3 with 8 chips each, T0..T3 with 2 chips each.
-3. **Resolver.**
-   - **Chip counts.** These confine s0..s3 to the A submeshes and s4..s7 to the T
-     submeshes.
-   - **Capacity.** Submeshes of at least 8 chips get 1 slot per chip, smaller ones 2. So s0
-     needs 4 of A's 8 slots, and each T submesh has 4 slots.
-   - **M0.** s0..s3 must run along the line, A0 to A3 or A3 to A0. So `s3 -> s4` leaves
-     from A3 (to T0) or from A0 (to T3).
-   - **M1.** s4..s7 must visit all of T0..T3. In a 4-cycle, a path through every vertex
-     ends next to where it started. Starting at T0, it ends at T1 or T2, but `s7 -> s0`
-     needs the cable on T3. Starting at T3, it ends at T1 or T2, but the cable back is on
-     T0.
-   - The resolver reports `no valid submesh assignment found`.
-4. **Result.** Reject, and `exclude_mapping({M0 -> P, M1 -> U})`.
-
-The count of cables is right and both land on boundary slices on M0. What fails is that
-on M1 they land on opposite corners. Only the layout shows that, which is why Plan 1 cannot
-prune it without hard pins.
-
-#### Seating (P, V)
-
-The cables land on A3 to M1 (0,3), which is in T1, and A0 to M1 (0,0), which is in T0.
-
-| Mapping | M0 | M1 | Who finds it |
-|---|---|---|---|
-| 1 | s0 A0, s1 A1, s2 A2, s3 A3 | s4 T1, s5 T3, s6 T2, s7 T0; loopback T0 to A0 | the resolver's first try (s0 on submesh 0) |
-| 2 | s0 A3, s1 A2, s2 A1, s3 A0 | s4 T0, s5 T2, s6 T3, s7 T1; loopback T1 to A3 | valid; found if mapping 1 failed |
-| impossible | a 4x2 stage on a T submesh, or a 1x2 stage on an A submesh | | chip-count filter (8 against 2) |
-
-Binding puts both cables in `R`. Emit `TT_PIPELINE_STAGE` s0..s3 for ranks 0–3 and the M1
-stages for the ranks that own T0..T3.
-
-At runtime, blaze is called with `submesh_shape` from the harness (4x2 on M0's ranks, 1x2 on
-M1's). It tiles, and each rank keeps the tile whose `(0,0)` chip is local. It allgathers
-and resolves, reaching the same answer.
-
-**A variation that Tier B stops.** If M1 were 4x8 with `host_topology [1, 4]` (4x2 slices)
-and still carried 1x2 stages, Tier B as written rejects at load, because 1x2 is not a whole
-slice. Blaze's per-rank tiling would build it. Each rank owns four 1x2 tiles and keeps the
-first with a local `(0,0)` chip (row 0), and the other three drop out. Then only cables
-landing in row 0 count. This is the edge case in 3.4: if runtime relies on it, the Tier B
-binding rule must allow it for the tiling path.
-
-### 8.4 Special cases these examples hit
-
-| Case | Where in the code | What happens |
-|---|---|---|
-| Stage 0 wider than one slice | `plan_ring_carve`, `stage_counts[0] != 1` | `input-infeasible`: stage 0 owns host-to-device, the loopback entry and device-to-host, so one rank must drive it |
-| Stage not a whole number of slices | `plan_ring_carve`, `r % nrows` or `c % ncols` | the planned carve rejects; only per-rank tiling can build it, and Tier B rejects it as written (8.3 variation) |
-| Host slices of different shapes | `plan_ring_carve` uniform check | the planned carve rejects; per-rank tiling is the path (8.3) |
-| Mixed stage shapes on per-rank tiling | one tile shape per mesh; resolver chip-count filter | no submesh of the needed size (8.2, step 4) |
-| Wide stage across a mesh crossing | `_as_rectangle`, more than one mesh | that rotation is skipped; another may work (carver example A) |
-| Loop of the wrong length | `_cycles_no_branch`, `_cycles_of_length` | `no-cycle-of-length-N` with achievable lengths, which list only lengths up to N when there are branch slices (carver example B) |
-| Right length, no alignment | `_group_cycle` returns nothing | `no-alignment` with same-mesh run lengths (carver example C) |
-| Unused slices | filler slots | their ranks idle; the plan still covers every chip |
-| Two ranks carve the same chips | `_collect_submeshes` collapse | one co-owned submesh, one node (8.2, step 6) |
-| Cable on a tile nobody keeps | `discover_submesh_links` sees only submesh chips | the cable does not count; Tier C applies the same rule (8.3 variation) |
-| Hamiltonian path endpoints | resolver over per-rank tiles | the right cable count on the wrong slices fails (8.3, seating (P, U)) |
-| Fork router degree | `plan_fork_carve` candidates | each fabric-return branch takes two router neighbours, each host-return branch one (carver example D) |
-| Search budget hit | `_MAX_SEARCH_EXPANSIONS = 200,000` | `budget-exhausted`; Tier C treats it as unknown and accepts (3.2) |
-| Pipeline failure feedback | `exclude_mapping`, never `add_forbidden_constraint` | the seat set is blocked, not the mesh on its seat; M0 on P still succeeds in 8.2, step 6 |

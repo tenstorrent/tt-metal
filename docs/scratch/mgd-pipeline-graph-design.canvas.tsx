@@ -2249,80 +2249,7 @@ function SmallMeshMap(props: {
   );
 }
 
-const CARVER_A = `
-phase 0   slices all 4x2; stage_counts = [1, 2, 2, 1]; need = 6 <= 8; stage 0 is 1 slice
-phase 2   A3 has one live neighbour (A2), B3 has one (B2): drop both
-          alive = {A0 A1 A2 B0 B1 B2}; all have 2 neighbours -> no branch slices
-phase 3   _cycles_no_branch walks from the lowest slice A0:
-          A0 A1 A2 B2 B1 B0              length 6 == need
-phase 4   canonical walk: anchor A0; A1 (0,0,2) < B0 (1,0,0), so step to A1
-          forward, offset 0:
-            s0 <- [A0]      M0 rows 0-3 cols 0-1   4x2   ok
-            s1 <- [A1 A2]   M0 rows 0-3 cols 2-5   4x4   ok
-            s2 <- [B2 B1]   M1 rows 0-3 cols 2-5   4x4   ok
-            s3 <- [B0]      M1 rows 0-3 cols 0-1   4x2   ok
-phase 5   slots M0 4x2@(0,0)  M0 4x4@(0,2)  M1 4x4@(0,2)  M1 4x2@(0,0)
-          fillers M0 4x2@(0,6)  M1 4x2@(0,6)          (ranks 3 and 7 idle)`;
-
-const CARVER_B = `
-phase 2   nothing pruned. Branch slices: A2 (A1, A3, B2) and B2 (B1, B3, A2)
-          _contract walks out of A2 in neighbour order, three chains A2 -> B2:
-            c0  interior A1 A0 B0 B1   weight 4
-            c1  interior A3 B3         weight 2
-            c2  direct                 weight 0
-phase 3   a cycle = two different chains between A2 and B2 = 2 + w + w slices
-            c0 + c2 = 6     c1 + c2 = 4     c0 + c1 = 8
-          need 6 -> c0 + c2 = A2 A1 A0 B0 B1 B2
-          (found 4 times: 2 start slices x 2 directions; one ring)
-          c0 + c1 passes 6 and is pruned before it closes
-phase 4   same canonical walk and plan as example A
-
-quirk     need 5 here fails with  achievable cycle lengths: [4]
-          lengths above need are never recorded when branch slices exist`;
-
-const CARVER_C = `
-ring      s0 4x2, s1 4x2, s2 4x8     stage_counts [1, 1, 4], need 6
-phase 3   cycle A0 A1 A2 B2 B1 B0, length 6
-phase 4   s2 needs 4 slices in one row of one mesh; the cycle's same-mesh
-          runs are [3, 3], so every rotation puts s2 across a crossing
-error     no-alignment: found 1 cycle(s) of the right length (6 slices) but
-          no rotation places every stage as its declared rectangle ...
-            cycle's same-mesh run lengths: [3, 3]
-            stage shapes: ['4x2', '4x2', '4x8']`;
-
-const CARVER_D = `
-fork      router R 4x2; branch X = three 4x2 stages, returns over fabric
-                        branch Y = one 4x2 stage, returns over host
-need_edges  = 2 (X) + 1 (Y) = 3      need_slices = 1 + 3 + 1 = 5
-candidates  slices with >= 3 neighbours: A2, B2      try A2
-order       fabric branches first, shortest first; then host branches
-X           _cycles_through(A2, length 4) on free slices: A2 A3 B3 B2
-            walks [A3 B3 B2] and [B2 B3 A3]; take the first
-            X0 A3, X1 B3, X2 B2, return B2 -> A2 over the cable
-Y           A2's free neighbours: {A1}; _path_of_length(A1, 1) = [A1]
-            Y0 A1, return over host
-plan        R A2 | X A3 B3 B2 | Y A1 | fillers A0 B0 B1
-
-if Y also returned over fabric: need_edges 4, best any slice has is 3
-  -> no slice has the 4 fabric neighbours this fork needs`;
-
-const CARVER_FLEX = `
-phase 1   no 6-cycle (only the 8-cycle)
-          census: spare = 2 and 6 + 2 is an achievable length, so
-          passthrough_ring = 2 (two passthrough stages would close over fabric)
-phase 3   one fabric component of 8 >= 6, so k starts at 1
-          _cover_with_chains(1): start at the smallest slice, extend to the
-          smallest free neighbour:
-            1. A0 A1 A2 A3 B3 B2     2. A0 B0 B1 B2 B3 A3     3. A1 A0 B0 B1 B2 B3 ...
-phase 4   _group_walk per cover; joints only between stages, never cut 0
-          cover 1 best: s0 A3, s1 B3+B2, s2 A0+A1, s3 A2   cut s1->s2  key (1,1,(1,))
-          cover 2 best: s0 A3, s1 B3+B2, s2 B1+B0, s3 A0   cut s3->s0  key (1,0,(3,))
-          key = (cut page sizes, 0 if the loopback is cut else 1, cuts)
-result    cover 2 wins: s3 -> s0 becomes HOST; carve
-          M0 4x2@(0,6), M1 4x4@(0,4), M1 4x4@(0,0), M0 4x2@(0,0); A1, A2 idle
-          _resolve_chains_separately: one fabric chain s0 -> s1 -> s2 -> s3`;
-
-const EX1_MGD = `
+const RUN_MIXED4 = `
 mesh_descriptors {
   name: "M"  arch: BLACKHOLE
   device_topology { dims: [ 4, 8 ] }
@@ -2341,86 +2268,187 @@ pipeline_descriptors {
   edges { src: "s2" dst: "s3" }  edges { src: "s3" dst: "s0" }
 }`;
 
-const EX1_MACHINE = `
-three 32-chip pods P, Q, R: each a 4x8 grid, four hosts h0..h3 (4x2 each)
+const RUN_POD8 = `
+M0  [4, 8], host_topology [1, 4]   4x2 slices A0..A3, ranks 0-3
+M1  [2, 4], host_topology [2, 2]   1x2 slices T0..T3, ranks 4-7
 
-cables (one each):
-  P.h0 - Q.h0    P.h3 - Q.h3       P-Q: 2 links
-  P.h0 - R.h0    P.h2 - R.h2       P-R: 2 links
-  Q.h1 - R.h1                      Q-R: 1 link
+        cols 0-1   cols 2-3        slice adjacency in M1
+row 0   T0 (r4)    T1 (r5)          T0 -- T1
+row 1   T2 (r6)    T3 (r7)          |      |
+                                    T2 -- T3
 
-assumed layout: mesh host rank i sits on host hi of its seat
-  (the PGD's preferred layout), so with M0 on P, slice A2 = P.h2`;
+ring of 8: s0..s3 [4, 2], s4..s7 [1, 2], loopback s7 -> s0, 2 channels`;
 
-const EX1_TIER_AB = `
-Tier A  validate_pipeline_descriptors (descriptor only)
-  ids unique; edges name declared stages; no self-edge
-  every stage out-degree 1 -> ring; one cycle, loopback s3 -> s0     PASS
+const RUN_MACHINE = `
+pods P, Q, R: 4x8 grids, four hosts h0..h3 (4x2 each)
+boards U, V:  2x4, four 2-chip hosts
 
-Tier B  declared fabric, no physical system
-  slice = 4x8 / [1,4] = 4x2, four per mesh
-  binding sets: 4x2 = 1 slice, 4x4 = 2 slices; all stages on M0 or M1
-  stage 0 is one slice; capacity 6 of 8 slices
-  projections (each mesh holds at most 4 slices):
-    s0 s1 -> M0, s2 s3 -> M1        3 + 3, crosses 2 <= 2 channels   ok
-    s0 s1 s3 -> M0, s2 -> M1        4 + 2, crosses 2                 ok
-    s0 s2 -> M0, s1 s3 -> M1        crosses 4 > 2                    dropped
-  segment carve: M0's 1 + 2 slices fit a path in a line of 4         ok
-  PASS; every projection crosses, a ring crosses a cut an even
-  number of times -> Plan 1 gets k(M0, M1) = 2`;
+P.h0 - Q.h0    P.h3 - Q.h3       P-Q: 2 links
+P.h0 - R.h0    P.h2 - R.h2       P-R: 2 links
+Q.h1 - R.h1                      Q-R: 1 link
+P.h0, P.h3 - two chips of U      P-U: 2 links
+P.h0, P.h3 - two chips of V      P-V: 2 links
 
-const EX1_SAT = `
-create_sat_placement_pools      both meshes: pool {P, Q, R}
-  sat_footprint_canonical merges orientations of one footprint
-  (key: grouping name, type, sorted ASICs) -> one seat per pod
-build_sat_placement_seat_graph  per MGD mesh pair, per seat pair:
-  saturated_link_count parallel edges   P-Q x2, P-R x2, Q-R x1
-build_sat_placement_constraints each mesh on a seat from its pool
-  M0, M1 share a pool but are adjacent: not twins, no symmetry window
-  footprints disjoint: injectivity keeps chips unshared
-new  Plan 1 (5.1)  k = 2: drop seat edges with < 2 links -> Q-R gone
-     (footprint level; the layout is not hard-pinned)
-new  unique_shapes = false (a pipeline descriptor is present)
-MasterSolve::restart -> master session maps M0-M1 onto the seat graph
-  seatings: (P,Q) (Q,P) (P,R) (R,P)
-  without Plan 1 also (Q,R) (R,Q): RELAXED needs only adjacency
-  with unique_shapes on, (P,Q) and (Q,P) would count as one`;
+assumed layout: mesh host rank i on host hi of its seat
+  (M0 on P, M1 on Q): cables on A0-B0, A3-B3
+  (M0 on P, M1 on R): cables on A0-B0, A2-B2`;
 
-const EX1_PQ = `
-links     gather_intermesh_candidates: the two P-Q cables
-          routed intra-mesh links: the lines A0-A1-A2-A3, B0-B1-B2-B3
-slices    A0..A3, B0..B3; adjacency is one loop of 8
+function RunningExamples() {
+  return (
+    <Stack gap={10}>
+      <H2>Running examples</H2>
+      <Text tone="secondary">
+        Every part below ends with examples of what that step checks, including its edge cases. They are hypothetical, traced by
+        hand through the code as it stands; nothing was run. Slices of a 4x8 mesh with host_topology [1, 4] are A0..A3 on M0
+        (ranks 0-3) and B0..B3 on M1 (ranks 4-7); inside a mesh they form a line.
+      </Text>
+      <Grid columns={fit(360)} gap={16} align="start">
+        <CodeCard path="mixed4: stages that span two ranks" mode="plain" language="protobuf" src={RUN_MIXED4} />
+        <Stack gap={12}>
+          <CodeCard path="pod8: different slice shapes (llama_8b_pod pattern)" mode="plain" language="text" src={RUN_POD8} />
+          <CodeCard path="the machine" mode="plain" language="text" src={RUN_MACHINE} />
+        </Stack>
+      </Grid>
+    </Stack>
+  );
+}
 
-planned carve
-  _prune_leaves: all 8 stay; _contract: no branch slices
-  _cycles_no_branch: A0 A1 A2 A3 B3 B2 B1 B0, length 8
-  CarvePlanError: no-cycle-of-length-6 ... achievable cycle lengths: [8]
+// --- Descriptor tab: Tier A and Tier B -------------------------------------
 
-per-rank tiling, tile shape per mesh from {4x2, 4x4}
-  4x2 + 4x2   eight 8-chip submeshes, none with 16 chips for s1
-  4x4 + 4x4   four 16-chip submeshes, none with 8 chips for s0
-  4x2 + 4x4   s0, s3 on A slices, s1, s2 on M1's 4x4 tiles;
-              s3 -> s0 needs two neighbouring A slices that both have a
-              cable to M1, but the cables are on A0 and A3
-  4x4 + 4x2   the mirror, same failure
-  resolver: no valid submesh assignment found
+function DescriptorExamples() {
+  return (
+    <Stack gap={12}>
+      <H2>Examples: Tier A</H2>
+      <Table
+        headers={["Descriptor", "Result", "Why"]}
+        rows={[
+          ["mixed4", "pass", "ids unique, edges name declared stages, out-degree 1 everywhere, one cycle (s3 > s0 is the loopback)"],
+          ["pod8", "pass", "a ring of 8; loopback s7 > s0"],
+          ["mixed4 + edge s1 > s1", "reject", "self-edge"],
+          ["mixed4 with s0 > s1 repeated", "pass", "two channels on that hop; the builder reads one link per edge"],
+          ["s0 > s1, s0 > s2, s1 > s0; s2 has no out-edge", "reject", "out-degree 2 makes it a fork; the branch at s2 never returns to the router"],
+          ["mixed4 FLEXIBLE with s3 > s0 as HOST", "reject", "FLEXIBLE plans its own host cuts, only when none are declared"],
+          ["mixed4 STRICT with s3 > s0 as HOST", "pass", "a host hop anywhere in a ring is allowed"],
+          ["a stage [2, 4] where every slice is 4x2", "pass here", "no transpose, so Tier B finds no mesh it binds to"],
+        ]}
+        rowTone={["success", "success", "danger", "success", "danger", "danger", "success", "warning"]}
+      />
 
-result    every path fails: reject, failure_stage = "pipeline_carve"
-feedback  exclude_mapping({M0 -> P, M1 -> Q})
-          never add_forbidden_constraint(M0 on P): M0 on P works with R`;
+      <H2>Examples: Tier B</H2>
+      <Text tone="secondary">
+        mixed4: slices are 4x2, four per mesh; 4x2 is one slice and 4x4 two, so every stage binds to either mesh; the ring needs
+        6 of 8 slices. Several projections survive and none is chosen.
+      </Text>
+      <Table
+        headers={["Projection", "Slices M0 / M1", "Crossings", "Result"]}
+        rows={[
+          ["all four stages on M0", "6 / 0", "0", "dropped: M0 holds 4 slices"],
+          ["s0, s1 > M0; s2, s3 > M1", "3 / 3", "2", "survives"],
+          ["s0, s1, s3 > M0; s2 > M1", "4 / 2", "2", "survives"],
+          ["s0, s2 > M0; s1, s3 > M1", "3 / 3", "4", "dropped: 2 channels"],
+        ]}
+        rowTone={["danger", "success", "success", "danger"]}
+      />
+      <Text tone="secondary">
+        Every survivor crosses, and a ring crosses a cut an even number of times, so Plan 1 gets k(M0, M1) = 2. pod8 has exactly
+        one projection: 4x2 binds only to M0 (M1 has 2 rows) and 1x2 only to M1 (not whole 4x2 slices). M0's four stages fill a
+        line, so its boundary slices are A0 and A3.
+      </Text>
+      <Table
+        headers={["Change", "Result", "Rule"]}
+        rows={[
+          ["mixed4 with s0 [4, 4]", "reject", "stage 0 binds to one slice"],
+          ["mixed4 + a fifth stage [4, 6]", "reject", "9 slices needed, 8 declared"],
+          ["mixed4 + a fifth stage [4, 4]", "pass", "8 of 8: s0, s3 and one 4x4 on one mesh, two 4x4 on the other"],
+          ["mixed4 with a stage [4, 10]", "reject", "wider than either mesh"],
+          ["pod8 with M1 4x8, host [1, 4], still 1x2 stages", "reject", "1x2 is not a whole slice; stricter than blaze's per-rank tiling"],
+          ["mixed4 with no MGD connection", "reject", "every projection crosses"],
+          ["the same, FLEXIBLE", "pass", "crossings may become host hops"],
+        ]}
+        rowTone={["danger", "danger", "success", "danger", "warning", "danger", "success"]}
+      />
+    </Stack>
+  );
+}
 
-const EX1_COLLECT = `
-_collect_submeshes model, planned-carve branch
+// --- Mapper tab: Tier C, carve planner, resolver, carve paths, loop, Tier D ---
+
+const CARVE_A = `
+phase 0   slices all 4x2; stage_counts = [1, 2, 2, 1]; need = 6 <= 8; stage 0 is 1 slice
+phase 2   A3 has one live neighbour (A2), B3 has one (B2): drop both
+          alive = {A0 A1 A2 B0 B1 B2}; all have 2 neighbours -> no branch slices
+phase 3   _cycles_no_branch walks from the lowest slice A0:
+          A0 A1 A2 B2 B1 B0              length 6 == need
+phase 4   canonical walk: anchor A0; A1 (0,0,2) < B0 (1,0,0), so step to A1
+          forward, offset 0:
+            s0 <- [A0]      M0 rows 0-3 cols 0-1   4x2   ok
+            s1 <- [A1 A2]   M0 rows 0-3 cols 2-5   4x4   ok
+            s2 <- [B2 B1]   M1 rows 0-3 cols 2-5   4x4   ok
+            s3 <- [B0]      M1 rows 0-3 cols 0-1   4x2   ok
+phase 5   slots M0 4x2@(0,0)  M0 4x4@(0,2)  M1 4x4@(0,2)  M1 4x2@(0,0)
+          fillers M0 4x2@(0,6)  M1 4x2@(0,6)          (ranks 3 and 7 idle)`;
+
+const CARVE_B = `
+phase 2   every slice has 2 neighbours: nothing pruned, no branch slices
+phase 3   one loop: A0 A1 A2 A3 B3 B2 B1 B0, length 8
+error     no-cycle-of-length-6: this fabric admits no simple cycle of
+          exactly 6 host slices, which is what a 4-stage loopback ring needs.
+            achievable cycle lengths: [8]
+            nearest: none below, 8 above`;
+
+const CARVE_C = `
+phase 2   nothing pruned. Branch slices: A2 (A1, A3, B2) and B2 (B1, B3, A2)
+          _contract walks out of A2 in neighbour order, three chains A2 -> B2:
+            c0  interior A1 A0 B0 B1   weight 4
+            c1  interior A3 B3         weight 2
+            c2  direct                 weight 0
+phase 3   a cycle = two different chains between A2 and B2 = 2 + w + w slices
+            c0 + c2 = 6     c1 + c2 = 4     c0 + c1 = 8
+          need 6 -> c0 + c2 = A2 A1 A0 B0 B1 B2
+          (found 4 times: 2 start slices x 2 directions; one ring)
+          c0 + c1 passes 6 and is pruned before it closes
+phase 4   same canonical walk and plan as example A
+          a 4x2 ring of 4 stages (need 4) would take c1 + c2 = A2 A3 B3 B2
+
+quirk     need 5 here fails with  achievable cycle lengths: [4]
+          lengths above need are never recorded when branch slices exist`;
+
+const CARVE_D = `
+ring      s0 4x2, s1 4x2, s2 4x8     stage_counts [1, 1, 4], need 6
+phase 3   cycle A0 A1 A2 B2 B1 B0, length 6
+phase 4   s2 needs 4 slices in one row of one mesh; the cycle's same-mesh
+          runs are [3, 3], so every rotation puts s2 across a crossing
+error     no-alignment: found 1 cycle(s) of the right length (6 slices) but
+          no rotation places every stage as its declared rectangle ...
+            cycle's same-mesh run lengths: [3, 3]
+            stage shapes: ['4x2', '4x2', '4x8']`;
+
+const CARVE_E = `
+fork      router R 4x2; branch X = three 4x2 stages, returns over fabric
+                        branch Y = one 4x2 stage, returns over host
+need_edges  = 2 (X) + 1 (Y) = 3      need_slices = 1 + 3 + 1 = 5
+candidates  slices with >= 3 neighbours: A2, B2      try A2
+order       fabric branches first, shortest first; then host branches
+X           _cycles_through(A2, length 4) on free slices: A2 A3 B3 B2
+            walks [A3 B3 B2] and [B2 B3 A3]; take the first
+            X0 A3, X1 B3, X2 B2, return B2 -> A2 over the cable
+Y           A2's free neighbours: {A1}; _path_of_length(A1, 1) = [A1]
+            Y0 A1, return over host
+plan        R A2 | X A3 B3 B2 | Y A1 | fillers A0 B0 B1
+
+if Y also returned over fabric: need_edges 4, best any slice has is 3
+  -> no slice has the 4 fabric neighbours this fork needs`;
+
+const COLLECT = `
 M0 slots in plan order: 4x2@(0,0), 4x4@(0,2), 4x2@(0,6)
   rank 0 -> 4x2@(0,0)   rank 1 -> 4x4@(0,2)   rank 2 -> 4x4@(0,2)   rank 3 -> filler
   (a rank in zero or two slots is a planner bug and raises)
-collapse identical chip sets:
+collapse identical chip sets, first-rank order:
   submesh 0 = A0 (8)   1 = A1+A2 (16, ranks 1, 2)   2 = A3 (8)
   submesh 3 = B0 (8)   4 = B1+B2 (16, ranks 5, 6)   5 = B3 (8)
-assert 6 distinct submeshes >= 4 stages`;
+6 distinct submeshes >= 4 stages`;
 
-const EX1_RESOLVE = `
-resolve_graph_layout -> resolve_pipeline_placement
+const RESOLVE_MIXED4 = `
 topological order, loopback excluded: s0 s1 s2 s3
 chip counts: s0 8, s1 16, s2 16, s3 8
 submesh links: 0-1 1-2 3-4 4-5 (in mesh), 0-3 and 1-4 (cables)
@@ -2437,431 +2465,475 @@ LinkSearch: one chip pair per edge, exclusive chips first;
 result: s0 -> 0  s1 -> 1  s2 -> 4  s3 -> 3
 (if submesh 0 failed: submesh 3 next, the mirror s0 B0 ... s3 A0)`;
 
-const EX1_RUNTIME = `
-control plane   binds R = {A2-B2, A0-B0} first (phase 0), count 2 filled
-blaze           build_topology(no submesh_shape) -> _collect_submeshes
-  plan_carve    discover_host_slices (allgather) + discover_slice_adjacency
-                (only get_forwarding_direction-confirmed links = bound cables)
-                -> same graph -> same plan as Tier C; crc32 exchange matches
-  carve         create_submesh(shape, offset) per slot on each rank's mesh
-  collapse      ranks 1+2 and 5+6 -> joint submeshes
-  resolve       resolve_graph_layout -> same layout -> build
-
-without 5.3, with a second A0-B0 cable on lower chip ids:
-  today's binding takes both A0-B0 cables; blaze sees only A0-B0
-  prune: A3, B3, then A2, B2, then A1, B1, then A0, B0 -> nothing left
-  CarvePlanError: no-cycle-of-length-6: only 0 slices can lie on any cycle`;
-
-const EX2_SETUP = `
-M0  device_topology [4, 8], host_topology [1, 4]   4x2 slices A0..A3, ranks 0-3
-M1  device_topology [2, 4], host_topology [2, 2]   1x2 slices T0..T3, ranks 4-7
-ring of 8: s0..s3 shape [4, 2], s4..s7 shape [1, 2], loopback s7 -> s0
-channels M0-M1: 2
-
-machine: pod P (as before) plus two 2x4 boards U and V, four 2-chip hosts
-each; each board has two cables to P, from hosts P.h0 and P.h3
-
-Tier A  ring of 8, loopback s7 -> s0                                PASS
-Tier B  4x2 binds only to M0 (M1 has 2 rows)
-        1x2 binds only to M1 (not whole 4x2 slices on M0)
-        one projection: s0..s3 -> M0 (4 of 4), s4..s7 -> M1 (4 of 4)
-        crossings s3 -> s4, s7 -> s0 = 2 <= 2 channels
-        segment carve: M0's 4 stages fill a line -> enter/leave at A0, A3
-                       M1's 4 stages: a path through a 4-cycle
-        PASS, k = 2, boundary slices {A0, A3} on M0, any on M1
-SAT     M0 pool {P}, M1 pool {U, V}; seat edges P-U x2, P-V x2
-        Plan 1 keeps both (slice-level boundary rule needs hard pins)
-        seatings offered: (P, U), then (P, V)`;
-
-const EX2_RESOLVE = `
+const RESOLVE_POD8 = `
 planned carve   rejected up front: host slices are not uniform (4x2 vs 1x2)
-per-rank tiling only tile shapes that divide: 4x2 on M0, 1x2 on M1
-                each tile is one rank's slice; nothing collapses
-                submeshes: A0..A3 (8 chips), T0..T3 (2 chips)
-resolver        chip counts: s0..s3 only on A, s4..s7 only on T
-                capacity: 1 slot/chip on >= 8 chips, 2 on smaller ones
-                M0: s0..s3 run A0..A3 or A3..A0
-                M1: a path through all of a 4-cycle ends NEXT TO its start
+per-rank tiling 4x2 on M0, 1x2 on M1; each tile is one rank's slice
+submeshes       A0..A3 (8 chips), T0..T3 (2 chips); nothing collapses
+chip counts     s0..s3 only on A, s4..s7 only on T
+capacity        1 slot/chip on >= 8 chips, 2 on smaller: T has 4 slots
+M0              s0..s3 run A0..A3 or A3..A0
+M1              a path through all of a 4-cycle ends NEXT TO its start
 
-seat U   cables A3 -> (0,1) in T0, A0 -> (1,3) in T3   (opposite corners)
+seat U   A3 -> (0,1) in T0, A0 -> (1,3) in T3     opposite corners
          s4 at T0 -> s7 at T1 or T2, but the cable back is on T3
          s4 at T3 -> s7 at T1 or T2, but the cable back is on T0
-         no valid submesh assignment found -> reject, exclude_mapping
+         no valid submesh assignment found
 
-seat V   cables A3 -> (0,3) in T1, A0 -> (0,0) in T0   (neighbours)
+seat V   A3 -> (0,3) in T1, A0 -> (0,0) in T0     neighbours
          s0 A0  s1 A1  s2 A2  s3 A3  s4 T1  s5 T3  s6 T2  s7 T0
-         loopback T0 -> A0 over the cable                -> accept`;
+         mirror: s0 A3 .. s3 A0, s4 T0  s5 T2  s6 T3  s7 T1`;
 
-function ExampleTab() {
-  const ex1Seatings: Array<[string, string, string, string]> = [
-    ["(P, Q)", "A0-B0, A3-B3", "planned carve: no-cycle-of-length-6; every tiling fails in the resolver", "reject, exclude_mapping"],
-    ["(Q, P)", "A0-B0, A3-B3 (meshes swapped)", "same geometry, same failures", "reject, exclude_mapping"],
-    ["(P, R)", "A0-B0, A2-B2", "planned carve finds a 6-cycle; resolver places the ring", "accept"],
-    ["(R, P), (Q, R), (R, Q)", "", "not reached; (Q, R) and (R, Q) were removed by Plan 1", "-"],
-  ];
+const FLEX_TRACE = `
+phase 1   no 6-cycle (only the 8-cycle)
+          census: spare = 2 and 6 + 2 is achievable -> passthrough_ring = 2
+phase 3   one fabric component of 8 >= 6, so k starts at 1
+          _cover_with_chains(1): smallest slice first, smallest free neighbour next
+            1. A0 A1 A2 A3 B3 B2     2. A0 B0 B1 B2 B3 A3     3. A1 A0 B0 B1 B2 B3 ...
+phase 4   _group_walk per cover; joints only between stages, never cut 0
+          cover 1 best: s0 A3, s1 B3+B2, s2 A0+A1, s3 A2   cut s1->s2  key (1,1,(1,))
+          cover 2 best: s0 A3, s1 B3+B2, s2 B1+B0, s3 A0   cut s3->s0  key (1,0,(3,))
+          key = (cut page sizes, 0 if the loopback is cut else 1, cuts)
+result    cover 2 wins: s3 -> s0 becomes HOST; carve
+          M0 4x2@(0,6), M1 4x4@(0,4), M1 4x4@(0,0), M0 4x2@(0,0); A1, A2 idle
+          _resolve_chains_separately: one fabric chain s0 -> s1 -> s2 -> s3`;
+
+const TIER_D = `
+mixed4 on (P, R), runtime
+  control plane            binds the two cables Tier C relied on (5.3)
+  build_topology           no submesh_shape -> plan_carve
+  discover_host_slices     allgather: A0..A3, B0..B3, 4x2 each
+  discover_slice_adjacency get_forwarding_direction-confirmed: lines + A0-B0, A2-B2
+  plan_ring_carve          the same 6-cycle and plan as Tier C (example A)
+  crc32 exchange           every rank derived the same plan
+  create_submesh           one call per slot on each rank's own mesh
+  collapse                 ranks 1+2 and 5+6 -> joint submeshes
+  resolve_graph_layout     s0 A0, s1 A1+A2, s2 B1+B2, s3 B0
+
+the same machine today, with a second A0-B0 cable on lower chip ids
+  binding takes both A0-B0 cables; blaze sees only A0-B0
+  _prune_leaves: A3, B3, then A2, B2, then A1, B1, then A0, B0
+  CarvePlanError: no-cycle-of-length-6: only 0 slices can lie on any cycle
+  the mapping is committed, so this is a hard failure`;
+
+function MapperExamples() {
   return (
-    <Stack gap={28}>
+    <Stack gap={14}>
+      <H2>Examples: what Tier C decides</H2>
+      <Table
+        headers={["Pipeline", "Seating (M0, M1)", "Cables land on", "Tier C", "Why"]}
+        rows={[
+          ["mixed4", "(P, Q)", "A0-B0, A3-B3", "reject", "one loop of 8 slices, the ring needs exactly 6; every tiling fails"],
+          ["mixed4", "(P, R)", "A0-B0, A2-B2", "accept", "a 6-slice loop exists and the stages align onto it"],
+          ["mixed4, FLEXIBLE", "(P, Q)", "A0-B0, A3-B3", "accept", "one fabric path covers 6 slices; the loopback goes over host"],
+          ["pod8", "(P, U)", "A3-T0, A0-T3", "reject", "opposite corners of M1: no path through M1's tiles joins them"],
+          ["pod8", "(P, V)", "A3-T1, A0-T0", "accept", "neighbouring tiles"],
+        ]}
+        rowTone={["danger", "success", "success", "danger", "success"]}
+      />
+
+      <H2>How the carve planner works</H2>
       <Text tone="secondary">
-        Hypothetical runs traced by hand through the code as it stands: blaze's carve planner, host edge planner and
-        submesh collection; tt-metal's SAT placement, intra-mesh solve and graph-layout resolver. Steps this design adds
-        are marked new. Nothing here was run. The same content is section 8 of the design doc.
+        plan_ring_carve works on whole host slices, because _collect_submeshes needs every rank's chips in exactly one slot.
+        Every rank runs it alone and must reach the same plan, so slices are ordered by geometry, never by rank.
+      </Text>
+      <Table
+        headers={["Phase", "Code", "What it does"]}
+        rows={[
+          ["1. discover (not ported)", "discover_host_slices, discover_slice_adjacency", "Each rank's chips become a HostSlice. A neighbour on another slice counts only if get_forwarding_direction confirms it; one link per slice pair is enough. Tier C uses get_coord_range and the candidate links."],
+          ["0. input checks", "top of plan_ring_carve", "Uniform slices; each stage a whole number of slices; need <= slices; stage 0 one slice."],
+          ["2. reduce", "_prune_leaves, _contract", "Drop slices with fewer than 2 live neighbours. Slices with more than 2 are branch slices; runs between them become weighted chains."],
+          ["3. cycle search", "_cycles_no_branch, _cycles_of_length", "Simple cycles of exactly need slices; DFS over branch slices, one chain per step, pruned above need. 200,000 expansions, 64 cycles."],
+          ["4. align", "_group_cycle, _canonical_walk, _as_rectangle", "Fewest crossings first; canonical walk, every rotation, reversed. Each stage's group must be one gap-free rectangle on one mesh with the declared shape."],
+          ["5. emit", "validate_carve_plan", "One CarveSlot per stage in order, a filler per unused slice; every chip covered once."],
+        ]}
+      />
+
+      <H3>A. One loop, no branch slices (mixed4 on (P, R))</H3>
+      <Grid columns={fit(380)} gap={20} align="start">
+        <SliceMap
+          stages={[
+            { mesh: 0, from: 0, to: 0, label: "s0" },
+            { mesh: 0, from: 1, to: 2, label: "s1 (4x4)" },
+            { mesh: 1, from: 1, to: 2, label: "s2 (4x4)" },
+            { mesh: 1, from: 0, to: 0, label: "s3" },
+            { mesh: 0, from: 3, to: 3, label: "pruned", idle: true },
+            { mesh: 1, from: 3, to: 3, label: "pruned", idle: true },
+          ]}
+          cables={[
+            { a: 0, b: 0, kind: "required" },
+            { a: 2, b: 2, kind: "required" },
+          ]}
+          verdict={{ ok: true, text: "plan found" }}
+        />
+        <CodeCard path="plan_ring_carve, cables A0-B0 and A2-B2" mode="plain" language="text" src={CARVE_A} />
+      </Grid>
+      <Text tone="secondary">
+        Twelve alignments exist (six rotations, two directions). Four work, each putting the 4x4 stages on a different pair of
+        ranks; the rest fail in _as_rectangle because a 4x4 group would take one slice from each mesh.
+      </Text>
+      <Grid columns={fit(300)} gap={14} align="start">
+        {[
+          {
+            name: "forward, offset 0 (returned)",
+            stages: [
+              { mesh: 0, from: 0, to: 0, label: "s0" },
+              { mesh: 0, from: 1, to: 2, label: "s1" },
+              { mesh: 1, from: 1, to: 2, label: "s2" },
+              { mesh: 1, from: 0, to: 0, label: "s3" },
+            ],
+          },
+          {
+            name: "forward, offset 3",
+            stages: [
+              { mesh: 1, from: 2, to: 2, label: "s0" },
+              { mesh: 1, from: 0, to: 1, label: "s1" },
+              { mesh: 0, from: 0, to: 1, label: "s2" },
+              { mesh: 0, from: 2, to: 2, label: "s3" },
+            ],
+          },
+          {
+            name: "reverse, offset 1 (the resolver's mirror)",
+            stages: [
+              { mesh: 1, from: 0, to: 0, label: "s0" },
+              { mesh: 1, from: 1, to: 2, label: "s1" },
+              { mesh: 0, from: 1, to: 2, label: "s2" },
+              { mesh: 0, from: 0, to: 0, label: "s3" },
+            ],
+          },
+          {
+            name: "reverse, offset 4",
+            stages: [
+              { mesh: 0, from: 2, to: 2, label: "s0" },
+              { mesh: 0, from: 0, to: 1, label: "s1" },
+              { mesh: 1, from: 0, to: 1, label: "s2" },
+              { mesh: 1, from: 2, to: 2, label: "s3" },
+            ],
+          },
+        ].map((m) => (
+          <div key={m.name}>
+            <Stack gap={4}>
+              <Text weight="semibold" size="small">
+                {m.name}
+              </Text>
+              <SliceMap stages={m.stages as SliceStage[]} cables={[{ a: 0, b: 0 }, { a: 2, b: 2 }]} />
+            </Stack>
+          </div>
+        ))}
+      </Grid>
+
+      <H3>B. Wrong loop length (mixed4 on (P, Q))</H3>
+      <Grid columns={fit(380)} gap={20} align="start">
+        <SliceMap stages={[]} cables={[{ a: 0, b: 0 }, { a: 3, b: 3 }]} verdict={{ ok: false, text: "STRICT: rejected" }} />
+        <CodeCard path="plan_ring_carve, cables A0-B0 and A3-B3" mode="plain" language="text" src={CARVE_B} />
+      </Grid>
+
+      <H3>C. Branch slices and contraction (add cable A3-B3)</H3>
+      <Grid columns={fit(380)} gap={20} align="start">
+        <SliceMap
+          stages={[
+            { mesh: 0, from: 0, to: 0, label: "s0" },
+            { mesh: 0, from: 1, to: 2, label: "s1 (4x4)" },
+            { mesh: 1, from: 1, to: 2, label: "s2 (4x4)" },
+            { mesh: 1, from: 0, to: 0, label: "s3" },
+            { mesh: 0, from: 3, to: 3, label: "c1", idle: true },
+            { mesh: 1, from: 3, to: 3, label: "c1", idle: true },
+          ]}
+          cables={[
+            { a: 0, b: 0, kind: "required" },
+            { a: 2, b: 2, kind: "required" },
+            { a: 3, b: 3, kind: "unused" },
+          ]}
+        />
+        <CodeCard path="plan_ring_carve, three cables" mode="plain" language="text" src={CARVE_C} />
+      </Grid>
+
+      <H3>D. Right length, no alignment</H3>
+      <Grid columns={fit(380)} gap={20} align="start">
+        <SliceMap
+          stages={[
+            { mesh: 0, from: 0, to: 2, label: "same-mesh run of 3", idle: true },
+            { mesh: 1, from: 0, to: 2, label: "same-mesh run of 3", idle: true },
+          ]}
+          cables={[
+            { a: 0, b: 0 },
+            { a: 2, b: 2 },
+          ]}
+          verdict={{ ok: false, text: "no-alignment" }}
+        />
+        <CodeCard path="plan_ring_carve, a 4x8 stage" mode="plain" language="text" src={CARVE_D} />
+      </Grid>
+
+      <H3>E. A fork (plan_fork_carve)</H3>
+      <Grid columns={fit(380)} gap={20} align="start">
+        <SliceMap
+          stages={[
+            { mesh: 0, from: 2, to: 2, label: "R" },
+            { mesh: 0, from: 3, to: 3, label: "X0" },
+            { mesh: 1, from: 3, to: 3, label: "X1" },
+            { mesh: 1, from: 2, to: 2, label: "X2" },
+            { mesh: 0, from: 1, to: 1, label: "Y0" },
+            { mesh: 0, from: 0, to: 0, label: "idle", idle: true },
+            { mesh: 1, from: 0, to: 1, label: "idle", idle: true },
+          ]}
+          cables={[
+            { a: 0, b: 0, kind: "unused" },
+            { a: 2, b: 2, kind: "required" },
+            { a: 3, b: 3, kind: "required" },
+          ]}
+          host={{ from: [0, 1], to: [0, 2], label: "Y0 > R over host" }}
+        />
+        <CodeCard path="plan_fork_carve, router plus two branches" mode="plain" language="text" src={CARVE_E} />
+      </Grid>
+      <Table
+        headers={["Other planner edge case", "Phase", "Result"]}
+        rows={[
+          ["pod8 (4x2 and 1x2 slices)", "0", "host slices are not uniform; per-rank tiling is the path"],
+          ["a 1x2 stage on 4x2 slices", "0", "not a whole number of 4x2 host slices"],
+          ["mixed4 with s0 4x4", "0", "input-infeasible: one rank must drive stage 0"],
+          ["only one cable, A0-B0", "2", "leaf pruning removes every slice"],
+          ["an open chain, no loopback", "before 0", "plan_carve refuses; give it a submesh_shape"],
+          ["a huge fabric", "3", "budget-exhausted; Tier C treats it as unknown and accepts"],
+        ]}
+      />
+
+      <H2>Examples: carve paths</H2>
+      <Grid columns={fit(420)} gap={20} align="start">
+        <CodeCard path="slots to submeshes (planned carve, mixed4 on (P, R))" mode="plain" language="text" src={COLLECT} />
+        <Stack gap={8}>
+          <Text tone="secondary">Per-rank tiling on mixed4 (P, Q), after the planned carve failed:</Text>
+          <Table
+            headers={["M0 tiles", "M1 tiles", "Result"]}
+            rows={[
+              ["4x2", "4x2", "eight 8-chip submeshes: nothing with 16 chips for s1"],
+              ["4x4", "4x4", "four 16-chip submeshes: nothing with 8 chips for s0"],
+              ["4x2", "4x4", "s0, s3 need neighbouring A slices that both have cables; the cables are on A0 and A3"],
+              ["4x4", "4x2", "the mirror, same failure"],
+            ]}
+            rowTone={["danger", "danger", "danger", "danger"]}
+          />
+        </Stack>
+      </Grid>
+      <H3>Flexible placement: mixed4 as FLEXIBLE on (P, Q)</H3>
+      <Grid columns={fit(380)} gap={20} align="start">
+        <SliceMap
+          stages={[
+            { mesh: 0, from: 3, to: 3, label: "s0" },
+            { mesh: 1, from: 2, to: 3, label: "s1 (4x4)" },
+            { mesh: 1, from: 0, to: 1, label: "s2 (4x4)" },
+            { mesh: 0, from: 0, to: 0, label: "s3" },
+            { mesh: 0, from: 1, to: 2, label: "idle", idle: true },
+          ]}
+          cables={[
+            { a: 0, b: 0, kind: "required" },
+            { a: 3, b: 3, kind: "required" },
+          ]}
+          host={{ from: [0, 0], to: [0, 3], label: "s3 > s0 over host" }}
+          verdict={{ ok: true, text: "FLEXIBLE: accepted" }}
+        />
+        <CodeCard path="plan_ring_placement" mode="plain" language="text" src={FLEX_TRACE} />
+      </Grid>
+      <Table
+        headers={["FLEXIBLE edge case", "Result"]}
+        rows={[
+          ["a cover whose only alignment cuts s0 > s1", "skipped: stage 0's outgoing edge stays on fabric"],
+          ["a joint between chains inside a 4x4 stage", "skipped: a wide stage cannot be split by a host hop"],
+          ["pod8 as FLEXIBLE", "HostEdgePlanError (slices not uniform), not caught: reject"],
+          ["a fork with a two-slice router", "ForkShapeUnsupported: use the STRICT paths"],
+          ["all fabric already, single-slice stages", "no plan; the resolver places it as in STRICT"],
+        ]}
+      />
+      <H3>Tile smaller than a host slice</H3>
+      <Text tone="secondary">
+        pod8 with M1 as 4x8, host [1, 4] and 1x2 stages: create_submeshes(1x2) makes 16 tiles; each M1 rank keeps the one whose
+        (0,0) chip is local, all in row 0. A cable landing in row 3 does not count, so the same seat passes or fails depending
+        on the intra-mesh layout. Tier B as written rejects this MGD.
       </Text>
 
-      <Stack gap={14}>
-        <H2>How the carve planner works</H2>
-        <Text tone="secondary">
-          plan_ring_carve answers one question: given every rank's host slice and which slice pairs the fabric links, which
-          slices does each stage get? It works on whole host slices, because _collect_submeshes needs every rank's chips in
-          exactly one slot. Every rank runs it alone and must reach the same plan, so slices are ordered by geometry, never
-          by rank, and plan_carve ends with a crc32 exchange.
-        </Text>
+      <H2>Examples: the resolver</H2>
+      <Table
+        headers={["Check", "Rule"]}
+        rows={[
+          ["chip count", "the submesh has exactly node_chip_counts[stage] chips"],
+          ["core capacity", "links (one per edge, +2 for stage 0's host-to-device and device-to-host) fit capacity x chips; 1 per chip on >= 8 chips, 2 below"],
+          ["neighbour count", "at least as many neighbouring submeshes as the stage has logical neighbours"],
+          ["connectivity", "linked to every placed neighbour's submesh"],
+          ["lookahead", "remaining_stages_can_connect"],
+        ]}
+      />
+      <Grid columns={fit(420)} gap={20} align="start">
+        <CodeCard path="mixed4 on (P, R)" mode="plain" language="text" src={RESOLVE_MIXED4} />
+        <CodeCard path="pod8 on seats U and V (per-rank tiling)" mode="plain" language="text" src={RESOLVE_POD8} />
+      </Grid>
+      <Grid columns={fit(380)} gap={20} align="start">
+        <Stack gap={6}>
+          <Text weight="semibold">pod8 on U: cables on opposite corners of M1</Text>
+          <SmallMeshMap
+            m0={["s0", "s1", "s2", "s3"]}
+            m1={["", "", "", ""]}
+            cables={[
+              { a: 3, row: 0, col: 1 },
+              { a: 0, row: 1, col: 3 },
+            ]}
+            verdict={{ ok: false, text: "rejected" }}
+          />
+        </Stack>
+        <Stack gap={6}>
+          <Text weight="semibold">pod8 on V: cables on neighbouring tiles</Text>
+          <SmallMeshMap
+            m0={["s0", "s1", "s2", "s3"]}
+            m1={["s7", "s4", "s6", "s5"]}
+            cables={[
+              { a: 3, row: 0, col: 3 },
+              { a: 0, row: 0, col: 0 },
+            ]}
+            verdict={{ ok: true, text: "accepted" }}
+          />
+        </Stack>
+      </Grid>
+      <Table
+        headers={["Resolver edge case", "What happens"]}
+        rows={[
+          ["mixed4 tiled 4x2 on both meshes", "s1 finds nothing with 16 chips"],
+          ["mixed4 tiled 4x4 on both meshes", "s0 finds nothing with 8 chips"],
+          ["a 1x2 router as stage 0 with 3 edges", "3 + 2 = 5 links against 2 chips x 2 = 4 slots"],
+          ["a ring stage on A3 or B3 in mixed4 on (P, R)", "one neighbouring submesh: skipped before any link search"],
+          ["harness core-pool overrides", "not in the MGD; Tier C can accept what runtime rejects"],
+        ]}
+      />
+
+      <H2>Example: mixed4 through the mapper loop</H2>
+      <Table
+        headers={["Iteration", "Seating", "Intra-mesh", "Tier C", "Next"]}
+        rows={[
+          ["1", "(P, Q)", "cables on A0-B0, A3-B3", "no-cycle-of-length-6 (B); every tiling fails", "exclude_mapping({M0>P, M1>Q})"],
+          ["2", "(Q, P)", "same cables, meshes swapped", "same failures", "exclude_mapping({M0>Q, M1>P})"],
+          ["3", "(P, R)", "cables on A0-B0, A2-B2", "plan (A), resolver, binding rerun pass", "emit"],
+        ]}
+        rowTone={["danger", "danger", "success"]}
+      />
+      <Table
+        headers={["Intra-mesh constraint", "Function", "On (P, R)"]}
+        rows={[
+          ["rank binding (hard)", "add_rank_binding_constraints", "M0 host rank i's fabric nodes on P.hi's ASICs; M1's on R.hi's"],
+          ["exit nodes (hard)", "add_exit_node_constraints", "mesh-level: at least 2 M0 nodes on ASICs cabled toward R (capped by the physical total under RELAXED); P has two, on h0 and h2"],
+          ["MGD pins (hard)", "add_pinning_constraints", "none declared"],
+          ["PGD layout (soft)", "add_pgd_pinning_preferred_constraints", "puts host rank i on host hi"],
+        ]}
+      />
+      <Table
+        headers={["Rank", "Slice", "TT_PIPELINE_STAGE (written, not consumed)"]}
+        rows={[
+          ["0", "A0", "s0"],
+          ["1, 2", "A1, A2", "s1 (co-owned)"],
+          ["3", "A3", "idle"],
+          ["4", "B0", "s3"],
+          ["5, 6", "B1, B2", "s2 (co-owned)"],
+          ["7", "B3", "idle"],
+        ]}
+      />
+      <Text size="small" tone="tertiary">
+        If blaze's runtime carve picked another alignment of the same cycle (for example s0 on B0), every entry would differ
+        while the mapping stays the same: the entry is a witness.
+      </Text>
+
+      <H2>Example: Tier D at runtime</H2>
+      <CodeCard path="blaze build_topology (unchanged)" mode="plain" language="text" src={TIER_D} />
+    </Stack>
+  );
+}
+
+// --- SAT tab -----------------------------------------------------------------
+
+function SatExamples() {
+  return (
+    <Stack gap={14}>
+      <H2>Examples: the master solve on mixed4</H2>
+      <Grid columns={fit(380)} gap={20} align="start">
+        <SeatGraph />
         <Table
-          headers={["Phase", "Code", "What it does"]}
+          headers={["Step", "Code", "Result"]}
           rows={[
-            ["1. discover", "discover_host_slices, discover_slice_adjacency", "Each rank's chips become a HostSlice(mesh, row0, col0, rows, cols). A neighbour on another slice counts only if get_forwarding_direction confirms it. One link per slice pair is enough."],
-            ["0. input checks", "top of plan_ring_carve", "Uniform slices; every stage a whole number of slices; need <= slices; stage 0 is one slice."],
-            ["2. reduce", "_prune_leaves, _contract", "Drop slices with fewer than 2 live neighbours. Slices with more than 2 are branch slices; runs between them become weighted chains."],
-            ["3. cycle search", "_cycles_no_branch, _cycles_of_length", "Simple cycles of exactly need slices. DFS over branch slices, one chain per step, pruned above need. Budget 200,000 expansions, 64 cycles."],
-            ["4. align", "_group_cycle, _canonical_walk, _as_rectangle", "Fewest crossings first. Canonical walk, then every rotation, then reversed. Each stage's group must be one gap-free rectangle on one mesh with the declared shape."],
-            ["5. emit", "validate_carve_plan", "One CarveSlot per stage in order, a filler slot per unused slice (its rank idles); every chip covered once."],
+            ["seat pools", "create_sat_placement_pools", "both meshes: {P, Q, R}; orientations merged by sat_footprint_canonical"],
+            ["seat graph", "build_sat_placement_seat_graph", "saturated_link_count parallel edges: P-Q x2, P-R x2, Q-R x1"],
+            ["constraints", "build_sat_placement_constraints", "M0, M1 share a pool but are adjacent: no symmetry window; footprints disjoint"],
+            ["new: Plan 1", "seat-graph edge drop", "k = 2: Q-R (1 link) dropped"],
+            ["new: unique_shapes", "MultiMeshSolutionEnumerator callers", "false: (P, Q) and (Q, P) are separate"],
+            ["master session", "MasterSolve::restart", "(P, Q), (Q, P), (P, R), (R, P)"],
           ]}
         />
-        <Text tone="secondary">
-          After the plan, every rank calls create_submesh(shape, offset) for each slot on its own mesh, keeps the one holding
-          its chips, and allgathers chip lists; identical chip sets collapse into one co-owned submesh. The resolver then
-          re-derives which stage goes on which submesh from chip counts and links. In Tier C, phase 1 comes from the mapper
-          (get_coord_range and the candidate links) and phases 0, 2 to 5 are the C++ port.
-        </Text>
+      </Grid>
+      <Table
+        headers={["Plan 1 case", "Result", "Why"]}
+        rows={[
+          ["mixed4, seat pair Q-R", "dropped", "1 link < k = 2"],
+          ["mixed4, seat pair P-Q", "kept, fails later", "2 links on distinct slice pairs; it fails on loop length, which no link count sees"],
+          ["pod8, seat pairs P-U and P-V", "both kept", "2 links each; with hard pins both touch {A0, A3}; U fails on M1's corners, which is about the path, not the boundary"],
+          ["using one projection's boundary slices", "not allowed", "mixed4's survivors disagree (s0, s1 vs s1, s3 on M0); only the union is sound"],
+          ["mixed4 as FLEXIBLE", "nothing pruned", "k = 0; Q-R works with one crossing over host"],
+        ]}
+        rowTone={["success", "warning", "warning", "danger", undefined]}
+      />
+      <H2>Examples: feedback</H2>
+      <Table
+        headers={["Feedback after mixed4 fails on (P, Q)", "Effect", "Verdict"]}
+        rows={[
+          ["exclude_mapping({M0>P, M1>Q})", "blocks this seat set", "correct: (P, R) is still offered and succeeds"],
+          ["add_forbidden_constraint(M0 on P)", "M0 never on P", "wrong: removes (P, R), one of the two seatings that work"],
+          ["add_forbidden_constraint(M1 on Q)", "M1 never on Q", "wrong in general; harmless here"],
+          ["block 'P and Q both used' (new API)", "blocks (P, Q) and (Q, P)", "only when proven for every carve over the pair"],
+        ]}
+        rowTone={["success", "danger", "warning", undefined]}
+      />
+      <Text tone="secondary">
+        unique_shapes: with it on, (P, Q) and (Q, P) share the key {"{P, Q}"} and only the first is checked. Harmless when both
+        lay out the same. If M1 had an MGD pin putting its host rank 0 on h1, the swap would lay out differently and could
+        succeed, but exclude_mapping on {"{P, Q}"} would also hide it.
+      </Text>
+    </Stack>
+  );
+}
 
-        <H3>Carver example A: one loop, no branch slices</H3>
-        <Grid columns={fit(380)} gap={20} align="start">
-          <SliceMap
-            stages={[
-              { mesh: 0, from: 0, to: 0, label: "s0" },
-              { mesh: 0, from: 1, to: 2, label: "s1 (4x4)" },
-              { mesh: 1, from: 1, to: 2, label: "s2 (4x4)" },
-              { mesh: 1, from: 0, to: 0, label: "s3" },
-              { mesh: 0, from: 3, to: 3, label: "pruned", idle: true },
-              { mesh: 1, from: 3, to: 3, label: "pruned", idle: true },
-            ]}
-            cables={[
-              { a: 0, b: 0, kind: "required" },
-              { a: 2, b: 2, kind: "required" },
-            ]}
-          />
-          <CodeCard path="plan_ring_carve, cables A0-B0 and A2-B2" mode="plain" language="text" src={CARVER_A} />
-        </Grid>
+// --- Binding tab -------------------------------------------------------------
 
-        <H3>Carver example B: branch slices and contraction</H3>
-        <Grid columns={fit(380)} gap={20} align="start">
-          <SliceMap
-            stages={[
-              { mesh: 0, from: 0, to: 0, label: "s0" },
-              { mesh: 0, from: 1, to: 2, label: "s1 (4x4)" },
-              { mesh: 1, from: 1, to: 2, label: "s2 (4x4)" },
-              { mesh: 1, from: 0, to: 0, label: "s3" },
-              { mesh: 0, from: 3, to: 3, label: "c1", idle: true },
-              { mesh: 1, from: 3, to: 3, label: "c1", idle: true },
-            ]}
-            cables={[
-              { a: 0, b: 0, kind: "required" },
-              { a: 2, b: 2, kind: "required" },
-              { a: 3, b: 3, kind: "unused" },
-            ]}
-          />
-          <CodeCard path="plan_ring_carve, add cable A3-B3" mode="plain" language="text" src={CARVER_B} />
-        </Grid>
-
-        <H3>Carver example C: right length, no alignment</H3>
-        <Grid columns={fit(380)} gap={20} align="start">
-          <SliceMap
-            stages={[
-              { mesh: 0, from: 0, to: 0, label: "s0?" },
-              { mesh: 0, from: 1, to: 1, label: "s1?" },
-              { mesh: 0, from: 2, to: 2, label: "s2 needs 4", idle: true },
-              { mesh: 1, from: 0, to: 2, label: "same-mesh run of 3", idle: true },
-            ]}
-            cables={[
-              { a: 0, b: 0 },
-              { a: 2, b: 2 },
-            ]}
-            verdict={{ ok: false, text: "no-alignment" }}
-          />
-          <CodeCard path="plan_ring_carve, a 4x8 stage on the same fabric" mode="plain" language="text" src={CARVER_C} />
-        </Grid>
-
-        <H3>Carver example D: a fork (plan_fork_carve)</H3>
-        <Grid columns={fit(380)} gap={20} align="start">
-          <SliceMap
-            stages={[
-              { mesh: 0, from: 2, to: 2, label: "R" },
-              { mesh: 0, from: 3, to: 3, label: "X0" },
-              { mesh: 1, from: 3, to: 3, label: "X1" },
-              { mesh: 1, from: 2, to: 2, label: "X2" },
-              { mesh: 0, from: 1, to: 1, label: "Y0" },
-              { mesh: 0, from: 0, to: 0, label: "idle", idle: true },
-              { mesh: 1, from: 0, to: 1, label: "idle", idle: true },
-            ]}
-            cables={[
-              { a: 0, b: 0, kind: "unused" },
-              { a: 2, b: 2, kind: "required" },
-              { a: 3, b: 3, kind: "required" },
-            ]}
-            host={{ from: [0, 1], to: [0, 2], label: "Y0 > R over host" }}
-          />
-          <CodeCard path="plan_fork_carve, router plus two branches" mode="plain" language="text" src={CARVER_D} />
-        </Grid>
-
-        <H3>Flexible placement: plan_ring_placement</H3>
-        <Grid columns={fit(380)} gap={20} align="start">
-          <SliceMap
-            stages={[
-              { mesh: 0, from: 3, to: 3, label: "s0" },
-              { mesh: 1, from: 2, to: 3, label: "s1 (4x4)" },
-              { mesh: 1, from: 0, to: 1, label: "s2 (4x4)" },
-              { mesh: 0, from: 0, to: 0, label: "s3" },
-              { mesh: 0, from: 1, to: 2, label: "idle", idle: true },
-            ]}
-            cables={[
-              { a: 0, b: 0, kind: "required" },
-              { a: 3, b: 3, kind: "required" },
-            ]}
-            host={{ from: [0, 0], to: [0, 3], label: "s3 > s0 over host" }}
-            verdict={{ ok: true, text: "FLEXIBLE: accepted" }}
-          />
-          <CodeCard path="plan_ring_placement, cables A0-B0 and A3-B3" mode="plain" language="text" src={CARVER_FLEX} />
-        </Grid>
-      </Stack>
-
-      <Stack gap={14}>
-        <H2>Example 1, end to end: stages that span two ranks</H2>
-        <Grid columns={fit(420)} gap={20} align="start">
-          <CodeCard path="MGD (abridged)" mode="plain" language="protobuf" src={EX1_MGD} />
-          <CodeCard path="hypothetical machine" mode="plain" language="text" src={EX1_MACHINE} />
-        </Grid>
-        <Table
-          headers={["Step", "Where", "Result"]}
-          rows={[
-            ["1. Tier A", "validate_pipeline_descriptors", "pass"],
-            ["2. Tier B", "MeshGraph construction", "pass; k(M0, M1) = 2"],
-            ["3. SAT setup", "pools, seat graph, constraints, Plan 1, master solve", "Q-R edge dropped; 4 seatings possible"],
-            ["4. seating (P, Q)", "intra-mesh, then Tier C", "reject: no 6-cycle, every tiling fails"],
-            ["5. seating (Q, P)", "same", "reject"],
-            ["6. seating (P, R)", "intra-mesh, Tier C, binding (5.3)", "accept: planned carve + resolver"],
-            ["7. runtime", "control plane binding, blaze build_topology", "same plan and layout"],
+function BindingExamples() {
+  return (
+    <Stack gap={12}>
+      <H2>Example: mixed4 on (P, R) with an extra cable</H2>
+      <Text tone="secondary">Two A0-B0 cables, both on lower chip ids than the A2-B2 cable; the MGD asks for 2 channels.</Text>
+      <Grid columns={fit(380)} gap={20} align="start">
+        <SliceMap
+          stages={[
+            { mesh: 0, from: 0, to: 0, label: "s0" },
+            { mesh: 0, from: 1, to: 2, label: "s1" },
+            { mesh: 1, from: 1, to: 2, label: "s2" },
+            { mesh: 1, from: 0, to: 0, label: "s3" },
           ]}
-          rowTone={[undefined, undefined, undefined, "danger", "danger", "success", "success"]}
-        />
-        <CodeCard path="steps 1 and 2: Tier A and Tier B" mode="plain" language="text" src={EX1_TIER_AB} />
-
-        <H3>Step 3: SAT placement setup</H3>
-        <Grid columns={fit(380)} gap={20} align="start">
-          <SeatGraph />
-          <CodeCard path="SatPlacementEnumerationSession" mode="plain" language="text" src={EX1_SAT} />
-        </Grid>
-        <Table headers={["Seating (M0, M1)", "Cables after intra-mesh", "Tier C", "Outcome"]} rows={ex1Seatings} rowTone={["danger", "danger", "success", undefined]} />
-
-        <H3>Step 4: seating (P, Q)</H3>
-        <Table
-          headers={["Intra-mesh constraint", "Function", "Here"]}
-          rows={[
-            ["rank binding (hard)", "add_rank_binding_constraints", "M0 host rank i's fabric nodes on P.hi's ASICs; M1's on Q.hi's"],
-            ["exit nodes (hard)", "add_exit_node_constraints", "mesh-level connection: at least 2 M0 nodes on ASICs cabled toward Q (capped by the physical total under RELAXED); P has two, on h0 and h3"],
-            ["MGD pins (hard)", "add_pinning_constraints", "none declared"],
-            ["PGD layout (soft)", "add_pgd_pinning_preferred_constraints", "biases toward the PGD layout"],
+          cables={[
+            { a: 0, b: 0, kind: "required" },
+            { a: 0, b: 0, kind: "unused", label: "2nd" },
+            { a: 2, b: 2, kind: "required" },
           ]}
         />
-        <Grid columns={fit(380)} gap={20} align="start">
-          <SliceMap
-            stages={[]}
-            cables={[
-              { a: 0, b: 0 },
-              { a: 3, b: 3 },
-            ]}
-            verdict={{ ok: false, text: "STRICT: rejected" }}
-          />
-          <CodeCard path="new: Tier C on (P, Q)" mode="plain" language="text" src={EX1_PQ} />
-        </Grid>
-        <Text tone="secondary">
-          Seating (Q, P) has the same cables with the meshes swapped and fails the same way. With unique_shapes on it would
-          never be offered; harmless here, but if the two meshes' layouts differed the swap could be the one that works.
-        </Text>
-
-        <H3>Step 6: seating (P, R)</H3>
-        <Grid columns={fit(380)} gap={20} align="start">
-          <SliceMap
-            stages={[
-              { mesh: 0, from: 0, to: 0, label: "s0" },
-              { mesh: 0, from: 1, to: 2, label: "s1 (4x4)" },
-              { mesh: 1, from: 1, to: 2, label: "s2 (4x4)" },
-              { mesh: 1, from: 0, to: 0, label: "s3" },
-              { mesh: 0, from: 3, to: 3, label: "idle", idle: true },
-              { mesh: 1, from: 3, to: 3, label: "idle", idle: true },
-            ]}
-            cables={[
-              { a: 0, b: 0, kind: "required" },
-              { a: 2, b: 2, kind: "required" },
-            ]}
-            verdict={{ ok: true, text: "STRICT: accepted" }}
-          />
-          <Stack gap={8}>
-            <Text tone="secondary">
-              Planned carve: carver example A above. Slots M0 4x2@(0,0), M0 4x4@(0,2), M1 4x4@(0,2), M1 4x2@(0,0), plus two
-              fillers.
-            </Text>
-            <CodeCard path="slots to submeshes" mode="plain" language="text" src={EX1_COLLECT} />
-          </Stack>
-        </Grid>
-        <CodeCard path="the resolver on those submeshes" mode="plain" language="text" src={EX1_RESOLVE} />
-
-        <H3>Four valid mappings on (P, R)</H3>
-        <Grid columns={fit(300)} gap={14} align="start">
-          {[
-            {
-              name: "A: forward, offset 0 (planner's pick)",
-              stages: [
-                { mesh: 0, from: 0, to: 0, label: "s0" },
-                { mesh: 0, from: 1, to: 2, label: "s1" },
-                { mesh: 1, from: 1, to: 2, label: "s2" },
-                { mesh: 1, from: 0, to: 0, label: "s3" },
-              ],
-              joint: "s1 on ranks 1+2, s2 on ranks 5+6",
-            },
-            {
-              name: "B: forward, offset 3",
-              stages: [
-                { mesh: 1, from: 2, to: 2, label: "s0" },
-                { mesh: 1, from: 0, to: 1, label: "s1" },
-                { mesh: 0, from: 0, to: 1, label: "s2" },
-                { mesh: 0, from: 2, to: 2, label: "s3" },
-              ],
-              joint: "s1 on ranks 4+5, s2 on ranks 0+1",
-            },
-            {
-              name: "C: reverse, offset 1 (resolver's mirror)",
-              stages: [
-                { mesh: 1, from: 0, to: 0, label: "s0" },
-                { mesh: 1, from: 1, to: 2, label: "s1" },
-                { mesh: 0, from: 1, to: 2, label: "s2" },
-                { mesh: 0, from: 0, to: 0, label: "s3" },
-              ],
-              joint: "s1 on ranks 5+6, s2 on ranks 1+2",
-            },
-            {
-              name: "D: reverse, offset 4",
-              stages: [
-                { mesh: 0, from: 2, to: 2, label: "s0" },
-                { mesh: 0, from: 0, to: 1, label: "s1" },
-                { mesh: 1, from: 0, to: 1, label: "s2" },
-                { mesh: 1, from: 2, to: 2, label: "s3" },
-              ],
-              joint: "s1 on ranks 0+1, s2 on ranks 4+5",
-            },
-          ].map((m) => (
-            <div key={m.name}>
-              <Stack gap={4}>
-                <Text weight="semibold" size="small">
-                  {m.name}
-                </Text>
-                <SliceMap stages={m.stages as SliceStage[]} cables={[{ a: 0, b: 0 }, { a: 2, b: 2 }]} />
-                <Text size="small" tone="tertiary">
-                  {m.joint}
-                </Text>
-              </Stack>
-            </div>
-          ))}
-        </Grid>
-        <Text size="small" tone="tertiary">
-          The other eight of the twelve alignments fail in _as_rectangle: a 4x4 group would take one slice from each mesh.
-          Tier C only needs one to exist.
-        </Text>
-
-        <H3>Binding, emit and runtime</H3>
-        <Text tone="secondary">
-          New (5.3): the crossing edges are s1 {">"} s2 on A2-B2 and s3 {">"} s0 on A0-B0, so R holds those two cables.
-          Phase 0 binds them first and fills the count of 2, and the rerun over the bound links gives the same plan. The
-          mapping is emitted with TT_PIPELINE_STAGE: rank 0 s0, ranks 1 and 2 s1, ranks 5 and 6 s2, rank 4 s3, ranks 3 and
-          7 idle.
-        </Text>
-        <CodeCard path="step 7: runtime (Tier D, unchanged)" mode="plain" language="text" src={EX1_RUNTIME} />
-      </Stack>
-
-      <Stack gap={14}>
-        <H2>Example 2, end to end: different slice shapes (per-rank tiling)</H2>
-        <Text tone="secondary">
-          The llama_8b_pod pattern at small scale. M1 is a 2x4 mesh whose four ranks each drive a 1x2 slice, so the planned
-          carve rejects the MGD (slices are not one shape) and per-rank tiling is the only path.
-        </Text>
-        <CodeCard path="setup, Tier A, Tier B and SAT placement" mode="plain" language="text" src={EX2_SETUP} />
-        <Grid columns={fit(380)} gap={20} align="start">
-          <Stack gap={6}>
-            <Text weight="semibold">Seat U: cables on opposite corners of M1</Text>
-            <SmallMeshMap
-              m0={["s0", "s1", "s2", "s3"]}
-              m1={["", "", "", ""]}
-              cables={[
-                { a: 3, row: 0, col: 1 },
-                { a: 0, row: 1, col: 3 },
-              ]}
-              verdict={{ ok: false, text: "rejected" }}
-            />
-          </Stack>
-          <Stack gap={6}>
-            <Text weight="semibold">Seat V: cables on neighbouring tiles</Text>
-            <SmallMeshMap
-              m0={["s0", "s1", "s2", "s3"]}
-              m1={["s7", "s4", "s6", "s5"]}
-              cables={[
-                { a: 3, row: 0, col: 3 },
-                { a: 0, row: 0, col: 0 },
-              ]}
-              verdict={{ ok: true, text: "accepted" }}
-            />
-          </Stack>
-        </Grid>
-        <CodeCard path="new: Tier C on both seatings" mode="plain" language="text" src={EX2_RESOLVE} />
         <Table
-          headers={["Mapping on V", "M0", "M1", "Who finds it"]}
+          headers={["Step", "Today", "With R first"]}
           rows={[
-            ["1", "s0 A0, s1 A1, s2 A2, s3 A3", "s4 T1, s5 T3, s6 T2, s7 T0; loopback T0 to A0", "resolver's first try (s0 on submesh 0)"],
-            ["2", "s0 A3, s1 A2, s2 A1, s3 A0", "s4 T0, s5 T2, s6 T3, s7 T1; loopback T1 to A3", "valid; found if mapping 1 failed"],
-            ["impossible", "a 4x2 stage on a T submesh", "a 1x2 stage on an A submesh", "chip-count filter (8 against 2)"],
+            ["gather", "A0-B0, A0-B0, A2-B2", "same"],
+            ["required links", "none", "A2-B2 (s1 > s2), A0-B0 (s3 > s0)"],
+            ["bind", "two lowest ids: both A0-B0", "R, filling the count of 2"],
+            ["rerun", "not done", "same plan and layout"],
+            ["runtime", "no-cycle-of-length-6", "builds"],
           ]}
         />
-        <Text tone="secondary">
-          On seat U the cable count is right and both cables touch M0's boundary slices; what fails is where they land on M1.
-          Only the solved layout shows that, which is why Plan 1 cannot prune it without hard pins. At runtime blaze is
-          called with submesh_shape 4x2 on M0's ranks and 1x2 on M1's, tiles, and resolves to the same answer.
-        </Text>
-        <Callout tone="warning" title="A variation Tier B stops">
-          If M1 were 4x8 with host_topology [1, 4] (4x2 slices) and still carried 1x2 stages, Tier B as written rejects at
-          load. Blaze would build it: each rank owns four 1x2 tiles, keeps the one whose (0,0) chip is local (row 0), and the
-          rest drop out, so only cables landing in row 0 count. This is the edge case in 3.4.
-        </Callout>
-      </Stack>
-
-      <Stack gap={10}>
-        <H2>Special cases these examples hit</H2>
-        <Table
-          headers={["Case", "Where in the code", "What happens"]}
-          rows={[
-            ["Stage 0 wider than one slice", "plan_ring_carve: stage_counts[0] != 1", "input-infeasible: one rank must drive H2D, the loopback entry and D2H"],
-            ["Stage not a whole number of slices", "plan_ring_carve: r % nrows or c % ncols", "planned carve rejects; only per-rank tiling builds it, and Tier B rejects it as written"],
-            ["Host slices of different shapes", "plan_ring_carve uniform check", "planned carve rejects; per-rank tiling is the path (example 2)"],
-            ["Mixed stage shapes on per-rank tiling", "one tile shape per mesh; resolver chip counts", "no submesh of the needed size (example 1, step 4)"],
-            ["Wide stage across a crossing", "_as_rectangle: more than one mesh", "that rotation is skipped; another may work (carver A)"],
-            ["Loop of the wrong length", "_cycles_no_branch, _cycles_of_length", "no-cycle-of-length-N; with branch slices only lengths up to N are listed (carver B)"],
-            ["Right length, no alignment", "_group_cycle returns None", "no-alignment with same-mesh run lengths (carver C)"],
-            ["Fork router degree", "plan_fork_carve candidates", "2 neighbours per fabric-return branch, 1 per host-return branch (carver D)"],
-            ["Unused slices", "filler slots", "their ranks idle; the plan still covers every chip"],
-            ["Two ranks carve the same chips", "_collect_submeshes collapse", "one co-owned submesh, one node"],
-            ["Path endpoints in a tile graph", "resolver over per-rank tiles", "right cable count on the wrong tiles fails (example 2, seat U)"],
-            ["Cable on a tile nobody keeps", "discover_submesh_links sees only submesh chips", "the cable does not count; Tier C must use the same rule"],
-            ["Search budget hit", "_MAX_SEARCH_EXPANSIONS = 200,000", "budget-exhausted; Tier C treats it as unknown and accepts"],
-            ["Pipeline failure feedback", "exclude_mapping, never add_forbidden_constraint", "the seat set is blocked, not the mesh on its seat; M0 on P still works with R"],
-          ]}
-        />
-      </Stack>
+      </Grid>
+      <Table
+        headers={["Binding edge case", "What happens"]}
+        rows={[
+          ["count 3, spare on A0-B0 only", "R takes two, the fill takes the spare; spread order changes nothing"],
+          ["count 3, spare on A3-B3", "the spread fill takes A3-B3 first: a new slice pair, more cycles for blaze (example C)"],
+          ["phase 0 cannot place a cable in R", "failure_stage = pipeline_binding; the seating is blocked"],
+          ["STRICT Graph connections with pins on A0 and A3", "Tier C may use only the pinned cables; mixed4 rejects (example B); nothing to choose"],
+        ]}
+      />
     </Stack>
   );
 }
@@ -2897,6 +2969,7 @@ function OverviewTab() {
           rule per language, parity-tested.
         </Callout>
       </Grid>
+      <RunningExamples />
     </Stack>
   );
 }
@@ -3022,6 +3095,7 @@ stages { id: "s8" shape { dims: [ 1, 2 ] } }
         </Text>
         <MergeDiagram />
       </Stack>
+      <DescriptorExamples />
     </Stack>
   );
 }
@@ -3106,6 +3180,7 @@ function MapperTab() {
           ]}
         />
       </Stack>
+      <MapperExamples />
     </Stack>
   );
 }
@@ -3171,6 +3246,7 @@ function SatTab() {
           ring-stress and superpod MGDs. The code change is in P8.
         </Callout>
       </Stack>
+      <SatExamples />
     </Stack>
   );
 }
@@ -3216,6 +3292,7 @@ function BindingTab() {
           </Text>
         </Stack>
       </Grid>
+      <BindingExamples />
     </Stack>
   );
 }
@@ -3260,7 +3337,6 @@ function QuestionsTab() {
 
 const SECTIONS = [
   { id: "overview", label: "Overview", body: OverviewTab },
-  { id: "example", label: "Worked examples through the code", body: ExampleTab },
   { id: "descriptor", label: "The MGD pipeline section", body: DescriptorTab },
   { id: "mapper", label: "Mapper check (Tier C)", body: MapperTab },
   { id: "sat", label: "SAT placement", body: SatTab },
