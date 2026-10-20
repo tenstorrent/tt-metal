@@ -9466,6 +9466,97 @@ tasks:
       pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_experts: '< 38.9'
+- id: P.11
+  title: 'Combine planner on several cores: our column mode on Marko''s multi-core v2 planner vs the one-core planner:
+    owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.10
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup/combine_rf
+  - ttnn/ttnn/bringup/flat_routed_expert_ttnn
+  - ttnn/ttnn/bringup/INDEX.md
+  ab:
+    change:
+      COMBINE_PLANNER: multi
+    env:
+      COMBINE_PLANNER: one
+  brief:
+    details: 'Owner (2026-10-20): the weighted combine''s planner (combine_rf/combine_plan.py) runs on ONE core per chip
+      in our column mode (axis=0: the other column''s experts skipped, id_offset, zero_unseen, passes, the fixed summation
+      order of the P.8 det), ~1.57 ms of the ~3.5 ms experts call a layer at 1024 tokens a chip (BREADCRUMBS P.9,
+      DS41-73). Marko Staletovic''s multi-core planners (v1, and v2 with the deterministic order: "det: the V2 multi-core
+      planner") exist in the same file for the whole-mesh mode only; his latest branch adds nothing for column mode
+      (analysis 2026-10-20). Port the column mode onto the multi-core v2 planner (behind a combine_rf option, default =
+      today''s program) so the column mode''s plan, counts, regions, token index and order table are built by several
+      cores, bit-identical to the one-core planner''s outputs (assert it in a fork unit test over random routings, at
+      S = 512 and 1024, column 0 and 1). ONE model setting COMBINE_PLANNER {one (default), multi}. Read combine_rf/README.md,
+      CHANGELOG.md, examples/ (his K3 layer uses the multi-core planner). Report the planner''s time and the experts call
+      per layer, one vs multi (tt/perf_experts.py). Final check: `python -m models.demos.common.bringup.orchestrator
+      measure --task P.11`.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done
+      && for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13
+      dec_reuse_12; do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_experts: '< 38.9'
+- id: P.12
+  title: 'Shared expert run by the flat routed expert (always-on slices, bfp8 weights) vs today''s separate shared expert:
+    owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.11
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup/flat_routed_expert_ttnn
+  - ttnn/ttnn/bringup/combine_rf
+  - ttnn/ttnn/bringup/INDEX.md
+  ab:
+    change:
+      SHARED_EXPERT_IMPL: flat
+    env:
+      SHARED_EXPERT_IMPL: linear
+  brief:
+    details: 'Owner (2026-10-20): the shared expert (tt/shared_expert.py: ttnn.linear chain, bf16 weights dequantized from
+      the checkpoint''s fp8, ~11.4 ms a chunk of device time, ~1.4 ms a layer) runs as the flat routed expert, the way Marko
+      Staletovic''s K3 MoE layer does (combine_rf/examples/tt_k3_token_split_moe.py: K3_SE=flat, _build_shared_flat: the
+      shared MLP''s intermediate split into SE_P always-on "experts" of I_shared / SE_P columns, every token routed to
+      every slice, its x layout conversion hidden under the dispatch; and examples/moe_knowledge_dump.md on the shared
+      expert overlapped with dispatch / folded, examples/moe_model/). Our shared expert: intermediate 2304, split over the
+      mesh row (TP 2: 1152 a chip), the same clamped SwiGLU as the routed experts, no routing weight, its output summed with
+      the routed experts'' (moe_add) and across the row. Weights in bfp8 (the checkpoint''s fp8 width, agents rule 7 / F117;
+      max_precision keeps the exact bf16 path). ONE model setting SHARED_EXPERT_IMPL {linear (default), flat}. Prefer the
+      option that also hides it (overlapped with dispatch, or folded into the routed experts'' program) when it is no more
+      work; report what you chose and why. Report the shared expert section and the MoE block per layer, linear vs flat,
+      and the rel error vs float64 of both. Final check: `python -m models.demos.common.bringup.orchestrator measure
+      --task P.12`.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done
+      && for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13
+      dec_reuse_12; do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_shared_expert: '< 11.4'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -9477,6 +9568,8 @@ tasks:
   - P.8
   - P.9
   - P.10
+  - P.11
+  - P.12
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
