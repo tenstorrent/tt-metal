@@ -18,6 +18,7 @@ from models.experimental.hpcg.reference.problem import COLOUR_ORDER, build
 from models.experimental.hpcg.tt.custom_ops.cg_vector import CgVectorOp, DotFinishOp
 from models.experimental.hpcg.tt.custom_ops.sparse_rows import SparseRowOp, SparseRowPlan, slot_pages
 from models.experimental.hpcg.tt.custom_ops.sparse_rows.op import debug_buffer, noc_coords
+from models.experimental.hpcg.tt.custom_ops.stencil_matrix import StencilMatrixOp
 from models.experimental.hpcg.tt.layout import TILE, rows_to_device, to_device, zeros_device
 
 
@@ -34,24 +35,26 @@ def slot_stride(P):
 
 
 class DeviceLevel:
-    """One multigrid level on device: matrix values and window offsets, and the level's work vectors."""
+    """One multigrid level on device: matrix values and window offsets, and the level's work vectors.
+    b: for the fine level, CG's right-hand side, which the device fills when it generates the matrix."""
 
-    def __init__(self, device, L, ncores, noc_xy, r=None):
+    def __init__(self, device, L, ncores, noc_xy, r=None, b=None):
         self.L, self.P = L, L.P
         blocks = [(L.starts[c], L.starts[c + 1]) for c in range(8)]
-        self.plan = SparseRowPlan(
-            L.COL_rows,
-            blocks,
-            blocks,
-            ncores,
-            noc_xy,
-            exchange=True,
-            bands=L.bstarts if L.bands > 1 else None,
-            pout=L.P,
-        )
-        # the storage rows are already padded to slot_stride, so both tables upload as they are
-        self.values = rows_to_device(device, L.V_rows)
-        self.offsets = rows_to_device(device, self.plan.off)  # 32-bit window offsets
+        plan_args = (blocks, blocks, ncores, noc_xy, True)
+        bands = L.bstarts if L.bands > 1 else None
+        if L.tables:  # matrix built on the host (no compiled helper): plan from its columns, upload both tables
+            self.plan = SparseRowPlan(L.COL_rows, *plan_args, bands=bands, pout=L.P)
+            # the storage rows are already padded to slot_stride, so both tables upload as they are
+            self.values = rows_to_device(device, L.V_rows)
+            self.offsets = rows_to_device(device, self.plan.off)  # 32-bit window offsets
+            if b is not None:
+                ttnn.copy(to_device(device, L.B), b)
+        else:  # the device writes the values, the offsets and b itself; the host plans the windows only
+            self.plan = SparseRowPlan(None, *plan_args, bands=bands, pout=L.P, stencil=L)
+            gen = StencilMatrixOp(device, L, self.plan, b=b)
+            gen()
+            self.values, self.offsets = gen.values, gen.offsets
         self.z, self.Az = (zeros_device(device, L.P) for _ in range(2))
         self.r = r if r is not None else zeros_device(device, L.P)  # the fine level shares CG's r
 
@@ -65,24 +68,27 @@ class HPCG:
     partial r.r. A CG solve is reset(), start(), then iteration() repeated.
     """
 
-    def __init__(self, device, nx, bands=None, order=COLOUR_ORDER, kernel_debug=False, level_cores=None):
+    def __init__(
+        self, device, nx, bands=None, order=COLOUR_ORDER, kernel_debug=False, level_cores=None, host_tables=False
+    ):
+        """host_tables: build the matrix and its offset tables on the host and upload them (the reference path)
+        instead of generating them on the device (tt/custom_ops/stencil_matrix)."""
         if nx % 8:
             raise ValueError(f"nx must be a multiple of 8 (4 multigrid levels), got {nx}")
         self.device = device
         g = device.compute_with_storage_grid_size()
         nc = g.x * g.y
         bands = list(bands) if bands is not None else [default_bands(nx >> l) for l in range(4)]
-        self.levels = build(nx, bands, slot_stride)
+        self.levels = build(nx, bands, slot_stride, tables=host_tables)
         self.order = list(order)
         noc_xy = noc_coords(device)
         lc = list(level_cores or []) + [nc] * 4  # cores per level for the smoothers (default: all)
         L0 = self.levels[0]
-        self.r = zeros_device(device, L0.P)
+        self.r, self.b = (zeros_device(device, L0.P) for _ in range(2))
         self.lv = [
-            DeviceLevel(device, L, min(nc, lc[l]), noc_xy, r=self.r if l == 0 else None)
+            DeviceLevel(device, L, min(nc, lc[l]), noc_xy, r=self.r if l == 0 else None, b=self.b if l == 0 else None)
             for l, L in enumerate(self.levels)
         ]
-        self.b = to_device(device, L0.B)
         self.x, self.p, self.Ap, self.zero = (zeros_device(device, L0.P) for _ in range(4))
         self.debug = debug_buffer(device)  # per-core cycle counters, written by kernel_debug builds
         dbg = dict(kernel_debug=kernel_debug, debug=self.debug)

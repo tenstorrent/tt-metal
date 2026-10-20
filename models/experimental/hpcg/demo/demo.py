@@ -40,6 +40,7 @@ def main(nx, iters):
     try:
         t0 = time.time()
         h = HPCG(device, nx)
+        ttnn.synchronize_device(device)  # setup includes the device's matrix generation
         setup_s = time.time() - t0
         emit(
             nx=nx,

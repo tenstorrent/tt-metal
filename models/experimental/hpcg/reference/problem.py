@@ -36,23 +36,77 @@ def _ceil(a, b):
 
 
 class Level:
-    def __init__(self, nx, bands=1, slot_stride=None):
+    def __init__(self, nx, bands=1, slot_stride=None, tables=True):
         """bands: y-bands per colour block. Inside a colour block rows are stored band by band (natural order inside
         a band), so a core that owns part of one band touches one band-plane above / below, not a whole plane.
         slot_stride(P): row length of the V / COL storage (default P); the device pads each slot row so that the 27
-        rows of one segment start in different DRAM banks. V and COL are [27, P] views of that storage."""
+        rows of one segment start in different DRAM banks. V and COL are [27, P] views of that storage.
+        tables=False: only the layout and the band tables (no V, COL, B, pos or nat_at on the host), for a device
+        that generates the matrix itself (needs the compiled host helper)."""
         self.nx, self.bands = nx, bands
         n = nx**3
         self.n = n
         from models.experimental.hpcg.host import native
 
         lib = native.lib()
-        if lib is not None:
-            self._build_native(lib, slot_stride)
+        self.P, self.starts, self.bstarts = self._layout()
+        self._band_tables()
+        self.stride = slot_stride(self.P) if slot_stride else self.P
+        self.tables = tables or lib is None
+        if not self.tables:
+            self.nnz = (3 * nx - 2) ** 3  # neighbours per axis: 3 inside, 2 at each end
+        elif lib is not None:
+            self._build_native(lib)
         else:
-            self._build_numpy(slot_stride)
-        self.real = self.nat_at >= 0
+            self._build_numpy()
         self.coarse = None
+
+    @property
+    def real(self):
+        """True on real rows, False on the padding rows at the end of each colour block."""
+        if not hasattr(self, "_real"):
+            self._real = np.zeros(self.P, bool)
+            for c in range(8):
+                a = self.starts[c]
+                self._real[a : a + self.count(c)] = True
+        return self._real
+
+    def count(self, c):
+        """Real rows of colour block c."""
+        cx, cy, cz = ((self.nx - p + 1) // 2 for p in (c & 1, (c >> 1) & 1, c >> 2))
+        return cx * cy * cz
+
+    def _band_tables(self):
+        """The storage order as small tables (see Geo in host/native_setup.cpp): line_band[py * nl + yl] = band of
+        colour-line yl for y parity py; band_y0, band_ny, band_start[c * nb + j] = first colour-line, lines and first
+        q of band j of colour c."""
+        nx, bands, bstarts = self.nx, self.bands, self.bstarts
+        h = max(1, nx // 2)
+        nl = (nx + 1) // 2
+        nb = max(len(b) - 1 for b in bstarts)
+        line_band = np.zeros(2 * nl, np.int32)
+        band_y0 = np.zeros(8 * nb, np.int32)
+        band_ny = np.zeros(8 * nb, np.int32)
+        band_start = np.zeros(8 * nb, np.int64)
+        for py in (0, 1):
+            cy = (nx - py + 1) // 2
+            line_band[py * nl : py * nl + cy] = np.arange(cy) * bands // h
+        for c in range(8):
+            py = (c >> 1) & 1
+            cy = (nx - py + 1) // 2
+            lb = np.arange(cy) * bands // h
+            band_start[c * nb : (c + 1) * nb] = bstarts[c][-1]  # bands a colour lacks: empty, at the block's end
+            for j in range(len(bstarts[c]) - 1):
+                sel = np.flatnonzero(lb == j)
+                band_y0[c * nb + j] = sel[0] if sel.size else 0
+                band_ny[c * nb + j] = sel.size
+                band_start[c * nb + j] = bstarts[c][j]
+        self.nb, self.nl = nb, nl
+        self.line_band, self.band_y0, self.band_ny, self.band_start = line_band, band_y0, band_ny, band_start
+
+    def geo(self):
+        """Arguments describing the storage order to the compiled helper (host/native_setup.cpp's Geo)."""
+        return [self.nx, self.nb, self.nl, self.line_band, self.band_y0, self.band_ny, self.band_start]
 
     def _layout(self):
         """Colour-block and band starts (q), from the per-colour counts alone (no per-point work)."""
@@ -69,29 +123,8 @@ class Level:
         starts.append(p)
         return p, starts, bstarts
 
-    def _build_native(self, lib, slot_stride):
-        nx, bands = self.nx, self.bands
-        P, starts, bstarts = self._layout()
-        h = max(1, nx // 2)
-        nl = (nx + 1) // 2
-        nb = max(len(b) - 1 for b in bstarts)
-        line_band = np.zeros(2 * nl, np.int32)
-        band_y0 = np.zeros(8 * nb, np.int32)
-        band_ny = np.zeros(8 * nb, np.int32)
-        band_start = np.zeros(8 * nb, np.int64)
-        for py in (0, 1):
-            cy = (nx - py + 1) // 2
-            line_band[py * nl : py * nl + cy] = np.arange(cy) * bands // h
-        for c in range(8):
-            py = (c >> 1) & 1
-            cy = (nx - py + 1) // 2
-            lb = np.arange(cy) * bands // h
-            for j in range(len(bstarts[c]) - 1):
-                sel = np.flatnonzero(lb == j)
-                band_y0[c * nb + j] = sel[0] if sel.size else 0
-                band_ny[c * nb + j] = sel.size
-                band_start[c * nb + j] = bstarts[c][j]
-        stride = slot_stride(P) if slot_stride else P
+    def _build_native(self, lib):
+        P, stride = self.P, self.stride
         from models.experimental.hpcg.host.native import zeros  # huge-page tables: see its docstring
 
         self.pos = zeros(self.n, np.int64)
@@ -101,26 +134,12 @@ class Level:
         self.B = zeros(P, np.float32)
         self.nnz = int(
             lib.hpcg_build_level(
-                nx,
-                nb,
-                nl,
-                line_band,
-                band_y0,
-                band_ny,
-                band_start,
-                P,
-                stride,
-                self.pos,
-                self.nat_at,
-                self.V_rows,
-                self.COL_rows,
-                self.B,
+                *self.geo(), P, stride, self.pos, self.nat_at, self.V_rows, self.COL_rows, self.B
             )
         )
-        self.P, self.starts, self.bstarts = P, starts, bstarts
         self.V, self.COL = self.V_rows[:, :P], self.COL_rows[:, :P]
 
-    def _build_numpy(self, slot_stride):
+    def _build_numpy(self):
         """The same matrix with numpy array operations: the readable definition, and the fallback."""
         nx, bands, n = self.nx, self.bands, self.n
         nat = np.arange(n)
@@ -139,10 +158,11 @@ class Level:
             bstarts.append([int(v) for v in p + np.concatenate([[0], np.cumsum(cnt)])])
             p = _ceil(p + m.size, TILE)
         starts.append(p)
-        self.P, self.starts, self.pos, self.bstarts = p, starts, pos, bstarts
+        assert (p, starts, bstarts) == (self.P, self.starts, self.bstarts)
+        self.pos = pos
         self.nat_at = np.full(p, -1, np.int64)
         self.nat_at[pos] = nat
-        stride = slot_stride(p) if slot_stride else p
+        stride = self.stride
         self.V_rows = np.zeros((27, stride), np.float32)  # values are exact in fp32 (26, -1, 0, 1)
         self.COL_rows = np.zeros((27, stride), np.int32)
         V, COL = self.V_rows[:, :p], self.COL_rows[:, :p]
@@ -184,11 +204,11 @@ class Level:
             self._link_numpy(C)
 
     def _link_native(self, lib, C):
+        """The same tables from the storage-order formula of both levels (no per-point tables)."""
         nb0 = self.starts[1]
         self.R, self.Rw = np.empty(C.P, np.int64), np.empty(C.P)
         self.Pm, self.Pw = np.empty(nb0, np.int64), np.empty(nb0)
-        cnat = np.ascontiguousarray(C.nat_at, np.int64)
-        rmax = lib.hpcg_link(self.nx, self.pos, nb0, C.nx, C.P, cnat, self.R, self.Rw, self.Pm, self.Pw)
+        rmax = lib.hpcg_link(*self.geo(), nb0, *C.geo(), C.P, self.R, self.Rw, self.Pm, self.Pw)
         assert rmax < nb0
 
     def _link_numpy(self, C):
@@ -214,11 +234,11 @@ class Level:
         self.Pm, self.Pw = Pm, Pw
 
 
-def build(nx, bands=None, slot_stride=None):
+def build(nx, bands=None, slot_stride=None, tables=True):
     """The 4 multigrid levels nx, nx/2, nx/4, nx/8 (bands: y-bands per level, default 1), linked fine to coarse.
-    slot_stride: see Level."""
+    slot_stride, tables: see Level."""
     bands = list(bands or []) + [1] * NLEV
-    levels = [Level(nx >> l, bands[l], slot_stride) for l in range(NLEV)]
+    levels = [Level(nx >> l, bands[l], slot_stride, tables) for l in range(NLEV)]
     for l in range(NLEV - 1):
         levels[l].link(levels[l + 1])
     return levels

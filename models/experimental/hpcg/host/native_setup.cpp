@@ -11,6 +11,106 @@
 #include <cstdint>
 #include <vector>
 
+namespace {
+
+// Storage order of one level (reference/problem.py): colour blocks c = px + 2 py + 4 pz, y-bands inside a block,
+// then z, y and x inside a band. line_band[py * nl + (y >> 1)]: band of colour-line y >> 1 for y parity py;
+// band_y0 / band_ny / band_start[c * nbands + j]: first colour-line, number of lines and first q of band j of colour c.
+struct Geo {
+    int32_t nx, nbands, nl;
+    const int32_t* line_band;
+    const int32_t* band_y0;
+    const int32_t* band_ny;
+    const int64_t* band_start;
+    int32_t cx(int p) const { return (nx - p + 1) / 2; }  // points of one parity along an axis
+    int64_t count(int c) const { return (int64_t)cx(c & 1) * cx((c >> 1) & 1) * cx(c >> 2); }
+    // q of the first point of grid line (y, z) in colour block cs (cs's y and z parities are y & 1 and z & 1)
+    int64_t line_q(int cs, int32_t y, int32_t z) const {
+        const int64_t k = (int64_t)cs * nbands + line_band[(y & 1) * nl + (y >> 1)];
+        return band_start[k] + ((int64_t)(z >> 1) * band_ny[k] + ((y >> 1) - band_y0[k])) * cx(cs & 1);
+    }
+    int64_t q_of(int32_t x, int32_t y, int32_t z) const {
+        return line_q((x & 1) + 2 * (y & 1) + 4 * (z & 1), y, z) + (x >> 1);
+    }
+    // f(q, i0, len, y, z): each run of real rows along x inside [a, e) of colour block c, i0 = the run's first x
+    // index in the block (x = 2 i0 + px); rows past the block's real rows (padding) are skipped
+    template <typename F>
+    void for_each_run(int c, int64_t a, int64_t e, F f) const {
+        const int py = (c >> 1) & 1, pz = c >> 2;
+        const int64_t k0 = (int64_t)c * nbands;
+        const int64_t end = std::min(e, band_start[k0] + count(c));
+        const int32_t cxn = cx(c & 1);
+        int jb = 0;
+        for (int64_t q = a; q < end;) {
+            while (jb + 1 < nbands && band_start[k0 + jb + 1] <= q) {
+                ++jb;  // the last band starting at or before q (bands without lines share the next band's start)
+            }
+            const int64_t k = k0 + jb, l = q - band_start[k], line = l / cxn;
+            const int32_t i0 = (int32_t)(l % cxn);
+            const int32_t len = (int32_t)std::min<int64_t>(cxn - i0, end - q);
+            f(q, i0, len, 2 * (band_y0[k] + (int32_t)(line % band_ny[k])) + py, 2 * (int32_t)(line / band_ny[k]) + pz);
+            q += len;
+        }
+    }
+    // f(q, x, y, z) for every real point, in storage order
+    template <typename F>
+    void for_each_point(F f) const {
+        for (int c = 0; c < 8; ++c) {
+            const int64_t a = band_start[(int64_t)c * nbands];
+            for_each_run(c, a, a + count(c), [&](int64_t q, int32_t i0, int32_t len, int32_t y, int32_t z) {
+                for (int32_t i = 0; i < len; ++i) {
+                    f(q + i, 2 * (i0 + i) + (c & 1), y, z);
+                }
+            });
+        }
+    }
+};
+
+// Runs of marked granules in [gmin, gmax] whose gaps are at most wgap granules -> window pieces (q lo, words, L1
+// byte offset), the first max_pieces of them stored; clears the mask. Returns the number of pieces.
+int64_t merge_pieces(
+    std::vector<uint8_t>& mask,
+    int64_t gmin,
+    int64_t gmax,
+    int32_t gran,
+    int32_t wgap,
+    int64_t max_pieces,
+    int64_t* plo,
+    int64_t* pln,
+    int64_t* pl1) {
+    int64_t np = 0, l1 = 0, start = -1, last = -1;
+    for (int64_t g = gmin; g <= gmax + 1; ++g) {
+        const bool on = g <= gmax && mask[g];
+        if (on) {
+            if (start < 0) {
+                start = g;
+            } else if (g - last > wgap) {  // close the previous run
+                if (np < max_pieces) {
+                    plo[np] = start * gran;
+                    pln[np] = (last + 1 - start) * gran;
+                    pl1[np] = l1;
+                }
+                l1 += (last + 1 - start) * gran * 4;
+                ++np;
+                start = g;
+            }
+            last = g;
+            mask[g] = 0;
+        }
+    }
+    if (start >= 0) {
+        if (np < max_pieces) {
+            plo[np] = start * gran;
+            pln[np] = (last + 1 - start) * gran;
+            pl1[np] = l1;
+        }
+        ++np;
+    }
+    return np;
+}
+
+}  // namespace
+
 extern "C" {
 
 // Matrix of one level, in the storage order of reference/problem.py (colour blocks, y-bands, natural order).
@@ -34,13 +134,7 @@ int64_t hpcg_build_level(
     float* V,
     int32_t* COL,
     float* B) {
-    // q of grid point (x, y, z), from the storage-order formula (no table lookups beyond the band tables)
-    auto q_of = [&](int32_t x, int32_t y, int32_t z) -> int64_t {
-        const int px = x & 1, py = y & 1, pz = z & 1, c = px + 2 * py + 4 * pz;
-        const int64_t cx = (nx - px + 1) / 2;
-        const int64_t k = (int64_t)c * nbands + line_band[py * nl + (y >> 1)];
-        return band_start[k] + ((int64_t)(z >> 1) * band_ny[k] + ((y >> 1) - band_y0[k])) * cx + (x >> 1);
-    };
+    const Geo G{nx, nbands, nl, line_band, band_y0, band_ny, band_start};
     // Rows are visited in storage order (colour block, band, z line pair, y line, x), so each of the 27 value and
     // column rows is written front to back. Work items: (colour, band, z index), split over the threads.
     const int32_t nzc = (nx + 1) / 2;
@@ -80,7 +174,7 @@ int64_t hpcg_build_level(
                                 continue;
                             }
                             V[j * stride + q] = (j == 13) ? 26.0f : -1.0f;
-                            COL[j * stride + q] = (int32_t)q_of(jx, jy, jz);
+                            COL[j * stride + q] = (int32_t)G.q_of(jx, jy, jz);
                             ++cnt;
                         }
                     }
@@ -111,34 +205,49 @@ int64_t hpcg_build_level(
     return nnz;
 }
 
-// Grid transfer tables between fine level F (nx, pos, nb0 = rows of its colour block 0) and coarse level C (cnx,
-// cnat_at[CP]), as Level.link in reference/problem.py. R[qc]: q of coarse point qc's fine point (a padding row takes
-// the previous real row's R); Rw[qc]: 1 on real rows. Pm[q] (q < nb0): coarse q of fine point q (a fine row without
-// a coarse point takes the previous mapped row's Pm); Pw[q]: 1 on mapped rows. Returns the largest R of a real row.
+// Grid transfer tables between fine level F and coarse level C, from the storage-order formula of both (no
+// per-point tables), as Level.link in reference/problem.py. nb0: rows of F's colour block 0. R[qc]: q of coarse
+// point qc's fine point (2x, 2y, 2z) (a padding row takes the previous real row's R); Rw[qc]: 1 on real rows.
+// Pm[q] (q < nb0): coarse q of fine point q (a fine row without a coarse point takes the previous mapped row's Pm);
+// Pw[q]: 1 on mapped rows. Returns the largest R of a real row.
 int64_t hpcg_link(
     int32_t nx,
-    const int64_t* pos,
+    int32_t nbands,
+    int32_t nl,
+    const int32_t* line_band,
+    const int32_t* band_y0,
+    const int32_t* band_ny,
+    const int64_t* band_start,
     int64_t nb0,
     int32_t cnx,
+    int32_t cnbands,
+    int32_t cnl,
+    const int32_t* cline_band,
+    const int32_t* cband_y0,
+    const int32_t* cband_ny,
+    const int64_t* cband_start,
     int64_t CP,
-    const int64_t* cnat_at,
     int64_t* R,
     double* Rw,
     int64_t* Pm,
     double* Pw) {
+    const Geo F{nx, nbands, nl, line_band, band_y0, band_ny, band_start};
+    const Geo C{cnx, cnbands, cnl, cline_band, cband_y0, cband_ny, cband_start};
+    for (int64_t qc = 0; qc < CP; ++qc) {
+        Rw[qc] = 0.0;
+    }
+    C.for_each_point([&](int64_t qc, int32_t x, int32_t y, int32_t z) {
+        R[qc] = F.q_of(2 * x, 2 * y, 2 * z);
+        Rw[qc] = 1.0;
+    });
     int64_t rmax = -1, last = 0;
     for (int64_t qc = 0; qc < CP; ++qc) {
-        const int64_t cn = cnat_at[qc];
-        if (cn >= 0) {
-            const int64_t cx = cn % cnx, cy = (cn / cnx) % cnx, cz = cn / ((int64_t)cnx * cnx);
-            R[qc] = pos[2 * cx + 2 * cy * nx + 2 * cz * (int64_t)nx * nx];
-            Rw[qc] = 1.0;
+        if (Rw[qc] > 0.0) {
             rmax = std::max(rmax, R[qc]);
             last = qc;
         } else {
             // R[last] is final (last < qc); with no real row yet, last = 0 and R[0] = 0, as in numpy
             R[qc] = qc == 0 ? 0 : R[last];
-            Rw[qc] = 0.0;
         }
     }
     for (int64_t q = 0; q < nb0; ++q) {
@@ -146,7 +255,7 @@ int64_t hpcg_link(
         Pw[q] = 0.0;
     }
     for (int64_t qc = 0; qc < CP; ++qc) {
-        if (cnat_at[qc] >= 0 && R[qc] < nb0) {
+        if (Rw[qc] > 0.0 && R[qc] < nb0) {
             Pm[R[qc]] = qc;
             Pw[R[qc]] = 1.0;
         }
@@ -160,6 +269,95 @@ int64_t hpcg_link(
         }
     }
     return rmax;
+}
+
+// Window pieces of every core of a Gauss-Seidel launch on the 27-point matrix of one level, from the storage-order
+// formula instead of the column table: the same pieces hpcg_plan_windows computes from COL with exchange = 1 (the
+// columns of a run of rows along x, for one neighbour line, are a contiguous range of q).
+int64_t hpcg_plan_windows_stencil(
+    int32_t nx,
+    int32_t nbands,
+    int32_t nl,
+    const int32_t* line_band,
+    const int32_t* band_y0,
+    const int32_t* band_ny,
+    const int64_t* band_start,
+    int32_t nc,
+    int32_t NB,
+    const int64_t* own,
+    int32_t gran,
+    int32_t wgap,
+    int64_t ng,
+    int64_t empty_lo,
+    int64_t max_pieces,
+    int64_t* piece_lo,
+    int64_t* piece_ln,
+    int64_t* piece_l1,
+    int64_t* npieces) {
+    const Geo G{nx, nbands, nl, line_band, band_y0, band_ny, band_start};
+    int64_t bad = 0;
+#pragma omp parallel
+    {
+        std::vector<uint8_t> mask(ng, 0);
+#pragma omp for schedule(dynamic, 1) reduction(+ : bad)
+        for (int32_t k = 0; k < nc; ++k) {
+            int64_t gmin = ng, gmax = -1;
+            auto mark = [&](int64_t lo, int64_t hi) {  // granules of q range [lo, hi]
+                for (int64_t g = lo / gran; g <= hi / gran; ++g) {
+                    mask[g] = 1;
+                }
+                gmin = std::min(gmin, lo / gran);
+                gmax = std::max(gmax, hi / gran);
+            };
+            bool used = false;
+            for (int32_t b = 0; b < NB; ++b) {
+                const int64_t a = own[(k * NB + b) * 2], e = own[(k * NB + b) * 2 + 1];
+                if (e <= a) {
+                    continue;
+                }
+                used = true;
+                mark(a, e - 1);  // own rows (padding rows' columns are themselves)
+                G.for_each_run(b, a, e, [&](int64_t, int32_t i0, int32_t len, int32_t iy, int32_t iz) {
+                    const int px = b & 1;
+                    for (int sz = -1; sz <= 1; ++sz) {
+                        for (int sy = -1; sy <= 1; ++sy) {
+                            const int32_t jy = iy + sy, jz = iz + sz;
+                            if (jy < 0 || jy >= nx || jz < 0 || jz >= nx) {
+                                continue;  // missing neighbours: columns on the row itself
+                            }
+                            const int cs = px + 2 * (jy & 1) + 4 * (jz & 1), co = cs ^ 1;
+                            const int64_t bs = G.line_q(cs, jy, jz), bo = G.line_q(co, jy, jz);
+                            mark(bs + i0, bs + i0 + len - 1);  // sx = 0
+                            // sx = -1 and +1 (the other x parity): x index ix2 - 1 .. ix2 (px = 0) or ix2 .. ix2 + 1
+                            const int32_t cxo = G.cx(co & 1);
+                            const int32_t lo = std::max(0, i0 - (1 - px)), hi = std::min(cxo - 1, i0 + len - 1 + px);
+                            if (lo <= hi) {
+                                mark(bo + lo, bo + hi);
+                            }
+                        }
+                    }
+                });
+            }
+            if (!used) {
+                mark(empty_lo, empty_lo);
+            }
+            const int64_t np = merge_pieces(
+                mask,
+                gmin,
+                gmax,
+                gran,
+                wgap,
+                max_pieces,
+                piece_lo + k * max_pieces,
+                piece_ln + k * max_pieces,
+                piece_l1 + k * max_pieces);
+            npieces[k] = np;
+            if (np > max_pieces) {
+                bad += 1;
+            }
+        }
+    }
+    return bad ? -1 : 0;
 }
 
 // to_device's host permutation (tt/layout.py): dst[t * 1024 + k] = src[t * 1024 + word_of_flat(k)], so that after
@@ -231,34 +429,16 @@ int64_t hpcg_plan_windows(
             if (!used) {
                 mark(empty_lo / gran);
             }
-            int64_t np = 0, l1 = 0, start = -1, last = -1;
-            for (int64_t g = gmin; g <= gmax + 1; ++g) {
-                const bool on = g <= gmax && mask[g];
-                if (on) {
-                    if (start < 0) {
-                        start = g;
-                    } else if (g - last > wgap) {  // close the previous run
-                        if (np < max_pieces) {
-                            piece_lo[k * max_pieces + np] = start * gran;
-                            piece_ln[k * max_pieces + np] = (last + 1 - start) * gran;
-                            piece_l1[k * max_pieces + np] = l1;
-                        }
-                        l1 += (last + 1 - start) * gran * 4;
-                        ++np;
-                        start = g;
-                    }
-                    last = g;
-                    mask[g] = 0;
-                }
-            }
-            if (start >= 0) {
-                if (np < max_pieces) {
-                    piece_lo[k * max_pieces + np] = start * gran;
-                    piece_ln[k * max_pieces + np] = (last + 1 - start) * gran;
-                    piece_l1[k * max_pieces + np] = l1;
-                }
-                ++np;
-            }
+            const int64_t np = merge_pieces(
+                mask,
+                gmin,
+                gmax,
+                gran,
+                wgap,
+                max_pieces,
+                piece_lo + k * max_pieces,
+                piece_ln + k * max_pieces,
+                piece_l1 + k * max_pieces);
             npieces[k] = np;
             if (np > max_pieces) {
                 bad += 1;

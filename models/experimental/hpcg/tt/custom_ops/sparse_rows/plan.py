@@ -23,17 +23,20 @@ class SparseRowPlan:
     ghost lines from the neighbouring bands. A GS launch whose cores would have more than MAX_NB neighbours is
     planned on fewer cores."""
 
-    def __new__(cls, COL, out_blocks, src_regions, ncores, noc_xy, exchange, bands=None, pout=None):
+    def __new__(cls, COL, out_blocks, src_regions, ncores, noc_xy, exchange, bands=None, pout=None, stencil=None):
         """COL: [nslot, P] column indices (q order). out_blocks: (start, end) q ranges of the output rows, one per
         phase block (GS: one colour each). src_regions: q ranges of the input vector the columns fall in.
         exchange: True for Gauss-Seidel launches (cores push updated rows into each other's windows).
         bands: per out block, the q cuts of its y-bands (reference.problem.Level.bstarts), or None.
         pout: columns of COL in use (default all); COL's rows may be longer (row padding), and off then has
-        COL's row length too, so it can be uploaded as is."""
+        COL's row length too, so it can be uploaded as is.
+        stencil: a reference.problem.Level whose 27-point matrix the launch uses, with COL = None: the windows are
+        planned from the level's storage-order formula (no column table) and off is None, because the device
+        generates the offsets (tt/custom_ops/stencil_matrix). Gauss-Seidel plans only (exchange=True)."""
         nc = ncores
         while True:
             p = object.__new__(cls)
-            p._init(COL, out_blocks, src_regions, nc, noc_xy, exchange, bands=bands, pout=pout)
+            p._init(COL, out_blocks, src_regions, nc, noc_xy, exchange, bands=bands, pout=pout, stencil=stencil)
             if not exchange or max((len(x) for x in p.nbr), default=0) <= MAX_NB or nc == 1:
                 return p
             nc = max(1, int(nc * 0.75))
@@ -41,8 +44,8 @@ class SparseRowPlan:
     def __init__(self, *a, **k):
         pass
 
-    def _init(self, COL, out_blocks, src_regions, ncores, noc_xy, exchange, bands=None, pout=None):
-        nslot, stride = COL.shape
+    def _init(self, COL, out_blocks, src_regions, ncores, noc_xy, exchange, bands=None, pout=None, stencil=None):
+        nslot, stride = COL.shape if stencil is None else (27, stencil.stride)
         pout = stride if pout is None else pout
         self.nslot, self.pout = nslot, pout
         NB = len(out_blocks)
@@ -71,7 +74,10 @@ class SparseRowPlan:
                     own[k, b] = (a, min(e, a + per))
         ng = max(e for _, e in src_regions) // GRAN + 2  # granules of the input vector
         lib = native.lib()
-        if lib is not None:
+        if stencil is not None:
+            assert exchange and lib is not None
+            pieces, off, own_l1, ents = self._plan_stencil(lib, stencil, own, ng, src_regions[0][0])
+        elif lib is not None:
             pieces, off, own_l1, ents = self._plan_native(lib, COL, own, exchange, ng, src_regions[0][0])
         else:
             pieces, off, own_l1, ents = self._plan_numpy(COL, pout, own, exchange, ng, src_regions[0][0])
@@ -81,16 +87,66 @@ class SparseRowPlan:
         self.R = max(len(p[0]) for p in pieces)
         self.off = off
         # exchange lists (GS): rows [s, f) of block b owned by k that sit in a window piece of m -> (m's NoC x, y,
-        # s, f, L1 byte offset of s in m's window)
-        exch = [[[] for _ in out_blocks] for _ in range(nc)]
+        # s, f, L1 byte offset of s in m's window), grouped by (k, b) in their original order
+        E = np.asarray(ents, np.int64).reshape(-1, 6)
+        key = E[:, 0] * NB + E[:, 1]
+        order = np.argsort(key, kind="stable")
+        E, key = E[order], key[order]
+        nxy = np.asarray(noc_xy, np.int64).reshape(-1, 2)
+        self._exch_rows = np.column_stack([nxy[E[:, 2], 0], nxy[E[:, 2], 1], E[:, 3], E[:, 4], E[:, 5]])
+        self._exch_at = np.searchsorted(key, np.arange(nc * NB + 1))
         nbr = [set() for _ in range(nc)]
-        for k, b, m, s, f, dst in ents:
-            exch[k][b].append((noc_xy[m][0], noc_xy[m][1], s, f, dst))
-            nbr[k].add(m)
-            nbr[m].add(k)
-        self.nc, self.own, self.own_l1, self.pieces, self.exch, self.nbr = nc, own, own_l1, pieces, exch, nbr
+        for p in np.unique(np.concatenate([E[:, 0] * nc + E[:, 2], E[:, 2] * nc + E[:, 0]])).tolist():
+            nbr[p // nc].add(p % nc)
+        self.nc, self.own, self.own_l1, self.pieces, self.nbr = nc, own, own_l1, pieces, nbr
         self.out_blocks = out_blocks
         self._tables = {}  # _core_tables cache
+
+    def exch_rows(self, k, b):
+        """Exchange entries of core k, block b: an [n, 5] array of (NoC x, NoC y, s, f, L1 byte offset)."""
+        NB = len(self.out_blocks)
+        return self._exch_rows[self._exch_at[k * NB + b] : self._exch_at[k * NB + b + 1]]
+
+    @property
+    def exch(self):
+        """The exchange entries as exch[k][b] = [(NoC x, NoC y, s, f, L1 byte offset), ...]."""
+        return [
+            [[tuple(r) for r in self.exch_rows(k, b).tolist()] for b in range(len(self.out_blocks))]
+            for k in range(self.nc)
+        ]
+
+    @staticmethod
+    def _plan_stencil(lib, L, own, ng, empty_lo):
+        """Window pieces from the storage-order formula of level L (host/native_setup.cpp), the own rows' window
+        offsets and the exchange entries; no offsets table (the device generates it)."""
+        nc, NB = own.shape[:2]
+        own_f = np.ascontiguousarray(own.reshape(-1), np.int64)
+        maxp = 4096
+        plo, pln, pl1 = (np.zeros(nc * maxp, np.int64) for _ in range(3))
+        npc = np.zeros(nc, np.int64)
+        if lib.hpcg_plan_windows_stencil(*L.geo(), nc, NB, own_f, GRAN, WGAP, ng, empty_lo, maxp, plo, pln, pl1, npc) < 0:
+            raise ValueError(f"a core needs more than {maxp} window pieces")
+        pieces = [
+            (
+                plo[k * maxp : k * maxp + npc[k]].copy(),
+                pln[k * maxp : k * maxp + npc[k]].copy(),
+                pl1[k * maxp : k * maxp + npc[k]].copy(),
+            )
+            for k in range(nc)
+        ]
+        own_l1 = np.zeros((nc, NB), np.int64)
+        for k in range(nc):
+            lo, ln, l1 = pieces[k]
+            for b in range(NB):
+                a, e = own[k, b]
+                if e > a:
+                    p0 = int(np.searchsorted(lo, a, side="right") - 1)
+                    assert e <= lo[p0] + ln[p0], "own rows split over window pieces"
+                    own_l1[k, b] = l1[p0] + (a - lo[p0]) * 4
+        n = lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, None)
+        ents = np.zeros((n, 6), np.int64)
+        lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, ents.ctypes.data)
+        return pieces, None, own_l1, ents
 
     @staticmethod
     def _plan_native(lib, COL, own, exchange, ng, empty_lo):
@@ -128,7 +184,7 @@ class SparseRowPlan:
             n = lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, None)
             ents = np.zeros((n, 6), np.int64)
             lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, ents.ctypes.data)
-        return pieces, off, own_l1.reshape(nc, NB), [tuple(int(v) for v in e) for e in ents]
+        return pieces, off, own_l1.reshape(nc, NB), ents
 
     @staticmethod
     def _plan_numpy(COL, pout, own, exchange, ng, empty_lo):
@@ -188,57 +244,55 @@ class SparseRowPlan:
 
     def _core_tables(self, noc_xy, tpw):
         """The parts of each core's metadata row that do not depend on the launch's phases, computed once per tpw
-        (launches sharing this plan reuse them): the head without its phase list, the body (segments, then exchange
-        entries), each block's segment and exchange offsets relative to the body, and segments per block."""
+        (launches sharing this plan reuse them): window pieces, neighbour words, the body (segments, then exchange
+        entries), each block's [segment offset, segments, exchange offset, entries, own a, own e, own L1 offset] with
+        offsets relative to the body, and segments per block. Plain lists: the rows are short, so per-row numpy calls
+        cost more than they save."""
         key = (tpw, tuple(map(tuple, noc_xy)))
         if key in self._tables:
             return self._tables[key]
         NB = len(self.out_blocks)
         slot = {k: sorted(self.nbr[k]) for k in range(self.nc)}
+        own, own_l1 = self.own.tolist(), self.own_l1.tolist()
         out = []
         for k in range(self.nc):
-            nbrs = slot[k]
             lo, ln, l1 = self.pieces[k]
-            head = np.stack([lo, ln, l1], axis=1).reshape(-1).tolist()
-            nb_words = []
-            for m in nbrs:
-                nb_words += [noc_xy[m][0], noc_xy[m][1], 1 + slot[m].index(k)]  # my slot on m
+            pieces = np.stack([lo, ln, l1], axis=1).reshape(-1).tolist()
+            nb_words = [w for m in slot[k] for w in (noc_xy[m][0], noc_xy[m][1], 1 + slot[m].index(k))]  # my slot on m
             body, blk, nsegs = [], [], []
             for b in range(NB):
-                a, e = (int(v) for v in self.own[k, b])
+                a, e = own[k][b]
                 # segments never cross an L1 page (tpw words): cuts at the page boundaries inside [a, e)
-                cuts = [a] + list(range((a // tpw + 1) * tpw, e, tpw)) + [e] if e > a else []
-                blk.append([len(body), max(0, len(cuts) - 1)])
-                nsegs.append(max(0, len(cuts) - 1))
-                for s, f in zip(cuts[:-1], cuts[1:]):
-                    body += [s, f]
+                cuts = [a] + list(range((a // tpw + 1) * tpw, e, tpw)) + [e] if e > a else [a]
+                blk.append([len(body), len(cuts) - 1])
+                nsegs.append(len(cuts) - 1)
+                for i in range(len(cuts) - 1):
+                    body += (cuts[i], cuts[i + 1])
             for b in range(NB):
-                ex = self.exch[k][b]
-                a, e = (int(v) for v in self.own[k, b])
-                blk[b] += [len(body), len(ex), a, e, int(self.own_l1[k, b])]
-                for x in ex:
-                    body += list(x)
-            out.append((len(lo), len(nbrs), head, nb_words, body, blk, nsegs))
+                ex = self.exch_rows(k, b)
+                blk[b] += [len(body), len(ex), own[k][b][0], own[k][b][1], own_l1[k][b]]
+                body += ex.reshape(-1).tolist()
+            out.append((len(lo), len(slot[k]), pieces, nb_words, body, blk, nsegs))
         self._tables[key] = out
         return out
 
     def meta(self, phases, noc_xy, tpw=TILE):
         """Per-core metadata rows (layout in kernels/common.h) and segment counts for the compute kernel.
         phases: out block ids; 8 + b = an SpMV pass over block b (RESID launches)."""
-        rows = []
         NB = len(self.out_blocks)
-        phases = list(phases)
-        nseg_core, nseg_gs_core, nseg_r_core = [], [], []
-        for npieces, nnb, pieces, nb_words, body, blk, nsegs in self._core_tables(noc_xy, tpw):
+        phases = [int(p) for p in phases]
+        tables = self._core_tables(noc_xy, tpw)
+        rows = []
+        for npieces, nnb, pieces, nb_words, body, blk, _ in tables:
             pos = 5 + len(pieces) + 7 * NB + len(nb_words) + len(phases) + 2  # body start in the row
-            blocks = []
-            for seg_at, nseg, ex_at, nex, a, e, own_l1 in blk:
-                blocks += [pos + seg_at, nseg, pos + ex_at, nex, a, e, own_l1]
+            blocks = [v for sa, ns, xa, nx_, a, e, o in blk for v in (pos + sa, ns, pos + xa, nx_, a, e, o)]
             head = [npieces, len(phases), nnb + 1, nnb, NB] + pieces + blocks + nb_words + phases + [0, 0]  # reserved
             rows.append(head + body)
-            nseg_core.append(sum(nsegs[b & 7] for b in phases))
-            nseg_gs_core.append(sum(nsegs[b] for b in phases if b < 8))
-            nseg_r_core.append(sum(nsegs[0] for b in phases if b == 8))
+        nsegs = np.asarray([t[6] for t in tables], np.int64)  # [core, block]
+        ph = np.asarray(phases, np.int64)
+        nseg_core = nsegs[:, ph & 7].sum(axis=1).tolist()
+        nseg_gs_core = nsegs[:, ph[ph < 8]].sum(axis=1).tolist()
+        nseg_r_core = (nsegs[:, 0] * int((ph == 8).sum())).tolist()
         w = -(-max(len(r) for r in rows) // 16) * 16
         m = np.zeros((self.nc, w), np.int64)
         for k, r in enumerate(rows):

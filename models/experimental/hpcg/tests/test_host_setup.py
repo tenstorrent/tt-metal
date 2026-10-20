@@ -17,14 +17,14 @@ CASES = [(13, 1), (16, 1), (26, 1), (48, 5), (64, 10), (60, 5)]
 
 
 def _levels(nx, bands):
-    lib = native.lib()
-    if lib is None:
+    """The same level built by the compiled helper and by numpy."""
+    if native.lib() is None:
         pytest.skip("no C++ compiler")
-    a, b = Level.__new__(Level), Level.__new__(Level)
-    for L in (a, b):
-        L.nx, L.bands, L.n = nx, bands, nx**3
-    a._build_native(lib, slot_stride)
-    b._build_numpy(slot_stride)
+    a, b = Level(nx, bands, slot_stride), Level.__new__(Level)
+    b.nx, b.bands, b.n = nx, bands, nx**3
+    b.P, b.starts, b.bstarts = b._layout()
+    b.stride = slot_stride(b.P)
+    b._build_numpy()
     return a, b
 
 
@@ -34,6 +34,7 @@ def test_level_matches_numpy(nx, bands):
     assert (a.P, a.starts, a.bstarts, a.nnz) == (b.P, b.starts, b.bstarts, b.nnz)
     for f in ("pos", "nat_at", "V_rows", "COL_rows", "B"):
         assert np.array_equal(getattr(a, f), getattr(b, f)), f
+    assert np.array_equal(a.real, a.nat_at >= 0) and a.nnz == (3 * nx - 2) ** 3
 
 
 @pytest.mark.parametrize("nx, bands", CASES)
@@ -51,7 +52,7 @@ def test_plan_matches_numpy(nx, bands, exchange):
         assert np.array_equal(gl, wl) and np.array_equal(gn, wn) and np.array_equal(g1, w1)
     assert np.array_equal(got[1], want[1]), "offsets"
     assert np.array_equal(got[2], want[2]), "own L1 offsets"
-    assert got[3] == want[3], "exchange entries"
+    assert np.array_equal(np.asarray(got[3]).reshape(-1, 6), np.asarray(want[3], np.int64).reshape(-1, 6)), "exchange"
 
 
 @pytest.mark.parametrize("nx, bands", CASES)
@@ -64,3 +65,19 @@ def test_link_matches_numpy(nx, bands):
     F._link_numpy(C)
     for name, g, w in zip(("R", "Rw", "Pm", "Pw"), got, (F.R, F.Rw, F.Pm, F.Pw)):
         assert g.dtype == w.dtype and np.array_equal(g, w), name
+
+
+@pytest.mark.parametrize("nx, bands", CASES)
+def test_stencil_windows_match_column_windows(nx, bands):
+    """The window pieces planned from the storage-order formula equal the ones planned from the column table."""
+    L, _ = _levels(nx, bands)
+    blocks = [(L.starts[c], L.starts[c + 1]) for c in range(8)]
+    noc = [(i % 13, i // 13) for i in range(130)]
+    bs = L.bstarts if bands > 1 else None
+    want = SparseRowPlan(L.COL_rows, blocks, blocks, 130, noc, True, bands=bs, pout=L.P)
+    got = SparseRowPlan(None, blocks, blocks, 130, noc, True, bands=bs, pout=L.P, stencil=L)
+    assert got.nc == want.nc and np.array_equal(got.own, want.own)
+    for (gl, gn, g1), (wl, wn, w1) in zip(got.pieces, want.pieces):
+        assert np.array_equal(gl, wl) and np.array_equal(gn, wn) and np.array_equal(g1, w1)
+    assert np.array_equal(got.own_l1, want.own_l1) and got.exch == want.exch and got.win_b == want.win_b
+    assert got.off is None

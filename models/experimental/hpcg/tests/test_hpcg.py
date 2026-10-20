@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Every device op against the numpy reference of the same algorithm (reference/problem.py), then a few CG
-iterations against the fp64 reference.
+"""The device-generated matrix against the host-built one, every device op against the numpy reference of the same
+algorithm (reference/problem.py), then a few CG iterations against the fp64 reference.
 
 SpMV, restriction and prolongation must be bit-exact in fp32. A Gauss-Seidel update differs from numpy by at most
 a couple of fp32 roundings in the divide, so smoothers are checked to 5e-7 absolute (values are O(1)).
@@ -15,7 +15,9 @@ import ttnn
 from loguru import logger
 
 from models.experimental.hpcg.reference import problem as ref
-from models.experimental.hpcg.tt.hpcg import HPCG
+from models.experimental.hpcg.tt.custom_ops.sparse_rows import SparseRowPlan
+from models.experimental.hpcg.tt.custom_ops.sparse_rows.op import noc_coords
+from models.experimental.hpcg.tt.hpcg import HPCG, slot_stride
 from models.experimental.hpcg.tt.layout import from_device, to_device
 
 GS_ATOL = 5e-7
@@ -32,9 +34,22 @@ GS_ATOL = 5e-7
 def test_hpcg_ops_and_cg(device, nx, bands):
     h = HPCG(device, nx, bands=bands)
     order = h.order
+    # the host-built levels: the reference matrix (the device generated its own)
+    levels = ref.build(nx, [L.bands for L in h.levels], slot_stride)
+    g = device.compute_with_storage_grid_size()
+    for l, (d, L) in enumerate(zip(h.lv, levels)):
+        blocks = [(L.starts[c], L.starts[c + 1]) for c in range(8)]
+        bs = L.bstarts if L.bands > 1 else None
+        hp = SparseRowPlan(L.COL_rows, blocks, blocks, g.x * g.y, noc_coords(device), True, bands=bs, pout=L.P)
+        vals = ttnn.to_torch(d.values).numpy().reshape(27, -1)[:, : L.P]
+        offs = ttnn.to_torch(d.offsets).numpy().view(np.int32).reshape(27, -1)[:, : L.P]
+        assert np.array_equal(vals.view(np.int32), L.V.view(np.int32)), f"level {l} generated values"
+        assert np.array_equal(offs, hp.off[:, : L.P]), f"level {l} generated offsets"
+    assert np.array_equal(from_device(h.b), levels[0].B.astype(np.float64)), "generated b"
+
     rng = np.random.default_rng(0)
     for l, d in enumerate(h.lv):
-        L = d.L
+        L = levels[l]
         xs = np.where(L.real, rng.uniform(0.5, 1.5, L.P), 0.0).astype(np.float32)
         ttnn.copy(to_device(device, xs), d.z)
         h.spmv(l)()
@@ -65,7 +80,7 @@ def test_hpcg_ops_and_cg(device, nx, bands):
             assert np.array_equal(from_device(d.Az), a32), f"level {l} residual SpMV is not bit-exact"
 
     for l in range(3):
-        d, L, dc = h.lv[l], h.levels[l], h.lv[l + 1]
+        d, L, dc = h.lv[l], levels[l], h.lv[l + 1]
         nb0 = L.starts[1]
         t = np.zeros(L.P, np.float32)
         t[:nb0] = rng.uniform(-1, 1, nb0)
@@ -81,11 +96,11 @@ def test_hpcg_ops_and_cg(device, nx, bands):
         want[:nb0] = (zf[:nb0] + (zc[L.Pm] * L.Pw).astype(np.float32)).astype(np.float64)
         assert np.array_equal(from_device(d.z), want), f"level {l} prolongation"
 
-    L0 = h.levels[0]
+    L0 = levels[0]
     rs = np.where(L0.real, rng.uniform(-1, 1, L0.P), 0.0).astype(np.float32)
     ttnn.copy(to_device(device, rs), h.r)
     h.mg(0)
-    ref64 = ref.mg(h.levels, 0, rs.astype(np.float64), np.float64, order)
+    ref64 = ref.mg(levels, 0, rs.astype(np.float64), np.float64, order)
     rel = np.max(np.abs(from_device(h.lv[0].z) - ref64)) / np.max(np.abs(ref64))
     logger.info(f"multigrid V-cycle relative error vs fp64 {rel:.2e}")
     assert rel < 1e-6
@@ -93,7 +108,7 @@ def test_hpcg_ops_and_cg(device, nx, bands):
     iters = 3
     h.reset()
     nr0 = float(ttnn.to_torch(h.start()).reshape(-1)[0])
-    _, hist64 = ref.cg(h.levels, iters, np.float64, order)
+    _, hist64 = ref.cg(levels, iters, np.float64, order)
     for k in range(iters):
         nr = float(ttnn.to_torch(h.iteration()).reshape(-1)[0]) / nr0
         logger.info(f"CG {k + 1}: device {nr:.6e}  numpy fp64 {hist64[k]:.6e}")
