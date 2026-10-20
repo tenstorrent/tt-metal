@@ -62,14 +62,58 @@ def refuse_duplicate_keys(node: yaml.Node, where: str) -> None:
             refuse_duplicate_keys(item, where)
 
 
+def _merged_keys(node: yaml.Node) -> set:
+    """The keys a ``<<`` value hands a mapping: those of the mapping it names, or of each
+    in a sequence of them, their own merges included."""
+    if isinstance(node, yaml.SequenceNode):
+        return set().union(*(_merged_keys(item) for item in node.value))
+    if not isinstance(node, yaml.MappingNode):
+        return set()
+    keys = set()
+    for key, value in node.value:
+        if key.tag == "tag:yaml.org,2002:merge":
+            keys |= _merged_keys(value)
+        else:
+            keys.add(key.value)
+    return keys
+
+
+def refuse_merged_provenance(node: yaml.Node, where: str) -> None:
+    """A ``<<`` merge row is a cell of its own, so its measurement must be its own too:
+    a provenance field that reaches it only through the merge would credit it with the
+    anchor's figure and date. A plain ``*alias`` row *is* the anchor's row, and shares
+    its measurement by design. Checked on the composed node tree, before construction
+    resolves the merges away."""
+    if isinstance(node, yaml.MappingNode):
+        own, merged = set(), set()
+        for key, value in node.value:
+            if key.tag == "tag:yaml.org,2002:merge":
+                merged |= _merged_keys(value)
+            else:
+                own.add(key.value)
+                refuse_merged_provenance(value, where)
+        borrowed = sorted((merged - own) & set(PROVENANCE_FIELDS))
+        if borrowed:
+            raise ValueError(
+                f"{where}: {', '.join(f'`{k}`' for k in borrowed)} reaches a row only "
+                "through a `<<` merge key. A merged row is a cell of its own and needs "
+                "its own measurement fields; a plain `*alias` shares the anchor's."
+            )
+    elif isinstance(node, yaml.SequenceNode):
+        for item in node.value:
+            refuse_merged_provenance(item, where)
+
+
 def load_yaml(text: str, where: str) -> Any:
-    """*text* as PyYAML's safe loader reads it, refusing a repeated mapping key."""
+    """*text* as PyYAML's safe loader reads it, refusing a repeated mapping key and
+    provenance borrowed through a merge key."""
     loader = _LOADER(text)
     try:
         node = loader.get_single_node()
         if node is None:
             return None
         refuse_duplicate_keys(node, where)
+        refuse_merged_provenance(node, where)
         return loader.construct_document(node)
     finally:
         loader.dispose()
@@ -105,8 +149,10 @@ class Provenance:
         return cls(**{k: values[k] for k in PROVENANCE_FIELDS if k in values})
 
     @property
-    def exhaustive(self) -> bool:
-        """Whether the run behind the row saw every value of its input."""
+    def swept(self) -> bool:
+        """Whether the sweep measured the row, rather than a sample. Not whether it saw
+        every value of its input: a Float32 input is walked with a stride
+        (``ulp_sweep.is_exhaustive``)."""
         return self.run is not None
 
     @property
@@ -163,6 +209,33 @@ class Provenance:
         return found
 
 
+def check_provenance(where: str, row: Dict[str, Any], *, tolerance: bool) -> None:
+    """A row's provenance fields, against themselves and its contract; *tolerance* is
+    whether the row's resolved metric is the tolerance one. The figure a budget came
+    from is part of the row: a step budget without one is a guess, and the table's rule
+    is that no number in it is. The registry's loader and the PR guard both call this,
+    so the guard cannot pass a table the registry refuses to load."""
+    provenance = Provenance.of(row)
+    problems = provenance.problems()
+    if not tolerance and "max_ulp" in row and provenance.measured is None:
+        problems.append(
+            "a `max_ulp` row needs the `measured` figure it came from, and the `run` or "
+            "`sampled` date it was measured on"
+        )
+    if provenance.nonfinite is not None and not tolerance:
+        problems.append(
+            "`nonfinite` lanes hold a cell on tolerance, so it belongs on a "
+            "`metric: tolerance` row"
+        )
+    if provenance.measured_all is not None and "near_zero_atol" not in row:
+        problems.append(
+            "`measured_all` is the worst lane a `near_zero_atol` floor rescues; the "
+            "row has no floor"
+        )
+    if problems:
+        raise ValueError(f"{where} {row}: " + "; ".join(problems))
+
+
 def key_value(value: Any) -> str:
     """A key field as the registry reads it. YAML 1.1 reads a bare ``Yes``/``No`` as a
     boolean, and the registry maps it back to the enum member."""
@@ -185,17 +258,17 @@ class Row:
     """One row of the table: its fields as PyYAML loads them, and where it sits.
 
     *first_line*/*last_line* are 0-based indices into the file, for rewriting it and
-    for messages; the row's node ends at *end_column* of *last_line*."""
+    for messages."""
 
     op: str
     fields: Tuple[Tuple[str, Any], ...]
     first_line: int
     last_line: int
-    end_column: int
     #: The prose after the row's ``#``, for people. No code reads it.
     comment: str = ""
-    #: A ``- *anchor`` row: its fields are not inline, so it pins nothing a reader of
-    #: the line could see.
+    #: A ``- *anchor`` row, or one of an op whose whole row list is an alias (``Neg:
+    #: *low``, located on the key line): its fields are not inline, so it pins nothing a
+    #: reader of the line could see.
     alias: bool = False
 
     @property
@@ -259,17 +332,15 @@ class BudgetTable:
     top-level entry that is not a list of rows -- the guard parses arbitrary base
     revisions; ``_load_table`` is what refuses them."""
 
-    def __init__(self, text: str, path: Optional[Path] = None):
+    def __init__(self, text: str):
         self.text = text
-        self.path = path
         self.lines = text.splitlines(keepends=True)
         self.blocks: Dict[str, OpBlock] = {}
         self._parse()
 
     @classmethod
     def load(cls, path: Union[str, Path]) -> "BudgetTable":
-        path = Path(path)
-        return cls(path.read_text(encoding="utf-8"), path)
+        return cls(Path(path).read_text(encoding="utf-8"))
 
     # ── Queries ──────────────────────────────────────────────────────────────
 
@@ -347,7 +418,18 @@ class BudgetTable:
                     i = end_index
                 i += 1
             else:
+                start = events[i]
                 i = _skip_node(events, i)
+                if isinstance(start, yaml.AliasEvent) and isinstance(
+                    loaded.get(op), list
+                ):
+                    # `Neg: *low`: the whole row list is an anchor's. Each row is there
+                    # all the same, with the budget the registry enforces, so it is read
+                    # as an alias row on the key line rather than left out -- which hid
+                    # `*low` -> `*high` from the guard.
+                    positions = [
+                        (start.start_mark, start.end_mark, True) for _ in loaded[op]
+                    ]
             entries = loaded.get(op)
             rows: List[Row] = []
             if isinstance(entries, list) and len(entries) == len(positions):
@@ -360,7 +442,6 @@ class BudgetTable:
                             fields=tuple(values.items()),
                             first_line=start.line,
                             last_line=end.line,
-                            end_column=end.column,
                             comment=self._comment_after(end),
                             alias=alias,
                         )

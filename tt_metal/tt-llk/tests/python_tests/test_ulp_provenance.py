@@ -81,8 +81,8 @@ def test_a_malformed_provenance_says_what_is_wrong(fields, problem):
 
 
 def test_which_run_measured_a_row_and_whether_it_was_measurable():
-    assert Provenance(measured=1, run=_DAY).exhaustive
-    assert not Provenance(measured=1, sampled=_DAY).exhaustive
+    assert Provenance(measured=1, run=_DAY).swept
+    assert not Provenance(measured=1, sampled=_DAY).swept
     assert Provenance(measured=7, nonfinite=2, run=_DAY).unmeasurable
     assert Provenance(run=_DAY).unmeasurable  # the sweep ran and ranked no lane
     assert not Provenance(measured=7, run=_DAY).unmeasurable
@@ -102,6 +102,20 @@ def test_an_alias_row_a_yaml_boolean_and_a_date_read_as_the_loader_reads_them():
     assert alias.comment == "through the alias"
     assert keyed.pinned["dest"] == "Yes"
     assert keyed.provenance == Provenance(measured=1, run=_DAY)
+
+
+def test_an_op_whose_whole_row_list_is_an_alias_has_the_anchors_rows():
+    """`Neg: *low` once read as an op with no rows, so every reader skipped budgets the
+    registry enforces. Each is an alias row, located on the key line."""
+    table = BudgetTable(
+        "Abs: &low\n"
+        "  - {out: Float16_b, max_ulp: 2, measured: 2, run: 2026-10-05}\n"
+        "  - {out: Float32, metric: tolerance}\n"
+        "Neg: *low\n"
+    )
+    rows = table.rows_of("Neg")
+    assert [(r.alias, r.first_line, r.last_line) for r in rows] == [(True, 3, 3)] * 2
+    assert [r.values for r in rows] == [r.values for r in table.rows_of("Abs")]
 
 
 def test_a_row_is_found_by_exactly_its_key():

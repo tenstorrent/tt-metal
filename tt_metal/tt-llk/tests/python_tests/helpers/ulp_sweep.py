@@ -961,17 +961,9 @@ def nonfinite_verdict(
     )
 
 
-def nonfinite_reason(
-    overflowed: torch.Tensor,
-    src: torch.Tensor,
-    golden: torch.Tensor,
-    result: torch.Tensor,
-    stats: Dict,
-    lanes: int,
-    named_lanes: int = NAMED_LANES,
-) -> str:
-    """:func:`nonfinite_verdict` as one sentence, for a failure message."""
-    verdict = nonfinite_verdict(overflowed, src, golden, result, stats, named_lanes)
+def nonfinite_reason(verdict: Unmeasurable, lanes: int) -> str:
+    """*verdict*, from :func:`nonfinite_verdict`, as one sentence for a failure message:
+    the message and the recorded verdict are the one computation."""
     return (
         f"{verdict.nonfinite} {verdict.why}; max {verdict.measured} ULP over the "
         f"{lanes} measurable lanes"
@@ -1201,27 +1193,10 @@ def _incomplete_grids() -> List[Tuple[str, str, str, int]]:
 
 
 def finish_emit(arch, testsfailed: int, path=None, exitstatus=0) -> WriteReport:
-    """Write this session's measurements into the table, and report what was written.
-
-    * **nothing written**, :class:`WrongArch` off ``MEASURED_ARCH``, where unkeyed rows
-      would carry another arch's numbers under Wormhole's name; :class:`SessionNotClean`
-      after a failure, when only a subset was measured, or when *exitstatus* says the
-      session did not run to the end (pytest calls ``pytest_sessionfinish`` after a
-      Ctrl-C too, and an interrupt between two ops leaves every touched grid complete
-      and nothing counted as failed); :class:`IncompleteGrid` when an op's ``(in,
-      out)`` grid is incomplete, when a write would drop the rest's rows.
-    * **written, then** :class:`UnplacedMeasurements` when an op was measured with no
-      key line to write into. Every *other* op's block has already been rewritten, so a
-      red emit is not an untouched table.
-    * **written**, returning the :class:`WriteReport`. An op kept verbatim -- a row the
-      run covers carries a field ``_render`` cannot put back, the ``atol``/``rtol``
-      anchors -- is named in it: such a block is maintained by hand by design, and
-      failing on it would turn every whole-table emit red.
-
-    *exitstatus* is pytest's ``session.exitstatus``, an ``ExitCode`` or a plain int.
-    pytest has already set it to ``TESTS_FAILED`` when a test failed, so the failure
-    count is read first, to give that run its own message.
-    """
+    """Write this session's measurements into the table (:func:`write_table`), or raise
+    an :class:`EmitRefused` subclass naming why nothing was written. *exitstatus* is
+    pytest's, which already says ``TESTS_FAILED`` on a failure, so *testsfailed* is read
+    first to give that run its own message."""
     import pytest
     from helpers.sfpu_accuracy_budget import _TABLE_PATH, MEASURED_ARCH
 
@@ -1244,9 +1219,10 @@ def _verdict(
     ``("ulp", budget)`` while the measurement fits the table's ``usable_budget_ceiling``
     -- 419,430 steps for fp32, 51 for fp16, 6 for bf16, 25 for Bfp8_b -- with the
     budget the 1.1x headroom gives, capped at the ceiling. ``("tolerance", budget)``
-    once the measurement itself is past it; the budget it would have needed goes on the
-    row beside the measurement. Decided per cell and before collapsing, because it
-    depends on the output format and collapsing may drop it.
+    once the measurement itself is past it, with the budget it would have needed; the
+    row records only the measurement, from which this derives that budget again.
+    Decided per cell and before collapsing, because it depends on the output format and
+    collapsing may drop it.
 
     Without this the sweep enrols what it should not. ``Abs`` measures 393 steps on a
     Bfp8_b output from a bf16 input -- the block exponent quantizing a small element, not
@@ -1291,7 +1267,7 @@ def _verdict(
             # it replaces, with zero slack so any drift fails.
             return ("ulp", int(ceiling))
         # Only reached with the measurement itself past the ceiling: no budget would be
-        # tighter than the tolerance. The row names both numbers.
+        # tighter than the tolerance. The row records the measurement as `measured`.
         return ("tolerance", budget)
     return ("ulp", budget)
 
@@ -1355,8 +1331,8 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
             # sound on a full 2x2 grid -- both dropped implies all four agree. On an
             # anti-diagonal (only (No,No) and (Yes,Yes) recorded) each axis sees only
             # singletons, both get dropped, and one measurement would silently overwrite
-            # the other. `_render` writes the survivor's own figure into the provenance
-            # comment, so the budget audit could not catch it either.
+            # the other. `_render` writes the survivor's own figure as `measured`, so the
+            # budget audit could not catch it either.
             raise AmbiguousCollapse(
                 axes, [axes[i] for i in keep], collapsed, (merged[collapsed], value)
             )
@@ -1671,25 +1647,10 @@ def _block_end(lines: List[str], start: int) -> int:
 
 
 def write_table(path, run: date) -> WriteReport:
-    """Replace every swept op's block in the YAML with what the sweep measured, each
-    row credited to the sweep of the day *run*.
-
-    Line-oriented on purpose. The table's comments are prose for people, and a load
-    and re-dump through PyYAML would drop every one of them, including for the ops this
-    sweep never touched. Which lines are an op's key line and rows is read from
-    :class:`BudgetTable`, never from the shape of a line: matching key lines by a
-    trailing colon once skipped 17 ops whose key line carries a header comment, and left
-    their sampled rows in place looking measured.
-
-    A row this run does not supersede keeps its own ``run`` or ``sampled`` date, so a
-    narrower re-emit never credits it to the wrong run.
-
-    Raises :class:`UnplacedMeasurements` if an op in ``MEASURED`` has no key line to
-    write into -- *after* writing every op that has one, so one unenrolled op does not
-    throw away the rest of a whole-table emit. The measurement would otherwise be
-    dropped in silence, and the sampled rows it was meant to replace would stay in place
-    looking measured.
-    """
+    """Replace every swept op's block with what the sweep measured, credited to *run*;
+    line-oriented, so the table's prose survives, with rows located by
+    :class:`BudgetTable`. Raises :class:`UnplacedMeasurements` for an op with no key
+    line, after writing every op that has one."""
     path = Path(path)
     table = BudgetTable.load(path)
     lines = table.lines
@@ -1704,7 +1665,21 @@ def write_table(path, run: date) -> WriteReport:
             out.append(lines[i])
             i += 1
             continue
-        name, end = block.op, _block_end(lines, i)
+        name = block.op
+        # `_block_end` stops at a column-0 line, so a `# note` between two of the op's
+        # rows would leave the rows past it to the verbatim copy below as well as to
+        # this block, and the table would carry them twice. The block runs to its last
+        # row; a note inside it is kept, after the rows.
+        rows_end = max((row.last_line + 1 for row in block.rows), default=i + 1)
+        end = max(_block_end(lines, i), rows_end)
+        row_lines = {
+            n for row in block.rows for n in range(row.first_line, row.last_line + 1)
+        }
+        notes = [
+            lines[n]
+            for n in range(i + 1, end)
+            if n not in row_lines and lines[n].strip() and not lines[n][0].isspace()
+        ]
         cells = MEASURED[name]
         emitted_cells = {(k[0], k[1]) for k in cells}
         # Any row a measured cell resolves through, not only one pinning the measured
@@ -1743,6 +1718,7 @@ def write_table(path, run: date) -> WriteReport:
         for row in block.rows:
             if not _replaceable(row, emitted_cells):
                 out.extend(lines[row.first_line : row.last_line + 1])
+        out.extend(notes)
         written.append(name)
         i = end
     # Exactly one trailing newline: an op block carries its own trailing blank lines,

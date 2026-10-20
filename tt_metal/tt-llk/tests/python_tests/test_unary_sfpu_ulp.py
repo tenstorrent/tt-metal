@@ -283,7 +283,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     # reason carries the lane count the headroom report reads back.
     if overflowed.any():
         verdict = ulp_sweep.nonfinite_verdict(overflowed, src, golden, result, stats)
-        reason = nonfinite_reason(overflowed, src, golden, result, stats, lanes)
+        reason = nonfinite_reason(verdict, lanes)
         unmeasurable = (
             f"{reason}. No budget buys an overflow, and a step count cannot describe "
             "one."
@@ -312,7 +312,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     if ulp_sweep.EMIT or not gated:
         # Measured, not gated. The JSONL row is what `--ulp-measure` would have written
         # from inside passed_test, which this branch returns before; a tolerance cell is
-        # held against its row's "max N ULP" by the headroom report.
+        # held against its row's `measured` figure by the headroom report.
         _record_ulp_measurement(distance, mask=mask)
         if ulp_sweep.EMIT:
             # A cell that only a near-zero lane demotes is recorded with the floor that

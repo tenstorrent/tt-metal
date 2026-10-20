@@ -216,8 +216,9 @@ Acos:
 # For these sampled rows, budget = 1.25x the sweep's p99.9, rounded up and floored at 1
 # -- not 1.25x the worst lane, which would widen every row by the one unluckiest sample.
 # (Exhaustive --ulp-emit rows elsewhere are ceil(1.1x the worst lane), with a measured 0
-# kept at 0.) The p99.9 came from that run and is not recorded per row. The `max` each row records is the worst lane, so a budget sitting at or a little
-# under 1.25x that number is the rule working, not a row that lost its margin. A budget is
+# kept at 0.) The p99.9 came from that run and is not recorded per row. The `measured`
+# figure each row records is the worst lane, so a budget sitting at or a little under
+# 1.25x that number is the rule working, not a row that lost its margin. A budget is
 # only written where it is *tighter* than the tolerance it replaces: the usable ceiling
 # is 419430 steps on Float32, 51 on Float16 and 6 on Float16_b, and an op past it is
 # recorded as tolerance with its measurement so nobody re-derives it.

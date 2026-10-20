@@ -37,6 +37,7 @@ if __package__:
         PROVENANCE_FIELDS,
         BudgetTable,
         Provenance,
+        check_provenance,
         key_value,
         load_yaml,
     )
@@ -46,6 +47,7 @@ else:  # run by path on the slim runner, where `helpers/__init__.py` cannot impo
         PROVENANCE_FIELDS,
         BudgetTable,
         Provenance,
+        check_provenance,
         key_value,
         load_yaml,
     )
@@ -140,10 +142,11 @@ class Change:
     differently than the base did, since a collapsed row governs several. *held_before*
     and *held_after* say what the cell was held to on each side, as the report shows it.
 
-    *remeasured* is whether the deciding row's provenance (its measurement fields) differs from the same
-    row's in the base table -- the table's rule for raising a budget. Read off that one
-    row, not off the two rows the cell resolves to: when a deleted row hands its cells to
-    a broader one, those two comments differ although no comment was touched.
+    *remeasured* is whether the deciding row's provenance (its measurement fields)
+    differs from the same row's in the base table -- the table's rule for raising a
+    budget. Read off that one row, not off the two rows the cell resolves to: when a
+    deleted row hands its cells to a broader one, those two rows' fields differ although
+    neither was re-measured.
     """
 
     cell: Cell
@@ -209,17 +212,16 @@ def _check_number(where: str, name: str, value, *, integer: bool = False) -> Non
 
 def _check_row(where: str, fields: dict) -> None:
     """What the registry refuses in one row, so a table it cannot load gets no verdict:
-    an unknown field, a malformed provenance field, a metric that is neither, a bad
+    an unknown field, a metric that is neither, provenance fields wrong on their own or
+    for the row's contract (:func:`check_provenance`, the registry's own check), a bad
     number, or the two metrics' fields mixed in one row."""
     unknown = set(fields) - set(KEY_FIELDS) - CONTRACT_FIELDS - set(PROVENANCE_FIELDS)
     if unknown:
         raise ValueError(f"{where}: unknown field(s) {sorted(unknown)}")
-    problems = Provenance.of(fields).problems()
-    if problems:
-        raise ValueError(f"{where}: {problems[0]}")
     metric = fields.get("metric", "ulp")
     if metric not in ("ulp", "tolerance"):
         raise ValueError(f"{where}: metric must be ulp or tolerance, got {metric!r}")
+    check_provenance(where, fields, tolerance=metric == "tolerance")
     for name in ("atol", "rtol", "near_zero_atol"):
         if fields.get(name) is not None:
             _check_number(where, name, fields[name])
@@ -386,9 +388,9 @@ class _Held:
 
     @property
     def _tolerance_row(self) -> Optional[Row]:
-        """The row, if it is a tolerance row: the only kind whose comment is a baseline.
-        A step budget that does not bind on this arch is not one, and its "max N ULP"
-        describes the arch it binds on."""
+        """The row, if it is a tolerance row: the only kind whose `measured` is a
+        baseline. A step budget that does not bind on this arch is not one, and its
+        `measured` describes the arch it binds on."""
         if not self.measured_shape or self.row is None or self.row.gated:
             return None
         return self.row
@@ -928,7 +930,7 @@ def render_headroom(
         # nothing to hold the cell to, and a clean summary must not read as covering it.
         out += [
             f"{unjudged + uncovered} tolerance cell(s) measured but not judged: "
-            f"{unjudged} on a row that records no `max N ULP` or does not pin both "
+            f"{unjudged} on a row that records no `measured` figure or does not pin both "
             f"`in` and `out`, {uncovered} covered by no row at all.",
             "",
         ]
@@ -993,11 +995,19 @@ def render_headroom(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _parse_side(path: Path, side: str) -> Dict[Cell, Row]:
+    """:func:`parse_table` of one side of a diff, a refusal naming that side. A base from
+    before the table carried provenance fields is refused like any other table the
+    registry cannot load: its rows would all read as unmeasured, and every recorded
+    figure the head adds as a raised baseline."""
+    try:
+        return parse_table(path.read_text(encoding="utf-8"))
+    except (ValueError, yaml.YAMLError) as refused:
+        raise ValueError(f"the {side} table ({path}): {refused}") from None
+
+
 def _diff(args) -> Tuple[str, int]:
-    changes = compare(
-        parse_table(args.base.read_text(encoding="utf-8")),
-        parse_table(args.head.read_text(encoding="utf-8")),
-    )
+    changes = compare(_parse_side(args.base, "base"), _parse_side(args.head, "head"))
     report = render_budget_diff(changes)
     regressions = [c for c in changes if c.is_regression]
     if regressions and args.allow_raises:

@@ -1020,12 +1020,32 @@ def test_anchors_and_merge_keys_load_and_may_override(tmp_path):
           - &base {out: Float16_b, max_ulp: 2, measured: 2, run: 2026-01-01}
         Neg:
           - *base
-          - {<<: *base, out: Float32, max_ulp: 5}
+          - {<<: *base, out: Float32, max_ulp: 5, measured: 4, run: 2026-01-02}
         """,
     )
     neg = table[MathOperation.Neg]
     assert neg[BudgetKey(output_format=DataFormat.Float16_b)].max_ulp == 2
     assert neg[BudgetKey(output_format=DataFormat.Float32)].max_ulp == 5
+
+
+@pytest.mark.parametrize(
+    "own", ["", ", measured: 4"], ids=["no-provenance", "measured-but-no-date"]
+)
+def test_a_merge_key_row_may_not_borrow_its_anchors_measurement(tmp_path, own):
+    """A ``<<`` row is a cell of its own: taking the anchor's ``measured`` and ``run``
+    through the merge would credit a different budget with the anchor's measurement,
+    and the guard would count the new row as re-measured. A plain ``*alias`` row is the
+    anchor's own row, so it shares the measurement and loads."""
+    with _refuses("only through a `<<` merge key"):
+        _table(
+            tmp_path,
+            f"""\
+            Abs:
+              - &base {{out: Float16_b, max_ulp: 2, measured: 2, run: 2026-01-01}}
+            Neg:
+              - {{<<: *base, out: Float32, max_ulp: 5{own}}}
+            """,
+        )
 
 
 def test_a_quoted_and_an_unquoted_no_mean_the_same_thing(tmp_path):
@@ -1705,15 +1725,15 @@ def _strided(row) -> bool:
 
 
 def _measured_budget_rows(path=_TABLE_PATH):
-    """``(row, measured, exhaustive)`` for every ``max_ulp`` row: its ``measured``
-    figure, and whether the sweep measured it (``run``) or a sample did (``sampled``).
+    """``(row, measured, swept)`` for every ``max_ulp`` row: its ``measured`` figure,
+    and whether the sweep measured it (``run``) or a sample did (``sampled``).
 
     Deciding that by "the row has a number" once read every emitted row as a sampled
     one, and the exhaustive audit below then covered 10 of the table's 1,614 budgets:
     Acosh's ``max_ulp: 7`` measured at 6 raised to 12 with its measurement untouched
     passed."""
     return [
-        (row, row.provenance.measured, row.provenance.exhaustive)
+        (row, row.provenance.measured, row.provenance.swept)
         for row in BudgetTable.load(path).rows
         if row.max_ulp is not None
     ]
@@ -1730,15 +1750,6 @@ def test_the_provenance_parser_sees_every_budget_the_registry_enforces():
         if contract.metric is Metric.ULP
     )
     assert parsed == loaded
-
-
-def test_every_step_budget_names_the_measurement_it_came_from():
-    rows = _measured_budget_rows()
-    assert rows, "no max_ulp rows found -- the walk has drifted from the table"
-    unbacked = [row.describe() for row, measured, _ in rows if measured is None]
-    assert not unbacked, "budgets with no recorded measurement:\n" + "\n".join(
-        f"  {row}" for row in unbacked
-    )
 
 
 #: Exact by construction without being canaries: a clamp returns one of its operands,
@@ -1780,8 +1791,8 @@ def _sampled_zero_budgets(path=_TABLE_PATH):
     (:func:`_strided`)."""
     return [
         row
-        for row, _, exhaustive in _measured_budget_rows(path)
-        if row.max_ulp == 0 and (not exhaustive or _strided(row))
+        for row, _, swept in _measured_budget_rows(path)
+        if row.max_ulp == 0 and (not swept or _strided(row))
     ]
 
 
@@ -1844,21 +1855,21 @@ def test_a_sampled_zero_on_an_inexact_op_is_floored_to_one():
 
 def _budgets_past_their_measurement(path=_TABLE_PATH):
     """Every ``max_ulp`` row in *path* whose budget is not the one its measurement
-    allows, as messages. An exhaustive row carries exactly the budget the emitter
-    derives from its measurement -- ``_verdict``'s rule: 0 for an exhaustive 0, 1 for a
-    strided Float32 0 on an op not exact on that cell, and otherwise ``EMIT_HEADROOM``
-    rounded up -- so a budget widened by hand has to falsify the
-    comment beside it, which is the table header's rule for raising one. A sampled row
+    allows, as messages. A swept row carries exactly the budget the emitter derives
+    from its measurement -- ``_verdict``'s rule: 0 for an exhaustive 0, 1 for a strided
+    Float32 0 on an op not exact on that cell, and otherwise ``EMIT_HEADROOM`` rounded
+    up -- so a budget widened by hand has to come with a new ``measured`` figure, which
+    is the table header's rule for raising one. A sampled row
     may sit anywhere in ``[measured, MEASUREMENT_HEADROOM * measured]``, and at 1 over
     a measured 0: a finite sample cannot assert exactness."""
 
     problems = []
-    for row, measured, exhaustive in _measured_budget_rows(path):
+    for row, measured, swept in _measured_budget_rows(path):
         if measured is None:
-            continue  # owned by test_every_step_budget_names_the_measurement_it_came_from
+            continue  # the loader refuses such a row (check_provenance)
         budget = row.max_ulp
         where = f"{row.describe()} (records {measured} ULP)"
-        if exhaustive:
+        if swept:
             # The emitter's own call: the input format decides whether a 0 was seen on
             # every value (kept) or on a stride of Float32 (written as 1, unless the op
             # is exact by construction).
@@ -1898,7 +1909,7 @@ def test_a_demoted_row_measured_past_the_ceiling():
     wrong = []
     for row in BudgetTable.load(_TABLE_PATH).rows:
         p, fields = row.provenance, row.pinned
-        if row.metric != "tolerance" or not p.exhaustive or p.unmeasurable:
+        if row.metric != "tolerance" or not p.swept or p.unmeasurable:
             continue
         out_fmt = DataFormat[fields["out"]]
         if not has_ulp_gate(out_fmt) or out_fmt in _ULP_PROXY_DTYPES:

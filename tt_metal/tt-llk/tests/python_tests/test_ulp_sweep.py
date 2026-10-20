@@ -201,7 +201,7 @@ def test_a_re_emit_leaves_a_hand_written_row_and_an_arch_row_alone(table):
     ):
         assert after.row("Gelu", **key).fields == before.row("Gelu", **key).fields
         assert after.row("Gelu", **key).comment == before.row("Gelu", **key).comment
-    assert not after.row("Gelu", in_="Float16_b", out="Float32").provenance.exhaustive
+    assert not after.row("Gelu", in_="Float16_b", out="Float32").provenance.swept
     # And the first run's emitted rows still name it.
     assert after.row("Gelu", in_="Float16", out="Float16").provenance == Provenance(
         measured=1, run=_RUN
@@ -278,6 +278,53 @@ def test_a_row_carrying_a_floor_is_regenerated_from_the_measurement(table):
         6,
         None,
     )
+
+
+def test_an_op_whose_whole_row_list_is_an_alias_is_kept_verbatim(table):
+    """`Neg: *low` carries the anchor's rows, budgets and all, with nothing inline to
+    rewrite: emitting over it would replace a shared list with rows of its own, so the
+    block is kept and the report says why."""
+    table.write_text(
+        "Abs: &low\n"
+        "  - {in: Float16, out: Float16, max_ulp: 7, measured: 6, run: 2026-09-01}\n"
+        "\n"
+        "Gelu: *low  # the same kernel path\n",
+        encoding="utf-8",
+    )
+    before = table.read_text(encoding="utf-8")
+    _record_grid("Gelu", "Float16", "Float16", 5)
+    report = write_table(table, _RUN)
+    assert (report.written, report.kept) == ({}, {"Gelu": "alias"})
+    assert table.read_text(encoding="utf-8") == before
+
+
+def test_a_column_0_note_between_an_ops_rows_is_kept_once_and_moves_no_row(table):
+    """`_block_end` stops at a column-0 line, so the rows past such a note were written
+    once by the block and again by the verbatim copy after it: the emit succeeded and
+    the next import of the table refused it."""
+    from helpers.sfpu_accuracy_budget import _load_table
+
+    table.write_text(
+        "Gelu:\n"
+        "  - {in: Float16, out: Float16, max_ulp: 7, measured: 6, run: 2026-09-01}\n"
+        "# a note someone left between two rows\n"
+        "  - {in: Float16_b, out: Float32, max_ulp: 9, measured: 9, sampled: 2026-09-18}\n"
+        "  - {in: Float16_b, out: Float16_b, max_ulp: 7, measured: 6, run: 2026-09-01}\n"
+        "\n"
+        "Log1p:\n"
+        "  - {in: Float16, out: Float16_b, metric: tolerance}\n",
+        encoding="utf-8",
+    )
+    _record_grid("Gelu", "Float16", "Float16", 5)
+    _record_grid("Gelu", "Float16_b", "Float16_b", 1)
+    write_table(table, _RUN)
+    text = table.read_text(encoding="utf-8")
+    assert text.count("# a note someone left between two rows\n") == 1
+    assert text.count("sampled: 2026-09-18") == 1
+    after = BudgetTable.load(table)
+    assert after.row("Gelu", in_="Float16_b", out="Float16_b").max_ulp == 2
+    assert [r.op for r in after.rows].count("Gelu") == 3
+    assert len(_load_table(table)[MathOperation.Gelu]) == 3
 
 
 @pytest.mark.parametrize(
@@ -357,8 +404,8 @@ def test_a_cell_recorded_twice_keeps_the_worst_lane():
 def test_an_incomplete_grid_is_refused_rather_than_collapsed(table):
     """`approx` and `dest` droppability is decided per axis. On an anti-diagonal each
     axis sees only singletons, both would be dropped, and one measurement would
-    overwrite the other — with `_render` writing the survivor's own figure into the
-    provenance comment, so the budget audit could not catch it either."""
+    overwrite the other — with `_render` writing the survivor's own figure as
+    `measured`, so the budget audit could not catch it either."""
     record("Gelu", _CELL, 4)
     record("Gelu", ("Float16", "Float16", "Yes", "Yes"), 9)
     before = table.read_text()
@@ -1227,9 +1274,7 @@ def test_the_sweep_collects_every_keyed_op_whether_gating_or_emitting(monkeypatc
 
 
 def test_emit_writes_on_a_clean_wormhole_session(table):
-    """And credits the key line to the sweep it ran, under the arch it ran on."""
-    from datetime import date
-
+    """And credits each row it writes to today's run."""
     _record_grid("Gelu", "Float16", "Float16", 5)
     report = finish_emit(
         ChipArchitecture.WORMHOLE, 0, table, exitstatus=pytest.ExitCode.OK
@@ -1269,7 +1314,7 @@ def test_a_whole_table_emit_over_the_real_table_ends_green(tmp_path, monkeypatch
 
     import test_unary_sfpu_ulp as sweep
     from helpers import ulp_sweep
-    from helpers.sfpu_accuracy_budget import _TABLE_PATH
+    from helpers.sfpu_accuracy_budget import _TABLE_PATH, _load_table
     from helpers.ulp_sweep import sweep_cells
 
     path = tmp_path / "budget.yaml"
@@ -1284,6 +1329,7 @@ def test_a_whole_table_emit_over_the_real_table_ends_green(tmp_path, monkeypatch
         report = finish_emit(ChipArchitecture.WORMHOLE, 0, path)
     finally:
         MEASURED.clear()
+    _load_table(path)  # what the next import of the table does
     assert report.unplaced == []
     assert set(report.written) | set(report.kept) == {op.name for op in ops}
     assert not set(report.written) & set(report.kept)
@@ -1345,11 +1391,13 @@ def test_the_claim_is_the_singularity_not_the_sampling_guard_band(op, inside, ou
 
 def test_a_not_measurable_verdict_keeps_the_measurable_lanes_maximum(table):
     """Demoting a cell for a few non-finite lanes used to drop what the other ~64,000
-    lanes measured, and the headroom report then held them to nothing. The note carries
-    both figures, and the readers that judge them -- ulp_budget_diff's
+    lanes measured, and the headroom report then held them to nothing. The row carries
+    both figures as fields, and the readers that judge them -- ulp_budget_diff's
     ``recorded_nonfinite`` and ``recorded_max`` -- must find each in the row the emitter
-    actually writes. Read through them rather than through copies of their patterns: a
-    copy kept this test green while the reader's own pattern moved."""
+    actually writes; read through them rather than through the fields. The registry
+    must load that row too: only its loader holds the rule that ``nonfinite`` belongs on
+    a ``metric: tolerance`` row, so drift would first show at the next import."""
+    from helpers.sfpu_accuracy_budget import Metric, _load_table
     from helpers.ulp import ulp_distance, ulp_stats
     from helpers.ulp_budget_diff import parse_table, recorded_max, recorded_nonfinite
     from helpers.ulp_sweep import nonfinite_verdict, record_unmeasurable
@@ -1376,6 +1424,8 @@ def test_a_not_measurable_verdict_keeps_the_measurable_lanes_maximum(table):
         if row.provenance.nonfinite
     ]
     assert (recorded_nonfinite(row), recorded_max(row)) == (1, 1), row.provenance
+    contracts = _load_table(table)[MathOperation.Gelu]
+    assert any(c.metric is Metric.TOLERANCE for c in contracts.values())
 
 
 def test_an_unmeasurable_cell_is_written_as_its_own_verdict(table):
@@ -1395,6 +1445,8 @@ def test_an_unmeasurable_cell_is_written_as_its_own_verdict(table):
     parked = after.row("Gelu", in_="Float16", out="Float16", approx="Yes")
     assert (parked.metric, parked.provenance) == ("tolerance", Provenance(run=_RUN))
     assert parked.provenance.unmeasurable
+    # The why is in no field, so the comment is where it goes.
+    assert parked.comment == "not measurable: no lane a step count can describe"
 
 
 def test_emit_refuses_a_partly_measured_grid(table):
@@ -1601,9 +1653,9 @@ def test_the_near_zero_floor_is_derived_from_the_band_and_capped():
 
 def test_a_floored_cell_is_written_with_its_floor_and_read_back(table):
     """The row carries `max_ulp` for the lanes outside the floor and `near_zero_atol`
-    for the floor; the note leads with the residual, which is the figure the
-    provenance audit and the headroom report compare against, and records the
-    unfloored maximum. The loader accepts the row as a ULP contract with a floor."""
+    for the floor; `measured` is the residual, the figure the provenance audit and the
+    headroom report compare against, and `measured_all` the unfloored maximum. The
+    loader accepts the row as a ULP contract with a floor."""
     from helpers.sfpu_accuracy_budget import _load_table
 
     _record_grid("Gelu", "Float16", "Float16", _WORST, floor=_FLOOR)
@@ -1704,6 +1756,8 @@ def test_a_floor_that_still_leaves_the_cell_over_the_ceiling_demotes_and_says_so
     row = BudgetTable.load(table).row("Gelu", in_="Float16", out="Float16")
     assert (row.metric, row.near_zero_atol) == ("tolerance", None)
     assert row.provenance == Provenance(measured=14337, run=_RUN)
+    # No field holds the floor that was tried, so the comment says what it left.
+    assert row.comment == "100 ULP outside a 1.00e-03 near-zero floor"
 
 
 def test_floored_measurements_survive_the_xdist_merge():

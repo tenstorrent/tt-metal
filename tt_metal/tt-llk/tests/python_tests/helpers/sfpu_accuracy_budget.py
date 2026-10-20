@@ -49,7 +49,7 @@ from .ulp import (  # FLUSH_SUBNORMAL_OUTPUTS re-exported: the step gates read i
     has_ulp_gate,
     ulp_dtype,
 )
-from .ulp_provenance import PROVENANCE_FIELDS, Provenance, load_yaml
+from .ulp_provenance import PROVENANCE_FIELDS, check_provenance, load_yaml
 
 #: The architecture every unkeyed budget was measured on. Anywhere else an op resolves
 #: to the tolerance metric until the sweep has been re-run there.
@@ -428,32 +428,6 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
     return loaded
 
 
-def _check_provenance(where: str, row: Dict[str, Any]) -> None:
-    """A row's provenance fields, against themselves and its contract. The figure a
-    budget came from is part of the row: a step budget without one is a guess, and the
-    table's rule is that no number in it is."""
-    provenance = Provenance.of(row)
-    problems = provenance.problems()
-    tolerance = row.get("metric") == "tolerance"
-    if not tolerance and "max_ulp" in row and provenance.measured is None:
-        problems.append(
-            "a `max_ulp` row needs the `measured` figure it came from, and the `run` or "
-            "`sampled` date it was measured on"
-        )
-    if provenance.nonfinite is not None and not tolerance:
-        problems.append(
-            "`nonfinite` lanes hold a cell on tolerance, so it belongs on a "
-            "`metric: tolerance` row"
-        )
-    if provenance.measured_all is not None and "near_zero_atol" not in row:
-        problems.append(
-            "`measured_all` is the worst lane a `near_zero_atol` floor rescues; the "
-            "row has no floor"
-        )
-    if problems:
-        raise ValueError(f"{where} {row}: " + "; ".join(problems))
-
-
 def _row_to_entry(
     where: str, row: Dict[str, Any]
 ) -> Tuple[BudgetKey, AccuracyContract]:
@@ -472,7 +446,8 @@ def _row_to_entry(
     # AccuracyContract.__post_init__ owns the rest of the validation, so a row that is
     # half-converted between the two metrics is refused there rather than here.
     entry = key, AccuracyContract(metric=metric, **contract)
-    _check_provenance(where, row)
+    # The resolved metric, not the raw scalar: `metric: TOLERANCE` names the member too.
+    check_provenance(where, row, tolerance=metric is Metric.TOLERANCE)
     return entry
 
 
