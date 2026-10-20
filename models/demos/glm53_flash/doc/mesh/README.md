@@ -97,6 +97,15 @@ head: warm 1301 ms, cold 2660 ms (first-call compiles); first greedy token 10264
 (near-tie expert flips compound) or a chain-level defect is being separated with the single-chip streaming full
 model (`arg/glm53_fullmodel`, true prefill path, per-layer chain PCC).
 
+**Resolved (control):** the HF bf16 chain is itself this sensitive. `reference/hf_layer_reference.py --perturb 1e-3`
+(relative Gaussian noise on the layer-0 input, 5.0e-4 relative rms after bf16 rounding) chained through the same
+45 layers vs the unperturbed `L45_S128` dump (`tests/test_chain_sensitivity.py`, `_logs/mesh/chain_sensitivity.log`):
+prefill-row PCC 0.99994 (layer 3), 0.9984 (12), 0.9925 (18), 0.971 (21), 0.930 (24), 0.880 (27), 0.837 (30),
+0.829 (33), 0.908 (36), 0.905 (42), 0.934 (44); per-row minima down to 0.55. The TT single-chip streaming chain
+(bfp8 experts, true prefill: 0.998 at layer 10, 0.958 at 20, 0.69 at 30, 0.86 at 44) and the mesh chains follow the
+same curve one notch lower (its per-layer error is ~1e-3, twice the perturbation). Chain PCC past ~20 layers is
+therefore not a correctness metric for this model; token-level accuracy (greedy / teacher-forced top-1, top-5) is.
+
 Build cost: dense layer 2.7 s, MoE layer 43-48 s on the (1,4) mesh (host fp8 -> bf16 dequant 3-7 s, the rest
 is the bfp8 conversion + upload), i.e. ~32 min for 45 layers.
 
