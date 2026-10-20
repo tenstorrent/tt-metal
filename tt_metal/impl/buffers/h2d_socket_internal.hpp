@@ -22,7 +22,7 @@ namespace tt::tt_metal::experimental::detail {
 // without exposing it on the public H2DSocket surface.
 struct H2DSocketTryWriteAccess {
     static bool try_write(distributed::H2DSocket& socket, void* data, uint32_t num_pages);
-    static bool try_stage(distributed::H2DSocket& socket, void* data, uint32_t num_pages);
+    static uint32_t try_stage(distributed::H2DSocket& socket, const void* data, uint32_t max_pages);
     static void publish_staged(ttsl::Span<distributed::H2DSocket* const> sockets);
 };
 
@@ -34,12 +34,13 @@ inline bool try_write(distributed::H2DSocket& socket, void* data, uint32_t num_p
     return H2DSocketTryWriteAccess::try_write(socket, data, num_pages);
 }
 
-// try_write split in two, for writing to many sockets at once: try_stage writes `num_pages` into one
-// socket (false, writing nothing, if its FIFO lacks room), and publish_staged makes everything staged
-// on `sockets` visible to their receivers. A staged write reaches its receiver only through
-// publish_staged. try_write fences each socket twice; a batch shares publish_staged's two fences.
-inline bool try_stage(distributed::H2DSocket& socket, void* data, uint32_t num_pages) {
-    return H2DSocketTryWriteAccess::try_stage(socket, data, num_pages);
+// try_write split in two, for writing to many sockets at once: try_stage writes as many of the
+// `max_pages` consecutive pages at `data` into one socket as its FIFO has room for and returns how many
+// (0 if none fit), and publish_staged makes everything staged on `sockets` visible to their receivers.
+// A staged page reaches its receiver only through publish_staged. try_write fences each socket twice
+// for each write; a batch of pages on many sockets shares publish_staged's two fences.
+inline uint32_t try_stage(distributed::H2DSocket& socket, const void* data, uint32_t max_pages) {
+    return H2DSocketTryWriteAccess::try_stage(socket, data, max_pages);
 }
 
 inline void publish_staged(ttsl::Span<distributed::H2DSocket* const> sockets) {

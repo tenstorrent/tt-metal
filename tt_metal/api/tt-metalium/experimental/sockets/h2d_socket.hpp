@@ -254,10 +254,11 @@ private:
     // Non-blocking write. Returns false immediately if the FIFO can't fit `num_pages`
     // without spinning. Accessible only via tt::tt_metal::experimental::detail::try_write.
     bool try_write_impl(void* data, uint32_t num_pages);
-    // try_write_impl without its store fences or receiver notification: the pages are written and
-    // counted as sent, and reach the receiver once a store fence and notify_receiver_unfenced follow.
-    // Accessible only via tt::tt_metal::experimental::detail::try_stage / publish_staged.
-    bool try_stage_impl(void* data, uint32_t num_pages);
+    // Writes as many of the `max_pages` consecutive pages at `data` as the FIFO has room for, without
+    // store fences or a receiver notification, and returns how many it wrote. They are counted as sent
+    // and reach the receiver once a store fence and notify_receiver_unfenced follow. Accessible only via
+    // tt::tt_metal::experimental::detail::try_stage / publish_staged.
+    uint32_t try_stage_impl(const void* data, uint32_t max_pages);
     // Publishes bytes_sent to the receiver without a store fence after it. Accessible only via
     // tt::tt_metal::experimental::detail::publish_staged.
     void notify_receiver_unfenced();

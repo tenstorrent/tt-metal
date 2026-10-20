@@ -373,11 +373,23 @@ void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_de
     // prefetcher's request sockets microseconds per page. Gated on a real device and Blackhole — on
     // Wormhole B0 the device address space isn't fully mapped this way and a write may still need a
     // per-write driver reconfig.
+    //
+    // A DRAM core acknowledges a NOC write only once its L1 has taken the write over AXI, and a Strict
+    // window holds each write until the one before it is acknowledged, so it moves one write per round
+    // trip (about 0.4 us per 128 B page). A DRAM receiver's window posts its writes instead, on a static
+    // write VC: a NOC packet on a dynamic VC may switch VCs at each router, and a DRAM core gives each VC
+    // its own AXI ID, so a bytes_sent update could overtake the pages it counts; on one VC, writes to the
+    // receiver arrive in the order they were made.
+    const bool dram_receiver = recv_core_type_ == RecvCoreType::Dram;
     if (!cluster.is_mock_or_emulated() && env.get_hal().get_arch() == tt::ARCH::BLACKHOLE) {
         std::unique_ptr<tt::umd::IoWindow> window = cluster.get_driver()->create_io_window(
             recv_device_id,
             cluster.get_soc_desc(recv_device_id).get_coord_at(recv_virtual_core, tt::CoordSystem::TRANSLATED),
-            /*addr=*/l1_offset);
+            /*addr=*/l1_offset,
+            /*host=*/{},
+            dram_receiver ? tt::umd::IoOrdering::Posted : tt::umd::IoOrdering::Strict,
+            /*core_end=*/std::nullopt,
+            dram_receiver ? tt::umd::WindowFlags::UnicastWrite : tt::umd::WindowFlags::None);
         if (window != nullptr) {
             const uint64_t window_base = window->get_target_config().addr;
             const uint64_t fifo_end = static_cast<uint64_t>(aligned_data_buf_start_) + l1_offset + fifo_size_;
@@ -889,15 +901,6 @@ void H2DSocketImpl::write(void* data, uint32_t num_pages) {
 }
 
 bool H2DSocketImpl::try_write(void* data, uint32_t num_pages) {
-    if (!try_stage(data, num_pages)) {
-        return false;
-    }
-    tt_driver_atomics::sfence();
-    this->notify_receiver();
-    return true;
-}
-
-bool H2DSocketImpl::try_stage(void* data, uint32_t num_pages) {
     validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before writing.");
     uint32_t num_bytes = num_pages * page_size_;
@@ -919,12 +922,51 @@ bool H2DSocketImpl::try_stage(void* data, uint32_t num_pages) {
     auto data_addr = aligned_data_buf_start_ + write_ptr_;
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
         pcie_writer(data, num_bytes, data_addr);
+        tt_driver_atomics::sfence();
     } else {
         uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
         std::memcpy(data_ptr, data, num_bytes);
     }
     this->push_bytes(num_bytes);
+    this->notify_receiver();
     return true;
+}
+
+uint32_t H2DSocketImpl::try_stage(const void* data, uint32_t max_pages) {
+    validate_host_socket_access(rank_owns_endpoint_, recv_core_);
+    TT_FATAL(page_size_ > 0, "Page size must be set before writing.");
+    const auto* pages = static_cast<const uint8_t*>(data);
+    uint32_t staged = 0;
+    bool acked_refreshed = false;
+    while (staged < max_pages) {
+        uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
+        if (bytes_free < page_size_ && !acked_refreshed) {
+            tt_driver_atomics::mfence();
+            volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
+            bytes_acked_ = bytes_acked_value;
+            bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
+            acked_refreshed = true;
+        }
+        // One write per run of pages that fits in the FIFO before it wraps.
+        const uint32_t pages_before_wrap = (fifo_curr_size_ - write_ptr_) / page_size_;
+        const uint32_t run = std::min({max_pages - staged, bytes_free / page_size_, pages_before_wrap});
+        if (run == 0) {
+            break;
+        }
+        const uint32_t num_bytes = run * page_size_;
+        const uint8_t* src = pages + static_cast<size_t>(staged) * page_size_;
+        if (h2d_mode_ == H2DMode::HOST_PUSH) {
+            pcie_writer(const_cast<uint8_t*>(src), num_bytes, aligned_data_buf_start_ + write_ptr_);
+        } else {
+            std::memcpy(reinterpret_cast<uint8_t*>(host_buffer_.get()) + write_ptr_, src, num_bytes);
+        }
+        this->push_bytes(num_bytes);
+        staged += run;
+    }
+    if (staged == 0) {
+        advance_h2d_simulator_socket_device(mesh_device_, recv_core_.device_coord);
+    }
+    return staged;
 }
 
 HDSocketDescriptor H2DSocketImpl::populate_descriptor() const {
@@ -1091,7 +1133,7 @@ void H2DSocket::write(void* data, uint32_t num_pages) { pimpl_->write(data, num_
 
 bool H2DSocket::try_write_impl(void* data, uint32_t num_pages) { return pimpl_->try_write(data, num_pages); }
 
-bool H2DSocket::try_stage_impl(void* data, uint32_t num_pages) { return pimpl_->try_stage(data, num_pages); }
+uint32_t H2DSocket::try_stage_impl(const void* data, uint32_t max_pages) { return pimpl_->try_stage(data, max_pages); }
 
 void H2DSocket::notify_receiver_unfenced() { pimpl_->notify_receiver_unfenced(); }
 
@@ -1111,8 +1153,8 @@ bool H2DSocketTryWriteAccess::try_write(distributed::H2DSocket& socket, void* da
     return socket.try_write_impl(data, num_pages);
 }
 
-bool H2DSocketTryWriteAccess::try_stage(distributed::H2DSocket& socket, void* data, uint32_t num_pages) {
-    return socket.try_stage_impl(data, num_pages);
+uint32_t H2DSocketTryWriteAccess::try_stage(distributed::H2DSocket& socket, const void* data, uint32_t max_pages) {
+    return socket.try_stage_impl(data, max_pages);
 }
 
 void H2DSocketTryWriteAccess::publish_staged(ttsl::Span<distributed::H2DSocket* const> sockets) {

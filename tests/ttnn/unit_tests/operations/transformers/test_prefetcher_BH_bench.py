@@ -921,6 +921,7 @@ def test_bench_workercore_repeats(device, op_name, shape):
 # Per-device (K, N) of Llama decode matmuls on a 1x2 mesh, the receiver-contiguous weights a model's
 # decode trace streams over a ring of 8 banks x 2 receivers.
 TRACED_PREFETCH_SHAPES = [
+    pytest.param(2048, 1536, id="1B_QKV_2d"),
     pytest.param(4096, 2048, id="1B_FF2_2d"),
     pytest.param(7168, 4096, id="8B_FF2_2d"),
 ]
